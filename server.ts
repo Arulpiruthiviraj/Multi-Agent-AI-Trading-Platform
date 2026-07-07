@@ -4,8 +4,110 @@ import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+import WebSocket from "ws";
+
+
 import { GoogleGenAI } from "@google/genai";
 import { createServer as createViteServer } from "vite";
+
+const AUTOBOT_SYMBOLS = ["TSLA", "NVDA", "AAPL", "MSTR", "PLTR", "CRWD", "AMD", "SNOW", "META", "GOOG", "COIN"];
+
+let liveQuotes: any = {};
+let liveNews: any = {};
+let alpacaWs: any = null;
+let alpacaNewsWs: any = null;
+
+function initializeAlpacaWebSocket() {
+  if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) return;
+  const isPaper = process.env.PAPER_TRADING_ONLY !== "false";
+  
+  // Quotes WebSocket
+  const wssUrl = "wss://stream.data.alpaca.markets/v2/iex";
+  alpacaWs = new WebSocket(wssUrl);
+  
+  alpacaWs.addEventListener("open", () => {
+    console.log('[Alpaca WS] Connected to market data stream.');
+    alpacaWs.send(JSON.stringify({
+      action: 'auth',
+      key: process.env.ALPACA_API_KEY,
+      secret: process.env.ALPACA_SECRET_KEY
+    }));
+  });
+  
+  alpacaWs.addEventListener("message", (event) => {
+    const messages = JSON.parse(event.data.toString());
+    for (const msg of messages) {
+      if (msg.T === 'success' && msg.msg === 'authenticated') {
+        console.log('[Alpaca WS] Authenticated successfully. Subscribing to quotes...');
+        alpacaWs.send(JSON.stringify({
+          action: 'subscribe',
+          quotes: AUTOBOT_SYMBOLS
+        }));
+      } else if (msg.T === 'q') {
+        liveQuotes[msg.S] = { bid: msg.bp, ask: msg.ap, price: (msg.bp + msg.ap) / 2 };
+      } else if (msg.T === 't') {
+        if (!liveQuotes[msg.S]) liveQuotes[msg.S] = { bid: msg.p, ask: msg.p, price: msg.p };
+        liveQuotes[msg.S].price = msg.p;
+      }
+    }
+  });
+  
+  alpacaWs.addEventListener("close", () => {
+    console.log('[Alpaca WS] Connection closed. Reconnecting in 5s...');
+    setTimeout(() => {
+       if (alpacaWs) alpacaWs.close();
+       initializeAlpacaWebSocket();
+    }, 5000);
+  });
+  
+  alpacaWs.addEventListener("error", (err) => {
+    console.error('[Alpaca WS] Error:', err.message);
+  });
+
+  // News WebSocket
+  const newsWssUrl = "wss://stream.data.alpaca.markets/v1beta1/news";
+  alpacaNewsWs = new WebSocket(newsWssUrl);
+  
+  alpacaNewsWs.addEventListener("open", () => {
+    console.log('[Alpaca News WS] Connected to news stream.');
+    alpacaNewsWs.send(JSON.stringify({
+      action: 'auth',
+      key: process.env.ALPACA_API_KEY,
+      secret: process.env.ALPACA_SECRET_KEY
+    }));
+  });
+  
+  alpacaNewsWs.addEventListener("message", (event) => {
+    const messages = JSON.parse(event.data.toString());
+    for (const msg of messages) {
+      if (msg.T === 'success' && msg.msg === 'authenticated') {
+        console.log('[Alpaca News WS] Authenticated successfully. Subscribing to news...');
+        alpacaNewsWs.send(JSON.stringify({
+          action: 'subscribe',
+          news: ["*"] // Subscribe to all news
+        }));
+      } else if (msg.T === 'n') {
+        // Store latest news by symbol
+        for (const symbol of msg.symbols) {
+           if (!liveNews[symbol]) liveNews[symbol] = [];
+           liveNews[symbol].unshift(msg);
+           // Keep only last 5
+           if (liveNews[symbol].length > 5) {
+             liveNews[symbol].pop();
+           }
+        }
+      }
+    }
+  });
+  
+  alpacaNewsWs.addEventListener("close", () => {
+    console.log('[Alpaca News WS] Connection closed.');
+  });
+  
+  alpacaNewsWs.addEventListener("error", (err) => {
+    console.error('[Alpaca News WS] Error:', err.message);
+  });
+}
 
 dotenv.config();
 
@@ -322,6 +424,7 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
 }
 
   const app = express();
+  initializeAlpacaWebSocket();
 
   app.use((req, res, next) => {
     if (req.path.startsWith('/api/v1/auth')) return next();
@@ -1756,9 +1859,15 @@ async function triggerWebhooks(event: {
   app.get("/api/v1/signals", async (req: Request, res: Response) => {
     const symbol = ((req.query.symbol as string) || "AAPL").toUpperCase();
     const sector = (req.query.sector as string) || "Technology";
-    const newsHeadline =
-      (req.query.headline as string) ||
-      `Technical consolidations push ${symbol} into high momentum buy zone.`;
+    
+    let newsHeadline = req.query.headline as string;
+    if (!newsHeadline) {
+       if (liveNews[symbol] && liveNews[symbol].length > 0) {
+           newsHeadline = liveNews[symbol][0].headline;
+       } else {
+           newsHeadline = `Technical consolidations push ${symbol} into high momentum buy zone.`;
+       }
+    }
     const broker =
       (req.query.broker as string) || "Interactive Brokers (Paper)";
 
@@ -1782,29 +1891,35 @@ async function triggerWebhooks(event: {
       process.env.ALPACA_API_KEY &&
       process.env.ALPACA_SECRET_KEY
     ) {
-      try {
-        const qRes = await fetch(
-          `https://${alpacaDataBaseUrl}/v2/stocks/quotes/latest?symbols=${symbol}`,
-          {
-            headers: {
-              "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
-              "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY,
+      // Prioritize WebSocket live quotes
+      if (liveQuotes[symbol] && liveQuotes[symbol].price > 0) {
+        px_base = liveQuotes[symbol].bid || liveQuotes[symbol].price;
+        isRealPrice = true;
+      } else {
+        try {
+          const qRes = await fetch(
+            `https://${alpacaDataBaseUrl}/v2/stocks/quotes/latest?symbols=${symbol}`,
+            {
+              headers: {
+                "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
+                "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY,
+              },
             },
-          },
-        );
-        if (qRes.ok) {
-          const qData = await qRes.json();
-          if (qData.quotes && qData.quotes[symbol]) {
-            px_base = qData.quotes[symbol].bp; // Bid price baseline
-            isRealPrice = true;
-            console.log(`Fetched real Alpaca quote for ${symbol}: $${px_base}`);
+          );
+          if (qRes.ok) {
+            const qData = await qRes.json();
+            if (qData.quotes && qData.quotes[symbol]) {
+              px_base = qData.quotes[symbol].bp; // Bid price baseline
+              isRealPrice = true;
+            }
+            console.log(`Fetched real Alpaca quote for ${symbol}: ${px_base}`);
           }
+        } catch (e: any) {
+          console.warn(
+            "Could not fetch real Alpaca quote, falling back",
+            e.message,
+          );
         }
-      } catch (e: any) {
-        console.warn(
-          "Could not fetch real Alpaca quote, falling back",
-          e.message,
-        );
       }
     }
 
@@ -2243,6 +2358,21 @@ async function triggerWebhooks(event: {
           error: "Missing ALPACA_API_KEY or ALPACA_SECRET_KEY in Environment",
         });
     }
+    
+    // Check WebSocket first
+    if (liveQuotes[symbol] && liveQuotes[symbol].price > 0) {
+      return res.json({
+        quotes: {
+          [symbol]: {
+            ap: liveQuotes[symbol].ask,
+            bp: liveQuotes[symbol].bid,
+            price: liveQuotes[symbol].price,
+            source: 'websocket'
+          }
+        }
+      });
+    }
+    
     try {
       const response = await fetch(
         `https://data.alpaca.markets/v2/stocks/quotes/latest?symbols=${symbol}`,
@@ -2276,6 +2406,23 @@ async function triggerWebhooks(event: {
           error: "Missing ALPACA_API_KEY or ALPACA_SECRET_KEY in Environment",
         });
     }
+    
+    // Check WebSocket first
+    if (liveNews[symbol] && liveNews[symbol].length > 0) {
+      return res.json({
+        news: liveNews[symbol].map((n: any) => ({
+           id: n.id,
+           headline: n.headline,
+           summary: n.summary,
+           author: n.author,
+           created_at: n.created_at,
+           updated_at: n.updated_at,
+           url: n.url,
+           source: n.source || 'websocket'
+        }))
+      });
+    }
+    
     try {
       const response = await fetch(
         `https://data.alpaca.markets/v1beta1/news?symbols=${symbol}&limit=5`,
@@ -2975,7 +3122,8 @@ Return them in strict JSON format:
       }
     ] as any[]
   };
-  const AUTOBOT_SYMBOLS = ["TSLA", "NVDA", "AAPL", "MSTR", "PLTR", "CRWD", "AMD", "SNOW", "META", "GOOG", "COIN"];
+
+
 
   // Endpoints: Chaos Mode Control
   app.get("/api/v1/chaos/config", (req: Request, res: Response) => {
@@ -3390,9 +3538,16 @@ Output MUST be strict JSON matching this structure:
               await new Promise(r => setTimeout(r, 1000));
               autoBotState.history.unshift({ time: new Date().toISOString(), type: 'scan', msg: `Deep Research agent running macro sentiment analysis for ${targetSymbol}...` });
 
+              let recentNewsContext = "";
+              if (liveNews[targetSymbol] && liveNews[targetSymbol].length > 0) {
+                 const headlines = liveNews[targetSymbol].map((n: any) => n.headline).join("; ");
+                 recentNewsContext = `Recent breaking news for ${targetSymbol}: ${headlines}.`;
+                 autoBotState.history.unshift({ time: new Date().toISOString(), type: 'scan', msg: `[News Integration] Found live WebSocket news for ${targetSymbol}: ${liveNews[targetSymbol].length} recent headlines.` });
+              }
+
               const mReq = await generateContentWithRetry(ai, {
                   model: "gemini-3.5-flash",
-                  contents: `You are a Macro Deep Research Agent. Provide a quick sentiment analysis of ${targetSymbol} within current market conditions. Output strict JSON: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "score": number (-1 to 1), "thinking": "Internal thought process of market analysis in 1 sentence" }`,
+                  contents: `You are a Macro Deep Research Agent. Provide a quick sentiment analysis of ${targetSymbol} within current market conditions. ${recentNewsContext} Output strict JSON: { "sentiment": "BULLISH" | "BEARISH" | "NEUTRAL", "score": number (-1 to 1), "thinking": "Internal thought process of market analysis in 1 sentence" }`,
                   config: { responseMimeType: "application/json" }
               });
 

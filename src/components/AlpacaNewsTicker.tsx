@@ -141,7 +141,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
 
   useEffect(() => {
     fetchAlpacaNews();
-    const interval = setInterval(fetchAlpacaNews, 120000); // refresh every 2 mins
+    const interval = setInterval(fetchAlpacaNews, 5000); // Refresh frequently for WebSocket prioritization
     return () => clearInterval(interval);
   }, [targetSymbol]);
 
