@@ -1284,6 +1284,114 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const [webhooksList, setWebhooksList] = useState<any[]>([]);
+  const [newWebhookName, setNewWebhookName] = useState("");
+  const [newWebhookUrl, setNewWebhookUrl] = useState("");
+  const [newWebhookType, setNewWebhookType] = useState<"slack" | "discord" | "generic">("slack");
+  const [newWebhookEvents, setNewWebhookEvents] = useState<string[]>(["veto", "daily_loss_breach", "sector_exposure_breach"]);
+  const [webhookTestStatus, setWebhookTestStatus] = useState<string | null>(null);
+  const [webhookErrorMsg, setWebhookErrorMsg] = useState<string | null>(null);
+
+  const fetchWebhooks = async () => {
+    try {
+      const res = await fetch("/api/v1/webhooks");
+      if (res.ok) {
+        const data = await res.json();
+        setWebhooksList(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch webhooks", e);
+    }
+  };
+
+  useEffect(() => {
+    fetchWebhooks();
+  }, []);
+
+  const handleAddWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newWebhookName || !newWebhookUrl) {
+      setWebhookErrorMsg("Name and URL are required.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/v1/webhooks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: newWebhookName,
+          url: newWebhookUrl,
+          type: newWebhookType,
+          enabled: true,
+          events: newWebhookEvents
+        })
+      });
+      if (res.ok) {
+        setNewWebhookName("");
+        setNewWebhookUrl("");
+        setWebhookErrorMsg(null);
+        fetchWebhooks();
+      } else {
+        const err = await res.json();
+        setWebhookErrorMsg(err.error || "Failed to add webhook.");
+      }
+    } catch (err: any) {
+      setWebhookErrorMsg(err.message || "Network error.");
+    }
+  };
+
+  const handleToggleWebhook = async (id: string, currentlyEnabled: boolean) => {
+    try {
+      const res = await fetch(`/api/v1/webhooks/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled: !currentlyEnabled })
+      });
+      if (res.ok) {
+        fetchWebhooks();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleDeleteWebhook = async (id: string) => {
+    try {
+      const res = await fetch(`/api/v1/webhooks/${id}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        fetchWebhooks();
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  const handleTestWebhook = async (url: string, type: string) => {
+    setWebhookTestStatus("testing");
+    try {
+      const res = await fetch("/api/v1/webhooks/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, type })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success) {
+          setWebhookTestStatus("success");
+        } else {
+          setWebhookTestStatus("failed");
+        }
+      } else {
+        setWebhookTestStatus("failed");
+      }
+    } catch (e) {
+      setWebhookTestStatus("failed");
+    }
+    setTimeout(() => setWebhookTestStatus(null), 4000);
+  };
+
   const toggleAutoBot = async () => {
      try {
        const res = await fetch("/api/v1/autobot/toggle", {
@@ -9417,6 +9525,210 @@ export default function App() {
                     </ResponsiveContainer>
                  </div>
              </div>
+
+              {/* Outbound Webhooks Integration */}
+              <div id="webhooks-integration-panel" className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6 flex flex-col mt-6">
+                  <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2 border-b border-slate-800 pb-4">
+                    <BellRing size={20} className="text-indigo-400" />
+                    Real-Time Outbound Webhook Integrations
+                  </h2>
+                  
+                  <p className="text-xs text-slate-400 leading-relaxed mb-6 max-w-xl">
+                    Configure rule-based triggers linking internal agent operations directly to outbound Slack, Discord, or generic JSON POST webhooks. Receive instant notifications when specific risk parameters are breached, sector safety limits are exceeded, or an LLM decision is vetoed by the Risk Oversight Node.
+                  </p>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                     {/* Left Panel: Register Webhook Form */}
+                     <div className="lg:col-span-1 bg-[#111822] border border-slate-800/80 rounded-lg p-5">
+                        <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-4">Register New Endpoint</h3>
+                        <form onSubmit={handleAddWebhook} className="flex flex-col gap-4">
+                           <div>
+                              <label className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Friendly Name</label>
+                              <input 
+                                 type="text" 
+                                 value={newWebhookName} 
+                                 onChange={(e) => setNewWebhookName(e.target.value)} 
+                                 placeholder="e.g. Risk Alerts Slack"
+                                 className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                              />
+                           </div>
+
+                           <div>
+                              <label className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Webhook URL</label>
+                              <input 
+                                 type="text" 
+                                 value={newWebhookUrl} 
+                                 onChange={(e) => setNewWebhookUrl(e.target.value)} 
+                                 placeholder="https://hooks.slack.com/services/..."
+                                 className="w-full bg-slate-900 border border-slate-800 rounded px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                              />
+                           </div>
+
+                           <div>
+                              <label className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Integration Service Profile</label>
+                              <div className="grid grid-cols-3 gap-2">
+                                 {["slack", "discord", "generic"].map((type) => (
+                                    <button
+                                       key={type}
+                                       type="button"
+                                       onClick={() => setNewWebhookType(type as any)}
+                                       className={`py-1.5 px-2 rounded border text-[10px] font-mono uppercase tracking-wider text-center transition-all ${
+                                          newWebhookType === type 
+                                             ? "bg-indigo-500/10 border-indigo-500 text-indigo-400 font-bold" 
+                                             : "bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300"
+                                       }`}
+                                    >
+                                       {type}
+                                    </button>
+                                 ))}
+                              </div>
+                           </div>
+
+                           <div>
+                              <label className="text-[10px] uppercase font-mono text-slate-500 block mb-2">Select Active Risk Event Triggers</label>
+                              <div className="flex flex-col gap-2">
+                                 {[
+                                    { key: "veto", label: "Oversight Node Vetoes" },
+                                    { key: "daily_loss_breach", label: "Daily Loss Limit Breaches" },
+                                    { key: "sector_exposure_breach", label: "Sector Allocation Breaches" }
+                                 ].map((item) => {
+                                    const active = newWebhookEvents.includes(item.key);
+                                    return (
+                                       <label key={item.key} className="flex items-center gap-2 cursor-pointer group">
+                                          <input 
+                                             type="checkbox"
+                                             checked={active}
+                                             onChange={() => {
+                                                if (active) {
+                                                   setNewWebhookEvents(newWebhookEvents.filter(k => k !== item.key));
+                                                } else {
+                                                   setNewWebhookEvents([...newWebhookEvents, item.key]);
+                                                }
+                                             }}
+                                             className="rounded border-slate-800 bg-slate-900 text-indigo-600 focus:ring-0 focus:ring-offset-0 h-3 w-3"
+                                          />
+                                          <span className="text-[11px] text-slate-400 group-hover:text-slate-200 transition-colors">{item.label}</span>
+                                       </label>
+                                    );
+                                 })}
+                              </div>
+                           </div>
+
+                           {webhookErrorMsg && (
+                              <div className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2.5 py-1.5 rounded">
+                                 {webhookErrorMsg}
+                              </div>
+                           )}
+
+                           <button 
+                              type="submit"
+                              className="mt-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-mono uppercase tracking-wider py-2 px-4 rounded font-bold transition-colors flex items-center justify-center gap-2"
+                           >
+                              <Plus size={14} /> Add Integration
+                           </button>
+                        </form>
+                     </div>
+
+                     {/* Right Panel: Webhooks List */}
+                     <div className="lg:col-span-2 flex flex-col gap-4">
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                           <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Configured Endpoints ({webhooksList.length})</h3>
+                           <button onClick={fetchWebhooks} className="text-[10px] font-mono text-slate-500 hover:text-indigo-400 flex items-center gap-1 transition-colors">
+                              <RefreshCw size={10} /> Sync Status
+                           </button>
+                        </div>
+
+                        {webhooksList.length === 0 ? (
+                           <div className="bg-[#111822]/40 border border-dashed border-slate-800 rounded-lg p-12 text-center flex flex-col items-center justify-center">
+                              <Bell size={32} className="text-slate-600 mb-3" />
+                              <span className="text-slate-400 font-bold text-xs">No Outbound Webhooks Registered</span>
+                              <span className="text-slate-600 text-[10px] mt-1 max-w-sm">Use the form on the left to connect your Slack workspace, Discord guild, or back-office system to live risk metrics.</span>
+                           </div>
+                        ) : (
+                           <div className="flex flex-col gap-3 max-h-[380px] overflow-y-auto pr-1">
+                              {webhooksList.map((wh) => (
+                                 <div key={wh.id} className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-slate-700/60 transition-colors">
+                                    <div className="flex flex-col gap-1.5">
+                                       <div className="flex items-center gap-2 flex-wrap">
+                                          <span className="text-xs font-bold text-white">{wh.name}</span>
+                                          <span className={`px-1.5 py-0.5 rounded text-[8px] font-mono uppercase tracking-widest border ${
+                                             wh.type === "slack" 
+                                                ? "bg-purple-500/10 border-purple-500/20 text-purple-400" 
+                                                : wh.type === "discord" 
+                                                   ? "bg-indigo-500/10 border-indigo-500/20 text-indigo-400" 
+                                                   : "bg-slate-800 border-slate-700 text-slate-400"
+                                          }`}>
+                                             {wh.type}
+                                          </span>
+                                          <span className="text-slate-600 text-[9px] font-mono">
+                                             ID: {wh.id}
+                                          </span>
+                                       </div>
+                                       
+                                       <div className="text-[10px] text-slate-500 font-mono truncate max-w-[280px] md:max-w-md">
+                                          {wh.url}
+                                       </div>
+
+                                       <div className="flex items-center gap-1.5 flex-wrap">
+                                          <span className="text-[9px] text-slate-500 uppercase font-mono">Triggers:</span>
+                                          {wh.events.map((ev: string) => (
+                                             <span key={ev} className="bg-slate-900 text-slate-400 text-[8px] font-mono px-1.5 py-0.5 rounded border border-slate-800">
+                                                {ev.replace(/_/g, ' ')}
+                                             </span>
+                                          ))}
+                                       </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-3 shrink-0 self-end md:self-auto">
+                                       {/* Test Connection Button */}
+                                       <button 
+                                          onClick={() => handleTestWebhook(wh.url, wh.type)}
+                                          className={`py-1 px-2.5 rounded font-mono text-[9px] uppercase tracking-wider border transition-all flex items-center gap-1 ${
+                                             webhookTestStatus === "testing" 
+                                                ? "bg-slate-800 border-slate-700 text-slate-400 cursor-not-allowed" 
+                                                : "bg-slate-900 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700"
+                                          }`}
+                                          disabled={webhookTestStatus === "testing"}
+                                       >
+                                          {webhookTestStatus === "testing" ? "Testing..." : "Test Connection"}
+                                       </button>
+
+                                       {/* Toggle switch */}
+                                       <button 
+                                          onClick={() => handleToggleWebhook(wh.id, wh.enabled)}
+                                          className="text-slate-400 hover:text-white transition-colors"
+                                       >
+                                          {wh.enabled ? <ToggleRight size={22} className="text-indigo-400" /> : <ToggleLeft size={22} />}
+                                       </button>
+
+                                       {/* Delete */}
+                                       <button 
+                                          onClick={() => handleDeleteWebhook(wh.id)}
+                                          className="text-slate-500 hover:text-rose-400 p-1 rounded hover:bg-rose-500/5 transition-colors"
+                                       >
+                                          <Trash2 size={14} />
+                                       </button>
+                                    </div>
+                                 </div>
+                              ))}
+                           </div>
+                        )}
+
+                        {webhookTestStatus && webhookTestStatus !== "testing" && (
+                           <div className={`mt-2 text-xs p-3 rounded border font-mono ${
+                              webhookTestStatus === "success" 
+                                 ? "bg-emerald-500/10 border-emerald-500/20 text-emerald-400" 
+                                 : "bg-rose-500/10 border-rose-500/20 text-rose-400"
+                           }`}>
+                              {webhookTestStatus === "success" 
+                                 ? "✓ WEBHOOK SENT SUCCESSFUL: Connection verified. Test notification payload has been delivered."
+                                 : "✗ TEST DISPATCH FAILED: Remote server returned an error. Check the URL and connection settings."
+                              }
+                           </div>
+                        )}
+                     </div>
+                  </div>
+              </div>
 
           </div>
         )}

@@ -825,6 +825,74 @@ function savePortfolio(state: any) {
 
 let portfolioState = loadPortfolio();
 
+// Global custom outbound webhooks configuration
+let webhooks: any[] = [
+  {
+    id: "wh_slack_sample",
+    name: "Slack Desk channel",
+    url: "https://hooks.slack.com/services/T00/B00/X123",
+    type: "slack",
+    enabled: false,
+    events: ["veto", "daily_loss_breach", "sector_exposure_breach"],
+    createdAt: new Date().toISOString()
+  }
+];
+
+// Dispatch real-time notifications to configured webhooks
+async function triggerWebhooks(event: {
+  type: "veto" | "daily_loss_breach" | "sector_exposure_breach";
+  title: string;
+  message: string;
+  details?: any;
+}) {
+  console.log(`[Webhook Trigger] Event: ${event.type} | ${event.title}`);
+  for (const wh of webhooks) {
+    if (!wh.enabled) continue;
+    if (wh.events.includes("all") || wh.events.includes(event.type)) {
+      let payload: any = {};
+      const timestamp = new Date().toISOString();
+      if (wh.type === "slack") {
+        payload = {
+          text: `🚨 *[ARGUS RISK ALERT]* *${event.title}*\n> ${event.message}\n_Time: ${timestamp}_`
+        };
+      } else if (wh.type === "discord") {
+        payload = {
+          embeds: [{
+            title: `🚨 [ARGUS RISK ALERT] ${event.title}`,
+            description: event.message,
+            color: 15158332,
+            timestamp,
+            footer: {
+              text: "Argus Terminal Oversight Node"
+            }
+          }]
+        };
+      } else {
+        payload = {
+          event: event.type,
+          title: event.title,
+          message: event.message,
+          timestamp,
+          details: event.details || {}
+        };
+      }
+
+      try {
+        const response = await fetch(wh.url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(payload)
+        });
+        console.log(`[Webhook] Sent to ${wh.name} (${wh.type}). Status: ${response.status}`);
+      } catch (err: any) {
+        console.error(`[Webhook Error] Failed to dispatch webhook ${wh.name}:`, err.message);
+      }
+    }
+  }
+}
+
 // Simulated agents and history
   let recentTrades: any[] = [];
   let riskVetos: any[] = [
@@ -1560,6 +1628,103 @@ let portfolioState = loadPortfolio();
     res.json({ ok: true, paper_trading_only: process.env.PAPER_TRADING_ONLY !== "false" });
   });
 
+  app.get("/api/v1/webhooks", (req: Request, res: Response) => {
+    res.json(webhooks);
+  });
+
+  app.post("/api/v1/webhooks", (req: Request, res: Response) => {
+    const { name, url, type, enabled, events } = req.body;
+    if (!name || !url || !type) {
+      return res.status(400).json({ error: "Missing required fields: name, url, type" });
+    }
+    const newWebhook = {
+      id: "wh_" + Math.random().toString(36).substring(2, 9),
+      name,
+      url,
+      type,
+      enabled: enabled !== false,
+      events: Array.isArray(events) ? events : ["all"],
+      createdAt: new Date().toISOString()
+    };
+    webhooks.push(newWebhook);
+    res.status(201).json(newWebhook);
+  });
+
+  app.put("/api/v1/webhooks/:id", (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { name, url, type, enabled, events } = req.body;
+    const index = webhooks.findIndex(wh => wh.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: "Webhook not found" });
+    }
+    webhooks[index] = {
+      ...webhooks[index],
+      name: name !== undefined ? name : webhooks[index].name,
+      url: url !== undefined ? url : webhooks[index].url,
+      type: type !== undefined ? type : webhooks[index].type,
+      enabled: enabled !== undefined ? enabled : webhooks[index].enabled,
+      events: events !== undefined ? events : webhooks[index].events
+    };
+    res.json(webhooks[index]);
+  });
+
+  app.post("/api/v1/webhooks/test", async (req: Request, res: Response) => {
+    const { url, type } = req.body;
+    if (!url || !type) {
+      return res.status(400).json({ error: "Missing url or type" });
+    }
+    const timestamp = new Date().toISOString();
+    let payload: any = {};
+    if (type === "slack") {
+      payload = {
+        text: `🚨 *[ARGUS RISK ALERT TEST]* This is a test notification from your Argus Autonomous Trading Terminal.\n_Time: ${timestamp}_`
+      };
+    } else if (type === "discord") {
+      payload = {
+        embeds: [{
+          title: `🚨 [ARGUS RISK ALERT TEST] Connection Test`,
+          description: "This is a test notification from your Argus Autonomous Trading Terminal.",
+          color: 3066993,
+          timestamp,
+          footer: {
+            text: "Argus Terminal Oversight Node"
+          }
+        }]
+      };
+    } else {
+      payload = {
+        event: "test",
+        title: "Connection Test",
+        message: "This is a test notification from your Argus Autonomous Trading Terminal.",
+        timestamp,
+        details: { test: true }
+      };
+    }
+
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+      res.json({ success: response.ok, status: response.status });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
+    const { id } = req.params;
+    const index = webhooks.findIndex(wh => wh.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: "Webhook not found" });
+    }
+    webhooks.splice(index, 1);
+    res.json({ success: true });
+  });
+
   app.get("/api/v1/audit/trail", (req: Request, res: Response) => {
     try {
       if (fs.existsSync(AUDIT_LOG_FILE)) {
@@ -1858,6 +2023,12 @@ let portfolioState = loadPortfolio();
 
         responsePayload.vetoed_by_risk = true;
         responsePayload.execution_status = `VETOED by Risk Management Layer: ${msg}`;
+        triggerWebhooks({
+          type: "sector_exposure_breach",
+          title: `Sector Exposure Breach: ${symbol}`,
+          message: msg,
+          details: { symbol, techVal, totalEq, safetyCeiling: "35.0%" }
+        }).catch(err => console.error("Webhook trigger failed", err));
       } else {
         // Execute Buy
         const amt = 100.0; // Default size $100
@@ -3057,7 +3228,13 @@ Output MUST be strict JSON matching this structure:
            
            if (autoBotState.currentDailyLoss >= autoBotState.dailyLossLimit) {
                autoBotState.enabled = false;
-               autoBotState.history.unshift({ time: new Date().toISOString(), type: 'error', msg: `CRITICAL: Daily loss limit ($${autoBotState.dailyLossLimit}) reached. Bot shutting down.` });
+               autoBotState.history.unshift({ time: new Date().toISOString(), type: 'error', msg: `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) reached. Bot shutting down.` });
+               triggerWebhooks({
+                 type: "daily_loss_breach",
+                 title: "Daily Loss Limit Breached",
+                 message: `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) reached. Active daily loss has reached ${autoBotState.currentDailyLoss.toFixed(2)}. Trading engines suspended.`,
+                 details: { dailyLossLimit: autoBotState.dailyLossLimit, currentDailyLoss: autoBotState.currentDailyLoss }
+               }).catch(err => console.error("Webhook trigger failed", err));
                return;
            }
 
@@ -3132,7 +3309,13 @@ Output MUST be strict JSON matching this structure:
 
               if (autoBotState.currentDailyLoss >= autoBotState.dailyLossLimit) {
                  autoBotState.enabled = false;
-                 autoBotState.history.unshift({ time: new Date().toISOString(), type: 'error', msg: `CRITICAL: Daily loss limit ($${autoBotState.dailyLossLimit}) exceeded. Bot automatically halted to protect capital.` });
+                 autoBotState.history.unshift({ time: new Date().toISOString(), type: 'error', msg: `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) exceeded. Bot automatically halted to protect capital.` });
+                  triggerWebhooks({
+                    type: "daily_loss_breach",
+                    title: "Daily Loss Limit Exceeded",
+                    message: `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) exceeded. Active daily loss has reached ${autoBotState.currentDailyLoss.toFixed(2)}. Trading engines suspended.`,
+                    details: { dailyLossLimit: autoBotState.dailyLossLimit, currentDailyLoss: autoBotState.currentDailyLoss }
+                  }).catch(err => console.error("Webhook trigger failed", err));
                  return;
               }
            }
@@ -3457,6 +3640,12 @@ Output strict JSON: { "verdict": "APPROVE" | "REJECT", "reason": "short analytic
                  autoBotState.activeCycle.status = "vetoed";
                  autoBotState.activeCycle.finalAction = "VETOED by Risk Manager";
                  autoBotState.history.unshift({ time: new Date().toISOString(), type: 'veto', msg: `Risk Manager VETOED ${propData.decision} on ${targetSymbol}: ${verifData.reason}` });
+                 triggerWebhooks({
+                   type: "veto",
+                   title: `Risk Manager Veto: ${targetSymbol}`,
+                   message: `Risk Manager VETOED proposed ${propData.decision} on ${targetSymbol}: ${verifData.reason}`,
+                   details: { symbol: targetSymbol, decision: propData.decision, reason: verifData.reason, confidence: propData.confidence }
+                 }).catch(err => console.error("Webhook trigger failed", err));
                  
                  // Execute vetoed trade in Shadow Portfolio (bypassing the Risk Manager & ATR constraints!)
                  try {
