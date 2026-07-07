@@ -1,0 +1,8 @@
+{
+  "name": "Multi-Agent AI Trading Platform",
+  "description": "An enterprise-grade, multi-agent AI trading platform with quantitative baseline/ML models, narrative/news intelligence vectors, strict risk veto protocols, and paper trading simulations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
