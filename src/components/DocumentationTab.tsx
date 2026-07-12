@@ -3,7 +3,9 @@ import {
   BookOpen, Layers, Target, Activity, Wallet, BarChart3, 
   BrainCircuit, Terminal, Zap, ShieldCheck, Search, X, 
   ChevronRight, AlignLeft, Info, Settings, Database, 
-  LineChart, Bot
+  LineChart, Bot, CheckCircle2, Play, Circle, PlayCircle,
+  Network, Scale, Cpu, Radar, MessageSquare, AlertTriangle, ArrowDown,
+  TrendingUp, Sliders, Eye
 } from "lucide-react";
 
 interface DocumentationTabProps {
@@ -15,440 +17,527 @@ type DocSection = {
   category: string;
   title: string;
   icon: JSX.Element;
-  keywords: string[];
+  isCourse?: boolean;
   content: JSX.Element;
 };
 
 const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => {
   const [searchQuery, setSearchQuery] = useState("");
-  const [activeSectionId, setActiveSectionId] = useState<string>("introduction");
+  const [activeSectionId, setActiveSectionId] = useState<string>("intro-basics");
+  const [completedModules, setCompletedModules] = useState<Record<string, boolean>>({});
+  const [beginnerMode, setBeginnerMode] = useState<boolean>(true);
+
+  const markCompleted = (id: string) => {
+    setCompletedModules(prev => ({ ...prev, [id]: true }));
+  };
 
   const sections: DocSection[] = [
-    // GETTING STARTED
+    // COURSE 1: Beginner Onboarding
     {
-      id: "introduction",
-      category: "Getting Started",
-      title: "Introduction to Argus",
-      icon: <BookOpen size={18} />,
-      keywords: ["overview", "introduction", "getting started", "what is argus"],
+      id: "intro-basics",
+      category: "1. Terminal Onboarding",
+      title: "Argus Terminal Overview",
+      isCourse: true,
+      icon: <BookOpen size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 leading-relaxed text-sm">
-            Welcome to the <strong>Argus Autonomous Trading Terminal</strong>. Argus is a high-fidelity, multi-agent AI protocol designed for institutional-grade market analysis and execution. Unlike traditional algorithmic trading systems that rely solely on quantitative price data, Argus leverages a "Swarm Consensus" model combining specialized Large Language Model (LLM) agents.
-          </p>
-          <div className="bg-indigo-500/10 border border-indigo-500/30 p-5 rounded-lg flex gap-4">
-            <Info size={24} className="text-indigo-400 shrink-0" />
-            <div>
-              <h4 className="text-indigo-300 font-bold mb-1">Mission Statement</h4>
-              <p className="text-slate-400 text-xs leading-relaxed">
-                Argus aims to eliminate human emotional bias from trading by deploying a swarm of specialized AI personas that collaborate and compete simultaneously. By evaluating geopolitics, macroeconomic shifts, and localized sentiment alongside price action, Argus identifies hidden Alpha before it is priced in by the broader market.
-              </p>
-            </div>
+          <div className="flex justify-between items-center mb-6">
+            <h2 className="text-2xl font-bold text-white tracking-tight">Argus Autonomous Trading Terminal</h2>
+            {beginnerMode && (
+              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+                <CheckCircle2 size={12}/> Beginner Mode Active
+              </span>
+            )}
           </div>
-          <h3 className="text-white font-bold text-lg mt-8 mb-4 border-b border-slate-800 pb-2">Core Philosophy</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h4 className="text-emerald-400 font-bold mb-2">Cross-Dimensional Synthesis</h4>
-              <p className="text-xs text-slate-400">While human traders focus on a narrow set of technicals, the Argus swarm evaluates global macroeconomics, breaking news, and sentiment simultaneously to find outsized opportunities.</p>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h4 className="text-amber-400 font-bold mb-2">Adversarial Risk Management</h4>
-              <p className="text-xs text-slate-400">Proposer agents are naturally optimistic, seeking gains. Argus counters this with an adversarial Risk Manager agent that acts as an absolute veto authority, protecting capital at all costs.</p>
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "installation",
-      category: "Getting Started",
-      title: "Local Setup & Installation",
-      icon: <Terminal size={18} />,
-      keywords: ["setup", "install", "api keys", "configuration", "env", "run", "first time", "start"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 leading-relaxed text-sm">
-            Argus is designed to be deployed locally or via secure cloud containers. It utilizes a Node.js Express backend and a React/Vite frontend. Follow these instructions to launch your terminal.
-          </p>
           
-          <div className="space-y-4">
-            <h4 className="text-white font-bold border-b border-slate-800 pb-2">1. System Requirements</h4>
-            <ul className="list-disc pl-5 text-sm text-slate-400 space-y-2">
-              <li>Node.js version 18.0 or higher.</li>
-              <li>NPM or Yarn package manager.</li>
-              <li>Active API Keys for Google Gemini (and optionally Alpaca Markets).</li>
-            </ul>
+          <p className="text-slate-300 leading-relaxed text-sm">
+            Welcome to the <strong>Argus Autonomous Trading Terminal</strong>, an advanced, full-stack multi-agent AI terminal designed to execute and simulate continuous trading evaluations under strict risk mathematical constraints.
+          </p>
+
+          <div className="p-4 bg-slate-900/80 rounded border border-slate-800 flex items-start gap-3">
+            <Bot size={18} className="text-indigo-400 mt-1 shrink-0" />
+            <div>
+              <span className="text-xs font-mono font-bold text-indigo-300 uppercase block mb-1">THE CIO OVERSIGHT CONCEPT</span>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Argus introduces the concept of a virtual <strong>Chief Investment Officer (CIO)</strong>. The CIO steers strategy weights, schedules quantitative tasks, and runs all proposed trades through a multi-layer decision pipeline to block emotional sentiment traps and enforce hard mathematical risk boundaries.
+              </p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-indigo-500/30 transition-colors group">
+              <h3 className="text-indigo-400 font-bold mb-2 flex items-center gap-2"><LineChart size={16} className="group-hover:animate-pulse"/> 1. Dashboard Visualizers</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Observe live-market feeds, multi-node correlation matrices, and dynamic agent weight networks showing current AI voting consensus in real time.
+              </p>
+            </div>
+            
+            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-emerald-500/30 transition-colors group">
+              <h3 className="text-emerald-400 font-bold mb-2 flex items-center gap-2"><Target size={16} className="group-hover:animate-pulse"/> 2. Autonomous Mission Control</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Take control of the "Black Box" trading engine. Configure budget limits, strategy focus, risk levels, and utilize the Master Kill-Switch or custom tactical guardrails.
+              </p>
+            </div>
+            
+            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-amber-500/30 transition-colors group">
+              <h3 className="text-amber-400 font-bold mb-2 flex items-center gap-2"><Sliders size={16} className="group-hover:animate-pulse"/> 3. Strategy Backtest Arena</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Backtest and compare different strategy styles against simulated market conditions side-by-side with line toggle visualizations.
+              </p>
+            </div>
+            
+            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-rose-500/30 transition-colors group">
+              <h3 className="text-rose-400 font-bold mb-2 flex items-center gap-2"><Network size={16} className="group-hover:animate-pulse"/> 4. Semantic Precedent Database</h3>
+              <p className="text-slate-400 text-xs leading-relaxed">
+                Use the Vec Event Memory to search for historical market macro shocks (e.g., oil crisis, black swan events) using standard human prose.
+              </p>
+            </div>
+          </div>
+          
+          <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-lg mt-8 flex justify-between items-center transition-all duration-300 hover:bg-slate-800">
+            <div>
+              <h4 className="text-white font-bold mb-1 text-sm">Interactive Beginner Mode Guidance</h4>
+              <p className="text-slate-400 text-xs">Enabling beginner mode forces detailed tooltips, limits max exposure parameters, and explains complex mathematical formulas in simple terminology.</p>
+            </div>
+            <button 
+              onClick={() => setBeginnerMode(!beginnerMode)}
+              className={"px-4 py-2 rounded text-xs font-bold transition-all duration-300 " + (beginnerMode ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)] hover:bg-emerald-400" : "bg-slate-700 text-slate-300 hover:bg-slate-600")}
+            >
+              {beginnerMode ? "Active" : "Activate Mode"}
+            </button>
           </div>
 
-          <div className="space-y-4 mt-6">
-            <h4 className="text-white font-bold border-b border-slate-800 pb-2">2. Installation Steps</h4>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 font-mono text-xs text-slate-300 space-y-4">
-              <div>
-                <p className="text-slate-400 mb-2"># Clone the repository and install dependencies</p>
-                <code className="bg-slate-900 block p-3 rounded text-emerald-400">npm install</code>
-              </div>
-              <div>
-                <p className="text-slate-400 mb-2"># Configure your environment variables</p>
-                <code className="bg-slate-900 block p-3 rounded text-indigo-400 whitespace-pre">
-{`cp .env.example .env
-
-# Edit .env with your credentials:
-GEMINI_API_KEY=your_gemini_key_here
-ALPACA_API_KEY=your_alpaca_key_here (optional)
-ALPACA_API_SECRET=your_alpaca_secret_here (optional)`}
-                </code>
-              </div>
-              <div>
-                <p className="text-slate-400 mb-2"># Launch the development server</p>
-                <code className="bg-slate-900 block p-3 rounded text-emerald-400">npm run dev</code>
-              </div>
-            </div>
+          <div className="flex justify-end mt-8">
+            <button 
+              onClick={() => { markCompleted("intro-basics"); setActiveSectionId("agent-council"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              Understand Agent Council <ChevronRight size={16} />
+            </button>
           </div>
         </div>
       )
     },
-
-    // DATABASE & STATE
+    
+    // COURSE 2: Intelligence & Consensus Pipeline
     {
-      id: "database-setup",
-      category: "Database & State",
-      title: "Database Requirements & Setup",
-      icon: <Database size={18} />,
-      keywords: ["database", "db", "sql", "postgres", "redis", "memory", "setup", "persistence"],
+      id: "agent-council",
+      category: "1. Terminal Onboarding",
+      title: "The Multi-Agent Consensus Loop",
+      isCourse: true,
+      icon: <BrainCircuit size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 leading-relaxed text-sm">
-            Argus utilizes an abstracted persistence layer, meaning it can operate entirely in-memory for testing, or connect to a robust relational database (like PostgreSQL via Cloud SQL) and a caching layer (like Redis) for production.
+          <h2 className="text-2xl font-bold text-white tracking-tight mb-2">Multi-Agent Consensus Pipeline</h2>
+          <p className="text-slate-300 text-sm mb-6">
+            Unlike simple single-bot setups, Argus employs a structured <strong>multi-agent pipeline</strong>. Each node is engineered with unique prompts, focusing on separate areas of analysis.
           </p>
 
-          <div className="bg-indigo-500/10 border border-indigo-500/30 p-5 rounded-lg flex gap-4">
-            <Database size={24} className="text-indigo-400 shrink-0" />
-            <div>
-              <h4 className="text-indigo-300 font-bold mb-1">Current State: In-Memory / Simulated Local DB</h4>
-              <p className="text-slate-400 text-xs leading-relaxed">
-                By default, out-of-the-box, the backend server (`server.ts`) maintains the autonomous bot state, transaction logs, and learned rules within an `autoBotState` object in memory. This is perfect for local testing and simulations. Data is reset upon server restart. To persist data across sessions in a production environment, you must connect a database.
+          {/* Visual flow chart */}
+          <div className="bg-slate-950 border border-slate-800 p-6 rounded-lg font-mono text-xs flex flex-col items-center">
+            
+            <div className="bg-indigo-950/40 border border-indigo-500/40 p-3 rounded text-center w-72 text-white">
+              <span className="font-bold text-indigo-400 block mb-1 uppercase tracking-wider">Agent 1: The Proposer</span>
+              <p className="text-[10px] text-slate-400">Scans market, detects breakout momentum, submits BUY/SELL target logic.</p>
+            </div>
+
+            <div className="h-6 w-px bg-slate-800 flex flex-col justify-center items-center"><ArrowDown size={12} className="text-slate-500 relative top-3"/></div>
+
+            <div className="bg-amber-950/40 border border-amber-500/40 p-3 rounded text-center w-72 text-white">
+              <span className="font-bold text-amber-400 block mb-1 uppercase tracking-wider">Agent 2: Risk Verification Node</span>
+              <p className="text-[10px] text-slate-400">Computes 14-period Wilder's ATR and forces math safety limits on stop-loss.</p>
+            </div>
+
+            <div className="h-6 w-px bg-slate-800 flex flex-col justify-center items-center"><ArrowDown size={12} className="text-slate-500 relative top-3"/></div>
+
+            <div className="bg-rose-950/40 border border-rose-500/40 p-3 rounded text-center w-72 text-white">
+              <span className="font-bold text-rose-400 block mb-1 uppercase tracking-wider">Agent 3: Reflection & Memory Engine</span>
+              <p className="text-[10px] text-slate-400">Audits past unexpected losses, compiles persistent "Learned Rules" to inject back into system.</p>
+            </div>
+          </div>
+
+          <div className="space-y-4 mt-6">
+            <h3 className="text-lg font-bold text-white uppercase font-mono tracking-wide">Deep Dive into Agent Roles</h3>
+
+            <div className="bg-[#111822] p-4 rounded border border-slate-800">
+              <div className="flex items-center gap-2 text-indigo-400 font-bold mb-1">
+                <Bot size={16} />
+                <span>Agent 1 (The Proposer)</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                The Proposer acts as the alpha-hunting scanner. It reads technical indicator inputs (such as EMA, RSI, and Bollinger bands), sentiment parameters, and news trends. Based on the user's selected <strong>Strategy Focus</strong> and <strong>Risk Level</strong>, it generates a proposal containing the target asset, transaction type (BUY/SELL/HOLD), and an initial confidence score. Critically, it receives past memory rule injects to avoid previously encountered pitfalls.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] p-4 rounded border border-slate-800">
+              <div className="flex items-center gap-2 text-amber-400 font-bold mb-1">
+                <ShieldCheck size={16} />
+                <span>Agent 2 (The Risk Manager)</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                The Risk Manager or RiskVerification Node evaluates proposed trades against system-wide risk settings and hard mathematical constraints. It computes the 14-period Average True Range (ATR) using Wilder's smoothed moving average method. It enforces a strict rule where stop-losses must be set at a <strong>minimum of 1.5x the ATR value</strong>. This prevents stop-outs due to simple market noise. It also dynamically scales the position size based on the allocated budget risk level.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] p-4 rounded border border-slate-800">
+              <div className="flex items-center gap-2 text-rose-400 font-bold mb-1">
+                <Zap size={16} />
+                <span>Agent 3 (Reflection / Memory Engine)</span>
+              </div>
+              <p className="text-xs text-slate-300 leading-relaxed">
+                The Reflection Engine is the self-improving brain of Argus. It reviews closed positions (especially losing trades with unexpected drawdowns) and extracts logical post-mortems. It converts these findings into human-readable, strictly formatted "Memory Rules". These rules are stored permanently and automatically prepended to subsequent system prompts (Context Engineering) to ensure previous trade mistakes are never repeated.
               </p>
             </div>
           </div>
 
-          <div className="space-y-4 mt-6">
-            <h4 className="text-white font-bold border-b border-slate-800 pb-2">Production Database Setup (PostgreSQL)</h4>
-            <p className="text-sm text-slate-400">To migrate to a durable PostgreSQL database (e.g., Google Cloud SQL, Supabase, AWS RDS):</p>
-            
-            <ol className="list-decimal pl-5 text-sm text-slate-300 space-y-4">
-              <li>
-                <strong>Provision the Database:</strong> Create a PostgreSQL database instance. Ensure you have the connection URI string.
-              </li>
-              <li>
-                <strong>Environment Variable:</strong> Add your database URI to the `.env` file.
-                <code className="bg-[#111822] border border-slate-800 block p-3 rounded mt-2 text-indigo-400 font-mono text-xs">DATABASE_URL="postgres://user:password@host:port/dbname"</code>
-              </li>
-              <li>
-                <strong>Install ORM/Driver:</strong> Install the required database packages (e.g., Prisma or Drizzle ORM).
-                <code className="bg-[#111822] border border-slate-800 block p-3 rounded mt-2 text-emerald-400 font-mono text-xs">npm install drizzle-orm pg<br/>npm install -D drizzle-kit @types/pg</code>
-              </li>
-              <li>
-                <strong>Initialize Schema:</strong> Create the schema for `Portfolios`, `Trades`, `MemoryRules`, and `AuditLogs`.
-              </li>
-            </ol>
+          <div className="flex justify-between mt-8">
+            <button 
+              onClick={() => setActiveSectionId("intro-basics")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+            <button 
+              onClick={() => { markCompleted("agent-council"); setActiveSectionId("atr-positioning"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              Learn ATR Positioning <ChevronRight size={16} />
+            </button>
           </div>
         </div>
       )
     },
+
+    // COURSE 3: Math and ATR Positioning
     {
-      id: "db-parameters",
-      category: "Database & State",
-      title: "Updating Database Parameters",
-      icon: <Settings size={18} />,
-      keywords: ["db", "parameters", "configuration", "tuning", "max connections", "pool", "timeout"],
+      id: "atr-positioning",
+      category: "2. Mathematical Safeguards",
+      title: "Wilder's ATR & Risk-Based Position Sizing",
+      isCourse: true,
+      icon: <Scale size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 leading-relaxed text-sm">
-            When operating with a persistent database, the high-frequency nature of the autonomous agent loops requires specific parameter tuning to prevent connection exhaustion.
+          <h2 className="text-2xl font-bold text-white tracking-tight">ATR & Mathematical Risk Scaling</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">
+            Many algorithmic traders fail because they risk arbitrary amounts on every trade, ignoring market volatility. Argus prevents this using a <strong>14-period Average True Range (ATR) based Risk Engine</strong>.
           </p>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-emerald-400 font-bold mb-2">Connection Pooling</h5>
-              <p className="text-xs text-slate-400 mb-2">Because the autonomous bot loop (`setInterval`) can trigger dozens of asynchronous LLM calls and state updates simultaneously, you must configure a robust connection pool (e.g., using PgBouncer or the `pg.Pool` class).</p>
-              <code className="text-[10px] text-slate-500 font-mono">DB_POOL_MAX=50</code>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-amber-400 font-bold mb-2">Timeouts & Retries</h5>
-              <p className="text-xs text-slate-400 mb-2">Database queries must have strict timeouts. If a database lock occurs during a rapidly changing market simulation, the bot must fail gracefully rather than hanging the event loop.</p>
-              <code className="text-[10px] text-slate-500 font-mono">DB_IDLE_TIMEOUT_MS=10000</code>
-            </div>
-          </div>
-
-          <div className="space-y-4 mt-6">
-            <h4 className="text-white font-bold border-b border-slate-800 pb-2">State Synchronization</h4>
-            <p className="text-sm text-slate-400">
-              To minimize database writes, the backend caches the `autoBotState` in memory and performs bulk updates (upserts) to the database every X seconds, rather than writing to the database on every micro-tick of the simulation.
-              <br/><br/>
-              When modifying risk parameters (like Max Position Size) via the UI, the frontend issues a `POST /api/autobot/toggle` or parameter update endpoint. The backend updates the in-memory cache immediately, applies it to the next tick, and asynchronously flushes the change to the persistent DB.
+          {/* ATR Formula Panel */}
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+            <span className="text-[10px] font-mono uppercase text-slate-500 block mb-2">Mathematical Formulation</span>
+            <h3 className="text-sm font-bold text-white mb-2">Wilder's Average True Range (ATR-14)</h3>
+            <p className="text-xs text-slate-300 mb-4 leading-relaxed">
+              First, the True Range (TR) for each candle is calculated as the maximum of three values:
             </p>
-          </div>
-        </div>
-      )
-    },
-
-    // CORE CONCEPTS
-    {
-      id: "architecture",
-      category: "Core Concepts",
-      title: "System Architecture",
-      icon: <Layers size={18} />,
-      keywords: ["architecture", "deep dive", "layer", "how it works", "components"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 text-sm leading-relaxed mb-4">
-            Argus is built on a <strong>5-Layer Hierarchical Architecture</strong> separating data ingress, AI analysis, mathematical weighting, consensus decision-making, and hard risk management.
-          </p>
-          
-          <div className="space-y-6">
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 border-l-4 border-l-slate-500">
-              <h5 className="text-white font-bold mb-1">Layer 1: Data Ingress</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Responsible for collecting and streaming market data, news events, macro indicators, and geopolitical shifts. This acts as the sensory input for the AI swarm.</p>
+            <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-xs text-slate-300 mb-4 space-y-1">
+              <div>1. Current High minus Current Low: <span className="text-indigo-400">H_t - L_t</span></div>
+              <div>2. Absolute of Current High minus Previous Close: <span className="text-indigo-400">|H_t - C_(t-1)|</span></div>
+              <div>3. Absolute of Current Low minus Previous Close: <span className="text-indigo-400">|L_t - C_(t-1)|</span></div>
             </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 border-l-4 border-l-indigo-500">
-              <h5 className="text-white font-bold mb-1">Layer 2: Intelligence (LLM Swarm)</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Uses Google Gemini models to process unstructured qualitative data. Consists of specialized personas (Macro, Tech, News, Geopolitics) that translate real-world context into quantitative directional scores (-1.0 to 1.0).</p>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 border-l-4 border-l-sky-500">
-              <h5 className="text-white font-bold mb-1">Layer 3: Quantitative & Performance</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Evaluates agent performance mathematically. Tracks win rates, max drawdown, and Sharpe ratios for each agent, dynamically calibrating their "voting weight" based on real-time historical accuracy (Adaptive Performance Tracking).</p>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 border-l-4 border-l-amber-500">
-              <h5 className="text-white font-bold mb-1">Layer 4: Decision Consensus</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Aggregates the weighted signals from the Intelligence layer. A master Consensus Agent evaluates the aggregate votes to produce a final unified trade action (BUY/SELL/HOLD) alongside a confidence index.</p>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 border-l-4 border-l-rose-500">
-              <h5 className="text-white font-bold mb-1">Layer 5: Sovereign Risk Authority</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">The ultimate veto authority. Operates completely independently from the consensus. It vetos trades if allocation limits are exceeded or halts all operations if daily/weekly loss thresholds are breached.</p>
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "swarm-dynamics",
-      category: "Core Concepts",
-      title: "Agent Swarm Dynamics",
-      icon: <Target size={18} />,
-      keywords: ["agents", "swarm", "evolution", "weights", "correlation"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 text-sm leading-relaxed mb-4">
-            The core engine of Argus is its multi-agent swarm. By compartmentalizing logic into distinct LLM prompts, the system mimics a high-functioning quantitative trading floor.
-          </p>
-          
-          <h4 className="text-white font-bold border-b border-slate-800 pb-2 mt-8 mb-4">The Active Roster</h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="bg-[#111822] p-4 rounded-lg border border-slate-800">
-              <h5 className="text-sky-400 font-bold mb-1 flex items-center gap-2"><AlignLeft size={14} /> Macro Agent</h5>
-              <p className="text-xs text-slate-400">Analyzes interest rates, inflation data, and broad economic cycles. Has high weight during Federal Reserve announcements.</p>
-            </div>
-            <div className="bg-[#111822] p-4 rounded-lg border border-slate-800">
-              <h5 className="text-emerald-400 font-bold mb-1 flex items-center gap-2"><LineChart size={14} /> Tech Agent</h5>
-              <p className="text-xs text-slate-400">Focuses purely on price action, moving averages, RSI, and momentum divergence. The quantitative anchor of the swarm.</p>
-            </div>
-            <div className="bg-[#111822] p-4 rounded-lg border border-slate-800">
-              <h5 className="text-amber-400 font-bold mb-1 flex items-center gap-2"><Activity size={14} /> Sentiment Agent</h5>
-              <p className="text-xs text-slate-400">Scans social media velocity, news headlines, and retail fervor to detect short-term irrational market moves.</p>
-            </div>
-            <div className="bg-[#111822] p-4 rounded-lg border border-slate-800">
-              <h5 className="text-purple-400 font-bold mb-1 flex items-center gap-2"><Target size={14} /> Geopol Agent</h5>
-              <p className="text-xs text-slate-400">Monitors global conflicts, supply chain disruptions, and sovereign policy shifts for structural tail risks.</p>
-            </div>
-          </div>
-
-          <div className="bg-emerald-500/10 border border-emerald-500/30 p-5 rounded-lg mt-6">
-            <h4 className="text-emerald-400 font-bold mb-2">Evolutionary Weighting (Survival of the Fittest)</h4>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Agents do not have equal votes. Argus continuously tracks the Win Rate and Sharpe Ratio of every agent. If the Tech Agent begins losing trades in a choppy bear market, the Quantitative Layer automatically strips its voting power and redistributes it to the Geopol Agent (if it is performing better). This self-correcting swarm intelligence ensures the system adapts to shifting market regimes without human intervention.
+            <p className="text-xs text-slate-300 mb-3">
+              Then, Wilder's smoothed moving average is applied over 14 historical candles:
             </p>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "risk-protocol",
-      category: "Core Concepts",
-      title: "Risk Management Protocol",
-      icon: <ShieldCheck size={18} />,
-      keywords: ["risk", "veto", "circuit breaker", "exposure", "guardrails"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 text-sm leading-relaxed mb-4">
-            Trading via autonomous agents involves significant risk. The Argus Terminal implements a "Sovereign Risk Authority" that cannot be overridden by the Proposer swarm.
-          </p>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
-            <div className="border border-rose-500/20 bg-rose-500/5 p-5 rounded-lg flex flex-col h-full">
-              <h5 className="text-rose-400 font-bold mb-2">Circuit Breakers</h5>
-              <p className="text-xs text-slate-400 flex-1">Automatically halts all trading logic if portfolio equity drops below a daily or weekly maximum drawdown threshold. Requires manual human restart.</p>
-            </div>
-            <div className="border border-emerald-500/20 bg-emerald-500/5 p-5 rounded-lg flex flex-col h-full">
-              <h5 className="text-emerald-400 font-bold mb-2">Sector Exposure Caps</h5>
-              <p className="text-xs text-slate-400 flex-1">Caps maximum allocation per sector (e.g., max 30% in Technology) to prevent catastrophic over-concentration in a single asset class.</p>
-            </div>
-            <div className="border border-indigo-500/20 bg-indigo-500/5 p-5 rounded-lg flex flex-col h-full">
-              <h5 className="text-indigo-400 font-bold mb-2">The Final Veto</h5>
-              <p className="text-xs text-slate-400 flex-1">Even if the AI swarm achieves 100% unanimous consensus to buy an asset, the Risk Manager will VETO the trade if it violates any active guardrail.</p>
-            </div>
-          </div>
-          
-          <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-            <h4 className="text-white font-bold mb-2">Configuring Guardrails</h4>
-            <p className="text-xs text-slate-400 mb-4">Risk parameters are configured in the <strong>Command Center</strong> tab under the <strong>Guardrails Panel</strong>. Changes take effect immediately on the next bot cycle.</p>
-            <ul className="list-disc pl-5 text-xs text-slate-500 space-y-1">
-              <li>Max Position Size (Default: 5% of Portfolio)</li>
-              <li>Max Daily Drawdown (Default: -3.5%)</li>
-              <li>Required Agent Confidence Threshold (Default: 75%)</li>
-            </ul>
-          </div>
-        </div>
-      )
-    },
-
-    // MODULES & FEATURES
-    {
-      id: "trading-arena",
-      category: "Modules & Features",
-      title: "Trading Arena (Dashboard)",
-      icon: <Layers size={18} />,
-      keywords: ["arena", "dashboard", "manual", "consensus", "ui", "charts"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 text-sm leading-relaxed">
-            The Trading Arena is the central hub for manual execution, observation, and macro simulations. It visualizes the pulse of the agent swarm in real-time.
-          </p>
-          
-          <div className="space-y-4">
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-indigo-400 font-bold mb-2">Target Asset & News Ticker</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Select specific ticker symbols (e.g., AAPL, NVDA) and provide context headlines to simulate incoming market data. This is where you manually trigger the swarm.</p>
-            </div>
-            
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-indigo-400 font-bold mb-2">Multi-Agent Dialogue Graph</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">A visual network graph showing the active LLM nodes discussing the current asset. Lines pulse rapidly when data is being processed, visually representing the swarm consensus building.</p>
-            </div>
-            
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-indigo-400 font-bold mb-2">Strategy Synergy Matrix</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">A heatmap visualizing the correlation coefficient between different agents when proposing trades. It reveals if agents are acting redundantly (High Sync / Green) or acting as structural hedges (Inverse Correlation / Red).</p>
-            </div>
-            
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-indigo-400 font-bold mb-2">Execution vs. Veto Ledgers</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Two side-by-side tables. The left shows trades that were successfully booked to the portfolio. The right displays trades that were mercilessly blocked by the Risk Manager, explaining exactly *why* they were vetoed.</p>
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "holdings",
-      category: "Modules & Features",
-      title: "Holdings & Positions",
-      icon: <Wallet size={18} />,
-      keywords: ["portfolio", "holdings", "assets", "unrealized", "pnl", "treemap"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 text-sm leading-relaxed">
-            The Holdings module acts as your simulated (or connected) brokerage account view, tracking the ongoing performance of the swarm's deployed capital.
-          </p>
-          
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <div className="flex items-center gap-2 mb-3">
-                <Wallet size={16} className="text-sky-400" />
-                <h5 className="text-white font-bold">Active Portfolio Ledger</h5>
-              </div>
-              <p className="text-xs text-slate-400">Lists all currently held assets. Tracks exact allocation percentage, entry cost basis, current market price, and live Unrealized Profit/Loss. Use this view to manually override the bot and liquidate positions.</p>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <div className="flex items-center gap-2 mb-3">
-                <BarChart3 size={16} className="text-sky-400" />
-                <h5 className="text-white font-bold">Risk Attribution Treemap</h5>
-              </div>
-              <p className="text-xs text-slate-400">A dense, hierarchical map showing capital deployment clustered across different market sectors. Essential for rapid visualization of concentration risk (e.g., noticing the bot has deployed 60% of capital into Semiconductors).</p>
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "command-center",
-      category: "Modules & Features",
-      title: "Autonomous Command Center",
-      icon: <Bot size={18} />,
-      keywords: ["bot", "auto", "command", "autonomous", "settings", "telemetry"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 text-sm leading-relaxed">
-            The Command Center is mission control for the algorithmic "Black Box" bot. Once activated, the bot runs a continuous loop on the Node.js backend entirely independent of the browser.
-          </p>
-
-          <div className="bg-amber-500/10 border border-amber-500/30 p-5 rounded-lg flex gap-4">
-            <Zap size={24} className="text-amber-400 shrink-0" />
-            <div>
-              <h4 className="text-amber-300 font-bold mb-1">The Autonomous Loop</h4>
-              <p className="text-slate-400 text-xs leading-relaxed">
-                When toggled ON, the backend begins a `setInterval` loop. It randomly selects assets from the universe, generates synthetic or real market data, runs the full 5-Layer Swarm Evaluation, and executes trades without human input. The UI simply polls the backend to display telemetry.
-              </p>
+            <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-xs text-slate-300 text-center">
+              <span className="text-indigo-300 font-bold">ATR_t = ( (ATR_(t-1) * 13) + TR_t ) / 14</span>
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-amber-400 font-bold mb-2">Live Bot Telemetry</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">A matrix of terminal-like readouts showing the Bot's exact internal state: Operational Status, Simulated CPU/Memory Utilization, Network Latency, and the timestamp of the last executed cycle.</p>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-amber-400 font-bold mb-2">Strategy Bias Knobs</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Adjust the bot's overarching personality. Shift the focus between Momentum, Value, or Mean Reversion. Adjust the baseline risk tolerance from Conservative to Highly Aggressive, which modifies the required agent confidence threshold.</p>
-            </div>
-            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
-              <h5 className="text-rose-400 font-bold mb-2">Master Kill-Switch</h5>
-              <p className="text-xs text-slate-400 leading-relaxed">Instantly halts the backend `setInterval` loop. Immediately stops all future evaluations and trade proposals. Does NOT automatically liquidate current holdings.</p>
-            </div>
-          </div>
-        </div>
-      )
-    },
-    {
-      id: "learning-reflection",
-      category: "Modules & Features",
-      title: "Learning & Context Memory",
-      icon: <BrainCircuit size={18} />,
-      keywords: ["learning", "memory", "reflection", "rules", "context engineering"],
-      content: (
-        <div className="space-y-6 animate-fade-in">
-          <p className="text-slate-300 text-sm leading-relaxed mb-4">
-            The most advanced feature of the Argus Terminal is its ability to learn from its mistakes via automated Context Memory Engineering.
-          </p>
-          
-          <div className="bg-[#111822] p-6 rounded-lg border border-slate-800 relative overflow-hidden">
-            <div className="absolute top-0 right-0 p-4 opacity-10"><BrainCircuit size={100} /></div>
-            <h4 className="text-rose-400 font-bold mb-3 relative z-10">The Reflection Engine Workflow</h4>
-            <ol className="list-decimal pl-5 space-y-4 text-xs text-slate-300 relative z-10">
-              <li><strong>Loss Detection:</strong> The system continuously monitors closed trades. When a trade is closed at a significant loss, it triggers the Reflection Protocol.</li>
-              <li><strong>Post-Mortem Analysis:</strong> An independent LLM agent reviews the exact rationale that led the swarm to take the losing trade, comparing it to the actual market outcome.</li>
-              <li><strong>Rule Generation:</strong> The agent extracts a concrete lesson and generates a strict "Rule" (e.g., <em>"Do not buy semiconductors immediately following an inverted yield curve flash, regardless of RSI."</em>).</li>
-              <li><strong>Context Injection:</strong> This new rule is saved to the persistent `memoryRules` database. In all future trades involving similar assets, this rule is dynamically injected directly into the system prompt of the Proposer agents.</li>
-            </ol>
-          </div>
-
+          {/* Sizing constraints */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-            <div className="bg-[#111822] p-4 rounded-lg border border-slate-800">
-              <h5 className="text-indigo-400 font-bold mb-2">Semantic Event Memory</h5>
-              <p className="text-xs text-slate-400">A vector search interface. Users can search for historical macro shocks (e.g., "2008 Housing Crisis") to see how the system correlates historical lessons to current market conditions.</p>
+            <div className="bg-slate-900/60 p-4 rounded border border-slate-800">
+              <span className="text-[10px] font-mono uppercase text-indigo-400 font-bold block mb-2">1. NOISE FILTER PROTECTION</span>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Argus forces stop-losses to a **minimum of 1.5x the current ATR value** away from the entry price. If a stop-loss is placed any closer, normal price noise would stop out the trade prematurely.
+              </p>
             </div>
-            <div className="bg-[#111822] p-4 rounded-lg border border-slate-800">
-              <h5 className="text-indigo-400 font-bold mb-2">Trade Replay Modal</h5>
-              <p className="text-xs text-slate-400">Click any closed trade in the history ledger to open a full breakdown. See exactly which agents voted YES or NO, read their original rationale, and add manual human journaling notes.</p>
+
+            <div className="bg-slate-900/60 p-4 rounded border border-slate-800">
+              <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-2">2. RISK CAPITAL SCALING</span>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                The trade sizing matches your configured risk level. Maximum allowable shares are calculated so the maximum potential loss does not exceed your risk capital ceiling.
+              </p>
+            </div>
+          </div>
+
+          {/* Allocation settings explanation */}
+          <div className="bg-[#111822] border border-slate-800 p-4 rounded">
+            <span className="text-[10px] font-mono uppercase text-amber-400 font-bold block mb-3">BUDGET RISK LEVEL MULTIPLIERS</span>
+            <div className="space-y-2 text-xs font-mono">
+              <div className="flex justify-between border-b border-slate-800 pb-1">
+                <span className="text-slate-400">Low Risk Setting</span>
+                <span className="text-emerald-400 font-bold">1.0% of Total Budget</span>
+              </div>
+              <div className="flex justify-between border-b border-slate-800 pb-1">
+                <span className="text-slate-400">Medium Risk Setting</span>
+                <span className="text-indigo-400 font-bold">1.5% of Total Budget</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">High Risk Setting</span>
+                <span className="text-rose-400 font-bold">3.0% of Total Budget</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-between mt-8">
+            <button 
+              onClick={() => setActiveSectionId("agent-council")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+            <button 
+              onClick={() => { markCompleted("atr-positioning"); setActiveSectionId("cio-deck"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              Explore CIO Deck <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )
+    },
+
+    // COURSE 4: Chief Trader CIO Deck
+    {
+      id: "cio-deck",
+      category: "2. Mathematical Safeguards",
+      title: "Chief Trader Autonomous CIO Deck",
+      isCourse: true,
+      icon: <Sliders size={16} />,
+      content: (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-2xl font-bold text-white tracking-tight">Chief Trader Agent: Autonomous CIO Deck</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">
+            The **Chief Trader Agent** acts as the virtual Chief Investment Officer (CIO) of your autonomous terminal. It orchestrates three key areas to maintain discipline and optimize alpha extraction:
+          </p>
+
+          <div className="space-y-4">
+            {/* Step 1: Task Assignment */}
+            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 font-mono font-bold px-2 py-0.5 rounded">
+                  STAGE 1
+                </span>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                  Quantitative Task Dispatching
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                The CIO distributes research tasks to specialized analyst nodes to collect intelligence before trade proposals are compiled.
+              </p>
+              <ul className="list-disc list-inside text-xs text-slate-300 space-y-1 font-mono">
+                <li><strong className="text-slate-100">Sentiment Harvesting</strong> assigned to Gemini Node</li>
+                <li><strong className="text-slate-100">Volatility Analysis</strong> assigned to Technical Node</li>
+                <li><strong className="text-slate-100">Correlation Mapping</strong> assigned to Risk Node</li>
+                <li><strong className="text-slate-100">Regime Detection</strong> assigned to Claude Node</li>
+              </ul>
+            </div>
+
+            {/* Step 2: Strategy Tuning */}
+            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 font-mono font-bold px-2 py-0.5 rounded">
+                  STAGE 2
+                </span>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                  Core Strategy Selection & Tuning
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                The CIO toggles between four core algorithmic styles, allowing you to fine-tune strategy properties directly from the terminal console:
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
+                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
+                  <span className="text-indigo-400 font-bold block mb-0.5">Volatility Breakout Core</span>
+                  <p className="text-[10px] text-slate-500">Capitalizes on sudden momentum expansion from historical ranges.</p>
+                </div>
+                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
+                  <span className="text-emerald-400 font-bold block mb-0.5">Funding Rate Arb Node</span>
+                  <p className="text-[10px] text-slate-500">Collects risk-free premium on spot versus futures contract premiums.</p>
+                </div>
+                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
+                  <span className="text-amber-400 font-bold block mb-0.5">Liquidity Sweeping Alpha</span>
+                  <p className="text-[10px] text-slate-500">Trades support/resistance breaches targeting stop-loss hunt events.</p>
+                </div>
+                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
+                  <span className="text-rose-400 font-bold block mb-0.5">Macro Regime Tracker</span>
+                  <p className="text-[10px] text-slate-500">Detects shifts in overall inflation or interest rate cycles.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Step 3: Multi-Layer Veto Gate */}
+            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 font-mono font-bold px-2 py-0.5 rounded">
+                  STAGE 3
+                </span>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                  Multi-Layer Discretionary Veto
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                All trade proposals enter the CIO's vetting gate. If any rule is breached, the proposal is forcefully blocked to avoid capital degradation:
+              </p>
+              
+              <div className="space-y-2 font-mono text-[11px] bg-slate-950 p-3 rounded border border-slate-800/80">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Layer 1: Sentiment Consensus Gate</span>
+                  <span className="text-emerald-400 font-bold">BLOCKS EMOTIONAL FOMO CHASES</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Layer 2: Hard ATR Noise Filter Cap</span>
+                  <span className="text-amber-400 font-bold">REJECTS TIGHT NOISE STOP-LOSSES</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Layer 3: Macro Correlation Safety Limit</span>
+                  <span className="text-indigo-400 font-bold">STRICT SECTOR EXPOSURE DIVERSIFICATION</span>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Layer 4: CIO Discretionary Overlay</span>
+                  <span className="text-rose-400 font-bold">APPLIES HISTORICAL MEMORY RULES</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-between mt-8">
+            <button 
+              onClick={() => setActiveSectionId("atr-positioning")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+            <button 
+              onClick={() => { markCompleted("cio-deck"); setActiveSectionId("evolution-learning"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              See Evolution & Backtesting <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )
+    },
+
+    // COURSE 5: Practice & Evolution
+    {
+      id: "evolution-learning",
+      category: "3. Practice & Evolution",
+      title: "Learning, Reflection & Strategy Backtesting",
+      isCourse: true,
+      icon: <LineChart size={16} />,
+      content: (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-2xl font-bold text-white tracking-tight">Strategy Evolution & Manual Reflection</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">
+            Argus is designed around continuous adaptation. The terminal provides two distinct interfaces for reflection: automatic machine-learning loops and qualitative human trade journaling.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
+              <span className="text-[10px] font-mono text-indigo-400 uppercase font-bold block mb-1">
+                AUTOMATED CONTEXT ENGINEERING
+              </span>
+              <h3 className="text-sm font-bold text-white mb-2">The Memory Reflection Loop</h3>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                When the terminal suffers unexpected losses or hits stop-loss triggers, the reflection node converts that information into strict markdown directives. These directives are persisted and injected back into the active prompt files for Agent 1 and 2 automatically.
+              </p>
+              <div className="bg-slate-950 p-2.5 rounded border border-slate-900 font-mono text-[9px] text-rose-300 leading-tight">
+                "RULE #04: Do not trade correlated tech assets (e.g., NVDA, TSLA) simultaneously if macro indexes (SPY) exhibit 10-day ATR volatility exceeds 2.5."
+              </div>
+            </div>
+
+            <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
+              <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block mb-1">
+                QUALITATIVE MANUAL JOURNALING
+              </span>
+              <h3 className="text-sm font-bold text-white mb-2">Trade Reflection Modal</h3>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                In the Historical Trade Decisions Ledger, users can access a custom Trade Journal Modal. This is designed to capture human psychology feedback, allowing you to annotate trades with private qualitative logs.
+              </p>
+              <div className="bg-slate-950 p-2.5 rounded border border-slate-900 font-mono text-[9px] text-emerald-300 leading-tight">
+                "Note: Trade was well-conceived off weekly EMA support, but my risk-tolerance multiplier was set too high. Need to tune down to Low Risk next time."
+              </div>
+            </div>
+          </div>
+
+          {/* Backtesting tutorial */}
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg mt-6">
+            <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
+              <Sliders size={16} className="text-indigo-400" />
+              Strategy Backtest Engine Tutorial
+            </h3>
+            <p className="text-xs text-slate-300 leading-relaxed mb-3">
+              The Strategy Backtest Engine simulates two distinct portfolios under matching market feeds. Use the line toggle check-boxes to compare:
+            </p>
+            <ul className="list-disc list-inside text-xs text-slate-400 space-y-1.5 font-mono">
+              <li>Compare <strong className="text-indigo-400">Argus Multi-Agent Dynamic Core</strong> versus a simple <strong className="text-slate-200">Buy & Hold Benchmark</strong>.</li>
+              <li>Filter the realized performance over custom metrics (Last 7 Days, Last 30 Days, Month-to-Date, or Year-to-Date).</li>
+              <li>Toggle line charts dynamically to see exactly where volatility drawdowns occur in each setup.</li>
+            </ul>
+          </div>
+
+          <div className="flex justify-between mt-8">
+            <button 
+              onClick={() => setActiveSectionId("cio-deck")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+            <button 
+              onClick={() => { markCompleted("evolution-learning"); setActiveSectionId("simulator-safety"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              See Safety & Education <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )
+    },
+
+    // COURSE 6: Safety and Risk Education
+    {
+      id: "simulator-safety",
+      category: "3. Practice & Evolution",
+      title: "Trading Simulator & Safety Education",
+      isCourse: true,
+      icon: <PlayCircle size={16} />,
+      content: (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-2xl font-bold text-white tracking-tight">Virtual Simulator & General Risk Disclaimers</h2>
+          <p className="text-slate-300 text-sm mb-6">
+            Before connecting a real brokerage account or utilizing actual funds, please review these key safeguards and practice using the virtual paper-trading engine.
+          </p>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+            <div className="bg-[#111822] border border-slate-800 rounded-lg p-5 hover:border-emerald-500/30 transition-colors">
+               <h3 className="text-white font-bold mb-3 flex items-center gap-2"><Wallet size={16} className="text-emerald-400"/> Paper Trading Simulator</h3>
+               <p className="text-slate-400 text-xs mb-4">Start with a virtual $100,000 portfolio to test strategies without real-world risk. Observe how different Strategy Focus allocations change performance metrics.</p>
+               <button onClick={() => setActiveTab("command")} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-bold transition-colors shadow-md uppercase tracking-wider font-mono">
+                 Open Command Center to Run Simulation
+               </button>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 rounded-lg p-5 hover:border-indigo-500/30 transition-colors">
+               <h3 className="text-white font-bold mb-3 flex items-center gap-2"><Activity size={16} className="text-indigo-400"/> Step-by-Step Walkthrough</h3>
+               <p className="text-slate-400 text-xs mb-4">Launch a complete trade tracing demo. See exactly how proposals are generated, verified, sized, and subsequently exited when limits hit.</p>
+               <button onClick={() => setActiveTab("audit")} className="w-full py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-xs font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)] uppercase tracking-wider font-mono">
+                 Launch Audit Tracing Tab
+               </button>
+            </div>
+          </div>
+
+          <h3 className="text-lg font-bold text-white mb-4 border-b border-slate-800 pb-2">Important Safety Guidelines</h3>
+
+          <div className="bg-rose-500/10 border border-rose-500/20 p-5 rounded-lg flex gap-4">
+            <AlertTriangle size={32} className="text-rose-400 shrink-0"/>
+            <div>
+              <h4 className="text-rose-400 font-bold mb-3 uppercase tracking-widest text-xs font-mono">Core Disclaimers & Disciplinary Rules</h4>
+              <ul className="list-disc list-inside text-slate-300 text-xs space-y-2.5 leading-relaxed">
+                <li><strong>AI Models are Probabilistic:</strong> Generative models estimate outcomes based on historic patterns. They do not possess future sight and will experience consecutive losses during abrupt macroeconomic shifts.</li>
+                <li><strong>Never Overrule the Risk Manager:</strong> The 14-day Wilder's ATR and dynamic size caps are calibrated to protect you from portfolio ruin. Disabling guardrails or force-closing positions without structured logic can result in immediate loss of capital.</li>
+                <li><strong>Past Performance Disclaimers:</strong> Just because a consensus portfolio has achieved a high win rate over historical simulations does not guarantee future profitable yield, as market regimes evolve.</li>
+                <li><strong>Start Conservatively:</strong> Always configure the terminal to "Low Risk" (1.0% capital allocation per trade) and run the simulator for a minimum of 30 days to study multi-agent behavior thoroughly before committing capital.</li>
+              </ul>
             </div>
           </div>
         </div>
@@ -457,136 +546,127 @@ ALPACA_API_SECRET=your_alpaca_secret_here (optional)`}
   ];
 
   // Group sections by category
-  const categories = Array.from(new Set(sections.map(s => s.category)));
+  const categories = Array.from(new Set(sections.map(s => s.category))).sort();
 
   // Filter sections based on search query
-  const searchResults = sections.filter(section => {
-    if (!searchQuery) return true;
-    const query = searchQuery.toLowerCase();
-    return section.title.toLowerCase().includes(query) || 
-           section.keywords.some(k => k.includes(query)) ||
-           section.category.toLowerCase().includes(query);
-  });
+  const filteredSections = sections.filter(s => 
+    s.title.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    s.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    (s.id.toLowerCase().includes(searchQuery.toLowerCase()))
+  );
 
-  // Determine which section to display
-  let displaySection = sections.find(s => s.id === activeSectionId) || sections[0];
-  
-  // If searching, show the first match if current active is not in results
-  if (searchQuery && searchResults.length > 0 && !searchResults.find(s => s.id === activeSectionId)) {
-    displaySection = searchResults[0];
-  }
+  const activeSection = filteredSections.find(s => s.id === activeSectionId) || (filteredSections.length > 0 ? filteredSections[0] : sections[0]);
 
   return (
-    <div className="animate-fade-in flex flex-col md:flex-row gap-6 h-[85vh] min-h-[600px]" id="documentation-view">
-      
-      {/* Sidebar Navigation */}
-      <div className="w-full md:w-72 shrink-0 flex flex-col gap-4 h-full">
-        
-        {/* Search Box */}
-        <div className="relative w-full">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <Search className="h-4 w-4 text-slate-500" />
-          </div>
-          <input
-            type="text"
-            className="block w-full pl-10 pr-10 py-3 border border-slate-800 rounded-lg leading-5 bg-[#1A1F2B] text-slate-300 placeholder-slate-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm transition-all"
-            placeholder="Search documentation library..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
-          {searchQuery && (
-            <button 
-              className="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-white"
-              onClick={() => setSearchQuery("")}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
+    <div className="flex flex-col h-[calc(100vh-140px)] animate-fade-in bg-[#0A0F16]" id="documentation-learning-view">
+      {/* Top Header */}
+      <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-[#1A1F2B] shrink-0">
+        <div>
+          <h2 className="text-lg font-bold text-white flex items-center gap-2 uppercase tracking-wide">
+            <BookOpen size={20} className="text-indigo-400" />
+            Argus Learning & Documentation Center
+          </h2>
+          <p className="text-[11px] text-slate-400 font-mono mt-1">Interactive Academy & Platform Knowledge Base</p>
         </div>
-
-        {/* Categories & Links */}
-        <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 overflow-y-auto custom-scrollbar flex-1">
-          {searchQuery && searchResults.length === 0 ? (
-            <div className="text-center py-8">
-              <p className="text-slate-500 text-sm">No results found.</p>
-            </div>
-          ) : (
-            <div className="space-y-6">
-              {(searchQuery ? Array.from(new Set(searchResults.map(s => s.category))) : categories).map(category => {
-                const categorySections = (searchQuery ? searchResults : sections).filter(s => s.category === category);
-                if (categorySections.length === 0) return null;
-                
-                return (
-                  <div key={category} className="space-y-2">
-                    <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest px-2 mb-2">
-                      {category}
-                    </h3>
-                    <div className="space-y-1">
-                      {categorySections.map(section => {
-                        const isActive = displaySection.id === section.id;
-                        return (
-                          <button
-                            key={section.id}
-                            onClick={() => {
-                              setActiveSectionId(section.id);
-                              if (searchQuery) setSearchQuery("");
-                            }}
-                            className={`w-full text-left px-3 py-2 text-sm rounded flex items-center justify-between transition-all duration-200 group ${
-                              isActive 
-                                ? "bg-indigo-500/10 text-indigo-400 font-medium" 
-                                : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
-                            }`}
-                          >
-                            <div className="flex items-center gap-2.5">
-                              <span className={`${isActive ? "text-indigo-400" : "text-slate-500 group-hover:text-slate-400"}`}>
-                                {section.icon}
-                              </span>
-                              <span className="truncate">{section.title}</span>
-                            </div>
-                            {isActive && <ChevronRight size={14} className="text-indigo-400" />}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+        <div className="flex items-center gap-4">
+          <div className="relative group">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 group-focus-within:text-indigo-400 transition-colors" />
+            <input 
+              type="text" 
+              placeholder="Search concepts, engines..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="bg-[#111822] border border-slate-800 text-slate-300 text-xs rounded-full pl-9 pr-4 py-1.5 focus:outline-none focus:border-indigo-500 w-64 transition-colors"
+            />
+          </div>
+          <button 
+            onClick={() => setActiveTab("command")}
+            className="text-slate-400 hover:text-white transition-colors p-1"
+          >
+            <X size={20} />
+          </button>
         </div>
       </div>
 
-      {/* Main Content Area */}
-      <div className="flex-1 bg-[#1A1F2B] border border-slate-800 rounded-lg flex flex-col h-full overflow-hidden">
-        {/* Content Header */}
-        <div className="shrink-0 p-6 lg:px-10 lg:pt-10 lg:pb-6 border-b border-slate-800/60 bg-[#111822]/50">
-          <div className="flex items-center gap-2 text-xs text-slate-500 font-mono uppercase tracking-widest mb-3">
-            <span>{displaySection.category}</span>
-            <ChevronRight size={12} />
-            <span className="text-indigo-400">{displaySection.title}</span>
-          </div>
-          <h2 className="text-2xl md:text-3xl font-bold text-white flex items-center gap-3">
-            {React.cloneElement(displaySection.icon as React.ReactElement, { size: 28, className: "text-indigo-400 hidden sm:block" })}
-            {displaySection.title}
-          </h2>
-        </div>
-        
-        {/* Content Body */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-6 lg:p-10 bg-[#1A1F2B]">
-          <div className="max-w-4xl mx-auto pb-12">
-            {displaySection.content}
-            
-            {/* Footer Navigation */}
-            <div className="mt-16 pt-8 border-t border-slate-800 flex justify-between items-center">
-              <p className="text-xs text-slate-500 font-mono">ARGUS TERMINAL V1.0 // DOCS</p>
-              <button 
-                onClick={() => setActiveTab('arena')}
-                className="text-xs font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-widest flex items-center gap-2 transition-colors"
-              >
-                Return to Arena <ChevronRight size={14} />
-              </button>
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar Navigation */}
+        <div className="w-64 border-r border-slate-800 bg-[#111822] flex flex-col overflow-y-auto">
+          <div className="p-4 border-b border-slate-800 bg-[#1A1F2B]/50">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><Layers size={12}/> Course Progress</span>
+              <span className="text-emerald-400 text-xs font-bold font-mono">{Math.round((Object.keys(completedModules).length / sections.filter(s=>s.isCourse).length) * 100) || 0}%</span>
+            </div>
+            <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+              <div 
+                className="bg-emerald-500 h-full transition-all duration-1000 ease-out" 
+                style={{ width: `${(Object.keys(completedModules).length / sections.filter(s=>s.isCourse).length) * 100 || 0}%` }}
+              ></div>
             </div>
           </div>
+          
+          <div className="flex-1 py-4">
+            {categories.map((category, i) => {
+              const categorySections = filteredSections.filter(s => s.category === category);
+              if (categorySections.length === 0) return null;
+              
+              return (
+                <div key={i} className="mb-6">
+                  <h3 className="px-4 text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2 font-mono">
+                    {category}
+                  </h3>
+                  <div className="space-y-0.5">
+                    {categorySections.map(section => (
+                      <button
+                        key={section.id}
+                        onClick={() => setActiveSectionId(section.id)}
+                        className={`w-full text-left px-4 py-2.5 text-xs flex items-center justify-between transition-colors ${
+                          activeSectionId === section.id 
+                            ? "bg-indigo-500/10 text-indigo-400 border-r-2 border-indigo-500 font-bold" 
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className={activeSectionId === section.id ? "text-indigo-400" : "text-slate-500"}>
+                            {section.icon}
+                          </span>
+                          {section.title}
+                        </div>
+                        {section.isCourse && (
+                          completedModules[section.id] 
+                            ? <CheckCircle2 size={12} className="text-emerald-500" />
+                            : <Circle size={10} className="text-slate-600" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto bg-[#0A0F16] p-8 lg:p-12 relative scroll-smooth">
+           
+           {/* Background decorative elements */}
+           <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-indigo-500/5 blur-[120px] rounded-full pointer-events-none"></div>
+           
+           <div className="max-w-4xl mx-auto relative z-10">
+              {activeSection ? activeSection.content : (
+                 <div className="text-center py-20 animate-fade-in">
+                   <Search size={48} className="text-slate-700 mx-auto mb-4" />
+                   <h3 className="text-xl font-bold text-white mb-2">No results found</h3>
+                   <p className="text-slate-400">Try adjusting your search term.</p>
+                   <button 
+                     onClick={() => setSearchQuery("")}
+                     className="mt-6 text-indigo-400 hover:text-indigo-300 font-bold text-sm"
+                   >
+                     Clear Search
+                   </button>
+                 </div>
+              )}
+           </div>
+
         </div>
       </div>
     </div>
@@ -594,4 +674,3 @@ ALPACA_API_SECRET=your_alpaca_secret_here (optional)`}
 };
 
 export default DocumentationTab;
-
