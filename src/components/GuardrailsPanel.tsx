@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Shield, ShieldAlert, Activity, AlertTriangle, Zap, ServerCrash } from 'lucide-react';
+import { ContextualTooltip } from './ContextualTooltip';
 
 export default function GuardrailsPanel() {
   const [toggles, setToggles] = useState({
@@ -27,7 +28,10 @@ export default function GuardrailsPanel() {
           <Icon size={14} />
         </div>
         <div>
-          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 block mb-0.5">{label}</span>
+          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center mb-0.5">
+            {label}
+            <ContextualTooltip title={label} content={description} />
+          </span>
           <p className="text-[9px] font-mono text-slate-500 max-w-[200px]">{description}</p>
         </div>
       </div>

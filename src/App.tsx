@@ -1,5 +1,6 @@
 import StrategyScanner from "./components/StrategyScanner";
 import SystemOptimizer from "./components/SystemOptimizer";
+import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import AgentTopologyMap from "./components/AgentTopologyMap";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
@@ -25,6 +26,9 @@ import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
 import DocumentationTab from "./components/DocumentationTab";
 import { AppWalkthrough } from "./components/AppWalkthrough";
+import { AICoachPanel } from "./components/AICoachPanel";
+import { SetupWizard } from "./components/SetupWizard";
+import { AutonomousDashboard } from "./components/AutonomousDashboard";
 import { AutonomousMissionControl } from "./components/AutonomousMissionControl";
 import VectorClusteringMap from "./components/VectorClusteringMap";
 import { motion } from "motion/react";
@@ -1068,6 +1072,7 @@ const CustomPnLLegend: React.FC<CustomPnLLegendProps> = ({ totalPnL, profitableD
  * Manages all frontend state including active tabs, websocket feeds, and simulated price data.
  */
 export default function App() {
+  const [showCoach, setShowCoach] = useState(false);
   const [runBacktest, setRunBacktest] = useState(false);
   const [showTradeHistory, setShowTradeHistory] = useState(true);
   const [selectedStrategy1, setSelectedStrategy1] = useState("Narrative/News Agent");
@@ -1968,9 +1973,10 @@ export default function App() {
   }, [isAuthenticated]);
 
   // Navigation & User inputs
+  const [setupComplete, setSetupComplete] = useState(false);
   const [activeTab, setActiveTab] = useState<
-    "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation"
-  >("command");
+    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation"
+  >("dashboard");
   const [selectedAgentNode, setSelectedAgentNode] = useState<any | null>(null);
   const [standardLLMProvider, setStandardLLMProvider] = useState<"Gemini Flash" | "GPT-4o-mini" | "Claude 3 Haiku" | "DeepSeek-Coder">("Gemini Flash");
   const [premiumLLMProvider, setPremiumLLMProvider] = useState<"Gemini Pro" | "GPT-4o" | "Claude 3.5 Sonnet" | "DeepSeek-Chat">("Gemini Pro");
@@ -2758,7 +2764,16 @@ export default function App() {
       className="min-h-screen bg-[#111822] text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-slate-950"
       id="trading-platform-root"
     >
+      {!setupComplete && (
+        <SetupWizard onComplete={(config) => {
+          setAutoBotTargetBudget(config.budget);
+          setAutoBotRiskLevel(config.riskLevel);
+          setAutoBotConfig({ ...autoBotConfig, enabled: true, targetBudget: config.budget, riskLevel: config.riskLevel });
+          setSetupComplete(true);
+        }} />
+      )}
       <AppWalkthrough />
+      {showCoach && <AICoachPanel onClose={() => setShowCoach(false)} />}
       <LiveMarketNewsTicker />
       {enginesHalted && (
         <div className="bg-rose-600 px-4 py-1.5 flex justify-between items-center text-white">
@@ -2939,6 +2954,14 @@ export default function App() {
                 <span>K</span>
               </div>
             </button>
+            <button 
+              onClick={() => setShowCoach(!showCoach)} 
+              className={`bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 px-3 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all shadow-sm group ${showCoach ? "text-white bg-indigo-500/30" : "text-indigo-400"}`}
+              title="AI Trading Coach"
+            >
+              <MessageSquare size={14} className="group-hover:scale-110 transition-transform" />
+              <span className="text-[9px] font-bold uppercase tracking-widest hidden sm:inline">Coach</span>
+            </button>
             <button onClick={() => setAlertsModalOpen(true)} className="bg-slate-800/60 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-500 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm" title="Custom Alerts Engine">
               <Bell size={14} className="text-indigo-400" />
             </button>
@@ -3060,6 +3083,19 @@ export default function App() {
         <nav className="flex gap-1 overflow-x-auto scrollbar-hide py-1 items-center" aria-label="Tabs navigation">
           
           <button
+            id="tab-dashboard-btn"
+            onClick={() => setActiveTab("dashboard")}
+            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "dashboard"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Activity size={14} />
+            AUTONOMOUS DASHBOARD
+          </button>
+
+          <button
             id="tab-command-btn"
             onClick={() => setActiveTab("command")}
             className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
@@ -3069,7 +3105,7 @@ export default function App() {
             }`}
           >
             <Cpu size={14} />
-            AUTONOMOUS TRADING
+            MISSION CONTROL
           </button>
           
           <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
@@ -3307,6 +3343,12 @@ export default function App() {
 
       {/* Main Workspace Frame container */}
       <main className="flex-1 p-6" id="workspace-main">
+        {activeTab === "dashboard" && (
+          <AutonomousDashboard 
+             autoBotConfig={autoBotConfig} 
+             setAutoBotConfig={setAutoBotConfig} 
+          />
+        )}
         {/* ========================================================= */}
         {/* TAB: ARENA (Dashboard / Visualizers)                      */}
         {/* Purpose: The main high-level overview. Displays live      */}
@@ -9306,6 +9348,7 @@ export default function App() {
 
         {activeTab === "validation" && (
           <div className="animate-fade-in flex flex-col gap-6" id="validation-view">
+            <SystemValidationSuite />
             <SystemOptimizer />
           </div>
         )}

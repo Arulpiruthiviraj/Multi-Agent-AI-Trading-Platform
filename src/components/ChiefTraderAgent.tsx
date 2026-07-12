@@ -25,6 +25,7 @@ import {
   Clock,
   BookOpen
 } from "lucide-react";
+import { ContextualTooltip } from "./ContextualTooltip";
 
 interface TaskItem {
   id: string;
@@ -1086,8 +1087,17 @@ export default function ChiefTraderAgent() {
                         </div>
                       </div>
                       
-                      <div className="text-[10px] text-slate-400 leading-relaxed mb-2 bg-slate-950/40 p-2 rounded border border-slate-900/60">
+                      <div className="text-[10px] text-slate-400 leading-relaxed mb-2 bg-slate-950/40 p-2 rounded border border-slate-900/60 relative">
                         <span className="text-indigo-400 font-bold uppercase">Reasoning:</span> {opp.reasoning}
+                        <div className="absolute top-2 right-2">
+                          <ContextualTooltip 
+                            showIcon={false}
+                            title={`Analysis Breakdown: ${opp.symbol}`} 
+                            content={`Calculation Engines: Momentum Divergence detected, MACD Crossover confirmed. Agents: News Agent (Agree), Quant Agent (Agree), Risk Node (Warn: High Beta). Risks: Elevated volatility compared to baseline. News Catalyst: Recent earnings surprise and sector strength.`}
+                          >
+                            <button className="text-[8px] bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-500/30 hover:bg-indigo-500/40 uppercase tracking-widest font-bold">Why?</button>
+                          </ContextualTooltip>
+                        </div>
                       </div>
                       
                       <div className="flex justify-between items-center text-[9px] text-slate-500">
