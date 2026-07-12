@@ -11,6 +11,7 @@ import GuardrailsPanel from "./components/GuardrailsPanel";
 import AgentRegimeHeatmap from "./components/AgentRegimeHeatmap";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
 import MultiAgentDialogueGraph from "./components/MultiAgentDialogueGraph";
+import ChiefTraderAgent from "./components/ChiefTraderAgent";
 import ContextMemoryEngineering from "./components/ContextMemoryEngineering";
 import StrategySynergyMatrix from "./components/StrategySynergyMatrix";
 import LiveBotTelemetryPanel from "./components/LiveBotTelemetryPanel";
@@ -6385,6 +6386,9 @@ export default function App() {
               </p>
               <AgentTopologyMap flowAnimationEnabled={flowAnimationEnabled} />
             </div>
+
+            {/* Chief Trader Agent Portfolio CIO Deck */}
+            <ChiefTraderAgent />
 
             <MultiAgentDialogueGraph />
 

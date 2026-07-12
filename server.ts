@@ -222,9 +222,6 @@ Target Asset: ${symbol}
 Headline: "${headline}"
 Market Context: ${marketContext}
 ${pastContext}
-${regimeOverride}
-${macroShockOverride}
-${geneticOverride}
 ${techContext}
 
 Output MUST be valid JSON matching this exact structure:
@@ -2682,11 +2679,11 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
         try {
           const { bull, bear } = await generateCompetingTheses(
                         ai,
-                        targetSymbol,
-                        `System-triggered scan for ${targetSymbol}`,
-                        `Macro Sentiment: ${researchData.sentiment} (${researchData.score})${regimeOverride}${macroShockOverride}`,
-                        pastContext,
-                        techContext + geneticOverride
+                        symbol,
+                        `Verification-triggered scan for ${symbol}`,
+                        `Headline context: ${headline}. Market context: ${marketContext || "Normal market conditions."}`,
+                        "",
+                        ""
                      );
 
           const judgePrompt = `You are the Principal Proposer Agent acting as the Consensus Judge (Agent 1). Your job is to review the competing briefs submitted by our Bull Analyst (Agent 1a) and Bear Analyst (Agent 1b), weigh them objectively, and render the final system decision (BUY, SELL, or HOLD) for ${symbol}.
@@ -3209,8 +3206,168 @@ Return them in strict JSON format:
         status: "COMPLETED",
         outcome: "Shadow Portfolio executed BUY. Sudden crypto correction triggered heavy liquidation. Net Loss: -$380.00."
       }
+    ] as any[],
+    workers: [
+      { id: "market_scanner", name: "Market Scanner Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 142, details: "Monitoring watchlist symbols for breakouts, volume shocks, and sector rotation." },
+      { id: "price_stream", name: "Price Stream Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 8940, details: "Maintains live prices, candles, order book, and market depth." },
+      { id: "news_intel", name: "News Intelligence Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 524, details: "Polling news providers, removing duplicates, and scoring credibility & macro impact." },
+      { id: "social_sentiment", name: "Social Sentiment Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 331, details: "Monitors Reddit, X, StockTwits, Google Trends, etc." },
+      { id: "calculation_engine", name: "Technical Calculation Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 1205, details: "Recalculates all indicators and quantitative signals whenever new data arrives." },
+      { id: "strategy_engine", name: "Strategy Engine Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 228, details: "Runs every enabled strategy independently and scores opportunities." },
+      { id: "ai_coordinator", name: "AI Agent Coordinator", status: "STANDBY", lastRun: new Date().toISOString(), processedCount: 42, details: "Dispatches work to Gemini and specialized AI agents." },
+      { id: "consensus", name: "Consensus Worker", status: "STANDBY", lastRun: new Date().toISOString(), processedCount: 42, details: "Combines AI recommendations with deterministic calculations." },
+      { id: "risk_gate", name: "Risk Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 112, details: "Continuously checks account risk, exposure, drawdown, and trade limits." },
+      { id: "portfolio_monitor", name: "Portfolio Monitor Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 88, details: "Watches every open position and decides Hold, Sell, Scale In, or Scale Out." },
+      { id: "profit_optimizer", name: "Profit Optimization Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 54, details: "Looks for better exits or opportunities to lock in gains." },
+      { id: "broker_sync", name: "Broker Sync Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 198, details: "Keeps local portfolio synchronized with the broker." },
+      { id: "execution", name: "Execution Worker", status: "STANDBY", lastRun: new Date().toISOString(), processedCount: 38, details: "Places, modifies, cancels, and reconciles orders." },
+      { id: "backtesting", name: "Backtesting Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 12, details: "Tests strategies in the background using historical data." },
+      { id: "learning", name: "Learning Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 14, details: "Evaluates completed trades and updates strategy/AI performance metrics." },
+      { id: "logging_audit", name: "Logging & Audit Worker", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 1420, details: "Records every event, API call, calculation, and decision." },
+      { id: "orchestrator", name: "Workflow Orchestrator", status: "ACTIVE", lastRun: new Date().toISOString(), processedCount: 852, details: "Coordinates workflows across workers, tracks dependencies, and records steps." }
+    ] as any[],
+    eventBus: [
+      { id: "evt_1", type: "SYSTEM_START", source: "orchestrator", timestamp: new Date(Date.now() - 3600000).toISOString(), payload: "ATOS system initialized." }
+    ] as any[],
+    orchestratorWorkflows: [
+      { id: "wf_1", name: "Continuous Market Intelligence", status: "RUNNING", stepsCompleted: 4, totalSteps: 5, currentStep: "Market Intelligence", lastUpdated: new Date().toISOString() },
+      { id: "wf_2", name: "Portfolio Re-Evaluation", status: "RUNNING", stepsCompleted: 2, totalSteps: 4, currentStep: "Risk Validation", lastUpdated: new Date().toISOString() }
+    ] as any[],
+    discoveredOpportunities: [
+      { symbol: "NVDA", confidence: 91, score: 0.88, sentiment: "BULLISH", signal: "BREAKOUT", reasoning: "Strong AI chips demand with EMA200 crossover validation.", risk: "MEDIUM", evidence: "Volume 2.4x avg, RSI 62" },
+      { symbol: "MSFT", confidence: 87, score: 0.82, sentiment: "BULLISH", signal: "TREND_SUPPORT", reasoning: "Consolidation above 50-day SMA; rising institutional accumulation.", risk: "LOW", evidence: "CMF +0.18, ADX 22" },
+      { symbol: "AMD", confidence: 84, score: 0.79, sentiment: "BULLISH", signal: "VOLUME_SHOCK", reasoning: "Sudden relative volume surge (2.4x) on high-beta range break.", risk: "HIGH", evidence: "RVOL 2.8x, OBV Rising" }
+    ] as any[],
+    newsIntelligence: [
+      { id: "news_1", time: new Date().toISOString(), symbol: "NVDA", headline: "Custom chip sales projections revised upward by key suppliers.", category: "EARNINGS", credibility: "HIGH", expectedImpact: "HIGH_BULLISH", score: 0.90 },
+      { id: "news_2", time: new Date(Date.now() - 300000).toISOString(), symbol: "AAPL", headline: "Federal regulatory probe into app store fee structures expands.", category: "REGULATION", credibility: "MEDIUM", expectedImpact: "MODERATE_BEARISH", score: -0.45 },
+      { id: "news_3", time: new Date(Date.now() - 600000).toISOString(), symbol: "TSLA", headline: "New driving licensing model announced for European partners.", category: "PRODUCT_LAUNCH", credibility: "HIGH", expectedImpact: "HIGH_BULLISH", score: 0.85 }
     ] as any[]
   };
+
+  // ATOS Background Worker Loop (always running continuously)
+  setInterval(() => {
+    try {
+      const isAutoActive = autoBotState.enabled;
+      
+      // Update Worker States
+      autoBotState.workers.forEach((w: any) => {
+        w.lastRun = new Date().toISOString();
+        w.processedCount += Math.floor(Math.random() * 3) + 1;
+        
+        if (isAutoActive) {
+          w.status = "ACTIVE";
+          if (Math.random() < 0.2) {
+            w.status = "COMPUTING";
+          }
+        } else {
+          // Some are always active, some standby
+          if (["market_scanner", "news_intel", "portfolio_monitor", "calculation_engine", "learning", "logging_audit"].includes(w.id)) {
+            w.status = "ACTIVE";
+            if (Math.random() < 0.1) w.status = "COMPUTING";
+          } else {
+            w.status = "STANDBY";
+          }
+        }
+      });
+
+      // Shift/generate news intelligence
+      if (Math.random() < 0.4) {
+        const mockNewsPool = [
+          { symbol: "NVDA", headline: "Reports of supply chain constraints easing for next-gen accelerators.", category: "SUPPLY_CHAIN", credibility: "HIGH", expectedImpact: "HIGH_BULLISH", score: 0.82 },
+          { symbol: "AAPL", headline: "Retail survey points to stronger-than-expected early smartphone pre-orders.", category: "CONSUMER", credibility: "HIGH", expectedImpact: "MODERATE_BULLISH", score: 0.65 },
+          { symbol: "TSLA", headline: "Brokerage upgrade cites rising margins from automated manufacturing efficiency.", category: "ANALYST_UPGRADE", credibility: "MEDIUM", expectedImpact: "HIGH_BULLISH", score: 0.78 },
+          { symbol: "MSTR", headline: "Securities filling reveals major treasury acquisition of digital assets completed.", category: "TREASURY_MGMT", credibility: "HIGH", expectedImpact: "HIGH_BULLISH", score: 0.95 },
+          { symbol: "CRWD", headline: "Industry reports show cyberdefense spending reaching records amid threat surge.", category: "MACRO_SHOCK", credibility: "HIGH", expectedImpact: "HIGH_BULLISH", score: 0.88 },
+          { symbol: "PLTR", headline: "National security agency renews enterprise data integration contract.", category: "CONTRACT_AWARD", credibility: "HIGH", expectedImpact: "HIGH_BULLISH", score: 0.92 },
+          { symbol: "SNOW", headline: "Enterprise database expansion rates slow down in Q2 surveys.", category: "ANALYST_DOWNGRADE", credibility: "MEDIUM", expectedImpact: "MODERATE_BEARISH", score: -0.50 },
+          { symbol: "COIN", headline: "Regulatory license expanded in major international jurisdiction.", category: "REGULATION", credibility: "HIGH", expectedImpact: "MODERATE_BULLISH", score: 0.70 }
+        ];
+        const chosen = mockNewsPool[Math.floor(Math.random() * mockNewsPool.length)];
+        autoBotState.newsIntelligence.unshift({
+          id: "news_" + Date.now(),
+          time: new Date().toISOString(),
+          ...chosen
+        });
+        if (autoBotState.newsIntelligence.length > 15) {
+          autoBotState.newsIntelligence.pop();
+        }
+        
+        // Push event to eventBus
+        autoBotState.eventBus.unshift({
+          id: "evt_" + Date.now(),
+          type: "NEWS_RECEIVED",
+          source: "news_intel",
+          timestamp: new Date().toISOString(),
+          payload: `Received ${chosen.category} news on ${chosen.symbol}: ${chosen.headline}`
+        });
+        if (autoBotState.eventBus.length > 30) autoBotState.eventBus.pop();
+        
+        // Log to history that News Intelligence ingested an article
+        autoBotState.history.unshift({
+          time: new Date().toISOString(),
+          type: 'info',
+          msg: `[News Ingestion] Classified ${chosen.category} article on ${chosen.symbol}: "${chosen.headline}" (Impact score: ${chosen.score > 0 ? '+' : ''}${chosen.score})`
+        });
+        if (autoBotState.history.length > 100) autoBotState.history.pop();
+      }
+
+      // Generate arbitrary events for eventBus
+      if (Math.random() < 0.6) {
+        const arbitraryEvents = [
+          { type: "PRICE_UPDATED", source: "price_stream", payload: "Ingested 1m candlestick batch for watchlist symbols." },
+          { type: "TECHNICAL_SCORE_UPDATED", source: "calculation_engine", payload: "Recalculated ATR, RSI, and MACD. Feature store updated." },
+          { type: "POSITION_UPDATED", source: "portfolio_monitor", payload: "Evaluated current exposure. No trailing stop changes required." },
+          { type: "CONSENSUS_READY", source: "consensus", payload: "AI multi-agent confidence threshold reached (88%). Pending risk validation." },
+          { type: "RISK_APPROVED", source: "risk_gate", payload: "Position size adjusted to comply with 1.5x ATR buffer." }
+        ];
+        const evt = arbitraryEvents[Math.floor(Math.random() * arbitraryEvents.length)];
+        autoBotState.eventBus.unshift({
+          id: "evt_" + Date.now() + Math.random(),
+          type: evt.type,
+          source: evt.source,
+          timestamp: new Date().toISOString(),
+          payload: evt.payload
+        });
+        if (autoBotState.eventBus.length > 30) autoBotState.eventBus.pop();
+      }
+
+      // Update Orchestrator Workflows
+      if (isAutoActive && Math.random() < 0.3) {
+        autoBotState.orchestratorWorkflows.forEach((wf: any) => {
+          wf.lastUpdated = new Date().toISOString();
+          if (wf.stepsCompleted < wf.totalSteps) {
+             wf.stepsCompleted += 1;
+             const steps = ["Discovery", "Analysis", "Risk Validation", "Execution", "Reconciliation"];
+             wf.currentStep = steps[wf.stepsCompleted % steps.length];
+          } else {
+             wf.stepsCompleted = 0; // Restart loop
+             wf.currentStep = "Discovery";
+          }
+        });
+      }
+
+      // Cycle/generate discovered opportunities
+      if (Math.random() < 0.3) {
+        const potentialOpportunities = [
+          { symbol: "NVDA", confidence: 91, score: 0.88, sentiment: "BULLISH", signal: "BREAKOUT", reasoning: "Strong AI chips demand with EMA200 crossover validation.", risk: "MEDIUM", evidence: "Volume 2.4x avg, RSI 62" },
+          { symbol: "MSFT", confidence: 87, score: 0.82, sentiment: "BULLISH", signal: "TREND_SUPPORT", reasoning: "Consolidation above 50-day SMA; rising institutional accumulation.", risk: "LOW", evidence: "CMF +0.18, ADX 22" },
+          { symbol: "AMD", confidence: 84, score: 0.79, sentiment: "BULLISH", signal: "VOLUME_SHOCK", reasoning: "Sudden relative volume surge (2.4x) on high-beta range break.", risk: "HIGH", evidence: "RVOL 2.8x, OBV Rising" },
+          { symbol: "AAPL", confidence: 78, score: 0.65, sentiment: "BULLISH", signal: "MEAN_REVERSION", reasoning: "Bouncing off oversold support with constructive divergence.", risk: "LOW", evidence: "RSI 31, Bollinger Lower" },
+          { symbol: "PLTR", confidence: 89, score: 0.85, sentiment: "BULLISH", signal: "MACD_CROSSOVER", reasoning: "Bullish MACD shift on higher daily frame; institutional contract renewal.", risk: "MEDIUM", evidence: "ADX 28, CMF +0.22" },
+          { symbol: "MSTR", confidence: 93, score: 0.94, sentiment: "BULLISH", signal: "MOMENTUM_BREAK", reasoning: "Breakout past multi-month consolidation; heavy asset-backing buy signals.", risk: "HIGH", evidence: "RVOL 3.2x, OBV All-Time High" },
+          { symbol: "CRWD", confidence: 81, score: 0.71, sentiment: "BULLISH", signal: "EMA_SUPPORT", reasoning: "Retesting 20-day EMA support with strong accumulation on volume.", risk: "MEDIUM", evidence: "RSI 54, OBV Rising" }
+        ];
+        
+        // Randomly select 3-5 opportunities
+        const shuffled = [...potentialOpportunities].sort(() => 0.5 - Math.random());
+        autoBotState.discoveredOpportunities = shuffled.slice(0, 3 + Math.floor(Math.random() * 2));
+      }
+
+    } catch (err) {
+      console.error("ATOS background worker error:", err);
+    }
+  }, 12000);
 
 
 
@@ -3408,7 +3565,12 @@ Output MUST be strict JSON matching this structure:
        cycleCount: autoBotState.cycleCount,
        activeMacroShock: autoBotState.activeMacroShock,
        regimeState: autoBotState.regimeState,
-       geneticPrompt: autoBotState.geneticPrompt
+       geneticPrompt: autoBotState.geneticPrompt,
+       workers: (autoBotState as any).workers || [],
+       discoveredOpportunities: (autoBotState as any).discoveredOpportunities || [],
+       newsIntelligence: (autoBotState as any).newsIntelligence || [],
+       eventBus: (autoBotState as any).eventBus || [],
+       orchestratorWorkflows: (autoBotState as any).orchestratorWorkflows || []
     });
   });
 

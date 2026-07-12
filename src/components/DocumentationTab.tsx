@@ -5,7 +5,7 @@ import {
   ChevronRight, AlignLeft, Info, Settings, Database, 
   LineChart, Bot, CheckCircle2, Play, Circle, PlayCircle,
   Network, Scale, Cpu, Radar, MessageSquare, AlertTriangle, ArrowDown,
-  TrendingUp, Sliders, Eye
+  TrendingUp, Sliders, Eye, Lock, Globe, Shield
 } from "lucide-react";
 
 interface DocumentationTabProps {
@@ -42,7 +42,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
       content: (
         <div className="space-y-6 animate-fade-in">
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-white tracking-tight">Argus Autonomous Trading Terminal</h2>
+            <h2 className="text-2xl font-bold text-white tracking-tight font-sans">Argus Autonomous Trading Terminal</h2>
             {beginnerMode && (
               <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest flex items-center gap-1.5 shadow-[0_0_10px_rgba(16,185,129,0.2)]">
                 <CheckCircle2 size={12}/> Beginner Mode Active
@@ -97,7 +97,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
           <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-lg mt-8 flex justify-between items-center transition-all duration-300 hover:bg-slate-800">
             <div>
               <h4 className="text-white font-bold mb-1 text-sm">Interactive Beginner Mode Guidance</h4>
-              <p className="text-slate-400 text-xs">Enabling beginner mode forces detailed tooltips, limits max exposure parameters, and explains complex mathematical formulas in simple terminology.</p>
+              <p className="text-slate-400 text-xs font-mono">Enabling beginner mode forces detailed tooltips, limits max exposure parameters, and explains complex mathematical formulas in simple terminology.</p>
             </div>
             <button 
               onClick={() => setBeginnerMode(!beginnerMode)}
@@ -382,19 +382,19 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               <div className="space-y-2 font-mono text-[11px] bg-slate-950 p-3 rounded border border-slate-800/80">
                 <div className="flex justify-between items-center text-slate-300">
                   <span>Layer 1: Sentiment Consensus Gate</span>
-                  <span className="text-emerald-400 font-bold">BLOCKS EMOTIONAL FOMO CHASES</span>
+                  <span className="text-emerald-400 font-bold font-mono">BLOCKS EMOTIONAL FOMO CHASES</span>
                 </div>
                 <div className="flex justify-between items-center text-slate-300">
                   <span>Layer 2: Hard ATR Noise Filter Cap</span>
-                  <span className="text-amber-400 font-bold">REJECTS TIGHT NOISE STOP-LOSSES</span>
+                  <span className="text-amber-400 font-bold font-mono">REJECTS TIGHT NOISE STOP-LOSSES</span>
                 </div>
                 <div className="flex justify-between items-center text-slate-300">
                   <span>Layer 3: Macro Correlation Safety Limit</span>
-                  <span className="text-indigo-400 font-bold">STRICT SECTOR EXPOSURE DIVERSIFICATION</span>
+                  <span className="text-indigo-400 font-bold font-mono">STRICT SECTOR EXPOSURE DIVERSIFICATION</span>
                 </div>
                 <div className="flex justify-between items-center text-slate-300">
                   <span>Layer 4: CIO Discretionary Overlay</span>
-                  <span className="text-rose-400 font-bold">APPLIES HISTORICAL MEMORY RULES</span>
+                  <span className="text-rose-400 font-bold font-mono font-bold">APPLIES HISTORICAL MEMORY RULES</span>
                 </div>
               </div>
             </div>
@@ -408,7 +408,77 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               Previous
             </button>
             <button 
-              onClick={() => { markCompleted("cio-deck"); setActiveSectionId("evolution-learning"); }}
+              onClick={() => { markCompleted("cio-deck"); setActiveSectionId("veto-protocols"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              See Veto Protocols <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )
+    },
+
+    // NEW COURSE 5: Veto Protocol Specifications
+    {
+      id: "veto-protocols",
+      category: "2. Mathematical Safeguards",
+      title: "Veto Gate Specifications & Flow",
+      isCourse: true,
+      icon: <Shield size={16} />,
+      content: (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-2xl font-bold text-white tracking-tight">Discretionary Veto Protocol Specifications</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">
+            Every transaction executed by the <strong>Argus Black-Box Autonomous Loop</strong> undergoes immediate vetting via the CIO Veto Pipeline. There are four distinct, serialized gates that can issue a hard rejection veto.
+          </p>
+
+          <div className="space-y-4">
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block mb-1">Gate 1: Sentiment & Discipline Filter</span>
+              <h3 className="text-sm font-bold text-white mb-2">Psychological Trap Avoidance</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                The Proposer node may suggest an entry driven by sudden social buzz. Gate 1 scans the logical thesis of the proposal using natural language models to extract high-risk emotional flags (e.g. "rocket", "to the moon", "hype", "FOMO"). If sentiment is heavily hyper-inflated without technical consolidation backup, the trade is instantly vetoed as an emotional trap.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block mb-1">Gate 2: Wilder's ATR Noise Check</span>
+              <h3 className="text-sm font-bold text-white mb-2">Stop-Loss Math Validation</h3>
+              <p className="text-xs text-slate-400 leading-relaxed font-mono text-[11px]">
+                We calculate Wilder's Average True Range over 14 candles (ATR-14). Gate 2 evaluates the exact stop-loss distance of the proposed trade:
+                <br />
+                <span className="text-indigo-400 font-bold">StopLossDistance = |EntryPrice - StopLossPrice|</span>
+                <br />
+                The protocol forces a strict threshold constraint: <span className="text-amber-400 font-bold">StopLossDistance ≥ 1.5 * ATR-14</span>. Any proposal with a stop loss tighter than this value is blocked immediately to prevent normal intraday volatility noise from triggering stop-outs.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-indigo-400 uppercase font-bold block mb-1">Gate 3: Covariance & Concentration Cap</span>
+              <h3 className="text-sm font-bold text-white mb-2">Sector Over-concentration Shield</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Even if a trade is technically perfect, Gate 3 cross-references existing assets held within the autonomous portfolio. If the covariance matrix shows a sector or correlation index exceeding <strong className="text-slate-200">0.75</strong>, or if maximum allocation budget is reached for high-beta tech assets, the trade is vetoed to diversify the active capital base.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-rose-400 uppercase font-bold block mb-1">Gate 4: CIO Discretionary Overlay</span>
+              <h3 className="text-sm font-bold text-white mb-2">Dynamic Memory Rules Injection</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                The final gate applies persistent "Memory Rules" compiled by the Reflection Agent from previous trading post-mortems. If the proposed asset, timeframe, or market regime conflicts with an active memory guideline, the CIO overrides consensus and issues a final, binding veto.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-between mt-8">
+            <button 
+              onClick={() => setActiveSectionId("cio-deck")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+            <button 
+              onClick={() => { markCompleted("veto-protocols"); setActiveSectionId("evolution-learning"); }}
               className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
             >
               See Evolution & Backtesting <ChevronRight size={16} />
@@ -418,7 +488,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
       )
     },
 
-    // COURSE 5: Practice & Evolution
+    // COURSE 6: Practice & Evolution
     {
       id: "evolution-learning",
       category: "3. Practice & Evolution",
@@ -478,7 +548,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
 
           <div className="flex justify-between mt-8">
             <button 
-              onClick={() => setActiveSectionId("cio-deck")}
+              onClick={() => setActiveSectionId("veto-protocols")}
               className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
             >
               Previous
@@ -494,7 +564,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
       )
     },
 
-    // COURSE 6: Safety and Risk Education
+    // COURSE 7: Safety and Risk Education
     {
       id: "simulator-safety",
       category: "3. Practice & Evolution",
@@ -540,6 +610,103 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               </ul>
             </div>
           </div>
+
+          <div className="flex justify-between mt-8">
+            <button 
+              onClick={() => setActiveSectionId("evolution-learning")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+            <button 
+              onClick={() => { markCompleted("simulator-safety"); setActiveSectionId("live-ops"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              Learn Live Deployment <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )
+    },
+
+    // NEW COURSE 8: Production & Live Deployment
+    {
+      id: "live-ops",
+      category: "4. Deployment & Live Operations",
+      title: "Live Trading & Environment Configuration",
+      isCourse: true,
+      icon: <Lock size={16} />,
+      content: (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-2xl font-bold text-white tracking-tight">Configuring Argus for Live Environments</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">
+            Transitioning your autonomous terminal from local simulation loops to real production execution requires setting appropriate environment variables and choosing proper execution adapters.
+          </p>
+
+          <div className="space-y-5">
+            {/* Environment variables card */}
+            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+              <h3 className="text-white font-bold mb-3 flex items-center gap-2 font-mono uppercase text-xs text-indigo-400">
+                <Settings size={14} /> 1. Crucial Environment Variables
+              </h3>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                Ensure you copy `.env.example` to `.env` in your workspace and define the keys. The application utilizes a secure Express/TypeScript proxy server, protecting your private tokens from browser discovery.
+              </p>
+              
+              <div className="bg-slate-950 p-4 rounded border border-slate-900 font-mono text-xs text-slate-300 space-y-3">
+                <div>
+                  <span className="text-indigo-400 font-bold">GEMINI_API_KEY=</span>
+                  <span className="text-slate-500">{"your_google_ai_studio_api_key"}</span>
+                  <p className="text-[10px] text-slate-400 mt-1">Required for the multi-agent consensus logic. Prepopulated automatically in AI Studio container environments.</p>
+                </div>
+                <div className="border-t border-slate-800/80 pt-2">
+                  <span className="text-indigo-400 font-bold">PORT=3000</span>
+                  <p className="text-[10px] text-slate-400 mt-1">Hardcoded by the server container layer. Dev servers automatically bind to port 3000 on host 0.0.0.0.</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Dry Run vs Real Exchange */}
+            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+              <h3 className="text-white font-bold mb-3 flex items-center gap-2 font-mono uppercase text-xs text-amber-400">
+                <Globe size={14} /> 2. Dry Run Mode vs Live Exchange Adaption
+              </h3>
+              <p className="text-xs text-slate-300 leading-relaxed mb-3">
+                By default, the platform initiates a mocked execution thread:
+              </p>
+              <div className="space-y-2.5 text-xs text-slate-400">
+                <p>
+                  <strong className="text-slate-200">DRY_RUN (Standard/Mock Mode):</strong> All proposed buy/sell decisions verified by the Risk Node are appended to the in-memory `autoBotState` transaction arrays. No connection to outside brokerages is opened. This is optimal for testing the LLM consensus loop.
+                </p>
+                <p>
+                  <strong className="text-slate-200">LIVE_EXCHANGE Mode (Custom):</strong> When ready, developers can swap the simulation mocks with standard Web3 or stock broker wrappers (e.g., Alpaca API, Interactive Brokers C++, or CCXT for Crypto spot/futures).
+                </p>
+              </div>
+            </div>
+
+            {/* Safety checklist */}
+            <div className="bg-rose-950/20 border border-rose-500/15 p-4 rounded-lg flex gap-3">
+              <Lock size={20} className="text-rose-400 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="text-rose-400 font-bold text-xs uppercase font-mono mb-1">Production Safety Checklist</h4>
+                <ul className="list-disc list-inside text-slate-300 text-[11px] space-y-1.5 leading-relaxed font-mono">
+                  <li>Never push real API keys, brokerage passwords, or seed phrases to Github.</li>
+                  <li>Verify that your `server.ts` build step utilizes strict `esbuild` compression to bundle Node.js dependency paths correctly.</li>
+                  <li>Enable the Master Kill-Switch immediately if you notice latency spikes or abnormal consecutive multi-layer rejections.</li>
+                  <li>Ensure your hosting instance (such as Cloud Run) utilizes persistent logging to trace full multi-node consensus reasoning histories for audit logging.</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex justify-start mt-8">
+            <button 
+              onClick={() => setActiveSectionId("simulator-safety")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+          </div>
         </div>
       )
     }
@@ -562,7 +729,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
       {/* Top Header */}
       <div className="px-6 py-4 border-b border-slate-800 flex justify-between items-center bg-[#1A1F2B] shrink-0">
         <div>
-          <h2 className="text-lg font-bold text-white flex items-center gap-2 uppercase tracking-wide">
+          <h2 className="text-lg font-bold text-white flex items-center gap-2 uppercase tracking-wide font-sans">
             <BookOpen size={20} className="text-indigo-400" />
             Argus Learning & Documentation Center
           </h2>
@@ -593,7 +760,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
         <div className="w-64 border-r border-slate-800 bg-[#111822] flex flex-col overflow-y-auto">
           <div className="p-4 border-b border-slate-800 bg-[#1A1F2B]/50">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5"><Layers size={12}/> Course Progress</span>
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5 font-mono"><Layers size={12}/> Course Progress</span>
               <span className="text-emerald-400 text-xs font-bold font-mono">{Math.round((Object.keys(completedModules).length / sections.filter(s=>s.isCourse).length) * 100) || 0}%</span>
             </div>
             <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
@@ -621,8 +788,8 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
                         onClick={() => setActiveSectionId(section.id)}
                         className={`w-full text-left px-4 py-2.5 text-xs flex items-center justify-between transition-colors ${
                           activeSectionId === section.id 
-                            ? "bg-indigo-500/10 text-indigo-400 border-r-2 border-indigo-500 font-bold" 
-                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50"
+                            ? "bg-indigo-500/10 text-indigo-400 border-r-2 border-indigo-500 font-bold font-sans" 
+                            : "text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 font-sans"
                         }`}
                       >
                         <div className="flex items-center gap-2.5">

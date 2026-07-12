@@ -33,8 +33,11 @@ import {
   ChevronDown,
   X,
   Gauge,
-  Compass
+  Compass,
+  Network
 } from "lucide-react";
+
+import DigitalTwinVisualizer from "./DigitalTwinVisualizer";
 
 interface AutonomousMissionControlProps {
   autoBotConfig: any;
@@ -67,7 +70,7 @@ export function AutonomousMissionControl({
   // Global View Configurations (Feature 19)
   const [tradingMode, setTradingMode] = useState<"BEGINNER" | "ASSISTED" | "AUTONOMOUS" | "HEDGE_FUND">("AUTONOMOUS");
   const [isBeginnerExplanation, setIsBeginnerExplanation] = useState<boolean>(false);
-  const [activeSubTab, setActiveSubTab] = useState<"cio" | "scanner" | "tactical" | "arena" | "journal">("cio");
+  const [activeSubTab, setActiveSubTab] = useState<"twin" | "cio" | "scanner" | "tactical" | "arena" | "journal">("twin");
 
   // === CHIEF TRADER AGENT (CIO) DECK STATE ===
   const [cioTasks, setCioTasks] = useState<any[]>([
@@ -611,8 +614,16 @@ export function AutonomousMissionControl({
       {/* CORE VIEWPORT TABS */}
       <div className="flex border-b border-slate-800/60 mb-6 gap-2 overflow-x-auto">
         <button
+          onClick={() => setActiveSubTab("twin")}
+          className={`px-4 py-2.5 text-xs font-mono font-bold tracking-wider uppercase border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
+            activeSubTab === "twin" ? "border-indigo-500 text-white bg-indigo-500/[0.02]" : "border-transparent text-slate-400 hover:text-slate-200"
+          }`}
+        >
+          <Network size={14} /> ATOS Digital Twin
+        </button>
+        <button
           onClick={() => setActiveSubTab("cio")}
-          className={`px-4 py-2.5 text-xs font-mono font-bold tracking-wider uppercase border-b-2 transition-all flex items-center gap-2 ${
+          className={`px-4 py-2.5 text-xs font-mono font-bold tracking-wider uppercase border-b-2 transition-all flex items-center gap-2 whitespace-nowrap shrink-0 ${
             activeSubTab === "cio" ? "border-indigo-500 text-white bg-indigo-500/[0.02]" : "border-transparent text-slate-400 hover:text-slate-200"
           }`}
         >
@@ -653,6 +664,11 @@ export function AutonomousMissionControl({
       </div>
 
       {/* SUB-TABS INTERACTIVE VIEWPORTS */}
+
+      {/* VIEW: ATOS DIGITAL TWIN */}
+      {activeSubTab === "twin" && (
+        <DigitalTwinVisualizer />
+      )}
 
       {/* VIEW: CIO ORCHESTRATION */}
       {activeSubTab === "cio" && (
