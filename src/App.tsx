@@ -1,6 +1,7 @@
 import StrategyScanner from "./components/StrategyScanner";
 import SystemOptimizer from "./components/SystemOptimizer";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
+import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import AgentTopologyMap from "./components/AgentTopologyMap";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
@@ -22,6 +23,7 @@ import StrategyProfitSunburst from "./components/StrategyProfitSunburst";
 import TradeEfficiencyReport from "./components/TradeEfficiencyReport";
 import ExecutionQualityChart from "./components/ExecutionQualityChart";
 import TradeReplayModal from "./components/TradeReplayModal";
+import LiveTradeJourneyOverlay from "./components/LiveTradeJourneyOverlay";
 import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
 import DocumentationTab from "./components/DocumentationTab";
@@ -2130,6 +2132,17 @@ export default function App() {
 
   // Platform ledger data
   const [trades, setTrades] = useState<Trade[]>([]);
+  const [liveTradeTrigger, setLiveTradeTrigger] = useState<any | null>(null);
+  const prevTradesLenRef = useRef<number>(0);
+  useEffect(() => {
+    if (trades.length > prevTradesLenRef.current && prevTradesLenRef.current !== 0) {
+      const newTrade = trades[0]; // Assuming newest is first
+      if (newTrade && (newTrade.timestamp || newTrade.id)) {
+         setLiveTradeTrigger(newTrade);
+      }
+    }
+    prevTradesLenRef.current = trades.length;
+  }, [trades]);
   const [vetos, setVetos] = useState<RiskVeto[]>([]);
   const [selectedRiskVetoForModal, setSelectedRiskVetoForModal] = useState<any | null>(null);
   const [isVetoSubmittingReview, setIsVetoSubmittingReview] = useState<boolean>(false);
@@ -3291,6 +3304,19 @@ export default function App() {
           >
             <BookOpen size={14} />
             DOCUMENTATION
+          </button>
+
+          <button
+            id="tab-evaluation-btn"
+            onClick={() => setActiveTab("evaluation")}
+            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "evaluation"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Activity size={14} />
+            AGENT EVALUATION
           </button>
 
           <button
@@ -8295,6 +8321,14 @@ export default function App() {
               </div>
             )}
 
+            {/* Live Trade Journey Overlay */}
+            {liveTradeTrigger && (
+              <LiveTradeJourneyOverlay 
+                trade={liveTradeTrigger} 
+                onClose={() => setLiveTradeTrigger(null)} 
+              />
+            )}
+
             {/* Replay Modal */}
             {replayModalOpen && selectedReplayTrade && (
               <TradeReplayModal 
@@ -9343,6 +9377,12 @@ export default function App() {
                  </div>
                </div>
             </div>
+          </div>
+        )}
+
+        {activeTab === "evaluation" && (
+          <div className="animate-fade-in flex flex-col gap-6" id="evaluation-view">
+            <AgentEvaluationDashboard />
           </div>
         )}
 

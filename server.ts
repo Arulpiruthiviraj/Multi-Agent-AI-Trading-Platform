@@ -1,5 +1,7 @@
 import fs from "fs";
 import express, { Request, Response } from "express";
+import { v2Router } from "./src/server/routes/v2System";
+import { system } from "./src/server/core/SystemBootstrap";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -434,6 +436,7 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   });
 
   app.use(express.json());
+  app.use("/api/v2", v2Router);
 
   // Resolve static build folders
   const __filename = fileURLToPath(import.meta.url);
@@ -3612,6 +3615,7 @@ Output MUST be strict JSON matching this structure:
 
     if (enabled) {
        autoBotState.enabled = true;
+       system.start(autoBotState.tradingMode as any);
        autoBotState.history.unshift({ time: new Date().toISOString(), type: 'info', msg: `Autonomous bot ENABLED. Mode: ${autoBotState.tradingMode} | Budget: $${autoBotState.budget} | Strategy: ${autoBotState.strategy}` });
 
        // Auto Bot Interval Wrapper (every 10 seconds runs a full cycle)
@@ -3642,6 +3646,7 @@ Output MUST be strict JSON matching this structure:
            
            if (autoBotState.currentDailyLoss >= autoBotState.dailyLossLimit) {
                autoBotState.enabled = false;
+       system.stop();
                autoBotState.history.unshift({ time: new Date().toISOString(), type: 'error', msg: `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) reached. Bot shutting down.` });
                triggerWebhooks({
                  type: "daily_loss_breach",
@@ -3723,6 +3728,7 @@ Output MUST be strict JSON matching this structure:
 
               if (autoBotState.currentDailyLoss >= autoBotState.dailyLossLimit) {
                  autoBotState.enabled = false;
+       system.stop();
                  autoBotState.history.unshift({ time: new Date().toISOString(), type: 'error', msg: `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) exceeded. Bot automatically halted to protect capital.` });
                   triggerWebhooks({
                     type: "daily_loss_breach",
@@ -4220,6 +4226,7 @@ Output strict JSON: { "verdict": "APPROVE" | "REJECT", "reason": "short analytic
 
     } else {
        autoBotState.enabled = false;
+       system.stop();
        autoBotState.history.unshift({ time: new Date().toISOString(), type: 'info', msg: `Autonomous bot PAUSED.` });
     }
 
