@@ -1,4 +1,6 @@
 import { eventBus } from '../core/EventBus';
+import { db } from '../db';
+import { agentPerformanceStats } from '../db/schema';
 
 export class ChiefTraderAgent {
   private recentIdeas: any[] = [];
@@ -14,10 +16,26 @@ export class ChiefTraderAgent {
   constructor() {
     eventBus.on('TRADE_IDEA_GENERATED', (idea) => this.reviewIdea(idea));
     
-    // Periodically clear stale ideas
     setInterval(() => {
        this.recentIdeas = [];
     }, 60000);
+    
+    // Sync dynamic weights from database every 10 seconds
+    setInterval(() => this.syncWeights(), 10000);
+    this.syncWeights();
+  }
+  
+  async syncWeights() {
+      try {
+          const stats = await db.select().from(agentPerformanceStats).all();
+          for (const s of stats) {
+              if (s.agentName && s.currentWeight) {
+                  this.agentWeights[s.agentName] = s.currentWeight;
+              }
+          }
+      } catch (e) {
+          // ignore error if table is empty
+      }
   }
 
   reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string }) {
@@ -31,7 +49,7 @@ export class ChiefTraderAgent {
     let weightedConfidence = 0;
     let totalWeight = 0;
     
-    // Calculate consensus confidence
+    // Calculate consensus confidence using true weighted voting engine
     for (const i of agreeingIdeas) {
        const w = this.agentWeights[i.agent] || 1.0;
        weightedConfidence += i.confidence * w;
@@ -41,20 +59,19 @@ export class ChiefTraderAgent {
     for (const i of disagreeingIdeas) {
        const w = this.agentWeights[i.agent] || 1.0;
        weightedConfidence -= (i.confidence * w * 0.5); // Penalty for disagreement
-       totalWeight += w; // Add to total weight divisor to dilute confidence
+       totalWeight += w; 
     }
     
     const finalConfidence = Math.max(0, Math.min(1, weightedConfidence / (totalWeight || 1)));
     
     let approved = false;
     let reason = "";
-
-    const agentsAgreed = agreeingIdeas.map(i => i.agent).join(", ");
-    const agentsDisagreed = disagreeingIdeas.map(i => i.agent).join(", ");
+    const agentsAgreed = agreeingIdeas.map(i => `${i.agent}(wt:${(this.agentWeights[i.agent]||1.0).toFixed(2)})`).join(", ");
+    const agentsDisagreed = disagreeingIdeas.map(i => `${i.agent}(wt:${(this.agentWeights[i.agent]||1.0).toFixed(2)})`).join(", ");
 
     if (finalConfidence > 0.75) {
        approved = true;
-       reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(finalConfidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Primary Rationale: ${idea.reasoning}`;
+       reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(finalConfidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${idea.reasoning}`;
     } else if (idea.agent === 'NewsAgent' && idea.confidence > 0.88) {
        approved = true;
        reason = `[Chief Fast-Track] Overriding consensus due to high-conviction news catalyst. Final Confidence: ${(finalConfidence*100).toFixed(1)}%. Rationale: ${idea.reasoning}`;

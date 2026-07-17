@@ -5,6 +5,11 @@ export class MarketDataWorker {
   private activeStreams: Set<string> = new Set();
   private intervalId: NodeJS.Timeout | null = null;
   private ws: WebSocket | null = null;
+  private latestPrices: Map<string, number> = new Map();
+
+  getLatestPrice(symbol: string): number | null {
+    return this.latestPrices.get(symbol) || null;
+  }
 
   start() {
     if (this.intervalId || this.ws) return;
@@ -66,9 +71,11 @@ export class MarketDataWorker {
           }
         } else if (msg.T === "q") {
           // Quote message
+          this.latestPrices.set(msg.S, msg.bp);
           eventBus.emitMarketData(msg.S, msg.bp, msg.bs, new Date(msg.t).toISOString());
         } else if (msg.T === "t") {
           // Trade message
+          this.latestPrices.set(msg.S, msg.p);
           eventBus.emitMarketData(msg.S, msg.p, msg.s, new Date(msg.t).toISOString());
         }
       }
@@ -93,6 +100,7 @@ export class MarketDataWorker {
     symbols.forEach(symbol => {
       const mockPrice = 150 + Math.random() * 20;
       const mockVolume = Math.floor(Math.random() * 1000);
+      this.latestPrices.set(symbol, mockPrice);
       eventBus.emitMarketData(symbol, mockPrice, mockVolume, new Date().toISOString());
     });
   }

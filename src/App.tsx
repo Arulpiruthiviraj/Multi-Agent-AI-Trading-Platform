@@ -2130,19 +2130,31 @@ export default function App() {
   const [comparisonAgent1, setComparisonAgent1] = useState<string>("NewsAgent");
   const [comparisonAgent2, setComparisonAgent2] = useState<string>("MacroAgent");
 
-  // Platform ledger data
   const [trades, setTrades] = useState<Trade[]>([]);
   const [liveTradeTrigger, setLiveTradeTrigger] = useState<any | null>(null);
-  const prevTradesLenRef = useRef<number>(0);
+
   useEffect(() => {
-    if (trades.length > prevTradesLenRef.current && prevTradesLenRef.current !== 0) {
-      const newTrade = trades[0]; // Assuming newest is first
-      if (newTrade && (newTrade.timestamp || newTrade.id)) {
-         setLiveTradeTrigger(newTrade);
-      }
-    }
-    prevTradesLenRef.current = trades.length;
-  }, [trades]);
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+
+    ws.onmessage = (event) => {
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'TRADE_IDEA_GENERATED') {
+          // If no active trace is being viewed, pop it open
+          setLiveTradeTrigger((prev: any) => {
+             if (prev) return prev; 
+             return { trace_id: msg.data.traceId, rawTrade: msg.data };
+          });
+        }
+      } catch (e) {}
+    };
+
+    return () => {
+      ws.close();
+    };
+  }, []);
+
   const [vetos, setVetos] = useState<RiskVeto[]>([]);
   const [selectedRiskVetoForModal, setSelectedRiskVetoForModal] = useState<any | null>(null);
   const [isVetoSubmittingReview, setIsVetoSubmittingReview] = useState<boolean>(false);

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import ReactFlow, { Background, Controls, Edge, Node, Position, Handle } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { X, Play, Activity, TrendingUp, Newspaper, UserCheck, ShieldCheck, Send, CheckCircle2 } from 'lucide-react';
+import { useEventBusTrace } from '../hooks/useEventBusTrace';
 
 const JourneyNode = ({ data }: any) => {
   return (
@@ -26,51 +27,11 @@ const nodeTypes = { journey: JourneyNode };
 export default function LiveTradeJourneyOverlay({ trade, onClose }: { trade: any, onClose: () => void }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [timelineIndex, setTimelineIndex] = useState(0);
-  const [traceEvents, setTraceEvents] = useState<any[]>([]);
+  const traceEvents = useEventBusTrace(trade?.trace_id || null);
+  const timelineIndex = traceEvents.length > 0 ? traceEvents.length - 1 : 0;
 
   useEffect(() => {
-    const fetchTrace = async () => {
-       let events = [];
-       if (trade.rawTrade?.trace_id || trade.trace_id) {
-          try {
-             const res = await fetch(`/api/v2/system/trace/${trade.rawTrade?.trace_id || trade.trace_id}`);
-             const data = await res.json();
-             if (data.trace && data.trace.length > 0) {
-                 events = data.trace;
-             }
-          } catch(e) {}
-       }
-       
-       if (events.length === 0) {
-         events = [
-            { type: 'MARKET_DATA', payload: { symbol: trade.symbol, price: trade.price } },
-            { type: 'CALCULATION_COMPLETED', payload: { engine: 'TechnicalEngine', symbol: trade.symbol } },
-            { type: 'TRADE_IDEA_GENERATED', payload: { agent: trade.reasoning?.includes('News') ? 'NewsAgent' : 'TechnicalAgent', side: trade.decision || trade.side, confidence: 0.88, reasoning: 'Strong momentum detected.' } },
-            { type: 'CHIEF_APPROVED_IDEA', payload: { side: trade.decision || trade.side, confidence: 0.88, reasoning: trade.reasoning || 'Consensus approval.' } },
-            { type: 'RISK_ASSESSMENT_COMPLETED', payload: { approved: true, maxQuantity: trade.quantity || 10, reasoning: 'Risk limits validated.' } },
-            { type: 'ORDER_EXECUTED', payload: { side: trade.decision || trade.side, quantity: trade.quantity || 10, price: trade.price, status: 'FILLED' } },
-         ];
-       }
-       setTraceEvents(events);
-    };
-    fetchTrace();
-  }, [trade]);
-
-  useEffect(() => {
-    let interval: any;
-    if (traceEvents.length > 0 && timelineIndex < traceEvents.length) {
-      interval = setInterval(() => {
-        setTimelineIndex(prev => prev + 1);
-      }, 1500); // 1.5s per step
-    } else if (timelineIndex >= traceEvents.length && traceEvents.length > 0) {
-       // Close automatically after done, or keep it open?
-       // Let's keep it open until user dismisses.
-    }
-    return () => clearInterval(interval);
-  }, [traceEvents, timelineIndex]);
-
-  useEffect(() => {
+     if (traceEvents.length === 0) return;
      // Rebuild nodes and edges based on timelineIndex
      const activeTypes = traceEvents.slice(0, timelineIndex + 1).map(e => e.type);
      const currentEvent = traceEvents[timelineIndex] || {};

@@ -1,3 +1,5 @@
+import { WebSocketServer } from 'ws';
+import { eventBus } from './src/server/core/EventBus';
 import fs from "fs";
 import express, { Request, Response } from "express";
 import { v2Router } from "./src/server/routes/v2System";
@@ -439,8 +441,7 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   app.use("/api/v2", v2Router);
 
   // Resolve static build folders
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = path.dirname(__filename);
+  const dirName = process.cwd();
   const isProd = process.env.NODE_ENV === "production";
 
   // Initialize modern Google GenAI Client
@@ -4235,9 +4236,9 @@ Output strict JSON: { "verdict": "APPROVE" | "REJECT", "reason": "short analytic
 
   // Serves Static build directory of React SPA client in production
   if (isProd) {
-    app.use(express.static(path.join(__dirname, "../dist")));
+    app.use(express.static(path.join(dirName, "dist")));
     app.get("*", (req: Request, res: Response) => {
-      res.sendFile(path.join(__dirname, "../dist/index.html"));
+      res.sendFile(path.join(dirName, "dist/index.html"));
     });
   }
 
@@ -4253,6 +4254,36 @@ Output strict JSON: { "verdict": "APPROVE" | "REJECT", "reason": "short analytic
     });
     app.use(vite.middlewares);
   }
+
+  
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+  wss.on('connection', (ws) => {
+    console.log('[WS] Client connected');
+    
+    const onEvent = (eventName: any) => (data: any) => {
+       if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: eventName, data }));
+       }
+    };
+    
+    const handlers = [
+      { name: 'TRADE_IDEA_GENERATED', fn: onEvent('TRADE_IDEA_GENERATED') },
+      { name: 'CHIEF_APPROVED_IDEA', fn: onEvent('CHIEF_APPROVED_IDEA') },
+      { name: 'RISK_ASSESSMENT_COMPLETED', fn: onEvent('RISK_ASSESSMENT_COMPLETED') },
+      { name: 'ORDER_EXECUTED', fn: onEvent('ORDER_EXECUTED') },
+      { name: 'LEARNED_NEW_RULE', fn: onEvent('LEARNED_NEW_RULE') },
+      { name: 'MARKET_DATA', fn: onEvent('MARKET_DATA') },
+      { name: 'QUANT_ENGINE_OUTPUT', fn: onEvent('QUANT_ENGINE_OUTPUT') },
+      { name: 'SYSTEM_METRICS', fn: onEvent('SYSTEM_METRICS') },
+      { name: 'CALCULATION_COMPLETED', fn: onEvent('CALCULATION_COMPLETED') }
+    ];
+
+    handlers.forEach(h => eventBus.on(h.name, h.fn));
+
+    ws.on('close', () => {
+       handlers.forEach(h => eventBus.off(h.name, h.fn));
+    });
+  });
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Enterprise scale multi-agent backend running on port ${PORT}`);

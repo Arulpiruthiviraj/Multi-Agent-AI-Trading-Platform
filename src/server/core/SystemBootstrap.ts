@@ -1,3 +1,5 @@
+import { portfolioReconciliationWorker } from '../services/PortfolioReconciliation';
+import { advancedQuantEngines } from '../engines/AdvancedQuantEngines';
 import { db } from '../db';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { portfolioMonitor } from '../services/PortfolioMonitor';
@@ -8,7 +10,8 @@ import { newsAgent } from '../services/NewsAgent';
 import { fundamentalAgent } from '../services/FundamentalAgent';
 import { macroAgent } from '../services/MacroAgent';
 import { chiefTrader } from '../services/ChiefTraderAgent';
-import { agentEvaluator } from '../services/AgentEvaluator';
+import { reflectionEngine } from '../services/ReflectionEngine';
+import { systemMetricsWorker } from '../services/SystemMetricsWorker';
 
 export class SystemBootstrap {
   private isRunning = false;
@@ -24,13 +27,16 @@ export class SystemBootstrap {
     riskAgent;
     technicalAgent;
     chiefTrader;
+    advancedQuantEngines.start();
     
     marketDataWorker.start();
     portfolioMonitor.start();
+    portfolioReconciliationWorker.start();
     newsAgent.start();
     fundamentalAgent.start();
     macroAgent.start();
-    agentEvaluator.start();
+    reflectionEngine.start();
+    systemMetricsWorker.start();
     
     this.isRunning = true;
     console.log("[Argus System] All workers online.");
@@ -43,10 +49,12 @@ export class SystemBootstrap {
     
     marketDataWorker.stop();
     portfolioMonitor.stop();
+    portfolioReconciliationWorker.stop();
     newsAgent.stop();
     fundamentalAgent.stop();
     macroAgent.stop();
-    agentEvaluator.stop();
+    reflectionEngine.stop();
+    systemMetricsWorker.stop();
     
     this.isRunning = false;
     console.log("[Argus System] Shutdown complete.");
