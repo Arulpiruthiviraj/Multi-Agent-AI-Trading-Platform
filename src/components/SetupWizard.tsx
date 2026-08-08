@@ -2,6 +2,12 @@
 import React, { useState, useEffect } from "react";
 import { BrainCircuit, Check, Shield, Zap, TrendingUp, AlertTriangle, Settings, Activity, Cpu, CheckCircle2, ChevronRight, X, Play, RefreshCw, BarChart, Server, Globe, Database, HelpCircle, Lock, Key, CreditCard } from "lucide-react";
 
+interface ProviderStatus {
+  provider: string;
+  isConfigured: boolean;
+  source: 'env' | 'database' | null;
+}
+
 export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) => void, onSkip?: () => void }) {
   const [step, setStep] = useState(0);
   const [wizardMode, setWizardMode] = useState<'detecting' | 'setup'>('detecting');
@@ -48,8 +54,9 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
     maxPositionSize: 1000
   });
 
+  const [providerStatuses, setProviderStatuses] = useState<ProviderStatus[]>([]);
   const [dbStatus, setDbStatus] = useState("Connected");
-  
+
   const [isInitializing, setIsInitializing] = useState(false);
   const [initStep, setInitStep] = useState(0);
   const initSteps = [
@@ -61,19 +68,31 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
     "Starting Argus EventBus..."
   ];
 
-  // Auto-detection
+  // Fetch real provider status from backend on mount
   useEffect(() => {
-    if (wizardMode === 'detecting') {
-      setTimeout(() => {
-        // Simulate detection
-        setAiProviders(prev => ({ ...prev, Gemini: { key: "mock", connected: true } }));
-        setBrokerage(prev => ({ ...prev, connected: true }));
-        setDbStatus("Connected");
-        calculateReadiness();
+    fetch('/api/v1/config/provider-status')
+      .then(r => r.json())
+      .then((statuses: ProviderStatus[]) => {
+        setProviderStatuses(statuses);
+        setAiProviders(prev => {
+          const updated = { ...prev };
+          statuses.forEach(s => {
+            if (s.isConfigured && s.provider in updated) {
+              updated[s.provider] = { key: '__configured__', connected: true };
+            }
+          });
+          return updated;
+        });
+        // Compute initial readiness from fetched data directly
+        const hasAi = statuses.some(s => s.isConfigured);
+        setReadinessScore(hasAi ? 40 : 20);
         setWizardMode('setup');
-      }, 1500);
-    }
-  }, [wizardMode]);
+      })
+      .catch(() => {
+        // If the fetch fails, proceed to setup without pre-filled status
+        setWizardMode('setup');
+      });
+  }, []);
 
   const calculateReadiness = () => {
     let score = 20; // DB is connected
@@ -239,30 +258,45 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
                 </div>
                 
                 <div className="space-y-4">
-                  {(Object.entries(aiProviders) as [string, any][]).map(([provider, data]) => (
-                    <div key={provider} className="bg-[#111822] border border-slate-800 p-4 rounded-lg flex items-center justify-between gap-4">
-                       <div className="w-1/3">
-                         <h3 className="text-white font-bold uppercase tracking-wider text-sm">{provider}</h3>
-                         <div className="flex items-center gap-2 mt-1">
-                           {data.connected ? <span className="text-emerald-400 text-[10px] flex items-center gap-1 uppercase tracking-widest"><CheckCircle2 size={12}/> Connected</span> : <span className="text-slate-500 text-[10px] uppercase tracking-widest">Not Configured</span>}
-                         </div>
-                         <div className="mt-3 space-y-1">
+                  {(Object.entries(aiProviders) as [string, any][]).map(([provider, data]) => {
+                    const status = providerStatuses.find(s => s.provider === provider);
+                    const isPreConfigured = status?.isConfigured === true;
+                    return (
+                      <div key={provider} className={`bg-[#111822] border p-4 rounded-lg flex items-center justify-between gap-4 ${isPreConfigured ? 'border-emerald-800/50' : 'border-slate-800'}`}>
+                        <div className="w-1/3">
+                          <h3 className="text-white font-bold uppercase tracking-wider text-sm">{provider}</h3>
+                          <div className="flex items-center gap-2 mt-1">
+                            {data.connected
+                              ? <span className="text-emerald-400 text-[10px] flex items-center gap-1 uppercase tracking-widest"><CheckCircle2 size={12}/> Connected</span>
+                              : <span className="text-slate-500 text-[10px] uppercase tracking-widest">Not Configured</span>}
+                          </div>
+                          <div className="mt-3 space-y-1">
                             <div className="flex justify-between text-[10px] text-slate-500 uppercase tracking-widest"><span className="text-slate-600">Model Avail:</span> <span className="text-slate-400">All Tiers</span></div>
                             <div className="flex justify-between text-[10px] text-slate-500 uppercase tracking-widest"><span className="text-slate-600">Limits:</span> <span className="text-slate-400">Standard</span></div>
                             <div className="flex justify-between text-[10px] text-slate-500 uppercase tracking-widest"><span className="text-slate-600">Free Tier:</span> <span className="text-slate-400">Active</span></div>
-                         </div>
-                       </div>
-                       <div className="flex-1">
-                         <input 
-                           type="password" 
-                           placeholder={`${provider} API Key`} 
-                           value={data.key}
-                           onChange={(e) => handleAiChange(provider, e.target.value)}
-                           className="w-full bg-[#0A0F16] border border-slate-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-                         />
-                       </div>
-                    </div>
-                  ))}
+                          </div>
+                        </div>
+                        <div className="flex-1">
+                          {isPreConfigured ? (
+                            <div className="flex items-center gap-2 px-3 py-2 bg-emerald-500/10 border border-emerald-500/30 rounded">
+                              <Lock size={13} className="text-emerald-400 shrink-0" />
+                              <span className="text-emerald-400 font-bold uppercase tracking-widest text-[11px]">
+                                ✓ Key Loaded from {status?.source === 'env' ? 'ENV' : 'Database'}
+                              </span>
+                            </div>
+                          ) : (
+                            <input
+                              type="password"
+                              placeholder={`${provider} API Key`}
+                              value={data.key}
+                              onChange={(e) => handleAiChange(provider, e.target.value)}
+                              className="w-full bg-[#0A0F16] border border-slate-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                            />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
              </div>
           )}

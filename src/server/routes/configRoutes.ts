@@ -1,5 +1,22 @@
-import { AIRouter } from '../ai/AIRouter';
 import { v4 as uuidv4 } from 'uuid';
+
+interface ProviderStatus {
+  provider: string;
+  isConfigured: boolean;
+  source: 'env' | 'database' | null;
+}
+
+const AI_PROVIDER_ENV_MAP: Record<string, string> = {
+  Gemini:     'GEMINI_API_KEY',
+  OpenAI:     'OPENAI_API_KEY',
+  Claude:     'ANTHROPIC_API_KEY',
+  DeepSeek:   'DEEPSEEK_API_KEY',
+  Groq:       'GROQ_API_KEY',
+  Kimi:       'KIMI_API_KEY',
+  OpenRouter: 'OPENROUTER_API_KEY',
+  Mistral:    'MISTRAL_API_KEY',
+  NVIDIA:     'NVIDIA_API_KEY',
+};
 /**
  * ==========================================================
  * Module:
@@ -107,12 +124,14 @@ configRouter.get('/providers', async (req, res) => {
 
 configRouter.post('/providers', async (req, res) => {
   try {
-    const { provider, apiKey } = req.body;
+    const { provider, apiKey, apiEndpoint, defaultModel } = req.body;
     const existing = await db.select().from(schema.aiProviders).where(eq(schema.aiProviders.providerName, provider));
-    
+
     if (existing && existing.length > 0) {
        await db.update(schema.aiProviders).set({
           apiKeyEncrypted: apiKey ? EncryptionService.encrypt(apiKey) : null,
+          apiEndpoint: apiEndpoint ?? existing[0].apiEndpoint,
+          defaultModel: defaultModel ?? existing[0].defaultModel,
           enabled: true
        }).where(eq(schema.aiProviders.providerName, provider));
     } else {
@@ -121,14 +140,15 @@ configRouter.post('/providers', async (req, res) => {
          providerName: provider,
          displayName: provider,
          apiKeyEncrypted: apiKey ? EncryptionService.encrypt(apiKey) : null,
+         apiEndpoint: apiEndpoint || null,
+         defaultModel: defaultModel || null,
          enabled: true
        });
     }
-    // Also re-initialize the provider in AIRouter
-    if (apiKey) {
-       AIRouter.getInstance().registerProvider(provider, provider); // Wait, AIRouter doesn't have an easy reload. Let's just respond ok.
-    }
-    res.json({ ok: true });
+    // NOTE: AIRouter.initialize() only runs once at server boot - it has no
+    // single-provider hot-reload path. A saved/updated provider (including its
+    // apiEndpoint/defaultModel) only takes effect after a server restart.
+    res.json({ ok: true, note: "Restart the server for this provider change to take effect." });
   } catch (e: any) {
     console.error(e);
     res.status(500).json({ error: e.message });
@@ -139,6 +159,29 @@ configRouter.get('/models', async (req, res) => {
   try {
     const models = await db.select().from(schema.aiModels);
     res.json(models);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+configRouter.get('/provider-status', async (req, res) => {
+  try {
+    const dbProviders = await db.select().from(schema.aiProviders);
+
+    const statuses: ProviderStatus[] = Object.entries(AI_PROVIDER_ENV_MAP).map(([provider, envKey]) => {
+      if (process.env[envKey]) {
+        return { provider, isConfigured: true, source: 'env' as const };
+      }
+      const dbMatch = dbProviders.find(
+        p => p.providerName.toLowerCase() === provider.toLowerCase() && p.apiKeyEncrypted
+      );
+      if (dbMatch) {
+        return { provider, isConfigured: true, source: 'database' as const };
+      }
+      return { provider, isConfigured: false, source: null };
+    });
+
+    res.json(statuses);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
