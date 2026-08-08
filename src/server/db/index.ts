@@ -49,6 +49,7 @@ const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
 
 export const db = drizzle(sqlite, { schema });
+export const sqliteDb = sqlite;
 
 // Run migrations on startup
 try {

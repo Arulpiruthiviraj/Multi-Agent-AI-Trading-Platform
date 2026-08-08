@@ -43,6 +43,14 @@ export const users = sqliteTable('users', {
   createdAt: integer('created_at').default(Date.now())
 });
 
+export const sessions = sqliteTable('sessions', {
+  sessionToken: text('session_token').primaryKey(),
+  username: text('username').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  lastSeen: integer('last_seen').notNull(),
+  createdAt: integer('created_at').default(Date.now()),
+});
+
 export const settings = sqliteTable('settings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
 
@@ -78,6 +86,7 @@ export const aiProviders = sqliteTable('ai_providers', {
   displayName: text('display_name'),
   apiEndpoint: text('api_endpoint'),
   apiKeyEncrypted: text('api_key_encrypted'),
+  defaultModel: text('default_model'),
   enabled: integer('enabled', { mode: 'boolean' }).default(true),
   priority: integer('priority').default(1),
   active: integer('active', { mode: 'boolean' }).default(true),
@@ -168,6 +177,16 @@ export const trades = sqliteTable('trades', {
   newsConfidence: real('news_confidence'),
   newsSources: text('news_sources'),
   newsReasoning: text('news_reasoning')
+});
+
+export const dailyTradingSummary = sqliteTable('daily_trading_summary', {
+  date: text('date').primaryKey(),
+  totalTrades: integer('total_trades').notNull().default(0),
+  totalVolume: real('total_volume').notNull().default(0),
+  realizedPnl: real('realized_pnl').notNull().default(0),
+  unrealizedPnl: real('unrealized_pnl').notNull().default(0),
+  allocatedAmount: real('allocated_amount').notNull().default(0),
+  updatedAt: integer('updated_at').notNull(),
 });
 
 export const portfolio = sqliteTable('portfolio', {

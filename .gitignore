@@ -7,3 +7,8 @@ coverage/
 .env*
 !.env.example
 data/secrets.json
+data/.encryption_key
+data/*.db-shm
+data/*.db-wal
+data/audit_trail.jsonl
+sqlite.db

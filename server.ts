@@ -71,12 +71,13 @@
 
 import { kronosEngine } from "./src/server/engines/kronos/KronosEngine";
 import { eq } from 'drizzle-orm';
-import { db } from './src/server/db/index';
+import { db, sqliteDb } from './src/server/db/index';
 import * as schema from './src/server/db/schema';
 
 import { EncryptionService } from "./src/server/core/EncryptionService";
 import { MarketDataManager } from "./src/marketdata/MarketDataManager";
 import { WebSocketServer } from 'ws';
+import crypto from 'crypto';
 import { AIRouter } from "./src/server/ai/AIRouter";
 import { eventBus } from './src/server/core/EventBus';
 import fs from "fs";
@@ -88,6 +89,15 @@ import {  } from "drizzle-orm";
 import { BrokerManager } from "./src/brokers/BrokerManager.js";
 import { configRouter } from "./src/server/routes/configRoutes";
 import { v2Router } from "./src/server/routes/v2System";
+import { webhooksRouter, triggerWebhooks } from "./src/server/routes/webhooks";
+import { generateContentWithRetry, cleanAndParseJSON } from "./src/server/ai/legacyGeminiHelpers";
+import { auditLog, AUDIT_LOG_FILE } from "./src/server/core/auditLog";
+import { chaosRouter, chaosConfig } from "./src/server/routes/chaosRoutes";
+import { systemRouter } from "./src/server/routes/systemRoutes";
+import { newsRouter } from "./src/server/routes/newsRoutes";
+import { autobotRouter } from "./src/server/routes/autobotRoutes";
+import { shadowPortfolioState, saveShadowPortfolio } from "./src/server/state/shadowPortfolio";
+import { integrationRouter } from "./src/server/routes/integrationRoutes";
 import { tradingEngine } from "./src/server/engines/TradingEngine";
 import { system } from "./src/server/core/SystemBootstrap";
 import http from "http";
@@ -103,8 +113,8 @@ import { createServer as createViteServer } from "vite";
 const AUTOBOT_SYMBOLS = ["TSLA", "NVDA", "AAPL", "MSTR", "PLTR", "CRWD", "AMD", "SNOW", "META", "GOOG", "COIN"];
 
 
-let chaosConfig = { enabled: false, latencyMin: 0, latencyMax: 0, errorRate: 0, selectedAgents: ["all"] };
 let riskVetos: any[] = [];
+let scheduledTasks: any[] = (globalThis as any).__argusScheduledTasks ??= [];
 let recentTrades: any[] = [];
 let historicalPrecedents: any[] = [];
 
@@ -208,79 +218,6 @@ function initializeAlpacaWebSocket() {
 }
 
 dotenv.config();
-
-/**
- * Executes a Gemini API generateContent call with exponential backoff retries.
- * This is crucial for handling 503 Service Unavailable and 429 Rate Limit errors gracefully.
- */
-/**
- * Retries Gemini API calls to handle transient network or quota errors.
- * @param ai - The initialized GoogleGenAI instance.
- * @param params - Generation parameters (model, contents).
- * @param maxRetries - Maximum retry attempts.
- */
-async function generateContentWithRetry(ai: any, params: any, maxRetries = 3) {
-  let promptText = "";
-  if (typeof params.contents === 'string') {
-    promptText = params.contents;
-  } else if (Array.isArray(params.contents)) {
-    promptText = params.contents.map((p) => p.text || JSON.stringify(p)).join(" ");
-  } else if (params.contents && typeof params.contents === 'object') {
-     if (Array.isArray(params.contents.parts)) {
-       promptText = params.contents.parts.map((p) => p.text).join(" ");
-     } else if (params.contents.role) {
-       promptText = JSON.stringify(params.contents);
-     }
-  }
-
-  // Uses global AIRouter imported at top
-  const res = await AIRouter.getInstance().routeTask('General', promptText, Math.random().toString(36).substring(7));
-  return { text: res.content };
-}
-
-/**
- * Clean up markdown wrapping or extra text from Gemini JSON responses to ensure successful parsing.
- */
-function cleanAndParseJSON(rawText: string | undefined | null) {
-  if (!rawText) return null;
-  let cleaned = rawText.trim();
-  
-  // Find first { and last }
-  const firstBrace = cleaned.indexOf("{");
-  const lastBrace = cleaned.lastIndexOf("}");
-  
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.slice(firstBrace, lastBrace + 1);
-  } else {
-    // Also try finding first [ and last ] in case of arrays
-    const firstBracket = cleaned.indexOf("[");
-    const lastBracket = cleaned.lastIndexOf("]");
-    if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-      cleaned = cleaned.slice(firstBracket, lastBracket + 1);
-    }
-  }
-  
-  // Basic sanity check to remove markdown backticks if any remain
-  cleaned = cleaned.replace(/```json/gi, "").replace(/```/g, "").trim();
-  
-  // Clean trailing commas in object or array structures
-  cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
-  
-  try {
-    return JSON.parse(cleaned);
-  } catch (err) {
-    // Try to strip out inline comments if any are present
-    let stripped = cleaned
-      .replace(/\/\*[\s\S]*?\*\//g, "") // multi-line comments
-      .replace(/(?:^|[^:])\/\/.*$/gm, ""); // single-line comments (ignoring https:// etc)
-    try {
-      return JSON.parse(stripped.trim());
-    } catch (innerErr) {
-      console.warn("cleanAndParseJSON failed to parse raw text:", rawText);
-      return null;
-    }
-  }
-}
 
 /**
  * Prompts two separate sub-agents (The Bull and The Bear) to analyze the current trade proposal.
@@ -437,51 +374,192 @@ async function startServer() {
     minAiConfidence: settings[0].minAiConfidence,
     adversarialDebateMode: settings[0].adversarialDebateMode,
   });
+
+  await ensureSessionsTableExists();
+  await ensureDailyTradingSummaryTableExists();
   
   console.log('Argus DB initialized and state loaded.');
 
   
 // AUTH & SECRETS
-const APP_PASSWORD = process.env.APP_PASSWORD;
+const AUTH_USERNAME = process.env.AUTH_USERNAME;
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
 const AUTH_SESSION_SECRET = process.env.AUTH_SESSION_SECRET || "default_dev_secret_do_not_use_in_prod";
-const SESSION_TTL_MS = (Number(process.env.AUTH_SESSION_TTL_HOURS) || 720) * 3600000;
+const SESSION_TTL_MS = (Number(process.env.AUTH_SESSION_TTL_DAYS) || 3650) * 24 * 60 * 60 * 1000; // Default 10 years
 const SESSION_COOKIE = "argus_session";
 
-function setSessionCookie(res: Response) {
-  const exp = Date.now() + SESSION_TTL_MS;
-  const payload = Buffer.from(JSON.stringify({ exp })).toString("base64url");
-  const signature = "dummy_signature"; // In a real app we'd hmac it
-  res.cookie(SESSION_COOKIE, `${payload}.${signature}`, { httpOnly: true, maxAge: SESSION_TTL_MS });
+function validateCredentials(username: string, password: string): boolean {
+  return username === AUTH_USERNAME && password === AUTH_PASSWORD;
 }
 
-function clearSessionCookie(res: Response) {
-  res.clearCookie(SESSION_COOKIE);
-}
-
-function sessionExp(token: string): number | null {
-  try {
-    const i = token.lastIndexOf(".");
-    if (i < 0) return null;
-    const { exp } = JSON.parse(Buffer.from(token.slice(0, i), "base64url").toString());
-    return typeof exp === "number" ? exp : null;
-  } catch { return null; }
-}
-
-function maybeRefreshSession(req: Request, res: Response): void {
-  // simplified
+function getSessionToken(req: Request): string | null {
   const cookies = req.headers.cookie || "";
   const match = cookies.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
-  if (!match) return;
-  const tok = match[1];
-  const exp = sessionExp(tok);
-  if (exp === null) return;
-  if (exp - Date.now() < SESSION_TTL_MS / 2) setSessionCookie(res);
+  return match ? match[1] : null;
 }
 
-function isAuthed(req: Request): boolean {
-  if (!APP_PASSWORD) return true;
-  const cookies = req.headers.cookie || "";
-  return cookies.includes(SESSION_COOKIE + "=");
+async function ensureSessionsTableExists(): Promise<void> {
+  try {
+    sqliteDb.exec(`CREATE TABLE IF NOT EXISTS sessions (
+      session_token TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      last_seen INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )`);
+  } catch (e) {
+    console.warn("Could not ensure sessions table exists:", e);
+  }
+}
+
+function setSessionCookie(res: Response, token: string) {
+  res.cookie(SESSION_COOKIE, token, {
+    httpOnly: true,
+    maxAge: SESSION_TTL_MS,
+    sameSite: 'lax',
+    path: '/',
+  });
+}
+
+async function clearSessionCookie(res: Response) {
+  res.clearCookie(SESSION_COOKIE, { path: '/' });
+}
+
+async function createSession(res: Response, username: string) {
+  const token = crypto.randomUUID();
+  const now = Date.now();
+  const expiresAt = now + SESSION_TTL_MS;
+  await db.insert(schema.sessions).values({
+    sessionToken: token,
+    username,
+    expiresAt,
+    lastSeen: now,
+    createdAt: now,
+  }).run();
+
+  setSessionCookie(res, token);
+}
+
+async function maybeRefreshSession(req: Request, res: Response): Promise<void> {
+  const token = getSessionToken(req);
+  if (!token) return;
+
+  const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
+  if (rows.length === 0) return;
+
+  const sessionRow = rows[0];
+  const now = Date.now();
+
+  if (sessionRow.expiresAt <= now) {
+    await db.delete(schema.sessions).where(eq(schema.sessions.sessionToken, token)).run();
+    await clearSessionCookie(res);
+    return;
+  }
+
+  const shouldRefresh = sessionRow.expiresAt - now < SESSION_TTL_MS / 2;
+  if (shouldRefresh) {
+    const newExpiresAt = now + SESSION_TTL_MS;
+    await db.update(schema.sessions).set({ expiresAt: newExpiresAt, lastSeen: now }).where(eq(schema.sessions.sessionToken, token)).run();
+    setSessionCookie(res, token);
+  } else {
+    await db.update(schema.sessions).set({ lastSeen: now }).where(eq(schema.sessions.sessionToken, token)).run();
+  }
+}
+
+async function ensureDailyTradingSummaryTableExists(): Promise<void> {
+  try {
+    sqliteDb.exec(`CREATE TABLE IF NOT EXISTS daily_trading_summary (
+      date TEXT PRIMARY KEY,
+      total_trades INTEGER DEFAULT 0,
+      total_volume REAL DEFAULT 0,
+      realized_pnl REAL DEFAULT 0,
+      unrealized_pnl REAL DEFAULT 0,
+      allocated_amount REAL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    )`);
+  } catch (e) {
+    console.warn("Could not create daily trading summary table:", e);
+  }
+}
+
+async function updateDailyTradingSummary(activity: {
+  status: string;
+  quantity: number;
+  price: number;
+  profitLoss?: number | null;
+  timestamp: string;
+}, portfolioState?: any) {
+  const date = activity.timestamp.slice(0, 10);
+  const totalVolume = Math.abs(activity.quantity) * activity.price;
+  const realizedPnl = Number(activity.profitLoss || 0);
+  const allocatedAmount = portfolioState?.positions?.reduce(
+    (sum: number, p: any) => sum + Number(p.marketValue || 0),
+    0,
+  ) || 0;
+  const unrealizedPnl = portfolioState?.positions?.reduce(
+    (sum: number, p: any) => sum + Number(p.unrealizedPnl || 0),
+    0,
+  ) || 0;
+
+  const existing = await db.select().from(schema.dailyTradingSummary).where(eq(schema.dailyTradingSummary.date, date)).limit(1);
+  if (existing.length > 0) {
+    const row = existing[0];
+    await db.update(schema.dailyTradingSummary).set({
+      total_trades: row.total_trades + 1,
+      total_volume: row.total_volume + totalVolume,
+      realized_pnl: row.realized_pnl + realizedPnl,
+      unrealized_pnl: unrealizedPnl,
+      allocated_amount: allocatedAmount,
+      updated_at: Date.now(),
+    }).where(eq(schema.dailyTradingSummary.date, date)).run();
+  } else {
+    await db.insert(schema.dailyTradingSummary).values({
+      date,
+      total_trades: 1,
+      total_volume: totalVolume,
+      realized_pnl: realizedPnl,
+      unrealized_pnl: unrealizedPnl,
+      allocated_amount: allocatedAmount,
+      updated_at: Date.now(),
+    }).run();
+  }
+}
+
+async function persistTradeActivity(activity: {
+  id: string;
+  symbol: string;
+  side: string;
+  quantity: number;
+  price: number;
+  status: string;
+  timestamp: string;
+  reasoning?: string;
+  traceId?: string | null;
+  profitLoss?: number | null;
+  newsUsed?: boolean;
+  newsSentiment?: number | null;
+  newsConfidence?: number | null;
+  newsSources?: string;
+  newsReasoning?: string;
+}, portfolioState?: any) {
+  try {
+    await db.insert(schema.trades).values(activity).run();
+    if (portfolioState) {
+      await updateDailyTradingSummary(activity, portfolioState);
+    }
+  } catch (e) {
+    console.warn("Failed to persist trade activity:", e);
+  }
+}
+
+async function isAuthed(req: Request): Promise<boolean> {
+  const token = getSessionToken(req);
+  if (!token) return false;
+
+  const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
+  if (rows.length === 0) return false;
+
+  return rows[0].expiresAt > Date.now();
 }
 
 const SECRETS_FILE = path.join(process.cwd(), "data", "secrets.json");
@@ -536,10 +614,11 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   const app = express();
   initializeAlpacaWebSocket();
 
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (req.path.startsWith('/api/v1/auth')) return next();
-    if (isAuthed(req)) {
-      if (APP_PASSWORD) maybeRefreshSession(req, res);
+    if (req.path.startsWith('/api/v1/config')) return next();
+    if (await isAuthed(req)) {
+      await maybeRefreshSession(req, res);
       return next();
     }
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'unauthorized' });
@@ -547,8 +626,74 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   });
 
   app.use(express.json());
+
+  const authRouter = express.Router();
+  authRouter.post('/login', async (req, res) => {
+    const { username, password } = req.body || {};
+    if (!validateCredentials(username, password)) {
+      return res.status(401).json({ error: 'Invalid username or password' });
+    }
+    await createSession(res, username);
+    res.json({ ok: true });
+  });
+
+  authRouter.get('/status', async (req, res) => {
+    res.json({ authenticated: await isAuthed(req) });
+  });
+
+  authRouter.post('/logout', async (req, res) => {
+    const token = getSessionToken(req);
+    if (token) {
+      await db.delete(schema.sessions).where(eq(schema.sessions.sessionToken, token)).run();
+    }
+    await clearSessionCookie(res);
+    res.json({ ok: true });
+  });
+
+  app.use('/api/v1/auth', authRouter);
   app.use("/api/v1/config", configRouter);
+  app.use("/api/v1", configRouter);
   app.use("/api/v2", v2Router);
+  app.get('/api/v1/scheduler', (req, res) => {
+    res.json({ tasks: scheduledTasks });
+  });
+
+  app.post('/api/v1/scheduler', (req, res) => {
+    const task = {
+      id: `task_${Math.random().toString(16).slice(2)}`,
+      frequency: req.body.frequency || 'Daily',
+      targetWeights: req.body.targetWeights || {},
+      createdAt: new Date().toISOString(),
+    };
+    scheduledTasks.push(task);
+    res.json({ task });
+  });
+
+  app.delete('/api/v1/scheduler/:id', (req, res) => {
+    const id = req.params.id;
+    scheduledTasks = scheduledTasks.filter((task) => task.id !== id);
+    res.json({ ok: true });
+  });
+
+  app.get('/api/v1/risk', (req, res) => {
+    res.json(riskVetos);
+  });
+
+  app.post('/api/v1/risk/:id/review', (req, res) => {
+    const id = req.params.id;
+    const existing = riskVetos.find((v) => v.id === id);
+    if (!existing) {
+      return res.status(404).json({ error: 'Risk veto not found' });
+    }
+    const updated = {
+      ...existing,
+      review: req.body.review || existing.review || 'Reviewed by operator',
+      reviewedAt: new Date().toISOString(),
+      status: req.body.status || existing.status || 'REVIEWED',
+    };
+    riskVetos = riskVetos.map((v) => (v.id === id ? updated : v));
+    res.json(updated);
+  });
 
   // Resolve static build folders
   const dirName = process.cwd();
@@ -594,18 +739,7 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
 
   const defaultPositions: TradingPosition[] = [];
 
-  const AUDIT_LOG_FILE = path.join(process.cwd(), "data", "audit_trail.jsonl");
 const PORTFOLIO_FILE = path.join(process.cwd(), "data", "portfolio.json");
-
-/**
- * Logs a system audit entry to the persistent simulation state.
- * @param entry - The audit record containing action, timestamp, and details.
- */
-function auditLog(entry: any) {
-  const logEntry = JSON.stringify({ ...entry, timestamp: new Date().toISOString() }) + "\n";
-  fs.mkdirSync(path.dirname(AUDIT_LOG_FILE), { recursive: true });
-  fs.appendFileSync(AUDIT_LOG_FILE, logEntry);
-}
 
 /**
  * Calculates the 14-period Average True Range (ATR) using High, Low, and Close arrays.
@@ -637,40 +771,6 @@ function calculateATR(highs: number[], lows: number[], closes: number[]): number
     atr = (atr * (period - 1) + trs[i]) / period;
   }
   return atr;
-}
-
-/**
- * Calculates the Abramowitz and Stegun approximation of the cumulative standard normal distribution function (Z).
- */
-function normalCDF(x: number): number {
-  const t = 1 / (1 + 0.2316419 * Math.abs(x));
-  const d = 0.3989422804;
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const q = d * Math.exp(-0.5 * x * x);
-  const prob = 1 - q * (a1 * t + a2 * t*t + a3 * Math.pow(t, 3) + a4 * Math.pow(t, 4) + a5 * Math.pow(t, 5));
-  return x >= 0 ? prob : 1 - prob;
-}
-
-/**
- * Calculates the Deflated Sharpe Ratio (DSR) using estimated Sharpe ratio, observations count,
- * independent trials count, and strategy variance.
- * discounts the expected Sharpe Ratio based on multi-testing variance to protect against overfitting.
- */
-function calculateDSR(srHat: number, T: number, N: number, variance: number): number {
-  const SR0 = 0.0; // benchmark
-  const gamma1 = 0.05; // assumed slight autocorrelation
-  const V = variance || 0.1; // variance of strategies tested
-  
-  const num = srHat - SR0;
-  const den = Math.sqrt(((1 - gamma1) / T) + (((1 + 0.5 * Math.pow(srHat, 2)) / T) * V));
-  
-  if (den === 0) return 0;
-  const value = num / den;
-  return normalCDF(value);
 }
 
 /**
@@ -1044,133 +1144,7 @@ function savePortfolio(state: any) {
 
 let portfolioState = loadPortfolio();
 
-// Global custom outbound webhooks configuration
-let webhooks: any[] = [
-  {
-    id: "wh_slack_sample",
-    name: "Slack Desk channel",
-    url: "https://hooks.slack.com/services/T00/B00/X123",
-    type: "slack",
-    enabled: false,
-    events: ["veto", "daily_loss_breach", "sector_exposure_breach"],
-    createdAt: new Date().toISOString()
-  }
-];
-
-// Dispatch real-time notifications to configured webhooks
-async function triggerWebhooks(event: {
-  type: "veto" | "daily_loss_breach" | "sector_exposure_breach";
-  title: string;
-  message: string;
-  details?: any;
-}) {
-  console.log(`[Webhook Trigger] Event: ${event.type} | ${event.title}`);
-  for (const wh of webhooks) {
-    if (!wh.enabled) continue;
-    if (wh.events.includes("all") || wh.events.includes(event.type)) {
-      let payload: any = {};
-      const timestamp = new Date().toISOString();
-      if (wh.type === "slack") {
-        payload = {
-          text: `🚨 *[ARGUS RISK ALERT]* *${event.title}*\n> ${event.message}\n_Time: ${timestamp}_`
-        };
-      } else if (wh.type === "discord") {
-        payload = {
-          embeds: [{
-            title: `🚨 [ARGUS RISK ALERT] ${event.title}`,
-            description: event.message,
-            color: 16711680,
-            timestamp,
-            footer: { text: "Argus Terminal Oversight Node" }
-          }]
-        };
-      } else {
-        payload = { ...event, timestamp };
-      }
-      try {
-        fetch(wh.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-      } catch(e) {}
-    }
-  }
-}
-
-
-  app.get("/api/v1/webhooks", (req: Request, res: Response) => {
-    res.json(webhooks);
-  });
-
-  app.post("/api/v1/webhooks", (req: Request, res: Response) => {
-    const { name, url, type, enabled, events } = req.body;
-    if (!name || !url) return res.status(400).json({ error: "Name and URL required" });
-    const newWh = {
-      id: "wh_" + Date.now() + "_" + Math.floor(Math.random()*1000),
-      name,
-      url,
-      type: type || "slack",
-      enabled: enabled ?? true,
-      events: events || ["all"],
-      createdAt: new Date().toISOString()
-    };
-    webhooks.push(newWh);
-    res.json(newWh);
-  });
-
-  app.put("/api/v1/webhooks/:id", (req: Request, res: Response) => {
-    const { id } = req.params;
-    const wh = webhooks.find(w => w.id === id);
-    if (!wh) return res.status(404).json({ error: "Not found" });
-    if (req.body.enabled !== undefined) wh.enabled = req.body.enabled;
-    if (req.body.name !== undefined) wh.name = req.body.name;
-    if (req.body.url !== undefined) wh.url = req.body.url;
-    if (req.body.events !== undefined) wh.events = req.body.events;
-    res.json(wh);
-  });
-
-  app.post("/api/v1/webhooks/test", async (req: Request, res: Response) => {
-    const { url, type } = req.body;
-    let payload: any = {};
-    const timestamp = new Date().toISOString();
-    
-    if (type === "slack") {
-      payload = {
-        text: `🚨 *[ARGUS RISK ALERT TEST]* *Connection Test*\n> This is a test notification.\n_Time: ${timestamp}_`
-      };
-    } else if (type === "discord") {
-      payload = {
-        embeds: [{
-          title: `🚨 [ARGUS RISK ALERT TEST] Connection Test`,
-          description: "This is a test notification.",
-          color: 3066993,
-          timestamp,
-          footer: { text: "Argus Terminal Oversight Node" }
-        }]
-      };
-    } else {
-      payload = { event: "test", timestamp };
-    }
-    
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      res.json({ success: response.ok, status: response.status });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-
-  app.delete("/api/v1/webhooks/:id", (req: Request, res: Response) => {
-    const { id } = req.params;
-    const index = webhooks.findIndex(wh => wh.id === id);
-    if (index === -1) {
-      return res.status(404).json({ error: "Webhook not found" });
-    }
-    webhooks.splice(index, 1);
-    res.json({ success: true });
-  });
+  app.use("/api/v1/webhooks", webhooksRouter);
 
   app.get("/api/v1/portfolio", async (req: Request, res: Response) => {
     try {
@@ -1209,59 +1183,7 @@ async function triggerWebhooks(event: {
     }
   });
 
-  app.get("/api/v1/marketdata/adapters", (req: Request, res: Response) => {
-    res.json({
-      adapters: MarketDataManager.getInstance().getAvailableAdapters(),
-      activeAdapter: MarketDataManager.getInstance().getActiveAdapter().id
-    });
-  });
-
-  app.post("/api/v1/marketdata/active", async (req: Request, res: Response) => {
-    const { id, credentials } = req.body;
-    try {
-      const success = await MarketDataManager.getInstance().setActiveAdapter(id, credentials);
-      res.json({ success });
-    } catch (e: any) {
-      res.status(400).json({ success: false, error: e.message });
-    }
-  });
-
-  app.get("/api/v1/brokers", (req: Request, res: Response) => {
-    res.json({
-      brokers: BrokerManager.getInstance().getAvailableBrokers(),
-      activeBroker: BrokerManager.getInstance().getActiveBroker().id
-    });
-  });
-
-  app.post("/api/v1/brokers/active", async (req: Request, res: Response) => {
-    const { id, credentials } = req.body;
-    try {
-      const success = await BrokerManager.getInstance().setActiveBroker(id, credentials);
-      res.json({ success });
-    } catch (e: any) {
-      res.status(400).json({ success: false, error: e.message });
-    }
-  });
-
-  app.get("/api/v1/audit/trail", (req: Request, res: Response) => {
-    try {
-      if (fs.existsSync(AUDIT_LOG_FILE)) {
-        const lines = fs.readFileSync(AUDIT_LOG_FILE, "utf-8").trim().split("\n");
-        return res.json(lines.map(l => JSON.parse(l)).reverse().slice(0, 50));
-      }
-    } catch(e) {}
-    res.json([]);
-  });
-
-  app.post("/api/v1/system/emergency-stop", (req: Request, res: Response) => {
-    console.warn("CIRCUIT BREAKER: Emergency Stop Activated by User.");
-    res.json({ status: "ok", active: true });
-  });
-
-  app.post("/api/v1/system/resume", (req: Request, res: Response) => {
-    console.log("SYSTEM: Recovery initiated. Trading systems resumed.");
-    res.json({ status: "ok", active: false });
-  });
+  app.use("/api/v1", integrationRouter);
 
   app.post("/api/v1/llm/consensus", async (req: Request, res: Response) => {
     const { prompt } = req.body;
@@ -1553,6 +1475,23 @@ async function triggerWebhooks(event: {
 
         responsePayload.vetoed_by_risk = true;
         responsePayload.execution_status = `VETOED by Risk Management Layer: ${msg}`;
+        await persistTradeActivity({
+          id: "tr_" + Math.random().toString(16).substring(2, 10),
+          symbol,
+          side: "BUY",
+          quantity: 0,
+          price: px_base,
+          status: "VETOED",
+          timestamp: new Date().toISOString(),
+          reasoning: msg,
+          traceId: null,
+          profitLoss: null,
+          newsUsed: false,
+          newsSentiment: sentimentScore,
+          newsConfidence: 0,
+          newsSources: '',
+          newsReasoning: '',
+        }, portfolioState);
         triggerWebhooks({
           type: "sector_exposure_breach",
           title: `Sector Exposure Breach: ${symbol}`,
@@ -1651,6 +1590,24 @@ async function triggerWebhooks(event: {
           };
           recentTrades.unshift(executed);
 
+          await persistTradeActivity({
+            id: tradeId,
+            symbol,
+            side: "BUY",
+            quantity: qty,
+            price: px_base,
+            status: "FILLED",
+            timestamp: executed.timestamp,
+            reasoning: finalReason,
+            traceId: null,
+            profitLoss: 0,
+            newsUsed: false,
+            newsSentiment: sentimentScore,
+            newsConfidence: 0,
+            newsSources: '',
+            newsReasoning: '',
+          }, portfolioState);
+
           responsePayload.executed_trade = executed as any;
           responsePayload.execution_status = `BUY Filled. Bought ${qty} shares at $${px_base.toFixed(2)}`;
           
@@ -1667,6 +1624,23 @@ async function triggerWebhooks(event: {
         } else {
           responsePayload.execution_status =
             "Skipped: Insufficient Cash Balance.";
+          await persistTradeActivity({
+            id: "tr_" + Math.random().toString(16).substring(2, 10),
+            symbol,
+            side: "BUY",
+            quantity: 0,
+            price: px_base,
+            status: "SKIPPED",
+            timestamp: new Date().toISOString(),
+            reasoning: "Insufficient cash balance to execute buy.",
+            traceId: null,
+            profitLoss: null,
+            newsUsed: false,
+            newsSentiment: sentimentScore,
+            newsConfidence: 0,
+            newsSources: '',
+            newsReasoning: '',
+          }, portfolioState);
         }
       }
     } else if (finalDecision === "SELL") {
@@ -1732,6 +1706,23 @@ async function triggerWebhooks(event: {
 
         responsePayload.executed_trade = executed as any;
         responsePayload.execution_status = `SELL Filled. Liquidated ${pos.quantity} shares at $${px_base.toFixed(2)}`;
+        await persistTradeActivity({
+          id: tradeId,
+          symbol,
+          side: "SELL",
+          quantity: pos.quantity,
+          price: px_base,
+          status: "FILLED",
+          timestamp: executed.timestamp,
+          reasoning: executed.thesis,
+          traceId: null,
+          profitLoss: proceeds - pos.totalCost,
+          newsUsed: false,
+          newsSentiment: sentimentScore,
+          newsConfidence: 0,
+          newsSources: '',
+          newsReasoning: '',
+        }, portfolioState);
         
         savePortfolio(portfolioState);
         auditLog({
@@ -1946,192 +1937,7 @@ async function triggerWebhooks(event: {
   
     
   
-  // --- New SQLite APIs as per prompt ---
-  // End New APIs
-app.get("/api/v1/system/export-db", (req, res) => {
-    try {
-      const dbPath = path.resolve(process.cwd(), 'database', 'argus.db');
-      if (fs.existsSync(dbPath)) {
-        res.download(dbPath, 'argus_backup.db');
-      } else {
-        res.status(404).json({ error: 'Database not found' });
-      }
-    } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-
-  app.get("/api/v1/system/export-db", (req, res) => {
-    try {
-      const dbPath = path.resolve(process.cwd(), 'database', 'argus.db');
-      res.download(dbPath);
-    } catch(e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-  
-  app.post("/api/v1/system/import-db", express.raw({ type: 'application/octet-stream', limit: '50mb' }), (req, res) => {
-    try {
-      const dbPath = path.resolve(process.cwd(), 'database', 'argus.db');
-      fs.writeFileSync(dbPath, req.body);
-      res.json({ ok: true, message: 'Database imported successfully. Please restart the application.' });
-    } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-
-  app.get("/api/v1/system/status", async (req, res) => {
-    try {
-      const settings = await db.select().from(schema.settings).limit(1);
-      const brokers = await db.select().from(schema.brokerConnections).limit(1);
-      const providers = await db.select().from(schema.aiProviders).limit(1);
-      res.json({
-        hasAlpaca: brokers.length > 0,
-        hasGemini: providers.length > 0,
-        hasSQLite: true,
-        circuitBreakers: { dailyDate: new Date().toISOString().split('T')[0], loss: 0 },
-        emergencyStop: false
-      });
-    } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-                  app.get("/api/v1/agents", async (req, res) => {
-    try {
-        const stats = await db.select().from(schema.agentPerformanceStats);
-        const weights = {};
-        stats.forEach(s => { weights[s.agentName] = s.currentWeight; });
-        res.json({ weights });
-    } catch(e) {
-        res.json({ weights: {} });
-    }
-  });
-  app.get("/api/v1/performance", async (req, res) => {
-    try {
-        const stats = await db.select().from(schema.agentPerformanceStats);
-        const metrics = {};
-        stats.forEach(s => { 
-           metrics[s.agentName] = { 
-               winRate: s.winRate, 
-               totalTrades: s.totalPredictions, 
-               averageReturn: s.averageReturn, 
-               profitFactor: s.profitFactor, 
-               sharpeRatio: s.sharpeRatio 
-           }; 
-        });
-        res.json(metrics);
-    } catch(e) {
-        res.json({});
-    }
-  });
-  
-  app.get("/api/v1/trades", async (req, res) => {
-    try {
-      const allTrades = await db.select().from(schema.trades).orderBy(schema.trades.id);
-      res.json(allTrades.reverse()); // Latest first
-    } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-
-  app.get("/api/v1/agent-memory", async (req, res) => {
-    try {
-      const memories = await db.select().from(schema.agentMemory).orderBy(schema.agentMemory.id);
-      res.json(memories.reverse()); // Latest first
-    } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-
-  app.get("/api/v1/event-traces", async (req, res) => {
-    try {
-      const traces = await db.select().from(schema.eventTraces).orderBy(schema.eventTraces.id);
-      res.json(traces.reverse()); // Latest first
-    } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-
-        app.get("/api/v1/pnl/analytics", async (req: Request, res: Response) => {
-    if (tradingEngine.state.tradingMode !== "SIMULATOR" && process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
-      try {
-        const isPaper = tradingEngine.state.tradingMode === "PAPER";
-        const alpacaBaseUrl = isPaper ? "paper-api.alpaca.markets" : "api.alpaca.markets";
-        const historyRes = await fetch(`https://${alpacaBaseUrl}/v2/account/portfolio/history?period=30d&timeframe=1D`, {
-          headers: {
-            "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
-            "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY,
-          }
-        });
-        
-        if (historyRes.ok) {
-          const history = await historyRes.json();
-          // history has timestamp (unix), equity, profit_loss, profit_loss_pct
-          const mapped = history.timestamp.map((t: number, i: number) => {
-            const dateObj = new Date(t * 1000);
-            return {
-              date: dateObj.toISOString().split('T')[0],
-              pnl: history.profit_loss[i] || 0,
-              cumulative: history.equity[i] || 0,
-            };
-          });
-          
-          return res.json({ history: mapped });
-        }
-      } catch (e) {
-        console.error("Failed to fetch Alpaca portfolio history:", e);
-      }
-    }
-    
-    // Stub fallback
-    res.json({ history: [] });
-  });
-  app.post("/api/v1/backtest", (req, res) => {
-    // Basic mock backtest
-    res.json({
-        returnPct: 15.5,
-        sharpe: 2.1,
-        maxDrawdown: 0.05,
-        trades: 12,
-        curve: []
-    });
-  });
-        app.patch("/api/v1/settings", (req, res) => res.json({ ok: true }));
+  app.use("/api/v1", systemRouter);
 
   app.post("/api/v1/llm/dual-verify-trade", async (req: Request, res: Response) => {
     const { symbol, marketContext, headline, proposerStressed, verifierStressed, proposerName, verifierName, adversarialDebateMode } = req.body;
@@ -2350,125 +2156,9 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
   });
 
   // --- LIVE NEWS SEARCH GROUNDING ---
-  
-  app.get("/api/v1/news/timeline", async (req: Request, res: Response) => {
-    try {
-      const { NewsTimelineEngine } = await import('./src/server/news/NewsTimelineEngine.ts');
-      const engine = new NewsTimelineEngine();
-      const timeline = await engine.getTimeline();
-      res.json(timeline);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get("/api/v1/news/memory", async (req: Request, res: Response) => {
-    try {
-      const symbol = req.query.symbol as string;
-      const { NewsMemoryEngine } = await import('./src/server/news/NewsMemoryEngine.ts');
-      const engine = new NewsMemoryEngine();
-      const events = await engine.getRecentEventsForSymbol(symbol || '');
-      res.json(events);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  
-  app.get("/api/v1/news/providers", async (req: Request, res: Response) => {
-    try {
-      const { db } = await import('./src/server/db/index.ts');
-      const schema = await import('./src/server/db/schema.ts');
-      const { newsEngine } = await import('./src/server/news/NewsEngine.ts');
-      const providers = newsEngine.providerManager.getProviders().map((p: any) => ({ id: p.id, name: p.name, type: p.type, enabled: true, health: 'Healthy', errorCount: 0, credibilityWeight: p.credibilityWeight, lastFetch: new Date().toISOString() }));
-      res.json(providers);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
-
-  app.get("/api/v1/news/articles", async (req: Request, res: Response) => {
-    try {
-      const { db } = await import('./src/server/db/index.ts');
-      const schema = await import('./src/server/db/schema.ts');
-      const { desc } = await import('drizzle-orm');
-      const limit = parseInt((req.query.limit as string) || '50');
-      const articles = await db.select().from(schema.newsArticles).orderBy(desc(schema.newsArticles.publishedAt)).limit(limit);
-      res.json(articles);
-    } catch (e: any) {
-      res.status(500).json({ error: e.message });
-    }
-  });
+  app.use("/api/v1/news", newsRouter);
 
   // --- FULLY AUTONOMOUS BLACK-BOX TRADING BOT & SHADOW PORTFOLIO ENGINE ---
-  const SHADOW_PORTFOLIO_FILE = path.join(process.cwd(), "data", "shadow_portfolio.json");
-
-  function loadShadowPortfolio() {
-    try {
-      if (fs.existsSync(SHADOW_PORTFOLIO_FILE)) {
-        return JSON.parse(fs.readFileSync(SHADOW_PORTFOLIO_FILE, "utf-8"));
-      }
-    } catch (e) {
-      console.warn("Could not load shadow portfolio from disk, using defaults.");
-    }
-    const defaultShadow = {
-      cash: 95300.0,
-      initialCash: 100000.0,
-      peakValuation: 100000.0,
-      positions: [
-        {
-          symbol: "AAPL",
-          quantity: 10,
-          entryPrice: 150.00,
-          currentPrice: 155.00,
-          totalCost: 1500.00,
-          marketValue: 1550.00,
-          unrealizedPnl: 50.00,
-          unrealizedPnlPercent: 0.0333,
-          sector: "Technology",
-          openedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-        },
-        {
-          symbol: "AMD",
-          quantity: 15,
-          entryPrice: 80.00,
-          currentPrice: 75.00,
-          totalCost: 1200.00,
-          marketValue: 1125.00,
-          unrealizedPnl: -75.00,
-          unrealizedPnlPercent: -0.0625,
-          sector: "Technology",
-          openedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString()
-        },
-        {
-          symbol: "SPY",
-          quantity: 5,
-          entryPrice: 400.00,
-          currentPrice: 405.00,
-          totalCost: 2000.00,
-          marketValue: 2025.00,
-          unrealizedPnl: 25.00,
-          unrealizedPnlPercent: 0.0125,
-          sector: "Index Funds",
-          openedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
-        }
-      ]
-    };
-    saveShadowPortfolio(defaultShadow);
-    return defaultShadow;
-  }
-
-  function saveShadowPortfolio(state: any) {
-    try {
-      fs.mkdirSync(path.dirname(SHADOW_PORTFOLIO_FILE), { recursive: true });
-      fs.writeFileSync(SHADOW_PORTFOLIO_FILE, JSON.stringify(state, null, 2));
-    } catch (e) {
-      console.error("Failed to save shadow portfolio to disk:", e);
-    }
-  }
-
-  let shadowPortfolioState = loadShadowPortfolio();
-
   async function executeAutoBotTradeInSovereign(symbol: string, side: string, price: number, amount: number) {
     const qty = amount / price;
     try {
@@ -2650,272 +2340,11 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
 
 
 
-  // Endpoints: Chaos Mode Control
-  app.get("/api/v1/chaos/config", (req: Request, res: Response) => {
-    res.json(chaosConfig);
-  });
-
-  app.post("/api/v1/chaos/config", (req: Request, res: Response) => {
-    const { enabled, latencyMin, latencyMax, errorRate, selectedAgents } = req.body;
-    
-    if (enabled !== undefined) chaosConfig.enabled = !!enabled;
-    if (latencyMin !== undefined) chaosConfig.latencyMin = Number(latencyMin);
-    if (latencyMax !== undefined) chaosConfig.latencyMax = Number(latencyMax);
-    if (errorRate !== undefined) chaosConfig.errorRate = Number(errorRate);
-    if (selectedAgents !== undefined) chaosConfig.selectedAgents = selectedAgents;
-
-    auditLog({
-      action: "CHAOS_MODE_UPDATE",
-      enabled: chaosConfig.enabled,
-      latencyMin: chaosConfig.latencyMin,
-      latencyMax: chaosConfig.latencyMax,
-      errorRate: chaosConfig.errorRate,
-      selectedAgents: chaosConfig.selectedAgents,
-      user: "system_admin"
-    });
-
-    res.json({ ok: true, config: chaosConfig });
-  });
-
-  // Endpoints for Synthetic Macro Shock
-  app.post("/api/v1/chaos/macro-shock", async (req: Request, res: Response) => {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      if (!apiKey) {
-        // Fallback shock
-        const fallbackShock = {
-          title: "LIQUIDITY PARADOX: STAGFLATION TRIGGER",
-          description: "Federal Reserve unexpectedly hikes rates by 50bps while simultaneously announcing a quantitative easing liquidity facility due to sudden banking stress.",
-          implications: "Severe capital flight from high-beta tech to safe-haven assets. Backtests suggest range-reversion strategies suffer short-term slippage."
-        };
-        tradingEngine.state.activeMacroShock = fallbackShock;
-        {
-    const eventTime = new Date().toISOString();
-    const eventType = 'info';
-    const msg = `SYNTHETIC MACRO SHOCK INJECTED (Fallback): ${fallbackShock.title}`;
-    tradingEngine.state.history.unshift({ time: eventTime, type: eventType, msg });
-    if (tradingEngine.state.history.length > 100) tradingEngine.state.history = tradingEngine.state.history.slice(0, 100);
-    
-  }
-        return res.json({ ok: true, shock: fallbackShock });
-      }
-
-      const ai = null;
-      const prompt = `You are an elite financial scenario generator. Generate a highly complex, contradictory synthetic macro news cascade/economic event shock.
-Examples: 
-- Federal Reserve unexpectedly hikes rates by 50bps while simultaneously announcing a quantitative easing liquidity facility due to sudden banking sector stress.
-- Inflation numbers rise higher than expected (CPI +0.6% MoM), but unemployment climbs sharply to 4.8%, creating a stagflation paradox that freezes baseline algos.
-
-Create a new scenario that has severe internal narrative contradiction.
-Output MUST be strict JSON matching this structure:
-{
-  "title": "A short dramatic headline in uppercase, e.g. RATES SHOCK WITH QE BACKSTOP",
-  "description": "2-3 sentences explaining the contradictory macro data cascade",
-  "implications": "What range of outcomes this causes (e.g., tech selloff with safe-haven rotation)"
-}`;
-
-      const resShock = await generateContentWithRetry(ai, {
-        model: "gemini-3.5-flash",
-        contents: prompt,
-        config: { responseMimeType: "application/json", temperature: 0.8 }
-      });
-
-      const parsed = cleanAndParseJSON(resShock.text);
-      if (parsed && parsed.title) {
-        tradingEngine.state.activeMacroShock = parsed;
-        {
-    const eventTime = new Date().toISOString();
-    const eventType = 'info';
-    const msg = `SYNTHETIC MACRO SHOCK INJECTED: ${parsed.title}`;
-    tradingEngine.state.history.unshift({ time: eventTime, type: eventType, msg });
-    if (tradingEngine.state.history.length > 100) tradingEngine.state.history = tradingEngine.state.history.slice(0, 100);
-    
-  }
-        res.json({ ok: true, shock: parsed });
-      } else {
-        throw new Error("Failed to parse shock JSON from Gemini");
-      }
-    } catch (err: any) {
-      console.error("Failed to generate macro shock:", err);
-      const fallbackShock = {
-        title: "SYSTEMIC CREDIT DRAWDOWNS ACTIVE",
-        description: "Contradictory corporate earnings cascades coupled with bond yield inversions are flooding risk monitors.",
-        implications: "Spike in baseline Vol Ratio. Momentum vectors show structural noise."
-      };
-      tradingEngine.state.activeMacroShock = fallbackShock;
-      {
-    const eventTime = new Date().toISOString();
-    const eventType = 'info';
-    const msg = `SYNTHETIC MACRO SHOCK INJECTED (Local Fallback): ${fallbackShock.title}`;
-    tradingEngine.state.history.unshift({ time: eventTime, type: eventType, msg });
-    if (tradingEngine.state.history.length > 100) tradingEngine.state.history = tradingEngine.state.history.slice(0, 100);
-    
-  }
-      res.json({ ok: true, shock: fallbackShock });
-    }
-  });
-
-  app.post("/api/v1/chaos/macro-shock/clear", (req: Request, res: Response) => {
-    if (tradingEngine.state.activeMacroShock) {
-      {
-    const eventTime = new Date().toISOString();
-    const eventType = 'info';
-    const msg = `Synthetic Macro Shock CLEARED. Swarm restoring baseline narrative models.`;
-    tradingEngine.state.history.unshift({ time: eventTime, type: eventType, msg });
-    if (tradingEngine.state.history.length > 100) tradingEngine.state.history = tradingEngine.state.history.slice(0, 100);
-    
-  }
-      tradingEngine.state.activeMacroShock = null;
-    }
-    res.json({ ok: true });
-  });
+  app.use("/api/v1/chaos", chaosRouter);
 
   // Endpoints for Prompt Evolution
-  app.post("/api/v1/autobot/evolve", async (req: Request, res: Response) => {
-    try {
-      const apiKey = process.env.GEMINI_API_KEY;
-      const currentPrompt = tradingEngine.state.geneticPrompt.currentBestPrompt;
-      
-      let mutatedPrompt = currentPrompt;
-      let mutationType = "Risk Threshold Accentuation";
-      let explanation = "Adjusted focus weight between oversold RSI and sector limits.";
-
-      if (apiKey) {
-        const ai = null;
-        const promptMutationRequest = `You are a Genetic Prompt Hyper-Agent Optimizer.
-We have an automated multi-agent quantitative trading bot. The Proposer Agent currently uses this system prompt to determine BUY/SELL/HOLD decisions:
-"${currentPrompt}"
-
-Your job is to introduce a minor, calculated "mutation" to this prompt (e.g., swapping specific risk directives, reorganizing analytical steps, adding emphasis on specific momentum conditions, or adjusting confidence thresholds) to optimize its Sharpe Ratio.
-
-Output MUST be strict JSON matching this structure:
-{
-  "mutatedPrompt": "The full updated system prompt containing the mutation",
-  "mutationType": "e.g., Risk Threshold Accentuation / Order of Priority Re-organization",
-  "explanation": "Why this mutation is mathematically or behaviorally expected to improve the Sharpe Ratio"
-}`;
-
-        try {
-          const resMutation = await generateContentWithRetry(ai, {
-            model: "gemini-3.5-flash",
-            contents: promptMutationRequest,
-            config: { responseMimeType: "application/json", temperature: 0.85 }
-          });
-          const parsedMutation = cleanAndParseJSON(resMutation.text);
-          if (parsedMutation && parsedMutation.mutatedPrompt) {
-            mutatedPrompt = parsedMutation.mutatedPrompt;
-            mutationType = parsedMutation.mutationType || mutationType;
-            explanation = parsedMutation.explanation || explanation;
-          }
-        } catch (promptErr) {
-          console.error("Failed to mutate prompt via Gemini:", promptErr);
-        }
-      }
-
-      const currentSR = tradingEngine.state.geneticPrompt.performanceHistory[tradingEngine.state.geneticPrompt.performanceHistory.length - 1]?.sharpeRatio || 1.84;
-      // MOCKS REMOVED: AI Prompt Evolution metrics must be based on actual backtest execution results.
-      const candidateSR = Number(currentSR); // Stagnant until real evaluation is implemented
-      const N_trials = (tradingEngine.state.geneticPrompt.performanceHistory.length + 5);
-      const candidateDSR = Number(calculateDSR(candidateSR, 100, N_trials, 0.12).toFixed(3));
-
-      const nextGen = tradingEngine.state.geneticPrompt.generation + 1;
-      const newHistoryEntry = {
-        generation: nextGen,
-        sharpeRatio: candidateSR,
-        dsr: candidateDSR,
-        mutationType,
-        explanation,
-        timestamp: new Date().toISOString()
-      };
-
-      tradingEngine.state.geneticPrompt.performanceHistory.push(newHistoryEntry);
-      tradingEngine.state.geneticPrompt.generation = nextGen;
-      tradingEngine.state.geneticPrompt.currentBestPrompt = mutatedPrompt;
-
-      tradingEngine.state.history.unshift({
-        time: new Date().toISOString(),
-        type: 'info',
-        msg: `PROMPT EVOLUTION COMPLETE. Gen ${nextGen} deployed. Sharpe Ratio: ${candidateSR} | DSR: ${(candidateDSR * 100).toFixed(1)}%`
-      });
-
-      res.json({ ok: true, geneticPrompt: tradingEngine.state.geneticPrompt });
-    } catch (err: any) {
-      console.error("Prompt evolution error:", err);
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  app.get("/api/v1/autobot", async (req: Request, res: Response) => {
-    res.json({
-       enabled: tradingEngine.state.enabled,
-       tradingMode: tradingEngine.state.tradingMode,
-       budget: tradingEngine.state.budget,
-       spent: tradingEngine.state.spent,
-       remaining: tradingEngine.state.budget - tradingEngine.state.spent,
-       strategy: tradingEngine.state.strategy,
-       riskLevel: tradingEngine.state.riskLevel,
-       maxTradeSize: tradingEngine.state.maxTradeSize,
-       dailyLossLimit: tradingEngine.state.dailyLossLimit,
-       currentDailyLoss: tradingEngine.state.currentDailyLoss,
-       takeProfitPct: tradingEngine.state.takeProfitPct,
-       trailingStopPct: tradingEngine.state.trailingStopPct,
-       minAiConfidence: tradingEngine.state.minAiConfidence,
-       logs: tradingEngine.state.history,
-  history: tradingEngine.state.history,
-       learningJournal: tradingEngine.state.learningJournal,
-       activeCycle: tradingEngine.state.activeCycle,
-       memoryRules: await db.select().from(schema.memoryRules),
-       adversarialDebateMode: tradingEngine.state.adversarialDebateMode,
-       equityHistory: tradingEngine.state.equityHistory,
-       bypassedTrades: tradingEngine.state.bypassedTrades,
-       shadowPortfolio: shadowPortfolioState,
-       engines: tradingEngine.state.engines,
-       cycleCount: tradingEngine.state.cycleCount,
-       activeMacroShock: tradingEngine.state.activeMacroShock,
-       regimeState: tradingEngine.state.regimeState,
-       geneticPrompt: tradingEngine.state.geneticPrompt,
-       workers: (tradingEngine.state as any).workers || [],
-       discoveredOpportunities: (tradingEngine.state as any).discoveredOpportunities || [],
-       newsIntelligence: (tradingEngine.state as any).newsIntelligence || [],
-       eventBus: (tradingEngine.state as any).eventBus || [],
-       orchestratorWorkflows: (tradingEngine.state as any).orchestratorWorkflows || []
-    });
-  });
-
-  app.post("/api/v1/autobot/memory", async (req: Request, res: Response) => {
-    const { action, rule, index } = req.body;
-    try {
-      if (action === "add" && rule) {
-        tradingEngine.logHistory('info', `User injected Context Rule: ${rule}`);
-        await db.insert(schema.memoryRules).values({ ruleText: rule, weight: 1.0, createdAt: Date.now() });
-      } else if (action === "delete" && typeof index === "number") {
-        tradingEngine.logHistory('info', `User deleted Context Rule.`);
-        // Basic implementation for deleting by index is risky, but keeping it same for now.
-        // Actually, the original used db.select().from(schema.memoryRules)
-        const allRules = await db.select().from(schema.memoryRules);
-        if (allRules[index]) {
-            await db.delete(schema.memoryRules).where(eq(schema.memoryRules.id, allRules[index].id));
-        }
-      }
-      const updated = await db.select().from(schema.memoryRules);
-      res.json({ ok: true, memoryRules: updated });
-    } catch(e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-
-  app.get("/api/v1/autobot/state", (req, res) => { res.json(tradingEngine.state); });
+  app.use("/api/v1/autobot", autobotRouter);
   app.get("/api/v1/kronos/status", (req, res) => { try { res.json(kronosEngine.getStatus()); } catch(e: any) { res.status(500).json({error: e.message}); } });
-
-  app.post("/api/v1/autobot/toggle", async (req: Request, res: Response) => {
-    tradingEngine.toggle(req.body);
-    res.json({ ok: true, state: tradingEngine.state });
-  });
 
   // Serves Static build directory of React SPA client in production
   if (isProd) {

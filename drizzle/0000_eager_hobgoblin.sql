@@ -267,6 +267,24 @@ CREATE TABLE `trades` (
 	`news_reasoning` text
 );
 --> statement-breakpoint
+CREATE TABLE `sessions` (
+	`session_token` text PRIMARY KEY NOT NULL,
+	`username` text NOT NULL,
+	`expires_at` integer NOT NULL,
+	`last_seen` integer NOT NULL,
+	`created_at` integer NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE `daily_trading_summary` (
+	`date` text PRIMARY KEY NOT NULL,
+	`total_trades` integer DEFAULT 0 NOT NULL,
+	`total_volume` real DEFAULT 0 NOT NULL,
+	`realized_pnl` real DEFAULT 0 NOT NULL,
+	`unrealized_pnl` real DEFAULT 0 NOT NULL,
+	`allocated_amount` real DEFAULT 0 NOT NULL,
+	`updated_at` integer NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE `users` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`email` text NOT NULL,

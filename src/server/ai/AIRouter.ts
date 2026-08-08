@@ -117,14 +117,14 @@ export class AIRouter {
              await (providerInstance as OpenAIProvider).initialize(apiKey);
          } else if (nameLower.includes('nvidia')) {
              providerInstance = new NvidiaProvider();
-             await (providerInstance as NvidiaProvider).initialize(apiKey);
+             await (providerInstance as NvidiaProvider).initialize(apiKey, p.defaultModel || undefined);
          } else {
 
              // Universal compatible (LiteLLM, OpenRouter, Local, Groq, etc)
              const endpoint = p.apiEndpoint || 'https://openrouter.ai/api/v1';
              const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
              providerInstance = new OpenAICompatibleProvider(p.providerName, endpoint, isLocal);
-             await (providerInstance as OpenAICompatibleProvider).initialize(apiKey);
+             await (providerInstance as OpenAICompatibleProvider).initialize(apiKey, p.defaultModel || undefined);
          }
          
          if (providerInstance) {

@@ -1586,10 +1586,50 @@ export default function App() {
   };
 
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [authUsername, setAuthUsername] = useState("admin");
   const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
   const [isLiveMode, setIsLiveMode] = useState<boolean>(false);
   const [showLiveConfirm, setShowLiveConfirm] = useState<boolean>(false);
   const [serverAuditTrail, setServerAuditTrail] = useState<any[]>([]);
+
+  const handleLoginSubmit = async (e: any) => {
+    e.preventDefault();
+    setAuthError("");
+    try {
+      const res = await fetch("/api/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: authUsername, password: authPassword }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setAuthError(body.error || "Login failed. Use admin / password.");
+        return;
+      }
+      setIsAuthenticated(true);
+      setAuthPassword("");
+      localStorage.setItem("argus_authenticated", "true");
+    } catch (err) {
+      console.error(err);
+      setAuthError("Login failed due to network error.");
+    }
+  };
+
+  useEffect(() => {
+    const verifyAuth = async () => {
+      try {
+        const res = await fetch("/api/v1/auth/status");
+        if (res.ok) {
+          const data = await res.json();
+          setIsAuthenticated(data.authenticated === true);
+        }
+      } catch (err) {
+        console.warn("Auth status check failed", err);
+      }
+    };
+    verifyAuth();
+  }, []);
 
   // Chaos Mode states
   const [chaosEnabled, setChaosEnabled] = useState<boolean>(false);
@@ -1949,16 +1989,7 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-     if (isAuthenticated) {
-        // Auto-expire session for demonstration
-        const timer = setTimeout(() => {
-           setIsAuthenticated(false);
-           setAuthPassword("");
-        }, 1000 * 60 * 60); // 1 hour session
-        return () => clearTimeout(timer);
-     }
-  }, [isAuthenticated]);
+  // Keep auth state across page reloads by relying on the backend session cookie.
 
   // Navigation & User inputs
   const [setupComplete, setSetupComplete] = useState(false);
@@ -2730,18 +2761,19 @@ export default function App() {
                 <p className="text-xs text-slate-400 mb-8 font-mono border-b border-slate-800 pb-4">
                   Enterprise Multi-Agent AI Quant Trading
                 </p>
-                <form onSubmit={e => { e.preventDefault(); setIsAuthenticated(true); }} className="space-y-5">
+                <form onSubmit={handleLoginSubmit} className="space-y-5">
                    <div className="space-y-1.5">
-                     <label className="block text-xs font-mono text-slate-400">SESSION_ID (USER)</label>
-                     <input type="text" placeholder="admin" required className="w-full bg-[#111822] border border-slate-800 rounded-md p-3 text-sm text-slate-200 focus:border-emerald-500 hover:border-slate-700 outline-none transition-colors" />
+                     <label className="block text-xs font-mono text-slate-400">USERNAME</label>
+                     <input type="text" placeholder="admin" value={authUsername} onChange={(e) => setAuthUsername(e.target.value)} required className="w-full bg-[#111822] border border-slate-800 rounded-md p-3 text-sm text-slate-200 focus:border-emerald-500 hover:border-slate-700 outline-none transition-colors" />
                    </div>
                    <div className="space-y-1.5">
                      <label className="block text-xs font-mono text-slate-400 flex justify-between">
-                       <span>AUTH_TOKEN (PASS)</span>
-                       <span className="text-slate-600 hover:text-slate-400 cursor-pointer">Reset</span>
+                       <span>PASSWORD</span>
+                       <span className="text-slate-600 hover:text-slate-400 cursor-pointer" onClick={() => setAuthPassword("")}>Reset</span>
                      </label>
                      <input type="password" placeholder="••••••••" value={authPassword} onChange={(e) => setAuthPassword(e.target.value)} required className="w-full bg-[#111822] border border-slate-800 rounded-md p-3 text-sm text-slate-200 focus:border-emerald-500 hover:border-slate-700 outline-none transition-colors font-mono tracking-widest" />
                    </div>
+                   {authError && <div className="text-rose-400 text-xs font-mono">{authError}</div>}
                    <button type="submit" className="w-full bg-slate-800 hover:bg-slate-800 border border-slate-700 hover:border-emerald-500 text-emerald-400 font-bold py-3.5 text-xs rounded-md transition-all flex justify-center items-center gap-2 mt-6 uppercase tracking-wider shadow-lg shadow-emerald-500/5 group">
                      <Lock size={14} className="group-hover:text-emerald-300" />
                      Initialize Secure Session

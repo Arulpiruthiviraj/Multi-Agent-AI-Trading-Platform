@@ -71,7 +71,13 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
   // Fetch real provider status from backend on mount
   useEffect(() => {
     fetch('/api/v1/config/provider-status')
-      .then(r => r.json())
+      .then(async (r) => {
+        const data = await r.json();
+        if (!Array.isArray(data)) {
+          throw new Error('Unexpected provider status payload');
+        }
+        return data;
+      })
       .then((statuses: ProviderStatus[]) => {
         setProviderStatuses(statuses);
         setAiProviders(prev => {

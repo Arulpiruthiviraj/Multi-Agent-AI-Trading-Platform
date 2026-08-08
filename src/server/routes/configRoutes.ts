@@ -1,10 +1,21 @@
 import { v4 as uuidv4 } from 'uuid';
+import { ConfigItemStatus, WizardStatusResponse } from '../types/wizardStatus';
 
 interface ProviderStatus {
   provider: string;
   isConfigured: boolean;
   source: 'env' | 'database' | null;
 }
+
+/** Data providers read only from process.env in this codebase - there is no
+ * DB table/route that persists these keys today, so "db" is never a valid
+ * source for this category (kept honest rather than implying one exists). */
+const DATA_PROVIDER_ENV_MAP: Record<string, string> = {
+  AlphaVantage: 'ALPHAVANTAGE_API_KEY',
+  Polygon:      'POLYGON_API_KEY',
+  FMP:          'FMP_API_KEY',
+  Finnhub:      'FINNHUB_API_KEY',
+};
 
 const AI_PROVIDER_ENV_MAP: Record<string, string> = {
   Gemini:     'GEMINI_API_KEY',
@@ -191,6 +202,56 @@ configRouter.get('/usage', async (req, res) => {
   try {
     const usage = await db.select().from(schema.aiUsage);
     res.json(usage);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/**
+ * Aggregate configuration-detection status for the Setup Wizard: which AI
+ * providers, brokers, and data providers already have a usable credential,
+ * and whether it came from process.env or the database.
+ *
+ * SECURITY: this route never reads or returns key/secret *values* - only
+ * whether a non-null encrypted value exists in the DB, or whether the env
+ * var is set. No plaintext or ciphertext ever leaves this handler.
+ */
+configRouter.get('/wizard-status', async (req, res) => {
+  try {
+    const [dbProviders, dbBrokers] = await Promise.all([
+      db.select({ providerName: schema.aiProviders.providerName, hasKey: schema.aiProviders.apiKeyEncrypted }).from(schema.aiProviders),
+      db.select({ brokerName: schema.brokerConnections.brokerName, hasKey: schema.brokerConnections.apiKeyEncrypted }).from(schema.brokerConnections),
+    ]);
+
+    const aiProviders: Record<string, ConfigItemStatus> = {};
+    for (const [provider, envKey] of Object.entries(AI_PROVIDER_ENV_MAP)) {
+      if (process.env[envKey]) {
+        aiProviders[provider] = { isConfigured: true, source: 'env' };
+        continue;
+      }
+      const dbMatch = dbProviders.find(
+        (p) => p.providerName.toLowerCase() === provider.toLowerCase() && !!p.hasKey
+      );
+      aiProviders[provider] = dbMatch ? { isConfigured: true, source: 'db' } : { isConfigured: false, source: null };
+    }
+
+    const brokers: Record<string, ConfigItemStatus> = {};
+    if (process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
+      brokers.Alpaca = { isConfigured: true, source: 'env' };
+    } else {
+      const dbMatch = dbBrokers.find((b) => b.brokerName.toLowerCase() === 'alpaca' && !!b.hasKey);
+      brokers.Alpaca = dbMatch ? { isConfigured: true, source: 'db' } : { isConfigured: false, source: null };
+    }
+
+    const dataProviders: Record<string, ConfigItemStatus> = {};
+    for (const [provider, envKey] of Object.entries(DATA_PROVIDER_ENV_MAP)) {
+      dataProviders[provider] = process.env[envKey]
+        ? { isConfigured: true, source: 'env' }
+        : { isConfigured: false, source: null };
+    }
+
+    const payload: WizardStatusResponse = { aiProviders, brokers, dataProviders };
+    res.json(payload);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
