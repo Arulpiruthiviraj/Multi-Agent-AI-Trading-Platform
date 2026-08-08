@@ -7,4 +7,3 @@ coverage/
 .env*
 !.env.example
 data/secrets.json
-data/.encryption_key

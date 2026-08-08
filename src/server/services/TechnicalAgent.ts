@@ -97,8 +97,7 @@ export class TechnicalProposerAgent {
         side: "BUY",
         confidence: 0.85,
         reasoning: `Strong upward trend detected. MACD bullish crossover. RSI at ${rsi.toFixed(2)}.`,
-        agent: "TechnicalAgent",
-        currentPrice
+        agent: "TechnicalAgent"
       });
     }
 
@@ -110,11 +109,10 @@ export class TechnicalProposerAgent {
         side: "BUY",
         confidence: 0.78,
         reasoning: `Oversold condition. Price breached lower Bollinger Band with RSI at ${rsi.toFixed(2)}.`,
-        agent: "TechnicalAgent",
-        currentPrice
+        agent: "TechnicalAgent"
       });
     }
-
+    
     // Overbought condition
     if (rsi > 75 && currentPrice > bb.upper) {
       eventBus.emitTradeIdea({
@@ -123,8 +121,7 @@ export class TechnicalProposerAgent {
         side: "SELL",
         confidence: 0.88,
         reasoning: `Overbought condition. Price exceeded upper Bollinger Band. RSI at ${rsi.toFixed(2)}.`,
-        agent: "TechnicalAgent",
-        currentPrice
+        agent: "TechnicalAgent"
       });
     }
   }

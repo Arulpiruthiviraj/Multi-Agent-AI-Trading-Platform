@@ -20,14 +20,8 @@ export class NewsEngine {
   private impactEngine: NewsImpactEngine;
   private clusterEngine: NewsClusterEngine;
   private scoringEngine: NewsScoringEngine;
-
+  
   private intervalId: NodeJS.Timeout | null = null;
-
-  // Without this, every non-neutral article for a symbol emits its own TRADE_IDEA_GENERATED
-  // (each of which can trigger a multi-provider ChiefTrader debate), so a burst of related
-  // headlines about one symbol could fan out into dozens of AI calls within seconds.
-  private lastIdeaEmitAt: Map<string, number> = new Map();
-  private static readonly IDEA_COOLDOWN_MS = 5 * 60 * 1000;
 
   private constructor() {
     this.providerManager = new NewsProviderManager();
@@ -100,12 +94,6 @@ export class NewsEngine {
           
           if (aiAnalysis.tradingBias !== 'NEUTRAL') {
             finalSymbols.forEach(symbol => {
-              const lastEmit = this.lastIdeaEmitAt.get(symbol) || 0;
-              if (Date.now() - lastEmit < NewsEngine.IDEA_COOLDOWN_MS) {
-                return;
-              }
-              this.lastIdeaEmitAt.set(symbol, Date.now());
-
               eventBus.emitTradeIdea({
                  traceId,
                  symbol,

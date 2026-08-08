@@ -70,7 +70,6 @@ export interface AutoBotState {
     geneticPrompt?: any;
     bypassedTrades?: any[];
     regimeState?: any;
-    lastLossResetDay?: string;
 }
 
 class TradingEngine {
@@ -130,8 +129,7 @@ class TradingEngine {
                 current: "Bullish Trends",
                 volatility: "Low",
                 detectedAt: new Date().toISOString()
-            },
-            lastLossResetDay: new Date().toISOString().slice(0, 10)
+            }
         };
 // Listen to events to update state
         eventBus.on('TRADE_IDEA_GENERATED', (idea) => {
@@ -153,15 +151,6 @@ class TradingEngine {
         eventBus.on('ORDER_EXECUTED', (order) => {
            this.logHistory('execute', `Executed ${order.side} ${order.quantity}x ${order.symbol} @ $${order.price.toFixed(2)}`);
            this.state.spent += (order.quantity * order.price);
-
-           const today = new Date().toISOString().slice(0, 10);
-           if (this.state.lastLossResetDay !== today) {
-              this.state.currentDailyLoss = 0;
-              this.state.lastLossResetDay = today;
-           }
-           if (typeof order.profitLoss === 'number' && order.profitLoss < 0) {
-              this.state.currentDailyLoss += Math.abs(order.profitLoss);
-           }
         });
         
         eventBus.on('LEARNED_NEW_RULE', (rule) => {

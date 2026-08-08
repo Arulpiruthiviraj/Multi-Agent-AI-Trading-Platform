@@ -100,43 +100,35 @@ export class AIRouter {
      
      for (const p of dbProviders) {
          if (!p.enabled) continue;
+         
+         const apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : process.env[`${p.providerName.toUpperCase()}_API_KEY`];
+         let providerInstance: AIProvider | null = null;
+         
+         const nameLower = p.providerName.toLowerCase();
+         if (nameLower.includes('gemini') && !p.apiEndpoint) {
+             providerInstance = new GeminiProvider();
+             await (providerInstance as GeminiProvider).initialize(apiKey);
+         } else if (nameLower.includes('deepseek') && !p.apiEndpoint) {
+             providerInstance = new DeepSeekProvider();
+             await (providerInstance as DeepSeekProvider).initialize(apiKey);
+         
+         } else if (nameLower.includes('openai') && !p.apiEndpoint && !nameLower.includes('compatible')) {
+             providerInstance = new OpenAIProvider();
+             await (providerInstance as OpenAIProvider).initialize(apiKey);
+         } else if (nameLower.includes('nvidia')) {
+             providerInstance = new NvidiaProvider();
+             await (providerInstance as NvidiaProvider).initialize(apiKey);
+         } else {
 
-         // Isolated per-provider: EncryptionService.decrypt() now throws on genuinely corrupt/
-         // undecryptable ciphertext (e.g. ENCRYPTION_SECRET rotated) instead of silently
-         // returning garbage. Without this try/catch, one bad provider record would abort the
-         // whole loop and reject initialize(), which startServer() awaits unguarded.
-         try {
-             const apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : process.env[`${p.providerName.toUpperCase()}_API_KEY`];
-             let providerInstance: AIProvider | null = null;
-
-             const nameLower = p.providerName.toLowerCase();
-             if (nameLower.includes('gemini') && !p.apiEndpoint) {
-                 providerInstance = new GeminiProvider();
-                 await (providerInstance as GeminiProvider).initialize(apiKey);
-             } else if (nameLower.includes('deepseek') && !p.apiEndpoint) {
-                 providerInstance = new DeepSeekProvider();
-                 await (providerInstance as DeepSeekProvider).initialize(apiKey);
-
-             } else if (nameLower.includes('openai') && !p.apiEndpoint && !nameLower.includes('compatible')) {
-                 providerInstance = new OpenAIProvider();
-                 await (providerInstance as OpenAIProvider).initialize(apiKey);
-             } else if (nameLower.includes('nvidia')) {
-                 providerInstance = new NvidiaProvider();
-                 await (providerInstance as NvidiaProvider).initialize(apiKey);
-             } else {
-
-                 // Universal compatible (LiteLLM, OpenRouter, Local, Groq, etc)
-                 const endpoint = p.apiEndpoint || 'https://openrouter.ai/api/v1';
-                 const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
-                 providerInstance = new OpenAICompatibleProvider(p.providerName, endpoint, isLocal);
-                 await (providerInstance as OpenAICompatibleProvider).initialize(apiKey);
-             }
-
-             if (providerInstance) {
-                 this.registerProvider(p.id, providerInstance);
-             }
-         } catch (e: any) {
-             console.error(`[AIRouter] Failed to initialize provider ${p.providerName} (${p.id}): ${e.message}`);
+             // Universal compatible (LiteLLM, OpenRouter, Local, Groq, etc)
+             const endpoint = p.apiEndpoint || 'https://openrouter.ai/api/v1';
+             const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
+             providerInstance = new OpenAICompatibleProvider(p.providerName, endpoint, isLocal);
+             await (providerInstance as OpenAICompatibleProvider).initialize(apiKey);
+         }
+         
+         if (providerInstance) {
+             this.registerProvider(p.id, providerInstance);
          }
      }
   }
@@ -349,12 +341,9 @@ export class AIRouter {
                 if (pDb && pDb.length > 0) {
                     const prevLatency = pDb[0].latency || latency;
                     const newLatency = (prevLatency * 9 + latency) / 10;
-                    // Exponential moving average of the actual outcome (100 on success, 0 on
-                    // failure), rather than an ad hoc +1/-5 drift that could plateau at 100
-                    // after a handful of calls or swing wildly on a single blip.
-                    const prevSuccess = pDb[0].successRate ?? 100;
-                    const newSuccess = prevSuccess * 0.9 + 100 * 0.1;
-
+                    const prevSuccess = pDb[0].successRate || 100;
+                    const newSuccess = Math.min(100, prevSuccess + 1);
+                    
                     await db.update(schema.aiProviders).set({
                        latency: newLatency,
                        successRate: newSuccess,
@@ -394,8 +383,8 @@ export class AIRouter {
                 // Update provider health
                 const pDb = await db.select().from(schema.aiProviders).where(eq(schema.aiProviders.id, providerId));
                 if (pDb && pDb.length > 0) {
-                    const prevSuccess = pDb[0].successRate ?? 100;
-                    const newSuccess = prevSuccess * 0.9 + 0 * 0.1;
+                    const prevSuccess = pDb[0].successRate || 100;
+                    const newSuccess = Math.max(0, prevSuccess - 5);
                     const health = newSuccess < 50 ? 'Offline' : 'Degraded';
                     await db.update(schema.aiProviders).set({
                        successRate: newSuccess,

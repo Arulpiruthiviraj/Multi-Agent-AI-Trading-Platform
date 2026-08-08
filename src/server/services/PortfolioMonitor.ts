@@ -78,8 +78,7 @@ export class PortfolioMonitorWorker {
              side: "SELL",
              confidence: 0.85,
              reasoning: `Target profit reached (+${PnL.toFixed(2)}%). Scaling out to manage risk.`,
-             agent: "PortfolioManager",
-             currentPrice: currentLivePrice
+             agent: "PortfolioManager"
            });
         } else if (PnL < -3.0) {
            console.log(`[PortfolioWorker] Cutting loss on ${holding.symbol} (${PnL.toFixed(2)}%)`);
@@ -89,8 +88,7 @@ export class PortfolioMonitorWorker {
              side: "SELL",
              confidence: 0.95,
              reasoning: `Hard stop hit (${PnL.toFixed(2)}%). Preserving capital.`,
-             agent: "PortfolioManager",
-             currentPrice: currentLivePrice
+             agent: "PortfolioManager"
            });
         }
       }
