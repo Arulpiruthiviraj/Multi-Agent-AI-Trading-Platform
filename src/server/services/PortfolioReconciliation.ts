@@ -1,7 +1,15 @@
+/**
+ * ==========================================================
+ * Module: PortfolioReconciliation.ts
+ *
+ * Purpose:
+ * Syncs actual broker positions with local portfolio database.
+ * ==========================================================
+ */
 import { db } from '../db';
-import { portfolio, trades } from '../db/schema';
+import { portfolio } from '../db/schema';
 import { eq } from 'drizzle-orm';
-import fetch from 'node-fetch';
+import { BrokerManager } from '../../brokers/BrokerManager';
 
 export class PortfolioReconciliationWorker {
   private intervalId: NodeJS.Timeout | null = null;
@@ -20,35 +28,20 @@ export class PortfolioReconciliationWorker {
   }
 
   async reconcile() {
-    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY || process.env.PAPER_TRADING_ONLY === "false") {
-       console.log("[PortfolioReconciliation] Skipping sync, no valid Alpaca keys or LIVE mode disabled.");
-       return;
-    }
-
     try {
-      console.log("[PortfolioReconciliation] Syncing local portfolio with broker...");
+      console.log("[PortfolioReconciliation] Syncing local portfolio with active broker...");
       
-      const res = await fetch("https://paper-api.alpaca.markets/v2/positions", {
-        headers: {
-          "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
-          "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY
-        }
-      });
+      const broker = BrokerManager.getInstance().getActiveBroker();
+      const brokerPortfolio = await broker.portfolio();
       
-      if (!res.ok) {
-        console.error("[PortfolioReconciliation] Failed to fetch positions:", await res.text());
-        return;
-      }
-      
-      const remotePositions = await res.json();
-      
+      const remotePositions = brokerPortfolio.positions || [];
       const localHoldings = await db.select().from(portfolio).all();
       
       // Update local to match remote
       for (const pos of remotePositions) {
         const symbol = pos.symbol;
-        const qty = parseFloat(pos.qty);
-        const avgPrice = parseFloat(pos.avg_entry_price);
+        const qty = pos.quantity;
+        const avgPrice = pos.entryPrice;
         
         const local = localHoldings.find(h => h.symbol === symbol);
         if (local) {

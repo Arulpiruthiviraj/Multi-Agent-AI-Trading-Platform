@@ -1,8 +1,43 @@
+/**
+ * ==========================================================
+ * Module:
+ * VectorClusteringMap.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the VectorClusteringMap.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for VectorClusteringMapx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useMemo } from 'react';
 import { ScatterChart, Scatter, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ZAxis, Cell } from 'recharts';
 import { Layers } from 'lucide-react';
 
-const mockData = [
+const sampleData = [
   { name: '2008 Financial Crisis', x: -45, y: 60, type: 'systemic', score: 0.95 },
   { name: 'Dot Com Bubble', x: 20, y: 55, type: 'systemic', score: 0.8 },
   { name: 'COVID-19 Crash', x: -60, y: -20, type: 'supply', score: 0.92 },
@@ -60,8 +95,8 @@ export default function VectorClusteringMap() {
             <YAxis type="number" dataKey="y" name="Dimension 2" hide domain={[-80, 80]} />
             <ZAxis type="number" dataKey="score" range={[60, 200]} name="Relevance" />
             <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip />} />
-            <Scatter name="Historical Events" data={mockData}>
-              {mockData.map((entry, index) => (
+            <Scatter name="Historical Events" data={sampleData}>
+              {sampleData.map((entry, index) => (
                 <Cell key={`cell-${index}`} fill={COLORS[entry.type as keyof typeof COLORS]} opacity={0.7} />
               ))}
             </Scatter>

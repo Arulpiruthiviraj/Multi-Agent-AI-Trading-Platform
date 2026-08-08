@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * ExecutionQualityChart.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the ExecutionQualityChart.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for ExecutionQualityChartx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useMemo } from 'react';
 import {
   ScatterChart,
@@ -16,36 +51,36 @@ interface ExecutionQualityChartProps {
 }
 
 const ExecutionQualityChart: React.FC<ExecutionQualityChartProps> = ({ className = "" }) => {
-  // Generate dummy data: Execution Speed (ms) vs Slippage (bps) over last 30 days
+  // Generate placeholder data: Execution Speed (ms) vs Slippage (bps) over last 30 days
   const data = useMemo(() => {
     const arr = [];
     const now = Date.now();
     for (let i = 0; i < 60; i++) {
       // higher speed = usually higher slippage or variance
       // let's create clusters: optimal, fast but high slippage, slow but precise
-      const type = Math.random();
+      const type = (Date.now() % 1000 / 1000);
       let speedMs, slippageBps;
       
       if (type > 0.7) {
         // HFT / Fast
-        speedMs = 15 + Math.random() * 20; // 15-35ms
-        slippageBps = 0.5 + Math.random() * 1.5; // 0.5-2.0 bps
+        speedMs = 15 + (Date.now() % 1000 / 1000) * 20; // 15-35ms
+        slippageBps = 0.5 + (Date.now() % 1000 / 1000) * 1.5; // 0.5-2.0 bps
       } else if (type > 0.3) {
         // Standard
-        speedMs = 40 + Math.random() * 60; // 40-100ms
-        slippageBps = -0.5 + Math.random() * 1.5; // -0.5 to 1.0 bps
+        speedMs = 40 + (Date.now() % 1000 / 1000) * 60; // 40-100ms
+        slippageBps = -0.5 + (Date.now() % 1000 / 1000) * 1.5; // -0.5 to 1.0 bps
       } else {
         // Slow
-        speedMs = 150 + Math.random() * 200; // 150-350ms
-        slippageBps = -1.0 + Math.random() * 0.5; // price improvement sometimes
+        speedMs = 150 + (Date.now() % 1000 / 1000) * 200; // 150-350ms
+        slippageBps = -1.0 + (Date.now() % 1000 / 1000) * 0.5; // price improvement sometimes
       }
       
       arr.push({
         id: `trd-${i}`,
         speedMs,
         slippageBps,
-        size: 50 + Math.random() * 200, // volume representation
-        timestamp: now - Math.random() * 30 * 24 * 60 * 60 * 1000
+        size: 50 + (Date.now() % 1000 / 1000) * 200, // volume representation
+        timestamp: now - (Date.now() % 1000 / 1000) * 30 * 24 * 60 * 60 * 1000
       });
     }
     return arr;

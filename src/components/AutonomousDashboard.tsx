@@ -1,8 +1,43 @@
+/**
+ * ==========================================================
+ * Module:
+ * AutonomousDashboard.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the AutonomousDashboard.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for AutonomousDashboardx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from "react";
 import { Activity, ShieldCheck, Zap, TrendingUp, Cpu, Server, CheckCircle2, Clock, CheckCircle, FileText, Database, Radio, CheckSquare, Settings, Sliders } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from "recharts";
 
-export function AutonomousDashboard({ autoBotConfig, setAutoBotConfig }: { autoBotConfig: any, setAutoBotConfig: any }) {
+export function AutonomousDashboard({ autoBotConfig, systemState, setSystemState, setShowLaunchDialog }: { autoBotConfig?: any, systemState?: string, setSystemState?: any, setShowLaunchDialog?: any }) {
   const [handsOffMode, setHandsOffMode] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
 
@@ -11,16 +46,12 @@ export function AutonomousDashboard({ autoBotConfig, setAutoBotConfig }: { autoB
     return () => clearInterval(timer);
   }, []);
 
-  const performanceData = [
-    { time: "09:30", value: 100 },
-    { time: "10:00", value: 100.5 },
-    { time: "11:00", value: 101.2 },
-    { time: "12:00", value: 100.8 },
-    { time: "13:00", value: 102.1 },
-    { time: "14:00", value: 102.5 },
-    { time: "15:00", value: 103.1 },
-    { time: "16:00", value: 103.45 }
-  ];
+  const [performanceData, setPerformanceData] = useState<any[]>([]);
+  useEffect(() => {
+    fetch("/api/v1/pnl/analytics").then(res => res.json()).then(data => {
+      if (data.curve) { setPerformanceData(data.curve.slice(-20)); }
+    }).catch(e => console.error(e));
+  }, []);
 
   return (
     <div className="flex-1 p-6 overflow-y-auto custom-scrollbar animate-fade-in space-y-6">

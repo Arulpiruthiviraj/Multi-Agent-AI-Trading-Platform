@@ -1,0 +1,22 @@
+const fs = require('fs');
+const path = 'server.ts';
+let content = fs.readFileSync(path, 'utf8');
+
+const newCallLLMConsensus = `
+async function callLLMConsensus(prompt: string) {
+  try {
+     return await AIRouter.getInstance().routeConsensus("ConsensusDebate", prompt, uuidv4());
+  } catch (e: any) {
+     return {
+        consensus_verdict: "HOLD",
+        latency_ms: 0,
+        results: [{ provider: "mock", status: "error", error: e.message, latencyMs: 0 }]
+     };
+  }
+}
+`;
+
+content = content.replace(/async function callLLMConsensus\(prompt: string\) \{[\s\S]*?\}\n/, newCallLLMConsensus.trim() + '\n');
+
+fs.writeFileSync(path, content, 'utf8');
+console.log('Patched server.ts callLLMConsensus');

@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * AutoBotFlowVisualizer.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the AutoBotFlowVisualizer.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for AutoBotFlowVisualizerx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React from 'react';
 import { BrainCircuit, Search, ArrowRight, ShieldCheck, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 

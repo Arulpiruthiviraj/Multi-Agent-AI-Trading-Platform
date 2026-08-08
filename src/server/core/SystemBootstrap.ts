@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * SystemBootstrap.ts
+ *
+ * Purpose:
+ * Core implementation and logic for the SystemBootstrap.ts module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for SystemBootstrap
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import { portfolioReconciliationWorker } from '../services/PortfolioReconciliation';
 import { advancedQuantEngines } from '../engines/AdvancedQuantEngines';
 import { db } from '../db';
@@ -6,12 +41,17 @@ import { portfolioMonitor } from '../services/PortfolioMonitor';
 import { oms } from '../services/OrderManagement'; 
 import { riskAgent } from '../services/RiskAgent'; 
 import { technicalAgent } from '../services/TechnicalAgent'; 
-import { newsAgent } from '../services/NewsAgent';
+import { newsEngine } from '../news/NewsEngine';
 import { fundamentalAgent } from '../services/FundamentalAgent';
 import { macroAgent } from '../services/MacroAgent';
 import { chiefTrader } from '../services/ChiefTraderAgent';
 import { reflectionEngine } from '../services/ReflectionEngine';
 import { systemMetricsWorker } from '../services/SystemMetricsWorker';
+import { marketRegimeAgent } from '../services/MarketRegimeAgent';
+import { explainabilityAgent } from '../services/ExplainabilityAgent';
+import { kronosEngine } from '../engines/kronos/KronosEngine';
+
+import { kronosForecastAgent } from "../services/KronosForecastAgent";
 
 export class SystemBootstrap {
   private isRunning = false;
@@ -32,11 +72,15 @@ export class SystemBootstrap {
     marketDataWorker.start();
     portfolioMonitor.start();
     portfolioReconciliationWorker.start();
-    newsAgent.start();
+    newsEngine.start();
     fundamentalAgent.start();
     macroAgent.start();
     reflectionEngine.start();
     systemMetricsWorker.start();
+    marketRegimeAgent;
+    explainabilityAgent;
+    kronosForecastAgent;
+    kronosEngine.initialize();
     
     this.isRunning = true;
     console.log("[Argus System] All workers online.");
@@ -50,7 +94,7 @@ export class SystemBootstrap {
     marketDataWorker.stop();
     portfolioMonitor.stop();
     portfolioReconciliationWorker.stop();
-    newsAgent.stop();
+    newsEngine.stop();
     fundamentalAgent.stop();
     macroAgent.stop();
     reflectionEngine.stop();

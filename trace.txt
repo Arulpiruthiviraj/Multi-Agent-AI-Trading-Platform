@@ -1,0 +1,691 @@
+3375: 1 | autoBotState.intervalId = setInterval(async () => {
+3376: 2 | if (!autoBotState.enabled || autoBotState.spent >= autoBotState.budget) {
+3377: 2 | return; // Paused or out of budget
+3378: 1 | }
+3379: 1 | 
+3380: 1 | 
+3381: 1 | // Mutate Intelligence Engines
+3382: 2 | try {
+3383: 3 | if (autoBotState.engines) {
+3384: 3 | autoBotState.engines.marketIntelligence.vwap += (Math.random() - 0.5) * 2;
+3385: 3 | autoBotState.engines.marketIntelligence.rvol = Math.max(0.1, autoBotState.engines.marketIntelligence.rvol + (Math.random() - 0.5) * 0.2);
+3386: 3 | autoBotState.engines.trend.strength = Math.max(0, Math.min(100, autoBotState.engines.trend.strength + (Math.random() - 0.5) * 5));
+3387: 3 | autoBotState.engines.momentum.rsi = Math.max(0, Math.min(100, autoBotState.engines.momentum.rsi + (Math.random() - 0.5) * 4));
+3388: 3 | autoBotState.engines.news.sentiment = Math.max(0, Math.min(100, autoBotState.engines.news.sentiment + (Math.random() - 0.5) * 10));
+3389: 3 | autoBotState.engines.verification.aiConfidence = Math.max(50, Math.min(99, autoBotState.engines.verification.aiConfidence + Math.floor((Math.random() - 0.5) * 5)));
+3390: 3 | autoBotState.engines.verification.engineConfidence = Math.max(50, Math.min(99, autoBotState.engines.verification.engineConfidence + Math.floor((Math.random() - 0.5) * 5)));
+3391: 3 | autoBotState.engines.verification.agreement = 100 - Math.abs(autoBotState.engines.verification.aiConfidence - autoBotState.engines.verification.engineConfidence);
+3392: 2 | }
+3393: 1 | } catch(e) {}
+3394: 2 | try {
+3395: 2 | stepPortfolioPrices();
+3396: 2 | } catch (err) {
+3397: 2 | console.error("Failed to step portfolio prices:", err);
+3398: 1 | }
+3399: 1 | 
+3400: 2 | if (autoBotState.currentDailyLoss >= autoBotState.dailyLossLimit) {
+3401: 2 | autoBotState.enabled = false;
+3402: 2 | system.stop();
+3403: 3 | {
+3404: 3 | const eventTime = new Date().toISOString();
+3405: 3 | const eventType = 'error';
+3406: 3 | const msg = `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) reached. Bot shutting down.`;
+3407: 3 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3408: 3 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3409: 4 | try {
+3410: 5 | db.insert(schema.eventTraces).values({
+3411: 5 | eventType: eventType,
+3412: 5 | payload: JSON.stringify({ message: msg }),
+3413: 5 | timestamp: Date.now()
+3414: 4 | }).run();
+3415: 3 | } catch(e) {}
+3416: 2 | }
+3417: 3 | triggerWebhooks({
+3418: 3 | type: "daily_loss_breach",
+3419: 3 | title: "Daily Loss Limit Breached",
+3420: 3 | message: `CRITICAL: Daily loss limit (${autoBotState.dailyLossLimit}) reached. Active daily loss has reached ${autoBotState.currentDailyLoss.toFixed(2)}. Trading engines suspended.`,
+3421: 3 | details: { dailyLossLimit: autoBotState.dailyLossLimit, currentDailyLoss: autoBotState.currentDailyLoss }
+3422: 2 | }).catch(err => console.error("Webhook trigger failed", err));
+3423: 2 | return;
+3424: 1 | }
+3425: 1 | 
+3426: 1 | // Simulate some random loss updates on existing positions
+3427: 2 | if (Math.random() < 0.25 && autoBotState.spent > 0) {
+3428: 2 | const simulatedLoss = Math.random() * 800;
+3429: 2 | autoBotState.currentDailyLoss += simulatedLoss;
+3430: 3 | {
+3431: 3 | const eventTime = new Date().toISOString();
+3432: 3 | const eventType = 'error';
+3433: 3 | const msg = `Market update [${autoBotState.tradingMode}]: Open position drew down by $${simulatedLoss.toFixed(2)}. Total DD: $${autoBotState.currentDailyLoss.toFixed(2)}.`;
+3434: 3 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3435: 3 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3436: 4 | try {
+3437: 5 | db.insert(schema.eventTraces).values({
+3438: 5 | eventType: eventType,
+3439: 5 | payload: JSON.stringify({ message: msg }),
+3440: 5 | timestamp: Date.now()
+3441: 4 | }).run();
+3442: 3 | } catch(e) {}
+3443: 2 | }
+3444: 2 | 
+3445: 2 | // ==========================================
+3446: 2 | // AGENT 3: THE REFLECTION / MEMORY ENGINE
+3447: 2 | // ==========================================
+3448: 2 | // Here the AI looks at unexpected losses and diagnoses them.
+3449: 2 | // It outputs a strictly formatted rule that is extracted and applied
+3450: 2 | // to the context of the subsequent trade prompts.
+3451: 3 | try {
+3452: 4 | {
+3453: 4 | const eventTime = new Date().toISOString();
+3454: 4 | const eventType = 'scan';
+3455: 4 | const msg = `Triggering Reflection Agent to diagnose $${simulatedLoss.toFixed(2)} drawdown...`;
+3456: 4 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3457: 4 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3458: 5 | try {
+3459: 6 | db.insert(schema.eventTraces).values({
+3460: 6 | eventType: eventType,
+3461: 6 | payload: JSON.stringify({ message: msg }),
+3462: 6 | timestamp: Date.now()
+3463: 5 | }).run();
+3464: 4 | } catch(e) {}
+3465: 3 | }
+3466: 3 | const aiReflect = process.env.GEMINI_API_KEY ? new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }) : null;
+3467: 4 | if (aiReflect) {
+3468: 5 | const rReq = await generateContentWithRetry(aiReflect, {
+3469: 5 | model: "gemini-3.5-flash",
+3470: 5 | contents: `You are an AI Trading Reflection Agent. The autonomous system just suffered a sudden loss of $${simulatedLoss.toFixed(2)}. Identify a probable cause (e.g., failed breakout, news shock, false signal) and provide a 1-sentence learning rule to prevent it in the future. Output strict JSON { "cause": "...", "rule": "...", "sentiment": "negative" }`,
+3471: 5 | config: { responseMimeType: "application/json" }
+3472: 4 | });
+3473: 4 | 
+3474: 4 | let refData = cleanAndParseJSON(rReq.text) || { cause: "Unknown Volatility", rule: "Increase stop-loss buffer during unexpected volume spikes." };
+3475: 5 | {
+3476: 5 | const eventTime = new Date().toISOString();
+3477: 5 | const eventType = 'learn';
+3478: 5 | const msg = `Reflection Agent identified [${refData.cause}]. Learned Rule Update: ${refData.rule}`;
+3479: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3480: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3481: 6 | try {
+3482: 7 | db.insert(schema.eventTraces).values({
+3483: 7 | eventType: eventType,
+3484: 7 | payload: JSON.stringify({ message: msg }),
+3485: 7 | timestamp: Date.now()
+3486: 6 | }).run();
+3487: 5 | } catch(e) {}
+3488: 4 | }
+3489: 4 | 
+3490: 5 | {
+3491: 6 | const entry = {
+3492: 6 | time: new Date().toISOString(),
+3493: 6 | agent: "Agent 3: Reflection",
+3494: 6 | cause: refData.cause,
+3495: 6 | rule: refData.rule,
+3496: 5 | confidence: 0.8 };
+3497: 5 | autoBotState.learningJournal.unshift(entry);
+3498: 5 | if (autoBotState.learningJournal.length > 50) autoBotState.learningJournal = autoBotState.learningJournal.slice(0, 50);
+3499: 6 | try {
+3500: 7 | db.insert(schema.learnedRules).values({
+3501: 7 | id: Math.random().toString(36).substring(7),
+3502: 7 | agent: String(entry.agent),
+3503: 7 | cause: String(entry.cause),
+3504: 7 | rule: String(entry.rule),
+3505: 7 | confidence: Number(entry.confidence) || 0.8,
+3506: 7 | timestamp: String(entry.time)
+3507: 6 | }).run();
+3508: 5 | } catch(e) {}
+3509: 4 | }
+3510: 5 | try {
+3511: 5 | const { bull, bear } = await generateCompetingTheses(
+3512: 5 | ai,
+3513: 5 | targetSymbol,
+3514: 5 | `System-triggered scan for ${targetSymbol}`,
+3515: 5 | `Macro Sentiment: ${researchData.sentiment} (${researchData.score})`,
+3516: 5 | pastContext,
+3517: 5 | techContext
+3518: 5 | );
+3519: 5 | 
+3520: 6 | {
+3521: 6 | const eventTime = new Date().toISOString();
+3522: 6 | const eventType = 'scan';
+3523: 6 | const msg = `Adversarial Debate Generated. Bull: "${bull.thesis}" | Bear: "${bear.thesis}"`;
+3524: 6 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3525: 6 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3526: 7 | try {
+3527: 8 | db.insert(schema.eventTraces).values({
+3528: 8 | eventType: eventType,
+3529: 8 | payload: JSON.stringify({ message: msg }),
+3530: 8 | timestamp: Date.now()
+3531: 7 | }).run();
+3532: 6 | } catch(e) {}
+3533: 5 | }
+3534: 5 | 
+3535: 5 | const judgePrompt = `You are the Principal Proposer Agent acting as the Consensus Judge (Agent 1). Your job is to review the competing briefs submitted by our Bull Analyst (Agent 1a) and Bear Analyst (Agent 1b), weigh them objectively, and render the final system decision (BUY, SELL, or HOLD) for ${targetSymbol}.
+3536: 5 | Bull Brief: "${bull.thesis}" (Target: $${bull.target_price})
+3537: 5 | Bear Brief: "${bear.thesis}" (Trigger: $${bear.stop_trigger_price})
+3538: 5 | 
+3539: 5 | Asset: ${targetSymbol}
+3540: 5 | Strategy: ${autoBotState.strategy}
+3541: 5 | Risk Profile: ${autoBotState.riskLevel}
+3542: 5 | Macro Sentiment: ${researchData.sentiment} (${researchData.score})
+3543: 5 | ${pastContext}
+3544: 5 | ${techContext}
+3545: 5 | 
+3546: 5 | Resolve the debate. Force a final consensus decision.
+3547: 5 | Output MUST be valid JSON (and no other text) matching this exact structure:
+3548: 6 | {
+3549: 6 | "decision": "BUY" | "SELL" | "HOLD",
+3550: 6 | "confidence": number (1-100),
+3551: 6 | "thinking": "1-sentence explanation of how you resolved the conflict between the Bull and Bear briefs to reach this final verdict"
+3552: 5 | }`;
+3553: 5 | 
+3554: 6 | const judgeRes = await generateContentWithRetry(ai, {
+3555: 6 | model: "gemini-3.5-flash",
+3556: 6 | contents: judgePrompt,
+3557: 6 | config: { responseMimeType: "application/json", temperature: 0.5 }
+3558: 5 | });
+3559: 5 | 
+3560: 5 | const parsedJudge = cleanAndParseJSON(judgeRes.text);
+3561: 6 | if (parsedJudge) {
+3562: 6 | propData = parsedJudge;
+3563: 6 | } else {
+3564: 6 | console.warn("Failed to parse background judge JSON. Raw text:", judgeRes.text);
+3565: 5 | }
+3566: 5 | 
+3567: 6 | debateData = {
+3568: 6 | bull,
+3569: 6 | bear,
+3570: 6 | resolved: true
+3571: 5 | };
+3572: 5 | } catch (debateErr: any) {
+3573: 5 | console.error("Adversarial Debate failed, falling back to standard proposer:", debateErr);
+3574: 5 | // fallback to standard
+3575: 6 | const pReq = await generateContentWithRetry(ai, {
+3576: 6 | model: "gemini-3.5-flash",
+3577: 6 | contents: `You are an automated quant bot. Target: ${targetSymbol}. Strategy: ${autoBotState.strategy}. Risk Profile: ${autoBotState.riskLevel}. Macro Sentiment: ${researchData.sentiment} (${researchData.score}).${pastContext}${regimeOverride}${macroShockOverride}${geneticOverride}${techContext} Action: Determine if the current technical momentum fits the strategy. Output strict JSON { "decision": "BUY" | "SELL" | "HOLD", "confidence": number (1-100), "thinking": "Explain internal thought process in 1 sentence using the technical indicators" }`,
+3578: 6 | config: { responseMimeType: "application/json" }
+3579: 5 | });
+3580: 5 | propData = cleanAndParseJSON(pReq.text) || {};
+3581: 4 | }
+3582: 4 | } else {
+3583: 5 | const pReq = await generateContentWithRetry(ai, {
+3584: 5 | model: "gemini-3.5-flash",
+3585: 5 | contents: `You are an automated quant bot. Target: ${targetSymbol}. Strategy: ${autoBotState.strategy}. Risk Profile: ${autoBotState.riskLevel}. Macro Sentiment: ${researchData.sentiment} (${researchData.score}).${pastContext}${regimeOverride}${macroShockOverride}${geneticOverride}${techContext} Action: Determine if the current technical momentum fits the strategy. Output strict JSON { "decision": "BUY" | "SELL" | "HOLD", "confidence": number (1-100), "thinking": "Explain internal thought process in 1 sentence using the technical indicators" }`,
+3586: 5 | config: { responseMimeType: "application/json" }
+3587: 4 | });
+3588: 4 | propData = cleanAndParseJSON(pReq.text) || {};
+3589: 3 | }
+3590: 3 | 
+3591: 3 | autoBotState.activeCycle.proposerData = propData;
+3592: 4 | try {
+3593: 5 | db.insert(schema.agentMemory).values({
+3594: 5 | agentName: 'Agent 1: Proposer',
+3595: 5 | decision: propData.decision,
+3596: 5 | reasoning: propData.thinking || '',
+3597: 5 | confidence: propData.confidence || 0,
+3598: 5 | result: 'Pending'
+3599: 4 | }).run();
+3600: 3 | } catch(e) {}
+3601: 4 | if (debateData) {
+3602: 4 | autoBotState.activeCycle.debate = debateData;
+3603: 3 | }
+3604: 3 | 
+3605: 3 | // Log Proposer thinking
+3606: 4 | if (propData.thinking) {
+3607: 5 | {
+3608: 5 | const eventTime = new Date().toISOString();
+3609: 5 | const eventType = 'info';
+3610: 5 | const msg = `[Proposer Thought] ${propData.thinking}`;
+3611: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3612: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3613: 6 | try {
+3614: 7 | db.insert(schema.eventTraces).values({
+3615: 7 | eventType: eventType,
+3616: 7 | payload: JSON.stringify({ message: msg }),
+3617: 7 | timestamp: Date.now()
+3618: 6 | }).run();
+3619: 5 | } catch(e) {}
+3620: 4 | }
+3621: 3 | }
+3622: 3 | 
+3623: 4 | if (propData.decision === "HOLD" || propData.confidence < autoBotState.minAiConfidence) {
+3624: 4 | autoBotState.activeCycle.status = "rejected";
+3625: 4 | autoBotState.activeCycle.finalAction = "Rejected by Proposer";
+3626: 5 | {
+3627: 5 | const eventTime = new Date().toISOString();
+3628: 5 | const eventType = 'pass';
+3629: 5 | const msg = `Proposer rejected ${targetSymbol}. Confidence too low (${propData.confidence}% < ${autoBotState.minAiConfidence}%).`;
+3630: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3631: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3632: 6 | try {
+3633: 7 | db.insert(schema.eventTraces).values({
+3634: 7 | eventType: eventType,
+3635: 7 | payload: JSON.stringify({ message: msg }),
+3636: 7 | timestamp: Date.now()
+3637: 6 | }).run();
+3638: 5 | } catch(e) {}
+3639: 4 | }
+3640: 4 | setTimeout(() => { if (autoBotState.activeCycle?.status === "rejected") autoBotState.activeCycle = null; }, 3000);
+3641: 4 | return;
+3642: 3 | }
+3643: 3 | 
+3644: 3 | autoBotState.history.unshift({ time: new Date().toISOString(), type: 'scan', msg: `Proposer suggested ${propData.decision} on ${targetSymbol} (conf: ${propData.confidence}%). Requesting Risk Manager approval...`});
+3645: 3 | 
+3646: 3 | autoBotState.activeCycle.status = "verifying";
+3647: 3 | await new Promise(r => setTimeout(r, 1500));
+3648: 3 | 
+3649: 3 | // Chaos Mode simulator for Risk Manager node
+3650: 4 | if (chaosConfig.enabled && (chaosConfig.selectedAgents.includes("agent_risk_manager") || chaosConfig.selectedAgents.includes("all"))) {
+3651: 4 | const delay = Math.floor(Math.random() * (chaosConfig.latencyMax - chaosConfig.latencyMin + 1)) + chaosConfig.latencyMin;
+3652: 4 | await new Promise(r => setTimeout(r, delay));
+3653: 5 | if (Math.random() * 100 < chaosConfig.errorRate) {
+3654: 5 | autoBotState.activeCycle.status = "error";
+3655: 5 | autoBotState.activeCycle.finalAction = "RISK_MANAGER_TIMEOUT";
+3656: 5 | throw new Error(`NODE_TIMEOUT: Risk Manager oversight node dropped connection after ${delay}ms delay.`);
+3657: 4 | }
+3658: 3 | }
+3659: 3 | 
+3660: 3 | // ==========================================
+3661: 3 | // HARD MATH VERIFICATION GATES (DUAL-ENGINE)
+3662: 3 | // ==========================================
+3663: 3 | const chop = calculateCHOP(highs, lows, closes);
+3664: 3 | const zScore = calculateZScore(closes);
+3665: 3 | const amihud = calculateAmihud(closes, volumes);
+3666: 3 | const obvDivergence = checkOBVDivergence(closes, volumes);
+3667: 3 | const winRate = (autoBotState as any).performanceStats?.winRate || 0.55;
+3668: 3 | const rewardRisk = 2.0;
+3669: 3 | const kellyLimit = calculateKelly(winRate, rewardRisk);
+3670: 3 | 
+3671: 3 | let hardVetoReason = null;
+3672: 4 | if (propData.decision === "BUY") {
+3673: 4 | if (chop > 61.8) hardVetoReason = `CHOP = ${chop.toFixed(2)} (> 61.8). Sideways/Choppy market detected. Vetoing trend-following buy.`;
+3674: 4 | else if (zScore > 2.5) hardVetoReason = `Z-Score = ${zScore.toFixed(2)} (> +2.5). Price is statistically overextended. Vetoing buy to prevent mean-reversion collapse.`;
+3675: 4 | else if (obvDivergence) hardVetoReason = `Bearish OBV Divergence detected. Upward price movement lacks volume conviction. Vetoing buy.`;
+3676: 3 | }
+3677: 3 | 
+3678: 4 | if (amihud > 0.05 && tradeAmount > (autoBotState.budget * 0.05)) {
+3679: 4 | hardVetoReason = `Amihud Illiquidity = ${amihud.toFixed(4)}. Asset is too illiquid for requested size. Massive slippage risk.`;
+3680: 3 | }
+3681: 3 | 
+3682: 3 | // Kelly Sizing cap
+3683: 3 | const kellyMaxCap = autoBotState.budget * Math.max(0, kellyLimit);
+3684: 3 | const halfKellyCap = kellyMaxCap / 2;
+3685: 4 | if (tradeAmount > halfKellyCap && halfKellyCap > 0) {
+3686: 5 | {
+3687: 5 | const eventTime = new Date().toISOString();
+3688: 5 | const eventType = 'info';
+3689: 5 | const msg = `[Kelly Criterion] Safe size cap exceeded. Scaling trade amount from $${tradeAmount.toFixed(2)} down to Half-Kelly limit $${halfKellyCap.toFixed(2)}.`;
+3690: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3691: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3692: 6 | try {
+3693: 7 | db.insert(schema.eventTraces).values({
+3694: 7 | eventType: eventType,
+3695: 7 | payload: JSON.stringify({ message: msg }),
+3696: 7 | timestamp: Date.now()
+3697: 6 | }).run();
+3698: 5 | } catch(e) {}
+3699: 4 | }
+3700: 4 | tradeAmount = halfKellyCap;
+3701: 3 | }
+3702: 3 | 
+3703: 3 | let verifData;
+3704: 4 | if (hardVetoReason) {
+3705: 4 | verifData = { verdict: "REJECT", reason: `[HARD GATE VETO] ${hardVetoReason}`, thinking: "Mathematical verification gate triggered. Overriding LLM." };
+3706: 4 | // Log hard veto immediately
+3707: 5 | {
+3708: 5 | const eventTime = new Date().toISOString();
+3709: 5 | const eventType = 'info';
+3710: 5 | const msg = `[Dual-Engine Math Guardrail] ${hardVetoReason}`;
+3711: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3712: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3713: 6 | try {
+3714: 7 | db.insert(schema.eventTraces).values({
+3715: 7 | eventType: eventType,
+3716: 7 | payload: JSON.stringify({ message: msg }),
+3717: 7 | timestamp: Date.now()
+3718: 6 | }).run();
+3719: 5 | } catch(e) {}
+3720: 4 | }
+3721: 4 | } else {
+3722: 4 | // ==========================================
+3723: 4 | // AGENT 2: THE RISK MANAGER
+3724: 4 | // ==========================================
+3725: 4 | // The proposed trade must pass a secondary, independent LLM evaluation.
+3726: 5 | const vReq = await generateContentWithRetry(ai, {
+3727: 5 | model: "gemini-3.5-flash",
+3728: 5 | contents: `You are a highly defensive Risk Manager oversight node. Your system-wide Risk Tolerance is ${autoBotState.riskLevel}.
+3729: 5 | The Proposer agent suggests executing ${propData.decision} on ${targetSymbol} with Trade Size $${tradeAmount.toFixed(2)}.
+3730: 5 | The Proposer's thinking was: "${propData.thinking}"
+3731: 5 | 
+3732: 5 | ATR-BASED RISK CONSTRAINTS GATING:
+3733: 5 | - Asset Spot Price: $${currentPrice.toFixed(2)}
+3734: 5 | - Calculated ATR(14): $${currentATR.toFixed(2)}
+3735: 5 | - Forced Stop-Loss Distance (Minimum 1.5x ATR): $${atrStopLossDistance.toFixed(2)} (-${((atrStopLossDistance/currentPrice)*100).toFixed(2)}%)
+3736: 5 | - Calculated Max Sizing Cap: ${Math.floor(maxShares)} shares
+3737: 5 | - Dynamic Scaled Trade Size: $${tradeAmount.toFixed(2)} (scaled down to comply with the ATR-adjusted risk cap)
+3738: 5 | 
+3739: 5 | Current Market Context:${pastContext}${techContext}
+3740: 5 | 
+3741: 5 | Your mission is to find reasons to VETO/REJECT this trade if it violates our memory rules, exhibits high risk relative to the ${autoBotState.riskLevel} parameters, or shows momentum chasing at cyclical extremes (e.g. buying when RSI is overbought).
+3742: 5 | Affirm that we have successfully forced proposed stop-losses to a minimum of 1.5x the current ATR value, and dynamically scaled the trade size based on the ATR-adjusted risk cap.
+3743: 5 | Do not parrot the Proposer. Be highly skeptical.
+3744: 5 | Output strict JSON: { "verdict": "APPROVE" | "REJECT", "reason": "short analytical explanation of veto or clearance, referencing ATR/stop-loss safety parameters if applicable", "thinking": "Defensive analysis of the Proposer's suggestion in 1 sentence" }`,
+3745: 5 | config: { responseMimeType: "application/json" }
+3746: 4 | });
+3747: 4 | 
+3748: 4 | verifData = cleanAndParseJSON(vReq.text) || { verdict: "REJECT", reason: "", thinking: "" };
+3749: 3 | }
+3750: 3 | 
+3751: 3 | autoBotState.activeCycle.riskData = verifData;
+3752: 4 | try {
+3753: 5 | await db.insert(schema.agentMemory).values({
+3754: 5 | agentName: 'Agent 2: Risk Manager',
+3755: 5 | decision: verifData.verdict,
+3756: 5 | reasoning: verifData.thinking || verifData.reason || '',
+3757: 5 | confidence: 100, // Hardcoded or omitted
+3758: 5 | result: verifData.verdict
+3759: 4 | });
+3760: 4 | } catch (e) {
+3761: 4 | console.error("Failed to log risk memory", e);
+3762: 3 | }
+3763: 3 | 
+3764: 3 | // Log Risk Manager thinking
+3765: 4 | if (verifData.thinking) {
+3766: 5 | {
+3767: 5 | const eventTime = new Date().toISOString();
+3768: 5 | const eventType = 'info';
+3769: 5 | const msg = `[Risk Manager Thought] ${verifData.thinking}`;
+3770: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3771: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3772: 6 | try {
+3773: 7 | db.insert(schema.eventTraces).values({
+3774: 7 | eventType: eventType,
+3775: 7 | payload: JSON.stringify({ message: msg }),
+3776: 7 | timestamp: Date.now()
+3777: 6 | }).run();
+3778: 5 | } catch(e) {}
+3779: 4 | }
+3780: 3 | }
+3781: 3 | 
+3782: 4 | if (verifData.verdict !== "APPROVE") {
+3783: 4 | autoBotState.activeCycle.status = "vetoed";
+3784: 4 | autoBotState.activeCycle.finalAction = "VETOED by Risk Manager";
+3785: 5 | {
+3786: 5 | const eventTime = new Date().toISOString();
+3787: 5 | const eventType = 'veto';
+3788: 5 | const msg = `Risk Manager VETOED ${propData.decision} on ${targetSymbol}: ${verifData.reason}`;
+3789: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3790: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3791: 6 | try {
+3792: 7 | db.insert(schema.eventTraces).values({
+3793: 7 | eventType: eventType,
+3794: 7 | payload: JSON.stringify({ message: msg }),
+3795: 7 | timestamp: Date.now()
+3796: 6 | }).run();
+3797: 5 | } catch(e) {}
+3798: 4 | }
+3799: 5 | triggerWebhooks({
+3800: 5 | type: "veto",
+3801: 5 | title: `Risk Manager Veto: ${targetSymbol}`,
+3802: 5 | message: `Risk Manager VETOED proposed ${propData.decision} on ${targetSymbol}: ${verifData.reason}`,
+3803: 5 | details: { symbol: targetSymbol, decision: propData.decision, reason: verifData.reason, confidence: propData.confidence }
+3804: 4 | }).catch(err => console.error("Webhook trigger failed", err));
+3805: 4 | 
+3806: 4 | // Execute vetoed trade in Shadow Portfolio (bypassing the Risk Manager & ATR constraints!)
+3807: 5 | try {
+3808: 5 | executeAutoBotTradeInShadow(targetSymbol, propData.decision, currentPrice, autoBotState.maxTradeSize);
+3809: 5 | logTrade({ symbol: targetSymbol, side: propData.decision, price: currentPrice, size: tradeAmount });
+3810: 6 | try {
+3811: 7 | await db.insert(schema.trades).values({
+3812: 7 | id: Math.random().toString(36).substring(7),
+3813: 7 | symbol: targetSymbol,
+3814: 7 | side: propData.decision,
+3815: 7 | quantity: tradeAmount / currentPrice,
+3816: 7 | price: currentPrice,
+3817: 7 | status: "FILLED",
+3818: 7 | timestamp: new Date().toISOString(),
+3819: 7 | reasoning: propData.thinking || 'Executed by swarm'
+3820: 6 | });
+3821: 6 | } catch (e) {
+3822: 6 | console.error("Failed to log trade to SQLite", e);
+3823: 5 | }
+3824: 5 | logEventTrace({ type: 'execute', message: 'Vetoed in sovereign but executed in shadow' });
+3825: 6 | {
+3826: 6 | const eventTime = new Date().toISOString();
+3827: 6 | const eventType = 'execute';
+3828: 6 | const msg = `[Shadow Portfolio] Bypassed Veto! Executed unconstrained ${propData.decision} on ${targetSymbol} for $${autoBotState.maxTradeSize.toFixed(2)}.`;
+3829: 6 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3830: 6 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3831: 7 | try {
+3832: 8 | db.insert(schema.eventTraces).values({
+3833: 8 | eventType: eventType,
+3834: 8 | payload: JSON.stringify({ message: msg }),
+3835: 8 | timestamp: Date.now()
+3836: 7 | }).run();
+3837: 6 | } catch(e) {}
+3838: 5 | }
+3839: 5 | 
+3840: 6 | autoBotState.bypassedTrades.unshift({
+3841: 6 | time: new Date().toISOString(),
+3842: 6 | symbol: targetSymbol,
+3843: 6 | side: propData.decision,
+3844: 6 | reason: `VETOED in Sovereign because: ${verifData.reason}`,
+3845: 6 | amount: autoBotState.maxTradeSize,
+3846: 6 | price: currentPrice,
+3847: 6 | status: "ACTIVE_IN_SHADOW",
+3848: 6 | outcome: `Bypassed Risk Manager. Executed in Shadow Portfolio at $${currentPrice.toFixed(2)}. Tracking unhedged performance...`
+3849: 5 | });
+3850: 6 | if (autoBotState.bypassedTrades.length > 20) {
+3851: 6 | autoBotState.bypassedTrades = autoBotState.bypassedTrades.slice(0, 20);
+3852: 5 | }
+3853: 5 | } catch (shErr) {
+3854: 5 | console.error("Shadow portfolio execution failed on veto:", shErr);
+3855: 4 | }
+3856: 4 | 
+3857: 4 | // Trigger Proposer learning from Veto
+3858: 5 | {
+3859: 6 | const entry = {
+3860: 6 | time: new Date().toISOString(),
+3861: 6 | agent: "Agent 1: Proposer",
+3862: 6 | cause: `Vetoed by Risk Manager due to: ${verifData.reason.substring(0, 60)}...`,
+3863: 6 | rule: `Adjust strategy confidence calculation to account for ${targetSymbol} volatility constraints.`,
+3864: 6 | contextUpdated: "Proposer Context Vector"
+3865: 5 | };
+3866: 5 | autoBotState.learningJournal.unshift(entry);
+3867: 5 | if (autoBotState.learningJournal.length > 50) autoBotState.learningJournal = autoBotState.learningJournal.slice(0, 50);
+3868: 6 | try {
+3869: 7 | db.insert(schema.learnedRules).values({
+3870: 7 | id: Math.random().toString(36).substring(7),
+3871: 7 | agent: String(entry.agent),
+3872: 7 | cause: String(entry.cause),
+3873: 7 | rule: String(entry.rule),
+3874: 7 | confidence: Number(entry.confidence) || 0.8,
+3875: 7 | timestamp: String(entry.time)
+3876: 6 | }).run();
+3877: 5 | } catch(e) {}
+3878: 4 | }
+3879: 4 | if (autoBotState.learningJournal.length > 50) autoBotState.learningJournal = autoBotState.learningJournal.slice(0, 50);
+3880: 4 | 
+3881: 4 | setTimeout(() => { if (autoBotState.activeCycle?.status === "vetoed") autoBotState.activeCycle = null; }, 3000);
+3882: 4 | return;
+3883: 3 | }
+3884: 3 | 
+3885: 3 | autoBotState.history.unshift({ time: new Date().toISOString(), type: 'info', msg: `Risk Manager approved ${propData.decision} on ${targetSymbol}. Routing to Execution Agent...`});
+3886: 3 | 
+3887: 3 | // ==========================================
+3888: 3 | // AGENT 4: THE EXECUTION ENGINE (Slippage & Routing)
+3889: 3 | // ==========================================
+3890: 3 | autoBotState.activeCycle.status = "optimizing";
+3891: 3 | await new Promise(r => setTimeout(r, 1500));
+3892: 3 | 
+3893: 3 | // Execution Agent decides TWAP, Market, Limit depending on size and time
+3894: 4 | const execReq = await generateContentWithRetry(ai, {
+3895: 4 | model: "gemini-3.5-flash",
+3896: 4 | contents: `You are an Execution Routing Agent. Trade size is $${tradeAmount.toFixed(2)} on ${targetSymbol}. Decide standard execution parameters. Output strict JSON: { "strategy": "MARKET" | "TWAP" | "LIMIT", "maxSlippage": number, "reasoning": "brief reason", "thinking": "Internal execution thought process in 1 sentence" }`,
+3897: 4 | config: { responseMimeType: "application/json" }
+3898: 3 | });
+3899: 3 | 
+3900: 3 | let execData = cleanAndParseJSON(execReq.text) || { strategy: "MARKET", maxSlippage: 1.0, reasoning: "standard execution", thinking: "" };
+3901: 3 | autoBotState.activeCycle.executionData = execData;
+3902: 3 | 
+3903: 3 | // Log Execution Agent thinking
+3904: 4 | if (execData.thinking) {
+3905: 5 | {
+3906: 5 | const eventTime = new Date().toISOString();
+3907: 5 | const eventType = 'info';
+3908: 5 | const msg = `[Execution Thought] ${execData.thinking}`;
+3909: 5 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3910: 5 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3911: 6 | try {
+3912: 7 | db.insert(schema.eventTraces).values({
+3913: 7 | eventType: eventType,
+3914: 7 | payload: JSON.stringify({ message: msg }),
+3915: 7 | timestamp: Date.now()
+3916: 6 | }).run();
+3917: 5 | } catch(e) {}
+3918: 4 | }
+3919: 3 | }
+3920: 3 | 
+3921: 4 | if (Math.random() < 0.15) {
+3922: 5 | {
+3923: 6 | const entry = {
+3924: 6 | time: new Date().toISOString(),
+3925: 6 | agent: "Agent 4: Execution",
+3926: 6 | cause: `Sub-optimal slippage detected on ${execData.strategy} order for ${targetSymbol}.`,
+3927: 6 | rule: `Implement dynamic TWAP slicing when spread > 5 bps on ${targetSymbol}.`,
+3928: 6 | contextUpdated: "Execution Routing Constraints"
+3929: 5 | };
+3930: 5 | autoBotState.learningJournal.unshift(entry);
+3931: 5 | if (autoBotState.learningJournal.length > 50) autoBotState.learningJournal = autoBotState.learningJournal.slice(0, 50);
+3932: 6 | try {
+3933: 7 | db.insert(schema.learnedRules).values({
+3934: 7 | id: Math.random().toString(36).substring(7),
+3935: 7 | agent: String(entry.agent),
+3936: 7 | cause: String(entry.cause),
+3937: 7 | rule: String(entry.rule),
+3938: 7 | confidence: Number(entry.confidence) || 0.8,
+3939: 7 | timestamp: String(entry.time)
+3940: 6 | }).run();
+3941: 5 | } catch(e) {}
+3942: 4 | }
+3943: 4 | if (autoBotState.learningJournal.length > 50) autoBotState.learningJournal = autoBotState.learningJournal.slice(0, 50);
+3944: 3 | }
+3945: 3 | 
+3946: 4 | {
+3947: 4 | const eventTime = new Date().toISOString();
+3948: 4 | const eventType = 'scan';
+3949: 4 | const msg = `Execution Agent structured a ${execData.strategy} order (Max Slip: ${execData.maxSlippage}%). Reason: ${execData.reasoning}`;
+3950: 4 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+3951: 4 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+3952: 5 | try {
+3953: 6 | db.insert(schema.eventTraces).values({
+3954: 6 | eventType: eventType,
+3955: 6 | payload: JSON.stringify({ message: msg }),
+3956: 6 | timestamp: Date.now()
+3957: 5 | }).run();
+3958: 4 | } catch(e) {}
+3959: 3 | }
+3960: 3 | await new Promise(r => setTimeout(r, 1000));
+3961: 3 | // This is where real-time execution happens against a live brokerage API.
+3962: 3 | // Currently configured for mocked simulation as per safety guidelines.
+3963: 3 | // To enable real execution, uncomment the Alpaca/IBKR SDK implementation
+3964: 3 | // below and ensure your `savedSecrets` contain valid keys.
+3965: 3 | 
+3966: 3 | // [LIVE EXECUTION PLACEHOLDER]
+3967: 3 | /*
+3968: 4 | if (process.env.ALPACA_API_KEY && process.env.ALPACA_API_SECRET) {
+3969: 5 | const alpaca = new Alpaca({
+3970: 5 | keyId: process.env.ALPACA_API_KEY,
+3971: 5 | secretKey: process.env.ALPACA_API_SECRET,
+3972: 5 | paper: true,
+3973: 4 | });
+3974: 5 | await alpaca.createOrder({
+3975: 5 | symbol: targetSymbol,
+3976: 5 | qty: (tradeAmount / mockPrice), // Real implement would quote latest price
+3977: 5 | side: propData.decision.toLowerCase(),
+3978: 5 | type: 'market',
+3979: 5 | time_in_force: 'gtc'
+3980: 4 | });
+3981: 3 | }
+3982: 3 | */
+3983: 3 | 
+3984: 3 | // Executed Trade
+3985: 3 | autoBotState.activeCycle.status = "executed";
+3986: 3 | autoBotState.activeCycle.finalAction = "EXECUTED";
+3987: 3 | autoBotState.spent += tradeAmount;
+3988: 3 | 
+3989: 3 | // Apply actual transactions to persistent simulation states
+3990: 4 | try {
+3991: 4 | await executeAutoBotTradeInSovereign(targetSymbol, propData.decision, currentPrice, tradeAmount);
+3992: 5 | await db.insert(schema.trades).values({
+3993: 5 | id: Math.random().toString(36).substring(7),
+3994: 5 | symbol: targetSymbol,
+3995: 5 | side: propData.decision,
+3996: 5 | quantity: tradeAmount / currentPrice,
+3997: 5 | price: currentPrice,
+3998: 5 | status: "FILLED",
+3999: 5 | timestamp: new Date().toISOString(),
+4000: 5 | reasoning: execData?.reasoning || propData.thinking || 'Executed by swarm'
+4001: 4 | });
+4002: 4 | executeAutoBotTradeInShadow(targetSymbol, propData.decision, currentPrice, autoBotState.maxTradeSize);
+4003: 4 | } catch (exErr) {
+4004: 4 | console.error("Failed to execute portfolio transaction updates:", exErr);
+4005: 3 | }
+4006: 3 | 
+4007: 3 | let executionMessage = `Consensus verified! Executed ${propData.decision} on ${targetSymbol} for $${tradeAmount.toFixed(2)} in SIMULATOR mode.`;
+4008: 4 | if (autoBotState.tradingMode === "PAPER") {
+4009: 4 | executionMessage = `PAPER TRADING Execution: ${propData.decision} ${targetSymbol} for $${tradeAmount.toFixed(2)}. Shadow executed unconstrained for $${autoBotState.maxTradeSize.toFixed(2)}.`;
+4010: 4 | } else if (autoBotState.tradingMode === "LIVE") {
+4011: 4 | executionMessage = `LIVE TRADING API FIRED: ${propData.decision} on ${targetSymbol} for $${tradeAmount.toFixed(2)}. Shadow executed unconstrained for $${autoBotState.maxTradeSize.toFixed(2)}.`;
+4012: 3 | }
+4013: 3 | 
+4014: 4 | autoBotState.history.unshift({
+4015: 4 | time: new Date().toISOString(),
+4016: 4 | type: 'execute',
+4017: 4 | msg: executionMessage + ` Remaining Budget: $${(autoBotState.budget - autoBotState.spent).toFixed(2)}`
+4018: 3 | });
+4019: 3 | setTimeout(() => { if (autoBotState.activeCycle?.status === "executed") autoBotState.activeCycle = null; }, 4000);
+4020: 3 | 
+4021: 3 | // Add to global trades list so it shows in the generic portfolio dashboard
+4022: 4 | try {
+4023: 4 | // @ts-ignore
+4024: 5 | if (typeof recentTrades !== 'undefined') {
+4025: 5 | // Calculate fake price & qty
+4026: 5 | const mockPrice = 100 + Math.random() * 200;
+4027: 5 | const qty = tradeAmount / mockPrice;
+4028: 5 | // @ts-ignore
+4029: 6 | recentTrades.unshift({
+4030: 6 | id: "autobot_" + Date.now(),
+4031: 6 | symbol: targetSymbol,
+4032: 6 | side: propData.decision,
+4033: 6 | quantity: qty,
+4034: 6 | price: mockPrice,
+4035: 6 | total_amount: tradeAmount,
+4036: 6 | status: "FILLED",
+4037: 6 | thesis: `Autobot Multi-LLM Verified execution. Reason: ${verifData.reason}`,
+4038: 6 | timestamp: new Date().toISOString()
+4039: 5 | });
+4040: 4 | }
+4041: 3 | } catch (e) {}
+4042: 3 | 
+4043: 3 | } catch (e: any) {
+4044: 4 | {
+4045: 4 | const eventTime = new Date().toISOString();
+4046: 4 | const eventType = 'error';
+4047: 4 | const msg = `Autobot Error: ${e.message}`;
+4048: 4 | autoBotState.history.unshift({ time: eventTime, type: eventType, msg });
+4049: 4 | if (autoBotState.history.length > 100) autoBotState.history = autoBotState.history.slice(0, 100);
+4050: 5 | try {
+4051: 6 | db.insert(schema.eventTraces).values({
+4052: 6 | eventType: eventType,
+4053: 6 | payload: JSON.stringify({ message: msg }),
+4054: 6 | timestamp: Date.now()
+4055: 5 | }).run();
+4056: 4 | } catch(e) {}
+4057: 3 | }
+4058: 2 | }
+4059: 2 | 
+4060: 1 | }, 15000); // Polls every 15s
+4061: 1 | 
+4062: 1 | } else {
+4063: 1 | autoBotState.enabled = false;
+4064: 1 | system.stop();
+4065: 2 | {

@@ -1,4 +1,40 @@
+/**
+ * ==========================================================
+ * Module:
+ * LiveBotTelemetryPanel.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the LiveBotTelemetryPanel.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for LiveBotTelemetryPanelx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from 'react';
+import { useWebSocket } from '../context/WebSocketContext';
 import { Activity, Cpu, HardDrive, Network, Zap, Clock, ShieldCheck, Crosshair } from 'lucide-react';
 
 export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig: any }) {
@@ -6,22 +42,43 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
   const [cpuUsage, setCpuUsage] = useState(32);
   const [memUsage, setMemUsage] = useState(45);
   
-  // Simulate active changing hardware metrics
+  // execute active changing hardware metrics
+  
+  const { subscribe } = useWebSocket();
+
   useEffect(() => {
     if(!autoBotConfig.enabled) return;
-    const interval = setInterval(() => {
-      setLatency(prev => Math.max(5, Math.min(120, prev + (Math.random() * 10 - 5))));
-      setCpuUsage(prev => Math.max(10, Math.min(95, prev + (Math.random() * 14 - 7))));
-      setMemUsage(prev => Math.max(20, Math.min(85, prev + (Math.random() * 4 - 2))));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [autoBotConfig.enabled]);
+    
+    const unsub = subscribe('SYSTEM_METRICS', (data) => {
+      // Use actual emitted metrics instead of random
+      if (data && data.system) {
+         setMemUsage(Math.min(100, (data.system.heapUsed / data.system.heapTotal) * 100));
+         setCpuUsage(Math.min(100, Object.values(data.processes as Record<string,any>).reduce((sum, p) => sum + parseFloat(p.cpu || '0'), 0)));
+         
+         // Pick highest latency from executing processes
+         const maxLat = Math.max(...Object.values(data.processes as Record<string,any>).map(p => p.latency || 0), 14);
+         setLatency(maxLat);
+      }
+    });
+    
+    return () => unsub();
+  }, [autoBotConfig.enabled, subscribe]);
 
-  // Derive simulated trading metrics based on budget spent
+
+  // Derive executed trading metrics based on budget spent
   const spent = autoBotConfig.spent || 0;
   const estimatedTrades = Math.floor(spent / (autoBotConfig.maxTradeSize || 1000) * 1.5);
-  const simulatedWinRate = autoBotConfig.enabled ? (65 + (Math.random() * 5)).toFixed(1) : "0.0";
-  const simulatedUpl = autoBotConfig.enabled ? ((spent * 0.045) * (Math.random() * 0.4 + 0.8)).toFixed(2) : "0.00";
+  const [winRate, setWinRate] = useState(0);
+  const [upl, setUpl] = useState(0);
+  
+  useEffect(() => {
+    fetch('/api/v1/pnl/analytics').then(r => r.json()).then(d => {
+      if (d.summary) {
+        setWinRate(d.summary.winRate || 0);
+        setUpl(d.summary.totalProfitLoss || 0);
+      }
+    }).catch(console.error);
+  }, [autoBotConfig.enabled, spent]);
   
   return (
     <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
@@ -56,20 +113,20 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
          <div className="bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between">
             <div className="flex items-center gap-2 text-slate-500 mb-2">
                <ShieldCheck size={12} />
-               <span className="text-[10px] uppercase font-mono tracking-widest">Sim. Win Rate</span>
+               <span className="text-[10px] uppercase font-mono tracking-widest">Live Win Rate</span>
             </div>
             <div className="text-2xl font-bold text-emerald-400 font-mono">
-               {simulatedWinRate}%
+               {winRate.toFixed(1)}%
             </div>
          </div>
 
          <div className="bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between">
             <div className="flex items-center gap-2 text-slate-500 mb-2">
                <Zap size={12} />
-               <span className="text-[10px] uppercase font-mono tracking-widest">Est. Unrealized PNL</span>
+               <span className="text-[10px] uppercase font-mono tracking-widest">Total Live PNL</span>
             </div>
             <div className="text-2xl font-bold text-sky-400 font-mono">
-               +${simulatedUpl}
+               +${upl.toFixed(2)}
             </div>
          </div>
          
@@ -85,7 +142,7 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
 
        </div>
 
-       {/* System Hardware Mock */}
+       {/* System Hardware State */}
        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 border-t border-slate-800 pt-4 mt-2">
           <div className="flex items-center justify-between">
              <div className="flex items-center gap-2 text-slate-400">

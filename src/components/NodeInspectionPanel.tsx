@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * NodeInspectionPanel.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the NodeInspectionPanel.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for NodeInspectionPanelx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from 'react';
 import { X, Terminal, Activity, CheckCircle2, ShieldCheck, Newspaper, Send, TrendingUp, UserCheck, Clock, BookOpen } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';

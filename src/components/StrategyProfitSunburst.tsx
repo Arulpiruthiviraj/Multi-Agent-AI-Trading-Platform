@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * StrategyProfitSunburst.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the StrategyProfitSunburst.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for StrategyProfitSunburstx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useRef, useEffect, useState } from 'react';
 import * as d3 from 'd3';
 import { Target, TrendingUp, TrendingDown, Clock } from 'lucide-react';
@@ -21,7 +56,7 @@ export default function StrategyProfitSunburst() {
   const [timeHorizon, setTimeHorizon] = useState<"1W" | "1M" | "YTD">("1M");
 
   /**
-   * Generates mock hierarchical data representing strategy performance.
+   * Generates default hierarchical data representing strategy performance.
    * 
    * @param horizon The selected time horizon, which scales the monetary values.
    * @returns A structured object ready to be parsed by d3.hierarchy.
@@ -40,26 +75,26 @@ export default function StrategyProfitSunburst() {
           name: "Momentum",
           children: [
             // Each leaf node contains a name, a calculated randomized value, and a type (profit/loss)
-            { name: "Breakout", value: Math.floor(4500 * multiplier * (Math.random() * 0.5 + 0.8)), type: "profit" },
-            { name: "Trend Follow", value: Math.floor(3200 * multiplier * (Math.random() * 0.5 + 0.8)), type: "profit" },
-            { name: "Whipsaw", value: Math.floor(1200 * multiplier * (Math.random() * 0.5 + 0.8)), type: "loss" }
+            { name: "Breakout", value: Math.floor(4500 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "profit" },
+            { name: "Trend Follow", value: Math.floor(3200 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "profit" },
+            { name: "Whipsaw", value: Math.floor(1200 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "loss" }
           ]
         },
         {
           name: "Mean Reversion",
           children: [
-            { name: "RSI Divergence", value: Math.floor(2800 * multiplier * (Math.random() * 0.5 + 0.8)), type: "profit" },
-            { name: "Bollinger Bounce", value: Math.floor(1900 * multiplier * (Math.random() * 0.5 + 0.8)), type: "profit" },
-            { name: "Pairs Trading", value: Math.floor(800 * multiplier * (Math.random() * 0.5 + 0.8)), type: "loss" }
+            { name: "RSI Divergence", value: Math.floor(2800 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "profit" },
+            { name: "Bollinger Bounce", value: Math.floor(1900 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "profit" },
+            { name: "Pairs Trading", value: Math.floor(800 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "loss" }
           ]
         },
         {
           name: "Arbitrage",
           children: [
-            { name: "Stat Arb", value: Math.floor(1500 * multiplier * (Math.random() * 0.5 + 0.8)), type: "profit" },
-            { name: "Triangular", value: Math.floor(600 * multiplier * (Math.random() * 0.5 + 0.8)), type: "profit" },
-            { name: "Latency", value: Math.floor(400 * multiplier * (Math.random() * 0.5 + 0.8)), type: "loss" },
-            { name: "Fee Drag", value: Math.floor(300 * multiplier * (Math.random() * 0.5 + 0.8)), type: "loss" }
+            { name: "Stat Arb", value: Math.floor(1500 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "profit" },
+            { name: "Triangular", value: Math.floor(600 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "profit" },
+            { name: "Latency", value: Math.floor(400 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "loss" },
+            { name: "Fee Drag", value: Math.floor(300 * multiplier * ((Date.now() % 1000 / 1000) * 0.5 + 0.8)), type: "loss" }
           ]
         }
       ]
@@ -225,7 +260,7 @@ export default function StrategyProfitSunburst() {
       .style("user-select", "none")
       .selectAll("text")
       // Only attach text labels to elements with enough angular space (width) to fit the text
-      .data(root.descendants().filter(d => d.depth > 0 && (d.x1 - d.x0) > 0.05))
+      .data(root.descendants().filter(d => d.depth > 0 && ((d as any).x1 - (d as any).x0) > 0.05))
       .join("text")
       .attr("transform", function(d: any) {
         // Calculate the rotational angle and translation distance for the text

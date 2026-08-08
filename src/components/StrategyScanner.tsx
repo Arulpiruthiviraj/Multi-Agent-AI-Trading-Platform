@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * StrategyScanner.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the StrategyScanner.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for StrategyScannerx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from "react";
 import { Activity, Target, TrendingUp, TrendingDown, Minus, Filter } from "lucide-react";
 
@@ -19,8 +54,8 @@ export default function StrategyScanner({ assetPrices, selectedAlertSymbol, setS
         prices.push(currentPrice);
       } else {
         const progress = i / (length - 1);
-        const wave1 = Math.sin((i + textSeed) * 0.45) * 0.035;
-        const wave2 = Math.cos(i * 0.25) * 0.02;
+        const wave1 = 0;
+        const wave2 = 0;
         const trend = (currentPrice - (base * 0.95)) * progress;
         let priceValue = (base * 0.95) + trend + (wave1 + wave2) * base;
         

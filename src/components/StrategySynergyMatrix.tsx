@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * StrategySynergyMatrix.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the StrategySynergyMatrix.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for StrategySynergyMatrixx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React from 'react';
 import { Network, Activity } from 'lucide-react';
 
@@ -10,15 +45,15 @@ const agents = [
   "Geopol"
 ];
 
-// Mock correlation data between -1.0 and +1.0
+// default correlation data between -1.0 and +1.0
 // We'll generate a symmetrical matrix with 1.0 on the diagonal
 const getCorrelation = (i: number, j: number): number => {
   if (i === j) return 1.0;
   
-  // Deterministic mock data based on indices
+  // Deterministic default data based on indices
   const seed = (i * 7 + j * 13) % 100;
   
-  // Specific mock rules for flavor
+  // Specific default rules for flavor
   if ((agents[i] === "Macro" && agents[j] === "Geopol") || (agents[j] === "Macro" && agents[i] === "Geopol")) return 0.85;
   if ((agents[i] === "Tech" && agents[j] === "Sentiment") || (agents[j] === "Tech" && agents[i] === "Sentiment")) return 0.62;
   if ((agents[i] === "Macro" && agents[j] === "Sentiment") || (agents[j] === "Macro" && agents[i] === "Sentiment")) return -0.45;

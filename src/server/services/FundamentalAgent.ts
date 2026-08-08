@@ -1,7 +1,14 @@
+/**
+ * ==========================================================
+ * Module: FundamentalAgent.ts
+ *
+ * Purpose:
+ * Evaluates real fundamental data if available.
+ * ==========================================================
+ */
 import { eventBus } from '../core/EventBus';
-import { GoogleGenAI } from '@google/genai';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "mock-key" });
+import { AIRouter } from '../ai/AIRouter';
+import crypto from 'crypto';
 
 export class FundamentalAnalysisAgent {
   private intervalId: NodeJS.Timeout | null = null;
@@ -19,31 +26,39 @@ export class FundamentalAnalysisAgent {
     }
   }
 
+  private async fetchFundamentals(symbol: string) {
+    // In a production app, integrate FMP / AlphaVantage / Polygon here
+    // If no keys, return UNKNOWN
+    return {
+      peRatio: "UNKNOWN",
+      epsGrowth: "UNKNOWN",
+      debtToEquity: "UNKNOWN"
+    };
+  }
+
   private async analyzeFundamentals() {
-    const symbol = this.watchedSymbols[Math.floor(Math.random() * this.watchedSymbols.length)];
-    const traceId = Math.random().toString(36).substring(7);
-    
-    // Simulate fetching fundamental data
-    const peRatio = (15 + Math.random() * 40).toFixed(2);
-    const epsGrowth = ((Math.random() - 0.3) * 0.5 * 100).toFixed(2);
-    const debtToEquity = (Math.random() * 2).toFixed(2);
+    // We just pick a symbol round-robin or randomly from our list
+    const symbol = this.watchedSymbols[Math.floor(Date.now() / 60000) % this.watchedSymbols.length];
+    const traceId = crypto.randomUUID();
     
     try {
-       if (process.env.GEMINI_API_KEY) {
-          const response = await ai.models.generateContent({
-             model: 'gemini-3.5-flash',
-             contents: `Analyze these fundamentals for ${symbol}: P/E Ratio: ${peRatio}, EPS Growth: ${epsGrowth}%, Debt/Equity: ${debtToEquity}.
-Return a strict JSON object matching this schema:
-{
-  "summary": "Brief summary",
-  "recommendation": "BUY" | "SELL" | "HOLD",
-  "confidence": number between 0 and 1,
-  "supportingEvidence": "Key fundamental drivers",
-  "risks": "Fundamental risks",
-  "reasoning": "A one-sentence explanation"
-}`,
-             config: { responseMimeType: "application/json" }
+       const data = await this.fetchFundamentals(symbol);
+       
+       if (data.peRatio === "UNKNOWN") {
+          eventBus.emitTradeIdea({
+             traceId, 
+             symbol, 
+             side: "HOLD", 
+             confidence: 0, 
+             reasoning: "DATA_UNAVAILABLE: Fundamental data providers not configured.", 
+             agent: "FundamentalAgent"
           });
+          return;
+       }
+
+       if (process.env.GEMINI_API_KEY) {
+          const res = await AIRouter.getInstance().routeTask('FundamentalAgent', `Analyze these fundamentals for ${symbol}: P/E Ratio: ${data.peRatio}, EPS Growth: ${data.epsGrowth}%, Debt/Equity: ${data.debtToEquity}. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
+          const response = { text: res.content };
           
           if (response.text) {
              const analysis = JSON.parse(response.text);
@@ -58,15 +73,9 @@ Return a strict JSON object matching this schema:
                 });
              }
           }
-       } else {
-           if (parseFloat(peRatio) < 20) {
-              eventBus.emitTradeIdea({
-                 traceId, symbol, side: "BUY", confidence: 0.8, reasoning: "Fallback fundamental BUY", agent: "FundamentalAgent"
-              });
-           }
        }
     } catch (e) {
-       console.error("[FundamentalAgent] LLM parsing failed:", e);
+       console.error("[FundamentalAgent] Failed:", e);
     }
   }
 }

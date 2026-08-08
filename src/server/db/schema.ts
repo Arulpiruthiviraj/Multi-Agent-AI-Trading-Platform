@@ -1,14 +1,173 @@
-import { sqliteTable, text, real, integer } from 'drizzle-orm/sqlite-core';
+/**
+ * ==========================================================
+ * Module:
+ * schema.ts
+ *
+ * Purpose:
+ * Core implementation and logic for the schema.ts module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for schema
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
+import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+
+export const users = sqliteTable('users', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+
+  email: text('email').notNull(),
+  passwordHash: text('password_hash'),
+  createdAt: integer('created_at').default(Date.now())
+});
+
+export const settings = sqliteTable('settings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+
+  tradingMode: text('trading_mode').notNull().default('Paper'),
+  riskLevel: text('risk_level').notNull().default('Balanced'),
+  selectedBroker: text('selected_broker'),
+  selectedAiProvider: text('selected_ai_provider'),
+  budget: real('budget').default(50000),
+  strategy: text('strategy').default('Momentum Focus'),
+  maxTradeSize: real('max_trade_size').default(3000),
+  dailyLossLimit: real('daily_loss_limit').default(5000),
+  takeProfitPct: real('take_profit_pct').default(15),
+  trailingStopPct: real('trailing_stop_pct').default(5),
+  minAiConfidence: real('min_ai_confidence').default(75),
+  autoBotEnabled: integer('auto_bot_enabled', { mode: 'boolean' }).default(false),
+  adversarialDebateMode: integer('adversarial_debate_mode', { mode: 'boolean' }).default(true),
+  createdAt: integer('created_at').default(Date.now())
+});
+
+export const brokerConnections = sqliteTable('broker_connections', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+
+  brokerName: text('broker_name').notNull(),
+  apiKeyEncrypted: text('api_key_encrypted'),
+  secretEncrypted: text('secret_encrypted'),
+  paperMode: integer('paper_mode', { mode: 'boolean' }).default(true),
+  status: text('status').default('Disconnected')
+});
+
+export const aiProviders = sqliteTable('ai_providers', {
+  id: text('id').primaryKey(),
+  providerName: text('provider_name').notNull(),
+  displayName: text('display_name'),
+  apiEndpoint: text('api_endpoint'),
+  apiKeyEncrypted: text('api_key_encrypted'),
+  enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  priority: integer('priority').default(1),
+  active: integer('active', { mode: 'boolean' }).default(true),
+  health: text('health').default('Healthy'),
+  latency: real('latency').default(0),
+  quota: real('quota').default(0),
+  requests: integer('requests').default(0),
+  tokens: integer('tokens').default(0),
+  inputTokens: integer('input_tokens').default(0),
+  outputTokens: integer('output_tokens').default(0),
+  cost: real('cost').default(0),
+  successRate: real('success_rate').default(100),
+  lastFailure: text('last_failure'),
+  lastSuccess: text('last_success'),
+  createdAt: text('created_at'),
+  updatedAt: text('updated_at')
+});
+
+export const aiModels = sqliteTable('ai_models', {
+  id: text('id').primaryKey(),
+  providerId: text('provider_id'),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  displayName: text('display_name'),
+  capabilities: text('capabilities'),
+  predictedOhlc: text('predicted_ohlc'),
+  marketStructure: text('market_structure'),
+  momentum: text('momentum'),
+  actualResult: text('actual_result'),
+  mae: real('mae'),
+  rmse: real('rmse'),
+  mape: real('mape'),
+  directionalAccuracy: real('directional_accuracy'),
+  contextWindow: integer('context_window').default(8192),
+  maxOutput: integer('max_output').default(4096),
+  reasoningSupport: integer('reasoning_support', { mode: 'boolean' }).default(false),
+  visionSupport: integer('vision_support', { mode: 'boolean' }).default(false),
+  toolCalling: integer('tool_calling', { mode: 'boolean' }).default(false),
+  structuredOutput: integer('structured_output', { mode: 'boolean' }).default(false),
+  streaming: integer('streaming', { mode: 'boolean' }).default(true),
+  pricingInput: real('pricing_input').default(0),
+  pricingOutput: real('pricing_output').default(0),
+  enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  priority: integer('priority').default(1),
+  latencyScore: real('latency_score').default(0),
+  errorRate: real('error_rate').default(0),
+  tokenUsage: integer('token_usage').default(0),
+  estimatedCost: real('estimated_cost').default(0),
+  lastUsedAt: text('last_used_at'),
+  lastHealthCheck: text('last_health_check')
+});
+
+export const aiUsage = sqliteTable('ai_usage', {
+  id: text('id').primaryKey(),
+  timestamp: text('timestamp').notNull(),
+  provider: text('provider').notNull(),
+  model: text('model').notNull(),
+  predictedOhlc: text('predicted_ohlc'),
+  marketStructure: text('market_structure'),
+  momentum: text('momentum'),
+  actualResult: text('actual_result'),
+  mae: real('mae'),
+  rmse: real('rmse'),
+  mape: real('mape'),
+  directionalAccuracy: real('directional_accuracy'),
+  agent: text('agent'),
+  promptTokens: integer('prompt_tokens').default(0),
+  completionTokens: integer('completion_tokens').default(0),
+  latency: real('latency').default(0),
+  cost: real('cost').default(0),
+  responseStatus: text('response_status'),
+  retryCount: integer('retry_count').default(0)
+});
 
 export const trades = sqliteTable('trades', {
   id: text('id').primaryKey(),
   symbol: text('symbol').notNull(),
-  side: text('side').notNull(), // BUY, SELL
+  side: text('side').notNull(),
   quantity: real('quantity').notNull(),
   price: real('price').notNull(),
   status: text('status').notNull(), // PENDING, FILLED, REJECTED, CANCELED
   timestamp: text('timestamp').notNull(),
   reasoning: text('reasoning'),
+  traceId: text('trace_id'),
+  profitLoss: real('profit_loss'),
+  newsUsed: integer('news_used', { mode: 'boolean' }).default(false),
+  newsSentiment: real('news_sentiment'),
+  newsConfidence: real('news_confidence'),
+  newsSources: text('news_sources'),
+  newsReasoning: text('news_reasoning')
 });
 
 export const portfolio = sqliteTable('portfolio', {
@@ -17,6 +176,8 @@ export const portfolio = sqliteTable('portfolio', {
   averagePrice: real('average_price').notNull(),
   currentPrice: real('current_price'),
   lastUpdated: text('last_updated').notNull(),
+  unrealizedPnL: real('unrealized_pnl'),
+  brokerSource: text('broker_source'),
 });
 
 export const learnedRules = sqliteTable('learned_rules', {
@@ -42,10 +203,129 @@ export const agentPerformanceStats = sqliteTable('agent_performance_stats', {
   agentName: text('agent_name').primaryKey(),
   totalPredictions: integer('total_predictions').notNull().default(0),
   correctPredictions: integer('correct_predictions').notNull().default(0),
-  winRate: real('win_rate').notNull().default(0),
+  winRate: real('win_rate').notNull().default(0),  
   averageReturn: real('average_return').notNull().default(0),
   profitFactor: real('profit_factor').notNull().default(0),
   sharpeRatio: real('sharpe_ratio').notNull().default(0),
   currentWeight: real('current_weight').notNull().default(1.0),
   lastEvaluated: text('last_evaluated').notNull(),
+});
+
+export const explainabilityReports = sqliteTable('explainability_reports', {
+  traceId: text('trace_id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  decision: text('decision').notNull(),
+  reportText: text('report_text').notNull(),
+  timestamp: text('timestamp').notNull(),
+});
+
+export const agentMemory = sqliteTable('agent_memory', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+
+  agentName: text('agent_name').notNull(),
+  decision: text('decision').notNull(),
+  reasoning: text('reasoning'),
+  confidence: real('confidence'),
+  result: text('result')
+});
+
+export const eventTraces = sqliteTable('event_traces', {
+  id: text('id').primaryKey(),
+  correlationId: text('correlation_id'),
+  tradeId: text('trade_id'),
+  timestamp: integer('timestamp').notNull(),
+  source: text('source').notNull(),
+  destination: text('destination'),
+  eventType: text('event_type').notNull(),
+  payload: text('payload'), // JSON string
+  durationMs: integer('duration_ms'),
+  success: integer('success', { mode: 'boolean' }).default(true),
+  errorInfo: text('error_info')
+});
+
+export const memoryRules = sqliteTable('memory_rules', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+
+  ruleText: text('rule_text').notNull(),
+  weight: real('weight').default(1.0),
+  createdAt: integer('created_at').default(Date.now())
+});
+
+export const newsArticles = sqliteTable('news_articles', {
+  id: text('id').primaryKey(),
+  title: text('title').notNull(),
+  content: text('content'),
+  url: text('url'),
+  source: text('source').notNull(),
+  author: text('author'),
+  publishedAt: text('published_at').notNull(),
+  clusterId: text('cluster_id'),
+  sentimentScore: real('sentiment_score'),
+  credibilityScore: real('credibility_score'),
+  relevanceScore: real('relevance_score'),
+  summary: text('summary'),
+  symbols: text('symbols')
+});
+
+export const newsClusters = sqliteTable('news_clusters', {
+  id: text('id').primaryKey(),
+  title: text('title').notNull(),
+  summary: text('summary'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  eventType: text('event_type'),
+  sentimentScore: real('sentiment_score'),
+  impactScore: real('impact_score'),
+  timeHorizon: text('time_horizon'),
+  isArchived: integer('is_archived', { mode: 'boolean' }).default(false),
+  symbols: text('symbols')
+});
+
+export const newsProviders = sqliteTable('news_providers', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  type: text('type').notNull(),
+  apiKeyEncrypted: text('api_key_encrypted'),
+  enabled: integer('enabled', { mode: 'boolean' }).default(true),
+  lastFetch: text('last_fetch'),
+  health: text('health').default('Healthy'),
+  errorCount: integer('error_count').default(0),
+  credibilityWeight: real('credibility_weight').default(1.0)
+});
+
+export const kronosPredictions = sqliteTable('kronos_predictions', {
+  timeframe: text('timeframe').default('1m'),
+  id: integer('id').primaryKey({ autoIncrement: true }),
+
+  symbol: text('symbol').notNull(),
+  prediction: text('prediction').notNull(),
+  confidence: integer('confidence').notNull(),
+  forecastHorizon: integer('forecast_horizon').notNull(),
+  expectedMove: text('expected_move').notNull(),
+  volatility: text('volatility').notNull(),
+  support: real('support').notNull(),
+  resistance: real('resistance').notNull(),
+  model: text('model').notNull(),
+  predictedOhlc: text('predicted_ohlc'),
+  marketStructure: text('market_structure'),
+  momentum: text('momentum'),
+  actualResult: text('actual_result'),
+  mae: real('mae'),
+  rmse: real('rmse'),
+  mape: real('mape'),
+  directionalAccuracy: real('directional_accuracy'),
+  timestamp: text('timestamp').notNull()
+});
+
+export const predictionEngineWeights = sqliteTable('prediction_engine_weights', {
+  id: text('id').primaryKey(), // engine name e.g., 'Kronos', 'Technical'
+  winRate: real('win_rate').default(0),
+  accuracy: real('accuracy').default(0),
+  averagePredictionError: real('average_prediction_error').default(0),
+  precision: real('precision').default(0),
+  recall: real('recall').default(0),
+  roi: real('roi').default(0),
+  sharpeContribution: real('sharpe_contribution').default(0),
+  drawdownContribution: real('drawdown_contribution').default(0),
+  lastUpdated: text('last_updated').notNull()
 });

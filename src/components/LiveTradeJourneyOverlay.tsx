@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * LiveTradeJourneyOverlay.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the LiveTradeJourneyOverlay.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for LiveTradeJourneyOverlayx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from 'react';
 import ReactFlow, { Background, Controls, Edge, Node, Position, Handle } from 'reactflow';
 import 'reactflow/dist/style.css';
@@ -46,7 +81,7 @@ export default function LiveTradeJourneyOverlay({ trade, onClose }: { trade: any
      const newNodes: Node[] = [
        { id: 'start', type: 'journey', position: { x: 250, y: 50 }, data: { label: 'Opportunity Detected', icon: <Activity size={18}/>, active: hasMarket, description: hasMarket ? `Tick on ${trade.symbol}` : 'Awaiting data...' } },
        { id: 'calc-tech', type: 'journey', position: { x: 100, y: 200 }, data: { label: 'Technical Engine', icon: <TrendingUp size={18}/>, active: hasTech, description: hasTech ? 'Analyzed Momentum' : '...' } },
-       { id: 'calc-news', type: 'journey', position: { x: 400, y: 200 }, data: { label: 'News Sentiment', icon: <Newspaper size={18}/>, active: hasNews, description: hasNews ? 'Analyzed Sentiment' : '...' } },
+       { id: 'calc-news', type: 'journey', position: { x: 400, y: 200 }, data: { label: 'News Sentiment', icon: <Newspaper size={18}/>, active: hasNews, description: hasNews ? `Analyzed Sentiment ${(traceEvents.find(e => e.type === 'TRADE_IDEA_GENERATED' && e.payload?.agent === 'NewsAgent')?.payload?.newsDetails?.confidence * 100 || 0).toFixed(0)}%` : '...' } },
        { id: 'chief', type: 'journey', position: { x: 250, y: 350 }, data: { label: 'Chief Debate', icon: <UserCheck size={18}/>, active: hasChief, description: hasChief ? 'Approved Trade' : '...' } },
        { id: 'risk', type: 'journey', position: { x: 250, y: 500 }, data: { label: 'Risk Constraint', icon: <ShieldCheck size={18}/>, active: hasRisk, description: hasRisk ? 'Veto/Size Limits checked' : '...' } },
        { id: 'exec', type: 'journey', position: { x: 250, y: 650 }, data: { label: 'Execution', icon: <Send size={18}/>, active: hasExec, description: hasExec ? `${trade.side || trade.decision} ${trade.symbol} Fired` : '...' } }

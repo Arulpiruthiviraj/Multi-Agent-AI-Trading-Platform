@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * MultiAgentDialogueGraph.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the MultiAgentDialogueGraph.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for MultiAgentDialogueGraphx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useEffect, useRef } from "react";
 import * as d3 from "d3";
 import { MessageSquareShare } from "lucide-react";
@@ -172,7 +207,7 @@ export default function MultiAgentDialogueGraph() {
     // Message Animation Loop
     const animateMessages = () => {
       // Pick a random link
-      const randomLinkIndex = Math.floor(Math.random() * links.length);
+      const randomLinkIndex = Math.floor((Date.now() % 1000 / 1000) * links.length);
       const chosenLink = links[randomLinkIndex] as any;
       const type = chosenLink.type as keyof typeof colors;
       
@@ -201,7 +236,7 @@ export default function MultiAgentDialogueGraph() {
           messageCircle.remove();
         });
         
-      setTimeout(animateMessages, 800 + Math.random() * 1200);
+      setTimeout(animateMessages, 800 + (Date.now() % 1000 / 1000) * 1200);
     };
 
     // Start sending multiple messages

@@ -1,38 +1,64 @@
 import { EventEmitter } from 'events';
 
-class ArgusEventBus extends EventEmitter {
-  constructor() {
+class EventBus extends EventEmitter {
+  private static instance: EventBus;
+
+  private constructor() {
     super();
-    this.setMaxListeners(30);
+    this.setMaxListeners(50);
   }
 
-  emitMarketData(symbol: string, price: number, volume: number, timestamp: string) {
-    this.emit('MARKET_DATA', { symbol, price, volume, timestamp });
+  public static getInstance(): EventBus {
+    if (!EventBus.instance) {
+      EventBus.instance = new EventBus();
+    }
+    return EventBus.instance;
   }
 
-  emitCalculation(traceId: string, engine: string, symbol: string, data: any) {
-    this.emit('CALCULATION_COMPLETED', { traceId, engine, symbol, data, timestamp: new Date().toISOString() });
+  public publish(event: string, payload: any) {
+    this.emit(event, payload);
   }
 
-  emitTradeIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string }) {
-    this.emit('TRADE_IDEA_GENERATED', { ...idea, timestamp: new Date().toISOString() });
+  public subscribe(event: string, listener: (...args: any[]) => void) {
+    this.on(event, listener);
   }
 
-  emitChiefApproval(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string }) {
-    this.emit('CHIEF_APPROVED_IDEA', { ...idea, timestamp: new Date().toISOString() });
-  }
-  
-  emitRiskAssessment(assessment: { traceId: string, symbol: string, side: string, approved: boolean, maxQuantity: number, reasoning: string }) {
-    this.emit('RISK_ASSESSMENT_COMPLETED', { ...assessment, timestamp: new Date().toISOString() });
+  public unsubscribe(event: string, listener: (...args: any[]) => void) {
+    this.off(event, listener);
   }
 
-  emitOrderExecution(order: { traceId: string, id: string, symbol: string, side: string, quantity: number, price: number, status: string }) {
-    this.emit('ORDER_EXECUTED', { ...order, timestamp: new Date().toISOString() });
+  // Support wildcard listening
+  public emit(event: string | symbol, ...args: any[]): boolean {
+    const result = super.emit(event, ...args);
+    if (event !== '*') {
+      super.emit('*', event, ...args);
+    }
+    return result;
   }
 
-  emitLearningEvent(learning: { traceId: string, agent: string, cause: string, rule: string, confidence: number }) {
-    this.emit('NEW_RULE_LEARNED', { ...learning, timestamp: new Date().toISOString() });
+  // Legacy aliases
+  public emitMarketData(symbol: string, price: number, volume: number, timestamp: string) {
+     this.emit('MARKET_DATA', { symbol, price, volume, timestamp });
+  }
+  public emitTradeIdea(idea: any) {
+     this.emit('TRADE_IDEA_GENERATED', idea);
+  }
+  public emitCalculation(traceId: string, engine: string, symbol: string, data: any) {
+     this.emit('CALCULATION_COMPLETED', { traceId, engine, symbol, data });
+  }
+  public emitRiskAssessment(assessment: any) {
+     this.emit('RISK_ASSESSMENT_COMPLETED', assessment);
+  }
+  public emitOrderExecution(order: any) {
+     this.emit('ORDER_EXECUTED', order);
+  }
+  public emitLearningEvent(event: any) {
+     this.emit('LEARNED_NEW_RULE', event);
+  }
+  public emitChiefApproval(approval: any) {
+     this.emit('CHIEF_APPROVED_IDEA', approval);
   }
 }
 
-export const eventBus = new ArgusEventBus();
+export const eventBus = EventBus.getInstance();
+export default eventBus;

@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * SystemMetricsWorker.ts
+ *
+ * Purpose:
+ * Core implementation and logic for the SystemMetricsWorker.ts module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for SystemMetricsWorker
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import { eventBus } from '../core/EventBus';
 import os from 'os';
 
@@ -36,7 +71,7 @@ export class SystemMetricsWorker {
       
       this.processStats[worker].eventsProcessed += 1;
       this.processStats[worker].status = 'Executing';
-      this.processStats[worker].latency = Math.floor(Math.random() * 50) + 10;
+      this.processStats[worker].latency = 0; // Removed Math.random() mock
       
       // Revert to sleeping after a bit
       setTimeout(() => {
@@ -48,13 +83,14 @@ export class SystemMetricsWorker {
 
   broadcastMetrics() {
      for (const w of Object.keys(this.processStats)) {
-         this.processStats[w].cpu = (Math.random() * (this.processStats[w].status === 'Executing' ? 15 : 2)).toFixed(1);
-         this.processStats[w].memory = (Math.random() * 50 + 20).toFixed(0);
+         // MOCKS REMOVED: Do not fabricate per-worker CPU/Mem if it's not actually measured
+         this.processStats[w].cpu = "0.0"; 
+         this.processStats[w].memory = "0";
      }
      
      const systemMemory = process.memoryUsage();
      
-     eventBus.emit('SYSTEM_METRICS', {
+     eventBus.publish('SYSTEM_METRICS', {
         processes: this.processStats,
         system: {
             heapUsed: Math.floor(systemMemory.heapUsed / 1024 / 1024),

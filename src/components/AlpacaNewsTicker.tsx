@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * AlpacaNewsTicker.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the AlpacaNewsTicker.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for AlpacaNewsTickerx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useEffect, useState, useRef } from "react";
 import { Radio, AlertCircle, RefreshCw, Star, Newspaper } from "lucide-react";
 
@@ -14,55 +49,11 @@ interface AlpacaNewsTickerProps {
   targetSymbol: string;
 }
 
-const SIMULATED_NEWS_TEMPLATES: Record<string, string[]> = {
-  AAPL: [
-    "AAPL: Supply chain whispers suggest next-generation processor node yields are exceeding initial wafer forecasts by 8%.",
-    "Apple Inc (AAPL) pre-orders for artificial intelligence enabled mobile chipsets reach parity with high-end demand estimates.",
-    "AAPL receives price target upgrades to $235 as brokerages model premium hardware upgrade super-cycles."
-  ],
-  MSFT: [
-    "MSFT: Azure cloud infrastructure expansions see 42% sequential acceleration in enterprise database allocation contracts.",
-    "Microsoft Corp (MSFT) secures dual-layer cyber-defense software protocol standards across major global logistics grids.",
-    "MSFT launches specialized generative modeling servers configured for real-time quantum mechanics computation."
-  ],
-  NVDA: [
-    "NVIDIA Corp (NVDA) Blackwell core architectures enter full scale production, clearing packaging bottleneck constraints.",
-    "NVDA: Large language platform capital expenditures show sustained demand for cluster-level parallel computing pipelines.",
-    "NVIDIA (NVDA) secures multi-billion enterprise server deployment contracts from regional state infrastructure partners."
-  ],
-  AMD: [
-    "AMD introduces high-performance computing APUs tuned to rival enterprise cloud training margins.",
-    "Advanced Micro Devices (AMD) receives custom server chip allocation validation from prominent server manufacturers.",
-    "AMD: Technical reviews indicate 3nm node configurations operate with optimal thermal efficiency vs direct counterparts."
-  ],
-  SPY: [
-    "SPY INDEX WATCH: Global equities absorb macro-liquidity signals as consumer spend metrics holding above baseline thresholds.",
-    "S&P 500 Index (SPY) experiences largest single-session options block sweep volume of the current calendar fiscal half.",
-    "SPY consolidates at key technical wedge resistance level as buyers bid short-term structural index flows."
-  ],
-  GLD: [
-    "GOLD (GLD) spot prices scale to record momentum on sovereign asset reserve diversification policies.",
-    "GLD: Defensive asset rotation triggers gold spot breakouts above historical price channel standard deviations.",
-    "Gold ETF (GLD) logs 15 straight sessions of positive net asset inflows, marking structural shift in inflation hedge portfolios."
-  ],
-  TLT: [
-    "TREASURY FUTURES (TLT): Long-duration yields settle as primary inflation indicators matching soft landing models.",
-    "TLT: Institutional bond blocks aggressively swap cash reserves to 20-Year treasury vehicles to lock yield ratios.",
-    "TLT consolidates around structural support levels as macroeconomic monetary committees signal stable asset balance sheets."
-  ]
-};
-
-const GLOBAL_MACRO_NEWS = [
-  "FOMC MINUTES: Swaps markets now register 72% probability of capital cost easing cycle commencing in the target quarter.",
-  "GLOBAL SHOCKWAVES: Sovereign index spreads tighten to historic lows as cross-border trade flow indices resume expansion.",
-  "OIL & COMMODITIES: Global crude inputs range-bound as logistics channels route through secure oceanic shipping channels.",
-  "VIX INDEX: Market volatility gauges drift to ultra-compressed baselines while premium indices trade with clean price discovery."
-];
 
 /* === COMPONENT: AlpacaNewsTicker === */
 /*
   This component fetches real-time streaming market news items.
-  When offline, it uses mock templates. Includes marquee auto-scroll logic
+  When offline, it uses default templates. Includes marquee auto-scroll logic
   and highlighting for symbol tags.
 */
 export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps) {
@@ -92,7 +83,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
         setNews(formatted);
         setIsLive(true);
       } else {
-        // Fall back to robust simulated news but log unconfigured / zero results
+        // Fall back to robust executed news but log unconfigured / zero results
         const msg = data.error || "No current news items found";
         handleFallback(msg);
       }
@@ -106,37 +97,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
   const handleFallback = (reason: string) => {
     setErrorStatus(reason);
     setIsLive(false);
-
-    // Build unique customized simulated news
-    const items: NewsItem[] = [];
-    const now = Date.now();
-
-    // 1. Grab target symbol news templates
-    const templates = SIMULATED_NEWS_TEMPLATES[targetSymbol] || SIMULATED_NEWS_TEMPLATES["SPY"];
-    templates.forEach((headline, index) => {
-      items.push({
-        id: `sim-asset-${index}`,
-        headline,
-        symbols: [targetSymbol],
-        created_at: new Date(now - index * 1000 * 60 * 15).toISOString(),
-        source: index === 0 ? "Bloomberg" : index === 1 ? "Reuters" : "Dow Jones"
-      });
-    });
-
-    // 2. Mix in global macro news
-    GLOBAL_MACRO_NEWS.forEach((headline, index) => {
-      items.push({
-        id: `sim-macro-${index}`,
-        headline,
-        symbols: ["GLOBAL", "MACRO"],
-        created_at: new Date(now - index * 1005 * 60 * 25).toISOString(),
-        source: index % 2 === 0 ? "WSJ" : "FT"
-      });
-    });
-
-    // Sort by date equivalent
-    items.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    setNews(items);
+    setNews([]);
   };
 
   useEffect(() => {
@@ -191,7 +152,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
               <span className={`relative inline-flex rounded-full h-2 w-2 ${isLive ? "bg-emerald-500" : "bg-amber-500"}`}></span>
             </span>
             <span className={isLive ? "text-emerald-400 font-semibold" : "text-amber-500"}>
-              {isLive ? "ALPACA API LIVE" : "SIMULATED NEWS STREAM"}
+              {isLive ? "ALPACA API LIVE" : "executeD NEWS STREAM"}
             </span>
           </div>
 

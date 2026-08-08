@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * TechnicalAgent.ts
+ *
+ * Purpose:
+ * Core implementation and logic for the TechnicalAgent.ts module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for TechnicalAgent
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import { eventBus } from '../core/EventBus';
 import { rsiEngine } from '../engines/RSIEngine';
 import { macdEngine } from '../engines/MACDEngine';
@@ -52,50 +87,42 @@ export class TechnicalProposerAgent {
     const bb = this.calcBollingerBands(prices, 20);
     const traceId = Math.random().toString(36).substring(7);
 
-    if (Math.random() < 0.2) {
-       eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
-    }
+    eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
 
     // Momentum Breakout
     if (currentPrice > sma20 && sma20 > sma50 && rsi > 50 && rsi < 70 && macd.macd > macd.signal) {
-      if (Math.random() < 0.1) {
-        eventBus.emitTradeIdea({
-          traceId,
-          symbol,
-          side: "BUY",
-          confidence: 0.85,
-          reasoning: `Strong upward trend detected. MACD bullish crossover. RSI at ${rsi.toFixed(2)}.`,
-          agent: "TechnicalAgent"
-        });
-      }
+      eventBus.emitTradeIdea({
+        traceId,
+        symbol,
+        side: "BUY",
+        confidence: 0.85,
+        reasoning: `Strong upward trend detected. MACD bullish crossover. RSI at ${rsi.toFixed(2)}.`,
+        agent: "TechnicalAgent"
+      });
     }
 
     // Mean Reversion
     if (rsi < 30 && currentPrice < bb.lower) {
-      if (Math.random() < 0.1) {
-        eventBus.emitTradeIdea({
-          traceId,
-          symbol,
-          side: "BUY",
-          confidence: 0.78,
-          reasoning: `Oversold condition. Price breached lower Bollinger Band with RSI at ${rsi.toFixed(2)}.`,
-          agent: "TechnicalAgent"
-        });
-      }
+      eventBus.emitTradeIdea({
+        traceId,
+        symbol,
+        side: "BUY",
+        confidence: 0.78,
+        reasoning: `Oversold condition. Price breached lower Bollinger Band with RSI at ${rsi.toFixed(2)}.`,
+        agent: "TechnicalAgent"
+      });
     }
     
     // Overbought condition
     if (rsi > 75 && currentPrice > bb.upper) {
-      if (Math.random() < 0.1) {
-        eventBus.emitTradeIdea({
-          traceId,
-          symbol,
-          side: "SELL",
-          confidence: 0.88,
-          reasoning: `Overbought condition. Price exceeded upper Bollinger Band. RSI at ${rsi.toFixed(2)}.`,
-          agent: "TechnicalAgent"
-        });
-      }
+      eventBus.emitTradeIdea({
+        traceId,
+        symbol,
+        side: "SELL",
+        confidence: 0.88,
+        reasoning: `Overbought condition. Price exceeded upper Bollinger Band. RSI at ${rsi.toFixed(2)}.`,
+        agent: "TechnicalAgent"
+      });
     }
   }
 }

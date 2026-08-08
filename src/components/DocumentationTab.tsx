@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * DocumentationTab.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the DocumentationTab.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for DocumentationTabx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState } from "react";
 import { 
   BookOpen, Layers, Target, Activity, Wallet, BarChart3, 
@@ -16,9 +51,9 @@ type DocSection = {
   id: string;
   category: string;
   title: string;
-  icon: JSX.Element;
+  icon: React.ReactNode;
   isCourse?: boolean;
-  content: JSX.Element;
+  content: React.ReactNode;
 };
 
 const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => {
@@ -51,7 +86,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
           </div>
           
           <p className="text-slate-300 leading-relaxed text-sm">
-            Welcome to the <strong>Argus Autonomous Trading Terminal</strong>, an advanced, full-stack multi-agent AI terminal designed to execute and simulate continuous trading evaluations under strict risk mathematical constraints.
+            Welcome to the <strong>Argus Autonomous Trading Terminal</strong>, an advanced, full-stack multi-agent AI terminal designed to execute and execute continuous trading evaluations under strict risk mathematical constraints.
           </p>
 
           <div className="p-4 bg-slate-900/80 rounded border border-slate-800 flex items-start gap-3">
@@ -82,7 +117,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-amber-500/30 transition-colors group">
               <h3 className="text-amber-400 font-bold mb-2 flex items-center gap-2"><Sliders size={16} className="group-hover:animate-pulse"/> 3. Strategy Backtest Arena</h3>
               <p className="text-slate-400 text-xs leading-relaxed">
-                Backtest and compare different strategy styles against simulated market conditions side-by-side with line toggle visualizations.
+                Backtest and compare different strategy styles against executed market conditions side-by-side with line toggle visualizations.
               </p>
             </div>
             
@@ -537,7 +572,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               Strategy Backtest Engine Tutorial
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed mb-3">
-              The Strategy Backtest Engine simulates two distinct portfolios under matching market feeds. Use the line toggle check-boxes to compare:
+              The Strategy Backtest Engine executes two distinct portfolios under matching market feeds. Use the line toggle check-boxes to compare:
             </p>
             <ul className="list-disc list-inside text-xs text-slate-400 space-y-1.5 font-mono">
               <li>Compare <strong className="text-indigo-400">Argus Multi-Agent Dynamic Core</strong> versus a simple <strong className="text-slate-200">Buy & Hold Benchmark</strong>.</li>
@@ -672,14 +707,14 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
                 <Globe size={14} /> 2. Dry Run Mode vs Live Exchange Adaption
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed mb-3">
-                By default, the platform initiates a mocked execution thread:
+                By default, the platform initiates a defaulted execution thread:
               </p>
               <div className="space-y-2.5 text-xs text-slate-400">
                 <p>
-                  <strong className="text-slate-200">DRY_RUN (Standard/Mock Mode):</strong> All proposed buy/sell decisions verified by the Risk Node are appended to the in-memory `autoBotState` transaction arrays. No connection to outside brokerages is opened. This is optimal for testing the LLM consensus loop.
+                  <strong className="text-slate-200">DRY_RUN (Standard/default Mode):</strong> All proposed buy/sell decisions verified by the Risk Node are appended to the in-memory `autoBotState` transaction arrays. No connection to outside brokerages is opened. This is optimal for testing the LLM consensus loop.
                 </p>
                 <p>
-                  <strong className="text-slate-200">LIVE_EXCHANGE Mode (Custom):</strong> When ready, developers can swap the simulation mocks with standard Web3 or stock broker wrappers (e.g., Alpaca API, Interactive Brokers C++, or CCXT for Crypto spot/futures).
+                  <strong className="text-slate-200">LIVE_EXCHANGE Mode (Custom):</strong> When ready, developers can swap the simulation defaults with standard Web3 or stock broker wrappers (e.g., Alpaca API, Interactive Brokers C++, or CCXT for Crypto spot/futures).
                 </p>
               </div>
             </div>

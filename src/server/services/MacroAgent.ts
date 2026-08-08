@@ -1,7 +1,14 @@
+/**
+ * ==========================================================
+ * Module: MacroAgent.ts
+ *
+ * Purpose:
+ * Evaluates real macro data if available.
+ * ==========================================================
+ */
 import { eventBus } from '../core/EventBus';
-import { GoogleGenAI } from '@google/genai';
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || "mock-key" });
+import { AIRouter } from '../ai/AIRouter';
+import crypto from 'crypto';
 
 export class MacroEconomyAgent {
   private intervalId: NodeJS.Timeout | null = null;
@@ -18,32 +25,37 @@ export class MacroEconomyAgent {
       this.intervalId = null;
     }
   }
+  
+  private async fetchMacro() {
+     // Production app should integrate FRED, AlphaVantage Economic indicators
+     return {
+        inflation: "UNKNOWN",
+        fedFundsRate: "UNKNOWN",
+        unemployment: "UNKNOWN"
+     };
+  }
 
   private async analyzeMacro() {
-    const symbol = this.watchedSymbols[Math.floor(Math.random() * this.watchedSymbols.length)];
-    const traceId = Math.random().toString(36).substring(7);
+    const symbol = this.watchedSymbols[Math.floor(Date.now() / 75000) % this.watchedSymbols.length];
+    const traceId = crypto.randomUUID();
     
-    // Simulate macro factors
-    const inflation = (2.5 + Math.random() * 2).toFixed(1);
-    const fedFundsRate = (4.0 + (Math.random() > 0.5 ? 0.25 : -0.25)).toFixed(2);
-    const unemployment = (3.5 + Math.random()).toFixed(1);
-
     try {
-       if (process.env.GEMINI_API_KEY) {
-          const response = await ai.models.generateContent({
-             model: 'gemini-3.5-flash',
-             contents: `Analyze these macroeconomic indicators for their impact on large-cap equities like ${symbol}: CPI Inflation ${inflation}%, Fed Funds Rate ${fedFundsRate}%, Unemployment ${unemployment}%.
-Return a strict JSON object matching this schema:
-{
-  "summary": "Brief summary",
-  "recommendation": "BUY" | "SELL" | "HOLD",
-  "confidence": number between 0 and 1,
-  "supportingEvidence": "Key macro drivers",
-  "risks": "Macro risks",
-  "reasoning": "A one-sentence explanation"
-}`,
-             config: { responseMimeType: "application/json" }
+       const data = await this.fetchMacro();
+       if (data.inflation === "UNKNOWN") {
+          eventBus.emitTradeIdea({
+             traceId, 
+             symbol, 
+             side: "HOLD", 
+             confidence: 0, 
+             reasoning: "DATA_UNAVAILABLE: Macro data providers not configured.", 
+             agent: "MacroAgent"
           });
+          return;
+       }
+
+       if (process.env.GEMINI_API_KEY) {
+          const res = await AIRouter.getInstance().routeTask('MacroAgent', `Analyze these macroeconomic indicators for their impact on ${symbol}: CPI ${data.inflation}%, Fed Funds Rate ${data.fedFundsRate}%, Unemployment ${data.unemployment}%. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
+          const response = { text: res.content };
           
           if (response.text) {
              const analysis = JSON.parse(response.text);
@@ -58,13 +70,9 @@ Return a strict JSON object matching this schema:
                 });
              }
           }
-       } else {
-           eventBus.emitTradeIdea({
-              traceId, symbol, side: "BUY", confidence: 0.75, reasoning: "Fallback Macro BUY", agent: "MacroAgent"
-           });
        }
     } catch (e) {
-       console.error("[MacroAgent] LLM parsing failed:", e);
+       console.error("[MacroAgent] Failed:", e);
     }
   }
 }

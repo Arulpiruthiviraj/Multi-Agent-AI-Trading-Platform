@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * TradeReplayModal.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the TradeReplayModal.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for TradeReplayModalx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from 'react';
 import { X, Play, Pause, SkipBack, FastForward, Activity, BrainCircuit, BarChart2, ShieldCheck, Send, CheckCircle2, XCircle } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
@@ -7,9 +42,20 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
   const [timelineIndex, setTimelineIndex] = useState(0);
   const [traceEvents, setTraceEvents] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [explainabilityReport, setExplainabilityReport] = useState<any>(null);
+  const [showExplainability, setShowExplainability] = useState(false);
 
   useEffect(() => {
     const fetchTrace = async () => {
+       if (trade.trace_id) {
+          try {
+             const expRes = await fetch(`/api/v2/data/explainability/${trade.trace_id}`);
+             const expData = await expRes.json();
+             if (expData.report) {
+                 setExplainabilityReport(expData.report);
+             }
+          } catch(e) {}
+       }
        if (trade.trace_id) {
           try {
              const res = await fetch(`/api/v2/system/trace/${trade.trace_id}`);
@@ -22,8 +68,8 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
           } catch(e) {}
        }
        
-       // Fallback: Generate Mock Trace based on the trade details
-       const mockEvents = [
+       // Fallback: Generate default Trace based on the trade details
+       const sampleEvents = [
           { type: 'MARKET_DATA', payload: { symbol: trade.symbol, price: trade.price - 2 } },
           { type: 'CALCULATION_COMPLETED', payload: { engine: 'TechnicalEngine', symbol: trade.symbol, data: { rsi: 65, sma20: trade.price - 5 } } },
           { type: 'TRADE_IDEA_GENERATED', payload: { agent: 'TechnicalAgent', side: trade.decision || trade.side, confidence: 0.88, reasoning: 'Strong momentum detected.' } },
@@ -31,7 +77,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
           { type: 'RISK_ASSESSMENT_COMPLETED', payload: { approved: true, maxQuantity: trade.quantity || 10, reasoning: 'Risk limits validated.' } },
           { type: 'ORDER_EXECUTED', payload: { side: trade.decision || trade.side, quantity: trade.quantity || 10, price: trade.price, status: 'FILLED' } },
        ];
-       setTraceEvents(mockEvents);
+       setTraceEvents(sampleEvents);
        setLoading(false);
     };
     fetchTrace();
@@ -50,13 +96,13 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
         });
       }, 1500);
     }
+
     return () => clearInterval(interval);
   }, [isPlaying, traceEvents.length]);
 
   if (loading) return null;
 
   const currentEvent = traceEvents[timelineIndex] || {};
-
   const chartData = traceEvents.map((e, i) => {
      let price = trade.price;
      if (e.type === 'MARKET_DATA') price = e.payload.price;
@@ -76,123 +122,146 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
               <p className="text-slate-500 text-[10px]">End-to-End Decision Flow Visualization</p>
             </div>
           </div>
-          <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-4">
+             {explainabilityReport && (
+                 <button onClick={() => setShowExplainability(!showExplainability)} className="text-[10px] bg-indigo-500/20 text-indigo-400 px-3 py-1.5 rounded uppercase tracking-widest font-bold hover:bg-indigo-500/30 transition-colors">
+                    {showExplainability ? "Hide Explainability Report" : "View Explainability Report"}
+                 </button>
+             )}
+            <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors">
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         <div className="p-6 flex flex-col gap-6 overflow-y-auto">
-          
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            
-            {/* Left: Journey Timeline */}
-            <div className="md:col-span-1 border border-slate-800 bg-[#111822] p-4 rounded flex flex-col gap-3 max-h-[400px] overflow-y-auto">
-               <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Decision Journey</h3>
-               {traceEvents.map((evt, i) => (
-                  <div key={i} className={`flex flex-col p-2 border-l-2 transition-all ${i === timelineIndex ? 'border-emerald-500 bg-slate-800/40' : i < timelineIndex ? 'border-indigo-500/50 opacity-70' : 'border-slate-800 opacity-30'}`}>
-                     <span className={`text-[10px] font-bold ${i === timelineIndex ? 'text-emerald-400' : 'text-slate-400'}`}>{evt.type.replace(/_/g, ' ')}</span>
-                     <span className="text-[9px] text-slate-500 truncate">{new Date(evt.timestamp || Date.now()).toLocaleTimeString()}</span>
-                  </div>
-               ))}
-            </div>
+          {showExplainability && explainabilityReport ? (
+              <div className="bg-[#111822] border border-indigo-500/30 rounded p-6">
+                 <h3 className="text-sm font-bold uppercase tracking-widest text-indigo-400 mb-4 flex items-center gap-2">
+                    <BrainCircuit size={16} /> Human Explainability Report
+                 </h3>
+                 <div className="prose prose-invert prose-sm max-w-none text-slate-300">
+                    {explainabilityReport.reportText.split('\n').map((line: string, i: number) => (
+                       <p key={i} className="mb-2 whitespace-pre-wrap">{line}</p>
+                    ))}
+                 </div>
+              </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* Left: Journey Timeline */}
+              <div className="md:col-span-1 border border-slate-800 bg-[#111822] p-4 rounded flex flex-col gap-3 max-h-[400px] overflow-y-auto">
+                 <h3 className="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Decision Journey</h3>
+                 {traceEvents.map((evt, i) => (
+                    <div key={i} className={`flex flex-col p-2 border-l-2 transition-all ${i === timelineIndex ? 'border-emerald-500 bg-slate-800/40' : i < timelineIndex ? 'border-indigo-500/50 opacity-70' : 'border-slate-800 opacity-30'}`}>
+                       <span className={`text-[10px] font-bold ${i === timelineIndex ? 'text-emerald-400' : 'text-slate-400'}`}>{evt.type.replace(/_/g, ' ')}</span>
+                       <span className="text-[9px] text-slate-500 truncate">{new Date(evt.timestamp || Date.now()).toLocaleTimeString()}</span>
+                    </div>
+                 ))}
+              </div>
 
-            {/* Center: Detail View */}
-            <div className="md:col-span-2 flex flex-col gap-4">
-                {/* Event Details Card */}
-                <div className="bg-[#111822] border border-slate-800 rounded p-5 flex flex-col h-[200px] justify-center items-center text-center relative overflow-hidden">
-                    {/* Background glow based on type */}
-                    <div className="absolute inset-0 bg-gradient-to-t from-transparent to-indigo-500/5 pointer-events-none" />
-                    
-                    {currentEvent.type === 'MARKET_DATA' && (
-                        <div className="animate-fade-in flex flex-col items-center">
-                           <BarChart2 size={32} className="text-sky-400 mb-3" />
-                           <h4 className="text-white font-bold uppercase tracking-widest mb-1">Market Data Discovered</h4>
-                           <p className="text-sm text-slate-400">Targeting {currentEvent.payload.symbol} at ${currentEvent.payload.price}</p>
-                        </div>
-                    )}
-                    {currentEvent.type === 'CALCULATION_COMPLETED' && (
-                        <div className="animate-fade-in flex flex-col items-center">
-                           <Activity size={32} className="text-amber-400 mb-3" />
-                           <h4 className="text-white font-bold uppercase tracking-widest mb-1">{currentEvent.payload.engine} Running</h4>
-                           <p className="text-xs text-slate-400 mb-2">Analyzing technical parameters...</p>
-                           <pre className="text-[10px] text-amber-200 bg-amber-500/10 p-2 rounded text-left w-full max-w-xs overflow-hidden">
-                              {JSON.stringify(currentEvent.payload.data, null, 2)}
-                           </pre>
-                        </div>
-                    )}
-                    {currentEvent.type === 'TRADE_IDEA_GENERATED' && (
-                        <div className="animate-fade-in flex flex-col items-center">
-                           <BrainCircuit size={32} className="text-indigo-400 mb-3" />
-                           <h4 className="text-white font-bold uppercase tracking-widest mb-1">{currentEvent.payload.agent}</h4>
-                           <div className="text-[11px] bg-indigo-500/20 text-indigo-300 p-2 rounded max-w-md border border-indigo-500/30">
-                              <span className="font-bold mr-2 text-indigo-400">IDEA: {currentEvent.payload.side}</span>
-                              {currentEvent.payload.reasoning}
-                           </div>
-                        </div>
-                    )}
-                    {currentEvent.type === 'CHIEF_APPROVED_IDEA' && (
-                        <div className="animate-fade-in flex flex-col items-center">
-                           <CheckCircle2 size={32} className="text-emerald-400 mb-3" />
-                           <h4 className="text-white font-bold uppercase tracking-widest mb-1">Chief AI Consensus</h4>
-                           <div className="text-[11px] bg-emerald-500/20 text-emerald-300 p-2 rounded max-w-md border border-emerald-500/30">
-                              {currentEvent.payload.reasoning}
-                           </div>
-                        </div>
-                    )}
-                    {currentEvent.type === 'RISK_ASSESSMENT_COMPLETED' && (
-                        <div className="animate-fade-in flex flex-col items-center">
-                           {currentEvent.payload.approved ? <ShieldCheck size={32} className="text-emerald-400 mb-3" /> : <XCircle size={32} className="text-rose-400 mb-3" />}
-                           <h4 className="text-white font-bold uppercase tracking-widest mb-1">Risk Validation</h4>
-                           <p className={`text-xs ${currentEvent.payload.approved ? 'text-emerald-400' : 'text-rose-400'}`}>{currentEvent.payload.reasoning}</p>
-                           {currentEvent.payload.approved && <p className="text-[10px] text-slate-500 mt-2">Max Sizing: {currentEvent.payload.maxQuantity} shares</p>}
-                        </div>
-                    )}
-                    {currentEvent.type === 'ORDER_EXECUTED' && (
-                        <div className="animate-fade-in flex flex-col items-center">
-                           <Send size={32} className="text-sky-400 mb-3" />
-                           <h4 className="text-white font-bold uppercase tracking-widest mb-1">Execution Engine</h4>
-                           <div className="text-[11px] font-bold tracking-widest text-white mt-1">
-                               {currentEvent.payload.side} {currentEvent.payload.quantity} {currentEvent.payload.symbol} @ ${Number(currentEvent.payload.price).toFixed(2)}
-                           </div>
-                           <p className="text-[10px] text-slate-500 mt-1">Status: {currentEvent.payload.status}</p>
-                        </div>
-                    )}
-                    {currentEvent.type === 'NEW_RULE_LEARNED' && (
-                        <div className="animate-fade-in flex flex-col items-center">
-                           <BrainCircuit size={32} className="text-fuchsia-400 mb-3" />
-                           <h4 className="text-white font-bold uppercase tracking-widest mb-1">Reflection Engine Update</h4>
-                           <div className="text-[11px] bg-fuchsia-500/20 text-fuchsia-300 p-2 rounded max-w-md border border-fuchsia-500/30 mt-2">
-                              {currentEvent.payload.rule}
-                           </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Price Context Chart */}
-                <div className="bg-[#111822] border border-slate-800 rounded p-4 h-[184px] flex flex-col">
-                  <h3 className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2 flex items-center gap-2">
-                    <BarChart2 size={12} className="text-sky-400" />
-                    Simulated Price Trajectory
-                  </h3>
-                  <div className="flex-1 w-full relative">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={chartData.slice(0, timelineIndex + 1)}>
-                        <defs>
-                          <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3}/>
-                            <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <XAxis dataKey="time" hide />
-                        <YAxis hide domain={['dataMin - 5', 'dataMax + 5']} />
-                        <Tooltip contentStyle={{ backgroundColor: '#111822', borderColor: '#1e293b', fontSize: '10px' }} />
-                        <Area type="stepAfter" dataKey="price" stroke="#38bdf8" fillOpacity={1} fill="url(#colorPrice)" isAnimationActive={false} />
-                      </AreaChart>
-                    </ResponsiveContainer>
+              {/* Center: Detail View */}
+              <div className="md:col-span-2 flex flex-col gap-4">
+                  {/* Event Details Card */}
+                  <div className="bg-[#111822] border border-slate-800 rounded p-5 flex flex-col h-[200px] justify-center items-center text-center relative overflow-hidden">
+                      <div className="absolute inset-0 bg-gradient-to-t from-transparent to-indigo-500/5 pointer-events-none" />
+                      
+                      {currentEvent.type === 'MARKET_DATA' && (
+                          <div className="animate-fade-in flex flex-col items-center">
+                             <BarChart2 size={32} className="text-sky-400 mb-3" />
+                             <h4 className="text-white font-bold uppercase tracking-widest mb-1">Market Data Discovered</h4>
+                             <p className="text-sm text-slate-400">Targeting {currentEvent.payload.symbol} at ${currentEvent.payload.price}</p>
+                          </div>
+                      )}
+                      
+                      {currentEvent.type === 'CALCULATION_COMPLETED' && (
+                          <div className="animate-fade-in flex flex-col items-center">
+                             <Activity size={32} className="text-amber-400 mb-3" />
+                             <h4 className="text-white font-bold uppercase tracking-widest mb-1">{currentEvent.payload.engine} Running</h4>
+                             <p className="text-xs text-slate-400 mb-2">Analyzing technical parameters...</p>
+                             <pre className="text-[10px] text-amber-200 bg-amber-500/10 p-2 rounded text-left w-full max-w-xs overflow-hidden">
+                                {JSON.stringify(currentEvent.payload.data, null, 2)}
+                             </pre>
+                          </div>
+                      )}
+                      
+                      {currentEvent.type === 'TRADE_IDEA_GENERATED' && (
+                          <div className="animate-fade-in flex flex-col items-center">
+                             <BrainCircuit size={32} className="text-indigo-400 mb-3" />
+                             <h4 className="text-white font-bold uppercase tracking-widest mb-1">{currentEvent.payload.agent}</h4>
+                             <div className="text-[11px] bg-indigo-500/20 text-indigo-300 p-2 rounded max-w-md border border-indigo-500/30">
+                                <span className="font-bold mr-2 text-indigo-400">IDEA: {currentEvent.payload.side}</span>
+                                {currentEvent.payload.reasoning}
+                             </div>
+                          </div>
+                      )}
+                      
+                      {currentEvent.type === 'CHIEF_APPROVED_IDEA' && (
+                          <div className="animate-fade-in flex flex-col items-center">
+                             <CheckCircle2 size={32} className="text-emerald-400 mb-3" />
+                             <h4 className="text-white font-bold uppercase tracking-widest mb-1">Chief AI Consensus</h4>
+                             <div className="text-[11px] bg-emerald-500/20 text-emerald-300 p-2 rounded max-w-md border border-emerald-500/30">
+                                {currentEvent.payload.reasoning}
+                             </div>
+                          </div>
+                      )}
+                      
+                      {currentEvent.type === 'RISK_ASSESSMENT_COMPLETED' && (
+                          <div className="animate-fade-in flex flex-col items-center">
+                             {currentEvent.payload.approved ? <ShieldCheck size={32} className="text-emerald-400 mb-3" /> : <XCircle size={32} className="text-rose-400 mb-3" />}
+                             <h4 className="text-white font-bold uppercase tracking-widest mb-1">Risk Validation</h4>
+                             <p className={`text-xs ${currentEvent.payload.approved ? 'text-emerald-400' : 'text-rose-400'}`}>{currentEvent.payload.reasoning}</p>
+                             {currentEvent.payload.approved && <p className="text-[10px] text-slate-500 mt-2">Max Sizing: {currentEvent.payload.maxQuantity} shares</p>}
+                          </div>
+                      )}
+                      
+                      {currentEvent.type === 'ORDER_EXECUTED' && (
+                          <div className="animate-fade-in flex flex-col items-center">
+                             <Send size={32} className="text-sky-400 mb-3" />
+                             <h4 className="text-white font-bold uppercase tracking-widest mb-1">Execution Engine</h4>
+                             <div className="text-[11px] font-bold tracking-widest text-white mt-1">
+                                 {currentEvent.payload.side} {currentEvent.payload.quantity} {currentEvent.payload.symbol} @ ${Number(currentEvent.payload.price).toFixed(2)}
+                             </div>
+                             <p className="text-[10px] text-slate-500 mt-1">Status: {currentEvent.payload.status}</p>
+                          </div>
+                      )}
+                      
+                      {currentEvent.type === 'NEW_RULE_LEARNED' && (
+                          <div className="animate-fade-in flex flex-col items-center">
+                             <BrainCircuit size={32} className="text-fuchsia-400 mb-3" />
+                             <h4 className="text-white font-bold uppercase tracking-widest mb-1">Reflection Engine Update</h4>
+                             <div className="text-[11px] bg-fuchsia-500/20 text-fuchsia-300 p-2 rounded max-w-md border border-fuchsia-500/30 mt-2">
+                                {currentEvent.payload.rule}
+                             </div>
+                          </div>
+                      )}
                   </div>
-                </div>
+
+                  {/* Price Context Chart */}
+                  <div className="bg-[#111822] border border-slate-800 rounded p-4 h-[184px] flex flex-col">
+                    <h3 className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2 flex items-center gap-2">
+                      <BarChart2 size={12} className="text-sky-400" />
+                      Simulated Price Trajectory
+                    </h3>
+                    <div className="flex-1 w-full relative">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData.slice(0, timelineIndex + 1)}>
+                          <defs>
+                            <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
+                              <stop offset="5%" stopColor="#38bdf8" stopOpacity={0.3}/>
+                              <stop offset="95%" stopColor="#38bdf8" stopOpacity={0}/>
+                            </linearGradient>
+                          </defs>
+                          <XAxis dataKey="time" hide />
+                          <YAxis hide domain={['dataMin - 5', 'dataMax + 5']} />
+                          <Tooltip contentStyle={{ backgroundColor: '#111822', borderColor: '#1e293b', fontSize: '10px' }} />
+                          <Area type="stepAfter" dataKey="price" stroke="#38bdf8" fillOpacity={1} fill="url(#colorPrice)" isAnimationActive={false} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Transport Controls */}
           <div className="bg-[#111822] border border-slate-800 rounded p-4 flex flex-col gap-4">

@@ -21,6 +21,11 @@
       ]
     },
     "allowImportingTsExtensions": true,
-    "noEmit": true
-  }
+    "noEmit": true,
+    "esModuleInterop": true,
+    "downlevelIteration": true
+  },
+  "exclude": [
+    "dist"
+  ]
 }

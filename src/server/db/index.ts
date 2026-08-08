@@ -1,62 +1,65 @@
+/**
+ * ==========================================================
+ * Module:
+ * index.ts
+ *
+ * Purpose:
+ * Core implementation and logic for the index.ts module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for index
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from './schema';
 import path from 'path';
+import fs from 'fs';
 
-const sqlite = new Database('argus.db');
+const dbDir = fs.existsSync('/data') ? '/data' : path.resolve(process.cwd(), 'data');
+if (!fs.existsSync(dbDir)) {
+  fs.mkdirSync(dbDir, { recursive: true });
+}
+const dbPath = path.join(dbDir, 'argus.db');
+const sqlite = new Database(dbPath);
+sqlite.pragma('journal_mode = WAL');
+
 export const db = drizzle(sqlite, { schema });
 
-// Simple migrate function for local dev (in prod use drizzle-kit migrations)
-sqlite.exec(`
-  CREATE TABLE IF NOT EXISTS trades (
-    id TEXT PRIMARY KEY,
-    symbol TEXT NOT NULL,
-    side TEXT NOT NULL,
-    quantity REAL NOT NULL,
-    price REAL NOT NULL,
-    status TEXT NOT NULL,
-    timestamp TEXT NOT NULL,
-    reasoning TEXT
-  );
-  
-  CREATE TABLE IF NOT EXISTS portfolio (
-    symbol TEXT PRIMARY KEY,
-    quantity REAL NOT NULL,
-    average_price REAL NOT NULL,
-    current_price REAL,
-    last_updated TEXT NOT NULL
-  );
-  
-  CREATE TABLE IF NOT EXISTS learned_rules (
-    id TEXT PRIMARY KEY,
-    agent TEXT NOT NULL,
-    cause TEXT NOT NULL,
-    rule TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    timestamp TEXT NOT NULL
-  );
+// Run migrations on startup
+try {
+  console.log("Running migrations...");
+  migrate(db, { migrationsFolder: path.join(process.cwd(), 'drizzle') });
+  console.log("Migrations complete.");
+} catch (error) {
+  console.error("Migration failed:", error);
+}
 
-  CREATE TABLE IF NOT EXISTS agent_predictions (
-    id TEXT PRIMARY KEY,
-    agent_name TEXT NOT NULL,
-    symbol TEXT NOT NULL,
-    prediction TEXT NOT NULL,
-    confidence REAL NOT NULL,
-    reasoning TEXT NOT NULL,
-    timestamp TEXT NOT NULL
-  );
+console.log("Database initialized at:", dbPath);
 
-  CREATE TABLE IF NOT EXISTS agent_performance_stats (
-    agent_name TEXT PRIMARY KEY,
-    total_predictions INTEGER NOT NULL DEFAULT 0,
-    correct_predictions INTEGER NOT NULL DEFAULT 0,
-    win_rate REAL NOT NULL DEFAULT 0,
-    average_return REAL NOT NULL DEFAULT 0,
-    profit_factor REAL NOT NULL DEFAULT 0,
-    sharpe_ratio REAL NOT NULL DEFAULT 0,
-    current_weight REAL NOT NULL DEFAULT 1.0,
-    last_evaluated TEXT NOT NULL
-  );
-`);
-
-console.log("Database initialized.");
+import { seedDefaultModels } from './seedModels';
+seedDefaultModels().catch(console.error);

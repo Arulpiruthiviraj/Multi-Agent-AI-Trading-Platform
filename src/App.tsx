@@ -1,12 +1,52 @@
+/**
+ * ==========================================================
+ * Module:
+ * App.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the App.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for Appx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import StrategyScanner from "./components/StrategyScanner";
 import SystemOptimizer from "./components/SystemOptimizer";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
+import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import AgentTopologyMap from "./components/AgentTopologyMap";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
 import TradeCorrelationMatrix from "./components/TradeCorrelationMatrix";
+import BrokerManagement from "./components/BrokerManagement";
+import AIProviderManagement from "./components/AIProviderManagement";
+import { KronosDashboard } from "./components/KronosDashboard";
+import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
 import AutoBotFlowVisualizer from "./components/AutoBotFlowVisualizer";
 import WeightAdjustmentVisualizer from "./components/WeightAdjustmentVisualizer";
 import GuardrailsPanel from "./components/GuardrailsPanel";
@@ -27,11 +67,13 @@ import LiveTradeJourneyOverlay from "./components/LiveTradeJourneyOverlay";
 import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
 import DocumentationTab from "./components/DocumentationTab";
+import { NewsDashboardTab } from "./components/NewsDashboardTab";
 import { AppWalkthrough } from "./components/AppWalkthrough";
 import { AICoachPanel } from "./components/AICoachPanel";
 import { SetupWizard } from "./components/SetupWizard";
 import { AutonomousDashboard } from "./components/AutonomousDashboard";
 import { AutonomousMissionControl } from "./components/AutonomousMissionControl";
+import { AutonomousLaunchDialog } from "./components/AutonomousLaunchDialog";
 import VectorClusteringMap from "./components/VectorClusteringMap";
 import { motion } from "motion/react";
 import {
@@ -127,6 +169,7 @@ import {
   ArrowUp,
   ArrowDown,
   Crosshair,
+  Newspaper
 } from "lucide-react";
 
 interface Position {
@@ -190,10 +233,10 @@ const mockWinRateData = Array.from({ length: 30 }).map((_, i) => {
   d.setDate(d.getDate() - (29 - i));
   return {
     date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    NewsAgent: 45 + Math.random() * 20 + (i * 0.5),
-    MacroAgent: 50 + Math.random() * 10 + (i * 0.3),
-    TechnicalAgent: 55 + Math.random() * 15 + (i * 0.2),
-    SentimentAgent: 40 + Math.random() * 25 + (i * 0.6),
+    NewsAgent: 45 + 0,
+    MacroAgent: 50 + 0,
+    TechnicalAgent: 55 + 0,
+    SentimentAgent: 40 + 0,
   };
 });
 
@@ -219,9 +262,9 @@ const mockBacktestData = Array.from({ length: 90 }).map((_, i) => {
   d.setDate(d.getDate() - (89 - i));
   return {
     date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    roi1: (Math.sin(i / 10) * 5) + (i * 0.15) + (Math.random() * 2 - 1),
-    roi2: (Math.cos(i / 8) * 4) + (i * 0.12) + (Math.random() * 1.5 - 0.75),
-    benchmark: (Math.sin(i / 12) * 3) + (i * 0.08) + (Math.random() * 1.5 - 0.75),
+    roi1: 0,
+    roi2: 0,
+    benchmark: 0,
   };
 });
 
@@ -253,26 +296,6 @@ const mockHeatmapData = [
   { agent: "OrderFlowAgent (L2)", regimes: [ { name: "Strong Bull", value: 1.2 }, { name: "Weak Bull", value: 2.1 }, { name: "Sideways", value: 4.5 }, { name: "Weak Bear", value: 1.1 }, { name: "Strong Bear", value: 2.3 }, { name: "Volatile", value: -2.5 } ] },
 ];
 
-const mockAgentComparativeMetrics: Record<string, { sharpe: number, drawdown: number, wins: number }> = {
-  "NewsAgent": { sharpe: 1.8, drawdown: -12.4, wins: 142 },
-  "MacroAgent": { sharpe: 2.1, drawdown: -8.5, wins: 110 },
-  "TechnicalAgent": { sharpe: 1.4, drawdown: -15.2, wins: 205 },
-  "SentimentAgent": { sharpe: 1.6, drawdown: -18.1, wins: 184 },
-  "OrderFlowAgent": { sharpe: 2.3, drawdown: -6.2, wins: 88 },
-};
-
-const mockAgentRoiData = Array.from({ length: 90 }).map((_, i) => {
-  const d = new Date();
-  d.setDate(d.getDate() - (89 - i));
-  return {
-    date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    NewsAgent: (i * 0.2) + (Math.random() * 4 - 2),
-    MacroAgent: (i * 0.15) + (Math.random() * 2 - 1),
-    TechnicalAgent: (i * 0.3) + (Math.random() * 8 - 4),
-    SentimentAgent: (i * 0.25) + (Math.random() * 6 - 3),
-    OrderFlowAgent: (i * 0.1) + (Math.random() * 1.5 - 0.5),
-  };
-});
 
 const getMockFactors = (agent: string | null, date: string | null) => {
   if (!agent || !date) return [];
@@ -866,12 +889,7 @@ export const RiskExposureDashboard = ({ dailyLossCap }: { dailyLossCap: number }
 
          {(() => {
            const assets = [
-             { symbol: "BTC/USD", atr: 1450.2, sma: 1390.5, swingPercent: 2.25, risk: "High", trend: "up", history: Array.from({length: 15}).map((_, i) => ({ atr: 1300 + (Math.random() * 200), sma: 1350 + (i * 3) })) },
-             { symbol: "ETH/USD", atr: 85.4, sma: 88.2, swingPercent: 2.47, risk: "High", trend: "down", history: Array.from({length: 15}).map((_, i) => ({ atr: 95 - (Math.random() * 15), sma: 90 - (i * 0.5) })) },
-             { symbol: "SOL/USD", atr: 8.2, sma: 5.5, swingPercent: 5.89, risk: "Extreme", trend: "up", history: Array.from({length: 15}).map((_, i) => ({ atr: 5 + (Math.random() * 4), sma: 4.8 + (i * 0.05) })) },
-             { symbol: "AAPL", atr: 2.1, sma: 2.4, swingPercent: 1.13, risk: "Low", trend: "down", history: Array.from({length: 15}).map((_, i) => ({ atr: 3 - (Math.random() * 1), sma: 2.8 - (i * 0.05) })) },
-             { symbol: "TSLA", atr: 8.5, sma: 6.2, swingPercent: 4.85, risk: "Extreme", trend: "down", history: Array.from({length: 15}).map((_, i) => ({ atr: 6 + (Math.random() * 3), sma: 5.4 + (i * 0.06) })) },
-             { symbol: "NVDA", atr: 15.2, sma: 14.8, swingPercent: 1.78, risk: "Med", trend: "up", history: Array.from({length: 15}).map((_, i) => ({ atr: 13 + (Math.random() * 3), sma: 14 + (i * 0.1) })) }
+             // MOCKS REMOVED: Waiting for real ATR data from MarketDataWorker
            ];
            const acceleratingAssets = assets.filter(a => a.sma > a.history[0].sma * 1.1).map(a => a.symbol);
            
@@ -1074,6 +1092,7 @@ const CustomPnLLegend: React.FC<CustomPnLLegendProps> = ({ totalPnL, profitableD
  * Manages all frontend state including active tabs, websocket feeds, and simulated price data.
  */
 export default function App() {
+  const { subscribe } = useWebSocket();
   const [showCoach, setShowCoach] = useState(false);
   const [runBacktest, setRunBacktest] = useState(false);
   const [showTradeHistory, setShowTradeHistory] = useState(true);
@@ -1199,6 +1218,8 @@ export default function App() {
   const [paperTradingEnabled, setPaperTradingEnabled] = useState(false);
   const [alertsModalOpen, setAlertsModalOpen] = useState(false);
   const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [showLaunchDialog, setShowLaunchDialog] = useState(false);
+  const [activeSessionConfig, setActiveSessionConfig] = useState<any>(null);
   
   const [hyperparams, setHyperparams] = useState({
     newsSensitivity: 75,
@@ -1246,65 +1267,29 @@ export default function App() {
   ]);
 
   useEffect(() => {
-    let interval = setInterval(() => {
-        fetch("/api/v1/autobot")
-           .then(r => {
-              if (r.ok && r.headers.get("content-type")?.includes("application/json")) {
-                 return r.json();
-              }
-              throw new Error("bad request or non-json");
-           })
-           .then(data => {
-              setAutoBotConfig(data);
-              
-              // Populate thought stream from history
-              if (data.history && data.history.length > 0) {
-                 const newLogs = data.history.slice(0, 15).map((log: any, idx: number) => {
-                    let type = "info";
-                    let msg = log.msg;
-                    if (msg.includes("[Proposer Thought]")) {
-                       type = "proposer";
-                       msg = msg.replace("[Proposer Thought] ", "");
-                    } else if (msg.includes("[Risk Manager Thought]")) {
-                       type = "risk";
-                       msg = msg.replace("[Risk Manager Thought] ", "");
-                    } else if (msg.includes("[Execution Thought]")) {
-                       type = "execution";
-                       msg = msg.replace("[Execution Thought] ", "");
-                    } else if (msg.includes("[Research Thought]")) {
-                       type = "research";
-                       msg = msg.replace("[Research Thought] ", "");
-                    } else if (msg.includes("Reflection Agent identified")) {
-                       type = "reflection";
-                    } else if (log.type === "veto" || log.type === "error") {
-                       type = "veto";
-                    }
-                    return { id: idx, agent: type, message: msg, type };
-                 });
-                 setThoughtStreamLogs(newLogs);
-              }
+    // Replaced interval polling with WebSocket subscription
+    const unsubscribe = subscribe('AUTOBOT_STATE_UPDATED', (data) => {
+      setAutoBotConfig(data);
+      if (data.history && data.history.length > 0) {
+        setThoughtStreamLogs(data.history.map((h: any) => ({
+          id: h.time + "_" + Math.random().toString(36).slice(2),
+          timestamp: h.time.split('T')[1].substring(0, 8),
+          agent: h.type === 'execute' ? 'Execution Engine' : h.type === 'error' ? 'System' : 'Reasoning',
+          content: h.msg
+        })));
+      }
+    });
+    
+    // Initial fetch to populate state immediately
+    fetch("/api/v1/autobot")
+      .then(r => r.json())
+      .then(data => setAutoBotConfig(data))
+      .catch(e => console.error("Initial fetch failed:", e));
 
-              if(!data.enabled) {
-                 // Sync inputs with backend state while disabled
-                 setAutoBotTargetBudget(data.budget);
-                 if (data.tradingMode) setAutoBotTradingMode(data.tradingMode);
-                 setAutoBotStrategy(data.strategy);
-                 setAutoBotRiskLevel(data.riskLevel);
-                 setAutoBotMaxTradeSize(data.maxTradeSize);
-                 if (data.dailyLossLimit) setAutoBotDailyLossLimit(data.dailyLossLimit);
-                 if (data.takeProfitPct) setAutoBotTakeProfit(data.takeProfitPct);
-                 if (data.trailingStopPct) setAutoBotTrailingStop(data.trailingStopPct);
-                 if (data.minAiConfidence) setAutoBotMinConfidence(data.minAiConfidence);
-                 if (data.adversarialDebateMode !== undefined) setAutoBotAdversarialDebate(data.adversarialDebateMode);
-              } else {
-                 // Even while enabled, sync the current debate setting
-                 if (data.adversarialDebateMode !== undefined) setAutoBotAdversarialDebate(data.adversarialDebateMode);
-              }
-           })
-           .catch(() => {});
-    }, 3000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      unsubscribe();
+    };
+  }, [subscribe]);
 
   const [webhooksList, setWebhooksList] = useState<any[]>([]);
   const [newWebhookName, setNewWebhookName] = useState("");
@@ -1414,7 +1399,7 @@ export default function App() {
     setTimeout(() => setWebhookTestStatus(null), 4000);
   };
 
-  const toggleAutoBot = async () => {
+  const toggleAutoBot = async (sessionConfig?: any) => {
      try {
        const res = await fetch("/api/v1/autobot/toggle", {
          method: "POST",
@@ -1435,6 +1420,7 @@ export default function App() {
        });
        const data = await res.json();
        setAutoBotConfig((prev: any) => ({ ...prev, enabled: data.enabled }));
+       setSystemState(data.enabled ? 'RUNNING' : 'STOPPED');
      } catch (e) {}
   };
 
@@ -1745,6 +1731,26 @@ export default function App() {
     return { portfolioDrawdownPercent, isDrawdownCritical };
   }, [portfolioData, assetPrices]);
 
+  const [globalAutoLiquidation, setGlobalAutoLiquidation] = useState(false);
+  const hasAutoLiquidatedRef = useRef(false);
+
+  useEffect(() => {
+    if (globalAutoLiquidation && isDrawdownCritical && !hasAutoLiquidatedRef.current) {
+        hasAutoLiquidatedRef.current = true; // prevent loop
+        fetch("/api/v1/portfolio/liquidate", { method: "POST" })
+           .then(res => {
+               if (res.ok) fetchState();
+           });
+    }
+  }, [globalAutoLiquidation, isDrawdownCritical]);
+  
+  // reset hasAutoLiquidatedRef.current when drawdown is no longer critical
+  useEffect(() => {
+      if (!isDrawdownCritical) {
+          hasAutoLiquidatedRef.current = false;
+      }
+  }, [isDrawdownCritical]);
+
   // Keep assetPrices state synchronized with any positions current price from backend
   useEffect(() => {
     if (portfolioData?.positions) {
@@ -1759,26 +1765,6 @@ export default function App() {
   }, [portfolioData]);
 
   // Periodic Micro-fluctuation simulation of market assetPrices + Alert Evaluation Engine
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      setAssetPrices(prev => {
-        const next = { ...prev };
-        const keys = Object.keys(next);
-        // Fluctuate a random symbol slightly
-        const randomKey = keys[Math.floor(Math.random() * keys.length)];
-        const changeFactor = 1 + (Math.random() - 0.5) * 0.003; // +/- 0.15% change
-        next[randomKey] = parseFloat((next[randomKey] * changeFactor).toFixed(2));
-
-        // Evaluate alerts with updated prices
-        evaluateAlerts(next);
-
-        return next;
-      });
-    }, 3000);
-
-    return () => clearInterval(intervalId);
-  }, [priceAlerts]);
-
   const evaluateAlerts = (currentPrices: Record<string, number>) => {
     let changed = false;
     const nextAlerts = priceAlerts.map(alert => {
@@ -1827,7 +1813,7 @@ export default function App() {
 
   const triggerAlertNotification = (alert: PriceAlert, currentPrice: number) => {
     const newNotif: VisualNotification = {
-      id: `alert-notif-${Date.now()}-${Math.random()}`,
+      id: `alert-notif-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       symbol: alert.symbol,
       targetPrice: alert.targetPrice,
       condition: alert.condition,
@@ -1897,7 +1883,7 @@ export default function App() {
 
   const addPriceAlert = (symbol: string, targetPrice: number, condition: "greater" | "less", soundProfile: string = "default") => {
     const newAlert: PriceAlert = {
-      id: `alert-${Date.now()}-${Math.random()}`,
+      id: `alert-${Date.now()}-${Math.random().toString(36).slice(2)}`,
       symbol: symbol.toUpperCase(),
       targetPrice,
       condition,
@@ -1976,6 +1962,7 @@ export default function App() {
 
   // Navigation & User inputs
   const [setupComplete, setSetupComplete] = useState(false);
+  const [systemState, setSystemState] = useState<'STARTING' | 'INITIALIZING' | 'READY' | 'RUNNING' | 'STOPPED' | 'ERROR'>('STARTING');
   const [activeTab, setActiveTab] = useState<
     "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation"
   >("dashboard");
@@ -2125,6 +2112,19 @@ export default function App() {
   const [sandboxOverride, setSandboxOverride] = useState<boolean>(false);
 
   // Agent Comparison State
+  
+  const mockAgentComparativeMetrics: Record<string, any> = {
+    "NewsAgent": { sharpe: 1.8, drawdown: -12.4, wins: 45 },
+    "MacroAgent": { sharpe: 1.5, drawdown: -8.2, wins: 32 },
+    "SentimentAgent": { sharpe: 2.1, drawdown: -15.1, wins: 58 },
+    "TechnicalAgent": { sharpe: 1.2, drawdown: -6.5, wins: 24 }
+  };
+  const mockAgentRoiData = [
+    { date: 'Jan', NewsAgent: 5, MacroAgent: 3, SentimentAgent: 7, TechnicalAgent: 2 },
+    { date: 'Feb', NewsAgent: 12, MacroAgent: 8, SentimentAgent: 15, TechnicalAgent: 5 },
+    { date: 'Mar', NewsAgent: 8, MacroAgent: 15, SentimentAgent: 22, TechnicalAgent: 10 },
+  ];
+
   const [isComparisonActive, setIsComparisonActive] = useState<boolean>(false);
   const [isAgentComparisonModalOpen, setIsAgentComparisonModalOpen] = useState<boolean>(false);
   const [comparisonAgent1, setComparisonAgent1] = useState<string>("NewsAgent");
@@ -2134,26 +2134,14 @@ export default function App() {
   const [liveTradeTrigger, setLiveTradeTrigger] = useState<any | null>(null);
 
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'TRADE_IDEA_GENERATED') {
-          // If no active trace is being viewed, pop it open
-          setLiveTradeTrigger((prev: any) => {
-             if (prev) return prev; 
-             return { trace_id: msg.data.traceId, rawTrade: msg.data };
-          });
-        }
-      } catch (e) {}
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, []);
+    const unsubscribe = subscribe('TRADE_IDEA_GENERATED', (data) => {
+      setLiveTradeTrigger((prev: any) => {
+         if (prev) return prev;
+         return { trace_id: data.traceId, rawTrade: data };
+      });
+    });
+    return () => unsubscribe();
+  }, [subscribe]);
 
   const [vetos, setVetos] = useState<RiskVeto[]>([]);
   const [selectedRiskVetoForModal, setSelectedRiskVetoForModal] = useState<any | null>(null);
@@ -2554,8 +2542,8 @@ export default function App() {
           "Unprecedented quarterly earnings beat structural growth estimates.",
           "Regulatory oversight committee announces sweeping investigations into monopolistic practices.",
         ];
-        const s = assets[Math.floor(Math.random() * assets.length)];
-        const h = headlines[Math.floor(Math.random() * headlines.length)];
+        const s = assets[0];
+        const h = headlines[0];
         setTargetSymbol(s);
         setCustomHeadline(h);
         handleTriggerAnalysis(s, h);
@@ -2782,7 +2770,7 @@ export default function App() {
       agent,
       count,
     }))
-    .sort((a, b) => b.count - a.count);
+    .sort((a, b) => (b.count as number) - (a.count as number));
 
   return (
     <div
@@ -2790,10 +2778,26 @@ export default function App() {
       id="trading-platform-root"
     >
       {!setupComplete && (
-        <SetupWizard onComplete={(config) => {
-          setAutoBotTargetBudget(config.budget);
-          setAutoBotRiskLevel(config.riskLevel);
-          setAutoBotConfig({ ...autoBotConfig, enabled: true, targetBudget: config.budget, riskLevel: config.riskLevel });
+        <SetupWizard onSkip={() => setSetupComplete(true)} onComplete={async (config) => {
+          // Save AI Providers
+          if (config.aiProviders) {
+            for (const [provider, data] of Object.entries(config.aiProviders) as [string, any][]) {
+              if (data.connected && data.key && data.key !== "mock") {
+                try {
+                  await fetch("/api/v1/config/providers", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ provider, apiKey: data.key })
+                  });
+                } catch (e) { console.error("Failed to save provider:", provider, e); }
+              }
+            }
+          }
+          setAutoBotTargetBudget(config.initialCapital);
+          setAutoBotRiskLevel(config.riskProfile);
+          setAutoBotTradingMode(config.tradingMode);
+          setAutoBotConfig({ ...autoBotConfig, enabled: true, budget: config.initialCapital, riskLevel: config.riskProfile, strategy: config.aiProvider });
+          setSystemState('READY');
           setSetupComplete(true);
         }} />
       )}
@@ -3236,6 +3240,20 @@ export default function App() {
             )}
           </motion.button>
           
+          
+          <button
+            id="tab-news-btn"
+            onClick={() => setActiveTab("news")}
+            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "news"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Newspaper size={14} />
+            NEWS INTEL
+          </button>
+
           <button
             id="tab-intelligence-btn"
             onClick={() => setActiveTab("intelligence")}
@@ -3358,6 +3376,17 @@ export default function App() {
           </button>
 
           <button
+            onClick={() => setActiveTab("kronos")}
+            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "kronos"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <BrainCircuit size={14} />
+            KRONOS MODEL
+          </button>
+          <button
             id="tab-settings-btn"
             onClick={() => setActiveTab("settings")}
             className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
@@ -3384,7 +3413,7 @@ export default function App() {
         {activeTab === "dashboard" && (
           <AutonomousDashboard 
              autoBotConfig={autoBotConfig} 
-             setAutoBotConfig={setAutoBotConfig} 
+              
           />
         )}
         {/* ========================================================= */}
@@ -3492,7 +3521,7 @@ export default function App() {
           const totalAccruedPnl = tradesWithPnl.reduce((sum, t) => sum + t.pnl, 0);
 
           const handleExportToCsv = () => {
-            const statsList = Object.values(symbolStats);
+            const statsList = Object.values(symbolStats) as any[];
             
             // Format Header Row
             const headers = [
@@ -3547,7 +3576,7 @@ export default function App() {
           };
 
           const handleExportAgentData = () => {
-            const statsList = Object.values(symbolStats);
+            const statsList = Object.values(symbolStats) as any[];
             const agentData = statsList.map(stat => {
               const charCode = stat.symbol.charCodeAt(0) + stat.symbol.length;
               const agents = [
@@ -3843,7 +3872,7 @@ export default function App() {
                           </td>
                         </tr>
                       ) : (
-                        Object.values(symbolStats).map((stat) => {
+                        (Object.values(symbolStats) as any[]).map((stat) => {
                           const totalSymTrades = stat.trades.length;
                           const winPct = totalSymTrades > 0 ? ((stat.wins / totalSymTrades) * 100).toFixed(1) : "0.0";
                           const isProfitable = stat.totalPnl >= 0;
@@ -3863,7 +3892,7 @@ export default function App() {
 
                           // Generate sparkline trend data
                           const trendData = Array.from({ length: 15 }, (_, i) => 
-                            stat.totalPnl >= 0 ? 50 + i * 2 + (Math.random() * 20 - 10) : 50 - i * 2 + (Math.random() * 20 - 10)
+                            stat.totalPnl >= 0 ? 50 : 40
                           );
                           const maxPoint = Math.max(...trendData);
                           const minPoint = Math.min(...trendData);
@@ -4055,7 +4084,7 @@ export default function App() {
                       className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider"
                       htmlFor="headline-input"
                     >
-                      Simulate Live Macro / Geopolitical News Headline
+                      Fetch Live News Intelligence
                     </label>
                     {alpacaConfigured && selectedBroker.includes("Alpaca") && (
                       <button
@@ -4851,7 +4880,6 @@ export default function App() {
                             borderRadius: "6px",
                           }}
                           labelClassName="text-slate-400 font-mono text-[10px] font-bold"
-                          itemClassName="font-mono text-[11px]"
                           formatter={(value: any, name: string) => {
                             const formattedVal = Number(value).toFixed(1);
                             const suffix = riskAttributionMetric === "percentage" ? "%" : " units";
@@ -5974,7 +6002,7 @@ export default function App() {
                   <div className="flex-1 space-y-4">
                     <div>
                       <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Projected Drawdown</span>
-                      <span className="text-2xl font-bold text-rose-400">-{Math.floor(Math.random() * 8) + 4}.{Math.floor(Math.random() * 99)}%</span>
+                      <span className="text-2xl font-bold text-slate-500">No Data</span>
                     </div>
                     <div>
                        <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Affected Sectors</span>
@@ -6101,7 +6129,7 @@ export default function App() {
                             <div className="text-[10px] font-mono text-slate-400 mt-2">
                               Target Weights:
                               <div className="mt-1 flex flex-wrap gap-1">
-                                {Object.entries(task.targetWeights || {}).map(([k, v]) => (
+                                {Object.entries(task.targetWeights || {}).map(([k, v]: [string, any]) => (
                                   <span key={k} className="bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded text-[9px]">
                                     {k}: {v as number}%
                                   </span>
@@ -6133,6 +6161,10 @@ export default function App() {
         )}
 
         {/* Tab 3: Detailed AI Agents & Performance tracking */}
+        {activeTab === "news" && (
+          <NewsDashboardTab />
+        )}
+
         {activeTab === "intelligence" && (
 
           <div className="animate-fade-in flex flex-col gap-6" id="intelligence-view">
@@ -6992,8 +7024,8 @@ export default function App() {
             <AgentComparisonModal 
               isOpen={isAgentComparisonModalOpen} 
               onClose={() => setIsAgentComparisonModalOpen(false)}
-              mockAgentComparativeMetrics={mockAgentComparativeMetrics}
-              mockAgentRoiData={mockAgentRoiData}
+              agentMetrics={Object.keys(agentMetrics).length > 0 ? Object.fromEntries(Object.entries(agentMetrics).map(([k, v]: [string, any]) => [k, { sharpe: v.sharpe_ratio || 0, drawdown: v.max_drawdown || 0, wins: Math.floor((v.win_rate || 0) * (v.total_trades || 0) / 100) }])) : {}}
+              agentRoiData={[]}
             />
 
           </div>
@@ -8361,6 +8393,8 @@ export default function App() {
         {activeTab === "command" && (
           showMissionControl ? (
             <AutonomousMissionControl
+              systemState={systemState}
+              setSystemState={setSystemState}
               autoBotConfig={autoBotConfig}
               toggleAutoBot={toggleAutoBot}
               onClose={() => setShowMissionControl(false)}
@@ -8554,9 +8588,29 @@ export default function App() {
 
              </div>
 
-             <div id="risk-guardrails-panel"><GuardrailsPanel /></div>
+             <div id="risk-guardrails-panel">
+               <GuardrailsPanel 
+                 globalAutoLiquidation={globalAutoLiquidation} 
+                 setGlobalAutoLiquidation={setGlobalAutoLiquidation} 
+               />
+             </div>
              
              <RiskExposureDashboard dailyLossCap={autoBotDailyLossLimit} />
+
+             
+      {showLaunchDialog && (
+        <AutonomousLaunchDialog
+          onClose={() => setShowLaunchDialog(false)}
+          onStart={(config) => {
+            setActiveSessionConfig(config);
+            setShowLaunchDialog(false);
+            toggleAutoBot(config);
+            setShowMissionControl(true);
+          }}
+          initialBudget={autoBotTargetBudget}
+          initialRisk={autoBotDailyLossLimit}
+        />
+      )}
 
              {/* BLACK BOX AUTONOMOUS TRADING BOT */}
              <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
@@ -8580,10 +8634,10 @@ export default function App() {
                      </button>
                    )}
                    <button
-                     onClick={autoBotConfig.enabled ? toggleAutoBot : () => setShowMissionControl(true)}
+                     onClick={systemState === 'RUNNING' ? toggleAutoBot : () => setShowLaunchDialog(true)}
                      className={"px-6 py-3 rounded-lg font-bold font-mono tracking-widest text-xs transition-all " + (autoBotConfig.enabled ? "bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.4)]" : "bg-indigo-500 hover:bg-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.3)]")}
                    >
-                     {autoBotConfig.enabled ? "HALT ALL BLACK-BOX SYSTEMS" : "INITIALIZE AUTONOMOUS TRADING"}
+                     {systemState === 'RUNNING' ? "HALT ALL BLACK-BOX SYSTEMS" : "INITIALIZE AUTONOMOUS TRADING"}
                    </button>
                  </div>
                </div>
@@ -9405,6 +9459,7 @@ export default function App() {
           </div>
         )}
 
+        {activeTab === "kronos" && <KronosDashboard />}
         {activeTab === "settings" && (
           <div className="animate-fade-in flex flex-col gap-6" id="settings-view">
              <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6">
@@ -9413,7 +9468,11 @@ export default function App() {
                   API Keys & Integrations
                 </h2>
                 <div className="space-y-6">
-                    <div className="bg-[#111822] border border-slate-850 p-5 rounded-lg border-l-4 border-l-indigo-500 mb-8">
+                    <AIProviderManagement />
+                    <ConnectionStatusDashboard />
+                    <BrokerManagement />
+                    {/* Old Env Settings Hidden */}
+                    <div className="hidden">
                        <h3 className="text-xs font-mono font-bold text-slate-100 uppercase tracking-widest mb-4 flex justify-between items-center">
                          <span>Trading Environment</span>
                          <span className={`px-2 py-0.5 rounded text-[10px] ${isLiveMode ? 'bg-rose-500/20 text-rose-400 animate-pulse' : 'bg-emerald-500/20 text-emerald-400'}`}>
@@ -10282,15 +10341,15 @@ export default function App() {
                        </h3>
                        <div className="space-y-4 text-xs font-mono">
                          <div>
-                            <div className="flex justify-between text-slate-400 mb-1"><span>Bull Regime Wgt</span><span className="text-white">{(Math.random() * 0.5 + 0.5).toFixed(2)}</span></div>
+                            <div className="flex justify-between text-slate-400 mb-1"><span>Bull Regime Wgt</span><span className="text-white">"0.00"</span></div>
                             <div className="w-full bg-slate-800 h-1.5 rounded"><div className="bg-emerald-500 h-full w-[70%]" /></div>
                          </div>
                          <div>
-                            <div className="flex justify-between text-slate-400 mb-1"><span>Bear Regime Wgt</span><span className="text-white">{(Math.random() * 0.5).toFixed(2)}</span></div>
+                            <div className="flex justify-between text-slate-400 mb-1"><span>Bear Regime Wgt</span><span className="text-white">"0.00"</span></div>
                             <div className="w-full bg-slate-800 h-1.5 rounded"><div className="bg-rose-500 h-full w-[30%]" /></div>
                          </div>
                          <div>
-                            <div className="flex justify-between text-slate-400 mb-1"><span>Volatile Wgt</span><span className="text-white">{(Math.random() * 0.8).toFixed(2)}</span></div>
+                            <div className="flex justify-between text-slate-400 mb-1"><span>Volatile Wgt</span><span className="text-white">"0.00"</span></div>
                             <div className="w-full bg-slate-800 h-1.5 rounded"><div className="bg-amber-500 h-full w-[50%]" /></div>
                          </div>
                        </div>
@@ -10310,10 +10369,10 @@ export default function App() {
                              <div key={i} className="text-[10px] font-mono border-b border-slate-800/50 pb-2 mb-2 last:border-0">
                                 <div className="flex justify-between text-slate-500 mb-1">
                                    <span>{new Date(Date.now() - i * 15 * 60000).toISOString()}</span>
-                                   <span className="text-indigo-400">{selectedAgentNode.lat || Math.floor(Math.random() * 100 + 20) + "ms"}</span>
+                                   <span className="text-indigo-400">{selectedAgentNode.lat || "0ms"}</span>
                                 </div>
                                 <div className="text-slate-400">INPUT: <span className="text-slate-300">{"{\"ticker\": \"AAPL\", \"context\": \"Market momentum shifting positive\"}"}</span></div>
-                                <div className="text-slate-400 mt-1">OUTPUT: <span className={Math.random() > 0.5 ? "text-emerald-400" : "text-rose-400"}>{Math.random() > 0.5 ? "BUY" : "SELL"} SIGNAL (Conf: {(Math.random() * 0.2 + 0.7).toFixed(2)})</span></div>
+                                <div className="text-slate-400 mt-1">OUTPUT: <span className="text-slate-500">NO DATA</span></div>
                              </div>
                           ))}
                        </div>
@@ -10394,6 +10453,43 @@ export default function App() {
                     </div>
                  </div>
 
+                              <button onClick={() => {
+                  const input = document.createElement('input');
+                  input.type = 'file';
+                  input.accept = '.db,.sqlite';
+                  input.onchange = (e) => {
+                    const file = (e.target as HTMLInputElement).files?.[0];
+                    if (file) {
+                      const formData = new FormData();
+                      formData.append('database', file);
+                      // Send as raw body to system/import-db
+                      const reader = new FileReader();
+                      reader.onload = async (re) => {
+                        const res = await fetch('/api/v1/system/import-db', {
+                           method: 'POST',
+                           headers: { 'Content-Type': 'application/octet-stream' },
+                           body: re.target?.result
+                        });
+                        if (res.ok) { alert('Database imported successfully. Restarting...'); window.location.reload(); }
+                      };
+                      reader.readAsArrayBuffer(file);
+                    }
+                  };
+                  input.click();
+                }} className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-amber-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-white font-bold text-xs">Import Database Backup</span>
+                    <span className="text-[10px] text-slate-500 font-mono">Restore system from an argus.db file. [DB]</span>
+                  </div>
+                  <Database size={16} className="text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </button>
+                <button onClick={() => window.open("/api/v1/system/export-db", "_blank")} className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-indigo-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-white font-bold text-xs">Export Full Database Backup</span>
+                    <span className="text-[10px] text-slate-500 font-mono">Download the entire SQLite database file for backup. [DB]</span>
+                  </div>
+                  <Database size={16} className="text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity" />
+                </button>
               </div>
             </div>
           </div>
@@ -10824,7 +10920,7 @@ export default function App() {
               </p>
 
               <div className="space-y-3">
-                <button className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
+                <button onClick={() => window.open("/database/argus.db", "_blank")} className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
                   <div className="flex flex-col gap-1">
                     <span className="text-white font-bold text-xs">Vector Event Memory Logs</span>
                     <span className="text-[10px] text-slate-500 font-mono">Download exact RAG query history resolving macro precedents. [JSON]</span>
@@ -10832,7 +10928,7 @@ export default function App() {
                   <Download size={16} className="text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </button>
                 
-                <button className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
+                <button onClick={() => window.open("/database/argus.db", "_blank")} className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
                   <div className="flex flex-col gap-1">
                     <span className="text-white font-bold text-xs">Accumulated Reflection Rules</span>
                     <span className="text-[10px] text-slate-500 font-mono">Extract all post-mortem loss rules deduced by the system. [CSV]</span>
@@ -10840,7 +10936,7 @@ export default function App() {
                   <Download size={16} className="text-emerald-400 opacity-0 group-hover:opacity-100 transition-opacity" />
                 </button>
 
-                <button className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
+                <button onClick={() => window.open("/database/argus.db", "_blank")} className="w-full text-left bg-[#111822] hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/50 p-4 rounded group transition-all flex justify-between items-center cursor-pointer">
                   <div className="flex flex-col gap-1">
                     <span className="text-white font-bold text-xs">Historical Trade Decisions Ledger</span>
                     <span className="text-[10px] text-slate-500 font-mono">Full execution ledger including Proposer justification payloads. [CSV/JSON]</span>

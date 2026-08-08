@@ -1,0 +1,43 @@
+{
+  "cash": 95300,
+  "initialCash": 100000,
+  "peakValuation": 100000,
+  "positions": [
+    {
+      "symbol": "AAPL",
+      "quantity": 10,
+      "entryPrice": 150,
+      "currentPrice": 155,
+      "totalCost": 1500,
+      "marketValue": 1550,
+      "unrealizedPnl": 50,
+      "unrealizedPnlPercent": 0.0333,
+      "sector": "Technology",
+      "openedAt": "2026-06-22T00:54:20.778Z"
+    },
+    {
+      "symbol": "AMD",
+      "quantity": 15,
+      "entryPrice": 80,
+      "currentPrice": 75,
+      "totalCost": 1200,
+      "marketValue": 1125,
+      "unrealizedPnl": -75,
+      "unrealizedPnlPercent": -0.0625,
+      "sector": "Technology",
+      "openedAt": "2026-07-07T00:54:20.778Z"
+    },
+    {
+      "symbol": "SPY",
+      "quantity": 5,
+      "entryPrice": 400,
+      "currentPrice": 405,
+      "totalCost": 2000,
+      "marketValue": 2025,
+      "unrealizedPnl": 25,
+      "unrealizedPnlPercent": 0.0125,
+      "sector": "Index Funds",
+      "openedAt": "2026-06-07T00:54:20.778Z"
+    }
+  ]
+}

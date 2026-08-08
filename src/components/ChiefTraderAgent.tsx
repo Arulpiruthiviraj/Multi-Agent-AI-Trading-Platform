@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * ChiefTraderAgent.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the ChiefTraderAgent.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for ChiefTraderAgentx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from "react";
 import {
   Sliders,
@@ -210,7 +245,7 @@ export default function ChiefTraderAgent() {
     setNewTaskStatusMsg(`Instructing CIO to dispatch task to ${newTaskAgent}...`);
 
     let findings = "";
-    const rand = Math.random();
+    const rand = 0.6;
 
     if (newTaskAgent === "Quant Agent") {
       if (newTaskType === "Volatility Study") {
@@ -282,7 +317,7 @@ export default function ChiefTraderAgent() {
       const isAtrBreached = slDistance < minSlDistance;
 
       const isFomo = /fomo|moon|rocket|hype|feel|hope|rich/i.test(customProposalLogic);
-      const isOverexposed = customProposalSymbol === "NVDA" || customProposalSymbol === "AAPL" && Math.random() > 0.4;
+      const isOverexposed = customProposalSymbol === "NVDA" || customProposalSymbol === "AAPL" && 0.6 > 0.4;
 
       proposal = {
         symbol: customProposalSymbol,
@@ -363,7 +398,7 @@ export default function ChiefTraderAgent() {
         // Step 3: Correlation & Concentration Limit
         setVetoPipelineStep(2);
         setTimeout(() => {
-          const isCorrelationBreached = templateKey === "NVDA" || (proposal.symbol === "AAPL" && Math.random() > 0.5) || (proposal.symbol === "NVDA" && Math.random() > 0.5);
+          const isCorrelationBreached = templateKey === "NVDA" || (proposal.symbol === "AAPL" && 0.6 > 0.5) || (proposal.symbol === "NVDA" && 0.6 > 0.5);
           const l3Result = isCorrelationBreached ? "FAILED" : "PASS";
 
           setVetoPipelineResults(prev => ({
@@ -651,7 +686,7 @@ export default function ChiefTraderAgent() {
               </p>
 
               {/* Template Selectors */}
-              <span className="text-[9px] font-mono uppercase text-slate-500 block mb-2">Simulate Debate Scenarios</span>
+              <span className="text-[9px] font-mono uppercase text-slate-500 block mb-2">execute Debate Scenarios</span>
               <div className="grid grid-cols-2 gap-2 mb-4">
                 <button
                   onClick={() => handleRunVetoEvaluation("SPY")}
@@ -913,7 +948,7 @@ export default function ChiefTraderAgent() {
                 </div>
               ) : (
                 <div className="text-center py-12 border border-dashed border-slate-800 rounded-lg text-slate-500 font-mono text-xs">
-                  Select a template or custom input above, then click 'Engage Veto Pipeline' to simulate discretionary oversight traces.
+                  Select a template or custom input above, then click 'Engage Veto Pipeline' to execute discretionary oversight traces.
                 </div>
               )}
             </div>

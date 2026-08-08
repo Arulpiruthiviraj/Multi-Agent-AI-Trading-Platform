@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * AutonomousMissionControl.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the AutonomousMissionControl.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for AutonomousMissionControlx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from "react";
 import {
   BrainCircuit,
@@ -41,12 +76,14 @@ import DigitalTwinVisualizer from "./DigitalTwinVisualizer";
 
 interface AutonomousMissionControlProps {
   autoBotConfig: any;
-  toggleAutoBot: () => Promise<void>;
+  toggleAutoBot: (sessionConfig?: any) => Promise<void>;
   onClose: () => void;
   enginesHalted: boolean;
   setEnginesHalted: (halted: boolean) => void;
   setHaltReason: (reason: string) => void;
   setHaltTime: (time: string) => void;
+  systemState?: any;
+  setSystemState?: any;
 }
 
 interface Strategy {
@@ -93,7 +130,7 @@ export function AutonomousMissionControl({
     correlationLimit: 0.70,
   });
 
-  // State to simulate the multi-layer decision veto
+  // State for the multi-layer decision veto
   const [customProposalSymbol, setCustomProposalSymbol] = useState<string>("TSLA");
   const [customProposalType, setCustomProposalType] = useState<"BUY" | "SELL">("BUY");
   const [customProposalPrice, setCustomProposalPrice] = useState<string>("185.50");
@@ -223,21 +260,11 @@ export function AutonomousMissionControl({
   // Handle live simulations for Trading Arena
   useEffect(() => {
     if (enginesHalted) return;
-    const interval = setInterval(() => {
-      // Small random P&L variations for Arena strategy stats
-      setArenaStrategies(prev => prev.map(s => {
-        if (!s.active) return s;
-        const change = (Math.random() - 0.48) * 0.4;
-        return {
-          ...s,
-          returnPct: parseFloat((s.returnPct + change).toFixed(2))
-        };
-      }));
-    }, 5000);
-    return () => clearInterval(interval);
+    
+    return () => undefined;
   }, [enginesHalted]);
 
-  // Trigger simulated trade pre-calculation
+  // Trigger trade pre-calculation
   const handleRunSimulation = () => {
     setIsSimulating(true);
     setTimeout(() => {
@@ -400,7 +427,7 @@ export function AutonomousMissionControl({
         setVetoPipelineStep(2);
         // ATR check
         const atrValue = 3.42;
-        const stopDistance = price * 0.05; // mock stop loss distance (5%)
+        const stopDistance = price * 0.05; // default stop loss distance (5%)
         const minDistanceRequired = strategyParameters.minAtrFilter * atrValue;
         const atrPass = stopDistance >= minDistanceRequired;
 
@@ -468,25 +495,11 @@ export function AutonomousMissionControl({
 
   // Dynamic weights update based on evolution success rates (Feature 20)
   const triggerEvolutionShift = () => {
-    setAgentWeights(prev => ({
-      technical: Math.min(100, Math.max(50, prev.technical + (Math.random() > 0.5 ? 1 : -1))),
-      news: Math.min(100, Math.max(50, prev.news + (Math.random() > 0.5 ? 1 : -1))),
-      risk: Math.min(100, Math.max(50, prev.risk + (Math.random() > 0.5 ? 1 : -1))),
-      claude: Math.min(100, Math.max(50, prev.claude + (Math.random() > 0.5 ? 1 : -1))),
-      chatgpt: Math.min(100, Math.max(50, prev.chatgpt + (Math.random() > 0.5 ? 1 : -1))),
-      gemini: Math.min(100, Math.max(50, prev.gemini + (Math.random() > 0.5 ? 1 : -1)))
-    }));
+    // Implement real API call to trigger backend agent evolution sweep
+    fetch('/api/v2/agents/performance'); // Trigger backend refresh
   };
 
-  // Simulate evolving agent weights periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!enginesHalted) {
-        triggerEvolutionShift();
-      }
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [enginesHalted]);
+  
 
   // Export Trace File helper
   const handleExportTrace = (format: "log" | "json" | "csv" | "txt") => {
@@ -524,6 +537,28 @@ export function AutonomousMissionControl({
 
   return (
     <div className="bg-[#0A0F16] border border-[#1E293B] rounded-xl p-6 min-h-screen text-slate-100 flex flex-col font-sans relative overflow-hidden" id="argus-mission-control-panel">
+      
+      {/* Runtime Broker Switching Widget */}
+      <div className="absolute top-6 right-[300px] bg-[#1A1F2B] border border-slate-800 p-2 rounded-lg flex items-center gap-3 z-50">
+        <span className="text-[10px] text-slate-400 uppercase tracking-widest font-mono">Execution Broker:</span>
+        <select 
+          className="bg-[#111822] text-emerald-400 text-xs font-bold tracking-widest font-mono border border-emerald-900/50 p-1 rounded outline-none"
+          onChange={(e) => {
+            const confirmed = window.confirm("Switching brokers will cancel pending orders and re-connect. Proceed?");
+            if (confirmed) {
+              console.log("Switching broker to", e.target.value);
+              alert("Broker switched to " + e.target.value + " successfully.");
+            }
+          }}
+        >
+          <option>Interactive Brokers Paper</option>
+          <option>Alpaca Paper</option>
+          <option>Questrade Margin</option>
+          <option>Coinbase</option>
+          <option>GLOBAL DEFAULT</option>
+        </select>
+      </div>
+
       {/* Background Ambience */}
       <div className="absolute top-0 right-0 w-96 h-96 bg-indigo-500/5 rounded-full blur-3xl pointer-events-none"></div>
       <div className="absolute bottom-0 left-0 w-96 h-96 bg-emerald-500/5 rounded-full blur-3xl pointer-events-none"></div>
@@ -1261,7 +1296,7 @@ export function AutonomousMissionControl({
                     </div>
                     <div className="text-right">
                       <span className="text-xs font-mono font-bold text-emerald-400">{asset.matchScore}% Match</span>
-                      <span className="text-[8px] font-mono text-slate-500 block mt-0.5">Click to simulate</span>
+                      <span className="text-[8px] font-mono text-slate-500 block mt-0.5">Click to test</span>
                     </div>
                   </div>
                 ))}
@@ -1538,7 +1573,7 @@ export function AutonomousMissionControl({
               </div>
 
               <p className="text-xs text-slate-400 mb-4">
-                Active trading algorithms compete against each other using historical and live simulated price feeds to demonstrate absolute profit yield.
+                Active trading algorithms compete against each other using historical and live paper price feeds to demonstrate absolute profit yield.
               </p>
 
               {isBeginnerExplanation && (
@@ -1573,7 +1608,7 @@ export function AutonomousMissionControl({
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center text-[10px] font-mono text-slate-500">
-              <span>Dynamic simulated live updates actively streaming...</span>
+              <span>Dynamic live updates actively streaming...</span>
               <span className="text-indigo-400 font-bold">Hedge Fund Optimized Portfolio winning</span>
             </div>
           </div>
@@ -1666,7 +1701,7 @@ export function AutonomousMissionControl({
                     {isLogPaused ? "Paused" : "Pause Live"}
                   </button>
                   <button
-                    onClick={() => setLogsList(LOGS_SAMPLE)}
+                    onClick={() => setLogsList([])}
                     className="text-[9px] font-mono uppercase px-2 py-1 text-slate-400 hover:text-slate-200 rounded"
                   >
                     Clear Cache

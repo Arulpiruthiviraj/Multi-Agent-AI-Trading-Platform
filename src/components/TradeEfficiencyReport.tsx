@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * TradeEfficiencyReport.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the TradeEfficiencyReport.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for TradeEfficiencyReportx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from 'recharts';
 import { Zap } from 'lucide-react';
@@ -37,8 +72,8 @@ export default function TradeEfficiencyReport() {
     const interval = setInterval(() => {
       setData(prevData => prevData.map(item => {
         // News arb is fast but high slippage, Order Flow is slow but low slippage
-        const latencyJitter = (Math.random() * 20) - 10;
-        const slippageJitter = (Math.random() * 0.04) - 0.02;
+        const latencyJitter = ((Date.now() % 1000 / 1000) * 20) - 10;
+        const slippageJitter = ((Date.now() % 1000 / 1000) * 0.04) - 0.02;
         
         return {
           ...item,

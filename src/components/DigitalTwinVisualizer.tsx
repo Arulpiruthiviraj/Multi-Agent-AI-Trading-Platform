@@ -1,3 +1,39 @@
+/**
+ * ==========================================================
+ * Module:
+ * DigitalTwinVisualizer.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the DigitalTwinVisualizer.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for DigitalTwinVisualizerx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
+import { useWebSocket } from '../context/WebSocketContext';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import ReactFlow, { 
   MiniMap, Controls, Background, useNodesState, useEdgesState, addEdge, 
@@ -46,7 +82,7 @@ export default function DigitalTwinVisualizer() {
   // Define static nodes for the pipeline
     const initialNodes: Node[] = [
     { id: 'market-data-worker', type: 'custom', position: { x: 50, y: 50 }, data: { label: 'Market Data', icon: <Activity size={18}/>, description: 'Live Price & Volume', status: 'IDLE' } },
-    { id: 'news-agent', type: 'custom', position: { x: 300, y: 50 }, data: { label: 'News Intelligence', icon: <Newspaper size={18}/>, description: 'Sentiment Processing', status: 'IDLE' } },
+    { id: 'news-agent', type: 'custom', position: { x: 300, y: 50 }, data: { label: 'News Intelligence Engine', icon: <Newspaper size={18}/>, description: 'Sentiment Processing', status: 'IDLE' } },
     { id: 'fundamental-agent', type: 'custom', position: { x: 450, y: 50 }, data: { label: 'Fundamental Agent', icon: <Activity size={18}/>, description: 'Value & EPS', status: 'IDLE' } },
     { id: 'macro-agent', type: 'custom', position: { x: 600, y: 50 }, data: { label: 'Macro Agent', icon: <Activity size={18}/>, description: 'Fed & Inflation', status: 'IDLE' } },
     { id: 'portfolio-monitor', type: 'custom', position: { x: 750, y: 50 }, data: { label: 'Portfolio Manager', icon: <Clock size={18}/>, description: 'Position Checks', status: 'IDLE' } },
@@ -79,39 +115,44 @@ export default function DigitalTwinVisualizer() {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
+  const { subscribe } = useWebSocket();
   useEffect(() => {
-    let isMounted = true;
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    if (!isPlaying) return;
     
-    ws.onmessage = (event) => {
-      if (!isPlaying) return;
-      try {
-        const msg = JSON.parse(event.data);
-        if (msg.type === 'SYSTEM_METRICS') {
-           setSystemMetrics(msg.data);
+    const handleMessage = (type: string) => (data: any) => {
+       if (type === 'SYSTEM_METRICS') {
+           setSystemMetrics(data);
            return;
-        }
-        
-        const newEvent = {
-           id: Math.random().toString(36).substring(7),
-           type: msg.type,
+       }
+       const newEvent = {
+           id: (Date.now() % 1000 / 1000).toString(36).substring(7),
+           type: type,
            timestamp: new Date().toISOString(),
-           payload: msg.data
+           payload: data
         };
         setEvents(prev => {
           const updated = [newEvent, ...prev].slice(0, 50);
           updateGraphFromEvents(updated);
           return updated;
         });
-      } catch(e) {}
     };
+    
+    const unsubMetrics = subscribe('SYSTEM_METRICS', handleMessage('SYSTEM_METRICS'));
+    const unsubIdea = subscribe('TRADE_IDEA_GENERATED', handleMessage('TRADE_IDEA_GENERATED'));
+    const unsubApproval = subscribe('CHIEF_APPROVED_IDEA', handleMessage('CHIEF_APPROVED_IDEA'));
+    const unsubRisk = subscribe('RISK_ASSESSMENT_COMPLETED', handleMessage('RISK_ASSESSMENT_COMPLETED'));
+    const unsubOrder = subscribe('ORDER_EXECUTED', handleMessage('ORDER_EXECUTED'));
+    const unsubLearn = subscribe('LEARNED_NEW_RULE', handleMessage('LEARNED_NEW_RULE'));
 
     return () => {
-      isMounted = false;
-      ws.close();
+      unsubMetrics();
+      unsubIdea();
+      unsubApproval();
+      unsubRisk();
+      unsubOrder();
+      unsubLearn();
     };
-  }, [isPlaying]);
+  }, [isPlaying, subscribe]);
 
 
     const updateGraphFromEvents = (latestEvents: any[]) => {

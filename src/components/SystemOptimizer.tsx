@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * SystemOptimizer.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the SystemOptimizer.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for SystemOptimizerx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect, useRef } from "react";
 import { 
   ShieldCheck, Terminal, Scale, Activity, Database, Zap, Sparkles, 
@@ -160,13 +195,13 @@ export default function SystemOptimizer() {
 
       const activeConns = Math.min(
         poolExhaustionLimit, 
-        Math.floor(Math.random() * 15 * stressFactor * syncPenalty) + 5
+        Math.floor((Date.now() % 1000 / 1000) * 15 * stressFactor * syncPenalty) + 5
       );
 
       setDbPoolUtilization(activeConns);
 
       // API Concurrency varies randomly simulating 3 agents (Proposer, Risk, Reflection)
-      const currentApiThreads = Math.floor(Math.random() * 4) + Math.floor(stressFactor / 2) + 1;
+      const currentApiThreads = Math.floor((Date.now() % 1000 / 1000) * 4) + Math.floor(stressFactor / 2) + 1;
       setApiConcurrency(currentApiThreads);
 
       // Connection choke check
@@ -188,8 +223,8 @@ export default function SystemOptimizer() {
       setEventLoopLag(parseFloat(targetLag.toFixed(2)));
 
       // Random logs
-      const randomSymbol = ["TSLA", "NVDA", "AAPL", "BTC", "ETH"][Math.floor(Math.random() * 5)];
-      const isDropped = Math.random() < droppedPct;
+      const randomSymbol = ["TSLA", "NVDA", "AAPL", "BTC", "ETH"][Math.floor((Date.now() % 1000 / 1000) * 5)];
+      const isDropped = (Date.now() % 1000 / 1000) < droppedPct;
 
       if (isDropped) {
         setFailedRequests(prev => prev + 1);
@@ -199,7 +234,7 @@ export default function SystemOptimizer() {
         ]);
       } else {
         setSuccessfulRequests(prev => prev + 1);
-        if (Math.random() < 0.3) {
+        if ((Date.now() % 1000 / 1000) < 0.3) {
           setLogMessages(prev => [
             `[${new Date().toLocaleTimeString()}] ⚡ Agent consensus complete on ${randomSymbol}. State written successfully in ${Math.round(latency)}ms.`,
             ...prev.slice(0, 15)

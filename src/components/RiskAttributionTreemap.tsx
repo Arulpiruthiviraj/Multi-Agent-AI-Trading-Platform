@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * RiskAttributionTreemap.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the RiskAttributionTreemap.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for RiskAttributionTreemapx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState, useEffect } from 'react';
 import { Treemap, Tooltip, ResponsiveContainer } from 'recharts';
 import { ShieldAlert } from 'lucide-react';
@@ -95,36 +130,7 @@ export default function RiskAttributionTreemap() {
     },
   ]);
 
-  // Simulate dynamic risk updates
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setData((prevData) => {
-        const newData = JSON.parse(JSON.stringify(prevData));
-        const children = newData[0].children;
-        
-        // Randomly adjust weights slightly
-        let total = 0;
-        children.forEach((child: any) => {
-          const change = (Math.random() * 4) - 2;
-          child.size = Math.max(5, child.size + change);
-          total += child.size;
-        });
-        
-        // Normalize to 100%
-        children.forEach((child: any) => {
-          child.size = (child.size / total) * 100;
-          child.value = Number(child.size.toFixed(1));
-        });
-        
-        // Sort by size descending for better visualization
-        newData[0].children.sort((a: any, b: any) => b.size - a.size);
-        
-        return newData;
-      });
-    }, 3000);
-    
-    return () => clearInterval(interval);
-  }, []);
+  
 
   return (
     <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6 mb-6">

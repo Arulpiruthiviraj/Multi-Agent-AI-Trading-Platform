@@ -1,3 +1,38 @@
+/**
+ * ==========================================================
+ * Module:
+ * WeightAdjustmentVisualizer.tsx
+ *
+ * Purpose:
+ * Core implementation and logic for the WeightAdjustmentVisualizer.tsx module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for WeightAdjustmentVisualizerx
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
 import React, { useState } from 'react';
 import { ArrowRight } from 'lucide-react';
 
@@ -15,8 +50,8 @@ interface WeightAdjustmentVisualizerProps {
 export default function WeightAdjustmentVisualizer({ rule, seed }: WeightAdjustmentVisualizerProps) {
   const [showAfter, setShowAfter] = useState(false);
 
-  // Generate slightly deterministic mock data based on seed
-  const generateMockNodes = () => {
+  // Generate slightly deterministic default data based on seed
+  const generatedefaultNodes = () => {
     const nodes = ["Momentum Breakout", "Mean Reversion", "News Sentiment", "Trend Following (200d)", "Volatility Scalp"];
     
     // Pick 3 random nodes using the seed
@@ -31,7 +66,7 @@ export default function WeightAdjustmentVisualizer({ rule, seed }: WeightAdjustm
     ];
   };
 
-  const weights: WeightData[] = generateMockNodes();
+  const weights: WeightData[] = generatedefaultNodes();
 
   return (
     <div className="mt-4 border-t border-slate-800/50 pt-4">

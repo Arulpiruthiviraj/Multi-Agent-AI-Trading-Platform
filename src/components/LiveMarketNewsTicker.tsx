@@ -1,16 +1,16 @@
 import React, { useEffect, useState } from "react";
 import { Globe, RefreshCw, AlertCircle, Newspaper } from "lucide-react";
 
-interface LiveNewsItem {
+interface NewsClusterItem {
   id: string;
-  headline: string;
-  symbols: string[];
-  source: string;
-  sentiment: "BULLISH" | "BEARISH" | "NEUTRAL";
+  title: string;
+  symbols: string | null;
+  sentimentScore: number | null;
+  eventType: string | null;
 }
 
 export default function LiveMarketNewsTicker() {
-  const [news, setNews] = useState<LiveNewsItem[]>([]);
+  const [news, setNews] = useState<NewsClusterItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isError, setIsError] = useState(false);
 
@@ -18,11 +18,11 @@ export default function LiveMarketNewsTicker() {
     setIsLoading(true);
     setIsError(false);
     try {
-      const response = await fetch("/api/v1/news/live");
+      const response = await fetch("/api/v1/news/timeline");
       if (!response.ok) throw new Error("Failed to fetch news");
       const data = await response.json();
-      if (data.news && Array.isArray(data.news)) {
-        setNews(data.news);
+      if (Array.isArray(data)) {
+        setNews(data);
       } else {
         setNews([]);
       }
@@ -36,14 +36,14 @@ export default function LiveMarketNewsTicker() {
 
   useEffect(() => {
     fetchLiveNews();
-    const interval = setInterval(fetchLiveNews, 300000); // 5 mins
+    const interval = setInterval(fetchLiveNews, 15000); // 15s to poll news
     return () => clearInterval(interval);
   }, []);
 
   const doubledNews = [...news, ...news];
 
   if (isError || (!isLoading && news.length === 0)) {
-    return null; // Hide if failing completely
+    return null; 
   }
 
   return (
@@ -82,36 +82,39 @@ export default function LiveMarketNewsTicker() {
       <div className="ticker-marquee h-full items-center">
         {news.length > 0 ? (
           <div className="ticker-content">
-            {doubledNews.map((item, idx) => (
-              <div key={`${item.id}-${idx}`} className="flex items-center space-x-3 mx-4 flex-shrink-0">
-                <span className={`font-mono font-bold uppercase ${item.sentiment === 'BULLISH' ? 'text-emerald-400' : item.sentiment === 'BEARISH' ? 'text-rose-400' : 'text-slate-400'}`}>
-                  [{item.sentiment}]
-                </span>
-                
-                <span className="font-mono text-slate-200">
-                  {item.headline}
-                </span>
-                
-                {item.symbols && item.symbols.length > 0 && (
-                  <div className="flex gap-1">
-                    {item.symbols.map(sym => (
-                      <span key={sym} className="px-1.5 py-0.5 rounded text-[9px] bg-slate-800 text-slate-300 border border-slate-700">
-                        {sym}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                
-                <span className="text-slate-500 font-mono italic px-2 border-l border-slate-700 ml-2">
-                  {item.source}
-                </span>
-
-                <div className="w-1.5 h-1.5 rounded-full bg-slate-700 mx-2"></div>
-              </div>
-            ))}
+            {doubledNews.map((item, idx) => {
+              const sentiment = (item.sentimentScore || 0) > 0 ? 'BULLISH' : (item.sentimentScore || 0) < 0 ? 'BEARISH' : 'NEUTRAL';
+              const syms = item.symbols ? JSON.parse(item.symbols) : [];
+              return (
+                <div key={`${item.id}-${idx}`} className="flex items-center space-x-3 mx-4 flex-shrink-0">
+                  <span className={`font-mono font-bold uppercase ${sentiment === 'BULLISH' ? 'text-emerald-400' : sentiment === 'BEARISH' ? 'text-rose-400' : 'text-slate-400'}`}>
+                    [{sentiment}]
+                  </span>
+                  
+                  <span className="font-mono text-slate-200">
+                    {item.title}
+                  </span>
+                  
+                  {syms && syms.length > 0 && (
+                    <div className="flex gap-1">
+                      {syms.map((sym: string) => (
+                        <span key={sym} className="px-1.5 py-0.5 rounded text-[9px] bg-slate-800 text-slate-300 border border-slate-700">
+                          {sym}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  
+                  <span className="text-slate-500 font-mono italic px-2 border-l border-slate-700 ml-2">
+                    {item.eventType || 'News'}
+                  </span>
+                  <div className="w-1.5 h-1.5 rounded-full bg-slate-700 mx-2"></div>
+                </div>
+              );
+            })}
           </div>
         ) : (
-          <div className="text-slate-500 px-4 font-mono">Initializing deep research search grounding...</div>
+          <div className="text-slate-500 px-4 font-mono">Waiting for News Engine intelligence...</div>
         )}
       </div>
     </div>
