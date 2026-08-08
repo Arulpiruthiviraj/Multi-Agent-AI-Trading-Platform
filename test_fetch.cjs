@@ -1,0 +1,11 @@
+const fetch = require('node-fetch');
+async function test() {
+  try {
+     const inflRes = await fetch("https://www.alphavantage.co/query?function=INFLATION&apikey=demo");
+     const text = await inflRes.text();
+     console.log(text.substring(0, 100));
+  } catch (e) {
+     console.error(e);
+  }
+}
+test();

@@ -27,7 +27,40 @@ export class MacroEconomyAgent {
   }
   
   private async fetchMacro() {
-     // Production app should integrate FRED, AlphaVantage Economic indicators
+     if (!process.env.ALPHAVANTAGE_API_KEY) {
+        return {
+           inflation: "UNKNOWN",
+           fedFundsRate: "UNKNOWN",
+           unemployment: "UNKNOWN"
+        };
+     }
+     
+     try {
+         const key = process.env.ALPHAVANTAGE_API_KEY;
+         
+         const [inflRes, fedRes, unempRes] = await Promise.all([
+             fetch(`https://www.alphavantage.co/query?function=INFLATION&apikey=${key}`).then(r => r.json() as any),
+             fetch(`https://www.alphavantage.co/query?function=FEDERAL_FUNDS_RATE&apikey=${key}`).then(r => r.json() as any),
+             fetch(`https://www.alphavantage.co/query?function=UNEMPLOYMENT&apikey=${key}`).then(r => r.json() as any)
+         ]);
+         
+         let inflation = "UNKNOWN";
+         let fedFundsRate = "UNKNOWN";
+         let unemployment = "UNKNOWN";
+         
+         if (inflRes?.data?.[0]?.value) inflation = inflRes.data[0].value;
+         if (fedRes?.data?.[0]?.value) fedFundsRate = fedRes.data[0].value;
+         if (unempRes?.data?.[0]?.value) unemployment = unempRes.data[0].value;
+         
+         return {
+            inflation,
+            fedFundsRate,
+            unemployment
+         };
+     } catch (e) {
+         console.error("[MacroAgent] AlphaVantage fetch failed:", e);
+     }
+     
      return {
         inflation: "UNKNOWN",
         fedFundsRate: "UNKNOWN",

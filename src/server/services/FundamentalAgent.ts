@@ -27,8 +27,29 @@ export class FundamentalAnalysisAgent {
   }
 
   private async fetchFundamentals(symbol: string) {
-    // In a production app, integrate FMP / AlphaVantage / Polygon here
-    // If no keys, return UNKNOWN
+    if (!process.env.ALPHAVANTAGE_API_KEY) {
+      return {
+        peRatio: "UNKNOWN",
+        epsGrowth: "UNKNOWN",
+        debtToEquity: "UNKNOWN"
+      };
+    }
+
+    try {
+      const response = await fetch(`https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
+      const data = await response.json() as any;
+
+      if (data && data.PERatio) {
+        return {
+          peRatio: data.PERatio,
+          epsGrowth: data.QuarterlyEarningsGrowthYOY || "UNKNOWN",
+          debtToEquity: data.DebtToEquity || "UNKNOWN"
+        };
+      }
+    } catch (e) {
+      console.error("[FundamentalAgent] AlphaVantage fetch failed:", e);
+    }
+
     return {
       peRatio: "UNKNOWN",
       epsGrowth: "UNKNOWN",
