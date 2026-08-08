@@ -35,17 +35,18 @@
 
 import { eventBus } from '../core/EventBus';
 import { riskEngine } from '../engines/RiskEngine';
+import { marketDataWorker } from './MarketDataWorker';
 
 export class RiskValidationAgent {
-  private sessionOpen = true; 
-  
+  private sessionOpen = true;
+
   constructor() {
     eventBus.on('CHIEF_APPROVED_IDEA', (approval) => this.assessRisk(approval));
   }
-  
+
   assessRisk(approval: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
-     
+
      if (!this.sessionOpen) {
         eventBus.emitRiskAssessment({
            traceId: approval.traceId,
@@ -58,24 +59,16 @@ export class RiskValidationAgent {
         return;
      }
 
-     const estPrice = approval.currentPrice || 150; 
-
-     // Mock Portfolio State for Risk Engine evaluation
-     // In a real system, this state is fetched from db/Alpaca sync
-     const mockPortfolioState: any = {
-        totalEquity: 50000,
-        availableCash: 40000,
-        dailyRealizedPnL: -500, 
-        maxDrawdown: 0.05,
-        portfolioHeat: 0.40,
-        marketRegime: 'BULL',
-        openPositions: [
-           { symbol: 'AAPL', quantity: 50, currentPrice: 150, volatility: 0.02 }, 
-           { symbol: 'TSLA', quantity: 10, currentPrice: 250, volatility: 0.04 }  
-        ]
-     };
+     // Prefer the price the approving idea was actually generated against; fall back to the
+     // latest live tick. We never invent a price (e.g. a hardcoded $150) - RiskEngine will
+     // veto if none is available, since sizing against a fabricated price is worse than
+     // refusing to trade.
+     const estPrice = (approval.currentPrice && approval.currentPrice > 0)
+        ? approval.currentPrice
+        : marketDataWorker.getLatestPrice(approval.symbol) || undefined;
 
      const request: any = {
+        traceId: approval.traceId,
         symbol: approval.symbol,
         side: approval.side as 'BUY' | 'SELL',
         currentPrice: estPrice,

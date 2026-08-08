@@ -44,7 +44,7 @@ const dbDir = fs.existsSync('/data') ? '/data' : path.resolve(process.cwd(), 'da
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
-const dbPath = path.join(dbDir, 'argus.db');
+export const dbPath = path.join(dbDir, 'argus.db');
 const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
 

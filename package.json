@@ -7,7 +7,7 @@
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
-    "clean": "rm -rf dist server.js",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('server.js',{recursive:true,force:true})\"",
     "lint": "tsx --eval \"console.log('Skipping standard TSC compile for rapid deployment')\"",
     "db:migrate": "tsx database/migrate.ts"
   },
@@ -49,5 +49,13 @@
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
     "vite": "^6.2.3"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "esbuild@0.18.20": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.0": true,
+    "@google/genai@2.8.0": true,
+    "protobufjs@7.6.3": true
   }
 }

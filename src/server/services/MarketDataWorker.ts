@@ -36,14 +36,70 @@
 import { eventBus } from '../core/EventBus';
 import WebSocket from 'ws';
 
+interface Bar {
+  bucketStart: number;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
 export class MarketDataWorker {
   private activeStreams: Set<string> = new Set();
   private intervalId: NodeJS.Timeout | null = null;
   private ws: WebSocket | null = null;
   private latestPrices: Map<string, number> = new Map();
 
+  // Rolling 1-minute OHLC bars built from real trade prints, used by RiskEngine for
+  // ATR-based sizing. Never synthesized - if there's no tick flow, there are no bars.
+  private static readonly BAR_INTERVAL_MS = 60000;
+  private static readonly MAX_BARS = 60;
+  private currentBars: Map<string, Bar> = new Map();
+  private barHistory: Map<string, Bar[]> = new Map();
+
   getLatestPrice(symbol: string): number | null {
     return this.latestPrices.get(symbol) || null;
+  }
+
+  /**
+   * Returns up to `count` most recent OHLC bars for a symbol, oldest first.
+   * Returns null if no trade prints have been observed for the symbol yet.
+   */
+  getBars(symbol: string, count: number = 30): { highs: number[]; lows: number[]; closes: number[]; volumes: number[] } | null {
+    const history = this.barHistory.get(symbol) || [];
+    const current = this.currentBars.get(symbol);
+    const all = current ? [...history, current] : history;
+    if (all.length === 0) return null;
+
+    const slice = all.slice(-count);
+    return {
+      highs: slice.map(b => b.high),
+      lows: slice.map(b => b.low),
+      closes: slice.map(b => b.close),
+      volumes: slice.map(b => b.volume)
+    };
+  }
+
+  private recordTradePrint(symbol: string, price: number, size: number) {
+    const bucketStart = Math.floor(Date.now() / MarketDataWorker.BAR_INTERVAL_MS) * MarketDataWorker.BAR_INTERVAL_MS;
+    const bar = this.currentBars.get(symbol);
+
+    if (!bar || bar.bucketStart !== bucketStart) {
+      if (bar) {
+        const history = this.barHistory.get(symbol) || [];
+        history.push(bar);
+        if (history.length > MarketDataWorker.MAX_BARS) history.shift();
+        this.barHistory.set(symbol, history);
+      }
+      this.currentBars.set(symbol, { bucketStart, open: price, high: price, low: price, close: price, volume: size });
+      return;
+    }
+
+    bar.high = Math.max(bar.high, price);
+    bar.low = Math.min(bar.low, price);
+    bar.close = price;
+    bar.volume += size;
   }
 
   start() {
@@ -111,6 +167,7 @@ export class MarketDataWorker {
         } else if (msg.T === "t") {
           // Trade message
           this.latestPrices.set(msg.S, msg.p);
+          this.recordTradePrint(msg.S, msg.p, msg.s);
           eventBus.emitMarketData(msg.S, msg.p, msg.s, new Date(msg.t).toISOString());
         }
       }

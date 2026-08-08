@@ -71,7 +71,7 @@
 
 import { kronosEngine } from "./src/server/engines/kronos/KronosEngine";
 import { eq } from 'drizzle-orm';
-import { db } from './src/server/db/index';
+import { db, dbPath } from './src/server/db/index';
 import * as schema from './src/server/db/schema';
 
 import { EncryptionService } from "./src/server/core/EncryptionService";
@@ -80,6 +80,7 @@ import { WebSocketServer } from 'ws';
 import { AIRouter } from "./src/server/ai/AIRouter";
 import { eventBus } from './src/server/core/EventBus';
 import fs from "fs";
+import crypto from "crypto";
 import express, { Request, Response } from "express";
 import {  } from "./src/server/db/index.js";
 import { logTrade, logAiDecision, logEventTrace } from "./src/server/core/Logger.js";
@@ -447,11 +448,22 @@ const AUTH_SESSION_SECRET = process.env.AUTH_SESSION_SECRET || "default_dev_secr
 const SESSION_TTL_MS = (Number(process.env.AUTH_SESSION_TTL_HOURS) || 720) * 3600000;
 const SESSION_COOKIE = "argus_session";
 
+if (APP_PASSWORD && !process.env.AUTH_SESSION_SECRET) {
+  console.warn("[Auth] APP_PASSWORD is set but AUTH_SESSION_SECRET is not - sessions are being signed with a public default secret. Set AUTH_SESSION_SECRET in production.");
+}
+if (!APP_PASSWORD) {
+  console.warn("[Auth] APP_PASSWORD is not set - the dashboard and all /api/* routes are unauthenticated and publicly accessible.");
+}
+
+function signSessionPayload(payload: string): string {
+  return crypto.createHmac("sha256", AUTH_SESSION_SECRET).update(payload).digest("hex");
+}
+
 function setSessionCookie(res: Response) {
   const exp = Date.now() + SESSION_TTL_MS;
   const payload = Buffer.from(JSON.stringify({ exp })).toString("base64url");
-  const signature = "dummy_signature"; // In a real app we'd hmac it
-  res.cookie(SESSION_COOKIE, `${payload}.${signature}`, { httpOnly: true, maxAge: SESSION_TTL_MS });
+  const signature = signSessionPayload(payload);
+  res.cookie(SESSION_COOKIE, `${payload}.${signature}`, { httpOnly: true, sameSite: 'lax', maxAge: SESSION_TTL_MS });
 }
 
 function clearSessionCookie(res: Response) {
@@ -468,20 +480,46 @@ function sessionExp(token: string): number | null {
 }
 
 function maybeRefreshSession(req: Request, res: Response): void {
-  // simplified
   const cookies = req.headers.cookie || "";
   const match = cookies.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
   if (!match) return;
-  const tok = match[1];
+  const tok = decodeURIComponent(match[1]);
   const exp = sessionExp(tok);
   if (exp === null) return;
   if (exp - Date.now() < SESSION_TTL_MS / 2) setSessionCookie(res);
 }
 
+// Verifies the session cookie's HMAC signature (not just that a cookie with the right name
+// exists) and that it hasn't expired. Previously the signature was the literal string
+// "dummy_signature" and this function only checked for the cookie's presence, so any client
+// sending `argus_session=anything` was treated as authenticated.
 function isAuthed(req: Request): boolean {
   if (!APP_PASSWORD) return true;
+
   const cookies = req.headers.cookie || "";
-  return cookies.includes(SESSION_COOKIE + "=");
+  const match = cookies.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
+  if (!match) return false;
+
+  const token = decodeURIComponent(match[1]);
+  const i = token.lastIndexOf(".");
+  if (i < 0) return false;
+
+  const payload = token.slice(0, i);
+  const signature = token.slice(i + 1);
+  const expected = signSessionPayload(payload);
+
+  try {
+    const sigBuf = Buffer.from(signature, "hex");
+    const expBuf = Buffer.from(expected, "hex");
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) return false;
+  } catch {
+    return false;
+  }
+
+  const exp = sessionExp(token);
+  if (exp === null || exp < Date.now()) return false;
+
+  return true;
 }
 
 const SECRETS_FILE = path.join(process.cwd(), "data", "secrets.json");
@@ -547,6 +585,38 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   });
 
   app.use(express.json());
+
+  // Auth endpoints. These were previously exempted from the auth-gate middleware above but
+  // never actually existed - there was no way to ever set the session cookie, so the
+  // password gate (when APP_PASSWORD was configured) was permanently unreachable.
+  app.get("/api/v1/auth/status", (req: Request, res: Response) => {
+    res.json({ requiresAuth: !!APP_PASSWORD, authenticated: isAuthed(req) });
+  });
+
+  app.post("/api/v1/auth/login", (req: Request, res: Response) => {
+    if (!APP_PASSWORD) return res.json({ ok: true });
+
+    const password = req.body?.password;
+    if (typeof password !== "string" || password.length === 0) {
+      return res.status(400).json({ error: "Password required" });
+    }
+
+    const a = Buffer.from(password);
+    const b = Buffer.from(APP_PASSWORD);
+    const matches = a.length === b.length && crypto.timingSafeEqual(a, b);
+    if (!matches) {
+      return res.status(401).json({ error: "Invalid password" });
+    }
+
+    setSessionCookie(res);
+    res.json({ ok: true });
+  });
+
+  app.post("/api/v1/auth/logout", (req: Request, res: Response) => {
+    clearSessionCookie(res);
+    res.json({ ok: true });
+  });
+
   app.use("/api/v1/config", configRouter);
   app.use("/api/v2", v2Router);
 
@@ -1200,12 +1270,7 @@ async function triggerWebhooks(event: {
       });
     } catch(e: any) {
       console.error("Broker Portfolio Error:", e.message);
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
 
@@ -1950,48 +2015,22 @@ async function triggerWebhooks(event: {
   // End New APIs
 app.get("/api/v1/system/export-db", (req, res) => {
     try {
-      const dbPath = path.resolve(process.cwd(), 'database', 'argus.db');
       if (fs.existsSync(dbPath)) {
         res.download(dbPath, 'argus_backup.db');
       } else {
         res.status(404).json({ error: 'Database not found' });
       }
     } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
 
-  app.get("/api/v1/system/export-db", (req, res) => {
-    try {
-      const dbPath = path.resolve(process.cwd(), 'database', 'argus.db');
-      res.download(dbPath);
-    } catch(e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
-    }
-  });
-  
   app.post("/api/v1/system/import-db", express.raw({ type: 'application/octet-stream', limit: '50mb' }), (req, res) => {
     try {
-      const dbPath = path.resolve(process.cwd(), 'database', 'argus.db');
       fs.writeFileSync(dbPath, req.body);
       res.json({ ok: true, message: 'Database imported successfully. Please restart the application.' });
     } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
 
@@ -2008,12 +2047,7 @@ app.get("/api/v1/system/export-db", (req, res) => {
         emergencyStop: false
       });
     } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
                   app.get("/api/v1/agents", async (req, res) => {
@@ -2050,12 +2084,7 @@ app.get("/api/v1/system/export-db", (req, res) => {
       const allTrades = await db.select().from(schema.trades).orderBy(schema.trades.id);
       res.json(allTrades.reverse()); // Latest first
     } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
 
@@ -2064,12 +2093,7 @@ app.get("/api/v1/system/export-db", (req, res) => {
       const memories = await db.select().from(schema.agentMemory).orderBy(schema.agentMemory.id);
       res.json(memories.reverse()); // Latest first
     } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
 
@@ -2078,12 +2102,7 @@ app.get("/api/v1/system/export-db", (req, res) => {
       const traces = await db.select().from(schema.eventTraces).orderBy(schema.eventTraces.id);
       res.json(traces.reverse()); // Latest first
     } catch (e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
 
@@ -2900,12 +2919,7 @@ Output MUST be strict JSON matching this structure:
       const updated = await db.select().from(schema.memoryRules);
       res.json({ ok: true, memoryRules: updated });
     } catch(e) {
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e?.message || 'Internal error' });
     }
   });
 
@@ -2928,7 +2942,7 @@ Output MUST be strict JSON matching this structure:
     });
   }
 
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 5000; // matches the port documented across README/QUICK_START/AI_CONTEXT
   // Bug Fix: HMR Port Collision
   // Create HTTP server first, then pass to Vite HMR
   const httpServer = http.createServer(app);
@@ -2980,16 +2994,15 @@ Output MUST be strict JSON matching this structure:
     });
 
     
-    const onEvent = (eventName: any) => (data: any) => {
-       if (ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: eventName, data }));
-       }
-    };
-    
-    // Forward all events via wildcard
-    const wildcardHandler = (event) => {
+    // Forward all events via wildcard. EventBus.emit('*', ...) re-emits as
+    // (eventName: string, ...originalArgs), so the listener's first argument is the event
+    // name and the second is the payload - not a single { eventType, payload } object as this
+    // previously assumed. That mismatch meant every forwarded message shipped as
+    // { type: undefined, data: <eventName string> }, so no wildcard-driven UI update (e.g. the
+    // Digital Twin visualizer) ever received usable data.
+    const wildcardHandler = (eventName: string, payload: any) => {
       if (ws.readyState === 1) { // WebSocket.OPEN
-        ws.send(JSON.stringify({ type: event.eventType, data: event.payload || event }));
+        ws.send(JSON.stringify({ type: eventName, data: payload }));
       }
     };
     eventBus.on('*', wildcardHandler);

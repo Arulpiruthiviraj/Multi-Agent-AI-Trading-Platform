@@ -87,17 +87,20 @@ export class MacroEconomyAgent {
        }
 
        if (process.env.GEMINI_API_KEY) {
-          const res = await AIRouter.getInstance().routeTask('MacroAgent', `Analyze these macroeconomic indicators for their impact on ${symbol}: CPI ${data.inflation}%, Fed Funds Rate ${data.fedFundsRate}%, Unemployment ${data.unemployment}%. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
+          const res = await AIRouter.getInstance().routeTask('MacroAgent', `Analyze these macroeconomic indicators for their impact on ${symbol}: CPI ${data.inflation}%, Fed Funds Rate ${data.fedFundsRate}%, Unemployment ${data.unemployment}%. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }. "confidence" must be an integer from 0-100.`, traceId);
           const response = { text: res.content };
-          
+
           if (response.text) {
              const analysis = JSON.parse(response.text);
              if (analysis.recommendation !== "HOLD") {
+                // TRADE_IDEA_GENERATED confidence is always on a 0-1 scale; the LLM is asked
+                // for 0-100, so normalize here rather than emitting the raw value (which would
+                // otherwise blow past the consensus math's 0-1 clamp downstream).
                 eventBus.emitTradeIdea({
                    traceId,
                    symbol,
                    side: analysis.recommendation,
-                   confidence: analysis.confidence,
+                   confidence: Math.max(0, Math.min(1, (Number(analysis.confidence) || 0) / 100)),
                    reasoning: `[Macro AI] ${analysis.reasoning}`,
                    agent: "MacroAgent"
                 });
