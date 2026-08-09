@@ -127,8 +127,8 @@ def build_fingpt_model() -> None:
 
 def warmup_huggingface_models() -> None:
     try:
-        import torch  # noqa: F401
-        from transformers import pipeline, AutoModelForSeq2SeqLM, AutoTokenizer
+        import torch
+        from transformers import pipeline
     except ImportError as e:
         log(f"Skipping Hugging Face warm-up - Python ML deps not importable yet ({e}). Run this script again after pip install succeeds.")
         return
@@ -143,9 +143,17 @@ def warmup_huggingface_models() -> None:
 
     log(f"Warming up {HF_WARMUP_MODELS[1]} (time-series forecasting)...")
     try:
-        AutoTokenizer.from_pretrained(HF_WARMUP_MODELS[1])
-        AutoModelForSeq2SeqLM.from_pretrained(HF_WARMUP_MODELS[1])
-        log(f"  {HF_WARMUP_MODELS[1]} cached and working.")
+        # Uses the real ChronosPipeline (not a bare AutoModelForSeq2SeqLM.generate()) - Chronos
+        # needs its own mean-scale-and-quantize tokenizer to turn a numeric series into something
+        # the underlying T5 model can produce a meaningful forecast from. This is the same call
+        # path local_ai_service.py uses for real, so it doubles as a smoke test.
+        from chronos import ChronosPipeline
+        pipeline_obj = ChronosPipeline.from_pretrained(HF_WARMUP_MODELS[1], device_map="cpu", torch_dtype=torch.float32)
+        context = torch.tensor([100.0 + i * 0.1 for i in range(30)])
+        forecast = pipeline_obj.predict(context, prediction_length=5, num_samples=10)
+        log(f"  {HF_WARMUP_MODELS[1]} cached and working: sample forecast shape {tuple(forecast.shape)}")
+    except ImportError:
+        log(f"  WARNING: 'chronos-forecasting' package not installed - run `pip install -r requirements-ai.txt` again.")
     except Exception as e:
         log(f"  WARNING: failed to warm up {HF_WARMUP_MODELS[1]}: {e}")
 

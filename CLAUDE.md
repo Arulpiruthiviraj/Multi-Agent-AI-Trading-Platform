@@ -80,11 +80,15 @@ Fabricates 9 hardcoded agent objects, votes by count, calls Alpaca REST API dire
 
 ### EventBus
 
-`src/server/core/EventBus.ts` — Node `EventEmitter` singleton, no persistence, no replay. Subscribe with `eventBus.on('EVENT_NAME', handler)`. The only real market-data event is `MARKET_DATA` (not `MARKET_DATA_UPDATED` — this mismatch is why `KronosForecastAgent` never fires). All events also emit to the wildcard `*` listener used for WebSocket broadcasting.
+`src/server/core/EventBus.ts` — Node `EventEmitter` singleton, no in-memory replay beyond `EventStore.ts`'s capped ring buffer, but decision-lifecycle events are durably persisted to the `event_traces` table (see `GET /api/v1/event-traces?correlationId=`). Real market data ticks emit both `MARKET_DATA` and `MARKET_DATA_UPDATED` (via `emitMarketData()`). All events also emit to the wildcard `*` listener used for WebSocket broadcasting.
 
 ### AIRouter
 
-`src/server/ai/AIRouter.ts` — singleton, call `AIRouter.getInstance()`. All LLM calls must go through this; never call providers directly. Supports Gemini, OpenAI, DeepSeek, Nvidia, and OpenAI-compatible endpoints. Handles failover, health tracking, and EMA latency scoring. Cost tracking is implemented but always returns `$0` — `estimateCost()` is not implemented in any provider.
+`src/server/ai/AIRouter.ts` — singleton, call `AIRouter.getInstance()`. All LLM calls must go through this; never call providers directly. Supports Gemini, OpenAI, DeepSeek, Nvidia, and OpenAI-compatible endpoints (Ollama's local models are reachable this way at `http://localhost:11434/v1`). Handles failover, health tracking, EMA latency scoring, and per-agent routing overrides (`AIRouter.setAgentRoute()` / `GET|POST /api/v1/config/routing`). `estimateCost()` uses real published per-provider pricing; local/Ollama providers cost `$0`.
+
+### Local AI Stack (optional)
+
+Argus can call models running entirely on your own machine instead of a paid cloud LLM — see `docs/LOCAL_AI_SETUP.md`, `npm run setup:ai`. `KronosForecastAgent`/`KronosInference.ts` call a persistent local service (`npm run ai:serve`, `scripts/local_ai_service.py`) that loads `amazon/chronos-t5-mini` via the real `chronos-forecasting` package for genuine numerical price forecasting — this used to be a permanently-throwing stub; it's real now, but requires that service to be running (`KronosModelManager` polls its `/health` every 30s and reports `Warning: Kronos unavailable` honestly if it isn't, same convention as everywhere else). Ollama (`llama3.2`, `0xroyce/plutus`, a locally-built `fingpt`) is checked non-blockingly at boot and logs `[LocalAI] ...`.
 
 ### Database
 
@@ -123,9 +127,6 @@ Key tables: `settings`, `trades`, `portfolio`, `aiProviders`, `aiModels`, `aiUsa
 
 These are broken by design or by bug — do not describe them as working:
 
-- **Kronos** (`src/server/engines/kronos/`) — `KronosInference.ts` unconditionally throws; `KronosForecastAgent` listens for `MARKET_DATA_UPDATED` which nothing emits. Cannot produce output under any configuration.
-- **Backtesting** (`GET /api/v1/backtest`, `POST /api/v2/system/backtest`) — both return hardcoded numbers regardless of input.
-- **AI cost tracking** — every provider's `estimateCost()` returns `0`; all logged costs are `$0`.
 - **~9 frontend chart panels** (win-rate, drawdown, benchmark, heatmap, etc.) — static arrays in `App.tsx`, not backed by real data.
 - **`PortfolioMonitor` exit thresholds** — `settings.takeProfitPct` / `settings.trailingStopPct` are never read; hardcoded ±5%/-3% is used.
 - **`AdvancedQuantEngines` / `MarketRegimeAgent`** — real math/LLM, but their output events are never consumed by any decision.

@@ -84,6 +84,35 @@ Start the app (`npm run dev`) and check the boot log for one of:
 This check is non-blocking - a missing or unreachable local stack only logs a
 warning and never prevents the app from starting.
 
+## Running the real Kronos/Chronos forecast (`npm run ai:serve`)
+
+`KronosForecastAgent`/`KronosInference.ts` call a small persistent local
+service instead of loading Chronos in-process:
+
+```bash
+npm run ai:serve
+```
+
+This runs `scripts/local_ai_service.py`, which loads `amazon/chronos-t5-mini`
+once via the real `chronos-forecasting` package's `ChronosPipeline` (not a
+bare `transformers` model - Chronos needs its own mean-scale-and-quantize
+tokenizer to turn a numeric series into something the underlying model can
+forecast from) and serves it on `http://localhost:8008`:
+
+- `GET /health` - readiness check, polled by `KronosModelManager.ts` every 30s.
+- `POST /forecast` - `{ "prices": number[], "horizon": number }` → sampled
+  quantile forecast (`low`/`median`/`high`).
+
+Leave this running alongside `npm run dev`. If it isn't running,
+`KronosForecastAgent` stays honestly reported as unavailable (matching the
+existing `KRONOS_UNAVAILABLE` convention) rather than crashing or fabricating
+a forecast - same non-blocking pattern as the Ollama check above.
+
+`KronosForecastAgent` needs a real rolling window (30+ ticks) for a given
+symbol before it calls this service at all, and caps itself to one call per
+symbol per 60 seconds - a numeric forecast on a handful of points is noise,
+and every call has real (if small) CPU latency.
+
 ## Architecture: where each model fits
 
 - **FinBERT** - real numerical sentiment score for news articles/clusters in

@@ -14,6 +14,7 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "setup:ai": "python scripts/bootstrap_models.py",
+    "ai:serve": "python scripts/local_ai_service.py",
     "db:migrate": "tsx database/migrate.ts"
   },
   "dependencies": {

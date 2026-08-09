@@ -8,3 +8,4 @@ pandas
 yfinance
 ta
 neuralforecast
+chronos-forecasting
