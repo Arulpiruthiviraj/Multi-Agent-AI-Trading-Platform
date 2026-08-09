@@ -1035,97 +1035,20 @@ function loadPortfolio() {
   try {
     if (fs.existsSync(PORTFOLIO_FILE)) {
       const data = JSON.parse(fs.readFileSync(PORTFOLIO_FILE, "utf-8"));
-      if (!data.positions || data.positions.length === 0) {
-        data.positions = [
-          {
-            symbol: "AAPL",
-            quantity: 10,
-            entryPrice: 150.00,
-            currentPrice: 155.00,
-            totalCost: 1500.00,
-            marketValue: 1550.00,
-            unrealizedPnl: 50.00,
-            unrealizedPnlPercent: 0.0333,
-            sector: "Technology",
-            openedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            symbol: "AMD",
-            quantity: 15,
-            entryPrice: 80.00,
-            currentPrice: 75.00,
-            totalCost: 1200.00,
-            marketValue: 1125.00,
-            unrealizedPnl: -75.00,
-            unrealizedPnlPercent: -0.0625,
-            sector: "Technology",
-            openedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString()
-          },
-          {
-            symbol: "SPY",
-            quantity: 5,
-            entryPrice: 400.00,
-            currentPrice: 405.00,
-            totalCost: 2000.00,
-            marketValue: 2025.00,
-            unrealizedPnl: 25.00,
-            unrealizedPnlPercent: 0.0125,
-            sector: "Index Funds",
-            openedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
-          }
-        ];
-        data.cash = 95300.00;
-        data.initialCash = 100000.00;
-        data.peakValuation = 100000.00;
-        savePortfolio(data);
-      }
+      if (!data.positions) data.positions = [];
       return data;
     }
   } catch (e) {
     console.warn("Could not load portfolio from disk, using defaults.");
   }
+  // Starts empty (no fabricated positions) - schema.portfolio has no real writer in the live
+  // pipeline (OrderManagement.ts writes trades, not this table), so any seeded row here would sit
+  // untouched and get served by /api/v1/portfolio as if it were a real broker-confirmed position.
   const defaultP = {
-    cash: 95300.0,
+    cash: 100000.0,
     initialCash: 100000.0,
     peakValuation: 100000.0,
-    positions: [
-      {
-        symbol: "AAPL",
-        quantity: 10,
-        entryPrice: 150.00,
-        currentPrice: 155.00,
-        totalCost: 1500.00,
-        marketValue: 1550.00,
-        unrealizedPnl: 50.00,
-        unrealizedPnlPercent: 0.0333,
-        sector: "Technology",
-        openedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        symbol: "AMD",
-        quantity: 15,
-        entryPrice: 80.00,
-        currentPrice: 75.00,
-        totalCost: 1200.00,
-        marketValue: 1125.00,
-        unrealizedPnl: -75.00,
-        unrealizedPnlPercent: -0.0625,
-        sector: "Technology",
-        openedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString()
-      },
-      {
-        symbol: "SPY",
-        quantity: 5,
-        entryPrice: 400.00,
-        currentPrice: 405.00,
-        totalCost: 2000.00,
-        marketValue: 2025.00,
-        unrealizedPnl: 25.00,
-        unrealizedPnlPercent: 0.0125,
-        sector: "Index Funds",
-        openedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString()
-      }
-    ],
+    positions: [],
   };
   savePortfolio(defaultP);
   return defaultP;
@@ -1163,32 +1086,32 @@ let portfolioState = loadPortfolio();
   app.get("/api/v1/portfolio", async (req: Request, res: Response) => {
     try {
       const broker = BrokerManager.getInstance().getActiveBroker();
-      let portfolio;
-      try {
-        portfolio = await broker.portfolio();
-      } catch (e) {
-        portfolio = { cash: 10000, buyingPower: 10000, equity: 10000, positions: [] };
-      }
-      
-      const dbPositions = await db.select().from(schema.portfolio);
-      
+      // No fabricated fallback if the broker call fails - a real error surfaces as a real error
+      // instead of a fake $10,000 placeholder that looks like a real (if small) account.
+      const portfolio = await broker.portfolio();
+
+      // Positions come from the active broker directly, not from schema.portfolio - that table
+      // has no writer in the live pipeline (OrderManagement.ts writes trades, not portfolio rows)
+      // and was previously left holding stale/fabricated seed data that this route served instead
+      // of the broker's real position list. See Phase 0 of the production-readiness audit.
+
       // Keep track of peak valuation for drawdown
       if (portfolio.equity > portfolioState.peakValuation) {
          portfolioState.peakValuation = portfolio.equity;
       }
       const drawdown = (portfolioState.peakValuation - portfolio.equity) / portfolioState.peakValuation;
-      
+
       res.json({
          cash: portfolio.cash,
          buying_power: portfolio.buyingPower,
          equity: portfolio.equity,
-         positions: dbPositions.length > 0 ? dbPositions : portfolio.positions,
+         positions: portfolio.positions,
          peakValuation: portfolioState.peakValuation,
          drawdown: Number(drawdown.toFixed(4))
       });
     } catch(e: any) {
       console.error("Broker Portfolio Error:", e.message);
-      res.status(500).json({ error: e.message });
+      res.status(502).json({ error: `Broker unavailable: ${e.message}` });
     }
   });
 
@@ -1888,15 +1811,39 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
 
   
   const wss = new WebSocketServer({ noServer: true });
+
+  // WebSocket connections previously bypassed auth entirely - the HTTP auth middleware only
+  // gates paths starting with /api/, and 'upgrade' events never reach Express's request pipeline
+  // at all. The /ws stream carries every EventBus event (trade ideas, risk decisions, order
+  // fills), so when AUTH_PASSWORD is configured, require the same session cookie the HTTP API
+  // requires. Matches the HTTP middleware's own behavior when auth is unconfigured: allow through.
+  async function isWsAuthed(request: import('http').IncomingMessage): Promise<boolean> {
+    if (!AUTH_PASSWORD) return true;
+    const cookies = request.headers.cookie || "";
+    const match = cookies.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
+    const token = match ? match[1] : null;
+    if (!token) return false;
+    const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
+    return rows.length > 0 && rows[0].expiresAt > Date.now();
+  }
+
   httpServer.on('upgrade', (request, socket, head) => {
-    try {
-      const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
-      if (pathname === '/ws') {
+    (async () => {
+      try {
+        const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+        if (pathname !== '/ws') return;
+        if (!(await isWsAuthed(request))) {
+          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+          socket.destroy();
+          return;
+        }
         wss.handleUpgrade(request, socket, head, (ws) => {
           wss.emit('connection', ws, request);
         });
+      } catch (e) {
+        socket.destroy();
       }
-    } catch (e) {}
+    })();
   });
   setGlobalWss(wss);
   wss.on('connection', (ws) => {
