@@ -39,6 +39,7 @@ import { system } from '../core/SystemBootstrap';
 import { db } from '../db';
 import { trades, portfolio, learnedRules, agentPerformanceStats } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
+import { backtestEngine } from '../engines/backtest/BacktestEngine';
 
 export const v2Router = Router();
 
@@ -97,24 +98,26 @@ v2Router.get('/data/portfolio', async (req, res) => {
   }
 });
 
+// Thin delegate to the same real BacktestEngine that POST /api/v1/backtest uses - this used to be
+// a second, independently-fabricated result set (trades:450, winRate:64.2%...) returned via a
+// setTimeout regardless of strategy/symbol/timeframe. No frontend caller was found for this route
+// (confirmed via repo-wide grep) - kept as a real endpoint rather than removed, but no longer
+// duplicating fake logic.
 v2Router.post('/system/backtest', async (req, res) => {
-  const { strategy, symbol, timeframe } = req.body;
-  // Placeholder backtest logic
-  setTimeout(() => {
-    res.json({
-      ok: true,
-      results: {
-        strategy,
-        symbol,
-        trades: 450,
-        winRate: 64.2,
-        profitFactor: 1.85,
-        maxDrawdown: 8.4,
-        averageReturn: 12.5,
-        sharpeRatio: 1.6
-      }
-    });
-  }, 2000);
+  try {
+    const { symbol, symbols, startDate, endDate, timeframe, initialCash } = req.body || {};
+    const symbolList = symbols || (symbol ? [symbol] : null);
+    if (!symbolList || symbolList.length === 0) {
+      return res.status(400).json({ ok: false, error: "symbol or symbols is required" });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({ ok: false, error: "startDate and endDate are required (ISO dates)" });
+    }
+    const result = await backtestEngine.run({ symbols: symbolList, startDate, endDate, timeframe, initialCash });
+    res.json({ ok: true, results: result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 import { recentEvents } from '../core/EventStore';

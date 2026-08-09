@@ -18,6 +18,7 @@ import { db } from "../db/index";
 import * as schema from "../db/schema";
 import { tradingEngine } from "../engines/TradingEngine";
 import { AUDIT_LOG_FILE } from "../core/auditLog";
+import { backtestEngine } from "../engines/backtest/BacktestEngine";
 
 export const systemRouter = Router();
 
@@ -183,15 +184,41 @@ systemRouter.get("/pnl/analytics", async (req: Request, res: Response) => {
   res.json({ history: [] });
 });
 
-systemRouter.post("/backtest", (req: Request, res: Response) => {
-  // Basic mock backtest
-  res.json({
-    returnPct: 15.5,
-    sharpe: 2.1,
-    maxDrawdown: 0.05,
-    trades: 12,
-    curve: [],
-  });
+// Real historical replay - runs the same deterministic technical rules TechnicalAgent.ts uses
+// live against real Alpaca bars (backfilled/cached in ohlcv_bars). Replaces what used to be a
+// hardcoded {returnPct:15.5, sharpe:2.1, ...} response regardless of input.
+systemRouter.post("/backtest", async (req: Request, res: Response) => {
+  try {
+    const { symbols, startDate, endDate, timeframe, initialCash } = req.body || {};
+    if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
+      return res.status(400).json({ error: "symbols (non-empty array) is required" });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: "startDate and endDate are required (ISO dates)" });
+    }
+    const result = await backtestEngine.run({ symbols, startDate, endDate, timeframe, initialCash });
+    res.json(result);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+systemRouter.get("/backtest/:id", async (req: Request, res: Response) => {
+  try {
+    const run = await backtestEngine.getRun(req.params.id);
+    if (!run) return res.status(404).json({ error: "Backtest run not found" });
+    res.json(run);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+systemRouter.get("/backtest", async (req: Request, res: Response) => {
+  try {
+    res.json(await backtestEngine.listRuns());
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 systemRouter.patch("/settings", (req: Request, res: Response) => res.json({ ok: true }));

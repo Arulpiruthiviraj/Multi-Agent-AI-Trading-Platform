@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, index } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -334,6 +334,47 @@ export const kronosPredictions = sqliteTable('kronos_predictions', {
   mape: real('mape'),
   directionalAccuracy: real('directional_accuracy'),
   timestamp: text('timestamp').notNull()
+});
+
+// Real historical OHLCV storage for the backtest/replay engine (Phase 2). Bar timestamp is the
+// bar's OPEN time in epoch ms - the replay clock enforces that no agent sees a bar whose
+// timestamp is later than the simulated "now".
+export const ohlcvBars = sqliteTable('ohlcv_bars', {
+  id: text('id').primaryKey(), // `${symbol}:${timeframe}:${timestamp}`
+  symbol: text('symbol').notNull(),
+  timeframe: text('timeframe').notNull(), // '1Min', '5Min', '15Min', '1Hour', '1Day'
+  timestamp: integer('timestamp').notNull(), // bar open time, epoch ms
+  open: real('open').notNull(),
+  high: real('high').notNull(),
+  low: real('low').notNull(),
+  close: real('close').notNull(),
+  volume: real('volume').notNull(),
+  source: text('source').notNull().default('alpaca'),
+}, (table) => ({
+  symbolTimeframeTimeIdx: index('idx_ohlcv_symbol_tf_time').on(table.symbol, table.timeframe, table.timestamp),
+}));
+
+export const backtestRuns = sqliteTable('backtest_runs', {
+  id: text('id').primaryKey(),
+  createdAt: text('created_at').notNull(),
+  status: text('status').notNull(), // RUNNING, COMPLETED, FAILED
+  symbols: text('symbols').notNull(), // JSON array
+  startDate: text('start_date').notNull(),
+  endDate: text('end_date').notNull(),
+  timeframe: text('timeframe').notNull(),
+  initialCash: real('initial_cash').notNull(),
+  finalEquity: real('final_equity'),
+  totalTrades: integer('total_trades').default(0),
+  winRate: real('win_rate'),
+  profitFactor: real('profit_factor'),
+  sharpeRatio: real('sharpe_ratio'),
+  sortinoRatio: real('sortino_ratio'),
+  maxDrawdownPct: real('max_drawdown_pct'),
+  cagr: real('cagr'),
+  expectancy: real('expectancy'),
+  errorMessage: text('error_message'),
+  equityCurve: text('equity_curve'), // JSON array of {timestamp, equity}
+  tradeLog: text('trade_log'), // JSON array of individual simulated trades
 });
 
 export const predictionEngineWeights = sqliteTable('prediction_engine_weights', {

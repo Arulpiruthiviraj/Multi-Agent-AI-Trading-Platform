@@ -22,6 +22,13 @@
       "when": 1786216802378,
       "tag": "0002_giant_dark_beast",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1786280668889,
+      "tag": "0003_loud_jazinda",
+      "breakpoints": true
     }
   ]
 }
