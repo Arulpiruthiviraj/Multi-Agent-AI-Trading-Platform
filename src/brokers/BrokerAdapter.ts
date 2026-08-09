@@ -81,6 +81,23 @@ export interface AccountActivity {
   description: string;
 }
 
+// Describes what an adapter can ACTUALLY do, as implemented right now - not what the broker's
+// own API is theoretically capable of. canPlaceOrders MUST be false for any adapter whose
+// placeOrder() is unimplemented; nothing here may claim support that the adapter code doesn't
+// back up, since this drives what the UI is allowed to tell the user is available.
+export interface BrokerCapabilities {
+  canPlaceOrders: boolean;
+  canCancelOrders: boolean;
+  paperTrading: boolean;
+  liveTrading: boolean;
+  usEquities: boolean;
+  canadianEquities: boolean;
+  crypto: boolean;
+  options: boolean;
+  shortSelling: boolean;
+  streamingMarketData: boolean; // via this adapter's own marketData() - not MarketDataWorker
+}
+
 export interface BrokerPlugin {
   id: string;
   name: string;
@@ -90,17 +107,21 @@ export interface BrokerPlugin {
   validateCredentials(): Promise<boolean>;
   paperTrading(): void;
   liveTrading(): void;
-  marketData(symbols: string[], callback: (data: any) => void): Promise<void>;
+  getCapabilities(): BrokerCapabilities;
   portfolio(): Promise<Portfolio>;
   orders(): Promise<Order[]>;
   positions(): Promise<Position[]>;
   account(): Promise<any>;
   disconnect(): Promise<void>;
   health(): Promise<string>; // e.g. "Healthy", "Offline", "Degraded"
-  
+
   // internal methods for specific orders
   placeOrder(order: Partial<Order>): Promise<Order>;
   cancelOrder(orderId: string): Promise<boolean>;
-  
+
   tick?(currentPrices: Record<string, number>): void;
+}
+
+export function brokerSupports(broker: BrokerPlugin, capability: keyof BrokerCapabilities): boolean {
+  return !!broker.getCapabilities()[capability];
 }

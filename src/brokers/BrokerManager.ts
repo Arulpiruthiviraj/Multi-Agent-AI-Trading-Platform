@@ -163,10 +163,11 @@ export class BrokerManager {
     return this.activeBroker;
   }
 
-  public getAvailableBrokers(): {id: string, name: string}[] {
+  public getAvailableBrokers(): {id: string, name: string, capabilities: ReturnType<BrokerPlugin['getCapabilities']>}[] {
     return Array.from(this.brokers.values()).map(b => ({
       id: b.id,
-      name: b.name
+      name: b.name,
+      capabilities: b.getCapabilities()
     }));
   }
   

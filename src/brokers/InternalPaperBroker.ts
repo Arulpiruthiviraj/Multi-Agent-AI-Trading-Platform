@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import { BrokerPlugin, Order, Portfolio, Position } from './BrokerAdapter';
+import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter';
 
 export class InternalPaperBroker implements BrokerPlugin {
   async initialize() {
@@ -42,8 +42,19 @@ export class InternalPaperBroker implements BrokerPlugin {
   async validateCredentials() { return true; }
   paperTrading() {}
   liveTrading() {}
-  async marketData(symbols: string[], callback: (data: any) => void) {
-     // Mock stream
+  getCapabilities(): BrokerCapabilities {
+    return {
+      canPlaceOrders: true,
+      canCancelOrders: true,
+      paperTrading: true,
+      liveTrading: false, // in-memory simulator - there is no real broker behind it to trade live
+      usEquities: true,
+      canadianEquities: false,
+      crypto: false,
+      options: false,
+      shortSelling: false, // tick() comment: "we assume long only for simplicity"
+      streamingMarketData: false,
+    };
   }
   async health() { return "Healthy"; }
   id = 'internal_paper';

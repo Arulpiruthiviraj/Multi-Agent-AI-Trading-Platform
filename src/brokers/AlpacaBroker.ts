@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import { BrokerPlugin, Order, Portfolio, Position } from './BrokerAdapter.js';
+import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter.js';
 
 export class AlpacaBroker implements BrokerPlugin {
   id = 'alpaca';
@@ -42,7 +42,20 @@ export class AlpacaBroker implements BrokerPlugin {
   async validateCredentials() { return !!this.apiKey; }
   paperTrading() { this.baseUrl = 'https://paper-api.alpaca.markets'; }
   liveTrading() { this.baseUrl = 'https://api.alpaca.markets'; }
-  async marketData(symbols: string[], callback: (data: any) => void) {}
+  getCapabilities(): BrokerCapabilities {
+    return {
+      canPlaceOrders: true,
+      canCancelOrders: true,
+      paperTrading: true,
+      liveTrading: true,
+      usEquities: true,
+      canadianEquities: false,
+      crypto: false, // this adapter only implements the /v2/* US equities endpoints
+      options: false,
+      shortSelling: false, // placeOrder doesn't send a short-specific side/flag
+      streamingMarketData: false, // real-time ticks come from MarketDataWorker's own WS, not this class
+    };
+  }
   async health() { return "Healthy"; }
   
   

@@ -33,8 +33,10 @@
  * ==========================================================
  */
 
-import { BrokerPlugin, Order, Position, Portfolio } from './BrokerAdapter';
+import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './BrokerAdapter';
 
+// Unverified/unimplemented: authenticate() always returns true and placeOrder() throws. No
+// capability may report true until this adapter actually talks to Coinbase's API.
 export class CoinbaseBroker implements BrokerPlugin {
   id = 'coinbase';
   name = 'Coinbase Advanced Trade';
@@ -42,7 +44,20 @@ export class CoinbaseBroker implements BrokerPlugin {
   async validateCredentials() { return true; }
   paperTrading() { }
   liveTrading() { }
-  async marketData(symbols: string[], callback: (data: any) => void) {}
+  getCapabilities(): BrokerCapabilities {
+    return {
+      canPlaceOrders: false, // placeOrder() throws 'Not implemented'
+      canCancelOrders: false,
+      paperTrading: false,
+      liveTrading: false,
+      usEquities: false,
+      canadianEquities: false,
+      crypto: false, // would be the point of this adapter, but nothing is implemented yet
+      options: false,
+      shortSelling: false,
+      streamingMarketData: false,
+    };
+  }
   async health() { return "Healthy"; }
 
   isPaper = false;

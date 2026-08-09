@@ -33,8 +33,12 @@
  * ==========================================================
  */
 
-import { BrokerPlugin, Order, Position, Portfolio } from './BrokerAdapter';
+import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './BrokerAdapter';
 
+// Questrade's official developer documentation restricts order-execution API access to partner
+// developers - account/market-data access is available to customers, but placing orders is not.
+// This adapter is a placeholder (authenticate() always returns true, placeOrder() throws) and
+// must never report a capability it cannot back up.
 export class QuestradeBroker implements BrokerPlugin {
   id = 'questrade';
   name = 'Questrade (Canada)';
@@ -42,7 +46,20 @@ export class QuestradeBroker implements BrokerPlugin {
   async validateCredentials() { return true; }
   paperTrading() { }
   liveTrading() { }
-  async marketData(symbols: string[], callback: (data: any) => void) {}
+  getCapabilities(): BrokerCapabilities {
+    return {
+      canPlaceOrders: false, // partner-only order execution API; placeOrder() throws
+      canCancelOrders: false,
+      paperTrading: false,
+      liveTrading: false,
+      usEquities: false,
+      canadianEquities: false,
+      crypto: false,
+      options: false,
+      shortSelling: false,
+      streamingMarketData: false,
+    };
+  }
   async health() { return "Healthy"; }
 
   isPaper = false;

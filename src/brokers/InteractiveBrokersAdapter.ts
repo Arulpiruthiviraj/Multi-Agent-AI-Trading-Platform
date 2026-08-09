@@ -33,8 +33,13 @@
  * ==========================================================
  */
 
-import { BrokerPlugin, Order, Position, Portfolio } from './BrokerAdapter';
+import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './BrokerAdapter';
 
+// Unverified/unimplemented: authenticate() always returns true and placeOrder() throws. IBKR is
+// the prioritized real Canadian candidate (Client Portal API / TWS API have real order execution
+// for retail accounts, unlike Questrade) but this adapter does not talk to either API yet - real
+// implementation requires the official-docs research pass (sandbox availability, Canadian account
+// specifics) before any capability here can become true.
 export class InteractiveBrokersAdapter implements BrokerPlugin {
   id = 'ibkr';
   name = 'Interactive Brokers';
@@ -42,7 +47,20 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
   async validateCredentials() { return true; }
   paperTrading() { }
   liveTrading() { }
-  async marketData(symbols: string[], callback: (data: any) => void) {}
+  getCapabilities(): BrokerCapabilities {
+    return {
+      canPlaceOrders: false, // placeOrder() throws 'Not implemented'
+      canCancelOrders: false,
+      paperTrading: false,
+      liveTrading: false,
+      usEquities: false,
+      canadianEquities: false,
+      crypto: false,
+      options: false,
+      shortSelling: false,
+      streamingMarketData: false,
+    };
+  }
   async health() { return "Healthy"; }
 
   isPaper = false;
