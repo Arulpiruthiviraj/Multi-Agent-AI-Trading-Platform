@@ -110,6 +110,17 @@ import WebSocket from "ws";
 
 import { createServer as createViteServer } from "vite";
 
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] uncaughtException:', err.stack || err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  const stack = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+  console.error('[FATAL] unhandledRejection:', stack);
+  process.exit(1);
+});
+
 const AUTOBOT_SYMBOLS = ["TSLA", "NVDA", "AAPL", "MSTR", "PLTR", "CRWD", "AMD", "SNOW", "META", "GOOG", "COIN"];
 
 
