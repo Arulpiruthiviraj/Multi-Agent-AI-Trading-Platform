@@ -54,14 +54,12 @@ export function useEventBusTrace(targetTraceId: string | null) {
     }
 
     const handlers = [
-      'TRADE_IDA_GENERATED',
       'TRADE_IDEA_GENERATED',
       'CHIEF_APPROVED_IDEA',
       'RISK_ASSESSMENT_COMPLETED',
       'ORDER_EXECUTED',
       'LEARNED_NEW_RULE',
       'MARKET_DATA',
-      'QUANT_ENGINE_OUTPUT',
       'SYSTEM_METRICS',
       'CALCULATION_COMPLETED'
     ];

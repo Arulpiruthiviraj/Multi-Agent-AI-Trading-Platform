@@ -54,7 +54,7 @@ export class SystemMetricsWorker {
     eventBus.on('CALCULATION_COMPLETED', () => this.recordEvent('technical-engine'));
     eventBus.on('RISK_ASSESSMENT_COMPLETED', () => this.recordEvent('risk-engine'));
     eventBus.on('ORDER_EXECUTED', () => this.recordEvent('order-management'));
-    eventBus.on('NEW_RULE_LEARNED', () => this.recordEvent('reflection-engine'));
+    eventBus.on('LEARNED_NEW_RULE', () => this.recordEvent('reflection-engine'));
 
     this.intervalId = setInterval(() => this.broadcastMetrics(), 2000);
   }

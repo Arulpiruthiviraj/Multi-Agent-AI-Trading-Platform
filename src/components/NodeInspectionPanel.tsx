@@ -59,7 +59,7 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
        } else if (nodeId === 'portfolio-monitor') {
            relevant = activeEvents.filter(e => e.type === 'PORTFOLIO_UPDATE' || (e.type === 'TRADE_IDEA_GENERATED' && e.payload.agent === 'PortfolioManager'));
        } else if (nodeId === 'learning-engine') {
-           relevant = activeEvents.filter(e => e.type === 'NEW_RULE_LEARNED');
+           relevant = activeEvents.filter(e => e.type === 'LEARNED_NEW_RULE');
        }
 
        setLocalLogs(relevant.slice(0, 50));

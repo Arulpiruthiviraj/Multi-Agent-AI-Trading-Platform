@@ -63,4 +63,4 @@ eventBus.on('TRADE_IDEA_GENERATED', trackEvent('TRADE_IDEA_GENERATED'));
 eventBus.on('CHIEF_APPROVED_IDEA', trackEvent('CHIEF_APPROVED_IDEA'));
 eventBus.on('RISK_ASSESSMENT_COMPLETED', trackEvent('RISK_ASSESSMENT_COMPLETED'));
 eventBus.on('ORDER_EXECUTED', trackEvent('ORDER_EXECUTED'));
-eventBus.on('NEW_RULE_LEARNED', trackEvent('NEW_RULE_LEARNED'));
+eventBus.on('LEARNED_NEW_RULE', trackEvent('LEARNED_NEW_RULE'));

@@ -1888,16 +1888,12 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
     });
 
     
-    const onEvent = (eventName: any) => (data: any) => {
-       if (ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: eventName, data }));
-       }
-    };
-    
-    // Forward all events via wildcard
-    const wildcardHandler = (event) => {
+    // Forward all events via wildcard. EventBus's wildcard emit calls listeners
+    // as (eventName, ...args) - not as a single object - so the handler must
+    // destructure it that way or it silently drops the real payload.
+    const wildcardHandler = (eventName: string, payload: any) => {
       if (ws.readyState === 1) { // WebSocket.OPEN
-        ws.send(JSON.stringify({ type: event.eventType, data: event.payload || event }));
+        ws.send(JSON.stringify({ type: eventName, data: payload }));
       }
     };
     eventBus.on('*', wildcardHandler);

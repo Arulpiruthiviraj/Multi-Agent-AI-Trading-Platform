@@ -225,7 +225,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
                           </div>
                       )}
                       
-                      {currentEvent.type === 'NEW_RULE_LEARNED' && (
+                      {currentEvent.type === 'LEARNED_NEW_RULE' && (
                           <div className="animate-fade-in flex flex-col items-center">
                              <BrainCircuit size={32} className="text-fuchsia-400 mb-3" />
                              <h4 className="text-white font-bold uppercase tracking-widest mb-1">Reflection Engine Update</h4>
