@@ -56,26 +56,33 @@ export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLi
     setToggles(prev => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const ToggleSwitch = ({ label, icon: Icon, stateKey, description }: any) => (
+  const ToggleSwitch = ({ label, icon: Icon, stateKey, description, locked }: any) => (
     <div className="flex items-start justify-between p-3 bg-[#111822] border border-slate-800 rounded">
       <div className="flex gap-3">
         <div className="mt-0.5 text-slate-500">
           <Icon size={14} />
         </div>
         <div>
-          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center mb-0.5">
+          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center gap-1.5 mb-0.5">
             {label}
             <ContextualTooltip title={label} content={description} />
+            {locked && <span className="text-[8px] font-bold text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">REAL · ALWAYS ON</span>}
           </span>
           <p className="text-[9px] font-mono text-slate-500 max-w-[200px]">{description}</p>
         </div>
       </div>
-      <div 
-        className={"w-8 h-4 rounded-full border flex items-center px-0.5 transition-all cursor-pointer " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}
-        onClick={() => toggle(stateKey as keyof typeof toggles)}
-      >
-        <div className={"w-3 h-3 rounded-full transition-all " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-400" : "bg-slate-600")}></div>
-      </div>
+      {locked ? (
+        <div className="w-8 h-4 rounded-full border flex items-center px-0.5 bg-emerald-500/20 border-emerald-500/50 justify-end cursor-not-allowed" title="Enforced unconditionally in RiskEngine - not user-disableable">
+          <div className="w-3 h-3 rounded-full bg-emerald-400"></div>
+        </div>
+      ) : (
+        <div
+          className={"w-8 h-4 rounded-full border flex items-center px-0.5 transition-all cursor-pointer " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}
+          onClick={() => toggle(stateKey as keyof typeof toggles)}
+        >
+          <div className={"w-3 h-3 rounded-full transition-all " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-400" : "bg-slate-600")}></div>
+        </div>
+      )}
     </div>
   );
 
@@ -129,17 +136,19 @@ export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLi
               icon={Activity} 
               description="Size each position so stop-loss = fixed % of equity (e.g. 0.5%)." 
             />
-           <ToggleSwitch 
-              label="Hard Per-Position Cap" 
-              stateKey="hardCap" 
-              icon={ShieldAlert} 
-              description="No position exceeds 20% of total available equity." 
+           <ToggleSwitch
+              label="Hard Per-Position Cap"
+              stateKey="hardCap"
+              icon={ShieldAlert}
+              description="No position exceeds 20% of total available equity."
+              locked
             />
-           <ToggleSwitch 
-              label="Daily Loss Kill-Switch" 
-              stateKey="killSwitch" 
-              icon={AlertTriangle} 
-              description="Blocks new entries at >= 80% daily-loss cap." 
+           <ToggleSwitch
+              label="Daily Loss Kill-Switch"
+              stateKey="killSwitch"
+              icon={AlertTriangle}
+              description="Blocks new entries at >= 80% daily-loss cap."
+              locked
             />
            <ToggleSwitch 
               label="Circuit Breaker Auto-Flatten" 

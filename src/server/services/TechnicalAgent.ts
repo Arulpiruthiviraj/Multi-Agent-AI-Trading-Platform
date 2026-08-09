@@ -77,6 +77,18 @@ export class TechnicalProposerAgent {
      return { upper: sma + (stdDev * 2), lower: sma - (stdDev * 2) };
   }
 
+  private clamp01(v: number): number {
+    return Math.max(0, Math.min(1, v));
+  }
+
+  // Maps a 0-1 signal-strength score to a confidence in [0.55, 0.95] - a fired rule always has
+  // some baseline validity (it wouldn't have fired otherwise), and the strength score scales how
+  // far into "textbook" territory the actual indicator values are, rather than a fixed constant
+  // that doesn't distinguish a barely-triggered signal from an extreme one.
+  private strengthToConfidence(strength01: number): number {
+    return Number((0.55 + 0.40 * this.clamp01(strength01)).toFixed(3));
+  }
+
   private checkStrategies(symbol: string, prices: number[]) {
     const currentPrice = prices[prices.length - 1];
     
@@ -91,11 +103,15 @@ export class TechnicalProposerAgent {
 
     // Momentum Breakout
     if (currentPrice > sma20 && sma20 > sma50 && rsi > 50 && rsi < 70 && macd.macd > macd.signal) {
+      const rsiStrength = this.clamp01((rsi - 50) / 20);
+      const macdStrength = this.clamp01((macd.macd - macd.signal) / (currentPrice * 0.005));
+      const trendStrength = this.clamp01((sma20 - sma50) / (currentPrice * 0.02));
+      const confidence = this.strengthToConfidence((rsiStrength + macdStrength + trendStrength) / 3);
       eventBus.emitTradeIdea({
         traceId,
         symbol,
         side: "BUY",
-        confidence: 0.85,
+        confidence,
         currentPrice,
         reasoning: `Strong upward trend detected. MACD bullish crossover. RSI at ${rsi.toFixed(2)}.`,
         agent: "TechnicalAgent"
@@ -104,24 +120,32 @@ export class TechnicalProposerAgent {
 
     // Mean Reversion
     if (rsi < 30 && currentPrice < bb.lower) {
+      const rsiStrength = this.clamp01((30 - rsi) / 30);
+      const bandWidth = bb.upper - bb.lower;
+      const bbStrength = bandWidth > 0 ? this.clamp01((bb.lower - currentPrice) / bandWidth) : 0;
+      const confidence = this.strengthToConfidence((rsiStrength + bbStrength) / 2);
       eventBus.emitTradeIdea({
         traceId,
         symbol,
         side: "BUY",
-        confidence: 0.78,
+        confidence,
         currentPrice,
         reasoning: `Oversold condition. Price breached lower Bollinger Band with RSI at ${rsi.toFixed(2)}.`,
         agent: "TechnicalAgent"
       });
     }
-    
+
     // Overbought condition
     if (rsi > 75 && currentPrice > bb.upper) {
+      const rsiStrength = this.clamp01((rsi - 75) / 25);
+      const bandWidth = bb.upper - bb.lower;
+      const bbStrength = bandWidth > 0 ? this.clamp01((currentPrice - bb.upper) / bandWidth) : 0;
+      const confidence = this.strengthToConfidence((rsiStrength + bbStrength) / 2);
       eventBus.emitTradeIdea({
         traceId,
         symbol,
         side: "SELL",
-        confidence: 0.88,
+        confidence,
         currentPrice,
         reasoning: `Overbought condition. Price exceeded upper Bollinger Band. RSI at ${rsi.toFixed(2)}.`,
         agent: "TechnicalAgent"

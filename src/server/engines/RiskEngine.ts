@@ -15,6 +15,7 @@
 import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import * as schema from '../db/schema';
+import { desc, isNotNull, and, eq } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -22,6 +23,21 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 const STALE_PRICE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
 const MARKET_CLOCK_CACHE_MS = 60 * 1000;
+
+const MAX_CONSECUTIVE_LOSSES = 3;
+const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = 0.20; // matches GuardrailsPanel's "Hard Per-Position Cap" copy
+
+// Real consecutive-loss circuit breaker - reads actual realized P&L from the last few FILLED
+// SELL trades (now populated by OrderManagement.ts). Returns true only when there IS real trade
+// history and the most recent MAX_CONSECUTIVE_LOSSES of it were all losses.
+async function hasConsecutiveLosses(): Promise<boolean> {
+    const recentClosed = await db.select().from(schema.trades)
+        .where(and(eq(schema.trades.status, 'FILLED'), isNotNull(schema.trades.profitLoss)))
+        .orderBy(desc(schema.trades.timestamp))
+        .limit(MAX_CONSECUTIVE_LOSSES);
+    if (recentClosed.length < MAX_CONSECUTIVE_LOSSES) return false;
+    return recentClosed.every(t => (t.profitLoss ?? 0) < 0);
+}
 
 // Real market-hours check via Alpaca's /v2/clock. Returns null (skip the check) rather than a
 // fabricated guess when Alpaca credentials aren't configured - there is no other real source here.
@@ -87,7 +103,8 @@ export class RiskEngine {
             const dayStartEquity = tradingEngine.state.dayStartEquity ?? equityNow;
             const dailyLoss = Math.max(0, dayStartEquity - equityNow);
             tradingEngine.state.currentDailyLoss = dailyLoss;
-            if (dailyLoss >= tradingEngine.state.dailyLossLimit) {
+            const dailyLossKillSwitchThreshold = tradingEngine.state.dailyLossLimit * 0.8;
+            if (dailyLoss >= dailyLossKillSwitchThreshold) {
                 eventBus.emitRiskAssessment({
                     traceId: proposal.traceId,
                     symbol: proposal.symbol,
@@ -95,7 +112,22 @@ export class RiskEngine {
                     currentPrice: proposal.currentPrice,
                     approved: false,
                     maxQuantity: 0,
-                    reasoning: `Daily loss limit reached: -$${dailyLoss.toFixed(2)} (limit $${tradingEngine.state.dailyLossLimit}). All new trades blocked until tomorrow or a manual reset.`
+                    reasoning: `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached 80% of the $${tradingEngine.state.dailyLossLimit} daily loss limit. All new trades blocked until tomorrow or a manual reset.`
+                });
+                return;
+            }
+
+            // 2a-2. Consecutive-loss circuit breaker - real realized P&L from the last three
+            // FILLED trades, not a simulated/hardcoded count.
+            if (await hasConsecutiveLosses()) {
+                eventBus.emitRiskAssessment({
+                    traceId: proposal.traceId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    currentPrice: proposal.currentPrice,
+                    approved: false,
+                    maxQuantity: 0,
+                    reasoning: `${MAX_CONSECUTIVE_LOSSES} consecutive losing trades. All new trades blocked pending manual review.`
                 });
                 return;
             }
@@ -185,6 +217,18 @@ export class RiskEngine {
             let maxSharesByBuyingPower = Math.floor(buyingPower / currentPrice);
 
             let maxQuantity = Math.min(maxSharesByRisk, maxSharesByCapital, maxSharesByBuyingPower);
+
+            // 4a. Single-symbol concentration cap - no position may exceed
+            // MAX_SINGLE_SYMBOL_CONCENTRATION_PCT of real account equity after this trade fills.
+            // Reduces the size rather than outright rejecting, same as the other sizing caps above.
+            if (proposal.side === 'BUY') {
+                const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
+                const existingValue = existingPosition ? existingPosition.quantity * currentPrice : 0;
+                const maxPositionValue = accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
+                const remainingRoom = Math.max(0, maxPositionValue - existingValue);
+                const maxSharesByConcentration = Math.floor(remainingRoom / currentPrice);
+                maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
+            }
 
             // 5. Final validation
             if (maxQuantity <= 0) {
