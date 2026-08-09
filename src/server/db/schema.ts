@@ -77,7 +77,13 @@ export const brokerConnections = sqliteTable('broker_connections', {
   apiKeyEncrypted: text('api_key_encrypted'),
   secretEncrypted: text('secret_encrypted'),
   paperMode: integer('paper_mode', { mode: 'boolean' }).default(true),
-  status: text('status').default('Disconnected')
+  status: text('status').default('Disconnected'),
+  // A single "broker" (e.g. IBKR) can expose multiple real sub-accounts, and non-US brokers
+  // report native-currency balances (IBKR CAD accounts, Questrade TFSA/RRSP in CAD) rather than
+  // always USD. Both were previously unrepresentable - every connection was implicitly a single
+  // USD account.
+  accountId: text('account_id'),
+  currency: text('currency').default('USD'),
 });
 
 export const aiProviders = sqliteTable('ai_providers', {
@@ -197,6 +203,7 @@ export const portfolio = sqliteTable('portfolio', {
   lastUpdated: text('last_updated').notNull(),
   unrealizedPnL: real('unrealized_pnl'),
   brokerSource: text('broker_source'),
+  currency: text('currency').default('USD'),
 });
 
 export const learnedRules = sqliteTable('learned_rules', {
