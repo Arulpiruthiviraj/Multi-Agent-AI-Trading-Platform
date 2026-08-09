@@ -87,12 +87,11 @@ export class BrokerManager {
          
          const settings = await db.select().from(schema.settings).limit(1);
          const selectedName = settings[0]?.selectedBroker || 'Simulation Mode';
-         
+
          const brokerConnections = await db.select().from(schema.brokerConnections);
-         const connection = brokerConnections.find(b => b.brokerName === selectedName);
-         
+
          let activeFound = false;
-         
+
          for (const [id, broker] of this.brokers.entries()) {
              if (NON_FUNCTIONAL_BROKER_IDS.has(id)) continue;
              if (broker.name === selectedName || (selectedName === 'Simulation Mode' && id === 'internal_paper')) {
@@ -106,20 +105,33 @@ export class BrokerManager {
              console.warn(`[BrokerManager] Saved broker selection '${selectedName}' is unavailable or non-functional. Falling back to Internal Paper Simulator.`);
              this.activeBroker = internalPaper;
          }
-         
+
+         // Look up the connection row for the broker we actually resolved above - not for
+         // selectedName independently, which could point at a different broker than activeBroker
+         // ended up being (e.g. after the non-functional/unavailable fallback just above).
+         const connection = brokerConnections.find(b => b.brokerName === this.activeBroker.name);
+
          if (connection) {
-             const key = connection.apiKeyEncrypted ? EncryptionService.decrypt(connection.apiKeyEncrypted) : process.env.ALPACA_API_KEY;
-             const secret = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted)
-                 : connection.apiSecretEncrypted ? EncryptionService.decrypt(connection.apiSecretEncrypted)
-                 : process.env.ALPACA_SECRET_KEY;
-             
+             // Only pass through credentials this specific broker's own connection row actually has.
+             // No cross-broker fallback here - each adapter owns its own env-var fallback internally
+             // (e.g. AlpacaBroker.authenticate() falls back to process.env.ALPACA_* when no apiKey is
+             // passed). Hardcoding Alpaca's env vars as a universal fallback for any broker was the
+             // credential leak: a Questrade/IBKR connection with a missing key would have silently
+             // authenticated using Alpaca's credentials instead of failing.
+             const key = connection.apiKeyEncrypted ? EncryptionService.decrypt(connection.apiKeyEncrypted) : undefined;
+             const secret = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted) : undefined;
+
              if (connection.paperMode) {
                  this.activeBroker.paperTrading();
              } else {
                  this.activeBroker.liveTrading();
              }
-             
+
              await this.activeBroker.authenticate({ apiKey: key, secretKey: secret });
+         } else if (this.activeBroker.id === 'alpaca') {
+             // No DB connection row yet - Alpaca is the one adapter designed to fall back to
+             // process.env.ALPACA_API_KEY/SECRET_KEY on its own when given no credentials.
+             await this.activeBroker.authenticate({});
          } else {
              await this.activeBroker.authenticate({ initialCash: 100000 });
          }
