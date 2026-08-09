@@ -23,6 +23,7 @@ const AI_PROVIDER_ENV_MAP: Record<string, string> = {
   Claude:     'ANTHROPIC_API_KEY',
   DeepSeek:   'DEEPSEEK_API_KEY',
   Groq:       'GROQ_API_KEY',
+  Grok:       'GROK_API_KEY',
   Kimi:       'KIMI_API_KEY',
   OpenRouter: 'OPENROUTER_API_KEY',
   Mistral:    'MISTRAL_API_KEY',

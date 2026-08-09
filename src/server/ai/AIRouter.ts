@@ -86,9 +86,10 @@ export class AIRouter {
         // Seed some defaults
         const defaultProviders = [
             { id: uuidv4(), providerName: 'Gemini', apiEndpoint: null, priority: 0, enabled: true },
-            { id: uuidv4(), providerName: 'OpenRouter (Free Tier)', apiEndpoint: 'https://openrouter.ai/api/v1', priority: 1, enabled: true },
-            { id: uuidv4(), providerName: 'LiteLLM Gateway', apiEndpoint: 'http://localhost:4000', priority: 2, enabled: true },
-            { id: uuidv4(), providerName: 'Ollama (Local)', apiEndpoint: 'http://localhost:11434/v1', priority: 3, enabled: true },
+            { id: uuidv4(), providerName: 'Grok', apiEndpoint: 'https://api.x.ai/v1', priority: 1, enabled: true, defaultModel: 'grok-4' },
+            { id: uuidv4(), providerName: 'OpenRouter (Free Tier)', apiEndpoint: 'https://openrouter.ai/api/v1', priority: 2, enabled: true },
+            { id: uuidv4(), providerName: 'LiteLLM Gateway', apiEndpoint: 'http://localhost:4000', priority: 3, enabled: true },
+            { id: uuidv4(), providerName: 'Ollama (Local)', apiEndpoint: 'http://localhost:11434/v1', priority: 4, enabled: true },
         ];
         try {
             for (const p of defaultProviders) {
