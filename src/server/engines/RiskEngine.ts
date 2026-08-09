@@ -56,6 +56,7 @@ export class RiskEngine {
                      traceId: proposal.traceId,
                      symbol: proposal.symbol,
                      side: proposal.side,
+                     currentPrice: proposal.currentPrice,
                      approved: false,
                      maxQuantity: 0,
                      reasoning: "High volatility news event detected, overriding AI decision."
@@ -102,6 +103,7 @@ export class RiskEngine {
                      traceId: proposal.traceId,
                      symbol: proposal.symbol,
                      side: proposal.side,
+                     currentPrice,
                      approved: false,
                      maxQuantity: 0,
                      reasoning: `Insufficient buying power or risk limits exceeded. Required: ${currentPrice}, Available BP: ${buyingPower}`
@@ -117,6 +119,7 @@ export class RiskEngine {
                         traceId: proposal.traceId,
                         symbol: proposal.symbol,
                         side: proposal.side,
+                        currentPrice,
                         approved: false,
                         maxQuantity: 0,
                         reasoning: "Cannot sell - no existing position in broker portfolio."

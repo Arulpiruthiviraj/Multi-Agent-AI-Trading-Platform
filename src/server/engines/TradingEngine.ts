@@ -103,14 +103,9 @@ class TradingEngine {
                 news: { sentiment: 75, volume: "High" },
                 verification: { active: true, aiConfidence: 85, engineConfidence: 90, verdict: "pending" }
             },
-            activeCycle: {
-                phase: "idle",
-                targetSymbol: "",
-                signals: [],
-                aiConsensus: "pending",
-                riskCheck: "pending",
-                finalAction: "none"
-            },
+            // null until a real TRADE_IDEA_GENERATED event starts a cycle - AutoBotFlowVisualizer
+            // shows its honest "Waiting for next scan cycle" state while this is null.
+            activeCycle: null,
                         learningJournal: [],
             memoryRules: [],
             discoveredOpportunities: [],
@@ -134,10 +129,33 @@ class TradingEngine {
 // Listen to events to update state
         eventBus.on('TRADE_IDEA_GENERATED', (idea) => {
            this.logHistory('scan', `Agent proposed ${idea.side} on ${idea.symbol}`);
+
+           // Start (or continue) the live decision-flow cycle shown by AutoBotFlowVisualizer.
+           // Only real fields from the emitted idea are used - no fabricated stage data.
+           if (!this.state.activeCycle || this.state.activeCycle.symbol !== idea.symbol || ['executed', 'vetoed', 'rejected'].includes(this.state.activeCycle.status)) {
+               this.state.activeCycle = {
+                   status: 'researching',
+                   symbol: idea.symbol,
+                   amount: this.state.maxTradeSize,
+                   researchData: {
+                       sentiment: idea.side === 'BUY' ? 'BULLISH' : idea.side === 'SELL' ? 'BEARISH' : 'NEUTRAL',
+                       thinking: idea.reasoning
+                   }
+               };
+           }
         });
-        
+
         eventBus.on('CHIEF_APPROVED_IDEA', (idea) => {
            this.logHistory('scan', `Chief Trader approved ${idea.side} on ${idea.symbol} (Confidence: ${idea.confidence.toFixed(2)})`);
+
+           if (this.state.activeCycle?.symbol === idea.symbol) {
+               this.state.activeCycle.status = 'verifying';
+               this.state.activeCycle.proposerData = {
+                   decision: idea.side,
+                   confidence: Math.round(idea.confidence * 100),
+                   thinking: idea.reasoning
+               };
+           }
         });
 
         eventBus.on('RISK_ASSESSMENT_COMPLETED', (assessment) => {
@@ -146,11 +164,26 @@ class TradingEngine {
            } else {
                this.logHistory('veto', `Risk Engine vetoed ${assessment.symbol}: ${assessment.reasoning}`);
            }
+
+           if (this.state.activeCycle?.symbol === assessment.symbol) {
+               this.state.activeCycle.riskData = {
+                   verdict: assessment.approved ? 'APPROVE' : 'REJECT',
+                   thinking: assessment.reasoning
+               };
+               this.state.activeCycle.status = assessment.approved ? 'optimizing' : 'vetoed';
+               if (!assessment.approved) this.state.activeCycle.finalAction = 'REJECTED';
+           }
         });
-        
+
         eventBus.on('ORDER_EXECUTED', (order) => {
            this.logHistory('execute', `Executed ${order.side} ${order.quantity}x ${order.symbol} @ $${order.price.toFixed(2)}`);
            this.state.spent += (order.quantity * order.price);
+
+           if (this.state.activeCycle?.symbol === order.symbol) {
+               this.state.activeCycle.status = 'executed';
+               this.state.activeCycle.finalAction = 'EXECUTED';
+               this.state.activeCycle.executionData = { strategy: `${order.side} MARKET` };
+           }
         });
         
         eventBus.on('LEARNED_NEW_RULE', (rule) => {

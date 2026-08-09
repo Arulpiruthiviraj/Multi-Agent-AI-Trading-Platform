@@ -50,48 +50,13 @@ function loadShadowPortfolio(): ShadowPortfolioState {
   } catch (e) {
     console.warn("Could not load shadow portfolio from disk, using defaults.");
   }
+  // Starts empty (no fabricated positions) - the shadow ledger only ever
+  // reflects trades actually mirrored from real CHIEF_APPROVED_IDEA events.
   const defaultShadow: ShadowPortfolioState = {
-    cash: 95300.0,
+    cash: 100000.0,
     initialCash: 100000.0,
     peakValuation: 100000.0,
-    positions: [
-      {
-        symbol: "AAPL",
-        quantity: 10,
-        entryPrice: 150.0,
-        currentPrice: 155.0,
-        totalCost: 1500.0,
-        marketValue: 1550.0,
-        unrealizedPnl: 50.0,
-        unrealizedPnlPercent: 0.0333,
-        sector: "Technology",
-        openedAt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        symbol: "AMD",
-        quantity: 15,
-        entryPrice: 80.0,
-        currentPrice: 75.0,
-        totalCost: 1200.0,
-        marketValue: 1125.0,
-        unrealizedPnl: -75.0,
-        unrealizedPnlPercent: -0.0625,
-        sector: "Technology",
-        openedAt: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-      {
-        symbol: "SPY",
-        quantity: 5,
-        entryPrice: 400.0,
-        currentPrice: 405.0,
-        totalCost: 2000.0,
-        marketValue: 2025.0,
-        unrealizedPnl: 25.0,
-        unrealizedPnlPercent: 0.0125,
-        sector: "Index Funds",
-        openedAt: new Date(Date.now() - 45 * 24 * 60 * 60 * 1000).toISOString(),
-      },
-    ],
+    positions: [],
   };
   saveShadowPortfolio(defaultShadow);
   return defaultShadow;

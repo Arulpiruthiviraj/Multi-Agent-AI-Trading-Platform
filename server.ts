@@ -100,6 +100,7 @@ import { shadowPortfolioState, saveShadowPortfolio } from "./src/server/state/sh
 import { integrationRouter } from "./src/server/routes/integrationRoutes";
 import { tradingEngine } from "./src/server/engines/TradingEngine";
 import { system } from "./src/server/core/SystemBootstrap";
+import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -1774,23 +1775,14 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
     }
   }
 
-  function stepPortfolioPrices() {
-    // Update Sovereign Portfolio positions
-    if (portfolioState && portfolioState.positions) {
-      // MOCKS REMOVED: Price updates must come from a real BrokerPlugin / MarketData provider.
-      // We no longer fabricate Math.random() prices.
-      portfolioState.positions.forEach((pos: any) => {
-        pos.marketValue = Number((pos.quantity * pos.currentPrice).toFixed(2));
-        pos.unrealizedPnl = Number((pos.marketValue - pos.totalCost).toFixed(2));
-        pos.unrealizedPnlPercent = Number(pos.totalCost > 0 ? (pos.unrealizedPnl / pos.totalCost).toFixed(4) : "0");
-      });
-      savePortfolio(portfolioState);
-    }
-
-    // Update Shadow Portfolio positions
+  async function stepPortfolioPrices() {
+    // Update Shadow Portfolio position marks from real live ticks (MarketDataWorker).
+    // Falls back to the position's last known real price if no tick has arrived yet -
+    // never fabricates a price.
     if (shadowPortfolioState && shadowPortfolioState.positions) {
-      // MOCKS REMOVED: Bypassed portfolio prices rely on real data.
       shadowPortfolioState.positions.forEach((pos: any) => {
+        const liveTick = marketDataWorker.getLatestPrice(pos.symbol);
+        if (typeof liveTick === 'number' && liveTick > 0) pos.currentPrice = liveTick;
         pos.marketValue = Number((pos.quantity * pos.currentPrice).toFixed(2));
         pos.unrealizedPnl = Number((pos.marketValue - pos.totalCost).toFixed(2));
         pos.unrealizedPnlPercent = Number(pos.totalCost > 0 ? (pos.unrealizedPnl / pos.totalCost).toFixed(4) : "0");
@@ -1798,8 +1790,18 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
       saveShadowPortfolio(shadowPortfolioState);
     }
 
-    // Calculate and push equity history
-    const sovEquity = portfolioState.cash + portfolioState.positions.reduce((sum: number, p: any) => sum + p.marketValue, 0);
+    // Sovereign equity comes from the real broker portfolio (the same accessor RiskEngine
+    // uses) - not the legacy portfolioState JSON, which still carries pre-seeded demo data.
+    let sovEquity: number;
+    try {
+      const broker = BrokerManager.getInstance().getActiveBroker();
+      const portfolio = await broker.portfolio();
+      sovEquity = Number(portfolio.equity) || 0;
+    } catch (e) {
+      console.error('[ShadowBenchmark] Failed to fetch real broker equity for equity curve', e);
+      return;
+    }
+
     const shadEquity = shadowPortfolioState.cash + shadowPortfolioState.positions.reduce((sum: number, p: any) => sum + p.marketValue, 0);
 
     const timeLabel = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -1813,6 +1815,33 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
       tradingEngine.state.equityHistory.shift();
     }
   }
+
+  // Mirrors every Chief Trader decision into the unconstrained Shadow Portfolio, regardless
+  // of what Risk Engine decides - this is what ShadowPortfolioBenchmark's "Shadow" line means.
+  // Never places a real order and never touches the real broker.
+  eventBus.on('CHIEF_APPROVED_IDEA', (idea: any) => {
+    if (typeof idea.currentPrice === 'number' && idea.currentPrice > 0 && (idea.side === 'BUY' || idea.side === 'SELL')) {
+      executeAutoBotTradeInShadow(idea.symbol, idea.side, idea.currentPrice, tradingEngine.state.maxTradeSize);
+    }
+  });
+
+  // Logs every Risk Engine veto to the bypassed-trades ledger shown by ShadowPortfolioBenchmark.
+  // Only real fields from the emitted assessment are recorded.
+  eventBus.on('RISK_ASSESSMENT_COMPLETED', (assessment: any) => {
+    if (!assessment.approved) {
+      tradingEngine.state.bypassedTrades.unshift({
+        time: new Date().toISOString(),
+        symbol: assessment.symbol,
+        side: assessment.side,
+        reason: assessment.reasoning,
+        price: assessment.currentPrice,
+        amount: typeof assessment.currentPrice === 'number' ? tradingEngine.state.maxTradeSize : undefined
+      });
+      if (tradingEngine.state.bypassedTrades.length > 50) tradingEngine.state.bypassedTrades.pop();
+    }
+  });
+
+  setInterval(() => { stepPortfolioPrices().catch(e => console.error('[ShadowBenchmark] stepPortfolioPrices failed', e)); }, 60000);
 
 
   

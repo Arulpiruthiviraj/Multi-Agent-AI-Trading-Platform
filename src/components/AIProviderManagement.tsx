@@ -56,9 +56,12 @@ export default function AIProviderManagement() {
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     ws.onmessage = (event) => {
         try {
+            // server.ts wraps every EventBus event as {type: eventName, data: payload}.
+            // AIRouter publishes ai_metrics_update via eventBus.publish('UI_UPDATE', {type, payload}),
+            // so the real shape here is {type: 'UI_UPDATE', data: {type: 'ai_metrics_update', payload}}.
             const data = JSON.parse(event.data);
-            if (data.type === 'ai_metrics_update') {
-                setUsage(prev => [data.payload, ...prev].slice(0, 100));
+            if (data.type === 'UI_UPDATE' && data.data?.type === 'ai_metrics_update') {
+                setUsage(prev => [data.data.payload, ...prev].slice(0, 100));
             }
         } catch(e) {}
     };

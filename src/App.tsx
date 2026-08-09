@@ -50,7 +50,6 @@ import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
 import AutoBotFlowVisualizer from "./components/AutoBotFlowVisualizer";
 import WeightAdjustmentVisualizer from "./components/WeightAdjustmentVisualizer";
 import GuardrailsPanel from "./components/GuardrailsPanel";
-import AgentRegimeHeatmap from "./components/AgentRegimeHeatmap";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
 import MultiAgentDialogueGraph from "./components/MultiAgentDialogueGraph";
 import ChiefTraderAgent from "./components/ChiefTraderAgent";
@@ -1401,15 +1400,32 @@ export default function App() {
 
   const toggleAutoBot = async (sessionConfig?: any) => {
      try {
+       // AutonomousLaunchDialog's tradingMode/riskProfile use display strings; translate them to
+       // the values TradingEngine/SystemBootstrap actually understand. executionBroker, marketData,
+       // account, and agents are collected by the dialog but have no real backend support yet
+       // (per-session broker/data-provider switching and per-agent enable flags don't exist) -
+       // they are intentionally NOT sent so this doesn't imply they take effect.
+       const tradingModeMap: Record<string, string> = {
+         'Broker Paper Trading': 'PAPER',
+         'Argus Internal Paper Simulator': 'SIMULATION',
+         'LIVE TRADING': 'LIVE'
+       };
+       const riskProfileMap: Record<string, string> = {
+         'Conservative': 'Conservative',
+         'Aggressive': 'Aggressive',
+         'Moderate': 'Balanced',
+         'Institutional': 'Balanced'
+       };
+
        const res = await fetch("/api/v1/autobot/toggle", {
          method: "POST",
          headers: { "Content-Type": "application/json" },
-         body: JSON.stringify({ 
-           enabled: !autoBotConfig.enabled, 
-           tradingMode: autoBotTradingMode,
+         body: JSON.stringify({
+           enabled: !autoBotConfig.enabled,
+           tradingMode: sessionConfig?.tradingMode ? (tradingModeMap[sessionConfig.tradingMode] || autoBotTradingMode) : autoBotTradingMode,
            budget: autoBotTargetBudget,
-           strategy: autoBotStrategy,
-           riskLevel: autoBotRiskLevel,
+           strategy: sessionConfig?.strategy || autoBotStrategy,
+           riskLevel: sessionConfig?.riskProfile ? (riskProfileMap[sessionConfig.riskProfile] || autoBotRiskLevel) : autoBotRiskLevel,
            maxTradeSize: autoBotMaxTradeSize,
            dailyLossLimit: autoBotDailyLossLimit,
            takeProfitPct: autoBotTakeProfit,
