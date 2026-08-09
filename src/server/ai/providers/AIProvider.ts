@@ -36,7 +36,10 @@
 export interface AIProvider {
   initialize(apiKey?: string): Promise<void>;
   authenticate(): Promise<boolean>;
-  chat(prompt: string, options?: any): Promise<{ content: string, tokens: number }>;
+  // inputTokens/outputTokens are the real split from the provider's own usage field when
+  // available. tokens is kept as inputTokens+outputTokens for backward compatibility with
+  // existing callers that only look at the combined count.
+  chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }>;
   stream(prompt: string, options?: any): AsyncGenerator<string, void, unknown>;
   embeddings(text: string): Promise<number[]>;
   vision(image: Buffer, prompt: string): Promise<{ content: string, tokens: number }>;
@@ -56,7 +59,7 @@ export abstract class BaseAIProvider implements AIProvider {
 
   async initialize(apiKey?: string): Promise<void> {}
   async authenticate(): Promise<boolean> { return true; }
-  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number }> { return { content: '', tokens: 0 }; }
+  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> { return { content: '', tokens: 0, inputTokens: 0, outputTokens: 0 }; }
   async *stream(prompt: string, options?: any): AsyncGenerator<string, void, unknown> { yield ''; }
   async embeddings(text: string): Promise<number[]> { return []; }
   async vision(image: Buffer, prompt: string): Promise<{ content: string, tokens: number }> { return { content: '', tokens: 0 }; }

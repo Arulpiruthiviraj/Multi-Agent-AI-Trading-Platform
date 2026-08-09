@@ -54,6 +54,7 @@ export class InternalPaperBroker implements BrokerPlugin {
       options: false,
       shortSelling: false, // tick() comment: "we assume long only for simplicity"
       streamingMarketData: false,
+      requiresManualReauth: false,
     };
   }
   async health() { return "Healthy"; }

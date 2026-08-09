@@ -47,7 +47,10 @@ import { EncryptionService } from '../server/core/EncryptionService';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
-const NON_FUNCTIONAL_BROKER_IDS = new Set(['questrade', 'coinbase', 'ibkr']);
+// ibkr was moved off this list once InteractiveBrokersAdapter got a real Client Portal Web API
+// implementation - it can still legitimately fail authenticate() (requiresManualReauth: true,
+// no Gateway running), which is a real runtime state, not a stub.
+const NON_FUNCTIONAL_BROKER_IDS = new Set(['questrade', 'coinbase']);
 
 export class BrokerManager {
   private static instance: BrokerManager;

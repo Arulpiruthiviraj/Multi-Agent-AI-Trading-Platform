@@ -33,6 +33,19 @@ integrationRouter.get("/brokers", (req: Request, res: Response) => {
   });
 });
 
+// Same data as GET /brokers above, at a path that doesn't collide. configRoutes.ts's own
+// unrelated `configRouter.get('/brokers', ...)` is ALSO mounted at bare /api/v1 (a pre-existing
+// duplicate-mount defect - see the audit) and wins over this router's /brokers for that exact
+// path, so this real capability-model endpoint was completely unreachable. Not fixing the
+// underlying duplicate mount here (out of scope for this change) - just giving this data a path
+// that actually resolves.
+integrationRouter.get("/broker-capabilities", (req: Request, res: Response) => {
+  res.json({
+    brokers: BrokerManager.getInstance().getAvailableBrokers(),
+    activeBroker: BrokerManager.getInstance().getActiveBroker().id,
+  });
+});
+
 integrationRouter.post("/brokers/active", async (req: Request, res: Response) => {
   const { id, credentials } = req.body;
   try {

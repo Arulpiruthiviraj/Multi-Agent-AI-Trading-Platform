@@ -96,6 +96,11 @@ export interface BrokerCapabilities {
   options: boolean;
   shortSelling: boolean;
   streamingMarketData: boolean; // via this adapter's own marketData() - not MarketDataWorker
+  // True only for adapters whose authenticated session cannot be established or refreshed
+  // programmatically end-to-end (e.g. IBKR's Client Portal Gateway requires a human to complete
+  // browser 2FA login roughly every 24h - there is no official headless bypass). False for
+  // adapters that authenticate purely via API key/secret with no recurring human step.
+  requiresManualReauth: boolean;
 }
 
 export interface BrokerPlugin {

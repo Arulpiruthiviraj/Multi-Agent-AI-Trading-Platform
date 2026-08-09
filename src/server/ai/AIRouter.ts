@@ -180,10 +180,10 @@ export class AIRouter {
                     provider: providerId,
                     model: 'consensus',
                     agent: agentType,
-                    promptTokens: 0,
-                    completionTokens: res.tokens,
+                    promptTokens: res.inputTokens || 0,
+                    completionTokens: res.outputTokens ?? res.tokens,
                     latency,
-                    cost: provider.estimateCost(0, res.tokens),
+                    cost: provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens),
                     responseStatus: 'success'
                 });
             } catch (e) {}
@@ -209,7 +209,7 @@ export class AIRouter {
                 model: 'default',
                 provider: providerId,
                 latencyMs: latency,
-                tokenUsage: { input: 0, output: res.tokens },
+                tokenUsage: { input: res.inputTokens || 0, output: res.outputTokens ?? res.tokens },
                 status: "success"
             };
         } catch(e:any) {
@@ -330,13 +330,13 @@ export class AIRouter {
                     provider: providerId,
                     model: reqModel || 'default',
                     agent: agentType,
-                    promptTokens: 0,
-                    completionTokens: res.tokens,
+                    promptTokens: res.inputTokens || 0,
+                    completionTokens: res.outputTokens ?? res.tokens,
                     latency,
-                    cost: provider.estimateCost(0, res.tokens),
+                    cost: provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens),
                     responseStatus: 'success'
                 });
-                
+
                 // Update provider stats
                 const pDb = await db.select().from(schema.aiProviders).where(eq(schema.aiProviders.id, providerId));
                 if (pDb && pDb.length > 0) {
@@ -344,14 +344,18 @@ export class AIRouter {
                     const newLatency = (prevLatency * 9 + latency) / 10;
                     const prevSuccess = pDb[0].successRate || 100;
                     const newSuccess = Math.min(100, prevSuccess + 1);
-                    
+                    const callCost = provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens);
+
                     await db.update(schema.aiProviders).set({
                        latency: newLatency,
                        successRate: newSuccess,
                        health: 'Healthy',
                        lastSuccess: new Date().toISOString(),
                        requests: (pDb[0].requests || 0) + 1,
-                       tokens: (pDb[0].tokens || 0) + res.tokens
+                       tokens: (pDb[0].tokens || 0) + res.tokens,
+                       inputTokens: (pDb[0].inputTokens || 0) + (res.inputTokens || 0),
+                       outputTokens: (pDb[0].outputTokens || 0) + (res.outputTokens ?? res.tokens),
+                       cost: (pDb[0].cost || 0) + callCost,
                     }).where(eq(schema.aiProviders.id, providerId));
                 }
             } catch (e) { console.error("Failed to log usage", e); }

@@ -54,6 +54,7 @@ export class AlpacaBroker implements BrokerPlugin {
       options: false,
       shortSelling: false, // placeOrder doesn't send a short-specific side/flag
       streamingMarketData: false, // real-time ticks come from MarketDataWorker's own WS, not this class
+      requiresManualReauth: false, // pure API key/secret auth, no recurring human step
     };
   }
   async health() { return "Healthy"; }

@@ -56,6 +56,7 @@ export class CoinbaseBroker implements BrokerPlugin {
       options: false,
       shortSelling: false,
       streamingMarketData: false,
+      requiresManualReauth: false,
     };
   }
   async health() { return "Healthy"; }

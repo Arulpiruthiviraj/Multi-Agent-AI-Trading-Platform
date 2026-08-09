@@ -52,7 +52,7 @@ export class DeepSeekProvider extends BaseAIProvider {
     return !!this.apiKey;
   }
 
-  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number }> {
+  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
     if (!this.apiKey) throw new Error("DeepSeekProvider not authenticated");
     
     const response = await fetch("https://api.deepseek.com/v1/chat/completions", {
@@ -72,9 +72,22 @@ export class DeepSeekProvider extends BaseAIProvider {
     }
     
     const data = await response.json();
+    const inputTokens = data.usage?.prompt_tokens || 0;
+    const outputTokens = data.usage?.completion_tokens || 0;
     return {
         content: data.choices[0]?.message?.content || '',
-        tokens: data.usage?.total_tokens || 0
+        tokens: data.usage?.total_tokens || (inputTokens + outputTokens),
+        inputTokens,
+        outputTokens,
     };
+  }
+
+  // Public list price for deepseek-chat (cache-miss rate) as of DeepSeek's published API
+  // pricing - verify against platform.deepseek.com/api-docs/pricing before relying on this for
+  // budget decisions; DeepSeek has historically changed these rates and offered off-peak discounts.
+  estimateCost(inputTokens: number, outputTokens: number): number {
+    const inputPer1M = 0.14;
+    const outputPer1M = 0.28;
+    return (inputTokens / 1_000_000) * inputPer1M + (outputTokens / 1_000_000) * outputPer1M;
   }
 }

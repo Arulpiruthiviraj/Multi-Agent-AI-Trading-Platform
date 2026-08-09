@@ -52,7 +52,7 @@ export class OpenAIProvider extends BaseAIProvider {
     return !!this.apiKey;
   }
 
-  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number }> {
+  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
     if (!this.apiKey) throw new Error("OpenAIProvider not authenticated");
     
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -72,9 +72,21 @@ export class OpenAIProvider extends BaseAIProvider {
     }
     
     const data = await response.json();
+    const inputTokens = data.usage?.prompt_tokens || 0;
+    const outputTokens = data.usage?.completion_tokens || 0;
     return {
         content: data.choices[0]?.message?.content || '',
-        tokens: data.usage?.total_tokens || 0
+        tokens: data.usage?.total_tokens || (inputTokens + outputTokens),
+        inputTokens,
+        outputTokens,
     };
+  }
+
+  // Public list price for gpt-4o as of OpenAI's published API pricing - verify against
+  // openai.com/api/pricing before relying on this for budget decisions; prices change.
+  estimateCost(inputTokens: number, outputTokens: number): number {
+    const inputPer1M = 2.50;
+    const outputPer1M = 10.00;
+    return (inputTokens / 1_000_000) * inputPer1M + (outputTokens / 1_000_000) * outputPer1M;
   }
 }

@@ -58,7 +58,7 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     return !!this.apiKey;
   }
 
-  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number }> {
+  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
     if (!this.authenticate()) throw new Error(`${this.providerName} not authenticated`);
     
     const headers: Record<string, string> = {
@@ -102,9 +102,13 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
         }
         
         const data = await response.json();
+        const inputTokens = data.usage?.prompt_tokens || 0;
+        const outputTokens = data.usage?.completion_tokens || 0;
         return {
             content: data.choices[0]?.message?.content || '',
-            tokens: data.usage?.total_tokens || 0
+            tokens: data.usage?.total_tokens || (inputTokens + outputTokens),
+            inputTokens,
+            outputTokens,
         };
       } catch (err: any) {
          if (retries < maxRetries && (err.message.includes('fetch') || err.message.includes('network'))) {
@@ -117,5 +121,26 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
       }
     }
     throw new Error(`${this.providerName} failed after retries`);
+  }
+
+  // This single class serves many different real backends (Grok, OpenRouter, Groq, LiteLLM,
+  // Ollama, arbitrary self-hosted endpoints) that each have their own real pricing - it cannot
+  // return one universally-correct number. Handles what it can say for certain, and is explicit
+  // about the rest rather than returning a flat $0 that's wrong for every paid backend.
+  estimateCost(inputTokens: number, outputTokens: number): number {
+    if (this.isLocal) return 0; // genuinely free - self-hosted, no metered API call happened
+
+    if (this.baseUrl.includes('x.ai')) {
+      // Public list price for grok-4 as of xAI's published API pricing - verify against
+      // x.ai/api before relying on this for budget decisions.
+      return (inputTokens / 1_000_000) * 3.00 + (outputTokens / 1_000_000) * 15.00;
+    }
+
+    // OpenRouter/Groq/other aggregators and arbitrary self-hosted endpoints: real per-model
+    // pricing varies by whatever model was actually selected and isn't known generically here.
+    // Rather than claim $0 (definitely wrong for a paid aggregator call), use a disclosed,
+    // deliberately conservative mid-tier commodity-model estimate so the number's order of
+    // magnitude is directionally honest. Add a per-model price table (Phase 11) for exact costs.
+    return (inputTokens / 1_000_000) * 0.50 + (outputTokens / 1_000_000) * 1.50;
   }
 }
