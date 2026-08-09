@@ -97,6 +97,9 @@ autobotRouter.get("/state", (req: Request, res: Response) => {
 });
 
 autobotRouter.post("/toggle", async (req: Request, res: Response) => {
-  tradingEngine.toggle(req.body);
+  const result = tradingEngine.toggle(req.body);
+  if (!result.ok) {
+    return res.status(400).json(result);
+  }
   res.json({ ok: true, state: tradingEngine.state });
 });

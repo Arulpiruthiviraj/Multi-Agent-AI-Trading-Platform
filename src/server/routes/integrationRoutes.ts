@@ -58,6 +58,15 @@ integrationRouter.post("/brokers/:id/test", async (req: Request, res: Response) 
   res.json(result);
 });
 
+// The real paper->live promotion path - see BrokerManager.setLiveMode() for why this didn't
+// exist before (nothing ever set brokerConnections.paperMode to false).
+integrationRouter.post("/brokers/:id/live-mode", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { live, confirm } = req.body || {};
+  const result = await BrokerManager.getInstance().setLiveMode(id, !!live, confirm);
+  res.status(result.ok ? 200 : 400).json(result);
+});
+
 integrationRouter.post("/brokers/active", async (req: Request, res: Response) => {
   const { id, credentials } = req.body;
   try {

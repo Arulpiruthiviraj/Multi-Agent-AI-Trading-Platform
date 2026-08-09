@@ -85,9 +85,15 @@ configRouter.get('/settings', async (req, res) => {
 
 configRouter.post('/settings', async (req, res) => {
   try {
+    // Check the LIVE-trading confirmation gate BEFORE writing anything - the delete+insert below
+    // used to run unconditionally, persisting tradingMode: 'LIVE' straight to the DB regardless
+    // of what toggle() decided, bypassing the confirmation requirement entirely.
+    const result = tradingEngine.toggle(req.body);
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
     await db.delete(schema.settings);
     await db.insert(schema.settings).values(req.body);
-    tradingEngine.toggle(req.body); 
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

@@ -37,6 +37,7 @@ import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { system } from '../core/SystemBootstrap';
+import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../core/LiveTradingConfirmation';
 
 export interface AutoBotState {
     enabled: boolean;
@@ -289,7 +290,13 @@ class TradingEngine {
         }
     }
 
-    public toggle(config: Partial<AutoBotState>) {
+    public toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string }): { ok: boolean; error?: string } {
+        const goingLive = config.tradingMode === 'LIVE' && this.state.tradingMode !== 'LIVE';
+        if (goingLive && config.confirmLiveTrading !== LIVE_TRADING_CONFIRMATION_PHRASE) {
+            this.logHistory('veto', 'Blocked attempt to enable LIVE trading mode without explicit confirmation.');
+            return { ok: false, error: `Enabling LIVE trading mode requires confirmLiveTrading: "${LIVE_TRADING_CONFIRMATION_PHRASE}"` };
+        }
+
         const wasEnabled = this.state.enabled;
         Object.assign(this.state, config);
         
@@ -319,6 +326,12 @@ class TradingEngine {
             this.logHistory('stop', 'Autonomous bot DISABLED.');
             system.stop();
         }
+
+        if (goingLive) {
+            this.logHistory('start', 'LIVE trading mode enabled with explicit confirmation.');
+        }
+
+        return { ok: true };
     }
 }
 

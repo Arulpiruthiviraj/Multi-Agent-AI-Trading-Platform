@@ -44,6 +44,7 @@ import { db } from '../server/db';
 import * as schema from '../server/db/schema';
 import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../server/core/EncryptionService';
+import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../server/core/LiveTradingConfirmation';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
@@ -195,6 +196,36 @@ export class BrokerManager {
     } catch (e: any) {
       return { ok: false, health: 'Offline', error: e.message };
     }
+  }
+
+  // The only path in the app that can put a broker connection into real-money live mode.
+  // brokerConnections.paperMode defaults to true and nothing else in the codebase ever set it to
+  // false - there was no live-trading promotion path at all, reachable or not. Requires the
+  // caller to echo back LIVE_TRADING_CONFIRMATION_PHRASE exactly; going back to paper mode never
+  // requires confirmation, since that direction is always safe.
+  public async setLiveMode(id: string, live: boolean, confirmationPhrase?: string): Promise<{ ok: boolean; error?: string }> {
+    const broker = this.brokers.get(id);
+    if (!broker) return { ok: false, error: `Broker '${id}' not found` };
+    if (live && NON_FUNCTIONAL_BROKER_IDS.has(id)) {
+      return { ok: false, error: `${broker.name}'s placeOrder() is unimplemented - it can never trade live regardless of confirmation.` };
+    }
+    if (live && confirmationPhrase !== LIVE_TRADING_CONFIRMATION_PHRASE) {
+      return { ok: false, error: `Enabling live trading on ${broker.name} requires the exact confirmation phrase "${LIVE_TRADING_CONFIRMATION_PHRASE}".` };
+    }
+
+    const existing = await db.select().from(schema.brokerConnections).where(eq(schema.brokerConnections.brokerName, broker.name));
+    if (existing.length > 0) {
+      await db.update(schema.brokerConnections).set({ paperMode: !live }).where(eq(schema.brokerConnections.brokerName, broker.name));
+    } else {
+      await db.insert(schema.brokerConnections).values({ brokerName: broker.name, paperMode: !live });
+    }
+
+    if (this.activeBroker.id === id) {
+      if (live) this.activeBroker.liveTrading(); else this.activeBroker.paperTrading();
+    }
+
+    console.warn(`[BrokerManager] ${broker.name} switched to ${live ? 'LIVE (real money)' : 'paper'} mode.`);
+    return { ok: true };
   }
 
   public getAvailableBrokers(): {id: string, name: string, capabilities: ReturnType<BrokerPlugin['getCapabilities']>}[] {
