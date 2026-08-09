@@ -19,6 +19,7 @@ import * as schema from "../db/schema";
 import { tradingEngine } from "../engines/TradingEngine";
 import { AUDIT_LOG_FILE } from "../core/auditLog";
 import { backtestEngine } from "../engines/backtest/BacktestEngine";
+import { walkForwardValidator } from "../engines/backtest/WalkForwardValidator";
 
 export const systemRouter = Router();
 
@@ -216,6 +217,28 @@ systemRouter.get("/backtest/:id", async (req: Request, res: Response) => {
 systemRouter.get("/backtest", async (req: Request, res: Response) => {
   try {
     res.json(await backtestEngine.listRuns());
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Rolling walk-forward validation on top of the same real backtest engine - runs the identical,
+// fixed strategy on successive train/test windows so in-sample vs. out-of-sample performance can
+// be compared honestly. Never optimizes any parameter on the test window.
+systemRouter.post("/backtest/walk-forward", async (req: Request, res: Response) => {
+  try {
+    const { symbols, startDate, endDate, timeframe, initialCash, trainDays, testDays } = req.body || {};
+    if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
+      return res.status(400).json({ error: "symbols (non-empty array) is required" });
+    }
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: "startDate and endDate are required (ISO dates)" });
+    }
+    if (!trainDays || !testDays) {
+      return res.status(400).json({ error: "trainDays and testDays are required (integers, e.g. trainDays:180, testDays:30)" });
+    }
+    const result = await walkForwardValidator.run({ symbols, startDate, endDate, timeframe, initialCash, trainDays, testDays });
+    res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
