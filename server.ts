@@ -659,6 +659,11 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
     }
   });
 
+  async function getOnboardingComplete(): Promise<boolean> {
+    const rows = await db.select({ onboardingComplete: schema.settings.onboardingComplete }).from(schema.settings).limit(1);
+    return rows[0]?.onboardingComplete === true;
+  }
+
   const authRouter = express.Router();
   authRouter.post('/login', async (req, res) => {
     const { username, password } = req.body || {};
@@ -666,11 +671,12 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
       return res.status(401).json({ error: 'Invalid username or password' });
     }
     await createSession(res, username);
-    res.json({ ok: true });
+    res.json({ ok: true, onboardingComplete: await getOnboardingComplete() });
   });
 
   authRouter.get('/status', async (req, res) => {
-    res.json({ authenticated: await isAuthed(req) });
+    const authed = await isAuthed(req);
+    res.json({ authenticated: authed, onboardingComplete: authed ? await getOnboardingComplete() : false });
   });
 
   authRouter.post('/logout', async (req, res) => {

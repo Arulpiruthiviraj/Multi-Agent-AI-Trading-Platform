@@ -100,6 +100,23 @@ configRouter.post('/settings', async (req, res) => {
   }
 });
 
+// Persists that the Setup Wizard has been completed/skipped, so a future fresh login doesn't
+// force it open again. Uses UPDATE (not the delete+insert /settings route above) so it can never
+// wipe unrelated settings fields.
+configRouter.post('/onboarding-complete', async (req, res) => {
+  try {
+    const existing = await db.select().from(schema.settings).limit(1);
+    if (existing.length > 0) {
+      await db.update(schema.settings).set({ onboardingComplete: true }).where(eq(schema.settings.id, existing[0].id));
+    } else {
+      await db.insert(schema.settings).values({ onboardingComplete: true });
+    }
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 configRouter.get('/brokers', async (req, res) => {
   try {
     const brokers = await db.select().from(schema.brokerConnections);

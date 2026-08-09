@@ -1580,9 +1580,14 @@ export default function App() {
         setAuthError(body.error || "Login failed. Use admin / password.");
         return;
       }
+      const body = await res.json().catch(() => ({}));
       setIsAuthenticated(true);
       setAuthPassword("");
       localStorage.setItem("argus_authenticated", "true");
+      // Fresh login is the ONLY moment the wizard auto-opens - only when onboarding has never
+      // been completed. A reload/restored-session never reaches this branch (see verifyAuth
+      // below), so it never re-triggers this regardless of onboarding status.
+      setSetupComplete(body.onboardingComplete === true);
     } catch (err) {
       console.error(err);
       setAuthError("Login failed due to network error.");
@@ -1596,6 +1601,12 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           setIsAuthenticated(data.authenticated === true);
+          // A page load always lands here (initial mount effect), never in handleLoginSubmit's
+          // branch - whether that's a browser refresh or a restored session, the wizard must
+          // never auto-open. Only an explicit login submission is allowed to open it.
+          if (data.authenticated === true) {
+            setSetupComplete(true);
+          }
         }
       } catch (err) {
         console.warn("Auth status check failed", err);
@@ -2770,7 +2781,11 @@ export default function App() {
       id="trading-platform-root"
     >
       {!setupComplete && (
-        <SetupWizard onSkip={() => setSetupComplete(true)} onComplete={async (config) => {
+        <SetupWizard onSkip={() => {
+          fetch("/api/v1/config/onboarding-complete", { method: "POST" }).catch(() => {});
+          setSetupComplete(true);
+        }} onComplete={async (config) => {
+          fetch("/api/v1/config/onboarding-complete", { method: "POST" }).catch(() => {});
           // Save AI Providers
           if (config.aiProviders) {
             for (const [provider, data] of Object.entries(config.aiProviders) as [string, any][]) {
@@ -9462,6 +9477,21 @@ export default function App() {
                   API Keys & Integrations
                 </h2>
                 <div className="space-y-6">
+                    <div className="bg-[#0F141C] border border-slate-800 rounded-lg p-5 flex items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-xs font-mono font-bold text-slate-100 uppercase tracking-widest mb-1">System</h3>
+                        <p className="text-xs text-slate-500">
+                          Re-open the guided setup to review or change your broker, AI provider, trading mode, and risk configuration. Your existing settings are loaded, not reset.
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => setSetupComplete(false)}
+                        className="shrink-0 flex items-center gap-2 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-400 px-4 py-2.5 rounded-lg border border-emerald-500/30 transition-all text-xs font-bold font-mono uppercase tracking-wide"
+                      >
+                        <Settings size={14} />
+                        Launch Setup Wizard
+                      </button>
+                    </div>
                     <AIProviderManagement />
                     <ConnectionStatusDashboard />
                     <BrokerManagement />

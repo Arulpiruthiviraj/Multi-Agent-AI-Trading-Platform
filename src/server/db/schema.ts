@@ -67,6 +67,10 @@ export const settings = sqliteTable('settings', {
   minAiConfidence: real('min_ai_confidence').default(75),
   autoBotEnabled: integer('auto_bot_enabled', { mode: 'boolean' }).default(false),
   adversarialDebateMode: integer('adversarial_debate_mode', { mode: 'boolean' }).default(true),
+  // Persists whether the Setup Wizard has ever been completed/skipped - the wizard previously
+  // had no persistence at all (a plain useState(false) in App.tsx), so it force-reopened on
+  // every single page load/reload regardless of prior completion.
+  onboardingComplete: integer('onboarding_complete', { mode: 'boolean' }).default(false),
   createdAt: integer('created_at').default(Date.now())
 });
 
