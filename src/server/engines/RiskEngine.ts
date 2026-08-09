@@ -15,7 +15,7 @@
 import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { desc, isNotNull, and, eq } from 'drizzle-orm';
+import { desc, isNotNull, and, eq, gte } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -164,9 +164,14 @@ export class RiskEngine {
                 return;
             }
 
-            // 3. News risk validation
-            const recentNews = await db.select().from(schema.newsArticles).limit(20);
-            const symbolNews = recentNews.filter((n: any) => 
+            // 3. News risk validation - impactScore lives on news_clusters, not news_articles
+            // (news_articles has no impactScore column at all, so this always evaluated to
+            // "no high-impact news" regardless of real news). Limited to a 4-hour window so a
+            // stale high-impact cluster doesn't veto trades indefinitely.
+            const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+            const recentClusters = await db.select().from(schema.newsClusters)
+                .where(gte(schema.newsClusters.updatedAt, fourHoursAgo));
+            const symbolNews = recentClusters.filter((n: any) =>
                 n.symbols && n.symbols.includes(proposal.symbol) &&
                 n.impactScore && n.impactScore > 80
             );

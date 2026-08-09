@@ -520,22 +520,22 @@ async function updateDailyTradingSummary(activity: {
   if (existing.length > 0) {
     const row = existing[0];
     await db.update(schema.dailyTradingSummary).set({
-      total_trades: row.total_trades + 1,
-      total_volume: row.total_volume + totalVolume,
-      realized_pnl: row.realized_pnl + realizedPnl,
-      unrealized_pnl: unrealizedPnl,
-      allocated_amount: allocatedAmount,
-      updated_at: Date.now(),
+      totalTrades: row.totalTrades + 1,
+      totalVolume: row.totalVolume + totalVolume,
+      realizedPnl: row.realizedPnl + realizedPnl,
+      unrealizedPnl: unrealizedPnl,
+      allocatedAmount: allocatedAmount,
+      updatedAt: Date.now(),
     }).where(eq(schema.dailyTradingSummary.date, date)).run();
   } else {
     await db.insert(schema.dailyTradingSummary).values({
       date,
-      total_trades: 1,
-      total_volume: totalVolume,
-      realized_pnl: realizedPnl,
-      unrealized_pnl: unrealizedPnl,
-      allocated_amount: allocatedAmount,
-      updated_at: Date.now(),
+      totalTrades: 1,
+      totalVolume: totalVolume,
+      realizedPnl: realizedPnl,
+      unrealizedPnl: unrealizedPnl,
+      allocatedAmount: allocatedAmount,
+      updatedAt: Date.now(),
     }).run();
   }
 }

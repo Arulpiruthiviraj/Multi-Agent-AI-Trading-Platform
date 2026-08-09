@@ -5,13 +5,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run dev          # Start dev server (tsx server.ts, port 5000)
+npm run dev          # Start dev server (tsx server.ts, port 3000 - hardcoded in server.ts,
+                      # not read from the PORT env var despite the Environment Setup section below)
 npm run build        # Vite SPA build + esbuild server bundle → dist/
 npm run start        # Run production build (dist/server.cjs)
 npm run clean        # Remove dist/ and server.js
+npm run lint         # tsc --noEmit
+npm test             # vitest run - unit tests for RiskEngine gates, OrderManagement
+                      # idempotency/fill-polling, ChiefTraderAgent consensus math, and the
+                      # broker adapter contract (capabilities vs. actual placeOrder() behavior)
 ```
 
-**No test suite exists.** `npm test` is undefined. There is no test runner configured. Manual testing only.
+Test coverage is intentionally narrow: the safety-critical decision path (risk gates, order
+execution, consensus approval, broker capability claims), not the UI or the AI-provider
+integrations. Everything else is still manual-testing only.
 
 **Do not run `npm run db:migrate`** — that script targets a path (`database/migrate.ts`) that does not exist and will fail. Migrations run automatically when `src/server/db/index.ts` is first imported (i.e., on every `npm run dev` / `npm run start`).
 
@@ -27,7 +34,7 @@ Key variables:
 - `AUTH_SESSION_SECRET` — required alongside `APP_PASSWORD` in any real deployment
 - `ENCRYPTION_SECRET` — AES key for encrypting stored API keys; auto-generated to `data/.encryption_key` if absent
 - `PAPER_TRADING_ONLY` — set to `true` to force paper mode in the legacy `/api/v1/signals` endpoint and `AlpacaBroker`
-- `PORT` — defaults to `5000`
+- `PORT` — not actually read; `server.ts` hardcodes port `3000` regardless of this env var
 
 ## Architecture
 
