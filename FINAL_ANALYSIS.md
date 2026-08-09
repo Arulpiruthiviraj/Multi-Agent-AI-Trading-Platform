@@ -1,212 +1,203 @@
-# Argus Autonomous Trading Platform - Comprehensive Technical & Functional Analysis
+# Argus Autonomous Trading Platform — Technical & Functional Analysis
+
+This document was previously a self-generated, unverified summary that significantly overstated the
+platform's readiness (e.g. claimed "85% production ready," "Broker integration: 95%," with no
+supporting evidence). It has been rewritten to match the findings of a three-pass, independently
+verified engineering audit (live-tested against the running application, not just source-read) — see
+the published audit artifact for full detail and evidence citations. `CLAUDE.md` is the authoritative,
+continuously-maintained architecture reference; this file is a narrative summary of the same reality.
 
 ## 1. Executive Summary
-The Argus application is a full-stack, event-driven AI autonomous trading platform. It simulates a multi-agent consensus workflow where different AI agents (Technical, News, Fundamental, Macro) evaluate market data and propose trades. A Chief Trader aggregates these proposals into a consensus decision, which is then passed to a Risk Management engine for sizing and validation, before being routed to an Order Management System (OMS) for execution.
 
-**What it currently does:**
-- Connects to Alpaca Paper Trading for real market data (WebSockets) and real order execution.
-- Calculates real-time technical indicators (RSI, MACD, SMA, EMA, Bollinger Bands).
-- Evaluates news sentiment, fundamental data, and macro indicators using **real Gemini LLM reasoning**.
-- Employs a dynamic consensus model based on historical agent performance.
-- Validates trades against strict capital limits, position concentration caps, session availability, drawdown, portfolio heat, market regime, and volatility adjustments.
-- Continously reconciles internal portfolio database with actual Alpaca paper trading positions.
-- Persists trades, portfolio holdings, and learned reflection rules into a SQLite database.
-- Streams real-time `EventBus` trace logs to the frontend via WebSockets.
+Argus is a full-stack, event-driven, multi-agent autonomous trading platform: independent agents
+(Technical, News, Fundamental, Macro) evaluate market data and propose trades; a Chief Trader
+aggregates proposals into a weighted consensus; a Risk Engine sizes and validates the trade against
+real account state; an Order Management Service executes it through a broker adapter.
 
-**Changes Since Previous Version:**
-- Integrated **Gemini AI SDK** into `NewsAgent`, `FundamentalAgent`, and `MacroAgent` to replace mocked heuristics with structured JSON LLM analysis.
-- Expanded `RiskEngine` with robust quantitative guardrails: Daily loss limits, Maximum drawdown limits, Portfolio heat limits, Market regime adjustments, and Volatility-adjusted dynamic position sizing.
-- Added `AdvancedQuantEngines` node which calculates Multi-timeframe trends, Relative Volume, Support/Resistance, and Volatility Forecasting and pushes them via `EventBus`.
-- Added `PortfolioReconciliationWorker` to sync Alpaca's authoritative state back into the local `SQLite` ledger.
-- Migrated frontend polling in `DigitalTwinVisualizer` to real-time `WebSocket` event streaming (`ws://`).
-- Created initial automated test cases for the `RiskEngine`.
+**What is real and live-verified today:**
+- Real Alpaca WebSocket market data and real order execution (paper and live, gated behind an explicit
+  confirmation phrase — see Section 4).
+- Real technical indicators (RSI, MACD, SMA, Bollinger Bands) with a calculated (not hardcoded)
+  confidence score.
+- Real AI-router-mediated reasoning for News/Fundamental/Macro agents, with real per-provider cost
+  tracking and real per-agent provider routing.
+- A real risk engine: daily-loss kill-switch, consecutive-loss breaker, market-hours/stale-data checks,
+  single-symbol concentration cap, a working (fixed this pass) high-impact-news veto, order idempotency,
+  and real fill-price tracking.
+- A real historical backtest + walk-forward validation engine — run against real Alpaca history. It
+  currently shows **no out-of-sample edge** for the deterministic technical strategy on AAPL; this is a
+  real, unfavorable, unfabricated result, not a defect in the engine.
+- A real local AI stack (Ollama + a local Chronos time-series forecasting service) — the previously
+  permanently-throwing Kronos forecaster now produces real forecasts.
+- A real test suite (43 tests), real CI (GitHub Actions), and a real Docker/health-check deployment path.
 
-**Overall Production Readiness:** 85%
+**What is not yet real:**
+- 17 dashboard visualization panels are still static/decorative (hardcoded arrays or
+  `Date.now()`-seeded jitter) — explicitly deferred, not hidden.
+- Only Alpaca can trade fully autonomously; Interactive Brokers is now a real adapter but requires human
+  2FA roughly every 24h; Questrade and Coinbase order execution are stubs by design.
+- Sector/correlation exposure limits, Monte Carlo backtest sensitivity, and a historical replay of the
+  full AI-agent consensus (as opposed to just the deterministic technical rules) do not exist yet.
+
+**Honest overall assessment:** BETA. Paper-trading readiness criteria are met. Live-capital readiness
+is not — not because of missing infrastructure (that gap is closed), but because the one real strategy
+test run so far shows no edge, and the only broker that can run fully unattended is Alpaca.
 
 ---
 
-## 2. Complete Feature Inventory
+## 2. Feature Inventory
 
-| Feature | Description | Status | Files / Components | Dependencies |
-|---------|-------------|--------|---------------------|--------------|
-| **Market Data Streaming** | Ingests live quotes from Alpaca or falls back to mock tick data. | Fully Implemented | `MarketDataWorker.ts` | Alpaca WS |
-| **Technical Analysis Agent** | Computes SMA, EMA, RSI, MACD, BBands and generates signals. | Fully Implemented | `TechnicalAgent.ts` | `EventBus` |
-| **Advanced Quant Engines** | Multi-TF Trend, Volume Profile, Volatility, Support/Resistance. | Fully Implemented | `AdvancedQuantEngines.ts`| `EventBus` |
-| **News Intelligence Agent** | Analyzes headlines via Gemini LLM for sentiment. | Fully Implemented | `NewsAgent.ts` | `@google/genai` |
-| **Fundamental Agent**| Evaluates P/E and EPS via Gemini LLM. | Fully Implemented | `FundamentalAgent.ts` | `@google/genai` |
-| **Macro Economy Agent** | Evaluates Fed stance and inflation via Gemini LLM. | Fully Implemented | `MacroAgent.ts` | `@google/genai` |
-| **Chief Trader Consensus** | Aggregates ideas and applies dynamic weightings. | Fully Implemented | `ChiefTraderAgent.ts` | `EventBus` |
-| **Risk Management Engine** | Validates concentration, budget, drawdown, heat, and volatility. | Fully Implemented | `RiskEngine.ts`, `RiskAgent.ts`| `EventBus` |
-| **Order Execution (OMS)** | Routes orders to Alpaca Paper API. | Fully Implemented | `OrderManagement.ts` | `node-fetch` |
-| **Portfolio Reconciliation** | Syncs Alpaca broker data back to SQLite automatically. | Fully Implemented | `PortfolioReconciliation.ts`| `node-fetch` |
-| **Trade Reflection / Learning**| Evaluates trades and generates text-based rules. | Prototype | `OrderManagement.ts` | None |
-| **Digital Twin Visualizer** | Live graph representation of system nodes powered by WebSockets. | Fully Implemented | `DigitalTwinVisualizer.tsx` | ReactFlow, `ws` |
-| **Trade Replay Modal** | UI to view historical trace logs. | Prototype | `TradeReplayModal.tsx` | None |
-| **Database Persistence** | Stores trades, portfolio, and rules. | Fully Implemented | `db/schema.ts` | Better-SQLite3 |
+| Feature | Status | Evidence |
+|---|---|---|
+| Market data streaming (Alpaca WS) | Real | `MarketDataWorker.ts`, connected in every boot log this engagement |
+| Technical Agent (RSI/MACD/SMA/BBands) | Real | Confidence is a calculated function of indicator magnitude, not a constant |
+| Chief Trader consensus | Real | Weighted vote, DB-synced weights, real per-agent AI routing |
+| Risk Engine | Real | Daily-loss/consecutive-loss/concentration/stale-data/market-hours/news-veto gates, all unit-tested |
+| Order Management | Real | Idempotent by traceId, real fill-polling, real realized P&L on SELL |
+| Portfolio reconciliation | Real | Emits a real mismatch/match event; pauses trading past a $100 impact threshold |
+| Explainability | Real | LLM narrative generated from the actual persisted event trace of a specific decision |
+| Backtesting / walk-forward | Real, unfavorable result | Real Alpaca history; AAPL walk-forward shows no out-of-sample edge |
+| AI cost tracking | Real | `estimateCost()` implemented with real published pricing per provider |
+| Kronos/Chronos forecasting | Real | Local Chronos model via a persistent Python service; live-verified BUY/SELL/HOLD |
+| Interactive Brokers | Real, but manual-2FA-gated | Real Client Portal Web API client; cannot run fully unattended |
+| Paper→live confirmation gate | Real | Requires an exact confirmation phrase; previously not reachable at all |
+| Automated tests | Real | 43 tests / 4 files (vitest), real CI |
+| Local AI stack (Ollama/Chronos/FinBERT) | Partial | Setup + boot-time health check real; only Chronos is wired into a live agent so far |
+| Questrade / Coinbase execution | Stub by design | `placeOrder()` throws; blocked from being selected as the active broker |
+| ~17 dashboard visualization panels | Decorative | Static arrays / deterministic jitter; explicitly deferred |
+| Sector/correlation exposure limits | Missing | Not built |
 
 ---
 
 ## 3. Architecture Overview
-**Core Architecture:** Event-Driven Microservices pattern using a central Node.js `EventEmitter` (`ArgusEventBus`). Now fully enhanced with `WebSocket` propagation to the frontend.
 
-**Event Flow:**
-`Alpaca WS` -> `MarketDataWorker` -> (`MARKET_DATA`) -> `TechnicalAgent` & `AdvancedQuantEngines` -> `NewsAgent`, `FundamentalAgent`, `MacroAgent` -> (`TRADE_IDEA_GENERATED`) -> `ChiefTraderAgent` -> (`CHIEF_APPROVED_IDEA`) -> `RiskAgent` -> (`RISK_ASSESSMENT_COMPLETED`) -> `OrderManagementService` -> (`ORDER_EXECUTED`) -> DB.
+One Node.js process: Express API + Vite (dev)/static (prod), a raw `ws` WebSocket server, and an
+in-process `EventEmitter` as the message bus. Decision-lifecycle events (trade ideas, consensus,
+risk assessments, orders, learned rules) carry a real typed envelope (`eventId`, `schemaVersion`,
+`correlationId`, `source`) and are durably persisted to `event_traces`, replayable by correlation ID
+after a restart. High-frequency ticks stay in-memory only, by design, to avoid unbounded DB growth.
 
-**Data Flow:** Market Data -> Calculation Engines -> Agent Proposals -> Consensus -> Risk Sizing -> Execution API -> SQLite Database.
+**Real pipeline:**
+`Alpaca WS → MarketDataWorker → EventBus:MARKET_DATA → Technical/News/Fundamental/Macro/Kronos agents
+→ TRADE_IDEA_GENERATED → ChiefTraderAgent (weighted consensus, optional AI debate)
+→ CHIEF_APPROVED_IDEA → RiskAgent → RiskEngine → RISK_ASSESSMENT_COMPLETED
+→ OrderManagementService → BrokerManager.getActiveBroker() → ORDER_EXECUTED → WS → React`
 
----
+**Research plane (backtesting), real but separate from the live pipeline:**
+`HistoricalDataGateway (real Alpaca bars) → ohlcv_bars → ReplayClock (point-in-time gated)
+→ BacktestEngine (same deterministic technical rules as live TechnicalAgent) → backtest_runs`
 
-## 4. Autonomous Trading Lifecycle
-1. **System Initialization:** `SystemBootstrap.start()` initiates all workers and subscribes to EventBus. (Fully Implemented)
-2. **Market Monitoring:** `MarketDataWorker` polls or streams quotes. (Fully Implemented)
-3. **News/Fundamental/Macro Collection:** Agents generate ideas on intervals via Gemini LLM reasoning. (Fully Implemented)
-4. **Calculation Engines:** `TechnicalAgent` routes arrays to `RSIEngine` and `MACDEngine`. `AdvancedQuantEngines` runs logic. (Fully Implemented)
-5. **AI Agent Collaboration:** Agents emit `TRADE_IDEA_GENERATED` with confidence and trace ID. (Fully Implemented)
-6. **Consensus Generation:** `ChiefTraderAgent` groups ideas, weights confidence, and issues `CHIEF_APPROVED_IDEA`. (Fully Implemented)
-7. **Risk Validation:** `RiskAgent` checks 20% concentration limits, session, drawdown, portfolio heat, and calculates volatility-adjusted `maxQuantity`. (Fully Implemented).
-8. **Position Sizing:** Completed by `RiskEngine`. (Fully Implemented).
-9. **Order Execution:** `OMS` sends a market order to Alpaca Paper API. (Fully Implemented).
-10. **Portfolio Updates:** `OMS` writes directly to SQLite `portfolio` table. (Fully Implemented).
-11. **Learning:** Random delayed events generate reflection rules. (Prototype).
-12. **Reporting:** UI dashboards use REST API and WebSockets for data. (Fully Implemented).
+This backtests the deterministic technical strategy only — it does not yet replay the AI-agent
+consensus layer against history, which needs point-in-time news/fundamentals and per-bar AI calls
+across a real date range. Explicitly scoped out, not claimed as done.
 
 ---
 
-## 5. AI Agent Analysis
-- **TechnicalProposerAgent:** Analyzes price streams. Fully Implemented using real math. Outputs BUY/SELL ideas.
-- **NewsIntelligenceAgent:** Parses headlines using `@google/genai`. Outputs structured JSON (recommendation, confidence, reasoning). Fully Implemented.
-- **FundamentalAnalysisAgent:** Parses simulated PE/EPS data using `@google/genai`. Outputs structured JSON. Fully Implemented.
-- **MacroEconomyAgent:** Parses macro factors using `@google/genai`. Outputs structured JSON. Fully Implemented.
-- **ChiefTraderAgent:** Aggregates inputs, penalizes disagreement, rewards consensus. Fully Implemented.
-- **RiskValidationAgent:** Rule-based validator preventing overallocation via `RiskEngine`. Fully Implemented.
+## 4. Trading Safety Controls
+
+- **Emergency stop** — real, blocks all new trades until manually resumed.
+- **Daily-loss kill-switch** — trips at 80% of the configured daily loss limit, using real broker
+  equity against a real start-of-day baseline.
+- **Consecutive-loss breaker** — blocks new trades after 3 consecutive real losing FILLED trades.
+- **Market-hours / stale-data checks** — real Alpaca clock call; real per-symbol tick-age tracking.
+- **Single-symbol concentration cap** — 20% of real account equity; reduces size rather than rejecting.
+- **High-impact-news veto** — fixed this pass; was querying a column that doesn't exist on the table it
+  queried and could never fire for any trade, regardless of real news.
+- **Order idempotency** — a second order for the same `traceId` is refused.
+- **Paper→live promotion gate** — real, requires an exact confirmation phrase
+  (`LIVE_TRADING_CONFIRMATION_PHRASE`); there was previously no reachable path to live trading at all.
 
 ---
 
-## 6. Calculation Engine Analysis
-- **RSIEngine:** 14-period Wilder's Smoothing. Consumed by `TechnicalAgent`. Fully Implemented.
-- **MACDEngine:** 12, 26, 9 EMA crossover math. Consumed by `TechnicalAgent`. Fully Implemented.
-- **AdvancedQuantEngines:** Multi-TF Trend, Relative Volume, Support/Resistance, Volatility Forecast. Emits `QUANT_ENGINE_OUTPUT`. Fully Implemented.
+## 5. AI Architecture
+
+`AIRouter` is a real provider-agnostic abstraction — every agent calls `routeTask()`/`routeConsensus()`
+and never touches a provider SDK directly. It fails over by priority → health → success-rate → latency
+and logs every call (latency, tokens, cost, success) to SQLite. `estimateCost()` is implemented with
+real published pricing per provider (Gemini, OpenAI, DeepSeek, Grok, generic aggregator fallback); local
+models (Ollama, Chronos) cost $0.
+
+Per-agent provider routing is real and persisted (`agent_routing_overrides`) — the "Agent Routing" UI
+tab previously posted to a route that didn't exist.
+
+An optional local AI stack (`npm run setup:ai`, `npm run ai:serve`) provides Ollama-hosted chat models
+(`llama3.2`, `0xroyce/plutus`, a locally-built `fingpt`) and a real Chronos time-series forecasting
+service. Only Chronos is wired into a live decision path so far (the Kronos forecaster). FinBERT
+(sentiment) and XGBoost (a direction-probability input for TechnicalAgent) are installed and documented
+as the next integration points but not yet wired into any agent.
 
 ---
 
-## 7. Parallel Processing Analysis
-Processing is entirely **Event-Driven Async Loops** running in a standard Node.js event loop.
-- `MarketDataWorker`: Websocket listener / setInterval polling (every 3s). Emits `MARKET_DATA`.
-- `NewsAgent`: setInterval (45s). Emits `TRADE_IDEA_GENERATED`.
-- `FundamentalAgent`: setInterval (60s). Emits `TRADE_IDEA_GENERATED`.
-- `MacroAgent`: setInterval (75s). Emits `TRADE_IDEA_GENERATED`.
-- `PortfolioReconciliationWorker`: setInterval (300s). Syncs DB with Alpaca.
-- `ChiefTraderAgent`: Event listener + setInterval cleanup (60s). Emits `CHIEF_APPROVED_IDEA`.
+## 6. Broker Integration
+
+| Broker | Can place real orders? | Notes |
+|---|---|---|
+| Alpaca | Yes | Only broker that can run fully unattended |
+| Internal Paper Simulator | Yes (simulated) | Real spread-modeling fill logic |
+| Interactive Brokers | Yes, with caveats | Real Client Portal Web API client; requires human 2FA ~every 24h; cannot trade Canadian-listed equities (IIROC 3200A.1(b)(i), a regulatory restriction, not a technical gap) |
+| Questrade | No | `placeOrder()` throws by design — official API is account/data-only, order execution is partner-developer-only |
+| Coinbase | No | Placeholder, throws by design |
+
+All non-functional/manual-step brokers are blocked from being selected as the active order-placing
+broker at the code level, not just documented as unsupported.
 
 ---
 
-## 8. Mission Control & Animation Analysis
-- **Digital Twin Visualizer:** Uses `ReactFlow` to display node topology. Connected to real backend events via `wss://`. (Fully Implemented).
-- **Live Trade Journey:** Animates SVG paths to simulate trade lifecycle. Driven by simulated UI timers. (Mocked).
-- **Strategy Profit Sunburst / Topology Maps:** Static rendering of fetched data. (Static).
-- **Trade Replay Modal:** UI for trace logs. Playback controls are visual only, no actual time-stepping. (Prototype).
+## 7. Testing
+
+- **Unit tests:** 43 tests across 4 files (vitest) — RiskEngine's gates, OrderManagement idempotency
+  and fill-polling, ChiefTraderAgent consensus math, and a broker-adapter capability contract test.
+  Previously zero test files existed anywhere in the repo.
+- **CI:** GitHub Actions (`.github/workflows/ci.yml`) runs lint + test + build on every push/PR.
+- **`npm run lint`:** now actually runs `tsc --noEmit` — previously a no-op that printed a string.
+- **Integration/E2E tests:** still not implemented.
 
 ---
 
-## 9. Logging & Explainability
-- **Event Tracing:** Every idea generates a random `traceId` which is passed strictly through the pipeline.
-- **Log Format:** Standard `console.log` with bracketed prefixes (e.g. `[ChiefTrader] Reviewing BUY on AAPL`).
-- **AI Reasoning:** The `reasoning` string is appended to and expanded by each agent in sequence (now using actual Gemini generated strings).
+## 8. Deployment
+
+- Multi-stage `Dockerfile` (native rebuild for `better-sqlite3`, slim runtime image) +
+  `docker-compose.yml` with a persistent volume for `data/`.
+- `GET /health` (liveness) and `GET /ready` (liveness + real SQLite reachability check), unauthenticated
+  by design for container orchestration.
+- Real database export/import (`GET|POST /api/v1/system/export-db`/`import-db`) — previously wrote to a
+  path (`database/`) the app never read from, so export always 404'd.
+- `data/argus.db` (a live database, including encrypted API keys) and a constantly-churning
+  runtime-state file are no longer tracked in git.
+- `archive/python-platform/` — a disconnected Python reimplementation, archived (not deleted) per
+  explicit user decision; the running Node app never imported or called it.
 
 ---
 
-## 10. Broker & Market Integration
-- **Supported Broker:** Alpaca.
-- **Market Data:** Alpaca IEX `wss://stream.data.alpaca.markets/v2/iex` (Real implementation if keys provided).
-- **Paper Trading:** `node-fetch` POST to `https://paper-api.alpaca.markets/v2/orders` (Real implementation if keys provided).
-- **Portfolio Sync:** `PortfolioReconciliationWorker` queries Alpaca REST API to repair SQLite mismatches. (Real implementation).
+## 9. Known Gaps (honest, not exhaustive)
+
+**Trading capability:**
+- No demonstrated out-of-sample edge for the deterministic strategy (real walk-forward result, AAPL).
+- `trades` table is empty as of the last live check — no real order history exists yet.
+- Sector/correlation exposure limits do not exist.
+
+**UI:**
+- ~17 dashboard panels remain decorative — explicitly deferred by the user, not hidden.
+- Two dashboard tabs (Global News Intelligence, System Activity Logs) are real and correctly wired but
+  show empty because the background pipeline that feeds them (`SystemBootstrap.start()`) only runs when
+  the AutoBot is toggled on, and nothing starts it unconditionally at boot. A secondary bug: the News
+  tab's per-provider health stats are hardcoded and can't be trusted as evidence the pipeline is running.
+
+**Explicitly deferred by the user this pass, not forgotten:**
+- The real `shiyu-coder/Kronos` foundation model as a second forecasting backend (Chronos, a different
+  model, is what's wired in today).
+- A Model/Agent Lab AI-benchmarking harness.
+- An "Evidence Aggregator" normalizing agent outputs (a partial spec was proposed but not completed).
 
 ---
 
-## 11. Database & Persistence
-- **Technology:** SQLite3 via Drizzle ORM.
-- **Entities:** `trades`, `portfolio`, `learnedRules`, `agentPerformanceStats`.
-- **Stored Data:** Order history, open positions, active rule memory, historically derived agent weights.
+## 10. Recommended Next Priorities
 
----
-
-## 12. Testing
-- **Unit Tests:** `RiskEngine.test.ts` (Prototype unit tests).
-- **Integration/E2E Tests:** Not Implemented.
-
----
-
-## 13. Documentation
-- **Architecture:** Described lightly in `AGENTS.md` and `README.md`.
-- **UI Tooltips:** The application contains extensive `ContextualTooltip` UI wrappers.
-- **Walkthroughs:** `AppWalkthrough.tsx` provides a guided UI tour.
-
----
-
-## 14. Missing Features
-**Critical:**
-- Robust E2E and Unit Test Coverage (Jest/Vitest).
-- Production-grade authentication (e.g., Clerk, Firebase Auth, OAuth) for securing the dashboard.
-- CI/CD Deployment pipelines.
-
-**High Priority:**
-- More broker integrations (e.g., Interactive Brokers).
-- Options & Futures trading execution support.
-- Live Trade Journey animation piped to real EventBus trace logs instead of mocked timers.
-
----
-
-## 15. Production Readiness Assessment
-- **UI/UX:** 95%
-- **Autonomous trading:** 90%
-- **AI agents:** 90% (Using actual Gemini GenAI).
-- **Calculation engines:** 80% (Core engines exist, could add more).
-- **Risk management:** 90% (Comprehensive RiskEngine).
-- **Broker integration:** 95% (Alpaca fully wired for quotes, execution, and reconciliation).
-- **Market data:** 90%
-- **Logging:** 80%
-- **Observability:** 85% (WebSockets connected for Digital Twin).
-- **Security:** 50% (No user auth yet).
-- **Scalability:** 60% (Monolith Node).
-- **Testing:** 10% (Basic risk engine test).
-- **Documentation:** 60%
-
-**Overall Production Readiness:** 85%
-
----
-
-## 16. File & Component Inventory
-**Backend:**
-- `src/server/core/EventBus.ts` - Central Node.js EventEmitter.
-- `src/server/core/SystemBootstrap.ts` - Service lifecycle manager.
-- `src/server/services/RiskAgent.ts` & `src/server/engines/RiskEngine.ts` - Capital constraints and dynamic position sizing.
-- `src/server/services/NewsAgent.ts`, `FundamentalAgent.ts`, `MacroAgent.ts` - Gemini AI Agents.
-- `src/server/services/PortfolioReconciliation.ts` - Alpaca REST ledger sync.
-- `src/server/engines/AdvancedQuantEngines.ts` - Technical analysis and math indicators.
-
-**Frontend:**
-- `src/components/DigitalTwinVisualizer.tsx` - ReactFlow graph wired via WebSockets.
-- `src/components/AutonomousMissionControl.tsx` - Primary system dashboard.
-- `src/components/GuardrailsPanel.tsx` - Risk management configuration.
-
----
-
-## 17. Final Executive Assessment
-**1. What the application currently does:**
-It runs a live Node.js event-driven loop that detects trading signals, evaluates them against a committee of AI agents using actual LLM reasoning, passes them through a strict mathematical risk engine, and executes paper trades on Alpaca while syncing ledgers via REST and logging via WebSockets.
-
-**2. What has been added since the previous version:**
-Real LLM Integration for Unstructured Data (Gemini), Portfolio Reconciliation (Alpaca REST Sync), Advanced Quant Engines (Multi-TF/Vol), and WebSocket telemetry for the Digital Twin visualizer.
-
-**3. What remains incomplete:**
-Automated testing suites, robust user authentication, and CI/CD deployment wrappers.
-
-**4. Readiness:**
-- **Demonstration:** Yes.
-- **Paper trading:** Yes.
-- **Live trading:** No (Requires E2E testing and circuit breaker guarantees).
-
-**5. Recommended Next Priorities:**
-1. Implement extensive Unit and Integration Tests using Vitest.
-2. Add Authentication (Firebase/Clerk) to lock down the `/api/*` and dashboard.
-3. Hook the `LiveTradeJourneyOverlay` to the WebSocket feed instead of mock timers.
+1. Either improve the deterministic strategy or validate it on a different symbol/universe before any
+   live-capital conversation — the current one real backtest result argues against it.
+2. Accumulate a real, non-empty paper-trading history before considering live capital at all.
+3. Enable the AutoBot (or add an unconditional background-worker start path) so News Intelligence and
+   Activity Logs actually populate, and fix the hardcoded provider-health stats alongside it.
+4. Wire FinBERT/XGBoost into NewsEngine/TechnicalAgent, and route at least one agent's calls through the
+   local Ollama stack, to realize the cost savings the local AI stack was built to enable.
+5. Add sector/correlation exposure limits to the risk engine.

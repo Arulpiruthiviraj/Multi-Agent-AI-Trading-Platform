@@ -86,55 +86,55 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
           </div>
           
           <p className="text-slate-300 leading-relaxed text-sm">
-            Welcome to the <strong>Argus Autonomous Trading Terminal</strong>, an advanced, full-stack multi-agent AI terminal designed to execute and execute continuous trading evaluations under strict risk mathematical constraints.
+            Welcome to the <strong>Argus Autonomous Trading Terminal</strong>, a full-stack, event-driven multi-agent trading platform. This documentation describes what the running application actually does, verified against its own source and live behavior — not an idealized description of what it could do.
           </p>
 
           <div className="p-4 bg-slate-900/80 rounded border border-slate-800 flex items-start gap-3">
             <Bot size={18} className="text-indigo-400 mt-1 shrink-0" />
             <div>
-              <span className="text-xs font-mono font-bold text-indigo-300 uppercase block mb-1">THE CIO OVERSIGHT CONCEPT</span>
+              <span className="text-xs font-mono font-bold text-indigo-300 uppercase block mb-1">HOW A TRADE DECISION IS ACTUALLY MADE</span>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Argus introduces the concept of a virtual <strong>Chief Investment Officer (CIO)</strong>. The CIO steers strategy weights, schedules quantitative tasks, and runs all proposed trades through a multi-layer decision pipeline to block emotional sentiment traps and enforce hard mathematical risk boundaries.
+                Independent agents (Technical, News, Fundamental, Macro, and a local Chronos-based forecaster) each propose a BUY/SELL/HOLD idea with a real confidence score. The <strong>Chief Trader</strong> combines these into a single weighted consensus vote (approving only above 75% weighted confidence), and the <strong>Risk Engine</strong> checks that approved idea against real account equity, real market hours, and real circuit breakers before any order is placed.
               </p>
             </div>
           </div>
-          
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-indigo-500/30 transition-colors group">
               <h3 className="text-indigo-400 font-bold mb-2 flex items-center gap-2"><LineChart size={16} className="group-hover:animate-pulse"/> 1. Dashboard Visualizers</h3>
               <p className="text-slate-400 text-xs leading-relaxed">
-                Observe live-market feeds, multi-node correlation matrices, and dynamic agent weight networks showing current AI voting consensus in real time.
+                Live agent status, order events, and account state driven by real backend events. Some analytics panels (drawdown/heatmap/correlation-style charts) are still placeholder visuals not yet backed by real data — this is disclosed, not hidden.
               </p>
             </div>
-            
+
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-emerald-500/30 transition-colors group">
               <h3 className="text-emerald-400 font-bold mb-2 flex items-center gap-2"><Target size={16} className="group-hover:animate-pulse"/> 2. Autonomous Mission Control</h3>
               <p className="text-slate-400 text-xs leading-relaxed">
-                Take control of the "Black Box" trading engine. Configure budget limits, strategy focus, risk levels, and utilize the Master Kill-Switch or custom tactical guardrails.
+                Enable/disable the autonomous engine, set budget/risk level/strategy, and use the real Emergency Stop kill-switch. Enabling the AutoBot is also what starts the background news-ingestion and event-logging pipelines — they don't run on their own.
               </p>
             </div>
-            
+
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-amber-500/30 transition-colors group">
-              <h3 className="text-amber-400 font-bold mb-2 flex items-center gap-2"><Sliders size={16} className="group-hover:animate-pulse"/> 3. Strategy Backtest Arena</h3>
+              <h3 className="text-amber-400 font-bold mb-2 flex items-center gap-2"><Sliders size={16} className="group-hover:animate-pulse"/> 3. Backtest &amp; Walk-Forward</h3>
               <p className="text-slate-400 text-xs leading-relaxed">
-                Backtest and compare different strategy styles against executed market conditions side-by-side with line toggle visualizations.
+                Runs the same deterministic technical rules against real historical Alpaca bars, with real spread-cost modeling and a real look-ahead-bias guard. The one real result run so far shows no out-of-sample edge on AAPL — an honest finding, not a bug.
               </p>
             </div>
-            
+
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-rose-500/30 transition-colors group">
-              <h3 className="text-rose-400 font-bold mb-2 flex items-center gap-2"><Network size={16} className="group-hover:animate-pulse"/> 4. Semantic Precedent Database</h3>
+              <h3 className="text-rose-400 font-bold mb-2 flex items-center gap-2"><Network size={16} className="group-hover:animate-pulse"/> 4. Local AI Stack (optional)</h3>
               <p className="text-slate-400 text-xs leading-relaxed">
-                Use the Vec Event Memory to search for historical market macro shocks (e.g., oil crisis, black swan events) using standard human prose.
+                Ollama-hosted chat models and a local Chronos time-series forecaster can run entirely on your machine at $0 marginal cost, as an alternative to a paid cloud LLM for some tasks. See <code className="text-[10px]">docs/LOCAL_AI_SETUP.md</code> and <code className="text-[10px]">npm run setup:ai</code>.
               </p>
             </div>
           </div>
-          
+
           <div className="bg-slate-800/50 border border-slate-700 p-5 rounded-lg mt-8 flex justify-between items-center transition-all duration-300 hover:bg-slate-800">
             <div>
               <h4 className="text-white font-bold mb-1 text-sm">Interactive Beginner Mode Guidance</h4>
-              <p className="text-slate-400 text-xs font-mono">Enabling beginner mode forces detailed tooltips, limits max exposure parameters, and explains complex mathematical formulas in simple terminology.</p>
+              <p className="text-slate-400 text-xs font-mono">Enabling beginner mode shows more detailed explanations throughout this documentation. It does not change any live trading behavior or exposure limits — those are configured in Settings/Guardrails, not here.</p>
             </div>
-            <button 
+            <button
               onClick={() => setBeginnerMode(!beginnerMode)}
               className={"px-4 py-2 rounded text-xs font-bold transition-all duration-300 " + (beginnerMode ? "bg-emerald-500 text-white shadow-[0_0_15px_rgba(16,185,129,0.3)] hover:bg-emerald-400" : "bg-slate-700 text-slate-300 hover:bg-slate-600")}
             >
@@ -165,29 +165,36 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
         <div className="space-y-6 animate-fade-in">
           <h2 className="text-2xl font-bold text-white tracking-tight mb-2">Multi-Agent Consensus Pipeline</h2>
           <p className="text-slate-300 text-sm mb-6">
-            Unlike simple single-bot setups, Argus employs a structured <strong>multi-agent pipeline</strong>. Each node is engineered with unique prompts, focusing on separate areas of analysis.
+            Independent agents each watch different real inputs and publish a <code className="text-[11px]">TRADE_IDEA_GENERATED</code> event with a symbol, side, and confidence (0-1). The Chief Trader collects these per symbol and computes one weighted decision.
           </p>
 
           {/* Visual flow chart */}
           <div className="bg-slate-950 border border-slate-800 p-6 rounded-lg font-mono text-xs flex flex-col items-center">
-            
+
             <div className="bg-indigo-950/40 border border-indigo-500/40 p-3 rounded text-center w-72 text-white">
-              <span className="font-bold text-indigo-400 block mb-1 uppercase tracking-wider">Agent 1: The Proposer</span>
-              <p className="text-[10px] text-slate-400">Scans market, detects breakout momentum, submits BUY/SELL target logic.</p>
+              <span className="font-bold text-indigo-400 block mb-1 uppercase tracking-wider">TechnicalAgent</span>
+              <p className="text-[10px] text-slate-400">Real RSI/MACD/SMA/Bollinger math on every live tick. Confidence is calculated from how far the indicator values are into their trigger zone - not a fixed number.</p>
             </div>
 
             <div className="h-6 w-px bg-slate-800 flex flex-col justify-center items-center"><ArrowDown size={12} className="text-slate-500 relative top-3"/></div>
 
             <div className="bg-amber-950/40 border border-amber-500/40 p-3 rounded text-center w-72 text-white">
-              <span className="font-bold text-amber-400 block mb-1 uppercase tracking-wider">Agent 2: Risk Verification Node</span>
-              <p className="text-[10px] text-slate-400">Computes 14-period Wilder's ATR and forces math safety limits on stop-loss.</p>
+              <span className="font-bold text-amber-400 block mb-1 uppercase tracking-wider">News / Fundamental / Macro Agents</span>
+              <p className="text-[10px] text-slate-400">Each routes a prompt through AIRouter (real news/AlphaVantage data + an LLM) and self-reports a confidence, normalized to 0-1.</p>
             </div>
 
             <div className="h-6 w-px bg-slate-800 flex flex-col justify-center items-center"><ArrowDown size={12} className="text-slate-500 relative top-3"/></div>
 
             <div className="bg-rose-950/40 border border-rose-500/40 p-3 rounded text-center w-72 text-white">
-              <span className="font-bold text-rose-400 block mb-1 uppercase tracking-wider">Agent 3: Reflection & Memory Engine</span>
-              <p className="text-[10px] text-slate-400">Audits past unexpected losses, compiles persistent "Learned Rules" to inject back into system.</p>
+              <span className="font-bold text-rose-400 block mb-1 uppercase tracking-wider">KronosForecastAgent</span>
+              <p className="text-[10px] text-slate-400">Maintains its own rolling price history per symbol and calls a local Chronos time-series model for a real numerical forecast once it has 30+ ticks.</p>
+            </div>
+
+            <div className="h-6 w-px bg-slate-800 flex flex-col justify-center items-center"><ArrowDown size={12} className="text-slate-500 relative top-3"/></div>
+
+            <div className="bg-emerald-950/40 border border-emerald-500/40 p-3 rounded text-center w-72 text-white">
+              <span className="font-bold text-emerald-400 block mb-1 uppercase tracking-wider">ChiefTraderAgent</span>
+              <p className="text-[10px] text-slate-400">Weighted vote across whichever agents fired for that symbol. Approves only above 75% weighted confidence.</p>
             </div>
           </div>
 
@@ -197,30 +204,30 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             <div className="bg-[#111822] p-4 rounded border border-slate-800">
               <div className="flex items-center gap-2 text-indigo-400 font-bold mb-1">
                 <Bot size={16} />
-                <span>Agent 1 (The Proposer)</span>
+                <span>TechnicalAgent</span>
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                The Proposer acts as the alpha-hunting scanner. It reads technical indicator inputs (such as EMA, RSI, and Bollinger bands), sentiment parameters, and news trends. Based on the user's selected <strong>Strategy Focus</strong> and <strong>Risk Level</strong>, it generates a proposal containing the target asset, transaction type (BUY/SELL/HOLD), and an initial confidence score. Critically, it receives past memory rule injects to avoid previously encountered pitfalls.
+                Listens to every real market tick, computes RSI/MACD/SMA/Bollinger Bands, and checks three deterministic rule branches (momentum breakout, mean reversion, overbought). Confidence is <code className="text-[10px]">0.55 + 0.40 × avg(strength terms)</code>, where each strength term is a real 0-1 function of how far the actual indicator value is past its trigger threshold - RSI at 51 and RSI at 69 produce measurably different confidence for the same rule.
               </p>
             </div>
 
             <div className="bg-[#111822] p-4 rounded border border-slate-800">
               <div className="flex items-center gap-2 text-amber-400 font-bold mb-1">
                 <ShieldCheck size={16} />
-                <span>Agent 2 (The Risk Manager)</span>
+                <span>News / Fundamental / Macro Agents</span>
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                The Risk Manager or RiskVerification Node evaluates proposed trades against system-wide risk settings and hard mathematical constraints. It computes the 14-period Average True Range (ATR) using Wilder's smoothed moving average method. It enforces a strict rule where stop-losses must be set at a <strong>minimum of 1.5x the ATR value</strong>. This prevents stop-outs due to simple market noise. It also dynamically scales the position size based on the allocated budget risk level.
+                NewsEngine ingests real RSS and paid news APIs and clusters/scores articles. FundamentalAgent and MacroAgent pull real AlphaVantage data. All three route their analysis through <strong>AIRouter</strong> (never call a provider SDK directly) and self-report a confidence - a genuinely different input each time, but the same underlying mechanism (an LLM's own confidence claim) three times over, with no independent calibration check on whether a model's stated confidence matches its real hit rate.
               </p>
             </div>
 
             <div className="bg-[#111822] p-4 rounded border border-slate-800">
               <div className="flex items-center gap-2 text-rose-400 font-bold mb-1">
                 <Zap size={16} />
-                <span>Agent 3 (Reflection / Memory Engine)</span>
+                <span>KronosForecastAgent (Chronos-backed)</span>
               </div>
               <p className="text-xs text-slate-300 leading-relaxed">
-                The Reflection Engine is the self-improving brain of Argus. It reviews closed positions (especially losing trades with unexpected drawdowns) and extracts logical post-mortems. It converts these findings into human-readable, strictly formatted "Memory Rules". These rules are stored permanently and automatically prepended to subsequent system prompts (Context Engineering) to ensure previous trade mistakes are never repeated.
+                Calls a persistent local service (<code className="text-[10px]">npm run ai:serve</code>) running Amazon's Chronos time-series model. Needs 30+ real ticks of history for a symbol and a 60-second cooldown between calls per symbol. If the service isn't running, this agent honestly reports unavailable rather than fabricating a forecast - it never blocks the rest of the pipeline.
               </p>
             </div>
           </div>
@@ -243,88 +250,79 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
       )
     },
 
-    // COURSE 3: Math and ATR Positioning
+    // COURSE 3: Real Risk Engine Position Sizing
     {
       id: "atr-positioning",
       category: "2. Mathematical Safeguards",
-      title: "Wilder's ATR & Risk-Based Position Sizing",
+      title: "Risk Engine Position Sizing",
       isCourse: true,
       icon: <Scale size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-2xl font-bold text-white tracking-tight">ATR & Mathematical Risk Scaling</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">How the Risk Engine Sizes a Position</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            Many algorithmic traders fail because they risk arbitrary amounts on every trade, ignoring market volatility. Argus prevents this using a <strong>14-period Average True Range (ATR) based Risk Engine</strong>.
+            Every approved trade idea is sized by <code className="text-xs">RiskEngine.evaluateRisk()</code> using three independent caps, real broker account data, and the <strong>smallest</strong> of the three wins.
           </p>
 
-          {/* ATR Formula Panel */}
           <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
             <span className="text-[10px] font-mono uppercase text-slate-500 block mb-2">Mathematical Formulation</span>
-            <h3 className="text-sm font-bold text-white mb-2">Wilder's Average True Range (ATR-14)</h3>
-            <p className="text-xs text-slate-300 mb-4 leading-relaxed">
-              First, the True Range (TR) for each candle is calculated as the maximum of three values:
-            </p>
-            <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-xs text-slate-300 mb-4 space-y-1">
-              <div>1. Current High minus Current Low: <span className="text-indigo-400">H_t - L_t</span></div>
-              <div>2. Absolute of Current High minus Previous Close: <span className="text-indigo-400">|H_t - C_(t-1)|</span></div>
-              <div>3. Absolute of Current Low minus Previous Close: <span className="text-indigo-400">|L_t - C_(t-1)|</span></div>
+            <h3 className="text-sm font-bold text-white mb-2">Three Independent Sizing Caps</h3>
+            <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-xs text-slate-300 mb-4 space-y-2">
+              <div>1. Risk cap: <span className="text-indigo-400">maxSharesByRisk = (equity × riskPct) / (price × 0.05)</span></div>
+              <div>2. Capital cap: <span className="text-indigo-400">maxSharesByCapital = maxTradeSize / price</span></div>
+              <div>3. Buying-power cap: <span className="text-indigo-400">maxSharesByBuyingPower = buyingPower / price</span></div>
             </div>
-            <p className="text-xs text-slate-300 mb-3">
-              Then, Wilder's smoothed moving average is applied over 14 historical candles:
+            <p className="text-xs text-slate-300">
+              <code className="text-[10px]">maxQuantity = min(all three)</code>, then further reduced if it would push the position past 20% of account equity (the concentration cap), or capped to the existing position size on a SELL.
             </p>
-            <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-xs text-slate-300 text-center">
-              <span className="text-indigo-300 font-bold">ATR_t = ( (ATR_(t-1) * 13) + TR_t ) / 14</span>
-            </div>
           </div>
 
-          {/* Sizing constraints */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
             <div className="bg-slate-900/60 p-4 rounded border border-slate-800">
-              <span className="text-[10px] font-mono uppercase text-indigo-400 font-bold block mb-2">1. NOISE FILTER PROTECTION</span>
+              <span className="text-[10px] font-mono uppercase text-indigo-400 font-bold block mb-2">STOP-LOSS ASSUMPTION</span>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Argus forces stop-losses to a **minimum of 1.5x the current ATR value** away from the entry price. If a stop-loss is placed any closer, normal price noise would stop out the trade prematurely.
+                The risk cap assumes a flat <strong>5% per-share risk</strong> (<code className="text-[10px]">riskPerShare = price × 0.05</code>) - a simplifying assumption, not a volatility-adjusted (ATR-based) stop. This is disclosed here specifically because it's less sophisticated than the number might imply.
               </p>
             </div>
 
             <div className="bg-slate-900/60 p-4 rounded border border-slate-800">
-              <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-2">2. RISK CAPITAL SCALING</span>
+              <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-2">CONCENTRATION CAP</span>
               <p className="text-xs text-slate-400 leading-relaxed">
-                The trade sizing matches your configured risk level. Maximum allowable shares are calculated so the maximum potential loss does not exceed your risk capital ceiling.
+                No single symbol may exceed <strong>20% of real account equity</strong> after the trade fills. This reduces the order size rather than rejecting it outright, and applies on top of the three caps above.
               </p>
             </div>
           </div>
 
-          {/* Allocation settings explanation */}
           <div className="bg-[#111822] border border-slate-800 p-4 rounded">
-            <span className="text-[10px] font-mono uppercase text-amber-400 font-bold block mb-3">BUDGET RISK LEVEL MULTIPLIERS</span>
+            <span className="text-[10px] font-mono uppercase text-amber-400 font-bold block mb-3">RISK LEVEL → PORTFOLIO RISK %</span>
             <div className="space-y-2 text-xs font-mono">
               <div className="flex justify-between border-b border-slate-800 pb-1">
-                <span className="text-slate-400">Low Risk Setting</span>
-                <span className="text-emerald-400 font-bold">1.0% of Total Budget</span>
+                <span className="text-slate-400">Conservative</span>
+                <span className="text-emerald-400 font-bold">1.0% of account equity</span>
               </div>
               <div className="flex justify-between border-b border-slate-800 pb-1">
-                <span className="text-slate-400">Medium Risk Setting</span>
-                <span className="text-indigo-400 font-bold">1.5% of Total Budget</span>
+                <span className="text-slate-400">Balanced (default)</span>
+                <span className="text-indigo-400 font-bold">2.0% of account equity</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">High Risk Setting</span>
-                <span className="text-rose-400 font-bold">3.0% of Total Budget</span>
+                <span className="text-slate-400">Aggressive</span>
+                <span className="text-rose-400 font-bold">3.0% of account equity</span>
               </div>
             </div>
           </div>
 
           <div className="flex justify-between mt-8">
-            <button 
+            <button
               onClick={() => setActiveSectionId("agent-council")}
               className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
             >
               Previous
             </button>
-            <button 
+            <button
               onClick={() => { markCompleted("atr-positioning"); setActiveSectionId("cio-deck"); }}
               className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
             >
-              Explore CIO Deck <ChevronRight size={16} />
+              Explore Chief Trader Consensus <ChevronRight size={16} />
             </button>
           </div>
         </div>
@@ -335,118 +333,82 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
     {
       id: "cio-deck",
       category: "2. Mathematical Safeguards",
-      title: "Chief Trader Autonomous CIO Deck",
+      title: "Chief Trader Consensus Math",
       isCourse: true,
       icon: <Sliders size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-2xl font-bold text-white tracking-tight">Chief Trader Agent: Autonomous CIO Deck</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Chief Trader Agent: The Real Consensus Math</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            The **Chief Trader Agent** acts as the virtual Chief Investment Officer (CIO) of your autonomous terminal. It orchestrates three key areas to maintain discipline and optimize alpha extraction:
+            <code className="text-xs">ChiefTraderAgent</code> collects every trade idea for a symbol within a rolling window and runs one weighted-vote calculation per side (BUY/SELL).
           </p>
 
           <div className="space-y-4">
-            {/* Step 1: Task Assignment */}
             <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-xs bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 font-mono font-bold px-2 py-0.5 rounded">
-                  STAGE 1
+                  STEP 1
                 </span>
                 <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
-                  Quantitative Task Dispatching
+                  Weight Ideas That Agree
                 </h3>
               </div>
               <p className="text-xs text-slate-400 leading-relaxed mb-3">
-                The CIO distributes research tasks to specialized analyst nodes to collect intelligence before trade proposals are compiled.
+                Each agent has a real, DB-synced weight (default weights: TechnicalAgent 0.25, NewsAgent 0.25, FundamentalAgent 0.20, MacroAgent/KronosEngine 0.15-0.20; adjusted over time by the Reflection Engine's real accuracy tracking).
               </p>
-              <ul className="list-disc list-inside text-xs text-slate-300 space-y-1 font-mono">
-                <li><strong className="text-slate-100">Sentiment Harvesting</strong> assigned to Gemini Node</li>
-                <li><strong className="text-slate-100">Volatility Analysis</strong> assigned to Technical Node</li>
-                <li><strong className="text-slate-100">Correlation Mapping</strong> assigned to Risk Node</li>
-                <li><strong className="text-slate-100">Regime Detection</strong> assigned to Claude Node</li>
-              </ul>
-            </div>
-
-            {/* Step 2: Strategy Tuning */}
-            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 font-mono font-bold px-2 py-0.5 rounded">
-                  STAGE 2
-                </span>
-                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
-                  Core Strategy Selection & Tuning
-                </h3>
-              </div>
-              <p className="text-xs text-slate-400 leading-relaxed mb-3">
-                The CIO toggles between four core algorithmic styles, allowing you to fine-tune strategy properties directly from the terminal console:
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono">
-                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                  <span className="text-indigo-400 font-bold block mb-0.5">Volatility Breakout Core</span>
-                  <p className="text-[10px] text-slate-500">Capitalizes on sudden momentum expansion from historical ranges.</p>
-                </div>
-                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                  <span className="text-emerald-400 font-bold block mb-0.5">Funding Rate Arb Node</span>
-                  <p className="text-[10px] text-slate-500">Collects risk-free premium on spot versus futures contract premiums.</p>
-                </div>
-                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                  <span className="text-amber-400 font-bold block mb-0.5">Liquidity Sweeping Alpha</span>
-                  <p className="text-[10px] text-slate-500">Trades support/resistance breaches targeting stop-loss hunt events.</p>
-                </div>
-                <div className="bg-slate-950 p-2.5 rounded border border-slate-800">
-                  <span className="text-rose-400 font-bold block mb-0.5">Macro Regime Tracker</span>
-                  <p className="text-[10px] text-slate-500">Detects shifts in overall inflation or interest rate cycles.</p>
-                </div>
+              <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-[11px] text-slate-300">
+                weightedConfidence = Σ (idea.confidence × agent.weight) for every idea agreeing on this side
               </div>
             </div>
 
-            {/* Step 3: Multi-Layer Veto Gate */}
             <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
               <div className="flex items-center gap-2 mb-2">
                 <span className="text-xs bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 font-mono font-bold px-2 py-0.5 rounded">
-                  STAGE 3
+                  STEP 2
                 </span>
                 <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
-                  Multi-Layer Discretionary Veto
+                  Discount for Disagreement
                 </h3>
               </div>
               <p className="text-xs text-slate-400 leading-relaxed mb-3">
-                All trade proposals enter the CIO's vetting gate. If any rule is breached, the proposal is forcefully blocked to avoid capital degradation:
+                Any agent proposing the opposite side pulls the score down at half weight - a real penalty, not a hard veto:
               </p>
-              
-              <div className="space-y-2 font-mono text-[11px] bg-slate-950 p-3 rounded border border-slate-800/80">
-                <div className="flex justify-between items-center text-slate-300">
-                  <span>Layer 1: Sentiment Consensus Gate</span>
-                  <span className="text-emerald-400 font-bold font-mono">BLOCKS EMOTIONAL FOMO CHASES</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-300">
-                  <span>Layer 2: Hard ATR Noise Filter Cap</span>
-                  <span className="text-amber-400 font-bold font-mono">REJECTS TIGHT NOISE STOP-LOSSES</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-300">
-                  <span>Layer 3: Macro Correlation Safety Limit</span>
-                  <span className="text-indigo-400 font-bold font-mono">STRICT SECTOR EXPOSURE DIVERSIFICATION</span>
-                </div>
-                <div className="flex justify-between items-center text-slate-300">
-                  <span>Layer 4: CIO Discretionary Overlay</span>
-                  <span className="text-rose-400 font-bold font-mono font-bold">APPLIES HISTORICAL MEMORY RULES</span>
-                </div>
+              <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-[11px] text-slate-300">
+                weightedConfidence −= (idea.confidence × agent.weight × 0.5) for every disagreeing idea
+                <br/>finalConfidence = clamp(weightedConfidence / totalWeight, 0, 1)
               </div>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs bg-indigo-500/15 border border-indigo-500/30 text-indigo-400 font-mono font-bold px-2 py-0.5 rounded">
+                  STEP 3
+                </span>
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono">
+                  Approve Only Above 75%
+                </h3>
+              </div>
+              <p className="text-xs text-slate-400 leading-relaxed mb-3">
+                Whichever side (BUY or SELL) has the higher final confidence wins. It's only forwarded to the Risk Engine as <code className="text-[10px]">CHIEF_APPROVED_IDEA</code> if that confidence exceeds <strong className="text-emerald-400">0.75</strong> - below that, the idea is held, not silently discarded, waiting for more agreement.
+              </p>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Optionally, if adversarial debate mode is on and a single idea's raw confidence exceeds 0.6, Chief Trader also runs a real multi-provider AI debate (via <code className="text-[10px]">AIRouter.routeConsensus</code>, 60s cooldown per symbol) and folds that result in as an additional weighted vote before deciding.
+              </p>
             </div>
           </div>
 
           <div className="flex justify-between mt-8">
-            <button 
+            <button
               onClick={() => setActiveSectionId("atr-positioning")}
               className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
             >
               Previous
             </button>
-            <button 
+            <button
               onClick={() => { markCompleted("cio-deck"); setActiveSectionId("veto-protocols"); }}
               className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
             >
-              See Veto Protocols <ChevronRight size={16} />
+              See the Real Risk Gates <ChevronRight size={16} />
             </button>
           </div>
         </div>
@@ -457,66 +419,84 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
     {
       id: "veto-protocols",
       category: "2. Mathematical Safeguards",
-      title: "Veto Gate Specifications & Flow",
+      title: "The Real Risk Gates",
       isCourse: true,
       icon: <Shield size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-2xl font-bold text-white tracking-tight">Discretionary Veto Protocol Specifications</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">RiskEngine's Real Gates</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            Every transaction executed by the <strong>Argus Black-Box Autonomous Loop</strong> undergoes immediate vetting via the CIO Veto Pipeline. There are four distinct, serialized gates that can issue a hard rejection veto.
+            Every <code className="text-xs">CHIEF_APPROVED_IDEA</code> passes through <code className="text-xs">RiskAgent → RiskEngine.evaluateRisk()</code> before an order can be placed. Any one of these six real, checked-in-order gates can reject a trade outright.
           </p>
 
           <div className="space-y-4">
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block mb-1">Gate 1: Sentiment & Discipline Filter</span>
-              <h3 className="text-sm font-bold text-white mb-2">Psychological Trap Avoidance</h3>
+              <span className="text-[10px] font-mono text-rose-400 uppercase font-bold block mb-1">Gate 1: Daily-Loss Kill-Switch</span>
+              <h3 className="text-sm font-bold text-white mb-2">Real Equity vs. Real Daily Baseline</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                The Proposer node may suggest an entry driven by sudden social buzz. Gate 1 scans the logical thesis of the proposal using natural language models to extract high-risk emotional flags (e.g. "rocket", "to the moon", "hype", "FOMO"). If sentiment is heavily hyper-inflated without technical consolidation backup, the trade is instantly vetoed as an emotional trap.
+                Tracks real broker equity against a real start-of-day baseline captured the first time risk is evaluated each calendar day. Blocks <strong>all</strong> new trades once the loss reaches 80% of the configured daily loss limit - a real, hand-tested circuit breaker.
               </p>
             </div>
 
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block mb-1">Gate 2: Wilder's ATR Noise Check</span>
-              <h3 className="text-sm font-bold text-white mb-2">Stop-Loss Math Validation</h3>
-              <p className="text-xs text-slate-400 leading-relaxed font-mono text-[11px]">
-                We calculate Wilder's Average True Range over 14 candles (ATR-14). Gate 2 evaluates the exact stop-loss distance of the proposed trade:
-                <br />
-                <span className="text-indigo-400 font-bold">StopLossDistance = |EntryPrice - StopLossPrice|</span>
-                <br />
-                The protocol forces a strict threshold constraint: <span className="text-amber-400 font-bold">StopLossDistance ≥ 1.5 * ATR-14</span>. Any proposal with a stop loss tighter than this value is blocked immediately to prevent normal intraday volatility noise from triggering stop-outs.
+              <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block mb-1">Gate 2: Consecutive-Loss Breaker</span>
+              <h3 className="text-sm font-bold text-white mb-2">Three Real Losses in a Row</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Reads the real realized P&amp;L of the last 3 <code className="text-[10px]">FILLED</code> trades from the database. If all three lost money, new trades are blocked pending manual review.
               </p>
             </div>
 
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-indigo-400 uppercase font-bold block mb-1">Gate 3: Covariance & Concentration Cap</span>
-              <h3 className="text-sm font-bold text-white mb-2">Sector Over-concentration Shield</h3>
+              <span className="text-[10px] font-mono text-indigo-400 uppercase font-bold block mb-1">Gate 3: Market-Hours &amp; Stale-Data Checks</span>
+              <h3 className="text-sm font-bold text-white mb-2">Real Alpaca Clock + Real Tick Age</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Even if a trade is technically perfect, Gate 3 cross-references existing assets held within the autonomous portfolio. If the covariance matrix shows a sector or correlation index exceeding <strong className="text-slate-200">0.75</strong>, or if maximum allocation budget is reached for high-beta tech assets, the trade is vetoed to diversify the active capital base.
+                Calls Alpaca's real <code className="text-[10px]">/v2/clock</code> endpoint (cached 60s) to refuse trades outside market hours, and rejects a trade if the last real tick for that symbol is older than 5 minutes - never trades on a symbol Argus hasn't actually heard from recently.
               </p>
             </div>
 
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-rose-400 uppercase font-bold block mb-1">Gate 4: CIO Discretionary Overlay</span>
-              <h3 className="text-sm font-bold text-white mb-2">Dynamic Memory Rules Injection</h3>
+              <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block mb-1">Gate 4: Single-Symbol Concentration Cap</span>
+              <h3 className="text-sm font-bold text-white mb-2">20% of Real Account Equity, Maximum</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                The final gate applies persistent "Memory Rules" compiled by the Reflection Agent from previous trading post-mortems. If the proposed asset, timeframe, or market regime conflicts with an active memory guideline, the CIO overrides consensus and issues a final, binding veto.
+                Reduces the order size (rather than rejecting outright) so no single symbol's position value can exceed 20% of real account equity after the fill.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 5: High-Impact-News Veto</span>
+              <h3 className="text-sm font-bold text-white mb-2">Real News Clusters, 4-Hour Window</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Vetoes a trade if a real news cluster covering that symbol, updated within the last 4 hours, has an impact score above 80. (This gate previously queried the wrong database table and could never fire for any trade - fixed and now covered by an automated test.)
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 6: Order Idempotency</span>
+              <h3 className="text-sm font-bold text-white mb-2">One Order Per Trace ID</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                <code className="text-[10px]">OrderManagementService</code> checks the trades table for an existing order with the same trace ID before placing a new one - a duplicate event for the same decision can never place a second real order.
               </p>
             </div>
           </div>
 
+          <div className="callout bg-slate-900/50 border border-slate-800 p-4 rounded-lg">
+            <p className="text-xs text-slate-400 leading-relaxed mb-0">
+              <strong className="text-slate-200">Not yet built:</strong> sector/correlation exposure limits. Concentration is capped per-symbol only - many uncorrelated-looking-but-actually-correlated positions could still concentrate real risk today.
+            </p>
+          </div>
+
           <div className="flex justify-between mt-8">
-            <button 
+            <button
               onClick={() => setActiveSectionId("cio-deck")}
               className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
             >
               Previous
             </button>
-            <button 
+            <button
               onClick={() => { markCompleted("veto-protocols"); setActiveSectionId("evolution-learning"); }}
               className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
             >
-              See Evolution & Backtesting <ChevronRight size={16} />
+              See Backtesting &amp; Reflection <ChevronRight size={16} />
             </button>
           </div>
         </div>
@@ -532,52 +512,48 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
       icon: <LineChart size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-2xl font-bold text-white tracking-tight">Strategy Evolution & Manual Reflection</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Reflection & Real Backtesting</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            Argus is designed around continuous adaptation. The terminal provides two distinct interfaces for reflection: automatic machine-learning loops and qualitative human trade journaling.
+            "Learning" and "backtesting" are two separate, real systems in Argus - and one of them has an important honest limitation worth understanding before you rely on it.
           </p>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
               <span className="text-[10px] font-mono text-indigo-400 uppercase font-bold block mb-1">
-                AUTOMATED CONTEXT ENGINEERING
+                REFLECTION ENGINE
               </span>
-              <h3 className="text-sm font-bold text-white mb-2">The Memory Reflection Loop</h3>
+              <h3 className="text-sm font-bold text-white mb-2">Real Scoring, Write-Only Rules</h3>
               <p className="text-xs text-slate-400 leading-relaxed mb-3">
-                When the terminal suffers unexpected losses or hits stop-loss triggers, the reflection node converts that information into strict markdown directives. These directives are persisted and injected back into the active prompt files for Agent 1 and 2 automatically.
+                <code className="text-[10px]">ReflectionEngine</code> really does score each agent's past predictions against actual price movement and updates that agent's consensus weight in the database on a 60-second cycle - this genuinely changes future Chief Trader votes.
               </p>
-              <div className="bg-slate-950 p-2.5 rounded border border-slate-900 font-mono text-[9px] text-rose-300 leading-tight">
-                "RULE #04: Do not trade correlated tech assets (e.g., NVDA, TSLA) simultaneously if macro indexes (SPY) exhibit 10-day ATR volatility exceeds 2.5."
+              <div className="bg-slate-950 p-2.5 rounded border border-slate-900 font-mono text-[9px] text-amber-300 leading-tight">
+                Honest limitation: it also writes LLM-generated rule text to a "learned rules" table, and that text is loaded at startup - but it is never injected into any agent's actual prompt. The rule-writing half of this loop is currently write-only.
               </div>
             </div>
 
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800">
               <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block mb-1">
-                QUALITATIVE MANUAL JOURNALING
+                EXPLAINABILITY AGENT
               </span>
-              <h3 className="text-sm font-bold text-white mb-2">Trade Reflection Modal</h3>
+              <h3 className="text-sm font-bold text-white mb-2">Real Per-Trade Narratives</h3>
               <p className="text-xs text-slate-400 leading-relaxed mb-3">
-                In the Historical Trade Decisions Ledger, users can access a custom Trade Journal Modal. This is designed to capture human psychology feedback, allowing you to annotate trades with private qualitative logs.
+                For any trade with a real event trace, <code className="text-[10px]">ExplainabilityAgent</code> generates an LLM narrative built from that trade's actual recorded events (not a template) - genuinely answers "why did Argus buy this stock" for that specific trace ID.
               </p>
-              <div className="bg-slate-950 p-2.5 rounded border border-slate-900 font-mono text-[9px] text-emerald-300 leading-tight">
-                "Note: Trade was well-conceived off weekly EMA support, but my risk-tolerance multiplier was set too high. Need to tune down to Low Risk next time."
-              </div>
             </div>
           </div>
 
-          {/* Backtesting tutorial */}
           <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg mt-6">
             <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2">
               <Sliders size={16} className="text-indigo-400" />
-              Strategy Backtest Engine Tutorial
+              Backtest &amp; Walk-Forward Engine
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed mb-3">
-              The Strategy Backtest Engine executes two distinct portfolios under matching market feeds. Use the line toggle check-boxes to compare:
+              Runs the same deterministic technical rules TechnicalAgent uses live, against real historical Alpaca bars, with a real spread-cost model and a hard look-ahead-bias guard (it cannot access a future bar even by accident).
             </p>
             <ul className="list-disc list-inside text-xs text-slate-400 space-y-1.5 font-mono">
-              <li>Compare <strong className="text-indigo-400">Argus Multi-Agent Dynamic Core</strong> versus a simple <strong className="text-slate-200">Buy & Hold Benchmark</strong>.</li>
-              <li>Filter the realized performance over custom metrics (Last 7 Days, Last 30 Days, Month-to-Date, or Year-to-Date).</li>
-              <li>Toggle line charts dynamically to see exactly where volatility drawdowns occur in each setup.</li>
+              <li>Real walk-forward validation (rolling train/test windows) is built and has been run against real AAPL history.</li>
+              <li>The one real result so far: average out-of-sample return was <strong className="text-rose-400">negative</strong> across 11 real periods - no demonstrated edge yet.</li>
+              <li>Scope, stated precisely: this backtests the deterministic technical rules only. It does not yet replay the full AI-agent consensus pipeline (News/Fundamental/Macro/Chief Trader) against history.</li>
             </ul>
           </div>
 
@@ -639,9 +615,9 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               <h4 className="text-rose-400 font-bold mb-3 uppercase tracking-widest text-xs font-mono">Core Disclaimers & Disciplinary Rules</h4>
               <ul className="list-disc list-inside text-slate-300 text-xs space-y-2.5 leading-relaxed">
                 <li><strong>AI Models are Probabilistic:</strong> Generative models estimate outcomes based on historic patterns. They do not possess future sight and will experience consecutive losses during abrupt macroeconomic shifts.</li>
-                <li><strong>Never Overrule the Risk Manager:</strong> The 14-day Wilder's ATR and dynamic size caps are calibrated to protect you from portfolio ruin. Disabling guardrails or force-closing positions without structured logic can result in immediate loss of capital.</li>
-                <li><strong>Past Performance Disclaimers:</strong> Just because a consensus portfolio has achieved a high win rate over historical simulations does not guarantee future profitable yield, as market regimes evolve.</li>
-                <li><strong>Start Conservatively:</strong> Always configure the terminal to "Low Risk" (1.0% capital allocation per trade) and run the simulator for a minimum of 30 days to study multi-agent behavior thoroughly before committing capital.</li>
+                <li><strong>Never Overrule the Risk Engine:</strong> The daily-loss kill-switch, consecutive-loss breaker, and concentration cap exist specifically to protect you from portfolio ruin. Disabling guardrails or force-closing positions without structured logic can result in immediate loss of capital.</li>
+                <li><strong>Past Performance Disclaimers:</strong> The one real backtest run against AAPL history so far showed <em>no</em> out-of-sample edge for the deterministic strategy - a real, honest, unfavorable result. A high win rate in one historical simulation does not guarantee future profitable yield.</li>
+                <li><strong>Start Conservatively:</strong> Always configure the terminal to "Conservative" (1% of equity risked per trade) and run the paper simulator for a meaningful stretch to study real multi-agent behavior before ever considering live capital.</li>
               </ul>
             </div>
           </div>
@@ -673,62 +649,62 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
       icon: <Lock size={16} />,
       content: (
         <div className="space-y-6 animate-fade-in">
-          <h2 className="text-2xl font-bold text-white tracking-tight">Configuring Argus for Live Environments</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Configuring Argus, and the Real Live-Trading Gate</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            Transitioning your autonomous terminal from local simulation loops to real production execution requires setting appropriate environment variables and choosing proper execution adapters.
+            Argus does not have separate "dry run" vs. "live exchange" modes you switch between. Every broker connection has its own real paper/live state, and enabling live trading anywhere requires an explicit confirmation step - there is no environment variable that silently turns real-money trading on.
           </p>
 
           <div className="space-y-5">
-            {/* Environment variables card */}
             <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
               <h3 className="text-white font-bold mb-3 flex items-center gap-2 font-mono uppercase text-xs text-indigo-400">
-                <Settings size={14} /> 1. Crucial Environment Variables
+                <Settings size={14} /> 1. Real Environment Variables (from .env.example)
               </h3>
               <p className="text-xs text-slate-400 leading-relaxed mb-3">
-                Ensure you copy `.env.example` to `.env` in your workspace and define the keys. The application utilizes a secure Express/TypeScript proxy server, protecting your private tokens from browser discovery.
+                Copy <code className="text-[10px]">.env.example</code> to <code className="text-[10px]">.env</code> and fill in what you need. Every key here is read for real by the server on boot - nothing on this list is aspirational.
               </p>
-              
+
               <div className="bg-slate-950 p-4 rounded border border-slate-900 font-mono text-xs text-slate-300 space-y-3">
                 <div>
-                  <span className="text-indigo-400 font-bold">GEMINI_API_KEY=</span>
-                  <span className="text-slate-500">{"your_google_ai_studio_api_key"}</span>
-                  <p className="text-[10px] text-slate-400 mt-1">Required for the multi-agent consensus logic. Prepopulated automatically in AI Studio container environments.</p>
+                  <span className="text-indigo-400 font-bold">ALPACA_API_KEY / ALPACA_SECRET_KEY</span>
+                  <p className="text-[10px] text-slate-400 mt-1">Required for real market data and paper/live order execution via Alpaca.</p>
                 </div>
                 <div className="border-t border-slate-800/80 pt-2">
-                  <span className="text-indigo-400 font-bold">PORT=3000</span>
-                  <p className="text-[10px] text-slate-400 mt-1">Hardcoded by the server container layer. Dev servers automatically bind to port 3000 on host 0.0.0.0.</p>
+                  <span className="text-indigo-400 font-bold">GEMINI_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY / ...</span>
+                  <p className="text-[10px] text-slate-400 mt-1">Any one AI provider key is enough to run the agent pipeline - AIRouter fails over across whichever are configured.</p>
+                </div>
+                <div className="border-t border-slate-800/80 pt-2">
+                  <span className="text-indigo-400 font-bold">AUTH_PASSWORD / AUTH_SESSION_SECRET / ENCRYPTION_SECRET</span>
+                  <p className="text-[10px] text-slate-400 mt-1">All three must be generated for real before any real deployment - the shipped placeholders are intentionally invalid and won't authenticate. Generate with <code className="text-[9px]">node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"</code>.</p>
                 </div>
               </div>
             </div>
 
-            {/* Dry Run vs Real Exchange */}
             <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
               <h3 className="text-white font-bold mb-3 flex items-center gap-2 font-mono uppercase text-xs text-amber-400">
-                <Globe size={14} /> 2. Dry Run Mode vs Live Exchange Adaption
+                <Globe size={14} /> 2. The Real Paper→Live Confirmation Gate
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed mb-3">
-                By default, the platform initiates a defaulted execution thread:
+                Every broker connection defaults to paper mode. Flipping a broker to live, or setting the trading mode to LIVE, requires the caller to echo back an exact confirmation phrase - a checkbox default can never accidentally enable real-money trading:
               </p>
               <div className="space-y-2.5 text-xs text-slate-400">
                 <p>
-                  <strong className="text-slate-200">DRY_RUN (Standard/default Mode):</strong> All proposed buy/sell decisions verified by the Risk Node are appended to the in-memory `autoBotState` transaction arrays. No connection to outside brokerages is opened. This is optimal for testing the LLM consensus loop.
+                  <strong className="text-slate-200">Broker live mode:</strong> <code className="text-[10px]">BrokerManager.setLiveMode(brokerId, true, confirmationPhrase)</code> - rejects with a clear error if the phrase doesn't match exactly, or if that broker's <code className="text-[10px]">placeOrder()</code> is a known stub.
                 </p>
                 <p>
-                  <strong className="text-slate-200">LIVE_EXCHANGE Mode (Custom):</strong> When ready, developers can swap the simulation defaults with standard Web3 or stock broker wrappers (e.g., Alpaca API, Interactive Brokers C++, or CCXT for Crypto spot/futures).
+                  <strong className="text-slate-200">Trading mode:</strong> the same confirmation is required to set <code className="text-[10px]">tradingMode: 'LIVE'</code> via Settings or the AutoBot toggle. Reverting to paper mode never requires confirmation - that direction is always safe.
                 </p>
               </div>
             </div>
 
-            {/* Safety checklist */}
             <div className="bg-rose-950/20 border border-rose-500/15 p-4 rounded-lg flex gap-3">
               <Lock size={20} className="text-rose-400 shrink-0 mt-0.5" />
               <div>
-                <h4 className="text-rose-400 font-bold text-xs uppercase font-mono mb-1">Production Safety Checklist</h4>
+                <h4 className="text-rose-400 font-bold text-xs uppercase font-mono mb-1">Real Deployment Notes</h4>
                 <ul className="list-disc list-inside text-slate-300 text-[11px] space-y-1.5 leading-relaxed font-mono">
-                  <li>Never push real API keys, brokerage passwords, or seed phrases to Github.</li>
-                  <li>Verify that your `server.ts` build step utilizes strict `esbuild` compression to bundle Node.js dependency paths correctly.</li>
-                  <li>Enable the Master Kill-Switch immediately if you notice latency spikes or abnormal consecutive multi-layer rejections.</li>
-                  <li>Ensure your hosting instance (such as Cloud Run) utilizes persistent logging to trace full multi-node consensus reasoning histories for audit logging.</li>
+                  <li>Never commit real API keys, brokerage credentials, or the encryption key to git - <code className="text-[10px]">.env*</code> and <code className="text-[10px]">data/.encryption_key</code> are gitignored for exactly this reason.</li>
+                  <li>A real multi-stage Dockerfile and docker-compose.yml exist at the repo root, with a persistent volume for <code className="text-[10px]">data/</code> - <code className="text-[10px]">GET /health</code>/<code className="text-[10px]">/ready</code> are real, unauthenticated container health checks.</li>
+                  <li>Interactive Brokers requires a human to complete browser 2FA at the Gateway roughly every 24 hours - it cannot run as a fully unattended live broker the way Alpaca can.</li>
+                  <li>Use the real Emergency Stop immediately if you observe abnormal behavior - it's a genuine kill-switch, live-tested, not a cosmetic button.</li>
                 </ul>
               </div>
             </div>
