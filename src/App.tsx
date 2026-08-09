@@ -2057,8 +2057,8 @@ export default function App() {
       executionLive: false,
       executionPaper: false,
     });
-    // In a real app this would call an API immediately
     console.warn("CRITICAL: GLOBAL EMERGENCY STOP TRIGGERED");
+    fetch("/api/v1/system/emergency-stop", { method: "POST" }).catch(() => {});
   };
 
   const toggleModule = (module: keyof typeof moduleStates) => {
@@ -8481,6 +8481,7 @@ export default function App() {
                          setEnginesHalted(false);
                          setHaltReason("");
                          setHaltTime("");
+                         fetch("/api/v1/system/resume", { method: "POST" }).catch(() => {});
                        }}
                        className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-6 rounded-lg text-lg uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] mb-4"
                      >
@@ -8493,6 +8494,7 @@ export default function App() {
                          setEnginesHalted(true);
                          setHaltReason("UI emergency stop");
                          setHaltTime(new Date().toLocaleTimeString());
+                         fetch("/api/v1/system/emergency-stop", { method: "POST" }).catch(() => {});
                        }}
                        className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-6 rounded-lg text-lg uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-2 shadow-[0_0_20px_rgba(225,29,72,0.4)] mb-4"
                      >
@@ -8557,7 +8559,7 @@ export default function App() {
                        <button onClick={() => handleSetMode("scanning_only")} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (!enginesHalted && autoMode === "scanning_only" ? "bg-indigo-600 text-white" : "bg-[#111822] text-slate-400 hover:bg-slate-800")}>SCANNING ONLY</button>
                        <button onClick={() => handleSetMode("signal_only")} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (!enginesHalted && autoMode === "signal_only" ? "bg-indigo-600 text-white" : "bg-[#111822] text-slate-400 hover:bg-slate-800")}>SIGNAL ONLY</button>
                        <button onClick={() => handleSetMode("paused")} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (!enginesHalted && autoMode === "paused" ? "bg-indigo-600 text-white" : "bg-[#111822] text-slate-400 hover:bg-slate-800")}>PAUSED</button>
-                       <button onClick={() => { setEnginesHalted(true); setHaltReason("UI emergency stop"); setHaltTime(new Date().toLocaleTimeString()); }} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (enginesHalted ? "bg-indigo-600 text-white" : "bg-[#111822] text-rose-400 hover:bg-slate-800")}>EMERGENCY STOP</button>
+                       <button onClick={() => { setEnginesHalted(true); setHaltReason("UI emergency stop"); setHaltTime(new Date().toLocaleTimeString()); fetch("/api/v1/system/emergency-stop", { method: "POST" }).catch(() => {}); }} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (enginesHalted ? "bg-indigo-600 text-white" : "bg-[#111822] text-rose-400 hover:bg-slate-800")}>EMERGENCY STOP</button>
                      </div>
                    </div>
 

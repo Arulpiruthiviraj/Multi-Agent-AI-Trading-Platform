@@ -33,11 +33,15 @@ systemRouter.get("/audit/trail", (req: Request, res: Response) => {
 
 systemRouter.post("/system/emergency-stop", (req: Request, res: Response) => {
   console.warn("CIRCUIT BREAKER: Emergency Stop Activated by User.");
+  tradingEngine.state.emergencyStopActive = true;
+  tradingEngine.logHistory("veto", "EMERGENCY STOP activated. RiskAgent will reject all new trades until resumed.");
   res.json({ status: "ok", active: true });
 });
 
 systemRouter.post("/system/resume", (req: Request, res: Response) => {
   console.log("SYSTEM: Recovery initiated. Trading systems resumed.");
+  tradingEngine.state.emergencyStopActive = false;
+  tradingEngine.logHistory("start", "Emergency stop cleared. Trading resumed.");
   res.json({ status: "ok", active: false });
 });
 
@@ -73,8 +77,12 @@ systemRouter.get("/system/status", async (req: Request, res: Response) => {
       hasAlpaca: brokers.length > 0,
       hasGemini: providers.length > 0,
       hasSQLite: true,
-      circuitBreakers: { dailyDate: new Date().toISOString().split("T")[0], loss: 0 },
-      emergencyStop: false,
+      circuitBreakers: {
+        dailyDate: tradingEngine.state.dayStartDateStr || new Date().toISOString().split("T")[0],
+        loss: tradingEngine.state.currentDailyLoss,
+        limit: tradingEngine.state.dailyLossLimit,
+      },
+      emergencyStop: tradingEngine.state.emergencyStopActive,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

@@ -70,6 +70,9 @@ export interface AutoBotState {
     geneticPrompt?: any;
     bypassedTrades?: any[];
     regimeState?: any;
+    emergencyStopActive: boolean;
+    dayStartEquity: number | null;
+    dayStartDateStr: string | null;
 }
 
 class TradingEngine {
@@ -87,6 +90,9 @@ class TradingEngine {
             maxTradeSize: 3000,
             dailyLossLimit: 5000,
             currentDailyLoss: 0,
+            emergencyStopActive: false,
+            dayStartEquity: null,
+            dayStartDateStr: null,
             takeProfitPct: 15,
             trailingStopPct: 5,
             minAiConfidence: 75,

@@ -109,7 +109,9 @@ export class ChiefTraderAgent {
         AIRouter.getInstance().routeConsensus("ConsensusDebate", debatePrompt, idea.traceId).then(debateResult => {
            if (debateResult && debateResult.consensus_verdict) {
               const consensusSide = debateResult.consensus_verdict;
-              const consensusConfidence = consensusSide === "HOLD" ? 50 : 80;
+              // Confidence is 0-1 scale everywhere else in the consensus math below
+              // (weightedConfidence / totalWeight, clamped to [0,1]) - this was 50/80.
+              const consensusConfidence = consensusSide === "HOLD" ? 0.5 : 0.8;
               
               // Push the consensus as a new idea
               this.recentIdeas.push({

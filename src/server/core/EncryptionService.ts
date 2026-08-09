@@ -38,8 +38,16 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Use a fixed secret from env or generate a consistent one for the local app instance
-const ENCRYPTION_KEY = process.env.ENCRYPTION_SECRET || crypto.scryptSync('argus-local-secret-key-default', 'salt', 32);
+// Broker and AI provider API keys stored in the DB are encrypted with this key. Without a real
+// ENCRYPTION_SECRET, every Argus install would otherwise fall back to the same hardcoded literal
+// key - making any DB dump trivially decryptable. Fail loudly instead of silently using it.
+if (!process.env.ENCRYPTION_SECRET) {
+  throw new Error(
+    'ENCRYPTION_SECRET is not set. Refusing to start: broker and AI provider API keys stored in ' +
+    'the database must not be encrypted with a hardcoded, publicly-known key. Set ENCRYPTION_SECRET in .env.'
+  );
+}
+const ENCRYPTION_KEY = process.env.ENCRYPTION_SECRET;
 const IV_LENGTH = 16;
 
 export class EncryptionService {
@@ -47,7 +55,7 @@ export class EncryptionService {
     if (!text) return text;
     try {
       const iv = crypto.randomBytes(IV_LENGTH);
-      let key = ENCRYPTION_KEY;
+      let key: string | Buffer = ENCRYPTION_KEY;
       if (typeof key === 'string') {
         key = crypto.scryptSync(key, 'salt', 32);
       }
@@ -71,7 +79,7 @@ export class EncryptionService {
       const iv = Buffer.from(textParts.shift() as string, 'hex');
       const encryptedText = Buffer.from(textParts.join(':'), 'hex');
       
-      let key = ENCRYPTION_KEY;
+      let key: string | Buffer = ENCRYPTION_KEY;
       if (typeof key === 'string') {
         key = crypto.scryptSync(key, 'salt', 32);
       }

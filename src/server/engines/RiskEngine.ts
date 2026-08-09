@@ -16,6 +16,38 @@ import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { BrokerManager } from '../../brokers/BrokerManager';
+import { tradingEngine } from './TradingEngine';
+import { marketDataWorker } from '../services/MarketDataWorker';
+
+const STALE_PRICE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
+const MARKET_CLOCK_CACHE_MS = 60 * 1000;
+
+// Real market-hours check via Alpaca's /v2/clock. Returns null (skip the check) rather than a
+// fabricated guess when Alpaca credentials aren't configured - there is no other real source here.
+async function isMarketOpen(): Promise<boolean | null> {
+    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) return null;
+    if (cachedMarketClock && Date.now() - cachedMarketClock.fetchedAt < MARKET_CLOCK_CACHE_MS) {
+        return cachedMarketClock.isOpen;
+    }
+    try {
+        const isPaper = tradingEngine.state.tradingMode !== 'LIVE';
+        const base = isPaper ? 'paper-api.alpaca.markets' : 'api.alpaca.markets';
+        const res = await fetch(`https://${base}/v2/clock`, {
+            headers: {
+                'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
+                'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
+            }
+        });
+        if (!res.ok) return null;
+        const clock = await res.json();
+        cachedMarketClock = { isOpen: !!clock.is_open, fetchedAt: Date.now() };
+        return cachedMarketClock.isOpen;
+    } catch (e) {
+        console.error('[Risk Engine] Failed to fetch Alpaca market clock', e);
+        return null;
+    }
+}
 
 export class RiskEngine {
     private static instance: RiskEngine;
@@ -42,6 +74,63 @@ export class RiskEngine {
             const riskLevel = settings[0]?.riskLevel || "Balanced";
             const maxTradeSizeDollar = settings[0]?.maxTradeSize || 3000;
             const maxPortfolioRiskPct = (riskLevel === "Aggressive") ? 0.03 : (riskLevel === "Conservative" ? 0.01 : 0.02);
+
+            // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
+            // baseline captured the first time we evaluate risk each calendar day.
+            const equityNow = portfolio.equity || 0;
+            const todayStr = new Date().toISOString().split('T')[0];
+            if (tradingEngine.state.dayStartDateStr !== todayStr) {
+                tradingEngine.state.dayStartDateStr = todayStr;
+                tradingEngine.state.dayStartEquity = equityNow;
+                tradingEngine.state.currentDailyLoss = 0;
+            }
+            const dayStartEquity = tradingEngine.state.dayStartEquity ?? equityNow;
+            const dailyLoss = Math.max(0, dayStartEquity - equityNow);
+            tradingEngine.state.currentDailyLoss = dailyLoss;
+            if (dailyLoss >= tradingEngine.state.dailyLossLimit) {
+                eventBus.emitRiskAssessment({
+                    traceId: proposal.traceId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    currentPrice: proposal.currentPrice,
+                    approved: false,
+                    maxQuantity: 0,
+                    reasoning: `Daily loss limit reached: -$${dailyLoss.toFixed(2)} (limit $${tradingEngine.state.dailyLossLimit}). All new trades blocked until tomorrow or a manual reset.`
+                });
+                return;
+            }
+
+            // 2b. Real market-hours check (Alpaca /v2/clock). Skips (does not block) when Alpaca
+            // credentials aren't configured, since there is no real source to check against.
+            const marketOpen = await isMarketOpen();
+            if (marketOpen === false) {
+                eventBus.emitRiskAssessment({
+                    traceId: proposal.traceId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    currentPrice: proposal.currentPrice,
+                    approved: false,
+                    maxQuantity: 0,
+                    reasoning: "Market is currently closed (Alpaca clock)."
+                });
+                return;
+            }
+
+            // 2c. Stale market-data check - only fires when we've actually seen a real tick for
+            // this symbol before and it has since gone quiet; never fabricates a staleness verdict.
+            const priceAgeMs = marketDataWorker.getLatestPriceAgeMs(proposal.symbol);
+            if (priceAgeMs !== null && priceAgeMs > STALE_PRICE_THRESHOLD_MS) {
+                eventBus.emitRiskAssessment({
+                    traceId: proposal.traceId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    currentPrice: proposal.currentPrice,
+                    approved: false,
+                    maxQuantity: 0,
+                    reasoning: `Stale market data: last real tick for ${proposal.symbol} is ${Math.round(priceAgeMs / 1000)}s old (threshold ${STALE_PRICE_THRESHOLD_MS / 1000}s).`
+                });
+                return;
+            }
 
             // 3. News risk validation
             const recentNews = await db.select().from(schema.newsArticles).limit(20);

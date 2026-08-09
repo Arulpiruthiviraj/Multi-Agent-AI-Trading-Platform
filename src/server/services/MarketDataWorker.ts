@@ -41,9 +41,17 @@ export class MarketDataWorker {
   private intervalId: NodeJS.Timeout | null = null;
   private ws: WebSocket | null = null;
   private latestPrices: Map<string, number> = new Map();
+  private latestPriceTimestamps: Map<string, number> = new Map();
 
   getLatestPrice(symbol: string): number | null {
     return this.latestPrices.get(symbol) || null;
+  }
+
+  // Milliseconds since the last real MARKET_DATA tick for this symbol, or null if none has
+  // ever arrived (e.g. no Alpaca keys configured) - callers must not treat null as "fresh".
+  getLatestPriceAgeMs(symbol: string): number | null {
+    const t = this.latestPriceTimestamps.get(symbol);
+    return typeof t === 'number' ? Date.now() - t : null;
   }
 
   start() {
@@ -107,10 +115,12 @@ export class MarketDataWorker {
         } else if (msg.T === "q") {
           // Quote message
           this.latestPrices.set(msg.S, msg.bp);
+          this.latestPriceTimestamps.set(msg.S, Date.now());
           eventBus.emitMarketData(msg.S, msg.bp, msg.bs, new Date(msg.t).toISOString());
         } else if (msg.T === "t") {
           // Trade message
           this.latestPrices.set(msg.S, msg.p);
+          this.latestPriceTimestamps.set(msg.S, Date.now());
           eventBus.emitMarketData(msg.S, msg.p, msg.s, new Date(msg.t).toISOString());
         }
       }

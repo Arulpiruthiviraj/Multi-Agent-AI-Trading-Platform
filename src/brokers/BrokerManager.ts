@@ -45,6 +45,10 @@ import * as schema from '../server/db/schema';
 import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../server/core/EncryptionService';
 
+// placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
+// not partial implementations. Never allow them to become the active (order-placing) broker.
+const NON_FUNCTIONAL_BROKER_IDS = new Set(['questrade', 'coinbase', 'ibkr']);
+
 export class BrokerManager {
   private static instance: BrokerManager;
   private activeBroker: BrokerPlugin;
@@ -90,14 +94,16 @@ export class BrokerManager {
          let activeFound = false;
          
          for (const [id, broker] of this.brokers.entries()) {
+             if (NON_FUNCTIONAL_BROKER_IDS.has(id)) continue;
              if (broker.name === selectedName || (selectedName === 'Simulation Mode' && id === 'internal_paper')) {
                  this.activeBroker = broker;
                  activeFound = true;
                  break;
              }
          }
-         
+
          if (!activeFound) {
+             console.warn(`[BrokerManager] Saved broker selection '${selectedName}' is unavailable or non-functional. Falling back to Internal Paper Simulator.`);
              this.activeBroker = internalPaper;
          }
          
@@ -131,7 +137,10 @@ export class BrokerManager {
   public async setActiveBroker(id: string, credentials?: any): Promise<boolean> {
     const broker = this.brokers.get(id);
     if (!broker) throw new Error(`Broker ${id} not found`);
-    
+    if (NON_FUNCTIONAL_BROKER_IDS.has(id)) {
+      throw new Error(`Broker '${broker.name}' is not a functional adapter (placeOrder is unimplemented). Refusing to select it as active.`);
+    }
+
     // Safe transition
     if (this.activeBroker && this.activeBroker.id !== id) {
       console.log(`[BrokerManager] Switching from ${this.activeBroker.name} to ${broker.name}`);

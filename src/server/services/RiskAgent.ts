@@ -35,17 +35,30 @@
 
 import { eventBus } from '../core/EventBus';
 import { riskEngine } from '../engines/RiskEngine';
+import { tradingEngine } from '../engines/TradingEngine';
 
 export class RiskValidationAgent {
-  private sessionOpen = true; 
-  
+  private sessionOpen = true;
+
   constructor() {
     eventBus.on('CHIEF_APPROVED_IDEA', (approval) => this.assessRisk(approval));
   }
-  
+
   assessRisk(approval: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
-     
+
+     if (tradingEngine.state.emergencyStopActive) {
+        eventBus.emitRiskAssessment({
+           traceId: approval.traceId,
+           symbol: approval.symbol,
+           side: approval.side,
+           approved: false,
+           maxQuantity: 0,
+           reasoning: "Emergency stop is active. All new trades are blocked until resumed."
+        });
+        return;
+     }
+
      if (!this.sessionOpen) {
         eventBus.emitRiskAssessment({
            traceId: approval.traceId,

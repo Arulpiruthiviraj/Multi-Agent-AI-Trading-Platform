@@ -28,10 +28,22 @@ export class OrderManagementService {
   }
 
   async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any) {
+    // Idempotency: refuse to place a second real order for a traceId that already has one.
+    // Guards against any future duplicate RISK_ASSESSMENT_COMPLETED emission for the same trade.
+    try {
+      const existing = await db.select().from(trades).where(eq(trades.traceId, traceId)).limit(1);
+      if (existing.length > 0) {
+        console.warn(`[OMS] Duplicate execution attempt for traceId ${traceId} - an order was already placed (${existing[0].id}). Skipping.`);
+        return;
+      }
+    } catch (e) {
+      console.error('[OMS] Idempotency check failed, proceeding without it', e);
+    }
+
     const orderId = crypto.randomUUID();
     let fillPrice = 0;
     let status = "PENDING";
-    
+
     try {
       const activeBroker = BrokerManager.getInstance().getActiveBroker();
       console.log(`[OMS] Submitting order to ${activeBroker.name}: ${side} ${quantity}x ${symbol}`);
