@@ -8,7 +8,9 @@ coverage/
 !.env.example
 data/secrets.json
 data/.encryption_key
+data/*.db
 data/*.db-shm
 data/*.db-wal
 data/audit_trail.jsonl
+data/shadow_portfolio.json
 sqlite.db

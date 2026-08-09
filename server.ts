@@ -641,6 +641,24 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
 
   app.use(express.json());
 
+  // Unauthenticated by design (registered before the /api/* auth gate matters, and outside
+  // /api/ entirely) - container orchestrators and load balancers hit these without a session.
+  // Liveness: the process can respond at all, no dependency checks.
+  app.get('/health', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime() });
+  });
+
+  // Readiness: the process can actually serve real requests - checks the one hard dependency
+  // every route ultimately needs, the SQLite connection.
+  app.get('/ready', (req, res) => {
+    try {
+      sqliteDb.prepare('SELECT 1').get();
+      res.json({ status: 'ready' });
+    } catch (e: any) {
+      res.status(503).json({ status: 'not ready', error: e.message });
+    }
+  });
+
   const authRouter = express.Router();
   authRouter.post('/login', async (req, res) => {
     const { username, password } = req.body || {};

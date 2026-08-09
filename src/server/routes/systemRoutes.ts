@@ -13,8 +13,7 @@
  */
 import express, { Router, Request, Response } from "express";
 import fs from "fs";
-import path from "path";
-import { db } from "../db/index";
+import { db, dbPath, sqliteDb } from "../db/index";
 import * as schema from "../db/schema";
 import { eq, desc } from "drizzle-orm";
 import { tradingEngine } from "../engines/TradingEngine";
@@ -50,8 +49,10 @@ systemRouter.post("/system/resume", (req: Request, res: Response) => {
 
 systemRouter.get("/system/export-db", (req: Request, res: Response) => {
   try {
-    const dbPath = path.resolve(process.cwd(), "database", "argus.db");
     if (fs.existsSync(dbPath)) {
+      // Checkpoint first - in WAL mode, recent commits can live only in the -wal file, and a
+      // straight file copy of just the main .db file would silently miss them.
+      sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
       res.download(dbPath, "argus_backup.db");
     } else {
       res.status(404).json({ error: "Database not found" });
@@ -61,9 +62,12 @@ systemRouter.get("/system/export-db", (req: Request, res: Response) => {
   }
 });
 
+// Writing directly under the live db file while the app holds it open in WAL mode is unsafe -
+// takes a checkpoint first so the main file is fully caught up, then overwrites it. The app must
+// still be restarted afterward (the running process's connection/cache is not re-opened).
 systemRouter.post("/system/import-db", express.raw({ type: "application/octet-stream", limit: "50mb" }), (req: Request, res: Response) => {
   try {
-    const dbPath = path.resolve(process.cwd(), "database", "argus.db");
+    sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
     fs.writeFileSync(dbPath, req.body);
     res.json({ ok: true, message: "Database imported successfully. Please restart the application." });
   } catch (e: any) {

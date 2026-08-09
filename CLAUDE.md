@@ -88,13 +88,20 @@ Fabricates 9 hardcoded agent objects, votes by count, calls Alpaca REST API dire
 
 ### Database
 
-`better-sqlite3` + `Drizzle ORM`. DB file: `data/argus.db`. Schema: `src/server/db/schema.ts` (20 tables). Migration files: `drizzle/`. Import `db` from `src/server/db/index.ts` — do not open a second `better-sqlite3` connection.
+`better-sqlite3` + `Drizzle ORM`, WAL mode. DB file: `data/argus.db` (not tracked in git — see Backup & Restore below). Schema: `src/server/db/schema.ts` (25 tables). Migration files: `drizzle/`. Import `db` from `src/server/db/index.ts` — do not open a second `better-sqlite3` connection to this file from a separate process; on this stack a competing connection has been observed to report a false `SQLITE_CORRUPT` while the app's own connection stays perfectly healthy (verified via `PRAGMA integrity_check` through the live connection).
 
-Key tables: `settings`, `trades`, `portfolio`, `aiProviders`, `aiModels`, `aiUsage`, `learnedRules`, `agentPerformanceStats`, `agentPredictions`, `eventTraces`, `news_items`, `news_clusters`, `memoryRules`.
+Key tables: `settings`, `trades`, `portfolio`, `aiProviders`, `aiModels`, `aiUsage`, `learnedRules`, `agentPerformanceStats`, `agentPredictions`, `eventTraces`, `news_articles`, `news_clusters`, `memoryRules`, `agentRoutingOverrides`, `ohlcvBars`, `backtestRuns`.
+
+#### Backup & Restore
+
+- `GET /api/v1/system/export-db` — checkpoints the WAL then downloads `data/argus.db`.
+- `POST /api/v1/system/import-db` (raw `application/octet-stream` body) — checkpoints, overwrites `data/argus.db`, requires a restart afterward to take effect.
+- Both require an authenticated session when `AUTH_PASSWORD` is set.
+- Manual/offline alternative: stop the process, copy `data/argus.db` (and `data/.encryption_key` — losing it makes every encrypted API key in the DB unrecoverable), restore by copying back and restarting.
 
 ### Broker Layer
 
-`src/brokers/BrokerManager.ts` — singleton, call `BrokerManager.getInstance()`. Default broker on startup: `InternalPaperBroker` (in-memory, real simulated fills). `AlpacaBroker` is real (paper or live). `QuestradeBroker`, `InteractiveBrokersAdapter`, `CoinbaseBroker` are non-functional stubs — `placeOrder()` throws `Not implemented`.
+`src/brokers/BrokerManager.ts` — singleton, call `BrokerManager.getInstance()`. Default broker on startup: `InternalPaperBroker` (in-memory, real simulated fills). `AlpacaBroker` is real (paper or live). `InteractiveBrokersAdapter` is a real Client Portal Web API client but requires a human to complete browser 2FA login roughly every 24h (`requiresManualReauth: true`) and cannot place orders on Canadian-exchange equities (IIROC restriction, not a technical gap). `QuestradeBroker` and `CoinbaseBroker` are non-functional stubs — `placeOrder()` throws `Not implemented`.
 
 **Known startup gap**: `BrokerManager.initialize()` is never called from `startServer()`. The default broker is set at `BrokerManager` instantiation time, not via the initialization path.
 
@@ -122,7 +129,7 @@ These are broken by design or by bug — do not describe them as working:
 - **~9 frontend chart panels** (win-rate, drawdown, benchmark, heatmap, etc.) — static arrays in `App.tsx`, not backed by real data.
 - **`PortfolioMonitor` exit thresholds** — `settings.takeProfitPct` / `settings.trailingStopPct` are never read; hardcoded ±5%/-3% is used.
 - **`AdvancedQuantEngines` / `MarketRegimeAgent`** — real math/LLM, but their output events are never consumed by any decision.
-- **`python-platform/`** — a disconnected Python/FastAPI reimplementation. The running Node app does not import or call it.
+- **`archive/python-platform/`** — a disconnected Python/FastAPI reimplementation, moved out of the repo root since the running Node app never imported or called it.
 
 ## Adding a New Agent
 
