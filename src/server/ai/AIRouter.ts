@@ -132,10 +132,28 @@ export class AIRouter {
              this.registerProvider(p.id, providerInstance);
          }
      }
+
+     // Load persisted per-agent routing overrides (Phase 6) - setAgentRoute() already existed
+     // and routeTask() already checked this.agentRouting, but nothing ever populated it.
+     try {
+         const overrides = await db.select().from(schema.agentRoutingOverrides);
+         for (const o of overrides) {
+             this.setAgentRoute(o.agentName, o.providerId, o.model || '');
+         }
+         if (overrides.length > 0) {
+             console.log(`[AIRouter] Loaded ${overrides.length} agent routing override(s) from DB.`);
+         }
+     } catch (e) {
+         console.error('[AIRouter] Failed to load agent routing overrides', e);
+     }
   }
-  
+
   public setAgentRoute(agentType: string, providerId: string, model: string) {
      this.agentRouting.set(agentType, { providerId, model });
+  }
+
+  public clearAgentRoute(agentType: string) {
+     this.agentRouting.delete(agentType);
   }
 
   

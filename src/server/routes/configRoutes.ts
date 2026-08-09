@@ -70,6 +70,7 @@ import * as schema from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../core/EncryptionService';
 import { tradingEngine } from '../engines/TradingEngine';
+import { AIRouter } from '../ai/AIRouter';
 
 export const configRouter = Router();
 
@@ -204,6 +205,52 @@ configRouter.get('/usage', async (req, res) => {
     const usage = await db.select().from(schema.aiUsage);
     res.json(usage);
   } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Per-agent AI provider routing overrides. AIProviderManagement.tsx's "Agent Routing" tab has
+// always posted here; AIRouter.setAgentRoute()/agentRouting map already existed and routeTask()
+// already reads it, but nothing ever persisted an override or called setAgentRoute() at runtime.
+// This is the missing wiring, not new routing logic.
+configRouter.get('/routing', async (req, res) => {
+  try {
+    const overrides = await db.select().from(schema.agentRoutingOverrides);
+    res.json(overrides);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+configRouter.post('/routing', async (req, res) => {
+  try {
+    const { agent, providerId, model } = req.body;
+    if (!agent || !providerId) {
+      return res.status(400).json({ error: 'agent and providerId are required' });
+    }
+
+    const router = AIRouter.getInstance();
+
+    if (providerId === 'auto') {
+      await db.delete(schema.agentRoutingOverrides).where(eq(schema.agentRoutingOverrides.agentName, agent));
+      router.clearAgentRoute(agent);
+      return res.json({ ok: true, cleared: true });
+    }
+
+    const existing = await db.select().from(schema.agentRoutingOverrides).where(eq(schema.agentRoutingOverrides.agentName, agent));
+    const now = new Date().toISOString();
+    if (existing.length > 0) {
+      await db.update(schema.agentRoutingOverrides)
+        .set({ providerId, model: model ?? null, updatedAt: now })
+        .where(eq(schema.agentRoutingOverrides.agentName, agent));
+    } else {
+      await db.insert(schema.agentRoutingOverrides).values({ agentName: agent, providerId, model: model ?? null, updatedAt: now });
+    }
+
+    router.setAgentRoute(agent, providerId, model || '');
+    res.json({ ok: true });
+  } catch (e: any) {
+    console.error(e);
     res.status(500).json({ error: e.message });
   }
 });

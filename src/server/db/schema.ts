@@ -343,6 +343,16 @@ export const kronosPredictions = sqliteTable('kronos_predictions', {
   timestamp: text('timestamp').notNull()
 });
 
+// Per-agent AI provider routing overrides (Phase 6). AIRouter.setAgentRoute() already existed and
+// routeTask() already checks it, but nothing ever called it - AIProviderManagement.tsx's "Agent
+// Routing" tab posted to a route that didn't exist. This table is the missing persistence layer.
+export const agentRoutingOverrides = sqliteTable('agent_routing_overrides', {
+  agentName: text('agent_name').primaryKey(),
+  providerId: text('provider_id').notNull(),
+  model: text('model'),
+  updatedAt: text('updated_at').notNull(),
+});
+
 // Real historical OHLCV storage for the backtest/replay engine (Phase 2). Bar timestamp is the
 // bar's OPEN time in epoch ms - the replay clock enforces that no agent sees a bar whose
 // timestamp is later than the simulated "now".
