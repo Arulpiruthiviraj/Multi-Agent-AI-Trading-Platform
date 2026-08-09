@@ -67,7 +67,19 @@ export class RiskEngine {
             // Using actual buying power and portfolio value
             const accountEquity = portfolio.equity || 10000;
             const buyingPower = portfolio.buyingPower || 10000;
-            const currentPrice = proposal.currentPrice || 150; // Fallback only if missing
+            const currentPrice = proposal.currentPrice;
+
+            if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice) || currentPrice <= 0) {
+                eventBus.emitRiskAssessment({
+                    traceId: proposal.traceId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    approved: false,
+                    maxQuantity: 0,
+                    reasoning: "No valid price"
+                });
+                return;
+            }
 
             // Basic ATR risk calculation - normally fetched from market data, assuming $4 risk per share for this example if not provided
             const riskPerShare = currentPrice * 0.05; // 5% stop loss assumption

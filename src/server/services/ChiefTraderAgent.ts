@@ -91,7 +91,7 @@ export class ChiefTraderAgent {
     }
 }
 
-  async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, newsDetails?: any }) {
+  async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any }) {
     console.log(`[ChiefTrader] Reviewing ${idea.side} on ${idea.symbol} proposed by ${idea.agent}`);
     this.recentIdeas.push(idea);
     
@@ -117,6 +117,7 @@ export class ChiefTraderAgent {
                  symbol: idea.symbol,
                  side: consensusSide,
                  confidence: consensusConfidence,
+                 currentPrice: idea.currentPrice,
                  reasoning: `Multi-Model Debate Concluded: ${consensusSide} (Based on ${debateResult.results.length} models)`,
                  agent: 'ConsensusDebate'
               });
@@ -139,6 +140,7 @@ export class ChiefTraderAgent {
     let bestSide = 'HOLD';
     let maxWeightedConfidence = 0;
     let winningReason = '';
+    let winningPrice: number | undefined = undefined;
     let agentsAgreed = '';
     let agentsDisagreed = '';
     let bestFinalConfidence = 0;
@@ -171,6 +173,9 @@ export class ChiefTraderAgent {
             agentsAgreed = agreeingIdeas.map(i => `${i.agent}(wt:${(this.agentWeights[i.agent]||(i.agent==='ConsensusDebate'?0.35:1.0)).toFixed(2)})`).join(", ");
             agentsDisagreed = disagreeingIdeas.map(i => `${i.agent}(wt:${(this.agentWeights[i.agent]||(i.agent==='ConsensusDebate'?0.35:1.0)).toFixed(2)})`).join(", ");
             winningReason = agreeingIdeas[0]?.reasoning || "Consensus formed";
+            winningPrice = agreeingIdeas.find(i =>
+              typeof i.currentPrice === 'number' && Number.isFinite(i.currentPrice) && i.currentPrice > 0
+            )?.currentPrice;
         }
     }
 
@@ -191,6 +196,7 @@ export class ChiefTraderAgent {
          symbol: symbol,
          side: bestSide,
          confidence: bestFinalConfidence,
+         currentPrice: winningPrice,
          reasoning: reason,
          agentsContext: agentsAgreed
        });

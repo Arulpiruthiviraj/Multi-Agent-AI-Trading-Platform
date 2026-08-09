@@ -96,6 +96,7 @@ export class TechnicalProposerAgent {
         symbol,
         side: "BUY",
         confidence: 0.85,
+        currentPrice,
         reasoning: `Strong upward trend detected. MACD bullish crossover. RSI at ${rsi.toFixed(2)}.`,
         agent: "TechnicalAgent"
       });
@@ -108,6 +109,7 @@ export class TechnicalProposerAgent {
         symbol,
         side: "BUY",
         confidence: 0.78,
+        currentPrice,
         reasoning: `Oversold condition. Price breached lower Bollinger Band with RSI at ${rsi.toFixed(2)}.`,
         agent: "TechnicalAgent"
       });
@@ -120,6 +122,7 @@ export class TechnicalProposerAgent {
         symbol,
         side: "SELL",
         confidence: 0.88,
+        currentPrice,
         reasoning: `Overbought condition. Price exceeded upper Bollinger Band. RSI at ${rsi.toFixed(2)}.`,
         agent: "TechnicalAgent"
       });

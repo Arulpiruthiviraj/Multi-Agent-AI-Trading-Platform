@@ -58,27 +58,23 @@ export class RiskValidationAgent {
         return;
      }
 
-     const estPrice = approval.currentPrice || 150; 
-
-     // Mock Portfolio State for Risk Engine evaluation
-     // In a real system, this state is fetched from db/Alpaca sync
-     const mockPortfolioState: any = {
-        totalEquity: 50000,
-        availableCash: 40000,
-        dailyRealizedPnL: -500, 
-        maxDrawdown: 0.05,
-        portfolioHeat: 0.40,
-        marketRegime: 'BULL',
-        openPositions: [
-           { symbol: 'AAPL', quantity: 50, currentPrice: 150, volatility: 0.02 }, 
-           { symbol: 'TSLA', quantity: 10, currentPrice: 250, volatility: 0.04 }  
-        ]
-     };
+     const currentPrice = approval.currentPrice;
+     if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice) || currentPrice <= 0) {
+        eventBus.emitRiskAssessment({
+           traceId: approval.traceId,
+           symbol: approval.symbol,
+           side: approval.side,
+           approved: false,
+           maxQuantity: 0,
+           reasoning: "No valid price"
+        });
+        return;
+     }
 
      const request: any = {
         symbol: approval.symbol,
         side: approval.side as 'BUY' | 'SELL',
-        currentPrice: estPrice,
+        currentPrice,
         confidence: approval.confidence,
         newsDetails: approval.newsDetails
      };

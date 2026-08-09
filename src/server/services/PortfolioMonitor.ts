@@ -77,6 +77,7 @@ export class PortfolioMonitorWorker {
              symbol: holding.symbol,
              side: "SELL",
              confidence: 0.85,
+             currentPrice: currentLivePrice,
              reasoning: `Target profit reached (+${PnL.toFixed(2)}%). Scaling out to manage risk.`,
              agent: "PortfolioManager"
            });
@@ -87,6 +88,7 @@ export class PortfolioMonitorWorker {
              symbol: holding.symbol,
              side: "SELL",
              confidence: 0.95,
+             currentPrice: currentLivePrice,
              reasoning: `Hard stop hit (${PnL.toFixed(2)}%). Preserving capital.`,
              agent: "PortfolioManager"
            });
