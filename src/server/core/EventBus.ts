@@ -17,6 +17,9 @@ class EventBus extends EventEmitter {
 
   public publish(event: string, payload: any) {
     this.emit(event, payload);
+    if (event === 'MARKET_DATA') {
+      super.emit('MARKET_DATA_UPDATED', payload);
+    }
   }
 
   public subscribe(event: string, listener: (...args: any[]) => void) {
@@ -38,7 +41,9 @@ class EventBus extends EventEmitter {
 
   // Legacy aliases
   public emitMarketData(symbol: string, price: number, volume: number, timestamp: string) {
-     this.emit('MARKET_DATA', { symbol, price, volume, timestamp });
+     const payload = { symbol, price, volume, timestamp };
+     this.emit('MARKET_DATA', payload);
+     this.emit('MARKET_DATA_UPDATED', payload);
   }
   public emitTradeIdea(idea: any) {
      this.emit('TRADE_IDEA_GENERATED', idea);

@@ -103,7 +103,9 @@ export class BrokerManager {
          
          if (connection) {
              const key = connection.apiKeyEncrypted ? EncryptionService.decrypt(connection.apiKeyEncrypted) : process.env.ALPACA_API_KEY;
-             const secret = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted) : process.env.ALPACA_SECRET_KEY;
+             const secret = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted)
+                 : connection.apiSecretEncrypted ? EncryptionService.decrypt(connection.apiSecretEncrypted)
+                 : process.env.ALPACA_SECRET_KEY;
              
              if (connection.paperMode) {
                  this.activeBroker.paperTrading();

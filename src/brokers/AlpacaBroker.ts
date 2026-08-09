@@ -55,9 +55,9 @@ export class AlpacaBroker implements BrokerPlugin {
     return this.authenticate(credentials);
   }
   async authenticate(credentials?: any): Promise<boolean> {
-    if (credentials?.apiKey && credentials?.secretKey) {
-      this.apiKey = credentials.apiKey;
-      this.secretKey = credentials.secretKey;
+    if (credentials?.apiKey || credentials?.secretKey || credentials?.apiSecret) {
+      this.apiKey = credentials?.apiKey || process.env.ALPACA_API_KEY || '';
+      this.secretKey = credentials?.secretKey || credentials?.apiSecret || process.env.ALPACA_SECRET_KEY || '';
     } else {
       this.apiKey = process.env.ALPACA_API_KEY || '';
       this.secretKey = process.env.ALPACA_SECRET_KEY || '';

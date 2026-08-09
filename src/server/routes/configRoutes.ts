@@ -115,7 +115,7 @@ configRouter.post('/brokers', async (req, res) => {
     await db.insert(schema.brokerConnections).values({
        brokerName,
        apiKeyEncrypted: finalKey,
-       apiSecretEncrypted: finalSecret,
+       secretEncrypted: finalSecret,
        ...rest
     });
     res.json({ ok: true });
