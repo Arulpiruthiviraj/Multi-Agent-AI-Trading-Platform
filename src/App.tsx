@@ -1132,49 +1132,6 @@ export default function App() {
 
   const [pnlDateRange, setPnlDateRange] = useState("Last 30 Days");
 
-  const fullMockDailyPnL = [
-    { date: "Day 1", pnl: -120 },
-    { date: "Day 2", pnl: -50 },
-    { date: "Day 3", pnl: 200 },
-    { date: "Day 4", pnl: 310 },
-    { date: "Day 5", pnl: -150 },
-    { date: "Day 6", pnl: 450 },
-    { date: "Day 7", pnl: 600 },
-    { date: "Day 8", pnl: 100 },
-    { date: "Day 9", pnl: -400 },
-    { date: "Day 10", pnl: 850 },
-    { date: "Day 11", pnl: 320 },
-    { date: "Day 12", pnl: 50 },
-    { date: "Day 13", pnl: 920 },
-    { date: "Day 14", pnl: -80 },
-    { date: "Day 15", pnl: 240 },
-    { date: "Day 16", pnl: -100 },
-    { date: "Day 17", pnl: 400 },
-    { date: "Day 18", pnl: 150 },
-    { date: "Day 19", pnl: -550 },
-    { date: "Day 20", pnl: 650 },
-    { date: "Day 21", pnl: 220 },
-    { date: "Day 22", pnl: 300 },
-    { date: "Day 23", pnl: -20 },
-    { date: "Day 24", pnl: 710 },
-    { date: "Day 25", pnl: 450 },
-    { date: "Day 26", pnl: 800 },
-    { date: "Day 27", pnl: 340 },
-    { date: "Day 28", pnl: -120 },
-    { date: "Day 29", pnl: 550 },
-    { date: "Day 30", pnl: 1050 },
-  ];
-
-  const mockHistoricalTrades = [
-    { date: "2026-06-16", symbol: "TSLA", decision: "BUY", weight: 0.8, outcome: "+$120.40", outcomeClass: "text-emerald-400" },
-    { date: "2026-06-16", symbol: "NVDA", decision: "SELL", weight: 1.2, outcome: "-$55.00", outcomeClass: "text-rose-400" },
-    { date: "2026-06-15", symbol: "AAPL", decision: "BUY", weight: 0.9, outcome: "+$45.10", outcomeClass: "text-emerald-400" },
-    { date: "2026-06-15", symbol: "MSTR", decision: "BUY", weight: 1.5, outcome: "-$210.00", outcomeClass: "text-rose-400" },
-    { date: "2026-06-14", symbol: "PLTR", decision: "SELL", weight: 1.0, outcome: "+$32.50", outcomeClass: "text-emerald-400" },
-    { date: "2026-06-14", symbol: "CRWD", decision: "BUY", weight: 1.1, outcome: "+$18.20", outcomeClass: "text-emerald-400" },
-    { date: "2026-06-13", symbol: "AMD", decision: "SELL", weight: 0.7, outcome: "+$90.00", outcomeClass: "text-emerald-400" },
-  ];
-
   const [riskAttributionMetric, setRiskAttributionMetric] = useState<"percentage" | "absolute">("percentage");
   const [riskAttributionTimeframe, setRiskAttributionTimeframe] = useState<"30D" | "15D" | "7D">("30D");
   const [agentRiskWeights, setAgentRiskWeights] = useState<Record<string, number>>({
@@ -1658,7 +1615,6 @@ export default function App() {
 
   // Adaptive Terminal States
   const [macroShockLoading, setMacroShockLoading] = useState<boolean>(false);
-  const [geneticEvolving, setGeneticEvolving] = useState<boolean>(false);
 
   const triggerMacroShock = async () => {
     setMacroShockLoading(true);
@@ -1690,20 +1646,6 @@ export default function App() {
     }
   };
 
-  const triggerGeneticEvolve = async () => {
-    setGeneticEvolving(true);
-    try {
-      const res = await fetch("/api/v1/autobot/evolve", { method: "POST" });
-      const data = await res.json();
-      if (data.ok) {
-        fetch("/api/v1/autobot").then(r => r.json()).then(d => setAutoBotConfig(d));
-      }
-    } catch (err) {
-      console.error("Failed to evolve chromosome:", err);
-    } finally {
-      setGeneticEvolving(false);
-    }
-  };
 
   // Platform ledger data - declared at the top to avoid Temporal Dead Zone issues in earlier useEffects
   const [portfolioData, setPortfolioData] = useState<any | null>(null);
@@ -2324,7 +2266,8 @@ export default function App() {
   const [dailyPnLData, setDailyPnLData] = useState<any[]>([]);
 
   const getFilteredPnL = () => {
-    const dataSource = autoBotTradingMode !== "SIMULATOR" && dailyPnLData.length > 0 ? dailyPnLData : fullMockDailyPnL;
+    // No fabricated fallback - an empty real history renders as an honest empty chart.
+    const dataSource = dailyPnLData;
     if (pnlDateRange === "Last 7 Days" || pnlDateRange === "7D") return dataSource.slice(-7);
     if (pnlDateRange === "Last 30 Days" || pnlDateRange === "30D") return dataSource.slice(-30);
     if (pnlDateRange === "Month to Date (MTD)" || pnlDateRange === "MTD") return dataSource.slice(-15);
@@ -2338,7 +2281,7 @@ export default function App() {
   const lossMakingDays = activeDailyPnL.filter(item => item.pnl < 0).length;
 
   const getActiveHistoricalTrades = () => {
-    if (autoBotTradingMode !== "SIMULATOR" && trades && trades.length > 0) {
+    if (trades && trades.length > 0) {
       return trades.map((t: any) => ({
         date: t.timestamp ? t.timestamp.split('T')[0] : "N/A",
         symbol: t.symbol,
@@ -2349,7 +2292,8 @@ export default function App() {
         rawTrade: t,
       }));
     }
-    return mockHistoricalTrades;
+    // No fabricated fallback - no real trades yet renders as an honest empty list.
+    return [];
   };
   
   const activeHistoricalTrades = getActiveHistoricalTrades();
@@ -9915,6 +9859,10 @@ export default function App() {
                               <p className="text-xs text-slate-400 mb-4">
                                   Evolve prompt strategies based on historical agent performance. Genetic algorithms introduce and backtest mutated chromosomes.
                               </p>
+                              <p className="text-[10px] text-amber-500/80 font-mono mb-4 border border-amber-500/20 bg-amber-500/5 rounded p-2">
+                                  GATED: there is no real backtest to score a mutation against, and the evolved prompt is not
+                                  wired into any agent's actual AI calls yet. Re-enabling requires both.
+                              </p>
 
                               {autoBotConfig.geneticPrompt ? (
                                   <div className="space-y-3">
@@ -9925,15 +9873,11 @@ export default function App() {
                                           </div>
                                           <div className="flex justify-between text-[11px]">
                                               <span className="text-slate-500">FITNESS (SHARPE):</span>
-                                              <span className="text-white font-bold">
-                                                  {autoBotConfig.geneticPrompt.performanceHistory?.[autoBotConfig.geneticPrompt.performanceHistory.length - 1]?.sharpeRatio?.toFixed(2) || "1.84"}
-                                              </span>
+                                              <span className="text-slate-500 font-bold">GATED</span>
                                           </div>
                                           <div className="flex justify-between text-[11px]">
                                               <span className="text-slate-500">DEFLATED SHARPE (DSR):</span>
-                                              <span className="text-indigo-400 font-bold">
-                                                  {((autoBotConfig.geneticPrompt.performanceHistory?.[autoBotConfig.geneticPrompt.performanceHistory.length - 1]?.dsr || 0.72) * 100).toFixed(1)}%
-                                              </span>
+                                              <span className="text-slate-500 font-bold">GATED</span>
                                           </div>
                                       </div>
 
@@ -9953,12 +9897,12 @@ export default function App() {
 
                           <div className="mt-4 flex gap-2">
                               <button
-                                  onClick={triggerGeneticEvolve}
-                                  disabled={geneticEvolving}
-                                  className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white font-bold font-mono py-2 rounded text-xs transition-all uppercase flex items-center justify-center gap-1.5"
+                                  disabled
+                                  title="Gated off: no real fitness evaluation exists yet (see notice above)"
+                                  className="flex-1 bg-slate-800 text-slate-500 font-bold font-mono py-2 rounded text-xs uppercase flex items-center justify-center gap-1.5 cursor-not-allowed"
                               >
-                                  <RefreshCw size={12} className={geneticEvolving ? "animate-spin" : ""} />
-                                  {geneticEvolving ? "MUTATING DNA..." : "MUTATE PROMPT DNA"}
+                                  <RefreshCw size={12} />
+                                  MUTATE PROMPT DNA (GATED)
                               </button>
                           </div>
                       </div>

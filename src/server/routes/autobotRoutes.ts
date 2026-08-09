@@ -13,117 +13,25 @@ import { eq } from "drizzle-orm";
 import { db } from "../db/index";
 import * as schema from "../db/schema";
 import { tradingEngine } from "../engines/TradingEngine";
-import { generateContentWithRetry, cleanAndParseJSON } from "../ai/legacyGeminiHelpers";
 import { shadowPortfolioState } from "../state/shadowPortfolio";
-
-/**
- * Deflated Sharpe Ratio (DSR): discounts an observed Sharpe ratio for
- * multiple-testing bias given the number of independent trials.
- */
-function calculateDSR(srHat: number, T: number, N: number, variance: number): number {
-  const SR0 = 0.0; // benchmark
-  const gamma1 = 0.05; // assumed slight autocorrelation
-  const V = variance || 0.1; // variance of strategies tested
-
-  const num = srHat - SR0;
-  const den = Math.sqrt(((1 - gamma1) / T) + (((1 + 0.5 * Math.pow(srHat, 2)) / T) * V));
-
-  if (den === 0) return 0;
-  const value = num / den;
-  return normalCDF(value);
-}
-
-/**
- * Abramowitz and Stegun approximation of the cumulative standard normal
- * distribution function, used by calculateDSR.
- */
-function normalCDF(x: number): number {
-  const t = 1 / (1 + 0.2316419 * Math.abs(x));
-  const d = 0.3989422804;
-  const a1 = 0.254829592;
-  const a2 = -0.284496736;
-  const a3 = 1.421413741;
-  const a4 = -1.453152027;
-  const a5 = 1.061405429;
-  const q = d * Math.exp(-0.5 * x * x);
-  const prob = 1 - q * (a1 * t + a2 * t * t + a3 * Math.pow(t, 3) + a4 * Math.pow(t, 4) + a5 * Math.pow(t, 5));
-  return x >= 0 ? prob : 1 - prob;
-}
 
 export const autobotRouter = Router();
 
+// Gated off: this endpoint used to fabricate a Sharpe Ratio/DSR "fitness" score for every
+// mutation (falling back to a hardcoded 1.84 baseline, then literally copying it forward
+// unchanged every generation - its own comment admitted "Stagnant until real evaluation is
+// implemented"), and would report a fabricated mutationType/explanation with the prompt left
+// unchanged whenever no Gemini key was configured or the call failed. Separately,
+// geneticPrompt.currentBestPrompt is never read by ChiefTraderAgent, AIRouter, or any other real
+// agent - confirmed via grep, its only reader is this same route re-seeding the next mutation -
+// so even a real fitness score would not be evaluating anything that affects actual trades.
+// Refuses to run until both a real backtest-based fitness evaluation and a real prompt-injection
+// path into an agent's actual AI calls exist (Batch 4+).
 autobotRouter.post("/evolve", async (req: Request, res: Response) => {
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    const currentPrompt = tradingEngine.state.geneticPrompt.currentBestPrompt;
-
-    let mutatedPrompt = currentPrompt;
-    let mutationType = "Risk Threshold Accentuation";
-    let explanation = "Adjusted focus weight between oversold RSI and sector limits.";
-
-    if (apiKey) {
-      const ai = null;
-      const promptMutationRequest = `You are a Genetic Prompt Hyper-Agent Optimizer.
-We have an automated multi-agent quantitative trading bot. The Proposer Agent currently uses this system prompt to determine BUY/SELL/HOLD decisions:
-"${currentPrompt}"
-
-Your job is to introduce a minor, calculated "mutation" to this prompt (e.g., swapping specific risk directives, reorganizing analytical steps, adding emphasis on specific momentum conditions, or adjusting confidence thresholds) to optimize its Sharpe Ratio.
-
-Output MUST be strict JSON matching this structure:
-{
-  "mutatedPrompt": "The full updated system prompt containing the mutation",
-  "mutationType": "e.g., Risk Threshold Accentuation / Order of Priority Re-organization",
-  "explanation": "Why this mutation is mathematically or behaviorally expected to improve the Sharpe Ratio"
-}`;
-
-      try {
-        const resMutation = await generateContentWithRetry(ai, {
-          model: "gemini-3.5-flash",
-          contents: promptMutationRequest,
-          config: { responseMimeType: "application/json", temperature: 0.85 },
-        });
-        const parsedMutation = cleanAndParseJSON(resMutation.text);
-        if (parsedMutation && parsedMutation.mutatedPrompt) {
-          mutatedPrompt = parsedMutation.mutatedPrompt;
-          mutationType = parsedMutation.mutationType || mutationType;
-          explanation = parsedMutation.explanation || explanation;
-        }
-      } catch (promptErr) {
-        console.error("Failed to mutate prompt via Gemini:", promptErr);
-      }
-    }
-
-    const currentSR = tradingEngine.state.geneticPrompt.performanceHistory[tradingEngine.state.geneticPrompt.performanceHistory.length - 1]?.sharpeRatio || 1.84;
-    // MOCKS REMOVED: AI Prompt Evolution metrics must be based on actual backtest execution results.
-    const candidateSR = Number(currentSR); // Stagnant until real evaluation is implemented
-    const N_trials = tradingEngine.state.geneticPrompt.performanceHistory.length + 5;
-    const candidateDSR = Number(calculateDSR(candidateSR, 100, N_trials, 0.12).toFixed(3));
-
-    const nextGen = tradingEngine.state.geneticPrompt.generation + 1;
-    const newHistoryEntry = {
-      generation: nextGen,
-      sharpeRatio: candidateSR,
-      dsr: candidateDSR,
-      mutationType,
-      explanation,
-      timestamp: new Date().toISOString(),
-    };
-
-    tradingEngine.state.geneticPrompt.performanceHistory.push(newHistoryEntry);
-    tradingEngine.state.geneticPrompt.generation = nextGen;
-    tradingEngine.state.geneticPrompt.currentBestPrompt = mutatedPrompt;
-
-    tradingEngine.state.history.unshift({
-      time: new Date().toISOString(),
-      type: "info",
-      msg: `PROMPT EVOLUTION COMPLETE. Gen ${nextGen} deployed. Sharpe Ratio: ${candidateSR} | DSR: ${(candidateDSR * 100).toFixed(1)}%`,
-    });
-
-    res.json({ ok: true, geneticPrompt: tradingEngine.state.geneticPrompt });
-  } catch (err: any) {
-    console.error("Prompt evolution error:", err);
-    res.status(500).json({ error: err.message });
-  }
+  res.status(501).json({
+    error: "Prompt evolution is gated off: there is no real backtest to score a mutation's fitness against, " +
+      "and the evolved prompt is not wired into any agent's actual AI calls. Re-enable once both exist."
+  });
 });
 
 autobotRouter.get("/", async (req: Request, res: Response) => {

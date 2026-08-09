@@ -7,13 +7,13 @@ export const KronosDashboard = () => {
   
   useEffect(() => {
     // Attempt to fetch real Kronos status
-    fetch('/api/kronos/status')
+    fetch('/api/v1/kronos/status')
       .then(res => res.json())
       .then(data => setKronosStatus(data))
       .catch(() => setKronosStatus({ status: 'UNAVAILABLE' }));
   }, []);
 
-  const isUnavailable = kronosStatus?.status === 'UNAVAILABLE';
+  const isUnavailable = kronosStatus === null || kronosStatus?.isAvailable === false || kronosStatus?.status === 'UNAVAILABLE';
   const chartData: any[] = []; // Real data should be loaded from backend
 
   return (

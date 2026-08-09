@@ -1188,12 +1188,7 @@ let portfolioState = loadPortfolio();
       });
     } catch(e: any) {
       console.error("Broker Portfolio Error:", e.message);
-      res.json({
-        news: [
-          { id: "fallback-1", headline: "Global markets await next major economic data release", symbols: ["SPY", "QQQ"], source: "Argus Network", sentiment: "NEUTRAL" },
-          { id: "fallback-2", headline: "Tech sector shows resilience despite macro headwinds", symbols: ["XLK"], source: "Argus Network", sentiment: "BULLISH" }
-        ]
-      });
+      res.status(500).json({ error: e.message });
     }
   });
 
