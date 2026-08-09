@@ -178,6 +178,25 @@ export class BrokerManager {
     return this.activeBroker;
   }
 
+  // Real connection test that never mutates the active broker - calls the adapter's own
+  // authenticate() and health() and reports exactly what came back, including the real error
+  // message on failure. Previously SetupWizard.tsx's connection tests were mocked client-side;
+  // this is the real backend counterpart for any UI that wants a genuine test.
+  public async testConnection(id: string, credentials?: any): Promise<{ ok: boolean; health: string; error?: string }> {
+    const broker = this.brokers.get(id);
+    if (!broker) return { ok: false, health: 'Offline', error: `Broker '${id}' not found` };
+    if (NON_FUNCTIONAL_BROKER_IDS.has(id)) {
+      return { ok: false, health: 'Offline', error: `${broker.name}'s placeOrder() is unimplemented - this adapter cannot execute real trades regardless of credentials.` };
+    }
+    try {
+      const authenticated = await broker.authenticate(credentials);
+      const health = await broker.health();
+      return { ok: authenticated, health };
+    } catch (e: any) {
+      return { ok: false, health: 'Offline', error: e.message };
+    }
+  }
+
   public getAvailableBrokers(): {id: string, name: string, capabilities: ReturnType<BrokerPlugin['getCapabilities']>}[] {
     return Array.from(this.brokers.values()).map(b => ({
       id: b.id,

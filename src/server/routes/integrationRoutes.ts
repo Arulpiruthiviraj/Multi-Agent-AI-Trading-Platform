@@ -6,6 +6,9 @@
 import { Router, Request, Response } from "express";
 import { MarketDataManager } from "../../marketdata/MarketDataManager";
 import { BrokerManager } from "../../brokers/BrokerManager";
+import { db } from "../db";
+import * as schema from "../db/schema";
+import { eq } from "drizzle-orm";
 
 export const integrationRouter = Router();
 
@@ -46,10 +49,29 @@ integrationRouter.get("/broker-capabilities", (req: Request, res: Response) => {
   });
 });
 
+// Real, non-mutating connection test - never changes the active broker. Calls the adapter's own
+// authenticate()/health() and returns exactly what came back, including the real failure reason.
+integrationRouter.post("/brokers/:id/test", async (req: Request, res: Response) => {
+  const { id } = req.params;
+  const { credentials } = req.body || {};
+  const result = await BrokerManager.getInstance().testConnection(id, credentials);
+  res.json(result);
+});
+
 integrationRouter.post("/brokers/active", async (req: Request, res: Response) => {
   const { id, credentials } = req.body;
   try {
     const success = await BrokerManager.getInstance().setActiveBroker(id, credentials);
+    if (success) {
+      // Persist so this survives a restart - previously the runtime switch was in-memory only
+      // and BrokerManager.initialize() would silently revert to the last-saved settings row on
+      // next boot, undoing whatever the user had just selected here.
+      const activeName = BrokerManager.getInstance().getActiveBroker().name;
+      const existing = await db.select().from(schema.settings).limit(1);
+      if (existing.length > 0) {
+        await db.update(schema.settings).set({ selectedBroker: activeName }).where(eq(schema.settings.id, existing[0].id));
+      }
+    }
     res.json({ success });
   } catch (e: any) {
     res.status(400).json({ success: false, error: e.message });

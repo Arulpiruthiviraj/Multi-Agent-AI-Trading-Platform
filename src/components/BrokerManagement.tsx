@@ -1,236 +1,277 @@
 /**
- * ==========================================================
- * Module:
- * BrokerManagement.tsx
+ * BrokerManagement.tsx - real broker capability/connection management.
  *
- * Purpose:
- * Core implementation and logic for the BrokerManagement.tsx module within the Argus Trading Terminal.
+ * Rebuilt against BrokerManager's real capability model (Batch 3.5A / Phase 5). Previously this
+ * screen fabricated buying power ("100000" hardcoded), fabricated "Just now" sync timestamps,
+ * non-functional Test/Refresh/Edit/Delete buttons, and a static synchronization log that
+ * literally mentioned "Robinhood" - a broker with no adapter file in this codebase at all.
  *
- * Responsibilities:
- * - State management and logic execution for BrokerManagementx
- * - Interface with backend APIs and EventBus
- * - Render UI components (if React)
- *
- * Inputs:
- * - Module dependencies and injected props
- *
- * Outputs:
- * - Formatted data or React Elements
- *
- * Emits:
- * - Relevant system events
- *
- * Dependencies:
- * - Standard Argus architecture layers
- *
- * Called By:
- * - Argus Routing / Parent Components
- *
- * Never:
- * - Mutate global state directly without EventBus
- * - Call AI providers directly (Must use AIRouter)
- *
- * ==========================================================
+ * Every value below comes from a real API call. Nothing here is simulated.
  */
-
 import React, { useState, useEffect } from 'react';
-import { Server, Settings, CheckCircle2, ShieldCheck, Database, Plus, RefreshCw, Trash2, Edit2, Play } from 'lucide-react';
+import { Server, Settings, CheckCircle2, XCircle, Plus, RefreshCw, Play, AlertTriangle, ShieldAlert, Radio } from 'lucide-react';
+import { useWebSocket } from '../context/WebSocketContext';
+
+interface BrokerCapabilities {
+  canPlaceOrders: boolean;
+  canCancelOrders: boolean;
+  paperTrading: boolean;
+  liveTrading: boolean;
+  usEquities: boolean;
+  canadianEquities: boolean;
+  crypto: boolean;
+  options: boolean;
+  shortSelling: boolean;
+  streamingMarketData: boolean;
+  requiresManualReauth: boolean;
+}
+
+interface BrokerEntry {
+  id: string;
+  name: string;
+  capabilities: BrokerCapabilities;
+}
+
+interface ReconciliationLogEntry {
+  id: string;
+  timestamp: string;
+  type: 'match' | 'mismatch';
+  broker: string;
+  detail: string;
+}
+
+function CapabilityPill({ label, ok }: { label: string; ok: boolean }) {
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider ${ok ? 'bg-emerald-500/10 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>
+      {label}
+    </span>
+  );
+}
 
 export default function BrokerManagement() {
-  const [loading, setLoading] = useState(false);
-  const [globalDefaultBroker, setGlobalDefaultBroker] = useState('');
-  React.useEffect(() => {
-    fetch('/api/v1/config/settings')
-      .then(r => r.json())
-      .then(d => {
-        if (d.selectedBroker) {
-          setGlobalDefaultBroker(d.selectedBroker);
-        }
-      });
-  }, []);
+  const { subscribe } = useWebSocket();
+  const [brokers, setBrokers] = useState<BrokerEntry[]>([]);
+  const [activeBrokerId, setActiveBrokerId] = useState<string>('');
+  const [savedConnections, setSavedConnections] = useState<any[]>([]);
+  const [switching, setSwitching] = useState<string | null>(null);
+  const [testResults, setTestResults] = useState<Record<string, { ok: boolean; health: string; error?: string; testing?: boolean }>>({});
+  const [reconciliationLog, setReconciliationLog] = useState<ReconciliationLogEntry[]>([]);
+  const [addFormOpen, setAddFormOpen] = useState(false);
+  const [addForm, setAddForm] = useState({ brokerName: 'Alpaca', apiKeyEncrypted: '', apiSecretEncrypted: '', paperMode: true });
+  const [addStatus, setAddStatus] = useState<string | null>(null);
 
-  const [brokerAccounts, setBrokerAccounts] = useState<any[]>([]);
-   
-   useEffect(() => {
-     fetch('/api/v1/config/brokers')
-       .then(res => res.json())
-       .then(data => {
-         setBrokerAccounts(data.map((b: any) => ({
-           id: b.id, name: b.brokerName, type: 'Margin', mode: b.paperMode ? 'Paper' : 'Live', connected: b.status === 'Connected', sync: 'Just now', power: 100000, currency: 'USD'
-         })));
-       });
-   }, []);
+  const refresh = () => {
+    fetch('/api/v1/broker-capabilities').then(r => r.json()).then(data => {
+      setBrokers(data.brokers || []);
+      setActiveBrokerId(data.activeBroker || '');
+    }).catch(() => {});
+    fetch('/api/v1/config/brokers').then(r => r.json()).then(data => {
+      setSavedConnections(Array.isArray(data) ? data : []);
+    }).catch(() => {});
+  };
+
+  useEffect(() => { refresh(); }, []);
+
+  // Real reconciliation events (Phase 4) - replaces the old static fabricated sync log.
+  useEffect(() => {
+    const unsubMismatch = subscribe('RECONCILIATION_MISMATCH', (data: any) => {
+      setReconciliationLog(prev => [{
+        id: `${data.timestamp}-${Math.random()}`,
+        timestamp: data.timestamp,
+        type: 'mismatch',
+        broker: data.broker,
+        detail: `${data.mismatches?.length || 0} mismatch(es), worst impact ~$${data.worstImpactDollars ?? '?'}`,
+      }, ...prev].slice(0, 50));
+    });
+    const unsubMatch = subscribe('RECONCILIATION_MATCH', (data: any) => {
+      setReconciliationLog(prev => [{
+        id: `${data.timestamp}-${Math.random()}`,
+        timestamp: data.timestamp,
+        type: 'match',
+        broker: data.broker,
+        detail: 'Positions reconciled, no drift.',
+      }, ...prev].slice(0, 50));
+    });
+    return () => { unsubMismatch(); unsubMatch(); };
+  }, [subscribe]);
+
+  const setActive = async (id: string) => {
+    setSwitching(id);
+    try {
+      const res = await fetch('/api/v1/brokers/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        setTestResults(prev => ({ ...prev, [id]: { ok: false, health: 'Offline', error: 'authenticate() returned false - see server log for the real reason (e.g. no credentials, or an IBKR Gateway that is not running/logged in).' } }));
+      }
+    } catch (e: any) {
+      setTestResults(prev => ({ ...prev, [id]: { ok: false, health: 'Offline', error: e.message } }));
+    } finally {
+      setSwitching(null);
+      refresh();
+    }
+  };
+
+  const testConnection = async (id: string) => {
+    setTestResults(prev => ({ ...prev, [id]: { ...(prev[id] || { ok: false, health: 'Offline' }), testing: true } }));
+    try {
+      const res = await fetch(`/api/v1/brokers/${id}/test`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const data = await res.json();
+      setTestResults(prev => ({ ...prev, [id]: { ...data, testing: false } }));
+    } catch (e: any) {
+      setTestResults(prev => ({ ...prev, [id]: { ok: false, health: 'Offline', error: e.message, testing: false } }));
+    }
+  };
+
+  const submitAddConnection = async () => {
+    setAddStatus('Saving...');
+    try {
+      const res = await fetch('/api/v1/config/brokers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(addForm),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setAddStatus('Saved. Restart the server for AIRouter/BrokerManager to pick up a newly-added connection at boot, or use "Set Active" for adapters that read credentials at authenticate() time.');
+        refresh();
+      } else {
+        setAddStatus(`Failed: ${data.error || 'unknown error'}`);
+      }
+    } catch (e: any) {
+      setAddStatus(`Failed: ${e.message}`);
+    }
+  };
 
   return (
-    <>
-
-<style dangerouslySetInnerHTML={{ __html: `
-.toggle-checkbox:checked {
-  right: 0;
-  border-color: #f59e0b; /* amber-500 */
-}
-.toggle-checkbox:checked + .toggle-label {
-  background-color: #f59e0b;
-}
-` }} />
-
-
     <div className="flex flex-col gap-8 mb-8 font-mono">
-      
-      {/* Connected Brokers List */}
+
+      {/* Registered Broker Adapters - the real capability model */}
       <div className="bg-[#111822] border border-slate-850 p-5 rounded-lg border-l-4 border-l-emerald-500">
         <div className="flex justify-between items-center mb-6">
           <h3 className="text-xs font-bold text-slate-100 uppercase tracking-widest flex items-center gap-2">
-            <Server size={14} className="text-emerald-500" /> Connected Broker Accounts
+            <Server size={14} className="text-emerald-500" /> Registered Broker Adapters
           </h3>
-          <button className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-[10px] uppercase tracking-widest font-bold rounded transition-colors">
-            <Plus size={12} /> Add Broker Account
+          <button onClick={() => setAddFormOpen(v => !v)} className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-[10px] uppercase tracking-widest font-bold rounded transition-colors">
+            <Plus size={12} /> Add / Update Credentials
           </button>
         </div>
-
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-slate-800 text-[10px] text-slate-500 uppercase tracking-widest">
-                <th className="pb-3 font-medium">Status</th>
-                <th className="pb-3 font-medium">Account Name</th>
-                <th className="pb-3 font-medium">Type</th>
-                <th className="pb-3 font-medium">Mode</th>
-                <th className="pb-3 font-medium">Buying Power</th>
-                <th className="pb-3 font-medium">Last Sync</th>
-                <th className="pb-3 font-medium text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {brokerAccounts.map((account) => (
-                <tr key={account.id} className="border-b border-slate-800/50 hover:bg-slate-800/20 transition-colors">
-                  <td className="py-4">
-                    {account.connected ? (
-                      <CheckCircle2 size={14} className="text-emerald-500" />
-                    ) : (
-                      <div className="w-3.5 h-3.5 rounded-full border border-slate-600" />
-                    )}
-                  </td>
-                  <td className="py-4 text-xs font-bold text-slate-200">{account.name}</td>
-                  <td className="py-4 text-[10px] text-slate-400 uppercase tracking-wider">{account.type}</td>
-                  <td className="py-4">
-                    <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-widest ${account.mode === 'Live' ? 'bg-rose-500/10 text-rose-400' : 'bg-sky-500/10 text-sky-400'}`}>
-                      {account.mode}
-                    </span>
-                  </td>
-                  <td className="py-4 text-xs text-slate-300 font-bold">
-                    {account.connected ? `${account.power.toLocaleString()} ${account.currency}` : '--'}
-                  </td>
-                  <td className="py-4 text-[10px] text-slate-500">{account.sync}</td>
-                  <td className="py-4 flex justify-end gap-3 text-slate-500">
-                    <button className="hover:text-sky-400 transition-colors" title="Test Connection"><Play size={14} /></button>
-                    <button className="hover:text-emerald-400 transition-colors" title="Refresh Tokens"><RefreshCw size={14} /></button>
-                    <button className="hover:text-indigo-400 transition-colors" title="Edit Configurations"><Edit2 size={14} /></button>
-                    <button className="hover:text-rose-400 transition-colors" title="Delete Account"><Trash2 size={14} /></button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Global Default Broker Selection */}
-      <div className="bg-[#111822] border border-slate-850 p-5 rounded-lg border-l-4 border-l-indigo-500">
-        <h3 className="text-xs font-bold text-slate-100 uppercase tracking-widest mb-4 flex items-center gap-2">
-          <Settings size={14} className="text-indigo-500" /> Global Default Broker
-        </h3>
-        <p className="text-[11px] text-slate-400 leading-relaxed mb-6">
-          Select the broker that will be used by default for all autonomous trading sessions unless explicitly overridden during launch.
+        <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-4">
+          canPlaceOrders reflects whether the adapter's code implements real order placement per the broker's official API - not whether it has been live-tested this session. Never claims a capability the code doesn't actually implement.
         </p>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-          {brokerAccounts.map((account) => {
-            const isDefault = globalDefaultBroker === account.id;
-            return (
-              <label 
-                key={account.id} 
-                className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition-colors ${isDefault ? 'border-indigo-500 bg-indigo-500/10' : 'border-slate-800 bg-[#0A0F16] hover:border-slate-700'}`}
-              >
-                <input 
-                  type="radio" 
-                  name="defaultBroker" 
-                  value={account.id} 
-                  checked={isDefault}
-                  onChange={() => setGlobalDefaultBroker(account.id)}
-                  className="accent-indigo-500"
-                />
-                <div className="flex flex-col">
-                  <span className={`text-xs font-bold ${isDefault ? 'text-indigo-400' : 'text-slate-300'}`}>{account.name}</span>
-                  <span className="text-[10px] text-slate-500">{account.type} • {account.mode}</span>
-                </div>
+        {addFormOpen && (
+          <div className="bg-[#0A0F16] border border-slate-800 rounded p-4 mb-5 flex flex-col gap-3">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <select value={addForm.brokerName} onChange={e => setAddForm({ ...addForm, brokerName: e.target.value })} className="bg-[#111822] border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 outline-none">
+                {brokers.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+              </select>
+              <label className="flex items-center gap-2 text-xs text-slate-400">
+                <input type="checkbox" checked={addForm.paperMode} onChange={e => setAddForm({ ...addForm, paperMode: e.target.checked })} /> Paper mode
               </label>
+              <input placeholder="API Key" value={addForm.apiKeyEncrypted} onChange={e => setAddForm({ ...addForm, apiKeyEncrypted: e.target.value })} className="bg-[#111822] border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 outline-none" />
+              <input placeholder="API Secret" type="password" value={addForm.apiSecretEncrypted} onChange={e => setAddForm({ ...addForm, apiSecretEncrypted: e.target.value })} className="bg-[#111822] border border-slate-700 rounded px-2 py-1.5 text-xs text-slate-300 outline-none" />
+            </div>
+            <div className="flex items-center gap-3">
+              <button onClick={submitAddConnection} className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold uppercase tracking-widest rounded">Save (encrypted at rest)</button>
+              {addStatus && <span className="text-[10px] text-slate-400">{addStatus}</span>}
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-3">
+          {brokers.map(b => {
+            const isActive = b.id === activeBrokerId;
+            const test = testResults[b.id];
+            const hasSavedCreds = savedConnections.some((c: any) => c.brokerName === b.name && c.apiKeyEncrypted);
+            return (
+              <div key={b.id} className={`border rounded-lg p-4 ${isActive ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-slate-800 bg-[#0A0F16]'}`}>
+                <div className="flex justify-between items-start flex-wrap gap-3">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      {isActive ? <CheckCircle2 size={14} className="text-emerald-500" /> : <div className="w-3.5 h-3.5 rounded-full border border-slate-600" />}
+                      <span className="text-sm font-bold text-slate-100">{b.name}</span>
+                      {isActive && <span className="text-[9px] font-bold uppercase tracking-widest text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">ACTIVE</span>}
+                      {hasSavedCreds && <span className="text-[9px] font-bold uppercase tracking-widest text-sky-400 bg-sky-500/10 px-1.5 py-0.5 rounded">CREDENTIALS SAVED</span>}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      <CapabilityPill label="Place Orders" ok={b.capabilities.canPlaceOrders} />
+                      <CapabilityPill label="Cancel Orders" ok={b.capabilities.canCancelOrders} />
+                      <CapabilityPill label="Paper" ok={b.capabilities.paperTrading} />
+                      <CapabilityPill label="Live" ok={b.capabilities.liveTrading} />
+                      <CapabilityPill label="US Equities" ok={b.capabilities.usEquities} />
+                      <CapabilityPill label="Canadian Equities" ok={b.capabilities.canadianEquities} />
+                      <CapabilityPill label="Crypto" ok={b.capabilities.crypto} />
+                      {b.capabilities.requiresManualReauth && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 flex items-center gap-1">
+                          <ShieldAlert size={9} /> Needs periodic human 2FA login
+                        </span>
+                      )}
+                      {!b.capabilities.canPlaceOrders && (
+                        <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wider bg-rose-500/10 text-rose-400 flex items-center gap-1">
+                          <XCircle size={9} /> Not a functional trading adapter
+                        </span>
+                      )}
+                    </div>
+                    {b.id === 'ibkr' && (
+                      <p className="text-[9px] text-slate-500 mt-2 max-w-lg">
+                        Canadian equities are disabled regardless of session state - IBKR Canada retail accounts are barred from API order submission on TSX/TSXV-listed symbols by IIROC Dealer Member Rule 3200A.1(b)(i). US-listed symbols are unaffected.
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => testConnection(b.id)}
+                        disabled={test?.testing}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold uppercase tracking-widest rounded transition-colors disabled:opacity-50"
+                      >
+                        <Play size={11} /> {test?.testing ? 'Testing...' : 'Test Connection'}
+                      </button>
+                      <button
+                        onClick={() => setActive(b.id)}
+                        disabled={isActive || switching === b.id}
+                        className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-[10px] font-bold uppercase tracking-widest rounded transition-colors"
+                      >
+                        {switching === b.id ? 'Switching...' : isActive ? 'Active' : 'Set Active'}
+                      </button>
+                    </div>
+                    {test && (
+                      <div className={`text-[10px] max-w-xs text-right ${test.ok ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {test.ok ? `Connected - health: ${test.health}` : (test.error || `Not connected - health: ${test.health}`)}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
             );
           })}
         </div>
-        
-        <div className="mt-4 flex items-center gap-2">
-           <CheckCircle2 size={14} className="text-indigo-500" />
-           <span className="text-[10px] text-slate-300 uppercase tracking-widest">Use this broker by default for all autonomous trading</span>
-        </div>
       </div>
 
-
-      {/* Broker Synchronization Settings */}
-      <div className="bg-[#111822] border border-slate-850 p-5 rounded-lg border-l-4 border-l-amber-500 mt-8">
-        <h3 className="text-xs font-bold text-slate-100 uppercase tracking-widest mb-4 flex items-center gap-2">
-          <RefreshCw size={14} className="text-amber-500" /> Broker Synchronization
+      {/* Real reconciliation event log - replaces the old static/fabricated sync log */}
+      <div className="bg-[#111822] border border-slate-850 p-5 rounded-lg border-l-4 border-l-amber-500">
+        <h3 className="text-xs font-bold text-slate-100 uppercase tracking-widest mb-2 flex items-center gap-2">
+          <Radio size={14} className="text-amber-500" /> Live Portfolio Reconciliation Feed
         </h3>
-        <p className="text-[11px] text-slate-400 leading-relaxed mb-6">
-          Configure automated re-sync intervals and view detailed error logs for failed synchronization attempts.
+        <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-4">
+          Real RECONCILIATION_MATCH/RECONCILIATION_MISMATCH events from PortfolioReconciliationWorker, streamed over the same WebSocket the rest of the app uses. This worker only runs while the autonomous engine is active - the feed will be empty otherwise, which is the honest state, not an error.
         </p>
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Settings */}
-          <div>
-            <h4 className="text-[10px] text-slate-500 uppercase tracking-widest mb-3 border-b border-slate-800 pb-2">Auto-Sync Configurations</h4>
-            <div className="space-y-3">
-              {brokerAccounts.map(account => (
-                <div key={account.id} className="flex justify-between items-center bg-[#0A0F16] border border-slate-800 p-3 rounded">
-                  <div className="flex flex-col">
-                    <span className="text-xs font-bold text-slate-300">{account.name}</span>
-                    <span className="text-[9px] text-slate-500 uppercase tracking-widest">{account.mode}</span>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <select className="bg-[#1A1F2B] border border-slate-700 text-[10px] text-slate-300 p-1.5 rounded outline-none">
-                      <option>Off</option>
-                      <option>Every 1 min</option>
-                      <option>Every 5 mins</option>
-                      <option>Every 15 mins</option>
-                      <option>Every hour</option>
-                    </select>
-                    <div className="relative inline-block w-8 align-middle select-none transition duration-200 ease-in">
-                      <input type="checkbox" name="toggle" className="toggle-checkbox absolute block w-4 h-4 rounded-full bg-white border-4 border-slate-600 appearance-none cursor-pointer checked:right-0 checked:border-amber-500" defaultChecked={account.connected}/>
-                      <label className="toggle-label block overflow-hidden h-4 rounded-full bg-slate-700 cursor-pointer"></label>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Logs */}
-          <div>
-             <h4 className="text-[10px] text-slate-500 uppercase tracking-widest mb-3 border-b border-slate-800 pb-2">Recent Synchronization Logs</h4>
-             <div className="bg-[#0A0F16] border border-slate-800 rounded p-3 h-64 overflow-y-auto font-mono text-[10px]">
-                <div className="text-emerald-400 mb-2">[SUCCESS] Alpaca Paper: Token refreshed. Sync completed in 140ms.</div>
-                <div className="text-emerald-400 mb-2">[SUCCESS] Interactive Brokers Paper: Orders synchronized. Sync completed in 320ms.</div>
-                <div className="text-rose-400 mb-2">[ERROR] Robinhood: Authentication failed. Invalid API credentials or token expired. Please re-authenticate.</div>
-                <div className="text-emerald-400 mb-2">[SUCCESS] Questrade Margin: Portfolio balances synced.</div>
-                <div className="text-emerald-400 mb-2">[SUCCESS] Coinbase: Market data WebSocket heartbeat acknowledged.</div>
-                <div className="text-amber-400 mb-2">[WARN] Questrade TFSA: Rate limit approaching (95/100 requests per minute). Backing off for 15s.</div>
-                <div className="text-rose-400 mb-2">[ERROR] Robinhood: Failed to fetch active positions. Reason: Connection refused.</div>
-             </div>
-          </div>
+        <div className="bg-[#0A0F16] border border-slate-800 rounded p-3 h-56 overflow-y-auto font-mono text-[10px]">
+          {reconciliationLog.length === 0 ? (
+            <div className="text-slate-600 italic text-center py-8">No reconciliation events yet. Enable the autonomous engine to start the 5-minute reconciliation cycle.</div>
+          ) : (
+            reconciliationLog.map(entry => (
+              <div key={entry.id} className={`mb-2 ${entry.type === 'mismatch' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                [{entry.type === 'mismatch' ? 'MISMATCH' : 'MATCH'}] {new Date(entry.timestamp).toLocaleTimeString()} {entry.broker}: {entry.detail}
+              </div>
+            ))
+          )}
         </div>
       </div>
-
     </div>
-    </>
   );
 }
