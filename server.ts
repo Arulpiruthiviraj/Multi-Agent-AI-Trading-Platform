@@ -745,6 +745,27 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
     }
   }
 
+  // Non-blocking check for the local hybrid AI stack (see docs/LOCAL_AI_SETUP.md, `npm run
+  // setup:ai`). Never fails startup - the app is fully functional on cloud providers alone.
+  (async () => {
+    const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";
+    const EXPECTED_OLLAMA_MODELS = ["llama3.2:latest", "llama3.2:1b", "0xroyce/plutus:latest", "fingpt:latest"];
+    try {
+      const res = await fetch(`${OLLAMA_HOST}/api/tags`, { signal: AbortSignal.timeout(3000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const present = new Set((data.models || []).map((m: any) => m.name));
+      const missing = EXPECTED_OLLAMA_MODELS.filter((m) => !present.has(m));
+      if (missing.length > 0) {
+        console.warn(`[LocalAI] Ollama is running at ${OLLAMA_HOST} but missing model(s): ${missing.join(", ")}. Run 'npm run setup:ai'.`);
+      } else {
+        console.log(`[LocalAI] Ollama reachable at ${OLLAMA_HOST} with all ${EXPECTED_OLLAMA_MODELS.length} expected local models.`);
+      }
+    } catch (e: any) {
+      console.warn(`[LocalAI] Ollama not reachable at ${OLLAMA_HOST} (${e.message}). Local models are unavailable - agents will fall back to cloud providers only. Run 'npm run setup:ai' after installing Ollama.`);
+    }
+  })();
+
   // Simulated trading platform state in server
   interface TradingPosition {
     symbol: string;

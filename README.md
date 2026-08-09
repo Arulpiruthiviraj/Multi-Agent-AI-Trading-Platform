@@ -11,3 +11,10 @@ This document provides high-level context, constraints, and operational guidelin
 3. **Event-Driven**: Decoupled communication using the EventBus and WebSockets.
 
 For specific implementation details, refer to the `/skills` directory.
+
+## Optional: Local AI Stack
+
+Argus can offload cheap, high-frequency inference to models running on your
+own machine (Ollama + FinBERT/Chronos/XGBoost) instead of a paid cloud LLM on
+every tick and headline. See [docs/LOCAL_AI_SETUP.md](docs/LOCAL_AI_SETUP.md)
+- entirely optional, `npm run setup:ai` to install.
