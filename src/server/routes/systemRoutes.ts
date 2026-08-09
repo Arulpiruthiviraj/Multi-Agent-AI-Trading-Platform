@@ -16,6 +16,7 @@ import fs from "fs";
 import path from "path";
 import { db } from "../db/index";
 import * as schema from "../db/schema";
+import { eq, desc } from "drizzle-orm";
 import { tradingEngine } from "../engines/TradingEngine";
 import { AUDIT_LOG_FILE } from "../core/auditLog";
 import { backtestEngine } from "../engines/backtest/BacktestEngine";
@@ -143,8 +144,15 @@ systemRouter.get("/agent-memory", async (req: Request, res: Response) => {
 
 systemRouter.get("/event-traces", async (req: Request, res: Response) => {
   try {
-    const traces = await db.select().from(schema.eventTraces).orderBy(schema.eventTraces.id);
-    res.json(traces.reverse()); // Latest first
+    const { correlationId } = req.query;
+    const limit = Math.min(Number(req.query.limit) || 200, 1000);
+
+    let query = db.select().from(schema.eventTraces).$dynamic();
+    if (typeof correlationId === "string") {
+      query = query.where(eq(schema.eventTraces.correlationId, correlationId));
+    }
+    const traces = await query.orderBy(desc(schema.eventTraces.timestamp)).limit(limit);
+    res.json(traces);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

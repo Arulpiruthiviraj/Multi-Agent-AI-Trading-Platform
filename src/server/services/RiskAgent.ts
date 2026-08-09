@@ -85,6 +85,7 @@ export class RiskValidationAgent {
      }
 
      const request: any = {
+        traceId: approval.traceId,
         symbol: approval.symbol,
         side: approval.side as 'BUY' | 'SELL',
         currentPrice,

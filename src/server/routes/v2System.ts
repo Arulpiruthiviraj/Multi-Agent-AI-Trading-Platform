@@ -126,13 +126,32 @@ v2Router.get('/system/events', (req, res) => {
   res.json({ ok: true, events: recentEvents });
 });
 
-import { explainabilityReports } from '../db/schema';
+import { explainabilityReports, eventTraces } from '../db/schema';
 import { tradeTraces } from '../core/EventStore';
 
-v2Router.get('/system/trace/:traceId', (req, res) => {
+// In-memory tradeTraces is capped and lost on restart. Fall back to the durable
+// event_traces table (written by EventStore.ts) so a trace started before the
+// last restart, or evicted from memory, can still be replayed.
+v2Router.get('/system/trace/:traceId', async (req, res) => {
   const { traceId } = req.params;
-  const trace = tradeTraces[traceId] || [];
-  res.json({ ok: true, trace });
+  const inMemory = tradeTraces[traceId];
+  if (inMemory && inMemory.length > 0) {
+    return res.json({ ok: true, trace: inMemory, source: 'memory' });
+  }
+  try {
+    const rows = await db.select().from(eventTraces).where(eq(eventTraces.correlationId, traceId)).orderBy(eventTraces.timestamp).all();
+    const trace = rows.map(r => ({
+      eventId: r.id,
+      correlationId: r.correlationId,
+      source: r.source,
+      type: r.eventType,
+      timestamp: r.timestamp,
+      payload: r.payload ? JSON.parse(r.payload) : null,
+    }));
+    res.json({ ok: true, trace, source: 'db' });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 v2Router.get('/data/explainability/:traceId', async (req, res) => {
