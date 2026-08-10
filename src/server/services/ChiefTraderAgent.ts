@@ -38,6 +38,7 @@ import * as schema from '../db/schema';
 import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import { agentPerformanceStats } from '../db/schema';
+import { EvidenceAggregator, Evidence } from './EvidenceAggregator';
 
 export class ChiefTraderAgent {
   private recentIdeas: any[] = [];
@@ -134,76 +135,44 @@ export class ChiefTraderAgent {
     }
   }
 
+  private resolveWeight(agentName: string): number {
+    return this.agentWeights[agentName] || (agentName === 'ConsensusDebate' ? 0.35 : 1.0);
+  }
+
   evaluateConsensus(symbol: string, traceId: string) {
     const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
-    
-    // Group by side to find the strongest consensus
-    const sides = ['BUY', 'SELL', 'HOLD'];
-    let bestSide = 'HOLD';
-    let maxWeightedConfidence = 0;
-    let winningReason = '';
-    let winningPrice: number | undefined = undefined;
-    let agentsAgreed = '';
-    let agentsDisagreed = '';
-    let bestFinalConfidence = 0;
+    const evidence: Evidence[] = relevantIdeas.map(i => ({ ...i, weight: this.resolveWeight(i.agent) }));
 
-    for (const testSide of ['BUY', 'SELL']) {
-        const agreeingIdeas = relevantIdeas.filter(i => i.side === testSide);
-        const disagreeingIdeas = relevantIdeas.filter(i => i.side !== testSide && i.side !== 'HOLD');
-        
-        let weightedConfidence = 0;
-        let totalWeight = 0;
-        
-        for (const i of agreeingIdeas) {
-           const w = this.agentWeights[i.agent] || (i.agent === 'ConsensusDebate' ? 0.35 : 1.0);
-           weightedConfidence += i.confidence * w;
-           totalWeight += w;
-        }
-        
-        for (const i of disagreeingIdeas) {
-           const w = this.agentWeights[i.agent] || (i.agent === 'ConsensusDebate' ? 0.35 : 1.0);
-           weightedConfidence -= (i.confidence * w * 0.5); 
-           totalWeight += w; 
-        }
-        
-        const finalConfidence = Math.max(0, Math.min(1, weightedConfidence / (totalWeight || 1)));
-        
-        if (finalConfidence > maxWeightedConfidence) {
-            maxWeightedConfidence = finalConfidence;
-            bestSide = testSide;
-            bestFinalConfidence = finalConfidence;
-            agentsAgreed = agreeingIdeas.map(i => `${i.agent}(wt:${(this.agentWeights[i.agent]||(i.agent==='ConsensusDebate'?0.35:1.0)).toFixed(2)})`).join(", ");
-            agentsDisagreed = disagreeingIdeas.map(i => `${i.agent}(wt:${(this.agentWeights[i.agent]||(i.agent==='ConsensusDebate'?0.35:1.0)).toFixed(2)})`).join(", ");
-            winningReason = agreeingIdeas[0]?.reasoning || "Consensus formed";
-            winningPrice = agreeingIdeas.find(i =>
-              typeof i.currentPrice === 'number' && Number.isFinite(i.currentPrice) && i.currentPrice > 0
-            )?.currentPrice;
-        }
-    }
+    const result = EvidenceAggregator.aggregate(evidence);
+    const agentsAgreed = result.agreements.map(e => `${e.agent}(wt:${e.weight.toFixed(2)})`).join(", ");
+    const agentsDisagreed = result.disagreements.map(e => `${e.agent}(wt:${e.weight.toFixed(2)})`).join(", ");
 
     let approved = false;
     let reason = "";
-    
-    if (bestFinalConfidence > 0.75) {
+
+    if (result.confidence > 0.75) {
        approved = true;
-       reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(bestFinalConfidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${winningReason}`;
-    } 
-    
+       reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(result.confidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${result.reasoning}`;
+    }
+
     if (approved) {
        // Clear from recent so we don't duplicate
        this.recentIdeas = this.recentIdeas.filter(i => i.symbol !== symbol);
-       
+
        eventBus.emitChiefApproval({
          traceId: traceId,
          symbol: symbol,
-         side: bestSide,
-         confidence: bestFinalConfidence,
-         currentPrice: winningPrice,
+         side: result.side,
+         confidence: result.confidence,
+         currentPrice: result.currentPrice,
          reasoning: reason,
-         agentsContext: agentsAgreed
+         agentsContext: agentsAgreed,
+         // Structured evidence alongside the existing formatted string - lets a future trace
+         // viewer/ExplainabilityAgent show per-agent side/confidence/weight without re-parsing text.
+         evidence: evidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence, weight: e.weight, reasoning: e.reasoning })),
        });
     } else {
-       console.log(`[ChiefTrader] Idea stored. Waiting for stronger consensus on ${symbol}. Current confidence: ${(bestFinalConfidence*100).toFixed(1)}%`);
+       console.log(`[ChiefTrader] Idea stored. Waiting for stronger consensus on ${symbol}. Current confidence: ${(result.confidence*100).toFixed(1)}%`);
     }
   }
 

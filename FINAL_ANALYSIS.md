@@ -162,6 +162,38 @@ whole audit has been correcting for.
 All non-functional/manual-step brokers are blocked from being selected as the active order-placing
 broker at the code level, not just documented as unsupported.
 
+### 6a. Canadian Broker Landscape (real research this pass, not assumed)
+
+The user asked for a serious look at Canadian-accessible brokers beyond Alpaca/IBKR/Questrade. Researched
+live (web search + primary-source fetches, not carried forward from training data) rather than assumed:
+
+| Broker | Official API | Trading API | Canadian-listed equities (automated) | Status | Reason |
+|---|---|---|---|---|---|
+| Alpaca | Yes (real, integrated) | Yes (real, integrated) | N/A - US broker, doesn't list Canadian equities | **Real, integrated** | Only broker that runs fully unattended today |
+| Interactive Brokers | Yes (Client Portal Web API, real, integrated) | Yes, but not for Canadian-exchange securities | Blocked | **Real, integrated (US/intl only)**, human 2FA ~24h | IIROC Dealer Member Rule 3200 A.1.(b)(i) - confirmed via IBKR's own order-routing disclosure and OSC filings: IIROC-member dealers may not let clients use automated order systems for orders on a Canadian exchange/marketplace |
+| Questrade | Yes (OAuth2, real, documented) | Order placement restricted to Questrade-approved partner developers - not open to a third-party retail app | Same IIROC constraint would apply even to a partner integration | **Stub (accurate as-is)** | `placeOrder()` correctly throws; becoming a Questrade-approved partner is a business relationship, not something more code resolves |
+| Wealthsimple | **None** - confirmed no developer API exists | No | No | **UNSUPPORTED_OFFICIAL_API** | Wealthsimple's own published terms explicitly prohibit automated/API trading and warn of account termination for violators |
+| National Bank Direct Brokerage (NBDB) | None found | No | No | **UNSUPPORTED_OFFICIAL_API** | No public developer program found in any primary source checked |
+| TD Direct Investing / RBC Direct Investing / BMO InvestorLine / CIBC Investor's Edge / Scotia iTRADE | None found for any of the five | No | No | **UNSUPPORTED_OFFICIAL_API** (all five) | No public API program exists for any Big-5-bank direct-investing platform; would face the same IIROC constraint for Canadian-listed orders even if one existed |
+| SnapTrade (third-party aggregator, not a broker) | Yes, real, commercial (400M+ accounts, 35+ institutions claimed) | Yes - claims real order placement across 20+ brokerages including Questrade, CIBC Investor's Edge, **and Wealthsimple** | Apparently yes via SnapTrade's own broker partnerships | **Real product, NOT integrated - flagged, not recommended without the user's own legal review** | Its own FAQ confirms Wealthsimple order placement "with user permission," which sits in direct tension with Wealthsimple's own published ToS language banning API trading. This is a compliance judgment call for the account holder, not something an engineering decision can resolve either way - documented here rather than silently integrated or silently ignored. |
+| Coinbase | Yes (real exchange API) | Not implemented in Argus | N/A | **Stub (accurate as-is)** | Just unimplemented; no regulatory blocker distinct from any other crypto exchange |
+
+**Bottom line:** the reason no Canadian bank offers a retail trading API isn't merely "hasn't built it yet" -
+it's IIROC's DMR 3200 A.1.(b)(i) constraint on automated order systems for Canadian-exchange securities,
+which applies to every IIROC-member dealer (which is all of the above except Alpaca). The one real path to
+broader Canadian coverage that exists today, SnapTrade, does so by being the aggregator/dealer-of-record
+relationship itself for the brokers it integrates - and even it has a documented tension with at least one
+underlying broker's own terms. Building N one-off Argus adapters to banks with no public API would mean
+either scraping (explicitly against this project's own standing rule) or waiting on a partner relationship
+that isn't a code problem.
+
+Sources: [Questrade API docs](https://www.questrade.com/api/documentation/rest-operations/order-calls/) ·
+[Wealthsimple API status](https://wealthawesome.com/wealthsimple-api) ·
+[IIROC electronic trading guidance](https://www.ciro.ca/newsroom/publications/guidance-respecting-electronic-trading) ·
+[IBKR Canadian order-routing disclosure](https://www.interactivebrokers.com/en/?f=%2Fen%2Faccounts%2FlegalDocuments%2ForderRoutingDisclosureCA.php) ·
+[SnapTrade Wealthsimple integration](https://snaptrade.com/brokerage-integrations/wealthsimple-api) ·
+[SnapTrade brokerage integrations](https://snaptrade.com/brokerage-integrations)
+
 ---
 
 ## 7. Testing
@@ -321,3 +353,70 @@ in practice. The minimum bar before a live-capital conversation is meaningful: (
 accumulate a real trade sample large enough to evaluate the AI-consensus layer specifically (not
 just the backtested deterministic rules), and (2) resolve the dead paid-AI-provider keys so that
 sample isn't systematically biased toward whatever Ollama alone produces.
+
+---
+
+## 12. Production Readiness Gate
+
+| Area | Status | Evidence | Blocker | Next Action |
+|---|---|---|---|---|
+| Architecture | 🟢 Sound | Event-driven pipeline, typed/persisted envelopes, real adapters (Section 3) | Single-process EventBus caps horizontal scale | Not urgent at current volume |
+| Market Data | 🟢 Real | Alpaca WS, connected every boot | Single-source (Alpaca only) | Add a `MarketDataProvider` abstraction if/when a second real source is needed - not before |
+| Local AI | 🟢 Real | Ollama (NewsAgent), Chronos (Kronos), FinBERT (sentiment) all live-verified this engagement | XGBoost trained but not wired (inconclusive result, by design) | Re-evaluate once more real trade history exists to retrain on |
+| Paid AI | 🟡 Degraded-but-safe | Real router, real failover, real cost tracking; 6 of 7 seeded keys are dead | 6 dead API keys burning wasted (now deprioritized, not eliminated) round-trips | User to audit/replace or remove the dead `aiProviders` rows |
+| Forecasting | 🟢 Real | Kronos/Chronos live-verified BUY/SELL/HOLD via the local service | Only one forecasting model in the live path (Chronos); no ensemble | Not urgent - a second forecaster is a bigger project than this pass |
+| Agents | 🟢 Real | Technical/News/Fundamental/Macro/Kronos all produce real, evidenced signals | FundamentalAgent silently no-ops without `ALPHAVANTAGE_API_KEY` (honest HOLD, but easy to miss) | Surface "DATA_UNAVAILABLE" agents in Mission Control's agent-health view (not built) |
+| Consensus | 🟢 Real | `ChiefTraderAgent` weighted vote, 0.75 threshold, real DB-synced weights, live-verified withholding weak signals | No dedicated Evidence Aggregator - ChiefTrader itself does light-weight aggregation | See Section 13, P1 |
+| Risk | 🟢 Real | 9 real gates, all unit-tested (Section 4) | Correlation cap only sees symbols with cached OHLCV history | Acceptable given the "skip, don't fabricate" convention |
+| Backtesting | 🟡 Partial | Real, point-in-time-gated, self-reports insufficient sample size honestly | Only backtests deterministic rules, not the AI-consensus layer | Would need point-in-time news/fundamentals replay - large, not started |
+| Paper Trading | 🟡 Just started | AutoBot enabled this pass; pipeline live-verified end-to-end | Near-empty trade history (turned on this session) | Let it run; revisit after a real multi-day sample |
+| Broker Integration | 🟢 Real (Alpaca), 🟡 Partial (IBKR) | Real adapters, capability-gated selection | Only Alpaca is fully unattended | Not a code gap - IBKR's 2FA and Canadian-equity block are external constraints |
+| Canadian Broker Support | 🔴 None real, but honestly researched | Section 6a - IIROC DMR 3200A.1(b)(i) blocks every IIROC-member dealer for Canadian-listed automated orders | No Canadian bank offers a public trading API; SnapTrade has an unresolved ToS tension | User's own legal/compliance call - not resolvable by more engineering |
+| Order Execution | 🟢 Real | Idempotent, real fill-polling, real realized P&L | - | - |
+| Portfolio Reconciliation | 🟢 Real | Real mismatch/match event, pauses past a $100 impact threshold | - | - |
+| Observability | 🟡 Partial | Durable correlation-ID event traces for the decision pipeline | No dashboards/alerting layered on top; no unified activity-log UI across all subsystems | Bigger observability pass, not started (Part 12-13 of this audit's own ask) |
+| Training Data | 🔴 Not built | `ohlcv_bars`/`backtest_runs` exist; no prediction→outcome labeling pipeline | No `training_examples`/`label_outcomes` schema | Large, deliberately not started this pass - see Section 13, P3 |
+| Security | 🟢 Real, narrowly audited | Encrypted keys at rest, session auth, no secrets in logs this pass | No dependency-vuln scan, no rate limiting audited | Out of this pass's scope |
+| Testing | 🟡 Narrow | 47 real unit tests on the safety-critical path | Zero integration/E2E tests | See Section 13, P2 |
+| UI | 🟡 Partial | Core trading tabs are real; News Intelligence/Activity Logs now populated | ~17 secondary panels remain decorative | Explicitly deferred by the user across this whole engagement |
+| Deployment | 🟢 Real | Docker, CI, health/readiness checks | No monitoring/alerting beyond raw logs | Not urgent pre-paper-trading |
+| Profitability Evidence | 🔴 Not validated | 6 real backtests, all below the significance floor | No statistically meaningful edge shown anywhere in this codebase | Accumulate real paper-trading history; do not chase a backtest result under 20 trades |
+
+**ARGUS IS READY FOR:** continuous, monitored PAPER trading, with a human periodically reviewing Activity
+Logs / News Intelligence / trade outcomes - the full pipeline is real, live-verified, and fails safe.
+
+**ARGUS MUST NOT BE USED FOR:** live capital (no statistically meaningful edge has been shown by any
+backtest run against it), or automated trading of Canadian-listed securities through any broker (real
+regulatory blocker, not a technical one), until those two specific blockers are resolved.
+
+---
+
+## 13. Prioritized Roadmap (from this pass's findings)
+
+**P0 - before any further paper-trading evaluation is meaningful:** none. Nothing found this pass posed
+an active safety/correctness risk in the live path (the dedup bug found and fixed this pass would have
+qualified, but it's already fixed).
+
+**P1 - required before the AI-consensus layer's real performance can be evaluated:**
+- Let PAPER mode accumulate a real, multi-day trade sample (this is calendar time, not code).
+- Audit/replace the 6 dead paid-AI-provider keys so NewsAgent/ExplainabilityAgent/ReflectionEngine
+  aren't silently biased toward whatever Ollama alone produces.
+- A real Evidence Aggregator so every consensus decision has one normalized, inspectable structure
+  instead of each agent emitting an ad-hoc shape that `ChiefTraderAgent` interprets informally.
+
+**P2 - important hardening, not blocking paper trading:**
+- Integration/E2E tests (currently zero) - especially the full MARKET_DATA → ORDER_EXECUTED path.
+- Surface `DATA_UNAVAILABLE` agents (e.g. FundamentalAgent without an AlphaVantage key) in a real
+  agent-health UI view rather than only in server logs.
+- Retrain/re-evaluate the XGBoost direction model once a larger, real trade-history-backed dataset
+  exists - this pass's result was real but inconclusive at n=739.
+
+**P3 - future engagement scope, not started:**
+- The full ML training-data schema (`training_examples`, `label_outcomes`, point-in-time feature
+  snapshots) needed to responsibly evaluate "which agent/model adds alpha."
+- A Model Capability Registry + Forecast Ensemble layer, once more than one forecasting model is live.
+- SnapTrade (or an equivalent aggregator) as the realistic path to broader Canadian broker coverage -
+  contingent on the user's own review of the Wealthsimple ToS tension found this pass.
+
+**P4 - explicitly deferred, not forgotten:** the ~17 decorative dashboard panels, the real
+`shiyu-coder/Kronos` model as a second forecaster, Trading Arena/Strategy Scanner/AI Model Lab UI builds.
