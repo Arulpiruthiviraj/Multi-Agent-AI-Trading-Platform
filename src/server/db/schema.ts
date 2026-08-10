@@ -644,6 +644,23 @@ export const predictionOutcomes = sqliteTable('prediction_outcomes', {
   predictionSourceIdx: uniqueIndex('idx_prediction_outcomes_source').on(table.predictionId, table.sourceTable),
 }));
 
+// Phase 7 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - materialized, batch-built training
+// dataset. Never written live - only TrainingExampleBuilder writes here, and only after
+// checking every contributing input's availableAt against decisionAt (point-in-time integrity,
+// req #24). A transaction whose evidence fails that check is skipped, not silently included.
+// "Do NOT automatically train models yet" (per the architecture doc) - this is dataset
+// construction only, no training pipeline consumes it.
+export const trainingExamples = sqliteTable('training_examples', {
+  id: text('id').primaryKey(), // == transactionId, one training example per transaction for now
+  transactionId: text('transaction_id').notNull(),
+  observedAt: text('observed_at').notNull(), // earliest contributing evidence's own timestamp
+  availableAt: text('available_at').notNull(), // when the consensus decision itself became known
+  decisionAt: text('decision_at').notNull(), // when ChiefTraderAgent actually decided
+  featureSnapshot: text('feature_snapshot').notNull(), // JSON - frozen evidence/consensus inputs as of decisionAt only
+  label: text('label').notNull(), // JSON - real point-in-time outcome (PredictionOutcomeEvaluator)
+  createdAt: text('created_at').notNull(),
+});
+
 // OpenAlice external verification requests/results (OpenAliceAdapter, OpenAliceVerificationService).
 // OpenAlice is a separate, independent AI system reached only over MCP - it never has trading
 // credentials and this table is read-only evidence for FUTURE decisions, never a retroactive

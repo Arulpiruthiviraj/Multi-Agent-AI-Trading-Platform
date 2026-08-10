@@ -29,7 +29,10 @@ export const EVALUATION_HORIZON_MS = 60 * 60 * 1000;
 
 export interface EvaluatedOutcome {
   predictionId: string;
-  sourceTable: 'agent_predictions' | 'kronos_predictions';
+  // 'transactions' is used by Phase 7's TrainingExampleBuilder to label a whole consensus
+  // decision (not persisted to prediction_outcomes, which is prediction-level only) - reusing
+  // this same real bars-based evaluation logic rather than a second mechanism.
+  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions';
   symbol: string;
   actualPrice: number;
   actualReturn: number;
@@ -47,7 +50,7 @@ export interface EvaluatedOutcome {
  */
 export async function evaluatePrediction(
   predictionId: string,
-  sourceTable: 'agent_predictions' | 'kronos_predictions',
+  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions',
   symbol: string,
   side: string,
   predictionTimeMs: number,

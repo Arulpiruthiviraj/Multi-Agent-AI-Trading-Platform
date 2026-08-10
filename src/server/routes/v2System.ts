@@ -195,33 +195,151 @@ v2Router.get('/transactions', async (req, res) => {
   }
 });
 
+async function assembleTransaction(id: string) {
+  const transaction = await db.select().from(transactions).where(eq(transactions.id, id)).get();
+  if (!transaction) return null;
+
+  const consensusDecision = await db.select().from(consensusDecisions).where(eq(consensusDecisions.transactionId, id)).get() ?? null;
+  const evidence = await db.select().from(consensusEvidence).where(eq(consensusEvidence.transactionId, id));
+  const riskAssessment = await db.select().from(riskAssessments).where(eq(riskAssessments.transactionId, id)).get() ?? null;
+  const riskGates = riskAssessment
+    ? await db.select().from(riskGateResults).where(eq(riskGateResults.traceId, riskAssessment.traceId)).orderBy(riskGateResults.sequence)
+    : [];
+  const order = await db.select().from(trades).where(eq(trades.transactionId, id)).get() ?? null;
+  const orderFills = order ? await db.select().from(fills).where(eq(fills.orderId, order.id)) : [];
+  const events = await db.select().from(eventTraces).where(eq(eventTraces.transactionId, id)).orderBy(eventTraces.timestamp);
+
+  return {
+    transaction,
+    consensusDecision,
+    evidence,
+    riskAssessment,
+    riskGates: riskGates.map(g => ({ ...g, detail: g.detail ? JSON.parse(g.detail) : null })),
+    order,
+    fills: orderFills,
+    events: events.map(e => ({ ...e, payload: e.payload ? JSON.parse(e.payload) : null })),
+  };
+}
+
 v2Router.get('/transactions/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-    const transaction = await db.select().from(transactions).where(eq(transactions.id, id)).get();
-    if (!transaction) return res.status(404).json({ ok: false, error: `No transaction found for id ${id}` });
+    const data = await assembleTransaction(req.params.id);
+    if (!data) return res.status(404).json({ ok: false, error: `No transaction found for id ${req.params.id}` });
+    res.json({ ok: true, ...data });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
-    const consensusDecision = await db.select().from(consensusDecisions).where(eq(consensusDecisions.transactionId, id)).get() ?? null;
-    const evidence = await db.select().from(consensusEvidence).where(eq(consensusEvidence.transactionId, id));
-    const riskAssessment = await db.select().from(riskAssessments).where(eq(riskAssessments.transactionId, id)).get() ?? null;
-    const riskGates = riskAssessment
-      ? await db.select().from(riskGateResults).where(eq(riskGateResults.traceId, riskAssessment.traceId)).orderBy(riskGateResults.sequence)
-      : [];
-    const order = await db.select().from(trades).where(eq(trades.transactionId, id)).get() ?? null;
-    const orderFills = order ? await db.select().from(fills).where(eq(fills.orderId, order.id)) : [];
-    const events = await db.select().from(eventTraces).where(eq(eventTraces.transactionId, id)).orderBy(eventTraces.timestamp);
+// ==========================================================================================
+// Phase 8 - human-readable report + exports, generated on demand from the current relational
+// data (never a separately-maintained appended file, so it can never go stale from a crashed
+// writer - see TRANSACTION_OBSERVATORY_ARCHITECTURE.md's logging-architecture section).
+// ==========================================================================================
+function renderTransactionMarkdown(data: NonNullable<Awaited<ReturnType<typeof assembleTransaction>>>): string {
+  const { transaction, consensusDecision, evidence, riskAssessment, riskGates, order, fills } = data;
+  const lines: string[] = [];
+  lines.push(`# ${transaction.symbol} ${transaction.finalDecision || transaction.status} — Transaction Investigation`);
+  lines.push('');
+  lines.push(`**Transaction ID:** ${transaction.id}`);
+  lines.push(`**Opened:** ${transaction.openedAt}${transaction.closedAt ? `  **Closed:** ${transaction.closedAt}` : ''}`);
+  lines.push('');
+  lines.push('## Final Result');
+  lines.push('');
+  lines.push(`**${transaction.finalDecision || transaction.status}** ${transaction.finalDecision ? (riskAssessment?.approved ? '✓' : riskAssessment ? '✕' : '') : ''}`);
+  lines.push('');
 
-    res.json({
-      ok: true,
-      transaction,
-      consensusDecision,
-      evidence,
-      riskAssessment,
-      riskGates: riskGates.map(g => ({ ...g, detail: g.detail ? JSON.parse(g.detail) : null })),
-      order,
-      fills: orderFills,
-      events: events.map(e => ({ ...e, payload: e.payload ? JSON.parse(e.payload) : null })),
-    });
+  lines.push('## Why?');
+  lines.push('');
+  if (evidence.length === 0) {
+    lines.push('_No agent evidence recorded._');
+  } else {
+    for (const e of evidence) {
+      lines.push(`- **${e.agent}**: ${e.side} ${(e.confidence * 100).toFixed(0)}% (weight ${e.weight.toFixed(2)}) ${e.agreed ? '' : '_(disagreed with final consensus)_'}`);
+    }
+  }
+  lines.push('');
+
+  if (consensusDecision) {
+    lines.push('## Chief Trader');
+    lines.push('');
+    lines.push(`Consensus: ${(consensusDecision.weightedConfidence * 100).toFixed(1)}% (threshold ${(consensusDecision.threshold * 100).toFixed(0)}%)`);
+    lines.push('');
+    if (consensusDecision.reasoning) lines.push(`> ${consensusDecision.reasoning}`);
+    lines.push('');
+  }
+
+  lines.push('## Risk');
+  lines.push('');
+  if (!riskAssessment) {
+    lines.push('_Not evaluated - this transaction never reached RiskEngine._');
+  } else {
+    const passedCount = riskGates.filter(g => g.passed).length;
+    lines.push(`${passedCount}/${riskGates.length} gates passed.`);
+    lines.push('');
+    for (const g of riskGates) {
+      const mark = g.detail?.skipped ? '—' : g.passed ? '✓' : '✕';
+      lines.push(`- ${mark} ${g.gateName}`);
+    }
+    lines.push('');
+    lines.push(riskAssessment.approved ? `**Approved** - max ${riskAssessment.maxQuantity} shares.` : `**Rejected** at \`${riskAssessment.rejectionGate}\`: ${riskAssessment.reasoning}`);
+  }
+  lines.push('');
+
+  lines.push('## Execution');
+  lines.push('');
+  if (!order) {
+    lines.push('_No order was placed._');
+  } else {
+    lines.push(`Order ${order.status}. Submitted ${order.submittedAt || '--'}, accepted ${order.acceptedAt || '--'}, filled ${order.filledAt || '--'}.`);
+    if (fills.length > 0) {
+      lines.push('');
+      for (const f of fills) lines.push(`- ${f.quantity} @ $${f.price.toFixed(2)} (${f.filledAt})`);
+    }
+  }
+  lines.push('');
+
+  lines.push('## Outcome');
+  lines.push('');
+  lines.push(transaction.outcome === 'PENDING' ? '_Outcome pending._' : transaction.outcome);
+  lines.push('');
+
+  return lines.join('\n');
+}
+
+v2Router.get('/transactions/:id/report.md', async (req, res) => {
+  try {
+    const data = await assembleTransaction(req.params.id);
+    if (!data) return res.status(404).send(`No transaction found for id ${req.params.id}`);
+    res.set('Content-Type', 'text/markdown; charset=utf-8');
+    res.send(renderTransactionMarkdown(data));
+  } catch (e: any) {
+    res.status(500).send(e.message);
+  }
+});
+
+v2Router.get('/transactions/:id/export', async (req, res) => {
+  try {
+    const data = await assembleTransaction(req.params.id);
+    if (!data) return res.status(404).json({ ok: false, error: `No transaction found for id ${req.params.id}` });
+    const format = (req.query.format as string) || 'json';
+
+    if (format === 'md') {
+      res.set('Content-Type', 'text/markdown; charset=utf-8');
+      return res.send(renderTransactionMarkdown(data));
+    }
+    if (format === 'csv') {
+      const header = 'agent,side,confidence,weight,agreed,sourceTraceId';
+      const rows = data.evidence.map(e => [e.agent, e.side, e.confidence, e.weight, e.agreed, e.sourceTraceId || ''].join(','));
+      res.set('Content-Type', 'text/csv; charset=utf-8');
+      return res.send([header, ...rows].join('\n'));
+    }
+    if (format === 'jsonl') {
+      res.set('Content-Type', 'application/x-ndjson; charset=utf-8');
+      return res.send(data.events.map(e => JSON.stringify(e)).join('\n'));
+    }
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.send(JSON.stringify({ ok: true, ...data }, null, 2));
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }

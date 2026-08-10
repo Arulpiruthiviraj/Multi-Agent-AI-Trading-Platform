@@ -89,6 +89,7 @@ import {  } from "drizzle-orm";
 import { BrokerManager } from "./src/brokers/BrokerManager.js";
 import { configRouter } from "./src/server/routes/configRoutes";
 import { v2Router } from "./src/server/routes/v2System";
+import { analyticsRouter } from "./src/server/routes/analyticsRoutes";
 import { webhooksRouter, triggerWebhooks } from "./src/server/routes/webhooks";
 import { generateContentWithRetry, cleanAndParseJSON } from "./src/server/ai/legacyGeminiHelpers";
 import { auditLog, AUDIT_LOG_FILE } from "./src/server/core/auditLog";
@@ -692,6 +693,7 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   app.use("/api/v1/config", configRouter);
   app.use("/api/v1", configRouter);
   app.use("/api/v2", v2Router);
+  app.use("/api/v2/analytics", analyticsRouter);
   app.get('/api/v1/scheduler', (req, res) => {
     res.json({ tasks: scheduledTasks });
   });
