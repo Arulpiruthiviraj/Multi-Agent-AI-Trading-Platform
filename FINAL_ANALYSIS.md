@@ -39,7 +39,7 @@ real account state; an Order Management Service executes it through a broker ada
   a defect in the engine. See Section 9 for the per-symbol numbers.
 - A real local AI stack (Ollama + a local Chronos time-series forecasting service) — the previously
   permanently-throwing Kronos forecaster now produces real forecasts.
-- A real test suite (47 tests), real CI (GitHub Actions), and a real Docker/health-check deployment path.
+- A real test suite (54 unit + 1 integration test), real CI (GitHub Actions), and a real Docker/health-check deployment path.
 
 **What is not yet real:**
 - 17 dashboard visualization panels are still static/decorative (hardcoded arrays or
@@ -71,7 +71,7 @@ test run so far shows no edge, and the only broker that can run fully unattended
 | Kronos/Chronos forecasting | Real | Local Chronos model via a persistent Python service; live-verified BUY/SELL/HOLD |
 | Interactive Brokers | Real, but manual-2FA-gated | Real Client Portal Web API client; cannot run fully unattended |
 | Paper→live confirmation gate | Real | Requires an exact confirmation phrase; previously not reachable at all |
-| Automated tests | Real | 47 tests / 4 files (vitest), real CI |
+| Automated tests | Real | 54 unit tests / 6 files + 1 real integration test (vitest), real CI |
 | Local AI stack (Ollama/Chronos/FinBERT) | Real | Chronos (Kronos forecaster), FinBERT (news sentiment), and Ollama (NewsAgent's AI calls) are all wired into a live agent now; XGBoost still installed but unused |
 | News provider health stats | Real (fixed this pass) | Was 100% hardcoded (`enabled:true, health:"Healthy", errorCount:0`) regardless of real state; now tracks real per-provider fetch/error/lastFetch stats |
 | Sector concentration limit | Real | 40% cap on GICS-mapped large caps |
@@ -198,12 +198,22 @@ Sources: [Questrade API docs](https://www.questrade.com/api/documentation/rest-o
 
 ## 7. Testing
 
-- **Unit tests:** 47 tests across 4 files (vitest) — RiskEngine's gates, OrderManagement idempotency
-  and fill-polling, ChiefTraderAgent consensus math, and a broker-adapter capability contract test.
-  Previously zero test files existed anywhere in the repo.
+- **Unit tests:** 54 tests across 6 files (vitest) — RiskEngine's gates, OrderManagement idempotency
+  and fill-polling, ChiefTraderAgent consensus math, EvidenceAggregator's weighted-vote math, and a
+  broker-adapter capability contract test. Previously zero test files existed anywhere in the repo.
+- **Integration tests:** one real one added this pass (`src/server/integration/marketDataToRisk.test.ts`)
+  — feeds a real MARKET_DATA tick sequence through the actual TechnicalAgent → ChiefTraderAgent →
+  RiskAgent → RiskEngine chain over the real EventBus singleton, backed by a real isolated temp SQLite
+  DB (`ARGUS_DB_PATH`, added this pass so tests never share a connection with the live `data/argus.db`).
+  Every other test in the repo mocks the DB/EventBus per-module; this is the first proof the modules are
+  actually wired together the way `SystemBootstrap.ts` assembles them at boot, not just individually
+  correct. Scope: MARKET_DATA → RISK_ASSESSMENT_COMPLETED only (not yet through order placement/fills).
+  Found and fixed one real test-harness issue along the way: `EncryptionService.ts` reloads `.env` at
+  module-load time via a transitive import, silently re-injecting real Alpaca credentials into
+  `process.env` after they'd been deliberately cleared for the test.
 - **CI:** GitHub Actions (`.github/workflows/ci.yml`) runs lint + test + build on every push/PR.
 - **`npm run lint`:** now actually runs `tsc --noEmit` — previously a no-op that printed a string.
-- **Integration/E2E tests:** still not implemented.
+- **E2E (browser-driven UI) tests:** still not implemented.
 
 ---
 
@@ -339,7 +349,7 @@ credential review (not something a code fix can resolve):**
 | Backtesting | 6/10 | Real point-in-time-gated engine with a real significance check that's honest about failing itself. Only backtests the deterministic technical rules, not the AI-agent consensus layer. |
 | AI architecture | 8/10 | Real provider-agnostic router with real cost tracking, adaptive dead-provider deprioritization, and JSON-mode structured output; local-first now genuinely realized (Ollama/Chronos/FinBERT all live) rather than just documented. |
 | Broker architecture | 6/10 | Clean adapter interface; only Alpaca is fully unattended-capable; IBKR/Questrade/Coinbase gaps are honestly surfaced, not hidden. |
-| Testing | 5/10 | 47 real unit tests on the safety-critical path; zero integration/E2E tests. |
+| Testing | 5/10 | 54 unit tests + 1 real integration test on the safety-critical path; zero browser-driven E2E tests. |
 | Observability | 6/10 | Durable, correlation-ID-linked event traces for the decision pipeline; no dashboards/alerting on top of them yet. |
 | UX | 5/10 | Core trading tabs are now real; ~17 secondary panels remain decorative. |
 | Production readiness | 6/10 | Docker/CI/health-checks are real; no integration tests, no monitoring/alerting beyond logs. |
@@ -366,7 +376,7 @@ sample isn't systematically biased toward whatever Ollama alone produces.
 | Paid AI | 🟡 Degraded-but-safe | Real router, real failover, real cost tracking; 6 of 7 seeded keys are dead | 6 dead API keys burning wasted (now deprioritized, not eliminated) round-trips | User to audit/replace or remove the dead `aiProviders` rows |
 | Forecasting | 🟢 Real | Kronos/Chronos live-verified BUY/SELL/HOLD via the local service | Only one forecasting model in the live path (Chronos); no ensemble | Not urgent - a second forecaster is a bigger project than this pass |
 | Agents | 🟢 Real | Technical/News/Fundamental/Macro/Kronos all produce real, evidenced signals | FundamentalAgent silently no-ops without `ALPHAVANTAGE_API_KEY` (honest HOLD, but easy to miss) | Surface "DATA_UNAVAILABLE" agents in Mission Control's agent-health view (not built) |
-| Consensus | 🟢 Real | `ChiefTraderAgent` weighted vote, 0.75 threshold, real DB-synced weights, live-verified withholding weak signals | No dedicated Evidence Aggregator - ChiefTrader itself does light-weight aggregation | See Section 13, P1 |
+| Consensus | 🟢 Real | `ChiefTraderAgent` weighted vote, 0.75 threshold, real DB-synced weights, live-verified withholding weak signals, now backed by a real, independently-tested `EvidenceAggregator` module | Structured per-agent evidence is emitted but nothing downstream (UI/ExplainabilityAgent) consumes it yet | Wire a trace viewer to the new `evidence` field on `CHIEF_APPROVED_IDEA` |
 | Risk | 🟢 Real | 9 real gates, all unit-tested (Section 4) | Correlation cap only sees symbols with cached OHLCV history | Acceptable given the "skip, don't fabricate" convention |
 | Backtesting | 🟡 Partial | Real, point-in-time-gated, self-reports insufficient sample size honestly | Only backtests deterministic rules, not the AI-consensus layer | Would need point-in-time news/fundamentals replay - large, not started |
 | Paper Trading | 🟡 Just started | AutoBot enabled this pass; pipeline live-verified end-to-end | Near-empty trade history (turned on this session) | Let it run; revisit after a real multi-day sample |
@@ -377,7 +387,7 @@ sample isn't systematically biased toward whatever Ollama alone produces.
 | Observability | 🟡 Partial | Durable correlation-ID event traces for the decision pipeline | No dashboards/alerting layered on top; no unified activity-log UI across all subsystems | Bigger observability pass, not started (Part 12-13 of this audit's own ask) |
 | Training Data | 🔴 Not built | `ohlcv_bars`/`backtest_runs` exist; no prediction→outcome labeling pipeline | No `training_examples`/`label_outcomes` schema | Large, deliberately not started this pass - see Section 13, P3 |
 | Security | 🟢 Real, narrowly audited | Encrypted keys at rest, session auth, no secrets in logs this pass | No dependency-vuln scan, no rate limiting audited | Out of this pass's scope |
-| Testing | 🟡 Narrow | 47 real unit tests on the safety-critical path | Zero integration/E2E tests | See Section 13, P2 |
+| Testing | 🟡 Narrow | 54 unit tests + 1 real integration test on the safety-critical path | Zero browser-driven E2E tests | See Section 13, P2 |
 | UI | 🟡 Partial | Core trading tabs are real; News Intelligence/Activity Logs now populated | ~17 secondary panels remain decorative | Explicitly deferred by the user across this whole engagement |
 | Deployment | 🟢 Real | Docker, CI, health/readiness checks | No monitoring/alerting beyond raw logs | Not urgent pre-paper-trading |
 | Profitability Evidence | 🔴 Not validated | 6 real backtests, all below the significance floor | No statistically meaningful edge shown anywhere in this codebase | Accumulate real paper-trading history; do not chase a backtest result under 20 trades |
@@ -401,11 +411,15 @@ qualified, but it's already fixed).
 - Let PAPER mode accumulate a real, multi-day trade sample (this is calendar time, not code).
 - Audit/replace the 6 dead paid-AI-provider keys so NewsAgent/ExplainabilityAgent/ReflectionEngine
   aren't silently biased toward whatever Ollama alone produces.
-- A real Evidence Aggregator so every consensus decision has one normalized, inspectable structure
-  instead of each agent emitting an ad-hoc shape that `ChiefTraderAgent` interprets informally.
+- ~~A real Evidence Aggregator...~~ **Done this pass** - `EvidenceAggregator.ts`, extracted from
+  `ChiefTraderAgent`'s previously-triplicated inline weighted-vote math, 7 dedicated tests, `evidence`
+  now attached to `CHIEF_APPROVED_IDEA`. Not yet consumed by any UI/trace viewer (see Section 12).
 
 **P2 - important hardening, not blocking paper trading:**
-- Integration/E2E tests (currently zero) - especially the full MARKET_DATA → ORDER_EXECUTED path.
+- ~~Integration/E2E tests (currently zero)~~ **Partially done this pass**: one real integration test
+  now covers MARKET_DATA → RISK_ASSESSMENT_COMPLETED over the real EventBus + a real isolated temp DB
+  (`marketDataToRisk.test.ts`). Still missing: the rest of the path (→ order placement → fill →
+  portfolio reconciliation), and any browser-driven UI/E2E test.
 - Surface `DATA_UNAVAILABLE` agents (e.g. FundamentalAgent without an AlphaVantage key) in a real
   agent-health UI view rather than only in server logs.
 - Retrain/re-evaluate the XGBoost direction model once a larger, real trade-history-backed dataset

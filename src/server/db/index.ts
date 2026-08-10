@@ -40,11 +40,14 @@ import * as schema from './schema';
 import path from 'path';
 import fs from 'fs';
 
+// ARGUS_DB_PATH lets integration tests (or anything else) point at an isolated SQLite file
+// instead of the real data/argus.db - see CLAUDE.md's warning about a second connection to the
+// live file. Production/dev behavior is unchanged when it's unset.
 const dbDir = fs.existsSync('/data') ? '/data' : path.resolve(process.cwd(), 'data');
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
-const dbPath = path.join(dbDir, 'argus.db');
+const dbPath = process.env.ARGUS_DB_PATH || path.join(dbDir, 'argus.db');
 const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
 
