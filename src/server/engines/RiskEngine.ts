@@ -144,6 +144,12 @@ async function isMarketOpen(): Promise<boolean | null> {
     }
 }
 
+interface GateResult {
+    gate: string;
+    passed: boolean;
+    detail: any;
+}
+
 export class RiskEngine {
     private static instance: RiskEngine;
 
@@ -159,6 +165,29 @@ export class RiskEngine {
     public async evaluateRisk(proposal: any) {
         console.log(`[Risk Engine] Evaluating proposal: ${proposal.side} ${proposal.symbol}`);
 
+        // Phase 2 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md, confirmed design change): every gate
+        // is now evaluated unconditionally, in the same order as before, instead of returning on
+        // the first failure. The final approve/reject outcome and reported reasoning are
+        // unchanged (still driven by whichever gate fails FIRST in this order) - what changes is
+        // that every gate's real pass/fail is now recorded, even ones after the first failure,
+        // so a rejected trade still has a complete, honest gate-by-gate record instead of
+        // "not evaluated" gates being indistinguishable from passed ones. This does mean a
+        // rejected proposal now always pays the cost of every gate's real DB/network calls
+        // (portfolio, settings, consecutive-loss query, market clock, news query, and - for BUY -
+        // correlation history per existing position) rather than short-circuiting early.
+        const gateResults: GateResult[] = [];
+        let sequence = 0;
+        const recordGate = (gate: string, passed: boolean, detail: any) => {
+            gateResults.push({ gate, passed, detail });
+            eventBus.emit('RISK_GATE_EVALUATED', { transactionId: proposal.transactionId, traceId: proposal.traceId, symbol: proposal.symbol, gate, sequence: sequence++, passed, detail });
+        };
+
+        let approved = false;
+        let maxQuantity = 0;
+        let reasoning = '';
+        let accountEquity: number | undefined;
+        let buyingPower: number | undefined;
+
         try {
             // 1. Fetch real broker portfolio state
             const broker = BrokerManager.getInstance().getActiveBroker();
@@ -169,6 +198,9 @@ export class RiskEngine {
             const riskLevel = settings[0]?.riskLevel || "Balanced";
             const maxTradeSizeDollar = settings[0]?.maxTradeSize || 3000;
             const maxPortfolioRiskPct = (riskLevel === "Aggressive") ? 0.03 : (riskLevel === "Conservative" ? 0.01 : 0.02);
+
+            accountEquity = portfolio.equity || 10000;
+            buyingPower = portfolio.buyingPower || 10000;
 
             // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
             // baseline captured the first time we evaluate risk each calendar day.
@@ -183,65 +215,28 @@ export class RiskEngine {
             const dailyLoss = Math.max(0, dayStartEquity - equityNow);
             tradingEngine.state.currentDailyLoss = dailyLoss;
             const dailyLossKillSwitchThreshold = tradingEngine.state.dailyLossLimit * 0.8;
-            if (dailyLoss >= dailyLossKillSwitchThreshold) {
-                eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId, transactionId: proposal.transactionId,
-                    symbol: proposal.symbol,
-                    side: proposal.side,
-                    currentPrice: proposal.currentPrice,
-                    approved: false,
-                    maxQuantity: 0,
-                    reasoning: `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached 80% of the $${tradingEngine.state.dailyLossLimit} daily loss limit. All new trades blocked until tomorrow or a manual reset.`
-                });
-                return;
-            }
+            const dailyLossPassed = dailyLoss < dailyLossKillSwitchThreshold;
+            recordGate('daily_loss', dailyLossPassed, { dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: tradingEngine.state.dailyLossLimit });
+            const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached 80% of the $${tradingEngine.state.dailyLossLimit} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
 
             // 2a-2. Consecutive-loss circuit breaker - real realized P&L from the last three
             // FILLED trades, not a simulated/hardcoded count.
-            if (await hasConsecutiveLosses()) {
-                eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId, transactionId: proposal.transactionId,
-                    symbol: proposal.symbol,
-                    side: proposal.side,
-                    currentPrice: proposal.currentPrice,
-                    approved: false,
-                    maxQuantity: 0,
-                    reasoning: `${MAX_CONSECUTIVE_LOSSES} consecutive losing trades. All new trades blocked pending manual review.`
-                });
-                return;
-            }
+            const consecutiveLossesBad = await hasConsecutiveLosses();
+            recordGate('consecutive_loss', !consecutiveLossesBad, { maxConsecutiveLosses: MAX_CONSECUTIVE_LOSSES, triggered: consecutiveLossesBad });
+            const consecutiveLossReason = `${MAX_CONSECUTIVE_LOSSES} consecutive losing trades. All new trades blocked pending manual review.`;
 
             // 2b. Real market-hours check (Alpaca /v2/clock). Skips (does not block) when Alpaca
             // credentials aren't configured, since there is no real source to check against.
             const marketOpen = await isMarketOpen();
-            if (marketOpen === false) {
-                eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId, transactionId: proposal.transactionId,
-                    symbol: proposal.symbol,
-                    side: proposal.side,
-                    currentPrice: proposal.currentPrice,
-                    approved: false,
-                    maxQuantity: 0,
-                    reasoning: "Market is currently closed (Alpaca clock)."
-                });
-                return;
-            }
+            recordGate('market_hours', marketOpen !== false, { marketOpen });
+            const marketHoursReason = "Market is currently closed (Alpaca clock).";
 
             // 2c. Stale market-data check - only fires when we've actually seen a real tick for
             // this symbol before and it has since gone quiet; never fabricates a staleness verdict.
             const priceAgeMs = marketDataWorker.getLatestPriceAgeMs(proposal.symbol);
-            if (priceAgeMs !== null && priceAgeMs > STALE_PRICE_THRESHOLD_MS) {
-                eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId, transactionId: proposal.transactionId,
-                    symbol: proposal.symbol,
-                    side: proposal.side,
-                    currentPrice: proposal.currentPrice,
-                    approved: false,
-                    maxQuantity: 0,
-                    reasoning: `Stale market data: last real tick for ${proposal.symbol} is ${Math.round(priceAgeMs / 1000)}s old (threshold ${STALE_PRICE_THRESHOLD_MS / 1000}s).`
-                });
-                return;
-            }
+            const stale = priceAgeMs !== null && priceAgeMs > STALE_PRICE_THRESHOLD_MS;
+            recordGate('data_freshness', !stale, { priceAgeMs, thresholdMs: STALE_PRICE_THRESHOLD_MS });
+            const staleDataReason = `Stale market data: last real tick for ${proposal.symbol} is ${Math.round((priceAgeMs || 0) / 1000)}s old (threshold ${STALE_PRICE_THRESHOLD_MS / 1000}s).`;
 
             // 3. News risk validation - impactScore lives on news_clusters, not news_articles
             // (news_articles has no impactScore column at all, so this always evaluated to
@@ -254,159 +249,191 @@ export class RiskEngine {
                 n.symbols && n.symbols.includes(proposal.symbol) &&
                 n.impactScore && n.impactScore > 80
             );
+            recordGate('news_veto', symbolNews.length === 0, { matchingClusters: symbolNews.length });
+            const newsVetoReason = "High volatility news event detected, overriding AI decision.";
 
-            if (symbolNews.length > 0) {
-                 eventBus.emitRiskAssessment({
-                     newsDetails: proposal.newsDetails,
-                     traceId: proposal.traceId, transactionId: proposal.transactionId,
-                     symbol: proposal.symbol,
-                     side: proposal.side,
-                     currentPrice: proposal.currentPrice,
-                     approved: false,
-                     maxQuantity: 0,
-                     reasoning: "High volatility news event detected, overriding AI decision."
-                 });
-                 return;
-            }
-
-            // 4. Position Sizing Math
-            // Using actual buying power and portfolio value
-            const accountEquity = portfolio.equity || 10000;
-            const buyingPower = portfolio.buyingPower || 10000;
+            // 4. Position Sizing Math - using actual buying power and portfolio value
             const currentPrice = proposal.currentPrice;
+            const priceValid = typeof currentPrice === 'number' && Number.isFinite(currentPrice) && currentPrice > 0;
+            recordGate('price_validity', priceValid, { currentPrice });
+            const priceValidityReason = "No valid price";
 
-            if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice) || currentPrice <= 0) {
-                eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId, transactionId: proposal.transactionId,
-                    symbol: proposal.symbol,
-                    side: proposal.side,
-                    approved: false,
-                    maxQuantity: 0,
-                    reasoning: "No valid price"
-                });
-                return;
-            }
+            let sufficientSizePassed = false;
+            let sellPositionPassed = true; // only meaningful for SELL - stays true (n/a) for BUY
+            const sufficientSizeReasonHolder = { text: '' };
+            const sellPositionReason = "Cannot sell - no existing position in broker portfolio.";
 
-            // Basic ATR risk calculation - normally fetched from market data, assuming $4 risk per share for this example if not provided
-            const riskPerShare = currentPrice * 0.05; // 5% stop loss assumption
-            const maxRiskAmount = accountEquity * maxPortfolioRiskPct;
-            
-            // Maximum shares based on acceptable loss
-            let maxSharesByRisk = Math.floor(maxRiskAmount / riskPerShare);
+            if (priceValid) {
+                // Basic ATR risk calculation - normally fetched from market data, assuming $4 risk per share for this example if not provided
+                const riskPerShare = currentPrice * 0.05; // 5% stop loss assumption
+                const maxRiskAmount = accountEquity * maxPortfolioRiskPct;
 
-            // Maximum shares based on max trade size constraint
-            let maxSharesByCapital = Math.floor(maxTradeSizeDollar / currentPrice);
+                let maxSharesByRisk = Math.floor(maxRiskAmount / riskPerShare);
+                let maxSharesByCapital = Math.floor(maxTradeSizeDollar / currentPrice);
+                let maxSharesByBuyingPower = Math.floor(buyingPower / currentPrice);
 
-            // Maximum shares based on buying power
-            let maxSharesByBuyingPower = Math.floor(buyingPower / currentPrice);
+                maxQuantity = Math.min(maxSharesByRisk, maxSharesByCapital, maxSharesByBuyingPower);
 
-            let maxQuantity = Math.min(maxSharesByRisk, maxSharesByCapital, maxSharesByBuyingPower);
+                if (proposal.side === 'BUY') {
+                    // 4a. Single-symbol concentration cap - no position may exceed
+                    // MAX_SINGLE_SYMBOL_CONCENTRATION_PCT of real account equity after this trade
+                    // fills. Reduces size rather than rejecting outright, hence always "passed" -
+                    // its effect (if any) surfaces through the sufficient_size gate below.
+                    const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
+                    const existingValue = existingPosition ? existingPosition.quantity * currentPrice : 0;
+                    const maxPositionValue = accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
+                    const remainingRoom = Math.max(0, maxPositionValue - existingValue);
+                    const maxSharesByConcentration = Math.floor(remainingRoom / currentPrice);
+                    const beforeConcentration = maxQuantity;
+                    maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
+                    recordGate('symbol_concentration', true, { existingValue, maxPositionValue, capPct: MAX_SINGLE_SYMBOL_CONCENTRATION_PCT, boundQuantity: beforeConcentration !== maxQuantity ? maxQuantity : null });
 
-            // 4a. Single-symbol concentration cap - no position may exceed
-            // MAX_SINGLE_SYMBOL_CONCENTRATION_PCT of real account equity after this trade fills.
-            // Reduces the size rather than outright rejecting, same as the other sizing caps above.
-            if (proposal.side === 'BUY') {
-                const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
-                const existingValue = existingPosition ? existingPosition.quantity * currentPrice : 0;
-                const maxPositionValue = accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
-                const remainingRoom = Math.max(0, maxPositionValue - existingValue);
-                const maxSharesByConcentration = Math.floor(remainingRoom / currentPrice);
-                maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
+                    // 4b. Sector concentration cap - no GICS-mapped sector may exceed
+                    // MAX_SECTOR_CONCENTRATION_PCT of real account equity after this trade fills.
+                    const proposalSector = getSector(proposal.symbol);
+                    if (proposalSector) {
+                        const sectorValue = portfolio.positions.reduce((sum: number, p: any) => {
+                            return getSector(p.symbol) === proposalSector ? sum + p.quantity * currentPrice : sum;
+                        }, 0);
+                        const maxSectorValue = accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
+                        const remainingSectorRoom = Math.max(0, maxSectorValue - sectorValue);
+                        const maxSharesBySector = Math.floor(remainingSectorRoom / currentPrice);
+                        const beforeSector = maxQuantity;
+                        maxQuantity = Math.min(maxQuantity, maxSharesBySector);
+                        recordGate('sector_concentration', true, { sector: proposalSector, sectorValue, maxSectorValue, capPct: MAX_SECTOR_CONCENTRATION_PCT, boundQuantity: beforeSector !== maxQuantity ? maxQuantity : null });
+                    } else {
+                        recordGate('sector_concentration', true, { skipped: true, reason: 'symbol not in sector map' });
+                    }
 
-                // 4b. Sector concentration cap - no GICS-mapped sector may exceed
-                // MAX_SECTOR_CONCENTRATION_PCT of real account equity after this trade fills.
-                const proposalSector = getSector(proposal.symbol);
-                if (proposalSector) {
-                    const sectorValue = portfolio.positions.reduce((sum: number, p: any) => {
-                        return getSector(p.symbol) === proposalSector ? sum + p.quantity * currentPrice : sum;
-                    }, 0);
-                    const maxSectorValue = accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
-                    const remainingSectorRoom = Math.max(0, maxSectorValue - sectorValue);
-                    const maxSharesBySector = Math.floor(remainingSectorRoom / currentPrice);
-                    maxQuantity = Math.min(maxQuantity, maxSharesBySector);
-                }
-
-                // 4c. Correlation-based exposure cap - real pairwise return correlation (90-day
-                // daily closes, opportunistic real Alpaca backfill via HistoricalDataGateway)
-                // against every existing position. Caps combined exposure across positively,
-                // highly-correlated (r > CORRELATION_THRESHOLD) symbols at MAX_CORRELATED_EXPOSURE_PCT
-                // of equity - this catches the case sector mapping misses (e.g. an unmapped ticker
-                // that still moves in lockstep with an existing position). A strong NEGATIVE
-                // correlation is deliberately not capped here - two symbols that move oppositely
-                // are a natural hedge, not concentrated risk. Skips entirely (never blocks) if real
-                // price history isn't available for the proposal's own symbol.
-                if (portfolio.positions.length > 0) {
-                    const proposalCloses = await getRecentCloses(proposal.symbol);
-                    if (proposalCloses) {
-                        let correlatedValue = 0;
-                        for (const p of portfolio.positions) {
-                            if (p.symbol === proposal.symbol) { correlatedValue += p.quantity * currentPrice; continue; }
-                            const otherCloses = await getRecentCloses(p.symbol);
-                            if (!otherCloses) continue; // no real history for this position - skip it, don't fabricate
-                            const corr = returnCorrelation(proposalCloses, otherCloses);
-                            if (corr !== null && corr > CORRELATION_THRESHOLD) {
-                                correlatedValue += p.quantity * currentPrice;
+                    // 4c. Correlation-based exposure cap - real pairwise return correlation
+                    // (90-day daily closes, opportunistic real Alpaca backfill via
+                    // HistoricalDataGateway) against every existing position. Caps combined
+                    // exposure across positively, highly-correlated (r > CORRELATION_THRESHOLD)
+                    // symbols at MAX_CORRELATED_EXPOSURE_PCT of equity. A strong NEGATIVE
+                    // correlation is deliberately not capped - that's a hedge, not concentration.
+                    // Skips entirely (never blocks) if real price history isn't available.
+                    if (portfolio.positions.length > 0) {
+                        const proposalCloses = await getRecentCloses(proposal.symbol);
+                        if (proposalCloses) {
+                            let correlatedValue = 0;
+                            for (const p of portfolio.positions) {
+                                if (p.symbol === proposal.symbol) { correlatedValue += p.quantity * currentPrice; continue; }
+                                const otherCloses = await getRecentCloses(p.symbol);
+                                if (!otherCloses) continue; // no real history for this position - skip it, don't fabricate
+                                const corr = returnCorrelation(proposalCloses, otherCloses);
+                                if (corr !== null && corr > CORRELATION_THRESHOLD) {
+                                    correlatedValue += p.quantity * currentPrice;
+                                }
                             }
+                            const maxCorrelatedValue = accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
+                            const remainingCorrelatedRoom = Math.max(0, maxCorrelatedValue - correlatedValue);
+                            const maxSharesByCorrelation = Math.floor(remainingCorrelatedRoom / currentPrice);
+                            const beforeCorr = maxQuantity;
+                            maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
+                            recordGate('correlation_exposure', true, { correlatedValue, maxCorrelatedValue, capPct: MAX_CORRELATED_EXPOSURE_PCT, boundQuantity: beforeCorr !== maxQuantity ? maxQuantity : null });
+                        } else {
+                            recordGate('correlation_exposure', true, { skipped: true, reason: 'no real price history for this symbol' });
                         }
-                        const maxCorrelatedValue = accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
-                        const remainingCorrelatedRoom = Math.max(0, maxCorrelatedValue - correlatedValue);
-                        const maxSharesByCorrelation = Math.floor(remainingCorrelatedRoom / currentPrice);
-                        maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
+                    } else {
+                        recordGate('correlation_exposure', true, { skipped: true, reason: 'no existing positions to correlate against' });
                     }
                 }
-            }
 
-            // 5. Final validation
-            if (maxQuantity <= 0) {
-                 eventBus.emitRiskAssessment({
-                     traceId: proposal.traceId, transactionId: proposal.transactionId,
-                     symbol: proposal.symbol,
-                     side: proposal.side,
-                     currentPrice,
-                     approved: false,
-                     maxQuantity: 0,
-                     reasoning: `Insufficient buying power or risk limits exceeded. Required: ${currentPrice}, Available BP: ${buyingPower}`
-                 });
-                 return;
-            }
+                // 5. Final validation
+                sufficientSizePassed = maxQuantity > 0;
+                sufficientSizeReasonHolder.text = `Insufficient buying power or risk limits exceeded. Required: ${currentPrice}, Available BP: ${buyingPower}`;
+                recordGate('sufficient_size', sufficientSizePassed, { maxQuantity, buyingPower });
 
-            // If we are selling, make sure we have the shares
-            if (proposal.side === 'SELL') {
-                const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
-                if (!existingPosition || existingPosition.quantity <= 0) {
-                    eventBus.emitRiskAssessment({
-                        traceId: proposal.traceId, transactionId: proposal.transactionId,
-                        symbol: proposal.symbol,
-                        side: proposal.side,
-                        currentPrice,
-                        approved: false,
-                        maxQuantity: 0,
-                        reasoning: "Cannot sell - no existing position in broker portfolio."
-                    });
-                    return;
+                // If we are selling, make sure we have the shares
+                if (proposal.side === 'SELL') {
+                    const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
+                    sellPositionPassed = !!existingPosition && existingPosition.quantity > 0;
+                    recordGate('sell_position_exists', sellPositionPassed, { existingQuantity: existingPosition?.quantity ?? 0 });
+                    if (sellPositionPassed) {
+                        maxQuantity = Math.min(maxQuantity, existingPosition.quantity);
+                    }
                 }
-                maxQuantity = Math.min(maxQuantity, existingPosition.quantity);
+            } else {
+                recordGate('sufficient_size', false, { skipped: true, reason: 'invalid price - sizing not evaluated' });
+            }
+
+            // Final verdict: first gate to fail, in evaluation order, determines the reported
+            // reason - identical priority to the old early-exit order, but now every gate's real
+            // result (not just the first failure) has already been recorded above.
+            const firstFailure = gateResults.find(g => !g.passed);
+            approved = !firstFailure;
+            if (!approved) {
+                maxQuantity = 0;
+                reasoning = firstFailure!.gate === 'daily_loss' ? dailyLossReason
+                    : firstFailure!.gate === 'consecutive_loss' ? consecutiveLossReason
+                    : firstFailure!.gate === 'market_hours' ? marketHoursReason
+                    : firstFailure!.gate === 'data_freshness' ? staleDataReason
+                    : firstFailure!.gate === 'news_veto' ? newsVetoReason
+                    : firstFailure!.gate === 'price_validity' ? priceValidityReason
+                    : firstFailure!.gate === 'sufficient_size' ? sufficientSizeReasonHolder.text
+                    : firstFailure!.gate === 'sell_position_exists' ? sellPositionReason
+                    : `Rejected by gate: ${firstFailure!.gate}`;
+            } else {
+                reasoning = `Approved based on ${(maxPortfolioRiskPct*100).toFixed(1)}% portfolio risk cap and available BP.`;
             }
 
             eventBus.emitRiskAssessment({
                 traceId: proposal.traceId, transactionId: proposal.transactionId,
                 symbol: proposal.symbol,
                 side: proposal.side,
-                approved: true,
+                currentPrice: proposal.currentPrice,
+                approved,
                 maxQuantity,
-                reasoning: `Approved based on ${(maxPortfolioRiskPct*100).toFixed(1)}% portfolio risk cap and available BP.`
+                reasoning,
+                newsDetails: proposal.newsDetails,
             });
 
+            await this.persistAssessment(proposal, { approved, maxQuantity, reasoning, rejectionGate: firstFailure?.gate ?? null, accountEquity, buyingPower, gateResults });
         } catch (e) {
             console.error('[Risk Engine] Error evaluating risk', e);
+            approved = false;
+            maxQuantity = 0;
+            reasoning = `Risk evaluation crashed: ${(e as Error).message}`;
             eventBus.emitRiskAssessment({
                 traceId: proposal.traceId, transactionId: proposal.transactionId,
                 symbol: proposal.symbol,
                 side: proposal.side,
                 approved: false,
                 maxQuantity: 0,
-                reasoning: `Risk evaluation crashed: ${(e as Error).message}`
+                reasoning,
             });
+            await this.persistAssessment(proposal, { approved: false, maxQuantity: 0, reasoning, rejectionGate: 'system_error', accountEquity, buyingPower, gateResults });
+        }
+    }
+
+    private async persistAssessment(proposal: any, result: { approved: boolean, maxQuantity: number, reasoning: string, rejectionGate: string | null, accountEquity?: number, buyingPower?: number, gateResults: GateResult[] }) {
+        try {
+            await db.insert(schema.riskAssessments).values({
+                transactionId: proposal.transactionId,
+                traceId: proposal.traceId,
+                symbol: proposal.symbol,
+                side: proposal.side,
+                approved: result.approved,
+                maxQuantity: result.maxQuantity,
+                rejectionGate: result.rejectionGate,
+                accountEquity: result.accountEquity,
+                buyingPower: result.buyingPower,
+                reasoning: result.reasoning,
+                createdAt: new Date().toISOString(),
+            });
+            if (result.gateResults.length > 0) {
+                await db.insert(schema.riskGateResults).values(
+                    result.gateResults.map((g, i) => ({
+                        traceId: proposal.traceId,
+                        gateName: g.gate,
+                        sequence: i,
+                        passed: g.passed,
+                        detail: JSON.stringify(g.detail),
+                    }))
+                );
+            }
+        } catch (e) {
+            console.error('[Risk Engine] Failed to persist risk assessment', e);
         }
     }
 }

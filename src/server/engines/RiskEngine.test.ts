@@ -16,7 +16,7 @@ const { mockDb, setTableRows, resetTableRows } = vi.hoisted(() => {
       return Promise.resolve(resultsByTable.get(lastTable) || []).then(resolve, reject);
     },
   };
-  const mockDb = { select: () => builder };
+  const mockDb = { select: () => builder, insert: () => ({ values: () => Promise.resolve({}) }) };
   return {
     mockDb,
     setTableRows: (table: any, rows: any[]) => resultsByTable.set(table, rows),
@@ -58,7 +58,7 @@ const { mockBarsBySymbol, mockHistoricalDataGateway } = vi.hoisted(() => {
 });
 
 vi.mock('../db', () => ({ db: mockDb }));
-vi.mock('../core/EventBus', () => ({ eventBus: { emitRiskAssessment } }));
+vi.mock('../core/EventBus', () => ({ eventBus: { emitRiskAssessment, emit: vi.fn() } }));
 vi.mock('../../brokers/BrokerManager', () => ({
   BrokerManager: { getInstance: () => ({ getActiveBroker: () => mockBrokerHolder.broker }) },
 }));

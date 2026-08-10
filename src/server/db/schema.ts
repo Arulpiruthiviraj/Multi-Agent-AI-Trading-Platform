@@ -534,6 +534,35 @@ export const aiCalls = sqliteTable('ai_calls', {
   createdAt: text('created_at').notNull(),
 });
 
+// Phase 2 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - RiskEngine's decision, persisted as a real
+// row instead of only existing inside one RISK_ASSESSMENT_COMPLETED event payload. Confirmed
+// design change (user sign-off): RiskEngine now evaluates every gate every time (previously
+// early-exited on the first failure), so a rejected trade still has a complete gate-by-gate
+// record - required for honest per-gate visualization instead of fabricating checkmarks for
+// gates that never ran.
+export const riskAssessments = sqliteTable('risk_assessments', {
+  transactionId: text('transaction_id'),
+  traceId: text('trace_id').primaryKey(), // proposal.traceId - not every risk check has a transactionId yet (e.g. legacy callers)
+  symbol: text('symbol').notNull(),
+  side: text('side').notNull(),
+  approved: integer('approved', { mode: 'boolean' }).notNull(),
+  maxQuantity: real('max_quantity').notNull(),
+  rejectionGate: text('rejection_gate'), // which gate's failure determined the final reject, if any
+  accountEquity: real('account_equity'),
+  buyingPower: real('buying_power'),
+  reasoning: text('reasoning'),
+  createdAt: text('created_at').notNull(),
+});
+
+export const riskGateResults = sqliteTable('risk_gate_results', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  traceId: text('trace_id').notNull(), // FK risk_assessments.trace_id
+  gateName: text('gate_name').notNull(),
+  sequence: integer('sequence').notNull(),
+  passed: integer('passed', { mode: 'boolean' }).notNull(),
+  detail: text('detail'), // JSON - per-gate shape varies (e.g. {current, max, proposed} for concentration caps)
+});
+
 // OpenAlice external verification requests/results (OpenAliceAdapter, OpenAliceVerificationService).
 // OpenAlice is a separate, independent AI system reached only over MCP - it never has trading
 // credentials and this table is read-only evidence for FUTURE decisions, never a retroactive
