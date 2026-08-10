@@ -52,6 +52,7 @@ import { explainabilityAgent } from '../services/ExplainabilityAgent';
 import { kronosEngine } from '../engines/kronos/KronosEngine';
 
 import { kronosForecastAgent } from "../services/KronosForecastAgent";
+import { dbBackupService } from '../services/DbBackupService';
 
 export class SystemBootstrap {
   private isRunning = false;
@@ -77,6 +78,7 @@ export class SystemBootstrap {
     macroAgent.start();
     reflectionEngine.start();
     systemMetricsWorker.start();
+    dbBackupService.start();
     marketRegimeAgent;
     explainabilityAgent;
     kronosForecastAgent;
@@ -99,7 +101,8 @@ export class SystemBootstrap {
     macroAgent.stop();
     reflectionEngine.stop();
     systemMetricsWorker.stop();
-    
+    dbBackupService.stop();
+
     this.isRunning = false;
     console.log("[Argus System] Shutdown complete.");
   }
