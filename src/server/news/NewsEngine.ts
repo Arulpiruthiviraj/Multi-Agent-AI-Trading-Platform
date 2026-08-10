@@ -150,6 +150,17 @@ export class NewsEngine {
           console.error('[NewsEngine] Failed to log escalation decision', e);
         }
 
+        // Real-time broadcast of the same decision just persisted above - lets the UI show local-
+        // first escalation as it happens, not just after querying escalation_decisions later.
+        eventBus.publish('ESCALATION_DECISION', {
+          traceId,
+          agent: 'NewsAgent',
+          localSource: 'finbert',
+          localConfidence: Math.abs(impact.sentiment),
+          escalated: escalationDecision.escalate,
+          reason: escalationDecision.reason,
+        });
+
         if (aiAnalysis) {
           if (aiAnalysis.symbol) {
             finalSymbols = Array.from(new Set([...finalSymbols, aiAnalysis.symbol]));

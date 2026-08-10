@@ -51,6 +51,14 @@ import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { EncryptionService } from '../core/EncryptionService';
 
+// Whether a provider DB row is a local endpoint - matches the exact same check initialize() uses
+// to decide isLocal when constructing an OpenAICompatibleProvider. More reliable than inferring
+// "local" from a $0 estimateCost() result, which is also literally 0 for a paid aggregator that
+// failed before any tokens were counted (0 tokens -> 0 cost regardless of pricing formula).
+function isLocalProviderRow(row: { apiEndpoint: string | null } | undefined): boolean {
+  return !!row?.apiEndpoint && (row.apiEndpoint.includes('localhost') || row.apiEndpoint.includes('127.0.0.1'));
+}
+
 export class AIRouter {
   private static instance: AIRouter;
   private providers: Map<string, AIProvider> = new Map();
@@ -159,10 +167,11 @@ export class AIRouter {
   
   public async routeConsensus(agentType: string, prompt: string, traceId: string): Promise<any> {
     let availableProviders = Array.from(this.providers.entries());
-    
+
     // Fetch latest stats from DB to prioritize
+    let dbStats: (typeof schema.aiProviders.$inferSelect)[] = [];
     try {
-        const dbStats = await db.select().from(schema.aiProviders);
+        dbStats = await db.select().from(schema.aiProviders);
         availableProviders = availableProviders.filter(([id, p]) => {
            const stat = dbStats.find(s => s.id === id);
            return !stat || stat.enabled;
@@ -196,8 +205,11 @@ export class AIRouter {
             
             // Log usage
             try {
+                const callCost = provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens);
                 eventBus.publish('UI_UPDATE', { type: 'ai_metrics_update', payload: {
-                                provider: providerId, model: 'consensus', agent: agentType, latency, tokens: res.tokens, success: true
+                                provider: providerId, providerName: dbStats.find(s => s.id === providerId)?.providerName || providerId,
+                                model: 'consensus', agent: agentType, latency, tokens: res.tokens, success: true, cost: callCost,
+                                local: isLocalProviderRow(dbStats.find(s => s.id === providerId))
                             } });
                 await db.insert(schema.aiUsage).values({
                     id: uuidv4(),
@@ -208,7 +220,7 @@ export class AIRouter {
                     promptTokens: res.inputTokens || 0,
                     completionTokens: res.outputTokens ?? res.tokens,
                     latency,
-                    cost: provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens),
+                    cost: callCost,
                     responseStatus: 'success'
                 });
             } catch (e) {}
@@ -354,10 +366,13 @@ export class AIRouter {
             
             // Log usage to DB
             try {
+                const callCost = provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens);
                 // Broadcast to UI
                 try {
                    eventBus.publish('UI_UPDATE', { type: 'ai_metrics_update', payload: {
-                                   provider: providerId, model: reqModel || 'default', agent: agentType, latency, tokens: res ? res.tokens : 0, success: true
+                                   provider: providerId, providerName: dbStats.find(s => s.id === providerId)?.providerName || providerId,
+                                   model: reqModel || 'default', agent: agentType, latency, tokens: res ? res.tokens : 0, success: true, cost: callCost,
+                                   local: isLocalProviderRow(dbStats.find(s => s.id === providerId))
                                } });
                 } catch(e) {}
                 await db.insert(schema.aiUsage).values({
@@ -369,7 +384,7 @@ export class AIRouter {
                     promptTokens: res.inputTokens || 0,
                     completionTokens: res.outputTokens ?? res.tokens,
                     latency,
-                    cost: provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens),
+                    cost: callCost,
                     responseStatus: 'success'
                 });
 
@@ -380,7 +395,6 @@ export class AIRouter {
                     const newLatency = (prevLatency * 9 + latency) / 10;
                     const prevSuccess = pDb[0].successRate || 100;
                     const newSuccess = Math.min(100, prevSuccess + 1);
-                    const callCost = provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens);
 
                     await db.update(schema.aiProviders).set({
                        latency: newLatency,
@@ -405,7 +419,9 @@ export class AIRouter {
                 // Broadcast to UI
                 try {
                    eventBus.publish('UI_UPDATE', { type: 'ai_metrics_update', payload: {
-                                   provider: providerId, model: reqModel || 'default', agent: agentType, latency, tokens: res ? res.tokens : 0, success: false
+                                   provider: providerId, providerName: dbStats.find(s => s.id === providerId)?.providerName || providerId,
+                                   model: reqModel || 'default', agent: agentType, latency, tokens: res ? res.tokens : 0, success: false, cost: 0,
+                                   local: isLocalProviderRow(dbStats.find(s => s.id === providerId))
                                } });
                 } catch(e) {}
                 await db.insert(schema.aiUsage).values({

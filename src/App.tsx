@@ -39,7 +39,7 @@ import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import AgentTopologyMap from "./components/AgentTopologyMap";
+import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
 import TradeCorrelationMatrix from "./components/TradeCorrelationMatrix";
@@ -1973,8 +1973,6 @@ export default function App() {
   const [customHeadline, setCustomHeadline] = useState(
     "Central banks hint at potential rate cuts in response to cooling macro inflation indices.",
   );
-  
-  const [flowAnimationEnabled, setFlowAnimationEnabled] = useState(false);
 
   // Simulation analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -6483,27 +6481,19 @@ export default function App() {
               </div>
             )}
 
-            {/* Agent Topology Map */}
+            {/* Live Agent Network - every node/edge activation below is driven by a real
+                WebSocket event (EventBus's wildcard listener), not mock/demo data. */}
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
               <div className="flex items-center justify-between mb-3.5">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
                   <Network size={15} className="text-sky-400" />
                   Network Topology & Data Flow
                 </h3>
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-slate-400 font-mono">FLOW ANIMATION</span>
-                  <button 
-                    onClick={() => setFlowAnimationEnabled(!flowAnimationEnabled)} 
-                    className="text-slate-400 hover:text-white transition-colors"
-                  >
-                    {flowAnimationEnabled ? <ToggleRight size={20} className="text-emerald-400" /> : <ToggleLeft size={20} />}
-                  </button>
-                </div>
               </div>
               <p className="text-xs text-slate-400 mb-5">
-                Interactive visualization of node consensus mapping. Click nodes to view latency constraints and specific success metrics.
+                Real-time visualization of every agent, local/paid AI model call, and decision. Click any node for its live process log; click a transaction to trace it end-to-end by its real trace ID.
               </p>
-              <AgentTopologyMap flowAnimationEnabled={flowAnimationEnabled} />
+              <DigitalTwinVisualizer />
             </div>
 
             {/* Chief Trader Agent Portfolio CIO Deck */}

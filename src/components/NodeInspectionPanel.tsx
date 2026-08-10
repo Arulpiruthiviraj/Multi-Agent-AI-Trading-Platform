@@ -34,7 +34,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { X, Terminal, Activity, CheckCircle2, ShieldCheck, Newspaper, Send, TrendingUp, UserCheck, Clock, BookOpen } from 'lucide-react';
+import { X, Terminal, Activity, CheckCircle2, ShieldCheck, Newspaper, Send, TrendingUp, UserCheck, Clock, BookOpen, Cpu, DollarSign, BrainCircuit } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: { nodeId: string, onClose: () => void, activeEvents: any[] }) {
@@ -50,6 +50,16 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
            relevant = activeEvents.filter(e => e.type === 'CALCULATION_COMPLETED' && e.payload.engine === 'TechnicalEngine');
        } else if (nodeId === 'news-agent') {
            relevant = activeEvents.filter(e => e.type === 'TRADE_IDEA_GENERATED' && e.payload.agent === 'NewsAgent');
+       } else if (nodeId === 'news-providers') {
+           relevant = activeEvents.filter(e => e.type === 'NEWS_ANALYZED');
+       } else if (nodeId === 'finbert-model') {
+           relevant = activeEvents.filter(e => (e.type === 'NEWS_ANALYZED' && e.payload.impact?.sentimentSource === 'finbert') || e.type === 'ESCALATION_DECISION');
+       } else if (nodeId === 'ollama-llm') {
+           relevant = activeEvents.filter(e => e.type === 'AI_METRICS_UPDATE' && e.payload.local);
+       } else if (nodeId === 'paid-llm-pool') {
+           relevant = activeEvents.filter(e => e.type === 'AI_METRICS_UPDATE' && !e.payload.local);
+       } else if (nodeId === 'kronos-forecast') {
+           relevant = activeEvents.filter(e => e.type === 'TRADE_IDEA_GENERATED' && e.payload.agent === 'KronosEngine');
        } else if (nodeId === 'chief-trader') {
            relevant = activeEvents.filter(e => e.type === 'CHIEF_APPROVED_IDEA');
        } else if (nodeId === 'risk-manager') {
@@ -74,6 +84,11 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
          case 'market-data-worker': return <Activity size={24} className="text-sky-400" />;
          case 'technical-engine': return <TrendingUp size={24} className="text-amber-400" />;
          case 'news-agent': return <Newspaper size={24} className="text-fuchsia-400" />;
+         case 'news-providers': return <Newspaper size={24} className="text-sky-400" />;
+         case 'finbert-model': return <Cpu size={24} className="text-emerald-400" />;
+         case 'ollama-llm': return <Cpu size={24} className="text-emerald-400" />;
+         case 'paid-llm-pool': return <DollarSign size={24} className="text-amber-400" />;
+         case 'kronos-forecast': return <BrainCircuit size={24} className="text-indigo-400" />;
          case 'chief-trader': return <UserCheck size={24} className="text-emerald-400" />;
          case 'risk-manager': return <ShieldCheck size={24} className="text-rose-400" />;
          case 'order-management': return <Send size={24} className="text-indigo-400" />;
