@@ -46,6 +46,7 @@ import { fundamentalAgent } from '../services/FundamentalAgent';
 import { macroAgent } from '../services/MacroAgent';
 import { chiefTrader } from '../services/ChiefTraderAgent';
 import { reflectionEngine } from '../services/ReflectionEngine';
+import { predictionOutcomeEvaluator } from '../services/PredictionOutcomeEvaluator';
 import { systemMetricsWorker } from '../services/SystemMetricsWorker';
 import { marketRegimeAgent } from '../services/MarketRegimeAgent';
 import { explainabilityAgent } from '../services/ExplainabilityAgent';
@@ -77,6 +78,7 @@ export class SystemBootstrap {
     fundamentalAgent.start();
     macroAgent.start();
     reflectionEngine.start();
+    predictionOutcomeEvaluator.start();
     systemMetricsWorker.start();
     dbBackupService.start();
     marketRegimeAgent;
@@ -100,6 +102,7 @@ export class SystemBootstrap {
     fundamentalAgent.stop();
     macroAgent.stop();
     reflectionEngine.stop();
+    predictionOutcomeEvaluator.stop();
     systemMetricsWorker.stop();
     dbBackupService.stop();
 

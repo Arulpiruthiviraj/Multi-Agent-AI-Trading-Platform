@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import { sqliteTable, text, integer, real, index } from 'drizzle-orm/sqlite-core';
+import { sqliteTable, text, integer, real, index, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const users = sqliteTable('users', {
   id: integer('id').primaryKey({ autoIncrement: true }),
@@ -408,7 +408,15 @@ export const kronosPredictions = sqliteTable('kronos_predictions', {
   rmse: real('rmse'),
   mape: real('mape'),
   directionalAccuracy: real('directional_accuracy'),
-  timestamp: text('timestamp').notNull()
+  timestamp: text('timestamp').notNull(),
+  // Phase 4 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - the above actualResult/mae/rmse/mape/
+  // directionalAccuracy columns were never populated (KronosMetrics.evaluateTrade() was an empty
+  // stub, never called). Superseded by the new prediction_outcomes table + PredictionOutcomeEvaluator
+  // instead of implementing that stub - one real evaluator for both agent_predictions and
+  // kronos_predictions rather than two separate mechanisms. traceId/transactionId let a Kronos
+  // forecast be joined to the transaction it may have contributed evidence to.
+  traceId: text('trace_id'),
+  transactionId: text('transaction_id'),
 });
 
 // Per-agent AI provider routing overrides (Phase 6). AIRouter.setAgentRoute() already existed and
@@ -610,6 +618,31 @@ export const riskGateResults = sqliteTable('risk_gate_results', {
   passed: integer('passed', { mode: 'boolean' }).notNull(),
   detail: text('detail'), // JSON - per-gate shape varies (e.g. {current, max, proposed} for concentration caps)
 });
+
+// Phase 4 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - separates what a model/agent predicted from
+// what actually happened, using real point-in-time OHLCV bars (via HistoricalDataGateway) rather
+// than ReflectionEngine's prior "nearest FILLED trade within 5 minutes" proxy. `sourceTable`
+// disambiguates which table `predictionId` refers to (agent_predictions.id is a UUID text;
+// kronos_predictions.id is an autoincrement integer stringified - both land in the same text
+// column, so the source table must be recorded to join back correctly). `pnl` is only populated
+// when a prediction is tied to a real executed trade with a known size - left null otherwise
+// rather than fabricating a dollar figure from an unsized directional call.
+export const predictionOutcomes = sqliteTable('prediction_outcomes', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  predictionId: text('prediction_id').notNull(),
+  sourceTable: text('source_table').notNull(), // 'agent_predictions' | 'kronos_predictions'
+  symbol: text('symbol').notNull(),
+  actualPrice: real('actual_price'),
+  actualReturn: real('actual_return'),
+  actualDirection: text('actual_direction'), // UP | DOWN | FLAT
+  mfe: real('mfe'), // Maximum Favorable Excursion (return terms, signed positive = favorable), over the evaluation window
+  mae: real('mae'), // Maximum Adverse Excursion (return terms, signed negative = adverse) - NOT Mean Absolute Error
+  pnl: real('pnl'),
+  outcome: text('outcome').notNull(), // WIN | LOSS | N_A
+  evaluatedAt: text('evaluated_at').notNull(),
+}, (table) => ({
+  predictionSourceIdx: uniqueIndex('idx_prediction_outcomes_source').on(table.predictionId, table.sourceTable),
+}));
 
 // OpenAlice external verification requests/results (OpenAliceAdapter, OpenAliceVerificationService).
 // OpenAlice is a separate, independent AI system reached only over MCP - it never has trading

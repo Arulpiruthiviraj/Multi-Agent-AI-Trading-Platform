@@ -8,7 +8,7 @@
  * ==========================================================
  */
 import { db } from '../db';
-import { agentPredictions, agentPerformanceStats, trades, learnedRules } from '../db/schema';
+import { agentPredictions, agentPerformanceStats, trades, learnedRules, predictionOutcomes } from '../db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { marketDataWorker } from './MarketDataWorker';
@@ -94,41 +94,32 @@ export class ReflectionEngine {
          }
       }
 
-      // 1. We should ideally have price at prediction time, but without altering schema 
-      // we'll assume predictions aligned with trades or just track the number of predictions 
-      // and their nominal success based on the asset's overall direction during that hour.
-      // For now, we will track real outcomes from trades for agent performance, 
-      // but without complex time-matching, we'll assign a basic performance score based on recent trades.
-      
+      // Phase 4 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md): previously this compared a prediction
+      // to whatever FILLED trade happened to be nearby (within 5 minutes) - a coarse proxy, not
+      // the real price at a defined horizon after the prediction. PredictionOutcomeEvaluator now
+      // does that properly using real point-in-time OHLCV bars; this just reads its results.
+      // total/correct only count predictions that have actually been evaluated (a real
+      // prediction_outcomes row exists) - not every prediction ever made, which previously
+      // silently diluted win rate with predictions that were never even checked.
       const statsMap: Record<string, any> = {};
       const predictions = await db.select().from(agentPredictions).all();
-      
-      for (const p of predictions) {
+      const predictionById = new Map(predictions.map(p => [p.id, p]));
+      const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
+
+      for (const o of outcomes) {
+        const p = predictionById.get(o.predictionId);
+        if (!p) continue;
         if (!statsMap[p.agentName]) {
           statsMap[p.agentName] = { total: 0, correct: 0, sumReturn: 0 };
         }
+        if (o.outcome === 'N_A') continue; // HOLD-style predictions made no directional call to score
         statsMap[p.agentName].total += 1;
-        
-        const predTime = new Date(p.timestamp).getTime();
-        if (now - predTime > 60000) {
-            const currentPrice = marketDataWorker.getLatestPrice(p.symbol);
-            if (currentPrice) {
-               // A simplified evaluation: if prediction was BUY and price > threshold, we count as correct.
-               // Since we don't have entry price, we just proxy it by evaluating against the last known trade price.
-               const recentTrade = allTrades.find(t => t.symbol === p.symbol && t.status === 'FILLED' && Math.abs(new Date(t.timestamp).getTime() - predTime) < 300000);
-               if (recentTrade) {
-                   const isLong = p.prediction === 'BUY';
-                   const entry = recentTrade.price as number;
-                   const diff = currentPrice - entry;
-                   const isCorrect = isLong ? diff > 0 : diff < 0;
-                   if (isCorrect) {
-                       statsMap[p.agentName].correct += 1;
-                       statsMap[p.agentName].sumReturn += Math.abs(diff / entry);
-                   } else {
-                       statsMap[p.agentName].sumReturn -= Math.abs(diff / entry);
-                   }
-               }
-            }
+        const absReturn = Math.abs(o.actualReturn ?? 0);
+        if (o.outcome === 'WIN') {
+          statsMap[p.agentName].correct += 1;
+          statsMap[p.agentName].sumReturn += absReturn;
+        } else {
+          statsMap[p.agentName].sumReturn -= absReturn;
         }
       }
 
