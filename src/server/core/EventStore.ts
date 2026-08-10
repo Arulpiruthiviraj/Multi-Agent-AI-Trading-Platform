@@ -103,3 +103,12 @@ eventBus.on('LEARNED_NEW_RULE', trackEvent('LEARNED_NEW_RULE'));
 eventBus.on('OPENALICE_VERIFICATION_REQUESTED', trackEvent('OPENALICE_VERIFICATION_REQUESTED'));
 eventBus.on('OPENALICE_VERIFICATION_COMPLETED', trackEvent('OPENALICE_VERIFICATION_COMPLETED'));
 eventBus.on('OPENALICE_VERIFICATION_TIMED_OUT', trackEvent('OPENALICE_VERIFICATION_TIMED_OUT'));
+// Decision-lifecycle STARTED/COMPLETED pairs (one per real evaluation, not per tick) - unlike
+// TECHNICAL_ANALYSIS_*/NEWS_ANALYSIS_STARTED, which fire at tick/article frequency and are
+// deliberately excluded, same reasoning as MARKET_DATA/CALCULATION_COMPLETED above.
+eventBus.on('CHIEF_CONSENSUS_STARTED', trackEvent('CHIEF_CONSENSUS_STARTED'));
+eventBus.on('CHIEF_CONSENSUS_COMPLETED', trackEvent('CHIEF_CONSENSUS_COMPLETED'));
+eventBus.on('RISK_ASSESSMENT_STARTED', trackEvent('RISK_ASSESSMENT_STARTED'));
+eventBus.on('ORDER_SUBMITTED', trackEvent('ORDER_SUBMITTED'));
+eventBus.on('ORDER_ACCEPTED', trackEvent('ORDER_ACCEPTED'));
+eventBus.on('ORDER_FILLED', trackEvent('ORDER_FILLED'));

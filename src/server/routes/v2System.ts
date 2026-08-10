@@ -344,3 +344,85 @@ v2Router.get('/transactions/:id/export', async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ==========================================================================================
+// Real Mission Control metrics (req #14) - every number below is a real query/state read, no
+// Date.now()/Math.random() placeholders. An agent/model/broker that hasn't produced a real
+// signal recently is honestly reported as inactive/unhealthy, never assumed healthy by default.
+// ==========================================================================================
+import { agentPredictions, aiProviders, aiCalls as aiCallsTable } from '../db/schema';
+import { gte as gteOp } from 'drizzle-orm';
+import { marketDataWorker } from '../services/MarketDataWorker';
+import { BrokerManager } from '../../brokers/BrokerManager';
+import { tradingEngine } from '../engines/TradingEngine';
+
+const PIPELINE_AGENTS = ['TechnicalAgent', 'NewsAgent', 'FundamentalAgent', 'MacroAgent', 'KronosEngine'];
+const AGENT_ACTIVITY_WINDOW_MS = 3 * 60 * 1000; // covers the slowest real cadence (MacroAgent, 75s) with margin
+
+v2Router.get('/system/mission-control', async (req, res) => {
+  try {
+    const now = Date.now();
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    // Agents active: real recency of each agent's own logged predictions (agent_predictions),
+    // not a fabricated "5/5" - an agent that hasn't produced anything in the activity window
+    // (e.g. no ALPHAVANTAGE_API_KEY configured) is honestly counted as inactive.
+    const predictions = await db.select().from(agentPredictions);
+    const lastSeenByAgent = new Map<string, number>();
+    for (const p of predictions) {
+      const t = new Date(p.timestamp).getTime();
+      if (!lastSeenByAgent.has(p.agentName) || t > lastSeenByAgent.get(p.agentName)!) lastSeenByAgent.set(p.agentName, t);
+    }
+    const agentsActive = PIPELINE_AGENTS.filter(a => {
+      const last = lastSeenByAgent.get(a);
+      return last !== undefined && now - last < AGENT_ACTIVITY_WINDOW_MS;
+    }).length;
+
+    // AI models healthy: real ai_providers.health, not a static claim.
+    const providers = await db.select().from(aiProviders).where(eq(aiProviders.enabled, true));
+    const aiModelsHealthy = providers.filter(p => p.health === 'Healthy').length;
+
+    // Broker: real active broker + its real capability flags.
+    let brokerName = 'None';
+    let brokerCapabilities: any = null;
+    try {
+      const broker = BrokerManager.getInstance().getActiveBroker();
+      brokerName = broker.name;
+      brokerCapabilities = broker.getCapabilities();
+    } catch { /* no active broker configured */ }
+
+    // Trades today / win rate / realized P&L: real trades rows for today only.
+    const allTrades = await db.select().from(trades);
+    const todaysFilled = allTrades.filter(t => t.status === 'FILLED' && t.timestamp?.startsWith(todayStr));
+    const withPnl = todaysFilled.filter(t => t.profitLoss !== null && t.profitLoss !== undefined);
+    const wins = withPnl.filter(t => (t.profitLoss ?? 0) > 0).length;
+    const winRate = withPnl.length > 0 ? wins / withPnl.length : null;
+    const realizedPnlToday = withPnl.length > 0 ? withPnl.reduce((s, t) => s + (t.profitLoss ?? 0), 0) : null;
+
+    // AI cost today: real ai_calls.cost, not ai_usage's aggregate (this is the forensic ledger).
+    const callsToday = await db.select().from(aiCallsTable).where(gteOp(aiCallsTable.createdAt, todayStr));
+    const aiCostToday = callsToday.reduce((s, c) => s + (c.cost || 0), 0);
+
+    // Events/sec: real count over the in-memory ring buffer's last 10s window.
+    const recentWindowMs = 10_000;
+    const eventsInWindow = recentEvents.filter(e => now - e.timestamp < recentWindowMs).length;
+    const eventsPerSec = Number((eventsInWindow / (recentWindowMs / 1000)).toFixed(2));
+
+    res.json({
+      ok: true,
+      marketData: { connected: marketDataWorker.isConnected() },
+      agents: { active: agentsActive, total: PIPELINE_AGENTS.length },
+      aiModels: { healthy: aiModelsHealthy, total: providers.length },
+      broker: { name: brokerName, capabilities: brokerCapabilities },
+      riskEngine: { armed: !tradingEngine.state.emergencyStopActive },
+      autobot: { running: tradingEngine.state.enabled === true },
+      tradesToday: todaysFilled.length,
+      winRate,
+      realizedPnlToday,
+      aiCostToday: Number(aiCostToday.toFixed(4)),
+      eventsPerSec,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});

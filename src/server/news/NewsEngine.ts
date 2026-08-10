@@ -99,6 +99,11 @@ export class NewsEngine {
 
         const traceId = Math.random().toString(36).substring(7);
 
+        // Real STARTED event for live animation - NEWS_ANALYZED (published further below) is the
+        // real completed signal for this same traceId, kept under its existing name rather than
+        // adding a redundant near-duplicate event.
+        eventBus.publish('NEWS_ANALYSIS_STARTED', { traceId, headline: normalized.title, source: normalized.source });
+
         // Local-first escalation: FinBERT already ran inside impactEngine.assess() above. If its
         // sentiment is decisive, derive the trading bias directly from it and skip the LLM call
         // entirely - a real cost saving, not just a documented intention. Every decision (escalate

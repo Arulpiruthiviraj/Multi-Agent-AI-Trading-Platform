@@ -102,7 +102,10 @@ interface Transaction {
   lastUpdate: string;
 }
 
-const STAGE_ORDER = ['TRADE_IDEA_GENERATED', 'CHIEF_APPROVED_IDEA', 'RISK_ASSESSMENT_COMPLETED', 'ORDER_EXECUTED'];
+const STAGE_ORDER = [
+  'TRADE_IDEA_GENERATED', 'CHIEF_APPROVED_IDEA', 'RISK_ASSESSMENT_COMPLETED',
+  'ORDER_SUBMITTED', 'ORDER_ACCEPTED', 'ORDER_FILLED', 'ORDER_EXECUTED',
+];
 
 function buildTransactions(evts: any[]): Transaction[] {
   const byTrace = new Map<string, Transaction>();
@@ -212,12 +215,22 @@ export default function DigitalTwinVisualizer() {
 
     const unsubs = [
       subscribe('MARKET_DATA', record('MARKET_DATA')),
+      subscribe('NEWS_ANALYSIS_STARTED', record('NEWS_ANALYSIS_STARTED')),
       subscribe('NEWS_ANALYZED', record('NEWS_ANALYZED')),
       subscribe('ESCALATION_DECISION', record('ESCALATION_DECISION')),
       subscribe('UI_UPDATE', (data: any) => { if (data?.type === 'ai_metrics_update') record('AI_METRICS_UPDATE')(data.payload); }),
+      subscribe('TECHNICAL_ANALYSIS_STARTED', record('TECHNICAL_ANALYSIS_STARTED')),
+      subscribe('TECHNICAL_ANALYSIS_COMPLETED', record('TECHNICAL_ANALYSIS_COMPLETED')),
       subscribe('TRADE_IDEA_GENERATED', record('TRADE_IDEA_GENERATED')),
+      subscribe('CHIEF_CONSENSUS_STARTED', record('CHIEF_CONSENSUS_STARTED')),
+      subscribe('CHIEF_CONSENSUS_COMPLETED', record('CHIEF_CONSENSUS_COMPLETED')),
       subscribe('CHIEF_APPROVED_IDEA', record('CHIEF_APPROVED_IDEA')),
+      subscribe('RISK_ASSESSMENT_STARTED', record('RISK_ASSESSMENT_STARTED')),
+      subscribe('RISK_GATE_EVALUATED', record('RISK_GATE_EVALUATED')),
       subscribe('RISK_ASSESSMENT_COMPLETED', record('RISK_ASSESSMENT_COMPLETED')),
+      subscribe('ORDER_SUBMITTED', record('ORDER_SUBMITTED')),
+      subscribe('ORDER_ACCEPTED', record('ORDER_ACCEPTED')),
+      subscribe('ORDER_FILLED', record('ORDER_FILLED')),
       subscribe('ORDER_EXECUTED', record('ORDER_EXECUTED')),
       subscribe('LEARNED_NEW_RULE', record('LEARNED_NEW_RULE')),
     ];
@@ -247,6 +260,11 @@ export default function DigitalTwinVisualizer() {
       if (evt.type === 'MARKET_DATA') {
         newActiveNodes.add('market-data-worker');
         newActiveEdges.add('e-market-tech'); newActiveEdges.add('e-market-quant');
+      } else if (evt.type === 'TECHNICAL_ANALYSIS_STARTED' || evt.type === 'TECHNICAL_ANALYSIS_COMPLETED') {
+        newActiveNodes.add('technical-engine'); newActiveEdges.add('e-market-tech');
+      } else if (evt.type === 'NEWS_ANALYSIS_STARTED') {
+        newActiveNodes.add('news-providers'); newActiveNodes.add('news-agent');
+        newActiveEdges.add('e-news-src-agent');
       } else if (evt.type === 'NEWS_ANALYZED') {
         newActiveNodes.add('news-providers'); newActiveNodes.add('news-agent');
         newActiveEdges.add('e-news-src-agent');
@@ -269,11 +287,17 @@ export default function DigitalTwinVisualizer() {
         const node = AGENT_NODE[evt.payload.agent];
         if (node) { newActiveNodes.add(node); const edgeId = NODE_TO_CHIEF_EDGE[node]; if (edgeId) newActiveEdges.add(edgeId); }
         newActiveNodes.add('chief-trader');
+      } else if (evt.type === 'CHIEF_CONSENSUS_STARTED' || evt.type === 'CHIEF_CONSENSUS_COMPLETED') {
+        newActiveNodes.add('chief-trader');
       } else if (evt.type === 'CHIEF_APPROVED_IDEA') {
         newActiveNodes.add('chief-trader'); newActiveEdges.add('e-chief-risk'); newActiveNodes.add('risk-manager');
+      } else if (evt.type === 'RISK_ASSESSMENT_STARTED' || evt.type === 'RISK_GATE_EVALUATED') {
+        newActiveNodes.add('risk-manager');
       } else if (evt.type === 'RISK_ASSESSMENT_COMPLETED') {
         newActiveNodes.add('risk-manager');
         if (evt.payload.approved) { newActiveEdges.add('e-risk-exec'); newActiveNodes.add('order-management'); }
+      } else if (evt.type === 'ORDER_SUBMITTED' || evt.type === 'ORDER_ACCEPTED' || evt.type === 'ORDER_FILLED') {
+        newActiveNodes.add('order-management'); newActiveEdges.add('e-risk-exec');
       } else if (evt.type === 'ORDER_EXECUTED') {
         newActiveNodes.add('order-management'); newActiveEdges.add('e-exec-learn'); newActiveNodes.add('learning-engine');
       } else if (evt.type === 'LEARNED_NEW_RULE') {
@@ -407,12 +431,22 @@ export default function DigitalTwinVisualizer() {
                   </div>
                   <div className="text-slate-300 font-mono text-[9px] leading-relaxed">
                     {evt.type === 'MARKET_DATA' ? `Tick: ${evt.payload.symbol} @ $${evt.payload.price?.toFixed?.(2)} Vol: ${evt.payload.volume}` :
+                      evt.type === 'TECHNICAL_ANALYSIS_STARTED' ? `Analyzing ${evt.payload.symbol}...` :
+                      evt.type === 'TECHNICAL_ANALYSIS_COMPLETED' ? `${evt.payload.symbol} - RSI ${evt.payload.rsi?.toFixed?.(1)} | MACD ${evt.payload.macd?.toFixed?.(3)}\nLatency: ${evt.payload.latencyMs}ms` :
+                      evt.type === 'NEWS_ANALYSIS_STARTED' ? `${evt.payload.source}: ${evt.payload.headline}` :
                       evt.type === 'NEWS_ANALYZED' ? `Category: ${evt.payload.category}\nSentiment source: ${evt.payload.impact?.sentimentSource}` :
                       evt.type === 'ESCALATION_DECISION' ? `${evt.payload.escalated ? 'ESCALATED' : 'LOCAL-FIRST (skipped LLM)'}\n${evt.payload.reason}` :
                       evt.type === 'AI_METRICS_UPDATE' ? `${evt.payload.providerName || evt.payload.provider} (${evt.payload.local ? 'local $0' : `$${evt.payload.cost?.toFixed?.(4)}`})\nAgent: ${evt.payload.agent} | ${evt.payload.latency}ms` :
                       evt.type === 'TRADE_IDEA_GENERATED' ? `Agent: ${evt.payload.agent}\nIdea: ${evt.payload.side} ${evt.payload.symbol}\nConf: ${(evt.payload.confidence * 100).toFixed(0)}%` :
+                      evt.type === 'CHIEF_CONSENSUS_STARTED' ? `Evaluating ${evt.payload.ideaCount} idea(s) for ${evt.payload.symbol}...` :
+                      evt.type === 'CHIEF_CONSENSUS_COMPLETED' ? `${evt.payload.approved ? 'APPROVED' : 'NOT YET'} - ${evt.payload.side} ${evt.payload.symbol} @ ${(evt.payload.confidence * 100).toFixed(1)}% (threshold ${(evt.payload.threshold * 100).toFixed(0)}%)` :
                       evt.type === 'CHIEF_APPROVED_IDEA' ? `Chief Approved: ${evt.payload.side} ${evt.payload.symbol}\nContext: ${evt.payload.agentsContext}` :
+                      evt.type === 'RISK_ASSESSMENT_STARTED' ? `Evaluating ${evt.payload.side} ${evt.payload.symbol}...` :
+                      evt.type === 'RISK_GATE_EVALUATED' ? `${evt.payload.passed ? '✓' : '✕'} ${evt.payload.gate}` :
                       evt.type === 'RISK_ASSESSMENT_COMPLETED' ? `Risk: ${evt.payload.approved ? 'PASS' : 'VETO'}\nSymbol: ${evt.payload.symbol}\nCap: ${evt.payload.maxQuantity} shares` :
+                      evt.type === 'ORDER_SUBMITTED' ? `Order ${evt.payload.id} submitted: ${evt.payload.side} ${evt.payload.quantity}x ${evt.payload.symbol}` :
+                      evt.type === 'ORDER_ACCEPTED' ? `Broker accepted - status ${evt.payload.status}${evt.payload.brokerOrderId ? ` (${evt.payload.brokerOrderId})` : ''}` :
+                      evt.type === 'ORDER_FILLED' ? `Filled: ${evt.payload.quantity}x ${evt.payload.symbol} @ $${evt.payload.price?.toFixed?.(2)}` :
                       evt.type === 'ORDER_EXECUTED' ? `Execution: ${evt.payload.side} ${evt.payload.quantity}x ${evt.payload.symbol}\nFill: $${evt.payload.price?.toFixed?.(2)}` :
                       JSON.stringify(evt.payload)
                     }

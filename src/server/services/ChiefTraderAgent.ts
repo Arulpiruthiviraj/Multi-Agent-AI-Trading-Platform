@@ -146,6 +146,8 @@ export class ChiefTraderAgent {
   }
 
   async evaluateConsensus(symbol: string, traceId: string) {
+    eventBus.emit('CHIEF_CONSENSUS_STARTED', { traceId, symbol, ideaCount: this.recentIdeas.filter(i => i.symbol === symbol).length });
+
     const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
     const evidence: Evidence[] = relevantIdeas.map(i => ({ ...i, weight: this.resolveWeight(i.agent) }));
 
@@ -160,6 +162,11 @@ export class ChiefTraderAgent {
        approved = true;
        reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(result.confidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${result.reasoning}`;
     }
+
+    // Unconditional COMPLETED signal (unlike CHIEF_APPROVED_IDEA, which only fires on approval) -
+    // lets live animation show the Chief Trader node finishing its evaluation even when the
+    // result is "not yet, waiting for more evidence," not just on a successful approval.
+    eventBus.emit('CHIEF_CONSENSUS_COMPLETED', { traceId, symbol, approved, confidence: result.confidence, side: result.side, threshold: CONSENSUS_APPROVAL_THRESHOLD });
 
     if (approved) {
        // Clear from recent so we don't duplicate

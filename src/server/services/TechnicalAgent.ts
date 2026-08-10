@@ -91,15 +91,22 @@ export class TechnicalProposerAgent {
 
   private checkStrategies(symbol: string, prices: number[]) {
     const currentPrice = prices[prices.length - 1];
-    
+    const traceId = Math.random().toString(36).substring(7);
+    const startedAt = Date.now();
+
+    // Real STARTED/COMPLETED bracket for live animation (previously only Kronos had one) -
+    // TechnicalAgent's computation is synchronous and fast, but the pair still lets the UI show
+    // exactly when this node began working versus when it produced a real result.
+    eventBus.emit('TECHNICAL_ANALYSIS_STARTED', { traceId, symbol, timestamp: new Date(startedAt).toISOString() });
+
     const sma20 = this.calcSMA(prices, 20);
     const sma50 = this.calcSMA(prices, 50);
     const rsi = rsiEngine.calculate(prices);
     const macd = macdEngine.calculate(prices);
     const bb = this.calcBollingerBands(prices, 20);
-    const traceId = Math.random().toString(36).substring(7);
 
     eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
+    eventBus.emit('TECHNICAL_ANALYSIS_COMPLETED', { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
 
     // Momentum Breakout
     if (currentPrice > sma20 && sma20 > sma50 && rsi > 50 && rsi < 70 && macd.macd > macd.signal) {

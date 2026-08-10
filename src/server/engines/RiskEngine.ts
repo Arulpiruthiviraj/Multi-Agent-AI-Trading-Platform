@@ -164,6 +164,7 @@ export class RiskEngine {
 
     public async evaluateRisk(proposal: any) {
         console.log(`[Risk Engine] Evaluating proposal: ${proposal.side} ${proposal.symbol}`);
+        eventBus.emit('RISK_ASSESSMENT_STARTED', { traceId: proposal.traceId, transactionId: proposal.transactionId, symbol: proposal.symbol, side: proposal.side });
 
         // Phase 2 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md, confirmed design change): every gate
         // is now evaluated unconditionally, in the same order as before, instead of returning on

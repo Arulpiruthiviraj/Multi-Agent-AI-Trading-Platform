@@ -18,7 +18,7 @@ const { mockDb } = vi.hoisted(() => {
 const { emitChiefApproval } = vi.hoisted(() => ({ emitChiefApproval: vi.fn() }));
 
 vi.mock('../db', () => ({ db: mockDb }));
-vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emitChiefApproval } }));
+vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitChiefApproval } }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus: vi.fn() }) } }));
 
 import { ChiefTraderAgent } from './ChiefTraderAgent';

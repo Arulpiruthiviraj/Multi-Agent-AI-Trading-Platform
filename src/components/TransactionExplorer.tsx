@@ -12,6 +12,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Search, RefreshCw } from 'lucide-react';
 import TransactionObservatory from './TransactionObservatory';
+import MissionControlBar from './MissionControlBar';
 
 interface TxRow {
   id: string;
@@ -61,6 +62,8 @@ export default function TransactionExplorer() {
 
   return (
     <div className="flex flex-col gap-4">
+      <MissionControlBar />
+
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-white font-bold uppercase tracking-widest text-sm">Transaction Observatory</h2>

@@ -54,6 +54,12 @@ export class MarketDataWorker {
     return typeof t === 'number' ? Date.now() - t : null;
   }
 
+  // Real WebSocket readyState check, not a fabricated "connected" flag - used by Mission
+  // Control's MARKET DATA status indicator.
+  isConnected(): boolean {
+    return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
   start() {
     if (this.intervalId || this.ws) return;
     
