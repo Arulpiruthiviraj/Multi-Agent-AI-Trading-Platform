@@ -71,6 +71,13 @@
       "when": 1786368438256,
       "tag": "0009_lazy_yellowjacket",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1786369648860,
+      "tag": "0010_real_joseph",
+      "breakpoints": true
     }
   ]
 }

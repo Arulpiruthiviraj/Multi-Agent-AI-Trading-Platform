@@ -90,7 +90,10 @@ export class FundamentalAnalysisAgent {
                    side: analysis.recommendation,
                    confidence: analysis.confidence,
                    reasoning: `[Fundamental AI] ${analysis.reasoning}`,
-                   agent: "FundamentalAgent"
+                   agent: "FundamentalAgent",
+                   aiCallId: res.aiCallId,
+                   provider: res.provider,
+                   latencyMs: res.latency,
                 });
              }
           }

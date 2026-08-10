@@ -99,7 +99,10 @@ export class MacroEconomyAgent {
                    side: analysis.recommendation,
                    confidence: analysis.confidence,
                    reasoning: `[Macro AI] ${analysis.reasoning}`,
-                   agent: "MacroAgent"
+                   agent: "MacroAgent",
+                   aiCallId: res.aiCallId,
+                   provider: res.provider,
+                   latencyMs: res.latency,
                 });
              }
           }

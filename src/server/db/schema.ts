@@ -227,6 +227,17 @@ export const agentPredictions = sqliteTable('agent_predictions', {
   confidence: real('confidence').notNull(),
   reasoning: text('reasoning').notNull(),
   timestamp: text('timestamp').notNull(),
+  // Phase 1 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - the agent's own self-generated traceId,
+  // previously dropped even though every TRADE_IDEA_GENERATED payload carries one. Lets this row
+  // be joined to consensus_evidence.source_trace_id (and from there, to the transaction it fed)
+  // without needing to eagerly know the transaction id at write time - most predictions are
+  // logged before ChiefTraderAgent has evaluated consensus at all.
+  traceId: text('trace_id'),
+  // Only populated when this idea came from a real AI call (News/Fundamental/Macro) - null for
+  // deterministic agents (Technical) and the FinBERT local-first path (no LLM call made).
+  aiCallId: text('ai_call_id'),
+  provider: text('provider'),
+  latencyMs: real('latency_ms'),
 });
 
 export const agentPerformanceStats = sqliteTable('agent_performance_stats', {
@@ -492,6 +503,35 @@ export const consensusEvidence = sqliteTable('consensus_evidence', {
   reasoning: text('reasoning'),
   agreed: integer('agreed', { mode: 'boolean' }).notNull(), // did this agent's side match the final consensus side?
   currentPrice: real('current_price'),
+});
+
+// Phase 1 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - the AI call ledger. Before this, AIRouter's
+// routeTask()/routeConsensus() sent the real prompt to the real provider and only the token
+// counts/latency/cost survived into `ai_usage` - the prompt text and raw response were discarded
+// in-memory as soon as the call returned. This table is the forensic record `ai_usage`'s
+// aggregate counters were never meant to be; `ai_usage` stays as-is for existing dashboards.
+// transactionId is deliberately nullable and NOT eagerly populated - most AI calls happen before
+// ChiefTraderAgent has minted a transaction id at all (News/Fundamental/Macro analyze BEFORE
+// consensus is evaluated). Join via traceId -> consensus_evidence.source_trace_id instead.
+export const aiCalls = sqliteTable('ai_calls', {
+  id: text('id').primaryKey(),
+  traceId: text('trace_id'),
+  transactionId: text('transaction_id'),
+  agent: text('agent').notNull(),
+  provider: text('provider').notNull(),
+  model: text('model'),
+  modelVersion: text('model_version'),
+  promptVersion: text('prompt_version'),
+  prompt: text('prompt'),
+  rawResponse: text('raw_response'),
+  parsedResponse: text('parsed_response'), // JSON string, when the caller successfully parsed structured output
+  tokensIn: integer('tokens_in'),
+  tokensOut: integer('tokens_out'),
+  cost: real('cost'),
+  latencyMs: real('latency_ms'),
+  status: text('status').notNull(), // success | error
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
 });
 
 // OpenAlice external verification requests/results (OpenAliceAdapter, OpenAliceVerificationService).

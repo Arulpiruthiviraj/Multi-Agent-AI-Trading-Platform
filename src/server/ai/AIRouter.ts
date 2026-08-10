@@ -59,6 +59,53 @@ function isLocalProviderRow(row: { apiEndpoint: string | null } | undefined): bo
   return !!row?.apiEndpoint && (row.apiEndpoint.includes('localhost') || row.apiEndpoint.includes('127.0.0.1'));
 }
 
+// Phase 1 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - the AI call forensic ledger. Previously
+// the real prompt sent and the real raw response received were discarded in-memory the moment
+// a call returned; only aggregate token/latency/cost counters survived into `ai_usage`. This is
+// deliberately fire-and-forget (never awaited by callers, never throws past this function) -
+// persisting the ledger must never be able to break a real trading decision.
+interface AiCallLogInput {
+  traceId?: string;
+  agent: string;
+  provider: string;
+  model?: string;
+  prompt?: string;
+  rawResponse?: string;
+  parsedResponse?: string;
+  tokensIn?: number;
+  tokensOut?: number;
+  cost?: number;
+  latencyMs?: number;
+  status: 'success' | 'error';
+  error?: string;
+}
+
+async function logAiCall(input: AiCallLogInput): Promise<string> {
+  const id = uuidv4();
+  try {
+    await db.insert(schema.aiCalls).values({
+      id,
+      traceId: input.traceId,
+      agent: input.agent,
+      provider: input.provider,
+      model: input.model,
+      prompt: input.prompt,
+      rawResponse: input.rawResponse,
+      parsedResponse: input.parsedResponse,
+      tokensIn: input.tokensIn,
+      tokensOut: input.tokensOut,
+      cost: input.cost,
+      latencyMs: input.latencyMs,
+      status: input.status,
+      error: input.error,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('[AIRouter] Failed to persist ai_calls row', e);
+  }
+  return id;
+}
+
 export class AIRouter {
   private static instance: AIRouter;
   private providers: Map<string, AIProvider> = new Map();
@@ -237,6 +284,14 @@ export class AIRouter {
                parsed = { decision: res.content.toUpperCase().includes("BUY") ? "BUY" : res.content.toUpperCase().includes("SELL") ? "SELL" : "HOLD", confidence: 50, reasoning: res.content, supportingFactors: [], risks: [] };
             }
 
+            const aiCallId = await logAiCall({
+                traceId, agent: agentType, provider: providerId, model: 'consensus',
+                prompt: fullPrompt, rawResponse: res.content, parsedResponse: JSON.stringify(parsed),
+                tokensIn: res.inputTokens || 0, tokensOut: res.outputTokens ?? res.tokens,
+                cost: provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens),
+                latencyMs: latency, status: 'success',
+            });
+
             return {
                 decision: parsed.decision || "HOLD",
                 confidence: parsed.confidence || 0,
@@ -247,7 +302,8 @@ export class AIRouter {
                 provider: providerId,
                 latencyMs: latency,
                 tokenUsage: { input: res.inputTokens || 0, output: res.outputTokens ?? res.tokens },
-                status: "success"
+                status: "success",
+                aiCallId,
             };
         } catch(e:any) {
             // Log failure
@@ -265,7 +321,11 @@ export class AIRouter {
                     responseStatus: `error: ${e.message}`
                 });
             } catch (err) {}
-            return { provider: providerId, status: "error", error: e.message, latencyMs: Date.now() - pStart };
+            const aiCallId = await logAiCall({
+                traceId, agent: agentType, provider: providerId, model: 'consensus',
+                status: 'error', error: e.message, latencyMs: Date.now() - pStart,
+            });
+            return { provider: providerId, status: "error", error: e.message, latencyMs: Date.now() - pStart, aiCallId };
         }
     });
 
@@ -292,7 +352,7 @@ export class AIRouter {
     };
   }
 
-  public async routeTask(agentType: string, prompt: string, traceId: string, jsonMode: boolean = false): Promise<{content: string, provider: string, latency: number}> {
+  public async routeTask(agentType: string, prompt: string, traceId: string, jsonMode: boolean = false): Promise<{content: string, provider: string, latency: number, aiCallId?: string, model?: string, tokensIn?: number, tokensOut?: number}> {
     
     let preferredConfig = this.agentRouting.get(agentType);
     
@@ -409,8 +469,22 @@ export class AIRouter {
                     }).where(eq(schema.aiProviders.id, providerId));
                 }
             } catch (e) { console.error("Failed to log usage", e); }
-            
-            return { content: res.content, provider: providerId, latency };
+
+            const aiCallId = await logAiCall({
+                traceId,
+                agent: agentType,
+                provider: providerId,
+                model: reqModel || 'default',
+                prompt,
+                rawResponse: res.content,
+                tokensIn: res.inputTokens || 0,
+                tokensOut: res.outputTokens ?? res.tokens,
+                cost: provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens),
+                latencyMs: latency,
+                status: 'success',
+            });
+
+            return { content: res.content, provider: providerId, latency, aiCallId, model: reqModel || 'default', tokensIn: res.inputTokens || 0, tokensOut: res.outputTokens ?? res.tokens };
         } catch (e: any) {
             console.warn(`[AIRouter] Provider ${providerId} failed: ${e.message}. Failing over...`);
             lastError = e;
@@ -450,6 +524,16 @@ export class AIRouter {
                     }).where(eq(schema.aiProviders.id, providerId));
                 }
             } catch (err) {}
+            await logAiCall({
+                traceId,
+                agent: agentType,
+                provider: providerId,
+                model: reqModel || 'default',
+                prompt,
+                status: 'error',
+                error: e.message,
+                latencyMs: Date.now() - startTime,
+            });
             continue; // try next provider
         }
     }

@@ -31,7 +31,14 @@ export class ReflectionEngine {
         prediction: idea.side,
         confidence: idea.confidence,
         reasoning: idea.reasoning,
-        timestamp: idea.timestamp || new Date().toISOString()
+        timestamp: idea.timestamp || new Date().toISOString(),
+        // Phase 1 - the agent's own traceId (joinable to consensus_evidence.source_trace_id),
+        // and AI call telemetry when this idea came from a real LLM call (undefined/null for
+        // TechnicalAgent and the FinBERT local-first path - correctly absent, not fabricated).
+        traceId: idea.traceId,
+        aiCallId: idea.aiCallId,
+        provider: idea.provider,
+        latencyMs: idea.latencyMs,
       });
     } catch (e) {
       console.error("[ReflectionEngine] Error logging prediction:", e);

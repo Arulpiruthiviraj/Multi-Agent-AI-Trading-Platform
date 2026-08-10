@@ -14,6 +14,11 @@ export interface AIAnalysisResult {
   tradingBias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   reasoning: string;
   riskFlags: string[];
+  // Internal telemetry (not part of the AI's own structured output schema) - present only when
+  // this result came from a real AI call, absent for NewsEngine's local-first FinBERT path.
+  _aiCallId?: string;
+  _provider?: string;
+  _latencyMs?: number;
 }
 
 export class NewsScoringEngine {
@@ -49,7 +54,11 @@ Return a strict JSON object matching exactly this schema, with no markdown forma
         text = text.replace(/^```\n/, '').replace(/\n```$/, '');
       }
       
-      return JSON.parse(text) as AIAnalysisResult;
+      const parsed = JSON.parse(text) as AIAnalysisResult;
+      parsed._aiCallId = res.aiCallId;
+      parsed._provider = res.provider;
+      parsed._latencyMs = res.latency;
+      return parsed;
     } catch (e) {
       console.error('[NewsScoringEngine] AI Analysis failed:', e);
       return null;

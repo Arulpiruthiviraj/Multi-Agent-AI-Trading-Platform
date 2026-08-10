@@ -181,7 +181,10 @@ export class NewsEngine {
                      confidence: aiAnalysis.confidence / 100,
                      sources: normalized.source,
                      reasoning: aiAnalysis.reasoning
-                 }
+                 },
+                 aiCallId: aiAnalysis._aiCallId,
+                 provider: aiAnalysis._provider,
+                 latencyMs: aiAnalysis._latencyMs,
               });
             });
           }
