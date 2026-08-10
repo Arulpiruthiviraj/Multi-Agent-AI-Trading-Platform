@@ -7,7 +7,7 @@
  * ==========================================================
  */
 import { db } from '../db';
-import { portfolio } from '../db/schema';
+import { portfolio, reconciliationEvents, portfolioSnapshots } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { eventBus } from '../core/EventBus';
@@ -108,16 +108,45 @@ export class PortfolioReconciliationWorker {
       }
 
       const timestamp = new Date().toISOString();
+      let actionTaken: string | null = null;
+      let worstImpact = 0;
       if (mismatches.length > 0) {
-        const worstImpact = Math.max(...mismatches.map(m => m.approxDollarImpact));
+        worstImpact = Math.max(...mismatches.map(m => m.approxDollarImpact));
         eventBus.publish('RECONCILIATION_MISMATCH', { timestamp, broker: broker.name, mismatches, worstImpactDollars: Number(worstImpact.toFixed(2)) });
         if (worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS && !tradingEngine.state.emergencyStopActive) {
           tradingEngine.state.emergencyStopActive = true;
           tradingEngine.logHistory('veto', `Portfolio reconciliation found a ~$${worstImpact.toFixed(2)} mismatch vs ${broker.name} - trading paused pending manual review.`);
           console.error(`[PortfolioReconciliation] SIGNIFICANT mismatch ($${worstImpact.toFixed(2)}) - pausing new trading via emergencyStopActive.`);
+          actionTaken = 'TRADING_PAUSED';
         }
       } else {
         eventBus.publish('RECONCILIATION_MATCH', { timestamp, broker: broker.name });
+      }
+
+      // Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - previously RECONCILIATION_MISMATCH/
+      // MATCH were emitted live and never persisted, so there was no way to ask "how many
+      // reconciliation mismatches happened last month." One row per cycle, plus a point-in-time
+      // snapshot of both sides - the live `portfolio` table only ever holds current state.
+      try {
+        const inserted = await db.insert(reconciliationEvents).values({
+          checkedAt: timestamp,
+          broker: broker.name,
+          matches: mismatches.length === 0,
+          mismatches: mismatches.length > 0 ? JSON.stringify(mismatches) : null,
+          worstImpactDollars: mismatches.length > 0 ? Number(worstImpact.toFixed(2)) : null,
+          actionTaken,
+        }).returning({ id: reconciliationEvents.id });
+        const reconciliationId = inserted[0]?.id;
+
+        const snapshotRows = [
+          ...localHoldings.map(h => ({ symbol: h.symbol, quantity: h.quantity ?? 0, averagePrice: h.averagePrice, currentPrice: h.currentPrice, source: 'ARGUS', snapshotAt: timestamp, reconciliationId })),
+          ...remotePositions.map((p: any) => ({ symbol: p.symbol, quantity: p.quantity, averagePrice: p.entryPrice, currentPrice: p.currentPrice, source: 'BROKER', snapshotAt: timestamp, reconciliationId })),
+        ];
+        if (snapshotRows.length > 0) {
+          await db.insert(portfolioSnapshots).values(snapshotRows);
+        }
+      } catch (e) {
+        console.error('[PortfolioReconciliation] Failed to persist reconciliation history', e);
       }
 
       console.log(`[PortfolioReconciliation] Sync complete. ${mismatches.length} mismatch(es).`);

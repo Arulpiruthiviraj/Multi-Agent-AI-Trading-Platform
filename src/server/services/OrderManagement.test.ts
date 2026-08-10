@@ -1,9 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { trades } from '../db/schema';
+import { trades, fills } from '../db/schema';
 
-const { mockDb, setExistingTrades, insertedRows } = vi.hoisted(() => {
-  const insertedRows: any[] = [];
+// Phase 3 changed OMS from a single insert to insert-then-update as the order progresses
+// (PENDING at submission -> broker acceptance -> terminal fill/reject), so the mock now tracks
+// a mutable "current row" that both insert and update write into, plus separate insert logs for
+// `trades` vs `fills` so assertions can tell real order-lifecycle inserts apart from fill records.
+const { mockDb, setExistingTrades, tradesInserts, fillsInserts, getFinalTradeRow } = vi.hoisted(() => {
+  const tradesInserts: any[] = [];
+  const fillsInserts: any[] = [];
   let existingTrades: any[] = [];
+  let currentRow: any = null;
+
   const selectBuilder: any = {
     from() { return selectBuilder; },
     where() { return selectBuilder; },
@@ -12,19 +19,25 @@ const { mockDb, setExistingTrades, insertedRows } = vi.hoisted(() => {
       return Promise.resolve(existingTrades).then(resolve, reject);
     },
   };
+  const updateBuilder: any = {
+    set(patch: any) { if (currentRow) Object.assign(currentRow, patch); return updateBuilder; },
+    where() { return Promise.resolve({}); },
+  };
   const mockDb = {
     select: () => selectBuilder,
-    insert: () => ({
+    insert: (table: any) => ({
       values: (v: any) => {
-        insertedRows.push(v);
+        if (table === trades) { tradesInserts.push(v); currentRow = { ...v }; }
+        else if (table === fills) { fillsInserts.push(v); }
         return Promise.resolve({});
       },
     }),
+    update: () => updateBuilder,
   };
   return {
-    mockDb,
-    insertedRows,
+    mockDb, tradesInserts, fillsInserts,
     setExistingTrades: (rows: any[]) => { existingTrades = rows; },
+    getFinalTradeRow: () => currentRow,
   };
 });
 
@@ -33,7 +46,7 @@ const { emitOrderExecution } = vi.hoisted(() => ({ emitOrderExecution: vi.fn() }
 const { mockBrokerHolder } = vi.hoisted(() => ({ mockBrokerHolder: { broker: null as any } }));
 
 vi.mock('../db', () => ({ db: mockDb }));
-vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emitOrderExecution } }));
+vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitOrderExecution } }));
 vi.mock('../../brokers/BrokerManager', () => ({
   BrokerManager: { getInstance: () => ({ getActiveBroker: () => mockBrokerHolder.broker }) },
 }));
@@ -44,7 +57,8 @@ describe('OrderManagementService.executeOrder', () => {
   const oms = new OrderManagementService();
 
   beforeEach(() => {
-    insertedRows.length = 0;
+    tradesInserts.length = 0;
+    fillsInserts.length = 0;
     emitOrderExecution.mockClear();
     setExistingTrades([]);
   });
@@ -61,19 +75,45 @@ describe('OrderManagementService.executeOrder', () => {
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'dup-trace');
 
     expect(placeOrder).not.toHaveBeenCalled();
-    expect(insertedRows.length).toBe(0);
+    expect(tradesInserts.length).toBe(0);
   });
 
-  it('places a fresh order when no prior trade exists for the traceId', async () => {
+  it('inserts a PENDING row immediately at submission, before the broker call resolves', async () => {
+    let resolvePlaceOrder: (v: any) => void;
+    const placeOrder = vi.fn(() => new Promise(r => { resolvePlaceOrder = r; }));
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+    const resultPromise = oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'submit-trace');
+    // Macrotask boundary - guarantees every already-queued microtask (the idempotency check and
+    // the initial insert, both awaited before the broker call) has actually run, unlike counting
+    // `await Promise.resolve()` calls which is fragile to exactly how many microtask hops each
+    // mocked thenable takes to resolve.
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(tradesInserts).toHaveLength(1);
+    expect(tradesInserts[0].status).toBe('PENDING');
+    expect(tradesInserts[0].submittedAt).toBeTruthy();
+
+    resolvePlaceOrder!({ id: 'order-submit', status: 'FILLED', averageFillPrice: 100 });
+    await resultPromise;
+    expect(getFinalTradeRow().status).toBe('FILLED');
+  });
+
+  it('places a fresh order when no prior trade exists for the traceId, and records the real fill', async () => {
     const placeOrder = vi.fn(async () => ({ id: 'order-1', status: 'FILLED', averageFillPrice: 100 }));
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
 
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'fresh-trace');
 
     expect(placeOrder).toHaveBeenCalledWith({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 10 });
-    expect(insertedRows).toHaveLength(1);
-    expect(insertedRows[0].status).toBe('FILLED');
-    expect(insertedRows[0].price).toBe(100);
+    expect(tradesInserts).toHaveLength(1); // one order-lifecycle row, updated in place - not re-inserted
+    const finalRow = getFinalTradeRow();
+    expect(finalRow.status).toBe('FILLED');
+    expect(finalRow.price).toBe(100);
+    expect(finalRow.brokerOrderId).toBe('order-1');
+    // A real fill happened - it should also land in the fills ledger.
+    expect(fillsInserts).toHaveLength(1);
+    expect(fillsInserts[0].price).toBe(100);
   });
 
   it('polls for a terminal fill when the broker initially returns PENDING, and records the real fill price', async () => {
@@ -86,9 +126,9 @@ describe('OrderManagementService.executeOrder', () => {
     await vi.advanceTimersByTimeAsync(500);
     await resultPromise;
 
-    expect(insertedRows).toHaveLength(1);
-    expect(insertedRows[0].status).toBe('FILLED');
-    expect(insertedRows[0].price).toBe(123.45);
+    const finalRow = getFinalTradeRow();
+    expect(finalRow.status).toBe('FILLED');
+    expect(finalRow.price).toBe(123.45);
   });
 
   it('records PENDING honestly (no fabricated fill) if the order never reaches a terminal state before the poll timeout', async () => {
@@ -101,9 +141,10 @@ describe('OrderManagementService.executeOrder', () => {
     await vi.advanceTimersByTimeAsync(5000);
     await resultPromise;
 
-    expect(insertedRows).toHaveLength(1);
-    expect(insertedRows[0].status).toBe('PENDING');
-    expect(insertedRows[0].price).toBe(0);
+    const finalRow = getFinalTradeRow();
+    expect(finalRow.status).toBe('PENDING');
+    expect(finalRow.price).toBe(0);
+    expect(fillsInserts).toHaveLength(0); // never actually filled - no fill record fabricated
   });
 
   it('computes real realized P&L on a SELL fill using the pre-trade entry price', async () => {
@@ -113,7 +154,7 @@ describe('OrderManagementService.executeOrder', () => {
 
     await oms.executeOrder('AAPL', 'SELL', 10, 'reasoning', 'sell-trace');
 
-    expect(insertedRows[0].profitLoss).toBe(200); // (120 - 100) * 10
+    expect(getFinalTradeRow().profitLoss).toBe(200); // (120 - 100) * 10
   });
 
   it('records REJECTED (not a fabricated fill) when the broker throws', async () => {
@@ -122,7 +163,9 @@ describe('OrderManagementService.executeOrder', () => {
 
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'fail-trace');
 
-    expect(insertedRows[0].status).toBe('REJECTED');
-    expect(insertedRows[0].price).toBe(0);
+    const finalRow = getFinalTradeRow();
+    expect(finalRow.status).toBe('REJECTED');
+    expect(finalRow.price).toBe(0);
+    expect(fillsInserts).toHaveLength(0);
   });
 });

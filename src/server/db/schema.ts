@@ -186,7 +186,29 @@ export const trades = sqliteTable('trades', {
   newsSentiment: real('news_sentiment'),
   newsConfidence: real('news_confidence'),
   newsSources: text('news_sources'),
-  newsReasoning: text('news_reasoning')
+  newsReasoning: text('news_reasoning'),
+  // Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - previously this row was written exactly
+  // once, after the broker call (and optional fill-poll) had already resolved, so there was no
+  // real PENDING->FILLED transition to replay - a trade just appeared fully-formed. OMS now
+  // inserts this row immediately at submission and updates it as the broker order progresses.
+  transactionId: text('transaction_id'),
+  brokerOrderId: text('broker_order_id'),
+  requestId: text('request_id'), // the idempotency key actually used (== id today, kept distinct in case that changes)
+  submittedAt: text('submitted_at'),
+  acceptedAt: text('accepted_at'),
+  filledAt: text('filled_at'),
+});
+
+// Thin by design - today's brokers (Alpaca, InternalPaperBroker) are single-shot market orders,
+// so this will usually have 0-1 rows per order. Future-proofs partial fills without having to
+// redesign `trades` later.
+export const fills = sqliteTable('fills', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  orderId: text('order_id').notNull(), // FK trades.id
+  brokerFillId: text('broker_fill_id'),
+  quantity: real('quantity').notNull(),
+  price: real('price').notNull(),
+  filledAt: text('filled_at').notNull(),
 });
 
 export const dailyTradingSummary = sqliteTable('daily_trading_summary', {
@@ -197,6 +219,32 @@ export const dailyTradingSummary = sqliteTable('daily_trading_summary', {
   unrealizedPnl: real('unrealized_pnl').notNull().default(0),
   allocatedAmount: real('allocated_amount').notNull().default(0),
   updatedAt: integer('updated_at').notNull(),
+});
+
+// Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - RECONCILIATION_MISMATCH/MATCH were
+// previously emitted live over EventBus/WS and never persisted anywhere - there was no way to
+// ask "how many reconciliation mismatches happened last month." One row per reconciliation cycle
+// (every 5 minutes), plus a point-in-time snapshot of both sides for real history (the live
+// `portfolio` table only ever holds current state, no history).
+export const reconciliationEvents = sqliteTable('reconciliation_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  checkedAt: text('checked_at').notNull(),
+  broker: text('broker').notNull(),
+  matches: integer('matches', { mode: 'boolean' }).notNull(),
+  mismatches: text('mismatches'), // JSON array of MismatchDetail
+  worstImpactDollars: real('worst_impact_dollars'),
+  actionTaken: text('action_taken'), // e.g. 'TRADING_PAUSED', null if no action
+});
+
+export const portfolioSnapshots = sqliteTable('portfolio_snapshots', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  symbol: text('symbol').notNull(),
+  quantity: real('quantity').notNull(),
+  averagePrice: real('average_price'),
+  currentPrice: real('current_price'),
+  source: text('source').notNull(), // 'ARGUS' | 'BROKER'
+  snapshotAt: text('snapshot_at').notNull(),
+  reconciliationId: integer('reconciliation_id'), // FK reconciliation_events.id
 });
 
 export const portfolio = sqliteTable('portfolio', {

@@ -9,11 +9,18 @@
  * - Communicate with active broker.
  * - Insert trades into SQLite.
  * - Never fabricate fill prices if broker rejects.
+ *
+ * Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md): previously this wrote exactly one `trades`
+ * row, after the broker call (and optional fill-poll) had already resolved - a trade simply
+ * appeared fully-formed, with no real PENDING->ACCEPTED->FILLED transition to replay. It now
+ * inserts the row immediately at submission and updates it as the broker order actually
+ * progresses, emitting ORDER_SUBMITTED/ORDER_ACCEPTED/ORDER_FILLED at each real stage alongside
+ * the existing ORDER_EXECUTED summary event.
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
 import { db } from '../db';
-import { trades, portfolio } from '../db/schema';
+import { trades, fills, portfolio } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
@@ -23,7 +30,7 @@ export class OrderManagementService {
   constructor() {
     eventBus.on('RISK_ASSESSMENT_COMPLETED', async (assessment) => {
       if (assessment.approved && assessment.maxQuantity > 0) {
-        await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails);
+        await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails, assessment.transactionId);
       }
     });
   }
@@ -46,7 +53,7 @@ export class OrderManagementService {
     return null;
   }
 
-  async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any) {
+  async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any, transactionId?: string) {
     // Idempotency: refuse to place a second real order for a traceId that already has one.
     // Guards against any future duplicate RISK_ASSESSMENT_COMPLETED emission for the same trade.
     try {
@@ -60,9 +67,43 @@ export class OrderManagementService {
     }
 
     const orderId = crypto.randomUUID();
+    const submittedAt = new Date().toISOString();
+
+    // Insert the PENDING row immediately, BEFORE the broker call - this is the real submission
+    // moment, not a post-hoc record of whatever happened. If this insert itself fails, there's
+    // no row to update later, so abort rather than placing a real order Argus can't track.
+    try {
+      await db.insert(trades).values({
+        id: orderId,
+        symbol,
+        side,
+        quantity,
+        price: 0,
+        status: "PENDING",
+        timestamp: submittedAt,
+        reasoning,
+        traceId,
+        transactionId,
+        requestId: orderId,
+        submittedAt,
+        newsUsed: !!newsDetails,
+        newsSentiment: newsDetails?.sentiment,
+        newsConfidence: newsDetails?.confidence,
+        newsSources: newsDetails?.sources,
+        newsReasoning: newsDetails?.reasoning
+      } as any);
+    } catch (e) {
+      console.error('[OMS] Failed to insert initial order row - aborting before any broker call', e);
+      return;
+    }
+
+    eventBus.emit('ORDER_SUBMITTED', { traceId, transactionId, id: orderId, symbol, side, quantity, submittedAt });
+
     let fillPrice = 0;
     let status = "PENDING";
     let profitLoss: number | null = null;
+    let brokerOrderId: string | null = null;
+    let filledAt: string | null = null;
 
     try {
       const activeBroker = BrokerManager.getInstance().getActiveBroker();
@@ -84,10 +125,15 @@ export class OrderManagementService {
           quantity
       });
 
+      brokerOrderId = brokerOrder.id ?? null;
       status = brokerOrder.status || "REJECTED";
       if (brokerOrder.averageFillPrice) {
           fillPrice = brokerOrder.averageFillPrice;
       }
+
+      const acceptedAt = new Date().toISOString();
+      await db.update(trades).set({ brokerOrderId, status, price: fillPrice, acceptedAt }).where(eq(trades.id, orderId));
+      eventBus.emit('ORDER_ACCEPTED', { traceId, transactionId, id: orderId, brokerOrderId, status, acceptedAt });
 
       if (status === 'PENDING' && brokerOrder.id) {
         const terminal = await this.pollForFill(activeBroker, brokerOrder.id);
@@ -100,30 +146,33 @@ export class OrderManagementService {
       if (side === 'SELL' && status === 'FILLED' && preTradeEntryPrice !== null && fillPrice > 0) {
         profitLoss = Number(((fillPrice - preTradeEntryPrice) * quantity).toFixed(2));
       }
+      if (status === 'FILLED') {
+        filledAt = new Date().toISOString();
+      }
     } catch (e) {
       console.error("[OMS] Broker execution failed.", e);
       status = "REJECTED";
     }
 
     try {
-      const timestamp = new Date().toISOString();
-      await db.insert(trades).values({
-        id: orderId,
-        symbol,
-        side,
-        quantity,
-        price: fillPrice,
+      await db.update(trades).set({
         status,
-        timestamp,
-        reasoning,
-        traceId,
+        price: fillPrice,
         profitLoss,
-        newsUsed: !!newsDetails,
-        newsSentiment: newsDetails?.sentiment,
-        newsConfidence: newsDetails?.confidence,
-        newsSources: newsDetails?.sources,
-        newsReasoning: newsDetails?.reasoning
-      } as any);
+        brokerOrderId,
+        filledAt,
+      }).where(eq(trades.id, orderId));
+
+      if (status === 'FILLED') {
+        await db.insert(fills).values({
+          orderId,
+          brokerFillId: brokerOrderId,
+          quantity,
+          price: fillPrice,
+          filledAt: filledAt || new Date().toISOString(),
+        });
+        eventBus.emit('ORDER_FILLED', { traceId, transactionId, id: orderId, symbol, side, quantity, price: fillPrice, filledAt });
+      }
 
       eventBus.emitOrderExecution({
         traceId,
