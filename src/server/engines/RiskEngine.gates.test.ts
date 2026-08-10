@@ -81,6 +81,30 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
     expect(eventsForTrace.length).toBe(gates.length);
   });
 
+  it('blocks and records rejection via the emergency_stop gate - previously bypassed RiskEngine entirely via a RiskAgent pre-check', async () => {
+    tradingEngine.state.dayStartDateStr = new Date().toISOString().split('T')[0];
+    tradingEngine.state.dayStartEquity = 100000;
+    tradingEngine.state.dailyLossLimit = 5000;
+    tradingEngine.state.emergencyStopActive = true;
+
+    const traceId = 'gates-test-emergency';
+    try {
+      await riskEngine.evaluateRisk({ traceId, symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+      const [assessment] = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));
+      expect(assessment.approved).toBe(false);
+      expect(assessment.rejectionGate).toBe('emergency_stop');
+
+      const gates = await db.select().from(schema.riskGateResults).where(eq(schema.riskGateResults.traceId, traceId));
+      const emergencyGate = gates.find((g: any) => g.gateName === 'emergency_stop');
+      expect(emergencyGate.passed).toBe(false);
+      // Every downstream gate was still evaluated and recorded - not bypassed.
+      expect(gates.map((g: any) => g.gateName)).toContain('sufficient_size');
+    } finally {
+      tradingEngine.state.emergencyStopActive = false;
+    }
+  });
+
   it('persists a full passing gate ladder for an approved trade', async () => {
     tradingEngine.state.dayStartDateStr = new Date().toISOString().split('T')[0];
     tradingEngine.state.dayStartEquity = 100000;

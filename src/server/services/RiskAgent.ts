@@ -4,42 +4,24 @@
  * RiskAgent.ts
  *
  * Purpose:
- * Core implementation and logic for the RiskAgent.ts module within the Argus Trading Terminal.
+ * Thin forwarder from ChiefTraderAgent's approval to RiskEngine.evaluateRisk().
  *
- * Responsibilities:
- * - State management and logic execution for RiskAgent
- * - Interface with backend APIs and EventBus
- * - Render UI components (if React)
- *
- * Inputs:
- * - Module dependencies and injected props
- *
- * Outputs:
- * - Formatted data or React Elements
- *
- * Emits:
- * - Relevant system events
- *
- * Dependencies:
- * - Standard Argus architecture layers
- *
- * Called By:
- * - Argus Routing / Parent Components
- *
- * Never:
- * - Mutate global state directly without EventBus
- * - Call AI providers directly (Must use AIRouter)
- *
+ * Phase 2/5 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md): this used to run its own
+ * emergency-stop/session-open/price-validity pre-checks BEFORE ever calling RiskEngine, each
+ * short-circuiting with its own emitRiskAssessment - which meant a rejection at one of these
+ * checks bypassed RiskEngine's gate-recording entirely (no risk_assessments/risk_gate_results
+ * row was ever written), contradicting Phase 2's "every gate is evaluated and recorded"
+ * guarantee. `emergencyStopActive` is now RiskEngine's own first gate; `sessionOpen` was dead
+ * code (declared, checked, never set anywhere in the codebase - confirmed by repo-wide grep,
+ * always true); the price-validity check was already redundant with RiskEngine's own
+ * `price_validity` gate. This agent now always forwards to RiskEngine, whatever the price is.
  * ==========================================================
  */
 
 import { eventBus } from '../core/EventBus';
 import { riskEngine } from '../engines/RiskEngine';
-import { tradingEngine } from '../engines/TradingEngine';
 
 export class RiskValidationAgent {
-  private sessionOpen = true;
-
   constructor() {
     eventBus.on('CHIEF_APPROVED_IDEA', (approval) => this.assessRisk(approval));
   }
@@ -47,52 +29,12 @@ export class RiskValidationAgent {
   assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
 
-     if (tradingEngine.state.emergencyStopActive) {
-        eventBus.emitRiskAssessment({
-           traceId: approval.traceId,
-           transactionId: approval.transactionId,
-           symbol: approval.symbol,
-           side: approval.side,
-           approved: false,
-           maxQuantity: 0,
-           reasoning: "Emergency stop is active. All new trades are blocked until resumed."
-        });
-        return;
-     }
-
-     if (!this.sessionOpen) {
-        eventBus.emitRiskAssessment({
-           traceId: approval.traceId,
-           transactionId: approval.transactionId,
-           symbol: approval.symbol,
-           side: approval.side,
-           approved: false,
-           maxQuantity: 0,
-           reasoning: "Market session is currently closed."
-        });
-        return;
-     }
-
-     const currentPrice = approval.currentPrice;
-     if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice) || currentPrice <= 0) {
-        eventBus.emitRiskAssessment({
-           traceId: approval.traceId,
-           transactionId: approval.transactionId,
-           symbol: approval.symbol,
-           side: approval.side,
-           approved: false,
-           maxQuantity: 0,
-           reasoning: "No valid price"
-        });
-        return;
-     }
-
      const request: any = {
         traceId: approval.traceId,
         transactionId: approval.transactionId,
         symbol: approval.symbol,
         side: approval.side as 'BUY' | 'SELL',
-        currentPrice,
+        currentPrice: approval.currentPrice,
         confidence: approval.confidence,
         newsDetails: approval.newsDetails
      };

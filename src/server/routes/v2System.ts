@@ -163,3 +163,66 @@ v2Router.get('/data/explainability/:traceId', async (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+// ==========================================================================================
+// Transaction Observatory (TRANSACTION_OBSERVATORY_ARCHITECTURE.md, Phase 5)
+//
+// /transactions - list/search over the canonical transaction ledger (Phase 0's fix for the bug
+// where a trade's traceId only ever identified one contributing agent's own emission).
+// /transactions/:id - the single "assemble everything about this transaction" endpoint the
+// replay UI is built on. Every field is a column read from a real table - no recomputation, no
+// model calls, matching the "replay must be deterministic" requirement. Missing stages (a
+// transaction that never reached risk, or a risk-rejected one that never reached an order) are
+// simply absent (null) - never fabricated.
+// ==========================================================================================
+import { transactions, consensusDecisions, consensusEvidence, riskAssessments, riskGateResults, fills } from '../db/schema';
+import { desc as descOrder, like as likeOp, and as andOp } from 'drizzle-orm';
+
+v2Router.get('/transactions', async (req, res) => {
+  try {
+    const { symbol, status, limit } = req.query as { symbol?: string; status?: string; limit?: string };
+    const conditions = [];
+    if (symbol) conditions.push(likeOp(transactions.symbol, `%${symbol}%`));
+    if (status) conditions.push(eq(transactions.status, status));
+    const capped = Math.min(parseInt(limit || '50', 10) || 50, 200);
+
+    const rows = conditions.length > 0
+      ? await db.select().from(transactions).where(andOp(...conditions)).orderBy(descOrder(transactions.openedAt)).limit(capped)
+      : await db.select().from(transactions).orderBy(descOrder(transactions.openedAt)).limit(capped);
+    res.json({ ok: true, transactions: rows });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/transactions/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const transaction = await db.select().from(transactions).where(eq(transactions.id, id)).get();
+    if (!transaction) return res.status(404).json({ ok: false, error: `No transaction found for id ${id}` });
+
+    const consensusDecision = await db.select().from(consensusDecisions).where(eq(consensusDecisions.transactionId, id)).get() ?? null;
+    const evidence = await db.select().from(consensusEvidence).where(eq(consensusEvidence.transactionId, id));
+    const riskAssessment = await db.select().from(riskAssessments).where(eq(riskAssessments.transactionId, id)).get() ?? null;
+    const riskGates = riskAssessment
+      ? await db.select().from(riskGateResults).where(eq(riskGateResults.traceId, riskAssessment.traceId)).orderBy(riskGateResults.sequence)
+      : [];
+    const order = await db.select().from(trades).where(eq(trades.transactionId, id)).get() ?? null;
+    const orderFills = order ? await db.select().from(fills).where(eq(fills.orderId, order.id)) : [];
+    const events = await db.select().from(eventTraces).where(eq(eventTraces.transactionId, id)).orderBy(eventTraces.timestamp);
+
+    res.json({
+      ok: true,
+      transaction,
+      consensusDecision,
+      evidence,
+      riskAssessment,
+      riskGates: riskGates.map(g => ({ ...g, detail: g.detail ? JSON.parse(g.detail) : null })),
+      order,
+      fills: orderFills,
+      events: events.map(e => ({ ...e, payload: e.payload ? JSON.parse(e.payload) : null })),
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});

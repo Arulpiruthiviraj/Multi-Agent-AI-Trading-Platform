@@ -189,6 +189,12 @@ export class RiskEngine {
         let buyingPower: number | undefined;
 
         try {
+            // 0. Emergency stop - checked first, always evaluated and recorded, unlike the old
+            // RiskAgent pre-check that bypassed RiskEngine (and thus this gate ladder) entirely
+            // on a rejection.
+            recordGate('emergency_stop', !tradingEngine.state.emergencyStopActive, { emergencyStopActive: tradingEngine.state.emergencyStopActive });
+            const emergencyStopReason = "Emergency stop is active. All new trades are blocked until resumed.";
+
             // 1. Fetch real broker portfolio state
             const broker = BrokerManager.getInstance().getActiveBroker();
             const portfolio = await broker.portfolio();
@@ -364,7 +370,8 @@ export class RiskEngine {
             approved = !firstFailure;
             if (!approved) {
                 maxQuantity = 0;
-                reasoning = firstFailure!.gate === 'daily_loss' ? dailyLossReason
+                reasoning = firstFailure!.gate === 'emergency_stop' ? emergencyStopReason
+                    : firstFailure!.gate === 'daily_loss' ? dailyLossReason
                     : firstFailure!.gate === 'consecutive_loss' ? consecutiveLossReason
                     : firstFailure!.gate === 'market_hours' ? marketHoursReason
                     : firstFailure!.gate === 'data_freshness' ? staleDataReason
