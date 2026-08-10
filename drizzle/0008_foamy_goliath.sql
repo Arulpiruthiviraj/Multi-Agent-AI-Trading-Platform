@@ -1,0 +1,20 @@
+CREATE TABLE `openalice_verifications` (
+	`id` text PRIMARY KEY NOT NULL,
+	`trace_id` text NOT NULL,
+	`symbol` text NOT NULL,
+	`side` text NOT NULL,
+	`mode` text NOT NULL,
+	`argus_confidence` real NOT NULL,
+	`argus_reasoning` text NOT NULL,
+	`status` text NOT NULL,
+	`direction` text,
+	`openalice_confidence` real,
+	`thesis` text,
+	`supporting_evidence` text,
+	`contradicting_evidence` text,
+	`raw_response` text,
+	`error` text,
+	`created_at` text NOT NULL,
+	`completed_at` text,
+	`latency_ms` integer
+);

@@ -39,6 +39,8 @@ import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import { agentPerformanceStats } from '../db/schema';
 import { EvidenceAggregator, Evidence } from './EvidenceAggregator';
+import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
+import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 
 export class ChiefTraderAgent {
   private recentIdeas: any[] = [];
@@ -171,6 +173,25 @@ export class ChiefTraderAgent {
          // viewer/ExplainabilityAgent show per-agent side/confidence/weight without re-parsing text.
          evidence: evidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence, weight: e.weight, reasoning: e.reasoning })),
        });
+
+       // Non-blocking, optional independent second opinion (OPENALICE_INTEGRATION_AUDIT.md Phase 3/4).
+       // Fire-and-forget: never awaited, never gates this approval or the RiskEngine call that
+       // follows it. A no-op when OpenAlice isn't configured (see OpenAliceVerificationService).
+       // Its eventual result (which can take minutes) only ever feeds FUTURE decisions.
+       const openAliceTrigger = shouldTriggerOpenAliceVerification({
+         confidence: result.confidence,
+         disagreementCount: result.disagreements.length,
+       });
+       if (openAliceTrigger.shouldVerify && result.side !== 'HOLD') {
+         openAliceVerificationService.requestVerification({
+           traceId,
+           symbol,
+           side: result.side,
+           mode: 'TRADE_VERIFICATION',
+           argusConfidence: result.confidence,
+           argusReasoning: result.reasoning,
+         });
+       }
     } else {
        console.log(`[ChiefTrader] Idea stored. Waiting for stronger consensus on ${symbol}. Current confidence: ${(result.confidence*100).toFixed(1)}%`);
     }

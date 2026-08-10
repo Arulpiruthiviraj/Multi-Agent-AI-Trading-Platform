@@ -430,3 +430,28 @@ export const escalationDecisions = sqliteTable('escalation_decisions', {
   reason: text('reason').notNull(),
   escalatedProvider: text('escalated_provider'),
 });
+
+// OpenAlice external verification requests/results (OpenAliceAdapter, OpenAliceVerificationService).
+// OpenAlice is a separate, independent AI system reached only over MCP - it never has trading
+// credentials and this table is read-only evidence for FUTURE decisions, never a retroactive
+// edit to a trade that already executed. See OPENALICE_INTEGRATION_AUDIT.md.
+export const openaliceVerifications = sqliteTable('openalice_verifications', {
+  id: text('id').primaryKey(), // requestId, also the OpenAlice issue id
+  traceId: text('trace_id').notNull(),
+  symbol: text('symbol').notNull(),
+  side: text('side').notNull(), // 'BUY' | 'SELL'
+  mode: text('mode').notNull(), // 'BLIND_RESEARCH' | 'TRADE_VERIFICATION' | 'ADVERSARIAL_REVIEW'
+  argusConfidence: real('argus_confidence').notNull(),
+  argusReasoning: text('argus_reasoning').notNull(),
+  status: text('status').notNull(), // 'PENDING' | 'COMPLETED' | 'TIMED_OUT' | 'FAILED'
+  direction: text('direction'), // 'AGREE' | 'DISAGREE' | 'NO_OPINION', null until COMPLETED
+  openaliceConfidence: real('openalice_confidence'),
+  thesis: text('thesis'),
+  supportingEvidence: text('supporting_evidence'), // JSON string array
+  contradictingEvidence: text('contradicting_evidence'), // JSON string array
+  rawResponse: text('raw_response'),
+  error: text('error'),
+  createdAt: text('created_at').notNull(),
+  completedAt: text('completed_at'),
+  latencyMs: integer('latency_ms'),
+});

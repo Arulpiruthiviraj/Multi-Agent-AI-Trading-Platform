@@ -35,6 +35,7 @@ Key variables:
 - `ENCRYPTION_SECRET` — AES key for encrypting stored API keys; auto-generated to `data/.encryption_key` if absent
 - `PAPER_TRADING_ONLY` — set to `true` to force paper mode in the legacy `/api/v1/signals` endpoint and `AlpacaBroker`
 - `PORT` — not actually read; `server.ts` hardcodes port `3000` regardless of this env var
+- `OPENALICE_ENABLED` / `OPENALICE_MCP_URL` — optional external verification integration, disabled unless both are set (see External Verification below)
 
 ## Architecture
 
@@ -92,9 +93,9 @@ Argus can call models running entirely on your own machine instead of a paid clo
 
 ### Database
 
-`better-sqlite3` + `Drizzle ORM`, WAL mode. DB file: `data/argus.db` (not tracked in git — see Backup & Restore below). Schema: `src/server/db/schema.ts` (25 tables). Migration files: `drizzle/`. Import `db` from `src/server/db/index.ts` — do not open a second `better-sqlite3` connection to this file from a separate process; on this stack a competing connection has been observed to report a false `SQLITE_CORRUPT` while the app's own connection stays perfectly healthy (verified via `PRAGMA integrity_check` through the live connection).
+`better-sqlite3` + `Drizzle ORM`, WAL mode. DB file: `data/argus.db` (not tracked in git — see Backup & Restore below). Schema: `src/server/db/schema.ts` (27 tables). Migration files: `drizzle/`. Import `db` from `src/server/db/index.ts` — do not open a second `better-sqlite3` connection to this file from a separate process; on this stack a competing connection has been observed to report a false `SQLITE_CORRUPT` while the app's own connection stays perfectly healthy (verified via `PRAGMA integrity_check` through the live connection).
 
-Key tables: `settings`, `trades`, `portfolio`, `aiProviders`, `aiModels`, `aiUsage`, `learnedRules`, `agentPerformanceStats`, `agentPredictions`, `eventTraces`, `news_articles`, `news_clusters`, `memoryRules`, `agentRoutingOverrides`, `ohlcvBars`, `backtestRuns`.
+Key tables: `settings`, `trades`, `portfolio`, `aiProviders`, `aiModels`, `aiUsage`, `learnedRules`, `agentPerformanceStats`, `agentPredictions`, `eventTraces`, `news_articles`, `news_clusters`, `memoryRules`, `agentRoutingOverrides`, `ohlcvBars`, `backtestRuns`, `escalationDecisions`, `openaliceVerifications`.
 
 #### Backup & Restore
 
@@ -116,6 +117,12 @@ Key tables: `settings`, `trades`, `portfolio`, `aiProviders`, `aiModels`, `aiUsa
 ### Reflection / Learning Loop
 
 `ReflectionEngine` (60s timer) scores agent predictions against actual price movement, updates `agent_performance_stats.currentWeight`, and writes LLM-generated rule text to `learned_rules`. The weight updates feed back into `ChiefTraderAgent` consensus. The rule *text* in `learned_rules` is loaded into `tradingEngine.state.memoryRules` at boot but is never injected into any agent's actual prompts — the learning loop is write-only for rule text.
+
+### External Verification (OpenAlice, optional)
+
+`src/server/integrations/openalice/` — an optional, off-by-default integration with [OpenAlice](https://github.com/TraderAlice/OpenAlice), a separate, independent AI research system, reached only over MCP (`@modelcontextprotocol/sdk`, already a real dependency, previously unused). Read-only and non-blocking by design: `OpenAliceAdapter` files an OpenAlice `issue_create` request and returns immediately; `OpenAliceVerificationService` polls OpenAlice's inbox (`inbox_read`, matched via `origin.issueId`) every 30s in the background and emits `OPENALICE_VERIFICATION_REQUESTED` / `_COMPLETED` / `_TIMED_OUT` once a real reply (or timeout, after 24h) arrives — this can take minutes to hours, since OpenAlice has no synchronous "give me a verdict now" tool. Results are persisted to `openaliceVerifications` and only ever inform *future* decisions; nothing here can alter or block a trade that already executed, and OpenAlice is never given credentials or an edge into `BrokerManager`/`RiskEngine`.
+
+`ChiefTraderAgent` fires a verification request (fire-and-forget, after its own approval) only when `shouldTriggerOpenAliceVerification()` (`EscalationPolicy.ts`) says the approval is worth a second opinion — confidence in the uncertain band `[0.75, 0.85]`, or any agent disagreement recorded by `EvidenceAggregator`. Disabled unless both `OPENALICE_ENABLED=true` and `OPENALICE_MCP_URL` are set; `IntegrityValidator`'s `openalice_reachable` check reports `UNKNOWN` (not a failure) when disabled. **Not live-verified against a real running OpenAlice instance** — no instance exists in this environment; the request-building, inbox-parsing, and trigger logic are unit-tested against a mocked adapter instead. See `OPENALICE_INTEGRATION_AUDIT.md` for the full architecture rationale (independence scoring, failure-state matrix, why Phases 5-7 — paper-trading evaluation, statistical evaluation, adaptive signal — are deliberately not implemented yet).
 
 ### Routes
 

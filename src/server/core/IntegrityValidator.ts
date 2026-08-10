@@ -19,6 +19,7 @@ import { sqliteDb } from '../db';
 import * as schema from '../db/schema';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { newsEngine } from '../news/NewsEngine';
+import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 
 export type CheckStatus = 'PASS' | 'FAIL' | 'UNKNOWN';
 
@@ -115,6 +116,25 @@ async function checkLocalAiServiceReachable(): Promise<IntegrityCheck> {
   }
 }
 
+async function checkOpenAliceReachable(): Promise<IntegrityCheck> {
+  const id = 'openalice_reachable';
+  const description = 'The optional OpenAlice external verification MCP server answers (only scored when enabled)';
+  if (!openAliceVerificationService.enabled) {
+    return { id, description, status: 'UNKNOWN', detail: 'OpenAlice integration disabled (OPENALICE_ENABLED != true) - this is the documented default, not a failure.' };
+  }
+  try {
+    const health = await openAliceVerificationService.health();
+    return {
+      id,
+      description,
+      status: health.reachable ? 'PASS' : 'FAIL',
+      detail: health.detail,
+    };
+  } catch (e: any) {
+    return { id, description, status: 'UNKNOWN', detail: e.message };
+  }
+}
+
 export async function runIntegrityCheck(): Promise<IntegrityReport> {
   const checks: IntegrityCheck[] = [
     checkSchemaTablesExist(),
@@ -122,6 +142,7 @@ export async function runIntegrityCheck(): Promise<IntegrityReport> {
     checkAiProvidersSeeded(),
     checkNewsProvidersRegistered(),
     await checkLocalAiServiceReachable(),
+    await checkOpenAliceReachable(),
   ];
 
   const scored = checks.filter(c => c.status !== 'UNKNOWN');

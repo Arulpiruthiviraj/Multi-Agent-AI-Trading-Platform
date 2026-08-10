@@ -57,6 +57,13 @@
       "when": 1786329604211,
       "tag": "0007_soft_toro",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1786359531852,
+      "tag": "0008_foamy_goliath",
+      "breakpoints": true
     }
   ]
 }
