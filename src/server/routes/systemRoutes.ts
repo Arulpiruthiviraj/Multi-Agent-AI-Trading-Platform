@@ -20,8 +20,20 @@ import { tradingEngine } from "../engines/TradingEngine";
 import { AUDIT_LOG_FILE } from "../core/auditLog";
 import { backtestEngine } from "../engines/backtest/BacktestEngine";
 import { walkForwardValidator } from "../engines/backtest/WalkForwardValidator";
+import { runIntegrityCheck } from "../core/IntegrityValidator";
 
 export const systemRouter = Router();
+
+// Real, live structural consistency check (DB tables, broker capabilities, seeded AI/news
+// providers, local AI service reachability) - see IntegrityValidator.ts. Never a hardcoded score.
+systemRouter.get("/system/integrity", async (req: Request, res: Response) => {
+  try {
+    const report = await runIntegrityCheck();
+    res.json(report);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 systemRouter.get("/audit/trail", (req: Request, res: Response) => {
   try {

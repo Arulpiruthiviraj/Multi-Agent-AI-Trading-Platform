@@ -410,3 +410,23 @@ export const predictionEngineWeights = sqliteTable('prediction_engine_weights', 
   drawdownContribution: real('drawdown_contribution').default(0),
   lastUpdated: text('last_updated').notNull()
 });
+
+// Real local-first escalation decisions (EscalationPolicy.ts) - every time a caller had to decide
+// "does this need a paid/reasoning-model call, or is a local signal already decisive," this
+// records what local signal was checked, its confidence, and why escalation did or didn't happen.
+// A real (if intentionally minimal) slice of the "AI call ledger" idea - not the full
+// system_events/agent_decisions/model_predictions/prediction_outcomes/training_examples schema.
+export const escalationDecisions = sqliteTable('escalation_decisions', {
+  id: text('id').primaryKey(),
+  timestamp: text('timestamp').notNull(),
+  traceId: text('trace_id'),
+  agent: text('agent').notNull(),
+  task: text('task').notNull(), // e.g. 'news_sentiment_analysis'
+  localSource: text('local_source').notNull(), // e.g. 'finbert'
+  localSignalAvailable: integer('local_signal_available', { mode: 'boolean' }).notNull(),
+  localConfidence: real('local_confidence'),
+  decisiveThreshold: real('decisive_threshold').notNull(),
+  escalated: integer('escalated', { mode: 'boolean' }).notNull(),
+  reason: text('reason').notNull(),
+  escalatedProvider: text('escalated_provider'),
+});

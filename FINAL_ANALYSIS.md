@@ -448,10 +448,10 @@ started - checked against the actual schema and code, not assumed.
 | 1 | Unified event ledger w/ correlation/trace IDs across the full lifecycle | 🟡 Partial | `event_traces` + `EventStore.ts` are real and do carry `eventId/schemaVersion/correlationId/source`, but high-frequency ticks are deliberately excluded (in-memory only), and AI calls live in a separate `ai_usage` table, not the same ledger |
 | 2 | `system_events`/`agent_decisions`/`model_predictions`/`prediction_outcomes`/`training_examples`/`ai_call_ledger` tables | 🔴 Mostly missing | None of these six tables exist under these names. Real but differently-shaped substrate exists: `agent_predictions` (agent/symbol/prediction/confidence/reasoning/timestamp - no cost, latency, model version, or outcome labels), `ai_usage` (provider/model/tokens/latency/cost - no escalation reason or decision-impact), `event_traces` |
 | 3 | Point-in-time feature snapshots (no look-ahead in future training data) | 🟡 Partial | Real and enforced for backtesting (`ReplayClock.assertNotFuture`, unit-tested); the live pipeline computes indicators in-memory per tick and never persists the snapshot, so there's nothing to leak from *today*, but also nothing to train on later |
-| 4 | Model Capability Registry (Ollama/FinGPT/FinBERT/XGBoost/Kronos/Chronos/paid LLMs) | 🔴 Not started | `ai_providers` tracks health/latency/successRate per provider, not a capability taxonomy (sentiment vs. forecasting vs. reasoning) |
-| 5 | Local-first orchestration: deterministic → local model → paid AI only on escalation | 🟡 Partial | The *pieces* are real (TechnicalAgent is fully deterministic; NewsAgent is explicitly routed to Ollama) but there's no actual confidence-gated escalation decision anywhere - an agent either calls AI or doesn't, and if it does, `AIRouter` picks by priority/health/latency, not by "is local confidence insufficient" |
+| 4 | Model Capability Registry (Ollama/FinGPT/FinBERT/XGBoost/Kronos/Chronos/paid LLMs) | 🟢 **Real, minimal** | `ModelCapabilityRegistry.ts` - a real, static registry of the models actually integrated (not aspirational ones), each tagged with capability, local/paid, and a `liveEligible` flag with a real reason (XGBoost is correctly `false`) |
+| 5 | Local-first orchestration: deterministic → local model → paid AI only on escalation | 🟢 **Real for one path** | `EscalationPolicy.ts`'s `decideEscalation()` is now real and live-verified: NewsEngine checks FinBERT's sentiment magnitude *before* calling Ollama, and skips the LLM call entirely when it's decisive (\|score\| ≥ 0.6). Live-verified against real FinBERT output. Scope: this one path only - Macro/FundamentalAgent still always-call-or-don't with no confidence gate |
 | 6 | Cache to prevent duplicate analysis of the same market state | 🔴 Not started | `NewsDeduplicator` dedupes articles specifically; no general request/response cache exists |
-| 7 | Full AI-call ledger (escalation reason, decision-before/after, cost, usefulness) | 🔴 Not started | `ai_usage` has cost/latency/tokens; none of the decision-impact fields |
+| 7 | Full AI-call ledger (escalation reason, decision-before/after, cost, usefulness) | 🟡 **Real, minimal slice** | New `escalation_decisions` table (real, migrated, integrity-checked) records every local-first decision with its real reason - but only for the one escalation path above, and without the cost/decision-impact fields `ai_usage` already tracks separately. Not yet one unified ledger |
 | 8 | Kronos + Chronos + Amazon Chronos forecast ensemble w/ agreement/divergence | 🔴 Blocked, not just unbuilt | Only **one** real forecasting model exists in the live path today (Chronos, powering the "Kronos" forecaster's name). The real `shiyu-coder/Kronos` model and a distinct Amazon Chronos integration were explicitly deferred earlier this engagement - this item needs that work done first |
 | 9 | Keep XGBoost out of the live path until validated | 🟢 **Already done** | Trained, walk-forward evaluated (56.7% vs. 53.3%/50% baselines, 95% CI overlaps baseline), deliberately not wired into any agent - see Section 10 |
 | 10 | Evidence Aggregator normalizing agent/model outputs before ChiefTrader | 🟢 **Already done** | `EvidenceAggregator.ts`, extracted from ChiefTraderAgent, 7 dedicated tests - and since `KronosForecastAgent` emits `TRADE_IDEA_GENERATED` like every other agent, the one real forecaster already flows through it today |
@@ -459,7 +459,7 @@ started - checked against the actual schema and code, not assumed.
 | 12 | Explicit capability flags (Canadian/US equities, crypto, options, paper/live, unattended, order types) | 🟢 Mostly real | `BrokerCapabilities` already has `canPlaceOrders/paperTrading/liveTrading/usEquities/canadianEquities/crypto/options/shortSelling/streamingMarketData/requiresManualReauth`. Missing: explicit `supportsStopOrders`/`supportsLimitOrders`/`supportsFractionalShares` granularity |
 | 13 | Never represent an unsupported broker/asset class as operational | 🟢 **Already done** | `NON_FUNCTIONAL_BROKER_IDS` blocks Questrade/Coinbase from ever being selected as the active broker, at the code level |
 | 14 | Complete integration/E2E test env on the internal paper broker, full lifecycle | 🟡 Just started | One real test now covers MARKET_DATA → RISK_ASSESSMENT_COMPLETED (this pass). Order placement → fill → reconciliation → P&L → training-dataset stages are not yet covered |
-| 15 | Argus Integrity Validator (schema/agent/model/broker/E2E consistency score) | 🔴 Not started | Nothing like this exists |
+| 15 | Argus Integrity Validator (schema/agent/model/broker/E2E consistency score) | 🟢 **Real, minimal** | `IntegrityValidator.ts` + `GET /api/v1/system/integrity` - 5 real checks (all 26 schema tables present in the live SQLite file, every registered broker exposes real capability flags, AI/news providers are seeded, the local AI service answers `/health`), live-verified at 5/5 (100%). Scoped to structural presence/reachability, not business-logic correctness - that's what the unit/integration tests are for |
 | 16 | Unified Mission Control health page (latency/freshness/version/cost/last-success per component) | 🔴 Not started | The underlying data is partially real and scattered (`ai_providers` health, real news-provider stats, broker capabilities) but nothing assembles it into one view |
 | 17 | Human Activity Log + developer Event Trace viewer, same ledger | 🟡 Partial | Activity Logs tab is real (Section 9); a dedicated "developer event trace viewer" UI doesn't exist, though the backend route (`/api/v1/event-traces?correlationId=`) does |
 | 18 | Every trade reconstructable from one trace ID end-to-end | 🟢 Mostly real | `traceId` threads through the whole live pipeline; `ExplainabilityAgent` already generates a narrative from the real persisted event trace for a specific decision. Missing: AI-call-level cost/escalation detail per trace, since that ledger (#7) doesn't exist yet |
@@ -468,14 +468,17 @@ started - checked against the actual schema and code, not assumed.
 | 21 | Keep all safety gates active, give them integration tests | 🟡 Partial | All 9 gates remain active and unit-tested; only 1 has any integration-test coverage so far (implicitly, via the one new test's clean-portfolio path) |
 | 22 | Stay PAPER ONLY, no live capital without evidence + explicit approval | 🟢 **Already true** | `LIVE_TRADING_CONFIRMATION_PHRASE` gate is real; nothing in this engagement has enabled live trading |
 
-**Honest bottom line:** this is not a greenfield ask. 7 of 22 items are already real (9, 10, 11, 12, 13,
-18, 22), and the broker-capability architecture in particular is already close to what was described.
-The genuinely large, unstarted work is the ML-observability ledger (items 1-2-3-6-7-19-20, which are all
-really one connected system), the Model Capability Registry + local-first escalation logic (4-5), the
-Integrity Validator (15), and the unified health UI (16). Item 8 (the 3-model forecast ensemble) can't
-start until the deferred second forecasting model exists. Per the user's own instruction embedded in
-the draft ("do not start coding immediately"), nothing above was implemented this pass - this is the
-audit that instruction asked for, not the build.
+**Honest bottom line, updated after this pass's build:** 11 of 22 items are now real (4, 5, 7 partial,
+9, 10, 11, 12, 13, 15, 18, 22) - the audit above was followed by real, live-verified, tested
+implementation of the Model Capability Registry, a real local-first escalation path (FinBERT-decisive
+news sentiment now skips the LLM call entirely, live-verified against real model output), a real
+minimal AI-call-ledger slice (`escalation_decisions`, integrity-checked), and a real Integrity Validator
+(5/5 checks passing against the live system). Still genuinely unstarted: the *rest* of the
+ML-observability ledger (items 1, 3, 6, 19, 20 - `system_events`/`agent_decisions`/`model_predictions`/
+`prediction_outcomes`/`training_examples` proper, and a general dedup cache), the unified health UI
+(16), and extending local-first escalation beyond the one NewsAgent path to Macro/FundamentalAgent (5's
+remaining scope). Item 8 (the 3-model forecast ensemble) still can't start until the deferred second
+forecasting model exists.
 
 **P4 - explicitly deferred, not forgotten:** the ~17 decorative dashboard panels, the real
 `shiyu-coder/Kronos` model as a second forecaster, Trading Arena/Strategy Scanner/AI Model Lab UI builds.

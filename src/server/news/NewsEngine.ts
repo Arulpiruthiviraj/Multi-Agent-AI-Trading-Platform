@@ -6,8 +6,16 @@ import { NewsClassifier } from './NewsClassifier';
 import { NewsSymbolExtractor } from './NewsSymbolExtractor';
 import { NewsImpactEngine } from './NewsImpactEngine';
 import { NewsClusterEngine } from './NewsClusterEngine';
-import { NewsScoringEngine } from './NewsScoringEngine';
+import { NewsScoringEngine, AIAnalysisResult } from './NewsScoringEngine';
 import { eventBus } from '../core/EventBus';
+import { decideEscalation } from '../ai/EscalationPolicy';
+import { db } from '../db';
+import * as schema from '../db/schema';
+import { v4 as uuidv4 } from 'uuid';
+
+// A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
+// entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.
+const DECISIVE_SENTIMENT_THRESHOLD = 0.6;
 
 export class NewsEngine {
   private static instance: NewsEngine;
@@ -90,8 +98,58 @@ export class NewsEngine {
         }
 
         const traceId = Math.random().toString(36).substring(7);
-        const aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId);
-        
+
+        // Local-first escalation: FinBERT already ran inside impactEngine.assess() above. If its
+        // sentiment is decisive, derive the trading bias directly from it and skip the LLM call
+        // entirely - a real cost saving, not just a documented intention. Every decision (escalate
+        // or not) is logged to escalation_decisions with its real reason, win or lose.
+        const escalationDecision = decideEscalation({
+          localSource: 'finbert',
+          localSignalAvailable: impact.sentimentSource === 'finbert',
+          localConfidence: Math.abs(impact.sentiment),
+          decisiveThreshold: DECISIVE_SENTIMENT_THRESHOLD,
+        });
+
+        let aiAnalysis: AIAnalysisResult | null = null;
+        if (escalationDecision.escalate) {
+          aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId);
+        } else if (finalSymbols.length > 0) {
+          const localConfidencePct = Math.round(Math.min(85, 50 + Math.abs(impact.sentiment) * 40));
+          aiAnalysis = {
+            symbol: finalSymbols[0],
+            headline: normalized.title,
+            source: normalized.source,
+            timestamp: normalized.publishedAt,
+            category,
+            sentimentScore: impact.sentiment,
+            marketImpactScore: impact.impactScore * 100,
+            confidence: localConfidencePct,
+            affectedSectors: [],
+            tradingBias: impact.sentiment > 0 ? 'BULLISH' : 'BEARISH',
+            reasoning: `[Local-First] FinBERT sentiment ${impact.sentiment > 0 ? 'positive' : 'negative'} (${impact.sentiment.toFixed(2)}) was decisive enough to skip the LLM call.`,
+            riskFlags: [],
+          };
+        }
+
+        try {
+          await db.insert(schema.escalationDecisions).values({
+            id: uuidv4(),
+            timestamp: new Date().toISOString(),
+            traceId,
+            agent: 'NewsAgent',
+            task: 'news_sentiment_analysis',
+            localSource: 'finbert',
+            localSignalAvailable: impact.sentimentSource === 'finbert',
+            localConfidence: Math.abs(impact.sentiment),
+            decisiveThreshold: DECISIVE_SENTIMENT_THRESHOLD,
+            escalated: escalationDecision.escalate,
+            reason: escalationDecision.reason,
+            escalatedProvider: escalationDecision.escalate ? 'NewsAgent AIRouter route' : null,
+          });
+        } catch (e) {
+          console.error('[NewsEngine] Failed to log escalation decision', e);
+        }
+
         if (aiAnalysis) {
           if (aiAnalysis.symbol) {
             finalSymbols = Array.from(new Set([...finalSymbols, aiAnalysis.symbol]));
