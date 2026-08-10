@@ -42,16 +42,30 @@ newsRouter.get("/memory", async (req: Request, res: Response) => {
 
 newsRouter.get("/providers", async (req: Request, res: Response) => {
   try {
-    const providers = newsEngine.providerManager.getProviders().map((p: any) => ({
-      id: p.id,
-      name: p.name,
-      type: p.type,
-      enabled: true,
-      health: "Healthy",
-      errorCount: 0,
-      credibilityWeight: p.credibilityWeight,
-      lastFetch: new Date().toISOString(),
-    }));
+    const providers = newsEngine.providerManager.getProviders().map((p: any) => {
+      const stats = newsEngine.providerManager.getStats(p.id);
+      const enabled = p.isConfigured ? p.isConfigured() : true;
+      const health = !enabled
+        ? "No API Key"
+        : stats.errorCount > 0 && !stats.lastSuccessAt
+          ? "Down"
+          : stats.errorCount > 0
+            ? "Degraded"
+            : stats.lastSuccessAt
+              ? "Healthy"
+              : "Not Yet Fetched";
+      return {
+        id: p.id,
+        name: p.name,
+        type: p.type,
+        enabled,
+        health,
+        errorCount: stats.errorCount,
+        lastArticleCount: stats.lastArticleCount,
+        credibilityWeight: p.credibilityWeight,
+        lastFetch: stats.lastFetchAt,
+      };
+    });
     res.json(providers);
   } catch (e: any) {
     res.status(500).json({ error: e.message });

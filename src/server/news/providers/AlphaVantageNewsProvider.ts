@@ -8,6 +8,7 @@ export class AlphaVantageNewsProvider implements NewsProviderPlugin {
 
   async initialize() {}
   async healthCheck() { return true; }
+  isConfigured() { return !!process.env.ALPHAVANTAGE_API_KEY; }
 
   async fetchLatest(): Promise<NewsArticleRaw[]> {
     if (!process.env.ALPHAVANTAGE_API_KEY) {

@@ -16,14 +16,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import torch
 from chronos import ChronosPipeline
+from transformers import pipeline as hf_pipeline
 
 MODEL_NAME = os.environ.get("CHRONOS_MODEL", "amazon/chronos-t5-mini")
+FINBERT_MODEL_NAME = os.environ.get("FINBERT_MODEL", "ProsusAI/finbert")
 PORT = int(os.environ.get("LOCAL_AI_SERVICE_PORT", "8008"))
 MIN_CONTEXT_LENGTH = 5
 
 print(f"[local_ai_service] Loading {MODEL_NAME} (this happens once, at startup)...")
 pipeline = ChronosPipeline.from_pretrained(MODEL_NAME, device_map="cpu", torch_dtype=torch.float32)
 print(f"[local_ai_service] {MODEL_NAME} loaded and resident in memory.")
+
+print(f"[local_ai_service] Loading {FINBERT_MODEL_NAME} (this happens once, at startup)...")
+sentiment_pipeline = hf_pipeline("sentiment-analysis", model=FINBERT_MODEL_NAME)
+print(f"[local_ai_service] {FINBERT_MODEL_NAME} loaded and resident in memory.")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -37,11 +43,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if self.path == "/health":
-            self._send_json(200, {"status": "ok", "model": MODEL_NAME})
+            self._send_json(200, {"status": "ok", "model": MODEL_NAME, "sentimentModel": FINBERT_MODEL_NAME})
         else:
             self._send_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:
+        if self.path == "/sentiment":
+            self._handle_sentiment()
+            return
         if self.path != "/forecast":
             self._send_json(404, {"error": "not found"})
             return
@@ -66,6 +75,31 @@ class Handler(BaseHTTPRequestHandler):
                 "low": quantiles[0].tolist(),
                 "median": quantiles[1].tolist(),
                 "high": quantiles[2].tolist(),
+            })
+        except Exception as e:
+            self._send_json(500, {"error": str(e)})
+
+    def _handle_sentiment(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+            text = body.get("text")
+            if not isinstance(text, str) or not text.strip():
+                self._send_json(400, {"error": "'text' must be a non-empty string"})
+                return
+
+            # FinBERT truncates internally at 512 tokens; a hard character cap here just
+            # avoids sending pathologically large payloads through the pipeline.
+            result = sentiment_pipeline(text[:2000])[0]
+            label = result["label"].lower()
+            score = float(result["score"])
+            signed_score = score if label == "positive" else (-score if label == "negative" else 0.0)
+
+            self._send_json(200, {
+                "model": FINBERT_MODEL_NAME,
+                "label": label,
+                "score": score,
+                "signedScore": signed_score,
             })
         except Exception as e:
             self._send_json(500, {"error": str(e)})

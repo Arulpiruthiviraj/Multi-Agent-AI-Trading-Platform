@@ -8,6 +8,7 @@ export class FinnhubNewsProvider implements NewsProviderPlugin {
 
   async initialize() {}
   async healthCheck() { return true; }
+  isConfigured() { return !!process.env.FINNHUB_API_KEY; }
 
   async fetchLatest(): Promise<NewsArticleRaw[]> {
     if (!process.env.FINNHUB_API_KEY) {

@@ -8,6 +8,7 @@ export class PolygonNewsProvider implements NewsProviderPlugin {
 
   async initialize() {}
   async healthCheck() { return true; }
+  isConfigured() { return !!process.env.POLYGON_API_KEY; }
 
   async fetchLatest(): Promise<NewsArticleRaw[]> {
     if (!process.env.POLYGON_API_KEY) {

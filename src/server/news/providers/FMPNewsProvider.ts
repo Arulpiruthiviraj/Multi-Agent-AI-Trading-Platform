@@ -8,6 +8,7 @@ export class FMPNewsProvider implements NewsProviderPlugin {
 
   async initialize() {}
   async healthCheck() { return true; }
+  isConfigured() { return !!process.env.FMP_API_KEY; }
 
   async fetchLatest(): Promise<NewsArticleRaw[]> {
     if (!process.env.FMP_API_KEY) {

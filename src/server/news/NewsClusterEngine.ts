@@ -17,8 +17,9 @@ export class NewsClusterEngine {
     const clusterId = `cluster_${uuidv4()}`;
 
     try {
-      // 1. Insert Article
-      await db.insert(schema.newsArticles).values({
+      // 1. Insert Article - onConflictDoNothing is defense-in-depth for a server restart, where
+      // NewsDeduplicator's in-memory id cache resets but these rows are already durably stored.
+      const inserted = await db.insert(schema.newsArticles).values({
         id: article.id,
         title: article.title,
         content: article.content,
@@ -32,7 +33,12 @@ export class NewsClusterEngine {
         relevanceScore: 1.0,
         summary: article.title,
         symbols: JSON.stringify(finalSymbols)
-      });
+      }).onConflictDoNothing();
+      if (inserted.changes === 0) {
+        // Already persisted from a prior process lifetime - don't create an orphan cluster row
+        // (and don't let the caller re-run AI analysis / re-emit a trade idea for it) either.
+        return null;
+      }
 
       // 2. Insert Cluster (Simplification: 1 article = 1 cluster for now, real clustering requires embedding matching)
       await db.insert(schema.newsClusters).values({

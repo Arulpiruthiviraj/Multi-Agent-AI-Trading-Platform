@@ -63,7 +63,7 @@ ChiefTraderAgent
     ↓ eventBus.emit('CHIEF_APPROVED_IDEA', ...)
 RiskAgent → RiskEngine.evaluateRisk()
   → refuses if no live price
-  → circuit breakers: daily-loss, 3-consecutive-loss, 30% single-symbol concentration
+  → circuit breakers: daily-loss, 3-consecutive-loss, 20% single-symbol / 40% sector concentration
   → real 14-period Wilder ATR sizing (flags 5% fallback if < 15 bars of history)
   → high-impact news veto (news_clusters.impactScore, 4-hour window)
     ↓ eventBus.emit('RISK_ASSESSMENT_COMPLETED', ...)

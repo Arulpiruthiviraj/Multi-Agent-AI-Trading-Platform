@@ -207,6 +207,43 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.maxQuantity).toBeLessThanOrEqual(50);
   });
 
+  it('caps a BUY at the 40% sector concentration limit when existing same-sector positions already fill it', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 100000,
+      buyingPower: 100000,
+      // MSFT + AAPL are both mapped to Technology; $38k already held against a $40k (40%) cap.
+      positions: [
+        { symbol: 'MSFT', quantity: 200, entryPrice: 100 }, // $20,000
+        { symbol: 'AAPL', quantity: 180, entryPrice: 100 }, // $18,000 existing exposure in the BUY's own symbol/sector
+      ],
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't9b', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    // Sector cap: $40k total - $38k held = $2k / $100 = 20 more shares max (tighter than the 20% single-symbol cap here).
+    expect(assessment.maxQuantity).toBeLessThanOrEqual(20);
+  });
+
+  it('does not let an unmapped-sector position count against a mapped symbol\'s sector cap', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 100000,
+      buyingPower: 1000000,
+      positions: [{ symbol: 'ZZZZ', quantity: 900, entryPrice: 100 }], // unmapped symbol, $90,000 exposure
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 1000000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't9c', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    // ZZZZ has no GICS mapping, so it doesn't count toward AAPL's (Technology) sector sum - AAPL
+    // is only bound by its own 20% single-symbol cap ($20k / $100 = 200 shares), not sector-crushed
+    // by ZZZZ's large unrelated position.
+    expect(assessment.approved).toBe(true);
+    expect(assessment.maxQuantity).toBe(200);
+  });
+
   it('rejects a SELL with no existing position', async () => {
     mockBrokerHolder.broker = makeBroker(basePortfolio({ positions: [] }));
 

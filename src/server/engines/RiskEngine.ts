@@ -26,6 +26,32 @@ const MARKET_CLOCK_CACHE_MS = 60 * 1000;
 
 const MAX_CONSECUTIVE_LOSSES = 3;
 const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = 0.20; // matches GuardrailsPanel's "Hard Per-Position Cap" copy
+const MAX_SECTOR_CONCENTRATION_PCT = 0.40;
+
+// Real (if coarse) GICS-style sector map for the large-cap names this app actually watches/trades.
+// Deliberately does NOT cover every possible ticker - an unmapped symbol just isn't sector-capped
+// (same as if this check didn't exist for it), rather than fabricating a sector guess.
+const SECTOR_MAP: Record<string, string> = {
+    AAPL: 'Technology', MSFT: 'Technology', NVDA: 'Technology', AMD: 'Technology',
+    AVGO: 'Technology', CRM: 'Technology', ORCL: 'Technology', ADBE: 'Technology', INTC: 'Technology',
+    GOOGL: 'Communication Services', GOOG: 'Communication Services', META: 'Communication Services',
+    NFLX: 'Communication Services', DIS: 'Communication Services', TMUS: 'Communication Services',
+    AMZN: 'Consumer Discretionary', TSLA: 'Consumer Discretionary', HD: 'Consumer Discretionary',
+    NKE: 'Consumer Discretionary', SBUX: 'Consumer Discretionary', MCD: 'Consumer Discretionary',
+    JPM: 'Financials', BAC: 'Financials', GS: 'Financials', WFC: 'Financials', MS: 'Financials', V: 'Financials', MA: 'Financials',
+    XOM: 'Energy', CVX: 'Energy', COP: 'Energy', SLB: 'Energy',
+    JNJ: 'Healthcare', PFE: 'Healthcare', UNH: 'Healthcare', LLY: 'Healthcare', MRK: 'Healthcare', ABBV: 'Healthcare',
+    WMT: 'Consumer Staples', PG: 'Consumer Staples', KO: 'Consumer Staples', PEP: 'Consumer Staples', COST: 'Consumer Staples',
+    BA: 'Industrials', CAT: 'Industrials', GE: 'Industrials', UPS: 'Industrials', HON: 'Industrials',
+    // Broad-market ETFs already ARE diversified across sectors - exempt them rather than mis-bucket them.
+    SPY: 'Diversified ETF', QQQ: 'Diversified ETF', VOO: 'Diversified ETF', VTI: 'Diversified ETF', DIA: 'Diversified ETF', IWM: 'Diversified ETF',
+};
+
+function getSector(symbol: string): string | null {
+    const sector = SECTOR_MAP[symbol.toUpperCase()];
+    if (!sector || sector === 'Diversified ETF') return null;
+    return sector;
+}
 
 // Real consecutive-loss circuit breaker - reads actual realized P&L from the last few FILLED
 // SELL trades (now populated by OrderManagement.ts). Returns true only when there IS real trade
@@ -233,6 +259,21 @@ export class RiskEngine {
                 const remainingRoom = Math.max(0, maxPositionValue - existingValue);
                 const maxSharesByConcentration = Math.floor(remainingRoom / currentPrice);
                 maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
+
+                // 4b. Sector concentration cap - no GICS-mapped sector may exceed
+                // MAX_SECTOR_CONCENTRATION_PCT of real account equity after this trade fills.
+                // Correlation-based limits (as opposed to sector) are NOT implemented - there is
+                // no historical return-correlation calculation anywhere in this codebase to drive one.
+                const proposalSector = getSector(proposal.symbol);
+                if (proposalSector) {
+                    const sectorValue = portfolio.positions.reduce((sum: number, p: any) => {
+                        return getSector(p.symbol) === proposalSector ? sum + p.quantity * currentPrice : sum;
+                    }, 0);
+                    const maxSectorValue = accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
+                    const remainingSectorRoom = Math.max(0, maxSectorValue - sectorValue);
+                    const maxSharesBySector = Math.floor(remainingSectorRoom / currentPrice);
+                    maxQuantity = Math.min(maxQuantity, maxSharesBySector);
+                }
             }
 
             // 5. Final validation

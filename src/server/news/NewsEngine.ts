@@ -74,16 +74,21 @@ export class NewsEngine {
 
         const category = this.classifier.classify(normalized);
         let finalSymbols = this.symbolExtractor.extract(normalized);
-        const impact = this.impactEngine.assess(normalized, category);
+        const impact = await this.impactEngine.assess(normalized, category);
         
         const clusterId = await this.clusterEngine.createOrUpdateCluster(
-          normalized, 
-          category, 
-          impact, 
+          normalized,
+          category,
+          impact,
           credibility,
           finalSymbols
         );
-        
+        if (!clusterId) {
+          // Either a DB error, or (onConflictDoNothing) this article was already persisted in a
+          // prior process lifetime - either way, don't burn an AI call re-analyzing it.
+          continue;
+        }
+
         const traceId = Math.random().toString(36).substring(7);
         const aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId);
         
