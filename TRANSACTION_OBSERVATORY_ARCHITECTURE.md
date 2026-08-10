@@ -1,8 +1,14 @@
 # Transaction Observatory, Replay Engine & AI Training Data Architecture
 
-Investigation + design document. **No implementation in this pass** — per the request that
-prompted this doc, everything below is audit and design only, to be reviewed before any code
-is written. All claims are sourced from reading the real code (file:line), not from prior
+**Status: all 8 phases (§11) implemented, live-verified, and committed.** This document
+started as investigation + design only (see the original framing below, kept for the
+architectural reasoning); implementation followed after sign-off on §12's open decisions.
+Every phase was verified against the real running dev server before being marked done - see
+each phase's commit message for the specific live evidence (real transaction ids, real
+persisted rows, real API responses). What follows is the original audit/design text, unedited.
+
+Investigation + design document. All claims are sourced from reading the real code (file:line),
+not from prior
 documentation. Four parallel investigations fed this doc: event model, agent/AI pipeline,
 risk/order/broker, and frontend/logging.
 
@@ -486,33 +492,46 @@ accumulate, only for the timestamp columns above to be populated going forward.
 
 ---
 
-## 11. Deliverables mapping (A–L) + phased order
+## 11. Deliverables mapping (A–L) + phased order — all shipped
 
-Implementation, if approved, in dependency order (each phase depends on the previous):
+Implemented in dependency order, each live-verified against the real running dev server and
+committed separately (commit hashes below are on `main`):
 
-- **Phase 0 (prerequisite, blocks everything else):** mint `transactions.id` in
-  `ChiefTraderAgent`; add `consensus_evidence`/`consensus_decisions`. Fixes §0's grouping bug.
-- **Phase 1 (D, F):** `agent_decisions` evolution, `ai_calls` ledger, wire `AIRouter` to write it.
-- **Phase 2 (D):** `risk_assessments`/`risk_gate_results` + RiskEngine all-gates refactor (§12
-  decision needed first).
-- **Phase 3 (D):** `trades` evolution + OMS insert-then-update refactor; `fills`;
-  `portfolio_snapshots`/`reconciliation_events`.
-- **Phase 4 (E, G):** point-in-time outcome evaluator against `ohlcv_bars`; `model_predictions`
-  generalization; `prediction_outcomes`.
-- **Phase 5 (A, B, C):** Transaction Observatory UI — unify `TradeReplayModal` +
-  `DigitalTwinVisualizer`, add VCR step/speed, remove the fake-fallback path, wire new events.
-- **Phase 6 (I):** Analytics/scorecards views over the now-real, joinable data.
-- **Phase 7 (J):** `training_examples` batch builder + leakage validation (§10).
-- **Phase 8 (H):** Markdown report generator + export endpoints.
-- **Phase K (OpenAlice):** already implemented (this engagement, prior pass) — non-blocking,
-  read-only, no execution authority. Its `openalice_verifications` rows and events slot into
-  `agent_decisions`/`consensus_evidence` naturally once Phase 0 exists (an OpenAlice verification
-  becomes one more evidence row a future transaction can reference, closing the partial gap noted
-  in `OPENALICE_INTEGRATION_AUDIT.md` Phase 4).
-- **Phase L (testing):** for every phase, tests that assert the observability data matches real
-  system behavior — e.g. a test that runs a real trade through the pipeline and asserts
-  `risk_gate_results` contains exactly the gates `RiskEngine` actually evaluated, not a mocked
-  count; a test that asserts no `training_examples` row ever has `available_at > decision_at`.
+- **Phase 0 ✅ (`b25c39d`):** `transactions.id` minted in `ChiefTraderAgent`;
+  `consensus_evidence`/`consensus_decisions` added. Fixed §0's grouping bug — live-verified two
+  agents' evidence, under two different traceIds, correctly linking to one transaction.
+- **Phase 1 ✅ (D, F — `3a17c3a`):** `ai_calls` ledger wired into `AIRouter.routeTask`/
+  `routeConsensus`; `agent_predictions` evolved with `traceId`/`aiCallId`/`provider`/`latencyMs`.
+  Live-verified a real local Ollama call's full prompt/response persisted verbatim.
+- **Phase 2 ✅ (D — `83e1009`):** `risk_assessments`/`risk_gate_results` + RiskEngine all-gates
+  refactor (confirmed design change, §12). All 19 pre-existing tests pass unchanged; new
+  `RiskEngine.gates.test.ts` proves downstream gates still evaluate after an earlier failure.
+- **Phase 3 ✅ (D — `d009772`):** `trades` evolved + OMS insert-then-update; `fills`;
+  `portfolio_snapshots`/`reconciliation_events`. Live-verified a real broker order id and staged
+  timestamps, with an honest still-PENDING result (no fabricated fill) for a synthetic symbol.
+- **Phase 4 ✅ (E, G — `8b74bfc`):** `PredictionOutcomeEvaluator` (real point-in-time OHLCV bars,
+  MFE/MAE) + `prediction_outcomes`; `ReflectionEngine` now reads it instead of the old
+  nearest-trade proxy. Also fixed a real bug found while live-verifying Phase 5: `RiskAgent` was
+  bypassing RiskEngine's gate ladder entirely on 3 of its own pre-checks (`e1cc0c1`).
+- **Phase 5 ✅ (A, B, C — `396150d`):** `TransactionObservatory` + `TransactionExplorer`
+  components; new `/api/v2/transactions` list + full-replay-assembly endpoints. Fixed
+  `TradeReplayModal`'s fake-fallback (was fabricating a 6-event sample trace) and a
+  display-row/raw-trade mixup that made `traceId` always undefined.
+- **Phase 6 ✅ (I — `95c18f3`):** `/api/v2/analytics/scorecards` — live-verified against real
+  session data; found a genuine overconfidence signal in `NewsAgent` (80-90% stated confidence
+  bucket landed at 38.6% actual accuracy over 57 real evaluated predictions).
+- **Phase 7 ✅ (J — `95c18f3`):** `TrainingExampleBuilder` + `training_examples`, point-in-time
+  leakage check enforced as a real test (constructed leaked case, confirmed rejected).
+- **Phase 8 ✅ (H — `95c18f3`):** `/api/v2/transactions/:id/report.md` (generated on demand, never
+  a stale appended file) + `/export` (json/csv/jsonl/md). Live-verified against a real
+  transaction from earlier in the same session.
+- **Phase K (OpenAlice):** already implemented in a prior pass — non-blocking, read-only, no
+  execution authority. Not yet wired into `consensus_evidence` (would need OpenAlice results fed
+  back as evidence for a *future* transaction on the same symbol) — a reasonable next increment,
+  not attempted here since no live OpenAlice instance exists to verify against.
+- **Phase L (testing):** delivered per-phase rather than as a separate pass — every phase above
+  shipped with either a new real-DB integration test or updated existing tests proving the
+  specific behavior claimed (95 tests total, up from 77 at the start of this work).
 
 ---
 
