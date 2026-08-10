@@ -47,18 +47,20 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
 
   useEffect(() => {
     const fetchTrace = async () => {
-       if (trade.trace_id) {
+       // Real API fields are camelCase (traceId, not trace_id) - Drizzle rows never had the
+       // snake_case shape this modal was reading; the fetches below always silently failed.
+       if (trade.traceId) {
           try {
-             const expRes = await fetch(`/api/v2/data/explainability/${trade.trace_id}`);
+             const expRes = await fetch(`/api/v2/data/explainability/${trade.traceId}`);
              const expData = await expRes.json();
              if (expData.report) {
                  setExplainabilityReport(expData.report);
              }
           } catch(e) {}
        }
-       if (trade.trace_id) {
+       if (trade.traceId) {
           try {
-             const res = await fetch(`/api/v2/system/trace/${trade.trace_id}`);
+             const res = await fetch(`/api/v2/system/trace/${trade.traceId}`);
              const data = await res.json();
              if (data.trace && data.trace.length > 0) {
                  setTraceEvents(data.trace);
@@ -67,17 +69,12 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
              }
           } catch(e) {}
        }
-       
-       // Fallback: Generate default Trace based on the trade details
-       const sampleEvents = [
-          { type: 'MARKET_DATA', payload: { symbol: trade.symbol, price: trade.price - 2 } },
-          { type: 'CALCULATION_COMPLETED', payload: { engine: 'TechnicalEngine', symbol: trade.symbol, data: { rsi: 65, sma20: trade.price - 5 } } },
-          { type: 'TRADE_IDEA_GENERATED', payload: { agent: 'TechnicalAgent', side: trade.decision || trade.side, confidence: 0.88, reasoning: 'Strong momentum detected.' } },
-          { type: 'CHIEF_APPROVED_IDEA', payload: { side: trade.decision || trade.side, confidence: 0.88, reasoning: 'Consensus approval.' } },
-          { type: 'RISK_ASSESSMENT_COMPLETED', payload: { approved: true, maxQuantity: trade.quantity || 10, reasoning: 'Risk limits validated.' } },
-          { type: 'ORDER_EXECUTED', payload: { side: trade.decision || trade.side, quantity: trade.quantity || 10, price: trade.price, status: 'FILLED' } },
-       ];
-       setTraceEvents(sampleEvents);
+
+       // No real trace data available - previously this silently fabricated a 6-event sample
+       // trace with no visual indication it wasn't real, which is exactly the "fake
+       // observability" this project's own conventions forbid. Leave traceEvents empty; the
+       // render path below shows an explicit "no trace data available" state instead.
+       setTraceEvents([]);
        setLoading(false);
     };
     fetchTrace();
@@ -101,6 +98,28 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
   }, [isPlaying, traceEvents.length]);
 
   if (loading) return null;
+
+  if (traceEvents.length === 0) {
+    return (
+      <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+        <div className="bg-[#0A0F16] border border-slate-800 rounded-lg w-full max-w-lg shadow-2xl overflow-hidden animate-fade-in relative flex flex-col font-mono">
+          <div className="bg-[#111822] border-b border-slate-800 p-4 flex justify-between items-center">
+            <h2 className="text-white font-bold tracking-widest uppercase text-sm">Trade Replay: {trade.symbol}</h2>
+            <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors"><X size={20} /></button>
+          </div>
+          <div className="p-8 flex flex-col items-center text-center gap-3">
+            <XCircle size={32} className="text-slate-600" />
+            <p className="text-sm font-bold uppercase tracking-widest text-slate-400">No Trace Data Available</p>
+            <p className="text-xs text-slate-500 max-w-sm">
+              This trade has no persisted event trace to replay - either it predates this
+              instance's event history, or no traceId was recorded for it. Nothing is fabricated
+              here in its place.
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const currentEvent = traceEvents[timelineIndex] || {};
   const chartData = traceEvents.map((e, i) => {

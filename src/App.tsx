@@ -62,6 +62,8 @@ import StrategyProfitSunburst from "./components/StrategyProfitSunburst";
 import TradeEfficiencyReport from "./components/TradeEfficiencyReport";
 import ExecutionQualityChart from "./components/ExecutionQualityChart";
 import TradeReplayModal from "./components/TradeReplayModal";
+import TransactionObservatory from "./components/TransactionObservatory";
+import TransactionExplorer from "./components/TransactionExplorer";
 import LiveTradeJourneyOverlay from "./components/LiveTradeJourneyOverlay";
 import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
@@ -194,6 +196,12 @@ interface Trade {
   status: string;
   thesis: string;
   timestamp: string;
+  // Real fields the backend has always returned (Drizzle rows are camelCase) that this
+  // interface never modeled - traceId/transactionId are what let a trade row be replayed.
+  traceId?: string;
+  transactionId?: string;
+  profitLoss?: number;
+  reasoning?: string;
 }
 
 interface RiskVeto {
@@ -1964,7 +1972,7 @@ export default function App() {
   const [setupComplete, setSetupComplete] = useState(false);
   const [systemState, setSystemState] = useState<'STARTING' | 'INITIALIZING' | 'READY' | 'RUNNING' | 'STOPPED' | 'ERROR'>('STARTING');
   const [activeTab, setActiveTab] = useState<
-    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation"
+    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation" | "observatory"
   >("dashboard");
   const [selectedAgentNode, setSelectedAgentNode] = useState<any | null>(null);
   const [standardLLMProvider, setStandardLLMProvider] = useState<"Gemini Flash" | "GPT-4o-mini" | "Claude 3 Haiku" | "DeepSeek-Coder">("Gemini Flash");
@@ -2296,8 +2304,10 @@ export default function App() {
         symbol: t.symbol,
         decision: t.side,
         weight: t.quantity ? (t.quantity / 10).toFixed(1) : "1.0", // Arbitrary weight mapping for display
-        outcome: t.pnl_realized ? (t.pnl_realized >= 0 ? `+$${t.pnl_realized.toFixed(2)}` : `-$${Math.abs(t.pnl_realized).toFixed(2)}`) : "N/A",
-        outcomeClass: t.pnl_realized && t.pnl_realized < 0 ? "text-rose-400" : "text-emerald-400",
+        // profitLoss is the real column (Drizzle camelCase) - pnl_realized never existed on the
+        // real trade row, so this was always "N/A" regardless of actual outcome.
+        outcome: (t.profitLoss !== null && t.profitLoss !== undefined) ? (t.profitLoss >= 0 ? `+$${t.profitLoss.toFixed(2)}` : `-$${Math.abs(t.profitLoss).toFixed(2)}`) : "N/A",
+        outcomeClass: (t.profitLoss !== null && t.profitLoss !== undefined && t.profitLoss < 0) ? "text-rose-400" : "text-emerald-400",
         rawTrade: t,
       }));
     }
@@ -3140,6 +3150,19 @@ export default function App() {
           >
             <Cpu size={14} />
             MISSION CONTROL
+          </button>
+
+          <button
+            id="tab-observatory-btn"
+            onClick={() => setActiveTab("observatory")}
+            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "observatory"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Search size={14} />
+            OBSERVATORY
           </button>
           
           <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
@@ -8273,8 +8296,8 @@ export default function App() {
                               <td className="py-3 px-2">{trade.weight}x</td>
                               <td className={`py-3 px-2 font-bold text-right ${trade.outcomeClass}`}>{trade.outcome}</td>
                               <td className="py-3 px-2 text-center flex items-center justify-center gap-2">
-                                <button 
-                                  onClick={() => handleOpenReplay(trade)}
+                                <button
+                                  onClick={() => handleOpenReplay(trade.rawTrade)}
                                   className="text-[10px] font-mono uppercase tracking-widest text-sky-400 hover:text-sky-300 transition-colors border border-sky-500/30 hover:border-sky-400/50 rounded px-2 py-1 bg-sky-500/10 flex items-center justify-center gap-1.5"
                                 >
                                   <Play size={10} />
@@ -8370,12 +8393,21 @@ export default function App() {
               />
             )}
 
-            {/* Replay Modal */}
+            {/* Replay Modal - real transactions (Phase 0+) get the full Transaction Observatory;
+                older trades that predate the transaction concept fall back to the legacy
+                trace-based replay modal. */}
             {replayModalOpen && selectedReplayTrade && (
-              <TradeReplayModal 
-                trade={selectedReplayTrade} 
-                onClose={() => { setReplayModalOpen(false); setSelectedReplayTrade(null); }} 
-              />
+              selectedReplayTrade.transactionId ? (
+                <TransactionObservatory
+                  transactionId={selectedReplayTrade.transactionId}
+                  onClose={() => { setReplayModalOpen(false); setSelectedReplayTrade(null); }}
+                />
+              ) : (
+                <TradeReplayModal
+                  trade={selectedReplayTrade}
+                  onClose={() => { setReplayModalOpen(false); setSelectedReplayTrade(null); }}
+                />
+              )
             )}
           </div>
         )}
@@ -9459,6 +9491,11 @@ export default function App() {
         )}
 
         {activeTab === "kronos" && <KronosDashboard />}
+        {activeTab === "observatory" && (
+          <div className="animate-fade-in">
+            <TransactionExplorer />
+          </div>
+        )}
         {activeTab === "settings" && (
           <div className="animate-fade-in flex flex-col gap-6" id="settings-view">
              <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6">
