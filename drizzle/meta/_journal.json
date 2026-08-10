@@ -64,6 +64,13 @@
       "when": 1786359531852,
       "tag": "0008_foamy_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786368438256,
+      "tag": "0009_lazy_yellowjacket",
+      "breakpoints": true
     }
   ]
 }

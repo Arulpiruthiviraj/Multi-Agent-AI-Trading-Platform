@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { mockDb } = vi.hoisted(() => {
   const builder: any = {
     from() { return builder; },
+    where() { return builder; },
     limit() { return builder; },
     all() { return Promise.resolve([]); },
     then(resolve: any, reject: any) { return Promise.resolve([]).then(resolve, reject); },
@@ -39,12 +40,12 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     agent.recentIdeas = [];
   });
 
-  it('approves when strong single-agent confidence clears the 0.75 threshold', () => {
+  it('approves when strong single-agent confidence clears the 0.75 threshold', async () => {
     agent.recentIdeas = [
       { traceId: 't1', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong momentum' },
     ];
 
-    agent.evaluateConsensus('AAPL', 't1');
+    await agent.evaluateConsensus('AAPL', 't1');
 
     // TechnicalAgent has weight 0.25 but is the ONLY voice, so weightedConfidence/totalWeight
     // reduces to its own raw confidence (0.95) regardless of its absolute weight.
@@ -54,17 +55,17 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.confidence).toBeCloseTo(0.95, 5);
   });
 
-  it('does not approve when weighted confidence stays at or below 0.75', () => {
+  it('does not approve when weighted confidence stays at or below 0.75', async () => {
     agent.recentIdeas = [
       { traceId: 't2', symbol: 'AAPL', side: 'BUY', confidence: 0.7, agent: 'TechnicalAgent', reasoning: 'weak signal' },
     ];
 
-    agent.evaluateConsensus('AAPL', 't2');
+    await agent.evaluateConsensus('AAPL', 't2');
 
     expect(emitChiefApproval).not.toHaveBeenCalled();
   });
 
-  it('reduces weighted confidence when agents disagree, but still approves if it clears 0.75', () => {
+  it('reduces weighted confidence when agents disagree, but still approves if it clears 0.75', async () => {
     agent.recentIdeas = [
       { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: 0.99, agent: 'TechnicalAgent', reasoning: 'buy A' },
       { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: 0.99, agent: 'NewsAgent', reasoning: 'buy B' },
@@ -73,7 +74,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
       { traceId: 't3', symbol: 'AAPL', side: 'SELL', confidence: 0.3, agent: 'KronosEngine', reasoning: 'weak sell' },
     ];
 
-    agent.evaluateConsensus('AAPL', 't3');
+    await agent.evaluateConsensus('AAPL', 't3');
 
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     const approval = emitChiefApproval.mock.calls[0][0];
@@ -87,26 +88,26 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.confidence).toBeGreaterThan(0.75);
   });
 
-  it('does not approve at all when disagreement pulls the winning side at/below the 0.75 approval bar', () => {
+  it('does not approve at all when disagreement pulls the winning side at/below the 0.75 approval bar', async () => {
     agent.recentIdeas = [
       { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'buy A' },
       { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'buy B' },
       { traceId: 't4', symbol: 'AAPL', side: 'SELL', confidence: 0.95, agent: 'MacroAgent', reasoning: 'sell C' },
     ];
 
-    agent.evaluateConsensus('AAPL', 't4');
+    await agent.evaluateConsensus('AAPL', 't4');
 
     // weighted = (0.95*0.25 + 0.95*0.25) - (0.95*0.15*0.5) = 0.40375; totalWeight = 0.65
     // finalConfidence = 0.40375/0.65 ≈ 0.621, below the 0.75 approval bar.
     expect(emitChiefApproval).not.toHaveBeenCalled();
   });
 
-  it('gives an unweighted agent (not in agentWeights) a default weight of 1.0', () => {
+  it('gives an unweighted agent (not in agentWeights) a default weight of 1.0', async () => {
     agent.recentIdeas = [
       { traceId: 't5', symbol: 'AAPL', side: 'BUY', confidence: 0.8, agent: 'BrandNewAgent', reasoning: 'novel signal' },
     ];
 
-    agent.evaluateConsensus('AAPL', 't5');
+    await agent.evaluateConsensus('AAPL', 't5');
 
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     const approval = emitChiefApproval.mock.calls[0][0];
@@ -114,12 +115,12 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.agentsContext).toContain('BrandNewAgent(wt:1.00)');
   });
 
-  it('gives the ConsensusDebate pseudo-agent a default weight of 0.35 when unweighted', () => {
+  it('gives the ConsensusDebate pseudo-agent a default weight of 0.35 when unweighted', async () => {
     agent.recentIdeas = [
       { traceId: 't6', symbol: 'AAPL', side: 'BUY', confidence: 0.9, agent: 'ConsensusDebate', reasoning: 'debate result' },
     ];
 
-    agent.evaluateConsensus('AAPL', 't6');
+    await agent.evaluateConsensus('AAPL', 't6');
 
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     const approval = emitChiefApproval.mock.calls[0][0];

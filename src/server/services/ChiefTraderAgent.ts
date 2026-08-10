@@ -41,6 +41,9 @@ import { agentPerformanceStats } from '../db/schema';
 import { EvidenceAggregator, Evidence } from './EvidenceAggregator';
 import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
+import { recordConsensusTransaction } from '../core/TransactionRegistry';
+
+const CONSENSUS_APPROVAL_THRESHOLD = 0.75;
 
 export class ChiefTraderAgent {
   private recentIdeas: any[] = [];
@@ -57,8 +60,9 @@ export class ChiefTraderAgent {
 
   constructor() {
     eventBus.on('TRADE_IDEA_GENERATED', (idea) => this.reviewIdea(idea));
-    
+
     setInterval(() => {
+       this.recordUnresolvedAsNoConsensus().catch(e => console.error('[ChiefTrader] Failed to record NO_CONSENSUS transactions', e));
        this.recentIdeas = [];
     }, 60000);
     
@@ -126,14 +130,14 @@ export class ChiefTraderAgent {
                  reasoning: `Multi-Model Debate Concluded: ${consensusSide} (Based on ${debateResult.results.length} models)`,
                  agent: 'ConsensusDebate'
               });
-              this.evaluateConsensus(idea.symbol, idea.traceId);
+              this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
            }
         }).catch(err => {
            console.error("[ChiefTrader] Debate failed", err);
-           this.evaluateConsensus(idea.symbol, idea.traceId);
+           this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
         });
     } else {
-       this.evaluateConsensus(idea.symbol, idea.traceId);
+       this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
     }
   }
 
@@ -141,7 +145,7 @@ export class ChiefTraderAgent {
     return this.agentWeights[agentName] || (agentName === 'ConsensusDebate' ? 0.35 : 1.0);
   }
 
-  evaluateConsensus(symbol: string, traceId: string) {
+  async evaluateConsensus(symbol: string, traceId: string) {
     const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
     const evidence: Evidence[] = relevantIdeas.map(i => ({ ...i, weight: this.resolveWeight(i.agent) }));
 
@@ -152,7 +156,7 @@ export class ChiefTraderAgent {
     let approved = false;
     let reason = "";
 
-    if (result.confidence > 0.75) {
+    if (result.confidence > CONSENSUS_APPROVAL_THRESHOLD) {
        approved = true;
        reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(result.confidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${result.reasoning}`;
     }
@@ -161,7 +165,30 @@ export class ChiefTraderAgent {
        // Clear from recent so we don't duplicate
        this.recentIdeas = this.recentIdeas.filter(i => i.symbol !== symbol);
 
+       // Mint the canonical transaction id and persist the consensus math + every contributing
+       // agent's evidence as real rows (TRANSACTION_OBSERVATORY_ARCHITECTURE.md Phase 0) - fixes
+       // the bug where only the ONE triggering idea's self-generated traceId survived downstream,
+       // orphaning every other contributing agent's evidence under its own different id.
+       const transactionId = await recordConsensusTransaction({
+         symbol,
+         side: result.side,
+         weightedConfidence: result.confidence,
+         threshold: CONSENSUS_APPROVAL_THRESHOLD,
+         approved: true,
+         reasoning: reason,
+         evidence: evidence.map(e => ({
+           sourceTraceId: e.traceId,
+           agent: e.agent,
+           side: e.side,
+           confidence: e.confidence,
+           weight: e.weight,
+           reasoning: e.reasoning,
+           currentPrice: e.currentPrice,
+         })),
+       });
+
        eventBus.emitChiefApproval({
+         transactionId,
          traceId: traceId,
          symbol: symbol,
          side: result.side,
@@ -194,6 +221,40 @@ export class ChiefTraderAgent {
        }
     } else {
        console.log(`[ChiefTrader] Idea stored. Waiting for stronger consensus on ${symbol}. Current confidence: ${(result.confidence*100).toFixed(1)}%`);
+    }
+  }
+
+  /**
+   * Called just before the 60s recentIdeas clear. Any symbol still holding accumulated ideas
+   * that never crossed CONSENSUS_APPROVAL_THRESHOLD gets a real NO_CONSENSUS transaction row -
+   * otherwise that attempt (and the evidence behind it) would simply vanish with no record,
+   * making "why didn't Argus trade AAPL even though 3 agents said BUY" unanswerable.
+   */
+  private async recordUnresolvedAsNoConsensus() {
+    const symbols = Array.from(new Set(this.recentIdeas.map(i => i.symbol)));
+    for (const symbol of symbols) {
+      const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
+      if (relevantIdeas.length === 0) continue;
+      const evidence: Evidence[] = relevantIdeas.map(i => ({ ...i, weight: this.resolveWeight(i.agent) }));
+      const result = EvidenceAggregator.aggregate(evidence);
+
+      await recordConsensusTransaction({
+        symbol,
+        side: result.side,
+        weightedConfidence: result.confidence,
+        threshold: CONSENSUS_APPROVAL_THRESHOLD,
+        approved: false,
+        reasoning: `No consensus reached before the evaluation window closed. Best side: ${result.side} at ${(result.confidence * 100).toFixed(1)}% (threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%).`,
+        evidence: evidence.map(e => ({
+          sourceTraceId: e.traceId,
+          agent: e.agent,
+          side: e.side,
+          confidence: e.confidence,
+          weight: e.weight,
+          reasoning: e.reasoning,
+          currentPrice: e.currentPrice,
+        })),
+      });
     }
   }
 

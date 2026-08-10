@@ -52,6 +52,12 @@ const NO_PERSIST_TYPES = new Set(['MARKET_DATA', 'CALCULATION_COMPLETED']);
 
 const trackEvent = (type: string) => (payload: any) => {
   const correlationId: string | null = payload?.traceId || payload?.trace_id || payload?.correlationId || null;
+  // The canonical transaction id (TRANSACTION_OBSERVATORY_ARCHITECTURE.md Phase 0) - only
+  // CHIEF_APPROVED_IDEA and everything emitted downstream of it carry one today. Deliberately
+  // NOT falling back to correlationId when absent: a per-agent traceId (e.g. from a lone
+  // TRADE_IDEA_GENERATED that never reached consensus) is not the same thing as a transaction,
+  // and mislabeling it as one would misrepresent event_traces queries by transaction_id.
+  const transactionId: string | null = payload?.transactionId ?? null;
   const envelope: EventEnvelope = {
     eventId: uuidv4(),
     schemaVersion: SCHEMA_VERSION,
@@ -78,6 +84,7 @@ const trackEvent = (type: string) => (payload: any) => {
     db.insert(schema.eventTraces).values({
       id: envelope.eventId,
       correlationId,
+      transactionId,
       timestamp: envelope.timestamp,
       source: envelope.source,
       eventType: type,

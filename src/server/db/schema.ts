@@ -270,7 +270,12 @@ export const eventTraces = sqliteTable('event_traces', {
   payload: text('payload'), // JSON string
   durationMs: integer('duration_ms'),
   success: integer('success', { mode: 'boolean' }).default(true),
-  errorInfo: text('error_info')
+  errorInfo: text('error_info'),
+  // Links this event to the canonical transaction it belongs to (transactions.id), when known.
+  // Nullable: most emitters still only carry their own self-generated traceId (correlationId
+  // above) - transactionId is populated once TransactionRegistry has minted one (from
+  // CHIEF_APPROVED_IDEA onward). See TRANSACTION_OBSERVATORY_ARCHITECTURE.md Phase 0.
+  transactionId: text('transaction_id'),
 });
 
 export const memoryRules = sqliteTable('memory_rules', {
@@ -429,6 +434,64 @@ export const escalationDecisions = sqliteTable('escalation_decisions', {
   escalated: integer('escalated', { mode: 'boolean' }).notNull(),
   reason: text('reason').notNull(),
   escalatedProvider: text('escalated_provider'),
+});
+
+// ==========================================================================================
+// Transaction Observatory - Phase 0 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md)
+//
+// Fixes a real architectural bug: prior to this, "traceId" identified one agent's own
+// emission, not one decision cycle. ChiefTraderAgent.evaluateConsensus() groups contributing
+// ideas by symbol (not traceId), then reports whichever single idea's traceId happened to
+// trigger the consensus check - so a trade approved on News's tipping vote would carry only
+// News's traceId, orphaning Technical's/Kronos's contributing evidence under their own,
+// different, self-generated ids. `transactions` is the new canonical unit: one row per symbol
+// per consensus-evaluation-cycle, id minted once by ChiefTraderAgent (human-readable
+// ARG-YYYY-MM-DD-NNNNNN format), with every contributing agent's evidence linked via
+// `consensus_evidence` regardless of which agent's own id triggered the cycle.
+// ==========================================================================================
+export const transactions = sqliteTable('transactions', {
+  id: text('id').primaryKey(), // 'ARG-2026-08-10-000123'
+  symbol: text('symbol').notNull(),
+  openedAt: text('opened_at').notNull(),
+  closedAt: text('closed_at'),
+  // OPEN (consensus approved, awaiting risk/order) | NO_CONSENSUS | RISK_REJECTED | EXECUTED | FILLED | RECONCILED
+  status: text('status').notNull(),
+  finalDecision: text('final_decision'), // BUY | SELL | HOLD | REJECTED
+  outcome: text('outcome').default('PENDING'), // WIN | LOSS | PENDING | N_A
+});
+
+// ChiefTraderAgent's weighted-vote consensus math, persisted as first-class queryable columns
+// instead of only existing inside one CHIEF_APPROVED_IDEA event payload.
+export const consensusDecisions = sqliteTable('consensus_decisions', {
+  transactionId: text('transaction_id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  side: text('side').notNull(), // BUY | SELL | HOLD
+  weightedConfidence: real('weighted_confidence').notNull(),
+  threshold: real('threshold').notNull(),
+  approved: integer('approved', { mode: 'boolean' }).notNull(),
+  agreementsCount: integer('agreements_count').notNull().default(0),
+  disagreementsCount: integer('disagreements_count').notNull().default(0),
+  debateUsed: integer('debate_used', { mode: 'boolean' }).default(false),
+  debateProviderCount: integer('debate_provider_count'),
+  reasoning: text('reasoning'),
+  createdAt: text('created_at').notNull(),
+});
+
+// Every contributing agent's evidence for a transaction, regardless of which agent's own
+// self-generated traceId happened to trigger the consensus cycle. `sourceTraceId` is a soft
+// reference back to that agent's own event_traces rows (agent_predictions/agent_decisions
+// don't yet carry stable ids to hard-FK against - see Phase 1 in the architecture doc).
+export const consensusEvidence = sqliteTable('consensus_evidence', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  transactionId: text('transaction_id').notNull(),
+  sourceTraceId: text('source_trace_id'),
+  agent: text('agent').notNull(),
+  side: text('side').notNull(),
+  confidence: real('confidence').notNull(),
+  weight: real('weight').notNull(),
+  reasoning: text('reasoning'),
+  agreed: integer('agreed', { mode: 'boolean' }).notNull(), // did this agent's side match the final consensus side?
+  currentPrice: real('current_price'),
 });
 
 // OpenAlice external verification requests/results (OpenAliceAdapter, OpenAliceVerificationService).

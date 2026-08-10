@@ -44,12 +44,13 @@ export class RiskValidationAgent {
     eventBus.on('CHIEF_APPROVED_IDEA', (approval) => this.assessRisk(approval));
   }
 
-  assessRisk(approval: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any }) {
+  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
 
      if (tradingEngine.state.emergencyStopActive) {
         eventBus.emitRiskAssessment({
            traceId: approval.traceId,
+           transactionId: approval.transactionId,
            symbol: approval.symbol,
            side: approval.side,
            approved: false,
@@ -62,6 +63,7 @@ export class RiskValidationAgent {
      if (!this.sessionOpen) {
         eventBus.emitRiskAssessment({
            traceId: approval.traceId,
+           transactionId: approval.transactionId,
            symbol: approval.symbol,
            side: approval.side,
            approved: false,
@@ -75,6 +77,7 @@ export class RiskValidationAgent {
      if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice) || currentPrice <= 0) {
         eventBus.emitRiskAssessment({
            traceId: approval.traceId,
+           transactionId: approval.transactionId,
            symbol: approval.symbol,
            side: approval.side,
            approved: false,
@@ -86,6 +89,7 @@ export class RiskValidationAgent {
 
      const request: any = {
         traceId: approval.traceId,
+        transactionId: approval.transactionId,
         symbol: approval.symbol,
         side: approval.side as 'BUY' | 'SELL',
         currentPrice,

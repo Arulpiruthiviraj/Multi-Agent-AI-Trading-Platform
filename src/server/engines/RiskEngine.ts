@@ -185,7 +185,7 @@ export class RiskEngine {
             const dailyLossKillSwitchThreshold = tradingEngine.state.dailyLossLimit * 0.8;
             if (dailyLoss >= dailyLossKillSwitchThreshold) {
                 eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId,
+                    traceId: proposal.traceId, transactionId: proposal.transactionId,
                     symbol: proposal.symbol,
                     side: proposal.side,
                     currentPrice: proposal.currentPrice,
@@ -200,7 +200,7 @@ export class RiskEngine {
             // FILLED trades, not a simulated/hardcoded count.
             if (await hasConsecutiveLosses()) {
                 eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId,
+                    traceId: proposal.traceId, transactionId: proposal.transactionId,
                     symbol: proposal.symbol,
                     side: proposal.side,
                     currentPrice: proposal.currentPrice,
@@ -216,7 +216,7 @@ export class RiskEngine {
             const marketOpen = await isMarketOpen();
             if (marketOpen === false) {
                 eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId,
+                    traceId: proposal.traceId, transactionId: proposal.transactionId,
                     symbol: proposal.symbol,
                     side: proposal.side,
                     currentPrice: proposal.currentPrice,
@@ -232,7 +232,7 @@ export class RiskEngine {
             const priceAgeMs = marketDataWorker.getLatestPriceAgeMs(proposal.symbol);
             if (priceAgeMs !== null && priceAgeMs > STALE_PRICE_THRESHOLD_MS) {
                 eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId,
+                    traceId: proposal.traceId, transactionId: proposal.transactionId,
                     symbol: proposal.symbol,
                     side: proposal.side,
                     currentPrice: proposal.currentPrice,
@@ -258,7 +258,7 @@ export class RiskEngine {
             if (symbolNews.length > 0) {
                  eventBus.emitRiskAssessment({
                      newsDetails: proposal.newsDetails,
-                     traceId: proposal.traceId,
+                     traceId: proposal.traceId, transactionId: proposal.transactionId,
                      symbol: proposal.symbol,
                      side: proposal.side,
                      currentPrice: proposal.currentPrice,
@@ -277,7 +277,7 @@ export class RiskEngine {
 
             if (typeof currentPrice !== 'number' || !Number.isFinite(currentPrice) || currentPrice <= 0) {
                 eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId,
+                    traceId: proposal.traceId, transactionId: proposal.transactionId,
                     symbol: proposal.symbol,
                     side: proposal.side,
                     approved: false,
@@ -359,7 +359,7 @@ export class RiskEngine {
             // 5. Final validation
             if (maxQuantity <= 0) {
                  eventBus.emitRiskAssessment({
-                     traceId: proposal.traceId,
+                     traceId: proposal.traceId, transactionId: proposal.transactionId,
                      symbol: proposal.symbol,
                      side: proposal.side,
                      currentPrice,
@@ -375,7 +375,7 @@ export class RiskEngine {
                 const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
                 if (!existingPosition || existingPosition.quantity <= 0) {
                     eventBus.emitRiskAssessment({
-                        traceId: proposal.traceId,
+                        traceId: proposal.traceId, transactionId: proposal.transactionId,
                         symbol: proposal.symbol,
                         side: proposal.side,
                         currentPrice,
@@ -389,7 +389,7 @@ export class RiskEngine {
             }
 
             eventBus.emitRiskAssessment({
-                traceId: proposal.traceId,
+                traceId: proposal.traceId, transactionId: proposal.transactionId,
                 symbol: proposal.symbol,
                 side: proposal.side,
                 approved: true,
@@ -400,7 +400,7 @@ export class RiskEngine {
         } catch (e) {
             console.error('[Risk Engine] Error evaluating risk', e);
             eventBus.emitRiskAssessment({
-                traceId: proposal.traceId,
+                traceId: proposal.traceId, transactionId: proposal.transactionId,
                 symbol: proposal.symbol,
                 side: proposal.side,
                 approved: false,
