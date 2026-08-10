@@ -19,6 +19,7 @@ import { desc, isNotNull, and, eq, gte } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { historicalDataGateway } from './backtest/HistoricalDataGateway';
 
 const STALE_PRICE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
@@ -51,6 +52,58 @@ function getSector(symbol: string): string | null {
     const sector = SECTOR_MAP[symbol.toUpperCase()];
     if (!sector || sector === 'Diversified ETF') return null;
     return sector;
+}
+
+const CORRELATION_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+const CORRELATION_MIN_OVERLAP = 20; // matches BacktestEngine's own significance floor
+const CORRELATION_THRESHOLD = 0.7;
+const MAX_CORRELATED_EXPOSURE_PCT = 0.50;
+const closesCache: Map<string, { closes: number[]; fetchedAt: number }> = new Map();
+
+// Real daily closes over a 90-day window, backed by ohlcv_bars (with an opportunistic real
+// Alpaca backfill if the cache is thin). Returns null - never a fabricated series - whenever
+// real history for this symbol isn't available (no Alpaca credentials, symbol never traded,
+// API failure). Cached in-memory for the market-clock cache's duration to avoid re-querying
+// the DB/Alpaca on every single risk evaluation within the same minute.
+async function getRecentCloses(symbol: string): Promise<number[] | null> {
+    const cached = closesCache.get(symbol);
+    if (cached && Date.now() - cached.fetchedAt < MARKET_CLOCK_CACHE_MS) return cached.closes;
+
+    const end = Date.now();
+    const start = end - CORRELATION_LOOKBACK_MS;
+    try {
+        let bars = await historicalDataGateway.getBars(symbol, '1Day', start, end);
+        if (bars.length < CORRELATION_MIN_OVERLAP) {
+            await historicalDataGateway.ensureBars(symbol, '1Day', start, end);
+            bars = await historicalDataGateway.getBars(symbol, '1Day', start, end);
+        }
+        if (bars.length < CORRELATION_MIN_OVERLAP) return null;
+        const closes = bars.map(b => b.close);
+        closesCache.set(symbol, { closes, fetchedAt: Date.now() });
+        return closes;
+    } catch (e) {
+        return null;
+    }
+}
+
+// Pearson correlation of daily returns (not raw prices, which would just measure "both went up
+// over time" for any two large caps). Returns null on too little overlapping history rather than
+// a fabricated 0.
+function returnCorrelation(closesA: number[], closesB: number[]): number | null {
+    const n = Math.min(closesA.length, closesB.length);
+    if (n < CORRELATION_MIN_OVERLAP + 1) return null;
+    const a = closesA.slice(-n), b = closesB.slice(-n);
+    const retA = a.slice(1).map((v, i) => v / a[i] - 1);
+    const retB = b.slice(1).map((v, i) => v / b[i] - 1);
+    const meanA = retA.reduce((s, v) => s + v, 0) / retA.length;
+    const meanB = retB.reduce((s, v) => s + v, 0) / retB.length;
+    let cov = 0, varA = 0, varB = 0;
+    for (let i = 0; i < retA.length; i++) {
+        const da = retA[i] - meanA, db = retB[i] - meanB;
+        cov += da * db; varA += da * da; varB += db * db;
+    }
+    if (varA === 0 || varB === 0) return null;
+    return cov / Math.sqrt(varA * varB);
 }
 
 // Real consecutive-loss circuit breaker - reads actual realized P&L from the last few FILLED
@@ -262,8 +315,6 @@ export class RiskEngine {
 
                 // 4b. Sector concentration cap - no GICS-mapped sector may exceed
                 // MAX_SECTOR_CONCENTRATION_PCT of real account equity after this trade fills.
-                // Correlation-based limits (as opposed to sector) are NOT implemented - there is
-                // no historical return-correlation calculation anywhere in this codebase to drive one.
                 const proposalSector = getSector(proposal.symbol);
                 if (proposalSector) {
                     const sectorValue = portfolio.positions.reduce((sum: number, p: any) => {
@@ -273,6 +324,35 @@ export class RiskEngine {
                     const remainingSectorRoom = Math.max(0, maxSectorValue - sectorValue);
                     const maxSharesBySector = Math.floor(remainingSectorRoom / currentPrice);
                     maxQuantity = Math.min(maxQuantity, maxSharesBySector);
+                }
+
+                // 4c. Correlation-based exposure cap - real pairwise return correlation (90-day
+                // daily closes, opportunistic real Alpaca backfill via HistoricalDataGateway)
+                // against every existing position. Caps combined exposure across positively,
+                // highly-correlated (r > CORRELATION_THRESHOLD) symbols at MAX_CORRELATED_EXPOSURE_PCT
+                // of equity - this catches the case sector mapping misses (e.g. an unmapped ticker
+                // that still moves in lockstep with an existing position). A strong NEGATIVE
+                // correlation is deliberately not capped here - two symbols that move oppositely
+                // are a natural hedge, not concentrated risk. Skips entirely (never blocks) if real
+                // price history isn't available for the proposal's own symbol.
+                if (portfolio.positions.length > 0) {
+                    const proposalCloses = await getRecentCloses(proposal.symbol);
+                    if (proposalCloses) {
+                        let correlatedValue = 0;
+                        for (const p of portfolio.positions) {
+                            if (p.symbol === proposal.symbol) { correlatedValue += p.quantity * currentPrice; continue; }
+                            const otherCloses = await getRecentCloses(p.symbol);
+                            if (!otherCloses) continue; // no real history for this position - skip it, don't fabricate
+                            const corr = returnCorrelation(proposalCloses, otherCloses);
+                            if (corr !== null && corr > CORRELATION_THRESHOLD) {
+                                correlatedValue += p.quantity * currentPrice;
+                            }
+                        }
+                        const maxCorrelatedValue = accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
+                        const remainingCorrelatedRoom = Math.max(0, maxCorrelatedValue - correlatedValue);
+                        const maxSharesByCorrelation = Math.floor(remainingCorrelatedRoom / currentPrice);
+                        maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
+                    }
                 }
             }
 

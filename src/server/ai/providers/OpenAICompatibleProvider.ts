@@ -78,15 +78,25 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     const maxRetries = 2;
     let delay = 500;
 
+    // Ollama's OpenAI-compatible endpoint honors response_format:{type:"json_object"} and
+    // constrains decoding to valid JSON - this measurably cuts the invalid-JSON failure rate
+    // small local models otherwise have on structured-extraction tasks (see NewsScoringEngine).
+    // Scoped to local backends only - not every OpenAI-compatible aggregator supports this param,
+    // and a paid call failing on an unsupported param would be a worse outcome than skipping it.
+    const body: Record<string, any> = {
+        model: options?.model || this.defaultModel,
+        messages: [{ role: "user", content: prompt }]
+    };
+    if (options?.jsonMode && this.isLocal) {
+        body.response_format = { type: 'json_object' };
+    }
+
     while (retries <= maxRetries) {
       try {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: "POST",
             headers,
-            body: JSON.stringify({
-                model: options?.model || this.defaultModel,
-                messages: [{ role: "user", content: prompt }]
-            })
+            body: JSON.stringify(body)
         });
         
         if (!response.ok) {

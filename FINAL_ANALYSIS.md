@@ -22,9 +22,9 @@ real account state; an Order Management Service executes it through a broker ada
 - Real AI-router-mediated reasoning for News/Fundamental/Macro agents, with real per-provider cost
   tracking and real per-agent provider routing.
 - A real risk engine: daily-loss kill-switch, consecutive-loss breaker, market-hours/stale-data checks,
-  single-symbol concentration cap, a sector concentration cap (added this pass, GICS-mapped large caps
-  only, correlation-based limits still not implemented), a working (fixed this pass) high-impact-news
-  veto, order idempotency, and real fill-price tracking.
+  single-symbol concentration cap, a sector concentration cap (GICS-mapped large caps), a real
+  correlation-based exposure cap (90-day return correlation, backed by real OHLCV history), a working
+  (fixed this pass) high-impact-news veto, order idempotency, and real fill-price tracking - 9 gates now.
 - AutoBot is now running continuously in PAPER mode (enabled this pass) - the News Intelligence and
   Activity Logs tabs are populated with real data for the first time, and real per-agent consensus
   (Technical/News/Fundamental/Macro/Kronos → ChiefTrader → RiskEngine) is live-verified end-to-end,
@@ -39,16 +39,15 @@ real account state; an Order Management Service executes it through a broker ada
   a defect in the engine. See Section 9 for the per-symbol numbers.
 - A real local AI stack (Ollama + a local Chronos time-series forecasting service) — the previously
   permanently-throwing Kronos forecaster now produces real forecasts.
-- A real test suite (45 tests), real CI (GitHub Actions), and a real Docker/health-check deployment path.
+- A real test suite (47 tests), real CI (GitHub Actions), and a real Docker/health-check deployment path.
 
 **What is not yet real:**
 - 17 dashboard visualization panels are still static/decorative (hardcoded arrays or
   `Date.now()`-seeded jitter) — explicitly deferred, not hidden.
 - Only Alpaca can trade fully autonomously; Interactive Brokers is now a real adapter but requires human
   2FA roughly every 24h; Questrade and Coinbase order execution are stubs by design.
-- Correlation-based exposure limits (sector limits were added this pass), Monte Carlo backtest
-  sensitivity, and a historical replay of the full AI-agent consensus (as opposed to just the
-  deterministic technical rules) do not exist yet.
+- Monte Carlo backtest sensitivity and a historical replay of the full AI-agent consensus (as opposed
+  to just the deterministic technical rules) do not exist yet.
 
 **Honest overall assessment:** BETA. Paper-trading readiness criteria are met. Live-capital readiness
 is not — not because of missing infrastructure (that gap is closed), but because the one real strategy
@@ -72,10 +71,13 @@ test run so far shows no edge, and the only broker that can run fully unattended
 | Kronos/Chronos forecasting | Real | Local Chronos model via a persistent Python service; live-verified BUY/SELL/HOLD |
 | Interactive Brokers | Real, but manual-2FA-gated | Real Client Portal Web API client; cannot run fully unattended |
 | Paper→live confirmation gate | Real | Requires an exact confirmation phrase; previously not reachable at all |
-| Automated tests | Real | 45 tests / 4 files (vitest), real CI |
+| Automated tests | Real | 47 tests / 4 files (vitest), real CI |
 | Local AI stack (Ollama/Chronos/FinBERT) | Real | Chronos (Kronos forecaster), FinBERT (news sentiment), and Ollama (NewsAgent's AI calls) are all wired into a live agent now; XGBoost still installed but unused |
 | News provider health stats | Real (fixed this pass) | Was 100% hardcoded (`enabled:true, health:"Healthy", errorCount:0`) regardless of real state; now tracks real per-provider fetch/error/lastFetch stats |
-| Sector concentration limit | Real | 40% cap on GICS-mapped large caps; correlation-based limits still not implemented |
+| Sector concentration limit | Real | 40% cap on GICS-mapped large caps |
+| Correlation-based exposure limit | Real | 50% cap across symbols with >0.7 real 90-day return correlation; skips (doesn't block) when history is unavailable |
+| Dead paid-AI-provider deprioritization | Real | `AIRouter` now sorts known-`Offline` providers (from real call outcomes) to the end of the attempt order instead of retrying them every call |
+| XGBoost direction classifier | Trained, evaluated, NOT wired in | Real walk-forward result (56.7% vs 53.3%/50% baselines) whose 95% CI overlaps the naive baseline - inconclusive, so not used by any live agent |
 | Questrade / Coinbase execution | Stub by design | `placeOrder()` throws; blocked from being selected as the active broker |
 | ~17 dashboard visualization panels | Decorative | Static arrays / deterministic jitter; explicitly deferred |
 
@@ -113,6 +115,9 @@ across a real date range. Explicitly scoped out, not claimed as done.
 - **Consecutive-loss breaker** — blocks new trades after 3 consecutive real losing FILLED trades.
 - **Market-hours / stale-data checks** — real Alpaca clock call; real per-symbol tick-age tracking.
 - **Single-symbol concentration cap** — 20% of real account equity; reduces size rather than rejecting.
+- **Sector concentration cap** — 40% of equity across GICS-mapped large caps.
+- **Correlation-based exposure cap** — 50% of equity across symbols with real >0.7 90-day return
+  correlation to the proposal; skips (doesn't block) when real price history is unavailable.
 - **High-impact-news veto** — fixed this pass; was querying a column that doesn't exist on the table it
   queried and could never fire for any trade, regardless of real news.
 - **Order idempotency** — a second order for the same `traceId` is refused.
@@ -161,7 +166,7 @@ broker at the code level, not just documented as unsupported.
 
 ## 7. Testing
 
-- **Unit tests:** 45 tests across 4 files (vitest) — RiskEngine's gates, OrderManagement idempotency
+- **Unit tests:** 47 tests across 4 files (vitest) — RiskEngine's gates, OrderManagement idempotency
   and fill-polling, ChiefTraderAgent consensus math, and a broker-adapter capability contract test.
   Previously zero test files existed anywhere in the repo.
 - **CI:** GitHub Actions (`.github/workflows/ci.yml`) runs lint + test + build on every push/PR.
@@ -217,17 +222,25 @@ broker at the code level, not just documented as unsupported.
   by keying on the provider-native article id (stable across refetches) plus `onConflictDoNothing()`
   on the insert as defense-in-depth for the id cache resetting across server restarts.
 
-**New finding this pass, not fixed (needs the user's own credential review, not a code fix):**
+**New finding two passes ago, symptom fixed this pass, root cause still needs the user's own
+credential review (not something a code fix can resolve):**
 - Turning on the real pipeline surfaced that most of the paid AI providers seeded in `aiProviders`
   (Gemini, OpenAI, Claude, Kimi, OpenRouter, Mistral) return 401/invalid-key errors when actually
   called by `AIRouter`'s failover chain - only NVIDIA (404, likely a bad model name) and the local
-  Ollama fallback are structurally different failures. The failover chain degrades safely (always
-  lands on Ollama), so nothing crashed, but every one of those calls today burns ~6 dead round-trips
-  before succeeding locally. Worth an audit of which of these keys are meant to be real.
+  Ollama fallback are structurally different failures. The failover chain always degraded safely
+  (lands on Ollama), so nothing crashed, but every call was burning ~6 dead round-trips before
+  succeeding locally. **Fixed the symptom this pass**: `AIRouter` now deprioritizes providers its own
+  real call history has marked `Offline`, so a call no longer retries known-dead keys before reaching
+  one that works. The keys themselves are still whatever they are - only the user can say which are
+  meant to be real vs. placeholders.
 - A small local model (`llama3.2`, 3B) frequently fails to return valid JSON for NewsAgent's structured
-  extraction task (`NewsScoringEngine`), so a real fraction of news-driven trade ideas are silently
-  dropped (caught, logged, skipped - not a crash). Acceptable degradation, but reduces NewsAgent's
-  effective signal coverage versus a cloud model at this specific structured-output task.
+  extraction task (`NewsScoringEngine`), so a real fraction of news-driven trade ideas were silently
+  dropped (caught, logged, skipped - not a crash). **Mitigated this pass**: `NewsScoringEngine` now
+  requests Ollama's JSON mode (`response_format:{type:"json_object"}`), which constrains decoding to
+  valid JSON. Only 2 real Ollama calls happened during this pass's live-verification window (the fixed
+  dedup bug means far fewer new articles arrive per cycle now) - both succeeded, but that's too small a
+  sample to claim the failure rate is meaningfully lower, just that the mechanism is real and correctly
+  wired.
 
 **Explicitly deferred by the user this pass, not forgotten:**
 - The real `shiyu-coder/Kronos` foundation model as a second forecasting backend (Chronos, a different
@@ -239,18 +252,43 @@ broker at the code level, not just documented as unsupported.
 
 ---
 
-## 10. Recommended Next Priorities
+## 10. This Pass's Work (previously "Recommended Next Priorities" - now actioned)
 
-1. Let AutoBot run in PAPER mode for real (days, not minutes) to accumulate a statistically meaningful
-   trade sample before revisiting the strategy question - five tiny backtests aren't enough either way.
-2. Audit the paid AI provider keys seeded in `aiProviders` - six of seven are currently dead weight.
-3. Improve NewsAgent's structured-output reliability against small local models (e.g. Ollama's JSON
-   mode / grammar-constrained decoding) rather than silently dropping a chunk of its signals.
-4. Wire XGBoost into TechnicalAgent (FinBERT/Ollama/Chronos are wired now; XGBoost is the one local
-   model still installed but unused) - or explicitly decide it's not worth the training-data/overfitting
-   risk given the five backtests above.
-5. Add correlation-based exposure limits to the risk engine (the sector cap added this pass is a coarser
-   proxy for the same risk).
+1. **AutoBot left running in PAPER mode.** Passive/time-based - nothing to implement, just confirmed
+   still running continuously across every restart this pass (persisted via `settings.autoBotEnabled`).
+2. **Dead paid-AI-provider auto-deprioritization, implemented.** `AIRouter` already tracked real
+   per-provider `successRate`/`health` from real call outcomes, but never *used* that signal to skip
+   providers already known to be `Offline` - every call still burned ~6 dead round-trips (expired keys)
+   before reaching a provider that actually answered. Fixed in both `routeTask()` and `routeConsensus()`:
+   providers with `health === 'Offline'` are moved to the end of the attempt order (not removed - if
+   every live provider fails, they're still tried as a last resort, so a stale/wrong health flag can't
+   permanently strand a call with zero providers). This is adaptive from real outcomes, not a static
+   blocklist - a provider earns its way back once it starts succeeding again.
+3. **Ollama JSON mode for NewsAgent, implemented.** `OpenAICompatibleProvider.chat()` now sends
+   `response_format: {type:"json_object"}` when the caller requests it (`AIRouter.routeTask(..., jsonMode:
+   true)`) and the target is a local backend - `NewsScoringEngine` now requests this, since its whole job
+   is strict JSON extraction and llama3.2 was visibly failing that a meaningful fraction of the time. Not
+   applied to non-local backends since not every OpenAI-compatible aggregator supports the parameter.
+4. **XGBoost direction classifier: trained, honestly evaluated, deliberately NOT wired into any live
+   agent.** `scripts/train_xgboost_direction.py` trains a real classifier on the real cached OHLCV bars
+   (features: RSI14, MACD histogram, SMA20/50 ratio, Bollinger %B, 5-day return - the same set
+   `TechnicalAgent.ts` can compute live) with a genuine chronological 80/20 walk-forward split per symbol
+   (2,949 train / 739 test rows). Result: **56.7% test accuracy** vs a 53.3% "always predict up" baseline
+   vs a 50% coin flip - clears both by the pre-registered +3pp margin, but the accuracy's own 95% CI
+   (`[53.1%, 60.3%]`) overlaps the baseline, meaning this result is not statistically distinguishable from
+   noise at this sample size. Per the standing rule against fabricating validated capability, the model
+   and its real metrics are saved (`models/xgboost_direction.json`/`_metrics.json`, gitignored -
+   regenerable, not canonical) but nothing calls it - wiring in an inconclusive signal as if it were
+   validated would repeat exactly the kind of overclaiming this whole audit exists to correct.
+5. **Correlation-based exposure cap, implemented.** New RiskEngine gate (4c): real pairwise Pearson
+   correlation of 90-day daily returns (backed by `ohlcv_bars`, with an opportunistic real Alpaca
+   backfill via `HistoricalDataGateway` when the cache is thin) between the proposed symbol and each
+   existing position. Combined exposure across symbols with return correlation `> 0.7` is capped at 50%
+   of equity - catches concentration the sector map misses (e.g. two unmapped but co-moving tickers).
+   Deliberately only fires on *positive* correlation - two symbols moving oppositely are a hedge, not
+   concentration, and capping that would be wrong. Skips entirely (never blocks) when real price history
+   isn't available for the proposed symbol. Two new unit tests (positive-correlation cap binds;
+   negative-correlation does NOT cap) bring RiskEngine to 19 tests, 47 total.
 
 ---
 
@@ -263,13 +301,13 @@ broker at the code level, not just documented as unsupported.
 | Category | Score | Why |
 |---|---|---|
 | Architecture | 7/10 | Real event-driven pipeline, typed/persisted event envelopes, clean broker/AI-provider abstractions. Single-process, in-memory EventBus (no replay beyond a capped ring buffer) caps how far this scales. |
-| Reliability | 6/10 | Graceful AI-provider failover (verified live: 6 dead providers → Ollama fallback, no crash); Alpaca WS reconnects on its own. No chaos/failure-injection tests exist beyond what unit tests cover. |
+| Reliability | 7/10 | Graceful AI-provider failover, now also adaptive (dead providers get deprioritized from real outcomes rather than retried every call); Alpaca WS reconnects on its own. No chaos/failure-injection tests exist beyond what unit tests cover. |
 | Security | 7/10 | Encrypted API keys at rest, session auth, no secrets seen in logs this pass. No rate limiting or dependency-vuln scanning audited. |
-| Risk management | 8/10 | 8 real gates now (daily-loss, consecutive-loss, market-hours, stale-data, news-veto, idempotency, single-symbol + sector concentration), all unit-tested. Correlation limits still missing. |
+| Risk management | 9/10 | 9 real gates now (daily-loss, consecutive-loss, market-hours, stale-data, news-veto, idempotency, single-symbol + sector + correlation concentration), all unit-tested. |
 | Backtesting | 6/10 | Real point-in-time-gated engine with a real significance check that's honest about failing itself. Only backtests the deterministic technical rules, not the AI-agent consensus layer. |
-| AI architecture | 8/10 | Real provider-agnostic router with real cost tracking; local-first now genuinely realized (Ollama/Chronos/FinBERT all live) rather than just documented. |
+| AI architecture | 8/10 | Real provider-agnostic router with real cost tracking, adaptive dead-provider deprioritization, and JSON-mode structured output; local-first now genuinely realized (Ollama/Chronos/FinBERT all live) rather than just documented. |
 | Broker architecture | 6/10 | Clean adapter interface; only Alpaca is fully unattended-capable; IBKR/Questrade/Coinbase gaps are honestly surfaced, not hidden. |
-| Testing | 5/10 | 45 real unit tests on the safety-critical path; zero integration/E2E tests. |
+| Testing | 5/10 | 47 real unit tests on the safety-critical path; zero integration/E2E tests. |
 | Observability | 6/10 | Durable, correlation-ID-linked event traces for the decision pipeline; no dashboards/alerting on top of them yet. |
 | UX | 5/10 | Core trading tabs are now real; ~17 secondary panels remain decorative. |
 | Production readiness | 6/10 | Docker/CI/health-checks are real; no integration tests, no monitoring/alerting beyond logs. |

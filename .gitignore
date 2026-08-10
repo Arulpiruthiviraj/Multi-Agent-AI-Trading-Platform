@@ -15,4 +15,7 @@ data/*.db-shm
 data/*.db-wal
 data/audit_trail.jsonl
 data/shadow_portfolio.json
+data/backups/
+data/ohlcv_export.json
+models/
 sqlite.db

@@ -46,6 +46,17 @@ const { mockMarketDataWorker } = vi.hoisted(() => ({
 
 const { emitRiskAssessment } = vi.hoisted(() => ({ emitRiskAssessment: vi.fn() }));
 
+// Per-symbol daily-close series the correlation cap reads via getRecentCloses(). Real
+// HistoricalDataGateway isn't exercised here - just its real return shape.
+const { mockBarsBySymbol, mockHistoricalDataGateway } = vi.hoisted(() => {
+  const mockBarsBySymbol: Record<string, number[]> = {};
+  const mockHistoricalDataGateway = {
+    getBars: vi.fn(async (symbol: string) => (mockBarsBySymbol[symbol] || []).map((close, i) => ({ timestamp: i, open: close, high: close, low: close, close, volume: 1000 }))),
+    ensureBars: vi.fn(async () => {}),
+  };
+  return { mockBarsBySymbol, mockHistoricalDataGateway };
+});
+
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { emitRiskAssessment } }));
 vi.mock('../../brokers/BrokerManager', () => ({
@@ -53,6 +64,7 @@ vi.mock('../../brokers/BrokerManager', () => ({
 }));
 vi.mock('./TradingEngine', () => ({ tradingEngine: mockTradingEngine }));
 vi.mock('../services/MarketDataWorker', () => ({ marketDataWorker: mockMarketDataWorker }));
+vi.mock('./backtest/HistoricalDataGateway', () => ({ historicalDataGateway: mockHistoricalDataGateway }));
 
 import { riskEngine } from './RiskEngine';
 
@@ -87,6 +99,7 @@ describe('RiskEngine.evaluateRisk', () => {
     setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 3000 }]);
     setTableRows(schema.trades, []);
     setTableRows(schema.newsClusters, []);
+    for (const key of Object.keys(mockBarsBySymbol)) delete mockBarsBySymbol[key];
     mockBrokerHolder.broker = makeBroker(basePortfolio());
     delete process.env.ALPACA_API_KEY;
     delete process.env.ALPACA_SECRET_KEY;
@@ -242,6 +255,54 @@ describe('RiskEngine.evaluateRisk', () => {
     // by ZZZZ's large unrelated position.
     expect(assessment.approved).toBe(true);
     expect(assessment.maxQuantity).toBe(200);
+  });
+
+  it('caps a BUY at the 50% correlated-exposure limit when it is highly positively correlated with an existing position', async () => {
+    const trendUp = Array.from({ length: 25 }, (_, i) => 100 + i * 2); // [100,102,...,148]
+    mockBarsBySymbol.CORRA = trendUp;
+    mockBarsBySymbol.CORRB = [...trendUp]; // identical return series -> correlation = 1.0
+
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 200000,
+      buyingPower: 1000000,
+      positions: [{ symbol: 'CORRB', quantity: 900, entryPrice: 100 }], // $90,000 existing exposure
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 1000000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-corr1', symbol: 'CORRA', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    // Correlated cap: 50% of $200k = $100k total; $90k already held in the correlated CORRB
+    // position -> $10k / $100 = 100 more shares max, tighter than the 20% single-symbol cap (400).
+    expect(assessment.approved).toBe(true);
+    expect(assessment.maxQuantity).toBe(100);
+  });
+
+  it('does not correlation-cap a BUY against a negatively-correlated existing position', async () => {
+    // Constructs two series whose per-step returns are exact negatives of each other
+    // (retB_i = -retA_i for every i), which guarantees Pearson correlation = -1 exactly -
+    // a real hedge, not a coincidental mirror of price levels (which does NOT imply
+    // negatively-correlated returns).
+    const stepReturns = Array.from({ length: 24 }, (_, i) => 0.01 * (i % 2 === 0 ? 1 : -1) + 0.001 * i);
+    const seriesA = [100]; for (const r of stepReturns) seriesA.push(seriesA[seriesA.length - 1] * (1 + r));
+    const seriesB = [100]; for (const r of stepReturns) seriesB.push(seriesB[seriesB.length - 1] * (1 - r));
+    mockBarsBySymbol.CORRC = seriesA;
+    mockBarsBySymbol.CORRD = seriesB;
+
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 200000,
+      buyingPower: 1000000,
+      positions: [{ symbol: 'CORRD', quantity: 900, entryPrice: 100 }], // $90,000 in an inversely-moving symbol
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 1000000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-corr2', symbol: 'CORRC', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    // A hedge, not concentration - the correlation cap must not fire. Bound only by the 20%
+    // single-symbol cap: $200k * 0.20 / $100 = 400 shares (below the 800-share risk-sizing cap).
+    expect(assessment.approved).toBe(true);
+    expect(assessment.maxQuantity).toBe(400);
   });
 
   it('rejects a SELL with no existing position', async () => {

@@ -167,8 +167,15 @@ export class AIRouter {
            const stat = dbStats.find(s => s.id === id);
            return !stat || stat.enabled;
         });
+
+        // Same known-dead exclusion as routeTask() - a multi-provider debate shouldn't spend real
+        // parallel calls on providers whose keys have already failed repeatedly, unless every
+        // enabled provider is in that state (then there's nothing better to fall back to).
+        const isKnownDead = (id: string) => dbStats.find(s => s.id === id)?.health === 'Offline';
+        const live = availableProviders.filter(([id]) => !isKnownDead(id));
+        if (live.length > 0) availableProviders = live;
     } catch (e) {}
-    
+
     if (availableProviders.length === 0) {
        throw new Error("No AI Providers available for consensus");
     }
@@ -273,7 +280,7 @@ export class AIRouter {
     };
   }
 
-  public async routeTask(agentType: string, prompt: string, traceId: string): Promise<{content: string, provider: string, latency: number}> {
+  public async routeTask(agentType: string, prompt: string, traceId: string, jsonMode: boolean = false): Promise<{content: string, provider: string, latency: number}> {
     
     let preferredConfig = this.agentRouting.get(agentType);
     
@@ -281,8 +288,9 @@ export class AIRouter {
     let availableProviders = Array.from(this.providers.entries());
     
     // Fetch latest stats from DB to prioritize
+    let dbStats: (typeof schema.aiProviders.$inferSelect)[] = [];
     try {
-        const dbStats = await db.select().from(schema.aiProviders);
+        dbStats = await db.select().from(schema.aiProviders);
         availableProviders.sort((a, b) => {
            const statA = dbStats.find(s => s.id === a[0]);
            const statB = dbStats.find(s => s.id === b[0]);
@@ -299,8 +307,18 @@ export class AIRouter {
            }
            return 0;
         });
+
+        // Providers real calls have already driven to 'Offline' (successRate decayed below 50
+        // from repeated real failures - see the failure branch below) are moved to the very end
+        // rather than tried in their normal priority slot. They're still tried last-resort if
+        // every live provider fails, but a call no longer burns N dead round-trips (e.g. expired
+        // API keys) before reaching a provider that's actually going to answer.
+        const isKnownDead = (id: string) => dbStats.find(s => s.id === id)?.health === 'Offline';
+        const live = availableProviders.filter(([id]) => !isKnownDead(id));
+        const dead = availableProviders.filter(([id]) => isKnownDead(id));
+        availableProviders = [...live, ...dead];
     } catch (e) {}
-    
+
     // If agent has a preferred provider, put it first
     if (preferredConfig) {
         const prefIdx = availableProviders.findIndex(p => p[0] === preferredConfig!.providerId);
@@ -330,7 +348,7 @@ export class AIRouter {
             console.log(`[AIRouter] Agent '${agentType}' routing to ${providerId}`);
             
             reqModel = (providerId === preferredConfig?.providerId) ? preferredConfig?.model : undefined;
-            res = await provider.chat(prompt, { model: reqModel });
+            res = await provider.chat(prompt, { model: reqModel, jsonMode });
             
             latency = Date.now() - startTime;
             

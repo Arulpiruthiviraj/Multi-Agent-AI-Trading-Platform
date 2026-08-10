@@ -39,7 +39,7 @@ Return a strict JSON object matching exactly this schema, with no markdown forma
 }`;
 
     try {
-      const res = await AIRouter.getInstance().routeTask('NewsAgent', prompt, traceId);
+      const res = await AIRouter.getInstance().routeTask('NewsAgent', prompt, traceId, true);
       let text = res.content;
       
       // Strip markdown code block if present
