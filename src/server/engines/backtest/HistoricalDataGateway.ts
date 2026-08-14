@@ -100,6 +100,64 @@ export class HistoricalDataGateway {
     }
   }
 
+  /**
+   * Phase 2C (FINAL_ANALYSIS.md's 4-phase remediation plan) - real corporate-actions safety
+   * check. ensureBars()/getBars() above always deal in adjustment='raw' bars (unadjusted for
+   * splits/dividends) - a real stock split within the backtest window would silently corrupt
+   * every bar before the split date, since a pre-split $400 close and a post-split $100 close for
+   * the same company are not comparable without adjustment, and the strategy would see what looks
+   * like a real -75% crash that never happened. This makes a separate, uncached, one-off fetch
+   * with adjustment='split' for the same range and compares it against the already-cached raw
+   * bars; a material difference anywhere means a real corporate action occurred in this window.
+   * Deliberately does NOT cache the split-adjusted comparison bars into ohlcv_bars - mixing two
+   * different adjustment conventions under the same symbol+timeframe cache key would silently
+   * corrupt every other real consumer of that cache (e.g. RiskEngine's correlation lookback).
+   * Returns `checked:false` (never a fabricated "clean" verdict) when it cannot actually compare -
+   * no credentials, no raw bars yet, or the comparison fetch itself failed.
+   */
+  async checkForUnadjustedCorporateActions(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<{ clean: boolean; checked: boolean; issues: string[] }> {
+    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
+      return { clean: true, checked: false, issues: ['Cannot check for corporate actions - no Alpaca credentials configured.'] };
+    }
+    const rawBars = await this.getBars(symbol, timeframe, startMs, endMs);
+    if (rawBars.length === 0) return { clean: true, checked: false, issues: [] };
+
+    try {
+      const splitByTs = new Map<number, number>();
+      let pageToken: string | undefined;
+      do {
+        const url = new URL(`${ALPACA_DATA_HOST}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
+        url.searchParams.set('timeframe', timeframe);
+        url.searchParams.set('start', new Date(startMs).toISOString());
+        url.searchParams.set('end', new Date(endMs).toISOString());
+        url.searchParams.set('limit', '10000');
+        url.searchParams.set('adjustment', 'split');
+        if (pageToken) url.searchParams.set('page_token', pageToken);
+
+        const res = await fetch(url.toString(), {
+          headers: { 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY, 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY }
+        });
+        if (!res.ok) return { clean: true, checked: false, issues: [`Could not verify - split-adjusted comparison fetch failed: ${res.status}`] };
+        const data = await res.json();
+        for (const b of (data.bars || [])) splitByTs.set(new Date(b.t).getTime(), b.c);
+        pageToken = data.next_page_token || undefined;
+      } while (pageToken);
+
+      const issues: string[] = [];
+      for (const bar of rawBars) {
+        const splitClose = splitByTs.get(bar.timestamp);
+        if (splitClose === undefined || bar.close === 0) continue;
+        const relDiff = Math.abs(splitClose - bar.close) / bar.close;
+        if (relDiff > 0.01) {
+          issues.push(`${symbol} ${new Date(bar.timestamp).toISOString().split('T')[0]}: raw close ${bar.close} vs split-adjusted close ${splitClose} (${(relDiff * 100).toFixed(1)}% difference) - likely an unadjusted stock split affecting this bar and everything before it.`);
+        }
+      }
+      return { clean: issues.length === 0, checked: true, issues };
+    } catch (e: any) {
+      return { clean: true, checked: false, issues: [`Could not verify corporate actions: ${e.message}`] };
+    }
+  }
+
   /** Real, ordered, point-in-time bars for a symbol/timeframe/range. No fabrication. */
   async getBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
     const rows = await db.select().from(schema.ohlcvBars)

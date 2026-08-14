@@ -1,4 +1,5 @@
 import { NewsProviderPlugin, NewsArticleRaw } from './NewsProviderPlugin';
+import { logErrorSafely } from '../../core/SecretRedaction';
 
 export class FMPNewsProvider implements NewsProviderPlugin {
   public id = 'fmp_news';
@@ -32,7 +33,9 @@ export class FMPNewsProvider implements NewsProviderPlugin {
         symbols: item.tickers ? item.tickers.split(',') : []
       }));
     } catch (e) {
-      console.error('[FMPNewsProvider] Error fetching news', e);
+      // FMP's API only supports key-in-query-string auth (no header alternative) - see
+      // AlphaVantageNewsProvider.ts's identical comment / SecretRedaction.ts.
+      logErrorSafely('[FMPNewsProvider] Error fetching news', e);
       return [];
     }
   }

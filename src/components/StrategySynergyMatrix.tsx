@@ -1,65 +1,40 @@
 /**
  * ==========================================================
- * Module:
- * StrategySynergyMatrix.tsx
+ * Module: StrategySynergyMatrix
  *
  * Purpose:
- * Core implementation and logic for the StrategySynergyMatrix.tsx module within the Argus Trading Terminal.
- *
- * Responsibilities:
- * - State management and logic execution for StrategySynergyMatrixx
- * - Interface with backend APIs and EventBus
- * - Render UI components (if React)
- *
- * Inputs:
- * - Module dependencies and injected props
- *
- * Outputs:
- * - Formatted data or React Elements
- *
- * Emits:
- * - Relevant system events
- *
- * Dependencies:
- * - Standard Argus architecture layers
- *
- * Called By:
- * - Argus Routing / Parent Components
- *
- * Never:
- * - Mutate global state directly without EventBus
- * - Call AI providers directly (Must use AIRouter)
- *
+ * Phase 3B of FINAL_ANALYSIS.md's 4-phase remediation plan. This used to render a fabricated 6x6
+ * correlation matrix between invented agent names ("Macro", "News", "Tech", "Sentiment", "Event",
+ * "Geopol") - none of which correspond to any real agent in this codebase - via a deterministic
+ * index-seeded formula with hardcoded special-case values. Now fetches
+ * GET /api/v2/strategy/agent-synergy, which computes a real Pearson correlation
+ * (src/server/services/AgentSynergy.ts) over real agent_predictions rows for the five agents this
+ * codebase actually runs: TechnicalAgent, NewsAgent, FundamentalAgent, MacroAgent,
+ * KronosForecastAgent. A pair with too few overlapping real predictions renders as AWAITING
+ * SIGNAL, never a fabricated coefficient.
  * ==========================================================
  */
 
-import React from 'react';
-import { Network, Activity } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Network } from 'lucide-react';
+import AwaitingSignal from './shared/AwaitingSignal';
 
-const agents = [
-  "Macro",
-  "News",
-  "Tech",
-  "Sentiment",
-  "Event",
-  "Geopol"
-];
-
-// default correlation data between -1.0 and +1.0
-// We'll generate a symmetrical matrix with 1.0 on the diagonal
-const getCorrelation = (i: number, j: number): number => {
-  if (i === j) return 1.0;
-  
-  // Deterministic default data based on indices
-  const seed = (i * 7 + j * 13) % 100;
-  
-  // Specific default rules for flavor
-  if ((agents[i] === "Macro" && agents[j] === "Geopol") || (agents[j] === "Macro" && agents[i] === "Geopol")) return 0.85;
-  if ((agents[i] === "Tech" && agents[j] === "Sentiment") || (agents[j] === "Tech" && agents[i] === "Sentiment")) return 0.62;
-  if ((agents[i] === "Macro" && agents[j] === "Sentiment") || (agents[j] === "Macro" && agents[i] === "Sentiment")) return -0.45;
-  
-  return (seed / 50) - 1; // Maps to -1.0 to 1.0
+const SHORT_LABEL: Record<string, string> = {
+  TechnicalAgent: 'TECH',
+  NewsAgent: 'NEWS',
+  FundamentalAgent: 'FUND',
+  MacroAgent: 'MACRO',
+  KronosForecastAgent: 'KRONOS',
 };
+
+interface SynergyResponse {
+  ok: boolean;
+  agents: string[];
+  matrix: (number | null)[][];
+  sampleCounts: number[][];
+  windowDays: number;
+  sampleSize: number;
+}
 
 const getColorForCorrelation = (val: number): string => {
   if (val >= 0.8) return 'bg-emerald-500/90 text-white';
@@ -72,6 +47,29 @@ const getColorForCorrelation = (val: number): string => {
 };
 
 const StrategySynergyMatrix = () => {
+  const [data, setData] = useState<SynergyResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v2/strategy/agent-synergy')
+        .then(r => r.json())
+        .then(json => {
+          if (!cancelled && json.ok) {
+            setData(json);
+            setLoading(false);
+          }
+        })
+        .catch(() => { if (!cancelled) setLoading(false); });
+    };
+    load();
+    const interval = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
+
+  const agents = data?.agents ?? [];
+
   return (
     <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 lg:p-6 shadow-md relative overflow-hidden group hover:border-indigo-500/30 transition-all duration-300 w-full">
       <div className="flex items-center justify-between mb-6">
@@ -80,56 +78,72 @@ const StrategySynergyMatrix = () => {
           Strategy Synergy Matrix
         </h3>
         <div className="text-[10px] font-mono text-slate-400 uppercase tracking-widest bg-slate-800/50 px-2 py-1 rounded border border-slate-700/50">
-          Cross-Agent Correlation
+          {data ? `${data.windowDays}D · ${data.sampleSize} REAL PREDICTIONS` : 'Cross-Agent Correlation'}
         </div>
       </div>
-      
+
       <p className="text-xs text-slate-400 mb-6 font-mono max-w-2xl">
-        Visualizes the correlation coefficient between analytical agents when proposing trades for identical assets. High positive correlation (&gt;0.7) suggests redundant signaling, while negative correlation implies structural hedging.
+        Real Pearson correlation between the five agents Argus actually runs, computed over their
+        real logged predictions on identical assets. High positive correlation (&gt;0.7) suggests
+        redundant signaling, negative correlation implies structural hedging. A pair without enough
+        overlapping real predictions shows as AWAITING SIGNAL rather than a fabricated number.
       </p>
 
-      <div className="overflow-x-auto">
-        <div className="min-w-max">
-          <div className="flex mb-1">
-            <div className="w-24 shrink-0"></div>
-            {agents.map((agent, i) => (
-              <div key={`header-${i}`} className="w-16 shrink-0 text-center text-[9px] font-mono text-slate-400 uppercase tracking-wider font-bold">
-                {agent}
+      {loading ? (
+        <div className="py-8 text-center text-slate-500 text-xs font-mono">Loading real agent-synergy data...</div>
+      ) : agents.length === 0 ? (
+        <AwaitingSignal reason="No agent predictions recorded yet." />
+      ) : (
+        <div className="overflow-x-auto">
+          <div className="min-w-max">
+            <div className="flex mb-1">
+              <div className="w-28 shrink-0"></div>
+              {agents.map((agent, i) => (
+                <div key={`header-${i}`} className="w-20 shrink-0 text-center text-[9px] font-mono text-slate-400 uppercase tracking-wider font-bold" title={agent}>
+                  {SHORT_LABEL[agent] || agent}
+                </div>
+              ))}
+            </div>
+
+            {agents.map((rowAgent, i) => (
+              <div key={`row-${i}`} className="flex mb-1 items-center">
+                <div className="w-28 shrink-0 text-right pr-4 text-[9px] font-mono text-slate-400 uppercase tracking-wider font-bold" title={rowAgent}>
+                  {SHORT_LABEL[rowAgent] || rowAgent}
+                </div>
+                {agents.map((colAgent, j) => {
+                  const val = data!.matrix[i][j];
+                  const n = data!.sampleCounts[i][j];
+                  return (
+                    <div key={`cell-${i}-${j}`} className="w-20 h-8 shrink-0 p-0.5">
+                      {val === null ? (
+                        <div
+                          className="w-full h-full rounded flex items-center justify-center border border-dashed border-slate-700/60 bg-slate-900/40"
+                          title={`${rowAgent} vs ${colAgent}: not enough overlapping real predictions yet (${n} day(s) of shared data).`}
+                        >
+                          <span className="text-[8px] font-mono text-slate-600">N/A</span>
+                        </div>
+                      ) : (
+                        <div
+                          className={`w-full h-full rounded flex items-center justify-center text-[10px] font-mono font-medium transition-colors border border-slate-900/50 ${getColorForCorrelation(val)}`}
+                          title={`${rowAgent} vs ${colAgent}: ${val.toFixed(2)} (${n} overlapping day(s) of real data)`}
+                        >
+                          {val.toFixed(2)}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             ))}
           </div>
-          
-          {agents.map((rowAgent, i) => (
-            <div key={`row-${i}`} className="flex mb-1 items-center">
-              <div className="w-24 shrink-0 text-right pr-4 text-[9px] font-mono text-slate-400 uppercase tracking-wider font-bold">
-                {rowAgent}
-              </div>
-              {agents.map((colAgent, j) => {
-                const val = getCorrelation(i, j);
-                const colorClass = getColorForCorrelation(val);
-                return (
-                  <div 
-                    key={`cell-${i}-${j}`} 
-                    className="w-16 h-8 shrink-0 p-0.5"
-                  >
-                    <div 
-                      className={`w-full h-full rounded flex items-center justify-center text-[10px] font-mono font-medium transition-colors border border-slate-900/50 ${colorClass}`}
-                      title={`${rowAgent} vs ${colAgent}: ${val.toFixed(2)}`}
-                    >
-                      {val.toFixed(2)}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
         </div>
-      </div>
-      
+      )}
+
       <div className="mt-6 pt-4 border-t border-slate-800/60 flex flex-wrap gap-4 items-center justify-center text-[9px] font-mono uppercase tracking-widest text-slate-500">
         <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-500/90 inline-block"></span> High Sync (+1.0)</div>
         <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-slate-800 inline-block"></span> Neutral (0.0)</div>
         <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-rose-500/90 inline-block"></span> Inverse (-1.0)</div>
+        <div className="flex items-center gap-1.5"><span className="w-3 h-3 rounded border border-dashed border-slate-700/60 inline-block"></span> Awaiting Signal</div>
       </div>
     </div>
   );

@@ -20,44 +20,17 @@ import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { historicalDataGateway } from './backtest/HistoricalDataGateway';
+import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizing';
+import { getTradingDateStr } from '../core/TradingCalendar';
+import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 
 const STALE_PRICE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
 const MARKET_CLOCK_CACHE_MS = 60 * 1000;
 
 const MAX_CONSECUTIVE_LOSSES = 3;
-const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = 0.20; // matches GuardrailsPanel's "Hard Per-Position Cap" copy
-const MAX_SECTOR_CONCENTRATION_PCT = 0.40;
-
-// Real (if coarse) GICS-style sector map for the large-cap names this app actually watches/trades.
-// Deliberately does NOT cover every possible ticker - an unmapped symbol just isn't sector-capped
-// (same as if this check didn't exist for it), rather than fabricating a sector guess.
-const SECTOR_MAP: Record<string, string> = {
-    AAPL: 'Technology', MSFT: 'Technology', NVDA: 'Technology', AMD: 'Technology',
-    AVGO: 'Technology', CRM: 'Technology', ORCL: 'Technology', ADBE: 'Technology', INTC: 'Technology',
-    GOOGL: 'Communication Services', GOOG: 'Communication Services', META: 'Communication Services',
-    NFLX: 'Communication Services', DIS: 'Communication Services', TMUS: 'Communication Services',
-    AMZN: 'Consumer Discretionary', TSLA: 'Consumer Discretionary', HD: 'Consumer Discretionary',
-    NKE: 'Consumer Discretionary', SBUX: 'Consumer Discretionary', MCD: 'Consumer Discretionary',
-    JPM: 'Financials', BAC: 'Financials', GS: 'Financials', WFC: 'Financials', MS: 'Financials', V: 'Financials', MA: 'Financials',
-    XOM: 'Energy', CVX: 'Energy', COP: 'Energy', SLB: 'Energy',
-    JNJ: 'Healthcare', PFE: 'Healthcare', UNH: 'Healthcare', LLY: 'Healthcare', MRK: 'Healthcare', ABBV: 'Healthcare',
-    WMT: 'Consumer Staples', PG: 'Consumer Staples', KO: 'Consumer Staples', PEP: 'Consumer Staples', COST: 'Consumer Staples',
-    BA: 'Industrials', CAT: 'Industrials', GE: 'Industrials', UPS: 'Industrials', HON: 'Industrials',
-    // Broad-market ETFs already ARE diversified across sectors - exempt them rather than mis-bucket them.
-    SPY: 'Diversified ETF', QQQ: 'Diversified ETF', VOO: 'Diversified ETF', VTI: 'Diversified ETF', DIA: 'Diversified ETF', IWM: 'Diversified ETF',
-};
-
-function getSector(symbol: string): string | null {
-    const sector = SECTOR_MAP[symbol.toUpperCase()];
-    if (!sector || sector === 'Diversified ETF') return null;
-    return sector;
-}
 
 const CORRELATION_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
-const CORRELATION_MIN_OVERLAP = 20; // matches BacktestEngine's own significance floor
-const CORRELATION_THRESHOLD = 0.7;
-const MAX_CORRELATED_EXPOSURE_PCT = 0.50;
 const closesCache: Map<string, { closes: number[]; fetchedAt: number }> = new Map();
 
 // Real daily closes over a 90-day window, backed by ohlcv_bars (with an opportunistic real
@@ -84,26 +57,6 @@ async function getRecentCloses(symbol: string): Promise<number[] | null> {
     } catch (e) {
         return null;
     }
-}
-
-// Pearson correlation of daily returns (not raw prices, which would just measure "both went up
-// over time" for any two large caps). Returns null on too little overlapping history rather than
-// a fabricated 0.
-function returnCorrelation(closesA: number[], closesB: number[]): number | null {
-    const n = Math.min(closesA.length, closesB.length);
-    if (n < CORRELATION_MIN_OVERLAP + 1) return null;
-    const a = closesA.slice(-n), b = closesB.slice(-n);
-    const retA = a.slice(1).map((v, i) => v / a[i] - 1);
-    const retB = b.slice(1).map((v, i) => v / b[i] - 1);
-    const meanA = retA.reduce((s, v) => s + v, 0) / retA.length;
-    const meanB = retB.reduce((s, v) => s + v, 0) / retB.length;
-    let cov = 0, varA = 0, varB = 0;
-    for (let i = 0; i < retA.length; i++) {
-        const da = retA[i] - meanA, db = retB[i] - meanB;
-        cov += da * db; varA += da * da; varB += db * db;
-    }
-    if (varA === 0 || varB === 0) return null;
-    return cov / Math.sqrt(varA * varB);
 }
 
 // Real consecutive-loss circuit breaker - reads actual realized P&L from the last few FILLED
@@ -153,6 +106,24 @@ interface GateResult {
 export class RiskEngine {
     private static instance: RiskEngine;
 
+    // Real fix for two TOCTOU races (portfolio_drawdown's peak-equity read-then-write, and
+    // order_rate_limit's count-then-insert): RiskAgent.assessRisk() invokes evaluateRisk()
+    // fire-and-forget with no queue, so two CHIEF_APPROVED_IDEA events arriving close together
+    // (a real scenario - both ChiefTraderAgent's own consensus approval and the manual-override
+    // route in v2System.ts emit this event) could previously run two evaluateRisk() calls
+    // concurrently, letting both read the same storedPeakEquity/recentOrderCount before either
+    // had written its own result. This promise-chain mutex serializes only evaluateRisk()
+    // invocations on this singleton - it never touches order placement, market-data ingestion,
+    // agent signal generation, or portfolio reconciliation, none of which call this method.
+    // Both racy resources are portfolio-wide/global state, not per-symbol, so there is no
+    // correctness benefit to a finer-grained lock: every OTHER gate's own logic (price_validity,
+    // market_hours, news_veto, etc.) is unaffected by serialization either way, since it has no
+    // shared-mutable-state race to begin with. Deliberately does not change RiskAgent's own
+    // fire-and-forget call site - callers await the same public method exactly as before; the
+    // ordering guarantee (FIFO by invocation time) and full-completion-before-next-starts
+    // guarantee are new, transparent side effects of this queue, not a new contract to adopt.
+    private evaluationQueue: Promise<void> = Promise.resolve();
+
     private constructor() {}
 
     public static getInstance(): RiskEngine {
@@ -162,7 +133,16 @@ export class RiskEngine {
         return RiskEngine.instance;
     }
 
-    public async evaluateRisk(proposal: any) {
+    public async evaluateRisk(proposal: any): Promise<void> {
+        const run = this.evaluationQueue.then(() => this.evaluateRiskSerialized(proposal));
+        // Never let one evaluation's rejection break the queue for evaluations queued after it -
+        // evaluateRiskSerialized already has its own internal top-level try/catch, so a rejection
+        // reaching here would only be a truly unexpected error; the queue must still advance.
+        this.evaluationQueue = run.then(() => undefined, () => undefined);
+        return run;
+    }
+
+    private async evaluateRiskSerialized(proposal: any) {
         console.log(`[Risk Engine] Evaluating proposal: ${proposal.side} ${proposal.symbol}`);
         eventBus.emit('RISK_ASSESSMENT_STARTED', { traceId: proposal.traceId, transactionId: proposal.transactionId, symbol: proposal.symbol, side: proposal.side });
 
@@ -190,11 +170,16 @@ export class RiskEngine {
         let buyingPower: number | undefined;
 
         try {
-            // 0. Emergency stop - checked first, always evaluated and recorded, unlike the old
-            // RiskAgent pre-check that bypassed RiskEngine (and thus this gate ladder) entirely
-            // on a rejection.
-            recordGate('emergency_stop', !tradingEngine.state.emergencyStopActive, { emergencyStopActive: tradingEngine.state.emergencyStopActive });
-            const emergencyStopReason = "Emergency stop is active. All new trades are blocked until resumed.";
+            // 0. Trading kill switch - checked first, always evaluated and recorded, unlike the
+            // old RiskAgent pre-check that bypassed RiskEngine (and thus this gate ladder)
+            // entirely on a rejection. Blocks on BOTH non-enabled states - TRADING_PAUSED is a
+            // softer halt than EMERGENCY_STOP (no forced order cancellation) but it still means
+            // no new trades, which is the entire point of pausing.
+            const tradingState = tradingEngine.state.tradingState;
+            recordGate('emergency_stop', tradingState === 'TRADING_ENABLED', { tradingState, emergencyStopActive: tradingEngine.state.emergencyStopActive });
+            const emergencyStopReason = tradingState === 'EMERGENCY_STOP'
+                ? "Emergency stop is active. All new trades are blocked until resumed."
+                : "Trading is paused. All new trades are blocked until resumed.";
 
             // 1. Fetch real broker portfolio state
             const broker = BrokerManager.getInstance().getActiveBroker();
@@ -203,16 +188,31 @@ export class RiskEngine {
             // 2. Fetch risk settings from SQLite
             const settings = await db.select().from(schema.settings).limit(1);
             const riskLevel = settings[0]?.riskLevel || "Balanced";
-            const maxTradeSizeDollar = settings[0]?.maxTradeSize || 3000;
             const maxPortfolioRiskPct = (riskLevel === "Aggressive") ? 0.03 : (riskLevel === "Conservative" ? 0.01 : 0.02);
+
+            // Phase 13 (ARGUS_PRE_IMPLEMENTATION_BASELINE.md) - real, hardcoded ceilings that
+            // apply automatically for real live trading, independent of whatever the settings row
+            // currently says. Never loosens anything - a no-op identity function whenever
+            // tradingMode isn't 'LIVE' (i.e. every paper-trading call, which is every call in this
+            // environment today). See RestrictedLiveMode.ts's own header for the full rationale.
+            const restrictedLiveCaps = applyRestrictedLiveCaps({
+                tradingMode: tradingEngine.state.tradingMode,
+                maxTradeSizeDollar: settings[0]?.maxTradeSize || 3000,
+                maxOpenPositions: settings[0]?.maxOpenPositions ?? 10,
+                dailyLossLimitDollars: tradingEngine.state.dailyLossLimit,
+            });
+            const maxTradeSizeDollar = restrictedLiveCaps.maxTradeSizeDollar;
 
             accountEquity = portfolio.equity || 10000;
             buyingPower = portfolio.buyingPower || 10000;
 
             // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
-            // baseline captured the first time we evaluate risk each calendar day.
+            // baseline captured the first time we evaluate risk each calendar day. Uses the real
+            // exchange trading day (America/New_York), not UTC - UTC midnight is 7-8 PM New York
+            // time, which would reset this baseline mid-session instead of at the real start of
+            // the trading day.
             const equityNow = portfolio.equity || 0;
-            const todayStr = new Date().toISOString().split('T')[0];
+            const todayStr = getTradingDateStr();
             if (tradingEngine.state.dayStartDateStr !== todayStr) {
                 tradingEngine.state.dayStartDateStr = todayStr;
                 tradingEngine.state.dayStartEquity = equityNow;
@@ -221,16 +221,46 @@ export class RiskEngine {
             const dayStartEquity = tradingEngine.state.dayStartEquity ?? equityNow;
             const dailyLoss = Math.max(0, dayStartEquity - equityNow);
             tradingEngine.state.currentDailyLoss = dailyLoss;
-            const dailyLossKillSwitchThreshold = tradingEngine.state.dailyLossLimit * 0.8;
+            const dailyLossKillSwitchThreshold = restrictedLiveCaps.dailyLossLimitDollars * 0.8;
             const dailyLossPassed = dailyLoss < dailyLossKillSwitchThreshold;
-            recordGate('daily_loss', dailyLossPassed, { dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: tradingEngine.state.dailyLossLimit });
-            const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached 80% of the $${tradingEngine.state.dailyLossLimit} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
+            recordGate('daily_loss', dailyLossPassed, { dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: restrictedLiveCaps.dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted });
+            const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached 80% of the $${restrictedLiveCaps.dailyLossLimitDollars}${restrictedLiveCaps.restricted ? ' (restricted live mode cap)' : ''} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
 
             // 2a-2. Consecutive-loss circuit breaker - real realized P&L from the last three
             // FILLED trades, not a simulated/hardcoded count.
             const consecutiveLossesBad = await hasConsecutiveLosses();
             recordGate('consecutive_loss', !consecutiveLossesBad, { maxConsecutiveLosses: MAX_CONSECUTIVE_LOSSES, triggered: consecutiveLossesBad });
             const consecutiveLossReason = `${MAX_CONSECUTIVE_LOSSES} consecutive losing trades. All new trades blocked pending manual review.`;
+
+            // 2a-3. Portfolio drawdown circuit breaker - distinct from the daily-loss check
+            // above (which resets every calendar day): tracks a real, persisted peak equity
+            // high-water-mark across the account's whole life and blocks once real equity falls
+            // more than maxPortfolioDrawdownPct below that peak. The peak only ever moves up
+            // (a new real high), so a slow multi-day bleed that never trips the daily-loss
+            // threshold on any single day still gets caught here.
+            const maxDrawdownPct = settings[0]?.maxPortfolioDrawdownPct ?? 0.15;
+            const storedPeakEquity = settings[0]?.peakEquity ?? null;
+            const peakEquity = (storedPeakEquity === null || equityNow > storedPeakEquity) ? equityNow : storedPeakEquity;
+            if (peakEquity !== storedPeakEquity) {
+                try { await db.update(schema.settings).set({ peakEquity }).run(); } catch (e) { console.error('[Risk Engine] Failed to persist new peak equity', e); }
+            }
+            const drawdownPct = peakEquity > 0 ? Math.max(0, (peakEquity - equityNow) / peakEquity) : 0;
+            const drawdownPassed = drawdownPct < maxDrawdownPct;
+            recordGate('portfolio_drawdown', drawdownPassed, { drawdownPct, maxDrawdownPct, peakEquity, equityNow });
+            const drawdownReason = `Portfolio drawdown ${(drawdownPct * 100).toFixed(1)}% from peak equity $${peakEquity.toFixed(2)} exceeds the configured ${(maxDrawdownPct * 100).toFixed(0)}% limit. All new trades blocked pending manual review.`;
+
+            // 2a-4. Order-rate limit - counts real risk_assessments rows created in the last 60
+            // seconds (any symbol/side), not just this symbol's. Catches a runaway agent/loop
+            // bug generating far more proposals than any real strategy should, independent of
+            // whether any individual proposal would otherwise pass every other gate.
+            const maxOrdersPerMinute = settings[0]?.maxOrdersPerMinute ?? 5;
+            const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
+            const recentAssessments = await db.select().from(schema.riskAssessments)
+                .where(gte(schema.riskAssessments.createdAt, oneMinuteAgo));
+            const recentOrderCount = recentAssessments.length;
+            const orderRatePassed = recentOrderCount < maxOrdersPerMinute;
+            recordGate('order_rate_limit', orderRatePassed, { recentOrderCount, maxOrdersPerMinute });
+            const orderRateReason = `Order rate limit exceeded: ${recentOrderCount} risk assessments in the last 60s (limit ${maxOrdersPerMinute}). Possible runaway signal loop - new trades blocked until the rate subsides.`;
 
             // 2b. Real market-hours check (Alpaca /v2/clock). Skips (does not block) when Alpaca
             // credentials aren't configured, since there is no real source to check against.
@@ -268,88 +298,42 @@ export class RiskEngine {
             let sufficientSizePassed = false;
             let sellPositionPassed = true; // only meaningful for SELL - stays true (n/a) for BUY
             const sufficientSizeReasonHolder = { text: '' };
+            const openPositionsCapReasonHolder = { text: '' };
             const sellPositionReason = "Cannot sell - no existing position in broker portfolio.";
 
             if (priceValid) {
-                // Basic ATR risk calculation - normally fetched from market data, assuming $4 risk per share for this example if not provided
-                const riskPerShare = currentPrice * 0.05; // 5% stop loss assumption
-                const maxRiskAmount = accountEquity * maxPortfolioRiskPct;
-
-                let maxSharesByRisk = Math.floor(maxRiskAmount / riskPerShare);
-                let maxSharesByCapital = Math.floor(maxTradeSizeDollar / currentPrice);
-                let maxSharesByBuyingPower = Math.floor(buyingPower / currentPrice);
-
-                maxQuantity = Math.min(maxSharesByRisk, maxSharesByCapital, maxSharesByBuyingPower);
-
-                if (proposal.side === 'BUY') {
-                    // 4a. Single-symbol concentration cap - no position may exceed
-                    // MAX_SINGLE_SYMBOL_CONCENTRATION_PCT of real account equity after this trade
-                    // fills. Reduces size rather than rejecting outright, hence always "passed" -
-                    // its effect (if any) surfaces through the sufficient_size gate below.
-                    const existingPosition = portfolio.positions.find((p: any) => p.symbol === proposal.symbol);
-                    const existingValue = existingPosition ? existingPosition.quantity * currentPrice : 0;
-                    const maxPositionValue = accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
-                    const remainingRoom = Math.max(0, maxPositionValue - existingValue);
-                    const maxSharesByConcentration = Math.floor(remainingRoom / currentPrice);
-                    const beforeConcentration = maxQuantity;
-                    maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
-                    recordGate('symbol_concentration', true, { existingValue, maxPositionValue, capPct: MAX_SINGLE_SYMBOL_CONCENTRATION_PCT, boundQuantity: beforeConcentration !== maxQuantity ? maxQuantity : null });
-
-                    // 4b. Sector concentration cap - no GICS-mapped sector may exceed
-                    // MAX_SECTOR_CONCENTRATION_PCT of real account equity after this trade fills.
-                    const proposalSector = getSector(proposal.symbol);
-                    if (proposalSector) {
-                        const sectorValue = portfolio.positions.reduce((sum: number, p: any) => {
-                            return getSector(p.symbol) === proposalSector ? sum + p.quantity * currentPrice : sum;
-                        }, 0);
-                        const maxSectorValue = accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
-                        const remainingSectorRoom = Math.max(0, maxSectorValue - sectorValue);
-                        const maxSharesBySector = Math.floor(remainingSectorRoom / currentPrice);
-                        const beforeSector = maxQuantity;
-                        maxQuantity = Math.min(maxQuantity, maxSharesBySector);
-                        recordGate('sector_concentration', true, { sector: proposalSector, sectorValue, maxSectorValue, capPct: MAX_SECTOR_CONCENTRATION_PCT, boundQuantity: beforeSector !== maxQuantity ? maxQuantity : null });
-                    } else {
-                        recordGate('sector_concentration', true, { skipped: true, reason: 'symbol not in sector map' });
-                    }
-
-                    // 4c. Correlation-based exposure cap - real pairwise return correlation
-                    // (90-day daily closes, opportunistic real Alpaca backfill via
-                    // HistoricalDataGateway) against every existing position. Caps combined
-                    // exposure across positively, highly-correlated (r > CORRELATION_THRESHOLD)
-                    // symbols at MAX_CORRELATED_EXPOSURE_PCT of equity. A strong NEGATIVE
-                    // correlation is deliberately not capped - that's a hedge, not concentration.
-                    // Skips entirely (never blocks) if real price history isn't available.
-                    if (portfolio.positions.length > 0) {
-                        const proposalCloses = await getRecentCloses(proposal.symbol);
-                        if (proposalCloses) {
-                            let correlatedValue = 0;
-                            for (const p of portfolio.positions) {
-                                if (p.symbol === proposal.symbol) { correlatedValue += p.quantity * currentPrice; continue; }
-                                const otherCloses = await getRecentCloses(p.symbol);
-                                if (!otherCloses) continue; // no real history for this position - skip it, don't fabricate
-                                const corr = returnCorrelation(proposalCloses, otherCloses);
-                                if (corr !== null && corr > CORRELATION_THRESHOLD) {
-                                    correlatedValue += p.quantity * currentPrice;
-                                }
-                            }
-                            const maxCorrelatedValue = accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
-                            const remainingCorrelatedRoom = Math.max(0, maxCorrelatedValue - correlatedValue);
-                            const maxSharesByCorrelation = Math.floor(remainingCorrelatedRoom / currentPrice);
-                            const beforeCorr = maxQuantity;
-                            maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
-                            recordGate('correlation_exposure', true, { correlatedValue, maxCorrelatedValue, capPct: MAX_CORRELATED_EXPOSURE_PCT, boundQuantity: beforeCorr !== maxQuantity ? maxQuantity : null });
-                        } else {
-                            recordGate('correlation_exposure', true, { skipped: true, reason: 'no real price history for this symbol' });
-                        }
-                    } else {
-                        recordGate('correlation_exposure', true, { skipped: true, reason: 'no existing positions to correlate against' });
-                    }
-                }
-
-                // 5. Final validation
-                sufficientSizePassed = maxQuantity > 0;
+                // Phase 2A (FINAL_ANALYSIS.md's 4-phase remediation plan): the actual sizing math
+                // (order-notional/single-symbol/open-positions/sector/correlation caps,
+                // sufficient-size) is now a pure, shared function (PositionSizing.ts) so
+                // BacktestEngine can use the byte-for-byte identical logic instead of its
+                // previous flat-10%-of-initial-cash rule - a real, previously-documented
+                // inconsistency (FINAL_ANALYSIS.md 15.9).
+                const maxOpenPositions = restrictedLiveCaps.maxOpenPositions;
+                openPositionsCapReasonHolder.text = `Maximum open positions (${maxOpenPositions}) already reached; cannot open a new position in ${proposal.symbol} until an existing position is closed.`;
                 sufficientSizeReasonHolder.text = `Insufficient buying power or risk limits exceeded. Required: ${currentPrice}, Available BP: ${buyingPower}`;
-                recordGate('sufficient_size', sufficientSizePassed, { maxQuantity, buyingPower });
+
+                // E2B - feature-flagged, defaults to 'FIXED_DOLLAR' (today's exact behavior) for
+                // anyone who hasn't opted into PERCENT_OF_EQUITY sizing via settings.
+                const sizingMode = (settings[0]?.positionSizingMode as 'FIXED_DOLLAR' | 'PERCENT_OF_EQUITY') || 'FIXED_DOLLAR';
+                const percentOfEquityPct = settings[0]?.percentOfEquityPct ?? 2;
+
+                const sizingResult = await calculatePositionSizing({
+                    side: proposal.side,
+                    symbol: proposal.symbol,
+                    currentPrice,
+                    accountEquity,
+                    buyingPower,
+                    maxTradeSizeDollar,
+                    maxPortfolioRiskPct,
+                    existingPositions: portfolio.positions.map((p: any) => ({ symbol: p.symbol, quantity: p.quantity })),
+                    maxOpenPositions,
+                    getRecentCloses,
+                    sizingMode,
+                    percentOfEquityPct,
+                });
+                maxQuantity = sizingResult.maxQuantity;
+                for (const g of sizingResult.gates) recordGate(g.gate, g.passed, g.detail);
+                sufficientSizePassed = sizingResult.gates.find(g => g.gate === 'sufficient_size')?.passed ?? false;
 
                 // If we are selling, make sure we have the shares
                 if (proposal.side === 'SELL') {
@@ -374,10 +358,13 @@ export class RiskEngine {
                 reasoning = firstFailure!.gate === 'emergency_stop' ? emergencyStopReason
                     : firstFailure!.gate === 'daily_loss' ? dailyLossReason
                     : firstFailure!.gate === 'consecutive_loss' ? consecutiveLossReason
+                    : firstFailure!.gate === 'portfolio_drawdown' ? drawdownReason
+                    : firstFailure!.gate === 'order_rate_limit' ? orderRateReason
                     : firstFailure!.gate === 'market_hours' ? marketHoursReason
                     : firstFailure!.gate === 'data_freshness' ? staleDataReason
                     : firstFailure!.gate === 'news_veto' ? newsVetoReason
                     : firstFailure!.gate === 'price_validity' ? priceValidityReason
+                    : firstFailure!.gate === 'open_positions_cap' ? openPositionsCapReasonHolder.text
                     : firstFailure!.gate === 'sufficient_size' ? sufficientSizeReasonHolder.text
                     : firstFailure!.gate === 'sell_position_exists' ? sellPositionReason
                     : `Rejected by gate: ${firstFailure!.gate}`;
@@ -394,6 +381,12 @@ export class RiskEngine {
                 maxQuantity,
                 reasoning,
                 newsDetails: proposal.newsDetails,
+                // Phase 16B - only meaningful (and only ever consumed by OrderManagement) on a
+                // real approval; forwarded unconditionally here regardless of approved/rejected
+                // since RiskEngine never bypasses or reinterprets it either way.
+                selectedQuantStrategy: proposal.selectedQuantStrategy ?? null,
+                quantStopPrice: proposal.quantStopPrice ?? null,
+                quantTargetPrice: proposal.quantTargetPrice ?? null,
             });
 
             await this.persistAssessment(proposal, { approved, maxQuantity, reasoning, rejectionGate: firstFailure?.gate ?? null, accountEquity, buyingPower, gateResults });

@@ -55,6 +55,11 @@ import { kronosEngine } from '../engines/kronos/KronosEngine';
 
 import { kronosForecastAgent } from "../services/KronosForecastAgent";
 import { dbBackupService } from '../services/DbBackupService';
+import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
+import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
+import { quantSignalAgent } from '../services/QuantSignalAgent';
+import { alertingService } from '../services/AlertingService';
+import { aiFailureCircuitBreaker } from '../services/AIFailureCircuitBreaker';
 
 export class SystemBootstrap {
   private isRunning = false;
@@ -66,10 +71,13 @@ export class SystemBootstrap {
     console.log("===================================");
     console.log(`[Argus System] Bootstrapping real workers in ${mode} mode...`);
     
-    oms;
+    oms.start();
+    alertingService.start();
+    aiFailureCircuitBreaker.start();
     riskAgent;
     technicalAgent;
     chiefTrader;
+    transactionLifecycleTracker;
     advancedQuantEngines.start();
     
     marketDataWorker.start();
@@ -83,6 +91,8 @@ export class SystemBootstrap {
     trainingExampleBuilder.start();
     systemMetricsWorker.start();
     dbBackupService.start();
+    marketDataCrossChecker.start();
+    quantSignalAgent.start(); // no-op unless QUANT_ENGINE_ENABLED=true - see QuantSignalAgent.ts
     marketRegimeAgent;
     explainabilityAgent;
     kronosForecastAgent;
@@ -98,6 +108,7 @@ export class SystemBootstrap {
     console.log("[Argus System] Shutting down workers...");
     
     marketDataWorker.stop();
+    oms.stop();
     portfolioMonitor.stop();
     portfolioReconciliationWorker.stop();
     newsEngine.stop();
@@ -108,6 +119,8 @@ export class SystemBootstrap {
     trainingExampleBuilder.stop();
     systemMetricsWorker.stop();
     dbBackupService.stop();
+    marketDataCrossChecker.stop();
+    quantSignalAgent.stop();
 
     this.isRunning = false;
     console.log("[Argus System] Shutdown complete.");

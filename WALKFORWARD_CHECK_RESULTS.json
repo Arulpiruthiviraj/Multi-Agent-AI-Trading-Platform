@@ -1,0 +1,20 @@
+{
+  "MOMENTUM_BREAKOUT_MSFT": {
+    "periodCount": 21,
+    "avgInSampleReturnPct": 0.37,
+    "avgOutOfSampleReturnPct": 0.04,
+    "outOfSamplePositivePeriodPct": 42.9,
+    "inSampleVsOutOfSampleGapPct": 0.33,
+    "insufficientPeriods": false,
+    "note": null
+  },
+  "MOMENTUM_BREAKOUT_AMD": {
+    "periodCount": 21,
+    "avgInSampleReturnPct": 1.36,
+    "avgOutOfSampleReturnPct": 0.28,
+    "outOfSamplePositivePeriodPct": 66.7,
+    "inSampleVsOutOfSampleGapPct": 1.08,
+    "insufficientPeriods": false,
+    "note": null
+  }
+}

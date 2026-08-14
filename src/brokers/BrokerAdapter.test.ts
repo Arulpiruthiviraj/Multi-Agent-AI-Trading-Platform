@@ -19,8 +19,8 @@ const brokers: { plugin: BrokerPlugin; expectFunctional: boolean }[] = [
   { plugin: new InternalPaperBroker(), expectFunctional: true },
   { plugin: new AlpacaBroker(), expectFunctional: true },
   { plugin: new InteractiveBrokersAdapter(), expectFunctional: true },
-  { plugin: new QuestradeBroker(), expectFunctional: false },
-  { plugin: new CoinbaseBroker(), expectFunctional: false },
+  { plugin: new QuestradeBroker(), expectFunctional: false }, // real read-only API; order execution is Questrade-partner-only, permanently
+  { plugin: new CoinbaseBroker(), expectFunctional: true }, // real Advanced Trade API; placeOrder() refuses in paper mode instead of throwing "Not implemented" - see its own test file
 ];
 
 describe.each(brokers)('$plugin.name broker contract', ({ plugin, expectFunctional }) => {

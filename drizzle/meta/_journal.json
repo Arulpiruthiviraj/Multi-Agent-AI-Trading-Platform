@@ -106,6 +106,76 @@
       "when": 1786373331568,
       "tag": "0014_sudden_squirrel_girl",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "6",
+      "when": 1786382790830,
+      "tag": "0015_organic_wonder_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "6",
+      "when": 1786397961544,
+      "tag": "0016_loud_venus",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1786446898405,
+      "tag": "0017_late_bloodstorm",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "6",
+      "when": 1786488940197,
+      "tag": "0018_goofy_moon_knight",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "6",
+      "when": 1786532749419,
+      "tag": "0019_vengeful_jamie_braddock",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "6",
+      "when": 1786533516887,
+      "tag": "0020_fair_naoko",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1786581595906,
+      "tag": "0021_huge_guardsmen",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1786581797159,
+      "tag": "0022_good_clint_barton",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1786582860963,
+      "tag": "0023_brown_scourge",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1786618739426,
+      "tag": "0024_add_quant_exit_fields",
+      "breakpoints": true
     }
   ]
 }

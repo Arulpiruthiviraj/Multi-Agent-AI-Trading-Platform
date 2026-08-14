@@ -1,41 +1,23 @@
 /**
  * ==========================================================
- * Module:
- * RiskAttributionTreemap.tsx
+ * Module: RiskAttributionTreemap
  *
- * Purpose:
- * Core implementation and logic for the RiskAttributionTreemap.tsx module within the Argus Trading Terminal.
+ * This used to render a fixed 5-entry array of invented per-agent risk percentages ("Macro
+ * Sentiment", "Order Flow", "News Interpreter", "Risk Verifier" - none of which are real Argus
+ * agents), with no fetch and no state update ever - the same numbers on every render, forever.
  *
- * Responsibilities:
- * - State management and logic execution for RiskAttributionTreemapx
- * - Interface with backend APIs and EventBus
- * - Render UI components (if React)
- *
- * Inputs:
- * - Module dependencies and injected props
- *
- * Outputs:
- * - Formatted data or React Elements
- *
- * Emits:
- * - Relevant system events
- *
- * Dependencies:
- * - Standard Argus architecture layers
- *
- * Called By:
- * - Argus Routing / Parent Components
- *
- * Never:
- * - Mutate global state directly without EventBus
- * - Call AI providers directly (Must use AIRouter)
- *
+ * Now backed by GET /api/v2/portfolio/risk-attribution: real notional exposure per real symbol
+ * currently held in the portfolio, grouped by the same GICS-mapped sector map RiskEngine's own
+ * sector-concentration gate uses (PositionSizing.ts's SECTOR_MAP). There is no real per-agent
+ * risk-attribution metric anywhere in this codebase - sector/symbol exposure is what real data
+ * can actually answer instead.
  * ==========================================================
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Treemap, Tooltip, ResponsiveContainer } from 'recharts';
 import { ShieldAlert } from 'lucide-react';
+import AwaitingSignal from './shared/AwaitingSignal';
 
 const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#06b6d4', '#6366f1'];
 
@@ -91,7 +73,7 @@ const CustomizedContent: React.FC<CustomContentProps> = (props) => {
           fillOpacity={0.7}
           className="font-mono pointer-events-none"
         >
-          {payload?.value}%
+          {payload?.pct}%
         </text>
       ) : null}
     </g>
@@ -105,10 +87,7 @@ const CustomTooltip = ({ active, payload }: any) => {
       <div className="bg-[#111822] border border-slate-700 p-3 rounded shadow-lg">
         <p className="text-white font-mono text-xs font-bold mb-1">{data?.name}</p>
         <p className="text-slate-400 font-mono text-[10px]">
-          Risk Contribution: <span className="text-emerald-400">{data?.value}%</span>
-        </p>
-        <p className="text-slate-500 font-mono text-[10px] mt-1 italic">
-          {data?.description}
+          Real Exposure: <span className="text-emerald-400">${data?.value?.toLocaleString()}</span> ({data?.pct}% of portfolio)
         </p>
       </div>
     );
@@ -117,20 +96,46 @@ const CustomTooltip = ({ active, payload }: any) => {
 };
 
 export default function RiskAttributionTreemap() {
-  const [data, setData] = useState([
-    {
-      name: 'Agent Risk Allocation',
-      children: [
-        { name: 'Macro Sentiment', size: 35, value: 35, description: 'High sensitivity to CPI and FOMC announcements' },
-        { name: 'Order Flow', size: 25, value: 25, description: 'L2 Book depth imbalances and large block trades' },
-        { name: 'Technical Analysis', size: 20, value: 20, description: 'Moving average crossovers and RSI divergence' },
-        { name: 'News Interpreter', size: 12, value: 12, description: 'Real-time headline NLP sentiment parsing' },
-        { name: 'Risk Verifier', size: 8, value: 8, description: 'Systematic hard-stops and trailing guardrails' },
-      ],
-    },
-  ]);
+  const [data, setData] = useState<any[] | null>(null);
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
 
-  
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v2/portfolio/risk-attribution')
+        .then(r => r.json())
+        .then(json => {
+          if (cancelled) return;
+          if (json.ok) {
+            setAvailable(json.available);
+            setReason(json.reason || null);
+            if (json.available) {
+              // Single root (depth 0, invisible) -> sector (depth 1, colored+labeled) -> symbol
+              // (depth 2, individually sized within its sector's block) - mirrors the depth
+              // semantics CustomizedContent already renders, just with a real extra real level.
+              setData([{
+                name: 'Portfolio Risk Exposure',
+                children: json.data.map((sector: any) => ({
+                  name: sector.sector,
+                  size: sector.value,
+                  value: sector.value,
+                  pct: sector.pct,
+                  children: sector.symbols.map((s: any) => ({ name: s.symbol, size: s.value, value: s.value, pct: s.pct })),
+                })),
+              }]);
+            }
+          } else {
+            setAvailable(false);
+            setReason(json.error || 'Request failed.');
+          }
+        })
+        .catch(e => { if (!cancelled) { setAvailable(false); setReason(e.message); } });
+    };
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, []);
 
   return (
     <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6 mb-6">
@@ -140,27 +145,41 @@ export default function RiskAttributionTreemap() {
           Risk Attribution Treemap
         </h3>
         <div className="text-[10px] font-mono tracking-widest uppercase text-slate-500 bg-[#111822] px-2 py-1 rounded border border-slate-700">
-          Agent Contribution %
+          Sector / Symbol Exposure
         </div>
       </div>
       <p className="text-[11px] text-slate-400 mb-6 leading-relaxed max-w-4xl">
-        Real-time breakdown of portfolio risk exposure attributed to each specific agent model. The area of each rectangle represents the proportional influence of that agent's signals on current open positions.
+        Real current portfolio notional exposure per symbol, grouped by the same real sector map RiskEngine's own sector-concentration gate uses. There is no real per-agent risk attribution in this codebase - this shows what real data can actually answer.
       </p>
-      
-      <div className="h-[300px] w-full bg-[#111822] rounded overflow-hidden border border-slate-800">
-        <ResponsiveContainer width="100%" height="100%">
-          <Treemap
-            data={data}
-            dataKey="size"
-            aspectRatio={4 / 3}
-            stroke="#1A1F2B"
-            fill="#3b82f6"
-            content={<CustomizedContent colors={COLORS} root={undefined} depth={0} x={0} y={0} width={0} height={0} index={0} payload={undefined} rank={0} name={''} />}
-          >
-            <Tooltip content={<CustomTooltip />} />
-          </Treemap>
-        </ResponsiveContainer>
-      </div>
+
+      {available === false && (
+        <div className="h-[300px] w-full bg-[#111822] rounded border border-slate-800 flex items-center justify-center">
+          <AwaitingSignal reason={reason || 'No open real positions in the portfolio.'} label="Risk Attribution" />
+        </div>
+      )}
+
+      {available === null && (
+        <div className="h-[300px] w-full bg-[#111822] rounded border border-slate-800 flex items-center justify-center text-[10px] font-mono text-slate-500 uppercase tracking-widest">
+          Loading real portfolio exposure...
+        </div>
+      )}
+
+      {available === true && data && (
+        <div className="h-[300px] w-full bg-[#111822] rounded overflow-hidden border border-slate-800">
+          <ResponsiveContainer width="100%" height="100%">
+            <Treemap
+              data={data}
+              dataKey="size"
+              aspectRatio={4 / 3}
+              stroke="#1A1F2B"
+              fill="#3b82f6"
+              content={<CustomizedContent colors={COLORS} root={undefined} depth={0} x={0} y={0} width={0} height={0} index={0} payload={undefined} rank={0} name={''} />}
+            >
+              <Tooltip content={<CustomTooltip />} />
+            </Treemap>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 }

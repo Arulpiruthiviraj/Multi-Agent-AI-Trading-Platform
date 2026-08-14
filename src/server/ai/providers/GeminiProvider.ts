@@ -37,14 +37,23 @@ import { BaseAIProvider } from './AIProvider';
 import { GoogleGenAI } from '@google/genai';
 import { EncryptionService } from '../../core/EncryptionService';
 
+// Hardening pass, Phase 6: this provider previously hardcoded 'gemini-2.5-flash' and silently
+// ignored options.model entirely - AIRouter.setAgentRoute()/routeTask() already built and passed
+// a real per-agent model override (`{model: reqModel}`) that never actually reached the API call.
+// Real, published Gemini model IDs this provider is willing to route to - an override outside
+// this list is rejected (falls back to the default, with a warning) rather than silently
+// executing against a model name that might not exist or might behave unexpectedly.
+const DEFAULT_MODEL = 'gemini-2.5-flash';
+const SUPPORTED_MODELS = new Set([DEFAULT_MODEL, 'gemini-2.5-pro', 'gemini-1.5-pro', 'gemini-1.5-flash']);
+
 export class GeminiProvider extends BaseAIProvider {
   private ai: GoogleGenAI | null = null;
-  
+
   constructor() {
     super();
     this.providerName = 'Gemini';
   }
-  
+
   async initialize(apiKey?: string): Promise<void> {
     const key = apiKey || process.env.GEMINI_API_KEY;
     if (key) {
@@ -58,9 +67,19 @@ export class GeminiProvider extends BaseAIProvider {
 
   async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
     if (!this.ai) throw new Error("GeminiProvider not authenticated");
+    let model = DEFAULT_MODEL;
+    if (options?.model) {
+      if (SUPPORTED_MODELS.has(options.model)) {
+        model = options.model;
+      } else {
+        console.warn(`[GeminiProvider] Requested model '${options.model}' is not in this provider's supported list - falling back to ${DEFAULT_MODEL} rather than silently executing against an unverified model name.`);
+      }
+    }
     const response = await this.ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt
+        model,
+        contents: prompt,
+        // Phase 7 - see OpenAIProvider.ts's identical comment. Additive, opt-in only.
+        ...(options?.temperature !== undefined ? { config: { temperature: options.temperature } } : {}),
     });
     // Real usage split from the SDK's own response - previously hardcoded to 0 regardless of
     // the fact that usageMetadata was already available on every response.

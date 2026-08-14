@@ -1,4 +1,5 @@
 import { NewsProviderPlugin, NewsArticleRaw } from './NewsProviderPlugin';
+import { logErrorSafely } from '../../core/SecretRedaction';
 
 export class PolygonNewsProvider implements NewsProviderPlugin {
   public id = 'polygon_news';
@@ -17,7 +18,13 @@ export class PolygonNewsProvider implements NewsProviderPlugin {
     }
 
     try {
-      const res = await fetch(`https://api.polygon.io/v2/reference/news?limit=10&apiKey=${process.env.POLYGON_API_KEY}`);
+      // Hardening pass, Phase 8: Polygon.io's real API supports header-based auth
+      // (Authorization: Bearer), unlike AlphaVantage/FMP - moved off key-in-query-string entirely
+      // rather than relying on redaction alone, since a header never appears in the request URL a
+      // caught fetch error might otherwise expose.
+      const res = await fetch('https://api.polygon.io/v2/reference/news?limit=10', {
+        headers: { Authorization: `Bearer ${process.env.POLYGON_API_KEY}` },
+      });
       if (!res.ok) return [];
       const data = await res.json();
       
@@ -34,7 +41,9 @@ export class PolygonNewsProvider implements NewsProviderPlugin {
         symbols: item.tickers || []
       }));
     } catch (e) {
-      console.error('[PolygonNewsProvider] Error fetching news', e);
+      // Defense-in-depth even though the key is no longer in the URL - consistent with every
+      // other provider's error logging, see SecretRedaction.ts.
+      logErrorSafely('[PolygonNewsProvider] Error fetching news', e);
       return [];
     }
   }

@@ -71,4 +71,46 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     expect(brokerSnapshot).toBeTruthy();
     expect(brokerSnapshot.quantity).toBe(42);
   });
+
+  it('real re-entrancy guard (Phase 10): a second concurrent reconcile() call is skipped, not run in parallel with the first', async () => {
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const originalPortfolio = broker.portfolio.bind(broker);
+    let callCount = 0;
+    // A real, deliberate delay widens the window - if the guard didn't exist, the second
+    // concurrent reconcile() call would start its own full cycle while this one is still
+    // in-flight, exactly the overlap this phase closes.
+    (broker as any).portfolio = async () => {
+      callCount++;
+      await new Promise(r => setTimeout(r, 50));
+      return originalPortfolio();
+    };
+
+    const eventsBefore = await db.select().from(schema.reconciliationEvents);
+
+    await Promise.all([
+      portfolioReconciliationWorker.reconcile(),
+      portfolioReconciliationWorker.reconcile(),
+    ]);
+
+    // Only the first call's broker.portfolio() ever ran - the second returned immediately via
+    // the isReconciling guard, before ever calling the broker.
+    expect(callCount).toBe(1);
+
+    const eventsAfter = await db.select().from(schema.reconciliationEvents);
+    // Exactly one new reconciliation_events row, not two - proving the second call didn't run its
+    // own full cycle in parallel.
+    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+
+    (broker as any).portfolio = originalPortfolio;
+  });
+
+  it('a call after a previous cycle has fully completed runs normally (the guard does not get stuck)', async () => {
+    await portfolioReconciliationWorker.reconcile();
+    const eventsBefore = await db.select().from(schema.reconciliationEvents);
+
+    await portfolioReconciliationWorker.reconcile();
+
+    const eventsAfter = await db.select().from(schema.reconciliationEvents);
+    expect(eventsAfter.length).toBe(eventsBefore.length + 1);
+  });
 });

@@ -20,7 +20,7 @@
  */
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { like } from 'drizzle-orm';
+import { like, eq } from 'drizzle-orm';
 
 // In-memory daily counter, reseeded from the DB on the first mint of a new calendar day. Safe
 // against restarts (reseeds from real DB rows) and against the common case (single-threaded
@@ -123,4 +123,29 @@ export async function recordConsensusTransaction(params: RecordConsensusParams):
   }
 
   return id;
+}
+
+// Real bug found and fixed this pass (FINAL_ANALYSIS.md 15.1/15.22 Critical #2, self-introduced in
+// this same Phase 0 work): `transactions.status` was written exactly once here at mint time and
+// never updated afterward, even after RiskEngine rejected the trade or an order filled - live-
+// confirmed via `GET /api/v2/transactions?limit=200` returning zero rows in any terminal state.
+// `TransactionLifecycleTracker` (a separate listener service, mirroring RiskAgent/OrderManagement's
+// own pattern) calls this as the real pipeline's later stages actually happen; nothing here
+// fabricates a transition ahead of the real event that causes it.
+export type TransactionStatus = 'OPEN' | 'NO_CONSENSUS' | 'RISK_REJECTED' | 'EXECUTED' | 'ORDER_REJECTED' | 'FILLED' | 'RECONCILED';
+export type TransactionOutcome = 'WIN' | 'LOSS' | 'PENDING' | 'N_A';
+
+export async function updateTransactionStatus(
+  transactionId: string,
+  status: TransactionStatus,
+  opts: { outcome?: TransactionOutcome; closed?: boolean } = {}
+): Promise<void> {
+  const patch: Record<string, unknown> = { status };
+  if (opts.outcome) patch.outcome = opts.outcome;
+  if (opts.closed) patch.closedAt = new Date().toISOString();
+  try {
+    await db.update(schema.transactions).set(patch).where(eq(schema.transactions.id, transactionId));
+  } catch (e) {
+    console.error(`[TransactionRegistry] Failed to update transaction ${transactionId} to ${status}`, e);
+  }
 }

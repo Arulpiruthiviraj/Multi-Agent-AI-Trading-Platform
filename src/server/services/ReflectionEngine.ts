@@ -8,11 +8,12 @@
  * ==========================================================
  */
 import { db } from '../db';
-import { agentPredictions, agentPerformanceStats, trades, learnedRules, predictionOutcomes } from '../db/schema';
+import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes } from '../db/schema';
 import { eq, sql } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { marketDataWorker } from './MarketDataWorker';
 import { AIRouter } from '../ai/AIRouter';
+import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
 import crypto from 'crypto';
 
 export class ReflectionEngine {
@@ -102,6 +103,12 @@ export class ReflectionEngine {
       // prediction_outcomes row exists) - not every prediction ever made, which previously
       // silently diluted win rate with predictions that were never even checked.
       const statsMap: Record<string, any> = {};
+      // Phase 1A - real Beta-Binomial confidence calibration per (agent, stated-confidence
+      // bucket): keyed by `${bucket.low}-${bucket.high}`, distinct from statsMap's flat
+      // agent-wide win rate above. See ConfidenceCalibration.ts's header for why this exists -
+      // NewsAgent's real overall win rate can look unremarkable while it's still systematically
+      // overconfident specifically in its high-confidence bucket, which a flat weight can't see.
+      const calibrationMap: Record<string, Record<string, { wins: number; losses: number }>> = {};
       const predictions = await db.select().from(agentPredictions).all();
       const predictionById = new Map(predictions.map(p => [p.id, p]));
       const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
@@ -120,6 +127,27 @@ export class ReflectionEngine {
           statsMap[p.agentName].sumReturn += absReturn;
         } else {
           statsMap[p.agentName].sumReturn -= absReturn;
+        }
+
+        const bucket = bucketFor(p.confidence);
+        const bucketKey = `${bucket.low}-${bucket.high}`;
+        if (!calibrationMap[p.agentName]) calibrationMap[p.agentName] = {};
+        if (!calibrationMap[p.agentName][bucketKey]) calibrationMap[p.agentName][bucketKey] = { wins: 0, losses: 0 };
+        if (o.outcome === 'WIN') calibrationMap[p.agentName][bucketKey].wins += 1;
+        else calibrationMap[p.agentName][bucketKey].losses += 1;
+      }
+
+      for (const [agentName, buckets] of Object.entries(calibrationMap)) {
+        for (const [bucketKey, { wins, losses }] of Object.entries(buckets)) {
+          const [low, high] = bucketKey.split('-').map(Number);
+          const calibratedConfidence = calibratedConfidenceForBucket({ low, high }, wins, losses);
+          await db.insert(agentConfidenceCalibration).values({
+            agentName, bucketLow: low, bucketHigh: high, wins, losses, calibratedConfidence,
+            lastEvaluated: new Date().toISOString(),
+          }).onConflictDoUpdate({
+            target: [agentConfidenceCalibration.agentName, agentConfidenceCalibration.bucketLow],
+            set: { wins, losses, calibratedConfidence, lastEvaluated: new Date().toISOString() },
+          });
         }
       }
 

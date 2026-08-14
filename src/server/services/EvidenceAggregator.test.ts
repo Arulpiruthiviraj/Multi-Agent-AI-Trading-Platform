@@ -66,6 +66,23 @@ describe('EvidenceAggregator.aggregate', () => {
     expect(result.currentPrice).toBe(150.5);
   });
 
+  it('Phase 1B: a dead agent voting HOLD/confidence:0 (exactly FundamentalAgent/MacroAgent\'s real DATA_UNAVAILABLE shape) does not dilute the weighted denominator at all - confirmed against the actual real payload shape, not just a generic HOLD case', () => {
+    const withoutDeadAgent = EvidenceAggregator.aggregate([
+      evidence({ side: 'BUY', confidence: 0.9, agent: 'TechnicalAgent', weight: 0.25 }),
+    ]);
+    const withDeadAgentsVoting = EvidenceAggregator.aggregate([
+      evidence({ side: 'BUY', confidence: 0.9, agent: 'TechnicalAgent', weight: 0.25 }),
+      evidence({ side: 'HOLD', confidence: 0, agent: 'FundamentalAgent', weight: 0.20, reasoning: 'DATA_UNAVAILABLE: Fundamental data providers not configured.' }),
+      evidence({ side: 'HOLD', confidence: 0, agent: 'MacroAgent', weight: 0.15, reasoning: 'DATA_UNAVAILABLE: Macro data providers not configured.' }),
+    ]);
+    // If the dead agents' weight (0.20 + 0.15) were added to totalWeight without any matching
+    // numerator contribution (since their confidence is 0), the result would be diluted below
+    // TechnicalAgent's own 0.9 - this proves that never happens: both results are identical.
+    expect(withDeadAgentsVoting.confidence).toBeCloseTo(withoutDeadAgent.confidence, 10);
+    expect(withDeadAgentsVoting.confidence).toBeCloseTo(0.9, 5);
+    expect(withDeadAgentsVoting.side).toBe('BUY');
+  });
+
   it('never returns a negative confidence even when disagreement outweighs agreement', () => {
     const result = EvidenceAggregator.aggregate([
       evidence({ side: 'BUY', confidence: 0.2, agent: 'A', weight: 0.1 }),

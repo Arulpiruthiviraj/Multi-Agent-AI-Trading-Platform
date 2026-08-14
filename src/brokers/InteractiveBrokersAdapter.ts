@@ -82,6 +82,10 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
         agent: this.agent,
         headers: {
           'Content-Type': 'application/json',
+          // The Client Portal Gateway's WAF returns a blanket 403 "Access Denied" for any
+          // request with no User-Agent - Node's https.request sends none by default (unlike
+          // curl/browsers, which is why this can look fine when checked manually with curl).
+          'User-Agent': 'OpenAlice-Argus/1.0',
           ...(bodyStr ? { 'Content-Length': Buffer.byteLength(bodyStr) } : {}),
         },
       }, (res) => {
@@ -172,6 +176,11 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
   }
 
   async validateCredentials(): Promise<boolean> { return this.isAuthenticated; }
+  // No-ops, deliberately: unlike AlpacaBroker (which really does switch a base URL), IBKR's
+  // Client Portal Gateway determines paper vs. live entirely by which account you log into at
+  // https://localhost:5000 - a separate paper-trading username, not something this adapter can
+  // switch after the fact. getCapabilities() still reports paperTrading:true/liveTrading:true
+  // since both really are supported, just gated by which session is already authenticated.
   paperTrading() {}
   liveTrading() {}
 

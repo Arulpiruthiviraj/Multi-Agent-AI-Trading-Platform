@@ -14,6 +14,7 @@ import { db } from "../db/index";
 import * as schema from "../db/schema";
 import { tradingEngine } from "../engines/TradingEngine";
 import { shadowPortfolioState } from "../state/shadowPortfolio";
+import { tradingLimiter, aiLimiter } from "../core/RateLimiters";
 
 export const autobotRouter = Router();
 
@@ -27,7 +28,7 @@ export const autobotRouter = Router();
 // so even a real fitness score would not be evaluating anything that affects actual trades.
 // Refuses to run until both a real backtest-based fitness evaluation and a real prompt-injection
 // path into an agent's actual AI calls exist (Batch 4+).
-autobotRouter.post("/evolve", async (req: Request, res: Response) => {
+autobotRouter.post("/evolve", aiLimiter, async (req: Request, res: Response) => {
   res.status(501).json({
     error: "Prompt evolution is gated off: there is no real backtest to score a mutation's fitness against, " +
       "and the evolved prompt is not wired into any agent's actual AI calls. Re-enable once both exist."
@@ -96,8 +97,8 @@ autobotRouter.get("/state", (req: Request, res: Response) => {
   res.json(tradingEngine.state);
 });
 
-autobotRouter.post("/toggle", async (req: Request, res: Response) => {
-  const result = tradingEngine.toggle(req.body);
+autobotRouter.post("/toggle", tradingLimiter, async (req: Request, res: Response) => {
+  const result = await tradingEngine.toggle(req.body);
   if (!result.ok) {
     return res.status(400).json(result);
   }

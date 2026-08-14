@@ -40,7 +40,11 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 interface AgentComparisonModalProps {
   isOpen: boolean;
   onClose: () => void;
-  agentMetrics: Record<string, { sharpe: number, drawdown: number, wins: number }>;
+  // Real shape, derived from GET /api/v1/performance (agent_performance_stats) - see App.tsx's
+  // realAgentComparativeMetrics. There is no real per-agent max_drawdown anywhere in this
+  // codebase's schema; profitFactor is the real metric that exists instead. Any field can be
+  // null when an agent has no real evaluated history yet - render "N/A", never a fabricated 0.
+  agentMetrics: Record<string, { sharpe: number | null, profitFactor: number | null, wins: number | null, winRatePct: number | null, totalTrades: number }>;
   agentRoiData: any[];
 }
 
@@ -142,23 +146,23 @@ export default function AgentComparisonModal({
                   <tbody className="divide-y divide-slate-800">
                     <tr className="hover:bg-slate-800/20 transition-colors">
                       <td className="px-4 py-3 text-slate-300">Sharpe Ratio</td>
-                      <td className="px-4 py-3 text-white font-mono">{agentMetrics[agentAlpha]?.sharpe}</td>
-                      <td className="px-4 py-3 text-white font-mono">{agentMetrics[agentBeta]?.sharpe}</td>
+                      <td className="px-4 py-3 text-white font-mono">{agentMetrics[agentAlpha]?.sharpe ?? 'N/A'}</td>
+                      <td className="px-4 py-3 text-white font-mono">{agentMetrics[agentBeta]?.sharpe ?? 'N/A'}</td>
                     </tr>
                     <tr className="hover:bg-slate-800/20 transition-colors">
-                      <td className="px-4 py-3 text-slate-300">Max Drawdown</td>
-                      <td className="px-4 py-3 text-rose-400 font-mono">{agentMetrics[agentAlpha]?.drawdown}%</td>
-                      <td className="px-4 py-3 text-rose-400 font-mono">{agentMetrics[agentBeta]?.drawdown}%</td>
+                      <td className="px-4 py-3 text-slate-300">Profit Factor</td>
+                      <td className="px-4 py-3 text-indigo-400 font-mono">{agentMetrics[agentAlpha]?.profitFactor ?? 'N/A'}</td>
+                      <td className="px-4 py-3 text-indigo-400 font-mono">{agentMetrics[agentBeta]?.profitFactor ?? 'N/A'}</td>
                     </tr>
                     <tr className="hover:bg-slate-800/20 transition-colors">
                       <td className="px-4 py-3 text-slate-300">Total Wins</td>
-                      <td className="px-4 py-3 text-emerald-400 font-mono">{agentMetrics[agentAlpha]?.wins}</td>
-                      <td className="px-4 py-3 text-emerald-400 font-mono">{agentMetrics[agentBeta]?.wins}</td>
+                      <td className="px-4 py-3 text-emerald-400 font-mono">{agentMetrics[agentAlpha]?.wins ?? 'N/A'}</td>
+                      <td className="px-4 py-3 text-emerald-400 font-mono">{agentMetrics[agentBeta]?.wins ?? 'N/A'}</td>
                     </tr>
                     <tr className="hover:bg-slate-800/20 transition-colors">
                       <td className="px-4 py-3 text-slate-300">Win Rate</td>
-                      <td className="px-4 py-3 text-slate-200 font-mono">{((agentMetrics[agentAlpha]?.wins / 300) * 100).toFixed(1)}%</td>
-                      <td className="px-4 py-3 text-slate-200 font-mono">{((agentMetrics[agentBeta]?.wins / 300) * 100).toFixed(1)}%</td>
+                      <td className="px-4 py-3 text-slate-200 font-mono">{agentMetrics[agentAlpha]?.winRatePct != null ? `${agentMetrics[agentAlpha]!.winRatePct!.toFixed(1)}%` : 'N/A'}</td>
+                      <td className="px-4 py-3 text-slate-200 font-mono">{agentMetrics[agentBeta]?.winRatePct != null ? `${agentMetrics[agentBeta]!.winRatePct!.toFixed(1)}%` : 'N/A'}</td>
                     </tr>
                   </tbody>
                 </table>

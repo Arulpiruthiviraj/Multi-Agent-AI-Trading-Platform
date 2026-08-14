@@ -42,9 +42,27 @@ export class MarketDataWorker {
   private ws: WebSocket | null = null;
   private latestPrices: Map<string, number> = new Map();
   private latestPriceTimestamps: Map<string, number> = new Map();
+  // Hardening pass, Phase 4: the last real (exchange timestamp, price) actually processed per
+  // symbol - a WS reconnect/redelivery can hand back the identical tick Alpaca already sent, and
+  // re-processing it re-triggers every downstream agent evaluation for a tick that isn't actually
+  // new. Keyed on the tick's own real exchange timestamp (msg.t), not Date.now() - two distinct
+  // real ticks essentially never share both the same exchange timestamp AND price, so this never
+  // discards a legitimate new tick, only an exact redelivery of one already processed.
+  private lastTick: Map<string, { timestampMs: number; price: number }> = new Map();
+  // Set the moment the socket actually drops; cleared once a reconnect successfully
+  // re-authenticates. Used to make a real data gap observable rather than fabricating ticks for
+  // it - there is no durable tick-level store to backfill from (unlike Phase 9's event_traces).
+  private disconnectedAt: number | null = null;
 
   getLatestPrice(symbol: string): number | null {
     return this.latestPrices.get(symbol) || null;
+  }
+
+  // Real currently-subscribed symbol list, not a fabricated watchlist - used by
+  // MarketDataCrossChecker to know which symbols actually have a live Alpaca feed to compare
+  // Questrade's quote against.
+  getActiveSymbols(): string[] {
+    return Array.from(this.activeStreams);
   }
 
   // Milliseconds since the last real MARKET_DATA tick for this symbol, or null if none has
@@ -58,6 +76,14 @@ export class MarketDataWorker {
   // Control's MARKET DATA status indicator.
   isConnected(): boolean {
     return !!this.ws && this.ws.readyState === WebSocket.OPEN;
+  }
+
+  // True only for an exact redelivery of a tick already processed (same symbol, same real
+  // exchange timestamp, same price) - not merely "close in time," which could discard a
+  // legitimate fast-moving real tick.
+  private isDuplicateTick(symbol: string, timestampMs: number, price: number): boolean {
+    const last = this.lastTick.get(symbol);
+    return !!last && last.timestampMs === timestampMs && last.price === price;
   }
 
   start() {
@@ -118,13 +144,30 @@ export class MarketDataWorker {
           if (symbols.length > 0) {
             this.ws?.send(JSON.stringify({ action: "subscribe", quotes: symbols }));
           }
+          // Hardening pass, Phase 4: the feed is genuinely live again as of right now (not just
+          // "socket open," which fires before auth completes) - this is the real end of any gap.
+          // There's no durable tick-level store to backfill missed ticks from (unlike Phase 9's
+          // event_traces for WS events), so this makes the gap honestly observable instead of
+          // silently pretending nothing was missed.
+          if (this.disconnectedAt !== null) {
+            const gapMs = Date.now() - this.disconnectedAt;
+            console.warn(`[MarketDataWorker] Reconnected after a ${Math.round(gapMs / 1000)}s data gap - any ticks during that window were not received (no tick-level backfill source exists).`);
+            eventBus.emit('MARKET_DATA_GAP_DETECTED', { gapMs, disconnectedAt: this.disconnectedAt, reconnectedAt: Date.now() });
+            this.disconnectedAt = null;
+          }
         } else if (msg.T === "q") {
           // Quote message
+          const timestampMs = new Date(msg.t).getTime();
+          if (this.isDuplicateTick(msg.S, timestampMs, msg.bp)) continue; // exact redelivery, not a new tick
+          this.lastTick.set(msg.S, { timestampMs, price: msg.bp });
           this.latestPrices.set(msg.S, msg.bp);
           this.latestPriceTimestamps.set(msg.S, Date.now());
           eventBus.emitMarketData(msg.S, msg.bp, msg.bs, new Date(msg.t).toISOString());
         } else if (msg.T === "t") {
           // Trade message
+          const timestampMs = new Date(msg.t).getTime();
+          if (this.isDuplicateTick(msg.S, timestampMs, msg.p)) continue; // exact redelivery, not a new tick
+          this.lastTick.set(msg.S, { timestampMs, price: msg.p });
           this.latestPrices.set(msg.S, msg.p);
           this.latestPriceTimestamps.set(msg.S, Date.now());
           eventBus.emitMarketData(msg.S, msg.p, msg.s, new Date(msg.t).toISOString());
@@ -137,6 +180,9 @@ export class MarketDataWorker {
     });
 
     this.ws.on("close", () => {
+      // Real start of the gap - captured here, not when the reconnect later succeeds, so the
+      // reported gap duration reflects how long the feed was actually down.
+      if (this.disconnectedAt === null) this.disconnectedAt = Date.now();
       console.log("[MarketDataWorker] WebSocket closed. Reconnecting...");
       setTimeout(() => this.connectAlpaca(), 5000);
     });

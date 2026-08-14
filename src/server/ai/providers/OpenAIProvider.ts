@@ -35,9 +35,14 @@
 
 import { BaseAIProvider } from './AIProvider';
 
+// Hardening pass, Phase 6: see GeminiProvider.ts's identical comment - this provider previously
+// hardcoded "gpt-4o" and silently ignored options.model.
+const DEFAULT_MODEL = 'gpt-4o';
+const SUPPORTED_MODELS = new Set([DEFAULT_MODEL, 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']);
+
 export class OpenAIProvider extends BaseAIProvider {
   public apiKey: string = '';
-  
+
   constructor() {
     super();
     this.providerName = 'OpenAI';
@@ -54,7 +59,16 @@ export class OpenAIProvider extends BaseAIProvider {
 
   async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
     if (!this.apiKey) throw new Error("OpenAIProvider not authenticated");
-    
+
+    let model = DEFAULT_MODEL;
+    if (options?.model) {
+      if (SUPPORTED_MODELS.has(options.model)) {
+        model = options.model;
+      } else {
+        console.warn(`[OpenAIProvider] Requested model '${options.model}' is not in this provider's supported list - falling back to ${DEFAULT_MODEL} rather than silently executing against an unverified model name.`);
+      }
+    }
+
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -62,11 +76,18 @@ export class OpenAIProvider extends BaseAIProvider {
             "Authorization": `Bearer ${this.apiKey}`
         },
         body: JSON.stringify({
-            model: "gpt-4o",
-            messages: [{ role: "user", content: prompt }]
+            model,
+            messages: [{ role: "user", content: prompt }],
+            // Phase 7 (AI_MODEL_INVENTORY.md / ARGUS_SAFETY_HARDENING_REPORT.md) - real,
+            // caller-controlled reproducibility knob. Previously no temperature was ever set
+            // anywhere in this codebase (default sampling varies by provider/model and is
+            // undocumented) - AIRouter.ts now passes a low, deterministic-leaning value for
+            // trading-decision prompts. Only included when the caller actually supplies one, so
+            // this never changes behavior for any call site that doesn't opt in.
+            ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
         })
     });
-    
+
     if (!response.ok) {
         throw new Error(`OpenAI API error: ${response.statusText}`);
     }

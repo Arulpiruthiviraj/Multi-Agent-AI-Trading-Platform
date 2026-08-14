@@ -26,7 +26,7 @@ export class RiskValidationAgent {
     eventBus.on('CHIEF_APPROVED_IDEA', (approval) => this.assessRisk(approval));
   }
 
-  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any }) {
+  assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any }) {
      console.log(`[RiskManager] Validating ${approval.side} on ${approval.symbol}`);
 
      const request: any = {
@@ -36,7 +36,15 @@ export class RiskValidationAgent {
         side: approval.side as 'BUY' | 'SELL',
         currentPrice: approval.currentPrice,
         confidence: approval.confidence,
-        newsDetails: approval.newsDetails
+        newsDetails: approval.newsDetails,
+        // Phase 16B (ARGUS_PHASE16_READINESS_REPORT.md) - forwarded so RiskEngine can pass the
+        // real per-strategy stop/target on to OrderManagement, which persists it onto the trade
+        // row so PortfolioMonitor can honor that strategy's own exit logic instead of the
+        // generic settings-driven thresholds. Null/undefined for any non-QuantEngine-sourced
+        // idea, exactly like today.
+        selectedQuantStrategy: approval.supportingQuantDetail?.selectedStrategy ?? null,
+        quantStopPrice: approval.supportingQuantDetail?.proposedStop ?? null,
+        quantTargetPrice: approval.supportingQuantDetail?.proposedTarget ?? null,
      };
 
      riskEngine.evaluateRisk(request);

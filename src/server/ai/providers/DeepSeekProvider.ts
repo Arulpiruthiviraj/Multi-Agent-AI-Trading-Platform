@@ -35,9 +35,14 @@
 
 import { BaseAIProvider } from './AIProvider';
 
+// Hardening pass, Phase 6: see GeminiProvider.ts's identical comment - this provider previously
+// hardcoded "deepseek-coder" and silently ignored options.model.
+const DEFAULT_MODEL = 'deepseek-coder';
+const SUPPORTED_MODELS = new Set([DEFAULT_MODEL, 'deepseek-chat', 'deepseek-reasoner']);
+
 export class DeepSeekProvider extends BaseAIProvider {
   public apiKey: string = '';
-  
+
   constructor() {
     super();
     this.providerName = 'DeepSeek';
@@ -54,7 +59,16 @@ export class DeepSeekProvider extends BaseAIProvider {
 
   async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
     if (!this.apiKey) throw new Error("DeepSeekProvider not authenticated");
-    
+
+    let model = DEFAULT_MODEL;
+    if (options?.model) {
+      if (SUPPORTED_MODELS.has(options.model)) {
+        model = options.model;
+      } else {
+        console.warn(`[DeepSeekProvider] Requested model '${options.model}' is not in this provider's supported list - falling back to ${DEFAULT_MODEL} rather than silently executing against an unverified model name.`);
+      }
+    }
+
     const response = await fetch("https://api.deepseek.com/v1/chat/completions", {
         method: "POST",
         headers: {
@@ -62,11 +76,13 @@ export class DeepSeekProvider extends BaseAIProvider {
             "Authorization": `Bearer ${this.apiKey}`
         },
         body: JSON.stringify({
-            model: "deepseek-coder",
-            messages: [{ role: "user", content: prompt }]
+            model,
+            messages: [{ role: "user", content: prompt }],
+            // Phase 7 - see OpenAIProvider.ts's identical comment. Additive, opt-in only.
+            ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
         })
     });
-    
+
     if (!response.ok) {
         throw new Error(`DeepSeek API error: ${response.statusText}`);
     }

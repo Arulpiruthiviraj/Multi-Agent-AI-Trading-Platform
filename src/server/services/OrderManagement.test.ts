@@ -105,7 +105,11 @@ describe('OrderManagementService.executeOrder', () => {
 
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'fresh-trace');
 
-    expect(placeOrder).toHaveBeenCalledWith({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 10 });
+    // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - clientOrderId is now always passed through as
+    // the real broker-level idempotency key (the local trades.id UUID, generated fresh per order
+    // attempt) - asserted loosely here (a real UUID string) rather than a specific value, since
+    // the id itself is generated inside executeOrder() and not observable from this test.
+    expect(placeOrder).toHaveBeenCalledWith({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 10, clientOrderId: expect.any(String) });
     expect(tradesInserts).toHaveLength(1); // one order-lifecycle row, updated in place - not re-inserted
     const finalRow = getFinalTradeRow();
     expect(finalRow.status).toBe('FILLED');

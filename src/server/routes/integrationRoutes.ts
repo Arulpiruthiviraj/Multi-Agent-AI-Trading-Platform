@@ -9,6 +9,7 @@ import { BrokerManager } from "../../brokers/BrokerManager";
 import { db } from "../db";
 import * as schema from "../db/schema";
 import { eq } from "drizzle-orm";
+import { tradingLimiter } from "../core/RateLimiters";
 
 export const integrationRouter = Router();
 
@@ -60,14 +61,14 @@ integrationRouter.post("/brokers/:id/test", async (req: Request, res: Response) 
 
 // The real paper->live promotion path - see BrokerManager.setLiveMode() for why this didn't
 // exist before (nothing ever set brokerConnections.paperMode to false).
-integrationRouter.post("/brokers/:id/live-mode", async (req: Request, res: Response) => {
+integrationRouter.post("/brokers/:id/live-mode", tradingLimiter, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { live, confirm } = req.body || {};
   const result = await BrokerManager.getInstance().setLiveMode(id, !!live, confirm);
   res.status(result.ok ? 200 : 400).json(result);
 });
 
-integrationRouter.post("/brokers/active", async (req: Request, res: Response) => {
+integrationRouter.post("/brokers/active", tradingLimiter, async (req: Request, res: Response) => {
   const { id, credentials } = req.body;
   try {
     const success = await BrokerManager.getInstance().setActiveBroker(id, credentials);

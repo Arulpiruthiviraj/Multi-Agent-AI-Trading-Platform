@@ -39,11 +39,12 @@ import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from './schema';
 import path from 'path';
 import fs from 'fs';
+import { resolveDbDir } from './resolveDbDir';
 
 // ARGUS_DB_PATH lets integration tests (or anything else) point at an isolated SQLite file
 // instead of the real data/argus.db - see CLAUDE.md's warning about a second connection to the
 // live file. Production/dev behavior is unchanged when it's unset.
-const dbDir = fs.existsSync('/data') ? '/data' : path.resolve(process.cwd(), 'data');
+const dbDir = resolveDbDir(process.platform, fs.existsSync, process.cwd(), path.resolve);
 if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
@@ -55,13 +56,19 @@ export const db = drizzle(sqlite, { schema });
 export const sqliteDb = sqlite;
 export { dbPath };
 
-// Run migrations on startup
+// Run migrations on startup. Real bug found and fixed this pass (FINAL_ANALYSIS.md 15.13/15.22
+// High #7): a failed migration used to be caught, logged, and swallowed - the process continued
+// running against a possibly-inconsistent schema instead of refusing to start. This module is
+// imported before any route/agent code runs (server.ts's very first real import), so re-throwing
+// here crashes the process during startup, before it can ever serve a request or place a trade -
+// "must not start as healthy" rather than "started, but silently broken."
+console.log("Running migrations...");
 try {
-  console.log("Running migrations...");
   migrate(db, { migrationsFolder: path.join(process.cwd(), 'drizzle') });
   console.log("Migrations complete.");
 } catch (error) {
-  console.error("Migration failed:", error);
+  console.error("[FATAL] Database migration failed - refusing to start with a possibly-inconsistent schema.", error);
+  throw error;
 }
 
 console.log("Database initialized at:", dbPath);

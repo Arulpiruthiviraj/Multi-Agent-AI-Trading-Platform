@@ -117,7 +117,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-amber-500/30 transition-colors group">
               <h3 className="text-amber-400 font-bold mb-2 flex items-center gap-2"><Sliders size={16} className="group-hover:animate-pulse"/> 3. Backtest &amp; Walk-Forward</h3>
               <p className="text-slate-400 text-xs leading-relaxed">
-                Runs the same deterministic technical rules against real historical Alpaca bars, with real spread-cost modeling and a real look-ahead-bias guard. The one real result run so far shows no out-of-sample edge on AAPL — an honest finding, not a bug.
+                Runs the same deterministic technical rules against real historical Alpaca bars, with real SEC/FINRA fee and dynamic ATR/volume-scaled slippage modeling, a real corporate-action safety halt, and a real look-ahead-bias guard — plus a separate per-strategy, per-regime backtest for the 5 QuantEngine strategies. Results vary by symbol/date range and are never fabricated to look better than they are; run a fresh backtest yourself rather than trusting any single number written down here.
               </p>
             </div>
 
@@ -286,11 +286,18 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             </div>
 
             <div className="bg-slate-900/60 p-4 rounded border border-slate-800">
-              <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-2">CONCENTRATION CAP</span>
+              <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-2">CONCENTRATION CAPS</span>
               <p className="text-xs text-slate-400 leading-relaxed">
-                No single symbol may exceed <strong>20% of real account equity</strong> after the trade fills. This reduces the order size rather than rejecting it outright, and applies on top of the three caps above.
+                No single symbol may exceed <strong>20%</strong> of real account equity, no sector may exceed <strong>40%</strong>, and no basket of real pairwise-correlated symbols (correlation &gt; 0.7) may exceed <strong>50%</strong> combined - all three reduce order size rather than rejecting outright, and all apply on top of the three caps above. See <em>The Real Risk Gates</em> for the full detail.
               </p>
             </div>
+          </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-4 rounded mt-4">
+            <span className="text-[10px] font-mono uppercase text-rose-400 font-bold block mb-2">NOT YET IN LIVE SIZING</span>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              A real fractional-Kelly / expected-value module exists (<code className="text-[10px]">quant/risk/ExpectedValue.ts</code>, refuses below 20 real backed trades, hard-capped at 10% of capital) and is used by the additive Quant Layer's own backtest - but live position sizing above still doesn't call it, and still uses a flat 5% stop-loss assumption rather than a real ATR-based one. Both are real, tested code waiting to be wired in, not vaporware.
+            </p>
           </div>
 
           <div className="bg-[#111822] border border-slate-800 p-4 rounded">
@@ -426,12 +433,20 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
         <div className="space-y-6 animate-fade-in">
           <h2 className="text-2xl font-bold text-white tracking-tight">RiskEngine's Real Gates</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            Every <code className="text-xs">CHIEF_APPROVED_IDEA</code> passes through <code className="text-xs">RiskAgent → RiskEngine.evaluateRisk()</code> before an order can be placed. Any one of these six real, checked-in-order gates can reject a trade outright.
+            Every <code className="text-xs">CHIEF_APPROVED_IDEA</code> passes through <code className="text-xs">RiskAgent → RiskEngine.evaluateRisk()</code> before an order can be placed. All gates below are evaluated and recorded even after the first failure (so a full audit trail exists), but any one of these 11 real, checked-in-order gates can reject a trade outright.
           </p>
 
           <div className="space-y-4">
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-rose-400 uppercase font-bold block mb-1">Gate 1: Daily-Loss Kill-Switch</span>
+              <span className="text-[10px] font-mono text-rose-400 uppercase font-bold block mb-1">Gate 1: Emergency Stop</span>
+              <h3 className="text-sm font-bold text-white mb-2">Global Kill-Switch, Checked First</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Blocks every new trade whenever <code className="text-[10px]">tradingState !== 'TRADING_ENABLED'</code> - the real Emergency Stop button sets this directly and is checked before any other gate runs.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-rose-400 uppercase font-bold block mb-1">Gate 2: Daily-Loss Kill-Switch</span>
               <h3 className="text-sm font-bold text-white mb-2">Real Equity vs. Real Daily Baseline</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
                 Tracks real broker equity against a real start-of-day baseline captured the first time risk is evaluated each calendar day. Blocks <strong>all</strong> new trades once the loss reaches 80% of the configured daily loss limit - a real, hand-tested circuit breaker.
@@ -439,7 +454,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             </div>
 
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block mb-1">Gate 2: Consecutive-Loss Breaker</span>
+              <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block mb-1">Gate 3: Consecutive-Loss Breaker</span>
               <h3 className="text-sm font-bold text-white mb-2">Three Real Losses in a Row</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
                 Reads the real realized P&amp;L of the last 3 <code className="text-[10px]">FILLED</code> trades from the database. If all three lost money, new trades are blocked pending manual review.
@@ -447,7 +462,23 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             </div>
 
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-indigo-400 uppercase font-bold block mb-1">Gate 3: Market-Hours &amp; Stale-Data Checks</span>
+              <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block mb-1">Gate 4: Portfolio Drawdown Circuit Breaker</span>
+              <h3 className="text-sm font-bold text-white mb-2">Real Peak-Equity High-Water Mark</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Tracks real persisted peak equity and blocks new trades once the drawdown from that peak exceeds a configured threshold (15% by default) - distinct from the daily-loss gate, which resets every trading day; this one tracks drawdown from the all-time high.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-amber-400 uppercase font-bold block mb-1">Gate 5: Order Rate Limit</span>
+              <h3 className="text-sm font-bold text-white mb-2">Real Runaway-Loop Protection</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Counts real risk-assessment rows in the trailing 60 seconds and blocks new trades above a configured ceiling (5/minute by default) - catches a signal-loop bug generating far more proposals than any real strategy should, independent of whether each individual proposal would otherwise pass.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-indigo-400 uppercase font-bold block mb-1">Gate 6: Market-Hours &amp; Stale-Data Checks</span>
               <h3 className="text-sm font-bold text-white mb-2">Real Alpaca Clock + Real Tick Age</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
                 Calls Alpaca's real <code className="text-[10px]">/v2/clock</code> endpoint (cached 60s) to refuse trades outside market hours, and rejects a trade if the last real tick for that symbol is older than 5 minutes - never trades on a symbol Argus hasn't actually heard from recently.
@@ -455,33 +486,49 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             </div>
 
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block mb-1">Gate 4: Single-Symbol Concentration Cap</span>
-              <h3 className="text-sm font-bold text-white mb-2">20% of Real Account Equity, Maximum</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                Reduces the order size (rather than rejecting outright) so no single symbol's position value can exceed 20% of real account equity after the fill.
-              </p>
-            </div>
-
-            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 5: High-Impact-News Veto</span>
+              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 7: High-Impact-News Veto</span>
               <h3 className="text-sm font-bold text-white mb-2">Real News Clusters, 4-Hour Window</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Vetoes a trade if a real news cluster covering that symbol, updated within the last 4 hours, has an impact score above 80. (This gate previously queried the wrong database table and could never fire for any trade - fixed and now covered by an automated test.)
+                Vetoes a trade if a real news cluster covering that symbol, updated within the last 4 hours, has an impact score above 80 - regardless of the article's actual direction, so a bullish high-impact story vetoes a SELL exactly the same as a BUY.
               </p>
             </div>
 
             <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
-              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 6: Order Idempotency</span>
+              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 8: Price Validity</span>
+              <h3 className="text-sm font-bold text-white mb-2">No Order on a Broken Price</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Rejects a trade outright if the current price used for sizing isn't a real finite number greater than zero - a last-line defense-in-depth check, not expected to fire under normal conditions.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-emerald-400 uppercase font-bold block mb-1">Gate 9: Position-Sizing Caps</span>
+              <h3 className="text-sm font-bold text-white mb-2">Single-Symbol, Sector, and Correlation Concentration - All Real, All Live</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Reduces order size (rather than rejecting outright) so no single symbol exceeds <strong>20%</strong> of real account equity, no GICS-style sector exceeds <strong>40%</strong>, and no basket of symbols with real pairwise return-correlation above 0.7 exceeds <strong>50%</strong> combined exposure - all computed from real position values and real 90-day daily-return correlation, not a placeholder. See <em>Risk Engine Position Sizing</em> for the full math.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 10: Sell-Position-Exists</span>
+              <h3 className="text-sm font-bold text-white mb-2">Can't Sell What You Don't Hold</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                A SELL idea is only sized above zero if the real broker portfolio actually shows an open position in that symbol - no broker in Argus supports short selling, so this is a hard structural check, not a configurable preference.
+              </p>
+            </div>
+
+            <div className="bg-[#111822] border border-slate-800 p-4 rounded-lg">
+              <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 11: Order Idempotency</span>
               <h3 className="text-sm font-bold text-white mb-2">One Order Per Trace ID</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                <code className="text-[10px]">OrderManagementService</code> checks the trades table for an existing order with the same trace ID before placing a new one - a duplicate event for the same decision can never place a second real order.
+                <code className="text-[10px]">OrderManagementService</code> checks the trades table for an existing order with the same trace ID (backed by a real DB unique constraint, not just an application-level check) before placing a new one - a duplicate event for the same decision can never place a second real order.
               </p>
             </div>
           </div>
 
           <div className="callout bg-slate-900/50 border border-slate-800 p-4 rounded-lg">
             <p className="text-xs text-slate-400 leading-relaxed mb-0">
-              <strong className="text-slate-200">Not yet built:</strong> sector/correlation exposure limits. Concentration is capped per-symbol only - many uncorrelated-looking-but-actually-correlated positions could still concentrate real risk today.
+              <strong className="text-slate-200">Not yet wired into live sizing:</strong> a real risk/reward-ratio, expected-value, and fractional-Kelly module exists (<code className="text-[10px]">quant/risk/ExpectedValue.ts</code>) and is used by the additive Quant Layer's backtest, but nothing in the always-on live pipeline calls it yet - live position sizing still uses the three caps above, not Kelly-suggested sizing.
             </p>
           </div>
 
@@ -548,12 +595,13 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               Backtest &amp; Walk-Forward Engine
             </h3>
             <p className="text-xs text-slate-300 leading-relaxed mb-3">
-              Runs the same deterministic technical rules TechnicalAgent uses live, against real historical Alpaca bars, with a real spread-cost model and a hard look-ahead-bias guard (it cannot access a future bar even by accident).
+              Runs the same deterministic technical rules TechnicalAgent uses live, against real historical Alpaca bars, with real commission/slippage modeling and a hard look-ahead-bias guard (it cannot access a future bar even by accident, unit-tested to prove the guard fires).
             </p>
             <ul className="list-disc list-inside text-xs text-slate-400 space-y-1.5 font-mono">
-              <li>Real walk-forward validation (rolling train/test windows) is built and has been run against real AAPL history.</li>
-              <li>The one real result so far: average out-of-sample return was <strong className="text-rose-400">negative</strong> across 11 real periods - no demonstrated edge yet.</li>
-              <li>Scope, stated precisely: this backtests the deterministic technical rules only. It does not yet replay the full AI-agent consensus pipeline (News/Fundamental/Macro/Chief Trader) against history.</li>
+              <li>Real walk-forward validation (rolling train/test windows, e.g. 365-day train / 90-day test) is built and self-reports <code className="text-[10px]">insufficientPeriods</code> honestly when a date range is too short to trust.</li>
+              <li>Real multi-symbol/multi-year runs consistently show a win rate close to a coin flip once pooled across enough trades - whatever positive expectancy shows up tends to come from the exit rule's reward:risk asymmetry, not from the entry signal predicting direction. Out-of-sample walk-forward return has not shown a reliable edge in any real run so far.</li>
+              <li>A real stock split inside the requested date range (e.g. AAPL, NVDA, TSLA all split in recent years) correctly halts the run with <code className="text-[10px]">CORPORATE_ACTION_DETECTED</code> rather than silently computing a corrupted result - if a backtest refuses to run on a familiar symbol, this is why.</li>
+              <li>Scope, stated precisely: this backtests the deterministic technical rules only - it does not replay the full AI-agent consensus pipeline (News/Fundamental/Macro/Chief Trader) against history. The additive Quant Layer's 5 strategies have their own separate real backtest (<code className="text-[10px]">runStrategyBacktest</code>), also deterministic-only.</li>
             </ul>
           </div>
 
@@ -616,7 +664,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               <ul className="list-disc list-inside text-slate-300 text-xs space-y-2.5 leading-relaxed">
                 <li><strong>AI Models are Probabilistic:</strong> Generative models estimate outcomes based on historic patterns. They do not possess future sight and will experience consecutive losses during abrupt macroeconomic shifts.</li>
                 <li><strong>Never Overrule the Risk Engine:</strong> The daily-loss kill-switch, consecutive-loss breaker, and concentration cap exist specifically to protect you from portfolio ruin. Disabling guardrails or force-closing positions without structured logic can result in immediate loss of capital.</li>
-                <li><strong>Past Performance Disclaimers:</strong> The one real backtest run against AAPL history so far showed <em>no</em> out-of-sample edge for the deterministic strategy - a real, honest, unfavorable result. A high win rate in one historical simulation does not guarantee future profitable yield.</li>
+                <li><strong>Past Performance Disclaimers:</strong> Real backtests against the deterministic strategy have not shown a statistically reliable out-of-sample edge - win rates pooled across enough real trades land close to a coin flip, and whatever positive expectancy shows up leans on the exit rule's reward:risk shape rather than the entry signal predicting direction. A high win rate in any one historical simulation does not guarantee future profitable yield.</li>
                 <li><strong>Start Conservatively:</strong> Always configure the terminal to "Conservative" (1% of equity risked per trade) and run the paper simulator for a meaningful stretch to study real multi-agent behavior before ever considering live capital.</li>
               </ul>
             </div>
@@ -710,9 +758,97 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             </div>
           </div>
 
-          <div className="flex justify-start mt-8">
-            <button 
+          <div className="flex justify-between mt-8">
+            <button
               onClick={() => setActiveSectionId("simulator-safety")}
+              className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
+            >
+              Previous
+            </button>
+            <button
+              onClick={() => { markCompleted("live-ops"); setActiveSectionId("quant-decision-layer"); }}
+              className="bg-indigo-600 hover:bg-indigo-500 text-white px-6 py-2 rounded flex items-center gap-2 text-sm font-bold transition-colors shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+            >
+              Explore the Additive Quant Layer <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )
+    },
+
+    // COURSE 5: Additive Quant Decision Layer
+    {
+      id: "quant-decision-layer",
+      category: "5. Additive Quant Decision Layer",
+      title: "Deterministic Regime, Strategy & Scoring Engine",
+      isCourse: true,
+      icon: <Radar size={16} />,
+      content: (
+        <div className="space-y-6 animate-fade-in">
+          <h2 className="text-2xl font-bold text-white tracking-tight">A Deterministic Quant Layer, Entirely Additive</h2>
+          <p className="text-slate-300 text-sm leading-relaxed">
+            <code className="text-xs">src/server/quant/</code> and <code className="text-xs">QuantSignalAgent.ts</code> add a real, deterministic regime/strategy/scoring engine on top of the existing agent pipeline - never a replacement for <code className="text-xs">RSIEngine</code>, <code className="text-xs">MACDEngine</code>, <code className="text-xs">PositionSizing</code>, or <code className="text-xs">BacktestEngine</code>, all of which it reuses rather than reimplements. It is <strong>off by default</strong> (<code className="text-xs">QUANT_ENGINE_ENABLED=true</code> in <code className="text-xs">.env</code>) - nothing about the existing pipeline changes for anyone who hasn't opted in.
+          </p>
+
+          <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">
+            <span className="text-[10px] font-mono uppercase text-slate-500 block mb-2">The Real Pipeline</span>
+            <div className="bg-slate-950 p-3 rounded border border-slate-800/80 font-mono text-[11px] text-slate-300 space-y-1.5">
+              <div>Real daily bars (same <code className="text-[10px]">ohlcv_bars</code> cache every other engine uses)</div>
+              <div className="text-indigo-400">↓ RegimeEngine.classifyRegime() - multi-signal, never a single indicator</div>
+              <div className="text-indigo-400">↓ MarketContext.getMarketContext() - SPY/QQQ/IWM/sector relative strength</div>
+              <div className="text-indigo-400">↓ StrategyEngine.evaluateAll() - 5 real strategies score their own conditions</div>
+              <div className="text-indigo-400">↓ GroupedScores.computeGroupedScores() - probabilistic, correlation-aware scoring</div>
+              <div className="text-indigo-400">↓ QuantContradictionAnalyzer - real AI qualitative review (optional, never overrides the math)</div>
+              <div>↓ eventBus.emit('TRADE_IDEA_GENERATED', {"{"}agent: 'QuantEngine', ...{"}"}) - same contract every agent uses</div>
+              <div>↓ ChiefTraderAgent → RiskEngine → OrderManagementService - completely unchanged, never bypassed</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="bg-slate-900/60 p-4 rounded border border-slate-800">
+              <span className="text-[10px] font-mono uppercase text-emerald-400 font-bold block mb-2">5 REAL STRATEGIES</span>
+              <ul className="text-xs text-slate-400 leading-relaxed space-y-1 font-mono">
+                <li><strong className="text-slate-200">Momentum Breakout</strong> - structural break + RVOL + volatility expansion</li>
+                <li><strong className="text-slate-200">Pullback Continuation</strong> - retrace to an MA without breaking the trend</li>
+                <li><strong className="text-slate-200">Mean Reversion</strong> - RSI/StochRSI extremes outside the Keltner Channel</li>
+                <li><strong className="text-slate-200">Trend Following</strong> - rides an established trend, no fixed target</li>
+                <li><strong className="text-slate-200">Range Reversion</strong> - fades whichever real range boundary is nearest</li>
+              </ul>
+              <p className="text-[10px] text-slate-500 mt-2">Each strategy discloses its own <code className="text-[9px]">conditionsMet</code>/<code className="text-[9px]">conditionsFailed</code>/<code className="text-[9px]">contradictions</code> - never a single opaque score.</p>
+            </div>
+
+            <div className="bg-slate-900/60 p-4 rounded border border-slate-800">
+              <span className="text-[10px] font-mono uppercase text-amber-400 font-bold block mb-2">NOT A VOTE COUNT</span>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                RSI, Stochastic RSI, CCI, and Williams %R all measure the same "is price stretched" fact - <code className="text-[10px]">GroupedScores.ts</code> blends them into <strong>one</strong> reading, not four independent votes, before combining it with a genuinely different signal (MACD/ROC). Counting correlated indicators as independent evidence is exactly the mistake this layer is built to avoid.
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-[#111822] border border-slate-800 p-4 rounded">
+            <span className="text-[10px] font-mono uppercase text-rose-400 font-bold block mb-3">REAL EXPECTED VALUE & KELLY - NEVER A GUESSED WIN RATE</span>
+            <p className="text-xs text-slate-300 leading-relaxed mb-2">
+              <code className="text-[10px]">quant/risk/ExpectedValue.ts</code> only ever computes expected value/Kelly sizing from a <strong>real backtest's own win rate and realized R-multiples</strong> - run one strategy against real history via the Scanner tab's "Real Per-Strategy Backtest" panel to see it. Two hard safeguards:
+            </p>
+            <ul className="list-disc list-inside text-slate-400 text-[11px] space-y-1 font-mono">
+              <li>Kelly refuses below <strong className="text-slate-200">20 real closed trades</strong> backing the win-rate estimate - "insufficient sample size," not a fabricated number.</li>
+              <li>Even when justified, the suggested size is hard-capped at <strong className="text-slate-200">10% of capital</strong>, regardless of what the raw formula computes.</li>
+            </ul>
+          </div>
+
+          <div className="bg-rose-950/20 border border-rose-500/15 p-4 rounded-lg flex gap-3">
+            <AlertTriangle size={20} className="text-rose-400 shrink-0 mt-0.5" />
+            <div>
+              <h4 className="text-rose-400 font-bold text-xs uppercase font-mono mb-1">What This Layer Does Not Claim</h4>
+              <p className="text-slate-300 text-[11px] leading-relaxed font-mono">
+                A deterministic scoring engine makes the pipeline more explainable and harder to fool with correlated signals - it does not, by itself, prove any of these 5 strategies has a real statistical edge on real markets. Run the real backtest before trusting any strategy's numbers, and read the honest <code className="text-[10px]">insufficientSampleSize</code>/Kelly-refusal flags rather than the headline win rate alone.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex justify-start mt-8">
+            <button
+              onClick={() => setActiveSectionId("live-ops")}
               className="text-slate-400 hover:text-white px-4 py-2 text-sm font-bold transition-colors"
             >
               Previous

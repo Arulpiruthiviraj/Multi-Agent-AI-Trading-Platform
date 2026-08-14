@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as schema from '../db/schema';
+import { getTradingDateStr } from '../core/TradingCalendar';
 
 // db.select().from(table)...limit()/where()/orderBy() all resolve to whatever rows were
 // registered for that specific table via setTableRows(). Mirrors drizzle's own thenable
@@ -16,7 +17,11 @@ const { mockDb, setTableRows, resetTableRows } = vi.hoisted(() => {
       return Promise.resolve(resultsByTable.get(lastTable) || []).then(resolve, reject);
     },
   };
-  const mockDb = { select: () => builder, insert: () => ({ values: () => Promise.resolve({}) }) };
+  const mockDb = {
+    select: () => builder,
+    insert: () => ({ values: () => Promise.resolve({}) }),
+    update: () => ({ set: () => ({ run: () => Promise.resolve({}) }) }),
+  };
   return {
     mockDb,
     setTableRows: (table: any, rows: any[]) => resultsByTable.set(table, rows),
@@ -36,6 +41,8 @@ const { mockTradingEngine } = vi.hoisted(() => ({
       currentDailyLoss: 0,
       dailyLossLimit: 5000,
       tradingMode: 'PAPER',
+      tradingState: 'TRADING_ENABLED' as 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP',
+      emergencyStopActive: false,
     },
   },
 }));
@@ -96,7 +103,10 @@ describe('RiskEngine.evaluateRisk', () => {
     mockTradingEngine.state.dayStartEquity = null;
     mockTradingEngine.state.currentDailyLoss = 0;
     mockTradingEngine.state.dailyLossLimit = 5000;
+    mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
+    mockTradingEngine.state.emergencyStopActive = false;
     setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 3000 }]);
+    setTableRows(schema.riskAssessments, []);
     setTableRows(schema.trades, []);
     setTableRows(schema.newsClusters, []);
     for (const key of Object.keys(mockBarsBySymbol)) delete mockBarsBySymbol[key];
@@ -112,7 +122,7 @@ describe('RiskEngine.evaluateRisk', () => {
   it('blocks all trades once the daily-loss kill-switch threshold (80% of limit) is breached', async () => {
     mockTradingEngine.state.dailyLossLimit = 1000;
     mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 91500 })); // -8500 -> wait, use small numbers
-    mockTradingEngine.state.dayStartDateStr = new Date().toISOString().split('T')[0];
+    mockTradingEngine.state.dayStartDateStr = getTradingDateStr();
     mockTradingEngine.state.dayStartEquity = 100000;
     mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 99150 })); // loss of 850 = 85% of 1000 limit
 
@@ -125,7 +135,7 @@ describe('RiskEngine.evaluateRisk', () => {
 
   it('does not trip the daily-loss breaker below the 80% threshold', async () => {
     mockTradingEngine.state.dailyLossLimit = 1000;
-    mockTradingEngine.state.dayStartDateStr = new Date().toISOString().split('T')[0];
+    mockTradingEngine.state.dayStartDateStr = getTradingDateStr();
     mockTradingEngine.state.dayStartEquity = 100000;
     mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 99500 })); // loss of 500 = 50% of limit
 
@@ -133,6 +143,30 @@ describe('RiskEngine.evaluateRisk', () => {
 
     const assessment = lastAssessment();
     expect(assessment.reasoning).not.toMatch(/Daily Loss Kill-Switch/);
+  });
+
+  it('uses the real New York trading day, not UTC, for the daily-loss reset boundary (Phase 3 hardening)', async () => {
+    // 2026-01-16T02:00:00Z is already "2026-01-16" under naive UTC, but real New York time at
+    // this instant is still 2026-01-15 21:00 EST - the prior trading day. Pin the system clock
+    // here and seed dayStartDateStr with the CORRECT (NY) date - if RiskEngine still computed
+    // today's date via naive UTC, it would see '2026-01-16' != the seeded '2026-01-15' and
+    // wrongly reset dayStartEquity to the current (lossy) equity, masking the real loss.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-16T02:00:00Z'));
+    try {
+      mockTradingEngine.state.dailyLossLimit = 1000;
+      mockTradingEngine.state.dayStartDateStr = '2026-01-15';
+      mockTradingEngine.state.dayStartEquity = 100000;
+      mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 99500 })); // real loss of 500
+
+      await riskEngine.evaluateRisk({ traceId: 't-tz', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+      // No incorrect reset happened - dayStartDateStr is untouched and the real $500 loss is preserved.
+      expect(mockTradingEngine.state.dayStartDateStr).toBe('2026-01-15');
+      expect(mockTradingEngine.state.currentDailyLoss).toBe(500);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('blocks new trades after 3 consecutive losing FILLED trades', async () => {
@@ -303,6 +337,113 @@ describe('RiskEngine.evaluateRisk', () => {
     // single-symbol cap: $200k * 0.20 / $100 = 400 shares (below the 800-share risk-sizing cap).
     expect(assessment.approved).toBe(true);
     expect(assessment.maxQuantity).toBe(400);
+  });
+
+  it('blocks all new trades once TRADING_PAUSED, not just EMERGENCY_STOP', async () => {
+    mockTradingEngine.state.tradingState = 'TRADING_PAUSED';
+    try {
+      await riskEngine.evaluateRisk({ traceId: 't-paused', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+      const assessment = lastAssessment();
+      expect(assessment.approved).toBe(false);
+      expect(assessment.reasoning).toMatch(/paused/i);
+    } finally {
+      mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
+    }
+  });
+
+  it('blocks all new trades once EMERGENCY_STOP is active, with an emergency-specific reason', async () => {
+    mockTradingEngine.state.tradingState = 'EMERGENCY_STOP';
+    try {
+      await riskEngine.evaluateRisk({ traceId: 't-estop', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+      const assessment = lastAssessment();
+      expect(assessment.approved).toBe(false);
+      expect(assessment.reasoning).toMatch(/emergency stop/i);
+    } finally {
+      mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
+    }
+  });
+
+  it('blocks a BUY once real portfolio drawdown from its persisted peak equity exceeds the configured limit', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 170000, buyingPower: 170000, positions: [] }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.10, peakEquity: 200000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-drawdown', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+    const assessment = lastAssessment();
+    // (200000 - 170000) / 200000 = 15% drawdown, exceeds the configured 10% limit.
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/drawdown/i);
+  });
+
+  it('does not block on drawdown when real equity is at or above its recorded peak', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 200000, buyingPower: 200000, positions: [] }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.10, peakEquity: 190000 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-drawdown-new-peak', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+    const assessment = lastAssessment();
+    expect(assessment.reasoning).not.toMatch(/drawdown/i);
+  });
+
+  it('blocks opening a brand new position once the configured maximum open-positions count is already reached', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 100000,
+      buyingPower: 100000,
+      positions: [
+        { symbol: 'MSFT', quantity: 10, entryPrice: 100 },
+        { symbol: 'MOH', quantity: 10, entryPrice: 100 }, // unmapped sector, avoids sector-cap interference
+      ],
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxOpenPositions: 2 }]);
+
+    // AAPL is not one of the two already-open positions, so opening it would be a 3rd distinct position.
+    await riskEngine.evaluateRisk({ traceId: 't-openpos', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/open positions/i);
+  });
+
+  it('does not block adding to an already-open position, even at the max open-positions count', async () => {
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      equity: 100000,
+      buyingPower: 100000,
+      positions: [
+        { symbol: 'AAPL', quantity: 10, entryPrice: 100 },
+        { symbol: 'MOH', quantity: 10, entryPrice: 100 },
+      ],
+    }));
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxOpenPositions: 2 }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-openpos-add', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(true);
+  });
+
+  it('blocks new proposals once the configured order-rate limit is exceeded, regardless of symbol/side', async () => {
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxOrdersPerMinute: 3 }]);
+    setTableRows(schema.riskAssessments, [
+      { id: 1, createdAt: new Date().toISOString() },
+      { id: 2, createdAt: new Date().toISOString() },
+      { id: 3, createdAt: new Date().toISOString() },
+    ]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-orderrate', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/rate limit/i);
+  });
+
+  it('does not block on order rate when recent activity is below the configured limit', async () => {
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxOrdersPerMinute: 3 }]);
+    setTableRows(schema.riskAssessments, [{ id: 1, createdAt: new Date().toISOString() }]);
+
+    await riskEngine.evaluateRisk({ traceId: 't-orderrate-ok', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+    const assessment = lastAssessment();
+    expect(assessment.reasoning).not.toMatch(/rate limit/i);
   });
 
   it('rejects a SELL with no existing position', async () => {

@@ -74,6 +74,20 @@ import { AIRouter } from '../ai/AIRouter';
 
 export const configRouter = Router();
 
+// Real bug found and fixed this pass (P0, same class as the autobot/toggle allowlist fix):
+// POST /settings used to do `db.delete(schema.settings); db.insert(schema.settings).values(req.body)`
+// - a full delete-and-recreate using the RAW, unvalidated client body. That let a client set
+// `tradingState` directly (completely bypassing the audited kill-switch endpoints and their
+// kill_switch_events trail) and `peakEquity` (letting a client reset the drawdown gate's
+// high-water-mark at will, defeating Phase 1.5's max-portfolio-drawdown protection). Only these
+// fields may be written through this general-purpose settings endpoint.
+const SETTINGS_ALLOWED_FIELDS: (keyof typeof schema.settings.$inferInsert)[] = [
+  'tradingMode', 'riskLevel', 'selectedBroker', 'selectedAiProvider', 'budget', 'strategy',
+  'maxTradeSize', 'dailyLossLimit', 'takeProfitPct', 'trailingStopPct', 'minAiConfidence',
+  'autoBotEnabled', 'adversarialDebateMode', 'maxPortfolioDrawdownPct', 'maxOpenPositions',
+  'maxOrdersPerMinute', 'positionSizingMode', 'percentOfEquityPct',
+];
+
 configRouter.get('/settings', async (req, res) => {
   try {
     const allSettings = await db.select().from(schema.settings).limit(1);
@@ -85,15 +99,24 @@ configRouter.get('/settings', async (req, res) => {
 
 configRouter.post('/settings', async (req, res) => {
   try {
-    // Check the LIVE-trading confirmation gate BEFORE writing anything - the delete+insert below
-    // used to run unconditionally, persisting tradingMode: 'LIVE' straight to the DB regardless
-    // of what toggle() decided, bypassing the confirmation requirement entirely.
-    const result = tradingEngine.toggle(req.body);
+    // Check the LIVE-trading confirmation gate BEFORE writing anything - toggle() already
+    // applies its own (narrower) allowlist and updates tradingEngine.state/settings for the
+    // fields it owns; this route additionally persists the broker/AI-provider selection fields
+    // toggle() doesn't handle. Only an explicit allowlist is ever written - see
+    // SETTINGS_ALLOWED_FIELDS' comment for the real bypass this closes.
+    const result = await tradingEngine.toggle(req.body);
     if (!result.ok) {
       return res.status(400).json(result);
     }
-    await db.delete(schema.settings);
-    await db.insert(schema.settings).values(req.body);
+    const patch: Record<string, unknown> = {};
+    for (const field of SETTINGS_ALLOWED_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
+        patch[field] = req.body[field];
+      }
+    }
+    if (Object.keys(patch).length > 0) {
+      await db.update(schema.settings).set(patch).run();
+    }
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -128,7 +151,14 @@ configRouter.get('/brokers', async (req, res) => {
 
 configRouter.post('/brokers', async (req, res) => {
   try {
-    const { brokerName, apiKeyEncrypted, apiSecretEncrypted, ...rest } = req.body;
+    // paperMode is deliberately excluded from `rest` below - this form (Add/Update Credentials)
+    // must never be able to set a connection live. BrokerManager.setLiveMode() (the
+    // /brokers/:id/live-mode route) is the only path that may do that, and it requires both a
+    // real capability check and LIVE_TRADING_CONFIRMATION_PHRASE. Without this, a raw POST here
+    // (or a buggy client) could have silently created a connection already in live mode, with
+    // real money at risk, the moment BrokerManager.initialize() next read it - never having gone
+    // through that confirmation gate at all.
+    const { brokerName, apiKeyEncrypted, apiSecretEncrypted, paperMode, ...rest } = req.body;
     let finalKey = apiKeyEncrypted;
     let finalSecret = apiSecretEncrypted;
     if (apiKeyEncrypted && !apiKeyEncrypted.includes(':')) {
@@ -137,12 +167,29 @@ configRouter.post('/brokers', async (req, res) => {
     if (apiSecretEncrypted && !apiSecretEncrypted.includes(':')) {
        finalSecret = EncryptionService.encrypt(apiSecretEncrypted);
     }
-    await db.insert(schema.brokerConnections).values({
-       brokerName,
-       apiKeyEncrypted: finalKey,
-       secretEncrypted: finalSecret,
-       ...rest
-    });
+
+    // Update-if-exists, not a blind insert: `brokerName` has no unique DB constraint, so
+    // re-submitting this form for the same broker used to silently create a second row.
+    // BrokerManager.initialize() reads brokerConnections via .find(b => b.brokerName === ...),
+    // which returns whichever row query order puts first (typically the oldest) - meaning a
+    // credential *update* could silently never take effect. paperMode is intentionally omitted
+    // from the update too, so rotating credentials on an already-live connection can never
+    // silently flip it back to paper.
+    const existing = await db.select().from(schema.brokerConnections).where(eq(schema.brokerConnections.brokerName, brokerName));
+    if (existing.length > 0) {
+      const updateValues: Record<string, any> = { ...rest };
+      if (finalKey) updateValues.apiKeyEncrypted = finalKey;
+      if (finalSecret) updateValues.secretEncrypted = finalSecret;
+      await db.update(schema.brokerConnections).set(updateValues).where(eq(schema.brokerConnections.id, existing[0].id));
+    } else {
+      await db.insert(schema.brokerConnections).values({
+         brokerName,
+         apiKeyEncrypted: finalKey,
+         secretEncrypted: finalSecret,
+         ...rest,
+         paperMode: true,
+      });
+    }
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

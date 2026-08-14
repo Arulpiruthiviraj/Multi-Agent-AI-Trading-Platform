@@ -3,6 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { eq } from 'drizzle-orm';
+import { getTradingDateStr } from '../core/TradingCalendar';
 
 /**
  * Real integration test (isolated temp SQLite DB, no per-module mocks) proving the actual point
@@ -22,8 +23,6 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
   beforeAll(async () => {
     tmpDbPath = path.join(os.tmpdir(), `argus_riskgates_${Date.now()}_${process.pid}.db`);
     process.env.ARGUS_DB_PATH = tmpDbPath;
-    delete process.env.ALPACA_API_KEY;
-    delete process.env.ALPACA_SECRET_KEY;
 
     ({ db, sqliteDb } = await import('../db'));
     schema = await import('../db/schema');
@@ -31,6 +30,17 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
     eventBus.on('RISK_GATE_EVALUATED', (e: any) => gateEvents.push(e));
     ({ riskEngine } = await import('./RiskEngine'));
     ({ tradingEngine } = await import('./TradingEngine'));
+
+    // Deleting these BEFORE the imports above doesn't stick: EncryptionService.ts calls
+    // dotenv.config() as a module-load side effect, and default dotenv behavior re-populates any
+    // key that looks "unset" - which `delete` produces - from .env. That silently undid this
+    // simulated "no Alpaca credentials" state after the import chain ran, making isMarketOpen()
+    // hit the real Alpaca clock API instead of short-circuiting - a real, previously-undetected
+    // test-reliability bug that only surfaced as a failure when the real market happened to be
+    // closed at the moment the suite ran. Deleting here, after all imports have already triggered
+    // any dotenv reload, is what actually makes it stick for the rest of this file's tests.
+    delete process.env.ALPACA_API_KEY;
+    delete process.env.ALPACA_SECRET_KEY;
   });
 
   afterAll(() => {
@@ -45,7 +55,7 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
     // Force the daily-loss kill-switch to trip immediately, regardless of the paper broker's
     // real (essentially flat) equity - this only needs the FIRST gate to fail; every gate after
     // it should still run and be recorded.
-    tradingEngine.state.dayStartDateStr = new Date().toISOString().split('T')[0];
+    tradingEngine.state.dayStartDateStr = getTradingDateStr();
     tradingEngine.state.dayStartEquity = 1_000_000;
     tradingEngine.state.dailyLossLimit = 1; // trivially breached - the paper broker's equity will be far below 999,999.2
 
@@ -82,10 +92,11 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
   });
 
   it('blocks and records rejection via the emergency_stop gate - previously bypassed RiskEngine entirely via a RiskAgent pre-check', async () => {
-    tradingEngine.state.dayStartDateStr = new Date().toISOString().split('T')[0];
+    tradingEngine.state.dayStartDateStr = getTradingDateStr();
     tradingEngine.state.dayStartEquity = 100000;
     tradingEngine.state.dailyLossLimit = 5000;
     tradingEngine.state.emergencyStopActive = true;
+    tradingEngine.state.tradingState = 'EMERGENCY_STOP';
 
     const traceId = 'gates-test-emergency';
     try {
@@ -102,11 +113,12 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
       expect(gates.map((g: any) => g.gateName)).toContain('sufficient_size');
     } finally {
       tradingEngine.state.emergencyStopActive = false;
+      tradingEngine.state.tradingState = 'TRADING_ENABLED';
     }
   });
 
   it('persists a full passing gate ladder for an approved trade', async () => {
-    tradingEngine.state.dayStartDateStr = new Date().toISOString().split('T')[0];
+    tradingEngine.state.dayStartDateStr = getTradingDateStr();
     tradingEngine.state.dayStartEquity = 100000;
     tradingEngine.state.dailyLossLimit = 5000;
 

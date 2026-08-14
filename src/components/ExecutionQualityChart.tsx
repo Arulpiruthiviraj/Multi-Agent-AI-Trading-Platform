@@ -1,39 +1,18 @@
 /**
  * ==========================================================
- * Module:
- * ExecutionQualityChart.tsx
+ * Module: ExecutionQualityChart
  *
- * Purpose:
- * Core implementation and logic for the ExecutionQualityChart.tsx module within the Argus Trading Terminal.
- *
- * Responsibilities:
- * - State management and logic execution for ExecutionQualityChartx
- * - Interface with backend APIs and EventBus
- * - Render UI components (if React)
- *
- * Inputs:
- * - Module dependencies and injected props
- *
- * Outputs:
- * - Formatted data or React Elements
- *
- * Emits:
- * - Relevant system events
- *
- * Dependencies:
- * - Standard Argus architecture layers
- *
- * Called By:
- * - Argus Routing / Parent Components
- *
- * Never:
- * - Mutate global state directly without EventBus
- * - Call AI providers directly (Must use AIRouter)
- *
+ * Phase 1A (Remediation Verification Pass, FINAL_ANALYSIS.md Section 25.3's follow-up) - this
+ * used to synthesize 60 fake trades per render via `Date.now() % 1000` jitter, including a fake
+ * "slippage" figure. Now backed by GET /api/v2/trading/execution-quality: real submit-to-fill
+ * latency for real FILLED trades. Slippage is deliberately NOT plotted - neither `trades` nor
+ * `risk_assessments` persists the price RiskEngine evaluated the proposal against, so there is no
+ * real slippage value to show (see the endpoint's own comment). Real order size is plotted
+ * instead, which real data can actually answer ("does size correlate with fill speed?").
  * ==========================================================
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ScatterChart,
   Scatter,
@@ -44,57 +23,58 @@ import {
   ResponsiveContainer,
   CartesianGrid
 } from 'recharts';
-import { Zap, Activity } from 'lucide-react';
+import { Zap, Activity, AlertTriangle } from 'lucide-react';
 
 interface ExecutionQualityChartProps {
   className?: string;
 }
 
+interface ExecutionPoint {
+  id: string;
+  symbol: string;
+  side: string;
+  speedMs: number;
+  quantity: number;
+  timestamp: string;
+}
+
 const ExecutionQualityChart: React.FC<ExecutionQualityChartProps> = ({ className = "" }) => {
-  // Generate placeholder data: Execution Speed (ms) vs Slippage (bps) over last 30 days
-  const data = useMemo(() => {
-    const arr = [];
-    const now = Date.now();
-    for (let i = 0; i < 60; i++) {
-      // higher speed = usually higher slippage or variance
-      // let's create clusters: optimal, fast but high slippage, slow but precise
-      const type = (Date.now() % 1000 / 1000);
-      let speedMs, slippageBps;
-      
-      if (type > 0.7) {
-        // HFT / Fast
-        speedMs = 15 + (Date.now() % 1000 / 1000) * 20; // 15-35ms
-        slippageBps = 0.5 + (Date.now() % 1000 / 1000) * 1.5; // 0.5-2.0 bps
-      } else if (type > 0.3) {
-        // Standard
-        speedMs = 40 + (Date.now() % 1000 / 1000) * 60; // 40-100ms
-        slippageBps = -0.5 + (Date.now() % 1000 / 1000) * 1.5; // -0.5 to 1.0 bps
-      } else {
-        // Slow
-        speedMs = 150 + (Date.now() % 1000 / 1000) * 200; // 150-350ms
-        slippageBps = -1.0 + (Date.now() % 1000 / 1000) * 0.5; // price improvement sometimes
-      }
-      
-      arr.push({
-        id: `trd-${i}`,
-        speedMs,
-        slippageBps,
-        size: 50 + (Date.now() % 1000 / 1000) * 200, // volume representation
-        timestamp: now - (Date.now() % 1000 / 1000) * 30 * 24 * 60 * 60 * 1000
+  const [data, setData] = useState<ExecutionPoint[] | null>(null);
+  const [available, setAvailable] = useState<boolean | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v2/trading/execution-quality')
+      .then(r => r.json())
+      .then(json => {
+        if (cancelled) return;
+        if (json.ok) {
+          setAvailable(json.available);
+          setData(json.data || []);
+          setReason(json.reason || null);
+        } else {
+          setAvailable(false);
+          setReason(json.error || 'Request failed.');
+        }
+      })
+      .catch(e => {
+        if (cancelled) return;
+        setAvailable(false);
+        setReason(e.message);
       });
-    }
-    return arr;
+    return () => { cancelled = true; };
   }, []);
 
   const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
-      const data = payload[0].payload;
+      const d: ExecutionPoint = payload[0].payload;
       return (
         <div className="bg-[#111822] border border-slate-700 p-3 rounded shadow-xl text-xs font-mono">
-          <p className="text-white font-bold mb-2 uppercase tracking-widest border-b border-slate-800 pb-1">Trade Exec</p>
-          <p className="text-emerald-400 mb-1"><span className="text-slate-500 mr-2">Speed:</span> {data.speedMs.toFixed(1)} ms</p>
-          <p className="text-amber-400 mb-1"><span className="text-slate-500 mr-2">Slippage:</span> {data.slippageBps.toFixed(2)} bps</p>
-          <p className="text-slate-300"><span className="text-slate-500 mr-2">Volume:</span> {data.size.toFixed(0)} shares</p>
+          <p className="text-white font-bold mb-2 uppercase tracking-widest border-b border-slate-800 pb-1">{d.symbol} {d.side}</p>
+          <p className="text-emerald-400 mb-1"><span className="text-slate-500 mr-2">Speed:</span> {d.speedMs.toFixed(0)} ms</p>
+          <p className="text-slate-300"><span className="text-slate-500 mr-2">Quantity:</span> {d.quantity} shares</p>
+          <p className="text-slate-500 text-[10px] mt-1">{new Date(d.timestamp).toLocaleString()}</p>
         </div>
       );
     }
@@ -107,50 +87,61 @@ const ExecutionQualityChart: React.FC<ExecutionQualityChartProps> = ({ className
         <div>
           <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
             <Zap size={16} className="text-indigo-400" />
-            Execution Quality: Speed vs Slippage
+            Execution Quality: Speed vs Order Size
           </h3>
-          <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest">Last 30 Days Trade Distribution</p>
-        </div>
-        <div className="text-[10px] font-mono tracking-widest uppercase text-slate-500 border border-slate-700 bg-[#111822] px-2 py-1 rounded flex gap-4">
-          <span className="flex items-center gap-1.5"><Activity size={10} className="text-emerald-400" /> Optimal Zone</span>
-          <span className="flex items-center gap-1.5"><Activity size={10} className="text-rose-400" /> High Slippage</span>
+          <p className="text-[10px] text-slate-400 mt-1 uppercase tracking-widest">Last 30 Days, Real Filled Orders</p>
         </div>
       </div>
-      
-      <div className="flex-1 w-full h-[300px] min-h-[300px]">
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-            <XAxis 
-              type="number" 
-              dataKey="speedMs" 
-              name="Speed (ms)" 
-              stroke="#475569" 
-              tick={{ fill: '#475569', fontSize: 10, fontFamily: 'monospace' }}
-              tickFormatter={(val) => `${val}ms`}
-              label={{ value: 'Execution Speed (ms)', position: 'insideBottom', offset: -10, fill: '#64748b', fontSize: 10, fontFamily: 'monospace' }}
-            />
-            <YAxis 
-              type="number" 
-              dataKey="slippageBps" 
-              name="Slippage (bps)" 
-              stroke="#475569" 
-              tick={{ fill: '#475569', fontSize: 10, fontFamily: 'monospace' }}
-              tickFormatter={(val) => `${val}bps`}
-              label={{ value: 'Slippage (bps)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10, fontFamily: 'monospace' }}
-            />
-            <ZAxis type="number" dataKey="size" range={[20, 200]} name="Volume" />
-            <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#334155' }} />
-            <Scatter 
-              name="Trades" 
-              data={data} 
-              fill="#818cf8"
-              fillOpacity={0.6}
-              shape="circle"
-            />
-          </ScatterChart>
-        </ResponsiveContainer>
-      </div>
+
+      {available === false && (
+        <div className="flex-1 flex flex-col items-center justify-center py-12 text-center gap-2 min-h-[300px]">
+          <AlertTriangle size={22} className="text-amber-500/70" />
+          <p className="text-xs font-mono uppercase tracking-widest text-amber-400/90">Execution Data Unavailable</p>
+          <p className="text-[10px] text-slate-500 max-w-sm">{reason || 'No FILLED trades with timing data in the last 30 days.'}</p>
+        </div>
+      )}
+
+      {available === null && (
+        <div className="flex-1 flex items-center justify-center py-12 text-[10px] font-mono text-slate-500 uppercase tracking-widest min-h-[300px]">
+          Loading real execution data...
+        </div>
+      )}
+
+      {available === true && data && (
+        <div className="flex-1 w-full h-[300px] min-h-[300px]">
+          <ResponsiveContainer width="100%" height="100%">
+            <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+              <XAxis
+                type="number"
+                dataKey="speedMs"
+                name="Speed (ms)"
+                stroke="#475569"
+                tick={{ fill: '#475569', fontSize: 10, fontFamily: 'monospace' }}
+                tickFormatter={(val) => `${val}ms`}
+                label={{ value: 'Execution Speed (ms)', position: 'insideBottom', offset: -10, fill: '#64748b', fontSize: 10, fontFamily: 'monospace' }}
+              />
+              <YAxis
+                type="number"
+                dataKey="quantity"
+                name="Quantity"
+                stroke="#475569"
+                tick={{ fill: '#475569', fontSize: 10, fontFamily: 'monospace' }}
+                label={{ value: 'Order Size (shares)', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10, fontFamily: 'monospace' }}
+              />
+              <ZAxis type="number" dataKey="quantity" range={[20, 200]} name="Size" />
+              <Tooltip content={<CustomTooltip />} cursor={{ strokeDasharray: '3 3', stroke: '#334155' }} />
+              <Scatter
+                name="Trades"
+                data={data}
+                fill="#818cf8"
+                fillOpacity={0.6}
+                shape="circle"
+              />
+            </ScatterChart>
+          </ResponsiveContainer>
+        </div>
+      )}
     </div>
   );
 };

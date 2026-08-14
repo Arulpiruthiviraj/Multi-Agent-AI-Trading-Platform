@@ -127,4 +127,63 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.confidence).toBeCloseTo(0.9, 5);
     expect(approval.agentsContext).toContain('ConsensusDebate(wt:0.35)');
   });
+
+  it('Phase 8: attaches real structured supportingQuantDetail when QuantEngine contributed evidence, without ever changing the deterministic side/confidence', async () => {
+    agent.recentIdeas = [
+      {
+        traceId: 't7', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'QuantEngine', reasoning: 'quant setup', currentPrice: 150,
+        quantDetail: {
+          regime: { regime: 'BULLISH_TREND', trendStrength: 80, volatility: 'NORMAL', marketStructure: 'TRENDING', confidence: 0.85, features: {}, insufficientData: false },
+          strategyEvaluation: {
+            strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 90, confidence: 0.9,
+            conditionsMet: ['a'], conditionsFailed: [], contradictions: ['Elevated RSI'],
+            invalidationConditions: ['Price closes back below the broken level.'],
+            stop: { price: 145, basis: 'test stop' }, target: { price: 165, basis: 'test target' },
+            applicableRegimes: ['BULLISH_TREND'],
+          },
+          groupedScores: { trendScore: 85, momentumScore: 80, volatilityScore: 50, volumeScore: 75, vwapScore: 70, marketScore: 65, sectorScore: 70, relativeStrengthScore: 75, priceStructureScore: 80, overallSetupScore: 78, dataCompletePct: 90 },
+          contradictions: ['Elevated RSI'],
+          aiContradictionAnalysis: { available: true, aiAgreesWithSide: true, additionalContradictions: ['Broader tape looks choppy.'], scenarioAnalysis: 'Real confluence with some risk.', disagreementNote: null },
+        },
+      },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't7');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    // The deterministic side/confidence are exactly what QuantEngine's own evidence computed -
+    // never altered by anything in supportingQuantDetail or the AI review it carries.
+    expect(approval.side).toBe('BUY');
+    expect(approval.confidence).toBeCloseTo(0.95, 5);
+
+    const detail = approval.supportingQuantDetail;
+    expect(detail).toBeDefined();
+    expect(detail.selectedStrategy).toBe('MOMENTUM_BREAKOUT');
+    expect(detail.regime.regime).toBe('BULLISH_TREND');
+    expect(detail.setupScores.overallSetupScore).toBe(78);
+    expect(detail.invalidationConditions).toContain('Price closes back below the broken level.');
+    // Phase 16F fix: strategyEvaluation.stop/.target are LevelSuggestion objects ({price, basis}) -
+    // proposedStop/proposedTarget must be the real numeric price a live consumer (RiskAgent ->
+    // trades.quantStopPrice/quantTargetPrice) can actually compare against, not the whole object.
+    expect(detail.proposedStop).toBe(145);
+    expect(detail.proposedTarget).toBe(165);
+    expect(detail.proposedEntry).toBe(150);
+    expect(detail.expectedHoldingPeriod).toContain('Short-term');
+    // Both the deterministic contradiction AND the AI's own additional one are preserved together
+    // - the AI's qualitative read is recorded, never used to replace the deterministic evidence.
+    expect(detail.contradictions).toEqual(['Elevated RSI', 'Broader tape looks choppy.']);
+    expect(detail.aiReview).toEqual({ agreesWithSide: true, scenarioAnalysis: 'Real confluence with some risk.', disagreementNote: null });
+  });
+
+  it('reports supportingQuantDetail as null (never a fabricated structure) when no contributing agent was QuantEngine', async () => {
+    agent.recentIdeas = [
+      { traceId: 't8', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong momentum' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't8');
+
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.supportingQuantDetail).toBeNull();
+  });
 });

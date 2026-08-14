@@ -1,4 +1,5 @@
 import { NewsProviderPlugin, NewsArticleRaw } from './NewsProviderPlugin';
+import { logErrorSafely } from '../../core/SecretRedaction';
 
 export class AlphaVantageNewsProvider implements NewsProviderPlugin {
   public id = 'alpha_vantage_news';
@@ -34,7 +35,11 @@ export class AlphaVantageNewsProvider implements NewsProviderPlugin {
         symbols: item.ticker_sentiment ? item.ticker_sentiment.map((t: any) => t.ticker) : []
       }));
     } catch (e) {
-      console.error('[AlphaVantageNewsProvider] Error fetching news', e);
+      // AlphaVantage's API only supports key-in-query-string auth (no header alternative), so
+      // the URL above necessarily embeds the real key - a caught fetch error's message/stack can
+      // include that URL (Node's undici includes it for some failure causes). Redacted before
+      // logging - see SecretRedaction.ts.
+      logErrorSafely('[AlphaVantageNewsProvider] Error fetching news', e);
       return [];
     }
   }

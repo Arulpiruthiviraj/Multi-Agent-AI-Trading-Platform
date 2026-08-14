@@ -7,21 +7,31 @@
  * ==========================================================
  */
 import { db } from '../db';
-import { portfolio, reconciliationEvents, portfolioSnapshots } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { portfolio, reconciliationEvents, portfolioSnapshots, trades } from '../db/schema';
+import { eq, notInArray } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { eventBus } from '../core/EventBus';
 import { tradingEngine } from '../engines/TradingEngine';
+import { TERMINAL_ORDER_STATUSES } from './OrderManagement';
 
 const QTY_TOLERANCE = 0.001; // ignore float noise, not real drift
 // A mismatch this large in dollar value pauses new trading (emergencyStopActive) until reviewed -
 // a small timing drift (a fill in flight when the sync runs) shouldn't halt the system, but a
 // meaningfully wrong position should never be traded around silently.
-const SIGNIFICANT_MISMATCH_DOLLARS = 100;
+export const SIGNIFICANT_MISMATCH_DOLLARS = 100;
+// Phase 1, item 4 (ARGUS_SAFETY_HARDENING_REPORT.md) - account-level consistency tolerance.
+// Argus does not maintain a second, independent ledger of "expected" cash (that would mean
+// building a whole shadow accounting system - out of scope and a real duplication risk) - what
+// IS checked is that the broker's own real numbers are internally consistent
+// (equity ~= cash + sum(position market values)), which catches a broken/stale broker response
+// or a position-mapping bug, not merely a timing drift from a fill in flight.
+const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = 0.01; // 1% of equity
+const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = 50;
 
 interface MismatchDetail {
   symbol: string;
-  type: 'QUANTITY_DRIFT' | 'MISSING_LOCALLY' | 'MISSING_REMOTELY';
+  type: 'QUANTITY_DRIFT' | 'MISSING_LOCALLY' | 'MISSING_REMOTELY'
+      | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY';
   localQty: number;
   remoteQty: number;
   approxDollarImpact: number;
@@ -29,6 +39,15 @@ interface MismatchDetail {
 
 export class PortfolioReconciliationWorker {
   private intervalId: NodeJS.Timeout | null = null;
+  // Hardening pass, Phase 10: reconcile() re-derives its full state (local holdings, remote
+  // positions, mismatches) from scratch on every call, so a skip-if-busy guard is correct here -
+  // unlike RiskEngine's evaluationQueue (where every call must eventually run), an overlapping
+  // reconcile() call is fully redundant with the one already in flight and safe to drop; the next
+  // scheduled 5-minute tick (or a future manual trigger) re-runs the same real check with no work
+  // lost. Without this, a broker call slow enough to outlast the 5-minute interval - or any future
+  // manual "reconcile now" trigger firing mid-cycle - could let two overlapping runs race on the
+  // same `portfolio` table writes and double-emit RECONCILIATION_MISMATCH/MATCH.
+  private isReconciling = false;
 
   start() {
     if (this.intervalId) return;
@@ -44,6 +63,11 @@ export class PortfolioReconciliationWorker {
   }
 
   async reconcile() {
+    if (this.isReconciling) {
+      console.warn('[PortfolioReconciliation] A reconciliation cycle is already in progress - skipping this overlapping call.');
+      return;
+    }
+    this.isReconciling = true;
     try {
       console.log("[PortfolioReconciliation] Syncing local portfolio with active broker...");
 
@@ -107,16 +131,89 @@ export class PortfolioReconciliationWorker {
         }
       }
 
+      // Phase 1, item 4 - open-order reconciliation. Previously only positions were checked;
+      // real broker orders and real cash/buying-power were entirely unreconciled (confirmed by
+      // the current audit, FINAL_ANALYSIS.md Section 30.12). Compares the broker's real non-
+      // terminal orders against local `trades` rows also non-terminal, matched by brokerOrderId -
+      // an order on one side with no matching counterpart on the other is a real, previously
+      // invisible drift (e.g. an order placed outside Argus, or a local row that never learned
+      // its own broker order vanished).
+      try {
+        const brokerOrders = await broker.orders();
+        const openBrokerOrders = brokerOrders.filter(o => !TERMINAL_ORDER_STATUSES.includes(o.status));
+        const openLocalTrades = await db.select().from(trades).where(notInArray(trades.status, TERMINAL_ORDER_STATUSES));
+
+        for (const bo of openBrokerOrders) {
+          const local = openLocalTrades.find(t => t.brokerOrderId === bo.id);
+          if (!local) {
+            const impact = (bo.price || bo.averageFillPrice || 0) * bo.quantity;
+            mismatches.push({ symbol: bo.symbol, type: 'OPEN_ORDER_MISSING_LOCALLY', localQty: 0, remoteQty: bo.quantity, approxDollarImpact: impact });
+            console.warn(`[PortfolioReconciliation] Broker reports an open order for ${bo.symbol} (${bo.id}) with no matching local trades row - possible order placed outside Argus.`);
+          }
+        }
+        for (const lt of openLocalTrades) {
+          if (!lt.brokerOrderId) continue; // already-crashed rows are OrderManagement.reconcileStaleOrders()'s territory, not this check's
+          const remote = openBrokerOrders.find(o => o.id === lt.brokerOrderId);
+          if (!remote) {
+            const impact = (lt.price || 0) * lt.quantity;
+            mismatches.push({ symbol: lt.symbol, type: 'OPEN_ORDER_MISSING_REMOTELY', localQty: lt.quantity, remoteQty: 0, approxDollarImpact: impact });
+            console.warn(`[PortfolioReconciliation] Local trades row ${lt.id} (${lt.symbol}) is still non-terminal (${lt.status}) but ${broker.name} no longer reports order ${lt.brokerOrderId} as open.`);
+          }
+        }
+      } catch (e) {
+        console.error('[PortfolioReconciliation] Open-order reconciliation failed', e);
+      }
+
+      // Phase 1, item 4 - account-level consistency check. Not a comparison against a separate
+      // local ledger (none exists, by design - see the constants' own comment above), but a real
+      // sanity check on the broker's own reported numbers: equity should approximately equal cash
+      // plus the market value of every reported position. A real violation here means the broker
+      // response itself is internally inconsistent (a stale/partial response, or a real accounting
+      // problem) - not something to silently trust.
+      try {
+        const { cash, buyingPower, equity } = brokerPortfolio;
+        const positionsValue = remotePositions.reduce((sum: number, p: any) => sum + (p.currentPrice ?? p.entryPrice ?? 0) * p.quantity, 0);
+        const nonFinite = [cash, buyingPower, equity].some(v => typeof v !== 'number' || !Number.isFinite(v));
+        if (nonFinite) {
+          mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: SIGNIFICANT_MISMATCH_DOLLARS });
+          console.error(`[PortfolioReconciliation] ${broker.name} reported a non-finite cash/buyingPower/equity value: cash=${cash} buyingPower=${buyingPower} equity=${equity}`);
+        } else {
+          const expectedEquity = cash + positionsValue;
+          const drift = Math.abs(equity - expectedEquity);
+          const tolerance = Math.max(ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS, equity * ACCOUNT_CONSISTENCY_TOLERANCE_PCT);
+          if (drift > tolerance) {
+            mismatches.push({ symbol: '__ACCOUNT__', type: 'ACCOUNT_INCONSISTENCY', localQty: 0, remoteQty: 0, approxDollarImpact: drift });
+            console.error(`[PortfolioReconciliation] ${broker.name}'s own reported equity ($${equity.toFixed(2)}) does not match cash+positions ($${expectedEquity.toFixed(2)}) - drift $${drift.toFixed(2)} exceeds tolerance $${tolerance.toFixed(2)}.`);
+          }
+        }
+      } catch (e) {
+        console.error('[PortfolioReconciliation] Account consistency check failed', e);
+      }
+
       const timestamp = new Date().toISOString();
       let actionTaken: string | null = null;
       let worstImpact = 0;
       if (mismatches.length > 0) {
         worstImpact = Math.max(...mismatches.map(m => m.approxDollarImpact));
         eventBus.publish('RECONCILIATION_MISMATCH', { timestamp, broker: broker.name, mismatches, worstImpactDollars: Number(worstImpact.toFixed(2)) });
-        if (worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS && !tradingEngine.state.emergencyStopActive) {
-          tradingEngine.state.emergencyStopActive = true;
-          tradingEngine.logHistory('veto', `Portfolio reconciliation found a ~$${worstImpact.toFixed(2)} mismatch vs ${broker.name} - trading paused pending manual review.`);
-          console.error(`[PortfolioReconciliation] SIGNIFICANT mismatch ($${worstImpact.toFixed(2)}) - pausing new trading via emergencyStopActive.`);
+        // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - REAL bug fixed here, found by the current
+        // audit (FINAL_ANALYSIS.md Section 30.12): this used to set
+        // `tradingEngine.state.emergencyStopActive = true` directly, which RiskEngine's real
+        // `emergency_stop` gate never reads (it reads `tradingEngine.state.tradingState`) - so a
+        // significant real position drift never actually blocked a single new order, despite this
+        // code's own prior comments and the log line below claiming it did. `setTradingState()` is
+        // the one real path that changes `tradingState` (persisted, audited, and the exact field
+        // the gate checks) - calling it here is what actually closes the gap. TRADING_PAUSED (not
+        // EMERGENCY_STOP) is used deliberately: a reconciliation drift warrants blocking NEW orders
+        // pending review, not the more drastic EMERGENCY_STOP behavior of also cancelling every
+        // real open order - open orders are left alone, matching the "existing positions remain
+        // observable" requirement this fix was scoped against.
+        if (worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS && tradingEngine.state.tradingState === 'TRADING_ENABLED') {
+          await tradingEngine.setTradingState('TRADING_PAUSED', {
+            reason: `Portfolio reconciliation found a ~$${worstImpact.toFixed(2)} mismatch vs ${broker.name} - trading paused pending manual review.`,
+            actor: 'system:PortfolioReconciliation',
+          });
+          console.error(`[PortfolioReconciliation] SIGNIFICANT mismatch ($${worstImpact.toFixed(2)}) - trading paused (tradingState=TRADING_PAUSED) via setTradingState(), verified to actually block new orders at RiskEngine's emergency_stop gate.`);
           actionTaken = 'TRADING_PAUSED';
         }
       } else {
@@ -152,6 +249,8 @@ export class PortfolioReconciliationWorker {
       console.log(`[PortfolioReconciliation] Sync complete. ${mismatches.length} mismatch(es).`);
     } catch (e) {
        console.error("[PortfolioReconciliation] Error during sync:", e);
+    } finally {
+      this.isReconciling = false;
     }
   }
 }

@@ -105,7 +105,19 @@ export default function BrokerManagement() {
       });
       const data = await res.json();
       if (!data.success) {
-        setTestResults(prev => ({ ...prev, [id]: { ok: false, health: 'Offline', error: 'authenticate() returned false - see server log for the real reason (e.g. no credentials, or an IBKR Gateway that is not running/logged in).' } }));
+        if (data.error) {
+          // setActiveBroker() already threw a specific, real reason (e.g. Questrade: "not a
+          // functional adapter - Refusing to select it as active") - show it directly rather
+          // than discarding it in favor of a generic re-check.
+          setTestResults(prev => ({ ...prev, [id]: { ok: false, health: 'Offline', error: data.error } }));
+        } else {
+          // No detail was given (setActiveBroker() returned false with no throw, e.g. a broker
+          // whose authenticate() just failed) - reuse the real testConnection() call every broker
+          // already has, which returns this specific broker's actual health/error, instead of
+          // guessing a broker-specific reason (the old version hardcoded an IBKR-flavored message
+          // and showed it under every broker, including Coinbase, which has no gateway at all).
+          await testConnection(id);
+        }
       }
     } catch (e: any) {
       setTestResults(prev => ({ ...prev, [id]: { ok: false, health: 'Offline', error: e.message } }));

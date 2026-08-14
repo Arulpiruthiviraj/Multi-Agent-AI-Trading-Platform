@@ -195,12 +195,18 @@ export function NewsDashboardTab() {
           </div>
         </div>
 
-        {/* Ticker Impact & Memory Timeline */}
+        {/* High-Impact News Veto - real data (cluster.impactScore, already fetched above) describing
+            RiskEngine's actual news_veto gate, not the fabricated "Chief Trader reads embeddings"
+            claim this card used to make (no embeddings/vector infrastructure exists in this
+            codebase at all - ChiefTraderAgent never sees impactScore in any form). */}
         <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col justify-center items-center">
              <Crosshair size={32} className="text-slate-700 mb-3" />
-             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">Impact Mappings Active</h4>
+             <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">
+               {clusters.filter(c => (c.impactScore ?? 0) > 80).length} High-Impact Event{clusters.filter(c => (c.impactScore ?? 0) > 80).length === 1 ? '' : 's'} Tracked
+             </h4>
              <p className="text-[10px] text-slate-500 font-mono text-center max-w-xs">
-               Event correlation pipelines and memory engines are securely persisting historical precedent. Chief Trader will reference these embeddings during trade consensus.
+               RiskEngine vetoes new trades on a symbol with a tracked event cluster scoring above 80
+               within the last 4 hours. This score does not otherwise influence Chief Trader's consensus.
              </p>
         </div>
       </div>

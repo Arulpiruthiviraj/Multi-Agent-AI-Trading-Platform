@@ -90,6 +90,10 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     if (options?.jsonMode && this.isLocal) {
         body.response_format = { type: 'json_object' };
     }
+    // Phase 7 - see OpenAIProvider.ts's identical comment. Additive, opt-in only.
+    if (options?.temperature !== undefined) {
+        body.temperature = options.temperature;
+    }
 
     while (retries <= maxRetries) {
       try {

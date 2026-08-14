@@ -50,8 +50,13 @@ import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../server/core/LiveTradingConf
 // not partial implementations. Never allow them to become the active (order-placing) broker.
 // ibkr was moved off this list once InteractiveBrokersAdapter got a real Client Portal Web API
 // implementation - it can still legitimately fail authenticate() (requiresManualReauth: true,
-// no Gateway running), which is a real runtime state, not a stub.
-const NON_FUNCTIONAL_BROKER_IDS = new Set(['questrade', 'coinbase']);
+// no Gateway running), which is a real runtime state, not a stub. coinbase was moved off this
+// list once CoinbaseBroker got a real Advanced Trade API implementation (order placement gated
+// behind live-mode confirmation, since Coinbase has no paper/sandbox environment to fall back to
+// - see CoinbaseBroker.ts's header comment). questrade remains here permanently, not because it's
+// unimplemented but because Questrade's own API restricts order execution to approved partner
+// developers - no implementation here can change that.
+const NON_FUNCTIONAL_BROKER_IDS = new Set(['questrade']);
 
 export class BrokerManager {
   private static instance: BrokerManager;
@@ -179,20 +184,36 @@ export class BrokerManager {
     return this.activeBroker;
   }
 
+  // Read-only lookup of a specific registered broker by id, regardless of which one is active -
+  // for consumers (e.g. MarketDataCrossChecker) that need a specific broker's real capability
+  // (Questrade's read-only market data) without disturbing which broker is set to place orders.
+  // Never creates a second instance - reusing this one matters for Questrade specifically, since
+  // its refresh token is single-use and a second independent authenticate() call would break it.
+  public getBroker(id: string): BrokerPlugin | undefined {
+    return this.brokers.get(id);
+  }
+
   // Real connection test that never mutates the active broker - calls the adapter's own
   // authenticate() and health() and reports exactly what came back, including the real error
   // message on failure. Previously SetupWizard.tsx's connection tests were mocked client-side;
   // this is the real backend counterpart for any UI that wants a genuine test.
-  public async testConnection(id: string, credentials?: any): Promise<{ ok: boolean; health: string; error?: string }> {
+  //
+  // Deliberately does NOT short-circuit for NON_FUNCTIONAL_BROKER_IDS here (unlike
+  // setActiveBroker/setLiveMode) - Questrade's placeOrder() is permanently impossible for a
+  // retail app, but its authenticate()/health() are now a real OAuth exchange + API call, and a
+  // user configuring QUESTRADE_REFRESH_TOKEN has a real reason to want to know whether it
+  // actually works. The response still says plainly that order placement is unavailable
+  // regardless of how the connection test itself comes out.
+  public async testConnection(id: string, credentials?: any): Promise<{ ok: boolean; health: string; error?: string; note?: string }> {
     const broker = this.brokers.get(id);
     if (!broker) return { ok: false, health: 'Offline', error: `Broker '${id}' not found` };
-    if (NON_FUNCTIONAL_BROKER_IDS.has(id)) {
-      return { ok: false, health: 'Offline', error: `${broker.name}'s placeOrder() is unimplemented - this adapter cannot execute real trades regardless of credentials.` };
-    }
     try {
       const authenticated = await broker.authenticate(credentials);
       const health = await broker.health();
-      return { ok: authenticated, health };
+      const note = NON_FUNCTIONAL_BROKER_IDS.has(id)
+        ? `Connection test only - ${broker.name}'s order-execution API is not available to retail apps, regardless of this result.`
+        : undefined;
+      return { ok: authenticated, health, note };
     } catch (e: any) {
       return { ok: false, health: 'Offline', error: e.message };
     }
@@ -208,6 +229,18 @@ export class BrokerManager {
     if (!broker) return { ok: false, error: `Broker '${id}' not found` };
     if (live && NON_FUNCTIONAL_BROKER_IDS.has(id)) {
       return { ok: false, error: `${broker.name}'s placeOrder() is unimplemented - it can never trade live regardless of confirmation.` };
+    }
+    // Capability-gated, not just the functional/non-functional split above: a broker can place
+    // orders but still lack ONE of the two modes specifically (Coinbase has no paper/sandbox
+    // environment at all; the Internal Paper Simulator has no real account behind it to go live).
+    // Without this check, a client could set a mode the adapter's own placeOrder()/authenticate()
+    // would later refuse anyway - this fails clearly upfront instead of at order time.
+    const caps = broker.getCapabilities();
+    if (live && !caps.liveTrading) {
+      return { ok: false, error: `${broker.name} does not support live trading.` };
+    }
+    if (!live && !caps.paperTrading) {
+      return { ok: false, error: `${broker.name} does not support paper trading (no sandbox/simulated environment exists for this broker).` };
     }
     if (live && confirmationPhrase !== LIVE_TRADING_CONFIRMATION_PHRASE) {
       return { ok: false, error: `Enabling live trading on ${broker.name} requires the exact confirmation phrase "${LIVE_TRADING_CONFIRMATION_PHRASE}".` };

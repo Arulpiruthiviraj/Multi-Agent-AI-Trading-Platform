@@ -71,7 +71,39 @@ export const settings = sqliteTable('settings', {
   // had no persistence at all (a plain useState(false) in App.tsx), so it force-reopened on
   // every single page load/reload regardless of prior completion.
   onboardingComplete: integer('onboarding_complete', { mode: 'boolean' }).default(false),
-  createdAt: integer('created_at').default(Date.now())
+  createdAt: integer('created_at').default(Date.now()),
+
+  // P0 trading-safety kill switch + max-loss protection (FINAL_ANALYSIS.md Section 15.22 #4/#5).
+  // Persisted (not just in-memory on TradingEngine.state) so an emergency stop survives a
+  // process restart instead of silently resuming trading - the whole point of "require explicit
+  // reactivation" is defeated if a crash/redeploy clears it for free.
+  tradingState: text('trading_state').notNull().default('TRADING_ENABLED'), // TRADING_ENABLED | TRADING_PAUSED | EMERGENCY_STOP
+  maxPortfolioDrawdownPct: real('max_portfolio_drawdown_pct').default(0.15), // peak-to-trough real equity drawdown cap
+  peakEquity: real('peak_equity'), // running high-water-mark of real broker equity, null until first observed
+  maxOpenPositions: integer('max_open_positions').default(10),
+  maxOrdersPerMinute: integer('max_orders_per_minute').default(5),
+
+  // E2B (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - optional, feature-flagged position-sizing mode.
+  // Default 'FIXED_DOLLAR' preserves today's exact behavior (maxTradeSize as a flat dollar cap)
+  // for anyone who hasn't opted in. 'PERCENT_OF_EQUITY' instead caps the order-notional gate at
+  // percentOfEquityPct% of CURRENT equity (so the cap scales as the account grows/shrinks) -
+  // PositionSizing.ts's risk-based/buying-power/concentration/correlation caps remain unchanged
+  // and still bind under either mode; this only changes which number feeds the notional cap.
+  positionSizingMode: text('position_sizing_mode').notNull().default('FIXED_DOLLAR'), // FIXED_DOLLAR | PERCENT_OF_EQUITY
+  percentOfEquityPct: real('percent_of_equity_pct').default(2), // only read when positionSizingMode='PERCENT_OF_EQUITY'
+});
+
+// Immutable audit trail for every kill-switch state transition (Phase 1.4: "every
+// activation/deactivation must be audited"). Distinct from tradingEngine.state.history (an
+// ephemeral, capped, in-memory activity feed) - this is a durable, queryable record.
+export const killSwitchEvents = sqliteTable('kill_switch_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  fromState: text('from_state').notNull(),
+  toState: text('to_state').notNull(),
+  reason: text('reason').notNull(),
+  actor: text('actor').notNull(), // authenticated username, or 'system' for automated transitions
+  cancelledOrderIds: text('cancelled_order_ids'), // JSON array of broker order IDs cancelled by this transition, if any
+  createdAt: text('created_at').notNull(),
 });
 
 export const brokerConnections = sqliteTable('broker_connections', {
@@ -197,7 +229,26 @@ export const trades = sqliteTable('trades', {
   submittedAt: text('submitted_at'),
   acceptedAt: text('accepted_at'),
   filledAt: text('filled_at'),
-});
+  // Phase 16B (ARGUS_PHASE16_READINESS_REPORT.md) - the real per-strategy stop/target a
+  // QuantEngine-originated BUY was opened with (from ChiefTraderAgent's own
+  // supportingQuantDetail.proposedStop/proposedTarget at approval time, threaded through
+  // RiskAgent -> RiskEngine -> here), captured at the exact decision moment rather than
+  // re-derived later from a nearest-timestamp heuristic. Null for every non-QuantEngine-sourced
+  // trade (technical/news/fundamental-originated) - PortfolioMonitor.ts falls back to the
+  // existing generic settings.takeProfitPct/trailingStopPct exit for those, unchanged.
+  quantStrategyId: text('quant_strategy_id'),
+  quantStopPrice: real('quant_stop_price'),
+  quantTargetPrice: real('quant_target_price'),
+}, (table) => ({
+  // Hardening pass, Phase 2: real duplicate-order idempotency at the DB level, closing the
+  // check-then-act race in OrderManagement.ts's own pre-insert lookup (two concurrent
+  // executeOrder() calls for the same traceId could both pass that check before either insert
+  // landed). Confirmed zero existing duplicate or null traceId collisions in the live DB before
+  // adding this. SQLite treats every NULL as distinct under a UNIQUE index, so this never blocks
+  // a row with no traceId (legacy data, or any future code path that doesn't set one) - it only
+  // ever rejects a genuine second INSERT for the same real traceId.
+  traceIdUniqueIdx: uniqueIndex('idx_trades_trace_id_unique').on(table.traceId),
+}));
 
 // Thin by design - today's brokers (Alpaca, InternalPaperBroker) are single-shot market orders,
 // so this will usually have 0-1 rows per order. Future-proofs partial fills without having to
@@ -299,6 +350,29 @@ export const agentPerformanceStats = sqliteTable('agent_performance_stats', {
   currentWeight: real('current_weight').notNull().default(1.0),
   lastEvaluated: text('last_evaluated').notNull(),
 });
+
+// Phase 1A (FINAL_ANALYSIS.md's 4-phase remediation plan) - real Beta-Binomial confidence
+// calibration per agent, per stated-confidence bucket. Distinct from agentPerformanceStats.
+// currentWeight above: that's a flat, agent-wide scalar driven by OVERALL win rate; this
+// corrects a SPECIFIC agent's SPECIFIC stated confidence level against its own real historical
+// accuracy at that level (e.g. NewsAgent's 80-90%-stated bucket resolving to ~34% real accuracy -
+// a calibration failure a flat per-agent weight cannot see or correct). Written only by
+// ReflectionEngine, from real prediction_outcomes - never estimated or guessed.
+export const agentConfidenceCalibration = sqliteTable('agent_confidence_calibration', {
+  agentName: text('agent_name').notNull(),
+  bucketLow: real('bucket_low').notNull(), // inclusive lower bound of the stated-confidence bucket, e.g. 0.8
+  bucketHigh: real('bucket_high').notNull(), // exclusive upper bound (1.0 bucket's upper bound is inclusive)
+  wins: integer('wins').notNull().default(0),
+  losses: integer('losses').notNull().default(0),
+  // Beta-Binomial posterior mean: (wins + priorAlpha) / (wins + losses + priorAlpha + priorBeta),
+  // prior centered on the bucket's own midpoint - shrinks toward the agent's OWN stated
+  // confidence when real sample size is thin (e.g. a 1-prediction agent), and toward the real
+  // observed accuracy once enough real outcomes exist to justify overriding the prior.
+  calibratedConfidence: real('calibrated_confidence').notNull(),
+  lastEvaluated: text('last_evaluated').notNull(),
+}, (table) => ({
+  agentBucketIdx: uniqueIndex('idx_agent_confidence_calibration_bucket').on(table.agentName, table.bucketLow),
+}));
 
 export const explainabilityReports = sqliteTable('explainability_reports', {
   traceId: text('trace_id').primaryKey(),
@@ -521,7 +595,10 @@ export const transactions = sqliteTable('transactions', {
   symbol: text('symbol').notNull(),
   openedAt: text('opened_at').notNull(),
   closedAt: text('closed_at'),
-  // OPEN (consensus approved, awaiting risk/order) | NO_CONSENSUS | RISK_REJECTED | EXECUTED | FILLED | RECONCILED
+  // OPEN (consensus approved, awaiting risk/order) | NO_CONSENSUS | RISK_REJECTED |
+  // EXECUTED (order submitted to broker, awaiting fill) | ORDER_REJECTED (broker rejected/
+  // canceled the order after risk approval) | FILLED | RECONCILED. Wired to real transitions by
+  // TransactionLifecycleTracker - see its header comment for the real bug this fixes.
   status: text('status').notNull(),
   finalDecision: text('final_decision'), // BUY | SELL | HOLD | REJECTED
   outcome: text('outcome').default('PENDING'), // WIN | LOSS | PENDING | N_A
@@ -685,3 +762,120 @@ export const openaliceVerifications = sqliteTable('openalice_verifications', {
   completedAt: text('completed_at'),
   latencyMs: integer('latency_ms'),
 });
+
+// Phase 1C (FINAL_ANALYSIS.md's 4-phase remediation plan) - real cache + rate-limit tracking for
+// external data providers with a request quota (AlphaVantage's free tier: 25 requests/day).
+// Root cause confirmed live against the real configured key: FundamentalAgent/MacroAgent were
+// each polling every 60-75s, exhausting the daily quota within minutes, after which every
+// subsequent call got AlphaVantage's rate-limit response and fell through to an honest
+// DATA_UNAVAILABLE - not a bug in that fallback, but real, avoidable waste, since fundamentals/
+// macro indicators don't change on a sub-minute cadence in reality either. `symbol` is null for
+// provider-wide data that isn't per-symbol (e.g. MacroAgent's CPI/Fed-Funds/unemployment, which
+// were previously wastefully re-fetched every cycle regardless of which "symbol" was nominally
+// being analyzed that cycle, despite being symbol-independent).
+export const externalDataCache = sqliteTable('external_data_cache', {
+  id: text('id').primaryKey(), // `${provider}:${dataType}:${symbol ?? 'GLOBAL'}`
+  provider: text('provider').notNull(), // 'alphavantage'
+  dataType: text('data_type').notNull(), // 'fundamentals' | 'macro'
+  symbol: text('symbol'), // null for symbol-independent data (macro indicators)
+  payload: text('payload').notNull(), // JSON - the real last-successful response, never fabricated
+  fetchedAt: integer('fetched_at').notNull(), // epoch ms of the last real successful fetch
+  // Set when a fetch attempt hits the provider's real rate-limit response - suppresses further
+  // real network calls until this real cooldown passes, instead of hammering an exhausted quota
+  // every cycle and getting the same rejection every time.
+  rateLimitedUntil: integer('rate_limited_until'),
+});
+
+// Additive quant decision layer (see plans/argus-quant-decision-layer plan, and
+// src/server/quant/). One row per QuantSignalAgent evaluation cycle per symbol - regime and
+// market-context are computed by Phase 2/3 (RegimeEngine.ts/MarketContext.ts) and persisted in
+// full (JSON) for real auditability, matching this schema's existing convention of persisting
+// full computed objects rather than a lossy summary (e.g. backtest_runs.equityCurve/tradeLog,
+// consensus_evidence). `strategyEvaluations`/`groupedScores` are reserved, nullable columns for
+// Phase 4 (Strategy Engine) and Phase 5 (Decision Layer) to populate later - designed in now to
+// avoid a second migration once those phases land, not yet written by anything as of Phase 3.
+export const quantAssessments = sqliteTable('quant_assessments', {
+  id: text('id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  timeframe: text('timeframe').notNull(),
+  regime: text('regime').notNull(), // JSON - full RegimeResult (RegimeEngine.ts)
+  marketContext: text('market_context').notNull(), // JSON - full MarketContextResult (MarketContext.ts)
+  strategyEvaluations: text('strategy_evaluations'), // JSON array - Phase 4, null until then
+  groupedScores: text('grouped_scores'), // JSON - Phase 5, null until then
+  aiContradictionAnalysis: text('ai_contradiction_analysis'), // JSON ContradictionAnalysisResult - Phase 7 (quant/ai/QuantContradictionAnalyzer.ts), null when no idea was emitted this cycle or no AI provider is configured
+  emittedTradeIdea: integer('emitted_trade_idea', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  symbolIdx: index('idx_quant_assessments_symbol').on(table.symbol, table.createdAt),
+}));
+
+// Phase 10 of the additive quant layer - per-strategy, per-regime backtesting. Deliberately a
+// SEPARATE table from `backtestRuns`, not a repurposing of it: backtestRuns is real, in-use, and
+// scoped to the existing single hardcoded technical strategy BacktestEngine.run() already backtests
+// - this table is scoped to running ONE named quant strategy (strategies/StrategyEngine.ts) via the
+// new BacktestEngine.runStrategyBacktest(), with real regime-segmented results and a real,
+// backtest-derived expected-value/Kelly readout (quant/risk/ExpectedValue.ts) neither
+// backtestRuns nor the live RiskEngine/PositionSizing path has ever computed.
+export const quantStrategyBacktests = sqliteTable('quant_strategy_backtests', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id').notNull(),
+  symbol: text('symbol').notNull(),
+  timeframe: text('timeframe').notNull(),
+  startDate: text('start_date').notNull(),
+  endDate: text('end_date').notNull(),
+  status: text('status').notNull(), // RUNNING | COMPLETED | FAILED
+  errorMessage: text('error_message'),
+  initialCash: real('initial_cash'),
+  finalEquity: real('final_equity'),
+  totalTrades: integer('total_trades'),
+  winRatePct: real('win_rate_pct'),
+  profitFactor: real('profit_factor'),
+  sharpe: real('sharpe'),
+  sortino: real('sortino'),
+  maxDrawdownPct: real('max_drawdown_pct'),
+  expectancy: real('expectancy'),
+  avgWinR: real('avg_win_r'),
+  avgLossR: real('avg_loss_r'),
+  avgR: real('avg_r'),
+  maxConsecutiveLosses: integer('max_consecutive_losses'),
+  regimeBreakdown: text('regime_breakdown'), // JSON - per-regime {count, winRatePct, expectancy}
+  expectedValue: text('expected_value'), // JSON - ExpectedValueResult, real backtest-derived EV, null if insufficient sample size
+  kelly: text('kelly'), // JSON - KellyResult, real backtest-derived Kelly suggestion, null if insufficient sample size
+  tradeLog: text('trade_log'), // JSON
+  equityCurve: text('equity_curve'), // JSON
+  // E7 (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - JSON {strategyReturnPct, symbolBuyAndHoldReturnPct,
+  // spyBuyAndHoldReturnPct, outperformedSymbolBuyAndHold, outperformedSpyBuyAndHold}, computed from
+  // the real bars this run already loaded (the traded symbol's own first/last close, and SPY's over
+  // the same window) - never a second fetch, never an assumed benchmark return.
+  benchmarkComparison: text('benchmark_comparison'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  strategySymbolIdx: index('idx_quant_strategy_backtests_strategy_symbol').on(table.strategyId, table.symbol),
+}));
+
+// E3 (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - optional, per-candidate decision trace for a
+// runStrategyBacktest() run, so "why did/didn't this bar produce a trade" is answerable after the
+// fact instead of only the final trade log. Deliberately opt-in (StrategyBacktestConfig.
+// verboseLogging) and a separate table from quant_strategy_backtests - a multi-year daily backtest
+// evaluates thousands of candidate bars, most of which never become a trade, so this must never be
+// written unconditionally on every run.
+export const quantBacktestDecisionLog = sqliteTable('quant_backtest_decision_log', {
+  id: text('id').primaryKey(),
+  backtestRunId: text('backtest_run_id').notNull(), // quant_strategy_backtests.id, not FK-enforced (matches this schema's existing convention for cross-table references)
+  symbol: text('symbol').notNull(),
+  timestamp: integer('timestamp').notNull(), // bar timestamp (ms)
+  regime: text('regime'), // RegimeLabel at this bar
+  side: text('side').notNull(), // BUY | SELL - the side the strategy evaluated
+  setupScore: real('setup_score'),
+  confidence: real('confidence'),
+  conditionsMet: text('conditions_met'), // JSON string[]
+  conditionsFailed: text('conditions_failed'), // JSON string[]
+  contradictions: text('contradictions'), // JSON string[]
+  sizingQuantity: integer('sizing_quantity'), // 0 if sizing rejected the candidate
+  sizingGates: text('sizing_gates'), // JSON SizingGateResult[], null when sizing was never reached (e.g. confidence gate already rejected)
+  outcome: text('outcome').notNull(), // ENTERED | REJECTED_LOW_CONFIDENCE | REJECTED_NO_STOP | REJECTED_ZERO_SIZE
+  reason: text('reason').notNull(), // human-readable explanation of `outcome`
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  runIdx: index('idx_quant_backtest_decision_log_run').on(table.backtestRunId),
+}));

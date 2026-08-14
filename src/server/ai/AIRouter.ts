@@ -50,6 +50,44 @@ import * as schema from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { EncryptionService } from '../core/EncryptionService';
+import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADE_SIDE_VALUES } from './AIOutputValidator';
+
+// Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - real timeout for every AI provider call. Previously
+// no timeout existed anywhere in this file or any provider file (confirmed by the current audit,
+// FINAL_ANALYSIS.md Section 30.8) - a hung provider call blocked the calling agent's tick
+// indefinitely. This is a router-level "soft" timeout via Promise.race: it does not (yet) cancel
+// the underlying in-flight HTTP request the way AlpacaBroker's AbortController-based timeout does
+// (that would require every provider's own chat() to accept and honor an abort signal - a larger,
+// deferred change, documented as such in the safety-hardening report), but it DOES guarantee the
+// CALLER (routeTask/routeConsensus, and transitively every agent that awaits them) is never
+// blocked past this timeout - a rejected timeout is handled by the exact same per-provider
+// try/catch every other real provider failure already goes through, so it fails over / logs / never
+// becomes a fabricated BUY or SELL, exactly like any other AI failure.
+const AI_PROVIDER_TIMEOUT_MS = 20_000;
+// Phase 7 (AI_MODEL_INVENTORY.md) - a low, non-zero temperature for every real trading-decision
+// call. Previously unset anywhere (each provider's own undocumented default sampling applied) -
+// this makes AI-influenced consensus votes measurably more reproducible without forcing fully
+// deterministic (temperature=0) sampling, which some providers handle poorly for longer
+// structured-JSON responses. Centralized here rather than duplicated per-provider so the policy
+// lives in one place.
+const AI_DECISION_TEMPERATURE = 0.2;
+
+class AITimeoutError extends Error {
+  constructor(providerId: string, ms: number) {
+    super(`AI provider '${providerId}' did not respond within ${ms}ms`);
+    this.name = 'AITimeoutError';
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, providerId: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new AITimeoutError(providerId, ms)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
 
 // Whether a provider DB row is a local endpoint - matches the exact same check initialize() uses
 // to decide isLocal when constructing an OpenAICompatibleProvider. More reliable than inferring
@@ -123,6 +161,12 @@ export class AIRouter {
 
   public registerProvider(id: string, provider: AIProvider) {
     this.providers.set(id, provider);
+  }
+
+  /** Test-only helper (also real, additive API surface - not gated behind NODE_ENV) - clears
+   *  registered providers without initialize()'s DB reads/seeding side effects. */
+  public clearProviders() {
+    this.providers.clear();
   }
 
   public async initialize() {
@@ -247,7 +291,7 @@ export class AIRouter {
             // Format prompt for consensus format
             const fullPrompt = prompt + "\n\nIMPORTANT: You must return a strict JSON object with this format (no markdown code blocks):\n{\n  \"decision\": \"BUY\" | \"SELL\" | \"HOLD\",\n  \"confidence\": 0-100,\n  \"reasoning\": \"Detailed explanation...\",\n  \"supportingFactors\": [\"fact1\"],\n  \"risks\": [\"risk1\"]\n}";
             
-            const res = await provider.chat(fullPrompt, { model: undefined });
+            const res = await withTimeout(provider.chat(fullPrompt, { model: undefined, temperature: AI_DECISION_TEMPERATURE }), AI_PROVIDER_TIMEOUT_MS, providerId);
             const latency = Date.now() - pStart;
             
             // Log usage
@@ -292,12 +336,19 @@ export class AIRouter {
                 latencyMs: latency, status: 'success',
             });
 
+            // Hardening pass, Phase 5: decision/confidence previously passed through unvalidated
+            // (`parsed.decision || "HOLD"` only guards against a falsy value, not an off-schema
+            // string; `parsed.confidence || 0` doesn't clamp range at all). This method's own
+            // consensus math below (`buyWeight += r.confidence`, compared against `> 50`) already
+            // assumes a real 0-100 scale and a real BUY/SELL/HOLD decision - validated here to
+            // match that existing convention exactly, not renormalized to the different 0-1 scale
+            // TRADE_IDEA_GENERATED uses elsewhere.
             return {
-                decision: parsed.decision || "HOLD",
-                confidence: parsed.confidence || 0,
-                reasoning: parsed.reasoning || res.content,
-                supportingFactors: parsed.supportingFactors || [],
-                risks: parsed.risks || [],
+                decision: coerceEnum(parsed.decision, TRADE_SIDE_VALUES, 'HOLD'),
+                confidence: clampScore(parsed.confidence, 0, 100, 0),
+                reasoning: coerceString(parsed.reasoning, res.content),
+                supportingFactors: coerceStringArray(parsed.supportingFactors),
+                risks: coerceStringArray(parsed.risks),
                 model: 'default',
                 provider: providerId,
                 latencyMs: latency,
@@ -420,7 +471,7 @@ export class AIRouter {
             console.log(`[AIRouter] Agent '${agentType}' routing to ${providerId}`);
             
             reqModel = (providerId === preferredConfig?.providerId) ? preferredConfig?.model : undefined;
-            res = await provider.chat(prompt, { model: reqModel, jsonMode });
+            res = await withTimeout(provider.chat(prompt, { model: reqModel, jsonMode, temperature: AI_DECISION_TEMPERATURE }), AI_PROVIDER_TIMEOUT_MS, providerId);
             
             latency = Date.now() - startTime;
             
@@ -538,6 +589,11 @@ export class AIRouter {
         }
     }
     
+    // Phase 12 (ARGUS_PRE_IMPLEMENTATION_BASELINE.md) - real event, previously nothing emitted
+    // here at all. AlertingService.ts is the first real consumer - a real "every AI provider is
+    // down" signal an operator should know about, not just a per-agent log line each agent's own
+    // try/catch already swallows independently.
+    eventBus.publish('AI_PROVIDERS_EXHAUSTED', { agentType, providersAttempted: availableProviders.map(([id]) => id), lastError: lastError?.message ?? null });
     throw new Error(`All AI providers failed for task ${agentType}. Last error: ${lastError?.message}`);
   }
 }
