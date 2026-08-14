@@ -137,6 +137,20 @@ export class InternalPaperBroker implements BrokerPlugin {
     return true;
   }
   
+  async closePosition(symbol: string): Promise<boolean> {
+    const pos = this._positions.get(symbol);
+    if (!pos || pos.quantity <= 0) return false;
+    
+    await this.placeOrder({
+      symbol,
+      side: 'SELL',
+      type: 'MARKET',
+      quantity: pos.quantity
+    });
+    
+    return true;
+  }
+  
   async positions(): Promise<Position[]> {
     return Array.from(this._positions.values());
   }

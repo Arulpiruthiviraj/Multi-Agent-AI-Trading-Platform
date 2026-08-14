@@ -35,6 +35,35 @@
 
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter.js';
 
+// Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - real request timeout/retry/circuit-breaker
+// configuration. Previously `fetchAlpaca()` used a bare `fetch()` with no timeout at all, so a
+// hung Alpaca call blocked the calling code (e.g. OrderManagement.executeOrder()) indefinitely -
+// confirmed by the current audit (FINAL_ANALYSIS.md Section 30.11) with zero test coverage of the
+// gap. These are module-level constants (not yet wired to `settings` - see the report's own "not
+// done this pass" list) so the values are visible and auditable in one place.
+const ALPACA_REQUEST_TIMEOUT_MS = 15_000;
+const ALPACA_MAX_RETRIES = 2; // additional attempts beyond the first, only for retry-safe requests
+const ALPACA_RETRY_BASE_DELAY_MS = 500; // exponential backoff: 500ms, 1500ms
+const CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3; // consecutive failures (post-retry) before the circuit opens
+const CIRCUIT_BREAKER_COOLDOWN_MS = 30_000; // fail fast for this long once the circuit is open
+
+/** Real, typed failure classification - callers (OrderManagement, PortfolioReconciliation, etc.)
+ *  can branch on `.kind` instead of parsing an error message string. */
+export class AlpacaRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly kind: 'TIMEOUT' | 'NETWORK' | 'RATE_LIMITED' | 'HTTP_ERROR' | 'CIRCUIT_OPEN',
+    public readonly httpStatus?: number,
+  ) {
+    super(message);
+    this.name = 'AlpacaRequestError';
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 export class AlpacaBroker implements BrokerPlugin {
   id = 'alpaca';
   name = 'Alpaca';
@@ -64,6 +93,11 @@ export class AlpacaBroker implements BrokerPlugin {
   private secretKey: string = '';
   private isPaper: boolean = true;
   private baseUrl: string = 'https://paper-api.alpaca.markets';
+
+  // Phase 1 circuit-breaker state - per-instance (this class is used as a singleton via
+  // BrokerManager in practice, so this really does track "the real Alpaca connection's" health).
+  private consecutiveFailures = 0;
+  private circuitOpenUntil = 0;
 
   async connect(credentials: any): Promise<boolean> {
     return this.authenticate(credentials);
@@ -99,30 +133,114 @@ export class AlpacaBroker implements BrokerPlugin {
     // Nothing to do for REST
   }
 
-  private async fetchAlpaca(path: string, options: RequestInit = {}) {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      ...options,
-      headers: {
-        'APCA-API-KEY-ID': this.apiKey,
-        'APCA-API-SECRET-KEY': this.secretKey,
-        'Content-Type': 'application/json',
-        ...options.headers,
-      }
-    });
-    if (!res.ok) {
-       const err = await res.text();
-       throw new Error(`Alpaca API Error: ${err}`);
+  /**
+   * Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - the single real choke point for every Alpaca
+   * call, now with: a real request timeout (no external call can block the caller indefinitely),
+   * a real circuit breaker (fails fast after repeated failures instead of hanging the trading
+   * engine on a known-down API), and retry-with-backoff/429 handling - but ONLY for requests
+   * explicitly marked `idempotentRetrySafe`. A GET/DELETE is always safe to retry (re-reading or
+   * re-cancelling has no duplicate-action risk). A POST (order submission) is ONLY marked safe
+   * here when the caller has supplied a real `client_order_id` in the payload - Alpaca itself
+   * deduplicates on that field, so retrying a timed-out submission with the same client_order_id
+   * cannot create a second real order, even if the first attempt actually reached Alpaca and the
+   * response was simply lost. `placeOrder()` below is the only caller that sets this.
+   */
+  private async fetchAlpaca(path: string, options: RequestInit & { idempotentRetrySafe?: boolean } = {}) {
+    const { idempotentRetrySafe = false, ...fetchOptions } = options;
+
+    if (Date.now() < this.circuitOpenUntil) {
+      throw new AlpacaRequestError(
+        `Alpaca circuit breaker is open (${this.consecutiveFailures} consecutive failures) - failing fast until ${new Date(this.circuitOpenUntil).toISOString()} instead of hammering a known-unhealthy API.`,
+        'CIRCUIT_OPEN',
+      );
     }
-    return res.json();
+
+    const maxAttempts = idempotentRetrySafe ? 1 + ALPACA_MAX_RETRIES : 1;
+    let lastError: AlpacaRequestError | null = null;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      if (attempt > 0) {
+        await sleep(ALPACA_RETRY_BASE_DELAY_MS * Math.pow(3, attempt - 1));
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), ALPACA_REQUEST_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${this.baseUrl}${path}`, {
+          ...fetchOptions,
+          signal: controller.signal,
+          headers: {
+            'APCA-API-KEY-ID': this.apiKey,
+            'APCA-API-SECRET-KEY': this.secretKey,
+            'Content-Type': 'application/json',
+            ...fetchOptions.headers,
+          },
+        });
+        clearTimeout(timeoutId);
+
+        if (res.status === 429) {
+          const retryAfterHeader = res.headers.get('Retry-After');
+          const retryAfterMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : null;
+          lastError = new AlpacaRequestError(`Alpaca API rate limited (429) on ${path}`, 'RATE_LIMITED', 429);
+          this.recordFailure();
+          if (idempotentRetrySafe && attempt < maxAttempts - 1) {
+            if (retryAfterMs && Number.isFinite(retryAfterMs)) await sleep(retryAfterMs);
+            continue;
+          }
+          throw lastError;
+        }
+
+        if (!res.ok) {
+          const err = await res.text();
+          this.recordFailure();
+          // A definite HTTP error response (4xx/5xx) is a real answer, not an unknown outcome -
+          // never blindly retried, even for an idempotent-safe request, since retrying a request
+          // Alpaca actively rejected (e.g. insufficient buying power) would just fail the same way.
+          throw new AlpacaRequestError(`Alpaca API Error (${res.status}) on ${path}: ${err}`, 'HTTP_ERROR', res.status);
+        }
+
+        this.recordSuccess();
+        return res.json();
+      } catch (e: any) {
+        clearTimeout(timeoutId);
+        if (e instanceof AlpacaRequestError) {
+          if (e.kind === 'HTTP_ERROR') throw e; // already classified and recorded above, never retried
+          lastError = e;
+        } else if (e?.name === 'AbortError') {
+          lastError = new AlpacaRequestError(`Alpaca API request to ${path} timed out after ${ALPACA_REQUEST_TIMEOUT_MS}ms - unknown whether Alpaca received it`, 'TIMEOUT');
+          this.recordFailure();
+        } else {
+          lastError = new AlpacaRequestError(`Alpaca API network error on ${path}: ${e?.message || e}`, 'NETWORK');
+          this.recordFailure();
+        }
+        if (idempotentRetrySafe && attempt < maxAttempts - 1) continue;
+        throw lastError;
+      }
+    }
+    // Unreachable in practice (the loop always returns or throws), but keeps TypeScript satisfied.
+    throw lastError ?? new AlpacaRequestError(`Alpaca API request to ${path} failed for an unknown reason`, 'NETWORK');
+  }
+
+  private recordFailure() {
+    this.consecutiveFailures++;
+    if (this.consecutiveFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
+      this.circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_COOLDOWN_MS;
+      console.error(`[AlpacaBroker] Circuit breaker OPEN after ${this.consecutiveFailures} consecutive failures - failing fast for ${CIRCUIT_BREAKER_COOLDOWN_MS}ms.`);
+    }
+  }
+
+  private recordSuccess() {
+    this.consecutiveFailures = 0;
+    this.circuitOpenUntil = 0;
   }
 
   async account(): Promise<any> {
-    return this.fetchAlpaca('/v2/account');
+    return this.fetchAlpaca('/v2/account', { idempotentRetrySafe: true });
   }
 
   async portfolio(): Promise<Portfolio> {
     const account = await this.account();
-    const positions = await this.fetchAlpaca('/v2/positions');
+    const positions = await this.fetchAlpaca('/v2/positions', { idempotentRetrySafe: true });
     
     const mappedPositions = positions.map((p: any) => ({
       symbol: p.symbol,
@@ -148,7 +266,7 @@ export class AlpacaBroker implements BrokerPlugin {
   }
 
   async orders(): Promise<Order[]> {
-    const orders = await this.fetchAlpaca('/v2/orders?status=all');
+    const orders = await this.fetchAlpaca('/v2/orders?status=all', { idempotentRetrySafe: true });
     return orders.map((o: any) => ({
       id: o.id,
       symbol: o.symbol,
@@ -175,14 +293,27 @@ export class AlpacaBroker implements BrokerPlugin {
     };
     if (payload.type === 'limit') payload.limit_price = orderData.price;
     if (payload.type === 'stop') payload.stop_price = orderData.stopPrice;
-    
+    // Phase 1 - when the caller supplies a real idempotency key, pass it through as Alpaca's own
+    // `client_order_id` and mark this specific POST safe to retry on timeout/network error: Alpaca
+    // deduplicates real order submissions on this field, so a retried submission with the SAME key
+    // can never create a second real order, even if the first attempt actually reached Alpaca and
+    // only the response was lost. Never retried when no key is supplied - that case has no way to
+    // know if a bare retry would duplicate a real order.
+    let idempotentRetrySafe = false;
+    if (orderData.clientOrderId) {
+      payload.client_order_id = orderData.clientOrderId;
+      idempotentRetrySafe = true;
+    }
+
     const res = await this.fetchAlpaca('/v2/orders', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      idempotentRetrySafe,
     });
     
     return {
       id: res.id,
+      clientOrderId: res.client_order_id || undefined,
       symbol: res.symbol,
       side: res.side.toUpperCase(),
       type: res.order_type.toUpperCase(),
@@ -199,8 +330,48 @@ export class AlpacaBroker implements BrokerPlugin {
   }
 
   async cancelOrder(orderId: string): Promise<boolean> {
-    await this.fetchAlpaca(`/v2/orders/${orderId}`, { method: 'DELETE' });
+    // DELETE is inherently idempotent - cancelling an already-cancelled/filled order just returns
+    // a real error with no duplicate side effect, so retrying on timeout/network error is safe.
+    await this.fetchAlpaca(`/v2/orders/${orderId}`, { method: 'DELETE', idempotentRetrySafe: true });
     return true;
+  }
+
+  async closePosition(symbol: string): Promise<boolean> {
+    try {
+      await this.fetchAlpaca(`/v2/positions/${symbol}`, { method: 'DELETE', idempotentRetrySafe: true });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * Phase 1, item 3 (order crash recovery) - real lookup by the client-supplied idempotency key,
+   * used by OrderManagement's startup/periodic reconciliation to answer "did Alpaca actually
+   * receive the order this local row claims to be REJECTED/unrecorded for?" definitively, instead
+   * of guessing from local state alone. Returns null (not a thrown error) when Alpaca genuinely
+   * has no order under that key - a real, honest "never reached Alpaca" answer.
+   */
+  async getOrderByClientOrderId(clientOrderId: string): Promise<Order | null> {
+    const results = await this.fetchAlpaca(
+      `/v2/orders?status=all&client_order_id=${encodeURIComponent(clientOrderId)}`,
+      { idempotentRetrySafe: true },
+    );
+    const match = Array.isArray(results) ? results[0] : results;
+    if (!match || !match.id) return null;
+    return {
+      id: match.id,
+      clientOrderId: match.client_order_id || undefined,
+      symbol: match.symbol,
+      side: match.side.toUpperCase(),
+      type: match.order_type.toUpperCase(),
+      status: match.status.toUpperCase(),
+      quantity: parseFloat(match.qty),
+      filledQuantity: parseFloat(match.filled_qty),
+      averageFillPrice: match.filled_avg_price ? parseFloat(match.filled_avg_price) : undefined,
+      createdAt: new Date(match.created_at),
+      updatedAt: new Date(match.updated_at),
+    };
   }
 
   async positions(): Promise<Position[]> {

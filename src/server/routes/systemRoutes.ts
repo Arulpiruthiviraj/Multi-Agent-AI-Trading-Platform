@@ -18,9 +18,11 @@ import * as schema from "../db/schema";
 import { eq, desc } from "drizzle-orm";
 import { tradingEngine } from "../engines/TradingEngine";
 import { AUDIT_LOG_FILE } from "../core/auditLog";
+import { getTradingDateStr } from "../core/TradingCalendar";
 import { backtestEngine } from "../engines/backtest/BacktestEngine";
 import { walkForwardValidator } from "../engines/backtest/WalkForwardValidator";
 import { runIntegrityCheck } from "../core/IntegrityValidator";
+import { tradingLimiter } from "../core/RateLimiters";
 
 export const systemRouter = Router();
 
@@ -45,18 +47,64 @@ systemRouter.get("/audit/trail", (req: Request, res: Response) => {
   res.json([]);
 });
 
-systemRouter.post("/system/emergency-stop", (req: Request, res: Response) => {
-  console.warn("CIRCUIT BREAKER: Emergency Stop Activated by User.");
-  tradingEngine.state.emergencyStopActive = true;
-  tradingEngine.logHistory("veto", "EMERGENCY STOP activated. RiskAgent will reject all new trades until resumed.");
-  res.json({ status: "ok", active: true });
+// Real trading-safety kill switch (FINAL_ANALYSIS.md P0): a tri-state machine
+// (TRADING_ENABLED | TRADING_PAUSED | EMERGENCY_STOP), persisted so it survives a restart, with
+// every transition written to the immutable kill_switch_events audit table via
+// TradingEngine.setTradingState(). EMERGENCY_STOP additionally cancels real outstanding broker
+// orders by default (cancelOpenOrders: false in the body opts out); existing filled positions
+// are never touched by any of these three endpoints.
+systemRouter.post("/system/emergency-stop", tradingLimiter, async (req: Request & { actor?: string }, res: Response) => {
+  try {
+    const reason = (req.body?.reason && String(req.body.reason).trim()) || 'Manually triggered emergency stop.';
+    const cancelOpenOrders = req.body?.cancelOpenOrders !== false;
+    const actor = req.actor || 'unknown';
+    console.warn(`CIRCUIT BREAKER: Emergency Stop activated by ${actor}.`);
+    const result = await tradingEngine.setTradingState('EMERGENCY_STOP', { reason, actor, cancelOpenOrders });
+    res.json({ status: "ok", active: true, tradingState: result.toState, cancelledOrderIds: result.cancelledOrderIds });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
-systemRouter.post("/system/resume", (req: Request, res: Response) => {
-  console.log("SYSTEM: Recovery initiated. Trading systems resumed.");
-  tradingEngine.state.emergencyStopActive = false;
-  tradingEngine.logHistory("start", "Emergency stop cleared. Trading resumed.");
-  res.json({ status: "ok", active: false });
+systemRouter.post("/system/pause", tradingLimiter, async (req: Request & { actor?: string }, res: Response) => {
+  try {
+    const reason = (req.body?.reason && String(req.body.reason).trim()) || 'Manually paused.';
+    const actor = req.actor || 'unknown';
+    const result = await tradingEngine.setTradingState('TRADING_PAUSED', { reason, actor });
+    res.json({ status: "ok", tradingState: result.toState });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+systemRouter.post("/system/resume", tradingLimiter, async (req: Request & { actor?: string }, res: Response) => {
+  try {
+    const reason = (req.body?.reason && String(req.body.reason).trim()) || 'Manually resumed.';
+    const actor = req.actor || 'unknown';
+    console.log(`SYSTEM: Recovery initiated by ${actor}.`);
+    const result = await tradingEngine.setTradingState('TRADING_ENABLED', { reason, actor });
+    res.json({ status: "ok", active: false, tradingState: result.toState });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+systemRouter.get("/system/trading-state", (req: Request, res: Response) => {
+  res.json({
+    tradingState: tradingEngine.state.tradingState,
+    emergencyStopActive: tradingEngine.state.emergencyStopActive,
+  });
+});
+
+// Real, durable audit trail for every kill-switch transition - distinct from the ephemeral,
+// capped in-memory activity feed at GET /api/v1/autobot (history field).
+systemRouter.get("/system/kill-switch-events", async (req: Request, res: Response) => {
+  try {
+    const rows = await db.select().from(schema.killSwitchEvents).orderBy(desc(schema.killSwitchEvents.id)).limit(100);
+    res.json(rows.map(r => ({ ...r, cancelledOrderIds: r.cancelledOrderIds ? JSON.parse(r.cancelledOrderIds) : [] })));
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 systemRouter.get("/system/export-db", (req: Request, res: Response) => {
@@ -97,7 +145,7 @@ systemRouter.get("/system/status", async (req: Request, res: Response) => {
       hasGemini: providers.length > 0,
       hasSQLite: true,
       circuitBreakers: {
-        dailyDate: tradingEngine.state.dayStartDateStr || new Date().toISOString().split("T")[0],
+        dailyDate: tradingEngine.state.dayStartDateStr || getTradingDateStr(),
         loss: tradingEngine.state.currentDailyLoss,
         limit: tradingEngine.state.dailyLossLimit,
       },
@@ -188,7 +236,6 @@ systemRouter.get("/pnl/analytics", async (req: Request, res: Response) => {
 
       if (historyRes.ok) {
         const history = await historyRes.json();
-        // history has timestamp (unix), equity, profit_loss, profit_loss_pct
         const mapped = history.timestamp.map((t: number, i: number) => {
           const dateObj = new Date(t * 1000);
           return {
@@ -197,16 +244,25 @@ systemRouter.get("/pnl/analytics", async (req: Request, res: Response) => {
             cumulative: history.equity[i] || 0,
           };
         });
+        
+        const totalProfitLoss = history.profit_loss && history.profit_loss.length > 0 ? history.profit_loss[history.profit_loss.length - 1] : 0;
 
-        return res.json({ history: mapped });
+        return res.json({ history: mapped, summary: { winRate: 0, totalProfitLoss } });
       }
     } catch (e) {
       console.error("Failed to fetch Alpaca portfolio history:", e);
     }
   }
 
-  // Stub fallback
-  res.json({ history: [] });
+  // Fallback for Paper Simulator mode
+  const broker = BrokerManager.getInstance().getActiveBroker();
+  try {
+    const portfolio = await broker.portfolio();
+    const totalProfitLoss = portfolio.equity - portfolio.cash;
+    res.json({ history: [], summary: { winRate: 0, totalProfitLoss } });
+  } catch (e) {
+    res.json({ history: [], summary: { winRate: 0, totalProfitLoss: 0 } });
+  }
 });
 
 // Real historical replay - runs the same deterministic technical rules TechnicalAgent.ts uses
@@ -251,9 +307,12 @@ systemRouter.get("/backtest", async (req: Request, res: Response) => {
 // be compared honestly. Never optimizes any parameter on the test window.
 systemRouter.post("/backtest/walk-forward", async (req: Request, res: Response) => {
   try {
-    const { symbols, startDate, endDate, timeframe, initialCash, trainDays, testDays } = req.body || {};
-    if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
-      return res.status(400).json({ error: "symbols (non-empty array) is required" });
+    const { symbols, strategyId, symbol, startDate, endDate, timeframe, initialCash, trainDays, testDays } = req.body || {};
+    // E5 - either the original run()-backed mode (symbols) or the quant-layer mode
+    // (strategyId+symbol) - exactly one, matching WalkForwardValidator.run()'s own validation.
+    const quantMode = !!(strategyId && symbol);
+    if (!quantMode && (!symbols || !Array.isArray(symbols) || symbols.length === 0)) {
+      return res.status(400).json({ error: "Either symbols (non-empty array) or both strategyId and symbol is required" });
     }
     if (!startDate || !endDate) {
       return res.status(400).json({ error: "startDate and endDate are required (ISO dates)" });
@@ -261,7 +320,7 @@ systemRouter.post("/backtest/walk-forward", async (req: Request, res: Response) 
     if (!trainDays || !testDays) {
       return res.status(400).json({ error: "trainDays and testDays are required (integers, e.g. trainDays:180, testDays:30)" });
     }
-    const result = await walkForwardValidator.run({ symbols, startDate, endDate, timeframe, initialCash, trainDays, testDays });
+    const result = await walkForwardValidator.run({ symbols, strategyId, symbol, startDate, endDate, timeframe, initialCash, trainDays, testDays });
     res.json(result);
   } catch (e: any) {
     res.status(500).json({ error: e.message });

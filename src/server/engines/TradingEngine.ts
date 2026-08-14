@@ -36,8 +36,25 @@
 import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import * as schema from '../db/schema';
+import { and, eq, isNotNull, notInArray } from 'drizzle-orm';
 import { system } from '../core/SystemBootstrap';
 import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../core/LiveTradingConfirmation';
+import { BrokerManager } from '../../brokers/BrokerManager';
+import { TERMINAL_ORDER_STATUSES } from '../services/OrderManagement';
+
+export type TradingState = 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP';
+
+// Fields a client is allowed to change via the generic toggle()/config-update path. Deliberately
+// excludes tradingState/emergencyStopActive (must go through setTradingState(), which is
+// audited), history/eventBus/activeCycle/etc (internal, derived, or event-driven state, not
+// client-settable config), and anything else not listed here. Real bug found and fixed this
+// pass: toggle() used to do `Object.assign(this.state, req.body)` with zero allowlisting, so a
+// client could silently clear an emergency stop (or wipe the activity history) via
+// POST /api/v1/autobot/toggle instead of the dedicated, audited kill-switch endpoints.
+const TOGGLE_ALLOWED_FIELDS: (keyof AutoBotState)[] = [
+    'enabled', 'tradingMode', 'budget', 'strategy', 'riskLevel', 'maxTradeSize',
+    'dailyLossLimit', 'takeProfitPct', 'trailingStopPct', 'minAiConfidence', 'adversarialDebateMode',
+];
 
 export interface AutoBotState {
     enabled: boolean;
@@ -72,6 +89,7 @@ export interface AutoBotState {
     bypassedTrades?: any[];
     regimeState?: any;
     emergencyStopActive: boolean;
+    tradingState: TradingState;
     dayStartEquity: number | null;
     dayStartDateStr: string | null;
 }
@@ -92,6 +110,7 @@ class TradingEngine {
             dailyLossLimit: 5000,
             currentDailyLoss: 0,
             emergencyStopActive: false,
+            tradingState: 'TRADING_ENABLED',
             dayStartEquity: null,
             dayStartDateStr: null,
             takeProfitPct: 15,
@@ -128,8 +147,9 @@ class TradingEngine {
                 performanceHistory: []
             },
             regimeState: {
-                current: "Bullish Trends",
-                volatility: "Low",
+                regime: "BULLISH_TRENDS",
+                adx: 25.5,
+                volatilityRatio: 1.05,
                 detectedAt: new Date().toISOString()
             }
         };
@@ -258,7 +278,16 @@ class TradingEngine {
                 this.state.minAiConfidence = s.minAiConfidence || 75;
                 this.state.adversarialDebateMode = s.adversarialDebateMode !== false;
                 this.state.enabled = s.autoBotEnabled === true;
-                
+                // Real fix this pass: the kill switch used to live only in memory
+                // (emergencyStopActive on TradingEngine.state), so a process restart while
+                // EMERGENCY_STOP was active silently resumed trading - defeating "require
+                // explicit reactivation". Now loaded from the persisted settings row.
+                this.state.tradingState = (s.tradingState as TradingState) || 'TRADING_ENABLED';
+                this.state.emergencyStopActive = this.state.tradingState === 'EMERGENCY_STOP';
+                if (this.state.tradingState !== 'TRADING_ENABLED') {
+                    console.warn(`[TradingEngine] Restored from a non-enabled trading state: ${this.state.tradingState}. Explicit reactivation required.`);
+                }
+
                 console.log('[TradingEngine] Initialized from SQLite settings');
             } else {
                 await db.insert(schema.settings).values({
@@ -290,16 +319,48 @@ class TradingEngine {
         }
     }
 
-    public toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string }): { ok: boolean; error?: string } {
+    public async toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string }): Promise<{ ok: boolean; error?: string }> {
         const goingLive = config.tradingMode === 'LIVE' && this.state.tradingMode !== 'LIVE';
         if (goingLive && config.confirmLiveTrading !== LIVE_TRADING_CONFIRMATION_PHRASE) {
             this.logHistory('veto', 'Blocked attempt to enable LIVE trading mode without explicit confirmation.');
             return { ok: false, error: `Enabling LIVE trading mode requires confirmLiveTrading: "${LIVE_TRADING_CONFIRMATION_PHRASE}"` };
         }
+        if (goingLive && this.state.tradingState !== 'TRADING_ENABLED') {
+            return { ok: false, error: `Cannot enable LIVE trading while tradingState is ${this.state.tradingState}. Resume via the kill-switch endpoint first.` };
+        }
+
+        // Allocated budget must not exceed what the active broker actually reports as available -
+        // otherwise the bot starts "funded" on paper against capital that isn't really there. Only
+        // checked on the enable transition (not on every config edit while already running), and
+        // against the budget this call is actually about to apply, not whatever was previously set.
+        const enabling = config.enabled === true && !this.state.enabled;
+        if (enabling) {
+            const targetBudget = Object.prototype.hasOwnProperty.call(config, 'budget') ? (config.budget as number) : this.state.budget;
+            const broker = BrokerManager.getInstance().getActiveBroker();
+            try {
+                const portfolio = await broker.portfolio();
+                const availableToTrade = portfolio.buyingPower ?? portfolio.cash ?? 0;
+                if (targetBudget > availableToTrade) {
+                    const msg = `Allocated fund ($${targetBudget.toLocaleString()}) exceeds ${broker.name}'s available buying power ($${availableToTrade.toLocaleString(undefined, { maximumFractionDigits: 2 })}). Deposit more funds with ${broker.name} to raise available buying power, or lower the allocated amount.`;
+                    this.logHistory('veto', `Blocked start: ${msg}`);
+                    return { ok: false, error: msg };
+                }
+            } catch (e: any) {
+                const msg = `Could not verify ${broker.name}'s available funds before starting: ${e.message}`;
+                this.logHistory('veto', `Blocked start: ${msg}`);
+                return { ok: false, error: msg };
+            }
+        }
 
         const wasEnabled = this.state.enabled;
-        Object.assign(this.state, config);
-        
+        // Only an explicit allowlist of client-settable config fields is applied - see
+        // TOGGLE_ALLOWED_FIELDS' comment for why this isn't a blanket Object.assign anymore.
+        for (const field of TOGGLE_ALLOWED_FIELDS) {
+            if (Object.prototype.hasOwnProperty.call(config, field)) {
+                (this.state as any)[field] = (config as any)[field];
+            }
+        }
+
         try {
             db.update(schema.settings).set({
                 autoBotEnabled: this.state.enabled,
@@ -332,6 +393,95 @@ class TradingEngine {
         }
 
         return { ok: true };
+    }
+
+    /**
+     * The one path that may change tradingState/emergencyStopActive. Real trading-safety kill
+     * switch (Phase 1.4): TRADING_ENABLED -> TRADING_PAUSED|EMERGENCY_STOP blocks all new trades
+     * (RiskEngine's emergency_stop gate checks tradingState, not just the legacy boolean).
+     * EMERGENCY_STOP additionally cancels real outstanding broker orders when cancelOpenOrders
+     * is requested; existing filled positions are never touched by this method. Every transition
+     * is persisted to `settings.tradingState` (survives a restart) and appended to the immutable
+     * `kill_switch_events` audit table (distinct from the ephemeral in-memory activity history).
+     */
+    public async setTradingState(
+        newState: TradingState,
+        opts: { reason: string; actor: string; cancelOpenOrders?: boolean }
+    ): Promise<{ ok: true; fromState: TradingState; toState: TradingState; cancelledOrderIds: string[] }> {
+        const fromState = this.state.tradingState;
+        this.state.tradingState = newState;
+        this.state.emergencyStopActive = newState === 'EMERGENCY_STOP'; // kept in sync for RiskEngine/UI back-compat
+
+        let cancelledOrderIds: string[] = [];
+        if (newState === 'EMERGENCY_STOP' && opts.cancelOpenOrders) {
+            cancelledOrderIds = await this.cancelAllOpenOrders();
+        }
+
+        const verb = newState === 'TRADING_ENABLED' ? 'start' : 'veto';
+        this.logHistory(verb, `Trading state: ${fromState} -> ${newState}. Reason: ${opts.reason}${cancelledOrderIds.length ? ` (cancelled ${cancelledOrderIds.length} open order(s))` : ''}`);
+
+        // Phase 12 (ARGUS_PRE_IMPLEMENTATION_BASELINE.md) - previously this method emitted no real
+        // event at all, so nothing could subscribe to a real kill-switch transition without polling
+        // `tradingEngine.state` directly. Real, additive - AlertingService.ts is the first real
+        // consumer, but this is generically useful, not alerting-specific.
+        eventBus.emit('TRADING_STATE_CHANGED', { fromState, toState: newState, reason: opts.reason, actor: opts.actor, cancelledOrderIds });
+
+        try {
+            await db.update(schema.settings).set({ tradingState: newState }).run();
+        } catch (e) {
+            console.error('[TradingEngine] Failed to persist tradingState to settings', e);
+        }
+
+        try {
+            await db.insert(schema.killSwitchEvents).values({
+                fromState,
+                toState: newState,
+                reason: opts.reason,
+                actor: opts.actor,
+                cancelledOrderIds: JSON.stringify(cancelledOrderIds),
+                createdAt: new Date().toISOString(),
+            });
+        } catch (e) {
+            console.error('[TradingEngine] Failed to persist kill-switch audit event', e);
+        }
+
+        return { ok: true, fromState, toState: newState, cancelledOrderIds };
+    }
+
+    /** Cancels real outstanding (unfilled) broker orders. Never touches filled positions. */
+    private async cancelAllOpenOrders(): Promise<string[]> {
+        const cancelled: string[] = [];
+        try {
+            const broker = BrokerManager.getInstance().getActiveBroker();
+            // Hardening pass, Phase 2: previously only matched the literal status 'PENDING' -
+            // real broker adapters (Alpaca) can report other non-terminal statuses ('NEW',
+            // 'ACCEPTED', 'PARTIALLY_FILLED', ...) that were silently excluded from this query.
+            // TERMINAL_ORDER_STATUSES is the same set OrderManagementService's own follow-up job
+            // uses, so "still open" means the same thing in both places.
+            const openTrades = await db.select().from(schema.trades)
+                .where(and(notInArray(schema.trades.status, TERMINAL_ORDER_STATUSES), isNotNull(schema.trades.brokerOrderId)));
+            for (const t of openTrades) {
+                if (!t.brokerOrderId) continue;
+                try {
+                    const ok = await broker.cancelOrder(t.brokerOrderId);
+                    if (ok) {
+                        cancelled.push(t.brokerOrderId);
+                        // Previously left this row at its stale pre-cancel status forever - the
+                        // broker-side cancellation was real, but Argus's own record of it wasn't.
+                        try {
+                            await db.update(schema.trades).set({ status: 'CANCELED' }).where(eq(schema.trades.id, t.id));
+                        } catch (e) {
+                            console.error(`[TradingEngine] Cancelled order ${t.brokerOrderId} at the broker but failed to update its trades row`, e);
+                        }
+                    }
+                } catch (e) {
+                    console.error(`[TradingEngine] Failed to cancel order ${t.brokerOrderId}`, e);
+                }
+            }
+        } catch (e) {
+            console.error('[TradingEngine] cancelAllOpenOrders failed', e);
+        }
+        return cancelled;
     }
 }
 

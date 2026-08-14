@@ -34,6 +34,8 @@
  */
 
 import StrategyScanner from "./components/StrategyScanner";
+import QuantSignalsPanel from "./components/QuantSignalsPanel";
+import AwaitingSignal from "./components/shared/AwaitingSignal";
 import SystemOptimizer from "./components/SystemOptimizer";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
@@ -161,6 +163,7 @@ import {
   Scale,
   Sliders,
   DownloadCloud,
+  LogOut,
   LayoutGrid,
   ThumbsUp,
   ThumbsDown,
@@ -214,13 +217,18 @@ interface RiskVeto {
   timestamp: string;
 }
 
+// Matches the real GET /api/v1/performance response shape exactly (systemRoutes.ts:171-187) -
+// this previously declared snake_case fields (agent_id/win_rate/sharpe_ratio/max_drawdown/
+// total_trades/current_weight) that the real endpoint has never returned, which silently made
+// every consumer's field access resolve to `undefined` (defaulting to 0 wherever `|| 0` masked
+// it) despite fetching real, non-empty data. There is no real per-agent max_drawdown anywhere in
+// agent_performance_stats - profitFactor is the real metric that exists instead.
 interface AgentMetric {
-  agent_id: string;
-  win_rate: number;
-  sharpe_ratio: number;
-  max_drawdown: number;
-  total_trades: number;
-  current_weight: number;
+  winRate: number;
+  totalTrades: number;
+  averageReturn: number;
+  profitFactor: number;
+  sharpeRatio: number;
 }
 
 
@@ -247,23 +255,6 @@ const mockWinRateData = Array.from({ length: 30 }).map((_, i) => {
   };
 });
 
-const mockDrawdownData = [
-  { time: "09:30", unprotected: 0, mitigated: 0 },
-  { time: "10:00", unprotected: -2.3, mitigated: -1.0 },
-  { time: "10:30", unprotected: -3.8, mitigated: -1.2 },
-  { time: "11:00", unprotected: -5.1, mitigated: -2.0 },
-  { time: "11:30", unprotected: -8.4, mitigated: -2.5 },
-  { time: "12:00", unprotected: -10.2, mitigated: -3.0 },
-  { time: "12:30", unprotected: -12.5, mitigated: -3.1 },
-  { time: "13:00", unprotected: -14.0, mitigated: -2.8 },
-  { time: "13:30", unprotected: -15.5, mitigated: -2.2 },
-  { time: "14:00", unprotected: -14.2, mitigated: -1.8 },
-  { time: "14:30", unprotected: -16.0, mitigated: -1.5 },
-  { time: "15:00", unprotected: -18.2, mitigated: -1.2 },
-  { time: "15:30", unprotected: -20.5, mitigated: -1.4 },
-  { time: "16:00", unprotected: -22.1, mitigated: -1.3 },
-];
-
 const mockBacktestData = Array.from({ length: 90 }).map((_, i) => {
   const d = new Date();
   d.setDate(d.getDate() - (89 - i));
@@ -284,15 +275,6 @@ const mockBenchmarkData = [
   { provider: "GPT-4o", latency: 1050, quality: 94, tier: "Premium" },
   { provider: "Claude 3.5 Sonnet", latency: 980, quality: 95, tier: "Premium" },
   { provider: "DeepSeek-Chat", latency: 1400, quality: 91, tier: "Premium" },
-];
-
-const mockTokenConsumptionData = [
-  { agent: "NewsAgent", standardTokens: 4520000, premiumTokens: 120000 },
-  { agent: "MacroAgent", standardTokens: 3100000, premiumTokens: 450000 },
-  { agent: "TechnicalAgent", standardTokens: 6800000, premiumTokens: 80000 },
-  { agent: "SentimentAgent", standardTokens: 5200000, premiumTokens: 150000 },
-  { agent: "OrderFlowAgent", standardTokens: 8400000, premiumTokens: 50000 },
-  { agent: "RiskVerification", standardTokens: 1200000, premiumTokens: 950000 },
 ];
 
 const mockHeatmapData = [
@@ -1100,6 +1082,12 @@ const CustomPnLLegend: React.FC<CustomPnLLegendProps> = ({ totalPnL, profitableD
  */
 export default function App() {
   const { subscribe } = useWebSocket();
+  // Hoisted from further down in this component: several fetch-on-mount effects earlier in the
+  // function body need to depend on this (see the /api/v1/autobot effect below) - a useEffect's
+  // dependency array is evaluated synchronously during render, so referencing a const declared
+  // later in the same function body would throw "Cannot access before initialization". A plain
+  // useState call has no ordering dependency on anything else, so hoisting just this one is safe.
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [showCoach, setShowCoach] = useState(false);
   const [runBacktest, setRunBacktest] = useState(false);
   const [showTradeHistory, setShowTradeHistory] = useState(true);
@@ -1178,6 +1166,10 @@ export default function App() {
   const [autoBotTrailingStop, setAutoBotTrailingStop] = useState(5);
   const [autoBotMinConfidence, setAutoBotMinConfidence] = useState(75);
   const [autoBotAdversarialDebate, setAutoBotAdversarialDebate] = useState(true);
+  // Real error from the last failed /api/v1/autobot/toggle call (e.g. allocated budget exceeds
+  // the active broker's real available buying power) - surfaced next to the Allocated Budget
+  // Limit input instead of being silently swallowed.
+  const [autoBotStartError, setAutoBotStartError] = useState<string | null>(null);
 
   const [paperTradingEnabled, setPaperTradingEnabled] = useState(false);
   const [alertsModalOpen, setAlertsModalOpen] = useState(false);
@@ -1225,12 +1217,40 @@ export default function App() {
 
   const [stressScenario, setStressScenario] = useState("Flash Crash");
   const [showStressTest, setShowStressTest] = useState(false);
+  // Real shock-magnitude input for the stress-test calculator - only "Flash Crash" pre-fills a
+  // number, since that scenario's own card text already states "-10% overall market cap" (not a
+  // new invented figure); the other three scenarios have no stated equity-impact percentage in
+  // their own description, so the user must supply one explicitly rather than Argus inventing it.
+  const [stressShockPct, setStressShockPct] = useState<number>(-10);
+  const [stressResult, setStressResult] = useState<any | null>(null);
+  const [stressLoading, setStressLoading] = useState(false);
+  const [stressError, setStressError] = useState<string | null>(null);
+
+  const runStressTest = async (shockPct: number) => {
+    setStressLoading(true);
+    setStressError(null);
+    try {
+      const res = await fetch(`/api/v2/portfolio/stress-test?shockPct=${shockPct}`);
+      const json = await res.json();
+      if (!json.ok) { setStressError(json.error || 'Request failed.'); return; }
+      setStressResult(json);
+    } catch (e: any) {
+      setStressError(e.message);
+    } finally {
+      setStressLoading(false);
+    }
+  };
 
   const [thoughtStreamLogs, setThoughtStreamLogs] = useState([
     { id: 1, agent: "System", message: "Terminal initialized. Connections secure.", type: "info" }
   ]);
 
   useEffect(() => {
+    // Same pre-auth-flooding bug as the fetchState effect below: this ran on every mount
+    // regardless of isAuthenticated, firing a failing 401 at /api/v1/autobot from the login
+    // screen. Gated the same way.
+    if (!isAuthenticated) return;
+
     // Replaced interval polling with WebSocket subscription
     const unsubscribe = subscribe('AUTOBOT_STATE_UPDATED', (data) => {
       setAutoBotConfig(data);
@@ -1243,7 +1263,7 @@ export default function App() {
         })));
       }
     });
-    
+
     // Initial fetch to populate state immediately
     fetch("/api/v1/autobot")
       .then(r => r.json())
@@ -1253,7 +1273,7 @@ export default function App() {
     return () => {
       unsubscribe();
     };
-  }, [subscribe]);
+  }, [subscribe, isAuthenticated]);
 
   const [webhooksList, setWebhooksList] = useState<any[]>([]);
   const [newWebhookName, setNewWebhookName] = useState("");
@@ -1276,8 +1296,11 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Same pre-auth-flooding bug as the other fetch-on-mount effects in this component - see the
+    // fetchState effect further down for the full explanation.
+    if (!isAuthenticated) return;
     fetchWebhooks();
-  }, []);
+  }, [isAuthenticated]);
 
   const handleAddWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1400,9 +1423,19 @@ export default function App() {
          })
        });
        const data = await res.json();
-       setAutoBotConfig((prev: any) => ({ ...prev, enabled: data.enabled }));
-       setSystemState(data.enabled ? 'RUNNING' : 'STOPPED');
-     } catch (e) {}
+       if (data.ok === false) {
+         // Real rejection from TradingEngine.toggle() - e.g. allocated budget exceeds the active
+         // broker's real available buying power. Surface it instead of silently no-op'ing.
+         setAutoBotStartError(data.error || 'Failed to start the autonomous bot.');
+         return;
+       }
+       setAutoBotStartError(null);
+       const nowEnabled = data.state?.enabled ?? data.enabled;
+       setAutoBotConfig((prev: any) => ({ ...prev, enabled: nowEnabled }));
+       setSystemState(nowEnabled ? 'RUNNING' : 'STOPPED');
+     } catch (e: any) {
+       setAutoBotStartError(e?.message || 'Failed to reach the server.');
+     }
   };
 
   const handleAddMemoryRule = async (rule: string) => {
@@ -1566,7 +1599,6 @@ export default function App() {
     downloadAnchorNode.remove();
   };
 
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [authUsername, setAuthUsername] = useState("admin");
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
@@ -1599,6 +1631,20 @@ export default function App() {
     } catch (err) {
       console.error(err);
       setAuthError("Login failed due to network error.");
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch("/api/v1/auth/logout", { method: "POST" });
+    } catch (err) {
+      console.error("Logout request failed", err);
+      // Still clear local auth state below even if the network call failed - the user asked to
+      // log out, and leaving the UI in an authenticated-looking state on a network error would be
+      // worse than a session row that outlives its cookie until it naturally expires.
+    } finally {
+      setIsAuthenticated(false);
+      localStorage.removeItem("argus_authenticated");
     }
   };
 
@@ -1974,6 +2020,90 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<
     "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation" | "observatory"
   >("dashboard");
+
+  // Task 3A (FINAL_ANALYSIS.md's 4-phase remediation plan) - "Observability & Trade Tracing" used
+  // to render an entirely fabricated timeline (a hardcoded trace id, made-up latencies, an
+  // invented "ChatGPT/Claude/Gemini LLM Council" debate transcript, fabricated news-pipeline and
+  // risk/execution numbers - none of it backed by any real event). The real equivalent -
+  // per-transaction consensus/risk/execution provenance - already exists and is real
+  // (TransactionObservatory.tsx, reading GET /api/v2/transactions/:id) but was only reachable via
+  // a trade-blotter "Replay" button, never from this tab. This lists real recent transactions
+  // (GET /api/v2/transactions) and opens the SAME real TransactionObservatory modal already wired
+  // for replay elsewhere - the "redirect to the real thing" fix, not a new fabrication.
+  const [auditTransactions, setAuditTransactions] = useState<any[]>([]);
+  const [auditTransactionsLoading, setAuditTransactionsLoading] = useState(true);
+
+  useEffect(() => {
+    if (activeTab !== "audit") return;
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v2/transactions?limit=25')
+        .then(r => r.json())
+        .then(json => { if (!cancelled && json.ok) { setAuditTransactions(json.transactions); setAuditTransactionsLoading(false); } })
+        .catch(() => { if (!cancelled) setAuditTransactionsLoading(false); });
+    };
+    load();
+    const interval = setInterval(load, 15_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [activeTab]);
+
+  // Real replacement for the Opportunity Feed tab's 3 hardcoded NVDA/TSLA/RIVN cards (invented
+  // "Regime"/"Algorithm" fields, "LIVE SCAN ACTIVE" badge with no fetch behind it at all) -
+  // GET /api/v2/opportunities, real recent high-confidence agent_predictions.
+  const [opportunities, setOpportunities] = useState<any[]>([]);
+  const [opportunitiesAvailable, setOpportunitiesAvailable] = useState<boolean | null>(null);
+  const [opportunitiesReason, setOpportunitiesReason] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== "opportunities") return;
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v2/opportunities')
+        .then(r => r.json())
+        .then(json => {
+          if (cancelled || !json.ok) return;
+          setOpportunitiesAvailable(json.available);
+          setOpportunities(json.data || []);
+          setOpportunitiesReason(json.reason || null);
+        })
+        .catch(() => { if (!cancelled) setOpportunitiesAvailable(false); });
+    };
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [activeTab]);
+
+  // Real replacement for the Learning & Evolution tab's fabricated "Mistakes Corrected"/"Models
+  // Retrained"/"Alpha Generated by RL" KPIs and "PER-STRATEGY SCORECARD" (invented strategy
+  // names) - GET /api/v2/agents/learning-summary, real per-agent weight/win-rate + real
+  // learned_rules text.
+  const [learningSummary, setLearningSummary] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== "learning") return;
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v2/agents/learning-summary')
+        .then(r => r.json())
+        .then(json => { if (!cancelled && json.ok) setLearningSummary(json); })
+        .catch(() => {});
+    };
+    load();
+    const interval = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [activeTab]);
+
+  // Real check of the actual running Argus instance for the Deployment tab - distinct from that
+  // tab's existing generic architecture self-assessment quiz (real, but evaluates a hypothetical
+  // system the user describes, not Argus itself). Reuses the same real endpoint the Validation
+  // tab's IntegrityValidator check uses.
+  const [deploymentIntegrity, setDeploymentIntegrity] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== "deployment") return;
+    fetch('/api/v1/system/integrity').then(r => r.json()).then(setDeploymentIntegrity).catch(() => {});
+  }, [activeTab]);
+
   const [selectedAgentNode, setSelectedAgentNode] = useState<any | null>(null);
   const [standardLLMProvider, setStandardLLMProvider] = useState<"Gemini Flash" | "GPT-4o-mini" | "Claude 3 Haiku" | "DeepSeek-Coder">("Gemini Flash");
   const [premiumLLMProvider, setPremiumLLMProvider] = useState<"Gemini Pro" | "GPT-4o" | "Claude 3.5 Sonnet" | "DeepSeek-Chat">("Gemini Pro");
@@ -2044,6 +2174,27 @@ export default function App() {
   const [tokenAlertEnabled, setTokenAlertEnabled] = useState(true);
   const [tokenAlertThreshold, setTokenAlertThreshold] = useState(50);
 
+  // Real replacement for the "Token Consumption & Projected Costs" panel's previous
+  // mockTokenConsumptionData array (6 invented agent names) + hardcoded $65.42 literal - now
+  // backed by GET /api/v2/ai/token-consumption, real ai_calls rows grouped by real agent.
+  const [tokenConsumptionData, setTokenConsumptionData] = useState<any[] | null>(null);
+  const [tokenConsumptionTotals, setTokenConsumptionTotals] = useState<any | null>(null);
+  const [tokenConsumptionAvailable, setTokenConsumptionAvailable] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v2/ai/token-consumption')
+      .then(r => r.json())
+      .then(json => {
+        if (cancelled || !json.ok) return;
+        setTokenConsumptionAvailable(json.available);
+        setTokenConsumptionData(json.data || []);
+        setTokenConsumptionTotals(json.totals);
+      })
+      .catch(() => { if (!cancelled) setTokenConsumptionAvailable(false); });
+    return () => { cancelled = true; };
+  }, []);
+
   const [agentStressTests, setAgentStressTests] = useState<Record<string, boolean>>({
     "NewsAgent (NLP)": false,
     "MacroAgent (Quant)": false,
@@ -2113,24 +2264,106 @@ export default function App() {
   const [isAutonomous, setIsAutonomous] = useState(false);
 
   // Advanced Trade Sandbox State
+  //
+  // Task 3C (FINAL_ANALYSIS.md's 4-phase remediation plan): "Execute Override" used to build a
+  // fabricated Trade object client-side and push it straight into local state - never touching
+  // the backend at all, so nothing here was a real order. It now calls
+  // POST /api/v2/trading/execute-override, which emits a real CHIEF_APPROVED_IDEA event carrying
+  // a real live price - the exact same event RiskAgent listens for after ChiefTraderAgent's own
+  // consensus approval - so the override still passes through every real RiskEngine gate
+  // (circuit breakers, ATR sizing, concentration caps) and real OrderManagementService/broker
+  // call. Only ChiefTraderAgent's AI-consensus step is deliberately skipped, which is the entire
+  // point of an "override." sandboxQuantity is kept as a user-facing target/estimate for the
+  // notional preview below - RiskEngine (not the user) determines the real approved quantity,
+  // reported back via the same RISK_ASSESSMENT_COMPLETED broadcast every other real trade uses.
   const [sandboxAction, setSandboxAction] = useState<"BUY" | "SELL">("BUY");
   const [sandboxQuantity, setSandboxQuantity] = useState<number>(100);
   const [sandboxOverride, setSandboxOverride] = useState<boolean>(false);
+  const [sandboxSubmitting, setSandboxSubmitting] = useState(false);
+  const [sandboxError, setSandboxError] = useState<string | null>(null);
+  const [sandboxPending, setSandboxPending] = useState<{ traceId: string; transactionId: string; currentPrice: number; symbol: string; side: "BUY" | "SELL" } | null>(null);
+  const [sandboxOutcome, setSandboxOutcome] = useState<any | null>(null);
+
+  useEffect(() => {
+    if (!sandboxPending) return;
+    const unsubRisk = subscribe('RISK_ASSESSMENT_COMPLETED', (data: any) => {
+      if (data.traceId !== sandboxPending.traceId) return;
+      setSandboxOutcome({ stage: data.approved ? 'RISK_APPROVED' : 'RISK_REJECTED', ...data });
+      setAuditLogs((prev: any[]) => [{
+        id: `AL-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: data.approved ? "INFO" : "WARN",
+        symbol: "SandboxOverride",
+        headline: data.approved
+          ? `MANUAL OVERRIDE APPROVED BY RISKENGINE: ${data.side} ${data.maxQuantity} ${data.symbol} - ${data.reasoning}`
+          : `MANUAL OVERRIDE REJECTED BY RISKENGINE: ${data.reasoning}`,
+      }, ...prev]);
+      if (!data.approved) setSandboxPending(null);
+    });
+    const unsubOrder = subscribe('ORDER_EXECUTED', (data: any) => {
+      if (data.transactionId !== sandboxPending.transactionId) return;
+      setSandboxOutcome((prev: any) => ({ ...(prev || {}), stage: 'ORDER_' + data.status, order: data }));
+      setSandboxPending(null);
+      if (data.status === 'FILLED') {
+        setTrades((prev: Trade[]) => [{
+          id: data.id, symbol: data.symbol, side: data.side, quantity: data.quantity,
+          price: data.price, total_amount: data.price * data.quantity, status: "filled",
+          thesis: "Manual consensus override - submitted via Advanced Trade Sandbox.",
+          timestamp: new Date().toISOString(), traceId: data.traceId, transactionId: data.transactionId,
+          profitLoss: data.profitLoss,
+        }, ...prev]);
+        setAuditLogs((prev: any[]) => [{
+          id: `AL-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          action: "INFO",
+          symbol: "SandboxOverride",
+          headline: `MANUAL OVERRIDE FILLED: ${data.side} ${data.quantity} ${data.symbol} @ $${data.price?.toFixed?.(2) ?? data.price}`,
+        }, ...prev]);
+      } else if (data.status === 'REJECTED' || data.status === 'CANCELED') {
+        setAuditLogs((prev: any[]) => [{
+          id: `AL-${Date.now()}`,
+          timestamp: new Date().toISOString(),
+          action: "WARN",
+          symbol: "SandboxOverride",
+          headline: `MANUAL OVERRIDE ORDER ${data.status} AT BROKER: ${data.symbol}`,
+        }, ...prev]);
+      }
+    });
+    return () => { unsubRisk(); unsubOrder(); };
+  }, [subscribe, sandboxPending]);
+
+  const handleExecuteOverride = async () => {
+    setSandboxSubmitting(true);
+    setSandboxError(null);
+    setSandboxOutcome(null);
+    try {
+      const res = await fetch('/api/v2/trading/execute-override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: targetSymbol, side: sandboxAction }),
+      });
+      const json = await res.json();
+      if (!json.ok) {
+        setSandboxError(json.error || 'Override submission failed.');
+        return;
+      }
+      setSandboxPending({ traceId: json.traceId, transactionId: json.transactionId, currentPrice: json.currentPrice, symbol: targetSymbol, side: sandboxAction });
+      setSandboxOutcome({ stage: 'SUBMITTED', currentPrice: json.currentPrice });
+      setAuditLogs((prev: any[]) => [{
+        id: `AL-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        action: "WARN",
+        symbol: "SandboxOverride",
+        headline: `USER OVERRIDE SUBMITTED TO RISKENGINE: ${sandboxAction} ${targetSymbol} @ real price $${json.currentPrice}`,
+      }, ...prev]);
+    } catch (e: any) {
+      setSandboxError(e.message || 'Network error submitting override.');
+    } finally {
+      setSandboxSubmitting(false);
+    }
+  };
 
   // Agent Comparison State
-  
-  const mockAgentComparativeMetrics: Record<string, any> = {
-    "NewsAgent": { sharpe: 1.8, drawdown: -12.4, wins: 45 },
-    "MacroAgent": { sharpe: 1.5, drawdown: -8.2, wins: 32 },
-    "SentimentAgent": { sharpe: 2.1, drawdown: -15.1, wins: 58 },
-    "TechnicalAgent": { sharpe: 1.2, drawdown: -6.5, wins: 24 }
-  };
-  const mockAgentRoiData = [
-    { date: 'Jan', NewsAgent: 5, MacroAgent: 3, SentimentAgent: 7, TechnicalAgent: 2 },
-    { date: 'Feb', NewsAgent: 12, MacroAgent: 8, SentimentAgent: 15, TechnicalAgent: 5 },
-    { date: 'Mar', NewsAgent: 8, MacroAgent: 15, SentimentAgent: 22, TechnicalAgent: 10 },
-  ];
-
   const [isComparisonActive, setIsComparisonActive] = useState<boolean>(false);
   const [isAgentComparisonModalOpen, setIsAgentComparisonModalOpen] = useState<boolean>(false);
   const [comparisonAgent1, setComparisonAgent1] = useState<string>("NewsAgent");
@@ -2158,6 +2391,26 @@ export default function App() {
   const [agentMetrics, setAgentMetrics] = useState<Record<string, AgentMetric>>(
     {},
   );
+
+  // Real replacement for mockAgentComparativeMetrics (invented "SentimentAgent", fixed fake
+  // sharpe/drawdown/wins) and mockAgentRoiData (a fake 3-month ROI line chart with no real
+  // per-agent historical series backing it - agent_performance_stats is a current snapshot, not
+  // a time series, so there is no real monthly trend to plot). Derived directly from the
+  // already-fetched, real `agentMetrics` state (GET /api/v1/performance) - the same real source
+  // AgentComparisonModal's "Deep Comparison" view already used, just with a field-name bug fixed
+  // (see the AgentMetric interface comment above).
+  const realAgentComparativeMetrics = useMemo(() => {
+    return Object.fromEntries(Object.entries(agentMetrics).map(([agent, m]: [string, any]) => [
+      agent,
+      {
+        sharpe: typeof m.sharpeRatio === 'number' ? m.sharpeRatio : null,
+        profitFactor: typeof m.profitFactor === 'number' ? m.profitFactor : null,
+        wins: typeof m.winRate === 'number' && typeof m.totalTrades === 'number' ? Math.round(m.winRate * m.totalTrades) : null,
+        winRatePct: typeof m.winRate === 'number' ? m.winRate * 100 : null,
+        totalTrades: m.totalTrades ?? 0,
+      },
+    ]));
+  }, [agentMetrics]);
   const [systemSettings, setSystemSettings] = useState<any | null>(null);
   const [systemHealthy, setSystemHealthy] = useState(true);
   const [alpacaConfigured, setAlpacaConfigured] = useState(false);
@@ -2513,6 +2766,15 @@ export default function App() {
   };
 
   useEffect(() => {
+    // Real bug fix: this effect used to run unconditionally on mount ([] deps), regardless of
+    // `isAuthenticated` - a hook registration always executes during render no matter what JSX a
+    // later `if (!isAuthenticated) return <Login/>` in this same component conditionally returns.
+    // Every one of fetchState()'s 9 endpoints plus audit-trail/chaos-config polled every 6s meant
+    // ~11 failing 401s per cycle sitting on the login screen alone, flooding the network and
+    // starving the real login POST of connections on constrained setups. Gating on
+    // `isAuthenticated` means this effect is a no-op until verifyAuth() or a real login resolves
+    // it true, and the interval is torn down (not just left dangling) if that ever flips back.
+    if (!isAuthenticated) return;
     fetchState();
     fetchServerAuditTrail();
     fetchChaosConfig();
@@ -2522,7 +2784,7 @@ export default function App() {
       fetchChaosConfig();
     }, 6000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isAuthenticated]);
 
   const handleToggleLive = async (enabled: boolean) => {
     try {
@@ -2638,18 +2900,14 @@ export default function App() {
     const execHeadline =
       typeof autoHeadline === "string" ? autoHeadline : customHeadline;
 
-    // Simulate News Ingestion -> Market Historian Trigger
-    setIsHistorianSearching(true);
-    await new Promise(r => setTimeout(r, 1200));
-    setHistorianAnalysis({
-        pattern_match: `Scanned last 50 occurrences of similar macroeconomic events affecting ${execSymbol}.`,
-        avg_sector_impact: "+4.2%",
-        avg_asset_impact: "+5.1%",
-        historical_outcome: "Historically Positive",
-        confidence: 0.82,
-        reasoning: "In 42 similar past macroeconomic events, the Tech sector yielded +4.2% average returns over 30 days."
-    });
+    // Market Historian "Event Memory Search" used to fabricate a canned response here
+    // (fixed "+4.2%"/"+5.1%"/"42 similar past events" regardless of symbol or headline) behind a
+    // 1200ms setTimeout made to look like a real historical-precedent search. No real
+    // embedding/vector-store or historical-event-matching infrastructure exists anywhere in this
+    // codebase (same real gap as VectorClusteringMap.tsx) - honestly disclosed as not yet
+    // implemented rather than fabricated.
     setIsHistorianSearching(false);
+    setHistorianAnalysis({ notImplemented: true, reason: 'Not yet implemented - no real historical-event-matching infrastructure exists in this codebase.' });
 
     try {
       const sectorMap: Record<string, string> = {
@@ -3011,6 +3269,9 @@ export default function App() {
             </button>
             <button onClick={() => setExportModalOpen(true)} className="bg-slate-800/60 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-500 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm" title="Export Diagnostics & Memory Logs">
               <DownloadCloud size={14} className="text-emerald-400" />
+            </button>
+            <button onClick={handleLogout} className="bg-slate-800/60 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 border border-slate-700 hover:border-rose-500/40 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm" title="Log Out">
+              <LogOut size={14} />
             </button>
           </div>
         </div>
@@ -3441,7 +3702,12 @@ export default function App() {
         {activeTab === "dashboard" && (
           <AutonomousDashboard 
              autoBotConfig={autoBotConfig} 
-              
+             portfolioData={portfolioData}
+             trades={trades}
+             assetPrices={assetPrices}
+             systemState={systemState}
+             setSystemState={setSystemState}
+             setShowLaunchDialog={setShowLaunchDialog}
           />
         )}
         {/* ========================================================= */}
@@ -3501,11 +3767,9 @@ export default function App() {
               return formatMs(avgMs);
             }
 
-            const firstTrade = symTrades[0];
-            if (!firstTrade) return "—";
-            const seed = symTrades.reduce((sum, t) => sum + t.id.split('').reduce((s, c) => s + c.charCodeAt(0), 0), 0);
-            const minutes = (seed % 110) + 10;
-            return `${minutes}m`;
+            // No real closed BUY->SELL pair exists yet for this symbol - honestly report no
+            // data rather than fabricating a hold duration from a symbol/trade-id-derived seed.
+            return "—";
           };
 
           // Define symbolStats
@@ -3604,27 +3868,22 @@ export default function App() {
           };
 
           const handleExportAgentData = () => {
-            const statsList = Object.values(symbolStats) as any[];
-            const agentData = statsList.map(stat => {
-              const charCode = stat.symbol.charCodeAt(0) + stat.symbol.length;
-              const agents = [
-                { name: "Macro Agent", statWin: 72, statPnl: "+$1,240.00", sharpe: "1.8", totalTrades: 142 },
-                { name: "News Agent", statWin: 68, statPnl: "+$890.50", sharpe: "1.4", totalTrades: 89 },
-                { name: "Tech Agent", statWin: 81, statPnl: "+$3,450.20", sharpe: "2.4", totalTrades: 312 },
-                { name: "Sentiment Agent", statWin: 54, statPnl: "-$210.00", sharpe: "0.8", totalTrades: 215 }
-              ];
-              const domAgent = agents[charCode % 4];
-              
-              return {
-                assetSymbol: stat.symbol,
-                agentName: domAgent.name,
-                winRatePercent: domAgent.statWin,
-                nodePnl: domAgent.statPnl,
-                sharpeRatio: domAgent.sharpe,
-                totalTrades: domAgent.totalTrades
-              };
-            });
-            
+            // Real replacement for a fabricated per-symbol "dominant agent" mapping (4 invented
+            // agent names - "Macro Agent"/"Tech Agent"/"Sentiment Agent" don't even match this
+            // codebase's real agent names - picked deterministically from the symbol's own
+            // char code, with fixed win/pnl/sharpe numbers). There is no real per-symbol
+            // "dominant agent" attribution in this codebase; exporting real per-agent aggregate
+            // stats (the same real GET /api/v1/performance data already fetched into
+            // agentMetrics) is what real data can actually answer.
+            const agentData = Object.entries(agentMetrics).map(([agentName, m]: [string, any]) => ({
+              agentName,
+              winRatePercent: typeof m.winRate === 'number' ? Number((m.winRate * 100).toFixed(1)) : null,
+              totalTrades: m.totalTrades ?? 0,
+              averageReturn: m.averageReturn ?? null,
+              profitFactor: m.profitFactor ?? null,
+              sharpeRatio: m.sharpeRatio ?? null,
+            }));
+
             const jsonContent = JSON.stringify(agentData, null, 2);
             const blob = new Blob([jsonContent], { type: "application/json;charset=utf-8;" });
             const url = URL.createObjectURL(blob);
@@ -3738,83 +3997,29 @@ export default function App() {
                 <MarketSentimentTrend />
               </div>
 
-              {/* L2 ODER BOOK DEPTH HEATMAP */}
+              {/* L2 ORDER BOOK DEPTH HEATMAP - Phase 1B (Remediation Verification Pass): this used
+                  to render a hardcoded bid/ask price ladder unconditionally. No real Level-2
+                  depth-of-book data source exists anywhere in this codebase - confirmed by a
+                  direct search across every broker adapter and market-data service - and Alpaca's
+                  IEX feed (the only live feed this app has) provides top-of-book quotes/trades,
+                  not full L2 depth. Rather than build a fetch to a data source that does not
+                  exist, this is now an honest DATA_UNAVAILABLE state, per this pass's own rule
+                  that no number on this dashboard may be synthetic. Real L2 support would require
+                  a broker/data-provider integration this app does not have today (e.g. a paid-tier
+                  market-data feed with depth), not just backend wiring. */}
               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6 mb-6">
                  <div className="flex justify-between items-center mb-4">
                    <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
                      <LayoutGrid size={16} className="text-indigo-400" />
                      Order Book (L2) Depth Heatmap
                    </h3>
-                   <div className="text-[10px] font-mono tracking-widest uppercase text-slate-500 border border-slate-700 bg-[#111822] px-2 py-1 rounded flex gap-2">
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 bg-emerald-500 rounded-sm inline-block"></span> Bids</span>
-                      <span className="flex items-center gap-1"><span className="w-2 h-2 bg-rose-500 rounded-sm inline-block"></span> Asks</span>
-                   </div>
                  </div>
-                 <p className="text-[11px] text-slate-400 mb-6 leading-relaxed max-w-4xl">
-                   Real-time visualization of market micro-structure. Dynamic depth-of-market simulating bid/ask clusters that the Order Flow Agent utilizes to pinpoint high-probability execution entries and structural supply/demand walls.
-                 </p>
-                 
-                 <div className="flex flex-col bg-[#111822] border border-slate-800 rounded overflow-hidden">
-                   <div className="grid grid-cols-2 text-[10px] uppercase font-mono tracking-widest bg-slate-900 border-b border-slate-800">
-                     <div className="p-2 border-r border-slate-800 text-center text-emerald-400 font-bold">Buy Depth (Bids)</div>
-                     <div className="p-2 text-center text-rose-400 font-bold">Sell Depth (Asks)</div>
-                   </div>
-                   
-                   <div className="flex h-48 relative">
-                     {/* Bids side */}
-                     <div className="flex-1 flex flex-col justify-between p-2 pr-4 border-r border-slate-800 relative group overflow-hidden">
-                        {[
-                          { price: '142.50', vol: 85, h: 'h-4' },
-                          { price: '142.45', vol: 120, h: 'h-6' },
-                          { price: '142.40', vol: 350, h: 'h-10' },
-                          { price: '142.35', vol: 410, h: 'h-12' },
-                          { price: '142.30', vol: 890, h: 'h-16' }, // The wall
-                        ].map((b, i) => (
-                           <div key={i} className="flex justify-between items-center text-[10px] font-mono z-10 hover:bg-slate-800/50 cursor-crosshair px-2 py-0.5 rounded">
-                             <span className="text-emerald-400 font-bold">${b.price}</span>
-                             <span className="text-slate-300">{b.vol}k</span>
-                           </div>
-                        ))}
-                        {/* Heatmap background bars */}
-                        <div className="absolute top-0 right-0 bottom-0 left-0 flex flex-col justify-between pointer-events-none opacity-20 p-2">
-                           <div className="w-[15%] h-5 bg-gradient-to-l from-emerald-500 to-transparent ml-auto rounded-l-full"></div>
-                           <div className="w-[25%] h-5 bg-gradient-to-l from-emerald-500 to-transparent ml-auto rounded-l-full"></div>
-                           <div className="w-[45%] h-5 bg-gradient-to-l from-emerald-500 to-transparent ml-auto rounded-l-full"></div>
-                           <div className="w-[60%] h-5 bg-gradient-to-l from-emerald-500 to-transparent ml-auto rounded-l-full"></div>
-                           <div className="w-[95%] h-5 bg-gradient-to-l from-emerald-500 to-transparent ml-auto rounded-l-full shadow-[0_0_15px_rgba(16,185,129,0.8)]"></div>
-                        </div>
-                     </div>
-
-                     {/* Asks side */}
-                     <div className="flex-1 flex flex-col justify-between p-2 pl-4 relative group overflow-hidden">
-                        {[
-                          { price: '142.55', vol: 65, h: 'h-4' },
-                          { price: '142.60', vol: 140, h: 'h-6' },
-                          { price: '142.65', vol: 190, h: 'h-8' },
-                          { price: '142.70', vol: 620, h: 'h-14' }, // The wall
-                          { price: '142.75', vol: 310, h: 'h-10' }, 
-                        ].map((a, i) => (
-                           <div key={i} className="flex justify-between items-center text-[10px] font-mono z-10 hover:bg-slate-800/50 cursor-crosshair px-2 py-0.5 rounded">
-                             <span className="text-slate-300">{a.vol}k</span>
-                             <span className="text-rose-400 font-bold">${a.price}</span>
-                           </div>
-                        ))}
-                        {/* Heatmap background bars */}
-                        <div className="absolute top-0 right-0 bottom-0 left-0 flex flex-col justify-between pointer-events-none opacity-20 p-2">
-                           <div className="w-[10%] h-5 bg-gradient-to-r from-rose-500 to-transparent mr-auto rounded-r-full"></div>
-                           <div className="w-[20%] h-5 bg-gradient-to-r from-rose-500 to-transparent mr-auto rounded-r-full"></div>
-                           <div className="w-[30%] h-5 bg-gradient-to-r from-rose-500 to-transparent mr-auto rounded-r-full"></div>
-                           <div className="w-[85%] h-5 bg-gradient-to-r from-rose-500 to-transparent mr-auto rounded-r-full shadow-[0_0_15px_rgba(244,63,94,0.8)]"></div>
-                           <div className="w-[40%] h-5 bg-gradient-to-r from-rose-500 to-transparent mr-auto rounded-r-full"></div>
-                        </div>
-                     </div>
-                     
-                     <div className="absolute top-0 bottom-0 left-[calc(50%-0.5px)] w-px bg-slate-700 pointer-events-none z-20 flex items-center justify-center">
-                       <span className="w-16 text-center text-[9px] font-mono font-bold bg-[#1A1F2B] text-slate-300 py-1 rounded border border-slate-700 shadow-md transform -rotate-90 md:rotate-0 md:-ml-8 z-30">
-                         SPREAD
-                       </span>
-                     </div>
-                   </div>
+                 <div className="flex flex-col items-center justify-center gap-2 py-10 text-center bg-[#111822] border border-slate-800 rounded">
+                   <AlertTriangle size={22} className="text-amber-500/70" />
+                   <p className="text-xs font-mono uppercase tracking-widest text-amber-400/90">L2 Depth Data Unavailable</p>
+                   <p className="text-[10px] text-slate-500 max-w-md px-4">
+                     No Level-2 order-book feed is integrated in this deployment - Alpaca's IEX feed provides top-of-book only. This panel intentionally shows no data rather than a fabricated depth ladder.
+                   </p>
                  </div>
               </div>
 
@@ -3908,41 +4113,19 @@ export default function App() {
                           // Custom holding duration calculator helper
                           const avgHoldTime = getAvgHoldDuration(stat.trades);
                           
-                          // Generate simulated dominant agent for the trade cluster
-                          const charCode = stat.symbol.charCodeAt(0) + stat.symbol.length;
-                          const agents = [
-                            { name: "Macro Agent", color: "text-indigo-400 bg-indigo-500/10 border-indigo-500/20", statWin: 72, statPnl: "+$1,240.00", sharpe: "1.8", totalTrades: 142 },
-                            { name: "News Agent", color: "text-sky-400 bg-sky-500/10 border-sky-500/20", statWin: 68, statPnl: "+$890.50", sharpe: "1.4", totalTrades: 89 },
-                            { name: "Tech Agent", color: "text-emerald-400 bg-emerald-500/10 border-emerald-500/20", statWin: 81, statPnl: "+$3,450.20", sharpe: "2.4", totalTrades: 312 },
-                            { name: "Sentiment Agent", color: "text-amber-400 bg-amber-500/10 border-amber-500/20", statWin: 54, statPnl: "-$210.00", sharpe: "0.8", totalTrades: 215 }
-                          ];
-                          const domAgent = agents[charCode % 4];
-
-                          // Generate sparkline trend data
-                          const trendData = Array.from({ length: 15 }, (_, i) => 
-                            stat.totalPnl >= 0 ? 50 : 40
-                          );
-                          const maxPoint = Math.max(...trendData);
-                          const minPoint = Math.min(...trendData);
-                          const range = maxPoint - minPoint || 1;
-                          const points = trendData.map((d, i) => `${(i / 14) * 48},${16 - ((d - minPoint) / range) * 16}`).join(" ");
-                          
-                          const logicText = stat.totalPnl >= 0
-                            ? `Capitalizing on positive momentum divergence across ${stat.symbol} pairs. Confidence index exceeds 85% threshold based on sector rotation metrics.`
-                            : `Scaling back exposure after negative macro shock correlated to ${stat.symbol}. Risk management veto triggered partial liquidation.`;
-
-                          // Mock rolling 30-day average for the agent
-                          const rolling30DayAvgWinRate = domAgent.statWin + 10 + (charCode % 15);
-                          const isUnderperforming = parseFloat(winPct) < (rolling30DayAvgWinRate * 0.8);
+                          // Real replacement: there is no real per-symbol "dominant agent"
+                          // attribution anywhere in this codebase (multiple agents can
+                          // contribute to a single consensus decision) - the old fabricated
+                          // dominant-agent tooltip, sparkline trend, canned "decision logic" text,
+                          // and rolling-30-day-average "Urgent" badge (compared against a value
+                          // that was itself fabricated) are removed rather than replaced with a
+                          // shallower fabrication.
 
                           return (
-                            <tr key={stat.symbol} className={`transition-colors ${isUnderperforming ? "bg-rose-500/10 hover:bg-rose-500/20 shadow-[inset_2px_0_0_0_#e11d48]" : "hover:bg-slate-800/20"}`}>
+                            <tr key={stat.symbol} className="transition-colors hover:bg-slate-800/20">
                               <td className="px-4 py-3 font-extrabold text-white flex items-center gap-2">
                                 <span className={`h-1.5 w-1.5 rounded-full ${isProfitable ? "bg-emerald-400" : "bg-rose-400"}`}></span>
                                 {stat.symbol}
-                                {isUnderperforming && (
-                                  <span className="text-[8px] bg-rose-500/20 text-rose-400 px-1.5 py-0.5 rounded border border-rose-500/30 uppercase tracking-widest ml-1" title="Win rate >20% below 30-day rolling avg">Urgent</span>
-                                )}
                               </td>
                               <td className="px-4 py-3 text-center text-slate-200">
                                 {totalSymTrades} ({stat.wins}W / {stat.losses}L)
@@ -3965,40 +4148,10 @@ export default function App() {
                                 {avgHoldTime}
                               </td>
                               <td className="px-4 py-3 text-center">
-                                <div className="group relative inline-flex justify-center items-center cursor-help">
-                                  <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded tracking-wider border ${domAgent.color}`}>
-                                    {domAgent.name}
-                                  </span>
-                                  <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-48 opacity-0 group-hover:opacity-100 transition-opacity z-50 bg-[#0A0F16] border border-slate-700 p-3 rounded-lg shadow-xl text-left">
-                                    <p className="text-[10px] text-white font-bold border-b border-slate-800 pb-1 mb-2 uppercase tracking-widest">{domAgent.name} Stats</p>
-                                    <div className="space-y-1">
-                                      <p className="text-[10px] text-slate-400 flex justify-between"><span>Total Trades:</span> <span className="text-white font-mono">{domAgent.totalTrades}</span></p>
-                                      <p className="text-[10px] text-slate-400 flex justify-between"><span>Win Rate:</span> <span className="text-white font-mono">{domAgent.statWin}%</span></p>
-                                      <p className="text-[10px] text-slate-400 flex justify-between"><span>Sharpe Ratio:</span> <span className="text-white font-mono">{domAgent.sharpe}</span></p>
-                                      <p className="text-[10px] text-slate-400 flex justify-between"><span>Node P&L:</span> <span className={`font-mono ${domAgent.statPnl.startsWith('+') ? 'text-emerald-400' : 'text-rose-400'}`}>{domAgent.statPnl}</span></p>
-                                    </div>
-                                  </div>
-                                </div>
+                                <span className="text-[9px] font-mono text-slate-600" title="No real per-symbol dominant-agent attribution exists - multiple real agents can contribute to one consensus decision.">N/A</span>
                               </td>
                               <td className="px-4 py-3 text-center">
-                                <div className="group relative inline-flex justify-center items-center cursor-help">
-                                  <svg width="48" height="16" className="overflow-visible">
-                                    <polyline
-                                      fill="none"
-                                      stroke={isProfitable ? "#34d399" : "#fb7185"}
-                                      strokeWidth="1.5"
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      points={points}
-                                    />
-                                  </svg>
-                                  <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 opacity-0 group-hover:opacity-100 transition-opacity z-50 bg-[#0A0F16] border border-slate-700 p-3 rounded-lg shadow-xl text-left">
-                                    <p className="text-[10px] text-white font-bold border-b border-slate-800 pb-1 mb-2 uppercase tracking-widest">{domAgent.name} Decision Logic</p>
-                                    <p className="text-[10px] text-slate-400 leading-relaxed whitespace-normal">
-                                      {logicText}
-                                    </p>
-                                  </div>
-                                </div>
+                                <span className="text-[9px] font-mono text-slate-600" title="No real per-symbol trend history is tracked yet.">—</span>
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded tracking-wider ${
@@ -4311,14 +4464,14 @@ export default function App() {
                   Advanced Trade Sandbox (Consensus Override)
                 </h3>
                 <p className="text-xs text-slate-400 mb-5">
-                  Manually draft execution parameters to bypass swarm consensus. Simulates post-trade portfolio margin and risk exposure.
+                  Manually submit a trade that skips ChiefTraderAgent's AI consensus step - it still passes through every real RiskEngine gate (circuit breakers, ATR sizing, concentration caps) and the real broker. RiskEngine, not this form, determines the actual approved quantity.
                 </p>
-                
+
                 <div className="bg-[#111822] border border-slate-800 rounded-lg p-4">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
                     <div>
                       <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5">Action</label>
-                      <select 
+                      <select
                         value={sandboxAction}
                         onChange={(e) => setSandboxAction(e.target.value as "BUY" | "SELL")}
                         className="w-full bg-[#1A1F2B] border border-slate-700 text-xs text-white rounded p-2 focus:outline-none focus:border-rose-500"
@@ -4328,9 +4481,9 @@ export default function App() {
                       </select>
                     </div>
                     <div>
-                      <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5">Quantity</label>
-                      <input 
-                        type="number" 
+                      <label className="block text-[10px] font-mono text-slate-400 uppercase tracking-wider mb-1.5">Target Quantity (est.)</label>
+                      <input
+                        type="number"
                         value={sandboxQuantity}
                         onChange={(e) => setSandboxQuantity(parseInt(e.target.value) || 0)}
                         className="w-full bg-[#1A1F2B] border border-slate-700 text-xs text-white rounded p-2 focus:outline-none focus:border-rose-500"
@@ -4339,8 +4492,8 @@ export default function App() {
                     </div>
                     <div className="md:col-span-2 flex items-end">
                       <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer p-2 hover:bg-slate-800/50 rounded w-full border border-transparent hover:border-slate-700 transition">
-                        <input 
-                          type="checkbox" 
+                        <input
+                          type="checkbox"
                           checked={sandboxOverride}
                           onChange={(e) => setSandboxOverride(e.target.checked)}
                           className="w-4 h-4 rounded text-rose-500 bg-slate-900 border-slate-700 focus:ring-rose-500 cursor-pointer"
@@ -4349,51 +4502,55 @@ export default function App() {
                       </label>
                     </div>
                   </div>
-                  
+
                   {/* Projected Impact Preview */}
                   <div className="border-t border-slate-800 pt-4 mt-2">
-                     <div className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-3">Simulated Portfolio Impact Preview (Market Data)</div>
+                     <div className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-3">Estimated Impact (target qty x last real tick - not what RiskEngine will actually approve)</div>
                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:h-16 h-auto">
                        <div className="bg-[#0B0F15] p-3 rounded border border-slate-800/80 flex flex-col justify-center">
-                         <div className="text-[9px] text-slate-500 mb-1 font-mono tracking-widest">NOTIONAL VALUE</div>
-                         <div className="text-white font-mono text-sm">${(sandboxQuantity * (targetSymbol === "AAPL" ? 170 : targetSymbol === "NVDA" ? 850 : 250)).toLocaleString()}</div>
+                         <div className="text-[9px] text-slate-500 mb-1 font-mono tracking-widest">EST. NOTIONAL VALUE</div>
+                         <div className="text-white font-mono text-sm">${(sandboxQuantity * (assetPrices[targetSymbol] || 0)).toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
                        </div>
                        <div className="bg-[#0B0F15] p-3 rounded border border-slate-800/80 flex flex-col justify-center">
                          <div className="text-[9px] text-slate-500 mb-1 font-mono tracking-widest">EST. MARGIN IMPACT</div>
-                         <div className="text-amber-400 font-mono text-sm">${(sandboxQuantity * (targetSymbol === "AAPL" ? 170 : targetSymbol === "NVDA" ? 850 : 250) * 0.15).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
+                         <div className="text-amber-400 font-mono text-sm">${(sandboxQuantity * (assetPrices[targetSymbol] || 0) * 0.15).toLocaleString(undefined, {minimumFractionDigits: 2})}</div>
                        </div>
                        <div className="h-full min-h-[40px]">
                           <button
-                            disabled={!sandboxOverride}
-                            onClick={() => {
-                              const trade = {
-                                id: `OVR-${Date.now().toString().slice(-4)}`,
-                                symbol: targetSymbol,
-                                side: sandboxAction,
-                                quantity: sandboxQuantity,
-                                price: (targetSymbol === "AAPL" ? 170.5 : targetSymbol === "NVDA" ? 850.2 : 250),
-                                status: "filled" as const,
-                                timestamp: new Date().toISOString(),
-                                executedBy: "sandbox_override",
-                                pnl: 0,
-                                flags: ["OVERRIDE"]
-                              };
-                              setTrades(prev => [trade, ...prev]);
-                              setAuditLogs(prev => [{
-                                id: `AL-${Date.now()}`,
-                                timestamp: trade.timestamp,
-                                action: "WARN",
-                                symbol: "SandboxOverride",
-                                headline: `USER OVERRIDE EXECUTED: ${trade.side} ${trade.quantity} ${trade.symbol}`
-                              }, ...prev]);
-                            }}
+                            disabled={!sandboxOverride || sandboxSubmitting || !!sandboxPending}
+                            onClick={handleExecuteOverride}
                             className="bg-rose-600 hover:bg-rose-500 disabled:opacity-20 disabled:bg-slate-800 disabled:text-slate-500 text-white font-bold w-full h-full rounded text-[11px] uppercase tracking-wider transition-colors shadow-[0_0_15px_rgba(225,29,72,0.3)] disabled:shadow-none"
                           >
-                            Execute Override
+                            {sandboxSubmitting ? "Submitting..." : sandboxPending ? "Awaiting RiskEngine..." : "Execute Override"}
                           </button>
                        </div>
                      </div>
                   </div>
+
+                  {(sandboxError || sandboxOutcome) && (
+                    <div className="border-t border-slate-800 pt-4 mt-4">
+                      {sandboxError && (
+                        <div className="text-[11px] font-mono text-rose-400 bg-rose-500/10 border border-rose-500/20 rounded p-3">
+                          SUBMISSION FAILED: {sandboxError}
+                        </div>
+                      )}
+                      {sandboxOutcome && (
+                        <div className={`text-[11px] font-mono rounded p-3 border ${
+                          sandboxOutcome.stage === 'RISK_REJECTED' || sandboxOutcome.stage === 'ORDER_REJECTED' || sandboxOutcome.stage === 'ORDER_CANCELED'
+                            ? 'text-rose-400 bg-rose-500/10 border-rose-500/20'
+                            : sandboxOutcome.stage === 'ORDER_FILLED'
+                            ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+                            : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                        }`}>
+                          {sandboxOutcome.stage === 'SUBMITTED' && `Submitted to RiskEngine at real price $${sandboxOutcome.currentPrice}. Waiting for gate evaluation...`}
+                          {sandboxOutcome.stage === 'RISK_APPROVED' && `RiskEngine APPROVED ${sandboxOutcome.maxQuantity} shares of ${sandboxOutcome.symbol}. ${sandboxOutcome.reasoning} Awaiting broker fill...`}
+                          {sandboxOutcome.stage === 'RISK_REJECTED' && `RiskEngine REJECTED this override: ${sandboxOutcome.reasoning}`}
+                          {sandboxOutcome.stage === 'ORDER_FILLED' && `FILLED: ${sandboxOutcome.order.side} ${sandboxOutcome.order.quantity} ${sandboxOutcome.order.symbol} @ $${sandboxOutcome.order.price?.toFixed?.(2) ?? sandboxOutcome.order.price} (real broker order ${sandboxOutcome.order.id}).`}
+                          {(sandboxOutcome.stage === 'ORDER_REJECTED' || sandboxOutcome.stage === 'ORDER_CANCELED') && `Broker ${sandboxOutcome.stage.replace('ORDER_', '')} this order after RiskEngine approval.`}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -4419,36 +4576,7 @@ export default function App() {
                   </div>
                   
                   {historianAnalysis && !isHistorianSearching && (
-                    <>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                         <div className="bg-[#111822] p-3 rounded-lg border border-slate-800">
-                           <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Pattern Matching Query</span>
-                           <div className="text-xs text-slate-300">
-                             {historianAnalysis.pattern_match}
-                           </div>
-                         </div>
-                         <div className="bg-[#111822] p-3 rounded-lg border border-slate-800">
-                           <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Historical Impact (30 Day)</span>
-                           <div className="flex gap-6 text-xs font-mono">
-                              <div>
-                                <span className="block text-slate-400 text-[9px] mb-0.5">AVG SECTOR</span>
-                                <span className={historianAnalysis.avg_sector_impact.startsWith('-') ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>{historianAnalysis.avg_sector_impact}</span>
-                              </div>
-                              <div>
-                                <span className="block text-slate-400 text-[9px] mb-0.5">AVG ASSET</span>
-                                <span className={historianAnalysis.avg_asset_impact.startsWith('-') ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>{historianAnalysis.avg_asset_impact}</span>
-                              </div>
-                              <div>
-                                <span className="block text-slate-400 text-[9px] mb-0.5">OUTCOME CONFIDENCE</span>
-                                <span className="text-slate-300">{(historianAnalysis.confidence * 100).toFixed(0)}%</span>
-                              </div>
-                           </div>
-                         </div>
-                      </div>
-                      <div className="text-xs text-slate-300 italic border-l-2 border-cyan-500/50 pl-3 py-1 bg-cyan-950/20 rounded-r">
-                         "{historianAnalysis.reasoning}"
-                      </div>
-                    </>
+                    <AwaitingSignal label="Market Historian" reason={historianAnalysis.reason || 'Not yet implemented - no real historical-event-matching infrastructure exists in this codebase.'} />
                   )}
                 </div>
               )}
@@ -5761,94 +5889,15 @@ export default function App() {
                   <h4 className="text-[10px] font-mono text-slate-400 uppercase mb-3 flex justify-between items-center">
                     <span>Mitigation vs Drawdown Trend</span>
                   </h4>
-                  <div className="h-[140px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart
-                        data={mockDrawdownData}
-                        margin={{ top: 5, right: 0, left: -25, bottom: 0 }}
-                      >
-                        <defs>
-                          <linearGradient
-                            id="colorUnprotected"
-                            x1="0"
-                            y1="0"
-                            x2="0"
-                            y2="1"
-                          >
-                            <stop
-                              offset="5%"
-                              stopColor="#ef4444"
-                              stopOpacity={0.3}
-                            />
-                            <stop
-                              offset="95%"
-                              stopColor="#ef4444"
-                              stopOpacity={0}
-                            />
-                          </linearGradient>
-                          <linearGradient
-                            id="colorMitigated"
-                            x1="0"
-                            y1="0"
-                            x2="0"
-                            y2="1"
-                          >
-                            <stop
-                              offset="5%"
-                              stopColor="#10b981"
-                              stopOpacity={0.3}
-                            />
-                            <stop
-                              offset="95%"
-                              stopColor="#10b981"
-                              stopOpacity={0}
-                            />
-                          </linearGradient>
-                        </defs>
-                        <XAxis
-                          dataKey="time"
-                          stroke="#475569"
-                          fontSize={9}
-                          tickLine={false}
-                          axisLine={false}
-                          minTickGap={20}
-                        />
-                        <YAxis
-                          stroke="#475569"
-                          fontSize={9}
-                          tickLine={false}
-                          axisLine={false}
-                          tickFormatter={(val) => `${val}%`}
-                        />
-                        <Tooltip
-                          contentStyle={{
-                            backgroundColor: "#0f172a",
-                            borderColor: "#1e293b",
-                            fontSize: "10px",
-                          }}
-                          itemStyle={{ color: "#cbd5e1" }}
-                          labelStyle={{ color: "#94a3b8" }}
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="unprotected"
-                          name="Unprotected Drawdown"
-                          stroke="#ef4444"
-                          strokeWidth={2}
-                          fillOpacity={1}
-                          fill="url(#colorUnprotected)"
-                        />
-                        <Area
-                          type="monotone"
-                          dataKey="mitigated"
-                          name="Agent Mitigated"
-                          stroke="#10b981"
-                          strokeWidth={2}
-                          fillOpacity={1}
-                          fill="url(#colorMitigated)"
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
+                  {/* This used to plot a fixed, hardcoded 14-point intraday series comparing a
+                      fictional "unprotected" portfolio against RiskEngine's real mitigation - no
+                      real counterfactual ("what would have happened without RiskEngine") exists
+                      anywhere in this codebase; Argus does not run a parallel unprotected
+                      simulation. Building one for real is a genuine future feature (a real
+                      shadow-portfolio run), not a small incremental fix - honestly disclosed as
+                      not yet implemented rather than fabricated. */}
+                  <div className="h-[140px] w-full flex items-center justify-center">
+                    <AwaitingSignal reason="No real counterfactual exists - Argus does not run a parallel unprotected simulation to compare against." label="Mitigation vs Drawdown" />
                   </div>
                 </div>
               </div>
@@ -6002,19 +6051,19 @@ export default function App() {
                 </span>
               </div>
               <p className="text-[11px] text-slate-400 mb-6 leading-relaxed max-w-4xl">
-                Predictive modeling tool measuring the resilience of current open positions under simulated macroeconomic shocks and black swan events. Determines implied drawdown and automated guardrail trigger velocities.
+                Real what-if calculator against your current real open positions. The shock percentage is an assumption YOU supply (only "Flash Crash" pre-fills a number, since that scenario's own description already states "-10% overall market cap" - the other three have no stated equity-impact figure, so nothing is invented here). Everything else - dollar impact, affected sectors, and whether RiskEngine's real portfolio_drawdown gate would actually trip - is computed from real current data.
               </p>
 
               <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
                 {[
-                  { name: "Flash Crash", desc: "-10% overall market cap within 30 mins", color: "rose" },
-                  { name: "CPI Spike", desc: "Inflation print >0.5% over expectations", color: "amber" },
-                  { name: "Interest Rate Hike", desc: "+50bps unexpected FED hike", color: "purple" },
-                  { name: "Geopolitical Shock", desc: "Major supply chain disruption", color: "blue" },
+                  { name: "Flash Crash", desc: "-10% overall market cap within 30 mins", shockPct: -10 },
+                  { name: "CPI Spike", desc: "Inflation print >0.5% over expectations - no stated equity-impact figure; set your own assumption below", shockPct: null },
+                  { name: "Interest Rate Hike", desc: "+50bps unexpected FED hike - no stated equity-impact figure; set your own assumption below", shockPct: null },
+                  { name: "Geopolitical Shock", desc: "Major supply chain disruption - no stated equity-impact figure; set your own assumption below", shockPct: null },
                 ].map(sc => (
-                  <button 
+                  <button
                     key={sc.name}
-                    onClick={() => { setStressScenario(sc.name); setShowStressTest(true); }}
+                    onClick={() => { setStressScenario(sc.name); setShowStressTest(true); if (sc.shockPct !== null) setStressShockPct(sc.shockPct); setStressResult(null); }}
                     className={`text-left p-4 rounded-lg border transition-all ${
                       stressScenario === sc.name && showStressTest ? `bg-slate-800 border-slate-500 shadow-[0_0_15px_rgba(0,0,0,0.5)]` : "bg-[#111822] border-slate-800 hover:border-slate-600"
                     }`}
@@ -6026,41 +6075,67 @@ export default function App() {
               </div>
 
               {showStressTest && (
-                <div className="bg-[#111822] border border-slate-800 rounded-lg p-5 animate-fade-in flex flex-col md:flex-row gap-6 mt-4">
-                  <div className="flex-1 space-y-4">
+                <div className="bg-[#111822] border border-slate-800 rounded-lg p-5 animate-fade-in flex flex-col gap-4 mt-4">
+                  <div className="flex items-end gap-3">
                     <div>
-                      <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Projected Drawdown</span>
-                      <span className="text-2xl font-bold text-slate-500">No Data</span>
+                      <label className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Assumed Shock %</label>
+                      <input
+                        type="number"
+                        step="1"
+                        min="-100"
+                        max="0"
+                        value={stressShockPct}
+                        onChange={(e) => setStressShockPct(Number(e.target.value))}
+                        className="w-28 bg-[#1A1F2B] border border-slate-700 text-white text-sm font-mono rounded p-2 focus:outline-none focus:border-rose-500"
+                      />
                     </div>
-                    <div>
-                       <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Affected Sectors</span>
-                       <div className="flex gap-2 text-[10px] font-mono mt-1">
-                         <span className="bg-slate-800 text-slate-300 px-2 py-1 rounded">Technology</span>
-                         <span className="bg-slate-800 text-slate-300 px-2 py-1 rounded">Consumer Cyclical</span>
-                       </div>
-                    </div>
-                    <div>
-                       <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Circuit Breaker Status</span>
-                       <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5"><ShieldAlert size={14}/> ARMED & RESPONSIVE</span>
-                    </div>
+                    <button
+                      onClick={() => runStressTest(stressShockPct)}
+                      disabled={stressLoading || stressShockPct >= 0}
+                      className="px-4 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-40 text-white text-xs font-bold uppercase tracking-widest rounded transition-colors"
+                    >
+                      {stressLoading ? 'Calculating...' : 'Run Real Calculation'}
+                    </button>
                   </div>
-                  <div className="flex-1 border-l border-slate-800 pl-6">
-                    <span className="text-[10px] uppercase font-mono text-slate-500 block mb-3">Guardrail Action Plan</span>
-                    <ul className="space-y-3 text-[11px] font-mono text-slate-300">
-                      <li className="flex items-start gap-2">
-                        <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0"></span>
-                        Liquidate high-beta allocations exceeding 1.5 correlation.
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
-                        Expand volatility bands on Limit Orders by +40%.
-                      </li>
-                      <li className="flex items-start gap-2">
-                        <span className="mt-0.5 w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0"></span>
-                        Halt News Agent execution privileges; transition to technical execution.
-                      </li>
-                    </ul>
-                  </div>
+
+                  {stressError && (
+                    <div className="text-xs text-rose-400 font-mono">{stressError}</div>
+                  )}
+
+                  {stressResult && stressResult.available === false && (
+                    <AwaitingSignal reason={stressResult.reason} label="Stress Test" />
+                  )}
+
+                  {stressResult && stressResult.available === true && (
+                    <div className="flex flex-col md:flex-row gap-6">
+                      <div className="flex-1 space-y-4">
+                        <div>
+                          <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Projected Impact (real positions, assumed {stressResult.data.shockPct}% shock)</span>
+                          <span className="text-2xl font-bold text-rose-400">${stressResult.data.projectedLoss.toLocaleString()}</span>
+                          <span className="text-xs text-slate-500 ml-2">${stressResult.data.totalValue.toLocaleString()} → ${stressResult.data.projectedValue.toLocaleString()}</span>
+                        </div>
+                        <div>
+                           <span className="text-[10px] uppercase font-mono text-slate-500 block mb-1">Real Affected Sectors (current holdings)</span>
+                           <div className="flex gap-2 text-[10px] font-mono mt-1 flex-wrap">
+                             {stressResult.data.affectedSectors.map((s: string) => (
+                               <span key={s} className="bg-slate-800 text-slate-300 px-2 py-1 rounded">{s}</span>
+                             ))}
+                           </div>
+                        </div>
+                      </div>
+                      <div className="flex-1 border-l border-slate-800 pl-6">
+                         <span className="text-[10px] uppercase font-mono text-slate-500 block mb-3">Real RiskEngine Portfolio-Drawdown Gate</span>
+                         {stressResult.data.wouldTripDrawdownGate === null ? (
+                           <span className="text-xs font-bold text-slate-400 flex items-center gap-1.5"><ShieldAlert size={14}/> No real peak-equity baseline yet</span>
+                         ) : stressResult.data.wouldTripDrawdownGate ? (
+                           <span className="text-xs font-bold text-rose-400 flex items-center gap-1.5"><ShieldAlert size={14}/> Would trip - trading would halt</span>
+                         ) : (
+                           <span className="text-xs font-bold text-emerald-400 flex items-center gap-1.5"><ShieldAlert size={14}/> Would NOT trip</span>
+                         )}
+                         <p className="text-[10px] text-slate-500 font-mono mt-2">{stressResult.data.drawdownGateDetail}</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -6909,7 +6984,7 @@ export default function App() {
                           value={comparisonAgent1}
                           onChange={(e) => setComparisonAgent1(e.target.value)}
                         >
-                          {Object.keys(mockAgentComparativeMetrics).map(agent => (
+                          {Object.keys(realAgentComparativeMetrics).map(agent => (
                             <option key={`c1-${agent}`} value={agent}>{agent}</option>
                           ))}
                         </select>
@@ -6921,7 +6996,7 @@ export default function App() {
                           value={comparisonAgent2}
                           onChange={(e) => setComparisonAgent2(e.target.value)}
                         >
-                          {Object.keys(mockAgentComparativeMetrics).map(agent => (
+                          {Object.keys(realAgentComparativeMetrics).map(agent => (
                             <option key={`c2-${agent}`} value={agent}>{agent}</option>
                           ))}
                         </select>
@@ -6932,7 +7007,7 @@ export default function App() {
                       <table className="w-full text-xs text-left">
                         <thead className="bg-slate-800/50 text-[10px] font-mono text-slate-400 uppercase tracking-widest">
                           <tr>
-                            <th className="px-3 py-2">Metric (90D)</th>
+                            <th className="px-3 py-2">Metric</th>
                             <th className="px-3 py-2 text-[#3b82f6]">Alpha</th>
                             <th className="px-3 py-2 text-[#10b981]">Beta</th>
                           </tr>
@@ -6940,39 +7015,29 @@ export default function App() {
                         <tbody className="divide-y divide-slate-800">
                           <tr>
                             <td className="px-3 py-2 text-slate-300">Sharpe Ratio</td>
-                            <td className="px-3 py-2 text-white font-mono">{mockAgentComparativeMetrics[comparisonAgent1]?.sharpe}</td>
-                            <td className="px-3 py-2 text-white font-mono">{mockAgentComparativeMetrics[comparisonAgent2]?.sharpe}</td>
+                            <td className="px-3 py-2 text-white font-mono">{realAgentComparativeMetrics[comparisonAgent1]?.sharpe ?? 'N/A'}</td>
+                            <td className="px-3 py-2 text-white font-mono">{realAgentComparativeMetrics[comparisonAgent2]?.sharpe ?? 'N/A'}</td>
                           </tr>
                           <tr>
-                            <td className="px-3 py-2 text-slate-300">Max Drawdown</td>
-                            <td className="px-3 py-2 text-rose-400 font-mono">{mockAgentComparativeMetrics[comparisonAgent1]?.drawdown}%</td>
-                            <td className="px-3 py-2 text-rose-400 font-mono">{mockAgentComparativeMetrics[comparisonAgent2]?.drawdown}%</td>
+                            <td className="px-3 py-2 text-slate-300">Profit Factor</td>
+                            <td className="px-3 py-2 text-indigo-400 font-mono">{realAgentComparativeMetrics[comparisonAgent1]?.profitFactor ?? 'N/A'}</td>
+                            <td className="px-3 py-2 text-indigo-400 font-mono">{realAgentComparativeMetrics[comparisonAgent2]?.profitFactor ?? 'N/A'}</td>
                           </tr>
                           <tr>
-                            <td className="px-3 py-2 text-slate-300">Wins</td>
-                            <td className="px-3 py-2 text-emerald-400 font-mono">{mockAgentComparativeMetrics[comparisonAgent1]?.wins}</td>
-                            <td className="px-3 py-2 text-emerald-400 font-mono">{mockAgentComparativeMetrics[comparisonAgent2]?.wins}</td>
+                            <td className="px-3 py-2 text-slate-300">Wins / Total</td>
+                            <td className="px-3 py-2 text-emerald-400 font-mono">{realAgentComparativeMetrics[comparisonAgent1]?.wins ?? 'N/A'} / {realAgentComparativeMetrics[comparisonAgent1]?.totalTrades ?? 0}</td>
+                            <td className="px-3 py-2 text-emerald-400 font-mono">{realAgentComparativeMetrics[comparisonAgent2]?.wins ?? 'N/A'} / {realAgentComparativeMetrics[comparisonAgent2]?.totalTrades ?? 0}</td>
                           </tr>
                         </tbody>
                       </table>
                     </div>
                   </div>
 
-                  {/* Chart Overlay */}
-                  <div className="lg:col-span-3 bg-[#111822] rounded-lg border border-slate-800 p-4 h-[250px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={mockAgentRoiData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                        <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-                        <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}%`} />
-                        <Tooltip
-                          contentStyle={{ backgroundColor: '#1A1F2B', borderColor: '#1e293b', fontSize: '10px', color: '#f8fafc' }}
-                          itemStyle={{ fontSize: '10px' }}
-                          labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
-                        />
-                        <Line type="monotone" dataKey={comparisonAgent1} stroke="#3b82f6" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name={`${comparisonAgent1} (Alpha)`} />
-                        <Line type="monotone" dataKey={comparisonAgent2} stroke="#10b981" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name={`${comparisonAgent2} (Beta)`} />
-                      </LineChart>
-                    </ResponsiveContainer>
+                  {/* Real per-agent time-series ROI does not exist yet - agent_performance_stats
+                      is a current snapshot, not a persisted history, so there is nothing real to
+                      chart here. An honest note replaces the old fabricated 3-month line chart. */}
+                  <div className="lg:col-span-3 bg-[#111822] rounded-lg border border-slate-800 p-4 h-[250px] flex items-center justify-center">
+                    <AwaitingSignal reason="Per-agent ROI is not yet tracked as a time series - agent_performance_stats only stores the current snapshot, not history." label="ROI Trend" />
                   </div>
                 </div>
               ) : (
@@ -7044,7 +7109,7 @@ export default function App() {
             <AgentComparisonModal 
               isOpen={isAgentComparisonModalOpen} 
               onClose={() => setIsAgentComparisonModalOpen(false)}
-              agentMetrics={Object.keys(agentMetrics).length > 0 ? Object.fromEntries(Object.entries(agentMetrics).map(([k, v]: [string, any]) => [k, { sharpe: v.sharpe_ratio || 0, drawdown: v.max_drawdown || 0, wins: Math.floor((v.win_rate || 0) * (v.total_trades || 0) / 100) }])) : {}}
+              agentMetrics={realAgentComparativeMetrics}
               agentRoiData={[]}
             />
 
@@ -7177,54 +7242,47 @@ export default function App() {
                     Closest Matching Vector precedents database list:
                   </h5>
                   <div className="space-y-4" id="matched-precedents-list">
-                    {memoryResult.matches.map((item: any, i: number) => (
-                      <div
-                        key={i}
-                        className="bg-[#111822] p-4 rounded-lg border border-slate-850"
-                      >
-                        <div className="flex justify-between items-start gap-2 mb-2">
-                          <div>
-                            <span className="text-xs font-extrabold text-white">
-                              {item.title}
-                            </span>
-                            <span className="text-[9px] uppercase font-mono text-slate-500 rounded bg-[#1A1F2B] border border-slate-850 px-2 py-0.5 ml-2">
-                              {item.category}
-                            </span>
+                    {memoryResult.matches && memoryResult.matches.length > 0 ? (
+                      memoryResult.matches.map((item: any, i: number) => (
+                        <div key={i} className="bg-[#111822] p-4 rounded-lg border border-slate-850">
+                          <div className="flex justify-between items-start gap-2 mb-2">
+                            <div>
+                              <span className="text-xs font-extrabold text-white">{item.title}</span>
+                              <span className="text-[9px] uppercase font-mono text-slate-500 rounded bg-[#1A1F2B] border border-slate-850 px-2 py-0.5 ml-2">{item.category}</span>
+                            </div>
+                            <span className="text-xs font-mono font-bold text-indigo-400">Index score: {(item.score * 100).toFixed(0)}%</span>
                           </div>
-                          <span className="text-xs font-mono font-bold text-indigo-400">
-                            Index score: {(item.score * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-400 leading-relaxed mb-3">
-                          {item.description}
-                        </p>
-                        <div className="p-3 bg-[#1A1F2B]/40 rounded border border-slate-850/65 text-xs text-slate-300">
-                          <b className="text-[10px] uppercase font-mono tracking-wider text-emerald-400 block mb-1">
-                            Asset Reaction Record:
-                          </b>
-                          {item.impact}
-                        </div>
-                        <div className="mt-3 flex items-center justify-between border-t border-slate-800/80 pt-3">
-                          <span className="text-[10px] font-mono text-slate-500 uppercase flex items-center gap-1.5"><ThumbsUp size={10} className="text-slate-600"/> Quality Feedback Loop:</span>
-                          <div className="flex gap-2">
-                            <button
-                              onClick={() => handleMemoryFeedback(item.title, 'up')}
-                              className={`p-1.5 rounded transition-colors border ${memoryFeedback[item.title] === 'up' ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" : "bg-[#1A1F2B] text-slate-400 border-slate-800 hover:text-emerald-400 hover:border-emerald-500/50"}`}
-                              title="Accurate Match"
-                            >
-                              <ThumbsUp size={12} />
-                            </button>
-                            <button
-                              onClick={() => handleMemoryFeedback(item.title, 'down')}
-                               className={`p-1.5 rounded transition-colors border ${memoryFeedback[item.title] === 'down' ? "bg-rose-500/20 text-rose-400 border-rose-500/50" : "bg-[#1A1F2B] text-slate-400 border-slate-800 hover:text-rose-400 hover:border-rose-500/50"}`}
-                              title="Poor Match"
-                            >
-                              <ThumbsDown size={12} />
-                            </button>
+                          <p className="text-xs text-slate-400 leading-relaxed mb-3">{item.description}</p>
+                          <div className="p-3 bg-[#1A1F2B]/40 rounded border border-slate-850/65 text-xs text-slate-300">
+                            <b className="text-[10px] uppercase font-mono tracking-wider text-emerald-400 block mb-1">Asset Reaction Record:</b>
+                            {item.impact}
+                          </div>
+                          <div className="mt-3 flex items-center justify-between border-t border-slate-800/80 pt-3">
+                            <span className="text-[10px] font-mono text-slate-500 uppercase flex items-center gap-1.5"><ThumbsUp size={10} className="text-slate-600"/> Quality Feedback Loop:</span>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleMemoryFeedback(item.title, 'up')}
+                                className={`p-1.5 rounded transition-colors border ${memoryFeedback[item.title] === 'up' ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" : "bg-[#1A1F2B] text-slate-400 border-slate-800 hover:text-emerald-400 hover:border-emerald-500/50"}`}
+                                title="Accurate Match"
+                              >
+                                <ThumbsUp size={12} />
+                              </button>
+                              <button
+                                onClick={() => handleMemoryFeedback(item.title, 'down')}
+                                className={`p-1.5 rounded transition-colors border ${memoryFeedback[item.title] === 'down' ? "bg-rose-500/20 text-rose-400 border-rose-500/50" : "bg-[#1A1F2B] text-slate-400 border-slate-800 hover:text-rose-400 hover:border-rose-500/50"}`}
+                                title="Poor Match"
+                              >
+                                <ThumbsDown size={12} />
+                              </button>
+                            </div>
                           </div>
                         </div>
+                      ))
+                    ) : (
+                      <div className="bg-[#111822] p-4 rounded-lg border border-slate-850 text-xs text-slate-500 font-mono italic text-center">
+                        DATA_UNAVAILABLE: No historical precedents found in the vector database.
                       </div>
-                    ))}
+                    )}
                   </div>
                 </div>
               )}
@@ -7303,8 +7361,8 @@ export default function App() {
 
         {activeTab === "audit" && (
           <div className="animate-fade-in flex flex-col gap-6" id="observability-view">
-            
-            {/* Header / Replay Controls */}
+
+            {/* Header */}
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
               <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
                  <div>
@@ -7313,257 +7371,70 @@ export default function App() {
                       Observability & Trade Tracing
                     </h3>
                     <p className="text-[11px] text-slate-400 max-w-3xl leading-relaxed font-mono">
-                      End-to-end distributed tracing for AI execution. Inspect individual agent payloads, engine latency, and consensus networks.
+                      Real recent transactions (GET /api/v2/transactions). Click any row to open the full Transaction Observatory - real consensus evidence, real risk-gate results, and real broker fills for that transaction, assembled from the trades/consensus_decisions/risk_assessments/fills tables - no fabricated trace or debate transcript.
                     </p>
-                 </div>
-                 <div className="flex items-center gap-3 bg-[#111822] border border-slate-700 p-2 rounded-lg">
-                    <div className="px-3 border-r border-slate-700">
-                      <div className="text-[9px] uppercase text-slate-500 font-bold tracking-widest mb-0.5">Active Trace ID</div>
-                      <div className="text-xs font-mono text-indigo-400">TRD-20260711-000145</div>
-                    </div>
-                    <div className="flex items-center gap-1.5 px-2">
-                       <button className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition-colors" title="Rewind">
-                         <SkipBack size={14} />
-                       </button>
-                       <button className="px-3 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[10px] font-bold uppercase tracking-widest rounded hover:bg-emerald-500/20 transition-colors flex items-center gap-1.5">
-                         <Play size={12} fill="currentColor"/> Replay Trace
-                       </button>
-                       <button className="p-1.5 hover:bg-slate-800 text-slate-400 hover:text-white rounded transition-colors" title="Forward">
-                         <SkipForward size={14} />
-                       </button>
-                    </div>
                  </div>
               </div>
             </div>
 
-            {/* Horizontal Timeline */}
+            {/* Real Transaction List */}
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-               <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-6 font-mono">Execution Timeline</h4>
-               <div className="flex items-center justify-between text-[10px] font-mono w-full overflow-x-auto pb-4">
-                 <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400"><Check size={12} /></div>
-                   <span className="text-slate-300">Market Scan</span>
-                   <span className="text-slate-500">85ms</span>
+               <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-4 font-mono">Recent Transactions</h4>
+               {auditTransactionsLoading ? (
+                 <div className="py-8 text-center text-slate-500 text-xs font-mono">Loading real transactions...</div>
+               ) : auditTransactions.length === 0 ? (
+                 <AwaitingSignal reason="No transactions recorded yet - a real consensus approval or manual override will appear here." />
+               ) : (
+                 <div className="overflow-x-auto">
+                   <table className="w-full text-left border-collapse">
+                     <thead>
+                       <tr className="border-b border-slate-800 text-[10px] font-mono text-slate-500 uppercase tracking-wider">
+                         <th className="pb-3 pl-2 font-medium">Transaction</th>
+                         <th className="pb-3 font-medium">Symbol</th>
+                         <th className="pb-3 font-medium">Decision</th>
+                         <th className="pb-3 font-medium">Status</th>
+                         <th className="pb-3 font-medium">Outcome</th>
+                         <th className="pb-3 font-medium">Opened</th>
+                         <th className="pb-3 font-medium text-right pr-2">Trace</th>
+                       </tr>
+                     </thead>
+                     <tbody>
+                       {auditTransactions.map((t: any) => (
+                         <tr key={t.id} className="border-b border-slate-800/50 hover:bg-[#111822]/80 transition-colors">
+                           <td className="py-3 pl-2 font-mono text-[11px] text-indigo-400">{t.id}</td>
+                           <td className="py-3 text-xs font-bold text-white">{t.symbol}</td>
+                           <td className="py-3 text-xs">
+                             {t.finalDecision ? (
+                               <span className={t.finalDecision === 'BUY' ? 'text-emerald-400' : t.finalDecision === 'SELL' ? 'text-rose-400' : 'text-slate-400'}>{t.finalDecision}</span>
+                             ) : <span className="text-slate-600">--</span>}
+                           </td>
+                           <td className="py-3 text-[10px] font-mono text-slate-400">{t.status}</td>
+                           <td className="py-3 text-[10px] font-mono">
+                             {t.outcome === 'WIN' && <span className="text-emerald-400">WIN</span>}
+                             {t.outcome === 'LOSS' && <span className="text-rose-400">LOSS</span>}
+                             {(t.outcome === 'PENDING' || t.outcome === 'N_A') && <span className="text-slate-500">{t.outcome}</span>}
+                           </td>
+                           <td className="py-3 text-[10px] font-mono text-slate-500">{t.openedAt ? new Date(t.openedAt).toLocaleString() : '--'}</td>
+                           <td className="py-3 text-right pr-2">
+                             <button
+                               onClick={() => handleOpenReplay({ transactionId: t.id })}
+                               className="px-2.5 py-1 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 hover:bg-indigo-500/20 rounded text-[10px] font-mono font-bold uppercase tracking-wider transition-colors"
+                             >
+                               View Trace
+                             </button>
+                           </td>
+                         </tr>
+                       ))}
+                     </tbody>
+                   </table>
                  </div>
-                 <div className="h-px bg-slate-700 flex-1 min-w-[30px]"></div>
-                 
-                 <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400"><Check size={12} /></div>
-                   <span className="text-slate-300">Data Collect</span>
-                   <span className="text-slate-500">240ms</span>
-                 </div>
-                 <div className="h-px bg-slate-700 flex-1 min-w-[30px]"></div>
-
-                 <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400"><Check size={12} /></div>
-                   <span className="text-slate-300">Calc Engine</span>
-                   <span className="text-slate-500">120ms</span>
-                 </div>
-                 <div className="h-px bg-slate-700 flex-1 min-w-[30px]"></div>
-
-                 <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400"><Check size={12} /></div>
-                   <span className="text-slate-300">News Pipe</span>
-                   <span className="text-slate-500">410ms</span>
-                 </div>
-                 <div className="h-px bg-slate-700 flex-1 min-w-[30px]"></div>
-
-                 <div className="flex flex-col items-center gap-2 min-w-[80px] bg-indigo-500/10 p-2 rounded border border-indigo-500/20 shadow-[0_0_15px_rgba(99,102,241,0.1)] relative top-[-8px]">
-                   <div className="w-6 h-6 rounded-full bg-indigo-500 flex items-center justify-center text-white"><BrainCircuit size={12} /></div>
-                   <span className="text-indigo-400 font-bold">AI Debate</span>
-                   <span className="text-slate-400">3.2s</span>
-                 </div>
-                 <div className="h-px bg-slate-700 flex-1 min-w-[30px]"></div>
-
-                 <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400"><Check size={12} /></div>
-                   <span className="text-slate-300">Consensus</span>
-                   <span className="text-slate-500">45ms</span>
-                 </div>
-                 <div className="h-px bg-slate-700 flex-1 min-w-[30px]"></div>
-
-                 <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400"><Check size={12} /></div>
-                   <span className="text-slate-300">Risk Check</span>
-                   <span className="text-slate-500">20ms</span>
-                 </div>
-                 <div className="h-px bg-slate-700 flex-1 min-w-[30px]"></div>
-
-                 <div className="flex flex-col items-center gap-2 min-w-[80px]">
-                   <div className="w-6 h-6 rounded-full bg-emerald-500/20 border border-emerald-500 flex items-center justify-center text-emerald-400"><Check size={12} /></div>
-                   <span className="text-slate-300 text-center">Order Exec<br/><span className="text-[8px] text-slate-500">Alpaca</span></span>
-                 </div>
-               </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-               
-               {/* Decision Provenance Graph */}
-               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-                 <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-4 font-mono flex items-center gap-2">
-                   <Network size={14}/> Decision Provenance
-                 </h4>
-                 <div className="bg-[#111822] p-4 rounded border border-slate-800 font-mono text-[10px] text-slate-400 whitespace-pre leading-[1.6] overflow-x-auto">
-<span className="text-emerald-400 font-bold">BUY NVDA</span> (Score: 88%)
-│
-├── <span className="text-white">Calculation Engine (40%)</span>
-│   ├── Trend Score: <span className="text-emerald-400">95% (Bullish)</span>
-│   ├── Momentum Score: <span className="text-emerald-400">82% (Strong)</span>
-│   ├── Volume Score: <span className="text-emerald-400">91% (2.41x)</span>
-│   └── Market Structure: <span className="text-white">Higher Highs</span>
-│
-├── <span className="text-white">News Intelligence (15%)</span>
-│   ├── Reuters: <span className="text-emerald-400">Positive AI Demand</span>
-│   ├── Bloomberg: <span className="text-emerald-400">Analyst Upgrade</span>
-│   └── Earnings Analysis: <span className="text-white">Awaiting</span>
-│
-├── <span className="text-indigo-400 font-bold">AI Council (25%)</span>
-│   ├── ChatGPT: <span className="text-emerald-400 font-bold">BUY</span> (Conf: 89%)
-│   ├── Claude: <span className="text-emerald-400 font-bold">BUY</span> (Conf: 85%)
-│   └── Gemini: <span className="text-amber-400 font-bold">HOLD</span> (Conf: 72%)
-│
-├── <span className="text-white">Historical Similarity (10%)</span>
-│   └── Match: <span className="text-emerald-400">Pattern 84A (72% Win Rate)</span>
-│
-└── <span className="text-rose-400 font-bold">Risk Engine (10%)</span>
-    ├── ATR Volatility: <span className="text-white">3.8</span>
-    └── Position Sizing: <span className="text-emerald-400">Approved ($100)</span>
-                 </div>
-               </div>
-
-               {/* Agent Debate Logs */}
-               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-                 <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-4 font-mono flex items-center gap-2">
-                   <MessageSquare size={14}/> LLM Council Debate Logs
-                 </h4>
-                 
-                 <div className="space-y-4 font-mono">
-                    <div className="bg-[#111822] border-l-2 border-emerald-500 p-3 rounded-r">
-                      <div className="flex justify-between items-center mb-2">
-                         <span className="text-xs font-bold text-emerald-400">ChatGPT (Proposer)</span>
-                         <span className="text-[9px] text-slate-500">Latency: 3.2s | Tokens: 4,210</span>
-                      </div>
-                      <p className="text-[10px] text-slate-300">
-                        <span className="text-slate-500 uppercase">Recommendation:</span> <span className="text-emerald-400 font-bold">BUY</span> (89%)<br/>
-                        <span className="text-slate-500 uppercase">Reasoning:</span> Strong momentum confirmed by Volume Engine. Positive AI demand news outweighs minor overbought conditions. Above 200 EMA.
-                      </p>
-                    </div>
-
-                    <div className="bg-[#111822] border-l-2 border-emerald-500 p-3 rounded-r">
-                      <div className="flex justify-between items-center mb-2">
-                         <span className="text-xs font-bold text-emerald-400">Claude (Verifier)</span>
-                         <span className="text-[9px] text-slate-500">Latency: 2.8s | Tokens: 3,840</span>
-                      </div>
-                      <p className="text-[10px] text-slate-300">
-                        <span className="text-slate-500 uppercase">Recommendation:</span> <span className="text-emerald-400 font-bold">BUY</span> (85%)<br/>
-                        <span className="text-slate-500 uppercase">Concern:</span> Volume slightly declining on intra-day 15m chart.<br/>
-                        <span className="text-slate-500 uppercase">Risk:</span> Medium.
-                      </p>
-                    </div>
-
-                    <div className="bg-[#111822] border-l-2 border-amber-500 p-3 rounded-r">
-                      <div className="flex justify-between items-center mb-2">
-                         <span className="text-xs font-bold text-amber-400">Gemini (Devil's Advocate)</span>
-                         <span className="text-[9px] text-slate-500">Latency: 4.1s | Tokens: 4,512</span>
-                      </div>
-                      <p className="text-[10px] text-slate-300">
-                        <span className="text-slate-500 uppercase">Recommendation:</span> <span className="text-amber-400 font-bold">HOLD</span> (72%)<br/>
-                        <span className="text-slate-500 uppercase">Disagreement:</span> Potential resistance nearby at 183.50.<br/>
-                        <span className="text-slate-500 uppercase">Evidence:</span> Past rejection 3 times at this exact Fibonacci retracement level in the last 6 months.
-                      </p>
-                    </div>
-                 </div>
-               </div>
-
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-               {/* News Pipeline */}
-               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-                 <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-4 font-mono flex items-center gap-2">
-                   <Filter size={14}/> News Intelligence Pipeline
-                 </h4>
-                 <div className="space-y-2 font-mono text-[10px]">
-                    <div className="flex justify-between items-center p-2 bg-[#111822] rounded border border-slate-800">
-                       <span className="text-slate-400">Raw Articles Received</span>
-                       <span className="text-white font-bold">132</span>
-                    </div>
-                    <div className="flex justify-center text-slate-600 py-0.5"><ArrowDown size={12}/></div>
-                    <div className="flex justify-between items-center p-2 bg-[#111822] rounded border border-slate-800">
-                       <span className="text-slate-400">Duplicate / Spam Removal</span>
-                       <span className="text-emerald-400 font-bold">30</span>
-                    </div>
-                    <div className="flex justify-center text-slate-600 py-0.5"><ArrowDown size={12}/></div>
-                    <div className="p-3 bg-[#111822] rounded border border-slate-800">
-                       <div className="flex justify-between items-center mb-2">
-                         <span className="text-slate-400">Categorization</span>
-                         <span className="text-indigo-400">AI / Tech / Hardware</span>
-                       </div>
-                       <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden flex">
-                          <div className="bg-emerald-500 h-full" style={{ width: '83%' }}></div>
-                          <div className="bg-slate-500 h-full" style={{ width: '6%' }}></div>
-                          <div className="bg-rose-500 h-full" style={{ width: '11%' }}></div>
-                       </div>
-                       <div className="flex justify-between mt-2 text-[9px]">
-                          <span className="text-emerald-400">83% Positive</span>
-                          <span className="text-slate-500">6% Neutral</span>
-                          <span className="text-rose-400">11% Negative</span>
-                       </div>
-                    </div>
-                    <div className="flex justify-center text-slate-600 py-0.5"><ArrowDown size={12}/></div>
-                    <div className="flex justify-between items-center p-2 bg-indigo-500/10 border border-indigo-500/20 rounded">
-                       <span className="text-indigo-400 font-bold uppercase">Impact Estimation</span>
-                       <span className="text-emerald-400 font-bold">HIGH (NVIDIA infra upgrades)</span>
-                    </div>
-                 </div>
-               </div>
-
-               {/* Risk & Execution Logs */}
-               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-                 <h4 className="text-[10px] uppercase tracking-widest font-bold text-slate-500 mb-4 font-mono flex items-center gap-2">
-                   <ShieldCheck size={14}/> Risk & Execution Verification
-                 </h4>
-                 
-                 <div className="grid grid-cols-2 gap-4 mb-4">
-                    <div className="bg-[#111822] p-3 rounded border border-slate-800 font-mono text-[10px]">
-                       <h5 className="text-slate-500 uppercase mb-2 border-b border-slate-800 pb-1">Risk Engine</h5>
-                       <div className="space-y-1.5">
-                         <div className="flex justify-between"><span className="text-slate-400">Risk Score</span><span className="text-white">18 / 30</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Pass</span><span className="text-emerald-400 font-bold">Yes</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Position Size</span><span className="text-white">$100 (0.42 sh)</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Stop Loss</span><span className="text-rose-400">2% (ATR-based)</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Take Profit</span><span className="text-emerald-400">5%</span></div>
-                       </div>
-                    </div>
-
-                    <div className="bg-[#111822] p-3 rounded border border-slate-800 font-mono text-[10px]">
-                       <h5 className="text-slate-500 uppercase mb-2 border-b border-slate-800 pb-1">Execution Engine</h5>
-                       <div className="space-y-1.5">
-                         <div className="flex justify-between"><span className="text-slate-400">Broker</span><span className="text-sky-400">Alpaca</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Order</span><span className="text-emerald-400 font-bold">BUY MKT</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Status</span><span className="text-emerald-400 font-bold">FILLED</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Fill Price</span><span className="text-white">182.44</span></div>
-                         <div className="flex justify-between"><span className="text-slate-400">Slippage</span><span className="text-rose-400">0.01%</span></div>
-                       </div>
-                    </div>
-                 </div>
-
-                 <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded text-[10px] font-mono flex items-center justify-between">
-                    <div>
-                      <span className="text-emerald-400 font-bold block mb-0.5">TRADE COMPLETED SUCCESSFULLY</span>
-                      <span className="text-slate-400">Total Pipeline Latency: 2.83 seconds</span>
-                    </div>
-                    <button className="px-3 py-1 bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 rounded border border-emerald-500/30 transition-colors uppercase font-bold tracking-wider">
-                      Export Trace
-                    </button>
-                 </div>
-               </div>
+               )}
             </div>
 
           </div>
         )}
 
-        
+
         {activeTab === "opportunities" && (
           <div className="animate-fade-in flex flex-col gap-6" id="opportunities-view">
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg overflow-hidden">
@@ -7573,114 +7444,50 @@ export default function App() {
                    Autonomous Opportunity Feed
                  </h3>
                  <span className="text-[10px] font-mono bg-cyan-900/50 text-cyan-400 px-2 py-1 rounded">
-                   LIVE SCAN ACTIVE
+                   REAL AGENT PREDICTIONS, LAST 24H
                  </span>
                </div>
-               
-               <div className="divide-y divide-slate-800/50">
-                  {/* Opportunity Item 1 */}
-                  <div className="p-5 hover:bg-slate-800/20 transition-colors cursor-pointer group">
-                     <div className="flex flex-col md:flex-row justify-between gap-4 mb-3">
-                        <div>
-                           <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-bold text-white">NVDA</span>
-                              <span className="text-xs text-slate-400">NVIDIA Corporation</span>
-                           </div>
-                           <p className="text-xs text-slate-300 font-mono">
-                             Primary Narrative: Strong AI narrative compounding with bullish earnings trend
-                           </p>
-                        </div>
-                        <div className="flex gap-4 md:justify-end text-center font-mono">
-                           <div className="bg-[#111822] border border-emerald-900/50 px-3 py-1.5 rounded text-emerald-400">
-                             <span className="text-[9px] uppercase block text-emerald-600 mb-0.5">Direction</span>
-                             <span className="font-bold text-sm">BUY</span>
-                           </div>
-                           <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
-                             <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Confidence</span>
-                             <span className="font-bold text-sm text-white">87%</span>
-                           </div>
-                           <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
-                             <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Expected Ret</span>
-                             <span className="font-bold text-sm text-emerald-400">+12.4%</span>
-                           </div>
-                        </div>
-                     </div>
-                     <div className="text-[10px] text-slate-500 font-mono flex gap-4">
-                        <span>Risk Score: <span className="text-amber-400">Moderate (6.2/10)</span></span>
-                        <span>Regime: Bullish Trending</span>
-                        <span>Algorithm: XGBoost & Agent Swarm</span>
-                     </div>
-                  </div>
 
-                  {/* Opportunity Item 2 */}
-                  <div className="p-5 hover:bg-slate-800/20 transition-colors cursor-pointer group">
-                     <div className="flex flex-col md:flex-row justify-between gap-4 mb-3">
-                        <div>
-                           <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-bold text-white">TSLA</span>
-                              <span className="text-xs text-slate-400">Tesla, Inc.</span>
-                           </div>
-                           <p className="text-xs text-slate-300 font-mono">
-                             Primary Narrative: Supply chain constraints combined with tariff uncertainty
-                           </p>
-                        </div>
-                        <div className="flex gap-4 md:justify-end text-center font-mono">
-                           <div className="bg-[#111822] border border-rose-900/50 px-3 py-1.5 rounded text-rose-400">
-                             <span className="text-[9px] uppercase block text-rose-600 mb-0.5">Direction</span>
-                             <span className="font-bold text-sm">SELL</span>
-                           </div>
-                           <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
-                             <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Confidence</span>
-                             <span className="font-bold text-sm text-white">72%</span>
-                           </div>
-                           <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
-                             <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Expected Ret</span>
-                             <span className="font-bold text-sm text-rose-400">-5.8%</span>
-                           </div>
-                        </div>
-                     </div>
-                     <div className="text-[10px] text-slate-500 font-mono flex gap-4">
-                        <span>Risk Score: <span className="text-rose-400">Elevated (8.1/10)</span></span>
-                        <span>Regime: High Volatility</span>
-                        <span>Algorithm: Macro & Political Agents</span>
-                     </div>
-                  </div>
+               {opportunitiesAvailable === false && (
+                 <AwaitingSignal reason={opportunitiesReason || 'No real agent prediction in the last 24h cleared the confidence floor.'} label="Opportunity Feed" />
+               )}
 
-                  {/* Opportunity Item 3 */}
-                  <div className="p-5 hover:bg-slate-800/20 transition-colors cursor-pointer group">
-                     <div className="flex flex-col md:flex-row justify-between gap-4 mb-3">
-                        <div>
-                           <div className="flex items-center gap-2 mb-1">
-                              <span className="text-sm font-bold text-white">RIVN</span>
-                              <span className="text-xs text-slate-400">Rivian Automotive</span>
-                           </div>
-                           <p className="text-xs text-slate-300 font-mono">
-                             Primary Narrative: Pending production numbers and potential capital raise
-                           </p>
-                        </div>
-                        <div className="flex gap-4 md:justify-end text-center font-mono">
-                           <div className="bg-[#111822] border border-amber-900/50 px-3 py-1.5 rounded text-amber-500">
-                             <span className="text-[9px] uppercase block text-amber-600 mb-0.5">Direction</span>
-                             <span className="font-bold text-sm">WATCH</span>
-                           </div>
-                           <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
-                             <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Confidence</span>
-                             <span className="font-bold text-sm text-white">45%</span>
-                           </div>
-                           <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
-                             <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Expected Ret</span>
-                             <span className="font-bold text-sm text-slate-400">N/A</span>
-                           </div>
-                        </div>
-                     </div>
-                     <div className="text-[10px] text-slate-500 font-mono flex gap-4">
-                        <span>Risk Score: <span className="text-rose-400">High (9.5/10)</span></span>
-                        <span>Regime: Transitional</span>
-                        <span>Algorithm: News Sentiment Agent</span>
-                     </div>
-                  </div>
+               {opportunitiesAvailable === null && (
+                 <div className="py-8 text-center text-[10px] font-mono text-slate-500 uppercase tracking-widest">Loading real opportunities...</div>
+               )}
 
-               </div>
+               {opportunitiesAvailable === true && (
+                 <div className="divide-y divide-slate-800/50">
+                    {opportunities.map((opp, idx) => (
+                      <div key={`${opp.symbol}-${opp.agent}-${idx}`} className="p-5 hover:bg-slate-800/20 transition-colors">
+                         <div className="flex flex-col md:flex-row justify-between gap-4 mb-3">
+                            <div>
+                               <div className="flex items-center gap-2 mb-1">
+                                  <span className="text-sm font-bold text-white">{opp.symbol}</span>
+                                  <span className="text-xs text-slate-400">via {opp.agent}</span>
+                               </div>
+                               <p className="text-xs text-slate-300 font-mono">
+                                 {opp.reasoning}
+                               </p>
+                            </div>
+                            <div className="flex gap-4 md:justify-end text-center font-mono">
+                               <div className={`bg-[#111822] border px-3 py-1.5 rounded ${opp.prediction === 'BUY' ? 'border-emerald-900/50 text-emerald-400' : 'border-rose-900/50 text-rose-400'}`}>
+                                 <span className={`text-[9px] uppercase block mb-0.5 ${opp.prediction === 'BUY' ? 'text-emerald-600' : 'text-rose-600'}`}>Direction</span>
+                                 <span className="font-bold text-sm">{opp.prediction}</span>
+                               </div>
+                               <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
+                                 <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Confidence</span>
+                                 <span className="font-bold text-sm text-white">{opp.confidence}%</span>
+                               </div>
+                            </div>
+                         </div>
+                         <div className="text-[10px] text-slate-500 font-mono">
+                            <span>{new Date(opp.timestamp).toLocaleString()}</span>
+                         </div>
+                      </div>
+                    ))}
+                 </div>
+               )}
             </div>
           </div>
         )}
@@ -7689,118 +7496,74 @@ export default function App() {
         {activeTab === "learning" && (
           <div className="animate-fade-in grid grid-cols-1 lg:grid-cols-3 gap-6" id="learning-view">
             
-            {/* Top Stat Row Container */}
-            <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* Top Stat Row Container - real data (GET /api/v2/agents/learning-summary).
+                "Mistakes Corrected"/"Models Retrained"/"Alpha Generated by RL" had no real
+                source anywhere in this codebase (no RL system exists) and are removed rather
+                than replaced with a fabricated substitute; "Strategy Efficacy" becomes a real
+                average win rate across agents with real evaluated history. */}
+            <div className="lg:col-span-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-                  <span className="text-[10px] uppercase font-mono text-slate-500 block mb-2 tracking-wider">Mistakes Corrected (7d)</span>
+                  <span className="text-[10px] uppercase font-mono text-slate-500 block mb-2 tracking-wider">Real Agents With Evaluated History</span>
                   <div className="flex items-end justify-between">
-                     <span className="text-2xl font-bold text-white">14</span>
-                     <span className="text-xs font-mono text-emerald-400 flex items-center"><ArrowUpRight size={12}/> 2.1% Alpha</span>
+                     <span className="text-2xl font-bold text-white">{learningSummary ? learningSummary.agentWeights.filter((a: any) => a.totalPredictions > 0).length : '--'} / {learningSummary?.agentWeights.length ?? 5}</span>
                   </div>
                </div>
                <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-                  <span className="text-[10px] uppercase font-mono text-slate-500 block mb-2 tracking-wider">Models Retrained</span>
+                  <span className="text-[10px] uppercase font-mono text-slate-500 block mb-2 tracking-wider">Real Avg Win Rate (evaluated agents)</span>
                   <div className="flex items-end justify-between">
-                     <span className="text-2xl font-bold text-white">3</span>
-                     <span className="text-xs font-mono text-slate-400 flex items-center">Last: 4 hrs ago</span>
+                     {(() => {
+                       const evaluated = learningSummary?.agentWeights.filter((a: any) => a.winRate !== null) ?? [];
+                       const avg = evaluated.length > 0 ? evaluated.reduce((s: number, a: any) => s + a.winRate, 0) / evaluated.length : null;
+                       return <span className={`text-2xl font-bold ${avg !== null ? 'text-emerald-400' : 'text-slate-500'}`}>{avg !== null ? `${avg.toFixed(1)}%` : 'No Data'}</span>;
+                     })()}
                   </div>
                </div>
                <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-                  <span className="text-[10px] uppercase font-mono text-slate-500 block mb-2 tracking-wider">Strategy Efficacy</span>
+                  <span className="text-[10px] uppercase font-mono text-slate-500 block mb-2 tracking-wider">Real Learned Rules (recent)</span>
                   <div className="flex items-end justify-between">
-                     <span className="text-2xl font-bold text-emerald-400">68%</span>
-                     <span className="text-xs font-mono text-emerald-400 flex items-center"><ArrowUpRight size={12}/> 1.2%</span>
-                  </div>
-               </div>
-               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-                  <span className="text-[10px] uppercase font-mono text-slate-500 block mb-2 tracking-wider">Alpha Generated by RL</span>
-                  <div className="flex items-end justify-between">
-                     <span className="text-2xl font-bold text-emerald-400">+$2.4k</span>
-                     <span className="text-xs font-mono text-slate-400 flex items-center">Since inception</span>
+                     <span className="text-2xl font-bold text-white">{learningSummary?.recentLearnedRules.length ?? '--'}</span>
                   </div>
                </div>
             </div>
 
-            {/* Left Column - Per-Strategy Scorecard */}
+            {/* Left Column - real per-agent weight/win-rate table, replacing the fabricated
+                "PER-STRATEGY SCORECARD" (invented strategy names like "Trend-Following",
+                "Political Intel" - none are real Argus agents). No real RL exists - the weight
+                column is ChiefTraderAgent/ReflectionEngine's real consensus weight, not an RL
+                policy output. */}
             <div className="lg:col-span-2 bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
               <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2 uppercase tracking-wide">
                 <BrainCircuit size={16} className="text-indigo-400" />
-                PER-STRATEGY SCORECARD
+                REAL PER-AGENT SCORECARD
               </h3>
-              <p className="text-[10px] font-mono text-slate-400 mb-4">RL engine automatically scales capital toward strategies with rising win rates and penalizes those in drawdown.</p>
-              
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse min-w-max">
-                  <thead>
-                    <tr className="border-b border-slate-800 text-[9px] font-mono text-slate-500 uppercase tracking-wider">
-                      <th className="py-2 px-2">STRATEGY NODE</th>
-                      <th className="py-2 px-2">CATEGORY</th>
-                      <th className="py-2 px-2">HIT RATE</th>
-                      <th className="py-2 px-2">WIN/LOSS RATIO</th>
-                      <th className="py-2 px-2">WEIGHT (RL)</th>
-                      <th className="py-2 px-2 text-right">TREND</th>
-                    </tr>
-                  </thead>
-                  <tbody className="text-xs font-mono text-slate-300">
-                     <tr className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                        <td className="py-3 px-2 font-bold text-white">Trend-Following</td>
-                        <td className="py-3 px-2 text-slate-400">Technical</td>
-                        <td className="py-3 px-2">42.1%</td>
-                        <td className="py-3 px-2 text-slate-300">1.8</td>
-                        <td className="py-3 px-2 text-rose-400 text-sm font-bold">0.95x</td>
-                        <td className="py-3 px-2 text-rose-400 flex justify-end"><ArrowDownRight size={16}/></td>
-                     </tr>
-                     <tr className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                        <td className="py-3 px-2 font-bold text-white">Momentum & Breakout</td>
-                        <td className="py-3 px-2 text-slate-400">Technical</td>
-                        <td className="py-3 px-2 text-emerald-400">58.3%</td>
-                        <td className="py-3 px-2 text-emerald-400">2.1</td>
-                        <td className="py-3 px-2 text-emerald-400 text-sm font-bold">1.45x</td>
-                        <td className="py-3 px-2 text-emerald-400 flex justify-end"><ArrowUpRight size={16}/></td>
-                     </tr>
-                     <tr className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                        <td className="py-3 px-2 font-bold text-white">Mean Reversion</td>
-                        <td className="py-3 px-2 text-slate-400">Technical</td>
-                        <td className="py-3 px-2 text-emerald-400">61.2%</td>
-                        <td className="py-3 px-2 text-slate-300">1.2</td>
-                        <td className="py-3 px-2 text-emerald-400 text-sm font-bold">1.10x</td>
-                        <td className="py-3 px-2 text-emerald-400 flex justify-end"><ArrowUpRight size={16}/></td>
-                     </tr>
-                     <tr className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                        <td className="py-3 px-2 font-bold text-white flex items-center gap-2"><Sparkles size={12} className="text-indigo-400"/> Narrative/News Agent</td>
-                        <td className="py-3 px-2 text-indigo-400">NLP/LLM</td>
-                        <td className="py-3 px-2 text-emerald-400">68.4%</td>
-                        <td className="py-3 px-2 text-emerald-400 font-bold">2.4</td>
-                        <td className="py-3 px-2 text-emerald-400 text-sm font-bold">1.85x</td>
-                        <td className="py-3 px-2 text-emerald-400 flex justify-end"><ArrowUpRight size={16}/></td>
-                     </tr>
-                     <tr className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                        <td className="py-3 px-2 font-bold text-white flex items-center gap-2"><Clock size={12} className="text-indigo-400"/> Market Historian</td>
-                        <td className="py-3 px-2 text-indigo-400">NLP/LLM</td>
-                        <td className="py-3 px-2 text-slate-300">54.5%</td>
-                        <td className="py-3 px-2 text-slate-300">1.5</td>
-                        <td className="py-3 px-2 text-slate-300 text-sm font-bold">1.05x</td>
-                        <td className="py-3 px-2 text-slate-500 flex justify-end"><ArrowRight size={16}/></td>
-                     </tr>
-                     <tr className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                        <td className="py-3 px-2 font-bold text-white flex items-center gap-2"><Globe size={12} className="text-indigo-400"/> Political Intel</td>
-                        <td className="py-3 px-2 text-indigo-400">NLP/LLM</td>
-                        <td className="py-3 px-2 text-rose-400">32.1%</td>
-                        <td className="py-3 px-2 text-rose-400">0.8</td>
-                        <td className="py-3 px-2 text-rose-400 text-sm font-bold">0.45x</td>
-                        <td className="py-3 px-2 text-rose-400 flex justify-end"><ArrowDownRight size={16}/></td>
-                     </tr>
-                     <tr className="hover:bg-slate-800/20 transition-colors">
-                        <td className="py-3 px-2 font-bold text-white">XGBoost (Macro)</td>
-                        <td className="py-3 px-2 text-amber-400">Quant</td>
-                        <td className="py-3 px-2 text-slate-300">51.5%</td>
-                        <td className="py-3 px-2 text-slate-300">1.1</td>
-                        <td className="py-3 px-2 text-slate-300 text-sm font-bold">1.00x</td>
-                        <td className="py-3 px-2 text-slate-500 flex justify-end"><ArrowRight size={16}/></td>
-                     </tr>
-                  </tbody>
-                </table>
-              </div>
+              <p className="text-[10px] font-mono text-slate-400 mb-4">Real ChiefTraderAgent consensus weight and real ReflectionEngine-evaluated win rate, per real agent. Not an RL policy - Argus has no reinforcement-learning system.</p>
+
+              {!learningSummary ? (
+                <div className="py-8 text-center text-[10px] font-mono text-slate-500 uppercase tracking-widest">Loading real agent scorecard...</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse min-w-max">
+                    <thead>
+                      <tr className="border-b border-slate-800 text-[9px] font-mono text-slate-500 uppercase tracking-wider">
+                        <th className="py-2 px-2">AGENT</th>
+                        <th className="py-2 px-2">WIN RATE</th>
+                        <th className="py-2 px-2">EVALUATED PREDICTIONS</th>
+                        <th className="py-2 px-2">CONSENSUS WEIGHT</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-xs font-mono text-slate-300">
+                       {learningSummary.agentWeights.map((a: any) => (
+                         <tr key={a.agentName} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
+                            <td className="py-3 px-2 font-bold text-white">{a.agentName}</td>
+                            <td className={`py-3 px-2 ${a.winRate === null ? 'text-slate-500' : a.winRate >= 50 ? 'text-emerald-400' : 'text-rose-400'}`}>{a.winRate === null ? 'N/A' : `${a.winRate}%`}</td>
+                            <td className="py-3 px-2 text-slate-300">{a.totalPredictions}</td>
+                            <td className="py-3 px-2 text-slate-300 text-sm font-bold">{a.currentWeight === null ? 'N/A' : `${a.currentWeight}x`}</td>
+                         </tr>
+                       ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </div>
 
             {/* Right Column - Weight Evolution & Kelly */}
@@ -8654,6 +8417,11 @@ export default function App() {
                    <p className="text-xs text-slate-400 max-w-3xl leading-relaxed">
                      A highly experimental continuous evaluation loop. The system will autonomously select random targets, use multi-LLM verification (Proposer + Risk Manager), and continuously buy/sell 24/7 without human input until the allocated budget is exhausted.
                    </p>
+                   {autoBotStartError && (
+                     <p className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2 mt-3 max-w-3xl leading-relaxed">
+                       {autoBotStartError}
+                     </p>
+                   )}
                  </div>
                  <div className="flex items-center gap-3">
                    {autoBotConfig.enabled && (
@@ -8675,11 +8443,32 @@ export default function App() {
                
                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                  <div className="bg-[#111822] border border-slate-800 rounded-lg p-4">
-                    <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block">Allocated Budget Limit</span>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono block">Allocated Budget Limit</span>
+                      <span className="text-[9px] font-mono text-slate-500">
+                        Available: {portfolioData
+                          ? <span className={autoBotTargetBudget > (portfolioData.buying_power ?? portfolioData.cash ?? 0) ? "text-rose-400 font-bold" : "text-emerald-400"}>
+                              ${(portfolioData.buying_power ?? portfolioData.cash ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                            </span>
+                          : "--"}
+                      </span>
+                    </div>
                     <div className="flex items-center gap-2">
                        <span className="text-xl font-bold text-slate-200">$</span>
-                       <input type="number" min="1000" className="w-full bg-transparent text-xl font-bold text-white outline-none" value={autoBotTargetBudget} onChange={e => setAutoBotTargetBudget(Number(e.target.value))} disabled={autoBotConfig.enabled} />
+                       <input
+                         type="number"
+                         min="1000"
+                         className={"w-full bg-transparent text-xl font-bold outline-none " + (portfolioData && autoBotTargetBudget > (portfolioData.buying_power ?? portfolioData.cash ?? 0) ? "text-rose-400" : "text-white")}
+                         value={autoBotTargetBudget}
+                         onChange={e => setAutoBotTargetBudget(Number(e.target.value))}
+                         disabled={autoBotConfig.enabled}
+                       />
                     </div>
+                    {portfolioData && autoBotTargetBudget > (portfolioData.buying_power ?? portfolioData.cash ?? 0) && (
+                      <p className="text-[9px] text-rose-400 mt-2 leading-relaxed">
+                        Allocated fund not enough - this exceeds your broker's available buying power. Deposit more funds with your broker to raise available buying power, or lower the allocated amount.
+                      </p>
+                    )}
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex gap-4">
                     <div className="flex-1">
@@ -9262,11 +9051,13 @@ export default function App() {
         )}
 
         {activeTab === "scanner" && (
-          <StrategyScanner 
-            assetPrices={assetPrices}
-            selectedAlertSymbol={selectedAlertSymbol}
-            setSelectedAlertSymbol={setSelectedAlertSymbol}
-          />
+          <div className="flex flex-col gap-6">
+            <StrategyScanner
+              selectedAlertSymbol={selectedAlertSymbol}
+              setSelectedAlertSymbol={setSelectedAlertSymbol}
+            />
+            <QuantSignalsPanel />
+          </div>
         )}
 
         {activeTab === "activity" && (
@@ -9359,8 +9150,27 @@ export default function App() {
                </div>
                
                <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-3xl">
-                 Taking an AI trading bot from simulation to real-time, autonomous live trading is the ultimate test. Use this interactive auditor acting as a Quantitative Risk Officer to evaluate your system's execution realities, state reconciliation, and fail-safes.
+                 Taking an AI trading bot from simulation to real-time, autonomous live trading is the ultimate test. The checklist below is a generic, educational self-assessment against whatever architecture YOU describe via the dropdowns - it does not inspect this actual running Argus instance. For a real check of Argus itself, see the panel below it.
                </p>
+
+               {/* Real check of THIS running Argus instance - distinct from the generic
+                   self-assessment quiz below it, which evaluates a hypothetical architecture the
+                   user describes via dropdowns, not Argus's own actual current state. Reuses the
+                   same real GET /api/v1/system/integrity the Validation tab uses. */}
+               <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 mb-6 flex items-center justify-between">
+                 <div>
+                   <h4 className="text-xs font-bold text-white uppercase tracking-wide mb-1">Real Argus System Integrity Check</h4>
+                   <p className="text-[10px] text-slate-500 font-mono">
+                     {deploymentIntegrity ? `${deploymentIntegrity.score} real structural checks passed (${deploymentIntegrity.scorePct}%) - schema/broker/AI-provider/local-AI-service reachability.` : 'Loading real integrity check...'}
+                   </p>
+                 </div>
+                 <button
+                   onClick={() => fetch('/api/v1/system/integrity').then(r => r.json()).then(setDeploymentIntegrity).catch(() => {})}
+                   className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+                 >
+                   Re-check Now
+                 </button>
+               </div>
 
                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                  {/* Left Column: Form Parameters */}
@@ -10009,13 +9819,13 @@ export default function App() {
                    Token Consumption & Projected Costs
                  </h2>
 
-                 {tokenAlertEnabled && 65.42 > tokenAlertThreshold && (
+                 {tokenAlertEnabled && tokenConsumptionTotals && tokenConsumptionTotals.projectedCycleCost > tokenAlertThreshold && (
                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-4 flex items-start gap-4 mb-6">
                      <AlertCircle className="text-amber-400 mt-0.5" size={20} />
                      <div>
                        <h4 className="text-amber-400 font-bold text-sm uppercase tracking-wide mb-1">Cost Threshold Alert</h4>
                        <p className="text-amber-200/80 text-xs">
-                         Projected cycle cost (<span className="font-bold text-white">$65.42</span>) has exceeded the configured alert threshold of <span className="text-amber-300">${tokenAlertThreshold}</span>. Consider optimizing token usage or rate limiting premium agents.
+                         Projected cycle cost (<span className="font-bold text-white">${tokenConsumptionTotals.projectedCycleCost.toFixed(2)}</span>) has exceeded the configured alert threshold of <span className="text-amber-300">${tokenAlertThreshold}</span>. Consider optimizing token usage or rate limiting premium agents.
                        </p>
                      </div>
                    </div>
@@ -10023,15 +9833,15 @@ export default function App() {
 
                  <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
                    <p className="text-xs text-slate-400 leading-relaxed max-w-xl">
-                     Real-time tracking of token consumption across standard and premium language models, grouped by the individual agents in the swarm. Cost projections are based on current consumption rates extrapolated over the billing cycle.
+                     Real token consumption from the last 14 days of AI calls, grouped by real agent. "Local" is any real call that cost $0 (Ollama/local Chronos); "Paid" is any real call to a billed provider. Cost projection extrapolates the real average daily cost to 30 days.
                    </p>
-                   
+
                    <div className="flex items-center gap-4 bg-[#111822] border border-slate-800 p-3 rounded-lg min-w-[280px]">
                      <div className="flex-1">
                        <div className="flex items-center justify-between mb-2">
                          <span className="text-[10px] text-white font-mono uppercase tracking-wider">Enable Limits Alert</span>
-                         <button 
-                           onClick={() => setTokenAlertEnabled(!tokenAlertEnabled)} 
+                         <button
+                           onClick={() => setTokenAlertEnabled(!tokenAlertEnabled)}
                            className="text-slate-400 hover:text-white transition-colors"
                          >
                            {tokenAlertEnabled ? <ToggleRight size={20} className="text-amber-400" /> : <ToggleLeft size={20} />}
@@ -10041,58 +9851,70 @@ export default function App() {
                          <span className="text-slate-500 font-mono">Limit</span>
                          <span className="font-bold text-amber-400">${tokenAlertThreshold}</span>
                        </div>
-                       <input 
-                         type="range" 
-                         min="10" 
-                         max="200" 
-                         value={tokenAlertThreshold} 
+                       <input
+                         type="range"
+                         min="10"
+                         max="200"
+                         value={tokenAlertThreshold}
                          onChange={(e) => setTokenAlertThreshold(Number(e.target.value))}
                          disabled={!tokenAlertEnabled}
-                         className="w-full h-1 accent-amber-500 bg-slate-700 rounded-lg appearance-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed" 
+                         className="w-full h-1 accent-amber-500 bg-slate-700 rounded-lg appearance-none cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
                        />
                      </div>
                    </div>
                  </div>
 
-                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                     <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col justify-center items-center text-center">
-                        <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2">Total Standard</span>
-                        <div className="text-2xl font-bold text-slate-200">29.0M</div>
-                        <span className="text-xs text-indigo-400 mt-1">~$4.35</span>
-                     </div>
-                     <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col justify-center items-center text-center">
-                        <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2">Total Premium</span>
-                        <div className="text-2xl font-bold text-slate-200">1.8M</div>
-                        <span className="text-xs text-emerald-400 mt-1">~$27.00</span>
-                     </div>
-                     <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-lg p-4 flex flex-col justify-center items-center text-center relative overflow-hidden">
-                        <div className="absolute -right-4 -top-4 w-16 h-16 bg-indigo-500/20 rounded-full blur-2xl"></div>
-                        <span className="text-[10px] text-indigo-300 uppercase tracking-widest font-mono mb-2">Projected Cycle Cost</span>
-                        <div className="text-3xl font-bold text-white">$65.<span className="text-indigo-400">42</span></div>
-                        <span className="text-xs text-slate-400 mt-1">Based on 14d run rate</span>
-                     </div>
-                 </div>
+                 {tokenConsumptionAvailable === false && (
+                   <AwaitingSignal reason="No real AI calls recorded in the last 14 days." label="Token Consumption" />
+                 )}
 
-                 <div className="h-[300px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                       <BarChart
-                         data={mockTokenConsumptionData}
-                         layout="vertical"
-                         margin={{ top: 5, right: 30, left: 30, bottom: 5 }}
-                       >
-                         <XAxis type="number" fontSize={10} stroke="#475569" tickLine={false} axisLine={false} tickFormatter={(val) => `${(val / 1000000).toFixed(1)}M`} />
-                         <YAxis dataKey="agent" type="category" fontSize={10} stroke="#475569" tickLine={false} axisLine={false} />
-                         <Tooltip
-                           contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', fontSize: '12px', borderRadius: '8px' }}
-                           itemStyle={{ color: '#e2e8f0' }}
-                           formatter={(value: any, name: any) => [`${(value / 1000).toFixed(1)}k`, name === 'standardTokens' ? 'Standard' : 'Premium']}
-                         />
-                         <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
-                         <Bar dataKey="standardTokens" name="Standard Models (Flash, Haiku)" fill="#818cf8" radius={[0, 4, 4, 0]} barSize={12} stackId="a" />
-                         <Bar dataKey="premiumTokens" name="Premium Models (Pro, Sonnet, GPT-4o)" fill="#34d399" radius={[0, 4, 4, 0]} barSize={12} stackId="a" />
-                       </BarChart>
-                    </ResponsiveContainer>
-                 </div>
+                 {tokenConsumptionAvailable === null && (
+                   <div className="py-8 text-center text-[10px] font-mono text-slate-500 uppercase tracking-widest">Loading real token consumption...</div>
+                 )}
+
+                 {tokenConsumptionAvailable === true && tokenConsumptionTotals && (
+                   <>
+                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                         <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col justify-center items-center text-center">
+                            <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2">Local (Free) Tokens</span>
+                            <div className="text-2xl font-bold text-slate-200">{(tokenConsumptionTotals.localTokens / 1_000_000).toFixed(2)}M</div>
+                            <span className="text-xs text-indigo-400 mt-1">$0.00</span>
+                         </div>
+                         <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col justify-center items-center text-center">
+                            <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2">Paid Provider Tokens</span>
+                            <div className="text-2xl font-bold text-slate-200">{(tokenConsumptionTotals.paidTokens / 1_000_000).toFixed(2)}M</div>
+                            <span className="text-xs text-emerald-400 mt-1">~${tokenConsumptionTotals.totalCostLastNDays.toFixed(2)} (14d)</span>
+                         </div>
+                         <div className="bg-indigo-500/10 border border-indigo-500/30 rounded-lg p-4 flex flex-col justify-center items-center text-center relative overflow-hidden">
+                            <div className="absolute -right-4 -top-4 w-16 h-16 bg-indigo-500/20 rounded-full blur-2xl"></div>
+                            <span className="text-[10px] text-indigo-300 uppercase tracking-widest font-mono mb-2">Projected Cycle Cost</span>
+                            <div className="text-3xl font-bold text-white">${tokenConsumptionTotals.projectedCycleCost.toFixed(2)}</div>
+                            <span className="text-xs text-slate-400 mt-1">Real 14d run rate x 30</span>
+                         </div>
+                     </div>
+
+                     <div className="h-[300px] w-full">
+                        <ResponsiveContainer width="100%" height="100%">
+                           <BarChart
+                             data={tokenConsumptionData || []}
+                             layout="vertical"
+                             margin={{ top: 5, right: 30, left: 30, bottom: 5 }}
+                           >
+                             <XAxis type="number" fontSize={10} stroke="#475569" tickLine={false} axisLine={false} tickFormatter={(val) => `${(val / 1000000).toFixed(1)}M`} />
+                             <YAxis dataKey="agent" type="category" fontSize={10} stroke="#475569" tickLine={false} axisLine={false} />
+                             <Tooltip
+                               contentStyle={{ backgroundColor: '#1e293b', borderColor: '#334155', fontSize: '12px', borderRadius: '8px' }}
+                               itemStyle={{ color: '#e2e8f0' }}
+                               formatter={(value: any, name: any) => [`${(value / 1000).toFixed(1)}k`, name === 'localTokens' ? 'Local (Free)' : 'Paid Provider']}
+                             />
+                             <Legend iconType="circle" wrapperStyle={{ fontSize: '10px', paddingTop: '10px' }} />
+                             <Bar dataKey="localTokens" name="Local Models (Free)" fill="#818cf8" radius={[0, 4, 4, 0]} barSize={12} stackId="a" />
+                             <Bar dataKey="paidTokens" name="Paid Providers" fill="#34d399" radius={[0, 4, 4, 0]} barSize={12} stackId="a" />
+                           </BarChart>
+                        </ResponsiveContainer>
+                     </div>
+                   </>
+                 )}
              </div>
 
               {/* Outbound Webhooks Integration */}

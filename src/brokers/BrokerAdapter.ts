@@ -35,6 +35,12 @@
 
 export interface Order {
   id: string;
+  // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - optional client-supplied idempotency key, passed
+  // into placeOrder() and honored by AlpacaBroker (mapped to Alpaca's real `client_order_id`
+  // field, which Alpaca itself deduplicates on). Additive - a broker adapter that doesn't support
+  // one simply ignores it, exactly like every other optional field on this interface already used
+  // that way (trailPercent, takeProfitPrice, etc. below).
+  clientOrderId?: string;
   symbol: string;
   side: 'BUY' | 'SELL';
   type: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT' | 'TRAILING_STOP' | 'BRACKET' | 'OCO' | 'ICEBERG' | 'TWAP' | 'VWAP';
@@ -123,8 +129,16 @@ export interface BrokerPlugin {
   // internal methods for specific orders
   placeOrder(order: Partial<Order>): Promise<Order>;
   cancelOrder(orderId: string): Promise<boolean>;
+  closePosition(symbol: string): Promise<boolean>;
 
   tick?(currentPrices: Record<string, number>): void;
+
+  // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - optional, since not every broker adapter
+  // supports lookup-by-client-order-id. AlpacaBroker implements it (mapped to Alpaca's real
+  // client_order_id query param). Used by OrderManagement's crash-recovery reconciliation to
+  // definitively answer "did the broker actually receive this order?" for a local row left in a
+  // PENDING or possibly-wrongly-REJECTED state - never a guess from local state alone.
+  getOrderByClientOrderId?(clientOrderId: string): Promise<Order | null>;
 }
 
 export function brokerSupports(broker: BrokerPlugin, capability: keyof BrokerCapabilities): boolean {

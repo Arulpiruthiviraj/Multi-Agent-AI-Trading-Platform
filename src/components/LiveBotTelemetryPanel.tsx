@@ -65,9 +65,8 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
   }, [autoBotConfig.enabled, subscribe]);
 
 
-  // Derive executed trading metrics based on budget spent
-  const spent = autoBotConfig.spent || 0;
-  const estimatedTrades = Math.floor(spent / (autoBotConfig.maxTradeSize || 1000) * 1.5);
+  // Real executed trading metrics
+  const totalExecutions = autoBotConfig.totalTrades || 0;
   const [winRate, setWinRate] = useState(0);
   const [upl, setUpl] = useState(0);
   
@@ -101,12 +100,12 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
          
          <div className="bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between">
-            <div className="flex items-center gap-2 text-slate-500 mb-2">
-               <Crosshair size={12} />
-               <span className="text-[10px] uppercase font-mono tracking-widest">Est. Executions</span>
+             <div className="flex items-center gap-2 text-slate-500 mb-2">
+               <Cpu size={12} />
+               <span className="text-[10px] uppercase font-mono tracking-widest">Total Executions</span>
             </div>
             <div className="text-2xl font-bold text-white font-mono">
-               {estimatedTrades}
+               {totalExecutions}
             </div>
          </div>
 
@@ -121,12 +120,12 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
          </div>
 
          <div className="bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between">
-            <div className="flex items-center gap-2 text-slate-500 mb-2">
+             <div className="flex items-center gap-2 text-slate-500 mb-2">
                <Zap size={12} />
                <span className="text-[10px] uppercase font-mono tracking-widest">Total Live PNL</span>
             </div>
-            <div className="text-2xl font-bold text-sky-400 font-mono">
-               +${upl.toFixed(2)}
+            <div className={`text-2xl font-bold font-mono ${upl >= 0 ? 'text-sky-400' : 'text-rose-400'}`}>
+               {upl >= 0 ? '+' : '-'}${Math.abs(upl).toFixed(2)}
             </div>
          </div>
          
@@ -175,9 +174,9 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
              </div>
              <div className="flex items-center gap-2">
                 <div className="w-24 h-1.5 bg-slate-800 rounded overflow-hidden">
-                   <div className="h-full bg-sky-500 transition-all duration-300" style={{ width: `${autoBotConfig.enabled ? 88 : 0}%` }}></div>
+                   <div className="h-full bg-slate-500 transition-all duration-300" style={{ width: `0%` }}></div>
                 </div>
-                <span className="text-[10px] font-mono text-sky-400 w-8 text-right">{autoBotConfig.enabled ? '88' : '0'}%</span>
+                <span className="text-[10px] font-mono text-slate-500 w-8 text-right">N/A</span>
              </div>
           </div>
        </div>

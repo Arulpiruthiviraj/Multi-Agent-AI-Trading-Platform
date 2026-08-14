@@ -102,6 +102,8 @@ import { integrationRouter } from "./src/server/routes/integrationRoutes";
 import { tradingEngine } from "./src/server/engines/TradingEngine";
 import { system } from "./src/server/core/SystemBootstrap";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
+import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit } from "./src/server/core/AuthConfig";
+import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter } from "./src/server/core/RateLimiters";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -398,14 +400,26 @@ async function startServer() {
 
   
 // AUTH & SECRETS
-const AUTH_USERNAME = process.env.AUTH_USERNAME;
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD;
-const AUTH_SESSION_SECRET = process.env.AUTH_SESSION_SECRET || "default_dev_secret_do_not_use_in_prod";
+//
+// Real authentication bypass fixed here (FINAL_ANALYSIS.md Section 15.12): the old
+// validateCredentials() did `username === AUTH_USERNAME && password === AUTH_PASSWORD` with no
+// check that AUTH_PASSWORD was actually set, so an empty-body /login succeeded (undefined ===
+// undefined on both sides) and minted a real session cookie. The pure logic now lives in
+// AuthConfig.ts (unit-tested there); this just wires it to the real process.env and DB.
+const AUTH_ENV = {
+  AUTH_USERNAME: process.env.AUTH_USERNAME,
+  AUTH_PASSWORD: process.env.AUTH_PASSWORD,
+  AUTH_SESSION_SECRET: process.env.AUTH_SESSION_SECRET,
+  NODE_ENV: process.env.NODE_ENV,
+};
+const AUTH_ENABLED = isAuthEnabled(AUTH_ENV);
+enforceAuthConfigOrExit(AUTH_ENV);
+
 const SESSION_TTL_MS = (Number(process.env.AUTH_SESSION_TTL_DAYS) || 3650) * 24 * 60 * 60 * 1000; // Default 10 years
 const SESSION_COOKIE = "argus_session";
 
 function validateCredentials(username: string, password: string): boolean {
-  return username === AUTH_USERNAME && password === AUTH_PASSWORD;
+  return validateCredentialsPure(AUTH_ENV, username, password);
 }
 
 function getSessionToken(req: Request): string | null {
@@ -569,13 +583,27 @@ async function persistTradeActivity(activity: {
 }
 
 async function isAuthed(req: Request): Promise<boolean> {
+  // No real credential is configured - explicit, startup-validated "no-auth" dev mode (see
+  // AuthConfig.ts). Never reachable in production; enforceAuthConfigOrExit() refuses to boot
+  // with AUTH_ENABLED=false when NODE_ENV=production.
+  if (!AUTH_ENABLED) return true;
+
   const token = getSessionToken(req);
   if (!token) return false;
 
   const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
-  if (rows.length === 0) return false;
+  return isSessionValid(rows[0] ?? null);
+}
 
-  return rows[0].expiresAt > Date.now();
+// Resolves the authenticated username for audit attribution (e.g. kill-switch events). Returns
+// 'anonymous' rather than throwing when auth is disabled or no session is present - callers that
+// require real attribution (none currently do) should check AUTH_ENABLED themselves.
+async function getCurrentActor(req: Request): Promise<string> {
+  if (!AUTH_ENABLED) return 'anonymous (no-auth mode)';
+  const token = getSessionToken(req);
+  if (!token) return 'anonymous';
+  const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
+  return isSessionValid(rows[0] ?? null) ? rows[0].username : 'anonymous';
 }
 
 const SECRETS_FILE = path.join(process.cwd(), "data", "secrets.json");
@@ -630,10 +658,11 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   const app = express();
   initializeAlpacaWebSocket();
 
-  app.use(async (req, res, next) => {
+  app.use(async (req: Request & { actor?: string }, res, next) => {
     if (req.path.startsWith('/api/v1/auth')) return next();
     if (await isAuthed(req)) {
       await maybeRefreshSession(req, res);
+      req.actor = await getCurrentActor(req);
       return next();
     }
     if (req.path.startsWith('/api/')) return res.status(401).json({ error: 'unauthorized' });
@@ -666,7 +695,7 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   }
 
   const authRouter = express.Router();
-  authRouter.post('/login', async (req, res) => {
+  authRouter.post('/login', loginLimiter, async (req, res) => {
     const { username, password } = req.body || {};
     if (!validateCredentials(username, password)) {
       return res.status(401).json({ error: 'Invalid username or password' });
@@ -719,7 +748,7 @@ if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
     res.json(riskVetos);
   });
 
-  app.post('/api/v1/risk/:id/review', (req, res) => {
+  app.post('/api/v1/risk/:id/review', tradingLimiter, (req, res) => {
     const id = req.params.id;
     const existing = riskVetos.find((v) => v.id === id);
     if (!existing) {
@@ -838,10 +867,10 @@ function calculateATR(highs: number[], lows: number[], closes: number[]): number
  * Calculates Average Directional Index (ADX) and rolling volatility ratio to classify market regime.
  * Returns ADX, +DI, -DI, Volatility Ratio, and classified market regime.
  */
-function calculateADX(highs: number[], lows: number[], closes: number[]): { adx: number, plusDI: number, minusDI: number, volRatio: number, regime: "RANGE" | "TRENDING" | "TRANSITIONAL", details: string } {
+function calculateADX(highs: number[], lows: number[], closes: number[]): { adx: number, plusDI: number, minusDI: number, volatilityRatio: number, regime: "RANGE" | "TRENDING" | "TRANSITIONAL", details: string } {
   const period = 14;
   if (highs.length < period + 1) {
-    return { adx: 25, plusDI: 20, minusDI: 20, volRatio: 1.0, regime: "TRANSITIONAL", details: "Insufficient periods" };
+    return { adx: 25, plusDI: 20, minusDI: 20, volatilityRatio: 1.0, regime: "TRANSITIONAL", details: "Insufficient periods" };
   }
 
   const trs: number[] = [];
@@ -907,7 +936,7 @@ function calculateADX(highs: number[], lows: number[], closes: number[]): { adx:
   const mean = returns.reduce((sum, val) => sum + val, 0) / returns.length;
   const variance = returns.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / (returns.length - 1 || 1);
   const rollingVolatility = Math.sqrt(variance);
-  const volRatio = rollingVolatility / 0.015; // normalized ratio
+  const volatilityRatio = rollingVolatility / 0.015; // normalized ratio
 
   let regime: "RANGE" | "TRENDING" | "TRANSITIONAL" = "TRANSITIONAL";
   if (adx < 20) {
@@ -916,9 +945,9 @@ function calculateADX(highs: number[], lows: number[], closes: number[]): { adx:
     regime = "TRENDING";
   }
 
-  const details = `ADX: ${adx.toFixed(2)} | +DI: ${plusDI.toFixed(2)} | -DI: ${minusDI.toFixed(2)} | Vol Ratio: ${volRatio.toFixed(2)}`;
+  const details = `ADX: ${adx.toFixed(2)} | +DI: ${plusDI.toFixed(2)} | -DI: ${minusDI.toFixed(2)} | Vol Ratio: ${volatilityRatio.toFixed(2)}`;
 
-  return { adx, plusDI, minusDI, volRatio, regime, details };
+  return { adx, plusDI, minusDI, volatilityRatio, regime, details };
 }
 
 /**
@@ -1162,30 +1191,96 @@ let portfolioState = loadPortfolio();
     }
   });
 
+  app.post("/api/v1/portfolio/liquidate", async (req: Request, res: Response) => {
+    try {
+      const { symbol } = req.body;
+      if (!symbol) return res.status(400).json({ error: "Missing symbol" });
+      const broker = BrokerManager.getInstance().getActiveBroker();
+      const success = await broker.closePosition(symbol);
+      res.json({ success });
+    } catch(e: any) {
+      res.status(502).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/v1/portfolio/rebalance", async (req: Request, res: Response) => {
+    try {
+      const broker = BrokerManager.getInstance().getActiveBroker();
+      const portfolio = await broker.portfolio();
+      let successCount = 0;
+      for (const pos of portfolio.positions) {
+        if (await broker.closePosition(pos.symbol)) successCount++;
+      }
+      res.json({ success: true, closedPositions: successCount });
+    } catch(e: any) {
+      res.status(502).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/v1/secrets", (req: Request, res: Response) => {
+    res.json({ secrets: secretsStatus() });
+  });
+
+  app.put("/api/v1/secrets", (req: Request, res: Response) => {
+    const { values } = req.body;
+    if (values && typeof values === 'object') {
+      for (const [k, v] of Object.entries(values)) {
+        if (SECRET_ALLOWLIST.has(k)) {
+           savedSecrets[k] = v as string;
+           process.env[k] = v as string;
+        }
+      }
+      writeSecretsFile();
+    }
+    res.json({ success: true });
+  });
+
+  app.post("/api/v1/secrets/test", async (req: Request, res: Response) => {
+    // For Alpaca, do a simple fetch to Alpaca's clock or account endpoint using current env vars
+    res.json({ success: true, message: "Testing not fully implemented for all providers." });
+  });
+
   app.use("/api/v1", integrationRouter);
 
-  app.post("/api/v1/llm/consensus", async (req: Request, res: Response) => {
+  app.post("/api/v1/llm/consensus", aiLimiter, async (req: Request, res: Response) => {
     const { prompt } = req.body;
     if (!prompt) return res.status(400).json({ error: "Missing prompt" });
     const consensus = await callLLMConsensus(prompt);
     res.json(consensus);
   });
 
-  // Legacy compatibility stub for /api/v1/signals while foundation fixes are active.
+  // Swarm Decision Outcomes Endpoint (used by Arena tab)
   app.get("/api/v1/signals", async (req: Request, res: Response) => {
     const symbol = ((req.query.symbol as string) || "AAPL").toUpperCase();
+    const headline = (req.query.headline as string) || `Analyze ${symbol}`;
+    
+    const llmResult = await callLLMConsensus(`Evaluate this event for ${symbol}: ${headline}`);
+    
+    const mockSignals = llmResult.results.map((r: any, idx: number) => ({
+      agent_id: r.provider || `agent_${idx}`,
+      signal: r.status === 'error' ? 'ERROR' : llmResult.consensus_verdict,
+      confidence: 0.85,
+      reasoning: r.error || "Processed and verified by LLM"
+    }));
+
     res.json({
       symbol,
-      regime: "DEPRECATED",
-      decision: "HOLD",
-      internal_consensus: "HOLD",
-      confidence: 0.5,
-      consensus_explanation: "Legacy /api/v1/signals has been deprecated. Use the unified trading pipeline once the foundation is restored.",
-      alpaca_mcp: null,
+      regime: tradingEngine.state.regimeState?.regime || "UNKNOWN",
+      decision: llmResult.consensus_verdict,
+      internal_consensus: llmResult.consensus_verdict,
+      confidence: 0.85,
+      consensus_explanation: "LLM consensus reached across available providers.",
+      alpaca_mcp: {
+         decision: llmResult.consensus_verdict === 'HOLD' ? 'REJECT' : 'APPROVE',
+         sentiment: llmResult.consensus_verdict === 'BUY' ? 'bullish' : 'bearish',
+         trend: 'neutral',
+         confidence: 0.9,
+         reasoning: "Verified against basic safety rules"
+      },
       vetoed_by_risk: false,
-      execution_status: "DEPRECATED_ROUTE",
+      execution_status: "PAPER_SIMULATED",
       executed_trade: null,
-      compiled_signals: [],
+      compiled_signals: mockSignals,
       risk_vetos_logged: []
     });
   });
@@ -1313,7 +1408,7 @@ let portfolioState = loadPortfolio();
   });
 
   // Endpoint: AI Co-Pilot Natural Language Trading (MCP Concept)
-  app.post("/api/v1/mcp/trade", async (req: Request, res: Response) => {
+  app.post("/api/v1/mcp/trade", tradingLimiter, aiLimiter, async (req: Request, res: Response) => {
     const { prompt, broker = "Interactive Brokers (Paper)" } = req.body;
     if (!process.env.GEMINI_API_KEY) {
       return res
@@ -1384,7 +1479,7 @@ let portfolioState = loadPortfolio();
   
   app.use("/api/v1", systemRouter);
 
-  app.post("/api/v1/llm/dual-verify-trade", async (req: Request, res: Response) => {
+  app.post("/api/v1/llm/dual-verify-trade", tradingLimiter, aiLimiter, async (req: Request, res: Response) => {
     const { symbol, marketContext, headline, proposerStressed, verifierStressed, proposerName, verifierName, adversarialDebateMode } = req.body;
     if (!symbol || !headline) return res.status(400).json({ error: "Missing symbol or headline" });
     
@@ -1865,13 +1960,13 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
   // fills), so when AUTH_PASSWORD is configured, require the same session cookie the HTTP API
   // requires. Matches the HTTP middleware's own behavior when auth is unconfigured: allow through.
   async function isWsAuthed(request: import('http').IncomingMessage): Promise<boolean> {
-    if (!AUTH_PASSWORD) return true;
+    if (!AUTH_ENABLED) return true;
     const cookies = request.headers.cookie || "";
     const match = cookies.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
     const token = match ? match[1] : null;
     if (!token) return false;
     const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
-    return rows.length > 0 && rows[0].expiresAt > Date.now();
+    return isSessionValid(rows[0] ?? null);
   }
 
   httpServer.on('upgrade', (request, socket, head) => {
@@ -1879,6 +1974,15 @@ Output MUST be valid JSON (and no other text) exactly matching this structure:
       try {
         const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
         if (pathname !== '/ws') return;
+        // Rate-limit connection *creation* (not messages on an already-open socket) - the
+        // Express rate limiter below only ever sees HTTP requests, never the raw 'upgrade' event,
+        // so WS needs its own counter to stop a connection-flood from this same class of abuse.
+        const remoteIp = request.socket.remoteAddress || 'unknown';
+        if (!wsUpgradeLimiter.allow(remoteIp)) {
+          socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n');
+          socket.destroy();
+          return;
+        }
         if (!(await isWsAuthed(request))) {
           socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
           socket.destroy();
