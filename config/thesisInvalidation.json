@@ -1,0 +1,50 @@
+{
+  "$comment": "Thesis-invalidation rules. Strategy ids and thresholds live here — ThesisInvalidation.ts only interprets rule types. Changing this file is a reviewed config change, not an API knob. Preserve pre-extraction behavior.",
+  "biasLabels": {
+    "BUY": "long",
+    "SELL": "short"
+  },
+  "rules": [
+    {
+      "type": "regime_not_in_applicable",
+      "message": "Market regime flipped from {entryRegime} to {liveRegime} (no longer in [{applicable}])."
+    },
+    {
+      "type": "rvol_below",
+      "threshold": 1.2,
+      "strategies": ["MOMENTUM_BREAKOUT"],
+      "textIncludes": ["RVOL"],
+      "message": "RVOL collapsed to {rvol}x (below {threshold}x follow-through)."
+    },
+    {
+      "type": "false_breakout_through_structural_level",
+      "message": "Price closed back through the structural level {level} (false breakout)."
+    },
+    {
+      "type": "adx_below",
+      "threshold": 20,
+      "strategies": ["TREND_FOLLOWING"],
+      "textIncludes": ["ADX"],
+      "message": "ADX faded to {adx} (below {threshold} - trend strength gone)."
+    },
+    {
+      "type": "choch_against_side",
+      "message": "Market structure printed {structureEvent} against the {side} thesis."
+    },
+    {
+      "type": "close_through_structural_level",
+      "strategies": ["SMC_LIQUIDITY_SWEEP"],
+      "message": "Price closed back through the SMC sweep extreme {level} (continuation against the {bias})."
+    },
+    {
+      "type": "structure_trend_against_side",
+      "strategies": ["MEAN_REVERSION", "PULLBACK_CONTINUATION"],
+      "message": "Market structure trend flipped to {structureTrend}."
+    },
+    {
+      "type": "close_through_structural_level",
+      "strategies": ["RANGE_REVERSION"],
+      "message": "Close {close} broke the range boundary {level}."
+    }
+  ]
+}

@@ -161,3 +161,9 @@ A feature snapshot was added so existing Quant calculations can reach ChiefTrade
 evidence. **This appendix does not change the scores above.** Implementation without OOS success,
 paper fills, or NewsAgent calibration is not readiness. LIVE remains **NO-GO**. See
 `ARGUS_STRATEGY_INTEGRATION_REPORT.md` and `ARGUS_BACKTEST_VALIDATION_REPORT.md`.
+
+## Appendix — TradingAgents concepts (2026-08-15)
+
+Bull/Bear parser and TradeThesis are additive and **off** for live debate consumption. Thesis
+invalidation rules moved to `config/thesisInvalidation.json`. **Scores above are unchanged.**
+LIVE remains **NO-GO**.

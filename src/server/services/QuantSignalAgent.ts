@@ -35,6 +35,7 @@ import { computeSupportResistanceFeatures } from '../quant/indicators/supportRes
 import { computeSmcFeatures } from '../quant/indicators/smc';
 import { evaluateAll, bestStrategyIdea } from '../quant/strategies/StrategyEngine';
 import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine';
+import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
 import { computeGroupedScores, GroupedScores } from '../quant/scoring/GroupedScores';
 import { analyzeContradictions, ContradictionAnalysisResult } from '../quant/ai/QuantContradictionAnalyzer';
@@ -240,6 +241,12 @@ export class QuantSignalAgent {
             evaluations: strategyEvaluations,
             groupedScores,
             bars,
+          }),
+          tradeThesis: assembleTradeThesis({
+            symbol,
+            ctx: strategyContext,
+            evaluation: matchedStrategyEvaluation,
+            ideaSide: idea.side,
           }),
         },
       });

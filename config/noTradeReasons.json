@@ -1,0 +1,25 @@
+{
+  "$comment": "First-class NO_TRADE reasons. Codes are stable identifiers for journals and UI. Enabled by default for logging; none of these auto-submit orders.",
+  "reasons": [
+    { "code": "INSUFFICIENT_EVIDENCE", "label": "Insufficient independent evidence" },
+    { "code": "CONFLICTING_SIGNALS", "label": "Conflicting signals" },
+    { "code": "POOR_RISK_REWARD", "label": "Poor risk/reward" },
+    { "code": "POOR_LIQUIDITY", "label": "Poor liquidity" },
+    { "code": "REGIME_UNCLEAR", "label": "Market regime unclear" },
+    { "code": "EXCESSIVE_VOLATILITY", "label": "Excessive volatility" },
+    { "code": "STALE_MARKET_DATA", "label": "Stale market data" },
+    { "code": "MISSING_CRITICAL_DATA", "label": "Missing critical data" },
+    { "code": "NEWS_UNCERTAINTY", "label": "News uncertainty" },
+    { "code": "STRATEGY_UNSUITABLE_FOR_REGIME", "label": "Strategy not suitable for current regime" },
+    { "code": "EXPECTED_VALUE_TOO_LOW", "label": "Expected value too low or uncomputable" },
+    { "code": "POSITION_EXISTS", "label": "Position already exists" },
+    { "code": "PORTFOLIO_EXPOSURE", "label": "Portfolio exposure too high" },
+    { "code": "DAILY_LOSS_LIMIT", "label": "Daily loss limit" },
+    { "code": "CORRELATION_RISK", "label": "Correlation risk" },
+    { "code": "MODEL_DISAGREEMENT", "label": "Model disagreement" },
+    { "code": "THESIS_INVALIDATED", "label": "Thesis invalidated" },
+    { "code": "INSUFFICIENT_CONFIDENCE", "label": "Insufficient confidence" },
+    { "code": "DEBATE_HOLD", "label": "Adversarial debate verdict HOLD" },
+    { "code": "SWEEP_WITHOUT_CONFIRMATION", "label": "Liquidity sweep without CHoCH confirmation" }
+  ]
+}

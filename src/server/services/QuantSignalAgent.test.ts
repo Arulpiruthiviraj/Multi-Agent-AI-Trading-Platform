@@ -132,6 +132,8 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     expect(mine.quantDetail.featureSnapshot.momentum.rsiDivergence.isTradeSignal).toBe(false);
     expect(mine.quantDetail.featureSnapshot.unavailable.marketBreadth.status).toBe('NOT_SUPPORTED');
     expect(mine.quantDetail.featureSnapshot.unavailable.marketBreadth.tradingBlocked).toBe(false);
+    expect(mine.quantDetail.tradeThesis).toBeDefined();
+    expect(mine.quantDetail.tradeThesis.numericEvidenceSource).toBe('quant_engines');
     expect(persisted.aiContradictionAnalysis).toBeTruthy();
     expect(JSON.parse(persisted.aiContradictionAnalysis).available).toBe(false);
   });
