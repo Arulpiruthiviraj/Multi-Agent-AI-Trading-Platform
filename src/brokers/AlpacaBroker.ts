@@ -34,18 +34,14 @@
  */
 
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter.js';
+import { tradingSafety } from '../server/config/tradingSafety';
 
 // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - real request timeout/retry/circuit-breaker
-// configuration. Previously `fetchAlpaca()` used a bare `fetch()` with no timeout at all, so a
-// hung Alpaca call blocked the calling code (e.g. OrderManagement.executeOrder()) indefinitely -
-// confirmed by the current audit (FINAL_ANALYSIS.md Section 30.11) with zero test coverage of the
-// gap. These are module-level constants (not yet wired to `settings` - see the report's own "not
-// done this pass" list) so the values are visible and auditable in one place.
 const ALPACA_REQUEST_TIMEOUT_MS = 15_000;
-const ALPACA_MAX_RETRIES = 2; // additional attempts beyond the first, only for retry-safe requests
-const ALPACA_RETRY_BASE_DELAY_MS = 500; // exponential backoff: 500ms, 1500ms
-const CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3; // consecutive failures (post-retry) before the circuit opens
-const CIRCUIT_BREAKER_COOLDOWN_MS = 30_000; // fail fast for this long once the circuit is open
+const ALPACA_MAX_RETRIES = 2;
+const ALPACA_RETRY_BASE_DELAY_MS = 500;
+const CIRCUIT_BREAKER_FAILURE_THRESHOLD = tradingSafety.alpacaCircuitBreakerFailureThreshold;
+const CIRCUIT_BREAKER_COOLDOWN_MS = tradingSafety.alpacaCircuitBreakerCooldownMs;
 
 /** Real, typed failure classification - callers (OrderManagement, PortfolioReconciliation, etc.)
  *  can branch on `.kind` instead of parsing an error message string. */

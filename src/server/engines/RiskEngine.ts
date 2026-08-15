@@ -23,14 +23,16 @@ import { historicalDataGateway } from './backtest/HistoricalDataGateway';
 import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizing';
 import { getTradingDateStr } from '../core/TradingCalendar';
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
+import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
+import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
 
-const STALE_PRICE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
-const MARKET_CLOCK_CACHE_MS = 60 * 1000;
+const MARKET_CLOCK_CACHE_MS = tradingSafety.marketClockCacheMs;
 
-const MAX_CONSECUTIVE_LOSSES = 3;
+const MAX_CONSECUTIVE_LOSSES = tradingSafety.maxConsecutiveLosses;
 
-const CORRELATION_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+const CORRELATION_LOOKBACK_MS = tradingSafety.correlationLookbackMs;
 const closesCache: Map<string, { closes: number[]; fetchedAt: number }> = new Map();
 
 // Real daily closes over a 90-day window, backed by ohlcv_bars (with an opportunistic real
@@ -188,7 +190,7 @@ export class RiskEngine {
             // 2. Fetch risk settings from SQLite
             const settings = await db.select().from(schema.settings).limit(1);
             const riskLevel = settings[0]?.riskLevel || "Balanced";
-            const maxPortfolioRiskPct = (riskLevel === "Aggressive") ? 0.03 : (riskLevel === "Conservative" ? 0.01 : 0.02);
+            const maxPortfolioRiskPct = portfolioRiskPctForLevel(riskLevel);
 
             // Phase 13 (ARGUS_PRE_IMPLEMENTATION_BASELINE.md) - real, hardcoded ceilings that
             // apply automatically for real live trading, independent of whatever the settings row
@@ -221,10 +223,10 @@ export class RiskEngine {
             const dayStartEquity = tradingEngine.state.dayStartEquity ?? equityNow;
             const dailyLoss = Math.max(0, dayStartEquity - equityNow);
             tradingEngine.state.currentDailyLoss = dailyLoss;
-            const dailyLossKillSwitchThreshold = restrictedLiveCaps.dailyLossLimitDollars * 0.8;
+            const dailyLossKillSwitchThreshold = restrictedLiveCaps.dailyLossLimitDollars * tradingSafety.dailyLossKillSwitchFraction;
             const dailyLossPassed = dailyLoss < dailyLossKillSwitchThreshold;
             recordGate('daily_loss', dailyLossPassed, { dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: restrictedLiveCaps.dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted });
-            const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached 80% of the $${restrictedLiveCaps.dailyLossLimitDollars}${restrictedLiveCaps.restricted ? ' (restricted live mode cap)' : ''} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
+            const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached ${tradingSafety.dailyLossKillSwitchFraction * 100}% of the $${restrictedLiveCaps.dailyLossLimitDollars}${restrictedLiveCaps.restricted ? ' (restricted live mode cap)' : ''} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
 
             // 2a-2. Consecutive-loss circuit breaker - real realized P&L from the last three
             // FILLED trades, not a simulated/hardcoded count.
@@ -344,9 +346,42 @@ export class RiskEngine {
                         maxQuantity = Math.min(maxQuantity, existingPosition.quantity);
                     }
                 }
+
+                // Argus allocation is a hard authority ceiling, distinct from broker buying power.
+                // settings.budget (same field the Autobot "Allocated Budget Limit" writes) is the
+                // slice Argus may commit. Broker equity of $2,000 never authorizes a $101 BUY
+                // against a $100 allocation. Pending BUY notionals count as reserved.
+                const allocated = Number(
+                    settings[0]?.budget ?? tradingEngine.state.budget ?? 0
+                );
+                const allTrades = await db.select().from(schema.trades);
+                const pendingBuys = (allTrades || []).filter((t: any) =>
+                    t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
+                );
+                const capitalSnap = snapshotCapital({
+                    allocated: Number.isFinite(allocated) ? allocated : 0,
+                    positions: portfolio.positions || [],
+                    pendingBuys,
+                });
+                const requestedNotional = proposal.side === 'BUY' ? maxQuantity * currentPrice : 0;
+                const capitalGuard = evaluateAllocationGuard(capitalSnap, proposal.side, requestedNotional);
+                recordGate('argus_capital_allocation', capitalGuard.passed, capitalGuard);
+                eventBus.emit('CAPITAL_CHECK', {
+                    traceId: proposal.traceId,
+                    transactionId: proposal.transactionId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    ...capitalGuard,
+                    brokerEquity: accountEquity,
+                    brokerBuyingPower: buyingPower,
+                });
             } else {
                 recordGate('sufficient_size', false, { skipped: true, reason: 'invalid price - sizing not evaluated' });
+                recordGate('argus_capital_allocation', false, { skipped: true, reason: 'invalid price - allocation not evaluated' });
             }
+
+            const capitalRejectReason = (gateResults.find(g => g.gate === 'argus_capital_allocation')?.detail as any)?.reason
+                || 'Rejected by Argus capital allocation guard.';
 
             // Final verdict: first gate to fail, in evaluation order, determines the reported
             // reason - identical priority to the old early-exit order, but now every gate's real
@@ -367,9 +402,32 @@ export class RiskEngine {
                     : firstFailure!.gate === 'open_positions_cap' ? openPositionsCapReasonHolder.text
                     : firstFailure!.gate === 'sufficient_size' ? sufficientSizeReasonHolder.text
                     : firstFailure!.gate === 'sell_position_exists' ? sellPositionReason
+                    : firstFailure!.gate === 'argus_capital_allocation' ? capitalRejectReason
                     : `Rejected by gate: ${firstFailure!.gate}`;
             } else {
                 reasoning = `Approved based on ${(maxPortfolioRiskPct*100).toFixed(1)}% portfolio risk cap and available BP.`;
+            }
+
+            if (!approved && firstFailure) {
+                const { buildDiagnostic } = await import('../diagnostics/buildDiagnostic');
+                const { GATE_FIX } = await import('../diagnostics/catalog');
+                if (firstFailure.gate === 'argus_capital_allocation') {
+                    const d = firstFailure.detail || {};
+                    eventBus.emit('CAPITAL_BLOCK', buildDiagnostic('CAP-001', {
+                        requested: d.requestedNotional ?? '',
+                        remaining: d.remaining ?? '',
+                        allocated: d.allocated ?? '',
+                        used: d.used ?? '',
+                        brokerBuyingPower: buyingPower ?? '',
+                        technicalMessage: reasoning,
+                    }));
+                } else {
+                    eventBus.emit('RISK_BLOCK', buildDiagnostic('RSK-001', {
+                        gate: firstFailure.gate,
+                        reasoning,
+                        recommendedFix: GATE_FIX[firstFailure.gate] || 'Inspect the failed gate; do not bypass RiskEngine.',
+                    }));
+                }
             }
 
             eventBus.emitRiskAssessment({
@@ -387,6 +445,7 @@ export class RiskEngine {
                 selectedQuantStrategy: proposal.selectedQuantStrategy ?? null,
                 quantStopPrice: proposal.quantStopPrice ?? null,
                 quantTargetPrice: proposal.quantTargetPrice ?? null,
+                quantInvalidationJson: proposal.quantInvalidationJson ?? null,
             });
 
             await this.persistAssessment(proposal, { approved, maxQuantity, reasoning, rejectionGate: firstFailure?.gate ?? null, accountEquity, buyingPower, gateResults });

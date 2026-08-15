@@ -77,6 +77,84 @@ export function calculateStochasticRSI(closes: number[], rsiPeriod: number = 14,
   return ((currentRSI - lowestRSI) / (highestRSI - lowestRSI)) * 100;
 }
 
+export type DivergenceKind = 'BULLISH' | 'BEARISH' | 'NONE';
+
+/**
+ * Named oscillator divergence vs price. This is a FEATURE, never a trade signal.
+ * Bullish: price makes a lower low at two swing lows while the oscillator makes a higher low
+ * at those same price-pivot indices (classic RSI/MACD divergence).
+ */
+export interface DivergenceFeature {
+  kind: DivergenceKind | null;
+  isTradeSignal: false;
+  detail: string;
+}
+
+function localExtremaIndices(values: number[], kind: 'low' | 'high'): number[] {
+  const idx: number[] = [];
+  for (let i = 1; i < values.length - 1; i++) {
+    if (!Number.isFinite(values[i]) || !Number.isFinite(values[i - 1]) || !Number.isFinite(values[i + 1])) continue;
+    if (kind === 'low' && values[i] <= values[i - 1] && values[i] <= values[i + 1]) idx.push(i);
+    if (kind === 'high' && values[i] >= values[i - 1] && values[i] >= values[i + 1]) idx.push(i);
+  }
+  return idx;
+}
+
+export function detectPriceOscillatorDivergence(price: number[], oscillator: number[]): DivergenceFeature {
+  if (price.length < 8 || oscillator.length !== price.length) {
+    return { kind: null, isTradeSignal: false, detail: 'INSUFFICIENT_DATA' };
+  }
+
+  const pLows = localExtremaIndices(price, 'low');
+  const pHighs = localExtremaIndices(price, 'high');
+  let bullish = false;
+  let bearish = false;
+
+  if (pLows.length >= 2) {
+    const a = pLows[pLows.length - 2];
+    const b = pLows[pLows.length - 1];
+    if (Number.isFinite(oscillator[a]) && Number.isFinite(oscillator[b])) {
+      bullish = price[b] < price[a] && oscillator[b] > oscillator[a];
+    }
+  }
+  if (pHighs.length >= 2) {
+    const a = pHighs[pHighs.length - 2];
+    const b = pHighs[pHighs.length - 1];
+    if (Number.isFinite(oscillator[a]) && Number.isFinite(oscillator[b])) {
+      bearish = price[b] > price[a] && oscillator[b] < oscillator[a];
+    }
+  }
+
+  if (bullish && bearish) {
+    return { kind: 'NONE', isTradeSignal: false, detail: 'CONFLICTING_SWINGS' };
+  }
+  if (bullish) {
+    return { kind: 'BULLISH', isTradeSignal: false, detail: 'Price lower-low with oscillator higher-low at the same swing indices. Feature only — not a BUY.' };
+  }
+  if (bearish) {
+    return { kind: 'BEARISH', isTradeSignal: false, detail: 'Price higher-high with oscillator lower-high at the same swing indices. Feature only — not a SELL.' };
+  }
+  return { kind: 'NONE', isTradeSignal: false, detail: 'NO_DIVERGENCE' };
+}
+
+/** Trailing RSI aligned to `closes` length; earlier bars that lack a full RSI window are NaN. */
+export function alignedRsiSeries(closes: number[], rsiPeriod: number = 14): number[] {
+  const out = new Array(closes.length).fill(Number.NaN);
+  for (let end = rsiPeriod; end <= closes.length; end++) {
+    out[end - 1] = rsiEngine.calculate(closes.slice(0, end));
+  }
+  return out;
+}
+
+/** Trailing MACD histogram aligned to `closes` length. */
+export function alignedMacdHistogramSeries(closes: number[], minBars: number = 26): number[] {
+  const out = new Array(closes.length).fill(Number.NaN);
+  for (let end = minBars; end <= closes.length; end++) {
+    out[end - 1] = macdEngine.calculate(closes.slice(0, end)).histogram;
+  }
+  return out;
+}
+
 export interface MomentumFeatures {
   rsi: number;                 // existing RSIEngine, untouched
   macd: { macd: number; signal: number; histogram: number }; // existing MACDEngine, untouched

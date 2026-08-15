@@ -128,6 +128,10 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     // above - but the field itself is real and present, and persisted the same way.
     expect(mine.quantDetail.aiContradictionAnalysis).toBeDefined();
     expect(mine.quantDetail.aiContradictionAnalysis.available).toBe(false);
+    expect(mine.quantDetail.featureSnapshot).toBeDefined();
+    expect(mine.quantDetail.featureSnapshot.momentum.rsiDivergence.isTradeSignal).toBe(false);
+    expect(mine.quantDetail.featureSnapshot.unavailable.marketBreadth.status).toBe('NOT_SUPPORTED');
+    expect(mine.quantDetail.featureSnapshot.unavailable.marketBreadth.tradingBlocked).toBe(false);
     expect(persisted.aiContradictionAnalysis).toBeTruthy();
     expect(JSON.parse(persisted.aiContradictionAnalysis).available).toBe(false);
   });

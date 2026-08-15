@@ -33,16 +33,19 @@ import { computeMomentumFeatures } from '../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../quant/indicators/supportResistance';
 import { evaluateAll, bestStrategyIdea } from '../quant/strategies/StrategyEngine';
+import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
 import { computeGroupedScores, GroupedScores } from '../quant/scoring/GroupedScores';
 import { analyzeContradictions, ContradictionAnalysisResult } from '../quant/ai/QuantContradictionAnalyzer';
 import { riskRewardRatio, expectedValue } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
+import { MIN_BARS } from '../quant/RegimeEngine';
+import { tradingSafety } from '../config/tradingSafety';
 
-const DEFAULT_CYCLE_INTERVAL_MS = 5 * 60 * 1000; // 5 min - real bars don't update faster than this
-const LOOKBACK_DAYS = 400; // calendar days, generous enough to comfortably clear 200+ real trading bars for SMA200
+const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
+const LOOKBACK_DAYS = tradingSafety.quantLookbackDays;
 const TIMEFRAME = '1Day';
-const MIN_BARS_TO_EVALUATE = 60; // matches RegimeEngine's own MIN_BARS threshold for a non-degraded read
+const MIN_BARS_TO_EVALUATE = MIN_BARS;
 
 // Phase-3 baseline mapping from regime to a trade idea (regime alone, no strategy-setup
 // evaluation). Phase 4 wires the real StrategyEngine in as the PRIMARY idea source
@@ -230,6 +233,12 @@ export class QuantSignalAgent {
           groupedScores: groupedScores[idea.side],
           contradictions: matchedStrategyEvaluation?.contradictions ?? [],
           aiContradictionAnalysis,
+          featureSnapshot: snapshotFromStrategyContext({
+            ctx: strategyContext,
+            evaluations: strategyEvaluations,
+            groupedScores,
+            bars,
+          }),
         },
       });
     }

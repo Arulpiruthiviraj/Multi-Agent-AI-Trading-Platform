@@ -24,9 +24,10 @@
  */
 import { eventBus } from '../core/EventBus';
 import { tradingEngine } from '../engines/TradingEngine';
+import { tradingSafety } from '../config/tradingSafety';
 
-export const AI_FAILURE_WINDOW_MS = 10 * 60 * 1000;
-export const AI_FAILURE_THRESHOLD_FOR_LIVE_PAUSE = 5;
+export const AI_FAILURE_WINDOW_MS = tradingSafety.aiFailureWindowMs;
+export const AI_FAILURE_THRESHOLD_FOR_LIVE_PAUSE = tradingSafety.aiFailureThresholdForLivePause;
 
 export class AIFailureCircuitBreaker {
   private exhaustionTimestamps: number[] = [];

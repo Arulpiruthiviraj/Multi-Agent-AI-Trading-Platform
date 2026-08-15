@@ -378,6 +378,20 @@ async function startServer() {
   
   // Initialize broker manager so configured broker selection is active at runtime
   await BrokerManager.getInstance().initialize();
+
+  try {
+    const { modelRuntimeManager } = await import("./src/server/ai/ModelRuntimeManager");
+    const models = await modelRuntimeManager.startAndProbe();
+    for (const m of models) {
+      const line = m.health === "READY"
+        ? `[ModelRuntime] ${m.modelId.padEnd(16)} READY  ${m.detail || ""}`
+        : `[ModelRuntime] ${m.modelId.padEnd(16)} ${m.health}  Reason: ${m.detail || "unknown"}  Action: ${m.action || "none"}`;
+      if (m.health === "READY" || m.health === "DISABLED") console.log(line);
+      else console.warn(line);
+    }
+  } catch (e: any) {
+    console.warn(`[ModelRuntime] Probe failed (Argus remains usable): ${e.message}`);
+  }
   
   // Update in-memory autobot state to match DB
   Object.assign(tradingEngine.state, {

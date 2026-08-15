@@ -84,5 +84,6 @@ describe('computePaperTradingReport (Phase 10)', () => {
     const report = await computePaperTradingReport();
     expect(report.reconciliationEventCount).toBe(2);
     expect(report.reconciliationMismatchCount).toBe(1);
+    expect(report.experimentId).toBeTruthy();
   });
 });

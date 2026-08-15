@@ -45,6 +45,14 @@ export class RiskValidationAgent {
         selectedQuantStrategy: approval.supportingQuantDetail?.selectedStrategy ?? null,
         quantStopPrice: approval.supportingQuantDetail?.proposedStop ?? null,
         quantTargetPrice: approval.supportingQuantDetail?.proposedTarget ?? null,
+        quantInvalidationJson: approval.supportingQuantDetail ? JSON.stringify({
+          texts: approval.supportingQuantDetail.invalidationConditions ?? [],
+          strategy: approval.supportingQuantDetail.selectedStrategy ?? null,
+          side: approval.side,
+          entryRegime: approval.supportingQuantDetail.entryRegime ?? approval.supportingQuantDetail.regime?.regime ?? null,
+          applicableRegimes: approval.supportingQuantDetail.applicableRegimes ?? [],
+          structuralLevel: approval.supportingQuantDetail.structuralLevel ?? null,
+        }) : null,
      };
 
      riskEngine.evaluateRisk(request);

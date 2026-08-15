@@ -22,6 +22,7 @@
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomes } from '../db/schema';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
+import { tradingSafety } from '../config/tradingSafety';
 
 // Matches ReflectionEngine's existing "reflect on losses within the last hour" window - the
 // prediction must be at least this old before there's a real "afterward" to look at.
@@ -115,7 +116,7 @@ export class PredictionOutcomeEvaluator {
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.evaluatePending().catch(e => console.error('[PredictionOutcomeEvaluator] Cycle failed', e)), 5 * 60 * 1000);
+    this.intervalId = setInterval(() => this.evaluatePending().catch(e => console.error('[PredictionOutcomeEvaluator] Cycle failed', e)), tradingSafety.predictionOutcomeIntervalMs);
     this.evaluatePending().catch(e => console.error('[PredictionOutcomeEvaluator] Initial cycle failed', e));
   }
 

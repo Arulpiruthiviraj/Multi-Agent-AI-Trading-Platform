@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as schema from '../db/schema';
 import { getTradingDateStr } from '../core/TradingCalendar';
+import { tradingSafety } from '../config/tradingSafety';
 
 // db.select().from(table)...limit()/where()/orderBy() all resolve to whatever rows were
 // registered for that specific table via setTableRows(). Mirrors drizzle's own thenable
@@ -43,6 +44,7 @@ const { mockTradingEngine } = vi.hoisted(() => ({
       tradingMode: 'PAPER',
       tradingState: 'TRADING_ENABLED' as 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP',
       emergencyStopActive: false,
+      budget: 50000,
     },
   },
 }));
@@ -105,7 +107,8 @@ describe('RiskEngine.evaluateRisk', () => {
     mockTradingEngine.state.dailyLossLimit = 5000;
     mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
     mockTradingEngine.state.emergencyStopActive = false;
-    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 3000 }]);
+    mockTradingEngine.state.budget = 1_000_000;
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 3000, budget: 1_000_000 }]);
     setTableRows(schema.riskAssessments, []);
     setTableRows(schema.trades, []);
     setTableRows(schema.newsClusters, []);
@@ -169,12 +172,13 @@ describe('RiskEngine.evaluateRisk', () => {
     }
   });
 
-  it('blocks new trades after 3 consecutive losing FILLED trades', async () => {
-    setTableRows(schema.trades, [
-      { status: 'FILLED', profitLoss: -10, timestamp: '2026-01-03' },
-      { status: 'FILLED', profitLoss: -5, timestamp: '2026-01-02' },
-      { status: 'FILLED', profitLoss: -1, timestamp: '2026-01-01' },
-    ]);
+  it('blocks new trades after the configured consecutive losing FILLED trades', async () => {
+    const n = tradingSafety.maxConsecutiveLosses;
+    setTableRows(schema.trades, Array.from({ length: n }, (_, i) => ({
+      status: 'FILLED',
+      profitLoss: -10,
+      timestamp: `2026-01-${String(n - i).padStart(2, '0')}`,
+    })));
 
     await riskEngine.evaluateRisk({ traceId: 't3', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
 
@@ -505,5 +509,36 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.approved).toBe(true);
     expect(assessment.maxQuantity).toBeGreaterThan(0);
+  });
+
+  it('rejects a $101 BUY when Argus allocation is $100 even if broker buying power is $2000', async () => {
+    mockTradingEngine.state.budget = 100;
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 101, budget: 100 }]);
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ cash: 2000, buyingPower: 2000, equity: 2000 }));
+
+    await riskEngine.evaluateRisk({ traceId: 'cap-101', symbol: 'MSFT', side: 'BUY', currentPrice: 101 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/Remaining Argus allocation/);
+    expect(assessment.reasoning).toMatch(/\$101/);
+  });
+
+  it('approves a $60 BUY against $100 unused allocation, then rejects a second $50 BUY', async () => {
+    mockTradingEngine.state.budget = 100;
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 60, budget: 100 }]);
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ cash: 2000, buyingPower: 2000, equity: 2000 }));
+
+    await riskEngine.evaluateRisk({ traceId: 'cap-60', symbol: 'MSFT', side: 'BUY', currentPrice: 60 });
+    expect(lastAssessment().approved).toBe(true);
+
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 50, budget: 100 }]);
+    mockBrokerHolder.broker = makeBroker(basePortfolio({
+      cash: 1940, buyingPower: 1940, equity: 2000,
+      positions: [{ symbol: 'MSFT', quantity: 1, averagePrice: 60 }],
+    }));
+    await riskEngine.evaluateRisk({ traceId: 'cap-50', symbol: 'AAPL', side: 'BUY', currentPrice: 50 });
+    expect(lastAssessment().approved).toBe(false);
+    expect(lastAssessment().reasoning).toMatch(/requested capital = \$50/);
   });
 });

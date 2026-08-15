@@ -1,0 +1,7 @@
+{
+  "strongAgreementConfidence": 0.99,
+  "weakDisagreementConfidence": 0.3,
+  "splitConfidence": 0.95,
+  "belowThresholdConfidence": 0.7,
+  "unweightedAgentConfidence": 0.8
+}

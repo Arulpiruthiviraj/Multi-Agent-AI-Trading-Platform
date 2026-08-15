@@ -15,6 +15,7 @@ import { trades, transactions, riskAssessments, reconciliationEvents } from '../
 import { gte as gteOp } from 'drizzle-orm';
 
 export interface PaperTradingReport {
+  experimentId: string;
   windowSinceIso: string | null;
   totalTransactions: number;
   transactionsByStatus: Record<string, number>;
@@ -35,6 +36,10 @@ export interface PaperTradingReport {
 }
 
 export const MIN_TRADES_FOR_PAPER_VALIDATION = 30; // a real, honest floor - do not draw a conclusion from a handful of fills
+
+/** Persistent experiment identifier for a continuous paper run. Override via ARGUS_PAPER_EXPERIMENT_ID.
+ *  Never invents trades - it only labels whatever organic activity actually occurred. */
+export const PAPER_EXPERIMENT_ID = process.env.ARGUS_PAPER_EXPERIMENT_ID || 'ARGUS_PAPER_EXPERIMENT_001';
 
 export async function computePaperTradingReport(sinceIso?: string): Promise<PaperTradingReport> {
   const txns = sinceIso
@@ -94,6 +99,7 @@ export async function computePaperTradingReport(sinceIso?: string): Promise<Pape
   const statisticallyMeaningful = filledSells.length >= MIN_TRADES_FOR_PAPER_VALIDATION;
 
   return {
+    experimentId: PAPER_EXPERIMENT_ID,
     windowSinceIso: sinceIso ?? null,
     totalTransactions: txns.length,
     transactionsByStatus,

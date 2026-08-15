@@ -32,11 +32,36 @@ class EventBus extends EventEmitter {
 
   // Support wildcard listening
   public emit(event: string | symbol, ...args: any[]): boolean {
-    const result = super.emit(event, ...args);
-    if (event !== '*') {
-      super.emit('*', event, ...args);
+    // Phase 16A follow-up: Node's default EventEmitter.emit() aborts remaining listeners when
+    // one throws. That is the exact class of failure that left 101 real CHIEF_APPROVED_IDEA
+    // events with a RiskEngine rejection never written to transactions.status (a stale process
+    // was the original 135/141 incident; this dispatch abort is the same failure class going
+    // forward). Each listener is isolated - a throw is logged and the rest of the chain still
+    // runs. This is a live-behavior change only on the error path: previously later listeners
+    // were silently skipped; now they run. Happy-path dispatch order is unchanged.
+    const named = this.rawListeners(event);
+    if (event === 'error' && named.length === 0) {
+      const err = args[0];
+      if (err instanceof Error) throw err;
+      throw new Error(`Unhandled 'error' event: ${String(err)}`);
     }
-    return result;
+    for (const listener of named) {
+      try {
+        listener.apply(this, args);
+      } catch (e) {
+        console.error(`[EventBus] Listener for ${String(event)} threw - remaining listeners still run`, e);
+      }
+    }
+    if (event !== '*') {
+      for (const listener of this.rawListeners('*')) {
+        try {
+          listener.apply(this, [event, ...args]);
+        } catch (e) {
+          console.error('[EventBus] Wildcard listener threw - remaining listeners still run', e);
+        }
+      }
+    }
+    return named.length > 0;
   }
 
   // Legacy aliases

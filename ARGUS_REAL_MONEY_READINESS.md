@@ -154,3 +154,10 @@ ceiling independent of account size or settings misconfiguration.
     the quant-exit-parity question explicitly; (3) build real hallucination-protection and complete
     Stage C/D of the historical AI validation plan; (4) only then, re-run this exact scorecard
     against real accumulated evidence - not against more code.
+
+## Appendix — QuantitativeFeatureEngine (2026-08-15)
+
+A feature snapshot was added so existing Quant calculations can reach ChiefTrader as structured
+evidence. **This appendix does not change the scores above.** Implementation without OOS success,
+paper fills, or NewsAgent calibration is not readiness. LIVE remains **NO-GO**. See
+`ARGUS_STRATEGY_INTEGRATION_REPORT.md` and `ARGUS_BACKTEST_VALIDATION_REPORT.md`.

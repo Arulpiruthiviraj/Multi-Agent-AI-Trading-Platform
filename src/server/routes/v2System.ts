@@ -449,6 +449,7 @@ v2Router.get('/transactions/:id/export', async (req, res) => {
 import { agentPredictions, aiProviders, aiCalls as aiCallsTable } from '../db/schema';
 import { gte as gteOp } from 'drizzle-orm';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { tradingSafety } from '../config/tradingSafety';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from '../engines/TradingEngine';
 
@@ -546,7 +547,7 @@ const RSI_SCAN_UNAVAILABLE_SYMBOLS = new Set(['BTC']);
 // Comfortably more than rsiEngine's own 14-period Wilder floor, so a "real" RSI here always
 // reflects genuine smoothing rather than the engine's own insufficient-data fallback (a flat 50).
 const RSI_MIN_BARS = 20;
-const RSI_SCAN_LOOKBACK_MS = 90 * 24 * 60 * 60 * 1000;
+const RSI_SCAN_LOOKBACK_MS = tradingSafety.correlationLookbackMs;
 
 function rsiSignal(rsi: number): 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL' {
   if (rsi >= 70) return 'OVERBOUGHT';
@@ -1255,7 +1256,8 @@ v2Router.post('/quant/strategy-backtests', backtestLimiter, async (req, res) => 
     const result = await backtestEngine.runStrategyBacktest({ strategyId, symbol, startDate, endDate, timeframe, initialCash, verboseLogging: !!verboseLogging });
     res.json({ ok: true, data: result });
   } catch (e: any) {
-    res.status(400).json({ ok: false, error: e.message });
+    const { diagnosticFromBacktestError } = await import('../diagnostics/buildDiagnostic');
+    res.status(400).json({ ok: false, error: e.message, diagnostic: diagnosticFromBacktestError(e.message) });
   }
 });
 
@@ -1339,5 +1341,146 @@ v2Router.get('/paper-trading/report', async (req, res) => {
     res.json({ ok: true, data });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/orchestration/models', async (_req, res) => {
+  try {
+    const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
+    const models = await modelRuntimeManager.refresh();
+    res.json({ ok: true, models });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/orchestration/capital', async (_req, res) => {
+  try {
+    const { snapshotCapital } = await import('../engines/CapitalAllocation');
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    const settingsRows = await db.select().from(settings).limit(1);
+    const allocated = Number(settingsRows[0]?.budget ?? tradingEngine.state.budget ?? 0);
+    const broker = BrokerManager.getInstance().getActiveBroker();
+    const pf = await broker.portfolio();
+    const allTrades = await db.select().from(trades);
+    const pendingBuys = (allTrades || []).filter((t: any) =>
+      t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
+    );
+    const argus = snapshotCapital({
+      allocated: Number.isFinite(allocated) ? allocated : 0,
+      positions: pf.positions || [],
+      pendingBuys,
+    });
+    let openOrders = 0;
+    try {
+      const orders = await broker.orders();
+      openOrders = (orders || []).filter((o: any) => o.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(String(o.status).toUpperCase())).length;
+    } catch {
+      openOrders = pendingBuys.length;
+    }
+    const invested = (pf.positions || []).reduce((s: number, p: any) => {
+      const qty = Number(p.quantity) || 0;
+      const px = Number(p.averagePrice ?? p.avgPrice ?? 0) || 0;
+      return s + qty * px;
+    }, 0);
+    res.json({
+      ok: true,
+      broker: {
+        equity: pf.equity,
+        cash: pf.cash,
+        buyingPower: pf.buyingPower,
+        investedCapital: invested,
+        unrealizedPnl: pf.unrealizedPnl ?? null,
+        realizedPnl: pf.realizedPnl ?? null,
+        dailyPnl: pf.dailyPnl ?? null,
+        openPositions: (pf.positions || []).length,
+        openOrders,
+      },
+      argus,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/diagnostics', async (_req, res) => {
+  try {
+    const { collectDiagnostics } = await import('../diagnostics/DiagnosticService');
+    const snap = await collectDiagnostics();
+    res.json({ ok: true, ...snap });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/diagnostics/why-not-trading', async (_req, res) => {
+  try {
+    const { collectDiagnostics } = await import('../diagnostics/DiagnosticService');
+    const snap = await collectDiagnostics();
+    res.json({ ok: true, ...snap.whyNotTrading, timestamp: snap.timestamp });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/diagnostics/why/:id', async (req, res) => {
+  try {
+    const assembled = await assembleTransaction(req.params.id);
+    if (!assembled) {
+      return res.status(404).json({
+        ok: false,
+        available: false,
+        reason: 'No transaction row exists for this id. Nothing is fabricated.',
+      });
+    }
+    const { explainTransaction } = await import('../diagnostics/DiagnosticService');
+    const explanation = await explainTransaction(assembled);
+    res.json({ ok: true, ...explanation });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.post('/diagnostics/retry/:component', async (req, res) => {
+  try {
+    const component = String(req.params.component || '').toLowerCase();
+    if (['chronos', 'kronos', 'ollama', 'openalice', 'models'].includes(component)) {
+      const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
+      const models = await modelRuntimeManager.refresh();
+      return res.json({ ok: true, action: 're-probed', models });
+    }
+    if (component === 'market_data' || component === 'market-data') {
+      const { marketDataWorker: mdw } = await import('../services/MarketDataWorker');
+      return res.json({
+        ok: true,
+        action: 'status-only',
+        connected: mdw.isConnected(),
+        note: 'This does not bypass RiskEngine. It only reports whether the Alpaca WebSocket is OPEN.',
+      });
+    }
+    res.status(400).json({ ok: false, error: `Retry is not defined for ${component}` });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/replay/ai-availability', async (_req, res) => {
+  try {
+    const { aiHistoricalReplayAvailability } = await import('../replay/aiReplayAvailability');
+    res.json({ ok: true, data: aiHistoricalReplayAvailability() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.post('/replay/historical', backtestLimiter, async (req, res) => {
+  try {
+    const { runHistoricalReplay } = await import('../replay/HistoricalReplayService');
+    const data = await runHistoricalReplay(req.body || {});
+    res.json(data);
+  } catch (e: any) {
+    const { diagnosticFromBacktestError } = await import('../diagnostics/buildDiagnostic');
+    res.status(400).json({ ok: false, error: e.message, diagnostic: diagnosticFromBacktestError(e.message) });
   }
 });

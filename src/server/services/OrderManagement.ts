@@ -42,6 +42,7 @@ import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { BrokerPlugin, Order, brokerSupports } from '../../brokers/BrokerAdapter';
 import { updateTransactionStatus } from '../core/TransactionRegistry';
+import { tradingSafety } from '../config/tradingSafety';
 
 // Shared with TradingEngine.cancelAllOpenOrders(), which previously only matched the literal
 // string 'PENDING' - real broker adapters (Alpaca) can report other non-terminal statuses
@@ -66,8 +67,8 @@ const FOLLOWUP_INTERVAL_MS = 15000;
 // whether the broker actually received it first. This runs on a slower cadence (order-lookup-by-
 // client-order-id is a real broker API call per candidate row, not worth polling every 15s) and
 // once immediately on start(), matching PortfolioReconciliation's own "runs on boot too" pattern.
-const CRASH_RECOVERY_INTERVAL_MS = 5 * 60 * 1000;
-const CRASH_RECOVERY_LOOKBACK_MS = 48 * 60 * 60 * 1000; // bound the query - don't scan the whole trades table forever
+const CRASH_RECOVERY_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
+const CRASH_RECOVERY_LOOKBACK_MS = tradingSafety.crashRecoveryLookbackMs;
 
 export class OrderManagementService {
   private intervalId: NodeJS.Timeout | null = null;
@@ -77,7 +78,7 @@ export class OrderManagementService {
   constructor() {
     eventBus.on('RISK_ASSESSMENT_COMPLETED', async (assessment) => {
       if (assessment.approved && assessment.maxQuantity > 0) {
-        await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails, assessment.transactionId, assessment.selectedQuantStrategy, assessment.quantStopPrice, assessment.quantTargetPrice);
+        await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails, assessment.transactionId, assessment.selectedQuantStrategy, assessment.quantStopPrice, assessment.quantTargetPrice, assessment.quantInvalidationJson, assessment.currentPrice);
       }
     });
   }
@@ -164,7 +165,7 @@ export class OrderManagementService {
     return newQty;
   }
 
-  async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any, transactionId?: string, quantStrategyId?: string | null, quantStopPrice?: number | null, quantTargetPrice?: number | null) {
+  async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any, transactionId?: string, quantStrategyId?: string | null, quantStopPrice?: number | null, quantTargetPrice?: number | null, quantInvalidationJson?: string | null, intendedPrice?: number | null) {
     // Idempotency: refuse to place a second real order for a traceId that already has one.
     // Guards against any future duplicate RISK_ASSESSMENT_COMPLETED emission for the same trade.
     try {
@@ -197,7 +198,7 @@ export class OrderManagementService {
         symbol,
         side,
         quantity,
-        price: 0,
+        price: (typeof intendedPrice === 'number' && Number.isFinite(intendedPrice) && intendedPrice > 0) ? intendedPrice : 0,
         status: "PENDING",
         timestamp: submittedAt,
         reasoning,
@@ -215,6 +216,7 @@ export class OrderManagementService {
         quantStrategyId: quantStrategyId ?? null,
         quantStopPrice: quantStopPrice ?? null,
         quantTargetPrice: quantTargetPrice ?? null,
+        quantInvalidationJson: quantInvalidationJson ?? null,
       } as any);
     } catch (e: any) {
       const isDuplicate = e?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(String(e?.message || ''));

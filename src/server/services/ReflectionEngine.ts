@@ -9,9 +9,8 @@
  */
 import { db } from '../db';
 import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes } from '../db/schema';
-import { eq, sql } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
-import { marketDataWorker } from './MarketDataWorker';
 import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
 import crypto from 'crypto';
@@ -70,28 +69,19 @@ export class ReflectionEngine {
       let recentLosses: any[] = [];
       
       for (const t of allTrades) {
-         if (t.status === 'REJECTED') continue;
-         
+         if (t.status !== 'FILLED' || t.side !== 'SELL') continue;
+         if (t.profitLoss === null || t.profitLoss === undefined) continue;
+
          const tradeTime = new Date(t.timestamp).getTime();
-         if (now - tradeTime > 60000) {
-            const currentPrice = marketDataWorker.getLatestPrice(t.symbol!);
-            if (!currentPrice) continue;
-            
-            const isLong = t.side === 'BUY';
-            const entry = (t.price as number) || 0;
-            if (entry <= 0) continue;
-            
-            const priceDiff = currentPrice - entry;
-            const isProfitable = isLong ? priceDiff > 0 : priceDiff < 0;
-            
-            if (isProfitable) {
-                successfulTradesCount++;
-            } else {
-                failedTradesCount++;
-                if (now - tradeTime < 3600000) { // Only reflect on losses in the last hour
-                    recentLosses.push({ symbol: t.symbol, side: t.side, entry, currentPrice, reasoning: t.reasoning });
-                }
-            }
+         const isProfitable = t.profitLoss > 0;
+
+         if (isProfitable) {
+             successfulTradesCount++;
+         } else {
+             failedTradesCount++;
+             if (now - tradeTime < 3600000) {
+                 recentLosses.push({ symbol: t.symbol, side: t.side, entry: t.price, realizedPnl: t.profitLoss, reasoning: t.reasoning });
+             }
          }
       }
 

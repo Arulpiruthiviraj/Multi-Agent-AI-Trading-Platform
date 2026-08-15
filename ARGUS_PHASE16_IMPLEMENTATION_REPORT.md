@@ -177,3 +177,201 @@ diff bounded; flagged here as a real, well-scoped follow-up rather than silently
 **Verified result.** Full suite (through this point in Phase 16): all new tests pass, `npx tsc
 --noEmit` clean. `SystemBootstrap.ts` now starts `aiFailureCircuitBreaker` alongside
 `alertingService`, same real-boot code path.
+
+---
+
+## Phase 16A follow-up — EventBus listener isolation
+
+**Problem (documented, not fixed, in 16A above).** `EventBus.emit()` used Node's default
+`EventEmitter` dispatch: a synchronous throw in any listener aborts every later listener for that
+event. That is the same failure class as the 135/141 stuck-OPEN transactions.
+
+**Change.** `EventBus.emit()` now invokes each named and wildcard listener inside its own
+try/catch, logs the throw, and continues. Happy-path order is unchanged. This **is** a live
+behavior change, but only on the error path: previously later listeners were silently skipped;
+now they run.
+
+**Tests.** `src/server/core/EventBus.isolation.test.ts` — first listener throws, second still
+runs; a stock `EventEmitter` contrast case proves the Node default still aborts.
+
+---
+
+## Phase 16B follow-up — live thesis invalidation (canonical spec: live = backtest intent)
+
+**Problem.** Quant strategies state invalidation conditions (false breakout, regime flip, RVOL
+collapse, ADX fade, CHoCH) in `invalidationConditions[]`, but live `PortfolioMonitor` only
+compared numeric stop/target. A thesis could die while price was still between stop and target.
+
+**Canonical behavior (user-confirmed direction from 16B: make live strategy-aware).** After
+stop/target, re-evaluate the structured snapshot captured at entry (`trades.quant_invalidation_json`,
+migration `0025_quant_invalidation_json.sql`) against real daily bars via `classifyRegime` /
+volume / structure features. `ThesisInvalidation.ts` is pure and strategy-id keyed — it does not
+parse English. If bars are thin or Alpaca is unavailable, it returns null (no fabricated exit).
+
+**Tests.** `ThesisInvalidation.test.ts`; `PortfolioMonitor.test.ts` "exits when the original quant
+thesis is invalidated even though price is still between stop and target."
+
+**Scope.** Only QuantEngine-originated rows with a persisted snapshot. Technical/news/fundamental
+positions unchanged.
+
+---
+
+## Professional-trader consensus gates (live behavior change — documented)
+
+**Problem.** `ChiefTraderAgent.reviewIdea()` started an async debate for high-confidence ideas but
+any later idea with confidence ≤ 0.6 immediately called `evaluateConsensus()`, so a trade could
+approve before the debate finished. A single agent above 0.75 was enough to approve. Debate HOLD
+did not veto. Quant AI disagreement was recorded and ignored. `ReflectionEngine` treated open
+underwater BUYs as closed losses.
+
+**Change (additive gates, not a rewrite of EvidenceAggregator's BUY/SELL math except HOLD>0 now
+penalizes):**
+- Per-symbol `pendingDebates` — consensus waits until in-flight debate finishes (or fails).
+- Minimum two unique independent agreeing agents (`ConsensusDebate` does not count).
+- Debate HOLD is a hard NO TRADE.
+- Quant AI `aiAgreesWithSide === false` is a hard NO TRADE (does not overwrite the deterministic side).
+- `PortfolioManager` SELL skips debate and the two-agent floor (capital preservation).
+- HOLD with confidence > 0 penalizes both sides; HOLD at 0 (`DATA_UNAVAILABLE`) still does not dilute.
+- Reflection rules generated only from FILLED SELL with real `profitLoss`.
+
+**Tests.** `ChiefTraderAgent.test.ts` (single-agent NO TRADE, debate-in-flight deferral, HOLD veto,
+AI contradiction veto, PortfolioManager risk exit); `EvidenceAggregator.test.ts`;
+`ReflectionEngine.closedTrades.test.ts`; calibration tests updated to two independent voices.
+
+---
+
+## Phase 16C–16F, 16J–16L — reaffirm, do not re-tune
+
+No new strategies. No parameter optimization. Existing evidence stands:
+
+- In-sample `runStrategyBacktest()` numbers: `ARGUS_STRATEGY_VALIDATION_REPORT.md` / `BASELINE_RESULTS.json`.
+- Walk-forward OOS: MOMENTUM_BREAKOUT/MSFT +0.04%, AMD +0.28%, with 79–89% IS→OOS degradation
+  (`WALKFORWARD_CHECK_RESULTS.json`). **Not a validated edge.**
+- Live QuantEngine ideas already require positive EV from real closed-strategy history
+  (`QuantSignalAgent.ts` / `LiveStrategyPerformance.ts`) — sample size in this environment is
+  still zero organic closed trades, so this gate currently refuses strategy-sourced live ideas
+  honestly rather than fabricating a win rate.
+- Failure classification remains only categories derivable from backtest telemetry
+  (`FailureClassification.ts`). Requested labels that need live news/AI/RiskEngine are still
+  `UNIMPLEMENTED_FAILURE_CATEGORIES`, not faked.
+- Monte Carlo remains `scenarioAnalysis: true`, never a prediction (`MonteCarlo.ts`).
+
+---
+
+## Phase 16G — hallucination / data-quality protection (partial close)
+
+**Already real:** schema/enum/confidence coercion (`AIOutputValidator.ts`), used by News/Fundamental/Macro.
+
+**New this pass:**
+- `looksLikeListedTicker()` — rejects `(Coca-Cola)` / free-text company names. Wired into
+  `NewsScoringEngine` (AI `symbol` field) and `NewsEngine` (extract + emit). **Live behavior
+  change:** those malformed symbols no longer become `TRADE_IDEA_GENERATED`.
+- `rejectIfPriceDisagrees()` — if an AI claims a spot price more than 2% from live, the claim is
+  rejected. Helper is tested; agents that do not emit a numeric price are unaffected.
+
+**Still FAIL for gate 9 overall:** no point-in-time historical news/fundamental dataset (Stage C),
+so historical AI replay (Stage D) is still correctly not attempted. NewsAgent live accuracy 44.6%
+on 242 evaluated predictions stands (`ARGUS_AI_VALIDATION_REPORT.md`).
+
+---
+
+## Phase 16H — historical AI validation
+
+Unchanged: Stage C/D remain UNTESTABLE without a licensed point-in-time news/fundamentals feed.
+Recorded-live evaluation (Stage A/B) remains the only honest path. See `ARGUS_AI_VALIDATION_REPORT.md`.
+
+---
+
+## Phase 16I — paper-trading experiment scaffolding
+
+No synthetic trades were injected. `computePaperTradingReport()` now labels every report with
+`experimentId` (`ARGUS_PAPER_EXPERIMENT_ID` env, default `ARGUS_PAPER_EXPERIMENT_001`). Protocol:
+`ARGUS_PAPER_TRADING_EXPERIMENT.md`. This environment still has **zero organic closed paper
+trades** — the experiment has not been run; only the measurement harness exists.
+
+---
+
+## Phase 16M — restricted live (already closed this phase, reaffirmed)
+
+Hardcoded LIVE-only ceilings in `RestrictedLiveMode.ts` + `AIFailureCircuitBreaker.ts` (now read
+from `config/tradingSafety.json`, still not API/UI-tunable). Max pre-trade slippage remains
+honestly unenforceable (no L2/spread source). Frontend cannot raise those ceilings.
+
+---
+
+## Phase 16O — architecture freeze + config-backed safety thresholds
+
+**Analysis first:** `BEFORE_IMPLEMENTATION_ARCHITECTURE.md` (read-only inventory). Live path was
+not rewritten into a sequential Chronos→Kronos DAG. Agents already run in parallel on timers.
+Historical AI replay for 2019–2022 remains **UNTESTABLE** (no point-in-time news/LLM corpus).
+Unrestricted LIVE remains **NO-GO**. Kill switch already exists; no second one was added.
+
+**Config extraction (behavior-identical at current numbers):** `config/tradingSafety.json` loaded
+by `src/server/config/tradingSafety.ts`. Wired into RiskEngine (stale price, consecutive losses,
+correlation lookback, daily-loss fraction, risk-level percents), DiagnosticService stale window,
+EvidenceAggregator disagreement penalty (`netConfidenceFromVotes` for tests), ChiefTrader
+consensus floor / min independent agents, RestrictedLiveMode LIVE ceilings (still not API-tunable),
+PositionSizing concentration/stop assumption, EscalationPolicy OpenAlice band, Alpaca circuit
+breaker, AIFailureCircuitBreaker, OMS crash-recovery lookback, BacktestEngine lookback bars,
+RegimeEngine `MIN_BARS`, QuantSignalAgent cycle/lookback, RSI scan lookback, alerting/training/
+regime/prediction-outcome intervals.
+
+**Tests:** EvidenceAggregator expected confidence is computed from the same penalty as production,
+not `0.45 / 2`. Restricted-live still clamps; changing JSON requires review, not a UI write.
+
+**Not done (honest):** sequential mega-pipeline, enabling LIVE,
+rewriting every indicator period, fabricating historical LLM outputs.
+
+**Readiness:** **unchanged.** Config extraction is observability/maintainability, not an edge.
+
+---
+
+## Phase 16P — historical replay honesty + ledger (no AI fabrication)
+
+**WHY new modules:** items 10–17 of the Phase 16 request asked for 2022 AI replay UIs. That path
+would either look ahead or invent LLM votes. New code is additive: `src/server/replay/*`.
+
+**WHAT changed:**
+- `GET /api/v2/replay/ai-availability` returns UNAVAILABLE with WHAT/WHY/IMPACT/FIX/lookahead risk.
+- `POST /api/v2/replay/historical` with `mode=AI` does **not** call models; same payload.
+- `mode=QUANT_STRATEGY` reuses `BacktestEngine.runStrategyBacktest` + ReplayClock (unchanged engine).
+- Ledger pairs BUY/SELL into prediction-vs-actual (long-only BUY vs realized P&L).
+- Overconfidence flags count ~1R losses; **AI high-confidence losses = UNAVAILABLE**.
+- Evaluation tab mounts `ReplayResearchPanel` (does not alter other tabs).
+
+**WHAT did not change:** RiskEngine, OMS, brokers, LIVE flags, ChiefTrader, BacktestEngine internals.
+
+**Tests:** `historicalReplay.test.ts` (availability, ledger pairing, ReplayClock look-ahead throw).
+
+---
+
+## Phase 16 request map (evidence, not ambition)
+
+| # | Ask | Status |
+|---|-----|--------|
+| 1 Local models | IMPLEMENTED — NOT spawn-on-every-dev (`ModelRuntimeManager`) |
+| 2 Broker vs allocation | IMPLEMENTED server-side (`CapitalAllocation` + RiskEngine) — NOT VALIDATED on organic paper |
+| 3 Sequential mega-pipeline | **Rejected** — agents already parallel; replacing would rewrite live path |
+| 4 Parallel analysis | IMPLEMENTED (timers/`MARKET_DATA`); per-call latency PARTIAL via EventStore |
+| 5 Decision traces | PARTIAL — transactions + event_traces + DigitalTwin; not a pretty ARGUS-2026-000123 card for every skip |
+| 6 No hidden CoT | PRESERVED — structured evidence only |
+| 7 Visualization | IMPLEMENTED — DigitalTwin real WS events |
+| 8 Data unavailable UX | IMPLEMENTED — diagnostics catalog + DiagnosticCenter |
+| 9 Position monitor | IMPLEMENTED — PortfolioMonitor; not a full second AI pipeline per tick |
+| 10–12 Historical AI replay / ledger | AI: **UNTESTABLE**. Quant ReplayClock ledger: IMPLEMENTED this pass |
+| 13 Accuracy dashboard | PARTIAL — `/api/v1` analytics scorecards + AgentEvaluationDashboard; INSUFFICIENT SAMPLE when empty |
+| 14 Strategy comparison | PARTIAL — existing strategy-backtest + B&H/SPY in engine; UI not a full comparator matrix |
+| 15 Failure categories | PARTIAL — FailureClassification real categories only; news/AI categories remain UNIMPLEMENTED |
+| 16 Backtest logging | PARTIAL — verbose decision log when requested |
+| 17 Auto failure analysis | PARTIAL — failureBreakdown + 1R-loss flag; not Kronos>80% (no field) |
+| 18 Modes | IMPLEMENTED PAPER / LIVE+RestrictedLive; BACKTEST is engine not a silent mode switch |
+| 19 Kill switch | ALREADY EXISTS — emergency-stop; not duplicated |
+| 20 Tests | Additive tests exist; full chaos matrix not re-run every session |
+| 22 Do not enable LIVE | **Honored. NO-GO.** |
+
+---
+
+## Phase 16N — scorecard
+
+See `ARGUS_PHASE16_READINESS_REPORT.md`. **REAL-MONEY STATUS remains NO-GO.** Percentages were
+not inflated to make Argus look ready.

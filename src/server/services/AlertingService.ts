@@ -20,11 +20,9 @@
 import { eventBus } from '../core/EventBus';
 import { triggerWebhooks, WebhookEvent } from '../routes/webhooks';
 import { SIGNIFICANT_MISMATCH_DOLLARS } from './PortfolioReconciliation';
+import { tradingSafety } from '../config/tradingSafety';
 
-// Real, simple per-event-type cooldown so a persistent outage (e.g. every AI provider down for an
-// hour) produces one real alert, not one per failed call - alert fatigue is a real failure mode of
-// its own, not just "more alerts is safer."
-const ALERT_COOLDOWN_MS = 15 * 60 * 1000;
+const ALERT_COOLDOWN_MS = tradingSafety.alertingCooldownMs;
 
 export class AlertingService {
   private lastAlertAt = new Map<string, number>();

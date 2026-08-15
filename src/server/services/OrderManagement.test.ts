@@ -99,6 +99,15 @@ describe('OrderManagementService.executeOrder', () => {
     expect(getFinalTradeRow().status).toBe('FILLED');
   });
 
+  it('records intended price on the PENDING row so capital reservation is not $0', async () => {
+    const placeOrder = vi.fn(async () => ({ id: 'order-px', status: 'FILLED', averageFillPrice: 99 }));
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+    await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'price-trace', undefined, undefined, null, null, null, null, 150);
+    expect(tradesInserts[0].price).toBe(150);
+    expect(getFinalTradeRow().price).toBe(99);
+  });
+
   it('places a fresh order when no prior trade exists for the traceId, and records the real fill', async () => {
     const placeOrder = vi.fn(async () => ({ id: 'order-1', status: 'FILLED', averageFillPrice: 100 }));
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };

@@ -25,6 +25,8 @@ import { computeTrendFeatures, TrendFeatures } from './indicators/trend';
 import { computeVolatilityFeatures, VolatilityFeatures } from './indicators/volatility';
 import { computePriceActionFeatures, PriceActionFeatures } from './indicators/priceAction';
 
+import { tradingSafety } from '../config/tradingSafety';
+
 export type RegimeLabel = 'BULLISH_TREND' | 'BEARISH_TREND' | 'SIDEWAYS_RANGE';
 export type VolatilityLabel = 'HIGH' | 'LOW' | 'NORMAL';
 export type MarketStructureLabel = 'TRENDING' | 'RANGING' | 'CHOPPY';
@@ -44,7 +46,7 @@ export interface RegimeResult {
                               // best-effort read on thin data, flagged honestly rather than hidden
 }
 
-export const MIN_BARS = 60; // enough for SMA50 + a real DMI/ADX reading; below this, flag rather than hide
+export const MIN_BARS = tradingSafety.regimeMinBars;
 
 // Dead-zones below which a reading is treated as "too close to call" rather than forced into a
 // boolean vote - without these, a genuinely flat/noisy series can tip an all-or-nothing vote

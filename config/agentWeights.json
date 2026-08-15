@@ -1,0 +1,13 @@
+{
+  "defaults": {
+    "TechnicalAgent": 0.25,
+    "FundamentalAgent": 0.20,
+    "MacroAgent": 0.15,
+    "NewsAgent": 0.25,
+    "QuantEngine": 0.15,
+    "KronosEngine": 0.20
+  },
+  "consensusDebateWeight": 0.35,
+  "unlistedAgentWeight": 1.0,
+  "riskExitAgent": "PortfolioManager"
+}

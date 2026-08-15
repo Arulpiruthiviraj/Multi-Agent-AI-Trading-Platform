@@ -16,48 +16,68 @@ const { mockDb } = vi.hoisted(() => {
 });
 
 const { emitChiefApproval } = vi.hoisted(() => ({ emitChiefApproval: vi.fn() }));
+const { routeConsensus } = vi.hoisted(() => ({ routeConsensus: vi.fn() }));
 
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitChiefApproval } }));
-vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus: vi.fn() }) } }));
+vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus }) } }));
 
-import { ChiefTraderAgent } from './ChiefTraderAgent';
+import { ChiefTraderAgent, CONSENSUS_APPROVAL_THRESHOLD } from './ChiefTraderAgent';
+import { DISAGREEMENT_PENALTY, netConfidenceFromVotes } from './EvidenceAggregator';
+import { defaultAgentWeights, agentWeightConfig } from '../config/agentWeights';
+import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+
+const fixtures = loadRepoConfigJson<{
+  strongAgreementConfidence: number;
+  weakDisagreementConfidence: number;
+  splitConfidence: number;
+  belowThresholdConfidence: number;
+  unweightedAgentConfidence: number;
+}>('consensusFixtures.json');
+const w = defaultAgentWeights;
+
+function buyPair(symbol: string, confidence: number, extra: Record<string, unknown> = {}) {
+  return [
+    { traceId: 't', symbol, side: 'BUY', confidence, agent: 'TechnicalAgent', reasoning: 'tech', ...extra },
+    { traceId: 't', symbol, side: 'BUY', confidence, agent: 'NewsAgent', reasoning: 'news' },
+  ];
+}
 
 describe('ChiefTraderAgent.evaluateConsensus', () => {
   let agent: any;
 
   beforeEach(() => {
     emitChiefApproval.mockClear();
+    routeConsensus.mockReset();
     agent = new ChiefTraderAgent();
-    agent.agentWeights = {
-      TechnicalAgent: 0.25,
-      FundamentalAgent: 0.20,
-      MacroAgent: 0.15,
-      NewsAgent: 0.25,
-      QuantEngine: 0.15,
-      KronosEngine: 0.20,
-    };
+    agent.agentWeights = { ...defaultAgentWeights };
     agent.recentIdeas = [];
   });
 
-  it('approves when strong single-agent confidence clears the 0.75 threshold', async () => {
+  it('does not approve a strong single-agent idea - one voice is not independent confirmation', async () => {
     agent.recentIdeas = [
       { traceId: 't1', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong momentum' },
     ];
 
     await agent.evaluateConsensus('AAPL', 't1');
 
-    // TechnicalAgent has weight 0.25 but is the ONLY voice, so weightedConfidence/totalWeight
-    // reduces to its own raw confidence (0.95) regardless of its absolute weight.
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it(`approves when two independent agents agree and weighted confidence clears the configured threshold`, async () => {
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+
+    await agent.evaluateConsensus('AAPL', 't1');
+
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     const approval = emitChiefApproval.mock.calls[0][0];
     expect(approval.side).toBe('BUY');
     expect(approval.confidence).toBeCloseTo(0.95, 5);
   });
 
-  it('does not approve when weighted confidence stays at or below 0.75', async () => {
+  it('does not approve when weighted confidence stays at or below the configured approval threshold', async () => {
     agent.recentIdeas = [
-      { traceId: 't2', symbol: 'AAPL', side: 'BUY', confidence: 0.7, agent: 'TechnicalAgent', reasoning: 'weak signal' },
+      { traceId: 't2', symbol: 'AAPL', side: 'BUY', confidence: fixtures.belowThresholdConfidence, agent: 'TechnicalAgent', reasoning: 'weak signal' },
     ];
 
     await agent.evaluateConsensus('AAPL', 't2');
@@ -65,13 +85,13 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(emitChiefApproval).not.toHaveBeenCalled();
   });
 
-  it('reduces weighted confidence when agents disagree, but still approves if it clears 0.75', async () => {
+  it('reduces weighted confidence when agents disagree, but still approves if it clears the configured threshold', async () => {
     agent.recentIdeas = [
-      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: 0.99, agent: 'TechnicalAgent', reasoning: 'buy A' },
-      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: 0.99, agent: 'NewsAgent', reasoning: 'buy B' },
-      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: 0.99, agent: 'FundamentalAgent', reasoning: 'buy C' },
-      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: 0.99, agent: 'QuantEngine', reasoning: 'buy D' },
-      { traceId: 't3', symbol: 'AAPL', side: 'SELL', confidence: 0.3, agent: 'KronosEngine', reasoning: 'weak sell' },
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'TechnicalAgent', reasoning: 'buy A' },
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'NewsAgent', reasoning: 'buy B' },
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'FundamentalAgent', reasoning: 'buy C' },
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'QuantEngine', reasoning: 'buy D' },
+      { traceId: 't3', symbol: 'AAPL', side: 'SELL', confidence: fixtures.weakDisagreementConfidence, agent: 'KronosEngine', reasoning: 'weak sell' },
     ];
 
     await agent.evaluateConsensus('AAPL', 't3');
@@ -79,53 +99,125 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     const approval = emitChiefApproval.mock.calls[0][0];
     expect(approval.side).toBe('BUY');
-    // weighted = 0.99*(.25+.25+.20+.15) - 0.3*.20*0.5 = 0.8415 - 0.03 = 0.8115
-    // totalWeight = 0.85 + 0.20 = 1.05 -> finalConfidence = 0.8115/1.05 ≈ 0.7729
-    expect(approval.confidence).toBeCloseTo(0.8115 / 1.05, 4);
-    // Strictly less than the undiluted (no-disagreement) confidence of 0.99 - the disagreement
-    // must have actually pulled the number down, not been silently ignored.
-    expect(approval.confidence).toBeLessThan(0.99);
-    expect(approval.confidence).toBeGreaterThan(0.75);
+    const expectedWithDisagreement = netConfidenceFromVotes(
+      [
+        { confidence: fixtures.strongAgreementConfidence, weight: w.TechnicalAgent },
+        { confidence: fixtures.strongAgreementConfidence, weight: w.NewsAgent },
+        { confidence: fixtures.strongAgreementConfidence, weight: w.FundamentalAgent },
+        { confidence: fixtures.strongAgreementConfidence, weight: w.QuantEngine },
+      ],
+      [{ confidence: fixtures.weakDisagreementConfidence, weight: w.KronosEngine }],
+    );
+    expect(approval.confidence).toBeCloseTo(expectedWithDisagreement, 4);
+    expect(approval.confidence).toBeLessThan(fixtures.strongAgreementConfidence);
+    expect(approval.confidence).toBeGreaterThan(CONSENSUS_APPROVAL_THRESHOLD);
   });
 
-  it('does not approve at all when disagreement pulls the winning side at/below the 0.75 approval bar', async () => {
+  it('does not approve at all when disagreement pulls the winning side at/below the configured approval bar', async () => {
     agent.recentIdeas = [
-      { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'buy A' },
-      { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'buy B' },
-      { traceId: 't4', symbol: 'AAPL', side: 'SELL', confidence: 0.95, agent: 'MacroAgent', reasoning: 'sell C' },
+      { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: fixtures.splitConfidence, agent: 'TechnicalAgent', reasoning: 'buy A' },
+      { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: fixtures.splitConfidence, agent: 'NewsAgent', reasoning: 'buy B' },
+      { traceId: 't4', symbol: 'AAPL', side: 'SELL', confidence: fixtures.splitConfidence, agent: 'MacroAgent', reasoning: 'sell C' },
     ];
 
     await agent.evaluateConsensus('AAPL', 't4');
 
-    // weighted = (0.95*0.25 + 0.95*0.25) - (0.95*0.15*0.5) = 0.40375; totalWeight = 0.65
-    // finalConfidence = 0.40375/0.65 ≈ 0.621, below the 0.75 approval bar.
+    const expected = netConfidenceFromVotes(
+      [{ confidence: fixtures.splitConfidence, weight: w.TechnicalAgent }, { confidence: fixtures.splitConfidence, weight: w.NewsAgent }],
+      [{ confidence: fixtures.splitConfidence, weight: w.MacroAgent }],
+    );
+    expect(expected).toBeLessThanOrEqual(CONSENSUS_APPROVAL_THRESHOLD);
+    expect(DISAGREEMENT_PENALTY).toBeGreaterThan(0);
     expect(emitChiefApproval).not.toHaveBeenCalled();
   });
 
   it('gives an unweighted agent (not in agentWeights) a default weight of 1.0', async () => {
     agent.recentIdeas = [
-      { traceId: 't5', symbol: 'AAPL', side: 'BUY', confidence: 0.8, agent: 'BrandNewAgent', reasoning: 'novel signal' },
+      { traceId: 't5', symbol: 'AAPL', side: 'BUY', confidence: fixtures.unweightedAgentConfidence, agent: 'BrandNewAgent', reasoning: 'novel signal' },
+      { traceId: 't5', symbol: 'AAPL', side: 'BUY', confidence: fixtures.unweightedAgentConfidence, agent: 'NewsAgent', reasoning: 'news confirm' },
     ];
 
     await agent.evaluateConsensus('AAPL', 't5');
 
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     const approval = emitChiefApproval.mock.calls[0][0];
-    expect(approval.confidence).toBeCloseTo(0.8, 5);
+    expect(approval.confidence).toBeCloseTo(fixtures.unweightedAgentConfidence, 5);
     expect(approval.agentsContext).toContain('BrandNewAgent(wt:1.00)');
   });
 
-  it('gives the ConsensusDebate pseudo-agent a default weight of 0.35 when unweighted', async () => {
+  it('gives the ConsensusDebate pseudo-agent a default weight of 0.35 when unweighted, but debate alone is not independent confirmation', async () => {
     agent.recentIdeas = [
       { traceId: 't6', symbol: 'AAPL', side: 'BUY', confidence: 0.9, agent: 'ConsensusDebate', reasoning: 'debate result' },
+      { traceId: 't6', symbol: 'AAPL', side: 'BUY', confidence: 0.9, agent: 'TechnicalAgent', reasoning: 'tech' },
     ];
 
     await agent.evaluateConsensus('AAPL', 't6');
 
+    // ConsensusDebate does not count toward the two-independent-agent floor, so this stays NO TRADE.
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('does not approve when the adversarial debate votes HOLD, even if two agents agree on BUY', async () => {
+    agent.recentIdeas = [
+      ...buyPair('AAPL', 0.95),
+      { traceId: 't', symbol: 'AAPL', side: 'HOLD', confidence: 0.8, agent: 'ConsensusDebate', reasoning: 'debate hold' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'thold');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('does not approve when QuantEngine AI contradiction review disagrees with the side', async () => {
+    agent.recentIdeas = [
+      {
+        traceId: 't7b', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'QuantEngine', reasoning: 'quant setup',
+        quantDetail: {
+          regime: { regime: 'BULLISH_TREND' },
+          strategyEvaluation: { strategy: 'MOMENTUM_BREAKOUT', invalidationConditions: [], applicableRegimes: ['BULLISH_TREND'], stop: { price: 145 }, target: { price: 165 } },
+          groupedScores: { overallSetupScore: 78 },
+          contradictions: [],
+          aiContradictionAnalysis: { available: true, aiAgreesWithSide: false, additionalContradictions: ['tape is rolling over'], scenarioAnalysis: 'disagrees', disagreementNote: 'AI disagrees' },
+        },
+      },
+      { traceId: 't7b', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'news' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't7b');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('approves a PortfolioManager SELL immediately as a risk exit without a second confirming agent', async () => {
+    agent.recentIdeas = [
+      { traceId: 'exit-1', symbol: 'AAPL', side: 'SELL', confidence: fixtures.splitConfidence, agent: agentWeightConfig.riskExitAgent, reasoning: 'Hard stop hit.', currentPrice: 90 },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'exit-1');
+
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     const approval = emitChiefApproval.mock.calls[0][0];
-    expect(approval.confidence).toBeCloseTo(0.9, 5);
-    expect(approval.agentsContext).toContain('ConsensusDebate(wt:0.35)');
+    expect(approval.side).toBe('SELL');
+    expect(approval.reasoning).toContain('Risk Exit');
+  });
+
+  it('reviewIdea does not evaluate consensus while a debate is in flight, even if a later low-confidence idea arrives', async () => {
+    let finishDebate: (value: any) => void = () => {};
+    routeConsensus.mockImplementation(() => new Promise(resolve => { finishDebate = resolve; }));
+
+    await agent.reviewIdea({ traceId: 'd1', symbol: 'MSFT', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'd2', symbol: 'MSFT', side: 'BUY', confidence: 0.55, agent: 'MacroAgent', reasoning: 'weak follow-up' });
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+
+    finishDebate({ consensus_verdict: 'BUY', results: [{}, {}] });
+    const deadline = Date.now() + 2000;
+    while (emitChiefApproval.mock.calls.length === 0 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    // Two independent agents (Technical + Macro) plus debate BUY - should approve once debate settles.
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
   });
 
   it('Phase 8: attaches real structured supportingQuantDetail when QuantEngine contributed evidence, without ever changing the deterministic side/confidence', async () => {
@@ -146,6 +238,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
           aiContradictionAnalysis: { available: true, aiAgreesWithSide: true, additionalContradictions: ['Broader tape looks choppy.'], scenarioAnalysis: 'Real confluence with some risk.', disagreementNote: null },
         },
       },
+      { traceId: 't7', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'news confirm', currentPrice: 150 },
     ];
 
     await agent.evaluateConsensus('AAPL', 't7');
@@ -174,12 +267,11 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     // - the AI's qualitative read is recorded, never used to replace the deterministic evidence.
     expect(detail.contradictions).toEqual(['Elevated RSI', 'Broader tape looks choppy.']);
     expect(detail.aiReview).toEqual({ agreesWithSide: true, scenarioAnalysis: 'Real confluence with some risk.', disagreementNote: null });
+    expect(detail.featureSnapshot).toBeNull();
   });
 
   it('reports supportingQuantDetail as null (never a fabricated structure) when no contributing agent was QuantEngine', async () => {
-    agent.recentIdeas = [
-      { traceId: 't8', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong momentum' },
-    ];
+    agent.recentIdeas = buyPair('AAPL', 0.95);
 
     await agent.evaluateConsensus('AAPL', 't8');
 

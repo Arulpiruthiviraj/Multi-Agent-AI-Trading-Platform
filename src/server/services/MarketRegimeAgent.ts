@@ -35,15 +35,13 @@
 
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
-
-
+import { tradingSafety } from '../config/tradingSafety';
 
 export class MarketRegimeAgent {
   private currentRegime: string = "UNKNOWN";
 
   constructor() {
-    // Run regime detection every 5 minutes
-    setInterval(() => this.detectRegime(), 5 * 60 * 1000);
+    setInterval(() => this.detectRegime(), tradingSafety.marketRegimeIntervalMs);
     this.detectRegime();
   }
 

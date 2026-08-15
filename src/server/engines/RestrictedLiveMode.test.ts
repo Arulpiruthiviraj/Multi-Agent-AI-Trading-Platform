@@ -28,7 +28,7 @@ describe('applyRestrictedLiveCaps (Phase 13)', () => {
     const result = applyRestrictedLiveCaps({
       tradingMode: 'LIVE', maxTradeSizeDollar: 100, maxOpenPositions: 1, dailyLossLimitDollars: 50,
     });
-    expect(result.maxTradeSizeDollar).toBe(100); // tighter than the hardcoded 5000 ceiling - kept as-is
+    expect(result.maxTradeSizeDollar).toBe(100); // tighter than the configured live ceiling - kept as-is
     expect(result.maxOpenPositions).toBe(1);
     expect(result.dailyLossLimitDollars).toBe(50);
   });

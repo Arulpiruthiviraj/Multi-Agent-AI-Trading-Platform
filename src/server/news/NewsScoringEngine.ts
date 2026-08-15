@@ -1,6 +1,6 @@
 import { AIRouter } from '../ai/AIRouter';
 import { NormalizedArticle } from './NewsNormalizer';
-import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADING_BIAS_VALUES } from '../ai/AIOutputValidator';
+import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADING_BIAS_VALUES, looksLikeListedTicker } from '../ai/AIOutputValidator';
 
 export interface AIAnalysisResult {
   symbol: string;
@@ -66,7 +66,7 @@ Return a strict JSON object matching exactly this schema, with no markdown forma
       // the local-first path), marketImpactScore/confidence 0..100 (matching this prompt's own
       // example values and NewsEngine.ts's `confidence / 100` usage).
       const validated: AIAnalysisResult = {
-        symbol: coerceString(raw.symbol, 'UNKNOWN'),
+        symbol: looksLikeListedTicker(raw.symbol) ?? 'UNKNOWN',
         headline: coerceString(raw.headline, article.title),
         source: coerceString(raw.source, article.source),
         timestamp: coerceString(raw.timestamp, article.publishedAt),

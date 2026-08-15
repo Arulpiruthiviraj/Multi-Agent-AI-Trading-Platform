@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { calculateROC, calculateMomentum, calculateWilliamsR, calculateCCI, calculateStochasticRSI, computeMomentumFeatures } from './momentum';
+import { calculateROC, calculateMomentum, calculateWilliamsR, calculateCCI, calculateStochasticRSI, computeMomentumFeatures, detectPriceOscillatorDivergence } from './momentum';
 import { Bar } from '../../engines/backtest/HistoricalDataGateway';
 
 describe('indicators/momentum', () => {
@@ -87,6 +87,31 @@ describe('indicators/momentum', () => {
       expect(typeof features.macd.macd).toBe('number');
       expect(features.roc).not.toBeNull();
       expect(features.momentum).not.toBeNull();
+    });
+  });
+
+  describe('detectPriceOscillatorDivergence', () => {
+    it('flags bullish divergence as a feature, never as a trade signal', () => {
+      const price = [10, 9, 10, 8, 10, 9.5, 10, 7.5, 10];
+      const oscillator = [20, 15, 20, 18, 20, 19, 20, 22, 20];
+      const result = detectPriceOscillatorDivergence(price, oscillator);
+      expect(result.kind).toBe('BULLISH');
+      expect(result.isTradeSignal).toBe(false);
+    });
+
+    it('flags bearish divergence as a feature, never as a trade signal', () => {
+      const price = [10, 12, 11, 14, 13, 15, 14, 16, 15];
+      const oscillator = [50, 40, 45, 30, 35, 28, 32, 20, 25];
+      const result = detectPriceOscillatorDivergence(price, oscillator);
+      expect(result.kind).toBe('BEARISH');
+      expect(result.isTradeSignal).toBe(false);
+    });
+
+    it('returns INSUFFICIENT_DATA without fabricating a kind', () => {
+      const result = detectPriceOscillatorDivergence([1, 2, 3], [1, 2, 3]);
+      expect(result.kind).toBeNull();
+      expect(result.detail).toBe('INSUFFICIENT_DATA');
+      expect(result.isTradeSignal).toBe(false);
     });
   });
 });

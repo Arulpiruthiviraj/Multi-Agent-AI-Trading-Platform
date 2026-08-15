@@ -176,6 +176,13 @@
       "when": 1786618739426,
       "tag": "0024_add_quant_exit_fields",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "6",
+      "when": 1786650000000,
+      "tag": "0025_quant_invalidation_json",
+      "breakpoints": true
     }
   ]
 }

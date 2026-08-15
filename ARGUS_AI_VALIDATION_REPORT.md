@@ -90,3 +90,16 @@ and MacroAgent's real behavior (never directional) is flagged as a genuine open 
 remain honestly unbuilt, with a real reason stated, not silently skipped. **No AI agent in this
 codebase has demonstrated a real, validated trading edge** — this conclusion is unchanged, and this
 phase's own new evidence (NewsAgent) actively points the other way, not toward one.
+
+---
+
+## Phase 16 addendum
+
+- **Ticker hygiene:** `looksLikeListedTicker` now rejects free-text / parenthetical “symbols”
+  before NewsAgent emits `TRADE_IDEA_GENERATED`. This is data-quality, not an accuracy improvement.
+- **Price disagreement helper:** `rejectIfPriceDisagrees` exists and is unit-tested. NewsAgent
+  does not currently emit a numeric spot price, so this does not change NewsAgent’s 44.6% figure.
+- **Stage C/D:** still UNTESTABLE. No 2019 replay was run.
+- **AI + quant vs quant-only vs AI-only:** still no organic paper book to compare. Do not assume
+  the combination is better.
+

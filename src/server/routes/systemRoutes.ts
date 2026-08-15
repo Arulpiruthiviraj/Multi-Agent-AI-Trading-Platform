@@ -280,7 +280,8 @@ systemRouter.post("/backtest", async (req: Request, res: Response) => {
     const result = await backtestEngine.run({ symbols, startDate, endDate, timeframe, initialCash });
     res.json(result);
   } catch (e: any) {
-    res.status(500).json({ error: e.message });
+    const { diagnosticFromBacktestError } = await import('../diagnostics/buildDiagnostic');
+    res.status(500).json({ error: e.message, diagnostic: diagnosticFromBacktestError(e.message) });
   }
 });
 

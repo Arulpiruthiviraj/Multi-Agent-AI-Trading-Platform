@@ -22,10 +22,10 @@ export interface WalkForwardConfig {
   trainDays: number;
   // The out-of-sample window scored for each period. Must be wide enough that the underlying
   // backtest's own minimum-bar requirement can be satisfied WITHIN this window alone (daily bars:
-  // BacktestEngine.run()'s LOOKBACK=50, runStrategyBacktest()'s REGIME_MIN_BARS=60) - a testDays
-  // narrower than that will make every period's test call throw "Only N real bars available",
-  // regardless of how much data exists outside the window, since each window is evaluated on its
-  // own bars only (this is what makes it a real out-of-sample test, not something to work around).
+  // BacktestEngine.run() LOOKBACK from tradingSafety.backtestLookbackBars, runStrategyBacktest()
+  // REGIME_MIN_BARS from tradingSafety.regimeMinBars). A testDays narrower than that will make
+  // every period's test call throw "Only N real bars available", regardless of how much data
+  // exists outside the window, since each window is evaluated on its own bars only.
   testDays: number;
   /** E5 (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - when both are set, each train/test window runs
    * BacktestEngine.runStrategyBacktest() (the quant-layer strategies) for this one symbol instead

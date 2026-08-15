@@ -55,9 +55,10 @@ describe('ChiefTraderAgent - real confidence calibration end-to-end', () => {
     });
 
     const agent = new ChiefTraderAgent();
-    agent.agentWeights = { NewsAgent: 1.0 };
+    agent.agentWeights = { NewsAgent: 1.0, TechnicalAgent: 1.0 };
     agent.recentIdeas = [
       { traceId: 'cal-1', symbol: 'AAPL', side: 'BUY', confidence: 0.85, agent: 'NewsAgent', reasoning: 'bullish headline' },
+      { traceId: 'cal-1', symbol: 'AAPL', side: 'BUY', confidence: 0.85, agent: 'TechnicalAgent', reasoning: 'rsi' },
     ];
 
     await agent.evaluateConsensus('AAPL', 'cal-1');
@@ -70,9 +71,10 @@ describe('ChiefTraderAgent - real confidence calibration end-to-end', () => {
 
   it('leaves confidence unchanged for an agent/bucket with no real evaluated history yet', async () => {
     const agent = new ChiefTraderAgent();
-    agent.agentWeights = { KronosEngine: 1.0 };
+    agent.agentWeights = { KronosEngine: 1.0, TechnicalAgent: 1.0 };
     agent.recentIdeas = [
       { traceId: 'cal-2', symbol: 'TSLA', side: 'BUY', confidence: 0.9, agent: 'KronosEngine', reasoning: 'forecast signal' },
+      { traceId: 'cal-2', symbol: 'TSLA', side: 'BUY', confidence: 0.9, agent: 'TechnicalAgent', reasoning: 'rsi' },
     ];
 
     await agent.evaluateConsensus('TSLA', 'cal-2');
@@ -88,10 +90,17 @@ describe('ChiefTraderAgent - real confidence calibration end-to-end', () => {
       lastEvaluated: new Date().toISOString(),
     });
 
+    await db.insert(schema.agentConfidenceCalibration).values({
+      agentName: 'FundamentalAgent', bucketLow: 0.8, bucketHigh: 0.9,
+      wins: 68, losses: 12, calibratedConfidence: 0.845,
+      lastEvaluated: new Date().toISOString(),
+    });
+
     const agent = new ChiefTraderAgent();
-    agent.agentWeights = { TechnicalAgent: 1.0 };
+    agent.agentWeights = { TechnicalAgent: 1.0, FundamentalAgent: 1.0 };
     agent.recentIdeas = [
       { traceId: 'cal-3', symbol: 'MSFT', side: 'BUY', confidence: 0.85, agent: 'TechnicalAgent', reasoning: 'RSI oversold' },
+      { traceId: 'cal-3', symbol: 'MSFT', side: 'BUY', confidence: 0.85, agent: 'FundamentalAgent', reasoning: 'earnings' },
     ];
 
     await agent.evaluateConsensus('MSFT', 'cal-3');

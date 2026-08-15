@@ -456,6 +456,7 @@ export class AIRouter {
     }
 
     let lastError: Error | null = null;
+    const failedProviders: { id: string; reason: string }[] = [];
     
     for (const [providerId, provider] of availableProviders) {
         if (!(await provider.authenticate())) {
@@ -521,7 +522,7 @@ export class AIRouter {
                 }
             } catch (e) { console.error("Failed to log usage", e); }
 
-            const aiCallId = await logAiCall({
+            const aiCallId =             await logAiCall({
                 traceId,
                 agent: agentType,
                 provider: providerId,
@@ -535,10 +536,23 @@ export class AIRouter {
                 status: 'success',
             });
 
+            if (failedProviders.length > 0) {
+                const from = failedProviders[failedProviders.length - 1];
+                eventBus.emit('MODEL_FALLBACK', {
+                    fromProvider: from.id,
+                    toProvider: providerId,
+                    reason: from.reason,
+                    agentType,
+                    traceId,
+                    failedProviders,
+                });
+            }
+
             return { content: res.content, provider: providerId, latency, aiCallId, model: reqModel || 'default', tokensIn: res.inputTokens || 0, tokensOut: res.outputTokens ?? res.tokens };
         } catch (e: any) {
             console.warn(`[AIRouter] Provider ${providerId} failed: ${e.message}. Failing over...`);
             lastError = e;
+            failedProviders.push({ id: providerId, reason: e.message });
             // Record failure in usage log
             try {
                 // Broadcast to UI

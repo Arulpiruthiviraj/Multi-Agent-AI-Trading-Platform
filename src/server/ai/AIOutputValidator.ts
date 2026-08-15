@@ -69,3 +69,41 @@ export type TradeSide = typeof TRADE_SIDE_VALUES[number];
 
 export const TRADING_BIAS_VALUES = ['BULLISH', 'BEARISH', 'NEUTRAL'] as const;
 export type TradingBias = typeof TRADING_BIAS_VALUES[number];
+
+/**
+ * Phase 16G - a listed US equity ticker is 1-5 letters, optional share-class suffix (BRK.B).
+ * Company names, parenthetical fragments, and free text the news LLM invented ("(Coca-Cola)",
+ * "Sysco") are not tickers and must not reach ChiefTrader as a tradeable symbol.
+ */
+export function looksLikeListedTicker(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const s = raw.trim().toUpperCase();
+  if (!/^[A-Z]{1,5}(\.[A-Z])?$/.test(s)) return null;
+  return s;
+}
+
+/**
+ * Phase 16G - if an AI claims a spot price that disagrees with live market data by more than
+ * `maxDeviationPct` (default 2%), the AI number is rejected. The live price is never overwritten
+ * by the AI claim. Returns {accepted:false} when the claim is unusable - callers must then ignore
+ * the AI price, not invent a substitute.
+ */
+export function rejectIfPriceDisagrees(
+  claimedPrice: unknown,
+  livePrice: number | null | undefined,
+  maxDeviationPct = 2,
+): { accepted: boolean; reason: string | null } {
+  const claimed = typeof claimedPrice === 'number' ? claimedPrice
+    : typeof claimedPrice === 'string' ? parseFloat(claimedPrice) : NaN;
+  if (!Number.isFinite(claimed) || claimed <= 0) {
+    return { accepted: false, reason: 'AI claimed price is missing or non-numeric.' };
+  }
+  if (livePrice === null || livePrice === undefined || !Number.isFinite(livePrice) || livePrice <= 0) {
+    return { accepted: false, reason: 'No live market price available to validate the AI claim against.' };
+  }
+  const deviationPct = Math.abs(claimed - livePrice) / livePrice * 100;
+  if (deviationPct > maxDeviationPct) {
+    return { accepted: false, reason: `AI claimed price ${claimed} disagrees with live ${livePrice} by ${deviationPct.toFixed(2)}% (max ${maxDeviationPct}%).` };
+  }
+  return { accepted: true, reason: null };
+}

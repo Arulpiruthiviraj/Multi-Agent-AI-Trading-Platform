@@ -54,6 +54,12 @@ stop/target) is completely unaffected - falls through to the unchanged generic e
 `PortfolioMonitor.test.ts`'s new "quant strategy-aware exits" block (4 tests: stop, target,
 holds between the two, and the unaffected-fallback case).
 
+**Phase 16 follow-up:** live `PortfolioMonitor` also re-evaluates the structured thesis snapshot
+(`quant_invalidation_json`) against real bars (regime / RVOL / ADX / CHoCH / false breakout).
+`runStrategyBacktest()` already exits when strategy `evaluate()` no longer supports the position
+via stop/target; it does not separately re-run this live helper. Remaining structural gap:
+backtest still does not simulate ChiefTrader consensus or RiskEngine gates.
+
 ## 5. Position sizing
 
 | | Live | Backtest |

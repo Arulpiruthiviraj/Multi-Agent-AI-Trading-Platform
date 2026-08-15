@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { EVENTS } from '../core/eventNames';
 
 /**
  * E2A regression test (BACKTEST_QUANT_HARDENING_ANALYSIS.md): proves PortfolioMonitorWorker
@@ -65,6 +66,19 @@ describe('PortfolioMonitorWorker.reviewPortfolio - settings-driven exit threshol
     expect(emitSpy).not.toHaveBeenCalled();
   });
 
+  it('emits POSITION_MONITORED for each live-priced holding independently of a new entry idea', async () => {
+    await seedHolding('WATCH1', 5, 100);
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'WATCH1' ? 97 : null);
+    const emitSpy = vi.spyOn(eventBus, 'emit').mockImplementation(() => {});
+
+    await portfolioMonitor.reviewPortfolio();
+
+    const monitored = emitSpy.mock.calls.filter((c: any) => c[0] === EVENTS.POSITION_MONITORED);
+    const watch = monitored.find((c: any) => c[1]?.symbol === 'WATCH1');
+    expect(watch).toBeTruthy();
+    expect(watch[1].pnlPct).toBeCloseTo(-3, 5);
+  });
+
   it('DOES exit once price crosses the new -8%/+25% settings-driven thresholds', async () => {
     vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => {
       if (symbol === 'DOWN4') return 91; // -9% - past the new -8% stop
@@ -98,6 +112,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
   let portfolioMonitor: any;
   let marketDataWorker: any;
   let eventBus: any;
+  let historicalDataGateway: any;
 
   beforeAll(async () => {
     tmpDbPath = path.join(os.tmpdir(), `argus_portfoliomonitor_quant_${Date.now()}_${process.pid}.db`);
@@ -112,6 +127,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     ({ portfolioMonitor } = await import('./PortfolioMonitor'));
     ({ marketDataWorker } = await import('./MarketDataWorker'));
     ({ eventBus } = await import('../core/EventBus'));
+    ({ historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway'));
 
     // Generic thresholds deliberately wide (would NOT fire on their own at the test prices below)
     // so a firing exit in these tests can only be explained by the strategy-specific levels.
@@ -141,7 +157,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     });
   }
 
-  async function seedOpeningTrade(symbol: string, price: number, opts: { quantStrategyId?: string; quantStopPrice?: number; quantTargetPrice?: number }) {
+  async function seedOpeningTrade(symbol: string, price: number, opts: { quantStrategyId?: string; quantStopPrice?: number; quantTargetPrice?: number; quantInvalidationJson?: string }) {
     await db.insert(schema.trades).values({
       id: `trd-${symbol}-${Date.now()}-${Math.random()}`,
       symbol, side: 'BUY', quantity: 10, price, status: 'FILLED',
@@ -149,6 +165,7 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
       quantStrategyId: opts.quantStrategyId ?? null,
       quantStopPrice: opts.quantStopPrice ?? null,
       quantTargetPrice: opts.quantTargetPrice ?? null,
+      quantInvalidationJson: opts.quantInvalidationJson ?? null,
     } as any);
   }
 
@@ -203,5 +220,37 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
 
     expect(emitSpy).toHaveBeenCalledTimes(1);
     expect((emitSpy.mock.calls[0][0] as any).reasoning).toContain('+50%');
+  });
+
+  it('exits when the original quant thesis is invalidated even though price is still between stop and target', async () => {
+    await seedHolding('QINV', 10, 100);
+    await seedOpeningTrade('QINV', 100, {
+      quantStrategyId: 'RANGE_REVERSION',
+      quantStopPrice: 50,
+      quantTargetPrice: 200,
+      quantInvalidationJson: JSON.stringify({
+        texts: ['A real close beyond the support boundary confirms the range is breaking, not holding.'],
+        strategy: 'RANGE_REVERSION',
+        side: 'BUY',
+        entryRegime: 'SIDEWAYS_RANGE',
+        applicableRegimes: ['SIDEWAYS_RANGE'],
+        structuralLevel: 100,
+      }),
+    });
+
+    const bars = Array.from({ length: 60 }, (_, i) => ({
+      timestamp: Date.now() - (60 - i) * 86400000,
+      open: 90, high: 91, low: 89, close: 90, volume: 1000,
+    }));
+    vi.spyOn(historicalDataGateway, 'getBars').mockResolvedValue(bars);
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockImplementation((symbol: string) => symbol === 'QINV' ? 90 : null);
+    const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockImplementation(() => {});
+
+    await portfolioMonitor.reviewPortfolio();
+
+    expect(emitSpy).toHaveBeenCalled();
+    const invCall = emitSpy.mock.calls.find((c: any) => c[0].symbol === 'QINV');
+    expect(invCall).toBeDefined();
+    expect((invCall![0] as any).reasoning).toMatch(/thesis invalidated/i);
   });
 });

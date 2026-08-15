@@ -38,6 +38,7 @@ import { ALL_STRATEGIES, MIN_STRATEGY_CONFIDENCE_TO_TRADE } from '../../quant/st
 import { StrategyContext } from '../../quant/strategies/types';
 import { expectedValue, fractionalKelly, ExpectedValueResult, KellyResult } from '../../quant/risk/ExpectedValue';
 import { classifyTradeFailure, computeFailureBreakdown } from '../../quant/analysis/FailureClassification';
+import { tradingSafety } from '../../config/tradingSafety';
 import { buildAccountSizeReport } from '../../quant/analysis/AccountSizeReport';
 
 export interface BacktestConfig {
@@ -104,7 +105,7 @@ export interface StrategyBacktestConfig {
   verboseLogging?: boolean;
 }
 
-const LOOKBACK = 50;
+const LOOKBACK = tradingSafety.backtestLookbackBars;
 const PERIODS_PER_YEAR = 252; // assumes daily bars; only meaningful for timeframe='1Day'
 const MIN_SAMPLE_SIZE_FOR_TRUST = 20;
 

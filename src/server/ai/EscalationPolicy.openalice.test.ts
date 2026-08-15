@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { shouldTriggerOpenAliceVerification } from './EscalationPolicy';
+import { tradingSafety } from '../config/tradingSafety';
 
 describe('shouldTriggerOpenAliceVerification', () => {
   it('triggers when agents disagreed even though the weighted vote still approved', () => {
@@ -20,10 +21,9 @@ describe('shouldTriggerOpenAliceVerification', () => {
   });
 
   it('does not trigger right at the approval floor with no disagreement (below the uncertain band)', () => {
-    // ChiefTraderAgent only calls this after result.confidence > 0.75, so 0.75 itself never
-    // reaches here in practice, but the boundary behavior should still be deterministic.
-    const decision = shouldTriggerOpenAliceVerification({ confidence: 0.751, disagreementCount: 0 });
-    expect(decision.shouldVerify).toBe(true); // inside default [0.75, 0.85] band
+    const justInsideBand = tradingSafety.openAliceUncertainBandLow + 0.001;
+    const decision = shouldTriggerOpenAliceVerification({ confidence: justInsideBand, disagreementCount: 0 });
+    expect(decision.shouldVerify).toBe(true);
   });
 
   it('respects custom bounds', () => {

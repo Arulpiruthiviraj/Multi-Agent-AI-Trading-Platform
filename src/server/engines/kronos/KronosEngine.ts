@@ -63,7 +63,7 @@ export class KronosEngine implements IForecastEngine {
   public async predict(symbol: string, horizon: number, timeframe: string, ohlcvData: any[]): Promise<ForecastPrediction> {
     eventBus.publish('KRONOS_FORECAST_STARTED', { symbol, timeframe, horizon });
     if (!this.manager.isReady()) {
-      throw new Error('Kronos unavailable');
+      throw new Error('Kronos inference service is not responding (LOCAL_AI_SERVICE_URL). Kronos is an optional forecast provider; other agents continue. Start it with: npm run ai:serve');
     }
 
     try {
@@ -89,7 +89,7 @@ export class KronosEngine implements IForecastEngine {
    */
   public async batchPredict(symbols: string[], horizon: number, timeframe: string, dataMap: Record<string, any[]>): Promise<ForecastPrediction[]> {
     if (!this.manager.isReady()) {
-      throw new Error('Kronos unavailable');
+      throw new Error('Kronos inference service is not responding (LOCAL_AI_SERVICE_URL). Kronos is an optional forecast provider; other agents continue. Start it with: npm run ai:serve');
     }
     
     try {

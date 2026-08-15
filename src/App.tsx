@@ -39,9 +39,11 @@ import AwaitingSignal from "./components/shared/AwaitingSignal";
 import SystemOptimizer from "./components/SystemOptimizer";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
+import ReplayResearchPanel from "./components/ReplayResearchPanel";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
+import OrchestrationStatus from "./components/OrchestrationStatus";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
 import TradeCorrelationMatrix from "./components/TradeCorrelationMatrix";
@@ -49,6 +51,8 @@ import BrokerManagement from "./components/BrokerManagement";
 import AIProviderManagement from "./components/AIProviderManagement";
 import { KronosDashboard } from "./components/KronosDashboard";
 import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
+import DiagnosticCenter from "./components/DiagnosticCenter";
+import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
 import AutoBotFlowVisualizer from "./components/AutoBotFlowVisualizer";
 import WeightAdjustmentVisualizer from "./components/WeightAdjustmentVisualizer";
 import GuardrailsPanel from "./components/GuardrailsPanel";
@@ -1170,6 +1174,8 @@ export default function App() {
   // the active broker's real available buying power) - surfaced next to the Allocated Budget
   // Limit input instead of being silently swallowed.
   const [autoBotStartError, setAutoBotStartError] = useState<string | null>(null);
+  const [orchestrationModels, setOrchestrationModels] = useState<any[] | null>(null);
+  const [orchestrationCapital, setOrchestrationCapital] = useState<any | null>(null);
 
   const [paperTradingEnabled, setPaperTradingEnabled] = useState(false);
   const [alertsModalOpen, setAlertsModalOpen] = useState(false);
@@ -2018,7 +2024,7 @@ export default function App() {
   const [setupComplete, setSetupComplete] = useState(false);
   const [systemState, setSystemState] = useState<'STARTING' | 'INITIALIZING' | 'READY' | 'RUNNING' | 'STOPPED' | 'ERROR'>('STARTING');
   const [activeTab, setActiveTab] = useState<
-    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation" | "observatory"
+    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "deployment" | "validation" | "observatory" | "evaluation" | "diagnostics"
   >("dashboard");
 
   // Task 3A (FINAL_ANALYSIS.md's 4-phase remediation plan) - "Observability & Trade Tracing" used
@@ -2659,6 +2665,8 @@ export default function App() {
         setAgentWeights(agData.weights || {});
       }),
       fetchItem("/api/v1/performance", setAgentMetrics),
+      fetchItem("/api/v2/orchestration/models", (data) => setOrchestrationModels(data.models || [])),
+      fetchItem("/api/v2/orchestration/capital", setOrchestrationCapital),
     ]);
   };
 
@@ -3608,6 +3616,19 @@ export default function App() {
           >
             <Shield size={14} />
             OBSERVABILITY & TRACING
+          </button>
+
+          <button
+            id="tab-diagnostics-btn"
+            onClick={() => setActiveTab("diagnostics")}
+            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+              activeTab === "diagnostics"
+                ? "border-amber-500 text-amber-400 bg-amber-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <AlertTriangle size={14} />
+            DIAGNOSTICS
           </button>
 
           <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
@@ -6591,6 +6612,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mb-5">
                 Real-time visualization of every agent, local/paid AI model call, and decision. Click any node for its live process log; click a transaction to trace it end-to-end by its real trace ID.
               </p>
+              <OrchestrationStatus models={orchestrationModels} capital={orchestrationCapital} />
               <DigitalTwinVisualizer />
             </div>
 
@@ -8197,6 +8219,7 @@ export default function App() {
             />
           ) : (
             <div className="animate-fade-in flex flex-col gap-6" id="command-center-view">
+             <WhyNotTradingStrip />
              
              {/* Master Control & Granular Toggles Row */}
              <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
@@ -8457,7 +8480,7 @@ export default function App() {
                        <span className="text-xl font-bold text-slate-200">$</span>
                        <input
                          type="number"
-                         min="1000"
+                         min="1"
                          className={"w-full bg-transparent text-xl font-bold outline-none " + (portfolioData && autoBotTargetBudget > (portfolioData.buying_power ?? portfolioData.cash ?? 0) ? "text-rose-400" : "text-white")}
                          value={autoBotTargetBudget}
                          onChange={e => setAutoBotTargetBudget(Number(e.target.value))}
@@ -9290,6 +9313,13 @@ export default function App() {
         {activeTab === "evaluation" && (
           <div className="animate-fade-in flex flex-col gap-6" id="evaluation-view">
             <AgentEvaluationDashboard />
+            <ReplayResearchPanel />
+          </div>
+        )}
+
+        {activeTab === "diagnostics" && (
+          <div className="animate-fade-in" id="diagnostics-view">
+            <DiagnosticCenter />
           </div>
         )}
 

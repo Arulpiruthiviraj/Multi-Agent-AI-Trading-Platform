@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { coerceEnum, clampScore, normalizeConfidence01, coerceString, coerceStringArray, TRADE_SIDE_VALUES, TRADING_BIAS_VALUES } from './AIOutputValidator';
+import { coerceEnum, clampScore, normalizeConfidence01, coerceString, coerceStringArray, TRADE_SIDE_VALUES, TRADING_BIAS_VALUES, looksLikeListedTicker, rejectIfPriceDisagrees } from './AIOutputValidator';
 
 describe('coerceEnum', () => {
   it('matches case-insensitively', () => {
@@ -84,5 +84,37 @@ describe('coerceString / coerceStringArray', () => {
     expect(coerceStringArray(['a', 'b', 3, null, 'c'])).toEqual(['a', 'b', 'c']);
     expect(coerceStringArray('not an array')).toEqual([]);
     expect(coerceStringArray(undefined)).toEqual([]);
+  });
+});
+
+describe('looksLikeListedTicker (Phase 16G)', () => {
+  it('accepts real listed tickers', () => {
+    expect(looksLikeListedTicker('AAPL')).toBe('AAPL');
+    expect(looksLikeListedTicker('nvda')).toBe('NVDA');
+    expect(looksLikeListedTicker('BRK.B')).toBe('BRK.B');
+  });
+
+  it('rejects malformed company-name symbols that previously reached consensus', () => {
+    expect(looksLikeListedTicker('(Coca-Cola)')).toBeNull();
+    expect(looksLikeListedTicker('Apple Inc')).toBeNull();
+    expect(looksLikeListedTicker('UNKNOWN')).toBeNull();
+    expect(looksLikeListedTicker('')).toBeNull();
+    expect(looksLikeListedTicker(null)).toBeNull();
+  });
+});
+
+describe('rejectIfPriceDisagrees (Phase 16G)', () => {
+  it('rejects an AI-claimed price that disagrees with live market data', () => {
+    const result = rejectIfPriceDisagrees(200, 250);
+    expect(result.accepted).toBe(false);
+    expect(result.reason).toMatch(/disagrees/);
+  });
+
+  it('accepts a claim within 2% of live', () => {
+    expect(rejectIfPriceDisagrees(101, 100).accepted).toBe(true);
+  });
+
+  it('rejects when there is no live price to check against, never treating the AI number as ground truth', () => {
+    expect(rejectIfPriceDisagrees(200, null).accepted).toBe(false);
   });
 });

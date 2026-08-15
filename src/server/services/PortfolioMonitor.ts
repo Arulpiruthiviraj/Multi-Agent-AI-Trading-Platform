@@ -38,6 +38,13 @@ import { db } from '../db';
 import { portfolio, settings, trades } from '../db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { marketDataWorker } from './MarketDataWorker';
+import { EVENTS } from '../core/eventNames';
+import { tradingSafety } from '../config/tradingSafety';
+import { agentWeightConfig } from '../config/agentWeights';
+import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
+import { classifyRegime, MIN_BARS } from '../quant/RegimeEngine';
+import { computeVolumeFeatures } from '../quant/indicators/volume';
+import { evaluateThesisInvalidation, parseStoredThesis } from '../quant/analysis/ThesisInvalidation';
 
 // E2A (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - these were previously hardcoded literals
 // (+5%/-3%) unrelated to settings.takeProfitPct/trailingStopPct, which already existed in the
@@ -101,18 +108,39 @@ export class PortfolioMonitorWorker {
           .limit(1);
         const quantStop = openingTrade?.quantStopPrice ?? null;
         const quantTarget = openingTrade?.quantTargetPrice ?? null;
+        const storedThesis = parseStoredThesis((openingTrade as any)?.quantInvalidationJson);
 
-        if (quantStop !== null || quantTarget !== null) {
+        const PnL = ((currentLivePrice - holding.averagePrice) / holding.averagePrice) * 100;
+        const surveillance = {
+          symbol: holding.symbol,
+          entryPrice: holding.averagePrice,
+          currentPrice: currentLivePrice,
+          quantity: holding.quantity,
+          pnlPct: PnL,
+          quantStrategyId: openingTrade?.quantStrategyId ?? null,
+          quantStop,
+          quantTarget,
+          originalThesis: storedThesis,
+        };
+        eventBus.emit(EVENTS.POSITION_MONITORED, surveillance);
+        const riskLevel = PnL <= -trailingStopPct ? 'HIGH'
+          : PnL <= -(trailingStopPct * tradingSafety.positionRiskElevatedFraction) ? 'ELEVATED'
+          : 'NORMAL';
+        if (riskLevel !== 'NORMAL') {
+          eventBus.emit(EVENTS.POSITION_RISK_CHANGED, { ...surveillance, riskLevel });
+        }
+
+        if (quantStop !== null || quantTarget !== null || storedThesis) {
           if (quantTarget !== null && currentLivePrice >= quantTarget) {
             console.log(`[PortfolioWorker] Quant strategy (${openingTrade!.quantStrategyId}) target reached on ${holding.symbol}: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}`);
             eventBus.emitTradeIdea({
               traceId: Math.random().toString(36).substring(7),
               symbol: holding.symbol,
               side: "SELL",
-              confidence: 0.85,
+              confidence: tradingSafety.quantExitIdeaConfidence,
               currentPrice: currentLivePrice,
               reasoning: `Quant strategy (${openingTrade!.quantStrategyId}) target reached: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}. Scaling out to manage risk.`,
-              agent: "PortfolioManager"
+              agent: agentWeightConfig.riskExitAgent
             });
           } else if (quantStop !== null && currentLivePrice <= quantStop) {
             console.log(`[PortfolioWorker] Quant strategy (${openingTrade!.quantStrategyId}) stop hit on ${holding.symbol}: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}`);
@@ -120,16 +148,28 @@ export class PortfolioMonitorWorker {
               traceId: Math.random().toString(36).substring(7),
               symbol: holding.symbol,
               side: "SELL",
-              confidence: 0.95,
+              confidence: tradingSafety.quantStopExitConfidence,
               currentPrice: currentLivePrice,
               reasoning: `Quant strategy (${openingTrade!.quantStrategyId}) stop hit: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}. Preserving capital.`,
-              agent: "PortfolioManager"
+              agent: agentWeightConfig.riskExitAgent
             });
+          } else if (storedThesis) {
+            const invalidation = await this.evaluateLiveThesis(holding.symbol, storedThesis);
+            if (invalidation) {
+              console.log(`[PortfolioWorker] Original thesis invalidated on ${holding.symbol}: ${invalidation}`);
+              eventBus.emitTradeIdea({
+                traceId: Math.random().toString(36).substring(7),
+                symbol: holding.symbol,
+                side: "SELL",
+                confidence: tradingSafety.thesisInvalidationExitConfidence,
+                currentPrice: currentLivePrice,
+                reasoning: `Original thesis invalidated (${openingTrade!.quantStrategyId ?? storedThesis.strategy}): ${invalidation}`,
+                agent: agentWeightConfig.riskExitAgent
+              });
+            }
           }
           continue; // strategy-aware exit already evaluated this position - skip the generic percentage check below
         }
-
-        const PnL = ((currentLivePrice - holding.averagePrice) / holding.averagePrice) * 100;
 
         if (PnL > takeProfitPct) {
            console.log(`[PortfolioWorker] Taking profit on ${holding.symbol} (+${PnL.toFixed(2)}%)`);
@@ -137,10 +177,10 @@ export class PortfolioMonitorWorker {
              traceId: Math.random().toString(36).substring(7),
              symbol: holding.symbol,
              side: "SELL",
-             confidence: 0.85,
+             confidence: tradingSafety.quantExitIdeaConfidence,
              currentPrice: currentLivePrice,
              reasoning: `Target profit reached (+${PnL.toFixed(2)}%, threshold +${takeProfitPct}%). Scaling out to manage risk.`,
-             agent: "PortfolioManager"
+             agent: agentWeightConfig.riskExitAgent
            });
         } else if (PnL < -trailingStopPct) {
            console.log(`[PortfolioWorker] Cutting loss on ${holding.symbol} (${PnL.toFixed(2)}%)`);
@@ -148,15 +188,47 @@ export class PortfolioMonitorWorker {
              traceId: Math.random().toString(36).substring(7),
              symbol: holding.symbol,
              side: "SELL",
-             confidence: 0.95,
+             confidence: tradingSafety.quantStopExitConfidence,
              currentPrice: currentLivePrice,
              reasoning: `Hard stop hit (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%). Preserving capital.`,
-             agent: "PortfolioManager"
+             agent: agentWeightConfig.riskExitAgent
            });
         }
       }
     } catch (e) {
       console.error("[PortfolioWorker] Error during review:", e);
+    }
+  }
+
+  /**
+   * Re-reads real daily bars and re-runs the same regime/volume/structure features the
+   * QuantEngine used at entry. Returns a human-readable reason when the original thesis is
+   * dead, or null when bars are too thin / unavailable (never a fabricated invalidation).
+   */
+  private async evaluateLiveThesis(symbol: string, thesis: ReturnType<typeof parseStoredThesis>): Promise<string | null> {
+    if (!thesis) return null;
+    try {
+      const endMs = Date.now();
+      const startMs = endMs - 400 * 24 * 60 * 60 * 1000;
+      const bars = await historicalDataGateway.getBars(symbol, '1Day', startMs, endMs);
+      if (bars.length < MIN_BARS) return null;
+
+      const regime = classifyRegime(bars);
+      const volume = computeVolumeFeatures(bars);
+      const trend = regime.features.trend;
+      const result = evaluateThesisInvalidation(thesis, {
+        regime: regime.insufficientData ? null : regime.regime,
+        rvol: volume.relativeVolume,
+        adx: trend.dmi?.adx ?? null,
+        structureEvent: trend.structure.event,
+        structureTrend: trend.structure.trend,
+        lastClose: bars[bars.length - 1].close,
+        bars,
+      });
+      return result.invalidated ? result.reasons.join(' ') : null;
+    } catch (e) {
+      console.warn(`[PortfolioWorker] Could not re-evaluate thesis for ${symbol} (no honest bar history):`, (e as Error).message);
+      return null;
     }
   }
 }

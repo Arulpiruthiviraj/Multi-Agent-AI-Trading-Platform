@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AlpacaBroker, AlpacaRequestError } from './AlpacaBroker';
+import { tradingSafety } from '../server/config/tradingSafety';
 
 /**
  * Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - real coverage for the timeout/retry/circuit-breaker
@@ -125,7 +126,7 @@ describe('AlpacaBroker reliability (Phase 1)', () => {
     expect(result.clientOrderId).toBe('my-idempotency-key');
   });
 
-  it('circuit breaker opens after 3 consecutive failed attempts (within or across calls) and fails fast without calling fetch again', async () => {
+  it('circuit breaker opens after consecutive failed attempts matching the configured threshold and fails fast without calling fetch again', async () => {
     const fetchMock = vi.fn(async () => { throw new Error('down'); });
     vi.stubGlobal('fetch', fetchMock);
 
@@ -135,7 +136,7 @@ describe('AlpacaBroker reliability (Phase 1)', () => {
     const first = await runAndAdvance(broker.account().catch((e: any) => e));
     expect(first).toBeInstanceOf(AlpacaRequestError);
     const callsAfterFirst = fetchMock.mock.calls.length;
-    expect(callsAfterFirst).toBe(3);
+    expect(callsAfterFirst).toBe(tradingSafety.alpacaCircuitBreakerFailureThreshold);
 
     const second = await runAndAdvance(broker.account().catch((e: any) => e));
     expect(second).toBeInstanceOf(AlpacaRequestError);

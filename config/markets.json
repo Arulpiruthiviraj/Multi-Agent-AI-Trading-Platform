@@ -1,0 +1,28 @@
+{
+  "$comment": "Market/exchange metadata. Does not authorize Canadian live order routing. IBKR canadianEquities remains false (IIROC 3200A.1(b)(i)).",
+  "markets": {
+    "US": {
+      "id": "US",
+      "currency": "USD",
+      "timezone": "America/New_York",
+      "exchanges": ["NYSE", "NASDAQ", "AMEX"],
+      "benchmarks": ["SPY", "QQQ", "IWM", "DIA"],
+      "automatedOrderRouting": "SUPPORTED_VIA_ALPACA_US_EQUITIES"
+    },
+    "CA": {
+      "id": "CA",
+      "currency": "CAD",
+      "timezone": "America/Toronto",
+      "exchanges": ["TSX", "TSXV"],
+      "benchmarks": ["XIU.TO", "XIC.TO"],
+      "automatedOrderRouting": "BLOCKED_IIROC_3200A_1_B_I",
+      "notes": "Research/backtest/paper only until a legally permitted execution venue exists. Questrade is read-only. IBKR Canada retail cannot API-route TSX/TSXV."
+    }
+  },
+  "suffixToExchange": {
+    "TO": { "exchange": "TSX", "market": "CA", "currency": "CAD" },
+    "V": { "exchange": "TSXV", "market": "CA", "currency": "CAD" },
+    "VN": { "exchange": "TSXV", "market": "CA", "currency": "CAD" }
+  },
+  "defaultListing": { "exchange": "US_EQUITY", "market": "US", "currency": "USD" }
+}

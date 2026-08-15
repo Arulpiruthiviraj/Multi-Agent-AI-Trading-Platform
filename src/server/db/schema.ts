@@ -239,6 +239,10 @@ export const trades = sqliteTable('trades', {
   quantStrategyId: text('quant_strategy_id'),
   quantStopPrice: real('quant_stop_price'),
   quantTargetPrice: real('quant_target_price'),
+  // Structured snapshot of the original QuantEngine thesis (regime, applicable regimes,
+  // structural level, invalidation texts) so PortfolioMonitor can re-evaluate whether the
+  // thesis is still valid - not just whether a numeric stop/target was hit.
+  quantInvalidationJson: text('quant_invalidation_json'),
 }, (table) => ({
   // Hardening pass, Phase 2: real duplicate-order idempotency at the DB level, closing the
   // check-then-act race in OrderManagement.ts's own pre-insert lookup (two concurrent

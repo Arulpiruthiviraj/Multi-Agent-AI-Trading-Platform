@@ -80,6 +80,19 @@ describe('Integration: MARKET_DATA -> TechnicalAgent -> ChiefTrader -> RiskAgent
     }
     eventBus.emit('MARKET_DATA', { symbol, price: 10, volume: 1000, timestamp: new Date().toISOString() });
 
+    // A professional trader needs a second independent source - TechnicalAgent alone is not
+    // confirmation. Emit a real agreeing NewsAgent idea on the same symbol so ChiefTrader can
+    // clear MIN_INDEPENDENT_AGREEING_AGENTS (adversarial debate is off in this test).
+    eventBus.emitTradeIdea({
+      traceId: 'intg-news-1',
+      symbol,
+      side: 'BUY',
+      confidence: 0.8,
+      currentPrice: 10,
+      reasoning: 'Independent news confirmation for integration test.',
+      agent: 'NewsAgent',
+    });
+
     // The chain from here is real async DB-backed work (ChiefTraderAgent's settings read,
     // RiskEngine's broker/settings/trades/news-cluster reads) - poll instead of a single await.
     const deadline = Date.now() + 5000;

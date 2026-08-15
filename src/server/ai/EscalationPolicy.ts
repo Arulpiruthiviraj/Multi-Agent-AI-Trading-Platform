@@ -11,6 +11,8 @@
  * ==========================================================
  */
 
+import { tradingSafety } from '../config/tradingSafety';
+
 export interface EscalationInput {
   localSource: string;      // e.g. 'finbert'
   localSignalAvailable: boolean;
@@ -55,8 +57,8 @@ export function decideEscalation(input: EscalationInput): EscalationDecision {
 export interface OpenAliceTriggerInput {
   confidence: number;      // 0-1, ChiefTraderAgent's approved weighted confidence
   disagreementCount: number; // evidence.disagreements.length from EvidenceAggregator
-  lowerBound?: number;     // default 0.75 - matches ChiefTraderAgent's own approval floor
-  upperBound?: number;     // default 0.85 - above this, local consensus is already strong
+  lowerBound?: number;
+  upperBound?: number;
 }
 
 export interface OpenAliceTriggerDecision {
@@ -65,8 +67,8 @@ export interface OpenAliceTriggerDecision {
 }
 
 export function shouldTriggerOpenAliceVerification(input: OpenAliceTriggerInput): OpenAliceTriggerDecision {
-  const lowerBound = input.lowerBound ?? 0.75;
-  const upperBound = input.upperBound ?? 0.85;
+  const lowerBound = input.lowerBound ?? tradingSafety.openAliceUncertainBandLow;
+  const upperBound = input.upperBound ?? tradingSafety.openAliceUncertainBandHigh;
 
   if (input.disagreementCount > 0) {
     return {

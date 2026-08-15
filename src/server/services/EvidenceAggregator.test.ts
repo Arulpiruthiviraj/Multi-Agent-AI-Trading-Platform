@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { EvidenceAggregator, Evidence } from './EvidenceAggregator';
+import { EvidenceAggregator, Evidence, netConfidenceFromVotes } from './EvidenceAggregator';
 
 function evidence(overrides: Partial<Evidence>): Evidence {
   return {
@@ -27,24 +27,21 @@ describe('EvidenceAggregator.aggregate', () => {
     expect(result.confidence).toBeCloseTo(0.9, 5);
   });
 
-  it('HOLD evidence neither supports nor penalizes a BUY/SELL side', () => {
-    const result = EvidenceAggregator.aggregate([
-      evidence({ side: 'BUY', confidence: 0.9, agent: 'A', weight: 1.0 }),
-      evidence({ side: 'HOLD', confidence: 0.9, agent: 'B', weight: 1.0 }),
-    ]);
-    // If HOLD counted as a disagreement, confidence would be pulled down below 0.9.
+  it('a real HOLD (confidence > 0) penalizes BUY/SELL the same way a contrary directional vote does', () => {
+    const buy = evidence({ side: 'BUY', confidence: 0.9, agent: 'A', weight: 1.0 });
+    const hold = evidence({ side: 'HOLD', confidence: 0.9, agent: 'B', weight: 1.0 });
+    const result = EvidenceAggregator.aggregate([buy, hold]);
     expect(result.side).toBe('BUY');
-    expect(result.confidence).toBeCloseTo(0.9, 5);
+    expect(result.confidence).toBeCloseTo(netConfidenceFromVotes([buy], [hold]), 5);
+    expect(result.disagreements.some(e => e.side === 'HOLD')).toBe(true);
   });
 
-  it('pulls the winning side down by half the disagreeing evidence\'s weighted confidence', () => {
-    const result = EvidenceAggregator.aggregate([
-      evidence({ side: 'BUY', confidence: 0.99, agent: 'A', weight: 0.85 }),
-      evidence({ side: 'SELL', confidence: 0.3, agent: 'B', weight: 0.20 }),
-    ]);
-    // weighted = 0.99*0.85 - 0.3*0.20*0.5 = 0.8415 - 0.03 = 0.8115; totalWeight = 1.05
+  it('pulls the winning side down by the configured disagreement penalty times the disagreeing evidence', () => {
+    const buy = evidence({ side: 'BUY', confidence: 0.99, agent: 'A', weight: 0.85 });
+    const sell = evidence({ side: 'SELL', confidence: 0.3, agent: 'B', weight: 0.20 });
+    const result = EvidenceAggregator.aggregate([buy, sell]);
     expect(result.side).toBe('BUY');
-    expect(result.confidence).toBeCloseTo(0.8115 / 1.05, 5);
+    expect(result.confidence).toBeCloseTo(netConfidenceFromVotes([buy], [sell]), 5);
     expect(result.agreements).toHaveLength(1);
     expect(result.disagreements).toHaveLength(1);
   });

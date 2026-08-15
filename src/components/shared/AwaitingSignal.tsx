@@ -18,16 +18,18 @@ interface AwaitingSignalProps {
   reason?: string;
   label?: string;
   compact?: boolean;
+  /** When true, this is an empty result (e.g. no matching news), not a crashed service. */
+  emptyResult?: boolean;
 }
 
-export default function AwaitingSignal({ reason, label, compact }: AwaitingSignalProps) {
+export default function AwaitingSignal({ reason, label, compact, emptyResult }: AwaitingSignalProps) {
   if (compact) {
     return (
       <span
         className="inline-flex items-center gap-1 text-[10px] font-mono text-slate-600 uppercase tracking-wider"
         title={reason}
       >
-        <RadioTower size={10} /> AWAITING SIGNAL
+        <RadioTower size={10} /> {emptyResult ? 'NO MATCHING DATA' : 'AWAITING SIGNAL'}
       </span>
     );
   }
@@ -36,7 +38,7 @@ export default function AwaitingSignal({ reason, label, compact }: AwaitingSigna
     <div className="flex flex-col items-center justify-center gap-2 py-8 text-center">
       <RadioTower size={20} className="text-slate-600" />
       <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500">
-        {label ? `${label} — ` : ""}AWAITING SIGNAL
+        {label ? `${label} — ` : ""}{emptyResult ? "NO MATCHING DATA (NOT AN OUTAGE)" : "AWAITING SIGNAL"}
       </div>
       {reason && <div className="text-[10px] text-slate-600 max-w-xs leading-relaxed">{reason}</div>}
     </div>

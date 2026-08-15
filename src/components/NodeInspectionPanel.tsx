@@ -34,6 +34,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import eventCatalog from '../../config/eventNames.json';
+import agentWeights from '../../config/agentWeights.json';
 import { X, Terminal, Activity, CheckCircle2, ShieldCheck, Newspaper, Send, TrendingUp, UserCheck, Clock, BookOpen, Cpu, DollarSign, BrainCircuit } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -159,10 +161,12 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
            relevant = activeEvents.filter(e => e.type === 'CHIEF_APPROVED_IDEA' || e.type === 'CHIEF_CONSENSUS_STARTED' || e.type === 'CHIEF_CONSENSUS_COMPLETED');
        } else if (nodeId === 'risk-manager') {
            relevant = activeEvents.filter(e => e.type === 'RISK_ASSESSMENT_COMPLETED' || e.type === 'RISK_ASSESSMENT_STARTED' || e.type === 'RISK_GATE_EVALUATED');
+       } else if (nodeId === 'capital-guard') {
+           relevant = activeEvents.filter(e => e.type === 'CAPITAL_CHECK' || (e.type === 'RISK_GATE_EVALUATED' && e.payload?.gate === 'argus_capital_allocation'));
        } else if (nodeId === 'order-management') {
            relevant = activeEvents.filter(e => e.type === 'ORDER_EXECUTED' || e.type === 'ORDER_SUBMITTED' || e.type === 'ORDER_ACCEPTED' || e.type === 'ORDER_FILLED');
        } else if (nodeId === 'portfolio-monitor') {
-           relevant = activeEvents.filter(e => e.type === 'PORTFOLIO_UPDATE' || (e.type === 'TRADE_IDEA_GENERATED' && e.payload.agent === 'PortfolioManager'));
+           relevant = activeEvents.filter(e => e.type === eventCatalog.POSITION_MONITORED || e.type === eventCatalog.POSITION_RISK_CHANGED || e.type === eventCatalog.PORTFOLIO_UPDATE || (e.type === eventCatalog.TRADE_IDEA_GENERATED && e.payload.agent === agentWeights.riskExitAgent));
        } else if (nodeId === 'learning-engine') {
            relevant = activeEvents.filter(e => e.type === 'LEARNED_NEW_RULE');
        }
@@ -187,6 +191,7 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
          case 'kronos-forecast': return <BrainCircuit size={24} className="text-indigo-400" />;
          case 'chief-trader': return <UserCheck size={24} className="text-emerald-400" />;
          case 'risk-manager': return <ShieldCheck size={24} className="text-rose-400" />;
+         case 'capital-guard': return <DollarSign size={24} className="text-amber-400" />;
          case 'order-management': return <Send size={24} className="text-indigo-400" />;
          case 'portfolio-monitor': return <Clock size={24} className="text-teal-400" />;
          case 'learning-engine': return <BookOpen size={24} className="text-violet-400" />;

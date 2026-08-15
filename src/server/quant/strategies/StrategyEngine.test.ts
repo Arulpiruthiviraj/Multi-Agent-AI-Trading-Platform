@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { evaluateAll, bestStrategyIdea, ALL_STRATEGIES } from './StrategyEngine';
+import { evaluateAll, bestStrategyIdea, ALL_STRATEGIES, regimeStrategyEligibility } from './StrategyEngine';
 import { baseFixture } from './testHelpers';
 import { StrategyEvaluation } from './types';
 
@@ -85,5 +85,16 @@ describe('StrategyEngine.bestStrategyIdea', () => {
     expect(idea!.reasoning).toContain('MOMENTUM_BREAKOUT');
     expect(idea!.reasoning).toContain('setupScore 90');
     expect(idea!.reasoning).toContain('Contradictions: z');
+  });
+
+  it('lists regime-eligible vs ineligible strategies without treating regime as a trade signal', () => {
+    const ctx = baseFixture();
+    ctx.regime.regime = 'BULLISH_TREND';
+    const results = evaluateAll(ctx);
+    const { eligible, ineligible } = regimeStrategyEligibility(results, ctx.regime.regime);
+    expect(eligible.length + ineligible.length).toBe(5);
+    expect(eligible).toContain('MOMENTUM_BREAKOUT');
+    expect(ineligible.some(x => x.strategy === 'MEAN_REVERSION')).toBe(true);
+    expect(ineligible.find(x => x.strategy === 'MEAN_REVERSION')!.reason).toContain('not an automatic trade');
   });
 });

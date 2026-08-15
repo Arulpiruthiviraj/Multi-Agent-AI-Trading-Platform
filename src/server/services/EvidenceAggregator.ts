@@ -11,6 +11,8 @@
  * ==========================================================
  */
 
+import { tradingSafety } from '../config/tradingSafety';
+
 export interface Evidence {
   traceId: string;
   symbol: string;
@@ -31,15 +33,33 @@ export interface AggregationResult {
   disagreements: Evidence[];
 }
 
-// Same magnitude ChiefTraderAgent always used: a disagreeing agent pulls the winning side's
-// score down by half its own weighted confidence, not a full vote's worth.
-const DISAGREEMENT_PENALTY = 0.5;
+export const DISAGREEMENT_PENALTY = tradingSafety.disagreementPenalty;
+
+export function netConfidenceFromVotes(
+  agreeing: Array<{ confidence: number; weight: number }>,
+  disagreeing: Array<{ confidence: number; weight: number }>,
+): number {
+  let weightedConfidence = 0;
+  let totalWeight = 0;
+  for (const e of agreeing) {
+    weightedConfidence += e.confidence * e.weight;
+    totalWeight += e.weight;
+  }
+  for (const e of disagreeing) {
+    weightedConfidence -= e.confidence * e.weight * DISAGREEMENT_PENALTY;
+    totalWeight += e.weight;
+  }
+  return Math.max(0, Math.min(1, weightedConfidence / (totalWeight || 1)));
+}
 
 export class EvidenceAggregator {
   /**
-   * Weighted-vote consensus over one symbol's evidence. HOLD ideas neither support nor
-   * penalize BUY/SELL - only BUY vs SELL evidence compete with each other. Returns the side
-   * (BUY/SELL/HOLD) whose weighted confidence, net of opposing evidence, is highest.
+   * Weighted-vote consensus over one symbol's evidence. BUY vs SELL compete directly.
+   * A HOLD with real confidence (> 0) is a genuine "do not trade" vote and penalizes both
+   * directional sides the same way a contrary BUY/SELL would. HOLD at confidence 0 is the
+   * DATA_UNAVAILABLE shape (FundamentalAgent/MacroAgent when a provider is missing or
+   * rate-limited) and is excluded from the denominator so a dead agent cannot dilute a
+   * real directional vote.
    */
   static aggregate(evidence: Evidence[]): AggregationResult {
     let bestSide: 'BUY' | 'SELL' | 'HOLD' = 'HOLD';
@@ -51,20 +71,11 @@ export class EvidenceAggregator {
 
     for (const testSide of ['BUY', 'SELL'] as const) {
       const agreeing = evidence.filter(e => e.side === testSide);
-      const disagreeing = evidence.filter(e => e.side !== testSide && e.side !== 'HOLD');
+      const directionalDisagreeing = evidence.filter(e => e.side !== testSide && e.side !== 'HOLD');
+      const holdPenalties = evidence.filter(e => e.side === 'HOLD' && e.confidence > 0);
+      const disagreeing = [...directionalDisagreeing, ...holdPenalties];
 
-      let weightedConfidence = 0;
-      let totalWeight = 0;
-      for (const e of agreeing) {
-        weightedConfidence += e.confidence * e.weight;
-        totalWeight += e.weight;
-      }
-      for (const e of disagreeing) {
-        weightedConfidence -= e.confidence * e.weight * DISAGREEMENT_PENALTY;
-        totalWeight += e.weight;
-      }
-
-      const finalConfidence = Math.max(0, Math.min(1, weightedConfidence / (totalWeight || 1)));
+      const finalConfidence = netConfidenceFromVotes(agreeing, disagreeing);
       if (finalConfidence > bestConfidence) {
         bestConfidence = finalConfidence;
         bestSide = testSide;

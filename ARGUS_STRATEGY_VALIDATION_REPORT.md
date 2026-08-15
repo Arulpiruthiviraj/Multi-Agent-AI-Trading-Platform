@@ -137,3 +137,16 @@ real OOS evidence failed it. The other eighteen have none. Real, working machine
 that evidence exists and is demonstrated above - it has not yet been pointed at enough of the
 codebase's own strategies to draw a portfolio-wide conclusion, and this report does not pretend
 otherwise.
+
+---
+
+## Phase 16 addendum (no re-optimization)
+
+Phase 16 did **not** retune any strategy, walk-forward window, or cost model to improve these
+numbers. Additional live plumbing (EV refuse-to-emit when no closed-strategy sample exists;
+thesis invalidation on live QuantEngine positions) does not change the OOS verdict above.
+
+**Gate 5 / 6 remain FAIL.** Recommended mechanical work only: run `scripts/runWalkForwardCheck.ts`
+across the remaining 18 strategy×symbol rows without changing rules. If those also fail OOS,
+that is the answer — not a prompt to search for parameters that pass.
+

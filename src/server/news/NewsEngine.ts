@@ -11,7 +11,7 @@ import { eventBus } from '../core/EventBus';
 import { decideEscalation } from '../ai/EscalationPolicy';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { v4 as uuidv4 } from 'uuid';
+import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 
 // A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
 // entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.
@@ -81,7 +81,7 @@ export class NewsEngine {
         }
 
         const category = this.classifier.classify(normalized);
-        let finalSymbols = this.symbolExtractor.extract(normalized);
+        let finalSymbols = this.symbolExtractor.extract(normalized).filter(s => looksLikeListedTicker(s));
         const impact = await this.impactEngine.assess(normalized, category);
         
         const clusterId = await this.clusterEngine.createOrUpdateCluster(
@@ -168,11 +168,13 @@ export class NewsEngine {
 
         if (aiAnalysis) {
           if (aiAnalysis.symbol) {
-            finalSymbols = Array.from(new Set([...finalSymbols, aiAnalysis.symbol]));
+            const ticker = looksLikeListedTicker(aiAnalysis.symbol);
+            if (ticker) finalSymbols = Array.from(new Set([...finalSymbols, ticker]));
           }
           
           if (aiAnalysis.tradingBias !== 'NEUTRAL') {
             finalSymbols.forEach(symbol => {
+              if (!looksLikeListedTicker(symbol)) return;
               eventBus.emitTradeIdea({
                  traceId,
                  symbol,

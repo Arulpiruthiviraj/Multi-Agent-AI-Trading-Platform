@@ -21,12 +21,14 @@
  * ==========================================================
  */
 
-export const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = 0.20;
-export const MAX_SECTOR_CONCENTRATION_PCT = 0.40;
-export const CORRELATION_MIN_OVERLAP = 20;
-export const CORRELATION_THRESHOLD = 0.7;
-export const MAX_CORRELATED_EXPOSURE_PCT = 0.50;
-export const STOP_LOSS_ASSUMPTION_PCT = 0.05; // matches RiskEngine's real 5% stop-loss risk-per-share assumption
+import { tradingSafety } from '../config/tradingSafety';
+
+export const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = tradingSafety.maxSingleSymbolConcentrationPct;
+export const MAX_SECTOR_CONCENTRATION_PCT = tradingSafety.maxSectorConcentrationPct;
+export const CORRELATION_MIN_OVERLAP = tradingSafety.correlationMinOverlap;
+export const CORRELATION_THRESHOLD = tradingSafety.correlationThreshold;
+export const MAX_CORRELATED_EXPOSURE_PCT = tradingSafety.maxCorrelatedExposurePct;
+export const STOP_LOSS_ASSUMPTION_PCT = tradingSafety.stopLossAssumptionPct;
 
 // Same real (if coarse) GICS-style sector map RiskEngine.ts uses - kept here as the single source
 // so both the live engine and the backtest engine sector-cap against identical sector groupings.
@@ -128,7 +130,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
   // computed exactly as before and still applies on top of whichever notional cap wins here.
   const sizingMode = ctx.sizingMode ?? 'FIXED_DOLLAR';
   const effectiveNotionalCapDollar = sizingMode === 'PERCENT_OF_EQUITY'
-    ? ctx.accountEquity * ((ctx.percentOfEquityPct ?? 2) / 100)
+    ? ctx.accountEquity * ((ctx.percentOfEquityPct ?? tradingSafety.defaultPercentOfEquityPct) / 100)
     : ctx.maxTradeSizeDollar;
 
   const maxSharesByRisk = Math.floor(maxRiskAmount / riskPerShare);

@@ -13,6 +13,7 @@ import { eventBus } from './EventBus';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import * as schema from '../db/schema';
+import { PERSISTED_EVENTS } from './eventNames';
 
 export interface EventEnvelope {
   eventId: string;
@@ -93,22 +94,6 @@ const trackEvent = (type: string) => (payload: any) => {
   }
 };
 
-eventBus.on('MARKET_DATA', trackEvent('MARKET_DATA'));
-eventBus.on('CALCULATION_COMPLETED', trackEvent('CALCULATION_COMPLETED'));
-eventBus.on('TRADE_IDEA_GENERATED', trackEvent('TRADE_IDEA_GENERATED'));
-eventBus.on('CHIEF_APPROVED_IDEA', trackEvent('CHIEF_APPROVED_IDEA'));
-eventBus.on('RISK_ASSESSMENT_COMPLETED', trackEvent('RISK_ASSESSMENT_COMPLETED'));
-eventBus.on('ORDER_EXECUTED', trackEvent('ORDER_EXECUTED'));
-eventBus.on('LEARNED_NEW_RULE', trackEvent('LEARNED_NEW_RULE'));
-eventBus.on('OPENALICE_VERIFICATION_REQUESTED', trackEvent('OPENALICE_VERIFICATION_REQUESTED'));
-eventBus.on('OPENALICE_VERIFICATION_COMPLETED', trackEvent('OPENALICE_VERIFICATION_COMPLETED'));
-eventBus.on('OPENALICE_VERIFICATION_TIMED_OUT', trackEvent('OPENALICE_VERIFICATION_TIMED_OUT'));
-// Decision-lifecycle STARTED/COMPLETED pairs (one per real evaluation, not per tick) - unlike
-// TECHNICAL_ANALYSIS_*/NEWS_ANALYSIS_STARTED, which fire at tick/article frequency and are
-// deliberately excluded, same reasoning as MARKET_DATA/CALCULATION_COMPLETED above.
-eventBus.on('CHIEF_CONSENSUS_STARTED', trackEvent('CHIEF_CONSENSUS_STARTED'));
-eventBus.on('CHIEF_CONSENSUS_COMPLETED', trackEvent('CHIEF_CONSENSUS_COMPLETED'));
-eventBus.on('RISK_ASSESSMENT_STARTED', trackEvent('RISK_ASSESSMENT_STARTED'));
-eventBus.on('ORDER_SUBMITTED', trackEvent('ORDER_SUBMITTED'));
-eventBus.on('ORDER_ACCEPTED', trackEvent('ORDER_ACCEPTED'));
-eventBus.on('ORDER_FILLED', trackEvent('ORDER_FILLED'));
+for (const type of PERSISTED_EVENTS) {
+  eventBus.on(type, trackEvent(type));
+}

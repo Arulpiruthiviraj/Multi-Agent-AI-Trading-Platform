@@ -26,6 +26,7 @@
  */
 
 import { useWebSocket } from '../context/WebSocketContext';
+import eventCatalog from '../../config/eventNames.json';
 import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactFlow, {
@@ -103,7 +104,7 @@ interface Transaction {
 }
 
 const STAGE_ORDER = [
-  'TRADE_IDEA_GENERATED', 'CHIEF_APPROVED_IDEA', 'RISK_ASSESSMENT_COMPLETED',
+  'TRADE_IDEA_GENERATED', 'CHIEF_APPROVED_IDEA', 'CAPITAL_CHECK', 'RISK_ASSESSMENT_COMPLETED',
   'ORDER_SUBMITTED', 'ORDER_ACCEPTED', 'ORDER_FILLED', 'ORDER_EXECUTED',
 ];
 
@@ -165,7 +166,8 @@ export default function DigitalTwinVisualizer() {
     { id: 'paid-llm-pool', type: 'custom', position: { x: 680, y: 320 }, data: { label: 'Paid AI Pool', icon: <DollarSign size={18} />, description: 'Gemini/OpenAI/etc - metered', category: 'paid-model', status: 'IDLE' } },
 
     { id: 'chief-trader', type: 'custom', position: { x: 470, y: 470 }, data: { label: 'Chief Trader', icon: <UserCheck size={18} />, description: 'Weighted evidence consensus', category: 'decision', status: 'IDLE' } },
-    { id: 'risk-manager', type: 'custom', position: { x: 470, y: 610 }, data: { label: 'Risk Engine', icon: <ShieldCheck size={18} />, description: '9 real safety gates', category: 'risk', status: 'IDLE' } },
+    { id: 'risk-manager', type: 'custom', position: { x: 280, y: 610 }, data: { label: 'Risk Engine', icon: <ShieldCheck size={18} />, description: 'Deterministic safety gates', category: 'risk', status: 'IDLE' } },
+    { id: 'capital-guard', type: 'custom', position: { x: 660, y: 610 }, data: { label: 'Capital Guard', icon: <DollarSign size={18} />, description: 'Argus allocation ceiling', category: 'risk', status: 'IDLE' } },
     { id: 'order-management', type: 'custom', position: { x: 470, y: 750 }, data: { label: 'Order Execution', icon: <Send size={18} />, description: 'Broker routing + fills', category: 'execution', status: 'IDLE' } },
     { id: 'learning-engine', type: 'custom', position: { x: 890, y: 750 }, data: { label: 'Reflection Engine', icon: <BookOpen size={18} />, description: 'Post-trade learning', category: 'execution', status: 'IDLE' } },
   ];
@@ -188,7 +190,8 @@ export default function DigitalTwinVisualizer() {
     { id: 'e-port-chief', source: 'portfolio-monitor', target: 'chief-trader', style: edgeStyle },
 
     { id: 'e-chief-risk', source: 'chief-trader', target: 'risk-manager', style: edgeStyle },
-    { id: 'e-risk-exec', source: 'risk-manager', target: 'order-management', style: edgeStyle },
+    { id: 'e-risk-capital', source: 'risk-manager', target: 'capital-guard', style: edgeStyle },
+    { id: 'e-capital-exec', source: 'capital-guard', target: 'order-management', style: edgeStyle },
     { id: 'e-exec-learn', source: 'order-management', target: 'learning-engine', style: edgeStyle },
   ];
 
@@ -233,6 +236,11 @@ export default function DigitalTwinVisualizer() {
       subscribe('ORDER_FILLED', record('ORDER_FILLED')),
       subscribe('ORDER_EXECUTED', record('ORDER_EXECUTED')),
       subscribe('LEARNED_NEW_RULE', record('LEARNED_NEW_RULE')),
+      subscribe('CAPITAL_CHECK', record('CAPITAL_CHECK')),
+      subscribe('AGENT_DISAGREEMENT', record('AGENT_DISAGREEMENT')),
+      subscribe(eventCatalog.POSITION_MONITORED, record(eventCatalog.POSITION_MONITORED)),
+      subscribe(eventCatalog.POSITION_RISK_CHANGED, record(eventCatalog.POSITION_RISK_CHANGED)),
+      subscribe('MODEL_HEALTH', record('MODEL_HEALTH')),
     ];
 
     return () => unsubs.forEach(u => u());
@@ -247,6 +255,7 @@ export default function DigitalTwinVisualizer() {
     const AGENT_NODE: Record<string, string> = {
       TechnicalAgent: 'technical-engine', NewsAgent: 'news-agent', FundamentalAgent: 'fundamental-agent',
       MacroAgent: 'macro-agent', KronosEngine: 'kronos-forecast', PortfolioManager: 'portfolio-monitor',
+      QuantEngine: 'quant-engine',
     };
     // Explicit map, not derived from the node id string - "fundamental-agent" -> "e-fund-chief"
     // and "portfolio-monitor" -> "e-port-chief" don't share a prefix, so a split()-based guess
@@ -254,6 +263,7 @@ export default function DigitalTwinVisualizer() {
     const NODE_TO_CHIEF_EDGE: Record<string, string> = {
       'technical-engine': 'e-tech-chief', 'news-agent': 'e-news-chief', 'fundamental-agent': 'e-fund-chief',
       'macro-agent': 'e-macro-chief', 'kronos-forecast': 'e-kronos-chief', 'portfolio-monitor': 'e-port-chief',
+      'quant-engine': 'e-quant-chief',
     };
 
     recent.forEach((evt) => {
@@ -295,13 +305,23 @@ export default function DigitalTwinVisualizer() {
         newActiveNodes.add('risk-manager');
       } else if (evt.type === 'RISK_ASSESSMENT_COMPLETED') {
         newActiveNodes.add('risk-manager');
-        if (evt.payload.approved) { newActiveEdges.add('e-risk-exec'); newActiveNodes.add('order-management'); }
+        if (evt.payload.approved) { newActiveEdges.add('e-risk-capital'); newActiveNodes.add('capital-guard'); }
+      } else if (evt.type === 'CAPITAL_CHECK') {
+        newActiveNodes.add('capital-guard'); newActiveEdges.add('e-risk-capital');
+        if (evt.payload.passed) { newActiveEdges.add('e-capital-exec'); newActiveNodes.add('order-management'); }
       } else if (evt.type === 'ORDER_SUBMITTED' || evt.type === 'ORDER_ACCEPTED' || evt.type === 'ORDER_FILLED') {
-        newActiveNodes.add('order-management'); newActiveEdges.add('e-risk-exec');
+        newActiveNodes.add('order-management'); newActiveEdges.add('e-capital-exec');
       } else if (evt.type === 'ORDER_EXECUTED') {
         newActiveNodes.add('order-management'); newActiveEdges.add('e-exec-learn'); newActiveNodes.add('learning-engine');
       } else if (evt.type === 'LEARNED_NEW_RULE') {
         newActiveNodes.add('learning-engine');
+      } else if (evt.type === eventCatalog.POSITION_MONITORED || evt.type === eventCatalog.POSITION_RISK_CHANGED) {
+        newActiveNodes.add('portfolio-monitor');
+      } else if (evt.type === 'AGENT_DISAGREEMENT') {
+        newActiveNodes.add('chief-trader');
+      } else if (evt.type === 'MODEL_HEALTH') {
+        if (evt.payload?.modelId === 'ollama') newActiveNodes.add('ollama-llm');
+        if (evt.payload?.modelId === 'chronos-kronos') newActiveNodes.add('kronos-forecast');
       }
     });
 
@@ -444,6 +464,10 @@ export default function DigitalTwinVisualizer() {
                       evt.type === 'RISK_ASSESSMENT_STARTED' ? `Evaluating ${evt.payload.side} ${evt.payload.symbol}...` :
                       evt.type === 'RISK_GATE_EVALUATED' ? `${evt.payload.passed ? '✓' : '✕'} ${evt.payload.gate}` :
                       evt.type === 'RISK_ASSESSMENT_COMPLETED' ? `Risk: ${evt.payload.approved ? 'PASS' : 'VETO'}\nSymbol: ${evt.payload.symbol}\nCap: ${evt.payload.maxQuantity} shares` :
+                      evt.type === 'CAPITAL_CHECK' ? `${evt.payload.passed ? 'PASS' : 'REJECT'} remaining $${evt.payload.remaining?.toFixed?.(2)} requested $${evt.payload.requestedNotional?.toFixed?.(2)}` :
+                      evt.type === 'AGENT_DISAGREEMENT' ? `${evt.payload.disagreementScore} disagreement on ${evt.payload.symbol} (${evt.payload.disagreementCount})` :
+                      evt.type === eventCatalog.POSITION_MONITORED ? `${evt.payload.symbol} ${evt.payload.pnlPct?.toFixed?.(2)}% vs entry $${evt.payload.entryPrice}` :
+                      evt.type === eventCatalog.POSITION_RISK_CHANGED ? `${evt.payload.symbol} risk ${evt.payload.riskLevel}` :
                       evt.type === 'ORDER_SUBMITTED' ? `Order ${evt.payload.id} submitted: ${evt.payload.side} ${evt.payload.quantity}x ${evt.payload.symbol}` :
                       evt.type === 'ORDER_ACCEPTED' ? `Broker accepted - status ${evt.payload.status}${evt.payload.brokerOrderId ? ` (${evt.payload.brokerOrderId})` : ''}` :
                       evt.type === 'ORDER_FILLED' ? `Filled: ${evt.payload.quantity}x ${evt.payload.symbol} @ $${evt.payload.price?.toFixed?.(2)}` :
@@ -482,6 +506,7 @@ export default function DigitalTwinVisualizer() {
                 </button>
               </div>
               <div className="p-6 overflow-y-auto space-y-4">
+                <p className="text-[10px] text-slate-500 font-mono">Replay uses this trace&apos;s real persisted stages only — nothing is synthesized.</p>
                 {selectedTx.stages.map((stage, i) => (
                   <div key={i} className="relative pl-6">
                     {i < selectedTx.stages.length - 1 && <div className="absolute left-[5px] top-4 bottom-[-16px] w-px bg-slate-700" />}

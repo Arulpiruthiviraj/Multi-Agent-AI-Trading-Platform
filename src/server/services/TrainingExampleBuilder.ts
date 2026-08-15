@@ -24,13 +24,14 @@ import { db } from '../db';
 import { transactions, consensusDecisions, consensusEvidence, agentPredictions, trainingExamples } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { evaluatePrediction, EVALUATION_HORIZON_MS } from './PredictionOutcomeEvaluator';
+import { tradingSafety } from '../config/tradingSafety';
 
 export class TrainingExampleBuilder {
   private intervalId: NodeJS.Timeout | null = null;
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.buildPending().catch(e => console.error('[TrainingExampleBuilder] Cycle failed', e)), 15 * 60 * 1000);
+    this.intervalId = setInterval(() => this.buildPending().catch(e => console.error('[TrainingExampleBuilder] Cycle failed', e)), tradingSafety.trainingExampleIntervalMs);
     this.buildPending().catch(e => console.error('[TrainingExampleBuilder] Initial cycle failed', e));
   }
 

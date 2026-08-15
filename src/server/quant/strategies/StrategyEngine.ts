@@ -18,13 +18,15 @@ import { pullbackContinuation } from './pullbackContinuation';
 import { meanReversion } from './meanReversion';
 import { trendFollowing } from './trendFollowing';
 import { rangeReversion } from './rangeReversion';
+import { tradingSafety } from '../../config/tradingSafety';
+import type { RegimeLabel } from '../RegimeEngine';
 
 export const ALL_STRATEGIES = [momentumBreakout, pullbackContinuation, meanReversion, trendFollowing, rangeReversion];
 
 // A strategy evaluated outside its own stated applicable regime(s) has its confidence discounted,
 // not zeroed - real evidence, just less trustworthy context. Kept in one place so every strategy's
 // regime-fit is judged the same way rather than each module inventing its own penalty.
-const REGIME_MISMATCH_CONFIDENCE_MULTIPLIER = 0.5;
+const REGIME_MISMATCH_CONFIDENCE_MULTIPLIER = tradingSafety.regimeMismatchConfidenceMultiplier;
 
 export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
   return ALL_STRATEGIES
@@ -40,7 +42,27 @@ export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
 /** Real minimum bar before a strategy's evaluation is trusted enough to drive a trade idea -
  *  matches the codebase's own convention (RegimeEngine's placeholder used 0.6 on regime.confidence;
  *  the same bar is applied here to a strategy's own blended confidence). */
-export const MIN_STRATEGY_CONFIDENCE_TO_TRADE = 0.6;
+export const MIN_STRATEGY_CONFIDENCE_TO_TRADE = tradingSafety.minStrategyConfidenceToTrade;
+
+/**
+ * Lists which of the five existing strategies match the current regime.
+ * Does not add strategies, execute orders, or zero off-regime confidence (evaluateAll still discounts).
+ */
+export function regimeStrategyEligibility(evaluations: StrategyEvaluation[], regime: RegimeLabel): {
+  eligible: string[];
+  ineligible: Array<{ strategy: string; reason: string }>;
+} {
+  const eligible: string[] = [];
+  const ineligible: Array<{ strategy: string; reason: string }> = [];
+  for (const e of evaluations) {
+    if (e.applicableRegimes.includes(regime)) eligible.push(e.strategy);
+    else ineligible.push({
+      strategy: e.strategy,
+      reason: `Regime ${regime} is outside applicableRegimes (${e.applicableRegimes.join(', ')}). Confidence is discounted, not zeroed, and this is not an automatic trade.`,
+    });
+  }
+  return { eligible, ineligible };
+}
 
 export interface StrategyDerivedIdea {
   side: 'BUY' | 'SELL';
