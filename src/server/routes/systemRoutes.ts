@@ -23,6 +23,7 @@ import { backtestEngine } from "../engines/backtest/BacktestEngine";
 import { walkForwardValidator } from "../engines/backtest/WalkForwardValidator";
 import { runIntegrityCheck } from "../core/IntegrityValidator";
 import { tradingLimiter } from "../core/RateLimiters";
+import { BrokerManager } from "../../brokers/BrokerManager";
 
 export const systemRouter = Router();
 

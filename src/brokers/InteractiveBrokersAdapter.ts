@@ -338,4 +338,24 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
       return false;
     }
   }
+
+  /**
+   * Flatten via a market order of the current position size. There is no dedicated CP
+   * "close position" endpoint used here; this reuses placeOrder so RiskEngine/OMS stay the
+   * authorization path for live closes that go through Argus rather than a silent flatten.
+   * Callers that need a gated exit should still emit a SELL idea. Returns false if no position.
+   */
+  async closePosition(symbol: string): Promise<boolean> {
+    const positions = await this.positions();
+    const pos = positions.find(p => p.symbol === symbol);
+    if (!pos || pos.quantity === 0) return false;
+    const qty = Math.abs(pos.quantity);
+    await this.placeOrder({
+      symbol,
+      side: pos.quantity > 0 ? 'SELL' : 'BUY',
+      type: 'MARKET',
+      quantity: qty,
+    });
+    return true;
+  }
 }

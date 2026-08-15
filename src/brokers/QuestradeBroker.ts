@@ -245,6 +245,10 @@ export class QuestradeBroker implements BrokerPlugin {
 
   async cancelOrder(orderId: string): Promise<boolean> { return false; }
 
+  async closePosition(symbol: string): Promise<boolean> {
+    throw new Error("Not implemented: Questrade's order-execution API is restricted to approved partner developers - a retail app cannot close positions through it regardless of credentials.");
+  }
+
   async positions(): Promise<Position[]> {
     if (!this.accountNumber) return [];
     const res = await this.fetchQuestrade(`v1/accounts/${this.accountNumber}/positions`);

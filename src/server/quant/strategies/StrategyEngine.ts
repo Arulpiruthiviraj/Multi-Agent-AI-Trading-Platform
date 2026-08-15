@@ -3,13 +3,17 @@
  * Module: strategies/StrategyEngine
  *
  * Purpose:
- * Phase 4 of the additive quant layer - runs all 5 real strategy modules against one real
- * StrategyContext and returns their evaluations, ranked by real setupScore. Each strategy's raw
- * confidence (setupScore/100, computed by the strategy itself) is blended here with how well the
- * CURRENT regime actually matches that strategy's own `applicableRegimes` - a strategy whose
- * conditions mostly held but whose regime doesn't fit (e.g. Mean Reversion's conditions scoring
- * well during a real BULLISH_TREND) is real signal, but a materially less trustworthy one, and that
- * distinction must not be silently lost by only reporting the raw condition-match score.
+ * Runs strategy modules against one StrategyContext and returns evaluations ranked by setupScore.
+ * Each strategy's raw confidence is blended with regime fit: off-regime setups are DISCOUNTED
+ * (tradingSafety.regimeMismatchConfidenceMultiplier), never silently zeroed.
+ *
+ * Two lists:
+ *   CORE_STRATEGIES / ALL_STRATEGIES — the original five. Default live evaluateAll() set.
+ *   EXPERIMENTAL_STRATEGIES — SMC_LIQUIDITY_SWEEP. Backtestable via findStrategy(); live
+ *   evaluateAll() includes them only when QUANT_SMC_STRATEGY_ENABLED=true.
+ *
+ * ALL_STRATEGIES keeps the historical name so GET /api/v2/quant/strategies `strategies` array
+ * and existing tests still see exactly five ids unless that env flag is set.
  * ==========================================================
  */
 import { StrategyContext, StrategyEvaluation, StrategyDefinition } from './types';
@@ -22,11 +26,16 @@ import { smcLiquiditySweep } from './smcLiquiditySweep';
 import { tradingSafety } from '../../config/tradingSafety';
 import type { RegimeLabel } from '../RegimeEngine';
 
+/** Original five. Also exported as ALL_STRATEGIES for callers that list "live default" strategies. */
 export const CORE_STRATEGIES: StrategyDefinition[] = [momentumBreakout, pullbackContinuation, meanReversion, trendFollowing, rangeReversion];
 
-/** Backtestable / listed, but not in live evaluateAll unless QUANT_SMC_STRATEGY_ENABLED=true. */
+/**
+ * Backtestable and listed under experimentalStrategies on GET /api/v2/quant/strategies.
+ * Not in evaluateAll() unless QUANT_SMC_STRATEGY_ENABLED=true (checked at call time, not import time).
+ */
 export const EXPERIMENTAL_STRATEGIES: StrategyDefinition[] = [smcLiquiditySweep];
 
+/** Live Quant may include experimental strategies only when this env var is the string 'true'. */
 export function isSmcLiveQuantEnabled(): boolean {
   return process.env.QUANT_SMC_STRATEGY_ENABLED === 'true';
 }
@@ -35,9 +44,10 @@ export function resolveStrategiesForLiveEvaluation(): StrategyDefinition[] {
   return isSmcLiveQuantEnabled() ? [...CORE_STRATEGIES, ...EXPERIMENTAL_STRATEGIES] : CORE_STRATEGIES;
 }
 
-/** Live default set (the original five). Kept as this name so existing callers and tests are unchanged. */
+/** Live default set (the original five). Name preserved for existing imports and tests. */
 export const ALL_STRATEGIES = CORE_STRATEGIES;
 
+/** Core first, then experimental — used by BacktestEngine so SMC can be replayed without the live flag. */
 export function findStrategy(id: string): StrategyDefinition | undefined {
   return CORE_STRATEGIES.find(s => s.id === id) ?? EXPERIMENTAL_STRATEGIES.find(s => s.id === id);
 }

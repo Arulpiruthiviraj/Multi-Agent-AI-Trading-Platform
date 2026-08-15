@@ -11,6 +11,8 @@ Never silently substitute a fake number. If a feed or calculation is missing, em
 - Quant contradiction AI — `available: false` when no provider.
 - Historical AI replay — `UNAVAILABLE` with WHAT/WHY/IMPACT/FIX (`aiReplayAvailability.ts`).
 - Live EV — refuses strategy ideas when win-rate sample is missing or EV ≤ 0.
+- Thesis invalidation — missing RVOL/ADX/bars means that *rule* does not fire (no fabricated breach).
+- Bull/Bear notes — invented numerics stripped; not treated as prices.
 
 ## New structured `NOT_SUPPORTED` records (feature snapshot)
 

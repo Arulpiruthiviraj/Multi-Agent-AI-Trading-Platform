@@ -1,7 +1,18 @@
 /**
- * Facade over already-computed StrategyContext / strategy evaluations / grouped scores.
- * Does not reimplement indicators. Divergence series are derived from the same RSIEngine/MACDEngine
- * the rest of the stack uses. Unavailable capabilities are explicit NOT_SUPPORTED records — never fabricated.
+ * ==========================================================
+ * Module: QuantitativeFeatureEngine
+ *
+ * Purpose:
+ * Facade over already-computed StrategyContext, strategy evaluations, and GroupedScores.
+ * Does not reimplement RSI/MACD/SMA/etc. Named RSI/MACD divergence series reuse RSIEngine /
+ * MACDEngine. Distance-from-MA uses existing priceVsMA on already-computed MA values.
+ *
+ * Unavailable capabilities (breadth, options, L2, volume profile, TSI, anchored VWAP, pairs,
+ * Canadian FX/commodities) are explicit NOT_SUPPORTED records — never zeros, never fabricated
+ * votes. tradingBlocked is false: omission reduces evidence; it does not invent a RiskEngine gate.
+ *
+ * Optional ctx.smc is passed through when QuantSignalAgent / BacktestEngine computed it.
+ * ==========================================================
  */
 import { Bar } from '../engines/backtest/HistoricalDataGateway';
 import { priceVsMA, PriceVsMA } from './indicators/trend';

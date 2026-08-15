@@ -1,5 +1,9 @@
 # ARGUS_PRE_IMPLEMENTATION_BASELINE.md
 
+**Historical Phase 0 snapshot.** Later work extracted many thresholds into `config/tradingSafety.json`
+and related JSON files. Do not treat hardcoded constants listed below as current source of truth —
+verify against `config/` and the modules named in `ARGUS_CURRENT_ARCHITECTURE_MAP.md`.
+
 **Phase 0 deliverable only.** No production trading code has been modified to produce this
 document — it is a read-only baseline, built from `FINAL_ANALYSIS.md` Section 30 (the current
 ground-truth audit, produced via five independent call-chain traces plus direct source verification)

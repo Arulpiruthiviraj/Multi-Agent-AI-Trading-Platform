@@ -43,6 +43,7 @@ import ReplayResearchPanel from "./components/ReplayResearchPanel";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
+import AgentWorkflowTheater from "./components/AgentWorkflowTheater";
 import OrchestrationStatus from "./components/OrchestrationStatus";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
@@ -6612,6 +6613,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mb-5">
                 Real-time visualization of every agent, local/paid AI model call, and decision. Click any node for its live process log; click a transaction to trace it end-to-end by its real trace ID.
               </p>
+              <AgentWorkflowTheater />
               <OrchestrationStatus models={orchestrationModels} capital={orchestrationCapital} />
               <DigitalTwinVisualizer />
             </div>

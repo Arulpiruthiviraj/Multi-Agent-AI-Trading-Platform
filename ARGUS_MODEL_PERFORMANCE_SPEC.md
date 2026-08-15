@@ -13,4 +13,4 @@ Weight Claude vs Gemini vs Ollama as independent votes on the same prompt. Recor
 
 ## Bull/Bear
 
-`config/bullBearResearch.json` + `parseResearchNote`. Enabled only when `QUANT_BULL_BEAR_ENABLED=true`. Not in the always-on path.
+`config/bullBearResearch.json` + `src/server/ai/research/parseResearchNote.ts`. Enabled only when the env var named in JSON (`QUANT_BULL_BEAR_ENABLED`) is `'true'`. **ChiefTrader does not import this module today.**

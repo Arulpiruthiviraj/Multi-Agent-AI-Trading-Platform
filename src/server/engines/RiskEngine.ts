@@ -73,12 +73,18 @@ async function hasConsecutiveLosses(): Promise<boolean> {
     return recentClosed.every(t => (t.profitLoss ?? 0) < 0);
 }
 
-// Real market-hours check via Alpaca's /v2/clock. Returns null (skip the check) rather than a
-// fabricated guess when Alpaca credentials aren't configured - there is no other real source here.
-async function isMarketOpen(): Promise<boolean | null> {
-    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) return null;
+type MarketClockStatus = 'open' | 'closed' | 'unconfigured' | 'unavailable';
+
+/**
+ * Alpaca /v2/clock.
+ *   unconfigured — no API keys: skip (no clock source; paper tests rely on this).
+ *   unavailable  — keys present but HTTP/network failed: FAIL CLOSED (do not treat as open).
+ *   open/closed  — real clock payload. Failures are never cached as open.
+ */
+async function readMarketClock(): Promise<MarketClockStatus> {
+    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) return 'unconfigured';
     if (cachedMarketClock && Date.now() - cachedMarketClock.fetchedAt < MARKET_CLOCK_CACHE_MS) {
-        return cachedMarketClock.isOpen;
+        return cachedMarketClock.isOpen ? 'open' : 'closed';
     }
     try {
         const isPaper = tradingEngine.state.tradingMode !== 'LIVE';
@@ -89,14 +95,22 @@ async function isMarketOpen(): Promise<boolean | null> {
                 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
             }
         });
-        if (!res.ok) return null;
+        if (!res.ok) {
+            console.error(`[Risk Engine] Alpaca market clock HTTP ${res.status} — fail-closed`);
+            return 'unavailable';
+        }
         const clock = await res.json();
         cachedMarketClock = { isOpen: !!clock.is_open, fetchedAt: Date.now() };
-        return cachedMarketClock.isOpen;
+        return cachedMarketClock.isOpen ? 'open' : 'closed';
     } catch (e) {
-        console.error('[Risk Engine] Failed to fetch Alpaca market clock', e);
-        return null;
+        console.error('[Risk Engine] Failed to fetch Alpaca market clock — fail-closed', e);
+        return 'unavailable';
     }
+}
+
+/** Test-only: RiskEngine.test.ts must not inherit a 60s clock cache across cases. */
+export function resetMarketClockCacheForTests(): void {
+    cachedMarketClock = null;
 }
 
 interface GateResult {
@@ -264,11 +278,14 @@ export class RiskEngine {
             recordGate('order_rate_limit', orderRatePassed, { recentOrderCount, maxOrdersPerMinute });
             const orderRateReason = `Order rate limit exceeded: ${recentOrderCount} risk assessments in the last 60s (limit ${maxOrdersPerMinute}). Possible runaway signal loop - new trades blocked until the rate subsides.`;
 
-            // 2b. Real market-hours check (Alpaca /v2/clock). Skips (does not block) when Alpaca
-            // credentials aren't configured, since there is no real source to check against.
-            const marketOpen = await isMarketOpen();
-            recordGate('market_hours', marketOpen !== false, { marketOpen });
-            const marketHoursReason = "Market is currently closed (Alpaca clock).";
+            // 2b. Alpaca /v2/clock. Unconfigured → skip. Closed or clock outage → block.
+            // Previously `null !== false` passed the gate on REST failure (outage treated as open).
+            const marketClock = await readMarketClock();
+            const marketHoursPassed = marketClock === 'open' || marketClock === 'unconfigured';
+            recordGate('market_hours', marketHoursPassed, { marketClock, skipped: marketClock === 'unconfigured' });
+            const marketHoursReason = marketClock === 'unavailable'
+                ? 'Alpaca market clock unavailable (HTTP/network failure). Fail-closed: new trades blocked until the clock can be read.'
+                : 'Market is currently closed (Alpaca clock).';
 
             // 2c. Stale market-data check - only fires when we've actually seen a real tick for
             // this symbol before and it has since gone quiet; never fabricates a staleness verdict.

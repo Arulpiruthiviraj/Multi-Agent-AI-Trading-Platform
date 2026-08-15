@@ -270,6 +270,25 @@ export class CoinbaseBroker implements BrokerPlugin {
     const result = res?.results?.[0];
     return !!result?.success;
   }
+
+  /** Flatten by placing a market order of the current base-asset size. Paper mode refuses, same as placeOrder. */
+  async closePosition(symbol: string): Promise<boolean> {
+    if (this.isPaper) {
+      throw new Error(
+        `${this.name} has no real paper/sandbox trading environment - refusing to close a real position while in paper mode.`
+      );
+    }
+    const positions = await this.positions();
+    const pos = positions.find(p => p.symbol === symbol);
+    if (!pos || pos.quantity === 0) return false;
+    await this.placeOrder({
+      symbol,
+      side: pos.quantity > 0 ? 'SELL' : 'BUY',
+      type: 'MARKET',
+      quantity: Math.abs(pos.quantity),
+    });
+    return true;
+  }
 }
 
 function mapCoinbaseOrderType(t: string | undefined): Order['type'] {

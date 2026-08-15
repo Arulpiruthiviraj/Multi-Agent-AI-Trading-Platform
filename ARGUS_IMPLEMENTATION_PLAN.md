@@ -1,21 +1,27 @@
 # ARGUS_IMPLEMENTATION_PLAN.md
 
-## Phases (only A–D started)
+## Phases
 
 | Phase | Status | Live impact |
 |---|---|---|
-| A Architecture map | This folder of ARGUS_* specs | None |
-| B TradeThesis | Assembled on Quant ideas | Additive field only |
-| C Regime selector | Already discount + eligibility list | None new |
-| D Bull/Bear parser | Config + parser; **not** ChiefTrader | Off |
+| A Architecture map | `ARGUS_CURRENT_ARCHITECTURE_MAP.md` + comparison specs | None |
+| B TradeThesis | `assembleTradeThesis` on Quant ideas | Additive field only |
+| C Regime selector | Discount + `regimeStrategyEligibility` | None new |
+| D Bull/Bear parser | `parseResearchNote` + `bullBearResearch.json` | **Off** (`QUANT_BULL_BEAR_ENABLED`) |
 | E EV | Already on Quant strategy ideas | Unchanged |
-| F Position thesis | Config-driven invalidation | Same gates, configurable rules |
-| G–L Model tournament, lab UI, paper, restricted live | **Not this pass** | — |
+| F Position thesis | Config-driven `ThesisInvalidation` | Same gates; rules in JSON |
+| SMC experimental | `smc.ts` + `smcLiquiditySweep.ts` | Off unless `QUANT_SMC_STRATEGY_ENABLED` |
+| G–L Model tournament, lab UI, paper campaign, restricted live | **Not implemented as a productization pass** | — |
 
 ## Rollback
 
-Revert `config/thesisInvalidation.json` / thesis module / `quantDetail.tradeThesis`. No RiskEngine/OMS/Broker diffs intended.
+- Thesis rules: revert `config/thesisInvalidation.json`.
+- TradeThesis: stop attaching `quantDetail.tradeThesis` (field is ignored by approval math).
+- SMC: leave `QUANT_SMC_STRATEGY_ENABLED` unset; `ALL_STRATEGIES` stays five.
+- Bull/Bear: leave env unset; ChiefTrader does not import the parser today.
+
+No intended RiskEngine / OMS / Broker diffs for these additive pieces.
 
 ## Enablement
 
-Never auto-enable SMC, Bull/Bear, or Quant for LIVE. Path: backtest → WF → OOS → paper → explicit flag.
+Never auto-enable SMC, Bull/Bear, or Quant for LIVE. Path: backtest → walk-forward → OOS → paper → explicit flag. Readiness scores do not rise because files were added.

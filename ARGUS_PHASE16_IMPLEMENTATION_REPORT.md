@@ -205,8 +205,11 @@ compared numeric stop/target. A thesis could die while price was still between s
 **Canonical behavior (user-confirmed direction from 16B: make live strategy-aware).** After
 stop/target, re-evaluate the structured snapshot captured at entry (`trades.quant_invalidation_json`,
 migration `0025_quant_invalidation_json.sql`) against real daily bars via `classifyRegime` /
-volume / structure features. `ThesisInvalidation.ts` is pure and strategy-id keyed — it does not
-parse English. If bars are thin or Alpaca is unavailable, it returns null (no fabricated exit).
+volume / structure features. If bars are thin or Alpaca is unavailable, it returns null (no fabricated exit).
+
+**Errata (2026-08-15):** `ThesisInvalidation.ts` is no longer strategy-id keyed in TypeScript.
+Rule *types* stay in code; strategy ids, thresholds, and messages live in
+`config/thesisInvalidation.json`. English invalidation sentences are still not parsed as logic.
 
 **Tests.** `ThesisInvalidation.test.ts`; `PortfolioMonitor.test.ts` "exits when the original quant
 thesis is invalidated even though price is still between stop and target."

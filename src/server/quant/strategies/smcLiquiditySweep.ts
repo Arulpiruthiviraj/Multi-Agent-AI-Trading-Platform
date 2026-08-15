@@ -1,19 +1,29 @@
 /**
- * SMC liquidity-sweep confluence strategy.
+ * ==========================================================
+ * Module: strategies/smcLiquiditySweep
  *
- * Combines existing market structure (BOS/CHoCH) with additive SMC features (liquidity, wick
- * sweep, displacement, order block, FVG, trap-as-pattern). A sweep alone is never a trade.
- * Confirmation is CHoCH in the reversal direction (or a failed close-beyond / trap pattern
- * plus displacement).
+ * Purpose:
+ * Confluence scorer over SMC features + existing regime/volume. Weights come from
+ * config/smcConfluence.json (sum to 100). A wick sweep without CHoCH is scored but recorded
+ * as a contradiction — not an automatic fade.
  *
- * NOT in live Quant evaluateAll unless QUANT_SMC_STRATEGY_ENABLED=true.
- * UNVALIDATED until walk-forward OOS. Backtest is long-only in this engine — bearish setups
- * will not open shorts.
+ * Side:
+ *   SELL_SIDE_SWEPT (wick below lows, close back up) → BUY candidate
+ *   BUY_SIDE_SWEPT  (wick above highs, close back down) → SELL candidate
+ *
+ * Live vs backtest:
+ *   EXPERIMENTAL_STRATEGIES — findStrategy() can backtest it without the live flag.
+ *   evaluateAll() includes it only when QUANT_SMC_STRATEGY_ENABLED=true.
+ *   BacktestEngine is long-only: SELL candidates will not open shorts.
+ *
+ * Status: UNVALIDATED (no walk-forward OOS for this definition).
+ * ==========================================================
  */
 import { StrategyContext, StrategyDefinition, StrategyEvaluation } from './types';
 import { smcConfluence } from '../../config/smcConfluence';
 import type { SmcFeatures } from '../indicators/smc';
 
+/** Neutral snapshot when StrategyContext.smc was omitted (older unit fixtures). All conditions fail honestly. */
 function emptySmc(): SmcFeatures {
   return {
     structure: { trend: 'SIDEWAYS', event: 'NONE', lastSwingHigh: null, lastSwingLow: null },

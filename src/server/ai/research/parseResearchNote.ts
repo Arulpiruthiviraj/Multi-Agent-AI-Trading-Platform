@@ -1,6 +1,24 @@
 /**
- * Structured Bull/Bear research records. Numeric market facts are not accepted from the LLM.
- * Not consumed by ChiefTrader unless QUANT_BULL_BEAR_ENABLED=true (see bullBearResearch.json).
+ * ==========================================================
+ * Module: ai/research/parseResearchNote
+ *
+ * Purpose:
+ * Validate a Bull or Bear researcher JSON blob into a StructuredResearchNote.
+ *
+ * Inspired by TradingAgents' bull/bear researcher *roles*, implemented in Argus without
+ * vendoring TradingAgents source (Apache-2.0 — concepts only).
+ *
+ * Numeric market facts (entry, stop, target, expectedValue, probability) are ALWAYS null on
+ * the parsed note. If the LLM included them, their keys are listed in
+ * inventedNumericFieldsRejected so callers can see the model tried to invent prices.
+ * Interpretive `confidence` is allowed (0–1 via AIOutputValidator) and is NOT a calibrated
+ * win probability.
+ *
+ * Live consumption:
+ *   isBullBearResearchEnabled() reads the env var named in config/bullBearResearch.json
+ *   (QUANT_BULL_BEAR_ENABLED). Default off. ChiefTrader does not call this module unless that
+ *   flag is wired later — parser + tests exist so the contract is real before any live debate.
+ * ==========================================================
  */
 import { coerceEnum, coerceString, coerceStringArray, normalizeConfidence01 } from '../AIOutputValidator';
 import { bullBearResearchConfig, isBullBearResearchEnabled } from '../../config/bullBearResearch';

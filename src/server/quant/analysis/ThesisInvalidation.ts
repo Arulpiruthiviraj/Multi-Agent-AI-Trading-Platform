@@ -1,8 +1,28 @@
 /**
- * Live re-evaluation of a QuantEngine trade's original thesis.
+ * ==========================================================
+ * Module: quant/analysis/ThesisInvalidation
  *
- * Rule types are implemented here; which strategies they apply to, thresholds, and message
- * templates come from config/thesisInvalidation.json. Do not add strategy-id literals here.
+ * Purpose:
+ * Live re-evaluation of a QuantEngine trade's original thesis against CURRENT market features.
+ * Strategy modules state invalidation conditions up front (false breakout, regime flip, RVOL
+ * collapse, ADX fade, CHoCH against, close through a structural/sweep level). Those strings used
+ * to be stored on supportingQuantDetail and never read again. This module turns the structured
+ * snapshot captured at entry into a real pass/fail — never by parsing English sentences as logic.
+ *
+ * Config vs code (important):
+ *   - Rule TYPES (how to compare live RVOL to a threshold, how to detect a false breakout, …)
+ *     are implemented in this file. That is unavoidable: JSON cannot run detectFalseBreakout().
+ *   - Which STRATEGY IDS a rule applies to, numeric THRESHOLDS, and MESSAGE TEMPLATES live in
+ *     config/thesisInvalidation.json. Do NOT add strategy-id string literals or magic numbers
+ *     (1.2, 20, …) here. Adding a new strategy to an existing rule type is a config change.
+ *
+ * Called by:
+ *   PortfolioMonitor (Phase 16F) when an open Quant trade has a persisted thesis snapshot.
+ *
+ * Never:
+ *   Place or cancel orders. Emit a SELL *idea* only via the existing pipeline so RiskEngine
+ *   remains the authorization layer.
+ * ==========================================================
  */
 import { Bar } from '../../engines/backtest/HistoricalDataGateway';
 import { detectFalseBreakout } from '../indicators/priceAction';
@@ -11,15 +31,19 @@ import {
   ThesisInvalidationRule,
 } from '../../config/thesisInvalidation';
 
+/** Point-in-time snapshot persisted at entry. `texts` are human invalidation sentences for the
+ *  journal; matching uses `strategy` + optional `textIncludes` from config, not NLP on `texts`. */
 export interface StoredThesis {
   texts: string[];
   strategy: string | null;
   side: 'BUY' | 'SELL';
   entryRegime: string | null;
   applicableRegimes: string[];
+  /** Strategy-defined level: broken structure, range boundary, or SMC sweep extreme. */
   structuralLevel: number | null;
 }
 
+/** Live features the monitor already computed for this bar — not a second indicator pass. */
 export interface LiveMarketRead {
   regime: string | null;
   rvol: number | null;
@@ -35,6 +59,10 @@ export interface InvalidationResult {
   reasons: string[];
 }
 
+/**
+ * Deserialize a thesis JSON blob from trades / supportingQuantDetail. Returns null (never a
+ * fabricated BUY thesis) when the payload is missing, not JSON, or has no valid side.
+ */
 export function parseStoredThesis(raw: string | null | undefined): StoredThesis | null {
   if (!raw) return null;
   try {
@@ -57,6 +85,12 @@ export function serializeStoredThesis(thesis: StoredThesis): string {
   return JSON.stringify(thesis);
 }
 
+/**
+ * A rule with neither `strategies` nor `textIncludes` is GLOBAL (always considered).
+ * Otherwise it applies if the thesis strategy is listed OR any stored text contains a needle.
+ * The OR matches pre-extraction behavior (e.g. RVOL collapse on MOMENTUM_BREAKOUT *or* any
+ * thesis whose invalidation text mentioned "RVOL").
+ */
 function ruleApplies(rule: ThesisInvalidationRule, thesis: StoredThesis): boolean {
   const strategy = thesis.strategy || '';
   const hasStrategies = Array.isArray(rule.strategies) && rule.strategies.length > 0;
@@ -67,6 +101,7 @@ function ruleApplies(rule: ThesisInvalidationRule, thesis: StoredThesis): boolea
   return strategyHit || textHit;
 }
 
+/** `{placeholder}` substitution from config message templates. Unknown keys are left intact. */
 function formatMessage(template: string, vars: Record<string, string>): string {
   return template.replace(/\{([a-zA-Z]+)\}/g, (_, key: string) => vars[key] ?? `{${key}}`);
 }
@@ -89,6 +124,10 @@ function varsFor(thesis: StoredThesis, live: LiveMarketRead, rule: ThesisInvalid
   };
 }
 
+/**
+ * Evaluate one config rule against live features. Returns a filled message or null if the
+ * condition did not fire (missing data is "not invalidated", never a fabricated breach).
+ */
 function evaluateRule(rule: ThesisInvalidationRule, thesis: StoredThesis, live: LiveMarketRead): string | null {
   const msg = () => formatMessage(rule.message, varsFor(thesis, live, rule));
 
@@ -123,6 +162,7 @@ function evaluateRule(rule: ThesisInvalidationRule, thesis: StoredThesis, live: 
       return null;
     }
     case 'close_through_structural_level': {
+      // Shared by range-boundary breaks and SMC sweep-extreme continuation (config selects who).
       if (thesis.structuralLevel === null || live.lastClose === null) return null;
       const broke = thesis.side === 'BUY'
         ? live.lastClose < thesis.structuralLevel
@@ -139,6 +179,7 @@ function evaluateRule(rule: ThesisInvalidationRule, thesis: StoredThesis, live: 
   }
 }
 
+/** Apply every config rule in file order. Multiple reasons can fire; any reason ⇒ invalidated. */
 export function evaluateThesisInvalidation(thesis: StoredThesis, live: LiveMarketRead): InvalidationResult {
   const reasons: string[] = [];
   for (const rule of thesisInvalidationConfig.rules) {

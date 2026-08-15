@@ -1,45 +1,45 @@
 # ARGUS_STRATEGY_INTEGRATION_REPORT.md
 
-**Date:** 2026-08-15. Additive wiring only. QuantEngine remains **off** unless `QUANT_ENGINE_ENABLED=true`. No new strategies were enabled for live trading.
+**Date:** 2026-08-15. Additive wiring only.
 
-## What was already true
+QuantEngine remains **off** unless `QUANT_ENGINE_ENABLED=true`. No new strategy is enabled for live trading by default.
 
-Five strategies exist (`MOMENTUM_BREAKOUT`, `PULLBACK_CONTINUATION`, `MEAN_REVERSION`, `TREND_FOLLOWING`, `RANGE_REVERSION`). `StrategyEngine.evaluateAll` already **discounts** (does not zero) off-regime confidence via `tradingSafety.regimeMismatchConfidenceMultiplier`. `GroupedScores` already blends correlated oscillators so RSI/StochRSI/CCI/Williams are not four independent votes. `QuantSignalAgent` already refuses a strategy-sourced live idea when there is no live win-rate sample or EV ≤ 0.
+## Core strategies (live `evaluateAll` default)
 
-## What this pass added (integration, not a new zoo)
+`MOMENTUM_BREAKOUT`, `PULLBACK_CONTINUATION`, `MEAN_REVERSION`, `TREND_FOLLOWING`, `RANGE_REVERSION`.
 
-| Piece | Role | Does it execute? |
+`StrategyEngine.evaluateAll` **discounts** (does not zero) off-regime confidence via `tradingSafety.regimeMismatchConfidenceMultiplier`. `GroupedScores` blends correlated oscillators so RSI/StochRSI/CCI/Williams are not four independent votes. `QuantSignalAgent` refuses a strategy-sourced live idea when there is no live win-rate sample or EV ≤ 0.
+
+## Integration facade (not a new indicator zoo)
+
+| Piece | Role | Executes orders? |
 |---|---|---|
-| `QuantitativeFeatureEngine.snapshotFromStrategyContext` | Assembles existing StrategyContext + grouped scores + regime eligibility + named RSI/MACD **divergence features** + honest `NOT_SUPPORTED` records | No |
-| `regimeStrategyEligibility` | Lists eligible vs ineligible strategies for the current regime | No |
-| `detectPriceOscillatorDivergence` | Feature only (`isTradeSignal: false`) | No |
-| `quantDetail.featureSnapshot` | Passed through ChiefTrader as `supportingQuantDetail.featureSnapshot` | No — approval math unchanged |
-| `minStrategyConfidenceToTrade` in `config/tradingSafety.json` | Same 0.6 floor as before, no longer a module literal | Unchanged behavior |
+| `QuantitativeFeatureEngine.snapshotFromStrategyContext` | Assembles context + scores + eligibility + divergence + optional SMC + `NOT_SUPPORTED` | No |
+| `regimeStrategyEligibility` | Eligible vs ineligible for current regime | No |
+| `detectPriceOscillatorDivergence` | Feature (`isTradeSignal: false`) | No |
+| `quantDetail.featureSnapshot` | Passed through ChiefTrader | No — approval math unchanged |
+| `quantDetail.tradeThesis` | Structured why-buy / NO_TRADE from engines | No |
+| `minStrategyConfidenceToTrade` in `tradingSafety.json` | Same 0.6 floor as before | Unchanged |
 
-## Strategy library vs the 10-strategy request
+## Experimental: SMC / ICT
 
-Implemented and backtestable today: the **five** existing modules above.
+Detection: `src/server/quant/indicators/smc.ts` (reuses BOS/CHoCH/swings). Strategy: `SMC_LIQUIDITY_SWEEP`. Weights: `config/smcConfluence.json`.
 
-**Not implemented** (and not turned on): VWAP reversal as a separate module, opening-range breakout, gap, relative-strength-as-strategy, pairs/stat-arb, event/earnings. Session VWAP reclaim/rejection already exist as **features** in `computeVWAPContext`. Opening range / premarket are `available:false` on daily bars.
+- Listed on `GET /api/v2/quant/strategies` → `experimentalStrategies` (`validationStatus: UNVALIDATED`).
+- Backtest: `runStrategyBacktest({ strategyId: 'SMC_LIQUIDITY_SWEEP' })` via `findStrategy` **without** the live flag.
+- Live `evaluateAll`: only if `QUANT_SMC_STRATEGY_ENABLED=true`.
+- Sweep is not a trade. CHoCH confirmation is required for a confirmed reversal score.
+- Trap/manipulation labels are **patterns**, not intent.
+- Backtest engine is **long-only** — bearish SMC will not open shorts.
 
-Label for every strategy that lacks walk-forward OOS success: **UNVALIDATED**.
+**Not implemented as separate live strategies:** VWAP reversal module, ORB, gap, RS-as-strategy, pairs, event/earnings. Session VWAP reclaim/rejection already exist as features. Opening range / premarket are `available:false` on daily bars.
 
-## Pipeline (unchanged order)
+Every strategy without walk-forward OOS success: **UNVALIDATED**.
 
-MARKET DATA → existing indicator modules → RegimeEngine → MarketContext → StrategyEngine → GroupedScores → (new) feature snapshot → optional AI contradiction review → ChiefTrader → RiskEngine → sizing → OMS.
+## Thesis invalidation
 
-## SMC / ICT (additive, UNVALIDATED)
+`config/thesisInvalidation.json` + `ThesisInvalidation.ts`. Strategy IDs and thresholds are **not** TypeScript literals. PortfolioMonitor still routes exits through RiskEngine.
 
-Pattern engines live in `src/server/quant/indicators/smc.ts` (liquidity, wick sweep, displacement, FVG, order block, trap-as-failed-breakout). Existing BOS/CHoCH/HH-HL are reused, not rewritten.
+## Pipeline order (unchanged)
 
-Strategy `SMC_LIQUIDITY_SWEEP` is **experimental**:
-- Listed under `GET /api/v2/quant/strategies` → `experimentalStrategies`
-- Backtestable via `runStrategyBacktest({ strategyId: 'SMC_LIQUIDITY_SWEEP' })` without enabling live Quant
-- **Not** in live `evaluateAll` unless `QUANT_SMC_STRATEGY_ENABLED=true`
-- A sweep is `isTradeSignal: false`. Entry scoring requires CHoCH confirmation.
-- "Manipulation" / "smart money trap" are **pattern labels**, not claims of intentional manipulation
-- Backtest engine is long-only: bearish SMC will not open shorts
-- Label: **UNVALIDATED** until walk-forward OOS including commissions and slippage
-
-Weights: `config/smcConfluence.json`.
-
+MARKET DATA → indicators → RegimeEngine → MarketContext → StrategyEngine → GroupedScores → feature snapshot / TradeThesis → optional AI contradiction review → ChiefTrader → RiskEngine → sizing → OMS.

@@ -62,6 +62,7 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
         };
       },
       cancelOrder: cancelOrderSpy as any,
+      closePosition: async () => false,
     };
   }
 

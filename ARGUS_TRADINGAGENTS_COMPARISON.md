@@ -19,12 +19,16 @@ Argus remains system of record and execution. Adopt **ideas**, not LangGraph who
 | LLM as final authority | **Rejected** | NewsAgent 44.6% accuracy. |
 | Counting correlated AI votes | **Rejected** | Same mistake as counting RSI+MACD+Stoch as independent. |
 
-## What this pass implemented
+## Code map (Argus, not vendored TradingAgents)
 
-- Config-driven thesis invalidation (no strategy-id literals in TS).
-- `TradeThesis` assembled from engines; attached on Quant ideas only.
-- Bull/Bear **parser + config**; not wired into ChiefTrader.
-- First-class `NO_TRADE` reason catalog in JSON.
+| Concept | Argus files |
+|---|---|
+| Bull/Bear schema | `config/bullBearResearch.json`, `src/server/ai/research/parseResearchNote.ts` |
+| Structured thesis | `src/server/quant/thesis/assembleTradeThesis.ts` |
+| NO_TRADE catalog | `config/noTradeReasons.json` |
+| Thesis invalidation | `config/thesisInvalidation.json`, `src/server/quant/analysis/ThesisInvalidation.ts` |
+
+Implemented as **concepts in Argus code**, not a copy of TradingAgents: config-driven invalidation, TradeThesis on Quant ideas, Bull/Bear parser (not wired to ChiefTrader), NO_TRADE catalog.
 
 ## Explicitly not implemented (and not enabled)
 

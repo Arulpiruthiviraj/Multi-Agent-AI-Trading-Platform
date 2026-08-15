@@ -1,5 +1,12 @@
 /**
- * Load config/smcConfluence.json — SMC detection thresholds and confluence weights.
+ * ==========================================================
+ * Module: config/smcConfluence
+ *
+ * Purpose:
+ * Load config/smcConfluence.json: SMC confluence *weights* (should sum to 100) and detection
+ * thresholds (equal-level tolerance, displacement multiple, RVOL confirmation, sweep lookback).
+ * Changing weights is a reviewed config change, not a UI knob, and does not enable live Quant.
+ * ==========================================================
  */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
 

@@ -59,13 +59,21 @@ const CustomNode = ({ data }: any) => {
   return (
     <div className="relative">
       {active && (
-        <motion.div
-          className="absolute inset-0 rounded-xl"
-          initial={{ opacity: 0.6, scale: 1 }}
-          animate={{ opacity: 0, scale: 1.35 }}
-          transition={{ duration: 1.1, repeat: Infinity, ease: 'easeOut' }}
-          style={{ boxShadow: `0 0 0 2px ${style.glow}`, background: style.glow }}
-        />
+        <>
+          <motion.div
+            className="absolute inset-0 rounded-xl"
+            initial={{ opacity: 0.6, scale: 1 }}
+            animate={{ opacity: 0, scale: 1.35 }}
+            transition={{ duration: 1.1, repeat: Infinity, ease: 'easeOut' }}
+            style={{ boxShadow: `0 0 0 2px ${style.glow}`, background: style.glow }}
+          />
+          <motion.div
+            className="pointer-events-none absolute -inset-3 rounded-full border"
+            style={{ borderColor: style.glow }}
+            animate={{ rotate: 360, opacity: [0.15, 0.55, 0.15] }}
+            transition={{ duration: 6, repeat: Infinity, ease: 'linear' }}
+          />
+        </>
       )}
       <div
         className={`relative px-4 py-3 w-52 shadow-lg rounded-xl bg-[#0A0F16] border-2 transition-all duration-300 ${active ? `${style.border} scale-105` : 'border-slate-800'}`}

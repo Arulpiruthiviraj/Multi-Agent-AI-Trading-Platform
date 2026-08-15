@@ -4,11 +4,11 @@ Evidence only. Adding a feature snapshot **does not** validate a strategy.
 
 ## What already works
 
-- `BacktestEngine.runStrategyBacktest()` runs the five quant strategies on historical OHLCV with commissions, slippage, ReplayClock look-ahead guards, regime segmentation, EV/Kelly reporting, buy-and-hold benchmarks, and failure classification.
+- `BacktestEngine.runStrategyBacktest()` runs **core** quant strategies (and experimental `SMC_LIQUIDITY_SWEEP` via `findStrategy`) on historical OHLCV with commissions, slippage, ReplayClock look-ahead guards, regime segmentation, EV/Kelly reporting, buy-and-hold benchmarks, and failure classification. The engine is **long-only**.
 - `WalkForwardValidator` supports `run()` and `runStrategyBacktest()` modes.
 - Monte Carlo (`quant/analysis/MonteCarlo.ts`) is scenario analysis; `statisticallyJustified` refuses below 20 trades.
 
-This pass **did not** add new strategies to the backtester and **did not** re-run the full 2018–2025 grid.
+This document’s original pass did **not** re-run the 2018–2025 grid. SMC was added later as an experimental, **UNVALIDATED** strategy id — listing it in the backtester is not OOS evidence.
 
 ## Out-of-sample evidence (unchanged, still binding)
 

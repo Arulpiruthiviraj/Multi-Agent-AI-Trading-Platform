@@ -75,7 +75,7 @@ vi.mock('./TradingEngine', () => ({ tradingEngine: mockTradingEngine }));
 vi.mock('../services/MarketDataWorker', () => ({ marketDataWorker: mockMarketDataWorker }));
 vi.mock('./backtest/HistoricalDataGateway', () => ({ historicalDataGateway: mockHistoricalDataGateway }));
 
-import { riskEngine } from './RiskEngine';
+import { riskEngine, resetMarketClockCacheForTests } from './RiskEngine';
 
 function makeBroker(portfolio: any) {
   return { portfolio: vi.fn(async () => portfolio) };
@@ -116,6 +116,7 @@ describe('RiskEngine.evaluateRisk', () => {
     mockBrokerHolder.broker = makeBroker(basePortfolio());
     delete process.env.ALPACA_API_KEY;
     delete process.env.ALPACA_SECRET_KEY;
+    resetMarketClockCacheForTests();
   });
 
   afterEach(() => {
@@ -491,6 +492,30 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.approved).toBe(false);
     expect(assessment.reasoning).toMatch(/Market is currently closed/);
+  });
+
+  it('fail-closes market_hours when Alpaca clock HTTP fails (does not treat outage as open)', async () => {
+    process.env.ALPACA_API_KEY = 'key';
+    process.env.ALPACA_SECRET_KEY = 'secret';
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, json: async () => ({}) })));
+
+    await riskEngine.evaluateRisk({ traceId: 't13-outage', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/market clock unavailable/i);
+  });
+
+  it('fail-closes market_hours when Alpaca clock fetch throws', async () => {
+    process.env.ALPACA_API_KEY = 'key';
+    process.env.ALPACA_SECRET_KEY = 'secret';
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('network down'); }));
+
+    await riskEngine.evaluateRisk({ traceId: 't13-throw', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/market clock unavailable/i);
   });
 
   it('vetoes a trade on stale market data', async () => {

@@ -368,7 +368,7 @@ export const GATE_FIX: Record<string, string> = {
   consecutive_loss: 'Review the last three closed SELL P&L rows before re-enabling aggressive entries.',
   portfolio_drawdown: 'Drawdown from peak equity exceeded the configured cap. Manual review required.',
   order_rate_limit: 'Wait until fewer than maxOrdersPerMinute proposals hit RiskEngine.',
-  market_hours: 'Wait for the regular session, or this gate skipped when Alpaca clock is unconfigured.',
+  market_hours: 'Wait for the regular session. If the Alpaca clock request failed, restore API connectivity — an outage fail-closes this gate. Unconfigured keys skip the check.',
   data_freshness: 'Restore the market-data WebSocket so quotes are newer than 5 minutes.',
   news_veto: 'A high-impact news cluster in the last 4 hours vetoed this symbol (direction-blind).',
   price_validity: 'A finite live price is required. No fabricated price will be used.',

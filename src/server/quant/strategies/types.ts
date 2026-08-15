@@ -30,7 +30,8 @@ export interface StrategyContext {
   supportResistance: SupportResistanceFeatures;
   regime: RegimeResult;
   marketContext: MarketContextResult;
-  /** Optional SMC/ICT pattern snapshot. Absent on older fixtures; SMC strategy then scores 0. */
+  /** Optional SMC/ICT pattern snapshot from computeSmcFeatures(bars).
+   *  Older unit fixtures omit it; smcLiquiditySweep then treats every condition as unmet. */
   smc?: SmcFeatures;
 }
 

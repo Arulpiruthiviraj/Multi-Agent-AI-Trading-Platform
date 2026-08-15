@@ -74,9 +74,9 @@ describe('PortfolioMonitorWorker.reviewPortfolio - settings-driven exit threshol
     await portfolioMonitor.reviewPortfolio();
 
     const monitored = emitSpy.mock.calls.filter((c: any) => c[0] === EVENTS.POSITION_MONITORED);
-    const watch = monitored.find((c: any) => c[1]?.symbol === 'WATCH1');
+    const watch = monitored.find((c: any) => c[1]?.symbol === 'WATCH1') as [string, { pnlPct: number }] | undefined;
     expect(watch).toBeTruthy();
-    expect(watch[1].pnlPct).toBeCloseTo(-3, 5);
+    expect(watch![1].pnlPct).toBeCloseTo(-3, 5);
   });
 
   it('DOES exit once price crosses the new -8%/+25% settings-driven thresholds', async () => {

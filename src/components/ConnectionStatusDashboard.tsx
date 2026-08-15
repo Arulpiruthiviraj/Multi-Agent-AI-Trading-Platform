@@ -44,7 +44,11 @@ export default function ConnectionStatusDashboard() {
       </div>
       {error && <p className="text-[11px] text-rose-400 mb-3">Could not load diagnostics: {error}</p>}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {diagnostics.map(d => <ExplainCard key={d.id} d={d} compact />)}
+        {diagnostics.map(d => (
+          <div key={d.id}>
+            <ExplainCard d={d} compact />
+          </div>
+        ))}
       </div>
     </div>
   );

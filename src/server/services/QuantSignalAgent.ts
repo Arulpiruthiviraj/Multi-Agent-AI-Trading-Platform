@@ -160,6 +160,7 @@ export class QuantSignalAgent {
       supportResistance: computeSupportResistanceFeatures(bars),
       regime,
       marketContext,
+      // Additive SMC snapshot. Does not change evaluateAll() unless QUANT_SMC_STRATEGY_ENABLED.
       smc: computeSmcFeatures(bars),
     };
     const strategyEvaluations = evaluateAll(strategyContext);
@@ -242,6 +243,7 @@ export class QuantSignalAgent {
             groupedScores,
             bars,
           }),
+          // Structured why-buy / why-not-buy from engines. Not an order; approval math unchanged.
           tradeThesis: assembleTradeThesis({
             symbol,
             ctx: strategyContext,

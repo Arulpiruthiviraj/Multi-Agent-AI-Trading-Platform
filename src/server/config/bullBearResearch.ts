@@ -1,3 +1,16 @@
+/**
+ * ==========================================================
+ * Module: config/bullBearResearch
+ *
+ * Purpose:
+ * Load config/bullBearResearch.json: researcher role text, required qualitative fields, and
+ * which numeric keys must come from Quant (stripped by parseResearchNote).
+ *
+ * Enablement is an env var whose *name* is in JSON (enabledEnvVar, currently
+ * QUANT_BULL_BEAR_ENABLED). Default is off. ChiefTrader does not read this until a later
+ * additive wiring pass.
+ * ==========================================================
+ */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
 
 export interface BullBearResearchConfig {

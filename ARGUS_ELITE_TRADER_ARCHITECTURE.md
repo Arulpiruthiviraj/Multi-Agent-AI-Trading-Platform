@@ -24,6 +24,16 @@ Do not add votes. GroupedScores already blends correlated oscillators. AI models
 
 `CapitalAllocation` + RiskEngine `argus_capital_allocation`: Argus allocation (`settings.budget`) is not broker cash. Do not duplicate a second kill switch.
 
+## What exists today (not a wish list)
+
+- `TradeThesis` + `config/noTradeReasons.json`
+- ChiefTrader debate already searches for reasons not to trade; HOLD vetoes
+- Quant EV refuse + RiskEngine
+- Config-driven thesis invalidation on open Quant trades
+- Bull/Bear parser **off**
+
+Full TradingAgents-style LangGraph debate and Edge Engine over hundreds of comparable setups are **not** built. Do not describe them as live.
+
 ## Readiness
 
-This architecture does **not** raise `ARGUS_REAL_MONEY_READINESS.md`. OOS still failed. Paper book in this env still empty. LIVE **NO-GO**.
+This architecture does **not** raise `ARGUS_REAL_MONEY_READINESS.md`. Walk-forward OOS for checked quant combos still failed. Paper book in this environment is still empty. LIVE remains **NO-GO**.

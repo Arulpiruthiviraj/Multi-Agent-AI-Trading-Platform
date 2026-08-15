@@ -12,6 +12,7 @@ import { decideEscalation } from '../ai/EscalationPolicy';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { v4 as uuidv4 } from 'uuid';
 
 // A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
 // entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.

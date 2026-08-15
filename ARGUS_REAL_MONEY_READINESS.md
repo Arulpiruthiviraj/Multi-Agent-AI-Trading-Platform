@@ -167,3 +167,9 @@ paper fills, or NewsAgent calibration is not readiness. LIVE remains **NO-GO**. 
 Bull/Bear parser and TradeThesis are additive and **off** for live debate consumption. Thesis
 invalidation rules moved to `config/thesisInvalidation.json`. **Scores above are unchanged.**
 LIVE remains **NO-GO**.
+
+## Appendix — market_hours fail-closed (2026-08-15)
+
+Alpaca clock HTTP/network failure used to pass `market_hours` (`null !== false`). It now
+**blocks** (`unavailable`). Missing Alpaca keys still skip. **Headline scores above are
+unchanged** — this is an operational safety fix, not strategy/OOS evidence.

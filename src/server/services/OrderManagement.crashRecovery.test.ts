@@ -50,6 +50,7 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
         quantity: o.quantity!, filledQuantity: o.quantity!, createdAt: new Date(), updatedAt: new Date(),
       }),
       cancelOrder: async () => true,
+      closePosition: async () => false,
       getOrderByClientOrderId: lookupSpy,
     };
   }

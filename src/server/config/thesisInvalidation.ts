@@ -1,3 +1,15 @@
+/**
+ * ==========================================================
+ * Module: config/thesisInvalidation
+ *
+ * Purpose:
+ * Load config/thesisInvalidation.json once at process start. Strategy IDs, thresholds, and
+ * human-readable reason templates belong in that file so adding SMC / a future strategy does
+ * not require a TypeScript `if (strategy === '…')` branch.
+ *
+ * Unknown `type` values fail boot (throw) rather than silently skipping a safety rule.
+ * ==========================================================
+ */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
 
 export type ThesisInvalidationRuleType =
@@ -11,13 +23,18 @@ export type ThesisInvalidationRuleType =
 
 export interface ThesisInvalidationRule {
   type: ThesisInvalidationRuleType;
+  /** Template with {rvol} {threshold} {level} {close} {side} {bias} {adx} {entryRegime} {liveRegime} {applicable} {structureTrend} {structureEvent}. */
   message: string;
+  /** If set, the rule applies when thesis.strategy is in this list (OR textIncludes). */
   strategies?: string[];
+  /** If set, the rule also applies when any stored invalidation text contains a needle. */
   textIncludes?: string[];
+  /** Used by rvol_below / adx_below. */
   threshold?: number;
 }
 
 export interface ThesisInvalidationConfig {
+  /** BUY/SELL → words used in messages, e.g. long/short. */
   biasLabels: Record<string, string>;
   rules: ThesisInvalidationRule[];
 }

@@ -1,12 +1,32 @@
 /**
- * Smart Money Concepts (SMC) / ICT-style *pattern classification* over real OHLC.
+ * ==========================================================
+ * Module: quant/indicators/smc
  *
- * Reuses existing swing / BOS / CHoCH (`detectSwingPoints`, `detectMarketStructure`) and
- * false-breakout detection. Does not reimplement those, does not emit orders, and does not
- * claim that a sweep proves intentional institutional manipulation.
+ * Purpose:
+ * Smart Money Concepts / ICT-style *pattern classification* over real OHLC bars.
  *
- * Sweep ≠ trade: a wick beyond liquidity with a close back inside is a FEATURE. Confirmation
- * (CHoCH / displacement / failed close-beyond) is a separate feature.
+ * Reuses (does not fork):
+ *   detectSwingPoints / detectMarketStructure (HH, HL, LH, LL, BOS, CHoCH)
+ *   detectFalseBreakout (close beyond a level then close back)
+ *
+ * Definitions used here (one explicit convention so the engine is reviewable):
+ *   Buy-side liquidity  = last swing high (or equal highs within config tolerance)
+ *   Sell-side liquidity = last swing low (or equal lows)
+ *   Sweep               = wick THROUGH that pool in the lookback window, CLOSE back inside
+ *                         (distinct from a confirmed close-beyond breakout)
+ *   Displacement        = last bar range ≥ config multiple of the prior average range
+ *   Bullish FVG         = candle1.high < candle3.low (3-candle imbalance)
+ *   Bearish FVG         = candle1.low > candle3.high
+ *   Bullish order block = last bearish candle before an UP displacement (full candle [low, high])
+ *   Bearish order block = last bullish candle before a DOWN displacement
+ *   Trap                = sweep or false-breakout pattern. isIntentionalManipulation is ALWAYS
+ *                         false — order-flow, stops, and volatility can print the same shape.
+ *
+ * Sweep ≠ trade. isTradeSignal is a TypeScript literal `false`. Confirmation (CHoCH, etc.)
+ * lives on the SMC_LIQUIDITY_SWEEP strategy, which is experimental (QUANT_SMC_STRATEGY_ENABLED).
+ *
+ * Thresholds: config/smcConfluence.json (not module literals).
+ * ==========================================================
  */
 import { Bar } from '../../engines/backtest/HistoricalDataGateway';
 import { detectSwingPoints, detectMarketStructure, MarketStructureResult, SwingPoint } from './trend';
@@ -76,6 +96,7 @@ function withinPct(a: number, b: number, tolerancePct: number): boolean {
   return (Math.abs(a - b) / mid) * 100 <= tolerancePct;
 }
 
+/** Two most recent same-type swings within `tolerancePct` of each other (equal highs / equal lows). */
 export function detectEqualSwingLevels(swings: SwingPoint[], type: 'high' | 'low', tolerancePct: number): boolean {
   const same = swings.filter(s => s.type === type);
   if (same.length < 2) return false;
@@ -84,6 +105,7 @@ export function detectEqualSwingLevels(swings: SwingPoint[], type: 'high' | 'low
   return withinPct(last.price, prior.price, tolerancePct);
 }
 
+/** Map last swing high/low to buy-side / sell-side liquidity pools. Optional precomputed swings avoid a second fractal pass. */
 export function detectLiquidity(bars: Bar[], swings?: SwingPoint[]): SmcLiquidity {
   const points = swings ?? detectSwingPoints(bars);
   const highs = points.filter(s => s.type === 'high');
@@ -161,6 +183,7 @@ export function detectLiquiditySweep(bars: Bar[], liquidity: SmcLiquidity): SmcS
   };
 }
 
+/** Last-bar range vs average range of the prior `lookback` bars. Direction from close vs open. */
 export function detectDisplacement(bars: Bar[], lookback: number = 10): SmcDisplacement {
   const multiple = smcConfluence.displacementRangeMultiple;
   if (bars.length < lookback + 1) {
@@ -180,6 +203,7 @@ export function detectDisplacement(bars: Bar[], lookback: number = 10): SmcDispl
   return { present: true, direction, rangeMultiple, barIndex: lastIdx };
 }
 
+/** Most recent 3-candle FVG walking backward from the last bar. `filled` uses bars AFTER the pattern only (no look-ahead). */
 export function detectFairValueGap(bars: Bar[], currentPrice: number): SmcZone {
   const empty: SmcZone = { side: null, low: null, high: null, overlappingPrice: false, filled: null };
   if (bars.length < 3) return empty;
@@ -209,6 +233,7 @@ export function detectFairValueGap(bars: Bar[], currentPrice: number): SmcZone {
   return empty;
 }
 
+/** Opposite-color candle in the 8 bars before a detected displacement. Zone is that candle's high/low. */
 export function detectOrderBlock(bars: Bar[], displacement: SmcDisplacement, currentPrice: number): SmcZone {
   const empty: SmcZone = { side: null, low: null, high: null, overlappingPrice: false, filled: null };
   if (!displacement.present || displacement.barIndex === null || displacement.direction === null) return empty;
@@ -245,6 +270,9 @@ export function detectOrderBlock(bars: Bar[], displacement: SmcDisplacement, cur
   return empty;
 }
 
+/**
+ * Pattern label for a failed breakout / sweep-reversal. Never proof of "smart money" intent.
+ */
 export function classifyTrap(
   bars: Bar[],
   liquidity: SmcLiquidity,
@@ -270,6 +298,7 @@ export function classifyTrap(
   return { kind: 'NONE', isIntentionalManipulation: false, detail: noneDetail };
 }
 
+/** Single snapshot for StrategyContext.smc / feature engine. Pure; same bars → same result. */
 export function computeSmcFeatures(bars: Bar[]): SmcFeatures {
   const structure = detectMarketStructure(bars);
   const swings = detectSwingPoints(bars);

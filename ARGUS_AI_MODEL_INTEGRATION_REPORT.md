@@ -17,9 +17,13 @@
 
 NewsAgent directional accuracy **44.6%** on **242** real evaluated predictions (`ARGUS_AI_VALIDATION_REPORT.md`). Worse than chance. Weighting already flows through `agent_performance_stats`; do not increase NewsAgent power until calibration and outcome recording stay honest.
 
-## Feature snapshot vs AI
+## Bull/Bear (TradingAgents concept, Argus implementation)
 
-ChiefTrader now *can* receive `supportingQuantDetail.featureSnapshot` when QuantEngine contributed. That is structured quantitative evidence for interpretation. It is **not** an automatic BUY and **does not** bypass RiskEngine.
+`config/bullBearResearch.json` + `src/server/ai/research/parseResearchNote.ts`. Default **off** (`QUANT_BULL_BEAR_ENABLED`). Not imported by ChiefTrader today. LLM-supplied entry/stop/target/EV/probability are discarded.
+
+## Feature snapshot / TradeThesis vs AI
+
+ChiefTrader *can* receive `supportingQuantDetail.featureSnapshot` when QuantEngine contributed. Quant ideas also carry `quantDetail.tradeThesis` (engine numbers). Neither is an automatic BUY. Neither bypasses RiskEngine.
 
 ## ModelRegistry
 

@@ -527,6 +527,7 @@ export class BacktestEngine {
           volume: computeVolumeFeatures(visibleBars),
           supportResistance: computeSupportResistanceFeatures(visibleBars),
           regime, marketContext,
+          // Same SMC snapshot as live QuantSignalAgent so backtests of SMC_LIQUIDITY_SWEEP see real features.
           smc: computeSmcFeatures(visibleBars),
         };
         const evaluation = strategy.evaluate(strategyContext);

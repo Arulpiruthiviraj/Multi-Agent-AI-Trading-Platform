@@ -1,3 +1,13 @@
+/**
+ * ==========================================================
+ * Module: config/noTradeReasons
+ *
+ * Purpose:
+ * First-class NO_TRADE catalog (config/noTradeReasons.json). Codes are stable for journals/UI.
+ * assembleTradeThesis uses reasons[0] as the default when side is HOLD or no evaluation exists.
+ * Listing a reason here does not submit orders and does not bypass RiskEngine.
+ * ==========================================================
+ */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
 
 export interface NoTradeReason {

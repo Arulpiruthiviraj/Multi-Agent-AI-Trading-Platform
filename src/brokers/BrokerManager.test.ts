@@ -42,6 +42,7 @@ describe('BrokerManager.setLiveMode capability gate', () => {
       health: async () => 'Healthy',
       placeOrder: async () => { throw new Error('not used in this test'); },
       cancelOrder: async () => false,
+      closePosition: async () => false,
     };
   }
 

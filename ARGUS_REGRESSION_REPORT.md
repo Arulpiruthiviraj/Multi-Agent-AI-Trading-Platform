@@ -2,28 +2,30 @@
 
 ## Intent
 
-Prove existing behavior did not change except additive fields and config extraction of an already-used 0.6 strategy-confidence floor.
+Prove existing behavior did not change except additive fields and config extraction (strategy-confidence floor, thesis-invalidation rules).
 
-## What must still pass (same contracts)
+## Contracts that must still hold
 
 - RiskEngine gates and concentration caps remain authoritative.
 - ChiefTrader approval threshold, two-agent confirmation, debate HOLD veto, Quant AI disagreement veto — unchanged.
 - `QUANT_ENGINE_ENABLED` default off — `start()` still a no-op without the flag.
-- Strategy `evaluate()` math unchanged; only eligibility listing + snapshot assembly added.
-- `supportingQuantDetail.featureSnapshot` is `null` when QuantEngine did not attach a snapshot (existing ChiefTrader fixture).
+- `evaluateAll()` still returns **five** strategies unless `QUANT_SMC_STRATEGY_ENABLED=true`.
+- `supportingQuantDetail.featureSnapshot` is `null` when QuantEngine did not attach a snapshot.
+- Thesis invalidation still fires on the same *kinds* of breaches; strategy ids now come from JSON.
 
-## Tests added/extended this pass
+## Tests covering the additive surface
 
-- `momentum.test.ts` — bullish/bearish divergence is a feature (`isTradeSignal === false`).
+- `momentum.test.ts` — divergence is a feature (`isTradeSignal === false`).
 - `QuantitativeFeatureEngine.test.ts` — snapshot + NOT_SUPPORTED.
-- `StrategyEngine.test.ts` — `regimeStrategyEligibility`.
-- `QuantSignalAgent.test.ts` — `quantDetail.featureSnapshot` present on a real emit.
-- `ChiefTraderAgent.test.ts` — `featureSnapshot` null when absent; side/confidence still 0.95.
+- `StrategyEngine.test.ts` — eligibility listing; still 5 live evaluations by default.
+- `smc.test.ts` / `smcLiquiditySweep.test.ts` — sweep is not a trade; SMC not in default evaluateAll.
+- `ThesisInvalidation.test.ts` — thresholds from `thesisInvalidation.json`.
+- `assembleTradeThesis.test.ts` / `parseResearchNote.test.ts`.
+- `QuantSignalAgent.test.ts` — `featureSnapshot` + `tradeThesis.numericEvidenceSource === 'quant_engines'`.
+- `ChiefTraderAgent.test.ts` — approval math unchanged.
 
-## Command used
-
-Targeted vitest on the files above (full parallel `npm test` can hook-timeout on DB/OpenAlice/Kronos probes; prefer `--maxWorkers=1` for a full run).
+Prefer `npx vitest run <paths> --maxWorkers=1` (full parallel `npm test` can hook-timeout on DB/OpenAlice/Kronos probes).
 
 ## Not claimed
 
-No live/backtest parity proof from this pass. No OOS improvement. No NewsAgent accuracy change.
+No OOS improvement. No NewsAgent accuracy change. LIVE still **NO-GO**.

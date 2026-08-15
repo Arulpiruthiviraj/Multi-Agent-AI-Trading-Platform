@@ -11,6 +11,10 @@
 
 A learned 4×4 “strategy sleeping” matrix. That requires a real closed-trade sample. This environment has **zero** organic closed paper trades. Shipping a matrix of invented win rates would be fake edge.
 
-## Config
+## Files
 
-Strategy applicability remains on each strategy module’s `applicableRegimes`. Do not hardcode strategy names in RegimeEngine.
+- `src/server/quant/RegimeEngine.ts`
+- `src/server/quant/strategies/StrategyEngine.ts` (`evaluateAll`, `regimeStrategyEligibility`)
+- `config/tradingSafety.json` → `regimeMismatchConfidenceMultiplier`
+
+SMC applies to all three regime labels (`applicableRegimes` on the strategy). That is eligibility, not an automatic trade.

@@ -35,32 +35,28 @@
 
 import React, { useState, useEffect } from 'react';
 import { useWebSocket } from '../context/WebSocketContext';
-import { Activity, Cpu, HardDrive, Network, Zap, Clock, ShieldCheck, Crosshair } from 'lucide-react';
+import { Activity, Cpu, HardDrive, Network, Zap, Clock, ShieldCheck } from 'lucide-react';
 
 export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig: any }) {
-  const [latency, setLatency] = useState(14);
-  const [cpuUsage, setCpuUsage] = useState(32);
-  const [memUsage, setMemUsage] = useState(45);
-  
-  // execute active changing hardware metrics
-  
-  const { subscribe } = useWebSocket();
+  const [latency, setLatency] = useState<number | null>(null);
+  const [heapPct, setHeapPct] = useState<number | null>(null);
+
+  const { subscribe, status: wsStatus } = useWebSocket();
 
   useEffect(() => {
-    if(!autoBotConfig.enabled) return;
-    
+    if (!autoBotConfig.enabled) return;
+
     const unsub = subscribe('SYSTEM_METRICS', (data) => {
-      // Use actual emitted metrics instead of random
-      if (data && data.system) {
-         setMemUsage(Math.min(100, (data.system.heapUsed / data.system.heapTotal) * 100));
-         setCpuUsage(Math.min(100, Object.values(data.processes as Record<string,any>).reduce((sum, p) => sum + parseFloat(p.cpu || '0'), 0)));
-         
-         // Pick highest latency from executing processes
-         const maxLat = Math.max(...Object.values(data.processes as Record<string,any>).map(p => p.latency || 0), 14);
-         setLatency(maxLat);
+      if (data && data.system && data.system.heapTotal > 0) {
+        setHeapPct(Math.min(100, (data.system.heapUsed / data.system.heapTotal) * 100));
+      }
+      const procs = data?.processes as Record<string, any> | undefined;
+      if (procs) {
+        const lats = Object.values(procs).map(p => Number(p.latency)).filter(n => Number.isFinite(n) && n > 0);
+        setLatency(lats.length ? Math.max(...lats) : null);
       }
     });
-    
+
     return () => unsub();
   }, [autoBotConfig.enabled, subscribe]);
 
@@ -77,7 +73,7 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
         setUpl(d.summary.totalProfitLoss || 0);
       }
     }).catch(console.error);
-  }, [autoBotConfig.enabled, spent]);
+  }, [autoBotConfig.enabled]);
   
   return (
     <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
@@ -92,7 +88,7 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
               <span className={`relative inline-flex rounded-full h-2 w-2 ${autoBotConfig.enabled ? 'bg-emerald-500' : 'bg-slate-500'}`}></span>
             </span>
             <span className="text-[10px] font-mono text-slate-400 tracking-widest uppercase">
-               {autoBotConfig.enabled ? 'Connection Stable' : 'System Offline'}
+               {wsStatus === 'connected' ? (autoBotConfig.enabled ? 'WS connected' : 'WS connected · bot off') : wsStatus === 'connecting' ? 'WS connecting' : 'WS disconnected'}
             </span>
          </div>
        </div>
@@ -135,7 +131,7 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
                <span className="text-[10px] uppercase font-mono tracking-widest">Avg Execution Latency</span>
             </div>
             <div className="text-2xl font-bold text-white font-mono">
-               {latency.toFixed(0)}<span className="text-sm text-slate-500 ml-1">ms</span>
+               {latency == null ? '—' : latency.toFixed(0)}{latency != null && <span className="text-sm text-slate-500 ml-1">ms</span>}
             </div>
          </div>
 
@@ -146,25 +142,25 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
           <div className="flex items-center justify-between">
              <div className="flex items-center gap-2 text-slate-400">
                 <Cpu size={14} />
-                <span className="text-xs font-mono uppercase">AI Core CPU Load</span>
+                <span className="text-xs font-mono uppercase">Process heap</span>
              </div>
              <div className="flex items-center gap-2">
                 <div className="w-24 h-1.5 bg-slate-800 rounded overflow-hidden">
-                   <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${cpuUsage}%` }}></div>
+                   <div className="h-full bg-indigo-500 transition-all duration-300" style={{ width: `${heapPct ?? 0}%` }}></div>
                 </div>
-                <span className="text-[10px] font-mono text-indigo-400 w-8 text-right">{cpuUsage.toFixed(0)}%</span>
+                <span className="text-[10px] font-mono text-indigo-400 w-8 text-right">{heapPct == null ? '—' : `${heapPct.toFixed(0)}%`}</span>
              </div>
           </div>
           <div className="flex items-center justify-between">
              <div className="flex items-center gap-2 text-slate-400">
                 <HardDrive size={14} />
-                <span className="text-xs font-mono uppercase">Vector DB Mem</span>
+                <span className="text-xs font-mono uppercase">CPU (per-worker)</span>
              </div>
              <div className="flex items-center gap-2">
                 <div className="w-24 h-1.5 bg-slate-800 rounded overflow-hidden">
-                   <div className="h-full bg-emerald-500 transition-all duration-300" style={{ width: `${memUsage}%` }}></div>
+                   <div className="h-full bg-slate-500 transition-all duration-300" style={{ width: '0%' }}></div>
                 </div>
-                <span className="text-[10px] font-mono text-emerald-400 w-8 text-right">{memUsage.toFixed(0)}%</span>
+                <span className="text-[10px] font-mono text-slate-500 w-8 text-right">N/A</span>
              </div>
           </div>
           <div className="flex items-center justify-between">

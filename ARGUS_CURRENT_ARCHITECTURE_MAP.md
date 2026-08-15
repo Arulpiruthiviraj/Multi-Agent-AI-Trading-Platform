@@ -1,6 +1,6 @@
 # ARGUS_CURRENT_ARCHITECTURE_MAP.md
 
-**Date:** 2026-08-15. Read-only map of the running Node app. Not a rewrite plan.
+**Date:** 2026-08-15. Map of the running Node app. Not a rewrite plan. Ground-truth for *current* wiring; older ARGUS_PHASE* / PRE_IMPLEMENTATION docs are snapshots unless they have an errata.
 
 ## System of record
 
@@ -10,36 +10,54 @@ Single process: Express + Vite/static SPA + `ws`. Entry: `server.ts`. SPA: `src/
 
 ```
 Alpaca / MARKET_DATA
-  → TechnicalAgent, NewsEngine, FundamentalAgent, MacroAgent, QuantSignalAgent (off unless QUANT_ENGINE_ENABLED)
+  → TechnicalAgent, NewsEngine, FundamentalAgent, MacroAgent,
+    QuantSignalAgent (no-op unless QUANT_ENGINE_ENABLED=true)
   → TRADE_IDEA_GENERATED
-  → ChiefTraderAgent (weights, optional multi-model debate, two-agent confirmation)
+  → ChiefTraderAgent (weights, optional multi-model debate, two-agent confirmation, debate HOLD veto)
   → CHIEF_APPROVED_IDEA
-  → RiskAgent / RiskEngine (all gates recorded)
+  → RiskAgent / RiskEngine (all gates recorded, including argus_capital_allocation)
   → OrderManagementService
   → BrokerManager.getActiveBroker().placeOrder
   → trades table + ORDER_EXECUTED
 ```
 
-**Not the live path:** `GET /api/v1/signals` (legacy simulation → `data/portfolio.json`). Do not merge it with SQLite trades.
+**Not the live path:** `GET /api/v1/signals` (legacy simulation → `data/portfolio.json`). Do not merge with SQLite trades.
 
 ## Quant backbone (opt-in)
 
-`src/server/quant/` — indicators, RegimeEngine, MarketContext, 5 core strategies + experimental `SMC_LIQUIDITY_SWEEP`, GroupedScores, EV/Kelly, Monte Carlo, WalkForward, FailureClassification.
+| Piece | Path | Default |
+|---|---|---|
+| Indicators (trend/momentum/vol/volume/S/R/priceAction) | `src/server/quant/indicators/` | Used when Quant runs |
+| SMC pattern engines | `indicators/smc.ts` | Computed on Quant/backtest context; strategy experimental |
+| Regime / market context | `RegimeEngine.ts`, `MarketContext.ts` | Quant only |
+| Core strategies | `StrategyEngine.CORE_STRATEGIES` (5) | Live evaluateAll |
+| Experimental SMC strategy | `EXPERIMENTAL_STRATEGIES` | Live only if `QUANT_SMC_STRATEGY_ENABLED=true`; backtest via `findStrategy` |
+| Feature facade | `QuantitativeFeatureEngine.ts` | `quantDetail.featureSnapshot` |
+| TradeThesis | `quant/thesis/assembleTradeThesis.ts` | `quantDetail.tradeThesis` |
+| EV gate | `QuantSignalAgent` + `ExpectedValue.ts` | Refuses strategy ideas without sample / non-positive EV |
+| Backtest | `BacktestEngine.runStrategyBacktest` | Long-only |
 
-Live Quant: `QuantSignalAgent` (`QUANT_ENGINE_ENABLED`). SMC live inclusion: `QUANT_SMC_STRATEGY_ENABLED` (default off). Backtest: `BacktestEngine.runStrategyBacktest` via `findStrategy`.
+## Position monitoring
+
+`PortfolioMonitor` + `evaluateThesisInvalidation` (`config/thesisInvalidation.json`). Exits are SELL *ideas*, not direct broker calls.
 
 ## Safety that must stay authoritative
 
-RiskEngine gates, CapitalAllocation (`settings.budget` ≠ broker cash), RestrictedLiveMode, OMS idempotency/crash recovery, Alpaca circuit breaker, PortfolioMonitor exits, PortfolioReconciliation pause-on-mismatch, kill switch (`emergency-stop`).
+RiskEngine gates, CapitalAllocation (`settings.budget` ≠ broker cash), RestrictedLiveMode, OMS idempotency/crash recovery, Alpaca circuit breaker, PortfolioReconciliation pause-on-mismatch, kill switch (`emergency-stop`).
 
 ## AI
 
-`AIRouter` only. Providers: Gemini, OpenAI, DeepSeek, Nvidia, OpenAI-compatible/Ollama. Local Chronos/Kronos via `ModelRuntimeManager`. OpenAlice optional MCP. `AIOutputValidator` coerces structured JSON. NewsAgent live accuracy **44.6%/242** — do not increase its power without calibration.
+`AIRouter` only. Gemini, OpenAI, DeepSeek, Nvidia, OpenAI-compatible/Ollama. Chronos/Kronos via `ModelRuntimeManager`. OpenAlice optional MCP. `AIOutputValidator` coerces JSON. `parseResearchNote` (Bull/Bear) exists; **not** in ChiefTrader unless `QUANT_BULL_BEAR_ENABLED=true`. NewsAgent live accuracy **44.6%/242**.
 
-## Feature flags / config (not UI knobs)
+## Config JSON (reviewed files, not UI knobs)
 
-`config/tradingSafety.json`, `eventNames.json`, `agentWeights.json`, `markets.json`, `smcConfluence.json`, `thesisInvalidation.json`, `noTradeReasons.json`, `bullBearResearch.json`.
+`tradingSafety.json`, `eventNames.json`, `agentWeights.json`, `markets.json`, `smcConfluence.json`, `thesisInvalidation.json`, `noTradeReasons.json`, `bullBearResearch.json`, `consensusFixtures.json`.
 
 ## License note on TradingAgents
 
-TauricResearch/TradingAgents is **Apache-2.0**. Argus must **not** copy large source trees. Concepts only; if any file were ever vendored, NOTICE/attribution would be required. This pass vendors **zero** TradingAgents source.
+TauricResearch/TradingAgents is **Apache-2.0**. Argus vendors **zero** of that source. Concepts only.
+
+## Agent Network UI
+
+- `DigitalTwinVisualizer` — live node/edge glow from real WebSocket events only.
+- `AgentWorkflowTheater` — per-agent motion scenes on the Agent Network tab. Looping stages are **educational architecture**, not a fake tick feed. Matching EventBus events pulse the corresponding card.

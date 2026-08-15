@@ -1,6 +1,22 @@
 /**
- * Additive TradeThesis: structured why-buy / why-not-buy assembled from existing engines.
- * LLMs must not fill numeric fields. Default live path still does not execute from this object.
+ * ==========================================================
+ * Module: quant/thesis/assembleTradeThesis
+ *
+ * Purpose:
+ * Build a structured TradeThesis from engines that already ran (StrategyContext + one
+ * StrategyEvaluation). This is the "why buy / why not buy" object for journals and UI.
+ *
+ * Hard rules:
+ *   - Numeric facts (price, stop, target, R:R, EV) come from Quant / strategy modules only.
+ *   - LLMs must not populate those fields (see parseResearchNote.ts).
+ *   - A TradeThesis is NOT an order. ChiefTrader + RiskEngine still authorize execution.
+ *   - HOLD or a missing evaluation is a first-class NO_TRADE (config/noTradeReasons.json),
+ *     not an error.
+ *
+ * Wired today:
+ *   QuantSignalAgent attaches the object as quantDetail.tradeThesis (additive). Approval
+ *   math is unchanged.
+ * ==========================================================
  */
 import { StrategyContext, StrategyEvaluation } from '../strategies/types';
 import { noTradeReasonsConfig, NoTradeReason } from '../../config/noTradeReasons';
@@ -21,12 +37,14 @@ export interface TradeThesis {
   expectedRewardRisk: number | null;
   estimatedExpectedValue: number | null;
   confidence: number | null;
+  /** Always quant_engines — documents that numbers were not LLM-invented. */
   numericEvidenceSource: 'quant_engines';
   finalDecision: 'CANDIDATE' | 'NO_TRADE';
   noTrade: NoTradeReason | null;
   dataTimestamp: string;
 }
 
+/** Reward/risk from engine prices. Null when any leg is missing or risk is zero (undefined ratio). */
 function rr(entry: number | null, stop: number | null, target: number | null): number | null {
   if (entry === null || stop === null || target === null) return null;
   const risk = Math.abs(entry - stop);
@@ -44,6 +62,7 @@ export function assembleTradeThesis(input: {
 }): TradeThesis {
   const { symbol, ctx, evaluation, ideaSide } = input;
   const missing: string[] = [];
+  // Honest gaps already reported by MarketContext / volume engines — never filled with 0.
   if (ctx.marketContext.breadth?.available === false) {
     missing.push(ctx.marketContext.breadth.reason);
   }
@@ -51,6 +70,7 @@ export function assembleTradeThesis(input: {
   if (ctx.volume.vwap.vwap === null) missing.push('Session VWAP unavailable');
 
   if (ideaSide === 'HOLD' || !evaluation) {
+    // reasons[0] is the configured default (INSUFFICIENT_EVIDENCE in noTradeReasons.json).
     const reason = noTradeReasonsConfig.reasons[0];
     return {
       schemaVersion: 1,

@@ -67,7 +67,7 @@ describe('ReflectionEngine - closed-trade-only loss reflection', () => {
     const spy = vi.spyOn(reflectionEngine, 'generateReflectionRule').mockResolvedValue(undefined);
     await reflectionEngine.evaluateAgents();
     expect(spy).toHaveBeenCalled();
-    const losses = spy.mock.calls[0][0];
+    const losses = spy.mock.calls[0][0] as any[];
     expect(losses.some((l: any) => l.symbol === 'MSFT' && l.realizedPnl === -50)).toBe(true);
     expect(losses.some((l: any) => l.symbol === 'AAPL')).toBe(false);
     spy.mockRestore();
