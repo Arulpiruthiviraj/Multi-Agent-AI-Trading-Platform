@@ -26,6 +26,7 @@ describe('QuantitativeFeatureEngine', () => {
     expect(snapshot.unavailable.marketBreadth.status).toBe('NOT_SUPPORTED');
     expect(snapshot.unavailable.optionsAnalytics.tradingBlocked).toBe(false);
     expect(snapshot.unavailable.orderFlow.whatHappened).toContain('not available');
+    expect(snapshot.smc).toBeNull();
   });
 
   it('uses the same strategy confidence floor as tradingSafety.json', () => {

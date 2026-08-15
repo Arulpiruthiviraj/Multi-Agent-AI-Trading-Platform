@@ -51,7 +51,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { eventBus } from '../core/EventBus';
 import { recordConsensusTransaction } from '../core/TransactionRegistry';
 import { oms } from '../services/OrderManagement';
-import { ALL_STRATEGIES } from '../quant/strategies/StrategyEngine';
+import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isSmcLiveQuantEnabled } from '../quant/strategies/StrategyEngine';
 import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
 
 export const v2Router = Router();
@@ -1153,13 +1153,20 @@ v2Router.get('/agents/learning-summary', async (req, res) => {
 // was to query SQLite directly - no route, no UI, anywhere in the codebase read it.
 // ==========================================================================================
 v2Router.get('/quant/strategies', (req, res) => {
+  const mapStrategy = (s: typeof ALL_STRATEGIES[number]) => ({
+    id: s.id,
+    displayName: s.displayName,
+    applicableRegimes: s.applicableRegimes,
+    typicalHoldingPeriod: STRATEGY_TYPICAL_HOLDING_PERIOD[s.id] ?? null,
+  });
   res.json({
     ok: true,
-    strategies: ALL_STRATEGIES.map(s => ({
-      id: s.id,
-      displayName: s.displayName,
-      applicableRegimes: s.applicableRegimes,
-      typicalHoldingPeriod: STRATEGY_TYPICAL_HOLDING_PERIOD[s.id] ?? null,
+    strategies: ALL_STRATEGIES.map(mapStrategy),
+    experimentalStrategies: EXPERIMENTAL_STRATEGIES.map(s => ({
+      ...mapStrategy(s),
+      enabledInLiveQuant: isSmcLiveQuantEnabled(),
+      validationStatus: 'UNVALIDATED',
+      note: 'SMC/ICT pattern classification. Not in live Quant evaluateAll unless QUANT_SMC_STRATEGY_ENABLED=true. A liquidity sweep is not a trade by itself. Backtest is long-only — bearish setups do not open shorts.',
     })),
   });
 });

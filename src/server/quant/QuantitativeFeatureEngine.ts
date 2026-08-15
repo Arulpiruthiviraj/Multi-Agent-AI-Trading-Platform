@@ -108,6 +108,7 @@ export interface QuantitativeFeatureSnapshot {
   marketContext: StrategyContext['marketContext'];
   groupedScores: { BUY: GroupedScores; SELL: GroupedScores };
   strategyEvaluations: StrategyEvaluation[];
+  smc: StrategyContext['smc'] | null;
   regimeEligibility: ReturnType<typeof regimeStrategyEligibility>;
   unavailable: Record<string, UnavailableCapability>;
 }
@@ -171,6 +172,7 @@ export function snapshotFromStrategyContext(input: {
     marketContext: ctx.marketContext,
     groupedScores,
     strategyEvaluations: evaluations,
+    smc: ctx.smc ?? null,
     regimeEligibility: regimeStrategyEligibility(evaluations, ctx.regime.regime),
     unavailable: {
       marketBreadth: notSupported(

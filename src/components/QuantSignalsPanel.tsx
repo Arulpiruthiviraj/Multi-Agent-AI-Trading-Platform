@@ -92,7 +92,15 @@ export default function QuantSignalsPanel() {
   useEffect(() => {
     fetch("/api/v2/quant/strategies")
       .then(r => r.json())
-      .then(json => { if (json.ok) setStrategies(json.strategies); })
+      .then(json => {
+        if (!json.ok) return;
+        const core = json.strategies || [];
+        const experimental = (json.experimentalStrategies || []).map((s: QuantStrategy) => ({
+          ...s,
+          displayName: `${s.displayName} [UNVALIDATED]`,
+        }));
+        setStrategies([...core, ...experimental]);
+      })
       .catch(() => {});
   }, []);
 

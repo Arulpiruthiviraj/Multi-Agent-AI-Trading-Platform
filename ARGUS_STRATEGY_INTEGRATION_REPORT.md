@@ -28,4 +28,18 @@ Label for every strategy that lacks walk-forward OOS success: **UNVALIDATED**.
 
 MARKET DATA → existing indicator modules → RegimeEngine → MarketContext → StrategyEngine → GroupedScores → (new) feature snapshot → optional AI contradiction review → ChiefTrader → RiskEngine → sizing → OMS.
 
-AI still cannot overwrite side/confidence. RiskEngine remains the only order-authorization path after OMS.
+## SMC / ICT (additive, UNVALIDATED)
+
+Pattern engines live in `src/server/quant/indicators/smc.ts` (liquidity, wick sweep, displacement, FVG, order block, trap-as-failed-breakout). Existing BOS/CHoCH/HH-HL are reused, not rewritten.
+
+Strategy `SMC_LIQUIDITY_SWEEP` is **experimental**:
+- Listed under `GET /api/v2/quant/strategies` → `experimentalStrategies`
+- Backtestable via `runStrategyBacktest({ strategyId: 'SMC_LIQUIDITY_SWEEP' })` without enabling live Quant
+- **Not** in live `evaluateAll` unless `QUANT_SMC_STRATEGY_ENABLED=true`
+- A sweep is `isTradeSignal: false`. Entry scoring requires CHoCH confirmation.
+- "Manipulation" / "smart money trap" are **pattern labels**, not claims of intentional manipulation
+- Backtest engine is long-only: bearish SMC will not open shorts
+- Label: **UNVALIDATED** until walk-forward OOS including commissions and slippage
+
+Weights: `config/smcConfluence.json`.
+

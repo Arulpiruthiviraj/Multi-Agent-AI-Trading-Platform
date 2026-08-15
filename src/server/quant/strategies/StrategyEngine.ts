@@ -12,16 +12,35 @@
  * distinction must not be silently lost by only reporting the raw condition-match score.
  * ==========================================================
  */
-import { StrategyContext, StrategyEvaluation } from './types';
+import { StrategyContext, StrategyEvaluation, StrategyDefinition } from './types';
 import { momentumBreakout } from './momentumBreakout';
 import { pullbackContinuation } from './pullbackContinuation';
 import { meanReversion } from './meanReversion';
 import { trendFollowing } from './trendFollowing';
 import { rangeReversion } from './rangeReversion';
+import { smcLiquiditySweep } from './smcLiquiditySweep';
 import { tradingSafety } from '../../config/tradingSafety';
 import type { RegimeLabel } from '../RegimeEngine';
 
-export const ALL_STRATEGIES = [momentumBreakout, pullbackContinuation, meanReversion, trendFollowing, rangeReversion];
+export const CORE_STRATEGIES: StrategyDefinition[] = [momentumBreakout, pullbackContinuation, meanReversion, trendFollowing, rangeReversion];
+
+/** Backtestable / listed, but not in live evaluateAll unless QUANT_SMC_STRATEGY_ENABLED=true. */
+export const EXPERIMENTAL_STRATEGIES: StrategyDefinition[] = [smcLiquiditySweep];
+
+export function isSmcLiveQuantEnabled(): boolean {
+  return process.env.QUANT_SMC_STRATEGY_ENABLED === 'true';
+}
+
+export function resolveStrategiesForLiveEvaluation(): StrategyDefinition[] {
+  return isSmcLiveQuantEnabled() ? [...CORE_STRATEGIES, ...EXPERIMENTAL_STRATEGIES] : CORE_STRATEGIES;
+}
+
+/** Live default set (the original five). Kept as this name so existing callers and tests are unchanged. */
+export const ALL_STRATEGIES = CORE_STRATEGIES;
+
+export function findStrategy(id: string): StrategyDefinition | undefined {
+  return CORE_STRATEGIES.find(s => s.id === id) ?? EXPERIMENTAL_STRATEGIES.find(s => s.id === id);
+}
 
 // A strategy evaluated outside its own stated applicable regime(s) has its confidence discounted,
 // not zeroed - real evidence, just less trustworthy context. Kept in one place so every strategy's
@@ -29,7 +48,7 @@ export const ALL_STRATEGIES = [momentumBreakout, pullbackContinuation, meanRever
 const REGIME_MISMATCH_CONFIDENCE_MULTIPLIER = tradingSafety.regimeMismatchConfidenceMultiplier;
 
 export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
-  return ALL_STRATEGIES
+  return resolveStrategiesForLiveEvaluation()
     .map(strategy => {
       const evaluation = strategy.evaluate(ctx);
       const regimeMatches = evaluation.applicableRegimes.includes(ctx.regime.regime);
@@ -45,7 +64,7 @@ export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
 export const MIN_STRATEGY_CONFIDENCE_TO_TRADE = tradingSafety.minStrategyConfidenceToTrade;
 
 /**
- * Lists which of the five existing strategies match the current regime.
+ * Lists which of the live-evaluated strategies match the current regime.
  * Does not add strategies, execute orders, or zero off-regime confidence (evaluateAll still discounts).
  */
 export function regimeStrategyEligibility(evaluations: StrategyEvaluation[], regime: RegimeLabel): {

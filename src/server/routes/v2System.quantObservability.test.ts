@@ -55,6 +55,10 @@ describe('v2System quant observability routes', () => {
       expect(res.body.ok).toBe(true);
       const ids = res.body.strategies.map((s: any) => s.id);
       expect(ids).toEqual(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'MEAN_REVERSION', 'TREND_FOLLOWING', 'RANGE_REVERSION']);
+      const experimentalIds = res.body.experimentalStrategies.map((s: any) => s.id);
+      expect(experimentalIds).toContain('SMC_LIQUIDITY_SWEEP');
+      expect(res.body.experimentalStrategies[0].validationStatus).toBe('UNVALIDATED');
+      expect(res.body.experimentalStrategies[0].enabledInLiveQuant).toBe(false);
       const trendFollowing = res.body.strategies.find((s: any) => s.id === 'TREND_FOLLOWING');
       expect(trendFollowing.applicableRegimes).toEqual(['BULLISH_TREND', 'BEARISH_TREND']);
       expect(trendFollowing.typicalHoldingPeriod).toContain('Open-ended');

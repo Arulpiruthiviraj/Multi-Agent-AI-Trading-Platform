@@ -85,4 +85,25 @@ describe('evaluateThesisInvalidation', () => {
     expect(parseStoredThesis(null)).toBeNull();
     expect(parseStoredThesis('not-json')).toBeNull();
   });
+
+  it('invalidates SMC_LIQUIDITY_SWEEP when price closes back through the sweep extreme', () => {
+    const result = evaluateThesisInvalidation({
+      texts: ['Price closes back through the sweep extreme'],
+      strategy: 'SMC_LIQUIDITY_SWEEP',
+      side: 'BUY',
+      entryRegime: 'BULLISH_TREND',
+      applicableRegimes: ['BULLISH_TREND', 'BEARISH_TREND', 'SIDEWAYS_RANGE'],
+      structuralLevel: 88,
+    }, {
+      regime: 'BULLISH_TREND',
+      rvol: 1.5,
+      adx: 25,
+      structureEvent: 'NONE',
+      structureTrend: 'UPTREND',
+      lastClose: 86,
+      bars: [bar(86)],
+    });
+    expect(result.invalidated).toBe(true);
+    expect(result.reasons[0]).toMatch(/sweep extreme/);
+  });
 });

@@ -88,6 +88,15 @@ export function evaluateThesisInvalidation(thesis: StoredThesis, live: LiveMarke
     reasons.push(`Market structure printed ${live.structureEvent} against the ${thesis.side} thesis.`);
   }
 
+  if (strategy === 'SMC_LIQUIDITY_SWEEP' && thesis.structuralLevel !== null && live.lastClose !== null) {
+    if (thesis.side === 'BUY' && live.lastClose < thesis.structuralLevel) {
+      reasons.push(`Price closed back through the SMC sweep extreme ${thesis.structuralLevel.toFixed(2)} (continuation against the long).`);
+    }
+    if (thesis.side === 'SELL' && live.lastClose > thesis.structuralLevel) {
+      reasons.push(`Price closed back through the SMC sweep extreme ${thesis.structuralLevel.toFixed(2)} (continuation against the short).`);
+    }
+  }
+
   if (strategy === 'MEAN_REVERSION' || strategy === 'PULLBACK_CONTINUATION') {
     const trendAgainst = thesis.side === 'BUY' ? 'DOWNTREND' : 'UPTREND';
     if (live.structureTrend === trendAgainst) {

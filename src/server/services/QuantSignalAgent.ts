@@ -32,6 +32,7 @@ import { getMarketContext, MarketContextResult } from '../quant/MarketContext';
 import { computeMomentumFeatures } from '../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../quant/indicators/supportResistance';
+import { computeSmcFeatures } from '../quant/indicators/smc';
 import { evaluateAll, bestStrategyIdea } from '../quant/strategies/StrategyEngine';
 import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
@@ -158,6 +159,7 @@ export class QuantSignalAgent {
       supportResistance: computeSupportResistanceFeatures(bars),
       regime,
       marketContext,
+      smc: computeSmcFeatures(bars),
     };
     const strategyEvaluations = evaluateAll(strategyContext);
 

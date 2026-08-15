@@ -34,7 +34,8 @@ import { getMarketContext, BarsFetcher, BENCHMARK_SYMBOLS, SECTOR_ETF_MAP } from
 import { computeMomentumFeatures } from '../../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../../quant/indicators/supportResistance';
-import { ALL_STRATEGIES, MIN_STRATEGY_CONFIDENCE_TO_TRADE } from '../../quant/strategies/StrategyEngine';
+import { computeSmcFeatures } from '../../quant/indicators/smc';
+import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, findStrategy, MIN_STRATEGY_CONFIDENCE_TO_TRADE } from '../../quant/strategies/StrategyEngine';
 import { StrategyContext } from '../../quant/strategies/types';
 import { expectedValue, fractionalKelly, ExpectedValueResult, KellyResult } from '../../quant/risk/ExpectedValue';
 import { classifyTradeFailure, computeFailureBreakdown } from '../../quant/analysis/FailureClassification';
@@ -402,9 +403,10 @@ export class BacktestEngine {
    * realized R-multiples, never an assumed/guessed probability.
    */
   async runStrategyBacktest(config: StrategyBacktestConfig): Promise<any> {
-    const strategy = ALL_STRATEGIES.find(s => s.id === config.strategyId);
+    const strategy = findStrategy(config.strategyId);
     if (!strategy) {
-      throw new Error(`Unknown strategy id "${config.strategyId}". Real strategies: ${ALL_STRATEGIES.map(s => s.id).join(', ')}.`);
+      const known = [...ALL_STRATEGIES, ...EXPERIMENTAL_STRATEGIES].map(s => s.id).join(', ');
+      throw new Error(`Unknown strategy id "${config.strategyId}". Real strategies: ${known}.`);
     }
 
     const runId = crypto.randomUUID();
@@ -525,6 +527,7 @@ export class BacktestEngine {
           volume: computeVolumeFeatures(visibleBars),
           supportResistance: computeSupportResistanceFeatures(visibleBars),
           regime, marketContext,
+          smc: computeSmcFeatures(visibleBars),
         };
         const evaluation = strategy.evaluate(strategyContext);
         const recentHighs = visibleBars.slice(-LOOKBACK).map(b => b.high);

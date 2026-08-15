@@ -17,6 +17,7 @@ import { PriceActionFeatures } from '../indicators/priceAction';
 import { SupportResistanceFeatures } from '../indicators/supportResistance';
 import { RegimeResult, RegimeLabel } from '../RegimeEngine';
 import { MarketContextResult } from '../MarketContext';
+import { SmcFeatures } from '../indicators/smc';
 
 export interface StrategyContext {
   symbol: string;
@@ -29,6 +30,8 @@ export interface StrategyContext {
   supportResistance: SupportResistanceFeatures;
   regime: RegimeResult;
   marketContext: MarketContextResult;
+  /** Optional SMC/ICT pattern snapshot. Absent on older fixtures; SMC strategy then scores 0. */
+  smc?: SmcFeatures;
 }
 
 export interface LevelSuggestion {
@@ -80,4 +83,5 @@ export const STRATEGY_TYPICAL_HOLDING_PERIOD: Record<string, string> = {
   MEAN_REVERSION: 'Very short-term (intraday to a few days) - closes once price reverts toward the statistical mean, not designed to be held through a real trend.',
   TREND_FOLLOWING: 'Open-ended - deliberately has no fixed target; held as long as the real trend persists, exited only when its trailing stop is hit or the trend structurally breaks.',
   RANGE_REVERSION: 'Short-term (typically within the current range cycle) - closes at the opposite range boundary; invalidated if the range itself breaks.',
+  SMC_LIQUIDITY_SWEEP: 'Short-term (hours to a few days) - waits for liquidity sweep plus CHoCH confirmation, then targets opposing liquidity. UNVALIDATED. Not an automatic fade of every wick.',
 };
