@@ -52,7 +52,7 @@
 |---------|--------|
 | `npx tsc --noEmit` | **PASS** |
 | Targeted vitest (phase22/25/26 + SecretRedaction + ingest + replay) | **45 passed** |
-| Full `npx vitest run` | _(see below)_ |
+| Full `npx vitest run` | **1086 passed / 165 files** |
 
 ---
 

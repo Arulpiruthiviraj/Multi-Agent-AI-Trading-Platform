@@ -117,4 +117,19 @@ describe('BrokerManager.setLiveMode capability gate', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/unimplemented/i);
   });
+
+  it('throws when PAPER_TRADING_ONLY=true and LIVE is requested', async () => {
+    const prev = process.env.PAPER_TRADING_ONLY;
+    process.env.PAPER_TRADING_ONLY = 'true';
+    try {
+      const manager = BrokerManager.getInstance();
+      manager.registerBroker(fakeBroker('pto_full', { paperTrading: true, liveTrading: true }));
+      const { LIVE_TRADING_CONFIRMATION_PHRASE } = await import('../server/core/LiveTradingConfirmation');
+      await expect(manager.setLiveMode('pto_full', true, LIVE_TRADING_CONFIRMATION_PHRASE))
+        .rejects.toThrow(/Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced in environment/);
+    } finally {
+      if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
+      else process.env.PAPER_TRADING_ONLY = prev;
+    }
+  });
 });

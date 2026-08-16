@@ -46,7 +46,6 @@ import { BrainCircuit, X, Plus, BookOpen, Fingerprint } from "lucide-react";
 
 interface RuleObject {
   rule: string;
-  dsr?: number;
   trials?: number;
   overfitRisk?: "LOW" | "HIGH";
 }
@@ -120,7 +119,6 @@ export default function ContextMemoryEngineering({ memoryRules, onAddRule, onDel
             memoryRules.map((rule, idx) => {
               const isObject = typeof rule !== "string";
               const ruleText = isObject ? (rule as RuleObject).rule : (rule as string);
-              const ruleDsr = isObject ? (rule as RuleObject).dsr : undefined;
               const ruleTrials = isObject ? (rule as RuleObject).trials : undefined;
               const ruleRisk = isObject ? (rule as RuleObject).overfitRisk : undefined;
 
@@ -141,23 +139,14 @@ export default function ContextMemoryEngineering({ memoryRules, onAddRule, onDel
                       <X size={14} />
                     </button>
                   </div>
-                  {isObject && ruleDsr !== undefined && (
+                  {isObject && ruleRisk === "HIGH" && (
                     <div className="pl-8 flex flex-wrap items-center gap-2 font-mono text-[9px] uppercase tracking-wider text-slate-500">
-                      <span className="bg-indigo-500/10 text-indigo-400 px-1.5 py-0.5 rounded border border-indigo-500/20 font-semibold">
-                        DSR: {(ruleDsr * 100).toFixed(1)}%
+                      <span className="bg-rose-500/10 text-rose-400 px-1.5 py-0.5 rounded border border-rose-500/20 font-bold animate-pulse">
+                        ⚠️ HIGH OVERFIT RISK
                       </span>
                       <span className="bg-slate-800/80 text-slate-400 px-1.5 py-0.5 rounded border border-slate-700">
                         Trials (N): {ruleTrials}
                       </span>
-                      {ruleRisk === "HIGH" ? (
-                        <span className="bg-rose-500/10 text-rose-400 px-1.5 py-0.5 rounded border border-rose-500/20 font-bold animate-pulse">
-                          ⚠️ HIGH OVERFIT RISK
-                        </span>
-                      ) : (
-                        <span className="bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/20 font-bold">
-                          🛡️ DSR UNAVAILABLE
-                        </span>
-                      )}
                     </div>
                   )}
                 </div>

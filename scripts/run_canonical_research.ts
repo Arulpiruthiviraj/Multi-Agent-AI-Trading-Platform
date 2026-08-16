@@ -13,7 +13,7 @@ import { runCanonicalCoreBacktest } from '../src/server/research/canonicalNextBa
 import { runCoreWalkForward } from '../src/server/research/coreWalkForward';
 import { runCoreRobustness } from '../src/server/research/coreRobustness';
 import { replayArgusStrategy } from '../src/server/research/argusStrategyReplay';
-import { recordResearchRun } from '../src/server/research/researchRuns';
+import { recordResearchRun, recordEvidenceGates } from '../src/server/research/researchRuns';
 import { writeDatasetSidecar, writeDatasetBars } from '../src/server/research/parquetStore';
 
 async function main() {
@@ -59,7 +59,7 @@ async function main() {
       continue;
     }
     const bt = runCanonicalCoreBacktest({ strategyId, dataset: ingest.dataset });
-    recordResearchRun(bt);
+    const rec = recordResearchRun(bt);
     const wf = runCoreWalkForward(strategyId, ingest.dataset);
     const replay = replayArgusStrategy({
       strategyId,
@@ -67,8 +67,24 @@ async function main() {
       provenance: ingest.dataset.provenance ?? 'UNKNOWN',
     });
     const rob = runCoreRobustness(ingest.dataset.bars, replay.signals);
+    recordEvidenceGates(rec.runId, {
+      strategyId,
+      datasetHash: bt.datasetHash,
+      provenance: ingest.dataset.provenance,
+      quality: ingest.quality.quality,
+      backtestPass: bt.backtestPass,
+      oosTrades: bt.metrics.tradeCount,
+      wfoStatus: wf.status,
+      wfoFolds: wf.foldCount,
+      wfoMedianTestExpectancy: wf.medianTestExpectancy,
+      robustnessLabel: rob.label,
+      robustnessGates: rob.gates ?? null,
+      strategyParity: 'FEATURE_SUBSET_PARITY',
+      fullStrategyParity: false,
+    });
     reports.push({
       strategyId,
+      runId: rec.runId,
       skipped: false,
       quality: ingest.quality.quality,
       provenance: ingest.dataset.provenance,
@@ -82,6 +98,7 @@ async function main() {
       wfoMedianTestExpectancy: wf.medianTestExpectancy,
       robustness: rob.label,
       robustnessCenterNetPnl: rob.centerNetPnl,
+      robustnessGates: rob.gates ?? null,
       promotable: false,
       canPlaceOrders: false,
     });

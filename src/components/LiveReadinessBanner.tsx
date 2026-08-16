@@ -2,11 +2,13 @@
 import React, { useEffect, useState } from 'react';
 
 interface LiveReadinessPayload {
+  ok?: boolean;
   result?: string;
   tradingEdgeScore?: number;
   organicPaper?: string;
   canadianLive?: string;
   failedMandatory?: string[];
+  error?: string;
 }
 
 export default function LiveReadinessBanner() {
@@ -14,10 +16,30 @@ export default function LiveReadinessBanner() {
 
   useEffect(() => {
     const load = () => {
-      fetch('/api/v2/live-readiness')
-        .then((r) => r.json())
-        .then((j) => setData(j))
-        .catch(() => setData(null));
+      fetch('/api/v2/live-readiness', { credentials: 'same-origin' })
+        .then(async (r) => {
+          if (!r.ok) {
+            setData({
+              ok: false,
+              result: 'LIVE_NO_GO',
+              organicPaper: 'NOT_ESTABLISHED',
+              canadianLive: 'NOT_AVAILABLE',
+              failedMandatory: [`HTTP_${r.status}`],
+              error: `live-readiness HTTP ${r.status}`,
+            });
+            return;
+          }
+          const j = await r.json();
+          setData(j);
+        })
+        .catch((e) => setData({
+          ok: false,
+          result: 'LIVE_NO_GO',
+          organicPaper: 'NOT_ESTABLISHED',
+          canadianLive: 'NOT_AVAILABLE',
+          failedMandatory: ['FETCH_FAILED'],
+          error: e?.message || 'fetch failed',
+        }));
     };
     load();
     const id = setInterval(load, 30000);
@@ -39,6 +61,7 @@ export default function LiveReadinessBanner() {
         {data?.failedMandatory && data.failedMandatory.length > 0
           ? ` Mandatory fails: ${data.failedMandatory.slice(0, 6).join(', ')}${data.failedMandatory.length > 6 ? '…' : ''}.`
           : ''}
+        {data?.error ? ` (${data.error})` : ''}
       </p>
     </div>
   );

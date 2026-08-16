@@ -247,6 +247,9 @@ export class BrokerManager {
   public async setLiveMode(id: string, live: boolean, confirmationPhrase?: string): Promise<{ ok: boolean; error?: string }> {
     const broker = this.brokers.get(id);
     if (!broker) return { ok: false, error: `Broker '${id}' not found` };
+    if (live && process.env.PAPER_TRADING_ONLY === 'true') {
+      throw new Error('Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced in environment.');
+    }
     if (live && NON_FUNCTIONAL_BROKER_IDS.has(id)) {
       return { ok: false, error: `${broker.name}'s placeOrder() is unimplemented - it can never trade live regardless of confirmation.` };
     }

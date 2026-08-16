@@ -89,7 +89,7 @@ describe('Alpaca warehouse ingest fail-closed', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('GREEN bars.json without parquet still counts as warehouse inventory', () => {
+  it('GREEN bars.json without parquet is cache only — not parquet warehouse', () => {
     const dir = mkdtempSync(join(tmpdir(), 'argus-wh-bars-'));
     process.env.ARGUS_RESEARCH_DIR = dir;
     writeFileSync(join(dir, 'QQQ.meta.json'), JSON.stringify({
@@ -98,7 +98,10 @@ describe('Alpaca warehouse ingest fail-closed', () => {
     }));
     expect(inspectResearchWarehouse().greenRealMarketData).toBe(false);
     writeFileSync(join(dir, 'QQQ.bars.json'), JSON.stringify({ bars: [{ timestamp: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }] }));
-    expect(inspectResearchWarehouse().greenRealMarketData).toBe(true);
+    const inv = inspectResearchWarehouse();
+    expect(inv.greenRealMarketData).toBe(false);
+    expect(inv.greenParquetCount).toBe(0);
+    expect(inv.greenBarsJsonOnlyCount).toBe(1);
     rmSync(dir, { recursive: true, force: true });
   });
 });

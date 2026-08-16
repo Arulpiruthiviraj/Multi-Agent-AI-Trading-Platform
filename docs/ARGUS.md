@@ -10,7 +10,7 @@ Node.js trading terminal: Express + Vite SPA + raw `ws` + SQLite (`data/argus.db
 
 **Live path (do not rewrite):** EventBus → idea agents → ChiefTrader → RiskAgent → RiskEngine → OMS → `BrokerManager.getActiveBroker().placeOrder` → `trades` / `fills`.
 
-**Not that path:** `GET /api/v1/signals` — fabricated agents, no RiskEngine/OMS/`trades`.
+**Not that path:** `GET|ALL /api/v1/signals` is **quarantined** — HTTP **410 Gone** (`SIGNALS_PATH_QUARANTINED`). It previously fabricated agent votes and wrote `portfolio.json` with no RiskEngine/OMS/`trades`. It is not restorable; the live path above is the only order path.
 
 Do not bypass RiskEngine. Do not add a second kill switch. `settings.budget` is Argus **allocation**, not broker equity. Quant off unless `QUANT_ENGINE_ENABLED=true`. TradingAgents is inspiration only (Apache-2.0 — do not vendor).
 
@@ -26,7 +26,7 @@ Paper: mechanically possible. Live: **NO-GO**.
 
 `npm run dev` → `scripts/devWithOpenAlice.ts` (Chronos :8008, Ollama, optional OpenAlice :47332, optional IBKR) + `tsx server.ts`. `npm run dev:server-only` = Node only.
 
-Boot: import constructors (OMS, RiskAgent, TechnicalAgent, ChiefTrader, Kronos, MarketRegimeAgent timer) → AIRouter → TradingEngine (Autobot `system.start` only if `autoBotEnabled`) → seed settings → BrokerManager → **MarketDataWorker.start always** → model probes → listen 3000. Migrations run on first import of `src/server/db/index.ts`. **`npm run db:migrate` is broken** (`database/migrate.ts` missing).
+Boot: import constructors (OMS, RiskAgent, TechnicalAgent, ChiefTrader, Kronos, MarketRegimeAgent timer) → AIRouter → TradingEngine (Autobot `system.start` only if `autoBotEnabled`) → seed settings → BrokerManager → **MarketDataWorker.start always** → model probes → listen. Bind host: **`127.0.0.1` when `AUTH_PASSWORD` unset** (loud WARNING); `0.0.0.0` only when auth is enabled. Port **3000**. Migrations run on first import of `src/server/db/index.ts`. **`npm run db:migrate` is broken** (`database/migrate.ts` missing).
 
 Autobot off: ticks can still drive Technical/Kronos → pipeline if `TRADING_ENABLED`. `system.stop` does not stop MarketDataWorker.
 
@@ -60,7 +60,7 @@ Restricted LIVE file ceilings: $5k order, 3 positions, $1k daily loss — not a 
 
 Example: broker $2000, budget $100 → $101 BUY fails allocation.
 
-Weak: equity fallback `|| 10000`; Autobot-off tick path; `PAPER_TRADING_ONLY` does not force BrokerManager paper.
+Weak: equity fallback `|| 10000`; Autobot-off tick path. `PAPER_TRADING_ONLY=true` **does** refuse LIVE: `BrokerManager.setLiveMode(true)` and `AlpacaBroker.liveTrading()` / LIVE authenticate throw (`Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced in environment.`).
 
 ## Brokers
 

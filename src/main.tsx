@@ -39,12 +39,15 @@ import App from './App.tsx';
 import './index.css';
 import { WebSocketProvider } from './context/WebSocketContext';
 import { ExplainerSettingsProvider } from './context/ExplainerSettingsContext';
+import { WealthAffirmationSettingsProvider } from './context/WealthAffirmationSettingsContext';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <WebSocketProvider>
       <ExplainerSettingsProvider>
-        <App />
+        <WealthAffirmationSettingsProvider>
+          <App />
+        </WealthAffirmationSettingsProvider>
       </ExplainerSettingsProvider>
     </WebSocketProvider>
   </StrictMode>,

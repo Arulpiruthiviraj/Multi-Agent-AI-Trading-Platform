@@ -61,6 +61,22 @@ export const backtestLimiter = rateLimit({
   message: { error: 'Backtest rate limit exceeded. Try again in a few minutes.' },
 });
 
+// MODE B Historical Replay Lab (create/start/download). Interactive operators retry often while
+// tuning forms; share neither the VectorBT 5/5min budget nor the trading limiter. Still bounded
+// so a runaway tab cannot spam RiskEngine→OMS replay loops forever.
+export const replayLabLimiter = rateLimit({
+  windowMs: 5 * MINUTE,
+  limit: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    error: 'Historical replay rate limit exceeded. Wait a few minutes, then retry create/start.',
+    code: 'REPLAY_LAB_RATE_LIMIT',
+    live: 'NO-GO',
+    canPlaceOrders: false,
+  },
+});
+
 /**
  * Hand-rolled sliding-window counter for WebSocket *connection creation*, keyed by remote IP.
  * Not an express-rate-limit instance because the raw `httpServer.on('upgrade', ...)` handler

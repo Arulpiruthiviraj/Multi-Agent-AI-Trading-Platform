@@ -67,8 +67,23 @@ export const v2Router = Router();
 mountResearchRoutes(v2Router);
 
 v2Router.get('/live-readiness', (_req, res) => {
-  const report = evaluateLiveReadiness();
-  res.json({ ok: true, ...report, live: report.result === 'LIVE_READY' ? 'GO' : 'NO-GO' });
+  try {
+    const report = evaluateLiveReadiness();
+    res.json({ ok: true, ...report, live: report.result === 'LIVE_READY' ? 'GO' : 'NO-GO' });
+  } catch (e: any) {
+    // Fail closed: never invent LIVE_READY when the engine throws.
+    res.status(200).json({
+      ok: false,
+      result: 'LIVE_NO_GO',
+      tradingEdgeScore: 8,
+      organicPaper: 'NOT_ESTABLISHED',
+      canadianLive: 'NOT_AVAILABLE',
+      failedMandatory: ['LIVE_READINESS_ENGINE_ERROR'],
+      canPlaceOrdersViaResearch: false,
+      live: 'NO-GO',
+      error: e?.message || String(e),
+    });
+  }
 });
 
 v2Router.get('/agents/performance', async (req, res) => {
@@ -126,11 +141,7 @@ v2Router.get('/data/portfolio', async (req, res) => {
   }
 });
 
-// Thin delegate to the same real BacktestEngine that POST /api/v1/backtest uses - this used to be
-// a second, independently-fabricated result set (trades:450, winRate:64.2%...) returned via a
-// setTimeout regardless of strategy/symbol/timeframe. No frontend caller was found for this route
-// (confirmed via repo-wide grep) - kept as a real endpoint rather than removed, but no longer
-// duplicating fake logic.
+// Thin delegate to SAME_BAR BacktestEngine — quarantined from promotion (NEXT_BAR canonical only).
 v2Router.post('/system/backtest', backtestLimiter, async (req, res) => {
   try {
     const { symbol, symbols, startDate, endDate, timeframe, initialCash } = req.body || {};
@@ -142,7 +153,14 @@ v2Router.post('/system/backtest', backtestLimiter, async (req, res) => {
       return res.status(400).json({ ok: false, error: "startDate and endDate are required (ISO dates)" });
     }
     const result = await backtestEngine.run({ symbols: symbolList, startDate, endDate, timeframe, initialCash });
-    res.json({ ok: true, results: result });
+    res.json({
+      ok: true,
+      results: result,
+      quarantine: 'SAME_BAR_CLOSE_NOT_PROMOTABLE',
+      promotable: false,
+      live: 'NO-GO',
+      promotionPath: 'POST /api/v2/research/canonical/core',
+    });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }

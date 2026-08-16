@@ -64,8 +64,12 @@ integrationRouter.post("/brokers/:id/test", async (req: Request, res: Response) 
 integrationRouter.post("/brokers/:id/live-mode", tradingLimiter, async (req: Request, res: Response) => {
   const { id } = req.params;
   const { live, confirm } = req.body || {};
-  const result = await BrokerManager.getInstance().setLiveMode(id, !!live, confirm);
-  res.status(result.ok ? 200 : 400).json(result);
+  try {
+    const result = await BrokerManager.getInstance().setLiveMode(id, !!live, confirm);
+    res.status(result.ok ? 200 : 400).json(result);
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: e?.message || String(e) });
+  }
 });
 
 integrationRouter.post("/brokers/active", tradingLimiter, async (req: Request, res: Response) => {

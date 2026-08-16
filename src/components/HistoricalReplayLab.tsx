@@ -38,9 +38,16 @@ export default function HistoricalReplayLab() {
   });
 
   useEffect(() => {
-    fetch('/api/v2/research/replay/providers')
-      .then((r) => r.json())
-      .then((j) => setProviders(j.providers || []))
+    fetch('/api/v2/research/replay/providers', { credentials: 'same-origin' })
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          setError(j.error || `providers HTTP ${r.status}`);
+          setProviders([]);
+          return;
+        }
+        setProviders(j.providers || []);
+      })
       .catch((e) => setError(e.message));
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -90,8 +97,9 @@ export default function HistoricalReplayLab() {
       const symbols = form.symbols.split(',').map((s) => s.trim().toUpperCase()).filter(Boolean);
       const results = [];
       for (const symbol of symbols) {
-        const r = await fetch('/api/v2/research/datasets/download', {
+        const res = await fetch('/api/v2/research/datasets/download', {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             provider: form.dataProvider,
@@ -100,7 +108,13 @@ export default function HistoricalReplayLab() {
             startDate: form.startDate,
             endDate: form.endDate,
           }),
-        }).then((x) => x.json());
+        });
+        const r = await res.json().catch(() => ({}));
+        if (res.status === 429 || r.code === 'REPLAY_LAB_RATE_LIMIT') {
+          setError(r.error || 'Historical replay rate limit exceeded. Wait a few minutes, then retry.');
+          setBusy(false);
+          return;
+        }
         results.push(r);
       }
       const red = results.find((r) => r.quality?.quality === 'RED' || r.ok === false);
@@ -126,8 +140,9 @@ export default function HistoricalReplayLab() {
     setEvents([]);
     setEquity([]);
     try {
-      const created = await fetch('/api/v2/research/replay/create', {
+      const createRes = await fetch('/api/v2/research/replay/create', {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
@@ -138,7 +153,20 @@ export default function HistoricalReplayLab() {
           maxPositionSize: Number(form.allocationBudget),
           randomSeed: 1,
         }),
-      }).then((r) => r.json());
+      });
+      const created = await createRes.json().catch(() => ({}));
+      if (!createRes.ok) {
+        const retry = createRes.headers.get('Retry-After');
+        const rateLimited = createRes.status === 429 || created.code === 'REPLAY_LAB_RATE_LIMIT';
+        setError(
+          rateLimited
+            ? `${created.error || 'Historical replay rate limit exceeded.'}${retry ? ` Retry-After ${retry}s.` : ' Wait ~1–5 minutes, then retry.'}`
+            : (created.error || `create HTTP ${createRes.status}`),
+        );
+        setRun(created);
+        setBusy(false);
+        return;
+      }
       if (!created.ok && created.status === 'DATA_UNAVAILABLE') {
         setError(created.error || created.code);
         setRun(created);
@@ -152,11 +180,18 @@ export default function HistoricalReplayLab() {
         return;
       }
       setRun(created);
-      const started = await fetch(`/api/v2/research/replay/${created.replayId}/start?async=${asyncMode ? '1' : '0'}`, {
+      const startRes = await fetch(`/api/v2/research/replay/${created.replayId}/start?async=${asyncMode ? '1' : '0'}`, {
         method: 'POST',
+        credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ async: asyncMode }),
-      }).then((r) => r.json());
+      });
+      const started = await startRes.json().catch(() => ({}));
+      if (!startRes.ok) {
+        setError(started.error || `start HTTP ${startRes.status}`);
+        setBusy(false);
+        return;
+      }
       if (started.error && started.ok === false) {
         setError(started.error);
         setBusy(false);
@@ -240,7 +275,7 @@ export default function HistoricalReplayLab() {
                 value={form.costProfile}
                 onChange={(e) => setForm({ ...form, costProfile: e.target.value })}
               >
-                {['Base', 'Optimistic', 'Conservative', 'ZERO_COST_RESEARCH', 'REALISTIC_COST', 'CUSTOM_COST'].map((p) => (
+                {['Base', 'REALISTIC_COST', 'Conservative', 'Optimistic', 'ZERO_COST_RESEARCH', 'CUSTOM_COST'].map((p) => (
                   <option key={p} value={p}>{p}</option>
                 ))}
               </select>
@@ -259,6 +294,11 @@ export default function HistoricalReplayLab() {
         <label><input type="checkbox" checked={form.fractionalShares} onChange={(e) => setForm({ ...form, fractionalShares: e.target.checked })} /> Fractional</label>
         <label><input type="checkbox" checked={form.extendedHours} onChange={(e) => setForm({ ...form, extendedHours: e.target.checked })} /> Extended hours</label>
       </div>
+      {(form.costProfile === 'Optimistic' || form.costProfile === 'ZERO_COST_RESEARCH') && (
+        <div className="mb-3 text-[10px] font-mono text-amber-300 border border-amber-500/30 bg-amber-500/5 rounded px-2 py-1.5">
+          WARNING: {form.costProfile} is theoretical / near-zero cost — not live-readiness evidence. Prefer Base or REALISTIC_COST.
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-2 mb-4">
         <button type="button" disabled={busy} onClick={loadValidate} className="px-3 py-2 text-[10px] font-mono uppercase tracking-widest bg-slate-800 text-slate-200 rounded disabled:opacity-40">

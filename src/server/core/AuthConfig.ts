@@ -130,6 +130,7 @@ export function enforceAuthConfigOrExit(
     log.info('[SECURITY] Authentication is ENABLED (AUTH_PASSWORD configured).');
   } else if (!isProduction(env)) {
     ensureDevToken(env);
+    log.warn('WARNING: AUTH_PASSWORD NOT SET. API BOUND TO LOCALHOST ONLY.');
     log.warn(`[SECURITY] Mutating /api/v1 and /api/v2 require loopback or X-Argus-Dev-Token (token generated for this process; value is not logged).`);
   }
 }

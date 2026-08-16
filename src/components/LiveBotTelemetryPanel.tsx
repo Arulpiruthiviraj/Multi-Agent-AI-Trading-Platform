@@ -63,14 +63,16 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
 
   // Real executed trading metrics
   const totalExecutions = autoBotConfig.totalTrades || 0;
-  const [winRate, setWinRate] = useState(0);
-  const [upl, setUpl] = useState(0);
+  const [winRate, setWinRate] = useState<number | null>(null);
+  const [upl, setUpl] = useState<number | null>(null);
   
   useEffect(() => {
     fetch('/api/v1/pnl/analytics').then(r => r.json()).then(d => {
       if (d.summary) {
-        setWinRate(d.summary.winRate || 0);
-        setUpl(d.summary.totalProfitLoss || 0);
+        const wr = d.summary.winRate;
+        setWinRate(typeof wr === 'number' && Number.isFinite(wr) && d.summary.sampleSize > 0 ? wr : null);
+        const pnl = d.summary.totalProfitLoss;
+        setUpl(typeof pnl === 'number' && Number.isFinite(pnl) ? pnl : null);
       }
     }).catch(console.error);
   }, [autoBotConfig.enabled]);
@@ -111,7 +113,7 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
                <span className="text-[10px] uppercase font-mono tracking-widest">Live Win Rate</span>
             </div>
             <div className="text-2xl font-bold text-emerald-400 font-mono">
-               {winRate.toFixed(1)}%
+               {winRate == null ? 'AWAITING_EVIDENCE' : `${winRate.toFixed(1)}%`}
             </div>
          </div>
 
@@ -120,8 +122,8 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
                <Zap size={12} />
                <span className="text-[10px] uppercase font-mono tracking-widest">Total Live PNL</span>
             </div>
-            <div className={`text-2xl font-bold font-mono ${upl >= 0 ? 'text-sky-400' : 'text-rose-400'}`}>
-               {upl >= 0 ? '+' : '-'}${Math.abs(upl).toFixed(2)}
+            <div className={`text-2xl font-bold font-mono ${upl == null ? 'text-slate-500' : upl >= 0 ? 'text-sky-400' : 'text-rose-400'}`}>
+               {upl == null ? 'N/A' : `${upl >= 0 ? '+' : '-'}$${Math.abs(upl).toFixed(2)}`}
             </div>
          </div>
          

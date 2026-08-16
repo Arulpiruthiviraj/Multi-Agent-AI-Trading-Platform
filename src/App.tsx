@@ -58,6 +58,11 @@ import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
 import DiagnosticCenter from "./components/DiagnosticCenter";
 import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
 import LiveReadinessBanner from "./components/LiveReadinessBanner";
+import WealthAffirmationOverlay from "./components/WealthAffirmationOverlay";
+import HyperAbundanceVortex from "./components/HyperAbundanceVortex";
+import DivineWealthOverlay from "./components/DivineWealthOverlay";
+import { WealthAffirmationToggle } from "./components/WealthAffirmationToggle";
+import { useWealthAffirmationSettings } from "./context/WealthAffirmationSettingsContext";
 import WeightAdjustmentVisualizer from "./components/WeightAdjustmentVisualizer";
 import GuardrailsPanel from "./components/GuardrailsPanel";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
@@ -798,67 +803,16 @@ export const RiskExposureDashboard = ({ dailyLossCap }: { dailyLossCap: number }
                <Crosshair size={14} className="text-emerald-500" />
                Position Size Optimizer (Kelly Criterion)
              </span>
-             <span className="text-[9px] text-slate-600">PROBABILITY ENGINE</span>
+             <span className="text-[9px] text-amber-500/80">AWAITING ORGANIC PAPER EVIDENCE</span>
            </h4>
-
-           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-             {[
-               { symbol: "BTC/USD", winRate: 0.55, riskReward: 1.5 },
-               { symbol: "ETH/USD", winRate: 0.45, riskReward: 2.0 },
-               { symbol: "SOL/USD", winRate: 0.60, riskReward: 1.2 }
-             ].map(asset => {
-               const W = asset.winRate;
-               const R = asset.riskReward;
-               const kellyFraction = (W - ((1 - W) / R)) * 100;
-               const halfKelly = kellyFraction / 2;
-               
-               return (
-                 <div key={asset.symbol} className="bg-[#1a212d] border border-slate-800 rounded p-3 relative overflow-hidden transition-all hover:border-emerald-500/30">
-                   <div className="absolute top-0 right-0 p-2 opacity-[0.03]">
-                     <Target size={60} className={kellyFraction > 0 ? "text-emerald-500" : "text-rose-500"} />
-                   </div>
-                   <div className="flex justify-between items-center mb-3 z-10 relative">
-                     <span className="text-sm font-bold text-slate-200 font-mono tracking-wider">{asset.symbol}</span>
-                     <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded ${kellyFraction > 0 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'}`}>
-                       {kellyFraction > 0 ? 'EDGE FOUND' : 'NO EDGE'}
-                     </span>
-                   </div>
-                   
-                   <div className="grid grid-cols-2 gap-2 mb-3 z-10 relative">
-                     <div className="flex flex-col">
-                       <span className="text-[9px] font-mono text-slate-500 tracking-wider">WIN RATE (W)</span>
-                       <span className="text-xs font-mono text-slate-300 font-bold">{(W * 100).toFixed(1)}%</span>
-                     </div>
-                     <div className="flex flex-col">
-                       <span className="text-[9px] font-mono text-slate-500 tracking-wider">RISK/REWARD (R)</span>
-                       <span className="text-xs font-mono text-slate-300 font-bold">{R.toFixed(2)}</span>
-                     </div>
-                   </div>
-                   
-                   <div className="border-t border-slate-800/80 pt-3 z-10 relative">
-                     <div className="flex justify-between items-end mb-1">
-                       <span className="text-[10px] font-mono text-slate-400">Optimal (Full Kelly)</span>
-                       <span className={`text-sm font-mono font-bold ${kellyFraction > 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
-                         {kellyFraction > 0 ? `${kellyFraction.toFixed(2)}%` : '0.00%'}
-                       </span>
-                     </div>
-                     <div className="w-full bg-slate-900 rounded-full h-1.5 mb-2 border border-slate-800">
-                       <div className={`h-full rounded-full ${kellyFraction > 0 ? 'bg-emerald-500' : 'bg-rose-500'}`} style={{ width: `${Math.max(0, Math.min(100, kellyFraction))}%` }}></div>
-                     </div>
-                     
-                     <div className="flex justify-between items-center mt-2">
-                       <span className="text-[9px] font-mono text-slate-500">Conservative (Half Kelly)</span>
-                       <span className="text-[10px] font-mono text-indigo-400 font-bold">{halfKelly > 0 ? `${halfKelly.toFixed(2)}%` : '0.00%'}</span>
-                     </div>
-                   </div>
-                 </div>
-               );
-             })}
+           <div className="border border-amber-500/20 bg-amber-500/5 rounded p-4 text-[11px] font-mono text-slate-400 leading-relaxed">
+             Hardcoded BTC/ETH/SOL win-rate theater was removed. Kelly sizing requires a measured win rate and R:R from
+             organic PAPER closed trades (≥{30} fills) — not invented crypto probabilities. Until then this panel stays
+             UNAVAILABLE and does not claim EDGE FOUND.
            </div>
-           
            <div className="mt-4 text-[9px] font-mono text-slate-500 flex items-center justify-between border-t border-slate-800/80 pt-3">
               <span className="flex items-center gap-1"><Calculator size={10} className="text-slate-400" /> K = W - [(1 - W) / R]</span>
-              <span>Allocations shown as % of total trading capital.</span>
+              <span>Not live readiness. Not a trade signal.</span>
            </div>
          </div>
 
@@ -926,6 +880,7 @@ const CustomPnLLegend: React.FC<CustomPnLLegendProps> = ({ totalPnL, profitableD
  */
 export default function App() {
   const { subscribe } = useWebSocket();
+  const { enableWealthAffirmations, enableHyperAbundanceMode, enableDivineWealthMode } = useWealthAffirmationSettings();
   // Hoisted from further down in this component: several fetch-on-mount effects earlier in the
   // function body need to depend on this (see the /api/v1/autobot effect below) - a useEffect's
   // dependency array is evaluated synchronously during render, so referencing a const declared
@@ -2891,6 +2846,13 @@ export default function App() {
       )}
       <AppWalkthrough />
       {showCoach && <AICoachPanel onClose={() => setShowCoach(false)} />}
+      {enableDivineWealthMode ? (
+        <DivineWealthOverlay />
+      ) : enableHyperAbundanceMode ? (
+        <HyperAbundanceVortex />
+      ) : (
+        enableWealthAffirmations && <WealthAffirmationOverlay />
+      )}
       <LiveMarketNewsTicker />
       {enginesHalted && (
         <div className="bg-rose-600 px-4 py-1.5 flex justify-between items-center text-white">
@@ -6519,42 +6481,17 @@ export default function App() {
                   <p className="text-xs text-slate-500">Agent weights come from agent_performance_stats when ReflectionEngine scores real predictions — not decorative mock bars.</p>
                </div>
 
-               {/* Kelly Position Sizing Learner */}
+               {/* Kelly Position Sizing Learner — no fabricated fraction */}
                <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
                   <h3 className="text-sm font-bold text-white mb-2 uppercase tracking-wide flex items-center gap-2">
                     <Target size={16} className="text-indigo-400" />
                     KELLY POSITION-SIZING LEARNER
                   </h3>
-                  <p className="text-[10px] text-slate-400 font-mono mb-4">Last adjustment: <span className="text-slate-500 font-bold">UNAVAILABLE</span> — no fabricated VIX/allocation telemetry.</p>
-                  
-                  <div className="space-y-4">
-                     <div className="bg-[#111822] p-4 rounded border border-slate-800">
-                        <div className="flex justify-between items-center mb-2">
-                           <span className="text-xs font-bold text-white">Current Kelly Fraction (Scaled)</span>
-                           <span className="text-lg font-bold text-emerald-400">8.4%</span>
-                        </div>
-                        <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden mt-1 mb-2">
-                           <div className="bg-emerald-500 h-full w-[35%] relative">
-                              <div className="absolute top-0 right-0 bottom-0 w-1 bg-white/50"></div>
-                           </div>
-                        </div>
-                        <div className="flex justify-between text-[10px] font-mono">
-                           <span className="text-slate-500">0%</span>
-                           <span className="text-slate-500">Max Cap: 25%</span>
-                        </div>
-                     </div>
-                     
-                     <div className="grid grid-cols-2 gap-3">
-                        <div className="bg-[#111822] p-3 rounded border border-slate-800">
-                           <span className="text-[9px] uppercase font-mono text-slate-500 mb-1 block">Base Risk per Trade</span>
-                           <span className="text-sm font-bold text-white">1.5%</span>
-                        </div>
-                        <div className="bg-[#111822] p-3 rounded border border-slate-800">
-                           <span className="text-[9px] uppercase font-mono text-slate-500 mb-1 block">Dynamic Multiplier</span>
-                           <span className="text-sm font-bold text-emerald-400">0.8x</span>
-                        </div>
-                     </div>
-                  </div>
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-amber-400 mb-2">AWAITING_EVIDENCE</p>
+                  <p className="text-xs text-slate-500 leading-relaxed">
+                    Kelly fraction requires measured win rate and R:R from organic PAPER closed trades.
+                    Fabricated 8.4% / 1.5% / 0.8x telemetry was removed. Not live readiness.
+                  </p>
                </div>
             </div>
 
@@ -7985,7 +7922,13 @@ export default function App() {
                   API Keys & Integrations
                 </h2>
                 <div className="space-y-6">
-                    <ExplainerToggle variant="settings" />
+                    <div className="space-y-3">
+                      <h3 className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-[0.2em]">
+                        Preferences · Mindset
+                      </h3>
+                      <ExplainerToggle variant="settings" />
+                      <WealthAffirmationToggle />
+                    </div>
                     <div className="bg-[#0F141C] border border-slate-800 rounded-lg p-5 flex items-center justify-between gap-4">
                       <div>
                         <h3 className="text-xs font-mono font-bold text-slate-100 uppercase tracking-widest mb-1">System</h3>
@@ -8412,11 +8355,11 @@ export default function App() {
                                           </div>
                                           <div className="flex justify-between text-[11px]">
                                               <span className="text-slate-500">FITNESS (SHARPE):</span>
-                                              <span className="text-slate-500 font-bold">GATED</span>
+                                              <span className="text-amber-500/80 font-bold">AWAITING_EVIDENCE</span>
                                           </div>
                                           <div className="flex justify-between text-[11px]">
                                               <span className="text-slate-500">DEFLATED SHARPE (DSR):</span>
-                                              <span className="text-slate-500 font-bold">GATED</span>
+                                              <span className="text-amber-500/80 font-bold">AWAITING_EVIDENCE</span>
                                           </div>
                                       </div>
 
@@ -8448,13 +8391,16 @@ export default function App() {
 
                   </div>
 
-                  {/* Evolutionary History Accordion/List */}
+                  {/* Evolutionary History — fitness metrics gated until a real evaluation endpoint exists */}
                   {autoBotConfig.geneticPrompt?.performanceHistory?.length > 0 && (
                       <div className="mt-6 border-t border-slate-800 pt-4">
                           <h3 className="text-xs font-mono font-bold text-slate-300 uppercase tracking-widest mb-3 flex items-center gap-1">
                               <History size={13} className="text-slate-400" />
-                              Chromosome Mutation History (Fitness Tracking & Genetic Log)
+                              Chromosome Mutation History (log only)
                           </h3>
+                          <p className="text-[10px] font-mono text-amber-400/90 mb-3 uppercase tracking-widest">
+                            Sharpe / DSR columns gated — AWAITING_EVIDENCE (no Bailey DSR API for this surface)
+                          </p>
                           <div className="max-h-[160px] overflow-y-auto rounded border border-slate-800 bg-[#111822] font-mono text-[10px] divide-y divide-slate-850">
                               {autoBotConfig.geneticPrompt.performanceHistory.map((item: any, idx: number) => (
                                   <div key={idx} className="p-2.5 flex flex-col md:flex-row justify-between items-start md:items-center gap-2 hover:bg-slate-900/30">
@@ -8463,18 +8409,8 @@ export default function App() {
                                           <span className="bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded font-bold">{item.mutationType || "Mutation"}</span>
                                           <span className="text-slate-400 text-[9px]">{item.explanation}</span>
                                       </div>
-                                      <div className="flex items-center gap-4 text-right self-end md:self-auto shrink-0">
-                                          <div>
-                                              <span className="text-slate-500 text-[9px] block">SHARPE</span>
-                                              <span className="text-white font-bold">{item.sharpeRatio?.toFixed(2)}</span>
-                                          </div>
-                                          <div>
-                                              <span className="text-slate-500 text-[9px] block">DSR</span>
-                                              <span className="text-indigo-400 font-bold">{(item.dsr * 100).toFixed(1)}%</span>
-                                          </div>
-                                          <div className="text-slate-500 text-[9px]">
-                                              {new Date(item.timestamp).toLocaleTimeString()}
-                                          </div>
+                                      <div className="text-slate-500 text-[9px] shrink-0">
+                                          {item.timestamp ? new Date(item.timestamp).toLocaleTimeString() : '—'}
                                       </div>
                                   </div>
                               ))}

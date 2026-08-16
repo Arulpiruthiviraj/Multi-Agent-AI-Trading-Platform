@@ -89,6 +89,8 @@ import {  } from "drizzle-orm";
 import { BrokerManager } from "./src/brokers/BrokerManager.js";
 import { configRouter } from "./src/server/routes/configRoutes";
 import { v2Router } from "./src/server/routes/v2System";
+import { mountResearchRoutes } from "./src/server/routes/researchRoutes";
+import { evaluateLiveReadiness } from "./src/server/core/liveReadinessEngine";
 import { analyticsRouter } from "./src/server/routes/analyticsRoutes";
 import { webhooksRouter, triggerWebhooks } from "./src/server/routes/webhooks";
 import { generateContentWithRetry, cleanAndParseJSON } from "./src/server/ai/legacyGeminiHelpers";
@@ -666,6 +668,41 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
   app.use("/api/v1/config", configRouter);
   app.use("/api/v1", configRouter);
   app.use("/api/v2", v2Router);
+  // Belt-and-suspenders: ensure live-readiness is reachable even if a stale v2Router bundle
+  // somehow omitted the handler (banner polls this every 30s).
+  app.get('/api/v2/live-readiness', (_req, res) => {
+    try {
+      const report = evaluateLiveReadiness();
+      res.json({ ok: true, ...report, live: report.result === 'LIVE_READY' ? 'GO' : 'NO-GO' });
+    } catch (e: any) {
+      res.status(200).json({
+        ok: false,
+        result: 'LIVE_NO_GO',
+        tradingEdgeScore: 8,
+        organicPaper: 'NOT_ESTABLISHED',
+        canadianLive: 'NOT_AVAILABLE',
+        failedMandatory: ['LIVE_READINESS_ENGINE_ERROR'],
+        canPlaceOrdersViaResearch: false,
+        live: 'NO-GO',
+        error: e?.message || String(e),
+      });
+    }
+  });
+  // Phase 24 MODE B failsafe — second mount of the research route table. If the primary
+  // v2Router ever boots without these handlers (stale tsx graph / partial import), Express
+  // falls through unmatched routes to this router instead of the /api/* 404 catch-all.
+  {
+    const researchFailsafe = express.Router();
+    mountResearchRoutes(researchFailsafe);
+    app.use('/api/v2', researchFailsafe);
+    const replayPaths = ((researchFailsafe as any).stack || [])
+      .map((l: any) => l?.route?.path)
+      .filter((p: unknown): p is string => typeof p === 'string' && p.includes('replay'));
+    console.log(`[boot] research replay routes mounted (${replayPaths.length}): ${replayPaths.join(', ')}`);
+    if (!replayPaths.includes('/research/replay/create')) {
+      console.error('[boot] FATAL-ISH: /research/replay/create missing after mountResearchRoutes — Historical Replay Lab will 404');
+    }
+  }
   app.use("/api/v2/analytics", analyticsRouter);
   app.get('/api/v1/scheduler', (req, res) => {
     res.json({ tasks: scheduledTasks });
@@ -1620,7 +1657,10 @@ let portfolioState = loadPortfolio();
   });
 
   app.all('/api/*', (req, res) => {
-    res.status(404).json({ error: 'API route not found: ' + req.path });
+    // Prefer req.originalUrl so nested mount stripping does not hide the full path operators hit.
+    const shown = req.originalUrl?.split('?')[0] || req.path;
+    console.warn(`[api-404] ${req.method} ${shown}`);
+    res.status(404).json({ error: 'API route not found: ' + shown });
   });
 
   if (!isProd) {
@@ -1728,8 +1768,13 @@ let portfolioState = loadPortfolio();
       process.exit(1);
     }
   });
-  httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`Enterprise scale multi-agent backend running on port ${PORT}`);
+  // Fail-closed network posture: without AUTH_PASSWORD, bind loopback only so LAN/WAN cannot hit open APIs.
+  const bindHost = AUTH_ENABLED ? '0.0.0.0' : '127.0.0.1';
+  httpServer.listen(PORT, bindHost, () => {
+    if (!AUTH_ENABLED) {
+      console.warn('WARNING: AUTH_PASSWORD NOT SET. API BOUND TO LOCALHOST ONLY.');
+    }
+    console.log(`Enterprise scale multi-agent backend running on ${bindHost}:${PORT}`);
   });
 }
 

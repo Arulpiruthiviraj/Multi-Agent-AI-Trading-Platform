@@ -71,6 +71,9 @@ export class AlpacaBroker implements BrokerPlugin {
     this.baseUrl = 'https://paper-api.alpaca.markets';
   }
   liveTrading() {
+    if (process.env.PAPER_TRADING_ONLY === 'true') {
+      throw new Error('Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced in environment.');
+    }
     this.isPaper = false;
     this.baseUrl = 'https://api.alpaca.markets';
   }
@@ -119,6 +122,9 @@ export class AlpacaBroker implements BrokerPlugin {
     const explicitLive = credentials?.isLive;
     const mode = typeof credentials?.tradingMode === 'string' ? credentials.tradingMode.toUpperCase() : '';
     if (explicitLive === true || mode === 'LIVE') {
+      if (process.env.PAPER_TRADING_ONLY === 'true') {
+        throw new Error('Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced in environment.');
+      }
       this.isPaper = false;
       this.baseUrl = 'https://api.alpaca.markets';
     } else if (explicitLive === false || mode === 'PAPER') {

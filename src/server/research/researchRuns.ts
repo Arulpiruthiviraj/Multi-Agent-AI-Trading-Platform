@@ -50,6 +50,23 @@ export function recordResearchRun(result: CanonicalBacktestResult): ResearchRunR
   return rec;
 }
 
+/** Persist WFO/robustness gate snapshot beside a research run (opt-in disk). Never invents PASS. */
+export function recordEvidenceGates(
+  runId: string,
+  gates: Record<string, unknown>,
+): void {
+  if (process.env.ARGUS_WRITE_RESEARCH_PARQUET !== 'true') return;
+  const dir = join(researchDataDir(), 'runs', runId);
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'evidence_gates.json'), JSON.stringify({
+    ...gates,
+    promotable: false,
+    live: 'NO-GO',
+    canPlaceOrders: false,
+    recordedAt: new Date().toISOString(),
+  }, null, 2));
+}
+
 export function latestRunForStrategy(strategyId: string): ResearchRunRecord | null {
   let best: ResearchRunRecord | null = null;
   for (const rec of memory.values()) {

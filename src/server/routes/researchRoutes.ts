@@ -12,7 +12,7 @@ import { getVectorBTStatus, runResearchCli, compareEngines } from '../research/V
 import { createJob, getJob, updateJob } from '../research/researchJobs';
 import { runSmaCrossover, signalUsesOnlyClosesThrough } from '../research/smaCrossover';
 import { runGoldenWalkForward } from '../research/walkForward';
-import { backtestLimiter } from '../core/RateLimiters';
+import { backtestLimiter, replayLabLimiter } from '../core/RateLimiters';
 import { assertNoArbitraryCode, importResearchDataset } from '../research/importDataset';
 import { listRegistered, getRegistered } from '../research/datasetRegistry';
 import { freezeStrategyVersion, loadStrategySpec, listStrategySpecIds } from '../research/strategySpecs';
@@ -34,11 +34,23 @@ import { inspectResearchWarehouse } from '../research/warehouseInventory';
 import { tradingEdgeScore } from '../research/edgeScore';
 import { db } from '../db';
 import { trades } from '../db/schema';
+import { pauseReplay, resumeReplay, stopReplay, stepReplay, getReplayRun, getReplayTrades, getReplayEquity } from '../replay/FullArgusReplayEngine';
+import { exportReplayManifest, readReplayArtifact, exportTradesCsv, exportEquityCsv } from '../replay/replayStore';
 
 export function mountResearchRoutes(v2Router: Router): void {
   v2Router.get('/research/vectorbt/status', async (_req, res) => {
     const status = await getVectorBTStatus();
-    res.json({ ok: true, ...status, live: 'NO-GO', quantAutoEnabled: false });
+    res.json({
+      ok: true,
+      ...status,
+      strategyParity: 'FEATURE_SUBSET_PARITY',
+      fullStrategyParity: false,
+      promotionEvidence: false,
+      note: 'VectorBT/Python is FEATURE_SUBSET only until full StrategyContext parity. Not LIVE evidence.',
+      live: 'NO-GO',
+      quantAutoEnabled: false,
+      canPlaceOrders: false,
+    });
   });
 
   v2Router.get('/research/strategies', (_req, res) => {
@@ -427,9 +439,25 @@ export function mountResearchRoutes(v2Router: Router): void {
     const summary = summarizeOrganicPaper(rows, researchSafety.minPaperTrades);
     const rec = latestRunForStrategy(researchSafety.coreStrategyIds[0] ?? 'MOMENTUM_BREAKOUT');
     const recon = reconcilePaperVsResearch(rec?.manifest ?? null, rows);
+    const closed = summary.closedTradeCount ?? 0;
+    const sessions = summary.sessionCount ?? 0;
+    const soak = {
+      status: closed >= researchSafety.minPaperTrades && sessions >= researchSafety.minPaperSessions
+        ? 'SOAK_FLOOR_MET'
+        : 'SOAK_IN_PROGRESS',
+      minPaperTrades: researchSafety.minPaperTrades,
+      minPaperSessions: researchSafety.minPaperSessions,
+      closedTradeCount: closed,
+      sessionCount: sessions,
+      remainingTrades: Math.max(0, researchSafety.minPaperTrades - closed),
+      remainingSessions: Math.max(0, researchSafety.minPaperSessions - sessions),
+      note: 'Organic PAPER FILLED SELL only. Replay/shadow/overrides excluded. Cannot be fabricated.',
+      live: 'NO-GO' as const,
+    };
     res.json({
       ok: true,
       ...summary,
+      soak,
       reconciliation: recon,
       invented: false,
       live: 'NO-GO',
@@ -505,7 +533,7 @@ export function mountResearchRoutes(v2Router: Router): void {
     res.json({ ok: true, providers: listHistoricalProviders(), live: 'NO-GO', canPlaceOrders: false });
   });
 
-  v2Router.post('/research/datasets/download', backtestLimiter, async (req, res) => {
+  v2Router.post('/research/datasets/download', replayLabLimiter, async (req, res) => {
     try {
       assertNoArbitraryCode(req.body ?? {});
       const { getHistoricalProvider } = await import('../replay/HistoricalDataProviderRegistry');
@@ -534,7 +562,7 @@ export function mountResearchRoutes(v2Router: Router): void {
     }
   });
 
-  v2Router.post('/research/replay/create', backtestLimiter, async (req, res) => {
+  v2Router.post('/research/replay/create', replayLabLimiter, async (req, res) => {
     try {
       assertNoArbitraryCode(req.body ?? {});
       const { createReplayRun } = await import('../replay/FullArgusReplayEngine');
@@ -545,7 +573,7 @@ export function mountResearchRoutes(v2Router: Router): void {
     }
   });
 
-  v2Router.post('/research/replay/:id/start', backtestLimiter, async (req, res) => {
+  v2Router.post('/research/replay/:id/start', replayLabLimiter, async (req, res) => {
     const { startReplay } = await import('../replay/FullArgusReplayEngine');
     const asyncMode = req.query.async === '1' || req.body?.async === true;
     const row = await startReplay(String(req.params.id), { async: asyncMode });
@@ -554,27 +582,25 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   v2Router.post('/research/replay/:id/pause', (req, res) => {
-    const { pauseReplay } = require('../replay/FullArgusReplayEngine');
     res.json(pauseReplay(String(req.params.id)));
   });
   v2Router.post('/research/replay/:id/resume', (req, res) => {
-    const { resumeReplay } = require('../replay/FullArgusReplayEngine');
     res.json(resumeReplay(String(req.params.id)));
   });
   v2Router.post('/research/replay/:id/stop', (req, res) => {
-    const { stopReplay } = require('../replay/FullArgusReplayEngine');
     res.json(stopReplay(String(req.params.id)));
   });
   v2Router.post('/research/replay/:id/step', (req, res) => {
-    const { stepReplay } = require('../replay/FullArgusReplayEngine');
     res.json(stepReplay(String(req.params.id)));
   });
 
   v2Router.get('/research/replay/:id', (req, res) => {
-    const { getReplayRun } = require('../replay/FullArgusReplayEngine');
     const row = getReplayRun(String(req.params.id));
     if (!row) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
-    const { session, ...rest } = row;
+    // Loosely-typed by design (runs: Map<string, Record<string, unknown>> - real replay session
+    // shape varies by run state) - matches the `as any` convention already used elsewhere in this
+    // file for the same map (e.g. getReplayTrades below), not a new looseness introduced here.
+    const { session, ...rest } = row as any;
     res.json({
       ok: true,
       ...rest,
@@ -587,7 +613,6 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   v2Router.get('/research/replay/:id/events', (req, res) => {
-    const { getReplayRun } = require('../replay/FullArgusReplayEngine');
     const row = getReplayRun(String(req.params.id));
     if (!row) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
     const events = row.events || (row as any).session?.events || [];
@@ -595,7 +620,6 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   v2Router.get('/research/replay/:id/trades', (req, res) => {
-    const { getReplayTrades } = require('../replay/FullArgusReplayEngine');
     const trades = getReplayTrades(String(req.params.id));
     if (trades == null) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
     res.json({ ok: true, trades, live: 'NO-GO', executionEnvironment: 'REPLAY', organicPaper: false });
@@ -609,14 +633,12 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   v2Router.get('/research/replay/:id/equity', (req, res) => {
-    const { getReplayEquity } = require('../replay/FullArgusReplayEngine');
     const equity = getReplayEquity(String(req.params.id));
     if (equity == null) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
     res.json({ ok: true, equity, live: 'NO-GO' });
   });
 
   v2Router.get('/research/replay/:id/report', (req, res) => {
-    const { getReplayRun } = require('../replay/FullArgusReplayEngine');
     const row = getReplayRun(String(req.params.id));
     if (!row) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
     res.json({
@@ -634,12 +656,6 @@ export function mountResearchRoutes(v2Router: Router): void {
   v2Router.get('/research/replay/:id/export', (req, res) => {
     const format = String(req.query.format || 'manifest').toLowerCase();
     const id = String(req.params.id);
-    const {
-      exportReplayManifest,
-      readReplayArtifact,
-      exportTradesCsv,
-      exportEquityCsv,
-    } = require('../replay/replayStore');
     if (format === 'manifest') {
       return res.json({ ok: true, ...exportReplayManifest(id), live: 'NO-GO', format: 'manifest' });
     }

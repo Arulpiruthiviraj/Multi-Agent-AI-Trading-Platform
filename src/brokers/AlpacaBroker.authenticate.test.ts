@@ -40,4 +40,18 @@ describe('AlpacaBroker.authenticate live URL (Phase 20)', () => {
     await broker.authenticate({ apiKey: 'k', secretKey: 's' });
     expect(urls[0]).toMatch(/^https:\/\/paper-api\.alpaca\.markets/);
   });
+
+  it('throws on liveTrading() and LIVE authenticate when PAPER_TRADING_ONLY=true', async () => {
+    const prev = process.env.PAPER_TRADING_ONLY;
+    process.env.PAPER_TRADING_ONLY = 'true';
+    try {
+      const broker = new AlpacaBroker();
+      expect(() => broker.liveTrading()).toThrow(/Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced/);
+      await expect(broker.authenticate({ apiKey: 'k', secretKey: 's', isLive: true }))
+        .rejects.toThrow(/Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced/);
+    } finally {
+      if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
+      else process.env.PAPER_TRADING_ONLY = prev;
+    }
+  });
 });

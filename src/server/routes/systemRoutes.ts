@@ -266,9 +266,7 @@ systemRouter.get("/pnl/analytics", async (req: Request, res: Response) => {
   }
 });
 
-// Real historical replay - runs the same deterministic technical rules TechnicalAgent.ts uses
-// live against real Alpaca bars (backfilled/cached in ohlcv_bars). Replaces what used to be a
-// hardcoded {returnPct:15.5, sharpe:2.1, ...} response regardless of input.
+// SAME_BAR_CLOSE BacktestEngine — quarantined from promotion. Prefer POST /api/v2/research/canonical/*.
 systemRouter.post("/backtest", async (req: Request, res: Response) => {
   try {
     const { symbols, startDate, endDate, timeframe, initialCash } = req.body || {};
@@ -279,7 +277,14 @@ systemRouter.post("/backtest", async (req: Request, res: Response) => {
       return res.status(400).json({ error: "startDate and endDate are required (ISO dates)" });
     }
     const result = await backtestEngine.run({ symbols, startDate, endDate, timeframe, initialCash });
-    res.json(result);
+    res.json({
+      ...result,
+      ok: true,
+      quarantine: 'SAME_BAR_CLOSE_NOT_PROMOTABLE',
+      promotable: false,
+      live: 'NO-GO',
+      promotionPath: 'POST /api/v2/research/canonical/core (NEXT_BAR_OPEN only)',
+    });
   } catch (e: any) {
     const { diagnosticFromBacktestError } = await import('../diagnostics/buildDiagnostic');
     res.status(500).json({ error: e.message, diagnostic: diagnosticFromBacktestError(e.message) });

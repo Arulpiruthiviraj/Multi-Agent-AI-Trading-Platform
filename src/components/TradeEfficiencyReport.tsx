@@ -37,7 +37,10 @@ const CustomTooltip = ({ active, payload, label }: any) => {
       <div className="bg-[#111822] border border-slate-700 p-3 rounded shadow-lg">
         <p className="text-white font-mono text-xs font-bold mb-2">{label}</p>
         <p className="text-slate-400 font-mono text-[10px]">
-          Win Rate: <span className="text-emerald-400">{point.winRate !== null ? `${point.winRate}%` : 'N/A'}</span>
+          Win Rate:{' '}
+          <span className="text-emerald-400">
+            {point.winRate !== null && point.totalPredictions > 0 ? `${point.winRate}%` : 'N/A'}
+          </span>
           {point.totalPredictions > 0 && <span className="text-slate-600"> ({point.totalPredictions} evaluated)</span>}
         </p>
         <p className="text-slate-400 font-mono text-[10px] mt-1">
@@ -84,7 +87,12 @@ export default function TradeEfficiencyReport() {
   // recharts needs a numeric field even for "N/A" bars - render nulls as 0-height bars rather
   // than dropping the agent from the chart entirely, so a reader can still see which agents have
   // no real latency/win-rate data yet.
-  const chartData = data?.map(d => ({ ...d, winRateChart: d.winRate ?? 0, latencyChart: d.avgLatencyMs ?? 0 })) ?? [];
+  const chartData = data?.map(d => ({
+    ...d,
+    // 0 evaluated outcomes is not a measured 0% win rate — keep the bar empty (N/A).
+    winRateChart: d.winRate == null || d.totalPredictions <= 0 ? null : d.winRate,
+    latencyChart: d.avgLatencyMs == null ? null : d.avgLatencyMs,
+  })) ?? [];
 
   return (
     <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6 mb-6">
