@@ -34,6 +34,7 @@
  */
 
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter';
+import { tradingSafety } from '../server/config/tradingSafety';
 
 export class InternalPaperBroker implements BrokerPlugin {
   async initialize() {
@@ -62,7 +63,7 @@ export class InternalPaperBroker implements BrokerPlugin {
   name = 'Argus Internal Simulator';
   isPaper = true;
   
-  private cash: number = 100000;
+  private cash: number = tradingSafety.internalPaperDefaultCash;
   private _positions: Map<string, Position> = new Map();
   private _orders: Map<string, Order> = new Map();
   

@@ -23,11 +23,14 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { marketDataWorker } from './MarketDataWorker';
+import { runtimeIntervals } from '../config/runtimeIntervals';
+import { quantThresholds } from '../config/quantThresholds';
 
-const CHECK_INTERVAL_MS = 60_000; // matches this app's other agent-cadence timers (Fundamental 60s, Macro 75s, PortfolioMonitor 60s)
-export const DIVERGENCE_THRESHOLD_PCT = 0.5;
+const CHECK_INTERVAL_MS = runtimeIntervals.marketDataCrossCheckMs;
+export const DIVERGENCE_THRESHOLD_PCT = quantThresholds.priceSourceDivergencePct;
 
 export function computeDivergencePct(alpacaPrice: number, questradePrice: number): number {
   return Math.abs(alpacaPrice - questradePrice) / questradePrice * 100;
@@ -90,7 +93,7 @@ export class MarketDataCrossChecker {
           console.warn(
             `[MarketDataCrossChecker] ${symbol}: Alpaca ${alpacaPrice} vs Questrade ${questradePrice} (${payload.divergencePct}% divergence)`
           );
-          eventBus.emit('MARKET_DATA_SOURCE_DISCREPANCY', payload);
+          eventBus.emit(EVENTS.MARKET_DATA_SOURCE_DISCREPANCY, payload);
         }
       } catch (e: any) {
         console.error(`[MarketDataCrossChecker] Questrade quote failed for ${symbol}: ${e.message}`);

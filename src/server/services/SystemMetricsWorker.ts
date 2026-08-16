@@ -34,6 +34,8 @@
  */
 
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 import os from 'os';
 
 export class SystemMetricsWorker {
@@ -56,7 +58,7 @@ export class SystemMetricsWorker {
     eventBus.on('ORDER_EXECUTED', () => this.recordEvent('order-management'));
     eventBus.on('LEARNED_NEW_RULE', () => this.recordEvent('reflection-engine'));
 
-    this.intervalId = setInterval(() => this.broadcastMetrics(), 2000);
+    this.intervalId = setInterval(() => this.broadcastMetrics(), runtimeIntervals.systemMetricsMs);
   }
 
   stop() {
@@ -90,7 +92,7 @@ export class SystemMetricsWorker {
      
      const systemMemory = process.memoryUsage();
      
-     eventBus.publish('SYSTEM_METRICS', {
+     eventBus.publish(EVENTS.SYSTEM_METRICS, {
         processes: this.processStats,
         system: {
             heapUsed: Math.floor(systemMemory.heapUsed / 1024 / 1024),

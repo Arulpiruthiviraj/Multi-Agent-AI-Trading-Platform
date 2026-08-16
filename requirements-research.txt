@@ -1,0 +1,4 @@
+vectorbt>=0.27.0
+numpy>=1.26.0
+pandas>=2.0.0
+pyarrow>=14.0.0

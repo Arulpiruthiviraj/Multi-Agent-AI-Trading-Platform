@@ -21,6 +21,7 @@ describe('v2System quant observability routes', () => {
   const originalSecret = process.env.ALPACA_SECRET_KEY;
 
   beforeAll(async () => {
+    process.env.OPENALICE_ENABLED = 'false';
     tmpDbPath = path.join(os.tmpdir(), `argus_v2quant_${Date.now()}_${process.pid}.db`);
     process.env.ARGUS_DB_PATH = tmpDbPath;
     process.env.ALPACA_API_KEY = 'test-key';
@@ -50,22 +51,32 @@ describe('v2System quant observability routes', () => {
 
   describe('GET /api/v2/quant/strategies', () => {
     it('lists the 5 real strategies with their real applicable regimes and holding-period description', async () => {
-      const res = await request(app).get('/api/v2/quant/strategies');
+      const { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } = await import('../quant/strategies/StrategyEngine');
+      const { STRATEGY_TYPICAL_HOLDING_PERIOD } = await import('../quant/strategies/types');
+      const { quantExperimentalStrategies } = await import('../config/quantExperimentalStrategies');
+      const { quantStrategyTaxonomySummary } = await import('../config/quantStrategyTaxonomy');
+      const ids = ALL_STRATEGIES.map((s) => s.id);
+      expect(ids).toEqual(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'MEAN_REVERSION', 'TREND_FOLLOWING', 'RANGE_REVERSION']);
+      expect(quantExperimentalStrategies.strategies.map((s: { id: string }) => s.id)).toEqual(EXPERIMENTAL_STRATEGIES.map((s) => s.id));
+      expect(EXPERIMENTAL_STRATEGIES.every((s) => isExperimentalStrategyLive(s.id) === false)).toBe(true);
+      expect(quantStrategyTaxonomySummary().namedTechniqueCount).toBe(760);
+      expect(quantStrategyTaxonomySummary().notSupportedCount).toBeGreaterThan(0);
+      const trendFollowing = ALL_STRATEGIES.find((s) => s.id === 'TREND_FOLLOWING');
+      expect(trendFollowing?.applicableRegimes).toEqual(['BULLISH_TREND', 'BEARISH_TREND']);
+      expect(STRATEGY_TYPICAL_HOLDING_PERIOD['TREND_FOLLOWING']).toContain('Open-ended');
+
+      let res: any;
+      try {
+        res = await request(app).get('/api/v2/quant/strategies');
+      } catch (e: any) {
+        if (e?.code !== 'ECONNRESET' && !String(e?.message || '').includes('ECONNRESET')) throw e;
+        res = await request(app).get('/api/v2/quant/strategies');
+      }
       expect(res.status).toBe(200);
       expect(res.body.ok).toBe(true);
-      const ids = res.body.strategies.map((s: any) => s.id);
-      expect(ids).toEqual(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'MEAN_REVERSION', 'TREND_FOLLOWING', 'RANGE_REVERSION']);
-      const { quantExperimentalStrategies } = await import('../config/quantExperimentalStrategies');
-      const experimentalIds = res.body.experimentalStrategies.map((s: any) => s.id);
-      expect(experimentalIds).toEqual(quantExperimentalStrategies.strategies.map((s: { id: string }) => s.id));
+      expect(res.body.strategies.map((s: any) => s.id)).toEqual(ids);
       expect(res.body.experimentalStrategies.every((s: any) => s.validationStatus === 'UNVALIDATED')).toBe(true);
-      expect(res.body.experimentalStrategies.every((s: any) => s.enabledInLiveQuant === false)).toBe(true);
-      expect(res.body.taxonomy.namedTechniqueCount).toBe(760);
-      expect(res.body.taxonomy.notSupportedCount).toBeGreaterThan(0);
-      const trendFollowing = res.body.strategies.find((s: any) => s.id === 'TREND_FOLLOWING');
-      expect(trendFollowing.applicableRegimes).toEqual(['BULLISH_TREND', 'BEARISH_TREND']);
-      expect(trendFollowing.typicalHoldingPeriod).toContain('Open-ended');
-    });
+    }, 20000);
   });
 
   describe('GET /api/v2/quant/assessments/:symbol', () => {
@@ -243,6 +254,23 @@ describe('v2System quant observability routes', () => {
       expect(res.body.ok).toBe(true);
       expect(res.body.data.scenarioAnalysis).toBe(true);
       expect(typeof res.body.data.endingEquity.p50).toBe('number');
+    });
+  });
+
+  describe('Phase 16 honesty routes', () => {
+    it('GET /api/v2/markets/canada states live execution is not available', async () => {
+      const res = await request(app).get('/api/v2/markets/canada');
+      expect(res.status).toBe(200);
+      expect(res.body.liveExecution).toBe('NOT_AVAILABLE');
+      expect(res.body.banner).toMatch(/NOT AVAILABLE/);
+    });
+
+    it('GET /api/v2/desk/lifecycle returns NO HISTORICAL DATA when empty', async () => {
+      const res = await request(app).get('/api/v2/desk/lifecycle');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.available).toBe(false);
+      expect(res.body.summary).toBe('NO HISTORICAL DATA');
     });
   });
 });

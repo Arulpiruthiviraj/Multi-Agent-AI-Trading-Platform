@@ -26,6 +26,25 @@ const defaultDbPath = path.join(
 );
 process.env.ARGUS_DB_PATH = defaultDbPath;
 
+// Isolate optional MCP/Chronos probes from the developer's .env. dotenv.config() does not
+// override keys that are already set, so this must be assigned (not deleted) before any
+// EncryptionService import. OpenAlice health against a half-open Guardian caused ECONNRESET
+// in v2System.quantObservability.test.ts (~20s = two 10s MCP timeouts). Tests that need a
+// live Guardian set ARGUS_TEST_ALLOW_OPENALICE=true before importing the service.
+if (process.env.ARGUS_TEST_ALLOW_OPENALICE !== 'true') {
+  process.env.OPENALICE_ENABLED = 'false';
+}
+
+// Do not share the developer's Chronos/Ollama sockets across Vitest workers. A live
+// local_ai_service.py on :8008 produced read ECONNRESET on unrelated supertest requests
+// (GET /api/v2/quant/strategies) when the full suite ran in parallel. Isolated file runs passed.
+if (process.env.ARGUS_TEST_ALLOW_CHRONOS !== 'true') {
+  process.env.LOCAL_AI_SERVICE_URL = 'http://127.0.0.1:9';
+}
+if (process.env.ARGUS_TEST_ALLOW_OLLAMA !== 'true') {
+  process.env.OLLAMA_HOST = 'http://127.0.0.1:9';
+}
+
 afterAll(() => {
   for (const suffix of ['', '-shm', '-wal']) {
     try { fs.unlinkSync(defaultDbPath + suffix); } catch { /* best-effort cleanup - may never have been created */ }

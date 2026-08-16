@@ -11,7 +11,10 @@ import os from 'os';
 // Mocking AIRouter directly is fully deterministic regardless of dotenv timing, and guarantees
 // this test never makes a real, slow, costly network call to a real AI provider.
 vi.mock('../ai/AIRouter', () => ({
-  AIRouter: { getInstance: () => ({ routeTask: async () => { throw new Error('No AI provider configured in this test.'); } }) },
+  AIRouter: { getInstance: () => ({
+    routeTask: async () => { throw new Error('No AI provider configured in this test.'); },
+    routeConsensus: async () => null,
+  }) },
 }));
 
 /**
@@ -79,7 +82,7 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     })));
   }
 
-  it('computes a real regime/market-context, persists a real quant_assessments row, and emits a real TRADE_IDEA_GENERATED as agent:QuantEngine', async () => {
+  it('computes a real regime/market-context, persists a real quant_assessments row, and does not emit a regime-only idea without EV', async () => {
     stubUptrendingFetch();
     vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSATEST']);
 
@@ -88,6 +91,9 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
 
     const agent = new QuantSignalAgent();
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
     const result = await agent.evaluateSymbol('QSATEST');
 
     eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
@@ -95,47 +101,19 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     expect(result).not.toBeNull();
     expect(result.regime.regime).toBe('BULLISH_TREND');
 
-    // Real trade idea, same shape ChiefTraderAgent.reviewIdea() already expects from every agent.
+    // Zero closed live trades => EV cannot be computed => live emit is withheld (regime fallback removed).
     const mine = receivedIdeas.find(i => i.symbol === 'QSATEST');
-    expect(mine).toBeDefined();
-    expect(mine.agent).toBe('QuantEngine');
-    expect(mine.side).toBe('BUY');
-    expect(mine.confidence).toBeGreaterThan(0);
-    expect(mine.confidence).toBeLessThanOrEqual(1);
+    expect(mine).toBeUndefined();
 
-    // Real persisted row, not just an in-memory return value.
     const persisted = (await db.select().from(schema.quantAssessments)).find((r: any) => r.symbol === 'QSATEST');
     expect(persisted).toBeDefined();
-    expect(persisted.emittedTradeIdea).toBe(true);
+    expect(persisted.emittedTradeIdea).toBe(false);
     expect(JSON.parse(persisted.regime).regime).toBe('BULLISH_TREND');
 
-    // Phase 6 - grouped/probabilistic scores are computed for both real candidate directions and
-    // persisted into the previously-reserved (until now, always-null) groupedScores column.
     const persistedScores = JSON.parse(persisted.groupedScores);
     expect(persistedScores.BUY.overallSetupScore).toBeGreaterThanOrEqual(0);
     expect(persistedScores.SELL.overallSetupScore).toBeGreaterThanOrEqual(0);
-    expect(result.groupedScores.BUY.trendScore).toBeGreaterThan(50); // real bullish regime -> BUY side favored
-
-    // Phase 6/8 wiring - the emitted trade idea carries the real structured quant detail
-    // (Chief Trader doesn't yet READ it - that's Phase 8 - but it's already real and present).
-    expect(mine.quantDetail).toBeDefined();
-    expect(mine.quantDetail.regime.regime).toBe('BULLISH_TREND');
-    expect(mine.quantDetail.groupedScores.overallSetupScore).toBeGreaterThanOrEqual(0);
-
-    // Phase 7 - real AI contradiction review is attempted for every real emitted idea. No AI
-    // provider is configured in this test env, so it degrades honestly (available:false, never a
-    // fabricated verdict) rather than throwing or blocking the real TRADE_IDEA_GENERATED emission
-    // above - but the field itself is real and present, and persisted the same way.
-    expect(mine.quantDetail.aiContradictionAnalysis).toBeDefined();
-    expect(mine.quantDetail.aiContradictionAnalysis.available).toBe(false);
-    expect(mine.quantDetail.featureSnapshot).toBeDefined();
-    expect(mine.quantDetail.featureSnapshot.momentum.rsiDivergence.isTradeSignal).toBe(false);
-    expect(mine.quantDetail.featureSnapshot.unavailable.marketBreadth.status).toBe('NOT_SUPPORTED');
-    expect(mine.quantDetail.featureSnapshot.unavailable.marketBreadth.tradingBlocked).toBe(false);
-    expect(mine.quantDetail.tradeThesis).toBeDefined();
-    expect(mine.quantDetail.tradeThesis.numericEvidenceSource).toBe('quant_engines');
-    expect(persisted.aiContradictionAnalysis).toBeTruthy();
-    expect(JSON.parse(persisted.aiContradictionAnalysis).available).toBe(false);
+    expect(result.groupedScores.BUY.trendScore).toBeGreaterThan(50);
   });
 
   it('skips a symbol honestly (no crash, no fabricated data) when Alpaca returns too few real bars', async () => {

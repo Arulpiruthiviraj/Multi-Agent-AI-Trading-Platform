@@ -12,8 +12,9 @@
  * ==========================================================
  */
 import { StrategyContext, StrategyDefinition, StrategyEvaluation, scoreFromConditions } from './types';
+import { quantThresholds } from '../../config/quantThresholds';
 
-const NEAR_BOUNDARY_PCT = 1.5;
+const NEAR_BOUNDARY_PCT = quantThresholds.nearBoundaryPct;
 
 export const rangeReversion: StrategyDefinition = {
   id: 'RANGE_REVERSION',

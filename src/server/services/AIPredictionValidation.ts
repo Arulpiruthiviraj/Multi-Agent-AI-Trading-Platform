@@ -36,7 +36,9 @@ export interface AgentPredictionValidation {
   statisticallyMeaningful: boolean; // fewer than MIN_SAMPLE_SIZE directional, evaluated predictions - do not trust the numbers above yet
 }
 
-export const MIN_SAMPLE_SIZE_FOR_PREDICTION_VALIDATION = 20; // matches this codebase's existing convention (BacktestEngine.MIN_SAMPLE_SIZE_FOR_TRUST, ExpectedValue.MIN_SAMPLE_SIZE_FOR_KELLY) - reused, not reinvented
+import { tradingSafety } from '../config/tradingSafety';
+
+export const MIN_SAMPLE_SIZE_FOR_PREDICTION_VALIDATION = tradingSafety.minSampleSizeForTrust;
 
 /**
  * Real, per-agent aggregation. `sinceIso` optionally bounds the window (e.g. "only predictions

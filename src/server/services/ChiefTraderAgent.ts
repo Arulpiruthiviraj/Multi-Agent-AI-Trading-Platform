@@ -46,10 +46,12 @@ import { openAliceVerificationService } from '../integrations/openalice/OpenAlic
 import { recordConsensusTransaction } from '../core/TransactionRegistry';
 import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
 import { tradingSafety } from '../config/tradingSafety';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 import { agentWeightConfig, defaultAgentWeights } from '../config/agentWeights';
 import { EVENTS } from '../core/eventNames';
 import { parseResearchNote, isBullBearResearchEnabled } from '../ai/research/parseResearchNote';
 import { bullBearResearchConfig } from '../config/bullBearResearch';
+import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
@@ -99,10 +101,10 @@ export class ChiefTraderAgent {
        // Keep ideas for symbols whose debate is still in flight - wiping them would make the
        // eventual debate completion evaluate an empty set and silently drop the original thesis.
        this.recentIdeas = this.recentIdeas.filter(i => (this.pendingDebates.get(i.symbol) || 0) > 0);
-    }, 60000);
+    }, runtimeIntervals.chiefTraderIdeaTtlMs);
     
     // Sync dynamic weights from database every 10 seconds
-    setInterval(() => this.syncWeights(), 10000);
+    setInterval(() => this.syncWeights(), runtimeIntervals.chiefTraderWeightSyncMs);
     this.syncWeights();
   }
   
@@ -391,6 +393,28 @@ export class ChiefTraderAgent {
     // result is "not yet, waiting for more evidence," not just on a successful approval.
     eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, { traceId, symbol, approved, confidence: approvedConfidence, side: approvedSide, threshold: CONSENSUS_APPROVAL_THRESHOLD });
 
+    for (const e of approvedEvidence) {
+      if (e.side !== 'BUY' && e.side !== 'SELL' && e.side !== 'HOLD') continue;
+      recordPitLive({
+        kind: e.agent === 'NewsAgent' ? 'NEWS_AGENT' : 'AGENT_REASONING',
+        symbol,
+        agent: e.agent,
+        side: e.side,
+        confidence: e.confidence,
+        payloadJson: JSON.stringify({ traceId, reasoning: e.reasoning, currentPrice: e.currentPrice }),
+        source: 'ChiefTraderAgent',
+      });
+    }
+    recordPitLive({
+      kind: 'CHIEF_TRADER',
+      symbol,
+      agent: 'ChiefTrader',
+      side: approved ? approvedSide : 'HOLD',
+      confidence: approvedConfidence,
+      payloadJson: JSON.stringify({ traceId, approved, reason }),
+      source: 'ChiefTraderAgent',
+    });
+
     if (approved) {
        this.recentIdeas = this.recentIdeas.filter(i => i.symbol !== symbol);
 
@@ -425,6 +449,8 @@ export class ChiefTraderAgent {
          supportingQuantDetail: this.buildSupportingQuantDetail(approvedEvidence, approvedPrice),
        });
 
+       eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'APPROVED', side: approvedSide, reason });
+
        // Non-blocking, optional independent second opinion (OPENALICE_INTEGRATION_AUDIT.md Phase 3/4).
        // Fire-and-forget: never awaited, never gates this approval or the RiskEngine call that
        // follows it. A no-op when OpenAlice isn't configured (see OpenAliceVerificationService).
@@ -445,6 +471,8 @@ export class ChiefTraderAgent {
        }
     } else {
        console.log(`[ChiefTrader] NO TRADE on ${symbol}. ${reason || `Current confidence: ${(result.confidence*100).toFixed(1)}%`}`);
+       eventBus.emit(EVENTS.DESK_NO_TRADE, { traceId, symbol, side: approvedSide, confidence: approvedConfidence, reason });
+       eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'NO_TRADE', reason });
     }
   }
 

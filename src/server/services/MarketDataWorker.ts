@@ -14,10 +14,12 @@
 
 import WebSocket from 'ws';
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
-const RECONNECT_MS = 5000;
+const RECONNECT_MS = runtimeIntervals.marketDataReconnectMs;
 
 function defaultSubscribeSymbols(): string[] {
   try {
@@ -82,7 +84,7 @@ export class MarketDataWorker {
   start() {
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       console.log("[MarketDataWorker] No Alpaca keys provided. MarketDataWorker will idle in disconnected state without fabricating data.");
-      eventBus.emit("MARKET_DATA_DISCONNECTED", { reason: "Missing API keys" });
+      eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: "Missing API keys" });
       return;
     }
     const state = this.ws?.readyState;
@@ -96,7 +98,7 @@ export class MarketDataWorker {
     this.tearDownSocket();
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       this.lastError = 'ALPACA_API_KEY or ALPACA_SECRET_KEY unset';
-      eventBus.emit("MARKET_DATA_DISCONNECTED", { reason: "Missing API keys" });
+      eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: "Missing API keys" });
       return this.getFeedStatus();
     }
     this.connectAlpaca();
@@ -203,13 +205,13 @@ export class MarketDataWorker {
           if (this.disconnectedAt !== null) {
             const gapMs = Date.now() - this.disconnectedAt;
             console.warn(`[MarketDataWorker] Reconnected after a ${Math.round(gapMs / 1000)}s data gap - any ticks during that window were not received (no tick-level backfill source exists).`);
-            eventBus.emit('MARKET_DATA_GAP_DETECTED', { gapMs, disconnectedAt: this.disconnectedAt, reconnectedAt: Date.now() });
+            eventBus.emit(EVENTS.MARKET_DATA_GAP_DETECTED, { gapMs, disconnectedAt: this.disconnectedAt, reconnectedAt: Date.now() });
             this.disconnectedAt = null;
           }
         } else if (msg.T === "error") {
           this.lastError = String(msg.msg || msg.code || 'Alpaca feed error');
           console.error(`[MarketDataWorker] Feed error: ${this.lastError}`);
-          eventBus.emit('MARKET_DATA_DISCONNECTED', { reason: this.lastError });
+          eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: this.lastError });
         } else if (msg.T === "q") {
           const timestampMs = new Date(msg.t).getTime();
           if (this.isDuplicateTick(msg.S, timestampMs, msg.bp)) continue;
@@ -240,7 +242,7 @@ export class MarketDataWorker {
       this.ws = null;
       if (this.disconnectedAt === null) this.disconnectedAt = Date.now();
       console.log("[MarketDataWorker] WebSocket closed. Reconnecting...");
-      eventBus.emit("MARKET_DATA_DISCONNECTED", { reason: this.lastError || "socket closed" });
+      eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: this.lastError || "socket closed" });
       this.clearReconnectTimer();
       this.reconnectTimer = setTimeout(() => this.connectAlpaca(), RECONNECT_MS);
     });

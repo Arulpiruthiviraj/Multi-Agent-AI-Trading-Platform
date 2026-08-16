@@ -722,7 +722,6 @@ export default function DigitalTwinVisualizer() {
           <AnimatePresence>
             {selectedNodeId && (
               <AgentFocusMode
-                key={selectedNodeId}
                 nodeId={selectedNodeId}
                 nodeLabel={String(nodes.find((n) => n.id === selectedNodeId)?.data?.label || selectedNodeId)}
                 seedEvents={events}

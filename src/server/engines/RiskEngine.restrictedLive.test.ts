@@ -29,6 +29,8 @@ describe('RiskEngine - restricted live mode caps (Phase 13)', () => {
     schema = await import('../db/schema');
     ({ riskEngine } = await import('./RiskEngine'));
     ({ tradingEngine } = await import('./TradingEngine'));
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
 
     delete process.env.ALPACA_API_KEY;
     delete process.env.ALPACA_SECRET_KEY;

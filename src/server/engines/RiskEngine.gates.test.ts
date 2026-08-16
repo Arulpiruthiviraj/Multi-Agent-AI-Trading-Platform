@@ -30,6 +30,8 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
     eventBus.on('RISK_GATE_EVALUATED', (e: any) => gateEvents.push(e));
     ({ riskEngine } = await import('./RiskEngine'));
     ({ tradingEngine } = await import('./TradingEngine'));
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
 
     // Deleting these BEFORE the imports above doesn't stick: EncryptionService.ts calls
     // dotenv.config() as a module-load side effect, and default dotenv behavior re-populates any
@@ -132,5 +134,22 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
     const gates = await db.select().from(schema.riskGateResults).where(eq(schema.riskGateResults.traceId, traceId));
     expect(gates.every((g: any) => g.passed)).toBe(true);
     expect(gates.map((g: any) => g.gateName)).toContain('symbol_concentration');
+  });
+
+  it('records autobot_enabled fail on BUY when Autobot is off', async () => {
+    tradingEngine.state.enabled = false;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    tradingEngine.state.dayStartDateStr = getTradingDateStr();
+    tradingEngine.state.dayStartEquity = 100000;
+    tradingEngine.state.dailyLossLimit = 5000;
+    const traceId = 'gates-test-autobot';
+    try {
+      await riskEngine.evaluateRisk({ traceId, symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+      const [assessment] = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));
+      expect(assessment.approved).toBe(false);
+      expect(assessment.rejectionGate).toBe('autobot_enabled');
+    } finally {
+      tradingEngine.state.enabled = true;
+    }
   });
 });

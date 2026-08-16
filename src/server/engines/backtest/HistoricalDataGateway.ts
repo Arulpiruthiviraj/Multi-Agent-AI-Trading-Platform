@@ -13,7 +13,7 @@
  */
 import { db } from '../../db';
 import * as schema from '../../db/schema';
-import { and, eq, gte, lte, asc, sql } from 'drizzle-orm';
+import { and, eq, gte, lte, asc, ne, sql } from 'drizzle-orm';
 import { tradingSafety } from '../../config/tradingSafety';
 import crypto from 'crypto';
 
@@ -223,6 +223,42 @@ export class HistoricalDataGateway {
       symbol: r.symbol,
       impactScore: r.impactScore,
       publishedAtMs: r.publishedAtMs,
+      finbertScore: r.finbertScore,
+    }));
+  }
+
+  /**
+   * Agent / ChiefTrader PIT rows knowable at simulated now, after windowStartMs.
+   * NEWS rows are queried separately (news-veto window). Never returns later publications.
+   */
+  async getPitAiRowsAsOf(symbol: string, nowMs: number, windowStartMs: number): Promise<Array<{
+    kind: string;
+    agent: string | null;
+    side: string | null;
+    confidence: number | null;
+    publishedAtMs: number;
+    payloadJson: string | null;
+    finbertScore: number | null;
+  }>> {
+    if (!Number.isFinite(nowMs) || !Number.isFinite(windowStartMs) || windowStartMs > nowMs) {
+      return [];
+    }
+    const rows = await db.select().from(schema.pitDecisionLedger)
+      .where(and(
+        ne(schema.pitDecisionLedger.kind, 'NEWS'),
+        eq(schema.pitDecisionLedger.symbol, symbol),
+        lte(schema.pitDecisionLedger.publishedAtMs, nowMs),
+        lte(schema.pitDecisionLedger.asOfMs, nowMs),
+        gte(schema.pitDecisionLedger.publishedAtMs, windowStartMs),
+      ))
+      .orderBy(asc(schema.pitDecisionLedger.publishedAtMs));
+    return rows.map(r => ({
+      kind: r.kind,
+      agent: r.agent,
+      side: r.side,
+      confidence: r.confidence,
+      publishedAtMs: r.publishedAtMs,
+      payloadJson: r.payloadJson,
       finbertScore: r.finbertScore,
     }));
   }

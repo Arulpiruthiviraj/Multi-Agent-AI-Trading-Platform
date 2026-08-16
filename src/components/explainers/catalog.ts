@@ -386,7 +386,7 @@ export const EXPLAINER_CATALOG = {
   recentTradesList: {
     title: 'Recent executed trades',
     what: 'Latest rows from the real `trades` table (live path), not portfolio.json.',
-    why: 'Legacy GET /api/v1/signals writes a different file and is not this list.',
+    why: 'Legacy GET /api/v1/signals is quarantined (HTTP 410) and is not this list.',
     how: 'SQLite trades. Empty means no fills on the EventBus path yet.',
   },
   aiEngineOps: {

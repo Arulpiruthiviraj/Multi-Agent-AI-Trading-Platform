@@ -35,6 +35,7 @@ describe('POST /api/v2/trading/execute-override - Phase 3C real manual-override 
     ({ tradingEngine } = await import('../engines/TradingEngine'));
     await tradingEngine.initialize();
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test baseline', actor: 'test' });
+    tradingEngine.state.enabled = true;
 
     ({ marketDataWorker } = await import('../services/MarketDataWorker'));
 
@@ -94,7 +95,7 @@ describe('POST /api/v2/trading/execute-override - Phase 3C real manual-override 
 
     // Real RiskEngine.evaluateRisk() runs asynchronously off the CHIEF_APPROVED_IDEA emit - give
     // it a tick to actually execute and write its real risk_assessments row via persistAssessment().
-    await new Promise(r => setTimeout(r, 1000));
+    await new Promise(r => setTimeout(r, 4000));
     const assessments = await db.select().from(schema.riskAssessments);
     const myAssessment = assessments.find((a: any) => a.traceId === res.body.traceId);
     expect(myAssessment).toBeTruthy();

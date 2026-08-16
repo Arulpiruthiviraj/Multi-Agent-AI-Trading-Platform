@@ -14,6 +14,7 @@ import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
 import crypto from 'crypto';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 export class ReflectionEngine {
   private intervalId: NodeJS.Timeout | null = null;
@@ -47,7 +48,7 @@ export class ReflectionEngine {
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.evaluateAgents(), 60000); // every 60s
+    this.intervalId = setInterval(() => this.evaluateAgents(), runtimeIntervals.reflectionEngineMs);
     console.log("[ReflectionEngine] Continuous Self-Improvement Loop started.");
   }
 

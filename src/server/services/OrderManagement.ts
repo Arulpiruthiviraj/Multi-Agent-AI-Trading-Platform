@@ -37,6 +37,7 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import { trades, fills } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
@@ -45,6 +46,7 @@ import { BrokerManager } from '../../brokers/BrokerManager';
 import { BrokerPlugin, Order, brokerSupports } from '../../brokers/BrokerAdapter';
 import { updateTransactionStatus } from '../core/TransactionRegistry';
 import { tradingSafety } from '../config/tradingSafety';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 // Shared with TradingEngine.cancelAllOpenOrders(), which previously only matched the literal
 // string 'PENDING' - real broker adapters (Alpaca) can report other non-terminal statuses
@@ -56,11 +58,9 @@ export function isTerminalOrderStatus(status: string | null | undefined): boolea
 
 // Follow-up must not race the initial pollForFill() window (default 4s) for the same order - only
 // pick up orders that window has already given up on.
-const FOLLOWUP_MIN_AGE_MS = 6000;
-// Bounded, not unbounded: stop actively re-polling (and log once) an order that's still
-// non-terminal after this long - an honest "we stopped checking" signal beats silent forever-polling.
+const FOLLOWUP_MIN_AGE_MS = runtimeIntervals.omsFollowUpMinAgeMs;
 const FOLLOWUP_MAX_AGE_MS = tradingSafety.omsFollowUpMaxAgeMs;
-const FOLLOWUP_INTERVAL_MS = 15000;
+const FOLLOWUP_INTERVAL_MS = runtimeIntervals.omsFollowUpIntervalMs;
 // Phase 1, item 3 (ARGUS_SAFETY_HARDENING_REPORT.md) - order-level crash recovery. Distinct from
 // FOLLOWUP_* above: followUpOpenOrders() only ever looks at rows that already have a real
 // brokerOrderId recorded - it structurally cannot help a row that crashed BEFORE that update
@@ -117,7 +117,7 @@ export class OrderManagementService {
   // acceptance. Poll briefly for a terminal status rather than recording "PENDING" forever with
   // no fill price - never fabricates a fill; if it's still pending after the timeout, that's
   // recorded honestly (and picked up later by followUpOpenOrders()).
-  private async pollForFill(broker: BrokerPlugin, orderId: string, timeoutMs = 4000, intervalMs = 400): Promise<Order | null> {
+  private async pollForFill(broker: BrokerPlugin, orderId: string, timeoutMs = runtimeIntervals.omsPollForFillTimeoutMs, intervalMs = runtimeIntervals.omsPollForFillIntervalMs): Promise<Order | null> {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, intervalMs));
@@ -165,7 +165,7 @@ export class OrderManagementService {
       price: fillPrice,
       filledAt: new Date().toISOString(),
     });
-    eventBus.emit('ORDER_FILLED', { traceId, transactionId, id: orderId, symbol, side, quantity: newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
+    eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
     return newQty;
   }
 
@@ -232,7 +232,7 @@ export class OrderManagementService {
       return;
     }
 
-    eventBus.emit('ORDER_SUBMITTED', { traceId, transactionId, id: orderId, symbol, side, quantity, submittedAt });
+    eventBus.emit(EVENTS.ORDER_SUBMITTED, { traceId, transactionId, id: orderId, symbol, side, quantity, submittedAt });
 
     let fillPrice = 0;
     let status = "PENDING";
@@ -275,7 +275,7 @@ export class OrderManagementService {
 
       const acceptedAt = new Date().toISOString();
       await db.update(trades).set({ brokerOrderId, status, price: fillPrice, acceptedAt }).where(eq(trades.id, orderId));
-      eventBus.emit('ORDER_ACCEPTED', { traceId, transactionId, id: orderId, brokerOrderId, status, acceptedAt });
+      eventBus.emit(EVENTS.ORDER_ACCEPTED, { traceId, transactionId, id: orderId, brokerOrderId, status, acceptedAt });
 
       let filledQuantity = brokerOrder.filledQuantity;
       if (status === 'PENDING' && brokerOrder.id) {

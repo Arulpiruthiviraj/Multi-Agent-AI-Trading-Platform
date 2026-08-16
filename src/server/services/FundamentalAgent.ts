@@ -12,12 +12,14 @@ import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './Ext
 import { coerceEnum, normalizeConfidence01, coerceString, TRADE_SIDE_VALUES } from '../ai/AIOutputValidator';
 import { logErrorSafely } from '../core/SecretRedaction';
 import crypto from 'crypto';
+import { runtimeIntervals } from '../config/runtimeIntervals';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 
 const UNKNOWN_FUNDAMENTALS = { peRatio: 'UNKNOWN', epsGrowth: 'UNKNOWN', debtToEquity: 'UNKNOWN' };
 // Fundamentals (P/E, EPS growth, debt/equity) are quarterly-cadence data in reality - refetching
 // every 60s was never going to see new information, only burn a 25-req/day quota shared across
 // 3 symbols and MacroAgent. 24h is generous relative to how often this data actually changes.
-const FUNDAMENTALS_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const FUNDAMENTALS_CACHE_MAX_AGE_MS = runtimeIntervals.fundamentalsCacheMaxAgeMs;
 
 // Hardening pass, Phase 7: the 24h cache above only ever gated the raw AlphaVantage fetch - every
 // 60s tick that hit a cache HIT for the raw data still went on to call the real, paid Gemini API
@@ -39,7 +41,7 @@ export class FundamentalAnalysisAgent {
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.analyzeFundamentals(), 60000);
+    this.intervalId = setInterval(() => this.analyzeFundamentals(), runtimeIntervals.fundamentalAgentMs);
   }
 
   stop() {
@@ -89,6 +91,7 @@ export class FundamentalAnalysisAgent {
   }
 
   private async analyzeFundamentals() {
+    if (!isLiveIdeaGenerationEnabled()) return;
     // We just pick a symbol round-robin or randomly from our list
     const symbol = this.watchedSymbols[Math.floor(Date.now() / 60000) % this.watchedSymbols.length];
     const traceId = crypto.randomUUID();

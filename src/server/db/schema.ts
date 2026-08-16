@@ -890,6 +890,21 @@ export const quantBacktestDecisionLog = sqliteTable('quant_backtest_decision_log
  * clock at which a replay may read it. Ingestion MUST reject publishedAtMs > asOfMs
  * (look-ahead). Queries MUST filter publishedAtMs <= simulated now.
  */
+export const tradeLifecycleTransitions = sqliteTable('trade_lifecycle_transitions', {
+  id: text('id').primaryKey(),
+  candidateId: text('candidate_id').notNull(),
+  symbol: text('symbol').notNull(),
+  state: text('state').notNull(),
+  reason: text('reason'),
+  source: text('source'),
+  evidenceJson: text('evidence_json'),
+  latencyMs: integer('latency_ms'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  candidateIdx: index('idx_trade_lifecycle_candidate').on(table.candidateId),
+  createdIdx: index('idx_trade_lifecycle_created').on(table.createdAt),
+}));
+
 export const pitDecisionLedger = sqliteTable('pit_decision_ledger', {
   id: text('id').primaryKey(),
   asOfMs: integer('as_of_ms').notNull(),

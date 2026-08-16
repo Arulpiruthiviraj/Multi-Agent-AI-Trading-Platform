@@ -1,0 +1,66 @@
+{
+  "$comment": "Desk-intelligence overlay. Does not place orders, bypass RiskEngine, or enable QUANT/LIVE. Family relevance is used for ranking/explanation only; it is not fitted on future data. Strategy ids must match StrategyEngine modules.",
+  "minRiskRewardRatio": 1.5,
+  "highVolatilityConfidenceMultiplier": 0.85,
+  "newsEmitsTradeIdeas": false,
+  "probabilityQuality": {
+    "empiricallyValidated": "EMPIRICALLY_VALIDATED",
+    "modelEstimate": "MODEL_ESTIMATE",
+    "unavailable": "UNAVAILABLE"
+  },
+  "dataQuality": {
+    "greenMaxStaleMs": 15000,
+    "yellowMaxStaleMs": 300000
+  },
+  "strategyFamilies": {
+    "MOMENTUM_BREAKOUT": "momentum",
+    "PULLBACK_CONTINUATION": "trend",
+    "MEAN_REVERSION": "mean_reversion",
+    "TREND_FOLLOWING": "trend",
+    "RANGE_REVERSION": "mean_reversion",
+    "SMC_LIQUIDITY_SWEEP": "market_structure",
+    "VWAP_VOLUME_STRUCTURE": "intraday",
+    "OPENING_RANGE_BREAKOUT": "intraday",
+    "VWAP_MEAN_REVERSION": "mean_reversion",
+    "DONCHIAN_CHANNEL_BREAKOUT": "momentum",
+    "MA_CROSSOVER": "trend",
+    "OSCILLATOR_MOMENTUM": "momentum",
+    "BOLLINGER_VOLATILITY": "volatility",
+    "PREVIOUS_PERIOD_BREAKOUT": "intraday",
+    "CANDLESTICK_REVERSAL": "market_structure",
+    "GAP_CONTINUATION": "intraday",
+    "FIBONACCI_PULLBACK": "trend",
+    "VOLUME_CONFIRMATION": "volume",
+    "SR_BOUNCE": "market_structure",
+    "RELATIVE_STRENGTH_ROTATION": "momentum"
+  },
+  "regimeFamilyRelevance": {
+    "BULLISH_TREND": {
+      "momentum": 0.82,
+      "trend": 0.88,
+      "mean_reversion": 0.21,
+      "market_structure": 0.7,
+      "volatility": 0.55,
+      "volume": 0.64,
+      "intraday": 0.6
+    },
+    "BEARISH_TREND": {
+      "momentum": 0.8,
+      "trend": 0.86,
+      "mean_reversion": 0.24,
+      "market_structure": 0.72,
+      "volatility": 0.6,
+      "volume": 0.64,
+      "intraday": 0.58
+    },
+    "SIDEWAYS_RANGE": {
+      "momentum": 0.28,
+      "trend": 0.22,
+      "mean_reversion": 0.88,
+      "market_structure": 0.7,
+      "volatility": 0.5,
+      "volume": 0.45,
+      "intraday": 0.77
+    }
+  }
+}

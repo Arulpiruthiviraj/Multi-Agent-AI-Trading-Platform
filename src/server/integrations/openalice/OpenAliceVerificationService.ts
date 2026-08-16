@@ -29,9 +29,10 @@ import type {
   VerificationRequest,
   VerificationResult,
 } from './types';
+import { runtimeIntervals } from '../../config/runtimeIntervals';
 
-const POLL_INTERVAL_MS = 30_000;
-const REQUEST_TIMEOUT_MS = 24 * 60 * 60 * 1000; // matches the audit's own latency finding: viable only non-blocking, can take hours
+const POLL_INTERVAL_MS = runtimeIntervals.openAlicePollMs;
+const REQUEST_TIMEOUT_MS = runtimeIntervals.openAliceRequestTimeoutMs;
 const GUARDIAN_MCP_URL = 'http://127.0.0.1:47332/mcp';
 
 export class OpenAliceVerificationService {
@@ -70,6 +71,30 @@ export class OpenAliceVerificationService {
   }
 
   async health(): Promise<VerificationHealth> {
+    if (!this.enabled || !this.adapter) {
+      return { reachable: false, detail: 'OpenAlice integration disabled (OPENALICE_ENABLED != true)', checkedAt: new Date().toISOString() };
+    }
+    const timeoutMs = runtimeIntervals.modelRuntimeProbeTimeoutMs * 2;
+    const timed = new Promise<VerificationHealth>((resolve) => {
+      const timer = setTimeout(() => {
+        resolve({
+          reachable: false,
+          detail: `Unreachable: OpenAlice health timed out after ${timeoutMs}ms (primary+Guardian budget)`,
+          checkedAt: new Date().toISOString(),
+        });
+      }, timeoutMs);
+      this.healthUncapped().then((h) => {
+        clearTimeout(timer);
+        resolve(h);
+      }).catch((e: any) => {
+        clearTimeout(timer);
+        resolve({ reachable: false, detail: `Unreachable: ${e?.message ?? e}`, checkedAt: new Date().toISOString() });
+      });
+    });
+    return timed;
+  }
+
+  private async healthUncapped(): Promise<VerificationHealth> {
     if (!this.enabled || !this.adapter) {
       return { reachable: false, detail: 'OpenAlice integration disabled (OPENALICE_ENABLED != true)', checkedAt: new Date().toISOString() };
     }
@@ -151,31 +176,34 @@ export class OpenAliceVerificationService {
       createdAt: request.createdAt,
     }).catch((e) => console.error('[OpenAlice] Failed to persist verification request', e));
 
-    void this.health().then(async (h): Promise<void> => {
-      if (!h.reachable || !this.adapter) {
-        console.warn('[OpenAlice] Skipping verification file — Guardian MCP not reachable:', h.detail);
+    void (async (): Promise<void> => {
+      try {
+        const h = await this.health();
+        if (!h.reachable || !this.adapter) {
+          console.warn('[OpenAlice] Skipping verification file — Guardian MCP not reachable:', h.detail);
+          this.pending.delete(request.requestId);
+          await db.update(schema.openaliceVerifications)
+            .set({ status: 'FAILED', error: h.detail, completedAt: new Date().toISOString() })
+            .where(eq(schema.openaliceVerifications.id, request.requestId));
+          return;
+        }
+        await this.adapter.requestVerification(request);
+        eventBus.publish('OPENALICE_VERIFICATION_REQUESTED', {
+          traceId: request.traceId,
+          requestId: request.requestId,
+          symbol: request.symbol,
+          side: request.side,
+          mode: request.mode,
+        });
+      } catch (e: any) {
+        console.error('[OpenAlice] Failed to file verification request', e);
         this.pending.delete(request.requestId);
         await db.update(schema.openaliceVerifications)
-          .set({ status: 'FAILED', error: h.detail, completedAt: new Date().toISOString() })
-          .where(eq(schema.openaliceVerifications.id, request.requestId));
-        return;
+          .set({ status: 'FAILED', error: String(e?.message ?? e), completedAt: new Date().toISOString() })
+          .where(eq(schema.openaliceVerifications.id, request.requestId))
+          .catch((err) => console.error('[OpenAlice] Failed to record request failure', err));
       }
-      await this.adapter.requestVerification(request);
-      eventBus.publish('OPENALICE_VERIFICATION_REQUESTED', {
-        traceId: request.traceId,
-        requestId: request.requestId,
-        symbol: request.symbol,
-        side: request.side,
-        mode: request.mode,
-      });
-    }).catch((e) => {
-      console.error('[OpenAlice] Failed to file verification request', e);
-      this.pending.delete(request.requestId);
-      db.update(schema.openaliceVerifications)
-        .set({ status: 'FAILED', error: String(e?.message ?? e), completedAt: new Date().toISOString() })
-        .where(eq(schema.openaliceVerifications.id, request.requestId))
-        .catch((err) => console.error('[OpenAlice] Failed to record request failure', err));
-    });
+    })();
   }
 
   private startPolling() {

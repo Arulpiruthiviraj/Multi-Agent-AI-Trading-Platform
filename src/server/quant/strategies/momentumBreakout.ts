@@ -15,8 +15,9 @@
  * ==========================================================
  */
 import { StrategyContext, StrategyDefinition, StrategyEvaluation, scoreFromConditions } from './types';
+import { quantThresholds } from '../../config/quantThresholds';
 
-const RVOL_THRESHOLD = 1.5;
+const RVOL_THRESHOLD = quantThresholds.rvolThreshold;
 
 export const momentumBreakout: StrategyDefinition = {
   id: 'MOMENTUM_BREAKOUT',
@@ -39,7 +40,7 @@ export const momentumBreakout: StrategyDefinition = {
     const check = (name: string, met: boolean) => (met ? conditionsMet.push(name) : conditionsFailed.push(name));
 
     check('Structural break in trade direction (BOS)', bullish ? bullBreak : bearBreak);
-    check('RVOL confirmation (>=1.5x average volume)', volume.relativeVolume !== null && volume.relativeVolume >= RVOL_THRESHOLD);
+    check(`RVOL confirmation (>=${RVOL_THRESHOLD}x average volume)`, volume.relativeVolume !== null && volume.relativeVolume >= RVOL_THRESHOLD);
     check('ATR expansion (volatility regime EXPANDING)', volatility.regime === 'EXPANDING');
     check(
       bullish ? 'Price above session VWAP' : 'Price below session VWAP',

@@ -22,6 +22,7 @@
  * ==========================================================
  */
 import { OpenAliceMcpClient } from './OpenAliceMcpClient';
+import { runtimeIntervals } from '../../config/runtimeIntervals';
 import { buildVerificationPrompt } from './prompt';
 import type {
   ExternalVerificationProvider,
@@ -89,8 +90,14 @@ export class OpenAliceAdapter implements ExternalVerificationProvider {
 
   async healthCheck(): Promise<VerificationHealth> {
     const checkedAt = new Date().toISOString();
+    const timeoutMs = runtimeIntervals.modelRuntimeProbeTimeoutMs;
     try {
-      const tools = await this.mcp.listToolNames();
+      const tools = await Promise.race([
+        this.mcp.listToolNames(),
+        new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error(`OpenAlice health timed out after ${timeoutMs}ms`)), timeoutMs);
+        }),
+      ]);
       const hasRequired = tools.includes('issue_create') && tools.includes('inbox_read');
       const looksLikeTradingMcp = tools.includes('placeOrder') || tools.includes('tradingCommit') || tools.includes('getQuote');
       let detail: string;

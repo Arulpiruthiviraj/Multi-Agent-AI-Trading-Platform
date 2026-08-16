@@ -32,16 +32,10 @@
  * ==========================================================
  */
 
-// Matches BacktestEngine.ts's own MIN_SAMPLE_SIZE_FOR_TRUST exactly - the same real-world
-// statistics apply to trusting a win-rate estimate whether it came from a backtest or live history.
-export const MIN_SAMPLE_SIZE_FOR_KELLY = 20;
+import { tradingSafety } from '../../config/tradingSafety';
 
-// A hard ceiling on the SUGGESTED risk fraction, independent of what the raw Kelly formula
-// computes - full Kelly (and even fractional Kelly on a noisy small-sample estimate) can suggest
-// aggressive sizing that would still be unwise even if the win-rate estimate is directionally
-// correct. This is deliberately a fixed constant, not configurable per-call, so a caller can't
-// accidentally (or a prompt-injected AI response can't) push it higher.
-export const MAX_KELLY_FRACTION_OF_CAPITAL = 0.10;
+export const MIN_SAMPLE_SIZE_FOR_KELLY = tradingSafety.minSampleSizeForTrust;
+export const MAX_KELLY_FRACTION_OF_CAPITAL = tradingSafety.maxKellyFractionOfCapital;
 
 export interface RiskRewardResult {
   ratio: number | null; // e.g. 2.5 means the target is 2.5x further from entry than the stop
@@ -102,7 +96,7 @@ export function fractionalKelly(
   winProbability: number,
   rrRatio: number,
   sampleSize: number,
-  fraction: number = 0.25
+  fraction: number = tradingSafety.kellyFractionDefault
 ): KellyResult {
   if (sampleSize < MIN_SAMPLE_SIZE_FOR_KELLY) {
     return {

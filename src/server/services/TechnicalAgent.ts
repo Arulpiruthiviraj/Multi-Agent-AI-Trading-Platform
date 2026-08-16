@@ -34,9 +34,11 @@
  */
 
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { rsiEngine } from '../engines/RSIEngine';
 import { macdEngine } from '../engines/MACDEngine';
+import { quantThresholds } from '../config/quantThresholds';
 
 export class TechnicalProposerAgent {
   private priceHistory: Record<string, number[]> = {};
@@ -46,19 +48,19 @@ export class TechnicalProposerAgent {
   }
 
   analyzeTick(data: { symbol: string, price: number, volume: number, timestamp: string }) {
+    if (!isLiveIdeaGenerationEnabled()) return;
+
     if (!this.priceHistory[data.symbol]) {
       this.priceHistory[data.symbol] = [];
     }
     const history = this.priceHistory[data.symbol];
     history.push(data.price);
     
-    if (history.length > 50) {
+    if (history.length > quantThresholds.technicalHistoryBars) {
       history.shift();
     }
 
-    if (!isLiveIdeaGenerationEnabled()) return;
-    
-    if (history.length === 50) {
+    if (history.length === quantThresholds.technicalHistoryBars) {
       this.checkStrategies(data.symbol, history);
     }
   }
@@ -69,7 +71,7 @@ export class TechnicalProposerAgent {
     return slice.reduce((a, b) => a + b, 0) / period;
   }
   
-  private calcBollingerBands(prices: number[], period: number = 20) {
+  private calcBollingerBands(prices: number[], period: number = quantThresholds.bollingerPeriod) {
      const sma = this.calcSMA(prices, period);
      const slice = prices.slice(prices.length - period);
      let sumSq = 0;
@@ -100,16 +102,16 @@ export class TechnicalProposerAgent {
     // Real STARTED/COMPLETED bracket for live animation (previously only Kronos had one) -
     // TechnicalAgent's computation is synchronous and fast, but the pair still lets the UI show
     // exactly when this node began working versus when it produced a real result.
-    eventBus.emit('TECHNICAL_ANALYSIS_STARTED', { traceId, symbol, timestamp: new Date(startedAt).toISOString() });
+    eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_STARTED, { traceId, symbol, timestamp: new Date(startedAt).toISOString() });
 
-    const sma20 = this.calcSMA(prices, 20);
+    const sma20 = this.calcSMA(prices, quantThresholds.bollingerPeriod);
     const sma50 = this.calcSMA(prices, 50);
     const rsi = rsiEngine.calculate(prices);
     const macd = macdEngine.calculate(prices);
     const bb = this.calcBollingerBands(prices, 20);
 
     eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
-    eventBus.emit('TECHNICAL_ANALYSIS_COMPLETED', { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
+    eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_COMPLETED, { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
 
     // Momentum Breakout
     if (currentPrice > sma20 && sma20 > sma50 && rsi > 50 && rsi < 70 && macd.macd > macd.signal) {

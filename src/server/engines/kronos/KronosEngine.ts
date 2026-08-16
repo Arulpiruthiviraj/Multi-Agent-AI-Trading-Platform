@@ -117,7 +117,11 @@ export class KronosEngine implements IForecastEngine {
 // Export singleton instance
 export const kronosEngine = new KronosEngine();
 
-// Auto initialize for demo purposes
-setTimeout(() => {
-  kronosEngine.initialize().catch(console.error);
-}, 3000);
+// Auto-init is for the real Node process. Vitest workers that import SystemBootstrap/v2System
+// must not open Chronos sockets — a half-open local_ai_service.py connection caused
+// GET /api/v2/quant/strategies to fail with read ECONNRESET (~19s) while Chronos was "up".
+if (process.env.VITEST !== 'true') {
+  setTimeout(() => {
+    kronosEngine.initialize().catch(console.error);
+  }, 3000);
+}

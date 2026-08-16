@@ -35,6 +35,8 @@ describe('Portfolio reconciliation mismatch actually blocks new orders (Phase 1 
     ({ riskEngine } = await import('../engines/RiskEngine'));
     ({ tradingEngine } = await import('../engines/TradingEngine'));
     ({ portfolioReconciliationWorker } = await import('./PortfolioReconciliation'));
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
 
     // Same real-world dotenv-reload hazard RiskEngine.gates.test.ts already documents and works
     // around: delete AFTER the import chain has already triggered any dotenv reload, so

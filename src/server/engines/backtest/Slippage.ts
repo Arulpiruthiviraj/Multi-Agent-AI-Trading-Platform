@@ -17,12 +17,13 @@
  * already loaded for this backtest.
  * ==========================================================
  */
+import { quantThresholds } from '../../config/quantThresholds';
 import { TechnicalIndicators } from '../TechnicalIndicators';
 
-export const BASE_SLIPPAGE_PCT = 0.0005; // floor - matches the old flat spread as a lower bound, not a replacement for it
-export const ATR_SLIPPAGE_MULTIPLIER = 0.05; // fraction of (ATR/price) added as slippage
-export const SIZE_IMPACT_MULTIPLIER = 0.5; // fraction of (orderShares/barVolume) added as slippage
-const MAX_SLIPPAGE_PCT = 0.05; // sanity ceiling - an illiquid/zero-volume bar must not imply near-infinite slippage
+export const BASE_SLIPPAGE_PCT = quantThresholds.baseSlippagePct;
+export const ATR_SLIPPAGE_MULTIPLIER = quantThresholds.atrSlippageMultiplier;
+export const SIZE_IMPACT_MULTIPLIER = quantThresholds.sizeImpactMultiplier;
+const MAX_SLIPPAGE_PCT = quantThresholds.maxSlippagePct;
 
 export interface SlippageContext {
   highs: number[];

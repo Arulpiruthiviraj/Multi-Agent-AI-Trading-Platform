@@ -10,10 +10,11 @@
 import fs from 'fs';
 import path from 'path';
 import { dbPath, sqliteDb } from '../db';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 const BACKUP_DIR = path.join(path.dirname(dbPath), 'backups');
-const INTERVAL_MS = 24 * 60 * 60 * 1000;
-const RETENTION_DAYS = 30;
+const INTERVAL_MS = runtimeIntervals.dbBackupIntervalMs;
+const RETENTION_DAYS = runtimeIntervals.dbBackupRetentionDays;
 
 export class DbBackupService {
   private intervalId: NodeJS.Timeout | null = null;

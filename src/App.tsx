@@ -35,6 +35,7 @@
 
 import StrategyScanner from "./components/StrategyScanner";
 import QuantSignalsPanel from "./components/QuantSignalsPanel";
+import EliteDeskPanel from "./components/EliteDeskPanel";
 import AwaitingSignal from "./components/shared/AwaitingSignal";
 import { SafeResponsiveContainer } from "./components/shared/SafeResponsiveContainer";
 import tradingSafetyConfig from "../config/tradingSafety.json";
@@ -54,7 +55,6 @@ import { KronosDashboard } from "./components/KronosDashboard";
 import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
 import DiagnosticCenter from "./components/DiagnosticCenter";
 import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
-import AutoBotFlowVisualizer from "./components/AutoBotFlowVisualizer";
 import WeightAdjustmentVisualizer from "./components/WeightAdjustmentVisualizer";
 import GuardrailsPanel from "./components/GuardrailsPanel";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
@@ -1390,26 +1390,7 @@ export default function App() {
   const logsEndRef = useRef<HTMLDivElement>(null);
 
   // Observing audit logs
-  const [auditLogs, setAuditLogs] = useState<any[]>([
-      {
-        id: "AL-1",
-        timestamp: "2024-03-12T08:44:12Z",
-        action: "INFO",
-        symbol: "RiskManager",
-        headline: "Assessing trade safety limits...",
-        details: {
-          exposure_level: 0.44,
-          confidence_score: 88,
-        }
-      },
-      {
-        id: "AL-2",
-        timestamp: "2024-03-12T08:44:12Z",
-        action: "SUCCESS",
-        symbol: "OrderBroker",
-        headline: "100 shares AAPL filled at $168.45."
-      }
-  ]);
+  const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [isAutoScrollAudit, setIsAutoScrollAudit] = useState(true);
 
   useEffect(() => {
@@ -2827,11 +2808,25 @@ export default function App() {
       const res = await fetch(
         `/api/v1/event-memory?query=${encodeURIComponent(memoryQuery)}`,
       );
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 410 || body?.code === 'EVENT_MEMORY_QUARANTINED') {
+        setMemoryResult({
+          quarantined: true,
+          summary: body.summary || 'NO HISTORICAL DATA',
+          what: body.what,
+          why: body.why,
+          impact: body.impact,
+          howToFix: body.howToFix,
+          matches: [],
+        });
+        return;
+      }
       if (res.ok) {
-        setMemoryResult(await res.json());
+        setMemoryResult(body);
       }
     } catch (e) {
-      console.error("Vector query fell back", e);
+      console.error("Vector query failed", e);
+      setMemoryResult({ quarantined: true, summary: 'NO HISTORICAL DATA', matches: [] });
     } finally {
       setIsSearchingMemory(false);
     }
@@ -6258,10 +6253,16 @@ export default function App() {
                   id="memory-search-results"
                 >
                   <h4 className="text-xs font-bold text-white mb-3.5 flex items-center gap-1.5 uppercase tracking-wide">
-                    <Layers size={14} className="text-emerald-400" />
-                    Precedent Analysis Verdict - powered by Gemini AI
+                    <Layers size={14} className="text-amber-400" />
+                    Event memory
                   </h4>
-
+                  {memoryResult.quarantined ? (
+                    <AwaitingSignal
+                      label="NO HISTORICAL DATA"
+                      reason={`${memoryResult.why || 'Fabricated vector memory is quarantined.'} Impact: ${memoryResult.impact || 'Not used for trades.'} Fix: ${memoryResult.howToFix || 'Use GET /api/v2/desk/lifecycle.'}`}
+                    />
+                  ) : (
+                  <>
                   <div className="bg-[#111822] p-4 rounded-lg border border-slate-850 text-xs leading-relaxed text-slate-300 italic mb-5 whitespace-pre-line">
                     "{memoryResult.summary}"
                   </div>
@@ -6285,33 +6286,19 @@ export default function App() {
                             <b className="text-[10px] uppercase font-mono tracking-wider text-emerald-400 block mb-1">Asset Reaction Record:</b>
                             {item.impact}
                           </div>
-                          <div className="mt-3 flex items-center justify-between border-t border-slate-800/80 pt-3">
-                            <span className="text-[10px] font-mono text-slate-500 uppercase flex items-center gap-1.5"><ThumbsUp size={10} className="text-slate-600"/> Quality Feedback Loop:</span>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => handleMemoryFeedback(item.title, 'up')}
-                                className={`p-1.5 rounded transition-colors border ${memoryFeedback[item.title] === 'up' ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/50" : "bg-[#1A1F2B] text-slate-400 border-slate-800 hover:text-emerald-400 hover:border-emerald-500/50"}`}
-                                title="Accurate Match"
-                              >
-                                <ThumbsUp size={12} />
-                              </button>
-                              <button
-                                onClick={() => handleMemoryFeedback(item.title, 'down')}
-                                className={`p-1.5 rounded transition-colors border ${memoryFeedback[item.title] === 'down' ? "bg-rose-500/20 text-rose-400 border-rose-500/50" : "bg-[#1A1F2B] text-slate-400 border-slate-800 hover:text-rose-400 hover:border-rose-500/50"}`}
-                                title="Poor Match"
-                              >
-                                <ThumbsDown size={12} />
-                              </button>
-                            </div>
+                          <div className="mt-3 flex justify-between border-t border-slate-800/80 pt-3">
+                            <span className="text-[10px] font-mono text-slate-500 uppercase">Quality Feedback Loop:</span>
                           </div>
                         </div>
                       ))
                     ) : (
                       <div className="bg-[#111822] p-4 rounded-lg border border-slate-850 text-xs text-slate-500 font-mono italic text-center">
-                        DATA_UNAVAILABLE: No historical precedents found in the vector database.
+                        NO HISTORICAL DATA
                       </div>
                     )}
                   </div>
+                  </>
+                  )}
                 </div>
               )}
             </div>
@@ -7640,7 +7627,10 @@ export default function App() {
                       <span>Live Decision Flow Visualizer</span>
                    </h4>
                    <div className="flex-1 flex items-center justify-center">
-                      <AutoBotFlowVisualizer cycle={autoBotConfig.activeCycle} />
+                      <AwaitingSignal
+                        label="Live Decision Flow Visualizer"
+                        reason="AutoBotFlowVisualizer animated a fabricated proposer/risk/execution cycle from legacy autoBotConfig.activeCycle. Real decisions are EventBus → ChiefTrader → RiskEngine → OMS. NOT_IMPLEMENTED as a live flow."
+                      />
                    </div>
                  </div>
                </div>
@@ -7650,130 +7640,16 @@ export default function App() {
 
              <ShadowPortfolioBenchmark autoBotConfig={autoBotConfig} />
 
-             {/* Dual LLM Verifier Sandbox */}
+             {/* Dual LLM sandbox was a client-side proposer/verifier theater, not RiskEngine. */}
              <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
                <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2 uppercase tracking-wide">
                  <ShieldAlert size={16} className="text-indigo-400" />
                  DUAL LLM TRADE VERIFICATION ENGINE
                </h3>
-               <p className="text-xs text-slate-400 mb-6 max-w-3xl">
-                 Simulate the multi-agent verification workflow powered by the backend. A Proposer Agent generates an initial trade signal, which is then vigorously audited by a separate Risk Verification Agent to eliminate bias and prevent procrastination in dynamic market regimes.
-               </p>
-               
-               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 <div>
-                   <div className="grid grid-cols-2 gap-3 mb-3">
-                     <div>
-                       <label className="text-[10px] text-slate-500 uppercase font-mono tracking-widest block mb-1">Proposer Node {agentStressTests[proposerAgentSelector] && <span className="text-rose-400 normal-case">(Stress Test Active)</span>}</label>
-                       <select 
-                         className="w-full bg-[#111822] border border-slate-700 text-xs text-white rounded p-2 focus:outline-none focus:border-indigo-500"
-                         value={proposerAgentSelector}
-                         onChange={(e) => setProposerAgentSelector(e.target.value)}
-                       >
-                         {Object.keys(agentStressTests).map(agent => (
-                           <option key={`prop-${agent}`} value={agent}>{agent}</option>
-                         ))}
-                       </select>
-                     </div>
-                     <div>
-                       <label className="text-[10px] text-slate-500 uppercase font-mono tracking-widest block mb-1">Verifier Node {agentStressTests[verifierAgentSelector] && <span className="text-rose-400 normal-case">(Stress Test Active)</span>}</label>
-                       <select 
-                         className="w-full bg-[#111822] border border-slate-700 text-xs text-white rounded p-2 focus:outline-none focus:border-indigo-500"
-                         value={verifierAgentSelector}
-                         onChange={(e) => setVerifierAgentSelector(e.target.value)}
-                       >
-                         {Object.keys(agentStressTests).map(agent => (
-                           <option key={`ver-${agent}`} value={agent}>{agent}</option>
-                         ))}
-                       </select>
-                     </div>
-                   </div>
-                   <input 
-                     type="text" 
-                     placeholder="Symbol (e.g. MSFT)" 
-                     className="w-full bg-[#111822] border border-slate-700 text-sm text-white rounded p-3 mb-3 focus:outline-none focus:border-indigo-500"
-                     value={verifierSymbol}
-                     onChange={(e) => setVerifierSymbol(e.target.value)}
-                   />
-                   <textarea
-                     placeholder="Headline or Market Context"
-                     className="w-full bg-[#111822] border border-slate-700 text-sm text-white rounded p-3 h-24 focus:outline-none focus:border-indigo-500 resize-none font-mono text-xs"
-                     value={verifierHeadline}
-                     onChange={(e) => setVerifierHeadline(e.target.value)}
-                   />
-                   <button 
-                     onClick={runDualVerification}
-                     disabled={isVerifying}
-                     className="mt-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3 px-4 rounded text-xs uppercase tracking-wide w-full flex items-center justify-center gap-2 disabled:opacity-50 transition-all border border-indigo-400"
-                   >
-                     {isVerifying ? <div className="w-4 h-4 border-2 border-white/20 border-t-white rounded-full animate-spin"></div> : <Play size={16} />}
-                     Run Dual-Agent Synthesis
-                   </button>
-                 </div>
-                 
-                 <div className="bg-[#0B0F15] border border-slate-800 rounded p-4 font-mono text-[10px] overflow-y-auto max-h-[350px]">
-                   {verifierResult ? (
-                     verifierResult.error ? (
-                       <div className="text-rose-400">Error: {verifierResult.error}</div>
-                     ) : (
-                       <div className="space-y-4">
-                         {verifierResult.debate && (
-                           <div className="border-b border-slate-800/50 pb-4">
-                             <div className="flex items-center gap-1.5 text-indigo-400 font-bold uppercase tracking-widest text-[9px] mb-3">
-                               <Zap size={10} /> ADVERSARIAL DEBATE ACTIVE (BULL VS BEAR)
-                             </div>
-                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                               <div className="bg-emerald-950/10 border border-emerald-900/30 rounded p-2.5">
-                                 <div className="text-emerald-400 font-bold uppercase text-[8px] tracking-widest mb-1 font-mono">Agent 1a (The Bull Thesis)</div>
-                                 <p className="text-emerald-200/90 italic leading-relaxed text-[10px]">{verifierResult.debate.bull?.thesis}</p>
-                                 {verifierResult.debate.bull?.target_price && (
-                                   <div className="text-[9px] font-mono text-emerald-500 mt-1.5 uppercase">Target Price: ${verifierResult.debate.bull.target_price}</div>
-                                 )}
-                               </div>
-                               <div className="bg-rose-950/10 border border-rose-900/30 rounded p-2.5">
-                                 <div className="text-rose-400 font-bold uppercase text-[8px] tracking-widest mb-1 font-mono">Agent 1b (The Bear Thesis)</div>
-                                 <p className="text-rose-200/90 italic leading-relaxed text-[10px]">{verifierResult.debate.bear?.thesis}</p>
-                                 {verifierResult.debate.bear?.stop_trigger_price && (
-                                   <div className="text-[9px] font-mono text-rose-500 mt-1.5 uppercase">Stop Trigger: ${verifierResult.debate.bear.stop_trigger_price}</div>
-                                 )}
-                               </div>
-                             </div>
-                           </div>
-                         )}
-                         <div>
-                           <div className="flex gap-2 items-center mb-1">
-                             <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]"><BrainCircuit size={10} className="inline mr-1"/> PROPOSER NODE</span>
-                             <span className={`px-1.5 py-0.5 rounded font-bold text-[9px] ${verifierResult.proposer?.decision === 'BUY' ? 'text-emerald-400 bg-emerald-400/10 border border-emerald-500/20' : verifierResult.proposer?.decision === 'SELL' ? 'text-rose-400 bg-rose-400/10 border border-rose-500/20' : 'text-slate-400 bg-slate-800 border border-slate-700'}`}>
-                               SIGNAL: {verifierResult.proposer?.decision || 'UNKNOWN'}
-                             </span>
-                           </div>
-                           <p className="text-slate-300 ml-1 border-l-2 border-slate-800 pl-2 py-1 leading-relaxed">{verifierResult.proposer?.reasoning}</p>
-                           {verifierResult.proposer?.thinking && (
-                             <p className="text-slate-500 ml-1 border-l-2 border-slate-800 pl-2 pb-1 italic leading-relaxed text-[9px] flex gap-1 items-start"><BrainCircuit size={10} className="mt-0.5 opacity-50 shrink-0"/> {verifierResult.proposer.thinking}</p>
-                           )}
-                         </div>
-                         
-                         <div className="border-t border-slate-800/50 pt-4">
-                           <div className="flex gap-2 items-center justify-between mb-1">
-                             <span className="text-indigo-400 font-bold uppercase tracking-widest text-[9px]"><ShieldAlert size={10} className="inline mr-1"/> VERIFIER NODE</span>
-                             <span className={`px-1.5 py-0.5 rounded font-bold text-[9px] ${verifierResult.verifier?.verified_decision === 'BUY' ? 'text-emerald-400 bg-emerald-400/10 border border-emerald-500/20' : verifierResult.verifier?.verified_decision === 'SELL' ? 'text-rose-400 bg-rose-400/10 border border-rose-500/20' : 'text-slate-400 bg-slate-800 border border-slate-700'}`}>
-                               OVERRIDE DECISION: {verifierResult.verifier?.verified_decision || 'UNKNOWN'}
-                             </span>
-                           </div>
-                           <p className="text-slate-300 ml-1 border-l-2 border-indigo-900/50 pl-2 py-1 leading-relaxed">{verifierResult.verifier?.critique}</p>
-                           {verifierResult.verifier?.thinking && (
-                             <p className="text-indigo-500/60 ml-1 border-l-2 border-indigo-900/50 pl-2 pb-1 italic leading-relaxed text-[9px] flex gap-1 items-start"><BrainCircuit size={10} className="mt-0.5 opacity-50 shrink-0"/> {verifierResult.verifier.thinking}</p>
-                           )}
-                         </div>
-                       </div>
-                   )) : (
-                     <div className="h-full flex items-center justify-center text-slate-500 uppercase tracking-widest">
-                       Awaiting target trajectory analysis...
-                     </div>
-                   )}
-                 </div>
-               </div>
-
+               <AwaitingSignal
+                 label="Dual-agent synthesis sandbox"
+                 reason="This panel ran a simulated proposer/verifier LLM pair that did not enter EventBus, ChiefTrader, or RiskEngine. Live verification is OpenAlice (optional, non-blocking) plus RiskEngine. NOT_IMPLEMENTED as an execution path."
+               />
              </div>
 
              {/* AI Intelligence Provider Row */}
@@ -8069,6 +7945,7 @@ export default function App() {
               setSelectedAlertSymbol={setSelectedAlertSymbol}
             />
             <QuantSignalsPanel />
+            <EliteDeskPanel />
           </div>
         )}
 
@@ -8529,7 +8406,7 @@ export default function App() {
                                       </div>
                                       <div className="flex justify-between">
                                           <span className="text-slate-500">VOLATILITY RATIO:</span>
-                                          <span className="text-white font-bold">{autoBotConfig.regimeState.volatilityRatio?.toFixed(2) || "1.08"}</span>
+                                          <span className="text-white font-bold">{typeof autoBotConfig.regimeState.volatilityRatio === 'number' ? autoBotConfig.regimeState.volatilityRatio.toFixed(2) : 'DATA_UNAVAILABLE'}</span>
                                       </div>
                                       <div className="text-[10px] text-slate-400 mt-2 border-t border-slate-900 pt-2 leading-normal">
                                           <span className="text-slate-500 block uppercase font-bold text-[9px] mb-0.5">Prompt Directives Applied:</span>

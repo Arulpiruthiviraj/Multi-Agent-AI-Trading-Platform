@@ -68,6 +68,16 @@ export function evaluateAllocationGuard(
     };
   }
   const requested = Number(requestedNotional) || 0;
+  if (!(Number.isFinite(snapshot.allocated) && snapshot.allocated > 0)) {
+    return {
+      passed: false,
+      requestedNotional: requested,
+      remaining: snapshot.remaining,
+      allocated: snapshot.allocated,
+      used: snapshot.used,
+      reason: 'INVALID_ARGUS_BUDGET: allocated budget is missing or not positive. No phantom capital is assumed.',
+    };
+  }
   if (requested <= 0) {
     return {
       passed: false,

@@ -26,6 +26,7 @@ import { computeVolatilityFeatures, VolatilityFeatures } from './indicators/vola
 import { computePriceActionFeatures, PriceActionFeatures } from './indicators/priceAction';
 
 import { tradingSafety } from '../config/tradingSafety';
+import { quantThresholds } from '../config/quantThresholds';
 
 export type RegimeLabel = 'BULLISH_TREND' | 'BEARISH_TREND' | 'SIDEWAYS_RANGE';
 export type VolatilityLabel = 'HIGH' | 'LOW' | 'NORMAL';
@@ -44,6 +45,17 @@ export interface RegimeResult {
   };
   insufficientData: boolean; // true when fewer than MIN_BARS bars were supplied - regime is a
                               // best-effort read on thin data, flagged honestly rather than hidden
+  /** Additive session/vol labels. Never invents breadth or risk-on from missing data. */
+  deskSession?: {
+    phase: 'PREMARKET' | 'OPEN' | 'MORNING' | 'MIDDAY' | 'AFTERNOON' | 'CLOSE' | 'UNKNOWN';
+    source: string;
+    highVolatility: boolean;
+    lowVolatility: boolean;
+    meanReversionEnvironment: boolean;
+    breakoutEnvironment: boolean;
+    breadth: { available: false; why: string; impact: string; howToFix: string };
+    riskOnOff: { available: false; why: string; impact: string; howToFix: string };
+  };
 }
 
 export const MIN_BARS = tradingSafety.regimeMinBars;
@@ -54,9 +66,9 @@ export const MIN_BARS = tradingSafety.regimeMinBars;
 // test fixture: a perfectly alternating +1/-1 series with zero net drift still forced a directional
 // read on every vote before these thresholds existed, simply based on which parity the array
 // happened to end on).
-const MIN_MEANINGFUL_PRICE_VS_MA_PCT = 0.1;
-const MIN_MEANINGFUL_SLOPE_PCT = 0.05;
-const MIN_MEANINGFUL_ADX = 15; // below this, DMI's +DI/-DI split is noise, not a real trend signal
+const MIN_MEANINGFUL_PRICE_VS_MA_PCT = quantThresholds.minMeaningfulPriceVsMaPct;
+const MIN_MEANINGFUL_SLOPE_PCT = quantThresholds.minMeaningfulSlopePct;
+const MIN_MEANINGFUL_ADX = quantThresholds.minMeaningfulAdx;
 
 /**
  * Each entry is `true` for a bullish read, `false` for bearish, `null` when that particular
@@ -98,8 +110,8 @@ function collectDirectionalVotes(trend: TrendFeatures): (boolean | null)[] {
  *  arbitrary absolute cutoff that would mean something different for a calm vs. volatile stock. */
 function classifyVolatilityLabel(volatility: VolatilityFeatures): VolatilityLabel {
   if (volatility.volatilityPercentile === null) return 'NORMAL';
-  if (volatility.volatilityPercentile >= 70) return 'HIGH';
-  if (volatility.volatilityPercentile <= 30) return 'LOW';
+  if (volatility.volatilityPercentile >= quantThresholds.volatilityPercentileHigh) return 'HIGH';
+  if (volatility.volatilityPercentile <= quantThresholds.volatilityPercentileLow) return 'LOW';
   return 'NORMAL';
 }
 
@@ -111,8 +123,8 @@ function classifyVolatilityLabel(volatility: VolatilityFeatures): VolatilityLabe
  *  one of the other two. */
 function classifyMarketStructure(trend: TrendFeatures, priceAction: PriceActionFeatures): MarketStructureLabel {
   const adx = trend.dmi?.adx ?? null;
-  if (adx !== null && adx >= 25) return 'TRENDING';
-  if (adx !== null && adx < 20 && priceAction.consolidating) return 'RANGING';
+  if (adx !== null && adx >= quantThresholds.minAdxTrending) return 'TRENDING';
+  if (adx !== null && adx < quantThresholds.minAdxRanging && priceAction.consolidating) return 'RANGING';
   return 'CHOPPY';
 }
 
@@ -150,13 +162,58 @@ export function classifyRegime(bars: Bar[]): RegimeResult {
   const adx = trend.dmi?.adx ?? 0;
   const trendStrength = Math.round(Math.min(100, Math.max(0, adx * (0.5 + agreementRatio * 0.5))));
 
+  const volLabel = classifyVolatilityLabel(volatility);
+  const structure = classifyMarketStructure(trend, priceAction);
   return {
     regime,
     trendStrength,
-    volatility: classifyVolatilityLabel(volatility),
-    marketStructure: classifyMarketStructure(trend, priceAction),
+    volatility: volLabel,
+    marketStructure: structure,
     confidence,
     features: { trend, volatility, priceAction },
     insufficientData: bars.length < MIN_BARS,
+    deskSession: classifyDeskSession(volLabel, structure, new Date()),
+  };
+}
+
+export function classifyDeskSession(
+  volatility: VolatilityLabel,
+  marketStructure: MarketStructureLabel,
+  now: Date = new Date(),
+): NonNullable<RegimeResult['deskSession']> {
+  const ny = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(now);
+  const hour = Number(ny.find(p => p.type === 'hour')?.value ?? NaN);
+  const minute = Number(ny.find(p => p.type === 'minute')?.value ?? NaN);
+  const minutes = hour * 60 + minute;
+  const open = tradingSafety.usEquityRthOpenMinute;
+  const close = tradingSafety.usEquityRthCloseMinute;
+  let phase: NonNullable<RegimeResult['deskSession']>['phase'] = 'UNKNOWN';
+  if (Number.isFinite(minutes)) {
+    if (minutes < open) phase = 'PREMARKET';
+    else if (minutes < open + 30) phase = 'OPEN';
+    else if (minutes < open + 150) phase = 'MORNING';
+    else if (minutes < close - 150) phase = 'MIDDAY';
+    else if (minutes < close - 30) phase = 'AFTERNOON';
+    else if (minutes < close) phase = 'CLOSE';
+  }
+  return {
+    phase,
+    source: 'America/New_York clock vs tradingSafety RTH minutes — not a volume profile.',
+    highVolatility: volatility === 'HIGH',
+    lowVolatility: volatility === 'LOW',
+    meanReversionEnvironment: marketStructure === 'RANGING',
+    breakoutEnvironment: marketStructure === 'TRENDING' && volatility === 'HIGH',
+    breadth: {
+      available: false,
+      why: 'No breadth vendor is wired (QuantitativeFeatureEngine returns NOT_SUPPORTED).',
+      impact: 'Broad-market confirmation/divergence cannot be scored.',
+      howToFix: 'Add a real breadth source; do not fill zeros.',
+    },
+    riskOnOff: {
+      available: false,
+      why: 'Risk-on/off is not derived from a real credit/FX panel in this codebase.',
+      impact: 'Do not treat SPY direction as a risk-on label.',
+      howToFix: 'Wire a real risk-appetite series before claiming risk-on/off.',
+    },
   };
 }

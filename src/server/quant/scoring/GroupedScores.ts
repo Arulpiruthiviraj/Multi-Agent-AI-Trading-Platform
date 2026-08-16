@@ -48,6 +48,7 @@ import { VolumeFeatures } from '../indicators/volume';
 import { PriceActionFeatures } from '../indicators/priceAction';
 import { RegimeResult } from '../RegimeEngine';
 import { MarketContextResult, BenchmarkTrend } from '../MarketContext';
+import { quantThresholds } from '../../config/quantThresholds';
 
 export type Side = 'BUY' | 'SELL';
 
@@ -65,7 +66,7 @@ export interface GroupedScores {
   dataCompletePct: number; // 0-100 - % of the underlying sub-signals that were real (not a neutral 50 fallback due to missing data)
 }
 
-const NEUTRAL = 50;
+const NEUTRAL = quantThresholds.groupedScoreNeutral;
 
 /** Clamps into [0,100] and rounds - every score-producing helper below funnels through this so the
  *  public interface is guaranteed well-formed regardless of how extreme an intermediate blend gets. */
@@ -254,16 +255,7 @@ function scorePriceStructure(trend: TrendFeatures, priceAction: PriceActionFeatu
 // since a technically-perfect setup fighting its own market/sector is real, demonstrated evidence
 // against it, not a footnote. Volume/VWAP/PriceStructure are confirmation-weight, not primary
 // signals on their own. Sums to 1.0; volatilityScore is intentionally excluded (see header).
-const OVERALL_WEIGHTS = {
-  trend: 0.20,
-  momentum: 0.15,
-  market: 0.15,
-  sector: 0.10,
-  relativeStrength: 0.10,
-  volume: 0.10,
-  vwap: 0.10,
-  priceStructure: 0.10,
-} as const;
+const OVERALL_WEIGHTS = quantThresholds.groupedScoreWeights;
 
 export interface GroupedScoresInput {
   trend: TrendFeatures;

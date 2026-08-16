@@ -1,7 +1,7 @@
 /**
  * Shared helpers for the legacy Gemini-flavored call sites in server.ts
- * (the `/api/v1/signals`, `/api/v1/chaos/*`, `/api/v1/autobot/evolve`, and
- * `/api/v1/llm/*` routes). Extracted structurally only — behavior is unchanged.
+ * (the `/api/v1/chaos/*`, `/api/v1/autobot/evolve`, and
+ * `/api/v1/llm/*` routes; GET `/api/v1/signals` is quarantined). Extracted structurally only — behavior is unchanged.
  *
  * These calls do not actually touch the Gemini SDK directly: every real request
  * is routed through `AIRouter.getInstance().routeTask('General', ...)`, so the

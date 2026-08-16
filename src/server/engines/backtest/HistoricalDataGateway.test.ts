@@ -163,4 +163,30 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
     expect(visible[0].impactScore).toBe(91);
     expect(visible[0].publishedAtMs).toBeLessThanOrEqual(nowMs);
   });
+
+  it('returns AI rows published at or before simulated now and hides later rows', async () => {
+    const nowMs = Date.UTC(2024, 5, 4, 16, 0, 0);
+    await historicalDataGateway.ingestPitLedgerEntry({
+      asOfMs: nowMs - 1_000,
+      publishedAtMs: nowMs - 1_000,
+      symbol: 'AICO',
+      kind: 'AGENT_REASONING',
+      agent: 'TechnicalAgent',
+      side: 'BUY',
+      confidence: 0.8,
+    });
+    await historicalDataGateway.ingestPitLedgerEntry({
+      asOfMs: nowMs + 1_000,
+      publishedAtMs: nowMs + 1_000,
+      symbol: 'AICO',
+      kind: 'AGENT_REASONING',
+      agent: 'NewsAgent',
+      side: 'BUY',
+      confidence: 0.9,
+    });
+    const visible = await historicalDataGateway.getPitAiRowsAsOf('AICO', nowMs, nowMs - 60_000);
+    expect(visible).toHaveLength(1);
+    expect(visible[0].agent).toBe('TechnicalAgent');
+    expect(visible[0].publishedAtMs).toBeLessThanOrEqual(nowMs);
+  });
 });

@@ -13,7 +13,8 @@ import { eventBus } from './EventBus';
 import { v4 as uuidv4 } from 'uuid';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { PERSISTED_EVENTS } from './eventNames';
+import { PERSISTED_EVENTS, EVENTS } from './eventNames';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 export interface EventEnvelope {
   eventId: string;
@@ -25,13 +26,9 @@ export interface EventEnvelope {
   payload: any;
 }
 
-const SCHEMA_VERSION = 1;
-const MAX_RECENT_EVENTS = 200;
-// tradeTraces previously grew forever (one entry per traceId, never removed) -
-// a real unbounded memory leak over a long-running process. Cap the number of
-// distinct traces retained in memory and evict the oldest by insertion order;
-// the DB copy below is unaffected and remains queryable after eviction.
-const MAX_TRACES = 500;
+const SCHEMA_VERSION = runtimeIntervals.eventStoreSchemaVersion;
+const MAX_RECENT_EVENTS = runtimeIntervals.eventStoreMaxRecentEvents;
+const MAX_TRACES = runtimeIntervals.eventStoreMaxTraces;
 
 export const recentEvents: EventEnvelope[] = [];
 export const tradeTraces: Record<string, EventEnvelope[]> = {};
@@ -49,7 +46,7 @@ function evictOldTraces() {
 // (bounded, same as before) but never written to SQLite, or the event_traces table
 // would grow unbounded and add write load to every tick. Only the actual decision-
 // lifecycle events (one per trade idea, not per tick) are durably persisted.
-const NO_PERSIST_TYPES = new Set(['MARKET_DATA', 'CALCULATION_COMPLETED']);
+const NO_PERSIST_TYPES = new Set([EVENTS.MARKET_DATA, EVENTS.CALCULATION_COMPLETED]);
 
 const trackEvent = (type: string) => (payload: any) => {
   const correlationId: string | null = payload?.traceId || payload?.trace_id || payload?.correlationId || null;
@@ -91,6 +88,21 @@ const trackEvent = (type: string) => (payload: any) => {
       eventType: type,
       payload: JSON.stringify(payload),
     }).catch((e) => console.error('[EventStore] Failed to persist event trace', e));
+  }
+
+  if (type === EVENTS.TRADE_LIFECYCLE || type === EVENTS.DESK_NO_TRADE) {
+    const candidateId = correlationId || envelope.eventId;
+    const state = type === EVENTS.DESK_NO_TRADE ? (payload?.code || 'NO_TRADE') : (payload?.state || 'UNKNOWN');
+    import('./TradeLifecycleStore').then(({ persistLifecycleTransition }) => {
+      persistLifecycleTransition({
+        candidateId,
+        symbol: payload?.symbol || 'UNKNOWN',
+        state: String(state),
+        reason: payload?.reason ?? payload?.code ?? null,
+        source: envelope.source,
+        evidence: { type, payload },
+      });
+    }).catch((e) => console.error('[EventStore] lifecycle persist failed', e));
   }
 };
 

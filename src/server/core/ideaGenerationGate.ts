@@ -1,6 +1,7 @@
 /**
- * Idea agents must not emit TRADE_IDEA_GENERATED from MARKET_DATA unless Autobot is on
- * and tradingState is TRADING_ENABLED. Ticks may still be recorded for warmup.
+ * Tick-driven idea agents must ignore MARKET_DATA unless Autobot is on
+ * (`tradingEngine.state.enabled`, the same flag the UI calls autoBotConfig.enabled)
+ * and tradingState is TRADING_ENABLED. No warmup from Autobot-off ticks.
  */
 import { tradingEngine } from '../engines/TradingEngine';
 

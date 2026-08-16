@@ -12,6 +12,7 @@ import https from 'https';
 import { eventBus } from '../core/EventBus';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 import { preferIpv4Loopback } from './preferIpv4Loopback';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 export type ModelHealthStatus = 'READY' | 'FAILED' | 'DISABLED' | 'STARTING';
 
@@ -38,7 +39,7 @@ const IBKR_URL = process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api'
 
 const children: ChildProcess[] = [];
 
-async function probe(url: string, timeoutMs = 2000): Promise<{ ok: boolean; latencyMs: number; body?: any; error?: string }> {
+async function probe(url: string, timeoutMs = runtimeIntervals.modelRuntimeProbeTimeoutMs): Promise<{ ok: boolean; latencyMs: number; body?: any; error?: string }> {
   const t0 = Date.now();
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });

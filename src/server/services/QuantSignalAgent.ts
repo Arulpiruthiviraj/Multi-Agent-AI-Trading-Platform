@@ -23,6 +23,7 @@
  */
 import crypto from 'crypto';
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { marketDataWorker } from './MarketDataWorker';
@@ -43,21 +44,20 @@ import { riskRewardRatio, expectedValue } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety } from '../config/tradingSafety';
+import { deskIntelligence, rankEvaluationsForRegime } from '../config/deskIntelligence';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { assessDataQuality } from '../core/dataQuality';
+import { getNewsCatalysts } from './NewsCatalystStore';
+import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
 
 const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
 const LOOKBACK_DAYS = tradingSafety.quantLookbackDays;
 const TIMEFRAME = '1Day';
 const MIN_BARS_TO_EVALUATE = MIN_BARS;
 
-// Phase-3 baseline mapping from regime to a trade idea (regime alone, no strategy-setup
-// evaluation). Phase 4 wires the real StrategyEngine in as the PRIMARY idea source
-// (evaluateSymbol below tries bestStrategyIdea() first) - this function now serves only as an
-// honest fallback for the case where no individual strategy's conditions clear its own confidence
-// bar but the regime itself is still a real, reasonably confident directional read. Only fires on
-// a real, reasonably confident directional regime read - a SIDEWAYS_RANGE or low-confidence regime
-// emits no idea at all, same as TechnicalAgent's rule blocks only fire when their real conditions
-// are actually met.
-const MIN_REGIME_CONFIDENCE_TO_TRADE = 0.6;
+// Kept for unit tests of the historical regime mapping. Live evaluateSymbol must NOT emit this
+// as a trade idea — no EV, stop, or target.
+const MIN_REGIME_CONFIDENCE_TO_TRADE = tradingSafety.minRegimeConfidenceToTrade;
 
 export interface DerivedIdea {
   side: 'BUY' | 'SELL';
@@ -178,7 +178,14 @@ export class QuantSignalAgent {
     const traceId = `quant-${symbol}-${crypto.randomUUID()}`;
     // Phase 4: the real Strategy Engine is the primary idea source; the Phase-3 regime-only mapping
     // is an honest fallback for when no individual strategy's own conditions clear its confidence bar.
-    let strategyIdea = bestStrategyIdea(strategyEvaluations);
+    const ranked = rankEvaluationsForRegime(strategyEvaluations, regime.regime);
+    const forPick = regime.volatility === 'HIGH'
+      ? ranked.map(e => ({
+          ...e,
+          confidence: Math.round(e.confidence * deskIntelligence.highVolatilityConfidenceMultiplier * 100) / 100,
+        }))
+      : ranked;
+    let strategyIdea = bestStrategyIdea(forPick);
     let matchedStrategyEvaluation = strategyIdea ? strategyEvaluations.find(e => e.strategy === strategyIdea!.strategy) ?? null : null;
 
     // Phase 16F (ARGUS_PHASE16_READINESS_REPORT.md) - a strategy-sourced idea (real stop/target,
@@ -205,10 +212,22 @@ export class QuantSignalAgent {
         console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} real expected value is ${ev ? ev.expectedValueR.toFixed(3) + 'R' : 'uncomputable'} (${liveWinRate.sampleSize} real closed trades, win rate ${(liveWinRate.winProbability * 100).toFixed(1)}%) - not a real edge, not emitting a live trade idea from it.`);
         strategyIdea = null;
         matchedStrategyEvaluation = null;
+      } else if (rr && rr.ratio !== null && rr.ratio < deskIntelligence.minRiskRewardRatio) {
+        console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} R:R ${rr.ratio.toFixed(2)} is below desk min ${deskIntelligence.minRiskRewardRatio} - NO TRADE.`);
+        strategyIdea = null;
+        matchedStrategyEvaluation = null;
       }
     }
 
-    const idea = strategyIdea ?? deriveIdeaFromRegime(regime);
+    const idea = strategyIdea;
+    if (!idea) {
+      eventBus.emit(EVENTS.DESK_NO_TRADE, {
+        traceId,
+        symbol,
+        code: strategyEvaluations.some(e => e.confidence >= 0.01) ? 'EXPECTED_VALUE_TOO_LOW' : 'INSUFFICIENT_EVIDENCE',
+        reason: 'Quant live emit requires a strategy idea that clears live EV and min R:R. Regime-only fallback is not a trade.',
+      });
+    }
 
     // Phase 7: AI contradiction/scenario review - only run when there's a real candidate idea to
     // review (never on a no-op cycle) and never allowed to touch idea.side/idea.confidence, which
@@ -223,14 +242,18 @@ export class QuantSignalAgent {
       }, traceId);
     }
 
-    if (idea) {
+    let emittedTradeIdea = false;
+    if (idea && isLiveIdeaGenerationEnabled()) {
+      const dataQuality = assessDataQuality(symbol);
+      if (dataQuality.tradeBlocked) {
+        eventBus.emit(EVENTS.DESK_NO_TRADE, {
+          traceId, symbol, code: 'STALE_MARKET_DATA', reason: dataQuality.blockReason,
+        });
+      } else {
+      const catalysts = getNewsCatalysts(symbol);
       eventBus.emitTradeIdea({
         traceId, symbol, side: idea.side, confidence: idea.confidence,
         currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
-        // Additive only - every existing TRADE_IDEA_GENERATED consumer (ChiefTraderAgent chief
-        // among them) already ignores fields it doesn't know about, so this is safe to add without
-        // touching the required {traceId,symbol,side,confidence,reasoning,agent,currentPrice} shape
-        // every other agent's emission still uses unchanged. Phase 8 is what actually reads this.
         quantDetail: {
           regime,
           strategyEvaluation: matchedStrategyEvaluation,
@@ -243,18 +266,48 @@ export class QuantSignalAgent {
             groupedScores,
             bars,
           }),
-          // Structured why-buy / why-not-buy from engines. Not an order; approval math unchanged.
+          ensembleRanking: ranked.map(e => ({
+            strategy: e.strategy,
+            regimeRelevance: e.regimeRelevance,
+            ensembleScore: e.ensembleScore,
+            setupScore: e.setupScore,
+            confidence: e.confidence,
+          })),
+          dataQuality,
+          newsCatalysts: catalysts.slice(0, 5),
           tradeThesis: assembleTradeThesis({
             symbol,
             ctx: strategyContext,
             evaluation: matchedStrategyEvaluation,
             ideaSide: idea.side,
+            reasonsNotToTrade: [
+              ...(matchedStrategyEvaluation?.contradictions ?? []),
+              ...(matchedStrategyEvaluation?.conditionsFailed.map(c => `Unmet: ${c}`) ?? []),
+              ...(catalysts.length === 0 ? ['No contemporaneous news catalyst (not required, but listed as why-not)'] : []),
+            ],
+            relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+            relativeStrengthVsSector: strategyContext.marketContext.relativeStrengthVsSector?.relativeStrengthPct ?? null,
+            vwapDistancePct: strategyContext.volume.vwap.distancePct,
+            catalystContribution: catalysts[0]?.contribution ?? null,
+          }),
+          eliteTraderDecision: buildEliteTraderDecision({
+            symbol,
+            regime,
+            evaluation: matchedStrategyEvaluation,
+            dataQuality,
+            catalystContribution: catalysts[0]?.contribution ?? null,
+            relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+            vwapDistancePct: strategyContext.volume.vwap.distancePct,
+            contradictions: matchedStrategyEvaluation?.contradictions,
+            newsEmitsTradeIdeas: deskIntelligence.newsEmitsTradeIdeas,
           }),
         },
       });
+      emittedTradeIdea = true;
+      }
     }
 
-    eventBus.emit('QUANT_ASSESSMENT_COMPLETED', { traceId, symbol, regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis, timestamp: new Date().toISOString(), emittedTradeIdea: idea !== null });
+    eventBus.emit(EVENTS.QUANT_ASSESSMENT_COMPLETED, { traceId, symbol, regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis, timestamp: new Date().toISOString(), emittedTradeIdea });
 
     try {
       await db.insert(schema.quantAssessments).values({
@@ -266,7 +319,7 @@ export class QuantSignalAgent {
         strategyEvaluations: JSON.stringify(strategyEvaluations),
         groupedScores: JSON.stringify(groupedScores),
         aiContradictionAnalysis: aiContradictionAnalysis ? JSON.stringify(aiContradictionAnalysis) : null,
-        emittedTradeIdea: idea !== null,
+        emittedTradeIdea,
         createdAt: new Date().toISOString(),
       });
     } catch (e: any) {

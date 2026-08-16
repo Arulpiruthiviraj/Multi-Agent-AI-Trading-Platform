@@ -1,11 +1,10 @@
 /**
- * Chaos-engineering routes: latency/error injection config for the legacy
- * `/api/v1/signals` simulation, plus synthetic macro-shock injection/clear.
+ * Chaos-engineering routes: latency/error injection config for diagnostics,
+ * plus synthetic macro-shock injection/clear.
  * Extracted from server.ts structurally only — behavior is unchanged.
  *
- * `chaosConfig` is exported (not just the router) because the legacy
- * `/api/v1/signals` handler in server.ts reads it directly to decide whether
- * to simulate per-agent latency/errors on a given request.
+ * `chaosConfig` remains exported for the chaos HTTP API. GET /api/v1/signals is
+ * quarantined and no longer reads this config.
  */
 import { Router, Request, Response } from "express";
 import { tradingEngine } from "../engines/TradingEngine";

@@ -93,7 +93,7 @@ import { analyticsRouter } from "./src/server/routes/analyticsRoutes";
 import { webhooksRouter, triggerWebhooks } from "./src/server/routes/webhooks";
 import { generateContentWithRetry, cleanAndParseJSON } from "./src/server/ai/legacyGeminiHelpers";
 import { auditLog, AUDIT_LOG_FILE } from "./src/server/core/auditLog";
-import { chaosRouter, chaosConfig } from "./src/server/routes/chaosRoutes";
+import { chaosRouter } from "./src/server/routes/chaosRoutes";
 import { systemRouter } from "./src/server/routes/systemRoutes";
 import { newsRouter } from "./src/server/routes/newsRoutes";
 import { autobotRouter } from "./src/server/routes/autobotRoutes";
@@ -1300,7 +1300,7 @@ let portfolioState = loadPortfolio();
 
   // Legacy GET /api/v1/signals fabricated agent votes and wrote portfolio.json, bypassing
   // RiskEngine / OMS / trades. Quarantined: clients must use the live EventBus path.
-  app.get("/api/v1/signals", (_req: Request, res: Response) => {
+  app.all("/api/v1/signals", (_req: Request, res: Response) => {
     res.status(410).json({
       error: "GONE",
       code: "SIGNALS_PATH_QUARANTINED",
@@ -1503,218 +1503,35 @@ let portfolioState = loadPortfolio();
   app.use("/api/v1", systemRouter);
 
   app.post("/api/v1/llm/dual-verify-trade", tradingLimiter, aiLimiter, async (req: Request, res: Response) => {
-    const { symbol, marketContext, headline, proposerStressed, verifierStressed, proposerName, verifierName, adversarialDebateMode } = req.body;
-    if (!symbol || !headline) return res.status(400).json({ error: "Missing symbol or headline" });
-    
-    if (!ai) {
-      return res.status(503).json({ error: "Gemini AI not initialized on the server." });
-    }
-
-    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
-    try {
-      // Proposer Failure/Latency Simulation
-      if (proposerStressed) {
-        await sleep(1500 + Math.random() * 2000); 
-        if (Math.random() > 0.6) {
-           throw new Error(`[Stress Test] ${proposerName || 'Proposer Agent'} endpoint timed out or returned 502 Bad Gateway.`);
-        }
-      }
-
-      // Step 1: The Proposer Agent
-      const proposerPrompt = `You are a highly assertive, quantitative day-trading agent (The Proposer). Given the following market data, propose a definitive trade decision.
-Asset: ${symbol}
-Headline: "${headline}"
-Market Context (which may include technicals like VWAP, RSI, MACD, Bollinger Bands, or strategy hints like Scalping/Momentum/Mean Reversion): ${marketContext || "Normal market conditions."}
-
-Evaluate the data using standard day trading methodology (e.g., buying when breaking out above VWAP on volume, selling when RSI is overbought).
-Output MUST be valid JSON (and no other text) exactly matching this structure:
-{
-  "decision": "BUY" | "SELL" | "HOLD",
-  "reasoning": "Brief explanation of the rationale, mentioning technical indicators if present",
-  "thinking": "Internal thought process of the proposer in 1 sentence"
-}`;
-
-      let proposerOutput: any = { decision: "HOLD", reasoning: "Failed to parse proposer output" };
-      let debateDetails: any = null;
-
-      if (adversarialDebateMode) {
-        try {
-          const { bull, bear } = await generateCompetingTheses(
-                        ai,
-                        symbol,
-                        `Verification-triggered scan for ${symbol}`,
-                        `Headline context: ${headline}. Market context: ${marketContext || "Normal market conditions."}`,
-                        "",
-                        ""
-                     );
-
-          const judgePrompt = `You are the Principal Proposer Agent acting as the Consensus Judge (Agent 1). Your job is to review the competing briefs submitted by our Bull Analyst (Agent 1a) and Bear Analyst (Agent 1b), weigh them objectively, and render the final system decision (BUY, SELL, or HOLD) for ${symbol}.
-Bull Brief: "${bull.thesis}" (Target: $${bull.target_price})
-Bear Brief: "${bear.thesis}" (Trigger: $${bear.stop_trigger_price})
-
-Asset: ${symbol}
-Headline: "${headline}"
-Market Context: ${marketContext || "Normal market conditions."}
-
-Resolve the debate. Force a final consensus decision.
-Output MUST be valid JSON (and no other text) matching this exact structure:
-{
-  "decision": "BUY" | "SELL" | "HOLD",
-  "reasoning": "1-sentence explanation of how you resolved the conflict between the Bull and Bear briefs to reach this final verdict",
-  "thinking": "Brief internal thought process"
-}`;
-
-          const judgeRes = await generateContentWithRetry(ai, {
-            model: "gemini-3.5-flash",
-            contents: judgePrompt,
-            config: { responseMimeType: "application/json", temperature: 0.5 }
-          });
-
-          const parsedJudge = cleanAndParseJSON(judgeRes.text);
-          if (parsedJudge) {
-            proposerOutput = parsedJudge;
-          } else {
-            console.log("Failed to parse judge JSON. Raw text:", judgeRes.text);
-          }
-
-          debateDetails = {
-            bull,
-            bear,
-            resolved: true
-          };
-
-        } catch (debateErr: any) {
-          console.error("Adversarial Debate failed in verification endpoint, falling back:", debateErr);
-          const proposerRes = await generateContentWithRetry(ai, {
-            model: "gemini-3.5-flash",
-            contents: proposerPrompt,
-            config: { responseMimeType: "application/json", temperature: 0.7 }
-          });
-          proposerOutput = cleanAndParseJSON(proposerRes.text) || proposerOutput;
-        }
-      } else {
-        const proposerRes = await generateContentWithRetry(ai, {
-          model: "gemini-3.5-flash",
-          contents: proposerPrompt,
-          config: {
-              responseMimeType: "application/json",
-              temperature: 0.7
-          }
-        });
-        
-        proposerOutput = cleanAndParseJSON(proposerRes.text) || proposerOutput;
-      }
-
-      // Verifier Failure/Latency Simulation
-      if (verifierStressed) {
-        await sleep(1500 + Math.random() * 2000);
-        if (Math.random() > 0.6) {
-           throw new Error(`[Stress Test] ${verifierName || 'Verifier Agent'} endpoint rejected the connection due to simulated rate limiting.`);
-        }
-      }
-
-      // Step 2: The Verifier Agent (Vigorous critic)
-      const verifierPrompt = `You are a skeptical, highly rigorous Risk and Verification Agent. Your job is to rigorously critique the decision proposed by another AI agent. Look for cognitive biases, impulsivity, or "procrastination" (unnecessary holding).
-Asset: ${symbol}
-Headline: "${headline}"
-Proposer's Decision: ${proposerOutput.decision}
-Proposer's Reasoning: ${proposerOutput.reasoning}
-
-Question the logic vigorously. Do they lack evidence? Is it too greedy or too fearful?
-Output MUST be valid JSON (and no other text) exactly matching this structure:
-{
-  "verified_decision": "BUY" | "SELL" | "HOLD",
-  "critique": "Your aggressive critique and reasoning for either overriding or accepting the proposal",
-  "confidence_score": 0.0 to 1.0,
-  "thinking": "Internal verification thought process in 1 sentence"
-}`;
-
-      const verifierRes = await generateContentWithRetry(ai, {
-        model: "gemini-3.5-flash", // We use the same model but distinct persona instructions
-        contents: verifierPrompt,
-        config: {
-            responseMimeType: "application/json",
-            temperature: 0.2 // Lower temp for more analytical, strict behavior
-        }
-      });
-
-      let verifierOutput: any = cleanAndParseJSON(verifierRes.text) || { verified_decision: "HOLD", critique: "Failed to parse verifier output", confidence_score: 0 };
-
-      res.json({
-          symbol,
-          headline,
-          proposer: proposerOutput,
-          verifier: verifierOutput,
-          final_decision: verifierOutput.verified_decision,
-          debate: debateDetails,
-          timestamp: new Date().toISOString()
-      });
-
-    } catch (e: any) {
-      console.error("Dual-verify error:", e);
-      res.status(500).json({ error: e.message || "Failed dual-verification" });
-    }
+    return res.status(410).json({
+      error: "GONE",
+      code: "DUAL_VERIFY_QUARANTINED",
+      message: "This sandbox invented BUY/SELL JSON without EventBus, ChiefTrader, RiskEngine, or OMS.",
+    });
   });
 
-  app.post("/api/v1/event-memory/feedback", async (req, res) => {
-    try {
-      res.json({ ok: true });
-    } catch (e) {
-      res.json({ ok: false });
-    }
+  app.post("/api/v1/event-memory/feedback", (_req, res) => {
+    res.status(410).json({
+      ok: false,
+      code: "EVENT_MEMORY_QUARANTINED",
+      what: "Fabricated vector event-memory",
+      why: "GET /api/v1/event-memory previously returned canned 82% Trade War text and pseudo-scores.",
+      impact: "That endpoint must not be used as model memory or trade evidence.",
+      howToFix: "Use persisted trades, event_traces, and GET /api/v2/desk/lifecycle. Do not restore the canned matcher.",
+    });
   });
 
-  app.get("/api/v1/event-memory", async (req: Request, res: Response) => {
-    const query =
-      (req.query.query as string) || "restrictive machinery tariffs";
-
-    console.log(
-      `Searching semantic precedent similarity for query: "${query}"...`,
-    );
-
-    let geminiContext = "";
-    if (ai) {
-      try {
-        const g_res = await generateContentWithRetry(ai, {
-          model: "gemini-3.5-flash",
-          contents: `You are an institutional trading platform strategist. Analyze this situation: "${query}". Answer 'Have we seen something similar before?' by referencing a major historical economy precedent (like 2018 Trade War, 2020 Pandemic, 2008 Lehman collapse). Detail why they correlate contextually, the asset reactions, and suggest defensive trade postures. Be concise and authoritative.`,
-        });
-        if (g_res && g_res.text) geminiContext = g_res.text;
-      } catch (e: any) {
-        console.warn(
-          "Gemini event memory query failed. Fallback applied.",
-          e.message,
-        );
-      }
-    }
-
-    if (!geminiContext) {
-      geminiContext = `Yes, we have seen comparable scenarios before. Based on your scenario '${query}', our historical database identifies a strong statistical trend match of 82% to the "2018 Sino-US Trade War Escalation" where technology asset margins contracted under tariff threats, causing defensive capital rotations to hard commodities.`;
-    }
-
-    // Calculate scores
-    const results = historicalPrecedents
-      .map((ev, i) => {
-        // Generate a simple pseudo score
-        const score = query.toLowerCase().includes(ev.category)
-          ? 0.88
-          : 0.42 - i * 0.08;
-        return {
-          score,
-          confidence: Math.max(0.5, Math.min(1.0, 0.5 + score * 3)),
-          title: ev.title,
-          category: ev.category,
-          description: ev.description,
-          impact: ev.marketImpact,
-        };
-      })
-      .sort((a, b) => b.score - a.score);
-
-    res.json({
-      query,
-      summary: geminiContext,
-      matches: results.slice(0, 2),
+  app.get("/api/v1/event-memory", (_req: Request, res: Response) => {
+    res.status(410).json({
+      ok: false,
+      code: "EVENT_MEMORY_QUARANTINED",
+      available: false,
+      summary: "NO HISTORICAL DATA",
+      matches: [],
+      what: "Semantic event memory",
+      why: "No real vector memory index exists. The previous handler invented precedents.",
+      impact: "Precedent search cannot inform trades. Decision history is SQLite, not this route.",
+      howToFix: "Query GET /api/v2/desk/lifecycle and GET /api/v2/data/trades. Do not fabricate similarity scores.",
     });
   });
 

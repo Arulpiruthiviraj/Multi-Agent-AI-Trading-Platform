@@ -1,0 +1,18 @@
+{
+  "$comment": "Research-only thresholds. Not live knobs. VectorBT cannot place orders. LIVE_CANDIDATE requires every boolean true; missing evidence stays false.",
+  "pythonTimeoutMs": 25000,
+  "minPaperTrades": 30,
+  "minPaperSessions": 10,
+  "minOosTrades": 30,
+  "minWalkForwardWindows": 3,
+  "permutationAlpha": 0.05,
+  "costStressMaxMultipleStillProfitable": 2,
+  "goldenSmaFast": 3,
+  "goldenSmaSlow": 8,
+  "smallAccountCapitals": [100, 500, 1000, 5000],
+  "allowlistedJobs": ["capability", "golden_sma", "walk_forward_golden", "cost_stress_golden"],
+  "allowlistedStrategies": ["GOLDEN_SMA", "SMA_CROSSOVER"],
+  "coreStrategyIds": ["MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION", "MEAN_REVERSION", "TREND_FOLLOWING", "RANGE_REVERSION"],
+  "experimentalStrategyIds": ["SMC_LIQUIDITY_SWEEP"],
+  "proxyAdapterNote": "CORE VectorBT adapters are measurement proxies, not byte-identical to StrategyEngine feature evaluations."
+}

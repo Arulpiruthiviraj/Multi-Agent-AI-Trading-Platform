@@ -72,6 +72,28 @@ export interface TradingSafety {
   newsVetoWindowMs: number;
   usEquityRthOpenMinute: number;
   usEquityRthCloseMinute: number;
+  reconSignificantMismatchDollars: number;
+  reconAccountConsistencyTolerancePct: number;
+  reconAccountConsistencyToleranceFloorDollars: number;
+  reconQtyTolerance: number;
+  fallbackTakeProfitPct: number;
+  fallbackTrailingStopPct: number;
+  internalPaperDefaultCash: number;
+  minSampleSizeForTrust: number;
+  minTradesForPaperValidation: number;
+  maxKellyFractionOfCapital: number;
+  kellyFractionDefault: number;
+  evaluationHorizonMs: number;
+  tradingDaysPerYear: number;
+  newsDecisiveSentimentThreshold: number;
+  aiDecisionTemperature: number;
+  minRegimeConfidenceToTrade: number;
+  monteCarloDefaultSeed: number;
+  sameSymbolCooldownMs: number;
+  postLossCooldownMs: number;
+  /** 0 = unlimited FILLED trades per NY session. */
+  maxDailyTrades: number;
+  duplicateSignalWindowMs: number;
 }
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
@@ -138,6 +160,27 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'newsVetoWindowMs',
   'usEquityRthOpenMinute',
   'usEquityRthCloseMinute',
+  'reconSignificantMismatchDollars',
+  'reconAccountConsistencyTolerancePct',
+  'reconAccountConsistencyToleranceFloorDollars',
+  'reconQtyTolerance',
+  'fallbackTakeProfitPct',
+  'fallbackTrailingStopPct',
+  'internalPaperDefaultCash',
+  'minSampleSizeForTrust',
+  'minTradesForPaperValidation',
+  'maxKellyFractionOfCapital',
+  'kellyFractionDefault',
+  'evaluationHorizonMs',
+  'tradingDaysPerYear',
+  'newsDecisiveSentimentThreshold',
+  'aiDecisionTemperature',
+  'minRegimeConfidenceToTrade',
+  'monteCarloDefaultSeed',
+  'sameSymbolCooldownMs',
+  'postLossCooldownMs',
+  'maxDailyTrades',
+  'duplicateSignalWindowMs',
 ];
 
 function loadTradingSafety(): TradingSafety {

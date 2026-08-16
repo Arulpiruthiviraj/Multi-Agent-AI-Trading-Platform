@@ -1,5 +1,6 @@
 import { eventBus } from '../../core/EventBus';
 import { preferIpv4Loopback } from '../../ai/preferIpv4Loopback';
+import { runtimeIntervals } from '../../config/runtimeIntervals';
 
 export type KronosStatus = 'Loading...' | 'Downloading...' | 'Initializing...' | 'Ready' | 'Warning: Kronos unavailable';
 
@@ -8,7 +9,7 @@ const SERVICE_URL = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http
 // local_ai_service.py) is meant to be started/stopped independently of the Node process, like
 // Ollama. A one-shot boot-time check would permanently report unavailable if the service was
 // started a moment after this process, even once it's actually up and reachable.
-const RECHECK_INTERVAL_MS = 30 * 1000;
+const RECHECK_INTERVAL_MS = runtimeIntervals.kronosRecheckMs;
 
 export class KronosModelManager {
   private status: KronosStatus = 'Loading...';

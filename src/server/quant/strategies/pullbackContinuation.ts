@@ -10,10 +10,11 @@
  * ==========================================================
  */
 import { StrategyContext, StrategyDefinition, StrategyEvaluation, scoreFromConditions } from './types';
+import { quantThresholds } from '../../config/quantThresholds';
 
-const PULLBACK_TOLERANCE_PCT = 3; // how close to the MA counts as "pulled back to it"
-const HEALTHY_RSI_MIN = 35;
-const HEALTHY_RSI_MAX = 65;
+const PULLBACK_TOLERANCE_PCT = quantThresholds.pullbackTolerancePct;
+const HEALTHY_RSI_MIN = quantThresholds.healthyRsiMin;
+const HEALTHY_RSI_MAX = quantThresholds.healthyRsiMax;
 
 export const pullbackContinuation: StrategyDefinition = {
   id: 'PULLBACK_CONTINUATION',

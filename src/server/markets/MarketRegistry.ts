@@ -18,9 +18,18 @@ interface MarketsFile {
   }>;
   suffixToExchange: Record<string, Listing>;
   defaultListing: Listing;
+  rsiScanDefaultSymbols: string[];
+  rsiScanUnavailableSymbols: string[];
 }
 
 const file = loadRepoConfigJson<MarketsFile>('markets.json');
+
+if (!Array.isArray(file.rsiScanDefaultSymbols) || file.rsiScanDefaultSymbols.some((s) => typeof s !== 'string')) {
+  throw new Error('config/markets.json missing rsiScanDefaultSymbols string array');
+}
+if (!Array.isArray(file.rsiScanUnavailableSymbols) || file.rsiScanUnavailableSymbols.some((s) => typeof s !== 'string')) {
+  throw new Error('config/markets.json missing rsiScanUnavailableSymbols string array');
+}
 
 export const MARKET_REGISTRY = file;
 

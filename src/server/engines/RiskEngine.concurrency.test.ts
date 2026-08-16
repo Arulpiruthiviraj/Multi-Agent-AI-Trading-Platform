@@ -70,6 +70,7 @@ const { mockTradingEngine } = vi.hoisted(() => ({
       tradingMode: 'PAPER',
       tradingState: 'TRADING_ENABLED' as 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP',
       emergencyStopActive: false,
+      enabled: true,
     },
   },
 }));

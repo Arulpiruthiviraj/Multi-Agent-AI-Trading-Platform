@@ -7,6 +7,7 @@ const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea } }));
+vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
 vi.mock('./ExternalDataCache', () => ({
   ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), set: setCache, markRateLimited: vi.fn() },

@@ -44,6 +44,7 @@ const { mockTradingEngine } = vi.hoisted(() => ({
       tradingMode: 'PAPER',
       tradingState: 'TRADING_ENABLED' as 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP',
       emergencyStopActive: false,
+      enabled: true,
       budget: 50000,
     },
   },
@@ -106,6 +107,7 @@ describe('RiskEngine.evaluateRisk', () => {
     mockTradingEngine.state.currentDailyLoss = 0;
     mockTradingEngine.state.dailyLossLimit = 5000;
     mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
+    mockTradingEngine.state.enabled = true;
     mockTradingEngine.state.emergencyStopActive = false;
     mockTradingEngine.state.budget = 1_000_000;
     mockTradingEngine.state.tradingMode = 'PAPER';
@@ -585,5 +587,25 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.approved).toBe(false);
     expect(assessment.reasoning).toMatch(/Daily buy notional cap/i);
+  });
+
+  it('blocks new BUY when Autobot is off without treating it as emergency_stop', async () => {
+    mockTradingEngine.state.enabled = false;
+    mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
+    await riskEngine.evaluateRisk({ traceId: 'autobot-off-buy', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/AUTOBOT_DISABLED/);
+    mockTradingEngine.state.enabled = true;
+  });
+
+  it('does not use autobot_enabled to block SELL/exits while TRADING_ENABLED', async () => {
+    mockTradingEngine.state.enabled = false;
+    mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
+    setTableRows(schema.portfolio, [{ symbol: 'AAPL', quantity: 10, averagePrice: 100 }]);
+    await riskEngine.evaluateRisk({ traceId: 'autobot-off-sell', symbol: 'AAPL', side: 'SELL', currentPrice: 100 });
+    const assessment = lastAssessment();
+    expect(assessment.reasoning).not.toMatch(/AUTOBOT_DISABLED/);
+    mockTradingEngine.state.enabled = true;
   });
 });

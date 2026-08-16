@@ -21,20 +21,21 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { kronosEngine } from '../engines/kronos/KronosEngine';
 import { ForecastPrediction } from '../engines/forecasting/IForecastEngine';
+import { quantThresholds } from '../config/quantThresholds';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 // Chronos needs a real window of history to say anything meaningful about the next few steps -
 // this is a real minimum, not an arbitrary one: too short a context is indistinguishable from
 // noise for any time-series model.
-const MIN_HISTORY = 30;
-const MAX_HISTORY = 200;
-// The local inference service call has real latency (a few hundred ms on CPU) - this cooldown
-// keeps KronosForecastAgent from calling it on every single tick per symbol.
-const PREDICTION_COOLDOWN_MS = 60_000;
-const HORIZON = 5;
-const TIMEFRAME = 'tick';
+const MIN_HISTORY = quantThresholds.kronosMinHistory;
+const MAX_HISTORY = quantThresholds.kronosMaxHistory;
+const PREDICTION_COOLDOWN_MS = runtimeIntervals.kronosPredictionCooldownMs;
+const HORIZON = quantThresholds.kronosHorizon;
+const TIMEFRAME = quantThresholds.kronosTimeframe;
 
 export class KronosForecastAgent {
   private priceHistory: Record<string, number[]> = {};
@@ -45,6 +46,7 @@ export class KronosForecastAgent {
   }
 
   private async onTick(data: { symbol?: string; price?: number }) {
+    if (!isLiveIdeaGenerationEnabled()) return;
     if (!data?.symbol || typeof data.price !== 'number' || !Number.isFinite(data.price)) return;
 
     const history = this.priceHistory[data.symbol] || (this.priceHistory[data.symbol] = []);
@@ -52,7 +54,6 @@ export class KronosForecastAgent {
     if (history.length > MAX_HISTORY) history.shift();
 
     if (history.length < MIN_HISTORY) return;
-    if (!isLiveIdeaGenerationEnabled()) return;
     if (!kronosEngine.getStatus().isAvailable) return;
 
     const last = this.lastPredictionAt[data.symbol] || 0;
@@ -75,19 +76,19 @@ export class KronosForecastAgent {
   private broadcastForecast(prediction: ForecastPrediction) {
     if (prediction.prediction === 'BUY' || prediction.prediction === 'SELL') {
       if (prediction.confidence > 0.8) {
-        eventBus.publish('KRONOS_HIGH_CONFIDENCE', prediction);
+        eventBus.publish(EVENTS.KRONOS_HIGH_CONFIDENCE, prediction);
       } else if (prediction.confidence < 0.4) {
-        eventBus.publish('KRONOS_LOW_CONFIDENCE', prediction);
+        eventBus.publish(EVENTS.KRONOS_LOW_CONFIDENCE, prediction);
       }
 
       if (prediction.marketStructure?.includes('reversal')) {
-        eventBus.publish('KRONOS_REVERSAL', prediction);
+        eventBus.publish(EVENTS.KRONOS_REVERSAL, prediction);
       }
       if (prediction.marketStructure?.includes('breakout')) {
-        eventBus.publish('KRONOS_BREAKOUT', prediction);
+        eventBus.publish(EVENTS.KRONOS_BREAKOUT, prediction);
       }
 
-      eventBus.publish('TRADE_IDEA_GENERATED', {
+      eventBus.publish(EVENTS.TRADE_IDEA_GENERATED, {
         traceId: `kronos-${Date.now()}`,
         symbol: prediction.symbol,
         side: prediction.prediction,

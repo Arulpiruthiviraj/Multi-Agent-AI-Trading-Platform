@@ -17,12 +17,8 @@ export function eventName(key: string): string {
   return value;
 }
 
-export const EVENTS = {
-  POSITION_MONITORED: eventName('POSITION_MONITORED'),
-  POSITION_RISK_CHANGED: eventName('POSITION_RISK_CHANGED'),
-  PORTFOLIO_UPDATE: eventName('PORTFOLIO_UPDATE'),
-  TRADE_IDEA_GENERATED: eventName('TRADE_IDEA_GENERATED'),
-  AGENT_DISAGREEMENT: eventName('AGENT_DISAGREEMENT'),
-  CHIEF_CONSENSUS_STARTED: eventName('CHIEF_CONSENSUS_STARTED'),
-  CHIEF_CONSENSUS_COMPLETED: eventName('CHIEF_CONSENSUS_COMPLETED'),
-} as const;
+const skip = new Set(['persist', '$comment']);
+export const EVENTS: Record<string, string> = {};
+for (const [k, v] of Object.entries(catalog)) {
+  if (!skip.has(k) && typeof v === 'string') EVENTS[k] = v;
+}

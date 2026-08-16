@@ -13,6 +13,7 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { desc, isNotNull, and, eq, gte } from 'drizzle-orm';
@@ -27,6 +28,12 @@ import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
 import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
+import {
+  evaluateDailyTradeLimit,
+  evaluateDuplicateSignal,
+  evaluatePostLossCooldown,
+  evaluateSameSymbolCooldown,
+} from '../risk/OvertradingGuards';
 
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
@@ -162,7 +169,7 @@ export class RiskEngine {
 
     private async evaluateRiskSerialized(proposal: any) {
         console.log(`[Risk Engine] Evaluating proposal: ${proposal.side} ${proposal.symbol}`);
-        eventBus.emit('RISK_ASSESSMENT_STARTED', { traceId: proposal.traceId, transactionId: proposal.transactionId, symbol: proposal.symbol, side: proposal.side });
+        eventBus.emit(EVENTS.RISK_ASSESSMENT_STARTED, { traceId: proposal.traceId, transactionId: proposal.transactionId, symbol: proposal.symbol, side: proposal.side });
 
         // Phase 2 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md, confirmed design change): every gate
         // is now evaluated unconditionally, in the same order as before, instead of returning on
@@ -178,7 +185,7 @@ export class RiskEngine {
         let sequence = 0;
         const recordGate = (gate: string, passed: boolean, detail: any) => {
             gateResults.push({ gate, passed, detail });
-            eventBus.emit('RISK_GATE_EVALUATED', { transactionId: proposal.transactionId, traceId: proposal.traceId, symbol: proposal.symbol, gate, sequence: sequence++, passed, detail });
+            eventBus.emit(EVENTS.RISK_GATE_EVALUATED, { transactionId: proposal.transactionId, traceId: proposal.traceId, symbol: proposal.symbol, gate, sequence: sequence++, passed, detail });
         };
 
         let approved = false;
@@ -198,6 +205,39 @@ export class RiskEngine {
             const emergencyStopReason = tradingState === 'EMERGENCY_STOP'
                 ? "Emergency stop is active. All new trades are blocked until resumed."
                 : "Trading is paused. All new trades are blocked until resumed.";
+
+            // Autobot toggle (tradingEngine.state.enabled / UI autoBotConfig.enabled) is NOT a
+            // second kill switch. emergency_stop still owns TRADING_PAUSED / EMERGENCY_STOP.
+            // New BUY risk requires Autobot on; SELL/exits still run while TRADING_ENABLED so
+            // PortfolioMonitor can flatten existing paper positions.
+            const autobotOn = tradingEngine.state.enabled === true;
+            const autobotBlocksBuy = proposal.side === 'BUY' && !autobotOn;
+            recordGate('autobot_enabled', !autobotBlocksBuy, {
+                enabled: tradingEngine.state.enabled,
+                side: proposal.side,
+                note: proposal.side === 'SELL'
+                    ? 'SELL/exit is not blocked by Autobot-off; emergency_stop still applies.'
+                    : undefined,
+            });
+            const autobotReason = 'AUTOBOT_DISABLED: Autobot is off. New BUY risk is blocked. SELL/exits still require TRADING_ENABLED.';
+
+            const nowMs = Date.now();
+            const tradeRows = await db.select().from(schema.trades);
+            const sameSymbol = evaluateSameSymbolCooldown({ side: proposal.side, symbol: proposal.symbol, nowMs, trades: tradeRows });
+            recordGate(sameSymbol.gate, sameSymbol.passed, sameSymbol.detail);
+            const postLoss = evaluatePostLossCooldown({ side: proposal.side, nowMs, trades: tradeRows });
+            recordGate(postLoss.gate, postLoss.passed, postLoss.detail);
+            const dailyTrades = evaluateDailyTradeLimit({ side: proposal.side, nowMs, trades: tradeRows });
+            recordGate(dailyTrades.gate, dailyTrades.passed, dailyTrades.detail);
+            const dupAssessments = await db.select().from(schema.riskAssessments)
+              .where(gte(schema.riskAssessments.createdAt, new Date(nowMs - tradingSafety.duplicateSignalWindowMs).toISOString()));
+            const duplicate = evaluateDuplicateSignal({
+              side: proposal.side,
+              symbol: proposal.symbol,
+              nowMs,
+              assessments: dupAssessments as any,
+            });
+            recordGate(duplicate.gate, duplicate.passed, duplicate.detail);
 
             // 1. Fetch real broker portfolio state
             const broker = BrokerManager.getInstance().getActiveBroker();
@@ -398,22 +438,21 @@ export class RiskEngine {
                 // settings.budget (same field the Autobot "Allocated Budget Limit" writes) is the
                 // slice Argus may commit. Broker equity of $2,000 never authorizes a $101 BUY
                 // against a $100 allocation. Pending BUY notionals count as reserved.
-                const allocated = Number(
-                    settings[0]?.budget ?? tradingEngine.state.budget ?? 0
-                );
+                const rawBudget = settings[0]?.budget ?? tradingEngine.state.budget;
+                const allocated = isPositiveFiniteMoney(rawBudget) ? rawBudget : Number.NaN;
                 const allTrades = await db.select().from(schema.trades);
                 const pendingBuys = (allTrades || []).filter((t: any) =>
                     t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
                 );
                 const capitalSnap = snapshotCapital({
-                    allocated: Number.isFinite(allocated) ? allocated : 0,
+                    allocated: isPositiveFiniteMoney(allocated) ? allocated : 0,
                     positions: portfolio.positions || [],
                     pendingBuys,
                 });
                 const requestedNotional = proposal.side === 'BUY' ? maxQuantity * currentPrice : 0;
                 const capitalGuard = evaluateAllocationGuard(capitalSnap, proposal.side, requestedNotional);
                 recordGate('argus_capital_allocation', capitalGuard.passed, capitalGuard);
-                eventBus.emit('CAPITAL_CHECK', {
+                eventBus.emit(EVENTS.CAPITAL_CHECK, {
                     traceId: proposal.traceId,
                     transactionId: proposal.transactionId,
                     symbol: proposal.symbol,
@@ -451,6 +490,11 @@ export class RiskEngine {
             if (!approved) {
                 maxQuantity = 0;
                 reasoning = firstFailure!.gate === 'emergency_stop' ? emergencyStopReason
+                    : firstFailure!.gate === 'autobot_enabled' ? autobotReason
+                    : firstFailure!.gate === 'same_symbol_cooldown' ? sameSymbol.reason
+                    : firstFailure!.gate === 'post_loss_cooldown' ? postLoss.reason
+                    : firstFailure!.gate === 'daily_trade_limit' ? dailyTrades.reason
+                    : firstFailure!.gate === 'duplicate_signal' ? duplicate.reason
                     : firstFailure!.gate === 'daily_loss' ? dailyLossReason
                     : firstFailure!.gate === 'consecutive_loss' ? consecutiveLossReason
                     : firstFailure!.gate === 'portfolio_drawdown' ? drawdownReason
@@ -475,7 +519,7 @@ export class RiskEngine {
                 const { GATE_FIX } = await import('../diagnostics/catalog');
                 if (firstFailure.gate === 'argus_capital_allocation') {
                     const d = firstFailure.detail || {};
-                    eventBus.emit('CAPITAL_BLOCK', buildDiagnostic('CAP-001', {
+                    eventBus.emit(EVENTS.CAPITAL_BLOCK, buildDiagnostic('CAP-001', {
                         requested: d.requestedNotional ?? '',
                         remaining: d.remaining ?? '',
                         allocated: d.allocated ?? '',
@@ -484,7 +528,7 @@ export class RiskEngine {
                         technicalMessage: reasoning,
                     }));
                 } else {
-                    eventBus.emit('RISK_BLOCK', buildDiagnostic('RSK-001', {
+                    eventBus.emit(EVENTS.RISK_BLOCK, buildDiagnostic('RSK-001', {
                         gate: firstFailure.gate,
                         reasoning,
                         recommendedFix: GATE_FIX[firstFailure.gate] || 'Inspect the failed gate; do not bypass RiskEngine.',

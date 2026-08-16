@@ -14,8 +14,9 @@
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { runtimeIntervals } from '../../config/runtimeIntervals';
 
-const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_TIMEOUT_MS = runtimeIntervals.openAliceMcpDefaultTimeoutMs;
 
 export class OpenAliceMcpClient {
   private client: Client | null = null;

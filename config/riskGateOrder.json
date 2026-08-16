@@ -2,6 +2,11 @@
   "$comment": "RiskEngine.evaluateRiskSerialized evaluation order for UI catalog only. Pass/fail must come from RISK_GATE_EVALUATED / risk_gate_results — never from this file. sell_position_exists is recorded on SELL only; BUY assessments omit it.",
   "gates": [
     "emergency_stop",
+    "autobot_enabled",
+    "same_symbol_cooldown",
+    "post_loss_cooldown",
+    "daily_trade_limit",
+    "duplicate_signal",
     "invalid_account_equity",
     "daily_loss",
     "consecutive_loss",

@@ -68,7 +68,7 @@ function mulberry32(seed: number) {
   };
 }
 
-export function runMonteCarlo(config: MonteCarloConfig, seed = 42): MonteCarloResult {
+export function runMonteCarlo(config: MonteCarloConfig, seed = tradingSafety.monteCarloDefaultSeed): MonteCarloResult {
   const sampleSize = config.rMultiples.length;
   const simulations = config.simulations ?? 2000;
   const pathLength = config.pathLength ?? sampleSize;
@@ -165,7 +165,7 @@ export function mean(values: number[]): number {
  * One-sided permutation p-value for H0: mean R = 0.
  * Sign-flips observed R-multiples; p = share of |mean_perm| >= |mean_obs|.
  */
-export function permutationTestMeanEdge(rMultiples: number[], permutations = 2000, seed = 42): {
+export function permutationTestMeanEdge(rMultiples: number[], permutations = tradingSafety.permutationTestIterations, seed = tradingSafety.monteCarloDefaultSeed): {
   observedMeanR: number;
   pValue: number;
   permutations: number;
@@ -196,7 +196,7 @@ export const STATISTICALLY_INSIGNIFICANT = 'STATISTICALLY_INSIGNIFICANT';
 export const OVERFIT_REJECTED = 'OVERFIT_REJECTED';
 
 /** Must match BacktestEngine's daily Sharpe annualization. */
-export const SHARPE_PERIODS_PER_YEAR = 252;
+export const SHARPE_PERIODS_PER_YEAR = tradingSafety.tradingDaysPerYear;
 
 export function periodReturnsFromEquityCurve(equityCurve: Array<{ equity: number }>): number[] {
   const returns: number[] = [];
@@ -226,7 +226,7 @@ export function permutationTestSharpe(
   returns: number[],
   permutations: number = tradingSafety.permutationTestIterations,
   alpha: number = tradingSafety.permutationSignificanceAlpha,
-  seed = 42,
+  seed = tradingSafety.monteCarloDefaultSeed,
 ): {
   observedSharpe: number;
   pValue: number;

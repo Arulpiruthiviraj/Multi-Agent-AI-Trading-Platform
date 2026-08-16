@@ -445,19 +445,21 @@ const TITLE: Record<string, string> = {
   'risk-manager': 'Risk Engine',
 };
 
+type AgentFocusModeProps = {
+  nodeId: string;
+  nodeLabel: string;
+  seedEvents: BusEvent[];
+  weights: { agentName: string; currentWeight: number | null }[];
+  onClose: () => void;
+};
+
 export default function AgentFocusMode({
   nodeId,
   nodeLabel,
   seedEvents,
   weights,
   onClose,
-}: {
-  nodeId: string;
-  nodeLabel: string;
-  seedEvents: BusEvent[];
-  weights: { agentName: string; currentWeight: number | null }[];
-  onClose: () => void;
-}) {
+}: AgentFocusModeProps): React.ReactElement {
   const { subscribe } = useWebSocket();
   const [live, setLive] = useState<BusEvent[]>(() =>
     seedEvents.filter((e) => nodeEventMatch(nodeId, e.type, e.payload)).slice(0, 120),

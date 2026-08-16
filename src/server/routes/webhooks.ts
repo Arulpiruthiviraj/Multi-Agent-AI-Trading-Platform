@@ -4,8 +4,8 @@
  * Extracted from server.ts (structural refactor only — behavior is unchanged):
  * - Manages the in-memory list of configured outbound webhooks (Slack/Discord/generic).
  * - Exposes CRUD + test-send routes, mounted at /api/v1/webhooks in server.ts.
- * - Exposes `triggerWebhooks()`, called from the legacy /api/v1/signals risk-veto path
- *   in server.ts whenever a sector-exposure breach (or other configured event type) occurs.
+ * - Exposes `triggerWebhooks()`. The legacy /api/v1/signals risk-veto caller is quarantined;
+ *   remaining callers are explicit webhook test/dispatch routes.
  */
 import { Router, Request, Response } from "express";
 

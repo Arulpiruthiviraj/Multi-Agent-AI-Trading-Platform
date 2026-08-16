@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { EVENTS } from './eventNames';
 
 class EventBus extends EventEmitter {
   private static instance: EventBus;
@@ -17,8 +18,8 @@ class EventBus extends EventEmitter {
 
   public publish(event: string, payload: any) {
     this.emit(event, payload);
-    if (event === 'MARKET_DATA') {
-      super.emit('MARKET_DATA_UPDATED', payload);
+    if (event === EVENTS.MARKET_DATA) {
+      super.emit(EVENTS.MARKET_DATA_UPDATED, payload);
     }
   }
 
@@ -67,26 +68,26 @@ class EventBus extends EventEmitter {
   // Legacy aliases
   public emitMarketData(symbol: string, price: number, volume: number, timestamp: string) {
      const payload = { symbol, price, volume, timestamp };
-     this.emit('MARKET_DATA', payload);
-     this.emit('MARKET_DATA_UPDATED', payload);
+     this.emit(EVENTS.MARKET_DATA, payload);
+     this.emit(EVENTS.MARKET_DATA_UPDATED, payload);
   }
   public emitTradeIdea(idea: any) {
-     this.emit('TRADE_IDEA_GENERATED', idea);
+     this.emit(EVENTS.TRADE_IDEA_GENERATED, idea);
   }
   public emitCalculation(traceId: string, engine: string, symbol: string, data: any) {
-     this.emit('CALCULATION_COMPLETED', { traceId, engine, symbol, data });
+     this.emit(EVENTS.CALCULATION_COMPLETED, { traceId, engine, symbol, data });
   }
   public emitRiskAssessment(assessment: any) {
-     this.emit('RISK_ASSESSMENT_COMPLETED', assessment);
+     this.emit(EVENTS.RISK_ASSESSMENT_COMPLETED, assessment);
   }
   public emitOrderExecution(order: any) {
-     this.emit('ORDER_EXECUTED', order);
+     this.emit(EVENTS.ORDER_EXECUTED, order);
   }
   public emitLearningEvent(event: any) {
-     this.emit('LEARNED_NEW_RULE', event);
+     this.emit(EVENTS.LEARNED_NEW_RULE, event);
   }
   public emitChiefApproval(approval: any) {
-     this.emit('CHIEF_APPROVED_IDEA', approval);
+     this.emit(EVENTS.CHIEF_APPROVED_IDEA, approval);
   }
 }
 

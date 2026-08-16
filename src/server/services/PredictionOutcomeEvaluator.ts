@@ -24,9 +24,7 @@ import { agentPredictions, kronosPredictions, predictionOutcomes } from '../db/s
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { tradingSafety } from '../config/tradingSafety';
 
-// Matches ReflectionEngine's existing "reflect on losses within the last hour" window - the
-// prediction must be at least this old before there's a real "afterward" to look at.
-export const EVALUATION_HORIZON_MS = 60 * 60 * 1000;
+export const EVALUATION_HORIZON_MS = tradingSafety.evaluationHorizonMs;
 
 export interface EvaluatedOutcome {
   predictionId: string;

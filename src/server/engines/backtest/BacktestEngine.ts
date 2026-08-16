@@ -44,7 +44,9 @@ import {
   nySessionKey,
 } from './BacktestRiskParity';
 import { evaluatePitRisk } from './PitRiskEngine';
+import { evaluatePitAiBuyGate } from './PitReplay';
 import { permutationTestSharpe, periodReturnsFromEquityCurve } from '../../quant/analysis/MonteCarlo';
+import { isPositiveFiniteMoney } from '../AccountEquity';
 
 export interface BacktestConfig {
   symbols: string[];
@@ -111,8 +113,8 @@ export interface StrategyBacktestConfig {
 }
 
 const LOOKBACK = tradingSafety.backtestLookbackBars;
-const PERIODS_PER_YEAR = 252; // assumes daily bars; only meaningful for timeframe='1Day'
-const MIN_SAMPLE_SIZE_FOR_TRUST = 20;
+const PERIODS_PER_YEAR = tradingSafety.tradingDaysPerYear;
+const MIN_SAMPLE_SIZE_FOR_TRUST = tradingSafety.minSampleSizeForTrust;
 
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v));
@@ -121,11 +123,19 @@ function strengthToConfidence(strength01: number): number {
   return Number((0.55 + 0.40 * clamp01(strength01)).toFixed(3));
 }
 
+function resolveSimulatedStartingCash(initialCash: number | undefined): number {
+  if (initialCash === undefined) return tradingSafety.internalPaperDefaultCash;
+  if (!isPositiveFiniteMoney(initialCash)) {
+    throw new Error('INVALID_ACCOUNT_EQUITY: backtest initialCash is missing or not positive. No phantom starting cash.');
+  }
+  return initialCash;
+}
+
 export class BacktestEngine {
   async run(config: BacktestConfig): Promise<any> {
     const runId = crypto.randomUUID();
     const timeframe = config.timeframe || '1Day';
-    const initialCash = config.initialCash || 100000;
+    const initialCash = resolveSimulatedStartingCash(config.initialCash);
     const startMs = new Date(config.startDate).getTime();
     const endMs = new Date(config.endDate).getTime();
 
@@ -305,8 +315,22 @@ export class BacktestEngine {
           .reverse();
         const pitNews = await historicalDataGateway.getPitNewsAsOf(evt.symbol, evt.timestamp);
         const existingPositions = Object.values(positions).map(p => ({ symbol: p.symbol, quantity: p.quantity, averagePrice: p.entryPrice }));
+        const prevBarTs = visibleBars.length >= 2
+          ? visibleBars[visibleBars.length - 2].timestamp
+          : evt.timestamp - tradingSafety.evaluationHorizonMs;
+        const pitAiRows = await historicalDataGateway.getPitAiRowsAsOf(evt.symbol, evt.timestamp, prevBarTs);
+        const pitAi = evaluatePitAiBuyGate(pitAiRows, evt.symbol, currentPrice);
 
-        if (signal === 'BUY' && confidence >= 0.55) {
+        if (signal === 'BUY' && confidence >= 0.55 && pitAi.allowBuy) {
+          const meanFinbert = pitNews.length > 0
+            ? pitNews.reduce((s, n) => s + (n.finbertScore ?? 0), 0) / pitNews.length
+            : null;
+          if (meanFinbert !== null) {
+            reasoning = `${reasoning}; FinBERT=${meanFinbert.toFixed(3)}`;
+          }
+          if (pitAi.replay) {
+            reasoning = `${reasoning}; ${pitAi.replay.reason}`;
+          }
           const pit = await evaluatePitRisk({
             nowMs: evt.timestamp,
             timeframe,
@@ -453,7 +477,7 @@ export class BacktestEngine {
 
     const runId = crypto.randomUUID();
     const timeframe = config.timeframe || '1Day';
-    const initialCash = config.initialCash || 100000;
+    const initialCash = resolveSimulatedStartingCash(config.initialCash);
     const startMs = new Date(config.startDate).getTime();
     const endMs = new Date(config.endDate).getTime();
     const symbol = config.symbol;
@@ -610,7 +634,17 @@ export class BacktestEngine {
           // same real scope run()'s own existing hardcoded strategy already has (its SELL signal
           // only ever closes an existing long, never opens a fresh short).
           if (drawdownCircuitBreakerTriggeredAt === null && evaluation.side === 'BUY' && evaluation.confidence >= MIN_STRATEGY_CONFIDENCE_TO_TRADE && evaluation.stop.price !== null) {
+            const prevBarTs = visibleBars.length >= 2
+              ? visibleBars[visibleBars.length - 2].timestamp
+              : currentBar.timestamp - tradingSafety.evaluationHorizonMs;
+            const pitAiRows = await historicalDataGateway.getPitAiRowsAsOf(symbol, currentBar.timestamp, prevBarTs);
+            const pitAi = evaluatePitAiBuyGate(pitAiRows, symbol, currentPrice, { allowTechnicalWhenEmpty: true });
+            if (!pitAi.allowBuy) {
+              decisionOutcome = 'REJECTED_PIT_AI_CONSENSUS';
+              decisionReason = pitAi.replay?.reason ?? 'PIT AI ledger present but BUY not approved';
+            }
             const pitNews = await historicalDataGateway.getPitNewsAsOf(symbol, currentBar.timestamp);
+            if (pitAi.allowBuy) {
             const pit = await evaluatePitRisk({
               nowMs: currentBar.timestamp,
               timeframe,
@@ -665,6 +699,7 @@ export class BacktestEngine {
               decisionReason = pit.approved
                 ? 'position sizing gates produced zero quantity - see sizingGates for the binding constraint'
                 : pit.reasoning;
+            }
             }
           } else if (evaluation.side === 'BUY' && evaluation.stop.price === null) {
             decisionOutcome = 'REJECTED_NO_STOP';

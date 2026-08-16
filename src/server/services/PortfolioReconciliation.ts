@@ -13,22 +13,15 @@ import { BrokerManager } from '../../brokers/BrokerManager';
 import { eventBus } from '../core/EventBus';
 import { tradingEngine } from '../engines/TradingEngine';
 import { tradingSafety } from '../config/tradingSafety';
+import { runtimeIntervals } from '../config/runtimeIntervals';
+import { EVENTS } from '../core/eventNames';
 import { TERMINAL_ORDER_STATUSES } from './OrderManagement';
 import { submitPipelineSells } from './PipelineFlatten';
 
-const QTY_TOLERANCE = 0.001; // ignore float noise, not real drift
-// A mismatch this large in dollar value pauses new trading (emergencyStopActive) until reviewed -
-// a small timing drift (a fill in flight when the sync runs) shouldn't halt the system, but a
-// meaningfully wrong position should never be traded around silently.
-export const SIGNIFICANT_MISMATCH_DOLLARS = 100;
-// Phase 1, item 4 (ARGUS_SAFETY_HARDENING_REPORT.md) - account-level consistency tolerance.
-// Argus does not maintain a second, independent ledger of "expected" cash (that would mean
-// building a whole shadow accounting system - out of scope and a real duplication risk) - what
-// IS checked is that the broker's own real numbers are internally consistent
-// (equity ~= cash + sum(position market values)), which catches a broken/stale broker response
-// or a position-mapping bug, not merely a timing drift from a fill in flight.
-const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = 0.01; // 1% of equity
-const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = 50;
+const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
+export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
+const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = tradingSafety.reconAccountConsistencyTolerancePct;
+const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = tradingSafety.reconAccountConsistencyToleranceFloorDollars;
 
 interface MismatchDetail {
   symbol: string;
@@ -54,7 +47,7 @@ export class PortfolioReconciliationWorker {
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.reconcile(), 60000 * 5); // Every 5 minutes
+    this.intervalId = setInterval(() => this.reconcile(), runtimeIntervals.portfolioReconciliationMs);
     this.reconcile();
   }
 
@@ -207,7 +200,7 @@ export class PortfolioReconciliationWorker {
       let worstImpact = 0;
       if (mismatches.length > 0) {
         worstImpact = Math.max(...mismatches.map(m => m.approxDollarImpact));
-        eventBus.publish('RECONCILIATION_MISMATCH', { timestamp, broker: broker.name, mismatches, worstImpactDollars: Number(worstImpact.toFixed(2)) });
+        eventBus.publish(EVENTS.RECONCILIATION_MISMATCH, { timestamp, broker: broker.name, mismatches, worstImpactDollars: Number(worstImpact.toFixed(2)) });
         // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - REAL bug fixed here, found by the current
         // audit (FINAL_ANALYSIS.md Section 30.12): this used to set
         // `tradingEngine.state.emergencyStopActive = true` directly, which RiskEngine's real
@@ -221,19 +214,6 @@ export class PortfolioReconciliationWorker {
         // real open order - open orders are left alone, matching the "existing positions remain
         // observable" requirement this fix was scoped against.
         if (worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS && tradingEngine.state.tradingState === 'TRADING_ENABLED') {
-          await tradingEngine.setTradingState('TRADING_PAUSED', {
-            reason: `Portfolio reconciliation found a ~$${worstImpact.toFixed(2)} mismatch vs ${broker.name} - trading paused pending manual review.`,
-            actor: 'system:PortfolioReconciliation',
-          });
-          console.error(`[PortfolioReconciliation] SIGNIFICANT mismatch ($${worstImpact.toFixed(2)}) - trading paused (tradingState=TRADING_PAUSED) via setTradingState(), verified to actually block new orders at RiskEngine's emergency_stop gate.`);
-          actionTaken = 'TRADING_PAUSED';
-          eventBus.publish('RECONCILIATION_EMERGENCY_HALT', {
-            timestamp,
-            broker: broker.name,
-            worstImpactDollars: Number(worstImpact.toFixed(2)),
-            mismatches,
-            autoFlatten: tradingSafety.autoFlattenOnReconciliationMismatch,
-          });
           if (tradingSafety.autoFlattenOnReconciliationMismatch) {
             const flattenSymbols = [...new Set(
               mismatches
@@ -241,14 +221,30 @@ export class PortfolioReconciliationWorker {
                 .map(m => m.symbol),
             )];
             if (flattenSymbols.length > 0) {
+              // Flatten while still TRADING_ENABLED so RiskEngine emergency_stop can pass; then pause.
               const flattenResult = await submitPipelineSells(flattenSymbols);
-              actionTaken = 'TRADING_PAUSED_AND_PIPELINE_FLATTEN';
+              actionTaken = 'PIPELINE_FLATTEN_THEN_TRADING_PAUSED';
               console.error(`[PortfolioReconciliation] autoFlattenOnReconciliationMismatch: submitted ${flattenResult.submitted.length} SELLs via RiskEngine; refused ${flattenResult.refused.length}.`);
             }
           }
+          await tradingEngine.setTradingState('TRADING_PAUSED', {
+            reason: `Portfolio reconciliation found a ~$${worstImpact.toFixed(2)} mismatch vs ${broker.name} - trading paused pending manual review.`,
+            actor: 'system:PortfolioReconciliation',
+          });
+          console.error(`[PortfolioReconciliation] SIGNIFICANT mismatch ($${worstImpact.toFixed(2)}) - trading paused (tradingState=TRADING_PAUSED) via setTradingState(), verified to actually block new orders at RiskEngine's emergency_stop gate.`);
+          if (actionTaken !== 'PIPELINE_FLATTEN_THEN_TRADING_PAUSED') {
+            actionTaken = 'TRADING_PAUSED';
+          }
+          eventBus.publish(EVENTS.RECONCILIATION_EMERGENCY_HALT, {
+            timestamp,
+            broker: broker.name,
+            worstImpactDollars: Number(worstImpact.toFixed(2)),
+            mismatches,
+            autoFlatten: tradingSafety.autoFlattenOnReconciliationMismatch,
+          });
         }
       } else {
-        eventBus.publish('RECONCILIATION_MATCH', { timestamp, broker: broker.name });
+        eventBus.publish(EVENTS.RECONCILIATION_MATCH, { timestamp, broker: broker.name });
       }
 
       // Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - previously RECONCILIATION_MISMATCH/

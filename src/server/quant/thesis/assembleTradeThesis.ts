@@ -42,6 +42,11 @@ export interface TradeThesis {
   finalDecision: 'CANDIDATE' | 'NO_TRADE';
   noTrade: NoTradeReason | null;
   dataTimestamp: string;
+  reasonsNotToTrade: string[];
+  relativeStrengthVsSpy: number | null;
+  relativeStrengthVsSector: number | null;
+  vwapDistancePct: number | null;
+  catalystContribution: number | null;
 }
 
 /** Reward/risk from engine prices. Null when any leg is missing or risk is zero (undefined ratio). */
@@ -59,6 +64,11 @@ export function assembleTradeThesis(input: {
   evaluation: StrategyEvaluation | null;
   ideaSide: 'BUY' | 'SELL' | 'HOLD';
   expectedValueR?: number | null;
+  reasonsNotToTrade?: string[];
+  relativeStrengthVsSpy?: number | null;
+  relativeStrengthVsSector?: number | null;
+  vwapDistancePct?: number | null;
+  catalystContribution?: number | null;
 }): TradeThesis {
   const { symbol, ctx, evaluation, ideaSide } = input;
   const missing: string[] = [];
@@ -92,6 +102,11 @@ export function assembleTradeThesis(input: {
       finalDecision: 'NO_TRADE',
       noTrade: reason,
       dataTimestamp: new Date().toISOString(),
+      reasonsNotToTrade: input.reasonsNotToTrade ?? ['HOLD / insufficient strategy evaluation'],
+      relativeStrengthVsSpy: input.relativeStrengthVsSpy ?? input.ctx.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+      relativeStrengthVsSector: input.relativeStrengthVsSector ?? input.ctx.marketContext.relativeStrengthVsSector?.relativeStrengthPct ?? null,
+      vwapDistancePct: input.vwapDistancePct ?? input.ctx.volume.vwap.distancePct,
+      catalystContribution: input.catalystContribution ?? null,
     };
   }
 
@@ -118,5 +133,10 @@ export function assembleTradeThesis(input: {
     finalDecision: 'CANDIDATE',
     noTrade: null,
     dataTimestamp: new Date().toISOString(),
+    reasonsNotToTrade: input.reasonsNotToTrade ?? evaluation.contradictions,
+    relativeStrengthVsSpy: input.relativeStrengthVsSpy ?? ctx.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
+    relativeStrengthVsSector: input.relativeStrengthVsSector ?? ctx.marketContext.relativeStrengthVsSector?.relativeStrengthPct ?? null,
+    vwapDistancePct: input.vwapDistancePct ?? ctx.volume.vwap.distancePct,
+    catalystContribution: input.catalystContribution ?? null,
   };
 }

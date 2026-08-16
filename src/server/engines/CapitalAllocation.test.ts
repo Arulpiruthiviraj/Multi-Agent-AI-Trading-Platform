@@ -41,4 +41,16 @@ describe('Argus capital allocation (broker cash ≠ trading authority)', () => {
     const snap = snapshotCapital({ allocated: 100, positions: [{ quantity: 1, averagePrice: 60 }], pendingBuys: [] });
     expect(evaluateAllocationGuard(snap, 'SELL', 60).passed).toBe(true);
   });
+
+  it('fail-closes BUY when allocated budget is missing or not positive', () => {
+    const zero = snapshotCapital({ allocated: 0, positions: [], pendingBuys: [] });
+    const r0 = evaluateAllocationGuard(zero, 'BUY', 10);
+    expect(r0.passed).toBe(false);
+    expect(r0.reason).toMatch(/INVALID_ARGUS_BUDGET/);
+
+    const nan = snapshotCapital({ allocated: Number.NaN, positions: [], pendingBuys: [] });
+    const rNan = evaluateAllocationGuard(nan, 'BUY', 10);
+    expect(rNan.passed).toBe(false);
+    expect(rNan.reason).toMatch(/INVALID_ARGUS_BUDGET/);
+  });
 });

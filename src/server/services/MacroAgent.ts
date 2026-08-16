@@ -12,6 +12,8 @@ import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './Ext
 import { coerceEnum, normalizeConfidence01, coerceString, TRADE_SIDE_VALUES } from '../ai/AIOutputValidator';
 import { logErrorSafely } from '../core/SecretRedaction';
 import crypto from 'crypto';
+import { runtimeIntervals } from '../config/runtimeIntervals';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 
 const UNKNOWN_MACRO = { inflation: 'UNKNOWN', fedFundsRate: 'UNKNOWN', unemployment: 'UNKNOWN' };
 const RATE_LIMITED_MACRO = { inflation: 'RATE_LIMITED', fedFundsRate: 'RATE_LIMITED', unemployment: 'RATE_LIMITED' };
@@ -20,7 +22,7 @@ const RATE_LIMITED_MACRO = { inflation: 'RATE_LIMITED', fedFundsRate: 'RATE_LIMI
 // also symbol-independent (unlike fundamentals) - cached once globally (symbol=null), not
 // per-"currently analyzed symbol", which is what the previous version wastefully did despite the
 // data itself never actually depending on which symbol happened to be selected that cycle.
-const MACRO_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const MACRO_CACHE_MAX_AGE_MS = runtimeIntervals.macroCacheMaxAgeMs;
 
 // Hardening pass, Phase 7: see FundamentalAgent.ts's identical comment - the 24h cache above only
 // ever gated the raw AlphaVantage fetch, not the downstream LLM call. Cached per real analyzed
@@ -38,7 +40,7 @@ export class MacroEconomyAgent {
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.analyzeMacro(), 75000);
+    this.intervalId = setInterval(() => this.analyzeMacro(), runtimeIntervals.macroAgentMs);
   }
 
   stop() {
@@ -97,6 +99,7 @@ export class MacroEconomyAgent {
   }
 
   private async analyzeMacro() {
+    if (!isLiveIdeaGenerationEnabled()) return;
     const symbol = this.watchedSymbols[Math.floor(Date.now() / 75000) % this.watchedSymbols.length];
     const traceId = crypto.randomUUID();
     

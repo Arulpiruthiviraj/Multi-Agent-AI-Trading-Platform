@@ -13,7 +13,7 @@
       "id": "CA",
       "currency": "CAD",
       "timezone": "America/Toronto",
-      "exchanges": ["TSX", "TSXV"],
+      "exchanges": ["TSX", "TSXV", "CSE"],
       "benchmarks": ["XIU.TO", "XIC.TO"],
       "automatedOrderRouting": "BLOCKED_IIROC_3200A_1_B_I",
       "notes": "Research/backtest/paper only until a legally permitted execution venue exists. Questrade is read-only. IBKR Canada retail cannot API-route TSX/TSXV."
@@ -24,5 +24,7 @@
     "V": { "exchange": "TSXV", "market": "CA", "currency": "CAD" },
     "VN": { "exchange": "TSXV", "market": "CA", "currency": "CAD" }
   },
-  "defaultListing": { "exchange": "US_EQUITY", "market": "US", "currency": "USD" }
+  "defaultListing": { "exchange": "US_EQUITY", "market": "US", "currency": "USD" },
+  "rsiScanDefaultSymbols": ["AAPL", "MSFT", "NVDA", "AMD", "SPY", "GLD", "TLT", "TSLA"],
+  "rsiScanUnavailableSymbols": ["BTC"]
 }

@@ -8,15 +8,21 @@ import { NewsImpactEngine } from './NewsImpactEngine';
 import { NewsClusterEngine } from './NewsClusterEngine';
 import { NewsScoringEngine, AIAnalysisResult } from './NewsScoringEngine';
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
+import { tradingSafety } from '../config/tradingSafety';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 import { decideEscalation } from '../ai/EscalationPolicy';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { v4 as uuidv4 } from 'uuid';
+import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
+import { deskIntelligence } from '../config/deskIntelligence';
+import { recordNewsCatalyst } from '../services/NewsCatalystStore';
 
 // A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
 // entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.
-const DECISIVE_SENTIMENT_THRESHOLD = 0.6;
+const DECISIVE_SENTIMENT_THRESHOLD = tradingSafety.newsDecisiveSentimentThreshold;
 
 export class NewsEngine {
   private static instance: NewsEngine;
@@ -54,7 +60,7 @@ export class NewsEngine {
   public start() {
     if (this.intervalId) return;
     console.log('[NewsEngine] Starting News Intelligence Pipeline...');
-    this.intervalId = setInterval(() => this.runPipeline(), 10000);
+    this.intervalId = setInterval(() => this.runPipeline(), runtimeIntervals.newsEngineMs);
     this.runPipeline();
   }
 
@@ -103,7 +109,7 @@ export class NewsEngine {
         // Real STARTED event for live animation - NEWS_ANALYZED (published further below) is the
         // real completed signal for this same traceId, kept under its existing name rather than
         // adding a redundant near-duplicate event.
-        eventBus.publish('NEWS_ANALYSIS_STARTED', { traceId, headline: normalized.title, source: normalized.source });
+        eventBus.publish(EVENTS.NEWS_ANALYSIS_STARTED, { traceId, headline: normalized.title, source: normalized.source });
 
         // Local-first escalation: FinBERT already ran inside impactEngine.assess() above. If its
         // sentiment is decisive, derive the trading bias directly from it and skip the LLM call
@@ -158,7 +164,7 @@ export class NewsEngine {
 
         // Real-time broadcast of the same decision just persisted above - lets the UI show local-
         // first escalation as it happens, not just after querying escalation_decisions later.
-        eventBus.publish('ESCALATION_DECISION', {
+        eventBus.publish(EVENTS.ESCALATION_DECISION, {
           traceId,
           agent: 'NewsAgent',
           localSource: 'finbert',
@@ -166,6 +172,8 @@ export class NewsEngine {
           escalated: escalationDecision.escalate,
           reason: escalationDecision.reason,
         });
+
+        const articlePublishedMs = Date.parse(normalized.publishedAt);
 
         if (aiAnalysis) {
           if (aiAnalysis.symbol) {
@@ -176,29 +184,81 @@ export class NewsEngine {
           if (aiAnalysis.tradingBias !== 'NEUTRAL') {
             finalSymbols.forEach(symbol => {
               if (!looksLikeListedTicker(symbol)) return;
-              eventBus.emitTradeIdea({
-                 traceId,
-                 symbol,
-                 side: aiAnalysis.tradingBias === 'BULLISH' ? 'BUY' : 'SELL',
-                 confidence: (aiAnalysis.confidence / 100) * credibility, // Weighted confidence
-                 reasoning: `[News Intelligence] ${aiAnalysis.reasoning}`,
-                 agent: "NewsAgent",
-                 newsDetails: {
-                     used: true,
-                     sentiment: (aiAnalysis as any).sentimentScore || 0,
-                     confidence: aiAnalysis.confidence / 100,
-                     sources: normalized.source,
-                     reasoning: aiAnalysis.reasoning
-                 },
-                 aiCallId: aiAnalysis._aiCallId,
-                 provider: aiAnalysis._provider,
-                 latencyMs: aiAnalysis._latencyMs,
+              const newsSide = aiAnalysis.tradingBias === 'BULLISH' ? 'BUY' as const : 'SELL' as const;
+              const newsConfidence = (aiAnalysis.confidence / 100) * credibility;
+              const contribution = Number((newsConfidence * (aiAnalysis.tradingBias === 'BEARISH' ? -1 : 1)).toFixed(3));
+              const catalystStrength: 'LOW' | 'MODERATE' | 'HIGH' =
+                newsConfidence >= 0.75 ? 'HIGH' : newsConfidence >= 0.45 ? 'MODERATE' : 'LOW';
+              recordPitLive({
+                kind: 'NEWS_AGENT',
+                symbol,
+                publishedAtMs: Number.isFinite(articlePublishedMs) ? articlePublishedMs : undefined,
+                agent: 'NewsAgent',
+                side: newsSide,
+                confidence: newsConfidence,
+                finbertScore: impact.sentimentSource === 'finbert' ? impact.sentiment : undefined,
+                payloadJson: JSON.stringify({ traceId, reasoning: aiAnalysis.reasoning, catalyst: true }),
+                source: 'NewsEngine',
               });
+              const catalyst = {
+                traceId,
+                symbol,
+                headline: normalized.title,
+                source: normalized.source,
+                publishedAtMs: Number.isFinite(articlePublishedMs) ? articlePublishedMs : null,
+                sentiment: impact.sentimentSource === 'finbert' ? impact.sentiment : null,
+                credibility,
+                catalystStrength,
+                tradingBias: aiAnalysis.tradingBias as 'BULLISH' | 'BEARISH' | 'NEUTRAL',
+                contribution,
+                reasoning: aiAnalysis.reasoning,
+                recordedAt: new Date().toISOString(),
+              };
+              recordNewsCatalyst(catalyst);
+              eventBus.emit(EVENTS.NEWS_CATALYST, catalyst);
+              // Default desk policy: news is a catalyst, not an independent BUY/SELL vote.
+              if (deskIntelligence.newsEmitsTradeIdeas) {
+                eventBus.emitTradeIdea({
+                   traceId,
+                   symbol,
+                   side: newsSide,
+                   confidence: newsConfidence,
+                   reasoning: `[News Intelligence] ${aiAnalysis.reasoning}`,
+                   agent: "NewsAgent",
+                   newsDetails: {
+                       used: true,
+                       sentiment: (aiAnalysis as any).sentimentScore || 0,
+                       confidence: aiAnalysis.confidence / 100,
+                       sources: normalized.source,
+                       reasoning: aiAnalysis.reasoning
+                   },
+                   aiCallId: aiAnalysis._aiCallId,
+                   provider: aiAnalysis._provider,
+                   latencyMs: aiAnalysis._latencyMs,
+                });
+              }
             });
           }
         }
         
-        eventBus.publish('NEWS_ANALYZED', {
+        for (const symbol of finalSymbols) {
+          if (!looksLikeListedTicker(symbol)) continue;
+          recordPitLive({
+            kind: 'NEWS',
+            symbol,
+            publishedAtMs: Number.isFinite(articlePublishedMs) ? articlePublishedMs : undefined,
+            finbertScore: impact.sentimentSource === 'finbert' ? impact.sentiment : undefined,
+            impactScore: impact.impactScore <= 1 ? impact.impactScore * 100 : impact.impactScore,
+            payloadJson: JSON.stringify({
+              headline: normalized.title,
+              source: normalized.source,
+              sentimentSource: impact.sentimentSource,
+            }),
+            source: 'NewsEngine',
+          });
+        }
+
+        eventBus.publish(EVENTS.NEWS_ANALYZED, {
           id: normalized.id,
           clusterId,
           symbols: finalSymbols,

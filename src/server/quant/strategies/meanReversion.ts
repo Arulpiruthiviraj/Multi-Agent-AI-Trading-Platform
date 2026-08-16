@@ -11,11 +11,12 @@
  * ==========================================================
  */
 import { StrategyContext, StrategyDefinition, StrategyEvaluation, scoreFromConditions } from './types';
+import { quantThresholds } from '../../config/quantThresholds';
 
-const RSI_OVERSOLD = 30;
-const RSI_OVERBOUGHT = 70;
-const STOCH_RSI_OVERSOLD = 20;
-const STOCH_RSI_OVERBOUGHT = 80;
+const RSI_OVERSOLD = quantThresholds.rsiOversold;
+const RSI_OVERBOUGHT = quantThresholds.rsiOverbought;
+const STOCH_RSI_OVERSOLD = quantThresholds.stochRsiOversold;
+const STOCH_RSI_OVERBOUGHT = quantThresholds.stochRsiOverbought;
 
 export const meanReversion: StrategyDefinition = {
   id: 'MEAN_REVERSION',
@@ -42,7 +43,7 @@ export const meanReversion: StrategyDefinition = {
       'Ranging / non-trending regime (not a real directional trend)',
       regime.marketStructure === 'RANGING' || regime.regime === 'SIDEWAYS_RANGE'
     );
-    check(bullish ? 'RSI oversold (<=30)' : 'RSI overbought (>=70)', bullish ? oversold : overbought);
+    check(bullish ? `RSI oversold (<=${RSI_OVERSOLD})` : `RSI overbought (>=${RSI_OVERBOUGHT})`, bullish ? oversold : overbought);
     check(
       bullish ? 'Price at/below the lower Keltner Channel' : 'Price at/above the upper Keltner Channel',
       volatility.keltner !== null && (bullish ? currentPrice <= volatility.keltner.lower : currentPrice >= volatility.keltner.upper)

@@ -426,6 +426,11 @@ export const DIAGNOSTIC_CATALOG: Record<string, CatalogEntry> = {
 
 export const GATE_FIX: Record<string, string> = {
   emergency_stop: 'Resume trading only after reviewing kill-switch events.',
+  autobot_enabled: 'Turn Autobot on (POST /autobot/toggle) before taking new BUY risk. SELL/exits still run while TRADING_ENABLED.',
+  same_symbol_cooldown: 'Wait for sameSymbolCooldownMs after the last FILLED order in this symbol.',
+  post_loss_cooldown: 'Wait for postLossCooldownMs after a closed losing SELL.',
+  daily_trade_limit: 'Wait for the next America/New_York session or raise maxDailyTrades in tradingSafety.json after review.',
+  duplicate_signal: 'A BUY for this symbol was already assessed inside duplicateSignalWindowMs.',
   daily_loss: 'Wait for the next exchange trading day or raise dailyLossLimit after a human review.',
   consecutive_loss: 'Review the last three closed SELL P&L rows before re-enabling aggressive entries.',
   portfolio_drawdown: 'Drawdown from peak equity exceeded the configured cap. Manual review required.',

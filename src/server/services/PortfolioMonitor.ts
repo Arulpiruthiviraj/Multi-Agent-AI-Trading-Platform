@@ -40,6 +40,7 @@ import { and, desc, eq } from 'drizzle-orm';
 import { marketDataWorker } from './MarketDataWorker';
 import { EVENTS } from '../core/eventNames';
 import { tradingSafety } from '../config/tradingSafety';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 import { agentWeightConfig } from '../config/agentWeights';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { classifyRegime, MIN_BARS } from '../quant/RegimeEngine';
@@ -52,8 +53,8 @@ import { evaluateThesisInvalidation, parseStoredThesis } from '../quant/analysis
 // read by anything. Used only when the settings table genuinely has no row yet (should not happen
 // in normal operation - the app always seeds one), so this fallback matches the schema's own
 // column defaults rather than the old, unrelated hardcoded values.
-const FALLBACK_TAKE_PROFIT_PCT = 15;
-const FALLBACK_TRAILING_STOP_PCT = 5;
+const FALLBACK_TAKE_PROFIT_PCT = tradingSafety.fallbackTakeProfitPct;
+const FALLBACK_TRAILING_STOP_PCT = tradingSafety.fallbackTrailingStopPct;
 
 export class PortfolioMonitorWorker {
   private intervalId: NodeJS.Timeout | null = null;
@@ -61,7 +62,7 @@ export class PortfolioMonitorWorker {
   start() {
     if (this.intervalId) return;
     console.log("[PortfolioWorker] Started monitoring loop.");
-    this.intervalId = setInterval(() => this.reviewPortfolio(), 60000);
+    this.intervalId = setInterval(() => this.reviewPortfolio(), runtimeIntervals.portfolioMonitorMs);
     this.reviewPortfolio();
   }
 
@@ -139,7 +140,7 @@ export class PortfolioMonitorWorker {
               side: "SELL",
               confidence: tradingSafety.quantExitIdeaConfidence,
               currentPrice: currentLivePrice,
-              reasoning: `Quant strategy (${openingTrade!.quantStrategyId}) target reached: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}. Scaling out to manage risk.`,
+              reasoning: `EXIT_CODE=TARGET_REACHED Quant strategy (${openingTrade!.quantStrategyId}) target reached: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}. Scaling out to manage risk.`,
               agent: agentWeightConfig.riskExitAgent
             });
             continue;
@@ -151,7 +152,7 @@ export class PortfolioMonitorWorker {
               side: "SELL",
               confidence: tradingSafety.quantStopExitConfidence,
               currentPrice: currentLivePrice,
-              reasoning: `Quant strategy (${openingTrade!.quantStrategyId}) stop hit: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}. Preserving capital.`,
+              reasoning: `EXIT_CODE=HARD_STOP Quant strategy (${openingTrade!.quantStrategyId}) stop hit: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}. Preserving capital.`,
               agent: agentWeightConfig.riskExitAgent
             });
             continue;
@@ -165,7 +166,7 @@ export class PortfolioMonitorWorker {
                 side: "SELL",
                 confidence: tradingSafety.thesisInvalidationExitConfidence,
                 currentPrice: currentLivePrice,
-                reasoning: `Original thesis invalidated (${openingTrade!.quantStrategyId ?? storedThesis.strategy}): ${invalidation}`,
+                reasoning: `EXIT_CODE=THESIS_INVALIDATION Original thesis invalidated (${openingTrade!.quantStrategyId ?? storedThesis.strategy}): ${invalidation}`,
                 agent: agentWeightConfig.riskExitAgent
               });
               continue;
@@ -178,7 +179,7 @@ export class PortfolioMonitorWorker {
               side: "SELL",
               confidence: tradingSafety.quantStopExitConfidence,
               currentPrice: currentLivePrice,
-              reasoning: `Live trailing-stop backstop (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%) in addition to strategy stop/target.`,
+              reasoning: `EXIT_CODE=TRAILING_STOP Live trailing-stop backstop (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%) in addition to strategy stop/target.`,
               agent: agentWeightConfig.riskExitAgent
             });
           }
@@ -193,7 +194,7 @@ export class PortfolioMonitorWorker {
              side: "SELL",
              confidence: tradingSafety.quantExitIdeaConfidence,
              currentPrice: currentLivePrice,
-             reasoning: `Target profit reached (+${PnL.toFixed(2)}%, threshold +${takeProfitPct}%). Scaling out to manage risk.`,
+             reasoning: `EXIT_CODE=TARGET_REACHED Target profit reached (+${PnL.toFixed(2)}%, threshold +${takeProfitPct}%). Scaling out to manage risk.`,
              agent: agentWeightConfig.riskExitAgent
            });
         } else if (PnL < -trailingStopPct) {
@@ -204,7 +205,7 @@ export class PortfolioMonitorWorker {
              side: "SELL",
              confidence: tradingSafety.quantStopExitConfidence,
              currentPrice: currentLivePrice,
-             reasoning: `Hard stop hit (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%). Preserving capital.`,
+             reasoning: `EXIT_CODE=HARD_STOP Hard stop hit (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%). Preserving capital.`,
              agent: agentWeightConfig.riskExitAgent
            });
         }

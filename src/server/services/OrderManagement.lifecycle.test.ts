@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { eq } from 'drizzle-orm';
 import type { BrokerCapabilities, BrokerPlugin, Order } from '../../brokers/BrokerAdapter';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 /**
  * Real integration test (isolated temp SQLite DB, real BrokerManager, no per-module mocks) for
@@ -307,7 +308,7 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
 });
 
 function FOLLOWUP_MIN_AGE_MS_PLUS_MARGIN(): number {
-  return 7000; // FOLLOWUP_MIN_AGE_MS (6000) + margin, so the follow-up cycle actually picks it up
+  return runtimeIntervals.omsFollowUpMinAgeMs + 1000;
 }
 
 function onceOrderExecuted(eventBus: any, orderId: string): Promise<any> {

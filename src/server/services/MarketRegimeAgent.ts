@@ -34,6 +34,7 @@
  */
 
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { AIRouter } from '../ai/AIRouter';
 import { tradingSafety } from '../config/tradingSafety';
 
@@ -49,7 +50,7 @@ export class MarketRegimeAgent {
     try {
       if (!process.env.GEMINI_API_KEY) {
         this.currentRegime = "SIMULATED_BULL_MARKET";
-        eventBus.emit('MARKET_REGIME_DETECTED', { regime: this.currentRegime, timestamp: new Date().toISOString() });
+        eventBus.emit(EVENTS.MARKET_REGIME_DETECTED, { regime: this.currentRegime, timestamp: new Date().toISOString() });
         return;
       }
       
@@ -81,7 +82,7 @@ Respond ONLY with a JSON object in this format:
       
       console.log(`[MarketRegime] Detected: ${this.currentRegime} (Conf: ${result.confidence}) - ${result.reasoning}`);
       
-      eventBus.emit('MARKET_REGIME_DETECTED', { 
+      eventBus.emit(EVENTS.MARKET_REGIME_DETECTED, { 
         regime: this.currentRegime, 
         confidence: result.confidence,
         reasoning: result.reasoning,

@@ -35,7 +35,9 @@ export interface PaperTradingReport {
   note: string | null;
 }
 
-export const MIN_TRADES_FOR_PAPER_VALIDATION = 30; // a real, honest floor - do not draw a conclusion from a handful of fills
+import { tradingSafety } from '../config/tradingSafety';
+
+export const MIN_TRADES_FOR_PAPER_VALIDATION = tradingSafety.minTradesForPaperValidation;
 
 /** Persistent experiment identifier for a continuous paper run. Override via ARGUS_PAPER_EXPERIMENT_ID.
  *  Never invents trades - it only labels whatever organic activity actually occurred. */

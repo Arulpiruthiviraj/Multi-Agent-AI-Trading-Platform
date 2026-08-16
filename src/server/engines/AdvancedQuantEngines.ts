@@ -7,6 +7,7 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { TechnicalIndicators } from './TechnicalIndicators';
 import crypto from 'crypto';
 
@@ -21,6 +22,7 @@ export class AdvancedQuantEngines {
   }
 
   private processMarketData(data: any) {
+    if (!isLiveIdeaGenerationEnabled()) return;
     const symbol = data.symbol;
     if (!this.priceHistory[symbol]) {
       this.priceHistory[symbol] = { high: [], low: [], close: [], volume: [] };

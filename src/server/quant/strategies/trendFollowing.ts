@@ -11,9 +11,10 @@
  * ==========================================================
  */
 import { StrategyContext, StrategyDefinition, StrategyEvaluation, scoreFromConditions } from './types';
+import { quantThresholds } from '../../config/quantThresholds';
 
-const MIN_TREND_STRENGTH = 50;
-const MIN_ADX = 25;
+const MIN_TREND_STRENGTH = quantThresholds.minTrendStrength;
+const MIN_ADX = quantThresholds.minAdxTrending;
 
 export const trendFollowing: StrategyDefinition = {
   id: 'TREND_FOLLOWING',
@@ -32,7 +33,7 @@ export const trendFollowing: StrategyDefinition = {
     const check = (name: string, met: boolean) => (met ? conditionsMet.push(name) : conditionsFailed.push(name));
 
     check(
-      bullish ? 'Strong BULLISH_TREND regime (trendStrength >= 50)' : 'Strong BEARISH_TREND regime (trendStrength >= 50)',
+      bullish ? `Strong BULLISH_TREND regime (trendStrength >= ${MIN_TREND_STRENGTH})` : `Strong BEARISH_TREND regime (trendStrength >= ${MIN_TREND_STRENGTH})`,
       (bullish ? regime.regime === 'BULLISH_TREND' : regime.regime === 'BEARISH_TREND') && regime.trendStrength >= MIN_TREND_STRENGTH
     );
     check('Market structure real TRENDING (not ranging/choppy)', regime.marketStructure === 'TRENDING');

@@ -680,7 +680,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
             <div className="bg-[#111822] border border-slate-800 rounded-lg p-5 hover:border-emerald-500/30 transition-colors">
                <h3 className="text-white font-bold mb-3 flex items-center gap-2"><Wallet size={16} className="text-emerald-400"/> Paper Trading Simulator</h3>
-               <p className="text-slate-400 text-xs mb-4">Default order-placing broker if none selected is InternalPaperBroker (in-memory fills, $100k default cash). Real pipeline writes SQLite <code className="text-[10px]">trades</code>. Legacy <code className="text-[10px]">GET /api/v1/signals</code> still fabricates votes and writes <code className="text-[10px]">portfolio.json</code> — it bypasses RiskEngine and is not the live path.</p>
+               <p className="text-slate-400 text-xs mb-4">Default order-placing broker if none selected is InternalPaperBroker (in-memory fills, $100k default cash). Real pipeline writes SQLite <code className="text-[10px]">trades</code>. Legacy <code className="text-[10px]">GET /api/v1/signals</code> is quarantined (HTTP 410) — it previously fabricated votes, wrote <code className="text-[10px]">portfolio.json</code>, and bypassed RiskEngine. Live orders only go EventBus → ChiefTrader → RiskEngine → OMS.</p>
                <button onClick={() => setActiveTab("command")} className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-white rounded text-xs font-bold transition-colors shadow-md uppercase tracking-wider font-mono">
                  Open Mission Control
                </button>

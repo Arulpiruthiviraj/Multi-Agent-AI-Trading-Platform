@@ -62,7 +62,7 @@ const AI_PROVIDER_TIMEOUT_MS = tradingSafety.aiProviderTimeoutMs;
 // deterministic (temperature=0) sampling, which some providers handle poorly for longer
 // structured-JSON responses. Centralized here rather than duplicated per-provider so the policy
 // lives in one place.
-const AI_DECISION_TEMPERATURE = 0.2;
+const AI_DECISION_TEMPERATURE = tradingSafety.aiDecisionTemperature;
 
 class AITimeoutError extends Error {
   constructor(providerId: string, ms: number) {

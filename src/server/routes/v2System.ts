@@ -55,6 +55,10 @@ import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } f
 import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
 import { experimentalStrategyRow } from '../config/quantExperimentalStrategies';
 import { quantStrategyTaxonomySummary } from '../config/quantStrategyTaxonomy';
+import { deskIntelligence } from '../config/deskIntelligence';
+import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
+import { noTradeReasonsConfig } from '../config/noTradeReasons';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 
 export const v2Router = Router();
 
@@ -452,11 +456,15 @@ import { agentPredictions, aiProviders, aiCalls as aiCallsTable } from '../db/sc
 import { gte as gteOp } from 'drizzle-orm';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { tradingSafety } from '../config/tradingSafety';
+import { runtimeIntervals } from '../config/runtimeIntervals';
+import { agentWeightConfig } from '../config/agentWeights';
+import { MARKET_REGISTRY } from '../markets/MarketRegistry';
+import { quantThresholds } from '../config/quantThresholds';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from '../engines/TradingEngine';
 
-const PIPELINE_AGENTS = ['TechnicalAgent', 'NewsAgent', 'FundamentalAgent', 'MacroAgent', 'KronosEngine'];
-const AGENT_ACTIVITY_WINDOW_MS = 3 * 60 * 1000; // covers the slowest real cadence (MacroAgent, 75s) with margin
+const PIPELINE_AGENTS = agentWeightConfig.pipelineAgents;
+const AGENT_ACTIVITY_WINDOW_MS = runtimeIntervals.agentActivityWindowMs;
 
 v2Router.get('/system/mission-control', async (req, res) => {
   try {
@@ -540,20 +548,14 @@ v2Router.get('/system/mission-control', async (req, res) => {
 // are real agents in this codebase) via a deterministic index-seeded formula - with a real Pearson
 // correlation over real agent_predictions rows for the actual five agents this codebase runs.
 // ==========================================================================================
-const RSI_SCAN_DEFAULT_SYMBOLS = ['AAPL', 'MSFT', 'NVDA', 'AMD', 'SPY', 'GLD', 'TLT', 'TSLA'];
-// Alpaca's equities-bars endpoint (the only real historical data source wired into Argus - see
-// HistoricalDataGateway) does not serve crypto, and no real crypto market-data source is wired in
-// for this purpose - BTC is explicitly flagged as unavailable rather than silently dropped or
-// backed by fake bars.
-const RSI_SCAN_UNAVAILABLE_SYMBOLS = new Set(['BTC']);
-// Comfortably more than rsiEngine's own 14-period Wilder floor, so a "real" RSI here always
-// reflects genuine smoothing rather than the engine's own insufficient-data fallback (a flat 50).
-const RSI_MIN_BARS = 20;
+const RSI_SCAN_DEFAULT_SYMBOLS = MARKET_REGISTRY.rsiScanDefaultSymbols;
+const RSI_SCAN_UNAVAILABLE_SYMBOLS = new Set(MARKET_REGISTRY.rsiScanUnavailableSymbols);
+const RSI_MIN_BARS = quantThresholds.rsiMinBars;
 const RSI_SCAN_LOOKBACK_MS = tradingSafety.correlationLookbackMs;
 
 function rsiSignal(rsi: number): 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL' {
-  if (rsi >= 70) return 'OVERBOUGHT';
-  if (rsi <= 30) return 'OVERSOLD';
+  if (rsi >= quantThresholds.rsiOverbought) return 'OVERBOUGHT';
+  if (rsi <= quantThresholds.rsiOversold) return 'OVERSOLD';
   return 'NEUTRAL';
 }
 
@@ -913,8 +915,8 @@ v2Router.get('/ai/token-consumption', async (req, res) => {
 // fields with a genuine source are returned (agent, symbol, prediction, confidence, reasoning,
 // timestamp). `available:false` when nothing in the window clears the confidence floor.
 // ==========================================================================================
-const OPPORTUNITY_MIN_CONFIDENCE = 0.6;
-const OPPORTUNITY_WINDOW_HOURS = 24;
+const OPPORTUNITY_MIN_CONFIDENCE = tradingSafety.minStrategyConfidenceToTrade;
+const OPPORTUNITY_WINDOW_HOURS = runtimeIntervals.opportunityWindowHours;
 
 v2Router.get('/opportunities', async (req, res) => {
   try {
@@ -1153,6 +1155,49 @@ v2Router.get('/agents/learning-summary', async (req, res) => {
 // runStrategyBacktest()). Before this, the only way to see this real, tested capability's output
 // was to query SQLite directly - no route, no UI, anywhere in the codebase read it.
 // ==========================================================================================
+v2Router.get('/desk/intelligence', (_req, res) => {
+  res.json({
+    ok: true,
+    defaultDecision: 'NO_TRADE',
+    liveIdeaGenerationEnabled: isLiveIdeaGenerationEnabled(),
+    newsEmitsTradeIdeas: deskIntelligence.newsEmitsTradeIdeas,
+    minRiskRewardRatio: deskIntelligence.minRiskRewardRatio,
+    noTradeReasons: noTradeReasonsConfig.reasons,
+    recentCatalysts: listRecentNewsCatalysts(15),
+    regimeFamilyRelevance: deskIntelligence.regimeFamilyRelevance,
+  });
+});
+
+v2Router.get('/system/startup-health', async (_req, res) => {
+  try {
+    const { collectStartupHealth } = await import('../core/StartupHealthRegistry');
+    const services = await collectStartupHealth();
+    res.json({ ok: true, services });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.get('/markets/canada', async (_req, res) => {
+  const { canadianMarketReadiness } = await import('../markets/canadianReadiness');
+  res.json({ ok: true, ...canadianMarketReadiness() });
+});
+
+v2Router.get('/desk/lifecycle', async (_req, res) => {
+  try {
+    const { listRecentLifecycle } = await import('../core/TradeLifecycleStore');
+    const rows = await listRecentLifecycle(80);
+    res.json({
+      ok: true,
+      available: rows.length > 0,
+      summary: rows.length === 0 ? 'NO HISTORICAL DATA' : undefined,
+      transitions: rows,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 v2Router.get('/quant/strategies', (req, res) => {
   const mapStrategy = (s: typeof ALL_STRATEGIES[number]) => ({
     id: s.id,
@@ -1371,7 +1416,20 @@ v2Router.get('/orchestration/capital', async (_req, res) => {
     const settingsRows = await db.select().from(settings).limit(1);
     const allocated = Number(settingsRows[0]?.budget ?? tradingEngine.state.budget ?? 0);
     const broker = BrokerManager.getInstance().getActiveBroker();
-    const pf = await broker.portfolio();
+    let pf: any;
+    try {
+      pf = await broker.portfolio();
+    } catch (e: any) {
+      return res.json({
+        ok: true,
+        available: false,
+        what: 'BROKER DATA UNAVAILABLE',
+        why: e?.message ?? String(e),
+        impact: 'Argus will not substitute fake equity, cash, or P&L. RiskEngine still refuses invalid equity.',
+        howToFix: 'Restore broker API connectivity (keys, network, 2FA, permissions, rate limits).',
+        argus: snapshotCapital({ allocated: Number.isFinite(allocated) ? allocated : 0, positions: [], pendingBuys: [] }),
+      });
+    }
     const allTrades = await db.select().from(trades);
     const pendingBuys = (allTrades || []).filter((t: any) =>
       t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
@@ -1395,6 +1453,7 @@ v2Router.get('/orchestration/capital', async (_req, res) => {
     }, 0);
     res.json({
       ok: true,
+      available: true,
       broker: {
         equity: pf.equity,
         cash: pf.cash,

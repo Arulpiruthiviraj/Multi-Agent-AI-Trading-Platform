@@ -15,6 +15,7 @@
  */
 import { StrategyContext, StrategyDefinition, StrategyEvaluation, scoreFromConditions } from './types';
 import { quantExperimentalStrategies } from '../../config/quantExperimentalStrategies';
+import { quantThresholds } from '../../config/quantThresholds';
 
 const t = quantExperimentalStrategies.thresholds;
 
@@ -59,10 +60,10 @@ export const oscillatorMomentum: StrategyDefinition = {
       bullish ? regime.regime === 'BULLISH_TREND' : regime.regime === 'BEARISH_TREND',
     );
 
-    if (bullish && momentum.rsi >= 80) {
+    if (bullish && momentum.rsi >= quantThresholds.rsiExtremeOverbought) {
       contradictions.push('RSI already extremely overbought (>=80) — momentum continuation risk of exhaustion.');
     }
-    if (!bullish && momentum.rsi <= 20) {
+    if (!bullish && momentum.rsi <= quantThresholds.rsiExtremeOversold) {
       contradictions.push('RSI already extremely oversold (<=20) — momentum continuation risk of exhaustion.');
     }
 

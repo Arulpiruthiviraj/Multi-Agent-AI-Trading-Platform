@@ -9,9 +9,9 @@
  *   1. Chronos/Kronos + FinBERT (`scripts/local_ai_service.py` on LOCAL_AI_SERVICE_PORT, default
  *      8008) unless ARGUS_SKIP_CHRONOS=true. This is what KronosEngine / KronosForecastAgent call.
  *   2. Ollama (`ollama serve` on 11434) unless ARGUS_SKIP_OLLAMA=true or something already listens.
- *   3. OpenAlice Guardian (sibling checkout or OPENALICE_REPO_PATH) unless ARGUS_SKIP_OPENALICE=true.
- *      Argus is pointed at Guardian http://127.0.0.1:47332/mcp (issue_create / inbox_read), never at
- *      the UTA trading MCP. Override with ARGUS_KEEP_OPENALICE_MCP_URL=true.
+ *   3. OpenAlice Guardian (sibling checkout, OPENALICE_REPO_PATH, or git clone) unless
+ *      ARGUS_SKIP_OPENALICE=true. Always points Argus at http://127.0.0.1:47332/mcp and sets
+ *      OPENALICE_ENABLED=true for the Node process. Never the UTA trading MCP.
  *   4. IBKR Client Portal Gateway when IBKR_GATEWAY_PATH is set or a common install path is found.
  *      Opens https://localhost:<port> for login. Does NOT complete 2FA (not possible).
  *
@@ -84,8 +84,26 @@ function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
 }
 
 function commandWorks(cmd: string, args: string[]): boolean {
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout: 8000, windowsHide: true });
+  const r = spawnSync(cmd, args, {
+    encoding: 'utf8',
+    timeout: 8000,
+    windowsHide: true,
+    // Windows shims are *.cmd; spawnSync without a shell reports "not found" even when PATH is fine.
+    shell: process.platform === 'win32',
+  });
   return r.status === 0;
+}
+
+/** OpenAlice's packageManager is pnpm. On Windows the shim is pnpm.cmd. */
+function resolvePnpmCommand(): string | null {
+  if (commandWorks('pnpm', ['--version'])) return 'pnpm';
+  if (process.platform === 'win32' && commandWorks('pnpm.cmd', ['--version'])) return 'pnpm.cmd';
+  if (commandWorks('corepack', ['--version'])) return 'corepack';
+  return null;
+}
+
+function pnpmBin(): string | null {
+  return resolvePnpmCommand();
 }
 
 function findPython(): { cmd: string; prefix: string[] } | null {
@@ -102,6 +120,49 @@ function openAliceCheckoutPath(): string {
 function openAliceCheckoutExists(): boolean {
   const openAlicePath = openAliceCheckoutPath();
   return fs.existsSync(openAlicePath) && fs.existsSync(path.join(openAlicePath, 'package.json'));
+}
+
+function ensureOpenAliceCheckout(): string | null {
+  const openAlicePath = openAliceCheckoutPath();
+  if (openAliceCheckoutExists()) return openAlicePath;
+
+  if (!commandWorks('git', ['--version'])) {
+    console.warn(
+      `[dev] No OpenAlice checkout at ${openAlicePath} and git is not on PATH. Clone https://github.com/TraderAlice/OpenAlice.git there (or set OPENALICE_REPO_PATH), then re-run npm run dev.`
+    );
+    return null;
+  }
+
+  console.log(`[dev] Cloning OpenAlice into ${openAlicePath} (https://github.com/TraderAlice/OpenAlice.git)`);
+  const clone = spawnSync(
+    'git',
+    ['clone', '--depth', '1', 'https://github.com/TraderAlice/OpenAlice.git', openAlicePath],
+    { encoding: 'utf8', timeout: 180_000, windowsHide: true, shell: process.platform === 'win32', stdio: 'inherit' },
+  );
+  if (clone.status !== 0 || !openAliceCheckoutExists()) {
+    console.warn(`[dev] git clone of OpenAlice failed (code=${clone.status}). Skipping Guardian.`);
+    return null;
+  }
+  return openAlicePath;
+}
+
+function ensureOpenAliceDeps(openAlicePath: string, pnpmCmd: string): boolean {
+  if (fs.existsSync(path.join(openAlicePath, 'node_modules'))) return true;
+  console.log(`[dev] OpenAlice node_modules missing - running ${pnpmCmd} install (first boot).`);
+  const args = pnpmCmd === 'corepack' ? ['pnpm', 'install'] : ['install'];
+  const install = spawnSync(pnpmCmd, args, {
+    cwd: openAlicePath,
+    encoding: 'utf8',
+    timeout: 600_000,
+    windowsHide: true,
+    shell: true,
+    stdio: 'inherit',
+  });
+  if (install.status !== 0) {
+    console.warn(`[dev] OpenAlice ${pnpmCmd} install failed (code=${install.status}). Guardian will not start.`);
+    return false;
+  }
+  return true;
 }
 
 async function waitForPort(port: number, timeoutMs: number, label: string): Promise<boolean> {
@@ -220,29 +281,28 @@ async function startChronosAndWait(): Promise<void> {
  * not Guardian — pinning Guardian to that port would collide and keep Model Runtime FAILED.
  */
 async function startOpenAliceGuardian(): Promise<string | null> {
-  const openAlicePath = openAliceCheckoutPath();
-
-  if (!fs.existsSync(openAlicePath) || !fs.existsSync(path.join(openAlicePath, 'package.json'))) {
-    console.warn(
-      `[dev] No OpenAlice checkout at ${openAlicePath}. Set OPENALICE_REPO_PATH or clone OpenAlice as a sibling folder. Skipping Guardian.`
-    );
-    return null;
-  }
+  const openAlicePath = ensureOpenAliceCheckout();
+  if (!openAlicePath) return null;
 
   if (await isPortOpen(GUARDIAN_MCP_PORT)) {
     console.log(`[dev] OpenAlice Guardian MCP already listening on ${GUARDIAN_MCP_PORT} - not starting a second pnpm dev.`);
     return GUARDIAN_MCP_URL;
   }
 
-  if (!commandWorks('pnpm', ['--version'])) {
-    console.warn('[dev] pnpm is not on PATH. Cannot start OpenAlice Guardian (`pnpm dev` in the OpenAlice checkout). Install pnpm, then re-run npm run dev.');
+  const pnpmCmd = pnpmBin();
+  if (!pnpmCmd) {
+    console.warn('[dev] pnpm is not on PATH. OpenAlice requires pnpm (packageManager pnpm@11). Install with `corepack enable` then `corepack prepare pnpm@11.7.0 --activate`, and re-run npm run dev.');
     return null;
   }
+
+  if (!ensureOpenAliceDeps(openAlicePath, pnpmCmd)) return null;
 
   const envOverrides: Record<string, string> = {
     OPENALICE_MCP_ENABLED: '1',
     OPENALICE_MCP_PORT: String(GUARDIAN_MCP_PORT),
     OPENALICE_WEB_PORT: String(GUARDIAN_WEB_PORT),
+    // Research/verification only — skip OpenAlice UTA so Argus never talks to a trading MCP.
+    OPENALICE_LITE_MODE: '1',
   };
 
   const envUrl = process.env.OPENALICE_MCP_URL?.trim();
@@ -254,8 +314,9 @@ async function startOpenAliceGuardian(): Promise<string | null> {
     );
   }
 
-  console.log(`[dev] Starting OpenAlice Guardian from ${openAlicePath} (MCP ${GUARDIAN_MCP_URL})`);
-  const openAlice = spawn('pnpm dev', {
+  const spawnArgs = pnpmCmd === 'corepack' ? ['pnpm', 'dev'] : ['dev'];
+  console.log(`[dev] Starting OpenAlice Guardian from ${openAlicePath} (${pnpmCmd} ${spawnArgs.join(' ')}; MCP ${GUARDIAN_MCP_URL})`);
+  const openAlice = spawn(pnpmCmd, spawnArgs, {
     cwd: openAlicePath,
     shell: true,
     stdio: 'inherit',
@@ -276,7 +337,7 @@ async function startOpenAliceGuardian(): Promise<string | null> {
     }
   });
 
-  const up = await waitForPort(GUARDIAN_MCP_PORT, 60_000, 'OpenAlice Guardian MCP');
+  const up = await waitForPort(GUARDIAN_MCP_PORT, 120_000, 'OpenAlice Guardian MCP');
   if (!up) {
     console.warn('[dev] Guardian MCP port did not open in time. Argus will keep probing.');
   }
@@ -446,10 +507,8 @@ async function main() {
   let guardianMcpUrl: string | null = null;
   if (process.env.ARGUS_SKIP_OPENALICE === 'true') {
     console.log('[dev] ARGUS_SKIP_OPENALICE=true - skipping OpenAlice Guardian.');
-  } else if (process.env.OPENALICE_ENABLED === 'true' || openAliceCheckoutExists()) {
-    guardianMcpUrl = await startOpenAliceGuardian();
   } else {
-    console.log('[dev] No OpenAlice checkout and OPENALICE_ENABLED is not true - skipping Guardian.');
+    guardianMcpUrl = await startOpenAliceGuardian();
   }
 
   if (process.env.ARGUS_SKIP_IBKR === 'true') {
@@ -466,9 +525,9 @@ async function main() {
     LOCAL_AI_SERVICE_URL: preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008'),
   };
 
-  if (guardianMcpUrl && process.env.ARGUS_KEEP_OPENALICE_MCP_URL !== 'true') {
+  if (process.env.ARGUS_SKIP_OPENALICE !== 'true' && process.env.ARGUS_KEEP_OPENALICE_MCP_URL !== 'true') {
     childEnv.OPENALICE_ENABLED = 'true';
-    childEnv.OPENALICE_MCP_URL = guardianMcpUrl;
+    childEnv.OPENALICE_MCP_URL = guardianMcpUrl || GUARDIAN_MCP_URL;
   }
 
   startTradingPlatform(childEnv);

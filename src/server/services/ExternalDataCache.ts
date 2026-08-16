@@ -19,6 +19,7 @@ import { db } from '../db';
 import { externalDataCache } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import crypto from 'crypto';
+import { runtimeIntervals } from '../config/runtimeIntervals';
 
 // Hardening pass, Phase 7: a stable, order-independent hash of a data object - used as part of
 // the cache key for a real LLM-analysis cache (FundamentalAgent/MacroAgent), so a cached analysis
@@ -30,7 +31,7 @@ export function hashObject(data: unknown): string {
   return crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex').slice(0, 16);
 }
 
-const RATE_LIMIT_COOLDOWN_MS = 24 * 60 * 60 * 1000; // AlphaVantage's quota is daily; a flat 24h
+const RATE_LIMIT_COOLDOWN_MS = runtimeIntervals.externalDataRateLimitCooldownMs;
 // cooldown from the moment a rate-limit response is actually observed is a safe, real choice that
 // doesn't require asserting an unverified fact about AlphaVantage's own internal reset clock.
 

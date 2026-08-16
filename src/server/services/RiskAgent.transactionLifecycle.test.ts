@@ -51,6 +51,9 @@ describe('CHIEF_APPROVED_IDEA -> RiskEngine -> transactions.status (Phase 16A re
     await import('../core/EventStore');
     await import('./RiskAgent');
     await import('./TransactionLifecycleTracker');
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
   });
 
   afterAll(() => {
