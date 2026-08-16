@@ -7,6 +7,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { desc } from 'drizzle-orm';
 import { tradingEngine } from '../engines/TradingEngine';
+import { readMarketClock } from '../engines/RiskEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { snapshotCapital } from '../engines/CapitalAllocation';
@@ -24,7 +25,7 @@ function emitIfChanged(d: DiagnosticMessage) {
   if (lastFingerprint.get(d.component) === fp) return;
   lastFingerprint.set(d.component, fp);
   eventBus.emit('DIAGNOSTIC_CREATED', d);
-  if (d.code === 'MD-001') eventBus.emit('DATA_STALE', d);
+    if (d.code === 'MD-001' || d.code === 'MD-005' || d.code === 'MD-006') eventBus.emit('DATA_STALE', d);
   if (d.code === 'MOD-001' || d.code === 'MOD-002' || d.code === 'MOD-004') eventBus.emit('MODEL_UNAVAILABLE', d);
   if (d.code === 'CAP-001') eventBus.emit('CAPITAL_BLOCK', d);
   if (d.code === 'RSK-001') eventBus.emit('RISK_BLOCK', d);
@@ -47,36 +48,50 @@ export async function collectDiagnostics(): Promise<{
   if (tradingState !== 'TRADING_ENABLED') {
     diagnostics.push(buildDiagnostic('SYS-001', { tradingState }));
   }
+  if (tradingEngine.state.enabled !== true) {
+    diagnostics.push(buildDiagnostic('SYS-002', { tradingState }));
+  }
 
   if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
     diagnostics.push(buildDiagnostic('MD-002', {}));
-  } else if (!marketDataWorker.isConnected()) {
-    diagnostics.push(buildDiagnostic('MD-001', {
-      symbol: '(feed)',
-      ageSeconds: 'unknown',
-      thresholdSeconds: STALE_MS / 1000,
-      cause: 'Alpaca keys are set but MarketDataWorker WebSocket is not OPEN.',
-    }));
   } else {
-    const symbols = marketDataWorker.getActiveSymbols();
-    let worstAge: number | null = null;
-    let worstSymbol = symbols[0] || 'n/a';
-    for (const s of symbols) {
-      const age = marketDataWorker.getLatestPriceAgeMs(s);
-      if (age == null) continue;
-      if (worstAge == null || age > worstAge) { worstAge = age; worstSymbol = s; }
-    }
-    if (worstAge != null && worstAge > STALE_MS) {
-      diagnostics.push(buildDiagnostic('MD-001', {
-        symbol: worstSymbol,
-        ageSeconds: Math.round(worstAge / 1000),
+    const feed = marketDataWorker.getFeedStatus();
+    const clock = await readMarketClock();
+    if (!feed.connected) {
+      const rs = feed.readyState;
+      const rsLabel = rs === 0 ? 'CONNECTING' : rs === 2 ? 'CLOSING' : rs == null ? 'no socket yet' : 'CLOSED';
+      diagnostics.push(buildDiagnostic('MD-005', {
         thresholdSeconds: STALE_MS / 1000,
-        cause: 'No MARKET_DATA tick within RiskEngine data_freshness window.',
+        cause: feed.lastError
+          ? `Alpaca keys are set. WebSocket is ${rsLabel}. lastError: ${feed.lastError}`
+          : `Alpaca keys are set. WebSocket is ${rsLabel} (not OPEN). The feed starts at process boot even if Autobot is off.`,
       }));
     } else {
-      diagnostics.push(buildDiagnostic('MD-003', {
-        ageSeconds: worstAge == null ? 'no tick yet' : Math.round(worstAge / 1000),
-      }));
+      const symbols = marketDataWorker.getActiveSymbols();
+      let worstAge: number | null = null;
+      let worstSymbol = symbols[0] || 'n/a';
+      for (const s of symbols) {
+        const age = marketDataWorker.getLatestPriceAgeMs(s);
+        if (age == null) continue;
+        if (worstAge == null || age > worstAge) { worstAge = age; worstSymbol = s; }
+      }
+      if (clock === 'closed' || clock === 'unavailable') {
+        diagnostics.push(buildDiagnostic('MD-006', {
+          clockStatus: clock,
+          ageSeconds: worstAge == null ? 'none yet' : Math.round(worstAge / 1000),
+        }));
+      } else if (worstAge != null && worstAge > STALE_MS) {
+        diagnostics.push(buildDiagnostic('MD-001', {
+          symbol: worstSymbol,
+          ageSeconds: Math.round(worstAge / 1000),
+          thresholdSeconds: STALE_MS / 1000,
+          cause: 'No MARKET_DATA tick within RiskEngine data_freshness window.',
+        }));
+      } else {
+        diagnostics.push(buildDiagnostic('MD-003', {
+          ageSeconds: worstAge == null ? 'no tick yet' : Math.round(worstAge / 1000),
+        }));
+      }
     }
   }
   diagnostics.push(buildDiagnostic('MD-004', {}));
@@ -161,21 +176,20 @@ export async function collectDiagnostics(): Promise<{
   const lastRisk = await db.select().from(schema.riskAssessments).orderBy(desc(schema.riskAssessments.createdAt)).limit(1);
   if (lastRisk[0] && !lastRisk[0].approved) {
     const gate = lastRisk[0].rejectionGate || 'unknown';
-    const code = gate === 'argus_capital_allocation' ? 'CAP-001' : 'RSK-001';
-    if (code === 'CAP-001' && capital) {
-      diagnostics.push(buildDiagnostic('CAP-001', {
-        requested: 'see reasoning',
-        remaining: capital.argus.remaining,
-        allocated: capital.argus.allocated,
-        used: capital.argus.used,
-        brokerBuyingPower: capital.broker.buyingPower,
-        technicalMessage: lastRisk[0].reasoning,
-      }));
+    const when = lastRisk[0].createdAt;
+    const liveHalt = gate === 'emergency_stop' && tradingState !== 'TRADING_ENABLED';
+    if (liveHalt) {
+      // SYS-001 already reports the live kill switch. Do not duplicate it as a second ERROR.
     } else {
       diagnostics.push(buildDiagnostic('RSK-001', {
         gate,
-        reasoning: lastRisk[0].reasoning,
+        reasoning: `Last persisted rejection (${when}): ${lastRisk[0].reasoning || gate}. Current tradingState is ${tradingState}. This row is history, not a live bypass.`,
         recommendedFix: GATE_FIX[gate] || 'Inspect the failed gate; do not bypass RiskEngine.',
+      }, {
+        severity: 'INFO',
+        tradingBlocked: false,
+        title: 'Last RiskEngine rejection (historical)',
+        status: 'EMPTY_RESULT',
       }));
     }
   }
@@ -191,7 +205,7 @@ export async function collectDiagnostics(): Promise<{
   const passing = [
     { component: 'BROKER', ok: !diagnostics.some(d => d.code === 'BRK-001'), note: capital ? `equity $${Number(capital.broker.equity).toFixed(2)}` : 'portfolio unread' },
     { component: 'CAPITAL', ok: !diagnostics.some(d => d.code === 'CAP-001'), note: capital ? `remaining $${Number(capital.argus.remaining).toFixed(2)}` : 'n/a' },
-    { component: 'MARKET_DATA', ok: !diagnostics.some(d => d.code === 'MD-001' || d.code === 'MD-002'), note: marketDataWorker.isConnected() ? 'WS OPEN' : 'WS not OPEN' },
+    { component: 'MARKET_DATA', ok: !diagnostics.some(d => (d.code === 'MD-001' || d.code === 'MD-002' || d.code === 'MD-005') && d.tradingBlocked), note: marketDataWorker.isConnected() ? 'WS OPEN' : 'WS not OPEN' },
     { component: 'RISK_ENGINE', ok: tradingState === 'TRADING_ENABLED', note: tradingState },
     { component: 'CHRONOS', ok: !diagnostics.some(d => d.code === 'MOD-001' && d.status === 'UNAVAILABLE'), note: 'optional' },
     { component: 'OLLAMA', ok: !diagnostics.some(d => d.code === 'MOD-002' && d.status === 'UNAVAILABLE'), note: 'optional' },

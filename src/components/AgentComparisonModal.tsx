@@ -35,7 +35,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { X, Activity, Maximize2, Network } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, Legend } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 
 interface AgentComparisonModalProps {
   isOpen: boolean;
@@ -179,7 +180,7 @@ export default function AgentComparisonModal({
                 <span className="text-[10px] text-slate-500 font-mono uppercase">Indexed to 0.00%</span>
               </div>
               <div className="flex-1 p-4 min-h-[300px]">
-                <ResponsiveContainer width="100%" height="100%">
+                <SafeResponsiveContainer>
                   <LineChart data={normalizedData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
                     <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
@@ -197,7 +198,7 @@ export default function AgentComparisonModal({
                     <Line type="monotone" dataKey={agentAlpha} stroke="#3b82f6" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name={`${agentAlpha} (Alpha)`} />
                     <Line type="monotone" dataKey={agentBeta} stroke="#10b981" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name={`${agentBeta} (Beta)`} />
                   </LineChart>
-                </ResponsiveContainer>
+                </SafeResponsiveContainer>
               </div>
             </div>
           </div>

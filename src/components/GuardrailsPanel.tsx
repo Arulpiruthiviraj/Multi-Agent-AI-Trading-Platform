@@ -65,7 +65,8 @@ export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLi
         <div>
           <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center gap-1.5 mb-0.5">
             {label}
-            <ContextualTooltip title={label} content={description} />
+            {/* Hover-only (?) — portal tooltip; no-op when tooltipsEnabled is off */}
+            <ContextualTooltip title={label} content={description} showIcon />
             {locked && <span className="text-[8px] font-bold text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">REAL · ALWAYS ON</span>}
           </span>
           <p className="text-[9px] font-mono text-slate-500 max-w-[200px]">{description}</p>
@@ -95,7 +96,7 @@ export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLi
         <div>
           <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center mb-0.5">
             {label}
-            <ContextualTooltip title={label} content={description} />
+            <ContextualTooltip title={label} content={description} showIcon />
           </span>
           <p className="text-[9px] font-mono text-slate-500 max-w-[200px]">{description}</p>
         </div>

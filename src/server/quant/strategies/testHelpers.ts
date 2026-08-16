@@ -27,6 +27,8 @@ export function baseFixture(): StrategyContext {
     supportResistance: {
       previousDay: null, dailyHighLow: null, weeklyHighLow: null, pivots: null, fibonacci: null, recentSwings: [],
       nearest: { nearestResistance: null, nearestSupport: null },
+      openingRange: { available: false, reason: 'test fixture — no bars', data: null },
+      priorChannel20: null,
     },
     regime: {
       regime: 'SIDEWAYS_RANGE', trendStrength: 10, volatility: 'NORMAL', marketStructure: 'CHOPPY', confidence: 0.3,

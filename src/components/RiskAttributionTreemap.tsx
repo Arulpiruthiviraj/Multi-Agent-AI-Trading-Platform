@@ -15,7 +15,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { Treemap, Tooltip, ResponsiveContainer } from 'recharts';
+import { Treemap, Tooltip } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 import { ShieldAlert } from 'lucide-react';
 import AwaitingSignal from './shared/AwaitingSignal';
 
@@ -166,7 +167,7 @@ export default function RiskAttributionTreemap() {
 
       {available === true && data && (
         <div className="h-[300px] w-full bg-[#111822] rounded overflow-hidden border border-slate-800">
-          <ResponsiveContainer width="100%" height="100%">
+          <SafeResponsiveContainer>
             <Treemap
               data={data}
               dataKey="size"
@@ -177,7 +178,7 @@ export default function RiskAttributionTreemap() {
             >
               <Tooltip content={<CustomTooltip />} />
             </Treemap>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
         </div>
       )}
     </div>

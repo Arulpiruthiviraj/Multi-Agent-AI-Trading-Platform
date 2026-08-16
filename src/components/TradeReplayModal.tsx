@@ -35,7 +35,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { X, Play, Pause, SkipBack, FastForward, Activity, BrainCircuit, BarChart2, ShieldCheck, Send, CheckCircle2, XCircle } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 
 export default function TradeReplayModal({ trade, onClose }: { trade: any, onClose: () => void }) {
   const [isPlaying, setIsPlaying] = useState(false);
@@ -262,7 +263,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
                       Simulated Price Trajectory
                     </h3>
                     <div className="flex-1 w-full relative">
-                      <ResponsiveContainer width="100%" height="100%">
+                      <SafeResponsiveContainer>
                         <AreaChart data={chartData.slice(0, timelineIndex + 1)}>
                           <defs>
                             <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
@@ -275,7 +276,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
                           <Tooltip contentStyle={{ backgroundColor: '#111822', borderColor: '#1e293b', fontSize: '10px' }} />
                           <Area type="stepAfter" dataKey="price" stroke="#38bdf8" fillOpacity={1} fill="url(#colorPrice)" isAnimationActive={false} />
                         </AreaChart>
-                      </ResponsiveContainer>
+                      </SafeResponsiveContainer>
                     </div>
                   </div>
               </div>

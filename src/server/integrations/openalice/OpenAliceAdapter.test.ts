@@ -84,6 +84,17 @@ describe('OpenAliceAdapter', () => {
     expect(health.reachable).toBe(false);
   });
 
+  it('healthCheck names a trading MCP as the wrong server, never READY', async () => {
+    const adapter = new OpenAliceAdapter('http://localhost:9999/mcp');
+    (adapter as any).mcp = {
+      listToolNames: vi.fn().mockResolvedValue(['placeOrder', 'getQuote', 'tradingCommit']),
+    };
+    const health = await adapter.healthCheck();
+    expect(health.reachable).toBe(false);
+    expect(health.detail).toMatch(/Wrong MCP/);
+    expect(health.detail).toMatch(/47332/);
+  });
+
   it('healthCheck reports unreachable on a connection failure, never throws', async () => {
     const adapter = new OpenAliceAdapter('http://localhost:9999/mcp');
     (adapter as any).mcp = { listToolNames: vi.fn().mockRejectedValue(new Error('ECONNREFUSED')) };

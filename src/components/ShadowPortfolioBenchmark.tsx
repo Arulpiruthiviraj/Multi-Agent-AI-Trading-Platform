@@ -34,7 +34,8 @@
  */
 
 import React from 'react';
-import { ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, Legend } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 import { ArrowUpRight, ArrowDownRight, ShieldCheck, Zap, AlertTriangle, Scale } from 'lucide-react';
 
 export default function ShadowPortfolioBenchmark({ autoBotConfig }: { autoBotConfig: any }) {
@@ -139,7 +140,7 @@ export default function ShadowPortfolioBenchmark({ autoBotConfig }: { autoBotCon
           Live Benchmarking Equity Comparison Curve
         </h4>
         <div className="h-[280px]">
-          <ResponsiveContainer width="100%" height="100%">
+          <SafeResponsiveContainer>
             <LineChart data={equityHistory} margin={{ top: 10, right: 10, left: 10, bottom: 0 }}>
               <XAxis dataKey="time" stroke="#475569" fontSize={9} tickLine={false} axisLine={false} />
               <YAxis 
@@ -166,7 +167,7 @@ export default function ShadowPortfolioBenchmark({ autoBotConfig }: { autoBotCon
               <Line type="monotone" dataKey="sovereign" stroke="#10b981" strokeWidth={2.5} dot={false} activeDot={{ r: 5 }} name="Sovereign (Risk-Gated)" />
               <Line type="monotone" dataKey="shadow" stroke="#f43f5e" strokeWidth={2.5} dot={false} activeDot={{ r: 5 }} name="Shadow (Unconstrained)" />
             </LineChart>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
         </div>
       </div>
 

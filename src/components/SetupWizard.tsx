@@ -149,7 +149,7 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-[#05080f] flex items-center justify-center p-4 sm:p-6 lg:p-8 font-mono">
+    <div className="fixed inset-0 z-[300] bg-[#05080f] flex items-center justify-center p-4 sm:p-6 lg:p-8 font-mono">
       {/* Background Effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-500/10 rounded-full blur-[120px]"></div>

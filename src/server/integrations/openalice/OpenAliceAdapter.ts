@@ -92,11 +92,18 @@ export class OpenAliceAdapter implements ExternalVerificationProvider {
     try {
       const tools = await this.mcp.listToolNames();
       const hasRequired = tools.includes('issue_create') && tools.includes('inbox_read');
+      const looksLikeTradingMcp = tools.includes('placeOrder') || tools.includes('tradingCommit') || tools.includes('getQuote');
+      let detail: string;
+      if (hasRequired) {
+        detail = `Connected. ${tools.length} tool(s) available, including issue_create and inbox_read.`;
+      } else if (looksLikeTradingMcp) {
+        detail = `Wrong MCP: this URL is a trading/broker server, not OpenAlice Guardian. Argus verification needs issue_create and inbox_read (Guardian at http://127.0.0.1:47332/mcp). Do not send Argus credentials into a trading MCP. Available: ${tools.join(', ') || 'none'}`;
+      } else {
+        detail = `Connected but missing expected tools. Available: ${tools.join(', ') || 'none'}`;
+      }
       return {
         reachable: hasRequired,
-        detail: hasRequired
-          ? `Connected. ${tools.length} tool(s) available, including issue_create and inbox_read.`
-          : `Connected but missing expected tools. Available: ${tools.join(', ') || 'none'}`,
+        detail,
         checkedAt,
       };
     } catch (e: any) {

@@ -107,7 +107,9 @@ export class SystemBootstrap {
     if (!this.isRunning) return;
     console.log("[Argus System] Shutting down workers...");
     
-    marketDataWorker.stop();
+    // Market-data stays up when Autobot is toggled off so Diagnostics/RiskEngine still have a
+    // real feed. Stopping it here made MD-001 fire whenever Autobot was idle even though keys
+    // were set. marketDataWorker.stop() remains available for process shutdown.
     oms.stop();
     portfolioMonitor.stop();
     portfolioReconciliationWorker.stop();

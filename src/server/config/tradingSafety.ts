@@ -27,6 +27,9 @@ export interface TradingSafety {
   restrictedLiveMaxOrderNotionalDollars: number;
   restrictedLiveMaxOpenPositions: number;
   restrictedLiveMaxDailyLossDollars: number;
+  /** 0 = unlimited in paper/simulation. LIVE always also applies restrictedLiveMaxDailyBuyNotionalDollars. */
+  maxDailyBuyNotionalDollars: number;
+  restrictedLiveMaxDailyBuyNotionalDollars: number;
   alpacaCircuitBreakerFailureThreshold: number;
   alpacaCircuitBreakerCooldownMs: number;
   aiFailureWindowMs: number;
@@ -46,11 +49,15 @@ export interface TradingSafety {
   positionRiskElevatedFraction: number;
   debateTriggerConfidence: number;
   debateResultConfidence: number;
+  debateLearnedRulesCount: number;
+  debateLearnedRuleMaxChars: number;
   quantExitIdeaConfidence: number;
   quantStopExitConfidence: number;
   thesisInvalidationExitConfidence: number;
   regimeMismatchConfidenceMultiplier: number;
   minStrategyConfidenceToTrade: number;
+  agentWinRateAlertPct: number;
+  agentWinRateAlertMinPredictions: number;
 }
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
@@ -74,6 +81,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'restrictedLiveMaxOrderNotionalDollars',
   'restrictedLiveMaxOpenPositions',
   'restrictedLiveMaxDailyLossDollars',
+  'maxDailyBuyNotionalDollars',
+  'restrictedLiveMaxDailyBuyNotionalDollars',
   'alpacaCircuitBreakerFailureThreshold',
   'alpacaCircuitBreakerCooldownMs',
   'aiFailureWindowMs',
@@ -93,11 +102,15 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'positionRiskElevatedFraction',
   'debateTriggerConfidence',
   'debateResultConfidence',
+  'debateLearnedRulesCount',
+  'debateLearnedRuleMaxChars',
   'quantExitIdeaConfidence',
   'quantStopExitConfidence',
   'thesisInvalidationExitConfidence',
   'regimeMismatchConfidenceMultiplier',
   'minStrategyConfidenceToTrade',
+  'agentWinRateAlertPct',
+  'agentWinRateAlertMinPredictions',
 ];
 
 function loadTradingSafety(): TradingSafety {

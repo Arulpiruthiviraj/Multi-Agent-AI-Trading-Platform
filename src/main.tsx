@@ -38,11 +38,14 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { WebSocketProvider } from './context/WebSocketContext';
+import { ExplainerSettingsProvider } from './context/ExplainerSettingsContext';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <WebSocketProvider>
-      <App />
+      <ExplainerSettingsProvider>
+        <App />
+      </ExplainerSettingsProvider>
     </WebSocketProvider>
   </StrictMode>,
 );

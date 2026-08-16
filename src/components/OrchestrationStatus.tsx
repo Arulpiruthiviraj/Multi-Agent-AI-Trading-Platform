@@ -4,6 +4,7 @@
  * DigitalTwinVisualizer still lights nodes only from real WebSocket events.
  */
 import React from 'react';
+import { Explainer } from './ContextualTooltip';
 
 export default function OrchestrationStatus({ models, capital }: { models: any[] | null; capital: any | null }) {
   return (
@@ -20,9 +21,16 @@ export default function OrchestrationStatus({ models, capital }: { models: any[]
             <div>
               <div className="text-[11px] font-bold text-white font-mono">{m.modelId}</div>
               <div className="text-[9px] text-slate-500 mt-0.5">{m.detail}</div>
-              {m.health === 'FAILED' && m.action && <div className="text-[9px] text-amber-400 mt-0.5">Action: {m.action}</div>}
+              {m.action && (m.health === 'FAILED' || m.health === 'STARTING') && (
+                <div className="text-[9px] text-amber-400 mt-0.5">Action: {m.action}</div>
+              )}
             </div>
-            <span className={`text-[9px] font-bold tracking-widest ${m.health === 'READY' ? 'text-emerald-400' : m.health === 'DISABLED' ? 'text-slate-500' : 'text-rose-400'}`}>
+            <span className={`text-[9px] font-bold tracking-widest ${
+              m.health === 'READY' ? 'text-emerald-400'
+                : m.health === 'DISABLED' ? 'text-slate-500'
+                : m.health === 'STARTING' ? 'text-amber-400'
+                : 'text-rose-400'
+            }`}>
               {m.health}
             </span>
           </div>
@@ -42,17 +50,17 @@ export default function OrchestrationStatus({ models, capital }: { models: any[]
         )}
         {capital?.ok && (
           <div className="grid grid-cols-2 gap-x-4 gap-y-2 font-mono text-[11px]">
-            <span className="text-slate-500">Broker equity</span>
+            <span className="text-slate-500"><Explainer id="brokerEquity">Broker equity</Explainer></span>
             <span className="text-white text-right">${Number(capital.broker.equity ?? 0).toFixed(2)}</span>
             <span className="text-slate-500">Cash</span>
             <span className="text-white text-right">${Number(capital.broker.cash ?? 0).toFixed(2)}</span>
-            <span className="text-slate-500">Buying power</span>
+            <span className="text-slate-500"><Explainer id="buyingPower">Buying power</Explainer></span>
             <span className="text-white text-right">${Number(capital.broker.buyingPower ?? 0).toFixed(2)}</span>
             <span className="text-slate-500">Invested</span>
             <span className="text-white text-right">${Number(capital.broker.investedCapital ?? 0).toFixed(2)}</span>
-            <span className="text-slate-500">Unrealized P&L</span>
+            <span className="text-slate-500"><Explainer id="unrealizedPnl">Unrealized P&L</Explainer></span>
             <span className="text-white text-right">{capital.broker.unrealizedPnl == null ? '—' : `$${Number(capital.broker.unrealizedPnl).toFixed(2)}`}</span>
-            <span className="text-indigo-300">Allocated to Argus</span>
+            <span className="text-indigo-300"><Explainer id="argusAllocation">Allocated to Argus</Explainer></span>
             <span className="text-indigo-300 text-right">${Number(capital.argus.allocated).toFixed(2)}</span>
             <span className="text-amber-300">Currently used</span>
             <span className="text-amber-300 text-right">${Number(capital.argus.used).toFixed(2)}</span>

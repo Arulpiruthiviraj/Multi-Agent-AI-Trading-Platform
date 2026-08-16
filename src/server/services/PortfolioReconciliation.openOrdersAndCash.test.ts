@@ -131,4 +131,24 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
 
     (broker as any).portfolio = originalPortfolio;
   });
+
+  it('a broker FILLED order with no matching local trades.brokerOrderId is flagged FILLED_ORDER_MISSING_LOCALLY', async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const broker = BrokerManager.getInstance().getActiveBroker();
+    const originalOrders = broker.orders.bind(broker);
+    (broker as any).orders = async () => [
+      ...(await originalOrders()),
+      { id: 'filled-orphan-1', symbol: 'FILLGAP', side: 'BUY', type: 'MARKET', status: 'FILLED', quantity: 8, filledQuantity: 8, price: 50, averageFillPrice: 50, createdAt: new Date(), updatedAt: new Date() },
+    ];
+
+    await portfolioReconciliationWorker.reconcile();
+
+    const events = await db.select().from(schema.reconciliationEvents);
+    const last = events[events.length - 1];
+    expect(last.matches).toBe(false);
+    const mismatches = JSON.parse(last.mismatches);
+    expect(mismatches.some((m: any) => m.symbol === 'FILLGAP' && m.type === 'FILLED_ORDER_MISSING_LOCALLY')).toBe(true);
+
+    (broker as any).orders = originalOrders;
+  });
 });

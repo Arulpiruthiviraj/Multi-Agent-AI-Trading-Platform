@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { preferIpv4Loopback } from './preferIpv4Loopback';
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emit: vi.fn() } }));
 vi.mock('../integrations/openalice/OpenAliceVerificationService', () => ({
   openAliceVerificationService: {
     enabled: false,
+    mcpUrl: null,
     health: async () => ({ reachable: false, detail: 'disabled', checkedAt: new Date().toISOString() }),
   },
 }));
@@ -38,7 +40,7 @@ describe('ModelRuntimeManager', () => {
     expect(ollama.health).toBe('READY');
     expect(ollama.loaded).toBe(true);
     expect(chronos.health).toBe('FAILED');
-    expect(chronos.action).toMatch(/npm run ai:serve/);
+    expect(chronos.action).toMatch(/npm run dev starts Chronos/);
   });
 
   it('does not spawn processes when ARGUS_START_LOCAL_MODELS is not true', async () => {
@@ -47,5 +49,13 @@ describe('ModelRuntimeManager', () => {
     const models = await modelRuntimeManager.startAndProbe();
     expect(models.every((m: any) => m.health !== 'STARTING')).toBe(true);
     expect(models.find((m: any) => m.modelId === 'ibkr-gateway').health).toBe('DISABLED');
+  });
+});
+
+describe('preferIpv4Loopback', () => {
+  it('rewrites localhost to 127.0.0.1 so Windows IPv6 localhost does not miss IPv4-bound Python', () => {
+    expect(preferIpv4Loopback('http://localhost:8008')).toBe('http://127.0.0.1:8008');
+    expect(preferIpv4Loopback('http://127.0.0.1:8008/')).toBe('http://127.0.0.1:8008');
+    expect(preferIpv4Loopback('https://example.com/v1')).toBe('https://example.com/v1');
   });
 });

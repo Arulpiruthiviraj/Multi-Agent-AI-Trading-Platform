@@ -31,7 +31,9 @@ import {
   Activity, ShieldCheck, Zap, TrendingUp, Cpu, Server, CheckCircle2, 
   Clock, CheckCircle, FileText, Database, Radio, Settings, Sliders, AlertTriangle 
 } from "lucide-react";
-import { XAxis, YAxis, Tooltip, ResponsiveContainer, AreaChart, Area } from "recharts";
+import { XAxis, YAxis, Tooltip, AreaChart, Area } from "recharts";
+import { SafeResponsiveContainer } from "./shared/SafeResponsiveContainer";
+import { Explainer } from "./ContextualTooltip";
 
 interface AutonomousDashboardProps {
   autoBotConfig?: any;
@@ -243,7 +245,7 @@ export function AutonomousDashboard({
                   : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
               }`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${isEngineActive ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
-                {isEngineActive ? "Running Live" : "Engine Paused"}
+                <Explainer id="engineRunBadge" quiet>{isEngineActive ? "Running Live" : "Engine Paused"}</Explainer>
               </span>
             </h1>
             <p className="text-slate-400 text-sm mt-1 flex items-center gap-2">
@@ -254,7 +256,7 @@ export function AutonomousDashboard({
 
         <div className="flex items-center gap-4 bg-[#0A0F16] p-2 rounded-lg border border-slate-800 relative z-10">
           <div className="flex flex-col px-4 border-r border-slate-800">
-            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Operation Mode</span>
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest"><Explainer id="operationMode">Operation Mode</Explainer></span>
             <span className="text-sm font-bold text-white mt-1">
               {autoBotConfig?.tradingMode || "Autonomous Paper"}
             </span>
@@ -263,7 +265,7 @@ export function AutonomousDashboard({
              <div className={`w-12 h-6 rounded-full border p-0.5 transition-all ${handsOffMode ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-slate-800 border-slate-700'}`}>
                 <div className={`w-4 h-4 rounded-full bg-white transition-transform ${handsOffMode ? 'translate-x-6' : 'translate-x-0'}`}></div>
              </div>
-             <span className="text-xs font-bold text-slate-400">Hands-Off Mode</span>
+             <span className="text-xs font-bold text-slate-400"><Explainer id="handsOffMode" quiet>Hands-Off Mode</Explainer></span>
           </div>
         </div>
       </div>
@@ -276,7 +278,7 @@ export function AutonomousDashboard({
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
               <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2 flex justify-between items-center">
-                Allocated Capital
+                <Explainer id="allocatedCapital">Allocated Capital</Explainer>
                 <Settings size={12} className="text-slate-600 hover:text-slate-300 cursor-pointer transition-colors" />
               </div>
               <div className="text-3xl font-bold text-white">
@@ -286,7 +288,7 @@ export function AutonomousDashboard({
             
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
               <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2">
-                Portfolio Valuation
+                <Explainer id="portfolioValuation">Portfolio Valuation</Explainer>
               </div>
               <div className="text-3xl font-bold text-indigo-400">
                 ${Number(portfolioEquity).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -297,7 +299,7 @@ export function AutonomousDashboard({
               isPnlPositive ? 'border-emerald-500/20 shadow-[0_0_20px_rgba(16,185,129,0.05)]' : 'border-rose-500/20 shadow-[0_0_20px_rgba(244,63,94,0.05)]'
             }`}>
               <div className={`text-[10px] font-bold uppercase tracking-widest mb-2 ${isPnlPositive ? 'text-emerald-500/70' : 'text-rose-500/70'}`}>
-                Today's P/L
+                <Explainer id="todaysPnl">Today's P/L</Explainer>
               </div>
               <div className={`text-3xl font-bold ${isPnlPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
                 {isPnlPositive ? '+' : ''}${Number(todaysPnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
@@ -312,7 +314,7 @@ export function AutonomousDashboard({
           <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
              <div className="flex justify-between items-center mb-6">
                <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
-                 <TrendingUp size={16} className="text-indigo-400" /> Realized & Intraday Performance
+                 <TrendingUp size={16} className="text-indigo-400" /> <Explainer id="realizedPerformance">Realized & Intraday Performance</Explainer>
                </h3>
                <span className="text-xs text-slate-500 font-mono">
                  {performanceData.length > 0 ? `${performanceData.length} data points` : "Awaiting Data"}
@@ -325,7 +327,7 @@ export function AutonomousDashboard({
                    Loading real-time performance analytics...
                  </div>
                ) : performanceData.length > 0 ? (
-                 <ResponsiveContainer width="100%" height="100%">
+                 <SafeResponsiveContainer>
                     <AreaChart data={performanceData}>
                       <defs>
                         <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
@@ -342,7 +344,7 @@ export function AutonomousDashboard({
                       />
                       <Area type="monotone" dataKey="value" stroke="#818cf8" strokeWidth={2} fillOpacity={1} fill="url(#colorValue)" />
                     </AreaChart>
-                 </ResponsiveContainer>
+                 </SafeResponsiveContainer>
                ) : (
                  <div className="h-full flex flex-col items-center justify-center text-slate-500 text-xs font-mono text-center p-6 border border-dashed border-slate-800 rounded">
                    <Activity size={28} className="text-slate-600 mb-2" />
@@ -360,7 +362,7 @@ export function AutonomousDashboard({
           {/* Current Activity */}
           <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <Activity size={14} className="text-indigo-400" /> AI Engine Operations
+              <Activity size={14} className="text-indigo-400" /> <Explainer id="aiEngineOps">AI Engine Operations</Explainer>
             </h3>
             <div className="space-y-3">
                <div className="flex items-center gap-3 text-xs">
@@ -373,7 +375,7 @@ export function AutonomousDashboard({
                </div>
                <div className="flex items-center gap-3 text-xs">
                  <div className={`w-2 h-2 rounded-full ${isEngineActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></div>
-                 <span className="text-slate-300">RiskEngine: 11 safety gates & ATR sizing active</span>
+                 <span className="text-slate-300"><Explainer id="riskEngineGates" quiet>RiskEngine: ordered safety gates (live sizing is not ATR)</Explainer></span>
                </div>
                <div className="flex items-center gap-3 text-xs">
                  <div className={`w-2 h-2 rounded-full ${isEngineActive ? 'bg-emerald-500 animate-pulse' : 'bg-slate-600'}`}></div>
@@ -391,11 +393,11 @@ export function AutonomousDashboard({
           {/* System Health */}
           <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
             <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-              <Server size={14} className="text-indigo-400" /> Subsystem Integrity
+              <Server size={14} className="text-indigo-400" /> <Explainer id="subsystemIntegrity">Subsystem Integrity</Explainer>
             </h3>
             <div className="space-y-3">
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-400 flex items-center gap-2"><Radio size={12}/> News Engine</span>
+                <span className="text-slate-400 flex items-center gap-2"><Radio size={12}/> <Explainer id="newsEngineStatus">News Engine</Explainer></span>
                 <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${
                   systemIntegrity?.checks?.news_provider_configured?.status === 'PASS' || !systemIntegrity
                     ? 'text-emerald-400 bg-emerald-500/10' 
@@ -408,19 +410,19 @@ export function AutonomousDashboard({
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400 flex items-center gap-2"><Database size={12}/> SQLite Database</span>
                 <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded text-[10px]">
-                  WAL Mode
+                  <Explainer id="sqliteWal">WAL Mode</Explainer>
                 </span>
               </div>
 
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-400 flex items-center gap-2"><Cpu size={12}/> Risk Engine Gates</span>
+                <span className="text-slate-400 flex items-center gap-2"><Cpu size={12}/> <Explainer id="riskEngineGates">Risk Engine Gates</Explainer></span>
                 <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded text-[10px]">
                   11 Gates Armed
                 </span>
               </div>
 
               <div className="h-px w-full bg-slate-800 my-2"></div>
-              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">AI Router Gateway</div>
+              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1"><Explainer id="aiRouterGateway">AI Router Gateway</Explainer></div>
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400">Configured Provider</span>
                 <span className="text-indigo-400 font-bold font-mono">
@@ -434,31 +436,31 @@ export function AutonomousDashboard({
           <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                <ShieldCheck size={14} className="text-emerald-400" /> Active Risk Limits
+                <ShieldCheck size={14} className="text-emerald-400" /> <Explainer id="activeRiskLimits">Active Risk Limits</Explainer>
               </h3>
               <Sliders size={14} className="text-slate-500 cursor-pointer hover:text-white" />
             </div>
             <div className="space-y-2 text-xs">
               <div className="flex justify-between text-slate-400">
-                <span>Maximum Daily Loss</span>
+                <span><Explainer id="dailyLossLimitMetric">Maximum Daily Loss</Explainer></span>
                 <span className="text-white font-bold font-mono">
                   ${Number(autoBotConfig?.dailyLossLimit ?? 5000).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between text-slate-400">
-                <span>Max Single Trade Size</span>
+                <span><Explainer id="maxTradeSizeMetric">Max Single Trade Size</Explainer></span>
                 <span className="text-white font-bold font-mono">
                   ${Number(autoBotConfig?.maxTradeSize ?? 3000).toLocaleString()}
                 </span>
               </div>
               <div className="flex justify-between text-slate-400">
-                <span>Max Open Positions</span>
+                <span><Explainer id="maxOpenPositionsMetric">Max Open Positions</Explainer></span>
                 <span className="text-white font-bold font-mono">
                   {autoBotConfig?.maxOpenPositions ?? 10}
                 </span>
               </div>
               <div className="flex justify-between text-slate-400 mt-2 pt-2 border-t border-slate-800">
-                <span>Emergency Circuit Breaker</span>
+                <span><Explainer id="emergencyBreaker">Emergency Circuit Breaker</Explainer></span>
                 <span className={`font-bold font-mono ${
                   autoBotConfig?.tradingState === "EMERGENCY_STOP" 
                     ? "text-rose-400" 
@@ -485,7 +487,7 @@ export function AutonomousDashboard({
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
           <div className="space-y-4">
             <div className="bg-[#0A0F16] border border-slate-800 rounded-lg p-4">
-              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Agent Win Rate</div>
+              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1"><Explainer id="agentWinRateMetric">Agent Win Rate</Explainer></div>
               <div className="text-xl font-bold text-white">
                 {learningStats?.avgWinRate !== undefined 
                   ? `${learningStats.avgWinRate.toFixed(1)}%` 
@@ -499,7 +501,7 @@ export function AutonomousDashboard({
             </div>
             
             <div className="bg-[#0A0F16] border border-slate-800 rounded-lg p-4">
-              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1">Learned Rules</div>
+              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1"><Explainer id="learnedRulesMetric">Learned Rules</Explainer></div>
               <div className="text-xl font-bold text-indigo-400">
                 {learningStats?.learnedRulesCount ?? 0}
               </div>
@@ -509,7 +511,7 @@ export function AutonomousDashboard({
           
           <div className="md:col-span-3">
              <h4 className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-3">
-               Recent Executed Trades ({recentTrades.length})
+               <Explainer id="recentTradesList">Recent Executed Trades</Explainer> ({recentTrades.length})
              </h4>
              {recentTrades.length > 0 ? (
                <div className="space-y-3">

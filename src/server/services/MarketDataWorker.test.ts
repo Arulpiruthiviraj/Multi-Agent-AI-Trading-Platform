@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * Real test coverage for hardening-pass Phase 4 (MarketDataWorker.ts): duplicate-tick dedup and
@@ -10,12 +10,16 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const { MockWebSocket, instances } = vi.hoisted(() => {
   class MockWebSocket {
     static OPEN = 1;
+    static CONNECTING = 0;
     static CLOSED = 3;
     readyState = 1;
     listeners: Record<string, Function[]> = {};
     sentMessages: any[] = [];
     on(event: string, cb: Function) {
       (this.listeners[event] ||= []).push(cb);
+    }
+    removeAllListeners() {
+      this.listeners = {};
     }
     send(data: string) {
       this.sentMessages.push(JSON.parse(data));
@@ -33,6 +37,9 @@ const { MockWebSocket, instances } = vi.hoisted(() => {
 
 vi.mock('ws', () => ({
   default: class {
+    static OPEN = 1;
+    static CONNECTING = 0;
+    static CLOSED = 3;
     constructor() {
       const instance = new MockWebSocket();
       instances.push(instance);
@@ -61,6 +68,10 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     process.env.ALPACA_SECRET_KEY = 'test-secret';
     worker = new MarketDataWorker();
     worker.start();
+  });
+
+  afterEach(() => {
+    worker.stop();
   });
 
   function authenticate(ws: any) {
@@ -140,5 +151,29 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     authenticate(ws);
 
     expect(emitSpy).not.toHaveBeenCalledWith('MARKET_DATA_GAP_DETECTED', expect.anything());
+  });
+
+  it('after the socket closes, start() opens a new handshake instead of no-op on the dead handle', () => {
+    const ws = instances[0];
+    ws.emit('close');
+    expect(worker.isConnected()).toBe(false);
+
+    worker.start();
+    expect(instances.length).toBe(2);
+  });
+
+  it('reconnect() tears down the current socket and starts a new one', () => {
+    const first = instances[0];
+    worker.reconnect();
+    expect(first.readyState).toBe(MockWebSocket.CLOSED);
+    expect(instances.length).toBe(2);
+  });
+
+  it('after authenticate, subscribes to config/markets.json US benchmarks when nothing else was subscribed', () => {
+    const ws = instances[0];
+    authenticate(ws);
+    const sub = ws.sentMessages.find((m: any) => m.action === 'subscribe');
+    expect(sub).toBeTruthy();
+    expect(sub.quotes).toEqual(expect.arrayContaining(['SPY', 'QQQ']));
   });
 });

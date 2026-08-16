@@ -24,6 +24,7 @@ import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizi
 import { getTradingDateStr } from '../core/TradingCalendar';
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
+import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
 
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
@@ -73,7 +74,7 @@ async function hasConsecutiveLosses(): Promise<boolean> {
     return recentClosed.every(t => (t.profitLoss ?? 0) < 0);
 }
 
-type MarketClockStatus = 'open' | 'closed' | 'unconfigured' | 'unavailable';
+export type MarketClockStatus = 'open' | 'closed' | 'unconfigured' | 'unavailable';
 
 /**
  * Alpaca /v2/clock.
@@ -81,7 +82,7 @@ type MarketClockStatus = 'open' | 'closed' | 'unconfigured' | 'unavailable';
  *   unavailable  — keys present but HTTP/network failed: FAIL CLOSED (do not treat as open).
  *   open/closed  — real clock payload. Failures are never cached as open.
  */
-async function readMarketClock(): Promise<MarketClockStatus> {
+export async function readMarketClock(): Promise<MarketClockStatus> {
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) return 'unconfigured';
     if (cachedMarketClock && Date.now() - cachedMarketClock.fetchedAt < MARKET_CLOCK_CACHE_MS) {
         return cachedMarketClock.isOpen ? 'open' : 'closed';
@@ -392,13 +393,26 @@ export class RiskEngine {
                     brokerEquity: accountEquity,
                     brokerBuyingPower: buyingPower,
                 });
+
+                const dailyCap = resolveDailyBuyNotionalCap(tradingEngine.state.tradingMode);
+                const alreadyToday = sumDailyBuyNotional(allTrades || []);
+                const dailyGuard = evaluateDailyBuyNotional({
+                    cap: dailyCap,
+                    side: proposal.side,
+                    alreadyDeployed: alreadyToday,
+                    requestedNotional,
+                });
+                recordGate('daily_buy_notional', dailyGuard.passed, dailyGuard);
             } else {
                 recordGate('sufficient_size', false, { skipped: true, reason: 'invalid price - sizing not evaluated' });
                 recordGate('argus_capital_allocation', false, { skipped: true, reason: 'invalid price - allocation not evaluated' });
+                recordGate('daily_buy_notional', false, { skipped: true, reason: 'invalid price - daily buy notional not evaluated' });
             }
 
             const capitalRejectReason = (gateResults.find(g => g.gate === 'argus_capital_allocation')?.detail as any)?.reason
                 || 'Rejected by Argus capital allocation guard.';
+            const dailyBuyNotionalReason = (gateResults.find(g => g.gate === 'daily_buy_notional')?.detail as any)?.reason
+                || 'Rejected by daily buy notional cap.';
 
             // Final verdict: first gate to fail, in evaluation order, determines the reported
             // reason - identical priority to the old early-exit order, but now every gate's real
@@ -420,6 +434,7 @@ export class RiskEngine {
                     : firstFailure!.gate === 'sufficient_size' ? sufficientSizeReasonHolder.text
                     : firstFailure!.gate === 'sell_position_exists' ? sellPositionReason
                     : firstFailure!.gate === 'argus_capital_allocation' ? capitalRejectReason
+                    : firstFailure!.gate === 'daily_buy_notional' ? dailyBuyNotionalReason
                     : `Rejected by gate: ${firstFailure!.gate}`;
             } else {
                 reasoning = `Approved based on ${(maxPortfolioRiskPct*100).toFixed(1)}% portfolio risk cap and available BP.`;

@@ -108,6 +108,7 @@ describe('RiskEngine.evaluateRisk', () => {
     mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
     mockTradingEngine.state.emergencyStopActive = false;
     mockTradingEngine.state.budget = 1_000_000;
+    mockTradingEngine.state.tradingMode = 'PAPER';
     setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 3000, budget: 1_000_000 }]);
     setTableRows(schema.riskAssessments, []);
     setTableRows(schema.trades, []);
@@ -565,5 +566,24 @@ describe('RiskEngine.evaluateRisk', () => {
     await riskEngine.evaluateRisk({ traceId: 'cap-50', symbol: 'AAPL', side: 'BUY', currentPrice: 50 });
     expect(lastAssessment().approved).toBe(false);
     expect(lastAssessment().reasoning).toMatch(/requested capital = \$50/);
+  });
+
+  it('LIVE: rejects a BUY when today NY countable BUY notional plus this order exceeds the restricted-live cap', async () => {
+    mockTradingEngine.state.tradingMode = 'LIVE';
+    const cap = tradingSafety.restrictedLiveMaxDailyBuyNotionalDollars;
+    setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 3000, budget: 1_000_000 }]);
+    setTableRows(schema.trades, [{
+      side: 'BUY',
+      status: 'FILLED',
+      price: 100,
+      quantity: Math.ceil(cap / 100),
+      timestamp: new Date().toISOString(),
+    }]);
+
+    await riskEngine.evaluateRisk({ traceId: 'daily-notional', symbol: 'MSFT', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/Daily buy notional cap/i);
   });
 });

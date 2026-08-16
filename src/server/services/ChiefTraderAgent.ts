@@ -38,7 +38,7 @@ import * as schema from '../db/schema';
 import { eventBus } from '../core/EventBus';
 import { db } from '../db';
 import { agentPerformanceStats, agentConfidenceCalibration } from '../db/schema';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { EvidenceAggregator, Evidence } from './EvidenceAggregator';
 import { bucketFor } from './ConfidenceCalibration';
 import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
@@ -48,12 +48,38 @@ import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
 import { tradingSafety } from '../config/tradingSafety';
 import { agentWeightConfig, defaultAgentWeights } from '../config/agentWeights';
 import { EVENTS } from '../core/eventNames';
+import { parseResearchNote, isBullBearResearchEnabled } from '../ai/research/parseResearchNote';
+import { bullBearResearchConfig } from '../config/bullBearResearch';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
  *  existing evidence, not an independent source, so it does not count toward this floor. */
 export const MIN_INDEPENDENT_AGREEING_AGENTS = tradingSafety.minIndependentAgreeingAgents;
 const RISK_EXIT_AGENT = agentWeightConfig.riskExitAgent;
+
+async function loadDebateLearnedRulesText(): Promise<string> {
+  try {
+    const rows = await db.select().from(schema.learnedRules)
+      .orderBy(desc(schema.learnedRules.timestamp))
+      .limit(tradingSafety.debateLearnedRulesCount);
+    if (!rows.length) return '';
+    const maxChars = tradingSafety.debateLearnedRuleMaxChars;
+    const lines = rows.map((r, i) => `${i + 1}. ${(r.rule || '').slice(0, maxChars)}`);
+    return `\nRecent learned rules (text only; they do not override RiskEngine):\n${lines.join('\n')}`;
+  } catch (e) {
+    console.warn('[ChiefTrader] Failed to load learned_rules for debate prompt', e);
+    return '';
+  }
+}
+
+function parseLlmJson(content: string | undefined): unknown {
+  if (!content) return null;
+  try {
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
 
 export class ChiefTraderAgent {
   private recentIdeas: any[] = [];
@@ -140,7 +166,37 @@ export class ChiefTraderAgent {
         console.log(`[ChiefTrader] Triggering multi-model debate for ${idea.symbol}`);
         this.beginDebate(idea.symbol);
 
-        const debatePrompt = `Analyze this trading idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}. Actively search for reasons NOT to trade. If the setup is poor, verdict must be HOLD.`;
+        const learnedRulesText = await loadDebateLearnedRulesText();
+        let researchBlock = '';
+        if (isBullBearResearchEnabled()) {
+          try {
+            const router = AIRouter.getInstance();
+            const fieldList = bullBearResearchConfig.requiredFields.join(', ');
+            const context = `Idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}. Return JSON with fields: ${fieldList}. Do not invent numeric market facts.`;
+            const [bullRes, bearRes] = await Promise.all([
+              router.routeTask(bullBearResearchConfig.bullAgentName, `${bullBearResearchConfig.bullRole}\n${context}`, idea.traceId, true),
+              router.routeTask(bullBearResearchConfig.bearAgentName, `${bullBearResearchConfig.bearRole}\n${context}`, idea.traceId, true),
+            ]);
+            const bullNote = parseResearchNote(parseLlmJson(bullRes?.content), 'BULL');
+            const bearNote = parseResearchNote(parseLlmJson(bearRes?.content), 'BEAR');
+            researchBlock = `\n${bullBearResearchConfig.bullAgentName}: ${bullNote.thesisSummary}\n${bullBearResearchConfig.bearAgentName}: ${bearNote.thesisSummary}`;
+            if (bearNote.confidence >= bullBearResearchConfig.bearHoldMinConfidence) {
+              this.recentIdeas.push({
+                traceId: idea.traceId,
+                symbol: idea.symbol,
+                side: 'HOLD',
+                confidence: bearNote.confidence,
+                currentPrice: idea.currentPrice,
+                reasoning: `[${bullBearResearchConfig.bearAgentName}] ${bearNote.thesisSummary || bearNote.invalidationCondition}`,
+                agent: bullBearResearchConfig.bearAgentName,
+              });
+            }
+          } catch (e) {
+            console.warn('[ChiefTrader] Bull/Bear research failed - debate continues without it', e);
+          }
+        }
+
+        const debatePrompt = `Analyze this trading idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}.${learnedRulesText}${researchBlock} Actively search for reasons NOT to trade. If the setup is poor, verdict must be HOLD.`;
 
         AIRouter.getInstance().routeConsensus("ConsensusDebate", debatePrompt, idea.traceId).then(debateResult => {
            if (debateResult && debateResult.consensus_verdict) {
@@ -308,6 +364,7 @@ export class ChiefTraderAgent {
       );
       const enoughIndependentVoices = uniqueIndependent.size >= MIN_INDEPENDENT_AGREEING_AGENTS;
       const debateSaidHold = evidence.some(e => e.agent === 'ConsensusDebate' && e.side === 'HOLD');
+      const bearSaidHold = evidence.some(e => e.agent === bullBearResearchConfig.bearAgentName && e.side === 'HOLD');
       const aiContradicts = evidence.some((e: any) => {
         const review = e.quantDetail?.aiContradictionAnalysis;
         return review?.available === true && review.aiAgreesWithSide === false;
@@ -319,6 +376,8 @@ export class ChiefTraderAgent {
         reason = `[NO TRADE] Only ${uniqueIndependent.size} independent agent(s) agreed on ${result.side} (need ${MIN_INDEPENDENT_AGREEING_AGENTS}). A single voice is not confirmation.`;
       } else if (debateSaidHold) {
         reason = `[NO TRADE] Adversarial debate verdict was HOLD - the thesis did not survive a search for reasons not to trade.`;
+      } else if (bearSaidHold) {
+        reason = `[NO TRADE] ${bullBearResearchConfig.bearAgentName} found a high-confidence case against the trade.`;
       } else if (aiContradicts) {
         reason = `[NO TRADE] Quant AI contradiction review disagrees with the deterministic side - thesis challenged, not overwritten.`;
       } else {

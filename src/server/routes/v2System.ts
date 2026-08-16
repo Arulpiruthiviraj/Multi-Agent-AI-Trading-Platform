@@ -51,8 +51,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { eventBus } from '../core/EventBus';
 import { recordConsensusTransaction } from '../core/TransactionRegistry';
 import { oms } from '../services/OrderManagement';
-import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isSmcLiveQuantEnabled } from '../quant/strategies/StrategyEngine';
+import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } from '../quant/strategies/StrategyEngine';
 import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
+import { experimentalStrategyRow } from '../config/quantExperimentalStrategies';
+import { quantStrategyTaxonomySummary } from '../config/quantStrategyTaxonomy';
 
 export const v2Router = Router();
 
@@ -1112,10 +1114,9 @@ v2Router.get('/portfolio/pnl-by-symbol', async (req, res) => {
 //
 // Real source: agent_performance_stats (currentWeight/winRate - the actual real feedback loop
 // that exists, per ChiefTraderAgent/ReflectionEngine, distinct from any RL claim) and
-// learned_rules (ReflectionEngine's real LLM-generated rule text). Per CLAUDE.md's own
-// documented limitation, learned_rules' text is loaded into memory at boot but never injected
-// into any agent's actual prompts - the frontend must disclose this, not imply the rules
-// actively steer trades.
+// learned_rules (ReflectionEngine's real LLM-generated rule text). Recent rule text is truncated
+// into ChiefTrader's adversarial debate prompt only; it never overrides RiskEngine. The frontend
+// must not imply the rules autonomously retrain models or size positions.
 // ==========================================================================================
 v2Router.get('/agents/learning-summary', async (req, res) => {
   try {
@@ -1164,10 +1165,11 @@ v2Router.get('/quant/strategies', (req, res) => {
     strategies: ALL_STRATEGIES.map(mapStrategy),
     experimentalStrategies: EXPERIMENTAL_STRATEGIES.map(s => ({
       ...mapStrategy(s),
-      enabledInLiveQuant: isSmcLiveQuantEnabled(),
+      enabledInLiveQuant: isExperimentalStrategyLive(s.id),
       validationStatus: 'UNVALIDATED',
-      note: 'SMC/ICT pattern classification. Not in live Quant evaluateAll unless QUANT_SMC_STRATEGY_ENABLED=true. A liquidity sweep is not a trade by itself. Backtest is long-only — bearish setups do not open shorts.',
+      note: experimentalStrategyRow(s.id)?.apiNote ?? 'Experimental. Not in live Quant evaluateAll unless its config env var is true.',
     })),
+    taxonomy: quantStrategyTaxonomySummary(),
   });
 });
 
@@ -1454,16 +1456,17 @@ v2Router.post('/diagnostics/retry/:component', async (req, res) => {
     const component = String(req.params.component || '').toLowerCase();
     if (['chronos', 'kronos', 'ollama', 'openalice', 'models'].includes(component)) {
       const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
-      const models = await modelRuntimeManager.refresh();
+      const models = await modelRuntimeManager.retryUnhealthy();
       return res.json({ ok: true, action: 're-probed', models });
     }
     if (component === 'market_data' || component === 'market-data') {
       const { marketDataWorker: mdw } = await import('../services/MarketDataWorker');
+      const status = mdw.reconnect();
       return res.json({
         ok: true,
-        action: 'status-only',
-        connected: mdw.isConnected(),
-        note: 'This does not bypass RiskEngine. It only reports whether the Alpaca WebSocket is OPEN.',
+        action: 'reconnect',
+        ...status,
+        note: 'Re-opened the Alpaca market-data WebSocket. This does not bypass RiskEngine; data_freshness still requires a fresh tick.',
       });
     }
     res.status(400).json({ ok: false, error: `Retry is not defined for ${component}` });

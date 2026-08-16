@@ -113,6 +113,9 @@ describe('indicators/supportResistance', () => {
       expect(features.previousDay).not.toBeNull();
       expect(features.pivots).not.toBeNull();
       expect(features.fibonacci).not.toBeNull();
+      expect(features.openingRange.available).toBe(false);
+      expect(features.priorChannel20).not.toBeNull();
+      expect(features.priorChannel20!.high).toBeLessThan(features.dailyHighLow!.high);
     });
   });
 });

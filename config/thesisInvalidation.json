@@ -12,7 +12,7 @@
     {
       "type": "rvol_below",
       "threshold": 1.2,
-      "strategies": ["MOMENTUM_BREAKOUT"],
+      "strategies": ["MOMENTUM_BREAKOUT", "OPENING_RANGE_BREAKOUT", "VWAP_VOLUME_STRUCTURE", "DONCHIAN_CHANNEL_BREAKOUT", "PREVIOUS_PERIOD_BREAKOUT", "BOLLINGER_VOLATILITY", "GAP_CONTINUATION", "VOLUME_CONFIRMATION"],
       "textIncludes": ["RVOL"],
       "message": "RVOL collapsed to {rvol}x (below {threshold}x follow-through)."
     },
@@ -23,7 +23,7 @@
     {
       "type": "adx_below",
       "threshold": 20,
-      "strategies": ["TREND_FOLLOWING"],
+      "strategies": ["TREND_FOLLOWING", "DONCHIAN_CHANNEL_BREAKOUT", "VWAP_VOLUME_STRUCTURE", "MA_CROSSOVER", "RELATIVE_STRENGTH_ROTATION"],
       "textIncludes": ["ADX"],
       "message": "ADX faded to {adx} (below {threshold} - trend strength gone)."
     },
@@ -38,8 +38,13 @@
     },
     {
       "type": "structure_trend_against_side",
-      "strategies": ["MEAN_REVERSION", "PULLBACK_CONTINUATION"],
+      "strategies": ["MEAN_REVERSION", "PULLBACK_CONTINUATION", "VWAP_MEAN_REVERSION", "VWAP_VOLUME_STRUCTURE", "FIBONACCI_PULLBACK", "CANDLESTICK_REVERSAL", "SR_BOUNCE", "OSCILLATOR_MOMENTUM"],
       "message": "Market structure trend flipped to {structureTrend}."
+    },
+    {
+      "type": "close_through_structural_level",
+      "strategies": ["OPENING_RANGE_BREAKOUT", "DONCHIAN_CHANNEL_BREAKOUT", "PREVIOUS_PERIOD_BREAKOUT", "BOLLINGER_VOLATILITY", "SR_BOUNCE"],
+      "message": "Price closed back through the breakout level {level} (false breakout against the {bias})."
     },
     {
       "type": "close_through_structural_level",

@@ -1,0 +1,4812 @@
+{
+  "$comment": "Named-technique catalog for the Quant Strategy Intelligence Layer. Aliases map to CORE or EXPERIMENTAL modules, or honest NOT_SUPPORTED. Not 1,000 live evaluate() edges. Default evaluateAll() remains the five CORE strategies. Do not set experimental env vars to true to see if it works.",
+  "note": "Argus organizes 760 named techniques into family modules. Live Quant still evaluates only CORE unless a per-id env flag is true. Walk-forward OOS for checked combos failed; experimental modules stay UNVALIDATED. 1,000 names are not 1,000 edges.",
+  "families": [
+    {
+      "id": "PRICE_ACTION",
+      "name": "Price Action & Market Structure",
+      "techniques": [
+        {
+          "n": 1,
+          "name": "Trend following",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 2,
+          "name": "Breakout trading",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 3,
+          "name": "Pullback trading",
+          "status": "CORE",
+          "moduleId": "PULLBACK_CONTINUATION"
+        },
+        {
+          "n": 4,
+          "name": "Range trading",
+          "status": "CORE",
+          "moduleId": "RANGE_REVERSION"
+        },
+        {
+          "n": 5,
+          "name": "Support/resistance bounce",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SR_BOUNCE"
+        },
+        {
+          "n": 6,
+          "name": "Support/resistance breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 7,
+          "name": "Resistance flip",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SR_BOUNCE"
+        },
+        {
+          "n": 8,
+          "name": "Support flip",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SR_BOUNCE"
+        },
+        {
+          "n": 9,
+          "name": "Higher-high/higher-low strategy",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 10,
+          "name": "Lower-high/lower-low strategy",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 11,
+          "name": "Swing high/low trading",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 12,
+          "name": "Failed breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 13,
+          "name": "False breakdown",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 14,
+          "name": "Opening-range breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 15,
+          "name": "Previous-day high breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 16,
+          "name": "Previous-day low breakdown",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 17,
+          "name": "Previous-week high breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 18,
+          "name": "Previous-week low breakdown",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 19,
+          "name": "Previous-month high breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 20,
+          "name": "Previous-month low breakdown",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 21,
+          "name": "Inside-bar breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 22,
+          "name": "Outside-bar reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 23,
+          "name": "NR4 breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 24,
+          "name": "NR7 breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 25,
+          "name": "Volatility contraction breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 26,
+          "name": "Price compression breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 27,
+          "name": "Flag breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 28,
+          "name": "Pennant breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 29,
+          "name": "Triangle breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 30,
+          "name": "Rectangle breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 31,
+          "name": "Wedge breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 32,
+          "name": "Double-top reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 33,
+          "name": "Double-bottom reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 34,
+          "name": "Triple-top reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 35,
+          "name": "Triple-bottom reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 36,
+          "name": "Head-and-shoulders",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 37,
+          "name": "Inverse head-and-shoulders",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 38,
+          "name": "Cup-and-handle",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 39,
+          "name": "Inverted cup-and-handle",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 40,
+          "name": "Rounded-bottom reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 41,
+          "name": "Rounded-top reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 42,
+          "name": "Island reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 43,
+          "name": "Gap-and-go",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 44,
+          "name": "Gap-fill",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 45,
+          "name": "Gap continuation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 46,
+          "name": "Gap reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 47,
+          "name": "Exhaustion gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 48,
+          "name": "Breakaway gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 49,
+          "name": "Common gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 50,
+          "name": "Runaway gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        }
+      ]
+    },
+    {
+      "id": "CANDLESTICK",
+      "name": "Candlestick Strategies",
+      "techniques": [
+        {
+          "n": 51,
+          "name": "Doji reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 52,
+          "name": "Dragonfly doji",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 53,
+          "name": "Gravestone doji",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 54,
+          "name": "Hammer",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 55,
+          "name": "Inverted hammer",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 56,
+          "name": "Hanging man",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 57,
+          "name": "Shooting star",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 58,
+          "name": "Bullish engulfing",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 59,
+          "name": "Bearish engulfing",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 60,
+          "name": "Piercing pattern",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 61,
+          "name": "Dark-cloud cover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 62,
+          "name": "Morning star",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 63,
+          "name": "Evening star",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 64,
+          "name": "Three white soldiers",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 65,
+          "name": "Three black crows",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 66,
+          "name": "Tweezer bottom",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 67,
+          "name": "Tweezer top",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 68,
+          "name": "Harami",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 69,
+          "name": "Harami cross",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 70,
+          "name": "Marubozu breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 71,
+          "name": "Three inside up",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 72,
+          "name": "Three inside down",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 73,
+          "name": "Three outside up",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 74,
+          "name": "Three outside down",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 75,
+          "name": "Rising three methods",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 76,
+          "name": "Falling three methods",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 77,
+          "name": "Kicker pattern",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 78,
+          "name": "Belt hold",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 79,
+          "name": "Spinning-top reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        },
+        {
+          "n": 80,
+          "name": "Long-legged doji",
+          "status": "EXPERIMENTAL",
+          "moduleId": "CANDLESTICK_REVERSAL"
+        }
+      ]
+    },
+    {
+      "id": "MOVING_AVERAGE",
+      "name": "Moving-Average Strategies",
+      "techniques": [
+        {
+          "n": 81,
+          "name": "SMA crossover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 82,
+          "name": "EMA crossover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 83,
+          "name": "5/20 crossover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 84,
+          "name": "9/21 crossover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 85,
+          "name": "20/50 crossover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 86,
+          "name": "50/200 golden cross",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 87,
+          "name": "50/200 death cross",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 88,
+          "name": "Triple EMA",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 89,
+          "name": "EMA pullback",
+          "status": "CORE",
+          "moduleId": "PULLBACK_CONTINUATION"
+        },
+        {
+          "n": 90,
+          "name": "SMA pullback",
+          "status": "CORE",
+          "moduleId": "PULLBACK_CONTINUATION"
+        },
+        {
+          "n": 91,
+          "name": "Moving-average bounce",
+          "status": "CORE",
+          "moduleId": "PULLBACK_CONTINUATION"
+        },
+        {
+          "n": 92,
+          "name": "Moving-average rejection",
+          "status": "CORE",
+          "moduleId": "PULLBACK_CONTINUATION"
+        },
+        {
+          "n": 93,
+          "name": "Moving-average breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 94,
+          "name": "Moving-average ribbon",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 95,
+          "name": "MA slope strategy",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 96,
+          "name": "MA distance strategy",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 97,
+          "name": "MA compression",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 98,
+          "name": "MA expansion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 99,
+          "name": "Adaptive MA",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 100,
+          "name": "Hull MA strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        }
+      ]
+    },
+    {
+      "id": "MOMENTUM",
+      "name": "Momentum Strategies",
+      "techniques": [
+        {
+          "n": 101,
+          "name": "RSI momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 102,
+          "name": "RSI breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 103,
+          "name": "RSI divergence",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 104,
+          "name": "RSI failure swing",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 105,
+          "name": "RSI 50-line strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 106,
+          "name": "RSI overbought reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 107,
+          "name": "RSI oversold reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 108,
+          "name": "Stochastic crossover",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 109,
+          "name": "Stochastic divergence",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 110,
+          "name": "Stochastic reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 111,
+          "name": "MACD crossover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 112,
+          "name": "MACD histogram momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 113,
+          "name": "MACD divergence",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 114,
+          "name": "MACD zero-line strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 115,
+          "name": "Rate-of-change momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 116,
+          "name": "Momentum oscillator",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 117,
+          "name": "ADX trend strategy",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 118,
+          "name": "ADX breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 119,
+          "name": "ADX trend-strength filter",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 120,
+          "name": "CCI momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 121,
+          "name": "CCI reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 122,
+          "name": "Williams %R reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 123,
+          "name": "Ultimate Oscillator",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 124,
+          "name": "Awesome Oscillator",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 125,
+          "name": "TRIX",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 126,
+          "name": "PPO",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 127,
+          "name": "DPO",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 128,
+          "name": "Fisher Transform",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 129,
+          "name": "Chande Momentum Oscillator",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 130,
+          "name": "Relative Momentum Index",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        }
+      ]
+    },
+    {
+      "id": "VOLATILITY",
+      "name": "Volatility Strategies",
+      "techniques": [
+        {
+          "n": 131,
+          "name": "ATR breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 132,
+          "name": "ATR trailing stop",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 133,
+          "name": "ATR position sizing",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 134,
+          "name": "ATR expansion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 135,
+          "name": "ATR contraction",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 136,
+          "name": "Bollinger Band squeeze",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 137,
+          "name": "Bollinger Band breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 138,
+          "name": "Bollinger Band mean reversion",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 139,
+          "name": "Bollinger Band walk",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 140,
+          "name": "Bollinger Band rejection",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 141,
+          "name": "Keltner Channel breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 142,
+          "name": "Keltner squeeze",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 143,
+          "name": "Donchian breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "DONCHIAN_CHANNEL_BREAKOUT"
+        },
+        {
+          "n": 144,
+          "name": "Donchian channel trend following",
+          "status": "EXPERIMENTAL",
+          "moduleId": "DONCHIAN_CHANNEL_BREAKOUT"
+        },
+        {
+          "n": 145,
+          "name": "Historical-volatility breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 146,
+          "name": "Volatility-regime switching",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 147,
+          "name": "Volatility compression",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 148,
+          "name": "Volatility expansion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 149,
+          "name": "Volatility clustering",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 150,
+          "name": "Standard-deviation breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        }
+      ]
+    },
+    {
+      "id": "VWAP",
+      "name": "VWAP / Intraday Strategies",
+      "techniques": [
+        {
+          "n": 151,
+          "name": "VWAP bounce",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 152,
+          "name": "VWAP breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 153,
+          "name": "VWAP reclaim",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 154,
+          "name": "VWAP rejection",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION"
+        },
+        {
+          "n": 155,
+          "name": "VWAP deviation bands",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION"
+        },
+        {
+          "n": 156,
+          "name": "VWAP mean reversion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION"
+        },
+        {
+          "n": 157,
+          "name": "Anchored VWAP",
+          "status": "NOT_SUPPORTED",
+          "reason": "Anchored VWAP is NOT_SUPPORTED (session VWAP exists; do not fabricate anchors)."
+        },
+        {
+          "n": 158,
+          "name": "Multiple anchored VWAP",
+          "status": "NOT_SUPPORTED",
+          "reason": "Anchored VWAP is NOT_SUPPORTED (session VWAP exists; do not fabricate anchors)."
+        },
+        {
+          "n": 159,
+          "name": "VWAP trend confirmation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 160,
+          "name": "VWAP + volume",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 161,
+          "name": "VWAP + RSI",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION"
+        },
+        {
+          "n": 162,
+          "name": "VWAP + EMA",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 163,
+          "name": "VWAP + opening range",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 164,
+          "name": "VWAP + liquidity sweep",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 165,
+          "name": "VWAP deviation reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION"
+        }
+      ]
+    },
+    {
+      "id": "VOLUME",
+      "name": "Volume Strategies",
+      "techniques": [
+        {
+          "n": 166,
+          "name": "Volume breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 167,
+          "name": "Relative-volume breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 168,
+          "name": "Volume climax reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 169,
+          "name": "Volume spike continuation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 170,
+          "name": "Volume divergence",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 171,
+          "name": "Volume dry-up breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 172,
+          "name": "OBV trend",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 173,
+          "name": "OBV divergence",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 174,
+          "name": "Accumulation/distribution",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 175,
+          "name": "Chaikin Money Flow",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 176,
+          "name": "Money Flow Index",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 177,
+          "name": "Volume-price trend",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 178,
+          "name": "Volume oscillator",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 179,
+          "name": "Volume profile breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 180,
+          "name": "Volume profile rejection",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 181,
+          "name": "Point-of-control strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 182,
+          "name": "Value-area breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 183,
+          "name": "Value-area rejection",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 184,
+          "name": "High-volume-node strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 185,
+          "name": "Low-volume-node strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        }
+      ]
+    },
+    {
+      "id": "SMC",
+      "name": "Smart Money Concepts / ICT",
+      "techniques": [
+        {
+          "n": 186,
+          "name": "Liquidity sweep",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 187,
+          "name": "Buy-side liquidity sweep",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 188,
+          "name": "Sell-side liquidity sweep",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 189,
+          "name": "Equal-high liquidity",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 190,
+          "name": "Equal-low liquidity",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 191,
+          "name": "Break of structure",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 192,
+          "name": "Change of character",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 193,
+          "name": "Market structure shift",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 194,
+          "name": "Order-block entry",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 195,
+          "name": "Breaker-block entry",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 196,
+          "name": "Mitigation-block entry",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 197,
+          "name": "Fair-value-gap entry",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 198,
+          "name": "Inverse FVG",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 199,
+          "name": "Consequent encroachment",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 200,
+          "name": "Imbalance fill",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 201,
+          "name": "Liquidity void",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 202,
+          "name": "Premium/discount entry",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 203,
+          "name": "Dealing-range strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 204,
+          "name": "Optimal trade entry",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 205,
+          "name": "Judas swing",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 206,
+          "name": "Power-of-three",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 207,
+          "name": "Turtle soup",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 208,
+          "name": "SMT divergence",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 209,
+          "name": "ICT kill zones",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 210,
+          "name": "London-session liquidity",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 211,
+          "name": "New-York-session liquidity",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 212,
+          "name": "Asian-range breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 213,
+          "name": "Previous-day liquidity",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 214,
+          "name": "Previous-week liquidity",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 215,
+          "name": "Previous-month liquidity",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 216,
+          "name": "Daily bias",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 217,
+          "name": "Weekly bias",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 218,
+          "name": "Session manipulation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 219,
+          "name": "Stop-run reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 220,
+          "name": "Displacement entry",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        }
+      ]
+    },
+    {
+      "id": "FIBONACCI",
+      "name": "Fibonacci Strategies",
+      "techniques": [
+        {
+          "n": 221,
+          "name": "Fibonacci retracement",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 222,
+          "name": "38.2% retracement",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 223,
+          "name": "50% retracement",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 224,
+          "name": "61.8% retracement",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 225,
+          "name": "78.6% retracement",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 226,
+          "name": "Fibonacci extension",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 227,
+          "name": "127.2% extension",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 228,
+          "name": "161.8% extension",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 229,
+          "name": "Fibonacci confluence",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 230,
+          "name": "Fibonacci + trend",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 231,
+          "name": "Fibonacci + S/R",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 232,
+          "name": "Fibonacci + RSI",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 233,
+          "name": "Fibonacci + volume",
+          "status": "EXPERIMENTAL",
+          "moduleId": "FIBONACCI_PULLBACK"
+        },
+        {
+          "n": 234,
+          "name": "Fibonacci time zones",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 235,
+          "name": "Fibonacci arcs",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        }
+      ]
+    },
+    {
+      "id": "CLASSICAL_PATTERNS",
+      "name": "Classical Chart Patterns",
+      "techniques": [
+        {
+          "n": 236,
+          "name": "Ascending triangle",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 237,
+          "name": "Descending triangle",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 238,
+          "name": "Symmetrical triangle",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 239,
+          "name": "Bull flag",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 240,
+          "name": "Bear flag",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 241,
+          "name": "Bull pennant",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 242,
+          "name": "Bear pennant",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 243,
+          "name": "Rising wedge",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 244,
+          "name": "Falling wedge",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 245,
+          "name": "Broadening formation",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 246,
+          "name": "Diamond top",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 247,
+          "name": "Diamond bottom",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 248,
+          "name": "Rectangle",
+          "status": "CORE",
+          "moduleId": "RANGE_REVERSION"
+        },
+        {
+          "n": 249,
+          "name": "Measured move",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 250,
+          "name": "AB=CD",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 251,
+          "name": "Wolfe wave",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 252,
+          "name": "Gartley",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 253,
+          "name": "Bat",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 254,
+          "name": "Butterfly",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 255,
+          "name": "Crab",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 256,
+          "name": "Shark",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 257,
+          "name": "Cypher",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        },
+        {
+          "n": 258,
+          "name": "Three drives",
+          "status": "NOT_SUPPORTED",
+          "reason": "Harmonic/Wolfe/Gartley pattern geometry is not computed (would be a new detector, not a zero-fill)."
+        }
+      ]
+    },
+    {
+      "id": "MEAN_REVERSION_FAMILY",
+      "name": "Mean-Reversion Strategies",
+      "techniques": [
+        {
+          "n": 259,
+          "name": "Moving-average mean reversion",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 260,
+          "name": "VWAP mean reversion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION"
+        },
+        {
+          "n": 261,
+          "name": "Bollinger mean reversion",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 262,
+          "name": "RSI mean reversion",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 263,
+          "name": "Z-score reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 264,
+          "name": "Statistical deviation reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 265,
+          "name": "Intraday range reversion",
+          "status": "CORE",
+          "moduleId": "RANGE_REVERSION"
+        },
+        {
+          "n": 266,
+          "name": "Overnight gap reversion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 267,
+          "name": "Pairs mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 268,
+          "name": "Basket mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 269,
+          "name": "Volatility mean reversion",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 270,
+          "name": "Residual mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        }
+      ]
+    },
+    {
+      "id": "STAT_ARB",
+      "name": "Statistical Arbitrage",
+      "techniques": [
+        {
+          "n": 271,
+          "name": "Pairs trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 272,
+          "name": "Cointegration trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 273,
+          "name": "Distance-based pairs",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 274,
+          "name": "Kalman-filter pairs",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 275,
+          "name": "Residual trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 276,
+          "name": "Basket arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 277,
+          "name": "Factor-neutral arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 278,
+          "name": "Sector-neutral arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 279,
+          "name": "Market-neutral trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 280,
+          "name": "Cross-sectional momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 281,
+          "name": "Cross-sectional mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 282,
+          "name": "Statistical dispersion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 283,
+          "name": "Relative-value trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 284,
+          "name": "Index constituent arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 285,
+          "name": "ETF arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        }
+      ]
+    },
+    {
+      "id": "TREND_SYSTEMS",
+      "name": "Momentum / Trend Systems",
+      "techniques": [
+        {
+          "n": 286,
+          "name": "Dual momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 287,
+          "name": "Absolute momentum",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 288,
+          "name": "Relative momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 289,
+          "name": "Cross-sectional momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 290,
+          "name": "Time-series momentum",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 291,
+          "name": "Breakout momentum",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 292,
+          "name": "Moving-average momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 293,
+          "name": "Donchian trend following",
+          "status": "EXPERIMENTAL",
+          "moduleId": "DONCHIAN_CHANNEL_BREAKOUT"
+        },
+        {
+          "n": 294,
+          "name": "Channel breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "DONCHIAN_CHANNEL_BREAKOUT"
+        },
+        {
+          "n": 295,
+          "name": "Turtle trading",
+          "status": "EXPERIMENTAL",
+          "moduleId": "DONCHIAN_CHANNEL_BREAKOUT"
+        },
+        {
+          "n": 296,
+          "name": "Volatility-adjusted momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 297,
+          "name": "Risk-adjusted momentum",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 298,
+          "name": "Multi-timeframe momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 299,
+          "name": "Sector momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 300,
+          "name": "Industry momentum",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        }
+      ]
+    },
+    {
+      "id": "MARKET_PROFILE",
+      "name": "Market Profile",
+      "techniques": [
+        {
+          "n": 301,
+          "name": "Initial-balance breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 302,
+          "name": "Initial-balance reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 303,
+          "name": "Value-area rotation",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 304,
+          "name": "Value-area breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 305,
+          "name": "POC rejection",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 306,
+          "name": "POC breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 307,
+          "name": "Single-print reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 308,
+          "name": "Excess high reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 309,
+          "name": "Excess low reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 310,
+          "name": "Poor-high reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 311,
+          "name": "Poor-low reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 312,
+          "name": "LVN rejection",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 313,
+          "name": "HVN rotation",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 314,
+          "name": "Auction failure",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        },
+        {
+          "n": 315,
+          "name": "Failed auction",
+          "status": "NOT_SUPPORTED",
+          "reason": "Volume profile / market profile / POC / HVN / LVN / initial balance are NOT_SUPPORTED."
+        }
+      ]
+    },
+    {
+      "id": "ORDER_FLOW",
+      "name": "Order Flow",
+      "techniques": [
+        {
+          "n": 316,
+          "name": "Bid/ask imbalance",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 317,
+          "name": "Delta divergence",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 318,
+          "name": "Cumulative delta",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 319,
+          "name": "Delta reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 320,
+          "name": "Absorption",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 321,
+          "name": "Exhaustion",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 322,
+          "name": "Aggressive buyer imbalance",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 323,
+          "name": "Aggressive seller imbalance",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 324,
+          "name": "Iceberg detection",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 325,
+          "name": "Footprint breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 326,
+          "name": "Footprint reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 327,
+          "name": "Stacked imbalance",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 328,
+          "name": "Delta + VWAP",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 329,
+          "name": "Delta + liquidity sweep",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 330,
+          "name": "Order-flow absorption reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        }
+      ]
+    },
+    {
+      "id": "SCALPING",
+      "name": "Scalping",
+      "techniques": [
+        {
+          "n": 331,
+          "name": "One-minute momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 332,
+          "name": "One-minute reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 333,
+          "name": "Three-minute breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 334,
+          "name": "Five-minute breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 335,
+          "name": "VWAP scalp",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 336,
+          "name": "EMA scalp",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER"
+        },
+        {
+          "n": 337,
+          "name": "Opening-range scalp",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 338,
+          "name": "Level-2 scalp",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 339,
+          "name": "Tape-reading scalp",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 340,
+          "name": "Volume-spike scalp",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 341,
+          "name": "Liquidity scalp",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 342,
+          "name": "Pullback scalp",
+          "status": "CORE",
+          "moduleId": "PULLBACK_CONTINUATION"
+        },
+        {
+          "n": 343,
+          "name": "Micro-breakout scalp",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 344,
+          "name": "Microstructure reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 345,
+          "name": "Spread capture",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        }
+      ]
+    },
+    {
+      "id": "OPENING",
+      "name": "Opening Strategies",
+      "techniques": [
+        {
+          "n": 346,
+          "name": "Opening-range breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 347,
+          "name": "Opening-range failure",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 348,
+          "name": "Opening drive",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 349,
+          "name": "Opening reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 350,
+          "name": "Gap-and-go",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 351,
+          "name": "Gap-fill",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 352,
+          "name": "Previous-day high breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 353,
+          "name": "Previous-day low breakdown",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT"
+        },
+        {
+          "n": 354,
+          "name": "Premarket high breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 355,
+          "name": "Premarket low breakdown",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 356,
+          "name": "First-hour breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 357,
+          "name": "First-hour reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT"
+        },
+        {
+          "n": 358,
+          "name": "Opening VWAP strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 359,
+          "name": "Opening volume strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 360,
+          "name": "Opening imbalance strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        }
+      ]
+    },
+    {
+      "id": "CLOSING",
+      "name": "Closing Strategies",
+      "techniques": [
+        {
+          "n": 361,
+          "name": "Power hour momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 362,
+          "name": "Closing-range breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 363,
+          "name": "Closing auction strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 364,
+          "name": "End-of-day reversal",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION"
+        },
+        {
+          "n": 365,
+          "name": "End-of-day momentum",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 366,
+          "name": "Closing VWAP strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 367,
+          "name": "MOC imbalance strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/order-book/tape/footprint feed. QuantitativeFeatureEngine does not invent book imbalance."
+        },
+        {
+          "n": 368,
+          "name": "Overnight continuation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 369,
+          "name": "Overnight reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 370,
+          "name": "Close-to-open strategy",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        }
+      ]
+    },
+    {
+      "id": "GAPS",
+      "name": "Gap Strategies",
+      "techniques": [
+        {
+          "n": 371,
+          "name": "Gap continuation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 372,
+          "name": "Gap reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 373,
+          "name": "Gap fill",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 374,
+          "name": "Gap fade",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 375,
+          "name": "Breakaway gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 376,
+          "name": "Exhaustion gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 377,
+          "name": "Common gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 378,
+          "name": "Runaway gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 379,
+          "name": "Earnings gap",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 380,
+          "name": "News gap",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 381,
+          "name": "Premarket gap",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 382,
+          "name": "Gap + volume",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 383,
+          "name": "Gap + VWAP",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 384,
+          "name": "Gap + RSI",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        },
+        {
+          "n": 385,
+          "name": "Gap + market regime",
+          "status": "EXPERIMENTAL",
+          "moduleId": "GAP_CONTINUATION"
+        }
+      ]
+    },
+    {
+      "id": "NEWS_EVENT",
+      "name": "News/Event Trading",
+      "techniques": [
+        {
+          "n": 386,
+          "name": "Earnings momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 387,
+          "name": "Earnings reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 388,
+          "name": "Earnings gap",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 389,
+          "name": "Earnings drift",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 390,
+          "name": "Earnings surprise",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 391,
+          "name": "Revenue surprise",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 392,
+          "name": "Guidance surprise",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 393,
+          "name": "Analyst upgrade momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 394,
+          "name": "Analyst downgrade momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 395,
+          "name": "FDA-event trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 396,
+          "name": "Product-launch trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 397,
+          "name": "Merger-arbitrage trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 398,
+          "name": "Economic-release trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 399,
+          "name": "CPI trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 400,
+          "name": "FOMC trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 401,
+          "name": "Jobs-report trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 402,
+          "name": "GDP-release trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 403,
+          "name": "Interest-rate decision trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 404,
+          "name": "News sentiment momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 405,
+          "name": "News fade",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        }
+      ]
+    },
+    {
+      "id": "FUNDAMENTAL_QUANT",
+      "name": "Fundamental Quant Strategies",
+      "techniques": [
+        {
+          "n": 406,
+          "name": "Value investing",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 407,
+          "name": "Deep value",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 408,
+          "name": "Growth investing",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 409,
+          "name": "Growth-at-a-reasonable-price",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 410,
+          "name": "Quality factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 411,
+          "name": "Momentum factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 412,
+          "name": "Low-volatility factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 413,
+          "name": "Size factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 414,
+          "name": "Profitability factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 415,
+          "name": "Earnings yield",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 416,
+          "name": "Free-cash-flow yield",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 417,
+          "name": "Book-to-market",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 418,
+          "name": "ROE strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 419,
+          "name": "ROIC strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 420,
+          "name": "Debt-quality strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 421,
+          "name": "Earnings revision",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 422,
+          "name": "EPS acceleration",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 423,
+          "name": "Revenue acceleration",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 424,
+          "name": "Margin expansion",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 425,
+          "name": "Cash-flow acceleration",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        }
+      ]
+    },
+    {
+      "id": "FACTOR",
+      "name": "Factor Investing",
+      "techniques": [
+        {
+          "n": 426,
+          "name": "Value factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 427,
+          "name": "Momentum factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 428,
+          "name": "Quality factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 429,
+          "name": "Size factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 430,
+          "name": "Low-volatility factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 431,
+          "name": "Carry factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 432,
+          "name": "Defensive factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 433,
+          "name": "Profitability factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 434,
+          "name": "Investment factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 435,
+          "name": "Earnings-quality factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 436,
+          "name": "Dividend factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 437,
+          "name": "Buyback factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 438,
+          "name": "Accrual factor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 439,
+          "name": "Composite-factor strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        },
+        {
+          "n": 440,
+          "name": "Multifactor ranking",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        }
+      ]
+    },
+    {
+      "id": "OPTIONS",
+      "name": "Options",
+      "techniques": [
+        {
+          "n": 441,
+          "name": "Covered call",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 442,
+          "name": "Cash-secured put",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 443,
+          "name": "Bull call spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 444,
+          "name": "Bear put spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 445,
+          "name": "Bull put spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 446,
+          "name": "Bear call spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 447,
+          "name": "Calendar spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 448,
+          "name": "Diagonal spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 449,
+          "name": "Iron condor",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 450,
+          "name": "Iron butterfly",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 451,
+          "name": "Straddle",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 452,
+          "name": "Strangle",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 453,
+          "name": "Long straddle",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 454,
+          "name": "Short straddle",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 455,
+          "name": "Long strangle",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 456,
+          "name": "Short strangle",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 457,
+          "name": "Butterfly",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 458,
+          "name": "Broken-wing butterfly",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 459,
+          "name": "Ratio spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 460,
+          "name": "Jade lizard",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 461,
+          "name": "Poor man’s covered call",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 462,
+          "name": "Gamma scalping",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 463,
+          "name": "Delta hedging",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 464,
+          "name": "Volatility arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 465,
+          "name": "IV mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 466,
+          "name": "IV crush",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 467,
+          "name": "Earnings IV strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 468,
+          "name": "Skew trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 469,
+          "name": "Term-structure trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 470,
+          "name": "Gamma-exposure trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        }
+      ]
+    },
+    {
+      "id": "OPTIONS_FLOW",
+      "name": "Options Flow",
+      "techniques": [
+        {
+          "n": 471,
+          "name": "Unusual-options-volume",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 472,
+          "name": "Large-call-flow",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 473,
+          "name": "Large-put-flow",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 474,
+          "name": "Sweeps",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 475,
+          "name": "Block trades",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 476,
+          "name": "Dark-pool/options confirmation",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 477,
+          "name": "Open-interest buildup",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 478,
+          "name": "Open-interest unwinding",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 479,
+          "name": "Gamma squeeze",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 480,
+          "name": "Dealer-gamma strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 481,
+          "name": "Gamma-wall strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 482,
+          "name": "Max-pain strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 483,
+          "name": "Put-wall strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 484,
+          "name": "Call-wall strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        },
+        {
+          "n": 485,
+          "name": "IV-rank strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, greeks, IV surface, or unusual-flow feed."
+        }
+      ]
+    },
+    {
+      "id": "INTERMARKET",
+      "name": "Intermarket Strategies",
+      "techniques": [
+        {
+          "n": 486,
+          "name": "SPY/QQQ relationship",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 487,
+          "name": "Stocks/bonds relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 488,
+          "name": "Gold/USD relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 489,
+          "name": "Oil/USD relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 490,
+          "name": "Dollar/risk-assets relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 491,
+          "name": "VIX/S&P relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 492,
+          "name": "Treasury-yield/equity relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 493,
+          "name": "Copper/economic-growth relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 494,
+          "name": "Bitcoin/Nasdaq relationship",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 495,
+          "name": "Sector rotation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 496,
+          "name": "Risk-on/risk-off",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 497,
+          "name": "Cross-asset momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 498,
+          "name": "Cross-asset mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 499,
+          "name": "Intermarket divergence",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 500,
+          "name": "Relative-strength rotation",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        }
+      ]
+    },
+    {
+      "id": "BREADTH",
+      "name": "Market Breadth",
+      "techniques": [
+        {
+          "n": 501,
+          "name": "Advance/decline strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 502,
+          "name": "Advance/decline divergence",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 503,
+          "name": "Up/down-volume ratio",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 504,
+          "name": "New-high/new-low strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 505,
+          "name": "Breadth thrust",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 506,
+          "name": "McClellan Oscillator",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 507,
+          "name": "McClellan Summation Index",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 508,
+          "name": "TRIN",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 509,
+          "name": "% above 20-MA",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 510,
+          "name": "% above 50-MA",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 511,
+          "name": "% above 200-MA",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 512,
+          "name": "Bullish-percent index",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 513,
+          "name": "Breadth divergence",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 514,
+          "name": "Sector breadth",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        },
+        {
+          "n": 515,
+          "name": "Breadth momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Market breadth is NOT_SUPPORTED (no A/D, McClellan, TRIN, % above MA source)."
+        }
+      ]
+    },
+    {
+      "id": "SEASONAL",
+      "name": "Seasonal / Calendar",
+      "techniques": [
+        {
+          "n": 516,
+          "name": "Day-of-week effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 517,
+          "name": "Monday effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 518,
+          "name": "Friday effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 519,
+          "name": "Turn-of-month effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 520,
+          "name": "Month-end effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 521,
+          "name": "Quarter-end effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 522,
+          "name": "Year-end effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 523,
+          "name": "January effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 524,
+          "name": "Sell-in-May effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 525,
+          "name": "Holiday effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 526,
+          "name": "Options-expiration effect",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 527,
+          "name": "Quadruple-witching strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 528,
+          "name": "Earnings-seasonality",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 529,
+          "name": "Seasonal commodity trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        },
+        {
+          "n": 530,
+          "name": "Tax-loss selling",
+          "status": "NOT_SUPPORTED",
+          "reason": "No calendar/seasonality strategy module (day-of-week, sell-in-May, etc.)."
+        }
+      ]
+    },
+    {
+      "id": "HFT",
+      "name": "High-Frequency / Microstructure",
+      "techniques": [
+        {
+          "n": 531,
+          "name": "Market making",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 532,
+          "name": "Spread capture",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 533,
+          "name": "Latency arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 534,
+          "name": "Queue-position trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 535,
+          "name": "Order-book imbalance",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 536,
+          "name": "Microprice prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 537,
+          "name": "Trade-sign prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 538,
+          "name": "Short-term price-impact model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 539,
+          "name": "Liquidity provision",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 540,
+          "name": "Adverse-selection model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 541,
+          "name": "Order-flow prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 542,
+          "name": "Quote imbalance",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 543,
+          "name": "Cancel-rate analysis",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 544,
+          "name": "Hidden-liquidity detection",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        },
+        {
+          "n": 545,
+          "name": "Market-impact optimization",
+          "status": "NOT_SUPPORTED",
+          "reason": "No colocation, queue position, or market-making microstructure engine."
+        }
+      ]
+    },
+    {
+      "id": "ML",
+      "name": "Machine Learning",
+      "techniques": [
+        {
+          "n": 546,
+          "name": "Logistic-regression classifier",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 547,
+          "name": "Linear-regression prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 548,
+          "name": "Random-forest classifier",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 549,
+          "name": "Random-forest regression",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 550,
+          "name": "Gradient boosting",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 551,
+          "name": "XGBoost",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 552,
+          "name": "LightGBM",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 553,
+          "name": "CatBoost",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 554,
+          "name": "SVM classification",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 555,
+          "name": "SVM regression",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 556,
+          "name": "KNN prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 557,
+          "name": "Naive Bayes",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 558,
+          "name": "Decision-tree model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 559,
+          "name": "Ensemble model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 560,
+          "name": "Stacking model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 561,
+          "name": "Bagging model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 562,
+          "name": "Boosting model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 563,
+          "name": "Neural-network prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 564,
+          "name": "LSTM prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 565,
+          "name": "GRU prediction",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 566,
+          "name": "CNN price-pattern model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 567,
+          "name": "Transformer model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 568,
+          "name": "Temporal Fusion Transformer",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 569,
+          "name": "Autoencoder anomaly detection",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 570,
+          "name": "Reinforcement-learning trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        }
+      ]
+    },
+    {
+      "id": "ALT_DATA",
+      "name": "AI / Alternative Data",
+      "techniques": [
+        {
+          "n": 571,
+          "name": "News sentiment model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 572,
+          "name": "Social sentiment model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 573,
+          "name": "Earnings-call NLP",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 574,
+          "name": "SEC-filing NLP",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 575,
+          "name": "Analyst-report NLP",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 576,
+          "name": "Search-trend analysis",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 577,
+          "name": "Web-traffic analysis",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 578,
+          "name": "App-download analysis",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 579,
+          "name": "Satellite-data strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 580,
+          "name": "Credit-card-spending data",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 581,
+          "name": "Supply-chain data",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 582,
+          "name": "Job-posting data",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 583,
+          "name": "Insider-transaction analysis",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 584,
+          "name": "Institutional-flow analysis",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 585,
+          "name": "Alternative-data ensemble",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        }
+      ]
+    },
+    {
+      "id": "CRYPTO",
+      "name": "Crypto",
+      "techniques": [
+        {
+          "n": 586,
+          "name": "Funding-rate arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 587,
+          "name": "Funding-rate mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 588,
+          "name": "Basis trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 589,
+          "name": "Perpetual/futures arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 590,
+          "name": "Spot/futures arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 591,
+          "name": "Exchange arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 592,
+          "name": "Liquidation hunting",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 593,
+          "name": "Open-interest breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 594,
+          "name": "Open-interest divergence",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 595,
+          "name": "Long/short ratio strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 596,
+          "name": "Crypto momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 597,
+          "name": "Crypto mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 598,
+          "name": "BTC dominance strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 599,
+          "name": "Stablecoin-flow strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        },
+        {
+          "n": 600,
+          "name": "On-chain momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Crypto-native (funding, perp basis, on-chain, liquidation) is not on the equity OHLCV Quant path."
+        }
+      ]
+    },
+    {
+      "id": "FOREX",
+      "name": "Forex",
+      "techniques": [
+        {
+          "n": 601,
+          "name": "Carry trade",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 602,
+          "name": "Interest-rate differential",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 603,
+          "name": "Currency momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 604,
+          "name": "Currency mean reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 605,
+          "name": "London breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 606,
+          "name": "New York breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 607,
+          "name": "Asian-range breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 608,
+          "name": "London reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 609,
+          "name": "London/New-York overlap",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 610,
+          "name": "Central-bank strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 611,
+          "name": "COT positioning",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 612,
+          "name": "Currency-strength matrix",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 613,
+          "name": "Multi-currency arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 614,
+          "name": "FX volatility breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        },
+        {
+          "n": 615,
+          "name": "FX correlation trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX session/COT engine; Canadian FX is NOT_SUPPORTED. Do not invent London/NY FX ranges."
+        }
+      ]
+    },
+    {
+      "id": "FUTURES",
+      "name": "Futures",
+      "techniques": [
+        {
+          "n": 616,
+          "name": "Commodity trend following",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        },
+        {
+          "n": 617,
+          "name": "Index futures breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 618,
+          "name": "Futures calendar spread",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        },
+        {
+          "n": 619,
+          "name": "Futures basis trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        },
+        {
+          "n": 620,
+          "name": "Commitment-of-traders strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        },
+        {
+          "n": 621,
+          "name": "Crude-oil inventory strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        },
+        {
+          "n": 622,
+          "name": "Natural-gas weather strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        },
+        {
+          "n": 623,
+          "name": "Gold/USD strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        },
+        {
+          "n": 624,
+          "name": "Treasury futures strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        },
+        {
+          "n": 625,
+          "name": "Yield-curve strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No futures COT/inventory/weather/yield-curve strategy feed."
+        }
+      ]
+    },
+    {
+      "id": "PORTFOLIO",
+      "name": "Portfolio Strategies",
+      "techniques": [
+        {
+          "n": 626,
+          "name": "Risk parity",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 627,
+          "name": "Equal weight",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 628,
+          "name": "Minimum variance",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 629,
+          "name": "Maximum diversification",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 630,
+          "name": "Minimum correlation",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 631,
+          "name": "Mean-variance optimization",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 632,
+          "name": "Black-Litterman",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 633,
+          "name": "Kelly allocation",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 634,
+          "name": "Fractional Kelly",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 635,
+          "name": "Volatility targeting",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 636,
+          "name": "Momentum allocation",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 637,
+          "name": "Trend allocation",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 638,
+          "name": "Tactical asset allocation",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 639,
+          "name": "Dynamic asset allocation",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 640,
+          "name": "Adaptive portfolio allocation",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        }
+      ]
+    },
+    {
+      "id": "RISK_MGMT",
+      "name": "Risk Management",
+      "techniques": [
+        {
+          "n": 641,
+          "name": "Fixed fractional risk",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 642,
+          "name": "Fixed-dollar risk",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 643,
+          "name": "Volatility sizing",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 644,
+          "name": "ATR sizing",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 645,
+          "name": "Kelly sizing",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 646,
+          "name": "Fractional Kelly",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 647,
+          "name": "Maximum drawdown control",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 648,
+          "name": "Daily loss limit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 649,
+          "name": "Weekly loss limit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 650,
+          "name": "Portfolio VaR",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 651,
+          "name": "Conditional VaR",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 652,
+          "name": "Expected shortfall",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 653,
+          "name": "Stress testing",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 654,
+          "name": "Scenario analysis",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 655,
+          "name": "Correlation-adjusted exposure",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 656,
+          "name": "Sector exposure control",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 657,
+          "name": "Beta-adjusted exposure",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 658,
+          "name": "Dynamic stop-loss",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 659,
+          "name": "Trailing stop",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 660,
+          "name": "Time stop",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        }
+      ]
+    },
+    {
+      "id": "EXITS",
+      "name": "Exit Strategies",
+      "techniques": [
+        {
+          "n": 661,
+          "name": "Fixed take-profit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 662,
+          "name": "Fixed stop-loss",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 663,
+          "name": "ATR stop",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 664,
+          "name": "volatility stop",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 665,
+          "name": "trailing stop",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 666,
+          "name": "chandelier exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 667,
+          "name": "parabolic SAR exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 668,
+          "name": "moving-average exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 669,
+          "name": "VWAP exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 670,
+          "name": "time-based exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 671,
+          "name": "partial profit-taking",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 672,
+          "name": "scale-out",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 673,
+          "name": "break-even stop",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 674,
+          "name": "structure-based exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 675,
+          "name": "liquidity-target exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 676,
+          "name": "opposite-signal exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 677,
+          "name": "regime-change exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 678,
+          "name": "news-risk exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 679,
+          "name": "end-of-day exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        },
+        {
+          "n": 680,
+          "name": "maximum-hold-time exit",
+          "status": "NOT_SUPPORTED",
+          "reason": "This is RiskEngine / PositionSizing / PortfolioMonitor behavior, not a Quant strategy id. Live path already has daily-loss, drawdown, trailing stops, and thesis invalidation."
+        }
+      ]
+    },
+    {
+      "id": "ADV_STATS",
+      "name": "Advanced Statistical Models",
+      "techniques": [
+        {
+          "n": 681,
+          "name": "AR model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 682,
+          "name": "MA model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 683,
+          "name": "ARMA",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 684,
+          "name": "ARIMA",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 685,
+          "name": "SARIMA",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 686,
+          "name": "GARCH",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 687,
+          "name": "EGARCH",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 688,
+          "name": "stochastic-volatility model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 689,
+          "name": "Markov-switching model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 690,
+          "name": "Hidden Markov Model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 691,
+          "name": "Bayesian regression",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 692,
+          "name": "Bayesian state-space model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 693,
+          "name": "Kalman filter",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 694,
+          "name": "Particle filter",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 695,
+          "name": "Gaussian process",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 696,
+          "name": "Copula model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 697,
+          "name": "Extreme-value model",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 698,
+          "name": "Monte Carlo pricing",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 699,
+          "name": "Bootstrap strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        },
+        {
+          "n": 700,
+          "name": "Bayesian model averaging",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained classifier/LSTM/RL Quant strategy module. Kronos/Chronos is a separate local forecast service, not these named ML models."
+        }
+      ]
+    },
+    {
+      "id": "CROSS_SECTION",
+      "name": "Portfolio / Cross-Sectional Signals",
+      "techniques": [
+        {
+          "n": 701,
+          "name": "Relative strength",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 702,
+          "name": "Sector relative strength",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 703,
+          "name": "Industry relative strength",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 704,
+          "name": "Cross-sectional ranking",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION"
+        },
+        {
+          "n": 705,
+          "name": "Long-short ranking",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 706,
+          "name": "Residual momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 707,
+          "name": "Residual reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 708,
+          "name": "Beta-neutral momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 709,
+          "name": "Dollar-neutral momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 710,
+          "name": "Sector-neutral momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 711,
+          "name": "Market-neutral pairs",
+          "status": "NOT_SUPPORTED",
+          "reason": "Pairs/cointegration/basket arb are NOT_SUPPORTED until a point-in-time pairs module exists."
+        },
+        {
+          "n": 712,
+          "name": "Factor-neutral trading",
+          "status": "NOT_SUPPORTED",
+          "reason": "No point-in-time fundamental/factor Quant engine (value/quality/size as systematic ranks)."
+        }
+      ]
+    },
+    {
+      "id": "ALT_MICRO",
+      "name": "Alternative Microstrategies",
+      "techniques": [
+        {
+          "n": 713,
+          "name": "Earnings drift",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 714,
+          "name": "Post-earnings announcement drift",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 715,
+          "name": "Analyst-revision drift",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings/FOMC/FDA event calendar strategy module. NewsEngine is separate and is not these named event trades."
+        },
+        {
+          "n": 716,
+          "name": "Insider buying",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 717,
+          "name": "Insider selling",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 718,
+          "name": "Short-interest squeeze",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 719,
+          "name": "Short-interest reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 720,
+          "name": "Borrow-cost strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 721,
+          "name": "Short-squeeze momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 722,
+          "name": "Float-rotation strategy",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 723,
+          "name": "Institutional accumulation",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 724,
+          "name": "Institutional distribution",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 725,
+          "name": "Dark-pool accumulation",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 726,
+          "name": "Dark-pool rejection",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 727,
+          "name": "Block-trade momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        },
+        {
+          "n": 728,
+          "name": "Block-trade reversal",
+          "status": "NOT_SUPPORTED",
+          "reason": "No alternative-data (satellite, card spend, app downloads, search trends) pipeline."
+        }
+      ]
+    },
+    {
+      "id": "MTF",
+      "name": "Multi-Timeframe Strategies",
+      "techniques": [
+        {
+          "n": 729,
+          "name": "Daily trend + intraday entry",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 730,
+          "name": "Weekly trend + daily entry",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 731,
+          "name": "4H trend + 15M entry",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 732,
+          "name": "1H trend + 5M entry",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 733,
+          "name": "Daily VWAP + 5M entry",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 734,
+          "name": "Weekly S/R + intraday entry",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 735,
+          "name": "Multi-timeframe RSI",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 736,
+          "name": "Multi-timeframe MACD",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 737,
+          "name": "Multi-timeframe structure",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 738,
+          "name": "Multi-timeframe liquidity",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 739,
+          "name": "Multi-timeframe momentum",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        },
+        {
+          "n": 740,
+          "name": "Multi-timeframe volatility",
+          "status": "NOT_SUPPORTED",
+          "reason": "Multi-timeframe bars are not a second feature snapshot on StrategyContext; daily+intraday combo is not a separate live module."
+        }
+      ]
+    },
+    {
+      "id": "COMPOSITE",
+      "name": "Composite Strategies",
+      "techniques": [
+        {
+          "n": 741,
+          "name": "RSI + MACD",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 742,
+          "name": "RSI + EMA",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 743,
+          "name": "RSI + VWAP",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION"
+        },
+        {
+          "n": 744,
+          "name": "MACD + EMA",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM"
+        },
+        {
+          "n": 745,
+          "name": "EMA + VWAP",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 746,
+          "name": "VWAP + volume",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 747,
+          "name": "VWAP + RSI + volume",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 748,
+          "name": "Bollinger + RSI",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 749,
+          "name": "Bollinger + MACD",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 750,
+          "name": "ATR + breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY"
+        },
+        {
+          "n": 751,
+          "name": "ADX + breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 752,
+          "name": "Volume + breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VOLUME_CONFIRMATION"
+        },
+        {
+          "n": 753,
+          "name": "Volume + VWAP",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 754,
+          "name": "SMC + VWAP",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 755,
+          "name": "SMC + volume",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 756,
+          "name": "SMC + RSI",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 757,
+          "name": "SMC + Fibonacci",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP"
+        },
+        {
+          "n": 758,
+          "name": "price action + volume",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT"
+        },
+        {
+          "n": 759,
+          "name": "price action + VWAP",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_VOLUME_STRUCTURE"
+        },
+        {
+          "n": 760,
+          "name": "price action + market regime",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING"
+        }
+      ]
+    }
+  ]
+}

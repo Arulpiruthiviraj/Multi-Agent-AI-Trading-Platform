@@ -8,8 +8,9 @@ Argus is a Node.js multi-agent trading terminal (Express + Vite SPA + `ws`). The
 
 | Document | Use for |
 |---|---|
-| `ARGUS_REAL_MONEY_READINESS.md` | Readiness scores. LIVE is **NO-GO**. Adding files does not raise scores. |
-| `FINAL_ANALYSIS.md` (Section 25.3 / tab matrix) | Which UI tabs/widgets are real vs fabricated. Do not trust memory. |
+| `docs/README.md` | Doc index + implemented-vs-open checklist after 2026-08-15 |
+| `ARGUS_REAL_MONEY_READINESS.md` (or `docs/reports/` after the docs move) | Readiness scores. LIVE is **NO-GO**. Adding files does not raise scores. |
+| `FINAL_ANALYSIS.md` (Section 25.3 / tab matrix; §31 honesty pass) | Which UI tabs/widgets are real vs fabricated. Do not trust memory. |
 | `ARGUS_CURRENT_ARCHITECTURE_MAP.md` | Current wiring snapshot. |
 | `QUANT_LAYER_ANALYSIS.md` | Original additive quant design. |
 
@@ -30,9 +31,11 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 ```bash
 npm run dev          # scripts/devWithOpenAlice.ts → tsx server.ts (port 3000 hardcoded).
-                     # Also starts OpenAlice Guardian if OPENALICE_ENABLED=true, and IBKR
-                     # Client Portal Gateway if IBKR_GATEWAY_PATH is set. Neither flag:
-                     # identical to tsx server.ts.
+                     # Also starts Chronos/Kronos (`npm run ai:serve`, :8008) and Ollama if
+                     # missing; OpenAlice Guardian if a checkout exists or OPENALICE_ENABLED=true;
+                     # IBKR Gateway if IBKR_GATEWAY_PATH is set. Skip with ARGUS_SKIP_CHRONOS /
+                     # ARGUS_SKIP_OLLAMA / ARGUS_SKIP_OPENALICE. Use npm run dev:server-only for
+                     # the Node process alone.
 npm run dev:server-only  # tsx server.ts only (no companion processes)
 npm run build        # Vite SPA + esbuild server bundle → dist/server.cjs
 npm run start        # node dist/server.cjs
@@ -67,7 +70,7 @@ Key variables:
 - `OPENALICE_ENABLED` / `OPENALICE_MCP_URL` — optional MCP verification (both required)
 - `QUANT_ENGINE_ENABLED` / `QUANT_ENGINE_INTERVAL_MS` — additive Quant agent (default off; interval default 300000 from `tradingSafety.quantCycleIntervalMs` if unset)
 - `QUANT_SMC_STRATEGY_ENABLED` — include `SMC_LIQUIDITY_SWEEP` in live `evaluateAll()` (default off). Backtest via `findStrategy` does **not** need this flag.
-- `QUANT_BULL_BEAR_ENABLED` — name lives in `config/bullBearResearch.json` (`enabledEnvVar`). Parser exists; **ChiefTrader does not consume it** until an additive wiring pass.
+- `QUANT_BULL_BEAR_ENABLED` — name lives in `config/bullBearResearch.json` (`enabledEnvVar`). Default off. When true, ChiefTrader adds qualitative Bull/Bear notes to debate and may record `BearResearcher` HOLD evidence. Does not invent prices/EV and does not bypass RiskEngine.
 
 IBKR: `IBKR_GATEWAY_URL` (default `https://localhost:5000/v1/api`), optional `IBKR_GATEWAY_PATH` so `npm run dev` can spawn the Gateway (2FA is still manual).
 
@@ -116,7 +119,7 @@ OrderManagementService → BrokerManager.getActiveBroker().placeOrder(...)
 
 **RiskEngine gates (order matters for the reported reason; all are recorded):**
 
-`emergency_stop` (also blocks `TRADING_PAUSED`), `daily_loss` (kill-switch fraction from `tradingSafety.dailyLossKillSwitchFraction`, currently 0.8 of the daily limit), `consecutive_loss`, `portfolio_drawdown` (settings `maxPortfolioDrawdownPct`, default 15% from peak), `order_rate_limit` (settings, default 5/min), `market_hours` (Alpaca clock; **skip** if no Alpaca keys; **fail-closed** if keys exist but the clock HTTP/network fails — an outage is not treated as open; closed session blocks), `data_freshness` (stale tick > `stalePriceThresholdMs`), `news_veto` (`news_clusters.impactScore`, 4h window, **direction-blind**), `price_validity`, then `PositionSizing.ts` gates (`order_notional_cap`, concentration/correlation/`sufficient_size`/`open_positions_cap`, …), `sell_position_exists` (SELL only), `argus_capital_allocation`.
+`emergency_stop` (also blocks `TRADING_PAUSED`), `daily_loss` (kill-switch fraction from `tradingSafety.dailyLossKillSwitchFraction`, currently 0.8 of the daily limit), `consecutive_loss`, `portfolio_drawdown` (settings `maxPortfolioDrawdownPct`, default 15% from peak), `order_rate_limit` (settings, default 5/min), `market_hours` (Alpaca clock; **skip** if no Alpaca keys; **fail-closed** if keys exist but the clock HTTP/network fails — an outage is not treated as open; closed session blocks), `data_freshness` (stale tick > `stalePriceThresholdMs`), `news_veto` (`news_clusters.impactScore`, 4h window, **direction-blind**), `price_validity`, then `PositionSizing.ts` gates (`order_notional_cap`, concentration/correlation/`sufficient_size`/`open_positions_cap`, …), `sell_position_exists` (SELL only), `argus_capital_allocation`, `daily_buy_notional` (cumulative BUY dollars on the NY session; paper unlimited unless `maxDailyBuyNotionalDollars` > 0; LIVE always uses `restrictedLiveMaxDailyBuyNotionalDollars`). Distinct from the daily-loss kill-switch.
 
 Restricted live (`RestrictedLiveMode.ts`): extra hardcoded ceilings when `tradingMode === 'LIVE'` (`restrictedLiveMaxOrderNotionalDollars` 5000, `restrictedLiveMaxOpenPositions` 3, `restrictedLiveMaxDailyLossDollars` 1000). File-reviewed; never a UI knob. No-op in paper.
 
@@ -185,7 +188,7 @@ Backup: `GET /api/v1/system/export-db` (WAL checkpoint + download). Restore: `PO
 
 ### Reflection / Learning
 
-`ReflectionEngine` (~60s) scores predictions vs price, updates `agent_performance_stats.currentWeight` (feeds ChiefTrader). LLM rule text → `learned_rules` / `tradingEngine.state.memoryRules`. Rule **text is not injected into live agent prompts** (write-only).
+`ReflectionEngine` (~60s) scores predictions vs price, updates `agent_performance_stats.currentWeight` (feeds ChiefTrader). LLM rule text → `learned_rules` / `tradingEngine.state.memoryRules`. Recent `learned_rules.rule` text is truncated into the ChiefTrader **debate prompt only** (`debateLearnedRulesCount` / `debateLearnedRuleMaxChars` in `tradingSafety.json`). It does not override RiskEngine.
 
 ### Additive Quant Decision Layer (optional)
 

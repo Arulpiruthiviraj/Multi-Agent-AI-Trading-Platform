@@ -1,0 +1,95 @@
+{
+  "$comment": "Experimental Quant strategy registry. Thresholds and per-strategy live env vars live here — not TypeScript literals. Default live evaluateAll() is still the five CORE strategies. findStrategy() can backtest any id below without the env flag. Do not set these env vars to 'true' to 'see if it works'. All remain UNVALIDATED (walk-forward OOS for checked combos failed). Pairs/options/L2 are NOT_SUPPORTED and are not listed here.",
+  "strategies": [
+    {
+      "id": "SMC_LIQUIDITY_SWEEP",
+      "enabledEnvVar": "QUANT_SMC_STRATEGY_ENABLED",
+      "apiNote": "SMC/ICT pattern classification. Not in live Quant evaluateAll unless QUANT_SMC_STRATEGY_ENABLED=true. A liquidity sweep is not a trade by itself. Backtest is long-only — bearish setups do not open shorts."
+    },
+    {
+      "id": "VWAP_VOLUME_STRUCTURE",
+      "enabledEnvVar": "QUANT_VWAP_STRUCTURE_ENABLED",
+      "apiNote": "Session VWAP + market structure + RVOL pullback. Experimental. Uses existing volume.vwap and trend.structure — not a second VWAP. Live evaluateAll only if QUANT_VWAP_STRUCTURE_ENABLED=true."
+    },
+    {
+      "id": "OPENING_RANGE_BREAKOUT",
+      "enabledEnvVar": "QUANT_ORB_STRATEGY_ENABLED",
+      "apiNote": "Opening-range breakout + RVOL. Opening range is unavailable on daily bars (honest fail, not a fabricated OR). Live evaluateAll only if QUANT_ORB_STRATEGY_ENABLED=true."
+    },
+    {
+      "id": "VWAP_MEAN_REVERSION",
+      "enabledEnvVar": "QUANT_VWAP_REVERSION_ENABLED",
+      "apiNote": "Fade an extended move vs session VWAP in a range (low ADX). Distinct from MEAN_REVERSION (Keltner). Live evaluateAll only if QUANT_VWAP_REVERSION_ENABLED=true."
+    },
+    {
+      "id": "DONCHIAN_CHANNEL_BREAKOUT",
+      "enabledEnvVar": "QUANT_DONCHIAN_STRATEGY_ENABLED",
+      "apiNote": "Break of the prior N-bar high/low (current bar excluded — classic Donchian entry). N is donchianPriorLookback. Not a second channel library. Live evaluateAll only if QUANT_DONCHIAN_STRATEGY_ENABLED=true."
+    },
+    {
+      "id": "MA_CROSSOVER",
+      "enabledEnvVar": "QUANT_MA_CROSSOVER_ENABLED",
+      "apiNote": "SMA50/SMA200 stack plus EMA9/EMA20 alignment and ADX. StrategyContext has current MAs only — this is a golden/death stack, not a same-bar cross event. Live evaluateAll only if QUANT_MA_CROSSOVER_ENABLED=true."
+    },
+    {
+      "id": "OSCILLATOR_MOMENTUM",
+      "enabledEnvVar": "QUANT_OSCILLATOR_MOMENTUM_ENABLED",
+      "apiNote": "RSI 50-line + MACD histogram + ROC family. RSI/MACD divergence remains a feature (isTradeSignal:false), not a standalone trade. Live evaluateAll only if QUANT_OSCILLATOR_MOMENTUM_ENABLED=true."
+    },
+    {
+      "id": "BOLLINGER_VOLATILITY",
+      "enabledEnvVar": "QUANT_BOLLINGER_VOLATILITY_ENABLED",
+      "apiNote": "Volatility squeeze (band width + CONTRACTING) then Keltner expansion breakout. Uses existing VolatilityFeatures — no second Bollinger library. Live evaluateAll only if QUANT_BOLLINGER_VOLATILITY_ENABLED=true."
+    },
+    {
+      "id": "PREVIOUS_PERIOD_BREAKOUT",
+      "enabledEnvVar": "QUANT_PREVIOUS_PERIOD_BREAKOUT_ENABLED",
+      "apiNote": "Close beyond previous-day high/low with RVOL. Weekly high/low is a 5-day approximation on daily bars. Live evaluateAll only if QUANT_PREVIOUS_PERIOD_BREAKOUT_ENABLED=true."
+    },
+    {
+      "id": "CANDLESTICK_REVERSAL",
+      "enabledEnvVar": "QUANT_CANDLESTICK_REVERSAL_ENABLED",
+      "apiNote": "Hammer/engulfing/shooting-star at nearest S/R. Only the candlestick patterns PriceActionFeatures actually detects. Live evaluateAll only if QUANT_CANDLESTICK_REVERSAL_ENABLED=true."
+    },
+    {
+      "id": "GAP_CONTINUATION",
+      "enabledEnvVar": "QUANT_GAP_STRATEGY_ENABLED",
+      "apiNote": "Session gap vs prior close (UTC day) with RVOL and VWAP alignment. Continuation, not a gap-fade. Live evaluateAll only if QUANT_GAP_STRATEGY_ENABLED=true."
+    },
+    {
+      "id": "FIBONACCI_PULLBACK",
+      "enabledEnvVar": "QUANT_FIBONACCI_PULLBACK_ENABLED",
+      "apiNote": "Pullback near the 61.8% retracement of the trailing daily range (existing TechnicalIndicators.calculateFibonacciRetracement). Not Fibonacci time zones or arcs. Live evaluateAll only if QUANT_FIBONACCI_PULLBACK_ENABLED=true."
+    },
+    {
+      "id": "VOLUME_CONFIRMATION",
+      "enabledEnvVar": "QUANT_VOLUME_CONFIRMATION_ENABLED",
+      "apiNote": "RVOL spike + CMF/MFI alignment with structure. Not volume profile / POC / HVN (NOT_SUPPORTED). Live evaluateAll only if QUANT_VOLUME_CONFIRMATION_ENABLED=true."
+    },
+    {
+      "id": "SR_BOUNCE",
+      "enabledEnvVar": "QUANT_SR_BOUNCE_ENABLED",
+      "apiNote": "Bounce at nearest swing/pivot/previous-day support or resistance with a reversal candle. Distinct from RANGE_REVERSION (does not require full consolidation). Live evaluateAll only if QUANT_SR_BOUNCE_ENABLED=true."
+    },
+    {
+      "id": "RELATIVE_STRENGTH_ROTATION",
+      "enabledEnvVar": "QUANT_RELATIVE_STRENGTH_ENABLED",
+      "apiNote": "Symbol vs SPY relative strength plus sector regime. Breadth thrust / McClellan / TRIN remain NOT_SUPPORTED. Live evaluateAll only if QUANT_RELATIVE_STRENGTH_ENABLED=true."
+    }
+  ],
+  "thresholds": {
+    "rvolContinuation": 1.5,
+    "rvolBreakout": 2,
+    "vwapPullbackMaxDistancePct": 0.35,
+    "adxTrendMin": 25,
+    "adxRangeMax": 20,
+    "vwapReversionDistancePct": 1,
+    "openingRangeWindowMinutes": 30,
+    "donchianPriorLookback": 20,
+    "rsiMidline": 50,
+    "nearLevelPct": 0.4,
+    "fibProximityPct": 0.35,
+    "bbSqueezeWidthPct": 4,
+    "gapMinSizePct": 0.5
+  }
+}

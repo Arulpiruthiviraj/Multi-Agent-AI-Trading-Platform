@@ -10,7 +10,7 @@ This document provides high-level context, constraints, and operational guidelin
 2. **Provider Agnostic**: AI features must route through the `AIRouter` layer.
 3. **Event-Driven**: Decoupled communication using the EventBus and WebSockets.
 
-For specific implementation details, refer to the `/skills` directory.
+For specific implementation details, refer to the `/skills` directory and **[docs/README.md](docs/README.md)** (architecture, specs, plans, reports). Root `CLAUDE.md` is the live-path contract.
 
 ## Optional: Local AI Stack
 

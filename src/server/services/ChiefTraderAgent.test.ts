@@ -4,6 +4,7 @@ const { mockDb } = vi.hoisted(() => {
   const builder: any = {
     from() { return builder; },
     where() { return builder; },
+    orderBy() { return builder; },
     limit() { return builder; },
     all() { return Promise.resolve([]); },
     then(resolve: any, reject: any) { return Promise.resolve([]).then(resolve, reject); },
@@ -16,16 +17,17 @@ const { mockDb } = vi.hoisted(() => {
 });
 
 const { emitChiefApproval } = vi.hoisted(() => ({ emitChiefApproval: vi.fn() }));
-const { routeConsensus } = vi.hoisted(() => ({ routeConsensus: vi.fn() }));
+const { routeConsensus, routeTask } = vi.hoisted(() => ({ routeConsensus: vi.fn(), routeTask: vi.fn() }));
 
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitChiefApproval } }));
-vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus }) } }));
+vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus, routeTask }) } }));
 
 import { ChiefTraderAgent, CONSENSUS_APPROVAL_THRESHOLD } from './ChiefTraderAgent';
 import { DISAGREEMENT_PENALTY, netConfidenceFromVotes } from './EvidenceAggregator';
 import { defaultAgentWeights, agentWeightConfig } from '../config/agentWeights';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+import { bullBearResearchConfig } from '../config/bullBearResearch';
 
 const fixtures = loadRepoConfigJson<{
   strongAgreementConfidence: number;
@@ -49,6 +51,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
   beforeEach(() => {
     emitChiefApproval.mockClear();
     routeConsensus.mockReset();
+    routeTask.mockReset();
     agent = new ChiefTraderAgent();
     agent.agentWeights = { ...defaultAgentWeights };
     agent.recentIdeas = [];
@@ -277,5 +280,23 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
 
     const approval = emitChiefApproval.mock.calls[0][0];
     expect(approval.supportingQuantDetail).toBeNull();
+  });
+
+  it('does not approve when BearResearcher HOLD evidence is present even if two agents agree on BUY', async () => {
+    agent.recentIdeas = [
+      ...buyPair('AAPL', 0.95),
+      {
+        traceId: 't',
+        symbol: 'AAPL',
+        side: 'HOLD',
+        confidence: bullBearResearchConfig.bearHoldMinConfidence,
+        agent: bullBearResearchConfig.bearAgentName,
+        reasoning: 'structured case against the trade',
+      },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't-bear');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
   });
 });

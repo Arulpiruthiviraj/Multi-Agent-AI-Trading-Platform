@@ -1,8 +1,9 @@
 import { eventBus } from '../../core/EventBus';
+import { preferIpv4Loopback } from '../../ai/preferIpv4Loopback';
 
 export type KronosStatus = 'Loading...' | 'Downloading...' | 'Initializing...' | 'Ready' | 'Warning: Kronos unavailable';
 
-const SERVICE_URL = process.env.LOCAL_AI_SERVICE_URL || 'http://localhost:8008';
+const SERVICE_URL = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008');
 // Re-checked lazily rather than once at boot - the local inference service (scripts/
 // local_ai_service.py) is meant to be started/stopped independently of the Node process, like
 // Ollama. A one-shot boot-time check would permanently report unavailable if the service was
@@ -13,8 +14,8 @@ export class KronosModelManager {
   private status: KronosStatus = 'Loading...';
   private modelVersion: string = 'unknown';
   private isAvailable: boolean = false;
-  private memoryUsage: string = '0 MB';
-  private gpuUsage: string = '0%';
+  private memoryUsage: string | null = null;
+  private gpuUsage: string | null = null;
   private inferenceTime: number = 0;
   private lastCheckedAt: number = 0;
 
@@ -37,7 +38,7 @@ export class KronosModelManager {
     } catch (e: any) {
       this.isAvailable = false;
       this.updateStatus('Warning: Kronos unavailable');
-      console.warn(`[KronosModelManager] Local Chronos inference service not reachable at ${SERVICE_URL} - reporting unavailable. Run 'npm run ai:serve'. (${e.message})`);
+      console.warn(`[KronosModelManager] Local Chronos inference service not reachable at ${SERVICE_URL} - reporting unavailable. npm run dev starts it (or npm run ai:serve). (${e.message})`);
     }
   }
 

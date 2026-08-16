@@ -9,6 +9,9 @@ describe('tradingSafety.json', () => {
     expect(tradingSafety.disagreementPenalty).toBeGreaterThan(0);
     expect(tradingSafety.consensusApprovalThreshold).toBeGreaterThan(0);
     expect(tradingSafety.consensusApprovalThreshold).toBeLessThan(1);
+    expect(tradingSafety.agentWinRateAlertPct).toBeGreaterThan(0);
+    expect(tradingSafety.agentWinRateAlertPct).toBeLessThan(100);
+    expect(tradingSafety.agentWinRateAlertMinPredictions).toBeGreaterThan(0);
   });
 
   it('netConfidenceFromVotes uses the configured disagreement penalty, not a test-local 0.5', () => {

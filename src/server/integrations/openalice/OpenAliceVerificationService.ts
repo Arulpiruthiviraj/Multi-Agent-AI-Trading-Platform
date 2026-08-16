@@ -32,12 +32,14 @@ import type {
 
 const POLL_INTERVAL_MS = 30_000;
 const REQUEST_TIMEOUT_MS = 24 * 60 * 60 * 1000; // matches the audit's own latency finding: viable only non-blocking, can take hours
+const GUARDIAN_MCP_URL = 'http://127.0.0.1:47332/mcp';
 
 export class OpenAliceVerificationService {
   private static instance: OpenAliceVerificationService;
 
   readonly enabled: boolean;
-  private readonly adapter: OpenAliceAdapter | null = null;
+  private adapter: OpenAliceAdapter | null = null;
+  private activeMcpUrl: string | null = null;
   private readonly pending = new Map<string, VerificationRequest>();
   private pollTimer: NodeJS.Timeout | null = null;
 
@@ -49,9 +51,9 @@ export class OpenAliceVerificationService {
         console.warn('[OpenAlice] OPENALICE_ENABLED=true but OPENALICE_MCP_URL is not set - disabling.');
         (this as any).enabled = false;
       } else {
+        this.activeMcpUrl = url;
         this.adapter = new OpenAliceAdapter(url);
-        this.startPolling();
-        console.log('[OpenAlice] Verification service enabled, polling every', POLL_INTERVAL_MS / 1000, 's');
+        console.log('[OpenAlice] Verification service enabled. Will not poll a trading MCP; Guardian tools required.');
       }
     }
   }
@@ -63,11 +65,51 @@ export class OpenAliceVerificationService {
     return OpenAliceVerificationService.instance;
   }
 
+  get mcpUrl(): string | null {
+    return this.activeMcpUrl;
+  }
+
   async health(): Promise<VerificationHealth> {
     if (!this.enabled || !this.adapter) {
       return { reachable: false, detail: 'OpenAlice integration disabled (OPENALICE_ENABLED != true)', checkedAt: new Date().toISOString() };
     }
-    return this.adapter.healthCheck();
+    const primary = await this.adapter.healthCheck();
+    if (primary.reachable) {
+      this.ensurePolling();
+      return primary;
+    }
+
+    const keepConfigured = process.env.ARGUS_KEEP_OPENALICE_MCP_URL === 'true';
+    const configured = (process.env.OPENALICE_MCP_URL || '').replace(/\/$/, '');
+    const guardian = GUARDIAN_MCP_URL.replace(/\/$/, '');
+    if (keepConfigured || configured === guardian) {
+      return primary;
+    }
+
+    const fallback = new OpenAliceAdapter(GUARDIAN_MCP_URL);
+    const secondary = await fallback.healthCheck();
+    if (secondary.reachable) {
+      this.adapter = fallback;
+      this.activeMcpUrl = GUARDIAN_MCP_URL;
+      this.ensurePolling();
+      console.warn(`[OpenAlice] Configured MCP lacked Guardian tools (issue_create/inbox_read). Switched to ${GUARDIAN_MCP_URL}. Trading MCP tools are never called.`);
+      return {
+        ...secondary,
+        detail: `${secondary.detail} (switched from a non-Guardian MCP to ${GUARDIAN_MCP_URL})`,
+      };
+    }
+
+    return {
+      reachable: false,
+      detail: `${primary.detail} Guardian fallback ${GUARDIAN_MCP_URL}: ${secondary.detail}`,
+      checkedAt: secondary.checkedAt,
+    };
+  }
+
+  private ensurePolling() {
+    if (this.pollTimer) return;
+    this.startPolling();
+    console.log('[OpenAlice] Inbox poll started every', POLL_INTERVAL_MS / 1000, 's');
   }
 
   /**
@@ -109,24 +151,32 @@ export class OpenAliceVerificationService {
       createdAt: request.createdAt,
     }).catch((e) => console.error('[OpenAlice] Failed to persist verification request', e));
 
-    this.adapter.requestVerification(request)
-      .then(() => {
-        eventBus.publish('OPENALICE_VERIFICATION_REQUESTED', {
-          traceId: request.traceId,
-          requestId: request.requestId,
-          symbol: request.symbol,
-          side: request.side,
-          mode: request.mode,
-        });
-      })
-      .catch((e) => {
-        console.error('[OpenAlice] Failed to file verification request', e);
+    void this.health().then((h) => {
+      if (!h.reachable || !this.adapter) {
+        console.warn('[OpenAlice] Skipping verification file — Guardian MCP not reachable:', h.detail);
         this.pending.delete(request.requestId);
-        db.update(schema.openaliceVerifications)
-          .set({ status: 'FAILED', error: String(e?.message ?? e), completedAt: new Date().toISOString() })
-          .where(eq(schema.openaliceVerifications.id, request.requestId))
-          .catch((err) => console.error('[OpenAlice] Failed to record request failure', err));
-      });
+        return db.update(schema.openaliceVerifications)
+          .set({ status: 'FAILED', error: h.detail, completedAt: new Date().toISOString() })
+          .where(eq(schema.openaliceVerifications.id, request.requestId));
+      }
+      return this.adapter.requestVerification(request)
+        .then(() => {
+          eventBus.publish('OPENALICE_VERIFICATION_REQUESTED', {
+            traceId: request.traceId,
+            requestId: request.requestId,
+            symbol: request.symbol,
+            side: request.side,
+            mode: request.mode,
+          });
+        });
+    }).catch((e) => {
+      console.error('[OpenAlice] Failed to file verification request', e);
+      this.pending.delete(request.requestId);
+      db.update(schema.openaliceVerifications)
+        .set({ status: 'FAILED', error: String(e?.message ?? e), completedAt: new Date().toISOString() })
+        .where(eq(schema.openaliceVerifications.id, request.requestId))
+        .catch((err) => console.error('[OpenAlice] Failed to record request failure', err));
+    });
   }
 
   private startPolling() {

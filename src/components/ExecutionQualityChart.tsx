@@ -20,10 +20,10 @@ import {
   YAxis,
   ZAxis,
   Tooltip,
-  ResponsiveContainer,
   CartesianGrid
 } from 'recharts';
 import { Zap, Activity, AlertTriangle } from 'lucide-react';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 
 interface ExecutionQualityChartProps {
   className?: string;
@@ -109,7 +109,7 @@ const ExecutionQualityChart: React.FC<ExecutionQualityChartProps> = ({ className
 
       {available === true && data && (
         <div className="flex-1 w-full h-[300px] min-h-[300px]">
-          <ResponsiveContainer width="100%" height="100%">
+          <SafeResponsiveContainer>
             <ScatterChart margin={{ top: 10, right: 20, bottom: 20, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
               <XAxis
@@ -139,7 +139,7 @@ const ExecutionQualityChart: React.FC<ExecutionQualityChartProps> = ({ className
                 shape="circle"
               />
             </ScatterChart>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
         </div>
       )}
     </div>

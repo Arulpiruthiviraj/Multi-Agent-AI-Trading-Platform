@@ -8,7 +8,7 @@
  */
 import { db } from '../db';
 import { portfolio, reconciliationEvents, portfolioSnapshots, trades } from '../db/schema';
-import { eq, notInArray } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { eventBus } from '../core/EventBus';
 import { tradingEngine } from '../engines/TradingEngine';
@@ -31,7 +31,8 @@ const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = 50;
 interface MismatchDetail {
   symbol: string;
   type: 'QUANTITY_DRIFT' | 'MISSING_LOCALLY' | 'MISSING_REMOTELY'
-      | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY';
+      | 'OPEN_ORDER_MISSING_LOCALLY' | 'OPEN_ORDER_MISSING_REMOTELY' | 'ACCOUNT_INCONSISTENCY'
+      | 'FILLED_ORDER_MISSING_LOCALLY';
   localQty: number;
   remoteQty: number;
   approxDollarImpact: number;
@@ -141,7 +142,9 @@ export class PortfolioReconciliationWorker {
       try {
         const brokerOrders = await broker.orders();
         const openBrokerOrders = brokerOrders.filter(o => !TERMINAL_ORDER_STATUSES.includes(o.status));
-        const openLocalTrades = await db.select().from(trades).where(notInArray(trades.status, TERMINAL_ORDER_STATUSES));
+        const localTrades = await db.select().from(trades);
+        const openLocalTrades = localTrades.filter(t => !TERMINAL_ORDER_STATUSES.includes(t.status));
+        const localBrokerOrderIds = new Set(localTrades.map(t => t.brokerOrderId).filter(Boolean));
 
         for (const bo of openBrokerOrders) {
           const local = openLocalTrades.find(t => t.brokerOrderId === bo.id);
@@ -159,6 +162,13 @@ export class PortfolioReconciliationWorker {
             mismatches.push({ symbol: lt.symbol, type: 'OPEN_ORDER_MISSING_REMOTELY', localQty: lt.quantity, remoteQty: 0, approxDollarImpact: impact });
             console.warn(`[PortfolioReconciliation] Local trades row ${lt.id} (${lt.symbol}) is still non-terminal (${lt.status}) but ${broker.name} no longer reports order ${lt.brokerOrderId} as open.`);
           }
+        }
+
+        for (const bo of brokerOrders.filter(o => o.status === 'FILLED')) {
+          if (!bo.id || localBrokerOrderIds.has(bo.id)) continue;
+          const impact = (bo.averageFillPrice || bo.price || 0) * (bo.filledQuantity || bo.quantity || 0);
+          mismatches.push({ symbol: bo.symbol, type: 'FILLED_ORDER_MISSING_LOCALLY', localQty: 0, remoteQty: bo.filledQuantity || bo.quantity, approxDollarImpact: impact });
+          console.warn(`[PortfolioReconciliation] Broker reports FILLED order ${bo.id} for ${bo.symbol} with no matching local trades.brokerOrderId.`);
         }
       } catch (e) {
         console.error('[PortfolioReconciliation] Open-order reconciliation failed', e);

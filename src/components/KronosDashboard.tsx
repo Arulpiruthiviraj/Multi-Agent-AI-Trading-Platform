@@ -6,11 +6,16 @@ export const KronosDashboard = () => {
   const [kronosStatus, setKronosStatus] = useState<any>(null);
   
   useEffect(() => {
-    // Attempt to fetch real Kronos status
-    fetch('/api/v1/kronos/status')
-      .then(res => res.json())
-      .then(data => setKronosStatus(data))
-      .catch(() => setKronosStatus({ status: 'UNAVAILABLE' }));
+    let cancelled = false;
+    const load = () => {
+      fetch('/api/v1/kronos/status')
+        .then(res => res.json())
+        .then(data => { if (!cancelled) setKronosStatus(data); })
+        .catch(() => { if (!cancelled) setKronosStatus({ status: 'UNAVAILABLE', isAvailable: false }); });
+    };
+    load();
+    const id = setInterval(load, 10_000);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   const isUnavailable = kronosStatus === null || kronosStatus?.isAvailable === false || kronosStatus?.status === 'UNAVAILABLE';
@@ -30,8 +35,11 @@ export const KronosDashboard = () => {
             <div>
               <p className="font-medium text-sm">Warning: KRONOS_UNAVAILABLE</p>
               <p className="text-xs text-rose-400/80 mt-1">
-                The Kronos prediction engine requires a valid Python/PyTorch environment. 
-                Trading continues using remaining evidence sources (Technical, Macro, Fundamental, News).
+                Nothing is answering <code className="text-[10px]">GET LOCAL_AI_SERVICE_URL/health</code> (default http://localhost:8008).
+                That Python process is Chronos-T5-mini + FinBERT — not a second Node engine.
+                <code className="text-[10px]">npm run dev</code> now starts it; wait for the first model load (can take a minute).
+                If it never comes up: install Python 3.10+, run <code className="text-[10px]">npm run setup:ai</code>, then restart.
+                Trading continues on Technical / Macro / Fundamental / News. Kronos does not invent forecasts.
               </p>
             </div>
           </div>
@@ -51,11 +59,11 @@ export const KronosDashboard = () => {
            </div>
            <div className="bg-[#111822] border border-slate-800 rounded p-4">
               <div className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Activity size={12}/> GPU Usage</div>
-              <div className="text-sm font-mono text-slate-300">{kronosStatus?.gpuUsage || '-'}</div>
+              <div className="text-sm font-mono text-slate-300">{kronosStatus?.gpuUsage ?? '—'}</div>
            </div>
            <div className="bg-[#111822] border border-slate-800 rounded p-4">
               <div className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Database size={12}/> Memory Usage</div>
-              <div className="text-sm font-mono text-slate-300">{kronosStatus?.memoryUsage || '-'}</div>
+              <div className="text-sm font-mono text-slate-300">{kronosStatus?.memoryUsage ?? '—'}</div>
            </div>
            <div className="bg-[#111822] border border-slate-800 rounded p-4">
               <div className="text-xs text-slate-500 mb-1 flex items-center gap-1"><Clock size={12}/> Inference Time</div>

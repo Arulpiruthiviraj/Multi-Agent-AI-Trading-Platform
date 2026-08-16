@@ -16,8 +16,8 @@
  *
  * Live consumption:
  *   isBullBearResearchEnabled() reads the env var named in config/bullBearResearch.json
- *   (QUANT_BULL_BEAR_ENABLED). Default off. ChiefTrader does not call this module unless that
- *   flag is wired later — parser + tests exist so the contract is real before any live debate.
+ *   (QUANT_BULL_BEAR_ENABLED). Default off. When true, ChiefTraderAgent may call this parser
+ *   during adversarial debate; numeric market facts stay null.
  * ==========================================================
  */
 import { coerceEnum, coerceString, coerceStringArray, normalizeConfidence01 } from '../AIOutputValidator';

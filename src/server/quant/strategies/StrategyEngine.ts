@@ -9,11 +9,15 @@
  *
  * Two lists:
  *   CORE_STRATEGIES / ALL_STRATEGIES — the original five. Default live evaluateAll() set.
- *   EXPERIMENTAL_STRATEGIES — SMC_LIQUIDITY_SWEEP. Backtestable via findStrategy(); live
- *   evaluateAll() includes them only when QUANT_SMC_STRATEGY_ENABLED=true.
+ *   EXPERIMENTAL_STRATEGIES — SMC plus additive family modules (VWAP, ORB, Donchian, MA,
+ *   oscillators, volatility bands, PDH/PDL, candles, gaps, Fib, volume, S/R, RS).
+ *   Backtestable via findStrategy(); live evaluateAll() includes a module only when ITS
+ *   env var from config/quantExperimentalStrategies.json is the string 'true'.
+ *   QUANT_SMC_STRATEGY_ENABLED does not enable the others. Named-technique aliases live in
+ *   config/quantStrategyTaxonomy.json — they are not 1,000 live evaluate() edges.
  *
  * ALL_STRATEGIES keeps the historical name so GET /api/v2/quant/strategies `strategies` array
- * and existing tests still see exactly five ids unless that env flag is set.
+ * and existing tests still see exactly five ids unless an experimental env flag is set.
  * ==========================================================
  */
 import { StrategyContext, StrategyEvaluation, StrategyDefinition } from './types';
@@ -23,7 +27,22 @@ import { meanReversion } from './meanReversion';
 import { trendFollowing } from './trendFollowing';
 import { rangeReversion } from './rangeReversion';
 import { smcLiquiditySweep } from './smcLiquiditySweep';
+import { vwapVolumeStructure } from './vwapVolumeStructure';
+import { openingRangeBreakout } from './openingRangeBreakout';
+import { vwapMeanReversion } from './vwapMeanReversion';
+import { donchianBreakout } from './donchianBreakout';
+import { maCrossover } from './maCrossover';
+import { oscillatorMomentum } from './oscillatorMomentum';
+import { bollingerVolatility } from './bollingerVolatility';
+import { previousPeriodBreakout } from './previousPeriodBreakout';
+import { candlestickReversal } from './candlestickReversal';
+import { gapContinuation } from './gapContinuation';
+import { fibonacciPullback } from './fibonacciPullback';
+import { volumeConfirmation } from './volumeConfirmation';
+import { srBounce } from './srBounce';
+import { relativeStrengthRotation } from './relativeStrengthRotation';
 import { tradingSafety } from '../../config/tradingSafety';
+import { isExperimentalStrategyLive } from '../../config/quantExperimentalStrategies';
 import type { RegimeLabel } from '../RegimeEngine';
 
 /** Original five. Also exported as ALL_STRATEGIES for callers that list "live default" strategies. */
@@ -31,17 +50,36 @@ export const CORE_STRATEGIES: StrategyDefinition[] = [momentumBreakout, pullback
 
 /**
  * Backtestable and listed under experimentalStrategies on GET /api/v2/quant/strategies.
- * Not in evaluateAll() unless QUANT_SMC_STRATEGY_ENABLED=true (checked at call time, not import time).
+ * Per-id live inclusion is checked at call time from config env vars (not import time).
  */
-export const EXPERIMENTAL_STRATEGIES: StrategyDefinition[] = [smcLiquiditySweep];
+export const EXPERIMENTAL_STRATEGIES: StrategyDefinition[] = [
+  smcLiquiditySweep,
+  vwapVolumeStructure,
+  openingRangeBreakout,
+  vwapMeanReversion,
+  donchianBreakout,
+  maCrossover,
+  oscillatorMomentum,
+  bollingerVolatility,
+  previousPeriodBreakout,
+  candlestickReversal,
+  gapContinuation,
+  fibonacciPullback,
+  volumeConfirmation,
+  srBounce,
+  relativeStrengthRotation,
+];
 
-/** Live Quant may include experimental strategies only when this env var is the string 'true'. */
+/** Live Quant may include SMC only when QUANT_SMC_STRATEGY_ENABLED is the string 'true'. */
 export function isSmcLiveQuantEnabled(): boolean {
   return process.env.QUANT_SMC_STRATEGY_ENABLED === 'true';
 }
 
+export { isExperimentalStrategyLive };
+
 export function resolveStrategiesForLiveEvaluation(): StrategyDefinition[] {
-  return isSmcLiveQuantEnabled() ? [...CORE_STRATEGIES, ...EXPERIMENTAL_STRATEGIES] : CORE_STRATEGIES;
+  const extra = EXPERIMENTAL_STRATEGIES.filter(s => isExperimentalStrategyLive(s.id));
+  return extra.length === 0 ? CORE_STRATEGIES : [...CORE_STRATEGIES, ...extra];
 }
 
 /** Live default set (the original five). Name preserved for existing imports and tests. */

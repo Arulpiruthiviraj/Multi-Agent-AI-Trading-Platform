@@ -18,7 +18,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 import { Zap, AlertTriangle } from 'lucide-react';
 import AwaitingSignal from './shared/AwaitingSignal';
 
@@ -115,7 +116,7 @@ export default function TradeEfficiencyReport() {
 
       {available === true && (
         <div className="h-[300px] w-full bg-[#111822] rounded overflow-hidden border border-slate-800 p-4">
-          <ResponsiveContainer width="100%" height="100%">
+          <SafeResponsiveContainer>
             <BarChart
               data={chartData}
               margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
@@ -161,7 +162,7 @@ export default function TradeEfficiencyReport() {
               <Bar yAxisId="left" dataKey="winRateChart" name="Win Rate (%)" fill="#10b981" radius={[4, 4, 0, 0]} maxBarSize={40} />
               <Bar yAxisId="right" dataKey="latencyChart" name="Avg Latency (ms)" fill="#818cf8" radius={[4, 4, 0, 0]} maxBarSize={40} />
             </BarChart>
-          </ResponsiveContainer>
+          </SafeResponsiveContainer>
         </div>
       )}
     </div>

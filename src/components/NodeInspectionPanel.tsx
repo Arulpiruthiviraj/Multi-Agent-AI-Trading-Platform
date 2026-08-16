@@ -37,7 +37,8 @@ import React, { useState, useEffect } from 'react';
 import eventCatalog from '../../config/eventNames.json';
 import agentWeights from '../../config/agentWeights.json';
 import { X, Terminal, Activity, CheckCircle2, ShieldCheck, Newspaper, Send, TrendingUp, UserCheck, Clock, BookOpen, Cpu, DollarSign, BrainCircuit } from 'lucide-react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { AreaChart, Area, XAxis, YAxis, Tooltip } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 
 // Real per-node-type field extraction from whatever event actually last fired for this node -
 // every value here traces back to a real payload field, never a placeholder. Returns null (not
@@ -262,7 +263,7 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
                {/* Dedicated Chart/Metric for Specific Nodes */}
                {nodeId === 'market-data-worker' && localLogs.length > 0 && (
                    <div className="bg-[#0A0F16] border border-slate-800 rounded p-3 h-32">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <SafeResponsiveContainer>
                             <AreaChart data={localLogs.map((l:any, i:number) => ({ time: i, price: l.payload.price })).reverse()}>
                                 <defs>
                                     <linearGradient id="colorMd" x1="0" y1="0" x2="0" y2="1">
@@ -272,7 +273,7 @@ export default function NodeInspectionPanel({ nodeId, onClose, activeEvents }: {
                                 </defs>
                                 <Area type="monotone" dataKey="price" stroke="#38bdf8" fill="url(#colorMd)" isAnimationActive={false} />
                             </AreaChart>
-                        </ResponsiveContainer>
+                        </SafeResponsiveContainer>
                    </div>
                )}
 

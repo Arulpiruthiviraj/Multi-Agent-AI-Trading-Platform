@@ -102,6 +102,7 @@ import { integrationRouter } from "./src/server/routes/integrationRoutes";
 import { tradingEngine } from "./src/server/engines/TradingEngine";
 import { system } from "./src/server/core/SystemBootstrap";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
+import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
 import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit } from "./src/server/core/AuthConfig";
 import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter } from "./src/server/core/RateLimiters";
 import http from "http";
@@ -378,6 +379,13 @@ async function startServer() {
   
   // Initialize broker manager so configured broker selection is active at runtime
   await BrokerManager.getInstance().initialize();
+
+  try {
+    marketDataWorker.start();
+    console.log('[MarketDataWorker] Started at boot (independent of Autobot). RiskEngine data_freshness still requires a fresh tick.');
+  } catch (e: any) {
+    console.warn(`[MarketDataWorker] Boot start failed: ${e.message}`);
+  }
 
   try {
     const { modelRuntimeManager } = await import("./src/server/ai/ModelRuntimeManager");
@@ -1205,30 +1213,33 @@ let portfolioState = loadPortfolio();
     }
   });
 
-  app.post("/api/v1/portfolio/liquidate", async (req: Request, res: Response) => {
+  app.post("/api/v1/portfolio/liquidate", tradingLimiter, async (req: Request, res: Response) => {
     try {
-      const { symbol } = req.body;
-      if (!symbol) return res.status(400).json({ error: "Missing symbol" });
+      const requested = typeof req.body?.symbol === "string" ? req.body.symbol.trim() : "";
       const broker = BrokerManager.getInstance().getActiveBroker();
-      const success = await broker.closePosition(symbol);
-      res.json({ success });
-    } catch(e: any) {
-      res.status(502).json({ error: e.message });
+      const portfolio = await broker.portfolio();
+      const symbols = requested
+        ? [requested]
+        : portfolio.positions.filter((p) => p.quantity > 0).map((p) => p.symbol);
+      if (symbols.length === 0) {
+        return res.json({ ok: true, submitted: [], refused: [], message: "No open positions to flatten through the pipeline." });
+      }
+      const result = await submitPipelineSells(symbols);
+      res.json({
+        ok: result.refused.length === 0,
+        ...result,
+        note: "SELL ideas were emitted as CHIEF_APPROVED_IDEA. RiskEngine and OMS still run. This does not call broker.closePosition.",
+      });
+    } catch (e: any) {
+      res.status(502).json({ ok: false, error: e.message });
     }
   });
 
-  app.post("/api/v1/portfolio/rebalance", async (req: Request, res: Response) => {
-    try {
-      const broker = BrokerManager.getInstance().getActiveBroker();
-      const portfolio = await broker.portfolio();
-      let successCount = 0;
-      for (const pos of portfolio.positions) {
-        if (await broker.closePosition(pos.symbol)) successCount++;
-      }
-      res.json({ success: true, closedPositions: successCount });
-    } catch(e: any) {
-      res.status(502).json({ error: e.message });
-    }
+  app.post("/api/v1/portfolio/rebalance", tradingLimiter, async (_req: Request, res: Response) => {
+    res.status(501).json({
+      ok: false,
+      error: "Target-allocation rebalance is not implemented. Closing every position via broker.closePosition is forbidden (bypasses RiskEngine). Use Emergency Stop and/or POST /api/v1/portfolio/liquidate, which submits SELL ideas through RiskEngine/OMS.",
+    });
   });
 
   app.get("/api/v1/secrets", (req: Request, res: Response) => {
@@ -1250,8 +1261,32 @@ let portfolioState = loadPortfolio();
   });
 
   app.post("/api/v1/secrets/test", async (req: Request, res: Response) => {
-    // For Alpaca, do a simple fetch to Alpaca's clock or account endpoint using current env vars
-    res.json({ success: true, message: "Testing not fully implemented for all providers." });
+    const key = typeof req.body?.key === "string" ? req.body.key : "";
+    if (key === "ALPACA_API_KEY" || key === "ALPACA_SECRET_KEY" || key === "alpaca") {
+      const apiKey = process.env.ALPACA_API_KEY;
+      const secret = process.env.ALPACA_SECRET_KEY;
+      if (!apiKey || !secret) {
+        return res.json({ success: false, implemented: true, message: "ALPACA_API_KEY / ALPACA_SECRET_KEY are unset." });
+      }
+      try {
+        const clockRes = await fetch("https://paper-api.alpaca.markets/v2/clock", {
+          headers: { "APCA-API-KEY-ID": apiKey, "APCA-API-SECRET-KEY": secret },
+          signal: AbortSignal.timeout(4000),
+        });
+        return res.json({
+          success: clockRes.ok,
+          implemented: true,
+          message: clockRes.ok ? "Alpaca clock reachable." : `Alpaca clock HTTP ${clockRes.status}`,
+        });
+      } catch (e: any) {
+        return res.json({ success: false, implemented: true, message: e.message });
+      }
+    }
+    res.json({
+      success: false,
+      implemented: false,
+      message: "Live credential probe is only implemented for Alpaca. Other providers are not silently reported as OK.",
+    });
   });
 
   app.use("/api/v1", integrationRouter);

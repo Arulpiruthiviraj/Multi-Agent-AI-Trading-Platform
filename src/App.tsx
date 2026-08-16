@@ -36,6 +36,8 @@
 import StrategyScanner from "./components/StrategyScanner";
 import QuantSignalsPanel from "./components/QuantSignalsPanel";
 import AwaitingSignal from "./components/shared/AwaitingSignal";
+import { SafeResponsiveContainer } from "./components/shared/SafeResponsiveContainer";
+import tradingSafetyConfig from "../config/tradingSafety.json";
 import SystemOptimizer from "./components/SystemOptimizer";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
@@ -75,6 +77,8 @@ import LiveTradeJourneyOverlay from "./components/LiveTradeJourneyOverlay";
 import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
 import DocumentationTab from "./components/DocumentationTab";
+import { ExplainerToggle } from "./components/ExplainerToggle";
+import { Explainer } from "./components/ContextualTooltip";
 import { NewsDashboardTab } from "./components/NewsDashboardTab";
 import { AppWalkthrough } from "./components/AppWalkthrough";
 import { AICoachPanel } from "./components/AICoachPanel";
@@ -95,7 +99,6 @@ import {
   XAxis,
   YAxis,
   Tooltip,
-  ResponsiveContainer,
   Legend,
   PieChart as RechartsPieChart,
   Pie,
@@ -235,30 +238,6 @@ interface AgentMetric {
   profitFactor: number;
   sharpeRatio: number;
 }
-
-
-const mockSystemLatencyData = [
-  { agent: "NewsAgent (NLP)", latency: 24, status: "Optimal" },
-  { agent: "MacroAgent (Quant)", latency: 45, status: "Normal" },
-  { agent: "TechnicalAgent (TA)", latency: 12, status: "Optimal" },
-  { agent: "SentimentAgent", latency: 32, status: "Optimal" },
-  { agent: "OrderFlowAgent (L2)", latency: 8, status: "Optimal" },
-  { agent: "Proposer Node", latency: 55, status: "Warning" },
-  { agent: "RiskVerification Node", latency: 110, status: "Critical" },
-  { agent: "Execution Node", latency: 15, status: "Optimal" },
-];
-
-const mockWinRateData = Array.from({ length: 30 }).map((_, i) => {
-  const d = new Date();
-  d.setDate(d.getDate() - (29 - i));
-  return {
-    date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    NewsAgent: 45 + 0,
-    MacroAgent: 50 + 0,
-    TechnicalAgent: 55 + 0,
-    SentimentAgent: 40 + 0,
-  };
-});
 
 const mockBacktestData = Array.from({ length: 90 }).map((_, i) => {
   const d = new Date();
@@ -680,7 +659,7 @@ export const RiskExposureDashboard = ({ dailyLossCap }: { dailyLossCap: number }
          <div className="bg-[#111822] rounded-lg border border-slate-800 p-4">
             <h4 className="text-[10px] uppercase font-mono tracking-widest text-slate-500 mb-4">Sector Concentration</h4>
             <div className="h-[200px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              <SafeResponsiveContainer>
                 <RechartsPieChart>
                   <Pie
                     data={sectorData}
@@ -707,7 +686,7 @@ export const RiskExposureDashboard = ({ dailyLossCap }: { dailyLossCap: number }
                     wrapperStyle={{ fontSize: '10px', fontFamily: 'monospace', color: '#94A3B8' }}
                   />
                 </RechartsPieChart>
-              </ResponsiveContainer>
+              </SafeResponsiveContainer>
             </div>
          </div>
 
@@ -930,12 +909,12 @@ export const RiskExposureDashboard = ({ dailyLossCap }: { dailyLossCap: number }
                </div>
 
                <div className="h-10 w-full mt-1 mb-2 z-10 pointer-events-none">
-                 <ResponsiveContainer width="100%" height="100%">
+                 <SafeResponsiveContainer>
                    <LineChart data={asset.history}>
                      <Line type="monotone" dataKey="atr" stroke={asset.risk === 'Extreme' ? '#f43f5e' : asset.risk === 'High' ? '#f59e0b' : asset.risk === 'Med' ? '#eab308' : '#10b981'} strokeWidth={2} dot={false} isAnimationActive={false} />
                      <Line type="monotone" dataKey="sma" stroke="#94a3b8" strokeWidth={1} strokeDasharray="3 3" dot={false} isAnimationActive={false} />
                    </LineChart>
-                 </ResponsiveContainer>
+                 </SafeResponsiveContainer>
                </div>
                
                <span className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded z-10 ${
@@ -2087,7 +2066,7 @@ export default function App() {
   const [learningSummary, setLearningSummary] = useState<any | null>(null);
 
   useEffect(() => {
-    if (activeTab !== "learning") return;
+    if (activeTab !== "learning" && activeTab !== "agents") return;
     let cancelled = false;
     const load = () => {
       fetch('/api/v2/agents/learning-summary')
@@ -2122,9 +2101,7 @@ export default function App() {
   // Simulation analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [lastAnalysis, setLastAnalysis] = useState<any | null>(null);
-  const [selectedBroker, setSelectedBroker] = useState(
-    "Interactive Brokers (Paper)",
-  );
+  const [selectedBroker, setSelectedBroker] = useState("Internal Paper");
 
   // Trading System Control State
   const [tradingMode, setTradingMode] = useState<"full_auto" | "scanning_only" | "signal_only" | "paused" | "emergency_stop">("full_auto");
@@ -2176,7 +2153,7 @@ export default function App() {
   });
 
   const [perfAlertEnabled, setPerfAlertEnabled] = useState(true);
-  const [perfAlertThreshold, setPerfAlertThreshold] = useState(48);
+  const [perfAlertThreshold, setPerfAlertThreshold] = useState(tradingSafetyConfig.agentWinRateAlertPct);
 
   const [tokenAlertEnabled, setTokenAlertEnabled] = useState(true);
   const [tokenAlertThreshold, setTokenAlertThreshold] = useState(50);
@@ -3221,7 +3198,7 @@ export default function App() {
 
       {/* Header Bar */}
       <header
-        className="border-b border-slate-800 bg-[#1A1F2B]/80 backdrop-blur-md sticky top-0 z-50 px-6 py-4 flex flex-wrap items-center justify-between gap-4"
+        className="border-b border-slate-800 bg-[#1A1F2B]/80 backdrop-blur-md px-6 py-4 flex flex-wrap items-center justify-between gap-4"
         id="platform-header"
       >
         <div className="flex items-center gap-3">
@@ -3234,7 +3211,7 @@ export default function App() {
                 ARGUS
               </h1>
               <span className={`text-[10px] uppercase font-mono px-2 py-0.5 rounded border font-semibold tracking-wider ${autoBotTradingMode === "LIVE" ? "bg-rose-500/10 border-rose-500/30 text-rose-500" : autoBotTradingMode === "PAPER" ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-amber-500/10 border-amber-500/30 text-amber-500"}`}>
-                {autoBotTradingMode}-MODE
+                <Explainer id="paperVsLive" quiet>{autoBotTradingMode}-MODE</Explainer>
               </span>
             </div>
             <p className="text-xs text-slate-400">
@@ -3245,18 +3222,26 @@ export default function App() {
 
         {/* Live Status Indicators */}
         <div className="flex items-center gap-3 text-[10px] font-mono tracking-widest uppercase">
-          <div className="bg-slate-800/60 text-slate-400 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> API: <span className="text-white font-bold ml-0.5">ACTIVE</span></div>
-          <div className="bg-slate-800/60 text-slate-400 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span> LLM: <span className="text-orange-300 font-bold ml-0.5">GEMINI</span></div>
-          <div className="bg-slate-800/60 text-slate-400 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-1">RISK ENGINE: <span className="text-emerald-400 font-bold">ARMED</span></div>
-          <div className="bg-rose-500/10 text-rose-400 border border-rose-500/30 px-3 py-1.5 rounded flex items-center gap-2">
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
-            MARKET: CLOSED
+          <Explainer id="headerApiStatus" quiet>
+            <div className="bg-slate-800/60 text-slate-400 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> API: <span className="text-white font-bold ml-0.5">ACTIVE</span></div>
+          </Explainer>
+          <Explainer id="headerLlmStatus" quiet>
+            <div className="bg-slate-800/60 text-slate-400 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span> LLM: <span className="text-orange-300 font-bold ml-0.5">GEMINI</span></div>
+          </Explainer>
+          <div className="bg-slate-800/60 text-slate-400 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-1">
+            <Explainer id="riskEngineGates" quiet>RISK ENGINE</Explainer>: <span className="text-emerald-400 font-bold">ARMED</span>
           </div>
+          <Explainer id="headerMarketSession" quiet>
+            <div className="bg-rose-500/10 text-rose-400 border border-rose-500/30 px-3 py-1.5 rounded flex items-center gap-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+              MARKET: CLOSED
+            </div>
+          </Explainer>
           <div className="flex items-center gap-2 ml-2">
+            <Explainer id="headerSearch" quiet>
             <button 
               onClick={() => setSearchOpen(true)} 
               className="bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 px-3 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all shadow-sm group" 
-              title="Search Terminal (Cmd+K)"
             >
               <Search size={14} className="group-hover:scale-110 transition-transform" />
               <span className="text-[9px] font-bold uppercase tracking-widest hidden sm:inline">Search</span>
@@ -3265,20 +3250,27 @@ export default function App() {
                 <span>K</span>
               </div>
             </button>
+            </Explainer>
+            <Explainer id="headerCoach" quiet>
             <button 
               onClick={() => setShowCoach(!showCoach)} 
               className={`bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 px-3 py-1.5 rounded flex items-center gap-2 cursor-pointer transition-all shadow-sm group ${showCoach ? "text-white bg-indigo-500/30" : "text-indigo-400"}`}
-              title="AI Trading Coach"
             >
               <MessageSquare size={14} className="group-hover:scale-110 transition-transform" />
               <span className="text-[9px] font-bold uppercase tracking-widest hidden sm:inline">Coach</span>
             </button>
-            <button onClick={() => setAlertsModalOpen(true)} className="bg-slate-800/60 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-500 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm" title="Custom Alerts Engine">
+            </Explainer>
+            <ExplainerToggle />
+            <Explainer id="headerAlerts" quiet>
+            <button onClick={() => setAlertsModalOpen(true)} className="bg-slate-800/60 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-500 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm">
               <Bell size={14} className="text-indigo-400" />
             </button>
-            <button onClick={() => setExportModalOpen(true)} className="bg-slate-800/60 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-500 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm" title="Export Diagnostics & Memory Logs">
+            </Explainer>
+            <Explainer id="headerExport" quiet>
+            <button onClick={() => setExportModalOpen(true)} className="bg-slate-800/60 hover:bg-slate-700 text-slate-300 border border-slate-700 hover:border-slate-500 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm">
               <DownloadCloud size={14} className="text-emerald-400" />
             </button>
+            </Explainer>
             <button onClick={handleLogout} className="bg-slate-800/60 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 border border-slate-700 hover:border-rose-500/40 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm" title="Log Out">
               <LogOut size={14} />
             </button>
@@ -3300,7 +3292,7 @@ export default function App() {
       >
         <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
           <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1 flex items-center justify-between">
-            <span>Total Equity</span>
+            <span><Explainer id="totalEquity">Total Equity</Explainer></span>
             <Wallet size={12} className="text-slate-500" />
           </div>
           <div className="text-lg font-bold text-white">
@@ -3319,7 +3311,7 @@ export default function App() {
 
         <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
           <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1">
-            Cash Balance
+            <Explainer id="cashBalance">Cash Balance</Explainer>
           </div>
           <div className="text-lg font-semibold text-slate-200">
             {portfolioData?.snapshot?.cash_balance !== undefined
@@ -3336,7 +3328,7 @@ export default function App() {
 
         <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
           <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1">
-            Positions Valuation
+            <Explainer id="positionsValuation">Positions Valuation</Explainer>
           </div>
           <div className="text-lg font-semibold text-slate-200">
             {portfolioData?.snapshot?.positions_value !== undefined
@@ -3353,7 +3345,7 @@ export default function App() {
 
         <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
           <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1">
-            Unrealized profit/losses
+            <Explainer id="unrealizedPnl">Unrealized profit/losses</Explainer>
           </div>
           <div className={`text-lg font-semibold ${portfolioData?.snapshot?.unrealized_pnl && portfolioData.snapshot.unrealized_pnl < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
             {portfolioData?.snapshot?.unrealized_pnl !== undefined
@@ -3367,7 +3359,7 @@ export default function App() {
 
         <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60 col-span-2 md:col-span-1">
           <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1 flex items-center justify-between">
-            <span>Portfolio Healthscore</span>
+            <span><Explainer id="portfolioHealthscore">Portfolio Healthscore</Explainer></span>
             <Shield size={12} className="text-emerald-400" />
           </div>
           <div className="flex items-center gap-2">
@@ -3379,7 +3371,7 @@ export default function App() {
             </div>
             {portfolioData?.snapshot?.health_score !== undefined && (
               <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 font-semibold tracking-wide uppercase font-mono">
-                NOMINAL
+                <Explainer id="ribbonNominal" quiet>NOMINAL</Explainer>
               </span>
             )}
           </div>
@@ -3389,104 +3381,118 @@ export default function App() {
         </div>
       </section>
 
-      {/* Main Structural Tabs Nav */}
+      {/* Tab strip stays on screen while the workspace scrolls. Wrap — do not hide desks behind a scrollbar. */}
       <div
-        className="bg-[#1A1F2B] border-b border-slate-850 px-6 flex items-center justify-between"
+        className="sticky top-0 z-50 bg-[#1A1F2B]/95 backdrop-blur-md border-b border-slate-850 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
         id="tabs-navigation"
       >
-        <nav className="flex gap-1 overflow-x-auto scrollbar-hide py-1 items-center" aria-label="Tabs navigation">
-          
+        <nav className="flex flex-wrap gap-x-0 gap-y-0 py-0.5 items-center" aria-label="Tabs navigation">
+          {/* Desk: operate the engine, book, then symbol work. */}
           <button
             id="tab-dashboard-btn"
             onClick={() => setActiveTab("dashboard")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
               activeTab === "dashboard"
                 ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
                 : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
             }`}
           >
             <Activity size={14} />
-            AUTONOMOUS DASHBOARD
+            <Explainer id="tabDashboard" quiet>AUTONOMOUS DASHBOARD</Explainer>
           </button>
 
           <button
             id="tab-command-btn"
             onClick={() => setActiveTab("command")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
               activeTab === "command"
                 ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
                 : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
             }`}
           >
             <Cpu size={14} />
-            MISSION CONTROL
+            <Explainer id="tabCommand" quiet>MISSION CONTROL</Explainer>
           </button>
 
-          <button
-            id="tab-observatory-btn"
-            onClick={() => setActiveTab("observatory")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "observatory"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Search size={14} />
-            OBSERVATORY
-          </button>
-          
-          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
-
-          <button
-            id="tab-arena-btn"
-            onClick={() => setActiveTab("arena")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "arena"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Layers size={14} />
-            TRADING ARENA
-          </button>
-          
-          <button
-            id="tab-scanner-btn"
-            onClick={() => setActiveTab("scanner")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "scanner"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Activity size={14} />
-            STRATEGY SCANNER
-          </button>
-          
-          <button
-            id="tab-opportunities-btn"
-            onClick={() => setActiveTab("opportunities")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "opportunities"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Target size={14} />
-            OPPORTUNITY FEED
-          </button>
-          
           <button
             id="tab-portfolio-btn"
             onClick={() => setActiveTab("portfolio")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
               activeTab === "portfolio"
                 ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
                 : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
             }`}
           >
             <Wallet size={14} />
-            HOLDINGS & POSITIONS
+            <Explainer id="tabPortfolio" quiet>HOLDINGS & POSITIONS</Explainer>
+          </button>
+
+          <button
+            id="tab-arena-btn"
+            onClick={() => setActiveTab("arena")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "arena"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Layers size={14} />
+            <Explainer id="tabArena" quiet>TRADING ARENA</Explainer>
+          </button>
+
+          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
+
+          {/* Markets: news and ideas before agent internals. */}
+          <button
+            id="tab-news-btn"
+            onClick={() => setActiveTab("news")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "news"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Newspaper size={14} />
+            <Explainer id="tabNews" quiet>NEWS INTEL</Explainer>
+          </button>
+
+          <button
+            id="tab-opportunities-btn"
+            onClick={() => setActiveTab("opportunities")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "opportunities"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Target size={14} />
+            <Explainer id="tabOpportunities" quiet>OPPORTUNITY FEED</Explainer>
+          </button>
+
+          <button
+            id="tab-scanner-btn"
+            onClick={() => setActiveTab("scanner")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "scanner"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Activity size={14} />
+            <Explainer id="tabScanner" quiet>STRATEGY SCANNER</Explainer>
+          </button>
+
+          <button
+            id="tab-intelligence-btn"
+            onClick={() => setActiveTab("intelligence")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "intelligence"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Globe size={14} />
+            <Explainer id="tabIntelligence" quiet>INTELLIGENCE</Explainer>
           </button>
 
           <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
@@ -3494,7 +3500,7 @@ export default function App() {
           <motion.button
             id="tab-agents-btn"
             onClick={() => setActiveTab("agents")}
-            className={`relative whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+            className={`relative whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
               activeTab === "agents"
                 ? "border-emerald-500 text-emerald-400"
                 : "border-transparent text-slate-400"
@@ -3502,11 +3508,11 @@ export default function App() {
             whileHover={
               activeTab !== "agents" ? {
                 backgroundColor: [
-                  "rgba(30, 41, 59, 1)", // hover:bg-slate-800
+                  "rgba(30, 41, 59, 1)",
                   "rgba(16, 185, 129, 0.1)",
                   "rgba(30, 41, 59, 1)"
                 ],
-                color: "#e2e8f0", // slate-200
+                color: "#e2e8f0",
                 transition: { duration: 1.5, repeat: Infinity, ease: "easeInOut" }
               } : undefined
             }
@@ -3528,7 +3534,7 @@ export default function App() {
             }
           >
             <BarChart3 size={14} />
-            AGENT NETWORK
+            <Explainer id="tabAgents" quiet>AGENT NETWORK</Explainer>
         {activeTab === "agents" && (
               <motion.span
                 className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-emerald-400"
@@ -3537,185 +3543,176 @@ export default function App() {
               />
             )}
           </motion.button>
-          
-          
-          <button
-            id="tab-news-btn"
-            onClick={() => setActiveTab("news")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "news"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Newspaper size={14} />
-            NEWS INTEL
-          </button>
-
-          <button
-            id="tab-intelligence-btn"
-            onClick={() => setActiveTab("intelligence")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "intelligence"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Globe size={14} />
-            INTELLIGENCE
-          </button>
-          
-          <button
-            id="tab-learning-btn"
-            onClick={() => setActiveTab("learning")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "learning"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <BrainCircuit size={14} />
-            LEARNING & EVOLUTION
-          </button>
-          
-          <button
-            id="tab-memory-btn"
-            onClick={() => setActiveTab("memory")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "memory"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Clock size={14} />
-            VEC EVENT MEMORY
-          </button>
-
-          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
-          
-          <button
-            id="tab-activity-btn"
-            onClick={() => setActiveTab("activity")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "activity"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <List size={14} />
-            ACTIVITY LOG
-          </button>
-          
-          <button
-            id="tab-audit-btn"
-            onClick={() => setActiveTab("audit")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "audit"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Shield size={14} />
-            OBSERVABILITY & TRACING
-          </button>
-
-          <button
-            id="tab-diagnostics-btn"
-            onClick={() => setActiveTab("diagnostics")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "diagnostics"
-                ? "border-amber-500 text-amber-400 bg-amber-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <AlertTriangle size={14} />
-            DIAGNOSTICS
-          </button>
-
-          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
-
-          <button
-            id="tab-documentation-btn"
-            onClick={() => setActiveTab("documentation")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "documentation"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <BookOpen size={14} />
-            DOCUMENTATION
-          </button>
 
           <button
             id="tab-evaluation-btn"
             onClick={() => setActiveTab("evaluation")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
               activeTab === "evaluation"
                 ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
                 : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
             }`}
           >
             <Activity size={14} />
-            AGENT EVALUATION
-          </button>
-
-          <button
-            id="tab-validation-btn"
-            onClick={() => setActiveTab("validation")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "validation"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <ShieldCheck size={14} />
-            VALIDATION
-          </button>
-
-          <button
-            id="tab-deployment-btn"
-            onClick={() => setActiveTab("deployment")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
-              activeTab === "deployment"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Rocket size={14} />
-            DEPLOYMENT
+            <Explainer id="tabEvaluation" quiet>AGENT EVALUATION</Explainer>
           </button>
 
           <button
             onClick={() => setActiveTab("kronos")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
               activeTab === "kronos"
                 ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
                 : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
             }`}
           >
             <BrainCircuit size={14} />
-            KRONOS MODEL
+            <Explainer id="tabKronos" quiet>KRONOS MODEL</Explainer>
           </button>
+
+          <button
+            id="tab-learning-btn"
+            onClick={() => setActiveTab("learning")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "learning"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <BrainCircuit size={14} />
+            <Explainer id="tabLearning" quiet>LEARNING & EVOLUTION</Explainer>
+          </button>
+
+          <button
+            id="tab-memory-btn"
+            onClick={() => setActiveTab("memory")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "memory"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Clock size={14} />
+            <Explainer id="tabMemory" quiet>VEC EVENT MEMORY</Explainer>
+          </button>
+
+          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
+
+          {/* Ops: real traces first, then logs and health. */}
+          <button
+            id="tab-observatory-btn"
+            onClick={() => setActiveTab("observatory")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "observatory"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Search size={14} />
+            <Explainer id="tabObservatory" quiet>OBSERVATORY</Explainer>
+          </button>
+
+          <button
+            id="tab-activity-btn"
+            onClick={() => setActiveTab("activity")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "activity"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <List size={14} />
+            <Explainer id="tabActivity" quiet>ACTIVITY LOG</Explainer>
+          </button>
+
+          <button
+            id="tab-diagnostics-btn"
+            onClick={() => setActiveTab("diagnostics")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "diagnostics"
+                ? "border-amber-500 text-amber-400 bg-amber-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <AlertTriangle size={14} />
+            <Explainer id="tabDiagnostics" quiet>DIAGNOSTICS</Explainer>
+          </button>
+
+          <button
+            id="tab-audit-btn"
+            onClick={() => setActiveTab("audit")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "audit"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Shield size={14} />
+            <Explainer id="tabAudit" quiet>OBSERVABILITY & TRACING</Explainer>
+          </button>
+
+          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
+
+          {/* System last: ship, keys, then the academy (not a trading surface). */}
+          <button
+            id="tab-validation-btn"
+            onClick={() => setActiveTab("validation")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "validation"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <ShieldCheck size={14} />
+            <Explainer id="tabValidation" quiet>VALIDATION</Explainer>
+          </button>
+
+          <button
+            id="tab-deployment-btn"
+            onClick={() => setActiveTab("deployment")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "deployment"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <Rocket size={14} />
+            <Explainer id="tabDeployment" quiet>DEPLOYMENT</Explainer>
+          </button>
+
           <button
             id="tab-settings-btn"
             onClick={() => setActiveTab("settings")}
-            className={`whitespace-nowrap px-4 py-3.5 text-[10px] font-mono font-medium border-b-2 transition-all flex items-center gap-2 ${
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
               activeTab === "settings"
                 ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
                 : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
             }`}
           >
             <Settings size={14} />
-            SETTINGS & KEYS
+            <Explainer id="tabSettings" quiet>SETTINGS & KEYS</Explainer>
+          </button>
+
+          <button
+            id="tab-documentation-btn"
+            onClick={() => setActiveTab("documentation")}
+            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
+              activeTab === "documentation"
+                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
+                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
+            }`}
+          >
+            <BookOpen size={14} />
+            <Explainer id="tabDocumentation" quiet>DOCUMENTATION</Explainer>
           </button>
         </nav>
 
-        <div className="hidden lg:flex items-center gap-3 text-xs text-slate-500">
-          <span>Active Risk Rules: </span>
-          <span className="text-slate-400 font-mono bg-[#111822] px-2.5 py-1 rounded border border-slate-800">
-            Max Drawdown 15% | Max Sector Exp 35% | Size $100
-          </span>
+        <div className="flex flex-wrap items-center gap-2 pb-1.5 text-[10px] text-slate-500">
+          <span>Active Risk Rules:</span>
+          <Explainer id="ribbonRiskRules" quiet>
+            <span className="text-slate-400 font-mono bg-[#111822] px-2 py-0.5 rounded border border-slate-800">
+              Max Drawdown 15% | Max Sector Exp 35% | Size $100
+            </span>
+          </Explainer>
         </div>
       </div>
 
@@ -4916,7 +4913,7 @@ export default function App() {
                       <p className="text-[10px] text-slate-500 font-mono mt-1">Enable at least one node to visualize risk allocation.</p>
                     </div>
                   ) : (
-                    <ResponsiveContainer width="100%" height="100%">
+                    <SafeResponsiveContainer>
                       <ComposedChart
                         data={(() => {
                           const daysLimit =
@@ -5134,7 +5131,7 @@ export default function App() {
                           />
                         )}
                       </ComposedChart>
-                    </ResponsiveContainer>
+                    </SafeResponsiveContainer>
                   )}
                 </div>
 
@@ -5415,7 +5412,7 @@ export default function App() {
 
                       {/* Dynamic Sparkline Charts */}
                       <div className="h-[120px] w-full mt-1 bg-[#0c1017]/75 rounded border border-slate-850 p-1 relative overflow-hidden">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <SafeResponsiveContainer>
                           <LineChart data={chartData} margin={{ top: 10, bottom: 2, left: 6, right: 6 }}>
                             <XAxis 
                               dataKey="day" 
@@ -5500,7 +5497,7 @@ export default function App() {
                               />
                             )}
                           </LineChart>
-                        </ResponsiveContainer>
+                        </SafeResponsiveContainer>
                       </div>
 
                       <p className="text-[9.5px] text-slate-500 font-mono leading-relaxed text-center italic">
@@ -5773,28 +5770,24 @@ export default function App() {
                     <Layers size={15} className="text-emerald-400" />
                     Live Broker Feed
                   </h3>
-                  <select
+                    <select
                     className="bg-[#111822] border border-slate-700 text-xs text-slate-300 rounded px-2 py-1 outline-none focus:border-indigo-500"
                     value={selectedBroker}
                     onChange={(e) => setSelectedBroker(e.target.value)}
                   >
-                    <option value="Interactive Brokers (Paper)">Interactive Brokers (Paper)</option>
-                    <option value="Interactive Brokers (Live)">Interactive Brokers (Live / Real Money)</option>
-                    <option value="Alpaca (Sim)">Alpaca (Simulated)</option>
-                    <option value="Alpaca (Live)">Alpaca (Live / Real Money)</option>
-                    <option value="Robinhood (Mock)">Robinhood (Mock)</option>
-                    <option value="Robinhood (Live)">Robinhood (Live / Real Money)</option>
-                    <option value="Questrade (Sim)">Questrade (Simulated)</option>
-                    <option value="Questrade (Live)">Questrade (Live / Real Money)</option>
-                    <option value="Charles Schwab (Live)">Charles Schwab (Live / Real Money)</option>
+                    <option value="Internal Paper">Internal Paper</option>
+                    <option value="Alpaca (Sim)">Alpaca paper/sim</option>
+                    <option value="Alpaca (Live)">Alpaca live</option>
+                    <option value="Interactive Brokers (Paper)">Interactive Brokers paper</option>
+                    <option value="Interactive Brokers (Live)">Interactive Brokers live</option>
+                    <option value="Questrade (Sim)">Questrade (read-only)</option>
+                    <option value="Coinbase">Coinbase (spot; paper placeOrder refused)</option>
                   </select>
                 </div>
                 <p className="text-[11px] text-slate-400 mb-3">
-                  Executions routed securely through:{" "}
-                  <span className="text-indigo-400 font-medium">
-                    {selectedBroker}
-                  </span>
-                  . Live trading uses real network API feeds and commits real capital using your active API keys.
+                  Display filter only — does not change <code className="text-[10px]">BrokerManager</code>.
+                  Order routing is whatever Settings selected (Alpaca, IBKR, Coinbase, Internal Paper).
+                  Questrade cannot place orders. Robinhood/Schwab have no adapter.
                 </p>
 
                 <div
@@ -5833,8 +5826,12 @@ export default function App() {
                               {t.side}
                             </span>
                           </div>
-                          <span className="text-[10px] text-emerald-400 font-semibold font-mono">
-                            FILLED
+                          <span className={`text-[10px] font-semibold font-mono ${
+                            t.status === "FILLED" ? "text-emerald-400"
+                              : t.status === "REJECTED" || t.status === "CANCELED" ? "text-rose-400"
+                              : "text-amber-400"
+                          }`}>
+                            {t.status || "UNKNOWN"}
                           </span>
                         </div>
                         <p className="text-[10px] text-slate-400 leading-tight">
@@ -5844,8 +5841,29 @@ export default function App() {
                           <span>
                             Qty: <b>{t.quantity}</b> @ <b>${t.price}</b>
                           </span>
-                          <span>
-                            {new Date(t.timestamp).toLocaleTimeString()}
+                          <span className="flex items-center gap-2">
+                            {t.id && t.status && !["FILLED", "REJECTED", "CANCELED"].includes(t.status) && (
+                              <button
+                                type="button"
+                                className="text-[9px] uppercase tracking-widest text-rose-300 border border-rose-500/40 px-1.5 py-0.5 rounded hover:bg-rose-500/10"
+                                onClick={async () => {
+                                  try {
+                                    const res = await fetch(`/api/v2/trading/cancel-order/${encodeURIComponent(t.id)}`, { method: "POST" });
+                                    const body = await res.json().catch(() => ({}));
+                                    if (!res.ok || body.ok === false) {
+                                      console.warn("[Argus] cancel-order refused", body.error || res.status);
+                                    }
+                                  } catch (err) {
+                                    console.warn("[Argus] cancel-order failed", err);
+                                  }
+                                }}
+                              >
+                                Cancel
+                              </button>
+                            )}
+                            <span>
+                              {new Date(t.timestamp).toLocaleTimeString()}
+                            </span>
                           </span>
                         </div>
                       </div>
@@ -6582,10 +6600,12 @@ export default function App() {
 
         
 {activeTab === "agents" && (() => {
-          const latestWinRates = mockWinRateData[mockWinRateData.length - 1];
-          const failingAgentsObject = Object.entries(latestWinRates)
-            .filter(([key, val]) => key !== 'date' && typeof val === 'number' && val < perfAlertThreshold);
-          const failingAgents = failingAgentsObject.map(([key]) => key.replace('Agent', ' Agent'));
+          const minPreds = tradingSafetyConfig.agentWinRateAlertMinPredictions;
+          const scored = (learningSummary?.agentWeights ?? []).filter((a: any) => a.winRate !== null && a.totalPredictions >= minPreds);
+          const failingAgents = scored.filter((a: any) => a.winRate < perfAlertThreshold);
+          const barData = (learningSummary?.agentWeights ?? [])
+            .filter((a: any) => a.winRate !== null)
+            .map((a: any) => ({ agent: a.agentName, winRate: a.winRate, predictions: a.totalPredictions }));
           
           return (
           <div className="flex flex-col gap-6 animate-fade-in" id="agents-performance-view">
@@ -6595,7 +6615,9 @@ export default function App() {
                 <div>
                   <h4 className="text-rose-400 font-bold text-sm uppercase tracking-wide mb-1">Performance Threshold Alert</h4>
                   <p className="text-rose-200/80 text-xs">
-                    Agent node(s) <span className="font-bold text-white">{failingAgents.join(", ")}</span> win-rate has dropped below the <span className="text-rose-300">{perfAlertThreshold}%</span> threshold over the last 24h period. Review casting weights or regime logic.
+                    {failingAgents.map((a: any) => a.agentName).join(", ")} scored win rate is below {perfAlertThreshold}%
+                    ({minPreds}+ real predictions in <code className="text-[10px]">agent_performance_stats</code>
+                    — lifetime, not a 24h series; that window is not stored). Reflection already feeds these win rates into ChiefTrader weights. SentimentAgent / OrderFlowAgent do not exist on the live path.
                   </p>
                 </div>
               </div>
@@ -6629,27 +6651,27 @@ export default function App() {
               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5" id="agent-performance-card">
                 <h3 className="text-sm font-bold text-white mb-3.5 flex items-center gap-2 uppercase tracking-wide">
                   <BarChart3 size={15} className="text-indigo-400" />
-                  Swarm Intelligence Nodes - Live Accuracy Tracking
+                  Agent scored win rate
                 </h3>
                 <p className="text-xs text-slate-400 mb-5">
-                  Metrics compiled inside services/performance_manager.py tracking win ratios and dynamically tuning casting weights.
+                  Lifetime win rate from ReflectionEngine / <code className="text-[10px]">agent_performance_stats</code>. There is no daily win-rate time series and no Python <code className="text-[10px]">performance_manager.py</code> in this repo. SentimentAgent is not a live voter.
                 </p>
                 <div className="flex-1 min-h-[300px]" id="agent-performance-grid">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={mockWinRateData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-                      <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}%`} domain={['dataMin - 10', 'auto']} />
+                  {barData.length === 0 ? (
+                    <AwaitingSignal reason="No scored agent_performance_stats rows yet (totalPredictions = 0). Win rate is not fabricated." />
+                  ) : (
+                  <SafeResponsiveContainer>
+                    <BarChart data={barData} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
+                      <XAxis dataKey="agent" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} interval={0} />
+                      <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} domain={[0, 100]} tickFormatter={(val) => `${val}%`} />
                       <Tooltip 
                         contentStyle={{ backgroundColor: '#111822', borderColor: '#1e293b', fontSize: '10px', color: '#f8fafc' }}
-                        itemStyle={{ fontSize: '10px' }}
-                        labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
+                        formatter={(val: any, _n: any, p: any) => [`${val}% (${p.payload.predictions} predictions)`, 'Win rate']}
                       />
-                      <Line type="monotone" dataKey="NewsAgent" stroke="#3b82f6" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="MacroAgent" stroke="#8b5cf6" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="TechnicalAgent" stroke="#10b981" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                      <Line type="monotone" dataKey="SentimentAgent" stroke="#f59e0b" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
-                    </LineChart>
-                  </ResponsiveContainer>
+                      <Bar dataKey="winRate" fill="#818cf8" radius={[4, 4, 0, 0]} />
+                    </BarChart>
+                  </SafeResponsiveContainer>
+                  )}
                 </div>
               </div>
             </div>
@@ -6661,9 +6683,22 @@ export default function App() {
                   Active Regime Casting Weights
                 </h3>
                 <p className="text-xs text-slate-400 mb-4">
-                  Casting voting weights optimized based on trading outcome accuracy metrics
+                  ChiefTrader weights from <code className="text-[10px]">agent_performance_stats.currentWeight</code> (ReflectionEngine). Not a separate regime-casting optimizer.
                 </p>
-                <div className="flex-1 bg-[#111822] rounded-lg p-4 flex flex-col justify-center border border-slate-800" id="regime-weights-chart">
+                <div className="flex-1 bg-[#111822] rounded-lg p-4 flex flex-col justify-center border border-slate-800 gap-3" id="regime-weights-chart">
+                  {!(learningSummary?.agentWeights?.length) ? (
+                    <AwaitingSignal compact reason="Weights load with GET /api/v2/agents/learning-summary." />
+                  ) : learningSummary.agentWeights.map((a: any) => (
+                    <div key={a.agentName}>
+                      <div className="flex justify-between text-[10px] font-mono text-slate-400 mb-1">
+                        <span>{a.agentName}</span>
+                        <span className="text-indigo-300">{a.currentWeight == null ? '—' : a.currentWeight.toFixed(3)}</span>
+                      </div>
+                      <div className="h-1.5 bg-slate-800 rounded overflow-hidden">
+                        <div className="h-full bg-indigo-500" style={{ width: `${Math.min(100, Math.max(0, (a.currentWeight ?? 0) * 100))}%` }} />
+                      </div>
+                    </div>
+                  ))}
                 </div>
               </div>
               
@@ -6672,7 +6707,7 @@ export default function App() {
                    <Settings size={15} className="text-indigo-400" />
                    Performance Alert Config
                  </h3>
-                 <p className="text-xs text-slate-400 mb-4">Configure diagnostic alerts when node confidence slips below threshold values.</p>
+                 <p className="text-xs text-slate-400 mb-4">UI-only banner when a real scored win rate is below this percent. Default is <code className="text-[10px]">tradingSafety.agentWinRateAlertPct</code>. Does not change RiskEngine.</p>
                  
                  <div className="space-y-4">
                    <div className="flex items-center justify-between">
@@ -6712,18 +6747,8 @@ export default function App() {
                   <Timer size={15} className="text-indigo-400" />
                   System Latency
                 </h3>
-                <p className="text-[10px] text-slate-400 mb-4 leading-relaxed">Real-time table of average response times per agent to help detect bottlenecked nodes.</p>
-                <div className="space-y-3">
-                  {mockSystemLatencyData.map((node, i) => (
-                    <div key={i} className="flex justify-between items-center text-xs border-b border-slate-800/50 pb-2 last:border-0 last:pb-0">
-                      <span className="text-slate-300 font-mono tracking-tight truncate max-w-[120px]" title={node.agent}>{node.agent}</span>
-                      <div className="flex items-center gap-3">
-                        <span className={ `font-mono font-bold ${node.status === "Critical" ? "text-rose-400" : node.status === "Warning" ? "text-fuchsia-400" : "text-white"} ` }>{node.latency}ms</span>
-                        <div className={`w-1.5 h-1.5 rounded-full ${node.status === "Optimal" ? "bg-emerald-500" : node.status === "Normal" ? "bg-indigo-400" : node.status === "Warning" ? "bg-fuchsia-500 animate-pulse" : "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)] animate-pulse"}`}></div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                <p className="text-[10px] text-slate-400 mb-4 leading-relaxed">Per-agent submit latency is not stored. This panel does not invent millisecond figures.</p>
+                <AwaitingSignal reason="No per-agent latency table exists. SYSTEM_METRICS is process-wide when the backend emits it; it is not NewsAgent vs SentimentAgent RTT." />
               </div>
 
               {/* Agent Node Stability Snapshot */}
@@ -6732,50 +6757,44 @@ export default function App() {
                   <Activity size={15} className="text-indigo-400" />
                   Agent Node Stability Snapshot
                 </h3>
-                <p className="text-[10px] text-slate-400 mb-4 leading-relaxed">Health indicator derived from latency overhead and strategy win-rate.</p>
+                <p className="text-[10px] text-slate-400 mb-4 leading-relaxed">Status from scored win rate only (same stats as the alert). Latency is not mixed in — that series was fabricated.</p>
+                {!(learningSummary?.agentWeights?.length) ? (
+                  <AwaitingSignal compact reason="Loads with GET /api/v2/agents/learning-summary." />
+                ) : (
                 <div className="space-y-3">
-                  {[
-                    { agent: "NewsAgent", key: "NewsAgent" },
-                    { agent: "MacroAgent", key: "MacroAgent" },
-                    { agent: "TechnicalAgent", key: "TechnicalAgent" },
-                    { agent: "SentimentAgent", key: "SentimentAgent" },
-                  ].map((node, i) => {
-                    const winRate = latestWinRates[node.key] as number;
-                    const latencyNode = mockSystemLatencyData.find(n => n.agent.includes(node.key));
-                    const latency = latencyNode ? latencyNode.latency : 50;
-                    
-                    let status = "Healthy";
-                    let dotColor = "bg-emerald-500";
-                    let textColor = "text-emerald-400";
-                    
-                    if (winRate < 45 || latency > 50) {
-                      status = "Degraded";
-                      dotColor = "bg-amber-500 animate-pulse";
-                      textColor = "text-amber-400";
-                    }
-                    if (winRate < 35 || latency > 100) {
-                      status = "Critical";
-                      dotColor = "bg-rose-500 animate-pulse shadow-[0_0_8px_rgba(244,63,94,0.8)]";
+                  {learningSummary.agentWeights.map((node: any) => {
+                    const enough = node.totalPredictions >= minPreds && node.winRate !== null;
+                    let status = "No sample";
+                    let dotColor = "bg-slate-600";
+                    let textColor = "text-slate-500";
+                    if (enough && node.winRate >= perfAlertThreshold) {
+                      status = "Healthy";
+                      dotColor = "bg-emerald-500";
+                      textColor = "text-emerald-400";
+                    } else if (enough) {
+                      status = "Below threshold";
+                      dotColor = "bg-rose-500 animate-pulse";
                       textColor = "text-rose-400";
                     }
 
                     return (
-                      <div key={i} className="flex flex-col gap-2 border-b border-slate-800/50 pb-3 last:border-0 last:pb-0">
+                      <div key={node.agentName} className="flex flex-col gap-2 border-b border-slate-800/50 pb-3 last:border-0 last:pb-0">
                         <div className="flex justify-between items-center text-xs">
-                          <span className="text-slate-300 font-mono tracking-tight">{node.agent}</span>
+                          <span className="text-slate-300 font-mono tracking-tight">{node.agentName}</span>
                           <div className="flex items-center gap-2">
                             <span className={`font-mono font-bold ${textColor}`}>{status}</span>
                             <div className={`w-2 h-2 rounded-full ${dotColor}`}></div>
                           </div>
                         </div>
                         <div className="flex justify-between items-center text-[10px] font-mono text-slate-500 bg-[#111822] p-1.5 rounded border border-slate-800">
-                          <span>Win Rate: <span className="text-slate-300">{winRate.toFixed(1)}%</span></span>
-                          <span>Latency: <span className="text-slate-300">{latency}ms</span></span>
+                          <span>Win Rate: <span className="text-slate-300">{node.winRate == null ? '—' : `${node.winRate}%`}</span></span>
+                          <span>Predictions: <span className="text-slate-300">{node.totalPredictions}</span></span>
                         </div>
                       </div>
                     );
                   })}
                 </div>
+                )}
               </div>
             </div>
             
@@ -7821,7 +7840,7 @@ export default function App() {
               {/* Chart container */}
               <div className="h-[250px] bg-[#111822] rounded-lg border border-slate-800 flex items-center justify-center p-4">
                  {runBacktest ? (
-                   <ResponsiveContainer width="100%" height="100%">
+                   <SafeResponsiveContainer>
                     <LineChart data={mockBacktestData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                       <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
                       <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}%`} />
@@ -7834,7 +7853,7 @@ export default function App() {
                       {showStrategy2 && <Line type="monotone" dataKey="roi2" stroke="#a855f7" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name={selectedStrategy2} />}
                       <Line type="monotone" dataKey="benchmark" stroke="#475569" strokeWidth={2} dot={false} strokeDasharray="3 3" name="S&P 500 Benchmark" />
                     </LineChart>
-                  </ResponsiveContainer>
+                  </SafeResponsiveContainer>
                  ) : (
                     <div className="text-center text-slate-500 flex flex-col items-center gap-2">
                        <BarChart3 size={24} className="opacity-20 mb-1"/>
@@ -7849,15 +7868,15 @@ export default function App() {
                     <span className="text-lg font-bold text-emerald-400">+14.2%</span>
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1">Max Drawdown</span>
+                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="maxDrawdown">Max Drawdown</Explainer></span>
                     <span className="text-lg font-bold text-rose-400">-4.1%</span>
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1">Sharpe Ratio</span>
+                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="sharpeRatio">Sharpe Ratio</Explainer></span>
                     <span className="text-lg font-bold text-white">1.85</span>
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1">Win Rate</span>
+                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="winRate">Win Rate</Explainer></span>
                     <span className="text-lg font-bold text-emerald-400">62.5%</span>
                  </div>
               </div>
@@ -7991,7 +8010,7 @@ export default function App() {
               </div>
               
               <div className="h-[340px] w-full">
-                <ResponsiveContainer width="100%" height="100%">
+                <SafeResponsiveContainer>
                   <LineChart data={activeDailyPnL} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
                     <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
                     <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `$${val}`} />
@@ -8021,7 +8040,7 @@ export default function App() {
                       content={<CustomPnLLegend totalPnL={totalPnL} profitableDays={profitableDays} lossMakingDays={lossMakingDays} pnlDateRange={pnlDateRange} />} 
                     />
                   </LineChart>
-                </ResponsiveContainer>
+                </SafeResponsiveContainer>
               </div>
             </div>
 
@@ -8975,7 +8994,7 @@ export default function App() {
                </div>
 
                <div className="h-[300px] w-full mt-4">
-                 <ResponsiveContainer width="100%" height="100%">
+                 <SafeResponsiveContainer>
                    <BarChart
                      data={mockBenchmarkData}
                      margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
@@ -8992,7 +9011,7 @@ export default function App() {
                      <Bar yAxisId="left" dataKey="latency" name="Latency (ms)" fill="#818cf8" radius={[4, 4, 0, 0]} barSize={20} />
                      <Bar yAxisId="right" dataKey="quality" name="Quality Score (%)" fill="#34d399" radius={[4, 4, 0, 0]} barSize={20} />
                    </BarChart>
-                 </ResponsiveContainer>
+                 </SafeResponsiveContainer>
                </div>
              </div>
 
@@ -9346,6 +9365,7 @@ export default function App() {
                   API Keys & Integrations
                 </h2>
                 <div className="space-y-6">
+                    <ExplainerToggle variant="settings" />
                     <div className="bg-[#0F141C] border border-slate-800 rounded-lg p-5 flex items-center justify-between gap-4">
                       <div>
                         <h3 className="text-xs font-mono font-bold text-slate-100 uppercase tracking-widest mb-1">System</h3>
@@ -9926,7 +9946,7 @@ export default function App() {
                      </div>
 
                      <div className="h-[300px] w-full">
-                        <ResponsiveContainer width="100%" height="100%">
+                        <SafeResponsiveContainer>
                            <BarChart
                              data={tokenConsumptionData || []}
                              layout="vertical"
@@ -9943,7 +9963,7 @@ export default function App() {
                              <Bar dataKey="localTokens" name="Local Models (Free)" fill="#818cf8" radius={[0, 4, 4, 0]} barSize={12} stackId="a" />
                              <Bar dataKey="paidTokens" name="Paid Providers" fill="#34d399" radius={[0, 4, 4, 0]} barSize={12} stackId="a" />
                            </BarChart>
-                        </ResponsiveContainer>
+                        </SafeResponsiveContainer>
                      </div>
                    </>
                  )}
@@ -10290,7 +10310,7 @@ export default function App() {
                        </h3>
                        <div className="flex-1 w-full relative group cursor-crosshair">
                           {/* We use recharts for actual chart, creating some dummy data for the specific agent */}
-                          <ResponsiveContainer width="100%" height="100%">
+                          <SafeResponsiveContainer>
                             <AreaChart data={[
                                { date: 'Day 1', val: 0 }, { date: 'Day 5', val: 120 }, { date: 'Day 10', val: 400 },
                                { date: 'Day 15', val: 380 }, { date: 'Day 20', val: 600 }, { date: 'Day 25', val: 950 },
@@ -10308,7 +10328,7 @@ export default function App() {
                               />
                               <Area type="monotone" dataKey="val" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#colorAgentVal)" />
                             </AreaChart>
-                          </ResponsiveContainer>
+                          </SafeResponsiveContainer>
                        </div>
                     </div>
 

@@ -13,7 +13,8 @@
  */
 
 import React, { useEffect, useState } from 'react';
-import { AreaChart, Area, ComposedChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Legend, CartesianGrid, ReferenceLine } from 'recharts';
+import { AreaChart, Area, ComposedChart, Line, XAxis, YAxis, Tooltip, Legend, CartesianGrid, ReferenceLine } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 import { Activity, TrendingUp, AlertTriangle } from 'lucide-react';
 
 interface SentimentPoint {
@@ -115,7 +116,7 @@ export default function MarketSentimentTrend() {
           </div>
 
           <div className="flex-1 w-full min-h-[200px] sm:min-h-[250px] z-10">
-            <ResponsiveContainer width="100%" height="100%">
+            <SafeResponsiveContainer>
               <ComposedChart data={data} margin={{ top: 10, right: 0, left: -20, bottom: 0 }}>
                 <defs>
                   <linearGradient id="sentimentArea" x1="0" y1="0" x2="0" y2="1">
@@ -140,7 +141,7 @@ export default function MarketSentimentTrend() {
 
                 <ReferenceLine y={0} yAxisId="left" stroke="#64748B" strokeDasharray="3 3" label={{ position: 'insideTopLeft', value: 'NEUTRAL (0)', fill: '#64748B', fontSize: 9 }} opacity={0.5} />
               </ComposedChart>
-            </ResponsiveContainer>
+            </SafeResponsiveContainer>
           </div>
           <div className="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center z-10">
             <p className="text-[10px] text-slate-500 font-mono flex items-center gap-1.5">

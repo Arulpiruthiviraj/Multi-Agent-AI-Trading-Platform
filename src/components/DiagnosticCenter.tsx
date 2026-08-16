@@ -22,7 +22,7 @@ export default function DiagnosticCenter() {
   }, []);
 
   const retry = (component: string) => {
-    fetch(`/api/v2/diagnostics/retry/${component}`, { method: 'POST' })
+    fetch(`/api/v2/diagnostics/retry/${encodeURIComponent(component)}`, { method: 'POST' })
       .then(() => load())
       .catch(() => load());
   };

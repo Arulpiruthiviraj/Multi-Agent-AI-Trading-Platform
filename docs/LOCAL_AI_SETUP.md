@@ -103,10 +103,10 @@ forecast from) and serves it on `http://localhost:8008`:
 - `POST /forecast` - `{ "prices": number[], "horizon": number }` → sampled
   quantile forecast (`low`/`median`/`high`).
 
-Leave this running alongside `npm run dev`. If it isn't running,
-`KronosForecastAgent` stays honestly reported as unavailable (matching the
-existing `KRONOS_UNAVAILABLE` convention) rather than crashing or fabricating
-a forecast - same non-blocking pattern as the Ollama check above.
+Leave this running (or just use `npm run dev`, which now starts the same process unless
+`ARGUS_SKIP_CHRONOS=true`). If it isn't running, `KronosForecastAgent` stays honestly
+reported as unavailable (matching `KRONOS_UNAVAILABLE`) rather than crashing or fabricating
+a forecast.
 
 `KronosForecastAgent` needs a real rolling window (30+ ticks) for a given
 symbol before it calls this service at all, and caps itself to one call per

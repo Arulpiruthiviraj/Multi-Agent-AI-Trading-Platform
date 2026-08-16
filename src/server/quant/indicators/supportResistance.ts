@@ -19,6 +19,7 @@
 import { TechnicalIndicators } from '../../engines/TechnicalIndicators';
 import { Bar } from '../../engines/backtest/HistoricalDataGateway';
 import { detectSwingPoints, SwingPoint } from './trend';
+import { quantExperimentalStrategies } from '../../config/quantExperimentalStrategies';
 
 function utcDayKey(timestampMs: number): string {
   const d = new Date(timestampMs);
@@ -170,16 +171,27 @@ export interface SupportResistanceFeatures {
   fibonacci: ReturnType<typeof TechnicalIndicators.calculateFibonacciRetracement> | null;
   recentSwings: SwingPoint[];
   nearest: { nearestResistance: LevelDistance | null; nearestSupport: LevelDistance | null };
+  /** Classic opening range. `available:false` on daily bars — never fabricated from a daily candle. */
+  openingRange: AvailabilityTagged<{ high: number; low: number }>;
+  /**
+   * High/low of the prior `donchianPriorLookback` bars excluding the current bar (Donchian-style
+   * breakout reference). Null when there are not enough prior bars. Distinct from `dailyHighLow`,
+   * which includes the current bar so close cannot exceed the window high.
+   */
+  priorChannel20: OHLC | null;
 }
 
 export function computeSupportResistanceFeatures(bars: Bar[]): SupportResistanceFeatures {
   const currentPrice = bars.length ? bars[bars.length - 1].close : 0;
   const prevDay = previousDayLevels(bars);
-  const daily = dailyHighLow(bars, 20);
+  const lookback = quantExperimentalStrategies.thresholds.donchianPriorLookback;
+  const daily = dailyHighLow(bars, lookback);
   const weekly = weeklyHighLow(bars, 4);
   const pivots = prevDay ? calculatePivotPoints(prevDay.high, prevDay.low, prevDay.close) : null;
   const fibonacci = daily ? TechnicalIndicators.calculateFibonacciRetracement(daily.high, daily.low) : null;
   const swings = swingHighsLows(bars).slice(-10);
+  const orWindow = quantExperimentalStrategies.thresholds.openingRangeWindowMinutes;
+  const priorBars = bars.length > 1 ? bars.slice(0, -1) : [];
 
   const candidateLevels = [
     ...(prevDay ? [prevDay.high, prevDay.low] : []),
@@ -195,5 +207,7 @@ export function computeSupportResistanceFeatures(bars: Bar[]): SupportResistance
     fibonacci,
     recentSwings: swings,
     nearest: nearestSupportResistance(currentPrice, candidateLevels),
+    openingRange: openingRange(bars, orWindow),
+    priorChannel20: rollingHighLow(priorBars, lookback),
   };
 }

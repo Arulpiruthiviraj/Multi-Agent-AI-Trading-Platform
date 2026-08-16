@@ -20,6 +20,8 @@
   "restrictedLiveMaxOrderNotionalDollars": 5000,
   "restrictedLiveMaxOpenPositions": 3,
   "restrictedLiveMaxDailyLossDollars": 1000,
+  "maxDailyBuyNotionalDollars": 0,
+  "restrictedLiveMaxDailyBuyNotionalDollars": 15000,
   "alpacaCircuitBreakerFailureThreshold": 3,
   "alpacaCircuitBreakerCooldownMs": 30000,
   "aiFailureWindowMs": 600000,
@@ -39,9 +41,13 @@
   "positionRiskElevatedFraction": 0.6,
   "debateTriggerConfidence": 0.6,
   "debateResultConfidence": 0.8,
+  "debateLearnedRulesCount": 5,
+  "debateLearnedRuleMaxChars": 280,
   "quantExitIdeaConfidence": 0.85,
   "quantStopExitConfidence": 0.95,
   "thesisInvalidationExitConfidence": 0.9,
   "regimeMismatchConfidenceMultiplier": 0.5,
-  "minStrategyConfidenceToTrade": 0.6
+  "minStrategyConfidenceToTrade": 0.6,
+  "agentWinRateAlertPct": 48,
+  "agentWinRateAlertMinPredictions": 20
 }

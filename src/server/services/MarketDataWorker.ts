@@ -1,40 +1,33 @@
 /**
  * ==========================================================
- * Module:
- * MarketDataWorker.ts
+ * Module: MarketDataWorker.ts
  *
- * Purpose:
- * Core implementation and logic for the MarketDataWorker.ts module within the Argus Trading Terminal.
+ * Alpaca IEX top-of-book WebSocket. Does not fabricate ticks.
  *
- * Responsibilities:
- * - State management and logic execution for MarketDataWorker
- * - Interface with backend APIs and EventBus
- * - Render UI components (if React)
- *
- * Inputs:
- * - Module dependencies and injected props
- *
- * Outputs:
- * - Formatted data or React Elements
- *
- * Emits:
- * - Relevant system events
- *
- * Dependencies:
- * - Standard Argus architecture layers
- *
- * Called By:
- * - Argus Routing / Parent Components
- *
- * Never:
- * - Mutate global state directly without EventBus
- * - Call AI providers directly (Must use AIRouter)
- *
+ * Real bugs this file closes:
+ * - start() used to no-op whenever `this.ws` was non-null, including CLOSED sockets,
+ *   so a failed handshake never recovered except via a 5s close timer.
+ * - POST /diagnostics/retry/market_data was status-only.
+ * - Nobody called subscribe(), so even an OPEN socket requested zero quotes.
  * ==========================================================
  */
 
-import { eventBus } from '../core/EventBus';
 import WebSocket from 'ws';
+import { eventBus } from '../core/EventBus';
+import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+
+const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
+const RECONNECT_MS = 5000;
+
+function defaultSubscribeSymbols(): string[] {
+  try {
+    const cfg = loadRepoConfigJson<{ markets?: { US?: { benchmarks?: string[] } } }>('markets.json');
+    const benches = cfg.markets?.US?.benchmarks;
+    return Array.isArray(benches) ? benches.filter(s => typeof s === 'string' && s.length > 0) : [];
+  } catch {
+    return [];
+  }
+}
 
 export class MarketDataWorker {
   private activeStreams: Set<string> = new Set();
@@ -42,131 +35,191 @@ export class MarketDataWorker {
   private ws: WebSocket | null = null;
   private latestPrices: Map<string, number> = new Map();
   private latestPriceTimestamps: Map<string, number> = new Map();
-  // Hardening pass, Phase 4: the last real (exchange timestamp, price) actually processed per
-  // symbol - a WS reconnect/redelivery can hand back the identical tick Alpaca already sent, and
-  // re-processing it re-triggers every downstream agent evaluation for a tick that isn't actually
-  // new. Keyed on the tick's own real exchange timestamp (msg.t), not Date.now() - two distinct
-  // real ticks essentially never share both the same exchange timestamp AND price, so this never
-  // discards a legitimate new tick, only an exact redelivery of one already processed.
   private lastTick: Map<string, { timestampMs: number; price: number }> = new Map();
-  // Set the moment the socket actually drops; cleared once a reconnect successfully
-  // re-authenticates. Used to make a real data gap observable rather than fabricating ticks for
-  // it - there is no durable tick-level store to backfill from (unlike Phase 9's event_traces).
   private disconnectedAt: number | null = null;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private lastError: string | null = null;
+  private authenticated = false;
 
   getLatestPrice(symbol: string): number | null {
     return this.latestPrices.get(symbol) || null;
   }
 
-  // Real currently-subscribed symbol list, not a fabricated watchlist - used by
-  // MarketDataCrossChecker to know which symbols actually have a live Alpaca feed to compare
-  // Questrade's quote against.
   getActiveSymbols(): string[] {
     return Array.from(this.activeStreams);
   }
 
-  // Milliseconds since the last real MARKET_DATA tick for this symbol, or null if none has
-  // ever arrived (e.g. no Alpaca keys configured) - callers must not treat null as "fresh".
   getLatestPriceAgeMs(symbol: string): number | null {
     const t = this.latestPriceTimestamps.get(symbol);
     return typeof t === 'number' ? Date.now() - t : null;
   }
 
-  // Real WebSocket readyState check, not a fabricated "connected" flag - used by Mission
-  // Control's MARKET DATA status indicator.
   isConnected(): boolean {
     return !!this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 
-  // True only for an exact redelivery of a tick already processed (same symbol, same real
-  // exchange timestamp, same price) - not merely "close in time," which could discard a
-  // legitimate fast-moving real tick.
+  getFeedStatus(): {
+    connected: boolean;
+    readyState: number | null;
+    authenticated: boolean;
+    lastError: string | null;
+    symbols: string[];
+  } {
+    return {
+      connected: this.isConnected(),
+      readyState: this.ws ? this.ws.readyState : null,
+      authenticated: this.authenticated,
+      lastError: this.lastError,
+      symbols: this.getActiveSymbols(),
+    };
+  }
+
   private isDuplicateTick(symbol: string, timestampMs: number, price: number): boolean {
     const last = this.lastTick.get(symbol);
     return !!last && last.timestampMs === timestampMs && last.price === price;
   }
 
   start() {
-    if (this.intervalId || this.ws) return;
-    
-    if (process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
-      console.log("[MarketDataWorker] Connecting to live Alpaca WebSocket...");
-      this.connectAlpaca();
-    } else {
+    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       console.log("[MarketDataWorker] No Alpaca keys provided. MarketDataWorker will idle in disconnected state without fabricating data.");
       eventBus.emit("MARKET_DATA_DISCONNECTED", { reason: "Missing API keys" });
+      return;
     }
+    const state = this.ws?.readyState;
+    if (state === WebSocket.OPEN || state === WebSocket.CONNECTING) return;
+    this.connectAlpaca();
+  }
+
+  /** Diagnostics retry: tear down a dead socket and handshake again. Never bypasses RiskEngine. */
+  reconnect(): ReturnType<MarketDataWorker['getFeedStatus']> {
+    this.clearReconnectTimer();
+    this.tearDownSocket();
+    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
+      this.lastError = 'ALPACA_API_KEY or ALPACA_SECRET_KEY unset';
+      eventBus.emit("MARKET_DATA_DISCONNECTED", { reason: "Missing API keys" });
+      return this.getFeedStatus();
+    }
+    this.connectAlpaca();
+    return this.getFeedStatus();
   }
 
   stop() {
+    this.clearReconnectTimer();
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
+    this.tearDownSocket();
     console.log("[MarketDataWorker] Disconnected.");
   }
 
   subscribe(symbol: string) {
-    this.activeStreams.add(symbol);
+    const sym = String(symbol || '').trim().toUpperCase();
+    if (!sym) return;
+    this.activeStreams.add(sym);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: "subscribe", quotes: [symbol] }));
+      this.ws.send(JSON.stringify({ action: "subscribe", quotes: [sym], trades: [sym] }));
     }
-    console.log(`[MarketDataWorker] Subscribed to ${symbol}`);
+    console.log(`[MarketDataWorker] Subscribed to ${sym}`);
   }
 
   unsubscribe(symbol: string) {
     this.activeStreams.delete(symbol);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: "unsubscribe", quotes: [symbol] }));
+      this.ws.send(JSON.stringify({ action: "unsubscribe", quotes: [symbol], trades: [symbol] }));
     }
   }
 
+  private clearReconnectTimer() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private tearDownSocket() {
+    const socket = this.ws;
+    this.ws = null;
+    this.authenticated = false;
+    if (!socket) return;
+    socket.removeAllListeners();
+    try {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close();
+      }
+    } catch {
+      /* already dead */
+    }
+  }
+
+  private ensureDefaultSubscriptions() {
+    if (this.activeStreams.size > 0) return;
+    for (const s of defaultSubscribeSymbols()) this.activeStreams.add(s);
+  }
+
+  private sendSubscribe(socket: WebSocket) {
+    this.ensureDefaultSubscriptions();
+    const symbols = Array.from(this.activeStreams);
+    if (symbols.length === 0) {
+      console.warn('[MarketDataWorker] Authenticated but no symbols to subscribe (config/markets.json US.benchmarks empty).');
+      return;
+    }
+    socket.send(JSON.stringify({ action: 'subscribe', quotes: symbols, trades: symbols }));
+  }
+
   private connectAlpaca() {
-    this.ws = new WebSocket("wss://stream.data.alpaca.markets/v2/iex");
-    
-    this.ws.on("open", () => {
-      this.ws?.send(JSON.stringify({
+    this.clearReconnectTimer();
+    const url = process.env.ALPACA_DATA_STREAM_URL || DEFAULT_STREAM_URL;
+    console.log(`[MarketDataWorker] Connecting to Alpaca market-data WebSocket (${url})...`);
+    const socket = new WebSocket(url);
+    this.ws = socket;
+    this.authenticated = false;
+
+    socket.on("open", () => {
+      if (this.ws !== socket) return;
+      this.lastError = null;
+      socket.send(JSON.stringify({
         action: "auth",
         key: process.env.ALPACA_API_KEY,
         secret: process.env.ALPACA_SECRET_KEY
       }));
     });
 
-    this.ws.on("message", (data) => {
-      const messages = JSON.parse(data.toString());
+    socket.on("message", (data) => {
+      if (this.ws !== socket) return;
+      let messages: any[];
+      try {
+        const parsed = JSON.parse(data.toString());
+        messages = Array.isArray(parsed) ? parsed : [parsed];
+      } catch (e: any) {
+        this.lastError = `Invalid JSON from feed: ${e.message}`;
+        return;
+      }
       for (const msg of messages) {
         if (msg.T === "success" && msg.msg === "authenticated") {
-          const symbols = Array.from(this.activeStreams);
-          if (symbols.length > 0) {
-            this.ws?.send(JSON.stringify({ action: "subscribe", quotes: symbols }));
-          }
-          // Hardening pass, Phase 4: the feed is genuinely live again as of right now (not just
-          // "socket open," which fires before auth completes) - this is the real end of any gap.
-          // There's no durable tick-level store to backfill missed ticks from (unlike Phase 9's
-          // event_traces for WS events), so this makes the gap honestly observable instead of
-          // silently pretending nothing was missed.
+          this.authenticated = true;
+          this.lastError = null;
+          this.sendSubscribe(socket);
           if (this.disconnectedAt !== null) {
             const gapMs = Date.now() - this.disconnectedAt;
             console.warn(`[MarketDataWorker] Reconnected after a ${Math.round(gapMs / 1000)}s data gap - any ticks during that window were not received (no tick-level backfill source exists).`);
             eventBus.emit('MARKET_DATA_GAP_DETECTED', { gapMs, disconnectedAt: this.disconnectedAt, reconnectedAt: Date.now() });
             this.disconnectedAt = null;
           }
+        } else if (msg.T === "error") {
+          this.lastError = String(msg.msg || msg.code || 'Alpaca feed error');
+          console.error(`[MarketDataWorker] Feed error: ${this.lastError}`);
+          eventBus.emit('MARKET_DATA_DISCONNECTED', { reason: this.lastError });
         } else if (msg.T === "q") {
-          // Quote message
           const timestampMs = new Date(msg.t).getTime();
-          if (this.isDuplicateTick(msg.S, timestampMs, msg.bp)) continue; // exact redelivery, not a new tick
+          if (this.isDuplicateTick(msg.S, timestampMs, msg.bp)) continue;
           this.lastTick.set(msg.S, { timestampMs, price: msg.bp });
           this.latestPrices.set(msg.S, msg.bp);
           this.latestPriceTimestamps.set(msg.S, Date.now());
           eventBus.emitMarketData(msg.S, msg.bp, msg.bs, new Date(msg.t).toISOString());
         } else if (msg.T === "t") {
-          // Trade message
           const timestampMs = new Date(msg.t).getTime();
-          if (this.isDuplicateTick(msg.S, timestampMs, msg.p)) continue; // exact redelivery, not a new tick
+          if (this.isDuplicateTick(msg.S, timestampMs, msg.p)) continue;
           this.lastTick.set(msg.S, { timestampMs, price: msg.p });
           this.latestPrices.set(msg.S, msg.p);
           this.latestPriceTimestamps.set(msg.S, Date.now());
@@ -175,18 +228,23 @@ export class MarketDataWorker {
       }
     });
 
-    this.ws.on("error", (err) => {
+    socket.on("error", (err) => {
+      if (this.ws !== socket) return;
+      this.lastError = err?.message || String(err);
       console.error("[MarketDataWorker] WebSocket error:", err);
     });
 
-    this.ws.on("close", () => {
-      // Real start of the gap - captured here, not when the reconnect later succeeds, so the
-      // reported gap duration reflects how long the feed was actually down.
+    socket.on("close", () => {
+      if (this.ws !== socket) return;
+      this.authenticated = false;
+      this.ws = null;
       if (this.disconnectedAt === null) this.disconnectedAt = Date.now();
       console.log("[MarketDataWorker] WebSocket closed. Reconnecting...");
-      setTimeout(() => this.connectAlpaca(), 5000);
+      eventBus.emit("MARKET_DATA_DISCONNECTED", { reason: this.lastError || "socket closed" });
+      this.clearReconnectTimer();
+      this.reconnectTimer = setTimeout(() => this.connectAlpaca(), RECONNECT_MS);
     });
   }
 
-  }
+}
 export const marketDataWorker = new MarketDataWorker();

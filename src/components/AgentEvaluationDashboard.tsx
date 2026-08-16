@@ -43,8 +43,8 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
-  ResponsiveContainer
 } from 'recharts';
+import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 
 interface AgentPerformance {
   agentName: string;
@@ -112,7 +112,7 @@ export default function AgentEvaluationDashboard() {
           <div className="lg:col-span-2 bg-[#0A0F16] border border-slate-800 rounded p-4">
             <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest mb-4">Relative Consensus Weight Distribution</h3>
             <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
+              <SafeResponsiveContainer>
                 <BarChart data={stats} layout="vertical" margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" horizontal={false} />
                   <XAxis type="number" hide />
@@ -124,7 +124,7 @@ export default function AgentEvaluationDashboard() {
                   />
                   <Bar dataKey="currentWeight" fill="#10b981" radius={[0, 4, 4, 0]} barSize={20} />
                 </BarChart>
-              </ResponsiveContainer>
+              </SafeResponsiveContainer>
             </div>
           </div>
 

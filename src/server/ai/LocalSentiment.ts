@@ -14,7 +14,9 @@
  * ==========================================================
  */
 
-const SERVICE_URL = process.env.LOCAL_AI_SERVICE_URL || 'http://localhost:8008';
+import { preferIpv4Loopback } from './preferIpv4Loopback';
+
+const SERVICE_URL = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008');
 
 export interface FinBertSentiment {
   model: string;

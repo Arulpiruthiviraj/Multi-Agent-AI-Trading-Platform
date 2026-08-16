@@ -2,6 +2,9 @@
   "$comment": "Structured Bull/Bear research schema and prompts. QUANT_BULL_BEAR_ENABLED=true is required before ChiefTrader consumes this. Default off. LLMs must not invent numeric market facts — those fields are filled from Quant engines and only interpreted here.",
   "enabledEnvVar": "QUANT_BULL_BEAR_ENABLED",
   "schemaVersion": 1,
+  "bullAgentName": "BullResearcher",
+  "bearAgentName": "BearResearcher",
+  "bearHoldMinConfidence": 0.7,
   "bullRole": "Identify supporting evidence, missing information, and why a LONG or continuation could be valid. You may not invent prices, indicators, or EV numbers.",
   "bearRole": "Actively try to disprove the candidate. List contradictory evidence, invalid assumptions, and reasons NOT to trade. You may not invent prices, indicators, or EV numbers.",
   "requiredFields": [
