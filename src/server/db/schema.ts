@@ -883,3 +883,29 @@ export const quantBacktestDecisionLog = sqliteTable('quant_backtest_decision_log
 }, (table) => ({
   runIdx: index('idx_quant_backtest_decision_log_run').on(table.backtestRunId),
 }));
+
+/**
+ * Point-in-time AI/news/ChiefTrader ledger for historical replay.
+ * publishedAtMs is when the fact existed in the world. asOfMs is the earliest simulated
+ * clock at which a replay may read it. Ingestion MUST reject publishedAtMs > asOfMs
+ * (look-ahead). Queries MUST filter publishedAtMs <= simulated now.
+ */
+export const pitDecisionLedger = sqliteTable('pit_decision_ledger', {
+  id: text('id').primaryKey(),
+  asOfMs: integer('as_of_ms').notNull(),
+  publishedAtMs: integer('published_at_ms').notNull(),
+  symbol: text('symbol').notNull(),
+  kind: text('kind').notNull(), // NEWS | NEWS_AGENT | CHIEF_TRADER | AGENT_REASONING
+  agent: text('agent'),
+  side: text('side'),
+  confidence: real('confidence'),
+  finbertScore: real('finbert_score'),
+  impactScore: real('impact_score'),
+  payloadJson: text('payload_json'),
+  source: text('source'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  asOfIdx: index('idx_pit_decision_ledger_asof').on(table.asOfMs),
+  publishedIdx: index('idx_pit_decision_ledger_published').on(table.publishedAtMs),
+  symbolIdx: index('idx_pit_decision_ledger_symbol').on(table.symbol),
+}));

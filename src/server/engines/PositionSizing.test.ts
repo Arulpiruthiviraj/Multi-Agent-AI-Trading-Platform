@@ -102,6 +102,12 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     }
   });
 
+  it('fail-closes INVALID_ACCOUNT_EQUITY when account equity is missing or not positive', async () => {
+    const result = await calculatePositionSizing(baseCtx({ accountEquity: 0 }));
+    expect(result.maxQuantity).toBe(0);
+    expect(result.gates.find(g => g.gate === 'invalid_account_equity')?.passed).toBe(false);
+  });
+
   it('sufficient_size fails when the computed quantity is zero', async () => {
     const result = await calculatePositionSizing(baseCtx({ buyingPower: 0 }));
     expect(result.maxQuantity).toBe(0);

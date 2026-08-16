@@ -183,6 +183,13 @@
       "when": 1786650000000,
       "tag": "0025_quant_invalidation_json",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "6",
+      "when": 1786653600000,
+      "tag": "0026_pit_decision_ledger",
+      "breakpoints": true
     }
   ]
 }

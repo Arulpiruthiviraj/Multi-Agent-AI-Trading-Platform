@@ -63,6 +63,15 @@ export interface TradingSafety {
   minStrategyConfidenceToTrade: number;
   agentWinRateAlertPct: number;
   agentWinRateAlertMinPredictions: number;
+  autoFlattenOnReconciliationMismatch: boolean;
+  oosSharpeDegradationMinRatio: number;
+  oosWinRateMinPct: number;
+  permutationTestIterations: number;
+  permutationSignificanceAlpha: number;
+  newsVetoMinImpactScore: number;
+  newsVetoWindowMs: number;
+  usEquityRthOpenMinute: number;
+  usEquityRthCloseMinute: number;
 }
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
@@ -121,6 +130,14 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'minStrategyConfidenceToTrade',
   'agentWinRateAlertPct',
   'agentWinRateAlertMinPredictions',
+  'oosSharpeDegradationMinRatio',
+  'oosWinRateMinPct',
+  'permutationTestIterations',
+  'permutationSignificanceAlpha',
+  'newsVetoMinImpactScore',
+  'newsVetoWindowMs',
+  'usEquityRthOpenMinute',
+  'usEquityRthCloseMinute',
 ];
 
 function loadTradingSafety(): TradingSafety {
@@ -129,6 +146,9 @@ function loadTradingSafety(): TradingSafety {
     if (typeof raw[key] !== 'number' || !Number.isFinite(raw[key] as number)) {
       throw new Error(`config/tradingSafety.json missing numeric field: ${key}`);
     }
+  }
+  if (typeof raw.autoFlattenOnReconciliationMismatch !== 'boolean') {
+    throw new Error('config/tradingSafety.json missing boolean field: autoFlattenOnReconciliationMismatch');
   }
   return raw as unknown as TradingSafety;
 }

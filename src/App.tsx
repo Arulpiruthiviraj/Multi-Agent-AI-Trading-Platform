@@ -38,14 +38,12 @@ import QuantSignalsPanel from "./components/QuantSignalsPanel";
 import AwaitingSignal from "./components/shared/AwaitingSignal";
 import { SafeResponsiveContainer } from "./components/shared/SafeResponsiveContainer";
 import tradingSafetyConfig from "../config/tradingSafety.json";
-import SystemOptimizer from "./components/SystemOptimizer";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
 import ReplayResearchPanel from "./components/ReplayResearchPanel";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
-import AgentWorkflowTheater from "./components/AgentWorkflowTheater";
 import OrchestrationStatus from "./components/OrchestrationStatus";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
@@ -60,7 +58,6 @@ import AutoBotFlowVisualizer from "./components/AutoBotFlowVisualizer";
 import WeightAdjustmentVisualizer from "./components/WeightAdjustmentVisualizer";
 import GuardrailsPanel from "./components/GuardrailsPanel";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
-import MultiAgentDialogueGraph from "./components/MultiAgentDialogueGraph";
 import ChiefTraderAgent from "./components/ChiefTraderAgent";
 import ContextMemoryEngineering from "./components/ContextMemoryEngineering";
 import StrategySynergyMatrix from "./components/StrategySynergyMatrix";
@@ -2810,37 +2807,11 @@ export default function App() {
       };
 
       const symbolSector = sectorMap[execSymbol] || "Diversified";
-      const qParams = new URLSearchParams({
-        symbol: execSymbol,
-        sector: symbolSector,
-        headline: execHeadline,
-        broker: selectedBroker,
+      setLastAnalysis({
+        gone: true,
+        error: 'GET /api/v1/signals is quarantined. It fabricated consensus and bypassed RiskEngine.',
+        code: 'SIGNALS_PATH_QUARANTINED',
       });
-
-      const res = await fetch(`/api/v1/signals?${qParams.toString()}`);
-      if (res.ok) {
-        const data = await res.json();
-        setLastAnalysis(data);
-
-        // Add to audit logs
-        setAuditLogs((prev) => [
-          {
-            id: `AL-${Date.now()}`,
-            timestamp: new Date().toISOString(),
-            action: "TRADE_EVALUATION",
-            symbol: execSymbol,
-            sector: symbolSector,
-            headline: execHeadline,
-            consensus: data.internal_consensus || "HOLD",
-            final_action: data.vetoed_by_risk ? "VETOED" : "APPROVED",
-            details: data,
-          },
-          ...prev,
-        ]);
-
-        // Refresh structural states
-        await fetchState();
-      }
     } catch (e) {
       console.error("Signals pass failed", e);
     } finally {
@@ -5652,296 +5623,17 @@ export default function App() {
         )}
 
         {activeTab === "intelligence" && (
-
           <div className="animate-fade-in flex flex-col gap-6" id="intelligence-view">
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-              <div className="flex justify-between items-start mb-6">
-                 <div>
-                    <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2 uppercase tracking-wide">
-                      <BrainCircuit size={16} className="text-indigo-400" />
-                      Quantitative Intelligence Platform
-                    </h3>
-                    <p className="text-[11px] text-slate-400 max-w-3xl leading-relaxed">
-                      Instead of a single calculation engine, raw market data flows through specialized numerical engines. 
-                      Every AI Agent receives pre-computed deterministic facts (Trend, Momentum, Structure, Macro) to prevent hallucination and enforce rigid consensus weighting.
-                    </p>
-                 </div>
-              </div>
-
-              {/* Engine Grid Container */}
-              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
-                
-                {/* 1. Trend Engine */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-emerald-500/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-emerald-400 block mb-2 font-bold border-b border-emerald-500/20 pb-1.5 flex items-center gap-1.5"><TrendingUp size={10}/> Trend Engine</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>EMA 200</span> <span className="text-emerald-400">{autoBotConfig?.engines?.trend?.ema200 || 'Above'}</span></div>
-                    <div className="flex justify-between"><span>ADX</span> <span className="text-white">{autoBotConfig?.engines?.trend?.adx || '28'} (Strong)</span></div>
-                    <div className="flex justify-between"><span>Score</span> <span className="text-white">{autoBotConfig?.engines?.trend?.strength?.toFixed(1) || '89.0'}</span></div>
-                  </div>
-                </div>
-
-                {/* 2. Momentum Engine */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-indigo-500/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-indigo-400 block mb-2 font-bold border-b border-indigo-500/20 pb-1.5 flex items-center gap-1.5"><Activity size={10}/> Momentum</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>RSI</span> <span className={(autoBotConfig?.engines?.momentum?.rsi || 64) > 70 ? 'text-rose-400' : 'text-emerald-400'}>{autoBotConfig?.engines?.momentum?.rsi?.toFixed(1) || '64.0'}</span></div>
-                    <div className="flex justify-between"><span>MACD</span> <span className="text-emerald-400">{autoBotConfig?.engines?.momentum?.macd || 'Bull Cross'}</span></div>
-                    <div className="flex justify-between"><span>Score</span> <span className="text-white">{autoBotConfig?.engines?.momentum?.score || '84'}</span></div>
-                  </div>
-                </div>
-
-                {/* 3. Structure Engine */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-fuchsia-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-fuchsia-400 block mb-2 font-bold border-b border-fuchsia-500/20 pb-1.5 flex items-center gap-1.5"><Layers size={10}/> Structure</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>Pattern</span> <span className="text-white">{autoBotConfig?.engines?.marketStructure?.structure || 'Higher Highs'}</span></div>
-                    <div className="flex justify-between"><span>Liquidity</span> <span className="text-slate-400">{autoBotConfig?.engines?.marketStructure?.liquiditySweep || 'None'}</span></div>
-                    <div className="flex justify-between"><span>CHoCH</span> <span className="text-slate-400">{autoBotConfig?.engines?.marketStructure?.choch ? 'Detected' : 'None'}</span></div>
-                  </div>
-                </div>
-
-                {/* 4. Smart Money */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-amber-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-amber-400 block mb-2 font-bold border-b border-amber-500/20 pb-1.5 flex items-center gap-1.5"><Database size={10}/> Smart Money</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>Ord Block</span> <span className="text-emerald-400">{autoBotConfig?.engines?.smartMoney?.orderBlock || 'Bullish 4H'}</span></div>
-                    <div className="flex justify-between"><span>FVG</span> <span className="text-slate-400">{autoBotConfig?.engines?.smartMoney?.fvg || 'Filled'}</span></div>
-                    <div className="flex justify-between"><span>Zone</span> <span className="text-emerald-400">{autoBotConfig?.engines?.smartMoney?.premiumDiscount || 'Discount'}</span></div>
-                  </div>
-                </div>
-
-                {/* 5. Options Flow */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-rose-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-rose-400 block mb-2 font-bold border-b border-rose-500/20 pb-1.5 flex items-center gap-1.5"><BarChart3 size={10}/> Options Flow</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>P/C Ratio</span> <span className="text-white">{autoBotConfig?.engines?.optionsFlow?.putCallRatio || '0.65'}</span></div>
-                    <div className="flex justify-between"><span>Gamma Exp</span> <span className="text-emerald-400">{autoBotConfig?.engines?.optionsFlow?.gammaExposure || '+1.2B'}</span></div>
-                    <div className="flex justify-between"><span>Max Pain</span> <span className="text-white">${autoBotConfig?.engines?.optionsFlow?.maxPain || '320'}</span></div>
-                  </div>
-                </div>
-
-                {/* 6. Volume Engine */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-sky-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-sky-400 block mb-2 font-bold border-b border-sky-500/20 pb-1.5 flex items-center gap-1.5"><BarChart2 size={10}/> Volume</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>RVOL</span> <span className="text-white">{autoBotConfig?.engines?.marketIntelligence?.rvol?.toFixed(2) || '1.40'}x</span></div>
-                    <div className="flex justify-between"><span>OBV</span> <span className="text-emerald-400">{autoBotConfig?.engines?.volume?.obv || 'Rising'}</span></div>
-                    <div className="flex justify-between"><span>Delta</span> <span className="text-emerald-400">{autoBotConfig?.engines?.volume?.delta || '+450k'}</span></div>
-                  </div>
-                </div>
-
-                {/* 7. Volatility */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-purple-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-purple-400 block mb-2 font-bold border-b border-purple-500/20 pb-1.5 flex items-center gap-1.5"><Zap size={10}/> Volatility</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>ATR</span> <span className="text-white">{autoBotConfig?.engines?.volatility?.atr || '4.8'}</span></div>
-                    <div className="flex justify-between"><span>B-Bands</span> <span className="text-rose-400">{autoBotConfig?.engines?.volatility?.bollinger || 'Upper Band'}</span></div>
-                    <div className="flex justify-between"><span>Regime</span> <span className="text-amber-400">{autoBotConfig?.engines?.volatility?.regime || 'Expanding'}</span></div>
-                  </div>
-                </div>
-
-                {/* 8. News Sentiment */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-cyan-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-cyan-400 block mb-2 font-bold border-b border-cyan-500/20 pb-1.5 flex items-center gap-1.5"><Globe size={10}/> News Agent</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>Sentiment</span> <span className="text-emerald-400">{autoBotConfig?.engines?.news?.sentiment?.toFixed(1) || '85.0'}</span></div>
-                    <div className="flex justify-between"><span>Sources</span> <span className="text-white">{autoBotConfig?.engines?.news?.sources || '14'}</span></div>
-                    <div className="flex justify-between"><span>Impact Vol</span> <span className="text-rose-400">{autoBotConfig?.engines?.news?.impact || 'High'}</span></div>
-                  </div>
-                </div>
-
-                {/* 9. Macro Environment */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-orange-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-orange-400 block mb-2 font-bold border-b border-orange-500/20 pb-1.5 flex items-center gap-1.5"><Target size={10}/> Macro Env</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>Yields</span> <span className="text-emerald-400">{autoBotConfig?.engines?.macro?.yields || 'Falling'}</span></div>
-                    <div className="flex justify-between"><span>DXY</span> <span className="text-emerald-400">{autoBotConfig?.engines?.macro?.dollarIndex || 'Weak'}</span></div>
-                    <div className="flex justify-between"><span>CPI</span> <span className="text-slate-400">{autoBotConfig?.engines?.macro?.cpi || 'Inline'}</span></div>
-                  </div>
-                </div>
-
-                {/* 10. Historical Analogs */}
-                <div className="bg-[#111822] border border-slate-800 p-3 rounded-lg hover:border-teal-400/30 transition-colors">
-                  <h4 className="text-[10px] uppercase font-mono text-teal-400 block mb-2 font-bold border-b border-teal-500/20 pb-1.5 flex items-center gap-1.5"><Clock size={10}/> Historical</h4>
-                  <div className="space-y-1.5 text-[10px] font-mono text-slate-300">
-                    <div className="flex justify-between"><span>Matches</span> <span className="text-white">{autoBotConfig?.engines?.historical?.matches || '842'}</span></div>
-                    <div className="flex justify-between"><span>Win Rate</span> <span className="text-emerald-400">{autoBotConfig?.engines?.historical?.winRate || '72'}%</span></div>
-                    <div className="flex justify-between"><span>Avg Ret</span> <span className="text-emerald-400">+{autoBotConfig?.engines?.historical?.avgReturn || '6.4'}%</span></div>
-                  </div>
-                </div>
-
-              </div>
-
-              {/* Evidence Engine Table */}
-              <h4 className="text-[11px] font-bold text-white uppercase tracking-widest mb-3 flex items-center gap-2 mt-4 border-t border-slate-800 pt-6">
-                <Layers size={14} className="text-amber-400" />
-                Live Evidence Weighting Engine (Deterministic Proof)
-              </h4>
-              <div className="overflow-x-auto border border-slate-800 rounded-lg">
-                <table className="w-full text-left">
-                  <thead>
-                    <tr className="bg-[#111822]/50 border-b border-slate-800 text-[10px] uppercase tracking-widest text-slate-500 font-mono">
-                      <th className="py-2 px-3">Criteria Evaluated by Engines</th>
-                      <th className="py-2 px-3">Engine Result</th>
-                      <th className="py-2 px-3 text-right">Mathematical Weight</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800 font-mono text-[11px]">
-                    {(autoBotConfig?.engines?.evidenceTable || [
-                      { criteria: "Price > 200 EMA", result: "Bullish", weight: 12 },
-                      { criteria: "MACD bullish crossover", result: "Bullish", weight: 8 },
-                      { criteria: "Relative volume 2.4x average", result: "Bullish", weight: 10 },
-                      { criteria: "RSI overbought (78)", result: "Bearish", weight: -6 },
-                      { criteria: "Positive earnings surprise", result: "Bullish", weight: 9 },
-                      { criteria: "Recent negative macro news", result: "Bearish", weight: -4 }
-                    ]).map((ev, i) => (
-                      <tr key={i} className="hover:bg-[#111822]/30">
-                        <td className="py-2 px-3 text-slate-300">{ev.criteria}</td>
-                        <td className={"py-2 px-3 " + (ev.result === 'Bullish' ? 'text-emerald-400' : 'text-rose-400')}>{ev.result}</td>
-                        <td className={"py-2 px-3 text-right " + (ev.weight > 0 ? 'text-emerald-400' : 'text-rose-400')}>{ev.weight > 0 ? '+' : ''}{ev.weight}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* AI Verification Engine */}
-              <div className="mt-6 bg-[#111822] border border-slate-700/50 p-4 rounded-lg flex flex-col md:flex-row items-center justify-between gap-6">
-                 <div>
-                    <h4 className="text-[10px] font-bold text-white uppercase tracking-widest mb-1 flex items-center gap-1.5"><ShieldCheck size={12} className="text-emerald-400"/> AI Verification & Consensus Engine</h4>
-                    <p className="text-[10px] text-slate-500 font-mono max-w-sm">Cross-referencing autonomous LLM sentiment with the aggregated mathematical score from all 10 intelligence engines.</p>
-                 </div>
-                 <div className="flex items-center gap-6 text-center font-mono">
-                    <div>
-                      <div className="text-[9px] text-slate-500 uppercase tracking-widest mb-1">AI Output</div>
-                      <div className="text-xl font-bold text-white">{autoBotConfig?.engines?.verification?.aiConfidence || 86}%</div>
-                    </div>
-                    <div className="text-slate-600 text-lg">VS</div>
-                    <div>
-                      <div className="text-[9px] text-slate-500 uppercase tracking-widest mb-1">Math Engine</div>
-                      <div className="text-xl font-bold text-indigo-400">{autoBotConfig?.engines?.verification?.engineConfidence || 88}%</div>
-                    </div>
-                    <div className="w-px h-8 bg-slate-800 mx-2"></div>
-                    <div>
-                      <div className="text-[9px] text-slate-500 uppercase tracking-widest mb-1">Consensus Match</div>
-                      <div className={"text-xl font-bold " + ((autoBotConfig?.engines?.verification?.agreement || 97) > 80 ? 'text-emerald-400' : 'text-amber-400')}>{autoBotConfig?.engines?.verification?.agreement?.toFixed(1) || '97.0'}%</div>
-                    </div>
-                 </div>
-              </div>
-              
-              {/* Evidence Graph / Consensus Engine */}
-              <div className="mt-6 bg-[#111822] border border-slate-800 rounded-lg p-5">
-               <div className="flex justify-between items-center mb-6 border-b border-slate-800 pb-4">
-                 <div>
-                   <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
-                     <Network size={16} className="text-fuchsia-400" />
-                     Live Evidence Graph & Consensus
-                   </h3>
-                   <p className="text-[10px] text-slate-400 font-mono mt-1">Hierarchical tree tracking the execution of multiple specialized intelligence engines into a single verified consensus.</p>
-                 </div>
-                 <div className="bg-[#1A1F2B] px-4 py-2 rounded border border-slate-700 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-0.5">Final Consensus</span>
-                    <span className="text-lg font-bold text-emerald-400">BUY (89%)</span>
-                 </div>
-               </div>
-               
-               <div className="font-mono text-xs overflow-x-auto">
-                 <div className="min-w-[600px] py-4 pl-4 space-y-4">
-                    <div className="flex items-center gap-3">
-                       <span className="text-emerald-400 font-bold border border-emerald-500/30 bg-emerald-500/10 px-2 py-1 rounded">BUY (89%)</span>
-                       <span className="text-slate-500">─── Target: NVDA</span>
-                    </div>
-                    
-                    <div className="pl-6 space-y-3 relative before:absolute before:left-[19px] before:top-[-10px] before:bottom-4 before:w-px before:bg-slate-700">
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-slate-300 w-36">Technical Score</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold">94% (Strong Buy)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-slate-300 w-36">Momentum Engine</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold">87% (Accelerating)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-slate-300 w-36">Volume Deviation</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold">82% (+2.4x Avg)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-slate-300 w-36">News Sentiment</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold">89% (Highly Positive)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-slate-300 w-36">Earnings Engine</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold">91% (+12% EPS Surprise)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-slate-300 w-36">Market Regime</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-indigo-400 font-bold">Bullish</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-slate-300 w-36">Historical Match</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-indigo-400 font-bold">88% (842 similar setups)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative mt-4">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-sky-400 w-36 flex items-center gap-1.5"><BrainCircuit size={12}/> Proposer Agent 1</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold">BUY (Confidence: 91%)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-purple-400 w-36 flex items-center gap-1.5"><BrainCircuit size={12}/> Debate Agent 2</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-amber-400 font-bold">HOLD (Reason: Overbought)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-rose-400 w-36 flex items-center gap-1.5"><ShieldAlert size={12}/> Risk Engine</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold">APPROVED (Risk: 1.2% Drawdown)</span>
-                       </div>
-                       
-                       <div className="flex items-center gap-4 relative pt-2 border-t border-slate-800/80 mt-2 w-max">
-                          <span className="absolute left-[-24px] top-1/2 w-4 h-px bg-slate-700"></span>
-                          <span className="text-white w-36 font-bold uppercase tracking-widest">Final Consensus</span>
-                          <span className="text-slate-500">............</span>
-                          <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">EXECUTED BUY</span>
-                       </div>
-
-                    </div>
-                 </div>
-               </div>
-              </div>
-
+              <h3 className="text-sm font-bold text-white mb-2 uppercase tracking-wide">Quantitative Intelligence</h3>
+              <AwaitingSignal
+                label="Fabricated engine grid"
+                reason="This tab used hardcoded fallbacks (ADX 28, RSI 64, Options P/C, EXECUTED BUY theater). Real quant lives on Strategy Scanner / GET /api/v2/quant/*. DATA_UNAVAILABLE."
+              />
             </div>
           </div>
         )}
 
-        
 {activeTab === "agents" && (() => {
           const minPreds = tradingSafetyConfig.agentWinRateAlertMinPredictions;
           const scored = (learningSummary?.agentWeights ?? []).filter((a: any) => a.winRate !== null && a.totalPredictions >= minPreds);
@@ -5966,8 +5658,7 @@ export default function App() {
               </div>
             )}
 
-            {/* Live Agent Network - every node/edge activation below is driven by a real
-                WebSocket event (EventBus's wildcard listener), not mock/demo data. */}
+            {/* Live Agent Network — EventBus WebSocket only. No looping demo graphs. */}
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
               <div className="flex items-center justify-between mb-3.5">
                 <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
@@ -5976,17 +5667,20 @@ export default function App() {
                 </h3>
               </div>
               <p className="text-xs text-slate-400 mb-5">
-                Real-time visualization of every agent, local/paid AI model call, and decision. Click any node for its live process log; click a transaction to trace it end-to-end by its real trace ID.
+                Hover a node for the last real payload. Packets move only when the matching EventBus event arrives. Click a node for the process log; click a transaction to trace it by real trace ID.
               </p>
-              <AgentWorkflowTheater />
               <OrchestrationStatus models={orchestrationModels} capital={orchestrationCapital} />
               <DigitalTwinVisualizer />
             </div>
 
-            {/* Chief Trader Agent Portfolio CIO Deck */}
             <ChiefTraderAgent />
 
-            <MultiAgentDialogueGraph />
+            <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
+              <AwaitingSignal
+                label="Multi-Agent Dialogue Graph"
+                reason="That D3 graph used SentimentAgent / OrderFlowAgent (not live voters) and looped fake propose/veto packets on a timer. DATA_UNAVAILABLE. Use the telemetry map above."
+              />
+            </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             
@@ -8453,28 +8147,10 @@ export default function App() {
         {activeTab === "deployment" && (
           <div className="animate-fade-in flex flex-col gap-6" id="deployment-auditor-view">
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6">
-               <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-4">
-                 <h2 className="text-lg font-bold text-white flex items-center gap-2">
+               <h2 className="text-lg font-bold text-white flex items-center gap-2 mb-4">
                     <Rocket size={20} className="text-emerald-400" />
-                    LIVE DEPLOYMENT READINESS AUDITOR
-                 </h2>
-                 <button 
-                   onClick={runDeploymentAudit} 
-                   disabled={isAuditing}
-                   className={`px-4 py-2 text-xs font-bold uppercase tracking-widest rounded ${isAuditing ? 'bg-slate-700 text-slate-400' : 'bg-emerald-600 hover:bg-emerald-500 text-white'} transition-colors`}
-                 >
-                   {isAuditing ? "Auditing..." : "Run Quant Audit"}
-                 </button>
-               </div>
-               
-               <p className="text-sm text-slate-400 mb-6 leading-relaxed max-w-3xl">
-                 Taking an AI trading bot from simulation to real-time, autonomous live trading is the ultimate test. The checklist below is a generic, educational self-assessment against whatever architecture YOU describe via the dropdowns - it does not inspect this actual running Argus instance. For a real check of Argus itself, see the panel below it.
-               </p>
-
-               {/* Real check of THIS running Argus instance - distinct from the generic
-                   self-assessment quiz below it, which evaluates a hypothetical architecture the
-                   user describes via dropdowns, not Argus's own actual current state. Reuses the
-                   same real GET /api/v1/system/integrity the Validation tab uses. */}
+                    LIVE DEPLOYMENT READINESS
+               </h2>
                <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 mb-6 flex items-center justify-between">
                  <div>
                    <h4 className="text-xs font-bold text-white uppercase tracking-wide mb-1">Real Argus System Integrity Check</h4>
@@ -8489,118 +8165,10 @@ export default function App() {
                    Re-check Now
                  </button>
                </div>
-
-               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                 {/* Left Column: Form Parameters */}
-                 <div className="flex flex-col gap-4">
-                    <h3 className="text-xs uppercase tracking-widest text-slate-500 font-bold mb-2 border-b border-slate-800 pb-2">System Parameters</h3>
-                    
-                    <div className="flex flex-col">
-                      <label className="text-[10px] text-slate-400 font-mono uppercase tracking-widest mb-1">Hosting & Latency</label>
-                      <select 
-                        value={auditorData.hosting} 
-                        onChange={(e) => setAuditorData({...auditorData, hosting: e.target.value})}
-                        className="bg-[#0A0F16] border border-slate-700 text-xs font-bold text-indigo-400 rounded px-3 py-2 outline-none focus:border-indigo-500"
-                      >
-                         <option>Local Machine (High Latency)</option>
-                         <option>Cloud Server (Mid Latency)</option>
-                         <option>Co-located Server (Ultra-Low Latency)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex flex-col">
-                      <label className="text-[10px] text-slate-400 font-mono uppercase tracking-widest mb-1">State Management (Reconciliation)</label>
-                      <select 
-                        value={auditorData.stateManagement} 
-                        onChange={(e) => setAuditorData({...auditorData, stateManagement: e.target.value})}
-                        className="bg-[#0A0F16] border border-slate-700 text-xs font-bold text-indigo-400 rounded px-3 py-2 outline-none focus:border-indigo-500"
-                      >
-                         <option>Local Variables Only</option>
-                         <option>Database Storage</option>
-                         <option>API Sync (Query Broker on Startup & Interval)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex flex-col">
-                      <label className="text-[10px] text-slate-400 font-mono uppercase tracking-widest mb-1">Partial Fill Logic</label>
-                      <select 
-                        value={auditorData.errorHandling} 
-                        onChange={(e) => setAuditorData({...auditorData, errorHandling: e.target.value})}
-                        className="bg-[#0A0F16] border border-slate-700 text-xs font-bold text-indigo-400 rounded px-3 py-2 outline-none focus:border-indigo-500"
-                      >
-                         <option>Basic Try/Catch</option>
-                         <option>Retry Orders Unconditionally</option>
-                         <option>Dynamic Target Adjustment & Cancel Remaining</option>
-                      </select>
-                    </div>
-
-                    <div className="flex flex-col">
-                      <label className="text-[10px] text-slate-400 font-mono uppercase tracking-widest mb-1">Risk Controls (Dead Man's Switch)</label>
-                      <select 
-                        value={auditorData.riskControls} 
-                        onChange={(e) => setAuditorData({...auditorData, riskControls: e.target.value})}
-                        className="bg-[#0A0F16] border border-slate-700 text-xs font-bold text-indigo-400 rounded px-3 py-2 outline-none focus:border-indigo-500"
-                      >
-                         <option>None</option>
-                         <option>Soft Limit Notifications</option>
-                         <option>Hard-Coded Structural Liquidate & Halt</option>
-                      </select>
-                    </div>
-
-                    <div className="flex flex-col">
-                      <label className="text-[10px] text-slate-400 font-mono uppercase tracking-widest mb-1">Backtest Validation</label>
-                      <select 
-                        value={auditorData.backtest} 
-                        onChange={(e) => setAuditorData({...auditorData, backtest: e.target.value})}
-                        className="bg-[#0A0F16] border border-slate-700 text-xs font-bold text-indigo-400 rounded px-3 py-2 outline-none focus:border-indigo-500"
-                      >
-                         <option>No Slippage Calculated</option>
-                         <option>Fixed Flat Fee Deduction</option>
-                         <option>Live Spread & Commission Modeled</option>
-                      </select>
-                    </div>
-
-                 </div>
-
-                 {/* Right Column: Audit Results */}
-                 <div className="bg-[#0A0F16] rounded border border-slate-800 p-5 flex flex-col relative overflow-hidden">
-                    <h3 className="text-xs uppercase tracking-widest text-slate-500 font-bold mb-4 flex items-center gap-2">
-                      <Terminal size={14} /> Audit Results
-                    </h3>
-                    
-                    {auditScore === null && !isAuditing ? (
-                      <div className="flex-1 flex items-center justify-center text-slate-600 text-sm font-mono text-center px-6">
-                        Configure your deployment parameters and click "Run Quant Audit" to evaluate live-readiness.
-                      </div>
-                    ) : isAuditing ? (
-                      <div className="flex-1 flex flex-col items-center justify-center text-slate-400 gap-4">
-                        <div className="w-8 h-8 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
-                        <span className="text-xs font-mono animate-pulse uppercase tracking-widest">Evaluating System Vulnerabilities...</span>
-                      </div>
-                    ) : (
-                      <div className="flex-1 flex flex-col animate-fade-in gap-4">
-                        <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-                          <span className="text-sm text-slate-400 uppercase tracking-widest">Readiness Score</span>
-                          <span className={`text-3xl font-black font-mono ${auditScore === 100 ? 'text-emerald-400' : auditScore! >= 70 ? 'text-amber-400' : 'text-rose-400'}`}>
-                            {auditScore}/100
-                          </span>
-                        </div>
-                        <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar max-h-[300px]">
-                          {auditFeedback?.split('\n').filter(Boolean).map((line, idx) => {
-                             const isCrit = line.includes("Critical");
-                             const isFatal = line.includes("Fatal");
-                             const isExcellent = line.includes("Excellent");
-                             return (
-                               <div key={idx} className={`mb-3 text-xs leading-relaxed font-mono p-3 rounded border ${isCrit ? 'bg-rose-500/5 border-rose-500/20 text-rose-300' : isFatal ? 'bg-rose-900/20 border-rose-500/40 text-rose-400 font-bold' : isExcellent ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/5 border-amber-500/20 text-amber-300'}`}>
-                                 {line}
-                               </div>
-                             );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                 </div>
-               </div>
+               <AwaitingSignal
+                 label="Dropdown quant-audit score"
+                 reason="The hosting/reconciliation/partial-fill dropdown quiz scored itself from the operator's own selections, not Argus. LIVE remains NO-GO. Use GET /api/v1/system/integrity above."
+               />
             </div>
           </div>
         )}
@@ -8621,7 +8189,10 @@ export default function App() {
         {activeTab === "validation" && (
           <div className="animate-fade-in flex flex-col gap-6" id="validation-view">
             <SystemValidationSuite />
-            <SystemOptimizer />
+            <AwaitingSignal
+              label="System optimizer theater"
+              reason="SystemOptimizer used hardcoded ATR/ADV/AI-prediction strings, not live RiskEngine or broker state. DATA_UNAVAILABLE."
+            />
           </div>
         )}
 

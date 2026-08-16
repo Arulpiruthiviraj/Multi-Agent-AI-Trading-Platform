@@ -14,6 +14,8 @@
 import { db } from '../../db';
 import * as schema from '../../db/schema';
 import { and, eq, gte, lte, asc, sql } from 'drizzle-orm';
+import { tradingSafety } from '../../config/tradingSafety';
+import crypto from 'crypto';
 
 export interface Bar {
   timestamp: number; // epoch ms, bar open time
@@ -156,6 +158,73 @@ export class HistoricalDataGateway {
     } catch (e: any) {
       return { clean: true, checked: false, issues: [`Could not verify corporate actions: ${e.message}`] };
     }
+  }
+
+  /**
+   * Persist a PIT news/agent fact. Rejects look-ahead: publishedAtMs must be <= asOfMs.
+   * Backtest replay may only read rows with publishedAtMs <= simulated now.
+   */
+  async ingestPitLedgerEntry(entry: {
+    asOfMs: number;
+    publishedAtMs: number;
+    symbol: string;
+    kind: 'NEWS' | 'NEWS_AGENT' | 'CHIEF_TRADER' | 'AGENT_REASONING';
+    agent?: string;
+    side?: 'BUY' | 'SELL' | 'HOLD';
+    confidence?: number;
+    finbertScore?: number;
+    impactScore?: number;
+    payloadJson?: string;
+    source?: string;
+  }): Promise<string> {
+    if (!Number.isFinite(entry.asOfMs) || !Number.isFinite(entry.publishedAtMs)) {
+      throw new Error('PIT ledger requires finite asOfMs and publishedAtMs.');
+    }
+    if (entry.publishedAtMs > entry.asOfMs) {
+      throw new Error(`LOOK_AHEAD_FORBIDDEN: publishedAtMs ${entry.publishedAtMs} is after asOfMs ${entry.asOfMs}. News/LLM text after the bar close cannot be ingested.`);
+    }
+    const id = crypto.randomUUID();
+    await db.insert(schema.pitDecisionLedger).values({
+      id,
+      asOfMs: entry.asOfMs,
+      publishedAtMs: entry.publishedAtMs,
+      symbol: entry.symbol,
+      kind: entry.kind,
+      agent: entry.agent ?? null,
+      side: entry.side ?? null,
+      confidence: entry.confidence ?? null,
+      finbertScore: entry.finbertScore ?? null,
+      impactScore: entry.impactScore ?? null,
+      payloadJson: entry.payloadJson ?? null,
+      source: entry.source ?? null,
+      createdAt: new Date().toISOString(),
+    });
+    return id;
+  }
+
+  /** NEWS rows knowable at simulated now, inside the live news-veto window. Never returns later publications. */
+  async getPitNewsAsOf(symbol: string, nowMs: number, windowMs: number = tradingSafety.newsVetoWindowMs): Promise<Array<{
+    symbol: string;
+    impactScore: number | null;
+    publishedAtMs: number;
+    finbertScore: number | null;
+  }>> {
+    const windowStart = nowMs - windowMs;
+    const rows = await db.select().from(schema.pitDecisionLedger)
+      .where(and(
+        eq(schema.pitDecisionLedger.kind, 'NEWS'),
+        eq(schema.pitDecisionLedger.symbol, symbol),
+        lte(schema.pitDecisionLedger.publishedAtMs, nowMs),
+        lte(schema.pitDecisionLedger.asOfMs, nowMs),
+        gte(schema.pitDecisionLedger.publishedAtMs, windowStart),
+      ))
+      .orderBy(asc(schema.pitDecisionLedger.publishedAtMs));
+    return rows.map(r => ({
+      symbol: r.symbol,
+      impactScore: r.impactScore,
+      publishedAtMs: r.publishedAtMs,
+      finbertScore: r.finbertScore,
+    }));
   }
 
   /** Real, ordered, point-in-time bars for a symbol/timeframe/range. No fabrication. */

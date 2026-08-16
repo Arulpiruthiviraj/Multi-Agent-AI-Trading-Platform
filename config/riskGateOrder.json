@@ -1,0 +1,24 @@
+{
+  "$comment": "RiskEngine.evaluateRiskSerialized evaluation order for UI catalog only. Pass/fail must come from RISK_GATE_EVALUATED / risk_gate_results — never from this file. sell_position_exists is recorded on SELL only; BUY assessments omit it.",
+  "gates": [
+    "emergency_stop",
+    "invalid_account_equity",
+    "daily_loss",
+    "consecutive_loss",
+    "portfolio_drawdown",
+    "order_rate_limit",
+    "market_hours",
+    "data_freshness",
+    "news_veto",
+    "price_validity",
+    "order_notional_cap",
+    "symbol_concentration",
+    "open_positions_cap",
+    "sector_concentration",
+    "correlation_exposure",
+    "sufficient_size",
+    "sell_position_exists",
+    "argus_capital_allocation",
+    "daily_buy_notional"
+  ]
+}

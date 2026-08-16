@@ -11,6 +11,7 @@
  * ==========================================================
  */
 import { backtestEngine } from './BacktestEngine';
+import { evaluateWalkForwardHarness } from '../../quant/analysis/MonteCarlo';
 
 export interface WalkForwardConfig {
   /** Required unless strategyId+symbol are given (see below) - the original run()-backed mode. */
@@ -119,6 +120,15 @@ export class WalkForwardValidator {
     const avgOOS = outOfSampleReturns.reduce((a, b) => a + b, 0) / outOfSampleReturns.length;
     const avgIS = inSampleReturns.reduce((a, b) => a + b, 0) / inSampleReturns.length;
     const oosPositivePeriods = outOfSampleReturns.filter(r => r > 0).length;
+    const avgSharpeIS = periods.reduce((a, p) => a + (Number(p.train.sharpe) || 0), 0) / periods.length;
+    const avgSharpeOOS = periods.reduce((a, p) => a + (Number(p.test.sharpe) || 0), 0) / periods.length;
+    const avgOosWinRatePct = periods.reduce((a, p) => a + (Number(p.test.winRatePct) || 0), 0) / periods.length;
+    const harness = evaluateWalkForwardHarness({
+      periodCount: periods.length,
+      avgSharpeIS,
+      avgSharpeOOS,
+      avgOosWinRatePct,
+    });
 
     return {
       periods,
@@ -126,13 +136,15 @@ export class WalkForwardValidator {
       avgInSampleReturnPct: Number(avgIS.toFixed(2)),
       avgOutOfSampleReturnPct: Number(avgOOS.toFixed(2)),
       outOfSamplePositivePeriodPct: Number(((oosPositivePeriods / periods.length) * 100).toFixed(1)),
-      // A strategy that only works in-sample and falls apart out-of-sample is the textbook
-      // overfitting signature this number is meant to surface, not hide.
       inSampleVsOutOfSampleGapPct: Number((avgIS - avgOOS).toFixed(2)),
+      avgInSampleSharpe: Number(avgSharpeIS.toFixed(4)),
+      avgOutOfSampleSharpe: Number(avgSharpeOOS.toFixed(4)),
+      avgOosWinRatePct: Number(avgOosWinRatePct.toFixed(1)),
+      oosSharpeDegradation: harness.oosSharpeDegradation,
+      oosWinRate: harness.oosWinRate,
+      verdict: harness.verdict,
       insufficientPeriods: periods.length < 5,
-      note: periods.length < 5
-        ? `Only ${periods.length} walk-forward period(s) - too few to draw a real conclusion about out-of-sample robustness. Widen the date range or shorten the windows.`
-        : null,
+      note: harness.reason,
     };
   }
 }

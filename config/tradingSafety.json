@@ -54,5 +54,14 @@
   "regimeMismatchConfidenceMultiplier": 0.5,
   "minStrategyConfidenceToTrade": 0.6,
   "agentWinRateAlertPct": 48,
-  "agentWinRateAlertMinPredictions": 20
+  "agentWinRateAlertMinPredictions": 20,
+  "autoFlattenOnReconciliationMismatch": false,
+  "oosSharpeDegradationMinRatio": 0.6,
+  "oosWinRateMinPct": 40,
+  "permutationTestIterations": 1000,
+  "permutationSignificanceAlpha": 0.05,
+  "newsVetoMinImpactScore": 80,
+  "newsVetoWindowMs": 14400000,
+  "usEquityRthOpenMinute": 570,
+  "usEquityRthCloseMinute": 960
 }

@@ -151,24 +151,23 @@ export class OpenAliceVerificationService {
       createdAt: request.createdAt,
     }).catch((e) => console.error('[OpenAlice] Failed to persist verification request', e));
 
-    void this.health().then((h) => {
+    void this.health().then(async (h): Promise<void> => {
       if (!h.reachable || !this.adapter) {
         console.warn('[OpenAlice] Skipping verification file — Guardian MCP not reachable:', h.detail);
         this.pending.delete(request.requestId);
-        return db.update(schema.openaliceVerifications)
+        await db.update(schema.openaliceVerifications)
           .set({ status: 'FAILED', error: h.detail, completedAt: new Date().toISOString() })
           .where(eq(schema.openaliceVerifications.id, request.requestId));
+        return;
       }
-      return this.adapter.requestVerification(request)
-        .then(() => {
-          eventBus.publish('OPENALICE_VERIFICATION_REQUESTED', {
-            traceId: request.traceId,
-            requestId: request.requestId,
-            symbol: request.symbol,
-            side: request.side,
-            mode: request.mode,
-          });
-        });
+      await this.adapter.requestVerification(request);
+      eventBus.publish('OPENALICE_VERIFICATION_REQUESTED', {
+        traceId: request.traceId,
+        requestId: request.requestId,
+        symbol: request.symbol,
+        side: request.side,
+        mode: request.mode,
+      });
     }).catch((e) => {
       console.error('[OpenAlice] Failed to file verification request', e);
       this.pending.delete(request.requestId);

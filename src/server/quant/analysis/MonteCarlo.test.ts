@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { runMonteCarlo } from './MonteCarlo';
+import {
+  runMonteCarlo,
+  permutationTestSharpe,
+  evaluateOosSharpeDegradation,
+  evaluateOosWinRate,
+  evaluateWalkForwardHarness,
+  STATISTICALLY_INSIGNIFICANT,
+  annualizedSharpe,
+} from './MonteCarlo';
+import { tradingSafety } from '../../config/tradingSafety';
 
 describe('runMonteCarlo', () => {
   it('is deterministic for a fixed seed - real reproducibility, not Math.random() nondeterminism', () => {
@@ -52,5 +61,77 @@ describe('runMonteCarlo', () => {
     const rMultiples = Array.from({ length: 25 }, () => -5); // catastrophic real losses
     const result = runMonteCarlo({ rMultiples, initialCapital: 1000, riskPerTradePct: 0.5, pathLength: 50, simulations: 200 }, 3);
     expect(result.endingEquity.p5).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('permutationTestSharpe', () => {
+  it('flags a strong positive-mean series as SIGNIFICANT at the configured alpha', () => {
+    const returns = Array.from({ length: 80 }, (_, i) => 0.004 + (i % 7) * 0.001);
+    const r = permutationTestSharpe(returns, 500, tradingSafety.permutationSignificanceAlpha, 1);
+    expect(r.observedSharpe).toBeGreaterThan(0);
+    expect(r.pValue).toBeLessThanOrEqual(tradingSafety.permutationSignificanceAlpha);
+    expect(r.verdict).toBe('SIGNIFICANT');
+  });
+
+  it(`flags a zero-mean series as ${STATISTICALLY_INSIGNIFICANT}`, () => {
+    const returns = Array.from({ length: 80 }, (_, i) => (i % 2 === 0 ? 0.01 : -0.01));
+    const r = permutationTestSharpe(returns, 500, tradingSafety.permutationSignificanceAlpha, 1);
+    expect(r.pValue).toBeGreaterThan(tradingSafety.permutationSignificanceAlpha);
+    expect(r.verdict).toBe(STATISTICALLY_INSIGNIFICANT);
+  });
+
+  it('is deterministic for a fixed seed', () => {
+    const returns = [0.01, -0.005, 0.008, -0.002, 0.012, -0.004];
+    expect(permutationTestSharpe(returns, 200, 0.05, 9)).toEqual(permutationTestSharpe(returns, 200, 0.05, 9));
+  });
+
+  it('annualizedSharpe is 0 when volatility is 0', () => {
+    expect(annualizedSharpe([0.01, 0.01, 0.01])).toBe(0);
+  });
+});
+
+describe('walk-forward degradation enforcer', () => {
+  it('OVERFIT_REJECTED when OOS Sharpe drops more than (1 - oosSharpeDegradationMinRatio)', () => {
+    const is = 2;
+    const oos = is * tradingSafety.oosSharpeDegradationMinRatio - 0.01;
+    const r = evaluateWalkForwardHarness({
+      periodCount: 6,
+      avgSharpeIS: is,
+      avgSharpeOOS: oos,
+      avgOosWinRatePct: 90,
+    });
+    expect(evaluateOosSharpeDegradation(is, oos).rejected).toBe(true);
+    expect(r.verdict).toBe('OVERFIT_REJECTED');
+  });
+
+  it('OVERFIT_REJECTED when OOS win rate is below tradingSafety.oosWinRateMinPct', () => {
+    const r = evaluateWalkForwardHarness({
+      periodCount: 6,
+      avgSharpeIS: 1.5,
+      avgSharpeOOS: 1.4,
+      avgOosWinRatePct: tradingSafety.oosWinRateMinPct - 1,
+    });
+    expect(evaluateOosWinRate(tradingSafety.oosWinRateMinPct - 1).passed).toBe(false);
+    expect(r.verdict).toBe('OVERFIT_REJECTED');
+  });
+
+  it('PASS when Sharpe ratio and OOS win rate both clear the configured floors', () => {
+    const r = evaluateWalkForwardHarness({
+      periodCount: 6,
+      avgSharpeIS: 1.5,
+      avgSharpeOOS: 1.2,
+      avgOosWinRatePct: tradingSafety.oosWinRateMinPct + 10,
+    });
+    expect(r.verdict).toBe('PASS');
+  });
+
+  it('INSUFFICIENT_PERIODS when metrics pass but the window count is too small', () => {
+    const r = evaluateWalkForwardHarness({
+      periodCount: 2,
+      avgSharpeIS: 1.5,
+      avgSharpeOOS: 1.2,
+      avgOosWinRatePct: 80,
+    });
+    expect(r.verdict).toBe('INSUFFICIENT_PERIODS');
   });
 });

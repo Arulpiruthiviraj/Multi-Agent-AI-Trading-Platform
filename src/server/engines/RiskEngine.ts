@@ -26,6 +26,7 @@ import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
+import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
 
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
@@ -220,15 +221,43 @@ export class RiskEngine {
             });
             const maxTradeSizeDollar = restrictedLiveCaps.maxTradeSizeDollar;
 
-            accountEquity = portfolio.equity || 10000;
-            buyingPower = portfolio.buyingPower || 10000;
+            if (!isPositiveFiniteMoney(portfolio.equity)) {
+                recordGate(INVALID_ACCOUNT_EQUITY, false, { equity: portfolio.equity, buyingPower: portfolio.buyingPower });
+                approved = false;
+                maxQuantity = 0;
+                reasoning = 'INVALID_ACCOUNT_EQUITY: broker equity is missing or not positive. No placeholder balance is used.';
+                eventBus.emitRiskAssessment({
+                    traceId: proposal.traceId, transactionId: proposal.transactionId,
+                    symbol: proposal.symbol,
+                    side: proposal.side,
+                    currentPrice: proposal.currentPrice,
+                    approved: false,
+                    maxQuantity: 0,
+                    reasoning,
+                    newsDetails: proposal.newsDetails,
+                    selectedQuantStrategy: proposal.selectedQuantStrategy ?? null,
+                    quantStopPrice: proposal.quantStopPrice ?? null,
+                    quantTargetPrice: proposal.quantTargetPrice ?? null,
+                    quantInvalidationJson: proposal.quantInvalidationJson ?? null,
+                });
+                await this.persistAssessment(proposal, {
+                    approved: false, maxQuantity: 0, reasoning,
+                    rejectionGate: INVALID_ACCOUNT_EQUITY,
+                    accountEquity: undefined, buyingPower: portfolio.buyingPower,
+                    gateResults,
+                });
+                return;
+            }
+            recordGate(INVALID_ACCOUNT_EQUITY, true, { equity: portfolio.equity });
+            accountEquity = portfolio.equity;
+            buyingPower = isPositiveFiniteMoney(portfolio.buyingPower) ? portfolio.buyingPower : 0;
 
             // 2a. Daily loss circuit breaker - tracks real broker equity against a start-of-day
             // baseline captured the first time we evaluate risk each calendar day. Uses the real
             // exchange trading day (America/New_York), not UTC - UTC midnight is 7-8 PM New York
             // time, which would reset this baseline mid-session instead of at the real start of
             // the trading day.
-            const equityNow = portfolio.equity || 0;
+            const equityNow = accountEquity;
             const todayStr = getTradingDateStr();
             if (tradingEngine.state.dayStartDateStr !== todayStr) {
                 tradingEngine.state.dayStartDateStr = todayStr;
@@ -299,12 +328,12 @@ export class RiskEngine {
             // (news_articles has no impactScore column at all, so this always evaluated to
             // "no high-impact news" regardless of real news). Limited to a 4-hour window so a
             // stale high-impact cluster doesn't veto trades indefinitely.
-            const fourHoursAgo = new Date(Date.now() - 4 * 60 * 60 * 1000).toISOString();
+            const fourHoursAgo = new Date(Date.now() - tradingSafety.newsVetoWindowMs).toISOString();
             const recentClusters = await db.select().from(schema.newsClusters)
                 .where(gte(schema.newsClusters.updatedAt, fourHoursAgo));
             const symbolNews = recentClusters.filter((n: any) =>
                 n.symbols && n.symbols.includes(proposal.symbol) &&
-                n.impactScore && n.impactScore > 80
+                n.impactScore && n.impactScore > tradingSafety.newsVetoMinImpactScore
             );
             recordGate('news_veto', symbolNews.length === 0, { matchingClusters: symbolNews.length });
             const newsVetoReason = "High volatility news event detected, overriding AI decision.";
@@ -435,6 +464,7 @@ export class RiskEngine {
                     : firstFailure!.gate === 'sell_position_exists' ? sellPositionReason
                     : firstFailure!.gate === 'argus_capital_allocation' ? capitalRejectReason
                     : firstFailure!.gate === 'daily_buy_notional' ? dailyBuyNotionalReason
+                    : firstFailure!.gate === INVALID_ACCOUNT_EQUITY ? 'INVALID_ACCOUNT_EQUITY: broker equity is missing or not positive. No placeholder balance is used.'
                     : `Rejected by gate: ${firstFailure!.gate}`;
             } else {
                 reasoning = `Approved based on ${(maxPortfolioRiskPct*100).toFixed(1)}% portfolio risk cap and available BP.`;

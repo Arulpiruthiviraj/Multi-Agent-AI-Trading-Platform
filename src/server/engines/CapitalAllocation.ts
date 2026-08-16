@@ -26,7 +26,7 @@ export function snapshotCapital(input: {
   positions: Array<{ quantity: number; averagePrice?: number; avgPrice?: number; marketValue?: number }>;
   pendingBuys: Array<{ quantity: number; price: number; side?: string; status?: string }>;
 }): CapitalSnapshot {
-  const allocated = Math.max(0, input.allocated || 0);
+  const allocated = Number.isFinite(input.allocated) && input.allocated > 0 ? input.allocated : 0;
   let usedPositions = 0;
   for (const p of input.positions) {
     const qty = Number(p.quantity) || 0;

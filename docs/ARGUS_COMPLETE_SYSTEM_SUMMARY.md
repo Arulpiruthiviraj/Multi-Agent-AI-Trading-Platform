@@ -3,7 +3,8 @@
 **File:** `docs/ARGUS_COMPLETE_SYSTEM_SUMMARY.md`  
 **Mode:** read-only analysis of **source + tests + config**. Dated reports in `docs/archive/historical/` are not wiring.  
 **LIVE real-money:** **NO-GO.** This document does not invent a readiness percentage. Adding markdown does not raise scores.  
-**Primary evidence:** code and tests. When docs disagree with code, both are listed.
+**Primary evidence:** code and tests. When docs disagree with code, both are listed.  
+**2026-08-15 overlay:** Alpaca/AI timeouts, OMS inbound fill ingest + orphan cancel/pause, recon `TRADING_PAUSED` blocks RiskEngine (Section 30.12 obsolete), backtest capital-gate inequalities + live TP/trail on strategy exits, Arena RNG charts → `AwaitingSignal`. See root `FINAL_ANALYSIS.md` §32. Numbered KT files: [`knowledge-transfer/`](knowledge-transfer/).
 
 Companion: [`ARGUS_SYSTEM_INVENTORY.json`](ARGUS_SYSTEM_INVENTORY.json) (machine-readable). Short living docs: [`ARGUS.md`](ARGUS.md), [`ARGUS_REFERENCE.md`](ARGUS_REFERENCE.md). UI honesty: root `FINAL_ANALYSIS.md` §25.3 / §31. Agent contract: root `CLAUDE.md`.
 
@@ -81,7 +82,7 @@ One SPA: `src/App.tsx` (~10905 lines), **21 tabs**. Mix of real APIs and mocked/
 | Question | Verdict |
 |---|---|
 | Suitable for **careful paper** (InternalPaper or Alpaca paper) to exercise the pipeline? | **PARTIALLY** — software path exists; this env had **no** organic closed paper book in the last scored pass; UI and `/signals` can mislead. |
-| Suitable for **real money**? | **NO-GO** — no OOS edge, AI accuracy weak, Coinbase/IBKR not unattended-safe, recon pause does not flatten, `/signals` bypass, Autobot-off ticks still feed TechnicalAgent. |
+| Suitable for **real money**? | **NO-GO** — no OOS edge, AI accuracy weak, Coinbase/IBKR not unattended-safe, recon pause does not flatten, `/signals` bypass, Autobot-off ticks still feed TechnicalAgent. Timeouts/crash ingest/orphan cancel are **software** fixes, not an edge. |
 
 ---
 

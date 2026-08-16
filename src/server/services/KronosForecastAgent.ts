@@ -21,6 +21,7 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { kronosEngine } from '../engines/kronos/KronosEngine';
 import { ForecastPrediction } from '../engines/forecasting/IForecastEngine';
 
@@ -51,6 +52,7 @@ export class KronosForecastAgent {
     if (history.length > MAX_HISTORY) history.shift();
 
     if (history.length < MIN_HISTORY) return;
+    if (!isLiveIdeaGenerationEnabled()) return;
     if (!kronosEngine.getStatus().isAvailable) return;
 
     const last = this.lastPredictionAt[data.symbol] || 0;

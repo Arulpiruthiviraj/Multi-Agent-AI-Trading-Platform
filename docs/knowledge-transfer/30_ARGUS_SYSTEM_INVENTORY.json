@@ -1,0 +1,47 @@
+{
+  "$comment": "Copy of docs/ARGUS_SYSTEM_INVENTORY.json for the numbered KT pack. LIVE is NO-GO.",
+  "canonicalPath": "docs/ARGUS_SYSTEM_INVENTORY.json",
+  "generatedFrom": "read-only reverse-engineering 2026-08-15 post-hardening",
+  "livePath": "EventBus TRADE_IDEA_GENERATED → ChiefTrader → RiskAgent → RiskEngine → OMS → BrokerManager.placeOrder",
+  "legacyBypassPath": "GET /api/v1/signals",
+  "port": 3000,
+  "portEnvRead": false,
+  "database": {
+    "engine": "sqlite",
+    "file": "data/argus.db",
+    "wal": true,
+    "tableCount": 44
+  },
+  "agentCount": 14,
+  "voterAgents": ["TechnicalAgent", "NewsAgent", "FundamentalAgent", "MacroAgent", "QuantEngine", "KronosEngine", "PortfolioManager"],
+  "aiProvidersWithClasses": ["Gemini", "OpenAI", "DeepSeek", "Nvidia", "OpenAICompatible/Ollama"],
+  "aiEnvKeysWithoutProviderClass": ["ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "KIMI_API_KEY", "GROK_API_KEY", "GROQ_API_KEY"],
+  "coreStrategyCount": 5,
+  "experimentalStrategyCount": 15,
+  "taxonomyNamedTechniques": 760,
+  "riskGateCount": 18,
+  "canonicalEventCount": 29,
+  "frontendTabs": 21,
+  "featureFlagCount": 26,
+  "tests": {"vitestFilesApprox": 128, "playwrightSpecs": 1, "globHitsTestSpec": 257},
+  "readiness": {
+    "paperThisEnvironmentLastScoredPass": "zero organic closed paper trades",
+    "newsAgentLastScoredPass": "44.6% on 242 predictions",
+    "walkForwardOosCheckedCombos": "failed",
+    "liveRealMoney": "NO-GO",
+    "highWinRate": "UNVALIDATED"
+  },
+  "hardening2026_08_15": {
+    "alpacaAbortTimeout": true,
+    "aiRouterAbortTimeout": true,
+    "omsInboundFillIngest": true,
+    "omsOrphanCancelOrPause": true,
+    "reconSetsTradingPaused": true,
+    "backtestCapitalGateInequalities": true,
+    "strategyBacktestLiveExits": true,
+    "arenaRngChartsRemoved": true,
+    "fullLiveRiskLadderInBacktest": false,
+    "aiInBacktest": false
+  },
+  "seeFullInventory": "../ARGUS_SYSTEM_INVENTORY.json"
+}

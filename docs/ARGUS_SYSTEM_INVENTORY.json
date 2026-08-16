@@ -1,6 +1,6 @@
 {
   "$comment": "Machine-readable Argus inventory from code/config. Not a readiness score. LIVE is NO-GO.",
-  "generatedFrom": "read-only reverse-engineering",
+  "generatedFrom": "read-only reverse-engineering 2026-08-15 post-hardening",
   "livePath": "EventBus TRADE_IDEA_GENERATED → ChiefTrader → RiskAgent → RiskEngine → OMS → BrokerManager.placeOrder",
   "legacyBypassPath": "GET /api/v1/signals",
   "port": 3000,
@@ -101,10 +101,24 @@
     "walkForwardOosCheckedCombos": "failed",
     "liveRealMoney": "NO-GO"
   },
+  "hardening2026_08_15": {
+    "alpacaAbortTimeout": true,
+    "aiRouterAbortTimeout": true,
+    "omsInboundFillIngest": true,
+    "omsOrphanCancelOrPause": true,
+    "reconSetsTradingPaused": true,
+    "backtestCapitalGateInequalities": true,
+    "strategyBacktestLiveExits": true,
+    "arenaRngChartsRemoved": true,
+    "fullLiveRiskLadderInBacktest": false,
+    "aiInBacktest": false
+  },
   "knownP0": [
     "no validated OOS edge",
     "LIVE NO-GO",
-    "GET /api/v1/signals bypasses RiskEngine"
+    "GET /api/v1/signals bypasses RiskEngine",
+    "Autobot-off TechnicalAgent still on MARKET_DATA",
+    "high win rate is UNVALIDATED not a software flag"
   ],
   "docVsCode": [
     {"claim": "45 tables", "code": "44 sqliteTable exports"},

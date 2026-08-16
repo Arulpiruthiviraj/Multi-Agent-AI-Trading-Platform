@@ -16,7 +16,7 @@ Do not bypass RiskEngine. Do not add a second kill switch. `settings.budget` is 
 
 ## What it does / does not
 
-Does: paper or Alpaca unattended orders through the live path; 18 recorded risk gates; recon can `TRADING_PAUSED`; optional Quant/Chronos/Ollama/OpenAlice/IBKR Gateway.
+Does: paper or Alpaca unattended orders through the live path; 18 recorded risk gates; recon `TRADING_PAUSED` **does** fail `emergency_stop`; Alpaca/AI AbortController timeouts; OMS inbound fill ingest + orphan cancel/pause; backtest capital-gate inequalities + live TP/trail exits on strategy runs; optional Quant/Chronos/Ollama/OpenAlice/IBKR Gateway.
 
 Does not: proven edge; L2/options/breadth/volume profile/pairs/anchored VWAP/TSI/CAD FX; fractional shares; Canadian automated routing (IIROC); historical AI replay of past years.
 
@@ -70,13 +70,13 @@ InternalPaper (default, ~$100k). Alpaca paper/live REST (unattended). IBKR Gatew
 
 Five CORE strategies if Quant on. Fifteen experimental modules: backtest via `findStrategy` without flags; live only if **that** env is `'true'`. Taxonomy JSON maps **760 names** — not 760 live edges. `NOT_SUPPORTED`: breadth, options, L2, profile, TSI, anchored VWAP, pairs, CAD FX.
 
-Backtest `run()` = TA-like rules, no AI. `runStrategyBacktest()` = named strategy, **long-only**, SEC/FINRA on sells, dynamic slippage. Walk-forward does not optimize. AI year-replay **UNAVAILABLE**.
+Backtest `run()` = TA-like rules, no AI. `runStrategyBacktest()` = named strategy, **long-only**, SEC/FINRA on sells, dynamic slippage. Both apply `BacktestRiskParity` daily-loss / consecutive-loss / drawdown / rate-limit (not the full live 18-gate ladder). Strategy exits: live `takeProfitPct`/`trailingStopPct` on close + strategy stop (no idealized target-on-high). Walk-forward does not optimize. AI year-replay **UNAVAILABLE**.
 
 ## Data / frontend / DB
 
 Alpaca IEX top-of-book + raw daily bars in `ohlcv_bars`. Two feeds: EventBus ticks vs `liveQuotes` → InternalPaper `tick` — TechnicalAgent uses EventBus only.
 
-SPA: `src/App.tsx`, **21 tabs**, mixed real/mock. Login return is **after** most hooks. `FINAL_ANALYSIS.md` wins for widgets.
+SPA: `src/App.tsx`, **21 tabs**, mixed real/mock. Arena RNG performance widgets replaced with `AwaitingSignal` (2026-08-15). Login return is **after** most hooks. `FINAL_ANALYSIS.md` §32 + §15.20 / §31 wins for widgets.
 
 **44** SQLite tables. Export DB + copy `data/.encryption_key`.
 
@@ -86,4 +86,4 @@ SPA: `src/App.tsx`, **21 tabs**, mixed real/mock. Login return is **after** most
 
 ## Honest gaps
 
-No OOS edge; UI lamps can be static/mocked; SQLite one writer; IBKR 2FA; recon $100 pause does not flatten; `/signals` still exists.
+No OOS edge; UI lamps can be static/mocked; SQLite one writer; IBKR 2FA; recon $100 pause does not flatten; `/signals` still exists; Autobot-off ticks can still drive TechnicalAgent. **LIVE NO-GO.** High win rate is not a software deliverable (`FINAL_ANALYSIS.md` §32.7). KT pack: `docs/knowledge-transfer/`.

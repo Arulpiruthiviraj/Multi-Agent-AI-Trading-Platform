@@ -22,6 +22,7 @@
  */
 
 import { tradingSafety } from '../config/tradingSafety';
+import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
 
 export const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = tradingSafety.maxSingleSymbolConcentrationPct;
 export const MAX_SECTOR_CONCENTRATION_PCT = tradingSafety.maxSectorConcentrationPct;
@@ -119,6 +120,12 @@ export interface SizingResult {
 export async function calculatePositionSizing(ctx: SizingContext): Promise<SizingResult> {
   const gates: SizingGateResult[] = [];
   const record = (gate: string, passed: boolean, detail: any) => gates.push({ gate, passed, detail });
+
+  if (!isPositiveFiniteMoney(ctx.accountEquity)) {
+    record(INVALID_ACCOUNT_EQUITY, false, { accountEquity: ctx.accountEquity });
+    record('sufficient_size', false, { maxQuantity: 0, reason: 'INVALID_ACCOUNT_EQUITY' });
+    return { maxQuantity: 0, gates };
+  }
 
   const riskPerShare = ctx.currentPrice * STOP_LOSS_ASSUMPTION_PCT;
   const maxRiskAmount = ctx.accountEquity * ctx.maxPortfolioRiskPct;

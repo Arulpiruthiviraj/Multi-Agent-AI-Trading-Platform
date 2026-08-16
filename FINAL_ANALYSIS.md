@@ -1,51 +1,44 @@
 # Argus Autonomous Trading Platform — Technical & Functional Analysis
 
-> ## LATEST READINESS AUDIT (2026-08-12) — READ THIS FIRST
+> ## LATEST READINESS — 2026-08-15 (Section 32) — READ THIS FIRST
 >
-> A fresh, ground-truth, read-only audit of the current repository (not a re-read of any prior
-> audit's own claims) was performed to answer one question: **how close is Argus, in its current
-> state, to being safe and technically ready for autonomous real-money trading?** Full 28-section
-> report with file:line evidence: **Section 30, "Deep Technical + Quantitative Autonomous Trading
-> Readiness Audit," at the end of this document.** Executive answer:
+> Section 30 (2026-08-12) is **historical**. Several of its P0 software claims are **stale vs current
+> code**. This banner does **not** invent a new readiness percentage and does **not** raise LIVE.
 >
 > ```
-> AUTONOMOUS REAL-MONEY READINESS:     53%
-> SOFTWARE READINESS:                  ~58%
-> TRADING-VALIDATION READINESS:        ~15%
-> AI READINESS:                        ~35%
-> QUANT STRATEGY READINESS:            ~25%
+> REAL-MONEY STATUS:                   NO-GO  (unchanged)
+> PAPER:                               MECHANICALLY POSSIBLE; not a proven book in this env
+> PROFITABILITY / WIN RATE:            UNVALIDATED — software cannot deliver a high win rate
+> QUANT OOS (last scored pass):        FAILED (edge evaporated)
+> NEWSAGENT (last scored pass):        44.6% on 242 predictions
+> ORGANIC CLOSED PAPER (that pass):    ZERO
 >
-> REAL-MONEY STATUS:                   NO-GO
-> CURRENT RECOMMENDATION:              PAPER (extended validation, not restricted live)
+> SECTION 30 P0s THAT ARE NOW CODE-FIXED (unit-tested; not live-broker proven):
+> - Recon pause: setTradingState('TRADING_PAUSED') — RiskEngine emergency_stop reads tradingState
+>   (PortfolioReconciliation.ts + tradingBlock test). Section 30.12 is obsolete.
+> - Alpaca AbortController timeout + retries + circuit breaker (tradingSafety.json numbers).
+> - AIRouter AbortController + aiProviderTimeoutMs; fetch providers honor signal.
+> - OMS inbound broker-fill ingest + stale client_order_id recovery; orphaned partials cancel
+>   or pause trading after omsFollowUpMaxAgeMs (not abandon).
+> - Backtest BUY entries use same daily-loss / consecutive-loss / drawdown / rate-limit
+>   inequalities as live (BacktestRiskParity.ts). NOT the full 18-gate live ladder.
+> - Strategy backtest exits use settings takeProfitPct/trailingStopPct (not idealized high vs
+>   per-strategy target).
+> - Arena RNG-seeded performance charts replaced with AwaitingSignal (no invented P&L).
 >
-> TOP 5 BLOCKERS:
-> 1. No validated trading edge anywhere — the one out-of-sample check ever run on this
->    codebase's own best-looking numbers showed 79-89% of the apparent edge evaporating
->    out-of-sample (Section 30.17).
-> 2. Portfolio reconciliation's "pauses trading on large mismatch" safety claim is FALSE —
->    verified by tracing the actual code: it sets a flag RiskEngine's real gate never reads
->    (Section 30.12, CRITICAL — REAL-MONEY RISK).
-> 3. Zero timeout anywhere in the broker or AI call stack — a hung Alpaca or LLM call blocks
->    indefinitely with no circuit breaker (Sections 30.5, 30.11).
-> 4. No order-level crash recovery — an order Alpaca filled but the app crashed before
->    recording can sit permanently wrong in the local DB (Section 30.5).
-> 5. No AI-driven decision (News/Fundamental/Macro/ChiefTrader debate) has ever been
->    backtested — the backtester has zero references to the AI layer at all (Section 30.8).
+> SECTION 30 P0s THAT STILL STAND:
+> - No validated trading edge (OOS fail).
+> - AI consensus path is not in BacktestEngine.
+> - GET /api/v1/signals still bypasses RiskEngine / OMS / trades.
+> - LIVE confirmation exists in software; trading validation does not.
 >
-> MINIMUM REALISTIC CAPITAL: ~$3,000-5,000 for restricted live (once other gates close) —
-> below the default $3,000 flat order cap, whole-share pricing on real symbols leaves too
-> little room to diversify or size meaningfully (Section 30.26).
->
-> PROFITABILITY EVIDENCE:   UNVALIDATED
-> AI TRADING EDGE:          UNVALIDATED
-> QUANT EDGE:                UNVALIDATED
->
-> FINAL VERDICT: NOT READY FOR AUTONOMOUS REAL-MONEY TRADING. See Section 30.27 for the full
-> Go/No-Go reasoning and the 10 hard gates (7 of 10 fail).
+> WHAT "100% TRADABLE AND AUTONOMOUS WITH HIGH WIN RATE" WOULD REQUIRE:
+> See Section 32.8. High win rate is an empirical trading result, not a feature flag.
+> Knowledge-transfer pack: docs/knowledge-transfer/ + docs/ARGUS_COMPLETE_SYSTEM_SUMMARY.md
 > ```
 >
-> **2026-08-15 honesty pass (Section 31) does not change the scores above.** UI/docs/`npm run dev`
-> companion-process work is additive and does not create a trading edge or raise LIVE readiness.
+> **Section 31** (UI honesty + companion boot) still applies. **Section 32** is the post-hardening
+> ground-truth overlay. Do not quote Section 30.12 / 30.5 timeouts as current bugs.
 
 ---
 
@@ -3993,9 +3986,116 @@ Already in code, recorded here so this file does not keep describing the pre-fix
 
 ### 31.6 What this pass explicitly does not claim
 
-- No change to Section 30 autonomous real-money **53% / NO-GO**.
+- No change to LIVE **NO-GO**. Section 30's numeric 53% figure is **not re-computed** here (do not
+  invent a new score). Software P0s in 30.5/30.12 are superseded by Section 32.
 - No claim that NewsAgent, Quant, or Kronos now has a validated edge.
 - No claim that Observability & Tracing (`audit`) is real — Observatory remains the real trace UI.
 - No second kill switch. Quant stays off unless env-enabled.
+
+---
+
+## 32. Execution / risk-parity / UI-honesty hardening overlay — 2026-08-15
+
+**Mode:** code + unit tests after the P0/P1 hardening pass. Not a live Alpaca fill campaign.
+**Does not claim profitability.**
+
+### 32.1 Classification of the audit items that were implemented
+
+| Audit claim (Section 30) | Current classification | Evidence |
+|---|---|---|
+| Recon only sets `emergencyStopActive` (ignored) | **IMPLEMENTED + VERIFIED** (unit) — 30.12 **obsolete** | `PortfolioReconciliation.ts` calls `tradingEngine.setTradingState('TRADING_PAUSED')`. `RiskEngine` `emergency_stop` requires `tradingState === 'TRADING_ENABLED'`. `PortfolioReconciliation.tradingBlock.test.ts` + `PortfolioReconciliation.test.ts` |
+| No Alpaca timeout | **IMPLEMENTED + VERIFIED** (unit) | `AlpacaBroker.ts` AbortController; `tradingSafety.alpacaRequestTimeoutMs` 15000; retries/circuit breaker; `AlpacaBroker.reliability.test.ts` |
+| No AI timeout / abort | **IMPLEMENTED + VERIFIED** (unit) | `AIRouter.withTimeout` AbortController; `aiProviderTimeoutMs` 20000; Gemini `abortSignal`; OpenAI/DeepSeek/compat `fetch` `signal`; `AIRouter.test.ts` |
+| Crash: fill never recorded | **IMPLEMENTED + VERIFIED** (unit) | `reconcileStaleOrders` (PENDING/REJECTED, no brokerOrderId) + `reconcileInboundBrokerOrders` (broker FILLED/PARTIAL with no local row). OMS `start()`. `OrderManagement.crashRecovery.test.ts`, lifecycle inbound test |
+| Partial fills abandoned at 30 min | **IMPLEMENTED + VERIFIED** (unit) | `followUpOpenOrders` → `cancelOrphanedOpenOrder` or `TRADING_PAUSED`. If broker list omits the id: warn once, leave last status. `omsFollowUpMaxAgeMs` 1800000 |
+| Backtest bypasses daily-loss/drawdown/rate-limit | **PARTIALLY IMPLEMENTED** | `BacktestRiskParity.ts` same inequalities for those four. **Not** live news_veto, market_hours, data_freshness, allocation, concentration, etc. |
+| Backtest idealized strategy targets | **IMPLEMENTED + VERIFIED** (unit) | `runStrategyBacktest` exit on strategy stop **or** live trail/TP vs **close**; no take-profit on bar high vs strategy target. `BacktestEngine.exitThresholds.test.ts` |
+| 13 fabricated UI tabs | **PARTIALLY IMPLEMENTED** | Arena mock risk-decomp / heatmap / model bars / charCodeAt overlay / mock factors → `AwaitingSignal`. Other tabs still mixed (see §15.20 + §31). Do not treat remaining educational theater as P&L |
+
+Config keys added (fail-boot if missing): `alpacaRequestTimeoutMs`, `alpacaMaxRetries`, `alpacaRetryBaseDelayMs`, `aiProviderTimeoutMs`, `omsFollowUpMaxAgeMs` (circuit breaker keys were already in JSON).
+
+### 32.2 Tab honesty after Arena purge (21 tabs)
+
+`src/App.tsx` `activeTab` values: dashboard, command, portfolio, arena, news, opportunities, scanner, intelligence, agents, evaluation, kronos, learning, memory, observatory, activity, diagnostics, audit, validation, deployment, settings, documentation.
+
+Still **not** fully real: Opportunity Feed, Validation RNG theater, Deployment quant-audit theater, Observability & Tracing (`audit`) vs Observatory, Intelligence fallbacks, Dashboard hardcoded shells, Agent Network dialogue/heatmap theater, Learning remaining gaps, L2 ladder (honestly unavailable). Strategy Scanner has a real `/api/v2/strategy/rsi-scan` path — do not cite charCodeAt overlay as current (overlay now AwaitingSignal).
+
+### 32.3 Live vs backtest (post-parity slice)
+
+| Component | Live | Backtest `run()` | `runStrategyBacktest()` |
+|---|---|---|---|
+| RiskEngine 18 gates | Yes | No | No |
+| daily_loss / consecutive_loss / drawdown / rate-limit **inequalities** | Yes | Yes (sim clock) | Yes |
+| ChiefTrader / News / LLM | Yes | No | No |
+| PositionSizing | Yes | Shared module | Shared module |
+| PortfolioMonitor TP/trail settings | Yes | `run()` uses settings | Same settings + strategy stop |
+| OMS / broker / recon | Yes | No | No |
+| SEC/FINRA + dynamic slippage | No (live broker) | Yes on sells | Yes |
+
+### 32.4 Still P0 for real money (not “missing timeouts”)
+
+1. **No OOS edge** — last scored walk-forward failed. **FAIL** trading validation.
+2. **AI path unbacktested** — News/Fund/Macro/debate never in `BacktestEngine`.
+3. **`GET /api/v1/signals`** — fabricated votes, `portfolio.json`, no RiskEngine.
+4. **Autobot off still feeds TechnicalAgent** from `MARKET_DATA` if worker started.
+5. **IBKR `requiresManualReauth`**; Coinbase paper `placeOrder` refuses; Questrade orders throw.
+6. **Canadian routing BLOCKED_IIROC** — `markets.json` is metadata.
+7. **Whole-share only**; default FIXED_DOLLAR cap often binds first.
+8. **Recon pause does not flatten** existing positions (by design).
+9. **SQLite single writer**; `PORT` unused; `npm run db:migrate` missing.
+10. **OpenAlice `tsc` error** in `OpenAliceVerificationService.ts` — compile hygiene, optional path.
+
+### 32.5 What would be required for *safe paper autonomy* (software)
+
+These are engineering gates, not win-rate gates:
+
+- Disable or RiskEngine-wrap `/api/v1/signals`.
+- Gate TechnicalAgent on Autobot/`TRADING_ENABLED` the same way News is.
+- Multi-week **organic** closed paper book with fills in `trades`/`fills` (this env last pass: zero).
+- Operator runbook: recon pause, orphan cancel, Alpaca circuit open.
+- UI: delete or label remaining fabricated tabs (`validation`, `audit`, leftover dashboard shells).
+- E2E covering OMS inbound recovery + recon pause (today: unit + 1 Playwright module-toggle spec).
+
+### 32.6 What would be required for *restricted live* (still NO-GO today)
+
+All of 32.5 **plus**: Alpaca live keys, `tradingMode` confirmation phrase, restricted-live ceilings left file-only, funded-account rehearsal of crash recovery, market-hours fail-closed proven in an outage, no Canadian auto-route, kill `/signals`, second human on recon pause.
+
+### 32.7 What would be required for a *high win rate* (honest)
+
+**Software cannot implement a high win rate.** Required empirical work:
+
+- Pre-registered universe, costs, slippage; walk-forward **pass** with sample ≥ engine’s 20-trade floor.
+- Point-in-time news/LLM logs before claiming AI edge (today: **UNAVAILABLE** for year replay).
+- Live-path vs backtest remaining divergences closed (news veto, hours, allocation, AI).
+- Calibrated probabilities (NewsAgent 44.6% is not an edge).
+- Regime-segmented OOS; no enabling experimental Quant flags “to see if it works.”
+
+Until those exist, claiming “100% autonomous and high win rate” is **false**.
+
+### 32.8 Suggested enhancement backlog (priority, not scheduled work)
+
+**P0 — capital / honesty:** remove or cage `/signals`; Autobot-off tick leak; remaining fabricated tabs; compile-fix OpenAlice if that path is enabled.
+
+**P1 — validation:** paper closed-trade campaign; PIT replay ledger for AI; wire remaining live gates that *can* be simulated (allocation, concentration) into backtest or document permanent divergence; flatten-or-alert policy on recon (today pause-only).
+
+**P2 — execution:** normalize Alpaca `canceled` vs `CANCELLED` if ever seen; inbound recovery vs `status=all` pagination; dual quote feeds (EventBus vs `liveQuotes`) unified.
+
+**P3 — product:** fractional shares only if broker + RiskEngine both support; Canadian **legal** execution (not JSON); IBKR unattended is likely **impossible** with 2FA.
+
+**P4 — research:** do not add strategies until CORE five have OOS. Ichimoku is missing — that is not a blocker vs edge.
+
+### 32.9 Tests added/updated this hardening pass
+
+`OrderManagement.lifecycle.test.ts` (inbound fill; cancel after max age; give-up only when broker omits order), `OrderManagement.crashRecovery.test.ts`, `BacktestRiskParity.test.ts`, `BacktestEngine.exitThresholds.test.ts` / drawdown, `PortfolioReconciliation.test.ts`, `AIRouter.test.ts`, `tradingSafety.test.ts`, `AlpacaBroker.reliability.test.ts`.
+
+`npx tsc --noEmit` still fails on pre-existing `OpenAliceVerificationService.ts` Promise typing. Hardening files were clean after dropping invalid `'CANCELLED'` compare.
+
+### 32.10 Verdict
+
+Argus is a **real event-driven paper/live *software* path** with fail-closed timeouts, order ingest, orphan cancel, recon pause that **does** block new orders, and partial backtest capital-gate parity.
+
+It is **not** a validated trading system. **LIVE: NO-GO.** High win rate: **UNKNOWN / UNVALIDATED.**
+
+KT documents: `docs/knowledge-transfer/` (01–30), `docs/ARGUS.md`, `docs/ARGUS_COMPLETE_SYSTEM_SUMMARY.md`, `docs/ARGUS_SYSTEM_INVENTORY.json`.
 
 ---

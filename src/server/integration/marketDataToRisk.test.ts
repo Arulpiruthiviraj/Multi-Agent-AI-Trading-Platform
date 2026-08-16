@@ -47,6 +47,9 @@ describe('Integration: MARKET_DATA -> TechnicalAgent -> ChiefTrader -> RiskAgent
     await import('../services/TechnicalAgent');
     await import('../services/ChiefTraderAgent');
     await import('../services/RiskAgent');
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
   });
 
   afterAll(() => {

@@ -142,6 +142,7 @@ export class PortfolioMonitorWorker {
               reasoning: `Quant strategy (${openingTrade!.quantStrategyId}) target reached: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}. Scaling out to manage risk.`,
               agent: agentWeightConfig.riskExitAgent
             });
+            continue;
           } else if (quantStop !== null && currentLivePrice <= quantStop) {
             console.log(`[PortfolioWorker] Quant strategy (${openingTrade!.quantStrategyId}) stop hit on ${holding.symbol}: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}`);
             eventBus.emitTradeIdea({
@@ -153,6 +154,7 @@ export class PortfolioMonitorWorker {
               reasoning: `Quant strategy (${openingTrade!.quantStrategyId}) stop hit: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}. Preserving capital.`,
               agent: agentWeightConfig.riskExitAgent
             });
+            continue;
           } else if (storedThesis) {
             const invalidation = await this.evaluateLiveThesis(holding.symbol, storedThesis);
             if (invalidation) {
@@ -166,9 +168,21 @@ export class PortfolioMonitorWorker {
                 reasoning: `Original thesis invalidated (${openingTrade!.quantStrategyId ?? storedThesis.strategy}): ${invalidation}`,
                 agent: agentWeightConfig.riskExitAgent
               });
+              continue;
             }
           }
-          continue; // strategy-aware exit already evaluated this position - skip the generic percentage check below
+          if (PnL < -trailingStopPct) {
+            eventBus.emitTradeIdea({
+              traceId: Math.random().toString(36).substring(7),
+              symbol: holding.symbol,
+              side: "SELL",
+              confidence: tradingSafety.quantStopExitConfidence,
+              currentPrice: currentLivePrice,
+              reasoning: `Live trailing-stop backstop (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%) in addition to strategy stop/target.`,
+              agent: agentWeightConfig.riskExitAgent
+            });
+          }
+          continue;
         }
 
         if (PnL > takeProfitPct) {

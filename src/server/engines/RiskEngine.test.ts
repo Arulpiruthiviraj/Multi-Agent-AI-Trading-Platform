@@ -202,9 +202,9 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.reasoning).not.toMatch(/consecutive losing trades/);
   });
 
-  it('vetoes a trade when a high-impact news cluster (impactScore > 80) covers the symbol', async () => {
+  it('vetoes a trade when a high-impact news cluster (impactScore above tradingSafety.newsVetoMinImpactScore) covers the symbol', async () => {
     setTableRows(schema.newsClusters, [
-      { symbols: '["AAPL","MSFT"]', impactScore: 95, updatedAt: new Date().toISOString() },
+      { symbols: '["AAPL","MSFT"]', impactScore: tradingSafety.newsVetoMinImpactScore + 15, updatedAt: new Date().toISOString() },
     ]);
 
     await riskEngine.evaluateRisk({ traceId: 't5', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });

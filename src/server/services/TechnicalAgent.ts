@@ -34,6 +34,7 @@
  */
 
 import { eventBus } from '../core/EventBus';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { rsiEngine } from '../engines/RSIEngine';
 import { macdEngine } from '../engines/MACDEngine';
 
@@ -54,6 +55,8 @@ export class TechnicalProposerAgent {
     if (history.length > 50) {
       history.shift();
     }
+
+    if (!isLiveIdeaGenerationEnabled()) return;
     
     if (history.length === 50) {
       this.checkStrategies(data.symbol, history);

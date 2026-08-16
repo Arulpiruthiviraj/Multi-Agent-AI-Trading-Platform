@@ -12,7 +12,9 @@ import { eq } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { eventBus } from '../core/EventBus';
 import { tradingEngine } from '../engines/TradingEngine';
+import { tradingSafety } from '../config/tradingSafety';
 import { TERMINAL_ORDER_STATUSES } from './OrderManagement';
+import { submitPipelineSells } from './PipelineFlatten';
 
 const QTY_TOLERANCE = 0.001; // ignore float noise, not real drift
 // A mismatch this large in dollar value pauses new trading (emergencyStopActive) until reviewed -
@@ -225,6 +227,25 @@ export class PortfolioReconciliationWorker {
           });
           console.error(`[PortfolioReconciliation] SIGNIFICANT mismatch ($${worstImpact.toFixed(2)}) - trading paused (tradingState=TRADING_PAUSED) via setTradingState(), verified to actually block new orders at RiskEngine's emergency_stop gate.`);
           actionTaken = 'TRADING_PAUSED';
+          eventBus.publish('RECONCILIATION_EMERGENCY_HALT', {
+            timestamp,
+            broker: broker.name,
+            worstImpactDollars: Number(worstImpact.toFixed(2)),
+            mismatches,
+            autoFlatten: tradingSafety.autoFlattenOnReconciliationMismatch,
+          });
+          if (tradingSafety.autoFlattenOnReconciliationMismatch) {
+            const flattenSymbols = [...new Set(
+              mismatches
+                .filter(m => m.symbol && m.symbol !== '__ACCOUNT__' && (m.type === 'QUANTITY_DRIFT' || m.type === 'MISSING_LOCALLY' || m.type === 'MISSING_REMOTELY'))
+                .map(m => m.symbol),
+            )];
+            if (flattenSymbols.length > 0) {
+              const flattenResult = await submitPipelineSells(flattenSymbols);
+              actionTaken = 'TRADING_PAUSED_AND_PIPELINE_FLATTEN';
+              console.error(`[PortfolioReconciliation] autoFlattenOnReconciliationMismatch: submitted ${flattenResult.submitted.length} SELLs via RiskEngine; refused ${flattenResult.refused.length}.`);
+            }
+          }
         }
       } else {
         eventBus.publish('RECONCILIATION_MATCH', { timestamp, broker: broker.name });

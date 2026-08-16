@@ -1298,39 +1298,13 @@ let portfolioState = loadPortfolio();
     res.json(consensus);
   });
 
-  // Swarm Decision Outcomes Endpoint (used by Arena tab)
-  app.get("/api/v1/signals", async (req: Request, res: Response) => {
-    const symbol = ((req.query.symbol as string) || "AAPL").toUpperCase();
-    const headline = (req.query.headline as string) || `Analyze ${symbol}`;
-    
-    const llmResult = await callLLMConsensus(`Evaluate this event for ${symbol}: ${headline}`);
-    
-    const mockSignals = llmResult.results.map((r: any, idx: number) => ({
-      agent_id: r.provider || `agent_${idx}`,
-      signal: r.status === 'error' ? 'ERROR' : llmResult.consensus_verdict,
-      confidence: 0.85,
-      reasoning: r.error || "Processed and verified by LLM"
-    }));
-
-    res.json({
-      symbol,
-      regime: tradingEngine.state.regimeState?.regime || "UNKNOWN",
-      decision: llmResult.consensus_verdict,
-      internal_consensus: llmResult.consensus_verdict,
-      confidence: 0.85,
-      consensus_explanation: "LLM consensus reached across available providers.",
-      alpaca_mcp: {
-         decision: llmResult.consensus_verdict === 'HOLD' ? 'REJECT' : 'APPROVE',
-         sentiment: llmResult.consensus_verdict === 'BUY' ? 'bullish' : 'bearish',
-         trend: 'neutral',
-         confidence: 0.9,
-         reasoning: "Verified against basic safety rules"
-      },
-      vetoed_by_risk: false,
-      execution_status: "PAPER_SIMULATED",
-      executed_trade: null,
-      compiled_signals: mockSignals,
-      risk_vetos_logged: []
+  // Legacy GET /api/v1/signals fabricated agent votes and wrote portfolio.json, bypassing
+  // RiskEngine / OMS / trades. Quarantined: clients must use the live EventBus path.
+  app.get("/api/v1/signals", (_req: Request, res: Response) => {
+    res.status(410).json({
+      error: "GONE",
+      code: "SIGNALS_PATH_QUARANTINED",
+      message: "GET /api/v1/signals is disabled. It fabricated consensus and bypassed RiskEngine. Use EventBus TRADE_IDEA_GENERATED → ChiefTrader → RiskEngine → OMS.",
     });
   });
 

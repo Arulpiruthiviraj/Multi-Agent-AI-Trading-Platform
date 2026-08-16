@@ -130,4 +130,37 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
     expect(result.clean).toBe(true);
     expect(call).toBe(2);
   });
+
+  it('refuses look-ahead ingestion when publishedAtMs is after asOfMs', async () => {
+    await expect(historicalDataGateway.ingestPitLedgerEntry({
+      asOfMs: 1_000,
+      publishedAtMs: 2_000,
+      symbol: 'AAPL',
+      kind: 'NEWS',
+      impactScore: 90,
+    })).rejects.toThrow(/LOOK_AHEAD_FORBIDDEN/);
+  });
+
+  it('returns NEWS published at or before simulated now and hides later rows', async () => {
+    const nowMs = Date.UTC(2024, 5, 3, 16, 0, 0);
+    await historicalDataGateway.ingestPitLedgerEntry({
+      asOfMs: nowMs - 60_000,
+      publishedAtMs: nowMs - 60_000,
+      symbol: 'PITCO',
+      kind: 'NEWS',
+      impactScore: 91,
+      finbertScore: 0.4,
+    });
+    await historicalDataGateway.ingestPitLedgerEntry({
+      asOfMs: nowMs + 60_000,
+      publishedAtMs: nowMs + 60_000,
+      symbol: 'PITCO',
+      kind: 'NEWS',
+      impactScore: 99,
+    });
+    const visible = await historicalDataGateway.getPitNewsAsOf('PITCO', nowMs);
+    expect(visible).toHaveLength(1);
+    expect(visible[0].impactScore).toBe(91);
+    expect(visible[0].publishedAtMs).toBeLessThanOrEqual(nowMs);
+  });
 });
