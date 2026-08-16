@@ -30,8 +30,13 @@ export interface TradingSafety {
   /** 0 = unlimited in paper/simulation. LIVE always also applies restrictedLiveMaxDailyBuyNotionalDollars. */
   maxDailyBuyNotionalDollars: number;
   restrictedLiveMaxDailyBuyNotionalDollars: number;
+  alpacaRequestTimeoutMs: number;
+  alpacaMaxRetries: number;
+  alpacaRetryBaseDelayMs: number;
   alpacaCircuitBreakerFailureThreshold: number;
   alpacaCircuitBreakerCooldownMs: number;
+  aiProviderTimeoutMs: number;
+  omsFollowUpMaxAgeMs: number;
   aiFailureWindowMs: number;
   aiFailureThresholdForLivePause: number;
   crashRecoveryLookbackMs: number;
@@ -83,7 +88,12 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'restrictedLiveMaxDailyLossDollars',
   'maxDailyBuyNotionalDollars',
   'restrictedLiveMaxDailyBuyNotionalDollars',
+  'alpacaRequestTimeoutMs',
+  'alpacaMaxRetries',
+  'alpacaRetryBaseDelayMs',
   'alpacaCircuitBreakerFailureThreshold',
+  'aiProviderTimeoutMs',
+  'omsFollowUpMaxAgeMs',
   'alpacaCircuitBreakerCooldownMs',
   'aiFailureWindowMs',
   'aiFailureThresholdForLivePause',

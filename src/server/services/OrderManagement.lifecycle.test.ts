@@ -177,19 +177,22 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     expect(after.status).toBe('FILLED'); // untouched - already terminal, never re-queried
   });
 
-  it('gives up (logs once, stops touching the row) after the bounded max follow-up age, without fabricating a resolution', async () => {
+  it('gives up (logs once, leaves last-known status) when the broker no longer reports the order after max follow-up age', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await oms.executeOrder('TSLA', 'BUY', 3, 'test reasoning', 'lifecycle-giveup-1');
     const row = (await db.select().from(schema.trades).where(eq(schema.trades.traceId, 'lifecycle-giveup-1')))[0];
 
-    ordersResponse = [{ id: row.brokerOrderId, symbol: 'TSLA', side: 'BUY', type: 'MARKET', status: 'PARTIALLY_FILLED', quantity: 3, filledQuantity: 0, createdAt: new Date(), updatedAt: new Date() }];
-    await ageOrder(row.id, 31 * 60 * 1000); // past the 30-minute bounded max-age
+    // Still-open locally, but the broker list no longer contains this id — we cannot invent
+    // a cancel/fill. If the order *is* still reported open, follow-up cancels the remainder
+    // (see "cancels a still-open order older than tradingSafety.omsFollowUpMaxAgeMs").
+    ordersResponse = [];
+    await ageOrder(row.id, 31 * 60 * 1000);
 
     await oms.followUpOpenOrders();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Giving up follow-up'));
 
     const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, row.id)))[0];
-    expect(after.status).toBe('PARTIALLY_FILLED'); // left exactly as last observed, not fabricated FILLED/CANCELED
+    expect(after.status).toBe('PARTIALLY_FILLED');
 
     warnSpy.mockRestore();
   });
@@ -244,6 +247,62 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
 
     const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, row.id)))[0];
     expect(after.status).not.toBe('CANCELED'); // never marked cancelled on a real broker refusal
+  });
+
+  it('reconcileInboundBrokerOrders records a broker fill that has no local trades row', async () => {
+    ordersResponse = [{
+      id: 'broker-inbound-1',
+      clientOrderId: 'never-locally-inserted',
+      symbol: 'MSFT',
+      side: 'BUY',
+      type: 'MARKET',
+      status: 'FILLED',
+      quantity: 3,
+      filledQuantity: 3,
+      averageFillPrice: 400,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }];
+    await oms.reconcileInboundBrokerOrders();
+    const rows = await db.select().from(schema.trades).where(eq(schema.trades.brokerOrderId, 'broker-inbound-1'));
+    expect(rows.length).toBe(1);
+    expect(rows[0].status).toBe('FILLED');
+    expect(rows[0].symbol).toBe('MSFT');
+    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, rows[0].id));
+    expect(fillRows.length).toBeGreaterThan(0);
+  });
+
+  it('followUpOpenOrders cancels a still-open order older than tradingSafety.omsFollowUpMaxAgeMs', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const oldIso = new Date(Date.now() - tradingSafety.omsFollowUpMaxAgeMs - 60_000).toISOString();
+    await db.insert(schema.trades).values({
+      id: 'orphan-partial',
+      symbol: 'ORPH',
+      side: 'BUY',
+      quantity: 10,
+      price: 10,
+      status: 'PARTIALLY_FILLED',
+      timestamp: oldIso,
+      reasoning: 'test',
+      traceId: 'orphan-partial-trace',
+      brokerOrderId: 'broker-orphan-1',
+      requestId: 'orphan-partial',
+      submittedAt: oldIso,
+    });
+    ordersResponse = [{
+      id: 'broker-orphan-1',
+      symbol: 'ORPH',
+      side: 'BUY',
+      type: 'MARKET',
+      status: 'PARTIALLY_FILLED',
+      quantity: 10,
+      filledQuantity: 2,
+      averageFillPrice: 10,
+      createdAt: new Date(oldIso),
+      updatedAt: new Date(),
+    }];
+    await oms.followUpOpenOrders();
+    expect(cancelOrderSpy).toHaveBeenCalledWith('broker-orphan-1');
   });
 });
 

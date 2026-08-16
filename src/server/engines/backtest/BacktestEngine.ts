@@ -41,6 +41,13 @@ import { expectedValue, fractionalKelly, ExpectedValueResult, KellyResult } from
 import { classifyTradeFailure, computeFailureBreakdown } from '../../quant/analysis/FailureClassification';
 import { tradingSafety } from '../../config/tradingSafety';
 import { buildAccountSizeReport } from '../../quant/analysis/AccountSizeReport';
+import {
+  consecutiveLossBlocksNewBuys,
+  dailyLossBlocksNewBuys,
+  drawdownBlocksNewBuys,
+  nySessionKey,
+  orderRateBlocksNewBuys,
+} from './BacktestRiskParity';
 
 export interface BacktestConfig {
   symbols: string[];
@@ -190,6 +197,9 @@ export class BacktestEngine {
       // E2B - feature-flagged, defaults to 'FIXED_DOLLAR' (today's exact behavior).
       const sizingMode = (liveSettings[0]?.positionSizingMode as 'FIXED_DOLLAR' | 'PERCENT_OF_EQUITY') || 'FIXED_DOLLAR';
       const percentOfEquityPct = liveSettings[0]?.percentOfEquityPct ?? 2;
+      const maxPortfolioDrawdownPct = liveSettings[0]?.maxPortfolioDrawdownPct ?? 0.15;
+      const dailyLossLimitDollars = liveSettings[0]?.dailyLossLimit ?? 5000;
+      const maxOrdersPerMinute = liveSettings[0]?.maxOrdersPerMinute ?? 5;
 
       // Point-in-time-safe closes lookup for the correlation-exposure gate - only ever bars
       // already visible up to the simulated clock, and only among symbols this backtest actually
@@ -209,6 +219,10 @@ export class BacktestEngine {
       const positions: Record<string, OpenPosition> = {};
       const equityCurve: { timestamp: number; equity: number }[] = [];
       const tradeLog: SimulatedTrade[] = [];
+      let peakEquity = initialCash;
+      let dayKey = nySessionKey(timeline[0].timestamp);
+      let dayStartEquity = initialCash;
+      const buyTimestampsMs: number[] = [];
 
       // Real point-in-time equity: cash plus every open position valued at its own last real
       // close visible as of the simulated clock - used both for sizing decisions (accountEquity
@@ -279,12 +293,29 @@ export class BacktestEngine {
           else if (changePct >= takeProfitPct) { signal = 'SELL'; confidence = 0.60; reasoning = `Take-profit (+${(takeProfitPct * 100).toFixed(1)}%)`; }
         }
 
-        if (signal === 'BUY' && confidence >= 0.55) {
+        const equityNow = computeEquity();
+        if (equityNow > peakEquity) peakEquity = equityNow;
+        const session = nySessionKey(evt.timestamp);
+        if (session !== dayKey) {
+          dayKey = session;
+          dayStartEquity = equityNow;
+        }
+        const closedPnlsNewestFirst = tradeLog
+          .filter(t => t.side === 'SELL' && typeof t.realizedPnl === 'number')
+          .map(t => t.realizedPnl as number)
+          .reverse();
+        const circuitBlocksBuy =
+          dailyLossBlocksNewBuys({ equityNow, dayStartEquity, dailyLossLimitDollars })
+          || consecutiveLossBlocksNewBuys(closedPnlsNewestFirst)
+          || drawdownBlocksNewBuys({ equityNow, peakEquity, maxPortfolioDrawdownPct })
+          || orderRateBlocksNewBuys({ buyTimestampsMs, nowMs: evt.timestamp, maxOrdersPerMinute });
+
+        if (signal === 'BUY' && confidence >= 0.55 && !circuitBlocksBuy) {
           // Phase 2A - real sizing: the exact same math live RiskEngine.evaluateRisk() uses
           // (order-notional/single-symbol/open-positions/sector/correlation caps), against this
           // backtest's own real point-in-time equity/positions, not a flat 10%-of-initial-cash
           // rule that ignored every real risk constraint live trading actually enforces.
-          const accountEquity = computeEquity();
+          const accountEquity = equityNow;
           const sizing = await calculatePositionSizing({
             side: 'BUY',
             symbol: evt.symbol,
@@ -309,6 +340,7 @@ export class BacktestEngine {
             const commission = calculateCommission({ side: 'BUY', quantity: qty, fillPrice }).total;
             cash -= qty * fillPrice + commission;
             positions[evt.symbol] = { symbol: evt.symbol, quantity: qty, entryPrice: fillPrice };
+            buyTimestampsMs.push(evt.timestamp);
             tradeLog.push({ symbol: evt.symbol, side: 'BUY', timestamp: evt.timestamp, price: fillPrice, quantity: qty, confidence, reasoning, commission, slippagePct });
           }
         } else if (signal === 'SELL' && pos) {
@@ -470,12 +502,11 @@ export class BacktestEngine {
       // E2B - same feature-flagged sizing mode run() now reads (see its own comment above).
       const sizingMode = (liveSettings[0]?.positionSizingMode as 'FIXED_DOLLAR' | 'PERCENT_OF_EQUITY') || 'FIXED_DOLLAR';
       const percentOfEquityPct = liveSettings[0]?.percentOfEquityPct ?? 2;
-      // Phase 2 (LIVE_BACKTEST_PARITY_SPEC.md) - the real live portfolio-drawdown circuit breaker
-      // (RiskEngine.ts's `portfolio_drawdown` gate) was previously never simulated in either
-      // backtest entry point at all - a backtest could freely keep opening new positions through a
-      // drawdown that would have actually blocked live trading. Backtest-only addition, reads the
-      // same real settings field RiskEngine reads live; RiskEngine itself is untouched.
       const maxPortfolioDrawdownPct = liveSettings[0]?.maxPortfolioDrawdownPct ?? 0.15;
+      const dailyLossLimitDollars = liveSettings[0]?.dailyLossLimit ?? 5000;
+      const maxOrdersPerMinute = liveSettings[0]?.maxOrdersPerMinute ?? 5;
+      const takeProfitPct = (liveSettings[0]?.takeProfitPct ?? 15) / 100;
+      const trailingStopPct = (liveSettings[0]?.trailingStopPct ?? 5) / 100;
 
       const clock = new ReplayClock(bars[0].timestamp);
       let cash = initialCash;
@@ -490,6 +521,9 @@ export class BacktestEngine {
       const tradeLog: StrategyTrade[] = [];
       let peakEquity = initialCash;
       let drawdownCircuitBreakerTriggeredAt: number | null = null;
+      let dayKey = nySessionKey(bars[0].timestamp);
+      let dayStartEquity = initialCash;
+      const buyTimestampsMs: number[] = [];
 
       const computeEquity = (currentPrice: number) => cash + (position ? position.quantity * currentPrice : 0);
 
@@ -535,6 +569,20 @@ export class BacktestEngine {
         const recentLows = visibleBars.slice(-LOOKBACK).map(b => b.low);
         const recentCloses = visibleBars.slice(-LOOKBACK).map(b => b.close);
 
+        const session = nySessionKey(currentBar.timestamp);
+        if (session !== dayKey) {
+          dayKey = session;
+          dayStartEquity = equityNow;
+        }
+        const closedPnlsNewestFirst = tradeLog
+          .filter(t => t.side === 'SELL' && typeof t.realizedPnl === 'number')
+          .map(t => t.realizedPnl as number)
+          .reverse();
+        const circuitBlocksBuy =
+          dailyLossBlocksNewBuys({ equityNow, dayStartEquity, dailyLossLimitDollars })
+          || consecutiveLossBlocksNewBuys(closedPnlsNewestFirst)
+          || orderRateBlocksNewBuys({ buyTimestampsMs, nowMs: currentBar.timestamp, maxOrdersPerMinute });
+
         if (!position) {
           // E3 - verbose per-candidate decision trace (opt-in). Populated below regardless of
           // which branch this candidate takes; written once at the end of the `!position` block
@@ -553,7 +601,7 @@ export class BacktestEngine {
           // anywhere supports short selling; every real broker reports shortSelling:false), the
           // same real scope run()'s own existing hardcoded strategy already has (its SELL signal
           // only ever closes an existing long, never opens a fresh short).
-          if (drawdownCircuitBreakerTriggeredAt === null && evaluation.side === 'BUY' && evaluation.confidence >= MIN_STRATEGY_CONFIDENCE_TO_TRADE && evaluation.stop.price !== null) {
+          if (drawdownCircuitBreakerTriggeredAt === null && !circuitBlocksBuy && evaluation.side === 'BUY' && evaluation.confidence >= MIN_STRATEGY_CONFIDENCE_TO_TRADE && evaluation.stop.price !== null) {
             const accountEquity = computeEquity(currentPrice);
             const sizing = await calculatePositionSizing({
               side: 'BUY', symbol, currentPrice, accountEquity, buyingPower: cash,
@@ -577,6 +625,7 @@ export class BacktestEngine {
               };
               trackedStop = evaluation.stop.price;
               tradeLog.push({ side: 'BUY', timestamp: currentBar.timestamp, price: fillPrice, quantity: qty, commission, slippagePct });
+              buyTimestampsMs.push(currentBar.timestamp);
               decisionOutcome = 'ENTERED';
               decisionReason = `entered ${qty} shares @ ${fillPrice.toFixed(2)} (${sizingMode})`;
             } else {
@@ -611,9 +660,11 @@ export class BacktestEngine {
           }
 
           const stopHit = trackedStop !== null && currentBar.low <= trackedStop;
-          const targetHit = evaluation.target.price !== null && currentBar.high >= evaluation.target.price;
-          if (stopHit || targetHit) {
-            const exitPrice = stopHit ? trackedStop! : evaluation.target.price!;
+          const changePct = (currentPrice - position.entryPrice) / position.entryPrice;
+          const liveTrailHit = changePct <= -trailingStopPct;
+          const liveTakeProfitHit = changePct >= takeProfitPct;
+          if (stopHit || liveTrailHit || liveTakeProfitHit) {
+            const exitPrice = stopHit ? trackedStop! : currentPrice;
             const slippagePct = calculateDynamicSlippagePct({ highs: recentHighs, lows: recentLows, closes: recentCloses, currentPrice: exitPrice, orderShares: position.quantity, barVolume: currentBar.volume });
             const fillPrice = exitPrice * (1 - slippagePct);
             const commission = calculateCommission({ side: 'SELL', quantity: position.quantity, fillPrice }).total;

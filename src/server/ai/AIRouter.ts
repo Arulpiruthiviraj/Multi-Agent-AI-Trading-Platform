@@ -51,19 +51,11 @@ import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { EncryptionService } from '../core/EncryptionService';
 import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADE_SIDE_VALUES } from './AIOutputValidator';
+import { tradingSafety } from '../config/tradingSafety';
 
-// Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - real timeout for every AI provider call. Previously
-// no timeout existed anywhere in this file or any provider file (confirmed by the current audit,
-// FINAL_ANALYSIS.md Section 30.8) - a hung provider call blocked the calling agent's tick
-// indefinitely. This is a router-level "soft" timeout via Promise.race: it does not (yet) cancel
-// the underlying in-flight HTTP request the way AlpacaBroker's AbortController-based timeout does
-// (that would require every provider's own chat() to accept and honor an abort signal - a larger,
-// deferred change, documented as such in the safety-hardening report), but it DOES guarantee the
-// CALLER (routeTask/routeConsensus, and transitively every agent that awaits them) is never
-// blocked past this timeout - a rejected timeout is handled by the exact same per-provider
-// try/catch every other real provider failure already goes through, so it fails over / logs / never
-// becomes a fabricated BUY or SELL, exactly like any other AI failure.
-const AI_PROVIDER_TIMEOUT_MS = 20_000;
+// Router timeout (tradingSafety.aiProviderTimeoutMs) plus AbortController so fetch-based
+// providers cancel in-flight HTTP instead of hanging after the caller has already failed over.
+const AI_PROVIDER_TIMEOUT_MS = tradingSafety.aiProviderTimeoutMs;
 // Phase 7 (AI_MODEL_INVENTORY.md) - a low, non-zero temperature for every real trading-decision
 // call. Previously unset anywhere (each provider's own undocumented default sampling applied) -
 // this makes AI-influenced consensus votes measurably more reproducible without forcing fully
@@ -79,12 +71,16 @@ class AITimeoutError extends Error {
   }
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number, providerId: string): Promise<T> {
+function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number, providerId: string): Promise<T> {
+  const controller = new AbortController();
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new AITimeoutError(providerId, ms)), ms);
-    promise.then(
+    const timer = setTimeout(() => {
+      controller.abort();
+      reject(new AITimeoutError(providerId, ms));
+    }, ms);
+    fn(controller.signal).then(
       (value) => { clearTimeout(timer); resolve(value); },
-      (err) => { clearTimeout(timer); reject(err); },
+      (err) => { clearTimeout(timer); controller.abort(); reject(err); },
     );
   });
 }
@@ -291,7 +287,7 @@ export class AIRouter {
             // Format prompt for consensus format
             const fullPrompt = prompt + "\n\nIMPORTANT: You must return a strict JSON object with this format (no markdown code blocks):\n{\n  \"decision\": \"BUY\" | \"SELL\" | \"HOLD\",\n  \"confidence\": 0-100,\n  \"reasoning\": \"Detailed explanation...\",\n  \"supportingFactors\": [\"fact1\"],\n  \"risks\": [\"risk1\"]\n}";
             
-            const res = await withTimeout(provider.chat(fullPrompt, { model: undefined, temperature: AI_DECISION_TEMPERATURE }), AI_PROVIDER_TIMEOUT_MS, providerId);
+            const res = await withTimeout((signal) => provider.chat(fullPrompt, { model: undefined, temperature: AI_DECISION_TEMPERATURE, signal }), AI_PROVIDER_TIMEOUT_MS, providerId);
             const latency = Date.now() - pStart;
             
             // Log usage
@@ -472,7 +468,7 @@ export class AIRouter {
             console.log(`[AIRouter] Agent '${agentType}' routing to ${providerId}`);
             
             reqModel = (providerId === preferredConfig?.providerId) ? preferredConfig?.model : undefined;
-            res = await withTimeout(provider.chat(prompt, { model: reqModel, jsonMode, temperature: AI_DECISION_TEMPERATURE }), AI_PROVIDER_TIMEOUT_MS, providerId);
+            res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: AI_DECISION_TEMPERATURE, signal }), AI_PROVIDER_TIMEOUT_MS, providerId);
             
             latency = Date.now() - startTime;
             

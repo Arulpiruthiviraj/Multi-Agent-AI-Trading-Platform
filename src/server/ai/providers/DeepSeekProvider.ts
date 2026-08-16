@@ -75,6 +75,7 @@ export class DeepSeekProvider extends BaseAIProvider {
             "Content-Type": "application/json",
             "Authorization": `Bearer ${this.apiKey}`
         },
+        signal: options?.signal,
         body: JSON.stringify({
             model,
             messages: [{ role: "user", content: prompt }],

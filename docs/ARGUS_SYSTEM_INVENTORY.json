@@ -1,0 +1,115 @@
+{
+  "$comment": "Machine-readable Argus inventory from code/config. Not a readiness score. LIVE is NO-GO.",
+  "generatedFrom": "read-only reverse-engineering",
+  "livePath": "EventBus TRADE_IDEA_GENERATED → ChiefTrader → RiskAgent → RiskEngine → OMS → BrokerManager.placeOrder",
+  "legacyBypassPath": "GET /api/v1/signals",
+  "port": 3000,
+  "portEnvRead": false,
+  "database": {
+    "engine": "sqlite",
+    "file": "data/argus.db",
+    "wal": true,
+    "tableCount": 44,
+    "tables": [
+      "users", "sessions", "settings", "kill_switch_events", "broker_connections",
+      "ai_providers", "ai_models", "ai_usage", "trades", "fills", "daily_trading_summary",
+      "reconciliation_events", "portfolio_snapshots", "portfolio", "learned_rules",
+      "agent_predictions", "agent_performance_stats", "agent_confidence_calibration",
+      "explainability_reports", "agent_memory", "event_traces", "memory_rules",
+      "news_articles", "news_clusters", "news_providers", "kronos_predictions",
+      "agent_routing_overrides", "ohlcv_bars", "backtest_runs", "prediction_engine_weights",
+      "escalation_decisions", "transactions", "consensus_decisions", "consensus_evidence",
+      "ai_calls", "risk_assessments", "risk_gate_results", "prediction_outcomes",
+      "training_examples", "openalice_verifications", "external_data_cache",
+      "quant_assessments", "quant_strategy_backtests", "quant_backtest_decision_log"
+    ]
+  },
+  "agents": [
+    {"name": "TechnicalAgent", "file": "src/server/services/TechnicalAgent.ts", "voter": true, "defaultOn": "MARKET_DATA even if Autobot off", "status": "IMPLEMENTED + VERIFIED (unit path)"},
+    {"name": "NewsAgent", "file": "src/server/news/NewsEngine.ts", "voter": true, "defaultOn": "Autobot 10s", "status": "IMPLEMENTED BUT UNVERIFIED accuracy (~44.6%/242)"},
+    {"name": "FundamentalAgent", "file": "src/server/services/FundamentalAgent.ts", "voter": true, "defaultOn": "Autobot ~60s", "status": "CONFIGURATION-DEPENDENT"},
+    {"name": "MacroAgent", "file": "src/server/services/MacroAgent.ts", "voter": true, "defaultOn": "Autobot ~75s", "status": "CONFIGURATION-DEPENDENT"},
+    {"name": "QuantEngine", "file": "src/server/services/QuantSignalAgent.ts", "voter": true, "defaultOn": false, "flag": "QUANT_ENGINE_ENABLED", "status": "FEATURE-FLAGGED"},
+    {"name": "KronosEngine", "file": "src/server/services/KronosForecastAgent.ts", "voter": true, "defaultOn": "if Chronos /health", "status": "EXTERNAL-DEPENDENCY-DEPENDENT"},
+    {"name": "PortfolioManager", "file": "src/server/services/PortfolioMonitor.ts", "voter": "risk-exit SELL ideas", "defaultOn": "Autobot 60s", "status": "IMPLEMENTED + VERIFIED tests"},
+    {"name": "ChiefTrader", "file": "src/server/services/ChiefTraderAgent.ts", "voter": false, "role": "consensus", "status": "IMPLEMENTED + VERIFIED tests"},
+    {"name": "RiskAgent", "file": "src/server/services/RiskAgent.ts", "voter": false, "role": "forwarder", "status": "IMPLEMENTED + VERIFIED"},
+    {"name": "MarketRegimeAgent", "file": "src/server/services/MarketRegimeAgent.ts", "voter": false, "status": "DEAD CODE as voter; emits MARKET_REGIME_DETECTED; SIMULATED without Gemini"},
+    {"name": "AdvancedQuantEngines", "file": "src/server/engines/AdvancedQuantEngines.ts", "voter": false, "status": "DEAD CODE as voter"},
+    {"name": "ExplainabilityAgent", "file": "src/server/services/ExplainabilityAgent.ts", "voter": false, "status": "IMPLEMENTED side path"},
+    {"name": "ReflectionEngine", "file": "src/server/services/ReflectionEngine.ts", "voter": false, "status": "IMPLEMENTED; rules in debate prompt only"},
+    {"name": "ManualOverride", "file": "src/server/services/PipelineFlatten.ts", "voter": false, "status": "IMPLEMENTED; still RiskEngine"}
+  ],
+  "aiProvidersWithClasses": ["Gemini", "OpenAI", "DeepSeek", "Nvidia", "OpenAICompatible/Ollama"],
+  "aiEnvKeysWithoutProviderClass": ["ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "OPENROUTER_API_KEY", "KIMI_API_KEY", "GROK_API_KEY", "GROQ_API_KEY"],
+  "localServices": [
+    {"name": "Chronos/Kronos", "url": "http://127.0.0.1:8008", "skip": "ARGUS_SKIP_CHRONOS"},
+    {"name": "Ollama", "url": "http://127.0.0.1:11434", "skip": "ARGUS_SKIP_OLLAMA"},
+    {"name": "OpenAlice Guardian", "url": "http://127.0.0.1:47332/mcp", "flags": ["OPENALICE_ENABLED", "OPENALICE_MCP_URL"]},
+    {"name": "IBKR Gateway", "url": "https://localhost:5000/v1/api", "skip": "ARGUS_SKIP_IBKR"}
+  ],
+  "coreStrategies": ["MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION", "MEAN_REVERSION", "TREND_FOLLOWING", "RANGE_REVERSION"],
+  "experimentalStrategies": [
+    "SMC_LIQUIDITY_SWEEP", "VWAP_VOLUME_STRUCTURE", "OPENING_RANGE_BREAKOUT", "VWAP_MEAN_REVERSION",
+    "DONCHIAN_CHANNEL_BREAKOUT", "MA_CROSSOVER", "OSCILLATOR_MOMENTUM", "BOLLINGER_VOLATILITY",
+    "PREVIOUS_PERIOD_BREAKOUT", "CANDLESTICK_REVERSAL", "GAP_CONTINUATION", "FIBONACCI_PULLBACK",
+    "VOLUME_CONFIRMATION", "SR_BOUNCE", "RELATIVE_STRENGTH_ROTATION"
+  ],
+  "taxonomyNamedTechniques": 760,
+  "taxonomyNote": "Aliases to CORE/EXPERIMENTAL/NOT_SUPPORTED — not 760 live evaluate() edges",
+  "notSupported": ["breadth", "options", "L2", "volume_profile", "TSI", "anchored_VWAP", "pairs", "CAD_FX"],
+  "riskGatesInOrder": [
+    "emergency_stop", "daily_loss", "consecutive_loss", "portfolio_drawdown", "order_rate_limit",
+    "market_hours", "data_freshness", "news_veto", "price_validity", "order_notional_cap",
+    "symbol_concentration", "open_positions_cap", "sector_concentration", "correlation_exposure",
+    "sufficient_size", "sell_position_exists", "argus_capital_allocation", "daily_buy_notional"
+  ],
+  "stopLossAssumptionPct": 0.05,
+  "consensusApprovalThreshold": 0.75,
+  "minIndependentAgreeingAgents": 2,
+  "brokers": [
+    {"id": "internal_paper", "status": "IMPLEMENTED + VERIFIED simulator", "paper": true, "live": false},
+    {"id": "alpaca", "status": "IMPLEMENTED + VERIFIED unattended paper/live REST", "paper": true, "live": true},
+    {"id": "ibkr", "status": "IMPLEMENTED BUT UNVERIFIED unattended; requiresManualReauth", "canadianEquities": false},
+    {"id": "coinbase", "status": "IMPLEMENTED BUT UNVERIFIED funded; paper placeOrder refuses"},
+    {"id": "questrade", "status": "DISABLED for orders; placeOrder throws"}
+  ],
+  "featureFlags": [
+    "QUANT_ENGINE_ENABLED", "QUANT_ENGINE_INTERVAL_MS", "QUANT_SMC_STRATEGY_ENABLED",
+    "QUANT_VWAP_STRUCTURE_ENABLED", "QUANT_ORB_STRATEGY_ENABLED", "QUANT_VWAP_REVERSION_ENABLED",
+    "QUANT_DONCHIAN_STRATEGY_ENABLED", "QUANT_MA_CROSSOVER_ENABLED", "QUANT_OSCILLATOR_MOMENTUM_ENABLED",
+    "QUANT_BOLLINGER_VOLATILITY_ENABLED", "QUANT_PREVIOUS_PERIOD_BREAKOUT_ENABLED",
+    "QUANT_CANDLESTICK_REVERSAL_ENABLED", "QUANT_GAP_STRATEGY_ENABLED", "QUANT_FIBONACCI_PULLBACK_ENABLED",
+    "QUANT_VOLUME_CONFIRMATION_ENABLED", "QUANT_SR_BOUNCE_ENABLED", "QUANT_RELATIVE_STRENGTH_ENABLED",
+    "QUANT_BULL_BEAR_ENABLED", "OPENALICE_ENABLED", "PAPER_TRADING_ONLY",
+    "ARGUS_SKIP_CHRONOS", "ARGUS_SKIP_OLLAMA", "ARGUS_SKIP_OPENALICE", "ARGUS_SKIP_IBKR"
+  ],
+  "eventsCanonical": [
+    "MARKET_DATA", "CALCULATION_COMPLETED", "TRADE_IDEA_GENERATED", "CHIEF_APPROVED_IDEA",
+    "RISK_ASSESSMENT_COMPLETED", "ORDER_EXECUTED", "LEARNED_NEW_RULE",
+    "OPENALICE_VERIFICATION_REQUESTED", "OPENALICE_VERIFICATION_COMPLETED", "OPENALICE_VERIFICATION_TIMED_OUT",
+    "CHIEF_CONSENSUS_STARTED", "CHIEF_CONSENSUS_COMPLETED", "RISK_ASSESSMENT_STARTED",
+    "ORDER_SUBMITTED", "ORDER_ACCEPTED", "ORDER_FILLED", "CAPITAL_CHECK", "AGENT_DISAGREEMENT",
+    "POSITION_MONITORED", "POSITION_RISK_CHANGED", "MODEL_HEALTH", "DIAGNOSTIC_CREATED",
+    "DATA_STALE", "MODEL_UNAVAILABLE", "MODEL_FALLBACK", "CAPITAL_BLOCK", "RISK_BLOCK", "PORTFOLIO_UPDATE"
+  ],
+  "frontendTabs": 21,
+  "tests": {"vitestFilesApprox": 128, "playwrightSpecs": 1},
+  "readiness": {
+    "paperThisEnvironmentLastScoredPass": "zero organic closed paper trades",
+    "newsAgentLastScoredPass": "44.6% on 242 predictions",
+    "walkForwardOosCheckedCombos": "failed",
+    "liveRealMoney": "NO-GO"
+  },
+  "knownP0": [
+    "no validated OOS edge",
+    "LIVE NO-GO",
+    "GET /api/v1/signals bypasses RiskEngine"
+  ],
+  "docVsCode": [
+    {"claim": "45 tables", "code": "44 sqliteTable exports"},
+    {"claim": "AGENTS.md ATR live sizing", "code": "stopLossAssumptionPct 0.05"},
+    {"claim": ".env.example Coinbase placeholder", "code": "CoinbaseBroker CDP JWT adapter"},
+    {"claim": "PipelineFlatten skips RiskEngine", "code": "emits CHIEF_APPROVED_IDEA into RiskAgent"}
+  ]
+}

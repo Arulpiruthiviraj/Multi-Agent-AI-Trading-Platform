@@ -100,6 +100,7 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
         const response = await fetch(`${this.baseUrl}/chat/completions`, {
             method: "POST",
             headers,
+            signal: options?.signal,
             body: JSON.stringify(body)
         });
         

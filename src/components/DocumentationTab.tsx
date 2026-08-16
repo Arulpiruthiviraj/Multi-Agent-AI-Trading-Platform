@@ -739,7 +739,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
         <div className="space-y-6 animate-fade-in">
           <h2 className="text-2xl font-bold text-white tracking-tight">Configuring Argus, and the Real Live-Trading Gate</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            Broker connections have paper vs live state. Enabling LIVE requires an explicit confirmation phrase — there is no env var that silently turns real-money trading on. <strong className="text-rose-300">This environment remains LIVE NO-GO</strong> per <code className="text-[10px]">ARGUS_REAL_MONEY_READINESS.md</code>. Adding files does not raise that score.
+            Broker connections have paper vs live state. Enabling LIVE requires an explicit confirmation phrase — there is no env var that silently turns real-money trading on. <strong className="text-rose-300">This environment remains LIVE NO-GO</strong> per <code className="text-[10px]">docs/archive/historical/ARGUS_REAL_MONEY_READINESS.md</code>. Adding files does not raise that score.
           </p>
 
           <div className="space-y-5">

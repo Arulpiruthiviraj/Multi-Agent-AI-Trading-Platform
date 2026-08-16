@@ -78,8 +78,12 @@ export class GeminiProvider extends BaseAIProvider {
     const response = await this.ai.models.generateContent({
         model,
         contents: prompt,
-        // Phase 7 - see OpenAIProvider.ts's identical comment. Additive, opt-in only.
-        ...(options?.temperature !== undefined ? { config: { temperature: options.temperature } } : {}),
+        ...(options?.temperature !== undefined || options?.signal ? {
+          config: {
+            ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+            ...(options?.signal ? { abortSignal: options.signal } : {}),
+          },
+        } : {}),
     });
     // Real usage split from the SDK's own response - previously hardcoded to 0 regardless of
     // the fact that usageMetadata was already available on every response.

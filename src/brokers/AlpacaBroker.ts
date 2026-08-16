@@ -36,10 +36,10 @@
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter.js';
 import { tradingSafety } from '../server/config/tradingSafety';
 
-// Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - real request timeout/retry/circuit-breaker
-const ALPACA_REQUEST_TIMEOUT_MS = 15_000;
-const ALPACA_MAX_RETRIES = 2;
-const ALPACA_RETRY_BASE_DELAY_MS = 500;
+// Timeouts/retries live in tradingSafety.json — not TypeScript literals.
+const ALPACA_REQUEST_TIMEOUT_MS = tradingSafety.alpacaRequestTimeoutMs;
+const ALPACA_MAX_RETRIES = tradingSafety.alpacaMaxRetries;
+const ALPACA_RETRY_BASE_DELAY_MS = tradingSafety.alpacaRetryBaseDelayMs;
 const CIRCUIT_BREAKER_FAILURE_THRESHOLD = tradingSafety.alpacaCircuitBreakerFailureThreshold;
 const CIRCUIT_BREAKER_COOLDOWN_MS = tradingSafety.alpacaCircuitBreakerCooldownMs;
 

@@ -25,8 +25,10 @@
  * (start()/stop() on the same interval-guarded pattern as every other periodic worker in this
  * codebase - see PortfolioMonitor.ts, ReflectionEngine.ts, etc.) that keeps checking orders the
  * initial poll gave up on, until either a terminal status is observed or a max age is reached (at
- * which point it stops polling that order and logs once - it never fabricates a resolution the
- * broker hasn't actually given); (2) real PARTIALLY_FILLED handling that aggregates multiple
+ * which point it cancels the remainder, or pauses trading if cancel is unavailable, rather than
+ * abandoning a live working order. If the broker no longer reports the order at all, it logs once
+ * and leaves last-known status — it never fabricates a fill the broker hasn't actually given);
+ * (2) real PARTIALLY_FILLED handling that aggregates multiple
  * broker-reported fills into distinct `fills` rows (fills are additive: each apply computes the
  * *new* quantity since the last observed fill, not the cumulative total, so re-running against an
  * unchanged broker order is a safe no-op); (3) a real cancellation path
@@ -57,7 +59,7 @@ export function isTerminalOrderStatus(status: string | null | undefined): boolea
 const FOLLOWUP_MIN_AGE_MS = 6000;
 // Bounded, not unbounded: stop actively re-polling (and log once) an order that's still
 // non-terminal after this long - an honest "we stopped checking" signal beats silent forever-polling.
-const FOLLOWUP_MAX_AGE_MS = 30 * 60 * 1000;
+const FOLLOWUP_MAX_AGE_MS = tradingSafety.omsFollowUpMaxAgeMs;
 const FOLLOWUP_INTERVAL_MS = 15000;
 // Phase 1, item 3 (ARGUS_SAFETY_HARDENING_REPORT.md) - order-level crash recovery. Distinct from
 // FOLLOWUP_* above: followUpOpenOrders() only ever looks at rows that already have a real
@@ -92,8 +94,10 @@ export class OrderManagementService {
     if (!this.crashRecoveryIntervalId) {
       this.crashRecoveryIntervalId = setInterval(() => {
         this.reconcileStaleOrders().catch(e => console.error('[OMS] crash-recovery cycle failed', e));
+        this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));
       }, CRASH_RECOVERY_INTERVAL_MS);
       this.reconcileStaleOrders().catch(e => console.error('[OMS] crash-recovery startup check failed', e));
+      this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));
     }
   }
 
@@ -381,9 +385,109 @@ export class OrderManagementService {
 
       if (match.status !== row.status || (match.filledQuantity ?? 0) > 0) {
         await this.applyFollowUpUpdate(row, match);
-      } else if (age > FOLLOWUP_MAX_AGE_MS && !this.followUpWarned.has(row.id)) {
-        console.warn(`[OMS] Giving up follow-up for order ${row.id} after ${Math.round(age / 1000)}s: still ${row.status}.`);
-        this.followUpWarned.add(row.id);
+      }
+      if (age > FOLLOWUP_MAX_AGE_MS && !isTerminalOrderStatus(match.status)) {
+        await this.cancelOrphanedOpenOrder(row, match, broker);
+      }
+    }
+  }
+
+  /**
+   * Orphaned open / partial orders past omsFollowUpMaxAgeMs: cancel remainder (fail-closed)
+   * instead of abandoning last-known status. If cancel is unavailable or fails, pause trading.
+   */
+  private async pauseTradingForOrphan(reason: string): Promise<void> {
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    await tradingEngine.setTradingState('TRADING_PAUSED', { reason, actor: 'OrderManagement' });
+  }
+
+  private async cancelOrphanedOpenOrder(row: any, match: Order, broker: BrokerPlugin): Promise<void> {
+    if (this.followUpWarned.has(row.id)) return;
+    this.followUpWarned.add(row.id);
+    const canCancel = brokerSupports(broker, 'canCancelOrders');
+    if (!canCancel) {
+      console.error(`[OMS] Orphaned ${row.status} order ${row.id} exceeded follow-up max age and broker cannot cancel — pausing trading.`);
+      await this.pauseTradingForOrphan(`OMS orphaned order ${row.id} (${row.symbol}) still ${match.status} after max follow-up age; broker cannot cancel remainder.`);
+      return;
+    }
+    try {
+      await broker.cancelOrder(row.brokerOrderId);
+      const refreshed = (await broker.orders()).find(o => o.id === row.brokerOrderId) || { ...match, status: 'CANCELED' };
+      await this.applyFollowUpUpdate(row, refreshed);
+      if (!isTerminalOrderStatus(refreshed.status)) {
+        await this.pauseTradingForOrphan(`OMS cancelled orphaned order ${row.id} but broker still reports ${refreshed.status}.`);
+      }
+    } catch (e) {
+      console.error(`[OMS] Failed to cancel orphaned order ${row.id}`, e);
+      await this.pauseTradingForOrphan(`OMS failed to cancel orphaned order ${row.id} (${row.symbol}) after max follow-up age.`);
+    }
+  }
+
+  /**
+   * Boot/periodic: ingest FILLED/PARTIALLY_FILLED broker orders that have no local trades row
+   * (crash after the broker accepted but before the local insert committed).
+   */
+  async reconcileInboundBrokerOrders(): Promise<void> {
+    let broker: BrokerPlugin;
+    try {
+      broker = BrokerManager.getInstance().getActiveBroker();
+    } catch {
+      return;
+    }
+    let brokerOrders: Order[];
+    try {
+      brokerOrders = await broker.orders();
+    } catch (e) {
+      console.error('[OMS] inbound recovery: broker.orders() failed', e);
+      return;
+    }
+    const cutoff = Date.now() - CRASH_RECOVERY_LOOKBACK_MS;
+    let local: any[];
+    try {
+      local = await db.select().from(trades);
+    } catch (e) {
+      console.error('[OMS] inbound recovery: failed to read trades', e);
+      return;
+    }
+    const byBrokerId = new Set(local.map((t: any) => t.brokerOrderId).filter(Boolean));
+    const byClientId = new Set(local.map((t: any) => t.id));
+
+    for (const o of brokerOrders) {
+      const created = o.createdAt instanceof Date ? o.createdAt.getTime() : Date.parse(String(o.createdAt || 0));
+      if (Number.isFinite(created) && created < cutoff) continue;
+      const filledQty = o.filledQuantity ?? 0;
+      if (filledQty <= 0 && o.status !== 'FILLED' && o.status !== 'PARTIALLY_FILLED') continue;
+      if (byBrokerId.has(o.id)) continue;
+      if (o.clientOrderId && byClientId.has(o.clientOrderId)) {
+        const row = local.find((t: any) => t.id === o.clientOrderId);
+        if (row) await this.applyFollowUpUpdate(row, o);
+        continue;
+      }
+      if (filledQty <= 0) continue;
+      const fillPrice = o.averageFillPrice || o.price || 0;
+      if (!(fillPrice > 0)) continue;
+      const nowIso = new Date().toISOString();
+      const id = o.clientOrderId && !byClientId.has(o.clientOrderId) ? o.clientOrderId : crypto.randomUUID();
+      try {
+        await db.insert(trades).values({
+          id,
+          symbol: o.symbol,
+          side: o.side,
+          quantity: o.quantity,
+          price: fillPrice,
+          status: o.status === 'FILLED' ? 'FILLED' : 'PARTIALLY_FILLED',
+          timestamp: nowIso,
+          reasoning: 'Inbound crash recovery: broker reported a fill with no matching local trades row.',
+          traceId: `inbound-${o.id}`,
+          brokerOrderId: o.id,
+          requestId: o.clientOrderId || id,
+          submittedAt: o.createdAt instanceof Date ? o.createdAt.toISOString() : nowIso,
+          filledAt: o.status === 'FILLED' ? nowIso : null,
+        });
+        await this.recordFillProgress(id, o.id, `inbound-${o.id}`, undefined, o.symbol, o.side, o.quantity, o.status, filledQty, fillPrice);
+        console.error(`[OMS] inbound recovery: recorded broker order ${o.id} as local trade ${id} (${o.side} ${filledQty} ${o.symbol}).`);
+      } catch (e) {
+        console.error(`[OMS] inbound recovery: failed to insert broker order ${o.id}`, e);
       }
     }
   }

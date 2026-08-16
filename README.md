@@ -1,20 +1,15 @@
-# Argus - README
+# Argus
 
-Welcome to the README documentation for the Argus Autonomous Trading Terminal.
+Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite).
 
-## Overview
-This document provides high-level context, constraints, and operational guidelines for future developers and AI agents working on Argus.
+**Docs:** [docs/ARGUS.md](docs/ARGUS.md) · [docs/ARGUS_REFERENCE.md](docs/ARGUS_REFERENCE.md) · [docs/LOCAL_AI_SETUP.md](docs/LOCAL_AI_SETUP.md)
 
-## Core Principles
-1. **Self-Documenting Code**: All modules must declare inputs, outputs, side-effects, and dependencies.
-2. **Provider Agnostic**: AI features must route through the `AIRouter` layer.
-3. **Event-Driven**: Decoupled communication using the EventBus and WebSockets.
+**Agents:** root `CLAUDE.md` is the live-path contract. LIVE real-money is **NO-GO**.
 
-For specific implementation details, refer to the `/skills` directory and **[docs/README.md](docs/README.md)** (architecture, specs, plans, reports). Root `CLAUDE.md` is the live-path contract.
+```bash
+cp .env.example .env   # add keys
+npm run dev            # :3000 + optional Chronos/Ollama/OpenAlice/IBKR
+npm test
+```
 
-## Optional: Local AI Stack
-
-Argus can offload cheap, high-frequency inference to models running on your
-own machine (Ollama + FinBERT/Chronos/XGBoost) instead of a paid cloud LLM on
-every tick and headline. See [docs/LOCAL_AI_SETUP.md](docs/LOCAL_AI_SETUP.md)
-- entirely optional, `npm run setup:ai` to install.
+`PORT` is not read; the server listens on **3000**.

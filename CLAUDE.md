@@ -8,11 +8,10 @@ Argus is a Node.js multi-agent trading terminal (Express + Vite SPA + `ws`). The
 
 | Document | Use for |
 |---|---|
-| `docs/README.md` | Doc index + implemented-vs-open checklist after 2026-08-15 |
-| `ARGUS_REAL_MONEY_READINESS.md` (or `docs/reports/` after the docs move) | Readiness scores. LIVE is **NO-GO**. Adding files does not raise scores. |
+| `docs/ARGUS.md` | Current system: live path, risk, brokers, startup. LIVE is **NO-GO**. |
+| `docs/ARGUS_REFERENCE.md` | Strategy/gate/table/env catalogs. |
 | `FINAL_ANALYSIS.md` (Section 25.3 / tab matrix; §31 honesty pass) | Which UI tabs/widgets are real vs fabricated. Do not trust memory. |
-| `ARGUS_CURRENT_ARCHITECTURE_MAP.md` | Current wiring snapshot. |
-| `QUANT_LAYER_ANALYSIS.md` | Original additive quant design. |
+| `docs/archive/historical/` | Dated reports. Adding files does not raise readiness scores. |
 
 NewsAgent live accuracy in the last scored pass: **44.6% on 242 predictions**. Walk-forward OOS for checked quant combos **failed**. This environment has had **zero organic closed paper trades** in that same pass. Historical AI replay of past years is **UNAVAILABLE** without point-in-time news/LLM logs — do not fabricate a 2022 debate.
 
@@ -214,7 +213,7 @@ Backup: `GET /api/v1/system/export-db` (WAL checkpoint + download). Restore: `PO
 
 ### External Verification (OpenAlice, optional)
 
-`src/server/integrations/openalice/`. Off unless `OPENALICE_ENABLED` and `OPENALICE_MCP_URL`. Read-only, non-blocking, never credentials into BrokerManager/RiskEngine. Results inform **future** decisions only. Not live-verified against a real OpenAlice in this environment. See `OPENALICE_INTEGRATION_AUDIT.md`.
+`src/server/integrations/openalice/`. Off unless `OPENALICE_ENABLED` and `OPENALICE_MCP_URL`. Read-only, non-blocking, never credentials into BrokerManager/RiskEngine. Results inform **future** decisions only. Not live-verified against a real OpenAlice in this environment. See `docs/archive/historical/OPENALICE_INTEGRATION_AUDIT.md`.
 
 ### Routes
 

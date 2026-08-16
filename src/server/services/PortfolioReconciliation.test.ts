@@ -104,6 +104,24 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     (broker as any).portfolio = originalPortfolio;
   });
 
+  it('a significant dollar mismatch sets tradingState TRADING_PAUSED (RiskEngine emergency_stop), not only emergencyStopActive', async () => {
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test reset', actor: 'tester' });
+
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const originalPortfolio = broker.portfolio.bind(broker);
+    (broker as any).portfolio = async () => {
+      const real = await originalPortfolio();
+      return { ...real, positions: [...real.positions, { symbol: 'PAUSETEST', quantity: 20, entryPrice: 10, currentPrice: 10 }] };
+    };
+
+    await portfolioReconciliationWorker.reconcile();
+
+    expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+    (broker as any).portfolio = originalPortfolio;
+    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'tester' });
+  });
+
   it('a call after a previous cycle has fully completed runs normally (the guard does not get stuck)', async () => {
     await portfolioReconciliationWorker.reconcile();
     const eventsBefore = await db.select().from(schema.reconciliationEvents);
