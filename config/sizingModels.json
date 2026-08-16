@@ -1,0 +1,28 @@
+{
+  "$comment": "Live RiskEngine sizing is FIXED_DOLLAR notional + stopLossAssumptionPct risk. ATR/STRUCTURE are research-only until separately OOS/WFO/paper validated. Do not wire a new model into LIVE.",
+  "liveModelId": "FIXED_DOLLAR_STOP_ASSUMPTION_PCT",
+  "liveModelVersion": "sizing-v1",
+  "promotable": false,
+  "models": {
+    "FIXED_DOLLAR": {
+      "status": "LIVE_DEFAULT",
+      "note": "Order notional cap from settings.maxTradeSize / defaultMaxTradeSizeDollars."
+    },
+    "PERCENT_OF_EQUITY": {
+      "status": "OPT_IN_SETTINGS",
+      "note": "Same RiskEngine path; notional = equity * percentOfEquityPct."
+    },
+    "FIXED_RISK": {
+      "status": "RESEARCH_ONLY",
+      "note": "Live already uses equity * riskPct / (price * stopLossAssumptionPct). Not a second LIVE path."
+    },
+    "ATR": {
+      "status": "NOT_LIVE",
+      "note": "Not used by PositionSizing.ts. Comments that say ATR-based live sizing are stale."
+    },
+    "STRUCTURE": {
+      "status": "NOT_LIVE",
+      "note": "Quant stop/target may persist on trades; OMS still places MARKET orders."
+    }
+  }
+}

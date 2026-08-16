@@ -39,6 +39,7 @@ import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { rsiEngine } from '../engines/RSIEngine';
 import { macdEngine } from '../engines/MACDEngine';
 import { quantThresholds } from '../config/quantThresholds';
+import { randomUUID } from 'node:crypto';
 
 export class TechnicalProposerAgent {
   private priceHistory: Record<string, number[]> = {};
@@ -96,7 +97,7 @@ export class TechnicalProposerAgent {
 
   private checkStrategies(symbol: string, prices: number[]) {
     const currentPrice = prices[prices.length - 1];
-    const traceId = Math.random().toString(36).substring(7);
+    const traceId = randomUUID();
     const startedAt = Date.now();
 
     // Real STARTED/COMPLETED bracket for live animation (previously only Kronos had one) -

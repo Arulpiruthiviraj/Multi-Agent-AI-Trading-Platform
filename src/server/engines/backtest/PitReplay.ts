@@ -5,6 +5,7 @@
 import { Evidence, EvidenceAggregator } from '../../services/EvidenceAggregator';
 import { tradingSafety } from '../../config/tradingSafety';
 import { agentWeightConfig, defaultAgentWeights } from '../../config/agentWeights';
+import { reconstructPitDebate, type PitAiCallRow, type PitNewsClusterRow } from './PitLlmReplay';
 
 export interface PitBar {
   timestamp: number;
@@ -48,7 +49,7 @@ export function clearPitSnapshots(): void {
 }
 
 export interface PitConsensusReplay {
-  debateReplayed: false;
+  debateReplayed: boolean;
   side: 'BUY' | 'SELL' | 'HOLD';
   confidence: number;
   independentAgreeingAgents: number;
@@ -90,7 +91,7 @@ export function evidenceFromPitIdeas(ideas: PitLedgerIdea[], symbol: string, cur
 }
 
 /** Deterministic ChiefTrader vote math only (EvidenceAggregator + min agents + threshold). */
-export function replayChiefTraderFromEvidence(evidence: Evidence[]): PitConsensusReplay {
+export function replayChiefTraderFromEvidence(evidence: Evidence[], debateReplayed = false): PitConsensusReplay {
   const agg = EvidenceAggregator.aggregate(evidence);
   const independent = new Set(agg.agreements.map(e => e.agent)).size;
   const minAgents = tradingSafety.minIndependentAgreeingAgents;
@@ -99,14 +100,14 @@ export function replayChiefTraderFromEvidence(evidence: Evidence[]): PitConsensu
   const confOk = agg.confidence >= bar;
   const approved = agg.side !== 'HOLD' && agentsOk && confOk;
   return {
-    debateReplayed: false,
+    debateReplayed,
     side: agg.side,
     confidence: agg.confidence,
     independentAgreeingAgents: independent,
     approved,
     reason: approved
-      ? `PIT consensus ${agg.side} conf=${agg.confidence.toFixed(3)} agents=${independent}`
-      : `NO_TRADE: agents ${independent}/${minAgents}, conf ${agg.confidence.toFixed(3)} vs ${bar}, debate not replayed`,
+      ? `PIT consensus ${agg.side} conf=${agg.confidence.toFixed(3)} agents=${independent}${debateReplayed ? '; debate reconstructed' : '; debate not replayed'}`
+      : `NO_TRADE: agents ${independent}/${minAgents}, conf ${agg.confidence.toFixed(3)} vs ${bar}${debateReplayed ? '' : ', debate not replayed'}`,
   };
 }
 
@@ -123,7 +124,12 @@ export function evaluatePitAiBuyGate(
   rows: PitLedgerIdea[],
   symbol: string,
   currentPrice: number,
-  options?: { allowTechnicalWhenEmpty?: boolean },
+  options?: {
+    allowTechnicalWhenEmpty?: boolean;
+    asOfMs?: number;
+    aiCalls?: PitAiCallRow[];
+    newsClusters?: PitNewsClusterRow[];
+  },
 ): PitAiBuyGate {
   const voterRows = rows.filter(r => r.kind === 'AGENT_REASONING' || r.kind === 'NEWS_AGENT');
   const chiefRows = rows.filter(r => r.kind === 'CHIEF_TRADER');
@@ -145,8 +151,20 @@ export function evaluatePitAiBuyGate(
       },
     };
   }
+  const reconstruction = (options?.aiCalls && options?.newsClusters && typeof options.asOfMs === 'number')
+    ? reconstructPitDebate({
+      asOfMs: options.asOfMs,
+      symbol,
+      aiCalls: options.aiCalls,
+      newsClusters: options.newsClusters,
+    })
+    : null;
+
   if (evidence.length > 0) {
-    const replay = replayChiefTraderFromEvidence(evidence);
+    const replay = replayChiefTraderFromEvidence(evidence, reconstruction?.debateReplayed === true);
+    if (reconstruction) {
+      replay.reason = `${replay.reason} | ${reconstruction.reason}`;
+    }
     return { ledgerPresent: true, allowBuy: replay.approved && replay.side === 'BUY', replay };
   }
   const latest = chiefRows.reduce((a, b) => (a.publishedAtMs >= b.publishedAtMs ? a : b));
@@ -154,15 +172,18 @@ export function evaluatePitAiBuyGate(
     latest.side === 'BUY' || latest.side === 'SELL' || latest.side === 'HOLD' ? latest.side : 'HOLD';
   const confidence = typeof latest.confidence === 'number' && Number.isFinite(latest.confidence) ? latest.confidence : 0;
   const approved = side === 'BUY' && confidence >= tradingSafety.consensusApprovalThreshold;
+  const debateReplayed = reconstruction?.debateReplayed === true;
   const replay: PitConsensusReplay = {
-    debateReplayed: false,
+    debateReplayed,
     side,
     confidence,
     independentAgreeingAgents: 0,
     approved,
-    reason: approved
-      ? `Stored PIT ChiefTrader BUY conf=${confidence.toFixed(3)}; debate not replayed`
-      : `NO_TRADE: stored PIT ChiefTrader ${side} conf=${confidence.toFixed(3)}; debate not replayed`,
+    reason: debateReplayed
+      ? reconstruction!.reason
+      : approved
+        ? `Stored PIT ChiefTrader BUY conf=${confidence.toFixed(3)}; debate not replayed`
+        : `NO_TRADE: stored PIT ChiefTrader ${side} conf=${confidence.toFixed(3)}; debate not replayed`,
   };
   return { ledgerPresent: true, allowBuy: approved, replay };
 }

@@ -39,6 +39,7 @@ import * as schema from '../db/schema';
 import { and, eq, isNotNull, notInArray } from 'drizzle-orm';
 import { system } from '../core/SystemBootstrap';
 import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../core/LiveTradingConfirmation';
+import { tradingSafety } from '../config/tradingSafety';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { TERMINAL_ORDER_STATUSES } from '../services/OrderManagement';
 
@@ -271,7 +272,7 @@ class TradingEngine {
                 this.state.riskLevel = s.riskLevel || "Balanced";
                 this.state.budget = s.budget || 50000;
                 this.state.strategy = s.strategy || "Momentum Focus";
-                this.state.maxTradeSize = s.maxTradeSize || 3000;
+                this.state.maxTradeSize = s.maxTradeSize || tradingSafety.defaultMaxTradeSizeDollars;
                 this.state.dailyLossLimit = s.dailyLossLimit || 5000;
                 this.state.takeProfitPct = s.takeProfitPct || 15;
                 this.state.trailingStopPct = s.trailingStopPct || 5;

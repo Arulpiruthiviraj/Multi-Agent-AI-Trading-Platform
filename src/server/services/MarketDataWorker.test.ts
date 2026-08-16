@@ -48,8 +48,13 @@ vi.mock('ws', () => ({
   },
 }));
 
-const { emitMarketData, emitSpy } = vi.hoisted(() => ({ emitMarketData: vi.fn(), emitSpy: vi.fn() }));
+const { emitMarketData, emitSpy, ideaGenEnabled } = vi.hoisted(() => ({
+  emitMarketData: vi.fn(),
+  emitSpy: vi.fn(),
+  ideaGenEnabled: { value: true },
+}));
 vi.mock('../core/EventBus', () => ({ eventBus: { emitMarketData, emit: emitSpy } }));
+vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
 
 import { MarketDataWorker } from './MarketDataWorker';
 
@@ -64,6 +69,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     instances.length = 0;
     emitMarketData.mockClear();
     emitSpy.mockClear();
+    ideaGenEnabled.value = true;
     process.env.ALPACA_API_KEY = 'test-key';
     process.env.ALPACA_SECRET_KEY = 'test-secret';
     worker = new MarketDataWorker();
@@ -167,6 +173,15 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     worker.reconnect();
     expect(first.readyState).toBe(MockWebSocket.CLOSED);
     expect(instances.length).toBe(2);
+  });
+
+  it('caches quotes but does not emit MARKET_DATA when Autobot/trading is gated off', () => {
+    ideaGenEnabled.value = false;
+    const ws = instances[0];
+    authenticate(ws);
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.25, bs: 100, t: '2026-01-15T14:30:00.000000000Z' });
+    expect(emitMarketData).not.toHaveBeenCalled();
+    expect(worker.getLatestPrice('AAPL')).toBe(150.25);
   });
 
   it('after authenticate, subscribes to config/markets.json US benchmarks when nothing else was subscribed', () => {

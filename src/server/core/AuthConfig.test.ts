@@ -6,6 +6,7 @@ import {
   checkAuthConfig,
   enforceAuthConfigOrExit,
   DEFAULT_SESSION_SECRET,
+  allowUnauthenticatedRequest,
 } from './AuthConfig';
 
 const REAL_ENV = {
@@ -132,5 +133,37 @@ describe('AuthConfig - enforceAuthConfigOrExit', () => {
     enforceAuthConfigOrExit({ NODE_ENV: 'development' }, log, exit);
     expect(exit).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalled();
+  });
+});
+
+describe('AuthConfig - mutating API lockdown when AUTH_PASSWORD is unset', () => {
+  const noAuth = { NODE_ENV: 'development' as const };
+
+  it('allows GET without a session', () => {
+    expect(allowUnauthenticatedRequest({
+      method: 'GET', path: '/api/v1/secrets', ip: '10.0.0.5', env: noAuth,
+    })).toBe(true);
+  });
+
+  it('allows mutating calls from loopback', () => {
+    expect(allowUnauthenticatedRequest({
+      method: 'POST', path: '/api/v1/autobot/toggle', ip: '127.0.0.1', env: noAuth,
+    })).toBe(true);
+  });
+
+  it('rejects mutating calls from a remote IP without a dev token', () => {
+    expect(allowUnauthenticatedRequest({
+      method: 'POST', path: '/api/v1/portfolio/liquidate', ip: '10.0.0.8', env: noAuth,
+    })).toBe(false);
+  });
+
+  it('allows mutating calls from a remote IP with a valid X-Argus-Dev-Token', () => {
+    expect(allowUnauthenticatedRequest({
+      method: 'PUT',
+      path: '/api/v1/settings',
+      ip: '10.0.0.8',
+      devTokenHeader: 'unit-test-dev-token-ok',
+      env: { ...noAuth, ARGUS_DEV_TOKEN: 'unit-test-dev-token-ok' },
+    })).toBe(true);
   });
 });

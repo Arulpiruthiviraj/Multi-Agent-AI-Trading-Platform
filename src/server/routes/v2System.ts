@@ -59,8 +59,16 @@ import { deskIntelligence } from '../config/deskIntelligence';
 import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
 import { noTradeReasonsConfig } from '../config/noTradeReasons';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
+import { mountResearchRoutes } from './researchRoutes';
 
 export const v2Router = Router();
+mountResearchRoutes(v2Router);
+
+v2Router.get('/live-readiness', (_req, res) => {
+  const report = evaluateLiveReadiness();
+  res.json({ ok: true, ...report, live: report.result === 'LIVE_READY' ? 'GO' : 'NO-GO' });
+});
 
 v2Router.get('/agents/performance', async (req, res) => {
   try {

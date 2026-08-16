@@ -15,7 +15,7 @@
 import { useWebSocket } from '../context/WebSocketContext';
 import eventCatalog from '../../config/eventNames.json';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, LayoutGroup } from 'motion/react';
 import ReactFlow, {
   Background,
   BaseEdge,
@@ -99,6 +99,17 @@ function hoverRows(nodeId: string, snap: LastSnapshot | undefined, weights: { ag
   const t = snap.eventType;
   const when = snap.timestamp ? new Date(snap.timestamp).toLocaleTimeString() : '—';
 
+  if (nodeId === 'technical-engine') {
+    const d = p.data && typeof p.data === 'object' ? p.data : p;
+    return [
+      { label: 'Event', value: t },
+      { label: 'Symbol', value: fmt(p.symbol || d.symbol) },
+      { label: 'RSI', value: d.rsi != null ? Number(d.rsi).toFixed(2) : '—' },
+      { label: 'MACD', value: d.macd != null ? Number(d.macd).toFixed(4) : '—' },
+      { label: 'Price', value: d.currentPrice != null ? Number(d.currentPrice).toFixed(2) : p.price != null ? Number(p.price).toFixed(2) : '—' },
+      { label: 'Received', value: when },
+    ];
+  }
   if (nodeId === 'market-data-worker') {
     return [
       { label: 'Event', value: t },
@@ -198,9 +209,9 @@ const TelemetryNode = ({ id, data }: { id: string; data: any }) => {
         />
       )}
       <motion.div
-        layoutId={`agent-node-${id}`}
+        layoutId={data.focused ? undefined : `agent-node-${id}`}
         transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        className={`relative px-4 py-3 w-52 shadow-lg rounded-xl bg-[#0A0F16] border-2 ${border}`}
+        className={`relative cursor-pointer px-4 py-3 w-52 shadow-lg rounded-xl bg-[#0A0F16] border-2 ${border} font-mono`}
         style={active && glow ? { boxShadow: `0 0 18px ${glow}` } : undefined}
       >
         <Handle type="target" position={Position.Top} className="w-2 h-2 bg-slate-500 border-none" />
@@ -320,6 +331,7 @@ export default function DigitalTwinVisualizer() {
 
   const seqRef = useRef(0);
   const lastTickPulseRef = useRef(0);
+  const lastCalcPulseRef = useRef(0);
   const nodeTimers = useRef<Map<string, number>>(new Map());
   const packetTimers = useRef<number[]>([]);
   const rafRef = useRef<number | null>(null);
@@ -333,7 +345,7 @@ export default function DigitalTwinVisualizer() {
   const initialNodes: Node[] = useMemo(() => [
     { id: 'market-data-worker', type: 'custom', position: { x: 20, y: 40 }, data: { label: 'Market Data', icon: <Activity size={18} />, description: 'Alpaca WS ticks', category: 'source', status: 'IDLE', hoverRows: hoverRows('market-data-worker', undefined, []) } },
     { id: 'news-providers', type: 'custom', position: { x: 280, y: 40 }, data: { label: 'News Providers', icon: <Newspaper size={18} />, description: 'RSS / paid news APIs', category: 'source', status: 'IDLE', hoverRows: hoverRows('news-providers', undefined, []) } },
-    { id: 'technical-engine', type: 'custom', position: { x: 20, y: 180 }, data: { label: 'Technical Agent', icon: <TrendingUp size={18} />, description: 'RSI/MACD/BB', category: 'agent', status: 'IDLE', hoverRows: hoverRows('technical-engine', undefined, []) } },
+    { id: 'technical-engine', type: 'custom', position: { x: 20, y: 180 }, data: { label: 'Technical Agent', icon: <TrendingUp size={18} />, description: 'RSI/MACD/BB', category: 'agent', status: 'IDLE', focused: false, hoverRows: hoverRows('technical-engine', undefined, []) } },
     { id: 'quant-engine', type: 'custom', position: { x: 20, y: 320 }, data: { label: 'Quant Engine', icon: <Activity size={18} />, description: 'Off unless QUANT_ENGINE_ENABLED', category: 'agent', status: 'IDLE', hoverRows: hoverRows('quant-engine', undefined, []) } },
     { id: 'news-agent', type: 'custom', position: { x: 280, y: 180 }, data: { label: 'News Agent', icon: <Newspaper size={18} />, description: 'FinBERT then optional LLM', category: 'agent', status: 'IDLE', hoverRows: hoverRows('news-agent', undefined, []) } },
     { id: 'fundamental-agent', type: 'custom', position: { x: 520, y: 180 }, data: { label: 'Fundamental Agent', icon: <Activity size={18} />, description: 'AlphaVantage + AIRouter', category: 'agent', status: 'IDLE', hoverRows: hoverRows('fundamental-agent', undefined, []) } },
@@ -405,6 +417,14 @@ export default function DigitalTwinVisualizer() {
             return true;
           });
         }
+        if (pending.events.some((e) => e.type === 'CALCULATION_COMPLETED')) {
+          let keptCalc = 0;
+          next = next.filter((e) => {
+            if (e.type !== 'CALCULATION_COMPLETED') return true;
+            keptCalc += 1;
+            return keptCalc <= 24;
+          });
+        }
         return next.slice(0, 150);
       });
     }
@@ -426,6 +446,7 @@ export default function DigitalTwinVisualizer() {
           status: st ?? n.data.status,
           pulseKey: st === 'PULSE' ? pulseKey : n.data.pulseKey,
           lastSnapshot: snap,
+          focused: n.data.focused,
           hoverRows: hoverRows(n.id, snap, weightsRef.current),
         },
       };
@@ -487,6 +508,13 @@ export default function DigitalTwinVisualizer() {
   }, [scheduleFlush]);
 
   const { subscribe, status: wsStatus } = useWebSocket();
+
+  useEffect(() => {
+    setNodes((nds) => nds.map((n) => ({
+      ...n,
+      data: { ...n.data, focused: n.id === selectedNodeId },
+    })));
+  }, [selectedNodeId, setNodes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -559,6 +587,16 @@ export default function DigitalTwinVisualizer() {
       subscribe('TECHNICAL_ANALYSIS_COMPLETED', (data: any) => enqueueEvent('TECHNICAL_ANALYSIS_COMPLETED', data, {
         nodes: [{ id: 'technical-engine', status: 'SUCCESS' }],
       })),
+      subscribe('CALCULATION_COMPLETED', (data: any) => {
+        if (data?.engine === 'AdvancedQuantEngine') return;
+        const now = Date.now();
+        const throttled = now - lastCalcPulseRef.current < TICK_THROTTLE_MS;
+        if (!throttled) lastCalcPulseRef.current = now;
+        enqueueEvent('CALCULATION_COMPLETED', data, {
+          skipLog: throttled,
+          nodes: [{ id: 'technical-engine', status: 'PULSE' }],
+        });
+      }),
       subscribe('TRADE_IDEA_GENERATED', (data: any) => {
         const node = AGENT_NODE[data?.agent];
         const edgeId = node ? NODE_TO_CHIEF_EDGE[node] : undefined;
@@ -671,7 +709,7 @@ export default function DigitalTwinVisualizer() {
             Agent Network — Live Telemetry
           </h2>
           <p className="text-xs text-slate-400 mt-1 font-mono">
-            Packets and glows fire only on real EventBus WebSocket events. Idle tape = idle graph. WS {wsStatus}.
+            Packets and glows fire only on real EventBus WebSocket events. Click a node for Focus Mode. Idle tape = idle graph. WS {wsStatus}.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -694,6 +732,7 @@ export default function DigitalTwinVisualizer() {
 
       <div className="flex flex-col lg:flex-row gap-4 flex-1 h-full">
         <div className="flex-1 border border-slate-800 rounded-lg bg-[#0A0F16] relative overflow-hidden h-[600px] lg:h-full">
+          <LayoutGroup id="agent-network-focus">
           <motion.div
             className="h-full w-full"
             animate={{
@@ -730,6 +769,7 @@ export default function DigitalTwinVisualizer() {
               />
             )}
           </AnimatePresence>
+          </LayoutGroup>
         </div>
 
         <div className="w-full lg:w-[420px] bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col h-[600px] lg:h-full overflow-hidden">

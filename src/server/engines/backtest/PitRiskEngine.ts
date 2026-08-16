@@ -11,6 +11,7 @@ import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotion
 import { calculatePositionSizing } from '../PositionSizing';
 import { getTradingDateStr } from '../../core/TradingCalendar';
 import { tradingSafety } from '../../config/tradingSafety';
+import { newsImpactOnVetoScale } from '../../news/newsClusterMatch';
 import {
   consecutiveLossBlocksNewBuys,
   dailyLossBlocksNewBuys,
@@ -131,7 +132,7 @@ export async function evaluatePitRisk(ctx: PitRiskContext): Promise<PitRiskResul
   const newsHits = ctx.pitNews.filter(n =>
     n.symbol === ctx.symbol
     && typeof n.impactScore === 'number'
-    && n.impactScore > tradingSafety.newsVetoMinImpactScore
+    && newsImpactOnVetoScale(n.impactScore) > tradingSafety.newsVetoMinImpactScore
     && n.publishedAtMs <= ctx.nowMs
     && n.publishedAtMs >= ctx.nowMs - tradingSafety.newsVetoWindowMs,
   );

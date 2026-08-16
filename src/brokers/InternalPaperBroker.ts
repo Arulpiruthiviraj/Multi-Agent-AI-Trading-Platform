@@ -63,7 +63,7 @@ export class InternalPaperBroker implements BrokerPlugin {
   name = 'Argus Internal Simulator';
   isPaper = true;
   
-  private cash: number = tradingSafety.internalPaperDefaultCash;
+  private cash: number = tradingSafety.internalPaperDefaultCash; // paperInitialCapital — not maxTradeSize
   private _positions: Map<string, Position> = new Map();
   private _orders: Map<string, Order> = new Map();
   

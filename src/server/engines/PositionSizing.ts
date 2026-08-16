@@ -95,6 +95,8 @@ export interface SizingContext {
   sizingMode?: 'FIXED_DOLLAR' | 'PERCENT_OF_EQUITY';
   /** Only read when sizingMode='PERCENT_OF_EQUITY'. */
   percentOfEquityPct?: number;
+  /** LIVE: skipped correlation/sector history is FAIL (UNKNOWN), not PASS. Paper keeps SKIPPED. */
+  failClosedUnknownInputs?: boolean;
   /** Real recent daily closes for correlation, or null if unavailable - caller supplies the
    * right point-in-time source (live: Alpaca-backed cache; backtest: bars already visible up to
    * the simulated clock, never a future bar). */
@@ -106,6 +108,8 @@ export interface SizingGateResult {
   passed: boolean;
   detail: any;
 }
+
+type SizingHonesty = 'PASS' | 'CLAMPED' | 'FAIL' | 'UNKNOWN' | 'SKIPPED';
 
 export interface SizingResult {
   maxQuantity: number;
@@ -145,7 +149,9 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
   const maxSharesByBuyingPower = Math.floor(ctx.buyingPower / ctx.currentPrice);
 
   const orderNotionalIsBinding = maxSharesByCapital <= maxSharesByRisk && maxSharesByCapital <= maxSharesByBuyingPower;
-  record('order_notional_cap', true, {
+  const notionalStatus: SizingHonesty = maxSharesByCapital <= 0 ? 'FAIL' : orderNotionalIsBinding ? 'CLAMPED' : 'PASS';
+  record('order_notional_cap', maxSharesByCapital > 0, {
+    status: notionalStatus,
     sizingMode, effectiveNotionalCapDollar,
     maxTradeSizeDollar: ctx.maxTradeSizeDollar, percentOfEquityPct: ctx.percentOfEquityPct,
     maxSharesByCapital, maxSharesByRisk, maxSharesByBuyingPower, isBinding: orderNotionalIsBinding,
@@ -161,7 +167,13 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     const maxSharesByConcentration = Math.floor(remainingRoom / ctx.currentPrice);
     const beforeConcentration = maxQuantity;
     maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
-    record('symbol_concentration', true, { existingValue, maxPositionValue, capPct: MAX_SINGLE_SYMBOL_CONCENTRATION_PCT, boundQuantity: beforeConcentration !== maxQuantity ? maxQuantity : null });
+    const concentrationFail = maxSharesByConcentration <= 0 && remainingRoom <= 0;
+    record('symbol_concentration', !concentrationFail, {
+      status: concentrationFail ? 'FAIL' : (beforeConcentration !== maxQuantity ? 'CLAMPED' : 'PASS'),
+      existingValue, maxPositionValue, capPct: MAX_SINGLE_SYMBOL_CONCENTRATION_PCT,
+      boundQuantity: beforeConcentration !== maxQuantity ? maxQuantity : null,
+    });
+    if (concentrationFail) maxQuantity = 0;
 
     const isNewPosition = !existingPosition;
     const openPositionsPassed = !isNewPosition || ctx.existingPositions.length < ctx.maxOpenPositions;

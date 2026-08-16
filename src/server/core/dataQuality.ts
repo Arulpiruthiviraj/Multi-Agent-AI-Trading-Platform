@@ -7,8 +7,9 @@ import { deskIntelligence } from '../config/deskIntelligence';
 import { tradingSafety } from '../config/tradingSafety';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
+import { evaluateQuoteFreshness, type MarketDataGrade } from './marketDataQuality';
 
-export type DataQualityColor = 'GREEN' | 'YELLOW' | 'RED';
+export type DataQualityColor = MarketDataGrade;
 
 export interface DataQualityChannel {
   channel: string;
@@ -24,23 +25,22 @@ export interface DataQualitySnapshot {
 }
 
 function worst(a: DataQualityColor, b: DataQualityColor): DataQualityColor {
-  const rank = { GREEN: 0, YELLOW: 1, RED: 2 };
+  const rank = { GREEN: 0, YELLOW: 1, RED: 2, UNKNOWN: 3 };
   return rank[a] >= rank[b] ? a : b;
 }
 
 export function assessDataQuality(symbol: string): DataQualitySnapshot {
-  const { greenMaxStaleMs, yellowMaxStaleMs } = deskIntelligence.dataQuality;
+  const { yellowMaxStaleMs } = deskIntelligence.dataQuality;
   const ageMs = marketDataWorker.getLatestPriceAgeMs?.(symbol) ?? null;
-  let market: DataQualityChannel;
-  if (ageMs === null) {
-    market = { channel: 'market_data', status: 'YELLOW', reason: 'No tick age recorded for this symbol (paper/internal feed may still have a last price).' };
-  } else if (ageMs <= greenMaxStaleMs) {
-    market = { channel: 'market_data', status: 'GREEN', reason: `Last tick ${ageMs}ms ago.` };
-  } else if (ageMs <= yellowMaxStaleMs) {
-    market = { channel: 'market_data', status: 'YELLOW', reason: `Last tick ${ageMs}ms ago (stale vs desk green band).` };
-  } else {
-    market = { channel: 'market_data', status: 'RED', reason: `Market data stale by ${ageMs}ms (threshold ${tradingSafety.stalePriceThresholdMs}ms).` };
-  }
+  const freshness = evaluateQuoteFreshness({
+    priceAgeMs: ageMs,
+    staleThresholdMs: tradingSafety.stalePriceThresholdMs,
+  });
+  const market: DataQualityChannel = {
+    channel: 'market_data',
+    status: freshness.grade,
+    reason: freshness.reason,
+  };
 
   const channels = [market];
 
@@ -60,7 +60,7 @@ export function assessDataQuality(symbol: string): DataQualitySnapshot {
   channels.push({ channel: 'forecast', status: 'YELLOW', reason: 'DATA UNAVAILABLE: Chronos/Kronos freshness is not attached to this symbol tick.' });
   channels.push({ channel: 'broker', status: 'YELLOW', reason: 'Broker snapshot freshness is not measured here. RiskEngine still requires a live portfolio() call.' });
   const overall = channels.reduce((acc, c) => worst(acc, c.status), 'GREEN' as DataQualityColor);
-  const tradeBlocked = market.status === 'RED';
+  const tradeBlocked = market.status === 'RED' || market.status === 'UNKNOWN';
   return {
     overall,
     tradeBlocked,

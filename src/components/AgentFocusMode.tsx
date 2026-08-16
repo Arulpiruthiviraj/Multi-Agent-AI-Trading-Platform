@@ -18,9 +18,16 @@ import agentWeights from '../../config/agentWeights.json';
 import riskGateOrder from '../../config/riskGateOrder.json';
 import {
   CONSENSUS_APPROVAL_THRESHOLD,
-  displayNetConfidenceFromVotes,
+  DISAGREEMENT_PENALTY,
+  displayVoteTerms,
   resolveDisplayWeight,
 } from './agentFocus/displayConsensus';
+import {
+  bollingerWidthPct,
+  finiteNum,
+  isTechnicalEngineCalc,
+  unwrapTechPayload,
+} from './agentFocus/parseTechTelemetry';
 
 const FOCUS_MS = 0.28;
 const SERIES_CAP = 48;
@@ -56,32 +63,52 @@ function fmtTs(iso: string | undefined) {
 }
 
 function num(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
-
-function bbWidthPct(d: any): number | null {
-  const upper = num(d?.bbUpper);
-  const lower = num(d?.bbLower);
-  const px = num(d?.currentPrice);
-  if (upper == null || lower == null || px == null || px === 0) return null;
-  return ((upper - lower) / px) * 100;
+  return finiteNum(v);
 }
 
 function techPayload(evt: BusEvent | undefined) {
   if (!evt) return null;
-  return evt.payload?.data || evt.payload;
+  return unwrapTechPayload(evt.payload);
+}
+
+/* Reveal completed EventBus JSON in ≤FOCUS_MS. Characters come only from the payload; EventBus does not stream Ollama tokens. */
+function CompletedJsonReveal({ text }: { text: string }) {
+  const [shown, setShown] = useState(text);
+  useEffect(() => {
+    if (!text) {
+      setShown('');
+      return;
+    }
+    const start = performance.now();
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / (FOCUS_MS * 1000));
+      setShown(text.slice(0, Math.max(1, Math.ceil(text.length * t))));
+      if (t < 1) raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [text]);
+  return (
+    <pre className="max-h-56 overflow-auto font-mono text-[10px] leading-relaxed text-cyan-100 custom-scrollbar">
+      {shown}
+    </pre>
+  );
 }
 
 /* === COMPONENT: TechnicalInternals === */
 function TechnicalInternals({ events }: { events: BusEvent[] }) {
-  const completed = events.filter((e) => e.type === 'TECHNICAL_ANALYSIS_COMPLETED' || e.type === 'CALCULATION_COMPLETED');
+  const completed = events.filter((e) => {
+    if (e.type === 'TECHNICAL_ANALYSIS_COMPLETED') return true;
+    return e.type === 'CALCULATION_COMPLETED' && isTechnicalEngineCalc(e.payload);
+  });
   const ideas = events.filter((e) => e.type === 'TRADE_IDEA_GENERATED' && e.payload?.agent === 'TechnicalAgent');
   const ticks = events.filter((e) => e.type === 'MARKET_DATA').slice(0, SERIES_CAP).reverse();
   const latestIdea = ideas[0];
   const series = completed.slice(0, SERIES_CAP).reverse();
   const rsi = series.map((e) => num(techPayload(e)?.rsi)).filter((v): v is number => v != null);
   const macd = series.map((e) => num(techPayload(e)?.macd)).filter((v): v is number => v != null);
-  const bbw = series.map((e) => bbWidthPct(techPayload(e))).filter((v): v is number => v != null);
+  const bbw = series.map((e) => bollingerWidthPct(techPayload(e))).filter((v): v is number => v != null);
   const prices = ticks.map((e) => num(e.payload?.price)).filter((v): v is number => v != null);
   const last = techPayload(completed[0]);
   const lastTick = ticks[ticks.length - 1];
@@ -117,7 +144,7 @@ function TechnicalInternals({ events }: { events: BusEvent[] }) {
         <div className="rounded border border-slate-800 bg-[#0A0F16] p-3">
           <div className="mb-1 flex justify-between font-mono text-[9px] text-slate-500">
             <span>BB WIDTH %</span>
-            <span className="text-violet-300">{bbWidthPct(last) != null ? bbWidthPct(last)!.toFixed(3) : '—'}</span>
+            <span className="text-violet-300">{bollingerWidthPct(last) != null ? bollingerWidthPct(last)!.toFixed(3) : '—'}</span>
           </div>
           <Sparkline values={bbw} color="#a78bfa" />
         </div>
@@ -164,11 +191,30 @@ function NewsInternals({ events, nodeId }: { events: BusEvent[]; nodeId: string 
   const provider = idea?.payload?.provider || analyzed?.payload?.aiAnalysis?._provider || aiMetrics?.payload?.provider;
   const local = aiMetrics?.payload?.local === true || (typeof provider === 'string' && /ollama|llama/i.test(provider));
 
+  const steps = [
+    { id: 'headline', label: 'HEADLINE', on: Boolean(started || headline) },
+    { id: 'finbert', label: 'FINBERT', on: finbertScore != null },
+    { id: 'escalation', label: 'ESCALATION', on: Boolean(escalation) },
+    { id: 'llm', label: 'LLM JSON', on: Boolean(jsonText) },
+  ];
+
   return (
     <div className="flex flex-col gap-3">
       <p className="font-mono text-[9px] uppercase tracking-widest text-slate-500">
-        NEWS_ANALYSIS_STARTED → FinBERT (NEWS_ANALYZED.impact) → optional AIRouter JSON. No token stream on EventBus.
+        NEWS_ANALYSIS_STARTED → FinBERT (NEWS_ANALYZED.impact) → optional AIRouter JSON. EventBus has no Ollama token stream.
       </p>
+      <div className="grid grid-cols-4 gap-1">
+        {steps.map((s) => (
+          <div
+            key={s.id}
+            className={`rounded border px-2 py-1.5 text-center font-mono text-[8px] uppercase tracking-widest ${
+              s.on ? 'border-emerald-500/50 bg-emerald-950/40 text-emerald-300' : 'border-slate-800 text-slate-600'
+            }`}
+          >
+            {s.label}
+          </div>
+        ))}
+      </div>
       <div className="rounded border border-slate-800 bg-[#0A0F16] p-3">
         <div className="text-[9px] font-bold uppercase tracking-widest text-slate-500">Headline</div>
         <div className="mt-1 font-mono text-[12px] text-slate-100">{headline || 'Awaiting NEWS_ANALYSIS_STARTED'}</div>
@@ -201,15 +247,7 @@ function NewsInternals({ events, nodeId }: { events: BusEvent[]; nodeId: string 
           <span className="font-mono font-normal text-slate-500">not a simulated typewriter</span>
         </div>
         {jsonText ? (
-          <motion.pre
-            key={jsonText.slice(0, 80)}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: FOCUS_MS }}
-            className="max-h-56 overflow-auto font-mono text-[10px] leading-relaxed text-cyan-100 custom-scrollbar"
-          >
-            {jsonText}
-          </motion.pre>
+          <CompletedJsonReveal text={jsonText} />
         ) : (
           <div className="font-mono text-[11px] text-slate-600">
             {escalation?.payload?.escalated
@@ -249,13 +287,17 @@ function ChiefInternals({
   }));
 
   let liveNet: number | null = null;
+  let liveTerms: { weightedSum: number; totalWeight: number; net: number } | null = null;
+  let liveSide: 'BUY' | 'SELL' | null = null;
   if (votes.length) {
     const buy = votes.filter((v) => v.side === 'BUY');
     const sell = votes.filter((v) => v.side === 'SELL');
     const hold = votes.filter((v) => v.side === 'HOLD' && v.confidence > 0);
-    const buyNet = displayNetConfidenceFromVotes(buy, [...sell, ...hold]);
-    const sellNet = displayNetConfidenceFromVotes(sell, [...buy, ...hold]);
-    liveNet = Math.max(buyNet, sellNet);
+    const buyTerms = displayVoteTerms(buy, [...sell, ...hold]);
+    const sellTerms = displayVoteTerms(sell, [...buy, ...hold]);
+    liveNet = Math.max(buyTerms.net, sellTerms.net);
+    liveTerms = buyTerms.net >= sellTerms.net ? buyTerms : sellTerms;
+    liveSide = buyTerms.net >= sellTerms.net ? 'BUY' : 'SELL';
   }
 
   const official = num(completed?.payload?.confidence);
@@ -279,15 +321,30 @@ function ChiefInternals({
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-slate-800">
           <motion.div
-            className={`h-full ${meter != null && meter > threshold ? 'bg-emerald-400' : 'bg-amber-400'}`}
+            className={`h-full ${meter != null && meter >= threshold ? 'bg-emerald-400' : 'bg-amber-400'}`}
             initial={false}
             animate={{ width: `${Math.min(100, Math.max(0, pct * 100))}%` }}
             transition={{ duration: FOCUS_MS }}
           />
         </div>
-        <div className="mt-1 font-mono text-[9px] text-slate-500">
-          ideaCount started={started?.payload?.ideaCount ?? '—'} · completed approved={completed?.payload?.approved == null ? '—' : String(completed.payload.approved)} · {fmtTs(completed?.timestamp || started?.timestamp)}
+        <div className="mt-2 font-mono text-[9px] leading-relaxed text-slate-400">
+          EvidenceAggregator: (Σ c·w − {DISAGREEMENT_PENALTY}·Σ c_opp·w) / Σ w
+          {liveTerms ? (
+            <span className="ml-2 text-cyan-300">
+              live {liveSide} {liveTerms.weightedSum.toFixed(4)} / {liveTerms.totalWeight.toFixed(4)} = {liveTerms.net.toFixed(4)} vs {threshold.toFixed(2)}
+            </span>
+          ) : (
+            <span className="ml-2">awaiting votes</span>
+          )}
         </div>
+        {approved && (
+          <div className="mt-2 rounded border border-fuchsia-800/50 bg-fuchsia-950/20 px-2 py-1.5 font-mono text-[10px] text-fuchsia-200">
+            CHIEF_APPROVED_IDEA {approved.payload?.side} {approved.payload?.symbol} conf=
+            {num(approved.payload?.confidence) != null ? (num(approved.payload.confidence)! * 100).toFixed(1) : '—'}%
+            {' · '}
+            {fmtTs(approved.timestamp)}
+          </div>
+        )}
       </div>
       <div className="flex max-h-64 flex-col gap-2 overflow-y-auto custom-scrollbar">
         {votes.length === 0 && (
@@ -318,6 +375,29 @@ function RiskInternals({ events }: { events: BusEvent[] }) {
   const started = events.find((e) => e.type === 'RISK_ASSESSMENT_STARTED');
   const completed = events.find((e) => e.type === 'RISK_ASSESSMENT_COMPLETED');
   const traceId = started?.payload?.traceId || completed?.payload?.traceId;
+  const txId = started?.payload?.transactionId || completed?.payload?.transactionId;
+  const [persisted, setPersisted] = useState<Array<{ gate: string; passed: boolean; sequence: number; detail: any }>>([]);
+
+  useEffect(() => {
+    if (!txId || !completed) {
+      setPersisted([]);
+      return;
+    }
+    let cancelled = false;
+    fetch(`/api/v2/transactions/${encodeURIComponent(String(txId))}`)
+      .then((r) => r.json())
+      .then((body) => {
+        if (cancelled || !body?.ok || !Array.isArray(body.riskGates)) return;
+        setPersisted(body.riskGates.map((g: any) => ({
+          gate: String(g.gate || ''),
+          passed: g.passed === true,
+          sequence: typeof g.sequence === 'number' ? g.sequence : 0,
+          detail: g.detail,
+        })).filter((g: { gate: string }) => g.gate));
+      })
+      .catch(() => { /* live RISK_GATE_EVALUATED remains the primary source */ });
+    return () => { cancelled = true; };
+  }, [txId, completed]);
   const gatesForRun = events.filter((e) => {
     if (e.type !== 'RISK_GATE_EVALUATED') return false;
     if (!traceId) return true;
@@ -334,6 +414,10 @@ function RiskInternals({ events }: { events: BusEvent[] }) {
       ts: g.timestamp,
     });
   }
+  for (const g of persisted) {
+    if (!g.gate || byName.has(g.gate)) continue;
+    byName.set(g.gate, { passed: g.passed, sequence: g.sequence, detail: g.detail, ts: completed?.timestamp || '' });
+  }
   const extra = [...byName.keys()].filter((k) => !riskGateOrder.gates.includes(k));
   const ladder = [...riskGateOrder.gates, ...extra];
   const rejection = completed?.payload?.rejectionGate || completed?.payload?.gate;
@@ -344,7 +428,7 @@ function RiskInternals({ events }: { events: BusEvent[] }) {
   return (
     <div className="flex flex-col gap-3">
       <p className="font-mono text-[9px] uppercase tracking-widest text-slate-500">
-        RISK_ASSESSMENT_STARTED then RISK_GATE_EVALUATED. Catalog = config/riskGateOrder.json. Colors only after a gate event.
+        {riskGateOrder.gates.length} gates from config/riskGateOrder.json. Live colors = RISK_GATE_EVALUATED; gaps filled from risk_gate_results via GET /api/v2/transactions/:id after COMPLETED.
       </p>
       <div className="flex justify-between font-mono text-[10px] text-slate-400">
         <span>{started ? `${started.payload?.side} ${started.payload?.symbol}` : 'Awaiting RISK_ASSESSMENT_STARTED'}</span>
@@ -407,7 +491,8 @@ function GenericInternals({ events }: { events: BusEvent[] }) {
 function nodeEventMatch(nodeId: string, type: string, payload: any): boolean {
   if (nodeId === 'market-data-worker') return type === 'MARKET_DATA';
   if (nodeId === 'technical-engine') {
-    return type === 'MARKET_DATA' || type === 'CALCULATION_COMPLETED' || type === 'TECHNICAL_ANALYSIS_STARTED' || type === 'TECHNICAL_ANALYSIS_COMPLETED'
+    return type === 'MARKET_DATA' || type === 'TECHNICAL_ANALYSIS_STARTED' || type === 'TECHNICAL_ANALYSIS_COMPLETED'
+      || (type === 'CALCULATION_COMPLETED' && isTechnicalEngineCalc(payload))
       || (type === 'TRADE_IDEA_GENERATED' && payload?.agent === 'TechnicalAgent');
   }
   if (nodeId === 'news-agent' || nodeId === 'news-providers' || nodeId === 'finbert-model' || nodeId === 'ollama-llm' || nodeId === 'paid-llm-pool') {
@@ -476,8 +561,9 @@ export default function AgentFocusMode({
       let next = [...batch, ...prev];
       if (nodeId === 'technical-engine') {
         const ticks = next.filter((e) => e.type === 'MARKET_DATA').slice(0, SERIES_CAP);
-        const rest = next.filter((e) => e.type !== 'MARKET_DATA');
-        next = [...ticks, ...rest];
+        const calcs = next.filter((e) => e.type === 'CALCULATION_COMPLETED' || e.type === 'TECHNICAL_ANALYSIS_COMPLETED').slice(0, SERIES_CAP);
+        const rest = next.filter((e) => e.type !== 'MARKET_DATA' && e.type !== 'CALCULATION_COMPLETED' && e.type !== 'TECHNICAL_ANALYSIS_COMPLETED');
+        next = [...ticks, ...calcs, ...rest];
       }
       return next.slice(0, 160);
     });
@@ -534,7 +620,7 @@ export default function AgentFocusMode({
         <button type="button" aria-label="Close focus mode" className="absolute inset-0 cursor-default bg-[#0A0F16]/55 backdrop-blur-md" onClick={onClose} />
         <motion.div
           layoutId={`agent-node-${nodeId}`}
-          className="relative z-10 flex max-h-[92%] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-cyan-500/25 bg-[#1A1F2B] shadow-[0_0_48px_rgba(34,211,238,0.12)]"
+          className="relative z-10 flex max-h-[92%] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-cyan-500/25 bg-[#1A1F2B] font-mono shadow-[0_0_48px_rgba(34,211,238,0.12)]"
           initial={{ opacity: 0.85, scale: 0.94 }}
           animate={{ opacity: 1, scale: 1 }}
           exit={{ opacity: 0, scale: 0.96 }}

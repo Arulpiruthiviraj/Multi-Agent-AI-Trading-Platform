@@ -10,6 +10,7 @@
   "source": "argus_fixture",
   "sourceVersion": "phase17",
   "market": "US",
+  "provenance": "UNIT_FIXTURE",
   "bars": [
     { "timestamp": 1704067200000, "open": 100, "high": 101, "low": 99.5, "close": 100.5, "volume": 1000 },
     { "timestamp": 1704153600000, "open": 100.5, "high": 102, "low": 100, "close": 101.5, "volume": 1100 },

@@ -27,6 +27,7 @@ import { rsiEngine } from '../RSIEngine';
 import { macdEngine } from '../MACDEngine';
 import { CORRELATION_MIN_OVERLAP, getSector } from '../PositionSizing';
 import { calculateCommission } from './Commissions';
+import { executionModelVersion, getExecutionModel } from '../../research/executionModel';
 import { calculateDynamicSlippagePct } from './Slippage';
 import { classifyRegime, RegimeLabel, MIN_BARS as REGIME_MIN_BARS } from '../../quant/RegimeEngine';
 import { getMarketContext, BarsFetcher, BENCHMARK_SYMBOLS, SECTOR_ETF_MAP } from '../../quant/MarketContext';
@@ -425,7 +426,13 @@ export class BacktestEngine {
       }).where(eq(schema.backtestRuns.id, runId));
 
       const statisticalSignificance = permutationTestSharpe(periodReturnsFromEquityCurve(equityCurve));
-      return { id: runId, status: 'COMPLETED', initialCash, finalEquity, totalReturnPct: metrics.totalReturnPct, ...metrics, trades: tradeLog.length, equityCurve, tradeLog, statisticalSignificance };
+      return {
+        id: runId, status: 'COMPLETED', initialCash, finalEquity, totalReturnPct: metrics.totalReturnPct, ...metrics, trades: tradeLog.length, equityCurve, tradeLog, statisticalSignificance,
+        executionModel: getExecutionModel('SAME_BAR_CLOSE').executionModel,
+        executionModelVersion: executionModelVersion(),
+        comparableToCanonicalResearch: false,
+        engineMismatchVsNextBarOpen: true,
+      };
     } catch (e: any) {
       await db.update(schema.backtestRuns).set({ status: 'FAILED', errorMessage: e.message }).where(eq(schema.backtestRuns.id, runId));
       throw e;
@@ -853,6 +860,10 @@ export class BacktestEngine {
         expectedValue: ev, kelly, trades: tradeLog.length, equityCurve, tradeLog, failureBreakdown,
         benchmarkComparison, accountSizeReport, statisticalSignificance,
         drawdownCircuitBreakerTriggeredAt,
+        executionModel: getExecutionModel('SAME_BAR_CLOSE').executionModel,
+        executionModelVersion: executionModelVersion(),
+        comparableToCanonicalResearch: false,
+        engineMismatchVsNextBarOpen: true,
       };
     } catch (e: any) {
       await db.update(schema.quantStrategyBacktests).set({ status: 'FAILED', errorMessage: e.message }).where(eq(schema.quantStrategyBacktests.id, runId));

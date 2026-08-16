@@ -34,6 +34,7 @@
  */
 
 import { eventBus } from '../core/EventBus';
+import { randomUUID } from 'node:crypto';
 import { db } from '../db';
 import { portfolio, settings, trades } from '../db/schema';
 import { and, desc, eq } from 'drizzle-orm';
@@ -135,7 +136,7 @@ export class PortfolioMonitorWorker {
           if (quantTarget !== null && currentLivePrice >= quantTarget) {
             console.log(`[PortfolioWorker] Quant strategy (${openingTrade!.quantStrategyId}) target reached on ${holding.symbol}: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}`);
             eventBus.emitTradeIdea({
-              traceId: Math.random().toString(36).substring(7),
+              traceId: randomUUID(),
               symbol: holding.symbol,
               side: "SELL",
               confidence: tradingSafety.quantExitIdeaConfidence,
@@ -147,7 +148,7 @@ export class PortfolioMonitorWorker {
           } else if (quantStop !== null && currentLivePrice <= quantStop) {
             console.log(`[PortfolioWorker] Quant strategy (${openingTrade!.quantStrategyId}) stop hit on ${holding.symbol}: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}`);
             eventBus.emitTradeIdea({
-              traceId: Math.random().toString(36).substring(7),
+              traceId: randomUUID(),
               symbol: holding.symbol,
               side: "SELL",
               confidence: tradingSafety.quantStopExitConfidence,
@@ -161,7 +162,7 @@ export class PortfolioMonitorWorker {
             if (invalidation) {
               console.log(`[PortfolioWorker] Original thesis invalidated on ${holding.symbol}: ${invalidation}`);
               eventBus.emitTradeIdea({
-                traceId: Math.random().toString(36).substring(7),
+                traceId: randomUUID(),
                 symbol: holding.symbol,
                 side: "SELL",
                 confidence: tradingSafety.thesisInvalidationExitConfidence,
@@ -174,7 +175,7 @@ export class PortfolioMonitorWorker {
           }
           if (PnL < -trailingStopPct) {
             eventBus.emitTradeIdea({
-              traceId: Math.random().toString(36).substring(7),
+              traceId: randomUUID(),
               symbol: holding.symbol,
               side: "SELL",
               confidence: tradingSafety.quantStopExitConfidence,
@@ -189,7 +190,7 @@ export class PortfolioMonitorWorker {
         if (PnL > takeProfitPct) {
            console.log(`[PortfolioWorker] Taking profit on ${holding.symbol} (+${PnL.toFixed(2)}%)`);
            eventBus.emitTradeIdea({
-             traceId: Math.random().toString(36).substring(7),
+             traceId: randomUUID(),
              symbol: holding.symbol,
              side: "SELL",
              confidence: tradingSafety.quantExitIdeaConfidence,
@@ -200,7 +201,7 @@ export class PortfolioMonitorWorker {
         } else if (PnL < -trailingStopPct) {
            console.log(`[PortfolioWorker] Cutting loss on ${holding.symbol} (${PnL.toFixed(2)}%)`);
            eventBus.emitTradeIdea({
-             traceId: Math.random().toString(36).substring(7),
+             traceId: randomUUID(),
              symbol: holding.symbol,
              side: "SELL",
              confidence: tradingSafety.quantStopExitConfidence,

@@ -250,7 +250,7 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     expect(after.status).not.toBe('CANCELED'); // never marked cancelled on a real broker refusal
   });
 
-  it('reconcileInboundBrokerOrders records a broker fill that has no local trades row', async () => {
+  it('reconcileInboundBrokerOrders tags unrecognized fills as SOURCE: EXTERNAL_MANUAL and does not record a RiskEngine fill', async () => {
     ordersResponse = [{
       id: 'broker-inbound-1',
       clientOrderId: 'never-locally-inserted',
@@ -267,10 +267,11 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     await oms.reconcileInboundBrokerOrders();
     const rows = await db.select().from(schema.trades).where(eq(schema.trades.brokerOrderId, 'broker-inbound-1'));
     expect(rows.length).toBe(1);
-    expect(rows[0].status).toBe('FILLED');
+    expect(rows[0].status).toBe('EXTERNAL_MANUAL');
+    expect(rows[0].reasoning).toMatch(/SOURCE: EXTERNAL_MANUAL/);
     expect(rows[0].symbol).toBe('MSFT');
     const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, rows[0].id));
-    expect(fillRows.length).toBeGreaterThan(0);
+    expect(fillRows.length).toBe(0);
   });
 
   it('followUpOpenOrders cancels a still-open order older than tradingSafety.omsFollowUpMaxAgeMs', async () => {

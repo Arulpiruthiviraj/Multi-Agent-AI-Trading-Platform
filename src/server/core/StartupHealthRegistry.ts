@@ -84,6 +84,16 @@ export async function collectStartupHealth(timeoutMs = 2000): Promise<StartupHea
   }));
 
   entries.push(stamp({
+    service: 'VectorBTResearch',
+    status: 'NOT_CONFIGURED',
+    error: null,
+    rootCause: 'Capability is reported by GET /api/v2/research/vectorbt/status — this registry does not spawn Python on every health poll.',
+    impact: 'Missing VectorBT does not block Argus. Research jobs report UNAVAILABLE. VectorBT cannot place orders.',
+    fix: 'pip install -r requirements-research.txt. Optional: pip install -U "vectorbt[rust]".',
+    latencyMs: null,
+  }));
+
+  entries.push(stamp({
     service: 'QuantSignalAgent',
     status: envOn('QUANT_ENGINE_ENABLED') ? 'READY' : 'DISABLED',
     error: null,

@@ -78,7 +78,10 @@ export interface TradingSafety {
   reconQtyTolerance: number;
   fallbackTakeProfitPct: number;
   fallbackTrailingStopPct: number;
+  /** InternalPaperBroker seed cash. Not broker equity. Not researchInitialCapital. Not maxTradeSize. */
   internalPaperDefaultCash: number;
+  /** Fallback order-notional cap when settings.maxTradeSize is unset. Not paper cash. */
+  defaultMaxTradeSizeDollars: number;
   minSampleSizeForTrust: number;
   minTradesForPaperValidation: number;
   maxKellyFractionOfCapital: number;
@@ -167,6 +170,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'fallbackTakeProfitPct',
   'fallbackTrailingStopPct',
   'internalPaperDefaultCash',
+  'defaultMaxTradeSizeDollars',
   'minSampleSizeForTrust',
   'minTradesForPaperValidation',
   'maxKellyFractionOfCapital',

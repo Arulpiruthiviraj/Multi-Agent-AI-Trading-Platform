@@ -197,7 +197,13 @@ export class AIRouter {
      for (const p of dbProviders) {
          if (!p.enabled) continue;
          
-         const apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : process.env[`${p.providerName.toUpperCase()}_API_KEY`];
+         let apiKey: string | undefined;
+         try {
+           apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : process.env[`${p.providerName.toUpperCase()}_API_KEY`];
+         } catch {
+           console.error(`[AIRouter] DECRYPTION_FAILED for provider ${p.providerName} — skipping that provider.`);
+           continue;
+         }
          let providerInstance: AIProvider | null = null;
          
          const nameLower = p.providerName.toLowerCase();

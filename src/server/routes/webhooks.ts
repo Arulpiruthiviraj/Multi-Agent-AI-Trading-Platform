@@ -24,7 +24,8 @@ export interface WebhookEvent {
       // Phase 12 (ARGUS_PRE_IMPLEMENTATION_BASELINE.md) - real CRITICAL alert categories, wired
       // to real EventBus events for the first time by AlertingService.ts. Additive to the
       // pre-existing union - the 3 original values and their behavior are unchanged.
-      | "reconciliation_mismatch" | "market_data_disconnected" | "trading_state_changed" | "ai_providers_exhausted";
+      | "reconciliation_mismatch" | "market_data_disconnected" | "trading_state_changed" | "ai_providers_exhausted"
+      | "external_manual_order";
   title: string;
   message: string;
   details?: Record<string, unknown>;

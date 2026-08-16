@@ -23,10 +23,13 @@
  * ==========================================================
  */
 
+import crypto from 'crypto';
+
 export interface AuthEnv {
   AUTH_USERNAME?: string;
   AUTH_PASSWORD?: string;
   AUTH_SESSION_SECRET?: string;
+  ARGUS_DEV_TOKEN?: string;
   NODE_ENV?: string;
 }
 
@@ -95,10 +98,9 @@ export function checkAuthConfig(env: AuthEnv): AuthConfigIssue[] {
   if (!enabled && !prod) {
     issues.push({
       fatal: false,
-      message: 'AUTH_PASSWORD is not set - Argus is running WITHOUT authentication. Every API ' +
-        'endpoint is reachable by anyone who can reach this port. This is intended for local-only, ' +
-        'single-user development use. Set AUTH_USERNAME and AUTH_PASSWORD before exposing this ' +
-        'server to any network.',
+      message: 'AUTH_PASSWORD is not set. Read-only GET /api is allowed; POST/PUT/PATCH/DELETE on ' +
+        '/api/v1 and /api/v2 require loopback or header X-Argus-Dev-Token. Set AUTH_USERNAME and ' +
+        'AUTH_PASSWORD before exposing this server to any network.',
     });
   }
   return issues;
@@ -126,5 +128,71 @@ export function enforceAuthConfigOrExit(
   }
   if (isAuthEnabled(env)) {
     log.info('[SECURITY] Authentication is ENABLED (AUTH_PASSWORD configured).');
+  } else if (!isProduction(env)) {
+    const token = ensureDevToken(env);
+    log.warn(`[SECURITY] Mutating /api/v1 and /api/v2 require loopback or X-Argus-Dev-Token (token generated for this process).`);
+    log.warn(`[SECURITY] ARGUS_DEV_TOKEN=${token}`);
   }
+}
+
+const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+
+export function isStateMutatingMethod(method: string | undefined): boolean {
+  return MUTATING_METHODS.has(String(method || '').toUpperCase());
+}
+
+export function isLoopbackAddress(ip: string | undefined | null): boolean {
+  if (!ip) return false;
+  const raw = ip.replace(/^::ffff:/i, '');
+  return raw === '127.0.0.1' || raw === '::1' || raw === 'localhost';
+}
+
+export function isMutatingApiPath(path: string | undefined): boolean {
+  if (!path) return false;
+  return path.startsWith('/api/v1/') || path.startsWith('/api/v2/');
+}
+
+export function hasValidDevToken(presented: string | string[] | undefined, expected: string | undefined): boolean {
+  if (!expected || expected.length < 8) return false;
+  const token = Array.isArray(presented) ? presented[0] : presented;
+  if (!token || typeof token !== 'string') return false;
+  try {
+    const a = Buffer.from(token);
+    const b = Buffer.from(expected);
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+let generatedDevToken: string | null = null;
+
+/** Stable per-process token when AUTH_PASSWORD is unset. Honors ARGUS_DEV_TOKEN if already set. */
+export function ensureDevToken(env: AuthEnv = process.env): string {
+  if (env.ARGUS_DEV_TOKEN && env.ARGUS_DEV_TOKEN.length >= 8) return env.ARGUS_DEV_TOKEN;
+  if (!generatedDevToken) generatedDevToken = crypto.randomBytes(24).toString('hex');
+  if (!process.env.ARGUS_DEV_TOKEN) process.env.ARGUS_DEV_TOKEN = generatedDevToken;
+  return generatedDevToken;
+}
+
+/**
+ * When AUTH_PASSWORD is unset: GET/HEAD/OPTIONS may proceed; mutating /api/v1|/api/v2
+ * require loopback or X-Argus-Dev-Token. Auth login paths are always allowed through
+ * so a password can still be configured later via env restart.
+ */
+export function allowUnauthenticatedRequest(opts: {
+  method: string;
+  path: string;
+  ip?: string | null;
+  devTokenHeader?: string | string[];
+  env?: AuthEnv;
+}): boolean {
+  const env = opts.env ?? process.env;
+  if (isAuthEnabled(env)) return false;
+  if (opts.path.startsWith('/api/v1/auth')) return true;
+  if (!isStateMutatingMethod(opts.method)) return true;
+  if (!isMutatingApiPath(opts.path)) return true;
+  if (isLoopbackAddress(opts.ip)) return true;
+  return hasValidDevToken(opts.devTokenHeader, ensureDevToken(env));
 }

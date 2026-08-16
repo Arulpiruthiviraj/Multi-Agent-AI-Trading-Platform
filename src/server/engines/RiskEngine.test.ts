@@ -216,6 +216,29 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.reasoning).toMatch(/high volatility news/i);
   });
 
+  it('vetoes when NewsImpactEngine 0–1 scores are stored (0.9 * 100 exceeds the veto threshold)', async () => {
+    setTableRows(schema.newsClusters, [
+      { symbols: '["AAPL"]', impactScore: 0.9, updatedAt: new Date().toISOString() },
+    ]);
+
+    await riskEngine.evaluateRisk({ traceId: 't5-scale', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/high volatility news/i);
+  });
+
+  it('does not treat substring ticker matches as coverage (A vs AAPL JSON array)', async () => {
+    setTableRows(schema.newsClusters, [
+      { symbols: '["AAPL"]', impactScore: 0.9, updatedAt: new Date().toISOString() },
+    ]);
+
+    await riskEngine.evaluateRisk({ traceId: 't5-substr', symbol: 'A', side: 'BUY', currentPrice: 150 });
+
+    const assessment = lastAssessment();
+    expect(assessment.reasoning).not.toMatch(/high volatility news/i);
+  });
+
   it('does not veto on a low-impact news cluster for the same symbol', async () => {
     setTableRows(schema.newsClusters, [
       { symbols: '["AAPL"]', impactScore: 40, updatedAt: new Date().toISOString() },

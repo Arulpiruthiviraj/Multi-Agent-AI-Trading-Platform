@@ -34,6 +34,8 @@ import {
   evaluatePostLossCooldown,
   evaluateSameSymbolCooldown,
 } from '../risk/OvertradingGuards';
+import { clusterCoversSymbol, newsImpactOnVetoScale } from '../news/newsClusterMatch';
+import { evaluateQuoteFreshness } from '../core/marketDataQuality';
 
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
@@ -255,7 +257,9 @@ export class RiskEngine {
             // environment today). See RestrictedLiveMode.ts's own header for the full rationale.
             const restrictedLiveCaps = applyRestrictedLiveCaps({
                 tradingMode: tradingEngine.state.tradingMode,
-                maxTradeSizeDollar: settings[0]?.maxTradeSize || 3000,
+                // Order-notional cap from settings. Fallback is tradingSafety.defaultMaxTradeSizeDollars
+                // (not InternalPaper seed cash / paperInitialCapital).
+                maxTradeSizeDollar: settings[0]?.maxTradeSize || tradingSafety.defaultMaxTradeSizeDollars,
                 maxOpenPositions: settings[0]?.maxOpenPositions ?? 10,
                 dailyLossLimitDollars: tradingEngine.state.dailyLossLimit,
             });
@@ -360,9 +364,13 @@ export class RiskEngine {
             // 2c. Stale market-data check - only fires when we've actually seen a real tick for
             // this symbol before and it has since gone quiet; never fabricates a staleness verdict.
             const priceAgeMs = marketDataWorker.getLatestPriceAgeMs(proposal.symbol);
-            const stale = priceAgeMs !== null && priceAgeMs > STALE_PRICE_THRESHOLD_MS;
-            recordGate('data_freshness', !stale, { priceAgeMs, thresholdMs: STALE_PRICE_THRESHOLD_MS });
-            const staleDataReason = `Stale market data: last real tick for ${proposal.symbol} is ${Math.round((priceAgeMs || 0) / 1000)}s old (threshold ${STALE_PRICE_THRESHOLD_MS / 1000}s).`;
+            const freshness = evaluateQuoteFreshness({ priceAgeMs, staleThresholdMs: STALE_PRICE_THRESHOLD_MS });
+            recordGate('data_freshness', freshness.passed, {
+              priceAgeMs: freshness.priceAgeMs,
+              thresholdMs: freshness.thresholdMs,
+              grade: freshness.grade,
+            });
+            const staleDataReason = freshness.reason;
 
             // 3. News risk validation - impactScore lives on news_clusters, not news_articles
             // (news_articles has no impactScore column at all, so this always evaluated to
@@ -372,8 +380,9 @@ export class RiskEngine {
             const recentClusters = await db.select().from(schema.newsClusters)
                 .where(gte(schema.newsClusters.updatedAt, fourHoursAgo));
             const symbolNews = recentClusters.filter((n: any) =>
-                n.symbols && n.symbols.includes(proposal.symbol) &&
-                n.impactScore && n.impactScore > tradingSafety.newsVetoMinImpactScore
+                clusterCoversSymbol(n.symbols, proposal.symbol) &&
+                typeof n.impactScore === 'number' &&
+                newsImpactOnVetoScale(n.impactScore) > tradingSafety.newsVetoMinImpactScore
             );
             recordGate('news_veto', symbolNews.length === 0, { matchingClusters: symbolNews.length });
             const newsVetoReason = "High volatility news event detected, overriding AI decision.";
@@ -419,6 +428,7 @@ export class RiskEngine {
                     getRecentCloses,
                     sizingMode,
                     percentOfEquityPct,
+                    failClosedUnknownInputs: tradingEngine.state.tradingMode === 'LIVE',
                 });
                 maxQuantity = sizingResult.maxQuantity;
                 for (const g of sizingResult.gates) recordGate(g.gate, g.passed, g.detail);

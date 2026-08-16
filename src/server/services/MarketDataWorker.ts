@@ -17,6 +17,7 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 const RECONNECT_MS = runtimeIntervals.marketDataReconnectMs;
@@ -47,6 +48,15 @@ export class MarketDataWorker {
     return this.latestPrices.get(symbol) || null;
   }
 
+  /** Snapshot of the single IEX socket cache — InternalPaper.tick source of truth (no second WS). */
+  getLatestPrices(): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const [symbol, price] of this.latestPrices) {
+      if (typeof price === 'number' && Number.isFinite(price) && price > 0) out[symbol] = price;
+    }
+    return out;
+  }
+
   getActiveSymbols(): string[] {
     return Array.from(this.activeStreams);
   }
@@ -74,6 +84,14 @@ export class MarketDataWorker {
       lastError: this.lastError,
       symbols: this.getActiveSymbols(),
     };
+  }
+
+  private maybeEmitMarketData(symbol: string, price: number, volume: number, timestamp: string) {
+    // Always cache the last quote for RiskEngine/UI freshness. Emit MARKET_DATA onto EventBus
+    // only while Autobot is on and tradingState is TRADING_ENABLED — otherwise tick-driven
+    // idea agents would keep warming from Autobot-off quotes.
+    if (!isLiveIdeaGenerationEnabled()) return;
+    eventBus.emitMarketData(symbol, price, volume, timestamp);
   }
 
   private isDuplicateTick(symbol: string, timestampMs: number, price: number): boolean {
@@ -218,14 +236,14 @@ export class MarketDataWorker {
           this.lastTick.set(msg.S, { timestampMs, price: msg.bp });
           this.latestPrices.set(msg.S, msg.bp);
           this.latestPriceTimestamps.set(msg.S, Date.now());
-          eventBus.emitMarketData(msg.S, msg.bp, msg.bs, new Date(msg.t).toISOString());
+          this.maybeEmitMarketData(msg.S, msg.bp, msg.bs, new Date(msg.t).toISOString());
         } else if (msg.T === "t") {
           const timestampMs = new Date(msg.t).getTime();
           if (this.isDuplicateTick(msg.S, timestampMs, msg.p)) continue;
           this.lastTick.set(msg.S, { timestampMs, price: msg.p });
           this.latestPrices.set(msg.S, msg.p);
           this.latestPriceTimestamps.set(msg.S, Date.now());
-          eventBus.emitMarketData(msg.S, msg.p, msg.s, new Date(msg.t).toISOString());
+          this.maybeEmitMarketData(msg.S, msg.p, msg.s, new Date(msg.t).toISOString());
         }
       }
     });

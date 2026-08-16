@@ -104,7 +104,7 @@ export class NewsEngine {
           continue;
         }
 
-        const traceId = Math.random().toString(36).substring(7);
+        const traceId = uuidv4();
 
         // Real STARTED event for live animation - NEWS_ANALYZED (published further below) is the
         // real completed signal for this same traceId, kept under its existing name rather than

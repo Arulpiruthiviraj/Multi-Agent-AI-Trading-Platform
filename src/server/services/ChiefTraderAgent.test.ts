@@ -22,6 +22,8 @@ const { routeConsensus, routeTask } = vi.hoisted(() => ({ routeConsensus: vi.fn(
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitChiefApproval } }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus, routeTask }) } }));
+const { ideaGenEnabled } = vi.hoisted(() => ({ ideaGenEnabled: { value: true } }));
+vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
 
 import { ChiefTraderAgent, CONSENSUS_APPROVAL_THRESHOLD } from './ChiefTraderAgent';
 import { DISAGREEMENT_PENALTY, netConfidenceFromVotes } from './EvidenceAggregator';
@@ -52,6 +54,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     emitChiefApproval.mockClear();
     routeConsensus.mockReset();
     routeTask.mockReset();
+    ideaGenEnabled.value = true;
     agent = new ChiefTraderAgent();
     agent.agentWeights = { ...defaultAgentWeights };
     agent.recentIdeas = [];
@@ -298,5 +301,26 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     await agent.evaluateConsensus('AAPL', 't-bear');
 
     expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('reviewIdea drops stray entry ideas when Autobot is off and does not call debate/LLM', async () => {
+    ideaGenEnabled.value = false;
+    routeTask.mockResolvedValue({ content: '{}' });
+    await agent.reviewIdea({
+      traceId: 't-off', symbol: 'AAPL', side: 'BUY', confidence: 0.95,
+      agent: 'TechnicalAgent', reasoning: 'stray',
+    });
+    expect(routeTask).not.toHaveBeenCalled();
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(agent.recentIdeas).toHaveLength(0);
+  });
+
+  it('reviewIdea still accepts PortfolioMonitor SELL risk-exits when Autobot is off', async () => {
+    ideaGenEnabled.value = false;
+    await agent.reviewIdea({
+      traceId: 't-exit', symbol: 'AAPL', side: 'SELL', confidence: 0.9,
+      agent: agentWeightConfig.riskExitAgent, reasoning: 'EXIT_CODE=stop',
+    });
+    expect(agent.recentIdeas.length).toBeGreaterThan(0);
   });
 });

@@ -39,7 +39,7 @@
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
-import { trades, fills } from '../db/schema';
+import { trades, fills, settings, brokerConnections } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
@@ -47,13 +47,25 @@ import { BrokerPlugin, Order, brokerSupports } from '../../brokers/BrokerAdapter
 import { updateTransactionStatus } from '../core/TransactionRegistry';
 import { tradingSafety } from '../config/tradingSafety';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { triggerWebhooks } from '../routes/webhooks';
+import { resolveOmsExecutionEnvironment, stampExecutionEnvironment } from '../research/organicPaper';
+import { assertBrokerEnvironmentAllowsOrder } from '../core/brokerEnvironment';
 
 // Shared with TradingEngine.cancelAllOpenOrders(), which previously only matched the literal
 // string 'PENDING' - real broker adapters (Alpaca) can report other non-terminal statuses
 // ('NEW', 'ACCEPTED', 'PARTIALLY_FILLED', ...) that were silently excluded from that query too.
-export const TERMINAL_ORDER_STATUSES: string[] = ['FILLED', 'REJECTED', 'CANCELED'];
+export const TERMINAL_ORDER_STATUSES: string[] = ['FILLED', 'REJECTED', 'CANCELED', 'EXTERNAL_MANUAL'];
 export function isTerminalOrderStatus(status: string | null | undefined): boolean {
   return !!status && TERMINAL_ORDER_STATUSES.includes(status);
+}
+
+function readTradingMode(): string | null {
+  try {
+    const row = db.select({ tradingMode: settings.tradingMode }).from(settings).limit(1).get();
+    return row?.tradingMode ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // Follow-up must not race the initial pollForFill() window (default 4s) for the same order - only
@@ -83,6 +95,16 @@ export class OrderManagementService {
         await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails, assessment.transactionId, assessment.selectedQuantStrategy, assessment.quantStopPrice, assessment.quantTargetPrice, assessment.quantInvalidationJson, assessment.currentPrice);
       }
     });
+  }
+
+  private resolveFillEnvironment() {
+    let brokerId = '';
+    try {
+      brokerId = BrokerManager.getInstance().getActiveBroker().id;
+    } catch {
+      brokerId = '';
+    }
+    return resolveOmsExecutionEnvironment({ brokerId, tradingMode: readTradingMode() });
   }
 
   start() {
@@ -170,6 +192,7 @@ export class OrderManagementService {
   }
 
   async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any, transactionId?: string, quantStrategyId?: string | null, quantStopPrice?: number | null, quantTargetPrice?: number | null, quantInvalidationJson?: string | null, intendedPrice?: number | null) {
+    reasoning = stampExecutionEnvironment(reasoning || '', this.resolveFillEnvironment());
     // Idempotency: refuse to place a second real order for a traceId that already has one.
     // Guards against any future duplicate RISK_ASSESSMENT_COMPLETED emission for the same trade.
     try {
@@ -243,6 +266,23 @@ export class OrderManagementService {
     try {
       const activeBroker = BrokerManager.getInstance().getActiveBroker();
       console.log(`[OMS] Submitting order to ${activeBroker.name}: ${side} ${quantity}x ${symbol}`);
+
+      let paperMode: boolean | null = true;
+      try {
+        const conn = db.select().from(brokerConnections).where(eq(brokerConnections.brokerName, activeBroker.name)).limit(1).get();
+        paperMode = conn ? (conn.paperMode as boolean) : true;
+      } catch {
+        paperMode = true;
+      }
+      const envGate = assertBrokerEnvironmentAllowsOrder({ tradingMode: readTradingMode(), paperMode });
+      if (!envGate.ok) {
+        await db.update(trades).set({
+          status: 'REJECTED',
+          reasoning: stampExecutionEnvironment(envGate.reason, 'UNKNOWN'),
+        }).where(eq(trades.id, orderId));
+        console.error(`[OMS] ${envGate.reason}`);
+        return;
+      }
 
       // Capture the pre-trade entry price so a SELL's realized P&L can be computed once it fills.
       let preTradeEntryPrice: number | null = null;
@@ -469,23 +509,31 @@ export class OrderManagementService {
       const nowIso = new Date().toISOString();
       const id = o.clientOrderId && !byClientId.has(o.clientOrderId) ? o.clientOrderId : crypto.randomUUID();
       try {
+        // Phase 20: unrecognized broker fills are NOT RiskEngine-approved Argus orders.
+        // Persist an audit row only. Do not record fills, do not update portfolio, do not
+        // let PortfolioMonitor auto-manage the position.
         await db.insert(trades).values({
           id,
           symbol: o.symbol,
           side: o.side,
           quantity: o.quantity,
           price: fillPrice,
-          status: o.status === 'FILLED' ? 'FILLED' : 'PARTIALLY_FILLED',
+          status: 'EXTERNAL_MANUAL',
           timestamp: nowIso,
-          reasoning: 'Inbound crash recovery: broker reported a fill with no matching local trades row.',
-          traceId: `inbound-${o.id}`,
+          reasoning: 'SOURCE: EXTERNAL_MANUAL. Inbound broker fill with no matching local OMS row. Not RiskEngine-approved. Operator intervention required. Argus will not auto-manage or auto-trade around this position.',
+          traceId: `EXTERNAL_MANUAL-${o.id}`,
           brokerOrderId: o.id,
           requestId: o.clientOrderId || id,
           submittedAt: o.createdAt instanceof Date ? o.createdAt.toISOString() : nowIso,
-          filledAt: o.status === 'FILLED' ? nowIso : null,
+          filledAt: null,
         });
-        await this.recordFillProgress(id, o.id, `inbound-${o.id}`, undefined, o.symbol, o.side, o.quantity, o.status, filledQty, fillPrice);
-        console.error(`[OMS] inbound recovery: recorded broker order ${o.id} as local trade ${id} (${o.side} ${filledQty} ${o.symbol}).`);
+        console.error(`[OMS] CRITICAL SOURCE: EXTERNAL_MANUAL broker order ${o.id} (${o.side} ${filledQty} ${o.symbol}) — not ingested as an Argus fill.`);
+        await triggerWebhooks({
+          type: 'external_manual_order',
+          title: 'External/manual broker order (not RiskEngine-approved)',
+          message: `Broker order ${o.id} ${o.side} ${filledQty} ${o.symbol} has no local OMS row. Tagged SOURCE: EXTERNAL_MANUAL. Operator intervention required.`,
+          details: { brokerOrderId: o.id, symbol: o.symbol, side: o.side, filledQty, source: 'EXTERNAL_MANUAL' },
+        });
       } catch (e) {
         console.error(`[OMS] inbound recovery: failed to insert broker order ${o.id}`, e);
       }

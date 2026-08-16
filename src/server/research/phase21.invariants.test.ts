@@ -1,0 +1,165 @@
+import { describe, it, expect } from 'vitest';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { compareExecutionModels, executionModelVersion, getExecutionModel } from './executionModel';
+import {
+  classifyTradeEnvironment,
+  isOrganicClosedPaper,
+  resolveOmsExecutionEnvironment,
+  stampExecutionEnvironment,
+  summarizeOrganicPaper,
+} from './organicPaper';
+import { deriveLifecycleStatus, emptyEvidence, liveGoNoGo } from './promotionEngine';
+import { freezeStrategyVersion } from './strategySpecs';
+import { findStrategy, resolveStrategiesForLiveEvaluation } from '../quant/strategies/StrategyEngine';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { tradingEngine } from '../engines/TradingEngine';
+import { researchComparisonMatrix } from './strategyEvidence';
+import { evaluatePitAiBuyGate } from '../engines/backtest/PitReplay';
+import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+import { tradingSafety } from '../config/tradingSafety';
+
+const ROOT = join(process.cwd());
+
+function walkFiles(dir: string, acc: string[] = []): string[] {
+  for (const name of readdirSync(dir)) {
+    if (name === 'node_modules' || name === 'dist' || name === '.venv' || name === 'archive') continue;
+    const p = join(dir, name);
+    const st = statSync(p);
+    if (st.isDirectory()) walkFiles(p, acc);
+    else acc.push(p);
+  }
+  return acc;
+}
+
+describe('Phase 21 evidence-path invariants', () => {
+  it('canonical research fill is NEXT_BAR_OPEN and mixing SAME_BAR_CLOSE is ENGINE_MISMATCH', () => {
+    expect(executionModelVersion()).toBe('argus-research-execution-v1');
+    expect(getExecutionModel().executionModel).toBe('NEXT_BAR_OPEN');
+    const cmp = compareExecutionModels('NEXT_BAR_OPEN', 'SAME_BAR_CLOSE');
+    expect(cmp.status).toBe('ENGINE_MISMATCH');
+    expect(cmp.compatible).toBe(false);
+    expect(researchComparisonMatrix().engineCompare.status).toBe('ENGINE_MISMATCH');
+  });
+
+  it('empty evidence cannot become LIVE_APPROVED or enable LIVE', () => {
+    const e = emptyEvidence('MOMENTUM_BREAKOUT');
+    expect(deriveLifecycleStatus(e)).toBe('UNTESTED');
+    expect(liveGoNoGo(e).live).toBe('NO-GO');
+    expect(liveGoNoGo(e).failedGates).toContain('MANUAL_APPROVAL');
+  });
+
+  it('LIVE_CANDIDATE without manual approval is still LIVE NO-GO', () => {
+    const e = {
+      ...emptyEvidence('MOMENTUM_BREAKOUT', '1.0.0'),
+      dataProvenance: 'REAL_MARKET_DATA' as const,
+      dataQualityPass: true,
+      backtestPass: true,
+      oosPass: true,
+      walkForwardPass: true,
+      monteCarloPass: true,
+      permutationPass: true,
+      sensitivityPass: true,
+      costStressPass: true,
+      paperTrades: 999,
+      paperSessions: 999,
+      paperExpectancyPositive: true,
+      paperDrawdownWithinLimit: true,
+      riskGatePass: true,
+      brokerHealthPass: true,
+      marketDataHealthPass: true,
+      startupHealthPass: true,
+      organicPaperOnly: true,
+      manualLiveApproval: false,
+    };
+    expect(deriveLifecycleStatus(e)).toBe('LIVE_CANDIDATE');
+    expect(liveGoNoGo(e).live).toBe('NO-GO');
+  });
+
+  it('untagged fills are UNKNOWN and do not count as organic paper', () => {
+    expect(classifyTradeEnvironment({ reasoning: 'ChiefTrader approved' })).toBe('UNKNOWN');
+    expect(isOrganicClosedPaper({ status: 'FILLED', side: 'SELL', profitLoss: 12, reasoning: 'ChiefTrader approved' })).toBe(false);
+    expect(isOrganicClosedPaper({
+      status: 'FILLED',
+      side: 'SELL',
+      profitLoss: 12,
+      reasoning: stampExecutionEnvironment('ChiefTrader approved', 'PAPER'),
+    })).toBe(true);
+    const empty = summarizeOrganicPaper([], 30);
+    expect(empty.closedTradeCount).toBe(0);
+    expect(empty.sharpe.status).toBe('INSUFFICIENT_SAMPLE');
+    expect(empty.invented).toBe(false);
+  });
+
+  it('OMS environment stamp does not invent PAPER for unknown brokers', () => {
+    expect(resolveOmsExecutionEnvironment({ brokerId: 'internal_paper', tradingMode: 'Paper' })).toBe('PAPER');
+    expect(resolveOmsExecutionEnvironment({ brokerId: 'lifecycle-stub', tradingMode: 'Paper' })).toBe('UNKNOWN');
+    expect(resolveOmsExecutionEnvironment({ brokerId: 'alpaca', tradingMode: 'LIVE' })).toBe('LIVE');
+  });
+
+  it('strategy version freeze is config-hashed and does not invent VALIDATED', () => {
+    const v = freezeStrategyVersion('MOMENTUM_BREAKOUT');
+    expect(v?.strategyVersion).toMatch(/^MOMENTUM_BREAKOUT-1\.0\.0-/);
+    expect(v?.executionModel).toBe('NEXT_BAR_OPEN');
+    expect(v?.configHash.startsWith('sha256:')).toBe(true);
+  });
+
+  it('experimental strategies stay out of live evaluateAll unless their env flag is true', () => {
+    expect(process.env.QUANT_SMC_STRATEGY_ENABLED).not.toBe('true');
+    expect(findStrategy('SMC_LIQUIDITY_SWEEP')?.id).toBe('SMC_LIQUIDITY_SWEEP');
+    const liveIds = resolveStrategiesForLiveEvaluation().map((s) => s.id);
+    expect(liveIds).not.toContain('SMC_LIQUIDITY_SWEEP');
+    expect(liveIds).toEqual(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'MEAN_REVERSION', 'TREND_FOLLOWING', 'RANGE_REVERSION']);
+  });
+
+  it('Autobot OFF disables live idea generation', () => {
+    tradingEngine.state.enabled = false;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    expect(isLiveIdeaGenerationEnabled()).toBe(false);
+  });
+
+  it('empty PIT ledger cannot authorize AI BUY', () => {
+    const gate = evaluatePitAiBuyGate([], 'AAPL', 100);
+    expect(gate.allowBuy).toBe(false);
+  });
+
+  it('RiskEngine catalog still has 24 recorded gates', () => {
+    const catalog = loadRepoConfigJson<{ gates: string[] }>('riskGateOrder.json');
+    expect(catalog.gates).toHaveLength(24);
+  });
+
+  it('restricted-live caps are ceilings, not profitability evidence', () => {
+    expect(tradingSafety.restrictedLiveMaxOrderNotionalDollars).toBeGreaterThan(0);
+    expect(tradingSafety.restrictedLiveMaxOpenPositions).toBeGreaterThan(0);
+  });
+
+  it('production TypeScript has no second OMS placeOrder path', () => {
+    const files = walkFiles(join(ROOT, 'src')).filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'));
+    const hits: string[] = [];
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8');
+      if (!text.includes('.placeOrder(')) continue;
+      const rel = relative(ROOT, f).replace(/\\/g, '/');
+      const allowed =
+        rel === 'src/server/services/OrderManagement.ts' ||
+        rel.startsWith('src/brokers/');
+      if (!allowed) hits.push(rel);
+    }
+    expect(hits).toEqual([]);
+    expect(readFileSync(join(ROOT, 'server.ts'), 'utf8')).not.toMatch(/\.placeOrder\(/);
+  });
+
+  it('VectorBT/Python research CLI cannot place orders', () => {
+    const cli = readFileSync(join(ROOT, 'python/argus_research/cli.py'), 'utf8');
+    expect(cli).toContain('Never places broker orders');
+    expect(cli).toContain('placeOrder');
+    expect(cli).not.toMatch(/BrokerManager/);
+    expect(cli).not.toMatch(/alpaca\.trade/);
+  });
+
+  it('UI does not call BrokerManager.placeOrder', () => {
+    const app = readFileSync(join(ROOT, 'src/App.tsx'), 'utf8');
+    expect(app).not.toMatch(/BrokerManager\.getInstance/);
+    expect(app).not.toMatch(/\.placeOrder\(/);
+  });
+});

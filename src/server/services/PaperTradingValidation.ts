@@ -33,9 +33,12 @@ export interface PaperTradingReport {
   reconciliationMismatchCount: number;
   statisticallyMeaningful: boolean;
   note: string | null;
+  organicClosedPaperTrades: number;
+  nonOrganicFilledSellsExcluded: number;
 }
 
 import { tradingSafety } from '../config/tradingSafety';
+import { isOrganicClosedPaper } from '../research/organicPaper';
 
 export const MIN_TRADES_FOR_PAPER_VALIDATION = tradingSafety.minTradesForPaperValidation;
 
@@ -64,6 +67,8 @@ export async function computePaperTradingReport(sinceIso?: string): Promise<Pape
     ? await db.select().from(trades).where(gteOp(trades.timestamp, sinceIso))
     : await db.select().from(trades).all();
   const filledSells = allTrades.filter(t => t.status === 'FILLED' && t.side === 'SELL' && typeof t.profitLoss === 'number');
+  const organicClosedPaperTrades = allTrades.filter((t) => isOrganicClosedPaper(t)).length;
+  const nonOrganicFilledSellsExcluded = filledSells.length - organicClosedPaperTrades;
 
   let winRatePct: number | null = null, profitFactor: number | null = null, expectancy: number | null = null;
   let sharpe: number | null = null, maxDrawdownPct: number | null = null;
@@ -114,6 +119,8 @@ export async function computePaperTradingReport(sinceIso?: string): Promise<Pape
     reconciliationEventCount: reconEvents.length,
     reconciliationMismatchCount,
     statisticallyMeaningful,
+    organicClosedPaperTrades,
+    nonOrganicFilledSellsExcluded,
     note: statisticallyMeaningful
       ? null
       : `Only ${filledSells.length} real closed (FILLED SELL) trade(s) - below the ${MIN_TRADES_FOR_PAPER_VALIDATION}-trade floor this report requires before treating win rate/profit factor/Sharpe/drawdown as meaningful. Do not draw a conclusion from this sample.`,

@@ -52,6 +52,7 @@ import { EVENTS } from '../core/eventNames';
 import { parseResearchNote, isBullBearResearchEnabled } from '../ai/research/parseResearchNote';
 import { bullBearResearchConfig } from '../config/bullBearResearch';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
@@ -151,6 +152,12 @@ export class ChiefTraderAgent {
   }
 
   async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any }) {
+    // Autobot-off: do not debate stray entry ideas (no LLM, no CHIEF_APPROVED_IDEA).
+    // PortfolioMonitor risk-exit SELLs still proceed — capital preservation is not an entry vote.
+    if (!isLiveIdeaGenerationEnabled() && !this.isRiskExit(idea)) {
+      console.log(`[ChiefTrader] Ignoring ${idea.agent} ${idea.side} ${idea.symbol} — Autobot off or trading not TRADING_ENABLED`);
+      return;
+    }
     console.log(`[ChiefTrader] Reviewing ${idea.side} on ${idea.symbol} proposed by ${idea.agent}`);
     this.recentIdeas.push(idea);
 

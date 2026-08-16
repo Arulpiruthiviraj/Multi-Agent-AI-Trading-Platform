@@ -65,8 +65,14 @@ export class AlpacaBroker implements BrokerPlugin {
   name = 'Alpaca';
   async initialize() { console.log('[AlpacaBroker] Initialized'); }
   async validateCredentials() { return !!this.apiKey; }
-  paperTrading() { this.baseUrl = 'https://paper-api.alpaca.markets'; }
-  liveTrading() { this.baseUrl = 'https://api.alpaca.markets'; }
+  paperTrading() {
+    this.isPaper = true;
+    this.baseUrl = 'https://paper-api.alpaca.markets';
+  }
+  liveTrading() {
+    this.isPaper = false;
+    this.baseUrl = 'https://api.alpaca.markets';
+  }
   getCapabilities(): BrokerCapabilities {
     return {
       canPlaceOrders: true,
@@ -107,10 +113,14 @@ export class AlpacaBroker implements BrokerPlugin {
       this.secretKey = process.env.ALPACA_SECRET_KEY || '';
     }
     
-    if (credentials?.isLive) {
+    // Phase 20: never silently reset LIVE → paper when isLive is omitted.
+    // Honor explicit credentials.isLive / tradingMode, else keep paperTrading()/liveTrading().
+    const explicitLive = credentials?.isLive;
+    const mode = typeof credentials?.tradingMode === 'string' ? credentials.tradingMode.toUpperCase() : '';
+    if (explicitLive === true || mode === 'LIVE') {
       this.isPaper = false;
       this.baseUrl = 'https://api.alpaca.markets';
-    } else {
+    } else if (explicitLive === false || mode === 'PAPER') {
       this.isPaper = true;
       this.baseUrl = 'https://paper-api.alpaca.markets';
     }

@@ -45,6 +45,8 @@ import * as schema from '../server/db/schema';
 import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../server/core/EncryptionService';
 import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../server/core/LiveTradingConfirmation';
+import { eventBus } from '../server/core/EventBus';
+import { EVENTS } from '../server/core/eventNames';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
@@ -62,9 +64,12 @@ export class BrokerManager {
   private static instance: BrokerManager;
   private activeBroker: BrokerPlugin;
   private brokers: Map<string, BrokerPlugin> = new Map();
+  private paperTickFromMarketData = false;
 
   private constructor() {
-     // A dummy initialization, will be overwritten by initialize()
+     // Default active broker is InternalPaperBroker, seeded with
+     // tradingSafety.internalPaperDefaultCash (paperInitialCapital). That seed is not
+     // settings.maxTradeSize / defaultMaxTradeSizeDollars (order-notional cap).
      this.activeBroker = new InternalPaperBroker();
   }
 
@@ -127,8 +132,14 @@ export class BrokerManager {
              // passed). Hardcoding Alpaca's env vars as a universal fallback for any broker was the
              // credential leak: a Questrade/IBKR connection with a missing key would have silently
              // authenticated using Alpaca's credentials instead of failing.
-             const key = connection.apiKeyEncrypted ? EncryptionService.decrypt(connection.apiKeyEncrypted) : undefined;
-             const secret = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted) : undefined;
+             let key: string | undefined;
+             let secret: string | undefined;
+             try {
+               key = connection.apiKeyEncrypted ? EncryptionService.decrypt(connection.apiKeyEncrypted) : undefined;
+               secret = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted) : undefined;
+             } catch {
+               console.error('[BrokerManager] DECRYPTION_FAILED for stored broker credentials — refusing to use plaintext fallback.');
+             }
 
              if (connection.paperMode) {
                  this.activeBroker.paperTrading();
@@ -136,18 +147,24 @@ export class BrokerManager {
                  this.activeBroker.liveTrading();
              }
 
-             await this.activeBroker.authenticate({ apiKey: key, secretKey: secret });
+             await this.activeBroker.authenticate({
+               apiKey: key,
+               secretKey: secret,
+               isLive: connection.paperMode === false,
+             });
          } else if (this.activeBroker.id === 'alpaca') {
-             // No DB connection row yet - Alpaca is the one adapter designed to fall back to
-             // process.env.ALPACA_API_KEY/SECRET_KEY on its own when given no credentials.
-             await this.activeBroker.authenticate({});
+             const mode = String(settings[0]?.tradingMode || '').toUpperCase();
+             await this.activeBroker.authenticate({ isLive: mode === 'LIVE' });
          } else {
              await this.activeBroker.authenticate({ initialCash: 100000 });
          }
+
+         this.wireInternalPaperTicksFromMarketData();
          
          console.log(`[BrokerManager] Initialized with Active Broker: ${this.activeBroker.name}`);
      } catch (e) {
          console.error('[BrokerManager] Init Failed', e);
+         this.wireInternalPaperTicksFromMarketData();
      }
   }
 
@@ -269,7 +286,19 @@ export class BrokerManager {
     }));
   }
   
-  // Tick for simulated paper brokers
+  /** InternalPaper fills use MarketDataWorker IEX quotes (EventBus MARKET_DATA), not a second socket. */
+  private wireInternalPaperTicksFromMarketData() {
+    if (this.paperTickFromMarketData) return;
+    this.paperTickFromMarketData = true;
+    eventBus.on(EVENTS.MARKET_DATA, (payload: { symbol?: string; price?: number }) => {
+      const symbol = payload?.symbol;
+      const price = payload?.price;
+      if (typeof symbol === 'string' && typeof price === 'number' && Number.isFinite(price) && price > 0) {
+        this.tick({ [symbol]: price });
+      }
+    });
+  }
+
   public tick(prices: Record<string, number>) {
      if (this.activeBroker.tick) {
         this.activeBroker.tick(prices);

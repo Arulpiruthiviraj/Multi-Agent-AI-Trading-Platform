@@ -34,7 +34,9 @@ async function main() {
         outOfSamplePositivePeriodPct: result.outOfSamplePositivePeriodPct,
         inSampleVsOutOfSampleGapPct: result.inSampleVsOutOfSampleGapPct,
         insufficientPeriods: result.insufficientPeriods,
-        note: result.note,
+        note: 'SAME_BAR_CLOSE WalkForwardValidator. Not CORE NEXT_BAR promotion evidence.',
+        promotionEvidence: false,
+        executionModel: 'SAME_BAR_CLOSE',
       };
       console.log(`  periods=${result.periodCount} avgIS=${result.avgInSampleReturnPct}% avgOOS=${result.avgOutOfSampleReturnPct}% gap=${result.inSampleVsOutOfSampleGapPct}% oosPositive=${result.outOfSamplePositivePeriodPct}%`);
     } catch (e: any) {

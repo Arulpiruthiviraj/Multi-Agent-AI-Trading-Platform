@@ -15,6 +15,7 @@ import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
 import crypto from 'crypto';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { agentWeightUpdate } from '../research/agentWeightPolicy';
 
 export class ReflectionEngine {
   private intervalId: NodeJS.Timeout | null = null;
@@ -147,12 +148,13 @@ export class ReflectionEngine {
         if (data.total === 0) continue;
         const winRate = data.correct / (data.total || 1);
         const avgReturn = data.sumReturn / (data.total || 1);
-        const profitFactor = winRate > 0 ? (winRate * 1.5) / ((1 - winRate) || 0.1) : 0;
-        
-        const newWeight = Math.max(0.1, 1.0 + ((winRate - 0.5) * 2)); 
+        const weight = agentWeightUpdate({ totalEvaluated: data.total, winRate });
+        const newWeight = weight.currentWeight;
         totalWeight += newWeight;
-        
-        const sharpeRatio = avgReturn === 0 ? 0 : (avgReturn * Math.sqrt(252)) / 0.1; // Simulated Sharpe using stddev 0.1
+        const profitFactor = weight.statisticallyMeaningful && winRate > 0 && winRate < 1
+          ? winRate / (1 - winRate)
+          : 0;
+        const sharpeRatio = weight.sharpeRatio;
         
         await db.insert(agentPerformanceStats).values({
           agentName,

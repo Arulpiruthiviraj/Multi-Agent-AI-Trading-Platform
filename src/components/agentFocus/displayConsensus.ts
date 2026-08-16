@@ -41,3 +41,28 @@ export function resolveDisplayWeight(
 }
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
+export const DISAGREEMENT_PENALTY = tradingSafety.disagreementPenalty;
+
+/** Numerator / denominator of the same fraction EvidenceAggregator uses. */
+export function displayVoteTerms(
+  agreeing: Array<{ confidence: number; weight: number }>,
+  disagreeing: Array<{ confidence: number; weight: number }>,
+): { weightedSum: number; totalWeight: number; net: number } {
+  const penalty = tradingSafety.disagreementPenalty;
+  let weightedSum = 0;
+  let totalWeight = 0;
+  for (const e of agreeing) {
+    weightedSum += e.confidence * e.weight;
+    totalWeight += e.weight;
+  }
+  for (const e of disagreeing) {
+    weightedSum -= e.confidence * e.weight * penalty;
+    totalWeight += e.weight;
+  }
+  const den = totalWeight || 1;
+  return {
+    weightedSum,
+    totalWeight: den,
+    net: Math.max(0, Math.min(1, weightedSum / den)),
+  };
+}

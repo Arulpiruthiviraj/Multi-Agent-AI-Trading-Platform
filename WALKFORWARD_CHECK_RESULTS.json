@@ -1,4 +1,10 @@
 {
+  "_quarantine": {
+    "promotionEvidence": false,
+    "executionModel": "SAME_BAR_CLOSE",
+    "selectionBias": "Combos chosen as highest in-sample Sharpe from an earlier E1 sweep.",
+    "note": "Not CORE NEXT_BAR_OPEN OOS. Not OOS_VALIDATED. Not a trading edge. Do not import into promotionEngine."
+  },
   "MOMENTUM_BREAKOUT_MSFT": {
     "periodCount": 21,
     "avgInSampleReturnPct": 0.37,
@@ -6,7 +12,7 @@
     "outOfSamplePositivePeriodPct": 42.9,
     "inSampleVsOutOfSampleGapPct": 0.33,
     "insufficientPeriods": false,
-    "note": null
+    "note": "SAME_BAR_CLOSE WalkForwardValidator. Quarantined from promotion."
   },
   "MOMENTUM_BREAKOUT_AMD": {
     "periodCount": 21,
@@ -15,6 +21,6 @@
     "outOfSamplePositivePeriodPct": 66.7,
     "inSampleVsOutOfSampleGapPct": 1.08,
     "insufficientPeriods": false,
-    "note": null
+    "note": "SAME_BAR_CLOSE WalkForwardValidator. Quarantined from promotion."
   }
 }

@@ -71,6 +71,7 @@
   "fallbackTakeProfitPct": 15,
   "fallbackTrailingStopPct": 5,
   "internalPaperDefaultCash": 100000,
+  "defaultMaxTradeSizeDollars": 3000,
   "minSampleSizeForTrust": 20,
   "minTradesForPaperValidation": 30,
   "maxKellyFractionOfCapital": 0.1,

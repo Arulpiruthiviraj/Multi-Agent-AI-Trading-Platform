@@ -103,7 +103,8 @@ import { tradingEngine } from "./src/server/engines/TradingEngine";
 import { system } from "./src/server/core/SystemBootstrap";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
-import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit } from "./src/server/core/AuthConfig";
+import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest } from "./src/server/core/AuthConfig";
+import { persistAllowlistedSecrets, secretsStatusFromEnvAndDb, SECRET_ALLOWLIST } from "./src/server/core/persistEncryptedSecrets";
 import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter } from "./src/server/core/RateLimiters";
 import http from "http";
 import path from "path";
@@ -136,59 +137,12 @@ let historicalPrecedents: any[] = [];
 
 
 
-let liveQuotes: any = {};
 let liveNews: any = {};
-let alpacaWs: any = null;
 let alpacaNewsWs: any = null;
 
-function initializeAlpacaWebSocket() {
+function initializeAlpacaNewsWebSocket() {
   if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) return;
-  const isPaper = process.env.PAPER_TRADING_ONLY !== "false";
-  
-  // Quotes WebSocket
-  const wssUrl = "wss://stream.data.alpaca.markets/v2/iex";
-  alpacaWs = new WebSocket(wssUrl);
-  
-  alpacaWs.addEventListener("open", () => {
-    console.log('[Alpaca WS] Connected to market data stream.');
-    alpacaWs.send(JSON.stringify({
-      action: 'auth',
-      key: process.env.ALPACA_API_KEY,
-      secret: process.env.ALPACA_SECRET_KEY
-    }));
-  });
-  
-  alpacaWs.addEventListener("message", (event) => {
-    const messages = JSON.parse(event.data.toString());
-    for (const msg of messages) {
-      if (msg.T === 'success' && msg.msg === 'authenticated') {
-        console.log('[Alpaca WS] Authenticated successfully. Subscribing to quotes...');
-        alpacaWs.send(JSON.stringify({
-          action: 'subscribe',
-          quotes: AUTOBOT_SYMBOLS
-        }));
-      } else if (msg.T === 'q') {
-        liveQuotes[msg.S] = { bid: msg.bp, ask: msg.ap, price: (msg.bp + msg.ap) / 2 };
-      } else if (msg.T === 't') {
-        if (!liveQuotes[msg.S]) liveQuotes[msg.S] = { bid: msg.p, ask: msg.p, price: msg.p };
-        liveQuotes[msg.S].price = msg.p;
-      }
-    }
-  });
-  
-  alpacaWs.addEventListener("close", () => {
-    console.log('[Alpaca WS] Connection closed. Reconnecting in 5s...');
-    setTimeout(() => {
-       if (alpacaWs) alpacaWs.close();
-       initializeAlpacaWebSocket();
-    }, 5000);
-  });
-  
-  alpacaWs.addEventListener("error", (err) => {
-    console.error('[Alpaca WS] Error:', err.message);
-  });
 
-  // News WebSocket
   const newsWssUrl = "wss://stream.data.alpaca.markets/v1beta1/news";
   alpacaNewsWs = new WebSocket(newsWssUrl);
   
@@ -234,6 +188,9 @@ function initializeAlpacaWebSocket() {
 }
 
 dotenv.config();
+if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
+  process.env.ALPACA_API_SECRET = process.env.ALPACA_SECRET_KEY;
+}
 
 /**
  * Prompts two separate sub-agents (The Bull and The Bear) to analyze the current trade proposal.
@@ -605,10 +562,14 @@ async function persistTradeActivity(activity: {
 }
 
 async function isAuthed(req: Request): Promise<boolean> {
-  // No real credential is configured - explicit, startup-validated "no-auth" dev mode (see
-  // AuthConfig.ts). Never reachable in production; enforceAuthConfigOrExit() refuses to boot
-  // with AUTH_ENABLED=false when NODE_ENV=production.
-  if (!AUTH_ENABLED) return true;
+  if (!AUTH_ENABLED) {
+    return allowUnauthenticatedRequest({
+      method: req.method,
+      path: req.path,
+      ip: req.ip || req.socket?.remoteAddress,
+      devTokenHeader: req.headers['x-argus-dev-token'],
+    });
+  }
 
   const token = getSessionToken(req);
   if (!token) return false;
@@ -628,57 +589,13 @@ async function getCurrentActor(req: Request): Promise<string> {
   return isSessionValid(rows[0] ?? null) ? rows[0].username : 'anonymous';
 }
 
-const SECRETS_FILE = path.join(process.cwd(), "data", "secrets.json");
-const SECRET_SPECS = [
-  { key: "ALPACA_API_KEY", label: "Alpaca API Key", category: "Broker" },
-  { key: "ALPACA_SECRET_KEY", label: "Alpaca Secret Key", category: "Broker" },
-  { key: "QUESTRADE_REFRESH_TOKEN", label: "Questrade Token", category: "Broker" },
-  { key: "QUESTRADE_ACCOUNT_ID", label: "Questrade Account", category: "Broker" },
-  { key: "GEMINI_API_KEY", label: "Gemini Key", category: "LLM" },
-  { key: "OPENAI_API_KEY", label: "OpenAI Key", category: "LLM" },
-  { key: "ANTHROPIC_API_KEY", label: "Anthropic Key", category: "LLM" },
-  { key: "MISTRAL_API_KEY", label: "Mistral Key", category: "LLM" },
-  { key: "FRED_API_KEY", label: "FRED Key", category: "Market Data" },
-  { key: "FINNHUB_API_KEY", label: "Finnhub Key", category: "Market Data" }
-];
-const SECRET_ALLOWLIST = new Set(SECRET_SPECS.map(s => s.key));
-
-let savedSecrets: Record<string, string> = {};
-try {
-  savedSecrets = JSON.parse(fs.readFileSync(SECRETS_FILE, "utf-8"));
-} catch {}
-
-function writeSecretsFile() {
-  fs.mkdirSync(path.dirname(SECRETS_FILE), { recursive: true });
-  fs.writeFileSync(SECRETS_FILE, JSON.stringify(savedSecrets, null, 2), { mode: 0o600 });
-}
-
-function secretsStatus() {
-  return SECRET_SPECS.map(spec => {
-    const val = process.env[spec.key];
-    return {
-      key: spec.key,
-      label: spec.label,
-      category: spec.category,
-      configured: !!val,
-      masked: val ? "••••" + val.slice(-4) : "",
-      source: process.env[spec.key] && !savedSecrets[spec.key] ? "env" : "saved"
-    };
-  });
-}
-
-// Bootstrap env keys
-for (const spec of SECRET_SPECS) {
-  if (savedSecrets[spec.key] && !process.env[spec.key]) {
-    process.env[spec.key] = savedSecrets[spec.key];
-  }
-}
-if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
-  process.env.ALPACA_API_SECRET = process.env.ALPACA_SECRET_KEY;
+const SECRETS_FILE_IGNORED = path.join(process.cwd(), "data", "secrets.json");
+if (fs.existsSync(SECRETS_FILE_IGNORED)) {
+  console.warn('[SECURITY] data/secrets.json is ignored. Keys must live in .env or encrypted SQLite (broker_connections / ai_providers). Plaintext file is not read or written.');
 }
 
   const app = express();
-  initializeAlpacaWebSocket();
+  initializeAlpacaNewsWebSocket();
 
   app.use(async (req: Request & { actor?: string }, res, next) => {
     if (req.path.startsWith('/api/v1/auth')) return next();
@@ -1242,22 +1159,25 @@ let portfolioState = loadPortfolio();
     });
   });
 
-  app.get("/api/v1/secrets", (req: Request, res: Response) => {
-    res.json({ secrets: secretsStatus() });
+  app.get("/api/v1/secrets", async (_req: Request, res: Response) => {
+    res.json({ secrets: await secretsStatusFromEnvAndDb() });
   });
 
-  app.put("/api/v1/secrets", (req: Request, res: Response) => {
+  app.put("/api/v1/secrets", async (req: Request, res: Response) => {
     const { values } = req.body;
-    if (values && typeof values === 'object') {
-      for (const [k, v] of Object.entries(values)) {
-        if (SECRET_ALLOWLIST.has(k)) {
-           savedSecrets[k] = v as string;
-           process.env[k] = v as string;
-        }
-      }
-      writeSecretsFile();
+    if (!values || typeof values !== 'object') {
+      return res.status(400).json({ success: false, error: 'values object required' });
     }
-    res.json({ success: true });
+    const filtered: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(values)) {
+      if (SECRET_ALLOWLIST.has(k) && typeof v === 'string') filtered[k] = v;
+    }
+    try {
+      const applied = await persistAllowlistedSecrets(filtered);
+      res.json({ success: true, stored: 'sqlite_encrypted', applied });
+    } catch (e: any) {
+      res.status(500).json({ success: false, error: e.message });
+    }
   });
 
   app.post("/api/v1/secrets/test", async (req: Request, res: Response) => {
@@ -1328,15 +1248,13 @@ let portfolioState = loadPortfolio();
         });
     }
     
-    // Check WebSocket first
-    if (liveQuotes[symbol] && liveQuotes[symbol].price > 0) {
+    const cached = marketDataWorker.getLatestPrice(symbol);
+    if (cached && cached > 0) {
       return res.json({
         quotes: {
           [symbol]: {
-            ap: liveQuotes[symbol].ask,
-            bp: liveQuotes[symbol].bid,
-            price: liveQuotes[symbol].price,
-            source: 'websocket'
+            price: cached,
+            source: 'market_data_worker'
           }
         }
       });
@@ -1538,96 +1456,7 @@ let portfolioState = loadPortfolio();
   // --- LIVE NEWS SEARCH GROUNDING ---
   app.use("/api/v1/news", newsRouter);
 
-  // --- FULLY AUTONOMOUS BLACK-BOX TRADING BOT & SHADOW PORTFOLIO ENGINE ---
-  async function executeAutoBotTradeInSovereign(symbol: string, side: string, price: number, amount: number) {
-    const qty = amount / price;
-    try {
-      const existing = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, symbol));
-      if (side === "BUY") {
-        if (existing.length > 0) {
-          const oldQty = existing[0].quantity;
-          const oldAvg = existing[0].averagePrice;
-          const newQty = oldQty + qty;
-          const newAvg = ((oldQty * oldAvg) + amount) / newQty;
-          await db.update(schema.portfolio).set({ quantity: newQty, averagePrice: newAvg, currentPrice: price, lastUpdated: new Date().toISOString() }).where(eq(schema.portfolio.symbol, symbol));
-        } else {
-          await db.insert(schema.portfolio).values({ symbol, quantity: qty, averagePrice: price, currentPrice: price, lastUpdated: new Date().toISOString() });
-        }
-      } else if (side === "SELL") {
-        if (existing.length > 0) {
-          const oldQty = existing[0].quantity;
-          const newQty = Math.max(0, oldQty - qty);
-          if (newQty === 0) {
-             await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, symbol));
-          } else {
-             await db.update(schema.portfolio).set({ quantity: newQty, currentPrice: price }).where(eq(schema.portfolio.symbol, symbol));
-          }
-        }
-      }
-    } catch(e) {
-      console.error("DB Portfolio Update Error:", e);
-    }
-    try {
-      const broker = BrokerManager.getInstance().getActiveBroker();
-      await broker.placeOrder({
-         symbol,
-         side: side as 'BUY' | 'SELL',
-         type: 'MARKET',
-         quantity: qty,
-         price
-      });
-    } catch(err) {
-      console.error("Broker placeOrder error", err);
-    }
-    
-    // Original fallback logic to keep portfolioState updated for legacy UI
-    if (side === "BUY") {
-      if (portfolioState.cash >= amount) {
-        portfolioState.cash = Number((portfolioState.cash - amount).toFixed(2));
-        const posIndex = portfolioState.positions.findIndex((p: any) => p.symbol === symbol);
-        if (posIndex !== -1) {
-          const pos = portfolioState.positions[posIndex];
-          pos.quantity = Number((pos.quantity + qty).toFixed(4));
-          pos.totalCost = Number((pos.totalCost + amount).toFixed(2));
-          pos.marketValue = Number((pos.quantity * price).toFixed(2));
-          pos.unrealizedPnl = Number((pos.marketValue - pos.totalCost).toFixed(2));
-          pos.unrealizedPnlPercent = Number(pos.totalCost > 0 ? (pos.unrealizedPnl / pos.totalCost).toFixed(4) : "0");
-        } else {
-          portfolioState.positions.push({
-            symbol,
-            quantity: Number(qty.toFixed(4)),
-            entryPrice: Number(price.toFixed(2)),
-            currentPrice: Number(price.toFixed(2)),
-            totalCost: Number(amount.toFixed(2)),
-            marketValue: Number(amount.toFixed(2)),
-            unrealizedPnl: 0,
-            unrealizedPnlPercent: 0,
-            sector: symbol === "SPY" ? "Index Funds" : "Technology",
-            openedAt: new Date().toISOString()
-          });
-        }
-        savePortfolio(portfolioState);
-      }
-    } else if (side === "SELL") {
-      const posIndex = portfolioState.positions.findIndex((p: any) => p.symbol === symbol);
-      if (posIndex !== -1) {
-        const pos = portfolioState.positions[posIndex];
-        const sellQty = Math.min(pos.quantity, qty);
-        const sellValue = sellQty * price;
-        pos.quantity = Number((pos.quantity - sellQty).toFixed(4));
-        pos.totalCost = Number(Math.max(0, pos.totalCost - (pos.totalCost / (pos.quantity + sellQty)) * sellQty).toFixed(2));
-        pos.marketValue = Number((pos.quantity * price).toFixed(2));
-        pos.unrealizedPnl = Number((pos.marketValue - pos.totalCost).toFixed(2));
-        pos.unrealizedPnlPercent = Number(pos.totalCost > 0 ? (pos.unrealizedPnl / pos.totalCost).toFixed(4) : "0");
-        portfolioState.cash = Number((portfolioState.cash + sellValue).toFixed(2));
-        if (pos.quantity <= 0.01) {
-          portfolioState.positions.splice(posIndex, 1);
-        }
-        savePortfolio(portfolioState);
-      }
-    }
-  }
-
+  // --- SHADOW PORTFOLIO (ledger only; never BrokerManager.placeOrder) ---
   function executeAutoBotTradeInShadow(symbol: string, side: string, price: number, amount: number) {
     const qty = amount / price;
     if (side === "BUY") {
@@ -1867,11 +1696,7 @@ let portfolioState = loadPortfolio();
   });
 
   setInterval(() => {
-    const prices = {};
-    for (const [sym, quote] of Object.entries(liveQuotes)) {
-       prices[sym] = (quote as any).price;
-    }
-    BrokerManager.getInstance().tick(prices);
+    BrokerManager.getInstance().tick(marketDataWorker.getLatestPrices());
   }, 1000);
   
   // Broadcast AutoBot state to all connected clients

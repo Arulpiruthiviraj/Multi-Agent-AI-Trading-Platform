@@ -65,10 +65,12 @@ export function useEventBusTrace(targetTraceId: string | null) {
     ];
 
     const unsubscribes = handlers.map(eventType => {
+      let seq = 0;
       return subscribe(eventType, (data) => {
         if (data && (data.traceId === targetTraceId || data.trace_id === targetTraceId)) {
+          seq += 1;
           const newEvent = {
-            id: Math.random().toString(36).substring(7),
+            id: `${eventType}:${data.traceId || data.trace_id}:${data.timestamp || Date.now()}:${seq}`,
             type: eventType,
             timestamp: data.timestamp || new Date().toISOString(),
             payload: data
