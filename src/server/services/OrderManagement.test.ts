@@ -5,17 +5,20 @@ import { trades, fills } from '../db/schema';
 // (PENDING at submission -> broker acceptance -> terminal fill/reject), so the mock now tracks
 // a mutable "current row" that both insert and update write into, plus separate insert logs for
 // `trades` vs `fills` so assertions can tell real order-lifecycle inserts apart from fill records.
-const { mockDb, setExistingTrades, tradesInserts, fillsInserts, getFinalTradeRow } = vi.hoisted(() => {
+const { mockDb, setExistingTrades, setThrowOnIdempotency, tradesInserts, fillsInserts, getFinalTradeRow } = vi.hoisted(() => {
   const tradesInserts: any[] = [];
   const fillsInserts: any[] = [];
   let existingTrades: any[] = [];
   let currentRow: any = null;
+  let throwOnIdempotency = false;
 
   const selectBuilder: any = {
     from() { return selectBuilder; },
     where() { return selectBuilder; },
     limit() { return selectBuilder; },
+    get() { return { tradingMode: 'Paper', paperMode: true }; },
     then(resolve: any, reject: any) {
+      if (throwOnIdempotency) return Promise.reject(new Error('idempotency lookup failed')).then(resolve, reject);
       return Promise.resolve(existingTrades).then(resolve, reject);
     },
   };
@@ -37,6 +40,7 @@ const { mockDb, setExistingTrades, tradesInserts, fillsInserts, getFinalTradeRow
   return {
     mockDb, tradesInserts, fillsInserts,
     setExistingTrades: (rows: any[]) => { existingTrades = rows; },
+    setThrowOnIdempotency: (v: boolean) => { throwOnIdempotency = v; },
     getFinalTradeRow: () => currentRow,
   };
 });
@@ -44,11 +48,15 @@ const { mockDb, setExistingTrades, tradesInserts, fillsInserts, getFinalTradeRow
 const { emitOrderExecution } = vi.hoisted(() => ({ emitOrderExecution: vi.fn() }));
 
 const { mockBrokerHolder } = vi.hoisted(() => ({ mockBrokerHolder: { broker: null as any } }));
+const { setTradingState } = vi.hoisted(() => ({ setTradingState: vi.fn(async () => {}) }));
 
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitOrderExecution } }));
 vi.mock('../../brokers/BrokerManager', () => ({
   BrokerManager: { getInstance: () => ({ getActiveBroker: () => mockBrokerHolder.broker }) },
+}));
+vi.mock('../engines/TradingEngine', () => ({
+  tradingEngine: { setTradingState },
 }));
 
 import { OrderManagementService } from './OrderManagement';
@@ -60,7 +68,9 @@ describe('OrderManagementService.executeOrder', () => {
     tradesInserts.length = 0;
     fillsInserts.length = 0;
     emitOrderExecution.mockClear();
+    setTradingState.mockClear();
     setExistingTrades([]);
+    setThrowOnIdempotency(false);
   });
 
   afterEach(() => {
@@ -73,6 +83,17 @@ describe('OrderManagementService.executeOrder', () => {
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(), positions: vi.fn() };
 
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'dup-trace');
+
+    expect(placeOrder).not.toHaveBeenCalled();
+    expect(tradesInserts.length).toBe(0);
+  });
+
+  it('aborts before placeOrder when the idempotency lookup throws', async () => {
+    setThrowOnIdempotency(true);
+    const placeOrder = vi.fn();
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(), positions: vi.fn() };
+
+    await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'lookup-fail-trace');
 
     expect(placeOrder).not.toHaveBeenCalled();
     expect(tradesInserts.length).toBe(0);
@@ -170,15 +191,19 @@ describe('OrderManagementService.executeOrder', () => {
     expect(getFinalTradeRow().profitLoss).toBe(200); // (120 - 100) * 10
   });
 
-  it('records REJECTED (not a fabricated fill) when the broker throws', async () => {
+  it('keeps PENDING and pauses trading when placeOrder throws (unknown submit is not REJECTED)', async () => {
     const placeOrder = vi.fn(async () => { throw new Error('broker down'); });
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
 
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'fail-trace');
 
     const finalRow = getFinalTradeRow();
-    expect(finalRow.status).toBe('REJECTED');
+    expect(finalRow.status).toBe('PENDING');
     expect(finalRow.price).toBe(0);
+    expect(String(finalRow.reasoning)).toMatch(/submitOutcome=UNKNOWN/);
     expect(fillsInserts).toHaveLength(0);
+    expect(setTradingState).toHaveBeenCalledWith('TRADING_PAUSED', expect.objectContaining({
+      reason: expect.stringContaining('placeOrder threw'),
+    }));
   });
 });

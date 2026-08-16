@@ -17,8 +17,9 @@ export function classifyBrokerEnvironment(opts: {
 }): BrokerEnvironment {
   const mode = String(opts.tradingMode || '').toUpperCase();
   const paper = normalizePaperMode(opts.paperMode);
+  if (paper === null || (mode !== 'LIVE' && mode !== 'PAPER')) return 'UNKNOWN';
   if (mode === 'LIVE' && paper === false) return 'LIVE';
-  if ((mode === 'PAPER' || mode === '') && paper !== false) return 'PAPER';
+  if (mode === 'PAPER' && paper === true) return 'PAPER';
   return 'UNKNOWN';
 }
 

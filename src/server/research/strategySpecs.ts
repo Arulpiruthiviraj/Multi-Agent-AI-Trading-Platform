@@ -8,7 +8,7 @@ export interface StrategySpecFile {
   version: string;
   family: string;
   sourceFile: string;
-  vectorbtParity: 'PROXY_NOT_FEATURE_PARITY' | 'PARITY' | 'FEATURE_TRANSLATION';
+  vectorbtParity: 'PROXY_NOT_FEATURE_PARITY' | 'PARITY' | 'FEATURE_TRANSLATION' | 'FEATURE_PARITY_ESTABLISHED' | 'FEATURE_SUBSET_PARITY';
   validationStatus?: string;
   timeframes: string[];
   features: string[];

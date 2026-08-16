@@ -167,7 +167,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     const maxSharesByConcentration = Math.floor(remainingRoom / ctx.currentPrice);
     const beforeConcentration = maxQuantity;
     maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
-    const concentrationFail = maxSharesByConcentration <= 0 && remainingRoom <= 0;
+    const concentrationFail = maxSharesByConcentration <= 0;
     record('symbol_concentration', !concentrationFail, {
       status: concentrationFail ? 'FAIL' : (beforeConcentration !== maxQuantity ? 'CLAMPED' : 'PASS'),
       existingValue, maxPositionValue, capPct: MAX_SINGLE_SYMBOL_CONCENTRATION_PCT,
@@ -188,9 +188,18 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
       const maxSharesBySector = Math.floor(remainingSectorRoom / ctx.currentPrice);
       const beforeSector = maxQuantity;
       maxQuantity = Math.min(maxQuantity, maxSharesBySector);
-      record('sector_concentration', true, { sector: proposalSector, sectorValue, maxSectorValue, capPct: MAX_SECTOR_CONCENTRATION_PCT, boundQuantity: beforeSector !== maxQuantity ? maxQuantity : null });
+      const sectorFail = maxSharesBySector <= 0;
+      record('sector_concentration', !sectorFail, {
+        status: sectorFail ? 'FAIL' : (beforeSector !== maxQuantity ? 'CLAMPED' : 'PASS'),
+        sector: proposalSector, sectorValue, maxSectorValue, capPct: MAX_SECTOR_CONCENTRATION_PCT,
+        boundQuantity: beforeSector !== maxQuantity ? maxQuantity : null,
+      });
+      if (sectorFail) maxQuantity = 0;
+    } else if (ctx.failClosedUnknownInputs) {
+      record('sector_concentration', false, { skipped: true, status: 'UNKNOWN', reason: 'symbol not in sector map' });
+      maxQuantity = 0;
     } else {
-      record('sector_concentration', true, { skipped: true, reason: 'symbol not in sector map' });
+      record('sector_concentration', true, { skipped: true, status: 'SKIPPED', reason: 'symbol not in sector map' });
     }
 
     if (ctx.existingPositions.length > 0) {
@@ -209,12 +218,40 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
         const maxSharesByCorrelation = Math.floor(remainingCorrelatedRoom / ctx.currentPrice);
         const beforeCorr = maxQuantity;
         maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
-        record('correlation_exposure', true, { correlatedValue, maxCorrelatedValue, capPct: MAX_CORRELATED_EXPOSURE_PCT, boundQuantity: beforeCorr !== maxQuantity ? maxQuantity : null });
+        const corrFail = maxSharesByCorrelation <= 0;
+        record('correlation_exposure', !corrFail, {
+          status: corrFail ? 'FAIL' : (beforeCorr !== maxQuantity ? 'CLAMPED' : 'PASS'),
+          correlatedValue, maxCorrelatedValue, capPct: MAX_CORRELATED_EXPOSURE_PCT,
+          boundQuantity: beforeCorr !== maxQuantity ? maxQuantity : null,
+        });
+        if (corrFail) maxQuantity = 0;
+      } else if (ctx.failClosedUnknownInputs) {
+        record('correlation_exposure', false, { skipped: true, status: 'UNKNOWN', reason: 'no real price history for this symbol' });
+        maxQuantity = 0;
       } else {
-        record('correlation_exposure', true, { skipped: true, reason: 'no real price history for this symbol' });
+        record('correlation_exposure', true, { skipped: true, status: 'SKIPPED', reason: 'no real price history for this symbol' });
       }
     } else {
-      record('correlation_exposure', true, { skipped: true, reason: 'no existing positions to correlate against' });
+      record('correlation_exposure', true, { skipped: true, status: 'SKIPPED', reason: 'no existing positions to correlate against' });
+    }
+  }
+
+  // Final honesty: a binding clamp that leaves zero shares must not report passed:true.
+  if (maxQuantity === 0) {
+    for (const g of gates) {
+      if (!g.passed) continue;
+      if (g.gate === 'order_notional_cap' && g.detail?.maxSharesByCapital <= 0) {
+        g.passed = false;
+        g.detail = { ...g.detail, status: 'FAIL' };
+      }
+      if (
+        (g.gate === 'symbol_concentration' || g.gate === 'sector_concentration' || g.gate === 'correlation_exposure')
+        && (g.detail?.status === 'CLAMPED' || g.detail?.boundQuantity === 0)
+        && g.detail?.boundQuantity === 0
+      ) {
+        g.passed = false;
+        g.detail = { ...g.detail, status: 'FAIL' };
+      }
     }
   }
 

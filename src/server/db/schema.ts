@@ -243,6 +243,9 @@ export const trades = sqliteTable('trades', {
   // structural level, invalidation texts) so PortfolioMonitor can re-evaluate whether the
   // thesis is still valid - not just whether a numeric stop/target was hit.
   quantInvalidationJson: text('quant_invalidation_json'),
+  // PAPER | LIVE | UNKNOWN | BACKTEST | REPLAY | SIMULATION — OMS writes this at insert.
+  // Reasoning stamp remains for older rows. Organic paper prefers this column.
+  executionEnvironment: text('execution_environment'),
 }, (table) => ({
   // Hardening pass, Phase 2: real duplicate-order idempotency at the DB level, closing the
   // check-then-act race in OrderManagement.ts's own pre-insert lookup (two concurrent
@@ -257,6 +260,15 @@ export const trades = sqliteTable('trades', {
 // Thin by design - today's brokers (Alpaca, InternalPaperBroker) are single-shot market orders,
 // so this will usually have 0-1 rows per order. Future-proofs partial fills without having to
 // redesign `trades` later.
+export const diagnosticTradeArchive = sqliteTable('diagnostic_trade_archive', {
+  id: text('id').primaryKey(),
+  archivedAt: text('archived_at').notNull(),
+  originalStatus: text('original_status').notNull(),
+  traceId: text('trace_id'),
+  symbol: text('symbol'),
+  snapshotJson: text('snapshot_json').notNull(),
+});
+
 export const fills = sqliteTable('fills', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   orderId: text('order_id').notNull(), // FK trades.id
@@ -910,7 +922,7 @@ export const pitDecisionLedger = sqliteTable('pit_decision_ledger', {
   asOfMs: integer('as_of_ms').notNull(),
   publishedAtMs: integer('published_at_ms').notNull(),
   symbol: text('symbol').notNull(),
-  kind: text('kind').notNull(), // NEWS | NEWS_AGENT | CHIEF_TRADER | AGENT_REASONING
+  kind: text('kind').notNull(), // NEWS | NEWS_AGENT | CHIEF_TRADER | AGENT_REASONING | DATA_QUALITY
   agent: text('agent'),
   side: text('side'),
   confidence: real('confidence'),
@@ -923,4 +935,35 @@ export const pitDecisionLedger = sqliteTable('pit_decision_ledger', {
   asOfIdx: index('idx_pit_decision_ledger_asof').on(table.asOfMs),
   publishedIdx: index('idx_pit_decision_ledger_published').on(table.publishedAtMs),
   symbolIdx: index('idx_pit_decision_ledger_symbol').on(table.symbol),
+}));
+
+/** Research WFO inbox. Script may only write RESEARCH_PARAM_CANDIDATE (legacy PAPER_TESTING readable). Not live enablement. */
+export const strategyConfigurations = sqliteTable('strategy_configurations', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id').notNull(),
+  regime: text('regime').notNull(),
+  paramsJson: text('params_json').notNull(),
+  status: text('status').notNull(),
+  evOos: real('ev_oos'),
+  dsrTrain: real('dsr_train'),
+  permutationPass: integer('permutation_pass', { mode: 'boolean' }).notNull(),
+  datasetId: text('dataset_id'),
+  fullStrategyParity: integer('full_strategy_parity', { mode: 'boolean' }).notNull().default(false),
+  updatedAt: text('updated_at').notNull(),
+});
+
+/** Phase 18 historical replay metadata. Bars stay in Parquet/JSONL, not this table. */
+export const replayRuns = sqliteTable('replay_runs', {
+  id: text('id').primaryKey(),
+  status: text('status').notNull(),
+  configJson: text('config_json').notNull(),
+  datasetHash: text('dataset_hash'),
+  configurationHash: text('configuration_hash'),
+  replayHash: text('replay_hash'),
+  summaryJson: text('summary_json'),
+  executionEnvironment: text('execution_environment').notNull().default('REPLAY'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  statusIdx: index('idx_replay_runs_status').on(table.status),
 }));

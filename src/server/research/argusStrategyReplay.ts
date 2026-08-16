@@ -15,6 +15,7 @@ import type { StrategyEvaluation } from '../quant/strategies/types';
 import type { DataProvenance, ResearchBar } from './ohlcvTypes';
 import { isPromotableProvenance } from './importDataset';
 import { executionModelVersion, getExecutionModel } from './executionModel';
+import { loadStrategySpec } from './strategySpecs';
 
 function emptyBenchmark(symbol: string): BenchmarkTrend {
   return { symbol, regime: null, source: 'UNAVAILABLE' };
@@ -60,7 +61,7 @@ export interface ArgusReplayResult {
   signalCount: number;
   signals: ArgusReplaySignal[];
   marketContext: 'UNAVAILABLE' | 'SUPPLIED';
-  vectorbtParity: 'FEATURE_TRANSLATION' | 'PROXY_NOT_FEATURE_PARITY';
+  vectorbtParity: 'FEATURE_TRANSLATION' | 'PROXY_NOT_FEATURE_PARITY' | 'FEATURE_PARITY_ESTABLISHED' | 'FEATURE_SUBSET_PARITY';
 }
 
 export function replayArgusStrategy(opts: {
@@ -82,7 +83,8 @@ export function replayArgusStrategy(opts: {
     minBarsRequired: MIN_BARS,
     barCount: opts.bars.length,
     marketContext: 'UNAVAILABLE',
-    vectorbtParity: opts.strategyId === 'SMC_LIQUIDITY_SWEEP' ? 'PROXY_NOT_FEATURE_PARITY' : 'FEATURE_TRANSLATION',
+    vectorbtParity: (loadStrategySpec(opts.strategyId)?.vectorbtParity as ArgusReplayResult['vectorbtParity'])
+      ?? 'PROXY_NOT_FEATURE_PARITY',
   };
 
   if (!strategy) {

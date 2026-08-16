@@ -38,7 +38,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { and, eq, isNotNull, notInArray } from 'drizzle-orm';
 import { system } from '../core/SystemBootstrap';
-import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../core/LiveTradingConfirmation';
+import { LIVE_TRADING_CONFIRMATION_PHRASE, armLiveTrading, disarmLiveTrading } from '../core/LiveTradingConfirmation';
 import { tradingSafety } from '../config/tradingSafety';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { TERMINAL_ORDER_STATUSES } from '../services/OrderManagement';
@@ -322,12 +322,22 @@ class TradingEngine {
 
     public async toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string }): Promise<{ ok: boolean; error?: string }> {
         const goingLive = config.tradingMode === 'LIVE' && this.state.tradingMode !== 'LIVE';
+        const goingPaper = config.tradingMode === 'Paper' && this.state.tradingMode === 'LIVE';
         if (goingLive && config.confirmLiveTrading !== LIVE_TRADING_CONFIRMATION_PHRASE) {
             this.logHistory('veto', 'Blocked attempt to enable LIVE trading mode without explicit confirmation.');
             return { ok: false, error: `Enabling LIVE trading mode requires confirmLiveTrading: "${LIVE_TRADING_CONFIRMATION_PHRASE}"` };
         }
         if (goingLive && this.state.tradingState !== 'TRADING_ENABLED') {
             return { ok: false, error: `Cannot enable LIVE trading while tradingState is ${this.state.tradingState}. Resume via the kill-switch endpoint first.` };
+        }
+        if (goingLive) armLiveTrading(config.confirmLiveTrading);
+        if (goingPaper) disarmLiveTrading();
+        else if (
+          Object.prototype.hasOwnProperty.call(config, 'tradingMode')
+          && config.tradingMode !== 'LIVE'
+          && this.state.tradingMode === 'LIVE'
+        ) {
+            disarmLiveTrading();
         }
 
         // Allocated budget must not exceed what the active broker actually reports as available -

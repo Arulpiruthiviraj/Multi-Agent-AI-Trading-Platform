@@ -97,6 +97,8 @@ describe('BacktestEngine.run', () => {
 
     expect(result.status).toBe('COMPLETED');
     expect(Array.isArray(result.tradeLog)).toBe(true);
+    expect(result.promotable).toBe(false);
+    expect(result.promotionRejection).toBe('SAME_BAR_CLOSE_NOT_PROMOTABLE');
 
     // Whether or not the exact strategy conditions fired a trade on this specific series, the
     // run must complete cleanly and never throw a corporate-actions halt on genuinely clean data.

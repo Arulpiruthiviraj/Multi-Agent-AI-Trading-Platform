@@ -151,6 +151,18 @@ export class ChiefTraderAgent {
     return (this.pendingDebates.get(symbol) || 0) > 0;
   }
 
+  private pushDebateFailClosed(idea: { traceId: string, symbol: string, currentPrice?: number }, why: string): void {
+    this.recentIdeas.push({
+      traceId: idea.traceId,
+      symbol: idea.symbol,
+      side: 'HOLD',
+      confidence: tradingSafety.debateResultConfidence,
+      currentPrice: idea.currentPrice,
+      reasoning: `Multi-Model Debate fail-closed HOLD (${why}). Adversarial debate did not produce a usable verdict.`,
+      agent: 'ConsensusDebate',
+    });
+  }
+
   async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any }) {
     // Autobot-off: do not debate stray entry ideas (no LLM, no CHIEF_APPROVED_IDEA).
     // PortfolioMonitor risk-exit SELLs still proceed — capital preservation is not an entry vote.
@@ -222,10 +234,12 @@ export class ChiefTraderAgent {
                  agent: 'ConsensusDebate'
               });
            } else {
-              console.warn(`[ChiefTrader] Debate for ${idea.symbol} returned no verdict - evaluating accumulated evidence without a debate vote.`);
+              console.warn(`[ChiefTrader] Debate for ${idea.symbol} returned no verdict - fail-closed HOLD (do not approve without a debate vote).`);
+              this.pushDebateFailClosed(idea, 'no verdict');
            }
         }).catch(err => {
            console.error("[ChiefTrader] Debate failed", err);
+           this.pushDebateFailClosed(idea, 'routeConsensus threw');
         }).finally(() => {
            this.endDebate(idea.symbol);
            if (!this.debatePending(idea.symbol)) {

@@ -18,6 +18,7 @@ import { researchComparisonMatrix } from './strategyEvidence';
 import { evaluatePitAiBuyGate } from '../engines/backtest/PitReplay';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { tradingSafety } from '../config/tradingSafety';
+import { researchSafety } from '../config/researchSafety';
 
 const ROOT = join(process.cwd());
 
@@ -42,6 +43,35 @@ describe('Phase 21 evidence-path invariants', () => {
     expect(researchComparisonMatrix().engineCompare.status).toBe('ENGINE_MISMATCH');
   });
 
+  it('SAME_BAR_CLOSE cannot leave UNTESTED even with all research flags set', () => {
+    const e = {
+      ...emptyEvidence('MOMENTUM_BREAKOUT', '1.0.0'),
+      dataProvenance: 'REAL_MARKET_DATA' as const,
+      executionModel: 'SAME_BAR_CLOSE',
+      dataQualityPass: true,
+      backtestPass: true,
+      oosPass: true,
+      walkForwardPass: true,
+      monteCarloPass: true,
+      permutationPass: true,
+      sensitivityPass: true,
+      costStressPass: true,
+      paperTrades: 999,
+      paperSessions: 999,
+      paperExpectancyPositive: true,
+      paperDrawdownWithinLimit: true,
+      riskGatePass: true,
+      brokerHealthPass: true,
+      marketDataHealthPass: true,
+      startupHealthPass: true,
+      organicPaperOnly: true,
+      manualLiveApproval: true,
+    };
+    expect(deriveLifecycleStatus(e)).toBe('UNTESTED');
+    expect(liveGoNoGo(e).live).toBe('NO-GO');
+    expect(liveGoNoGo(e).failedGates).toContain('EXECUTION_MODEL_NOT_CANONICAL');
+  });
+
   it('empty evidence cannot become LIVE_APPROVED or enable LIVE', () => {
     const e = emptyEvidence('MOMENTUM_BREAKOUT');
     expect(deriveLifecycleStatus(e)).toBe('UNTESTED');
@@ -53,6 +83,7 @@ describe('Phase 21 evidence-path invariants', () => {
     const e = {
       ...emptyEvidence('MOMENTUM_BREAKOUT', '1.0.0'),
       dataProvenance: 'REAL_MARKET_DATA' as const,
+      executionModel: 'NEXT_BAR_OPEN',
       dataQualityPass: true,
       backtestPass: true,
       oosPass: true,
@@ -85,16 +116,50 @@ describe('Phase 21 evidence-path invariants', () => {
       profitLoss: 12,
       reasoning: stampExecutionEnvironment('ChiefTrader approved', 'PAPER'),
     })).toBe(true);
+    expect(isOrganicClosedPaper({
+      status: 'FILLED',
+      side: 'SELL',
+      profitLoss: 99,
+      traceId: 'manual-override-abc',
+      reasoning: stampExecutionEnvironment('SOURCE: MANUAL_OVERRIDE — human', 'PAPER'),
+    })).toBe(false);
+    expect(classifyTradeEnvironment({
+      traceId: 'manual-override-abc',
+      reasoning: stampExecutionEnvironment('SOURCE: MANUAL_OVERRIDE — human', 'PAPER'),
+    })).toBe('UNKNOWN');
+    expect(isOrganicClosedPaper({
+      status: 'FILLED',
+      side: 'SELL',
+      profitLoss: 12,
+      traceId: 'diag-a-1786368993694',
+      reasoning: stampExecutionEnvironment('Approved', 'PAPER'),
+    })).toBe(false);
     const empty = summarizeOrganicPaper([], 30);
     expect(empty.closedTradeCount).toBe(0);
+    expect(empty.sessionCount).toBe(0);
     expect(empty.sharpe.status).toBe('INSUFFICIENT_SAMPLE');
     expect(empty.invented).toBe(false);
+  });
+
+  it('organic paper sessions are NY calendar days of closed FILLED SELL rows, not invented', () => {
+    const rows = Array.from({ length: 10 }, (_, i) => ({
+      status: 'FILLED' as const,
+      side: 'SELL' as const,
+      profitLoss: 1,
+      reasoning: stampExecutionEnvironment('OMS fill', 'PAPER'),
+      timestamp: `2026-01-${String(i + 5).padStart(2, '0')}T20:00:00.000Z`,
+    }));
+    const s = summarizeOrganicPaper(rows, 30);
+    expect(s.closedTradeCount).toBe(10);
+    expect(s.sessionCount).toBe(10);
+    expect(researchSafety.minPaperSessions).toBe(10);
   });
 
   it('OMS environment stamp does not invent PAPER for unknown brokers', () => {
     expect(resolveOmsExecutionEnvironment({ brokerId: 'internal_paper', tradingMode: 'Paper' })).toBe('PAPER');
     expect(resolveOmsExecutionEnvironment({ brokerId: 'lifecycle-stub', tradingMode: 'Paper' })).toBe('UNKNOWN');
-    expect(resolveOmsExecutionEnvironment({ brokerId: 'alpaca', tradingMode: 'LIVE' })).toBe('LIVE');
+    expect(resolveOmsExecutionEnvironment({ brokerId: 'internal_paper', tradingMode: 'LIVE' })).toBe('UNKNOWN');
+    expect(resolveOmsExecutionEnvironment({ brokerId: 'lifecycle-stub', tradingMode: 'LIVE' })).toBe('UNKNOWN');
   });
 
   it('strategy version freeze is config-hashed and does not invent VALIDATED', () => {
@@ -147,6 +212,14 @@ describe('Phase 21 evidence-path invariants', () => {
     }
     expect(hits).toEqual([]);
     expect(readFileSync(join(ROOT, 'server.ts'), 'utf8')).not.toMatch(/\.placeOrder\(/);
+    const routeDir = join(ROOT, 'src', 'server', 'routes');
+    const routeHits: string[] = [];
+    for (const f of walkFiles(routeDir).filter((p) => p.endsWith('.ts') && !p.endsWith('.test.ts'))) {
+      const text = readFileSync(f, 'utf8');
+      if (text.includes('.closePosition(')) routeHits.push(relative(ROOT, f).replace(/\\/g, '/'));
+    }
+    expect(routeHits).toEqual([]);
+    expect(readFileSync(join(ROOT, 'server.ts'), 'utf8')).not.toMatch(/\.closePosition\(/);
   });
 
   it('VectorBT/Python research CLI cannot place orders', () => {
@@ -161,5 +234,27 @@ describe('Phase 21 evidence-path invariants', () => {
     const app = readFileSync(join(ROOT, 'src/App.tsx'), 'utf8');
     expect(app).not.toMatch(/BrokerManager\.getInstance/);
     expect(app).not.toMatch(/\.placeOrder\(/);
+  });
+
+  it('OMS persists executionEnvironment as a column, not only a reasoning stamp', () => {
+    const schema = readFileSync(join(ROOT, 'src/server/db/schema.ts'), 'utf8');
+    expect(schema).toMatch(/executionEnvironment: text\('execution_environment'\)/);
+    const oms = readFileSync(join(ROOT, 'src/server/services/OrderManagement.ts'), 'utf8');
+    expect(oms).toMatch(/executionEnvironment: this\.resolveFillEnvironment\(\)/);
+  });
+
+  it('OMS does not treat a placeOrder throw as a definitive REJECTED', () => {
+    const oms = readFileSync(join(ROOT, 'src/server/services/OrderManagement.ts'), 'utf8');
+    const idx = oms.indexOf('Broker execution failed');
+    expect(idx).toBeGreaterThan(0);
+    const catchBlock = oms.slice(idx, idx + 900);
+    expect(catchBlock).toMatch(/submitOutcome=UNKNOWN/);
+    expect(catchBlock).not.toMatch(/status = ["']REJECTED["']/);
+  });
+
+  it('OMS idempotency lookup failure aborts before the broker', () => {
+    const oms = readFileSync(join(ROOT, 'src/server/services/OrderManagement.ts'), 'utf8');
+    expect(oms).not.toMatch(/proceeding without it/);
+    expect(oms).toMatch(/Idempotency check failed — aborting before broker/);
   });
 });

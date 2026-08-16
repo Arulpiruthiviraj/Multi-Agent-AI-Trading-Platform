@@ -3,14 +3,12 @@
  * Module: risk/ExpectedValue
  *
  * Purpose:
- * Phase 9 delta of the additive quant layer. RiskEngine.ts and PositionSizing.ts already own real
- * position sizing (ATR-based), daily loss limits, max exposure, correlated exposure, drawdown
- * monitoring, and consecutive-loss monitoring - none of that is touched or duplicated here. The
- * one real gap confirmed by reading both files (grepped for kelly/expectedValue/riskReward -
- * zero matches): no risk/reward ratio, no expected-value calculation, no Kelly-criterion logic
- * exists anywhere in this codebase. This module adds exactly those three, as pure functions with
- * no side effects and no knowledge of the broker/DB/EventBus - callers (PositionSizing.ts, or
- * whatever surfaces this to a human/AI) decide what to do with the numbers.
+ * Phase 9 additive quant layer. Live sizing stays in RiskEngine / PositionSizing
+ * (FIXED_DOLLAR or PERCENT_OF_EQUITY, stop-per-share from tradingSafety.stopLossAssumptionPct —
+ * not ATR). This module does not size or place orders.
+ *
+ * The gap this file fills: no R:R, expected value in R, or Kelly on the live path.
+ * Pure functions only — no broker/DB/EventBus. Callers decide what to do with the numbers.
  *
  * Per the plan's own explicit instruction: "Use fractional Kelly only if statistically justified
  * and heavily constrained. Never allow a mathematical sizing model to bypass hard risk limits."

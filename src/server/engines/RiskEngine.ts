@@ -36,6 +36,10 @@ import {
 } from '../risk/OvertradingGuards';
 import { clusterCoversSymbol, newsImpactOnVetoScale } from '../news/newsClusterMatch';
 import { evaluateQuoteFreshness } from '../core/marketDataQuality';
+import { getActiveReplaySession, replayVisibleBars } from '../replay/ReplayContext';
+import { classifyMarketSession, sessionAllowsFills } from '../replay/marketSession';
+import { replaySafety } from '../replay/replaySafety';
+import { newsVisibleAt } from '../replay/HistoricalNewsProvider';
 
 const STALE_PRICE_THRESHOLD_MS = tradingSafety.stalePriceThresholdMs;
 let cachedMarketClock: { isOpen: boolean; fetchedAt: number } | null = null;
@@ -52,6 +56,12 @@ const closesCache: Map<string, { closes: number[]; fetchedAt: number }> = new Ma
 // API failure). Cached in-memory for the market-clock cache's duration to avoid re-querying
 // the DB/Alpaca on every single risk evaluation within the same minute.
 async function getRecentCloses(symbol: string): Promise<number[] | null> {
+    const replay = getActiveReplaySession();
+    if (replay) {
+        const bars = replayVisibleBars(symbol);
+        if (bars.length < CORRELATION_MIN_OVERLAP) return null;
+        return bars.map((b) => b.close);
+    }
     const cached = closesCache.get(symbol);
     if (cached && Date.now() - cached.fetchedAt < MARKET_CLOCK_CACHE_MS) return cached.closes;
 
@@ -76,10 +86,12 @@ async function getRecentCloses(symbol: string): Promise<number[] | null> {
 // SELL trades (now populated by OrderManagement.ts). Returns true only when there IS real trade
 // history and the most recent MAX_CONSECUTIVE_LOSSES of it were all losses.
 async function hasConsecutiveLosses(): Promise<boolean> {
-    const recentClosed = await db.select().from(schema.trades)
+    const recentClosed = (await db.select().from(schema.trades)
         .where(and(eq(schema.trades.status, 'FILLED'), isNotNull(schema.trades.profitLoss)))
         .orderBy(desc(schema.trades.timestamp))
-        .limit(MAX_CONSECUTIVE_LOSSES);
+        .limit(MAX_CONSECUTIVE_LOSSES * 4))
+        .filter((t: any) => t.executionEnvironment !== 'REPLAY' && t.executionEnvironment !== 'BACKTEST' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix))
+        .slice(0, MAX_CONSECUTIVE_LOSSES);
     if (recentClosed.length < MAX_CONSECUTIVE_LOSSES) return false;
     return recentClosed.every(t => (t.profitLoss ?? 0) < 0);
 }
@@ -202,8 +214,9 @@ export class RiskEngine {
             // entirely on a rejection. Blocks on BOTH non-enabled states - TRADING_PAUSED is a
             // softer halt than EMERGENCY_STOP (no forced order cancellation) but it still means
             // no new trades, which is the entire point of pausing.
-            const tradingState = tradingEngine.state.tradingState;
-            recordGate('emergency_stop', tradingState === 'TRADING_ENABLED', { tradingState, emergencyStopActive: tradingEngine.state.emergencyStopActive });
+            const replay = getActiveReplaySession();
+            const tradingState = replay ? 'TRADING_ENABLED' : tradingEngine.state.tradingState;
+            recordGate('emergency_stop', tradingState === 'TRADING_ENABLED', { tradingState, emergencyStopActive: tradingEngine.state.emergencyStopActive, replay: !!replay });
             const emergencyStopReason = tradingState === 'EMERGENCY_STOP'
                 ? "Emergency stop is active. All new trades are blocked until resumed."
                 : "Trading is paused. All new trades are blocked until resumed.";
@@ -212,7 +225,7 @@ export class RiskEngine {
             // second kill switch. emergency_stop still owns TRADING_PAUSED / EMERGENCY_STOP.
             // New BUY risk requires Autobot on; SELL/exits still run while TRADING_ENABLED so
             // PortfolioMonitor can flatten existing paper positions.
-            const autobotOn = tradingEngine.state.enabled === true;
+            const autobotOn = replay ? replaySafety.allowBuysInReplay : tradingEngine.state.enabled === true;
             const autobotBlocksBuy = proposal.side === 'BUY' && !autobotOn;
             recordGate('autobot_enabled', !autobotBlocksBuy, {
                 enabled: tradingEngine.state.enabled,
@@ -223,8 +236,11 @@ export class RiskEngine {
             });
             const autobotReason = 'AUTOBOT_DISABLED: Autobot is off. New BUY risk is blocked. SELL/exits still require TRADING_ENABLED.';
 
-            const nowMs = Date.now();
-            const tradeRows = await db.select().from(schema.trades);
+            const nowMs = replay ? replay.clock.now() : Date.now();
+            const allTradeRows = await db.select().from(schema.trades);
+            const tradeRows = replay
+                ? allTradeRows.filter((t: any) => String(t.traceId || '').includes(replay.replayId) || String(t.reasoning || '').includes(replay.replayId))
+                : allTradeRows.filter((t: any) => t.executionEnvironment !== 'REPLAY' && t.executionEnvironment !== 'BACKTEST' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix));
             const sameSymbol = evaluateSameSymbolCooldown({ side: proposal.side, symbol: proposal.symbol, nowMs, trades: tradeRows });
             recordGate(sameSymbol.gate, sameSymbol.passed, sameSymbol.detail);
             const postLoss = evaluatePostLossCooldown({ side: proposal.side, nowMs, trades: tradeRows });
@@ -263,7 +279,20 @@ export class RiskEngine {
                 maxOpenPositions: settings[0]?.maxOpenPositions ?? 10,
                 dailyLossLimitDollars: tradingEngine.state.dailyLossLimit,
             });
-            const maxTradeSizeDollar = restrictedLiveCaps.maxTradeSizeDollar;
+            // Replay session owns research capital — do not leak live settings.budget into MODE B.
+            let maxTradeSizeDollar = restrictedLiveCaps.maxTradeSizeDollar;
+            let maxOpenPositions = restrictedLiveCaps.maxOpenPositions;
+            let dailyLossLimitDollars = restrictedLiveCaps.dailyLossLimitDollars;
+            if (replay) {
+                maxTradeSizeDollar = Math.min(
+                    maxTradeSizeDollar,
+                    Number(replay.config.maxPositionSize) > 0 ? replay.config.maxPositionSize : replay.config.allocationBudget,
+                    replay.config.allocationBudget,
+                );
+                dailyLossLimitDollars = Number(replay.config.maxDailyLoss) > 0
+                    ? replay.config.maxDailyLoss
+                    : dailyLossLimitDollars;
+            }
 
             if (!isPositiveFiniteMoney(portfolio.equity)) {
                 recordGate(INVALID_ACCOUNT_EQUITY, false, { equity: portfolio.equity, buyingPower: portfolio.buyingPower });
@@ -302,7 +331,7 @@ export class RiskEngine {
             // time, which would reset this baseline mid-session instead of at the real start of
             // the trading day.
             const equityNow = accountEquity;
-            const todayStr = getTradingDateStr();
+            const todayStr = getTradingDateStr(new Date(nowMs));
             if (tradingEngine.state.dayStartDateStr !== todayStr) {
                 tradingEngine.state.dayStartDateStr = todayStr;
                 tradingEngine.state.dayStartEquity = equityNow;
@@ -311,10 +340,10 @@ export class RiskEngine {
             const dayStartEquity = tradingEngine.state.dayStartEquity ?? equityNow;
             const dailyLoss = Math.max(0, dayStartEquity - equityNow);
             tradingEngine.state.currentDailyLoss = dailyLoss;
-            const dailyLossKillSwitchThreshold = restrictedLiveCaps.dailyLossLimitDollars * tradingSafety.dailyLossKillSwitchFraction;
+            const dailyLossKillSwitchThreshold = dailyLossLimitDollars * tradingSafety.dailyLossKillSwitchFraction;
             const dailyLossPassed = dailyLoss < dailyLossKillSwitchThreshold;
-            recordGate('daily_loss', dailyLossPassed, { dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: restrictedLiveCaps.dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted });
-            const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached ${tradingSafety.dailyLossKillSwitchFraction * 100}% of the $${restrictedLiveCaps.dailyLossLimitDollars}${restrictedLiveCaps.restricted ? ' (restricted live mode cap)' : ''} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
+            recordGate('daily_loss', dailyLossPassed, { dailyLoss, threshold: dailyLossKillSwitchThreshold, limit: dailyLossLimitDollars, restrictedLiveModeActive: restrictedLiveCaps.restricted, replay: !!replay });
+            const dailyLossReason = `Daily Loss Kill-Switch: -$${dailyLoss.toFixed(2)} reached ${tradingSafety.dailyLossKillSwitchFraction * 100}% of the $${dailyLossLimitDollars}${restrictedLiveCaps.restricted ? ' (restricted live mode cap)' : ''}${replay ? ' (replay config)' : ''} daily loss limit. All new trades blocked until tomorrow or a manual reset.`;
 
             // 2a-2. Consecutive-loss circuit breaker - real realized P&L from the last three
             // FILLED trades, not a simulated/hardcoded count.
@@ -344,9 +373,12 @@ export class RiskEngine {
             // bug generating far more proposals than any real strategy should, independent of
             // whether any individual proposal would otherwise pass every other gate.
             const maxOrdersPerMinute = settings[0]?.maxOrdersPerMinute ?? 5;
-            const oneMinuteAgo = new Date(Date.now() - 60 * 1000).toISOString();
-            const recentAssessments = await db.select().from(schema.riskAssessments)
+            const oneMinuteAgo = new Date(nowMs - 60 * 1000).toISOString();
+            const recentAssessmentsRaw = await db.select().from(schema.riskAssessments)
                 .where(gte(schema.riskAssessments.createdAt, oneMinuteAgo));
+            const recentAssessments = replay
+                ? recentAssessmentsRaw.filter((a: any) => String(a.traceId || '').includes(replay.replayId))
+                : recentAssessmentsRaw.filter((a: any) => !String(a.traceId || '').startsWith(replaySafety.replayTracePrefix));
             const recentOrderCount = recentAssessments.length;
             const orderRatePassed = recentOrderCount < maxOrdersPerMinute;
             recordGate('order_rate_limit', orderRatePassed, { recentOrderCount, maxOrdersPerMinute });
@@ -354,21 +386,26 @@ export class RiskEngine {
 
             // 2b. Alpaca /v2/clock. Unconfigured → skip. Closed or clock outage → block.
             // Previously `null !== false` passed the gate on REST failure (outage treated as open).
-            const marketClock = await readMarketClock();
+            const marketClock = replay
+                ? (sessionAllowsFills(classifyMarketSession(nowMs, replay.config.timezone, replay.config.extendedHours), replay.config.extendedHours) ? 'open' : 'closed')
+                : await readMarketClock();
             const marketHoursPassed = marketClock === 'open' || marketClock === 'unconfigured';
-            recordGate('market_hours', marketHoursPassed, { marketClock, skipped: marketClock === 'unconfigured' });
+            recordGate('market_hours', marketHoursPassed, { marketClock, skipped: marketClock === 'unconfigured', replay: !!replay });
             const marketHoursReason = marketClock === 'unavailable'
                 ? 'Alpaca market clock unavailable (HTTP/network failure). Fail-closed: new trades blocked until the clock can be read.'
                 : 'Market is currently closed (Alpaca clock).';
 
             // 2c. Stale market-data check - only fires when we've actually seen a real tick for
             // this symbol before and it has since gone quiet; never fabricates a staleness verdict.
-            const priceAgeMs = marketDataWorker.getLatestPriceAgeMs(proposal.symbol);
-            const freshness = evaluateQuoteFreshness({ priceAgeMs, staleThresholdMs: STALE_PRICE_THRESHOLD_MS });
+            const priceAgeMs = replay ? 0 : marketDataWorker.getLatestPriceAgeMs(proposal.symbol);
+            const freshness = replay
+                ? { passed: true, priceAgeMs: 0, thresholdMs: STALE_PRICE_THRESHOLD_MS, grade: 'replay_bar', reason: 'Replay uses last completed bar at T; daily age is not live-tick staleness.' }
+                : evaluateQuoteFreshness({ priceAgeMs, staleThresholdMs: STALE_PRICE_THRESHOLD_MS });
             recordGate('data_freshness', freshness.passed, {
               priceAgeMs: freshness.priceAgeMs,
               thresholdMs: freshness.thresholdMs,
-              grade: freshness.grade,
+              grade: (freshness as any).grade,
+              replay: !!replay,
             });
             const staleDataReason = freshness.reason;
 
@@ -376,15 +413,21 @@ export class RiskEngine {
             // (news_articles has no impactScore column at all, so this always evaluated to
             // "no high-impact news" regardless of real news). Limited to a 4-hour window so a
             // stale high-impact cluster doesn't veto trades indefinitely.
-            const fourHoursAgo = new Date(Date.now() - tradingSafety.newsVetoWindowMs).toISOString();
-            const recentClusters = await db.select().from(schema.newsClusters)
-                .where(gte(schema.newsClusters.updatedAt, fourHoursAgo));
-            const symbolNews = recentClusters.filter((n: any) =>
-                clusterCoversSymbol(n.symbols, proposal.symbol) &&
-                typeof n.impactScore === 'number' &&
-                newsImpactOnVetoScale(n.impactScore) > tradingSafety.newsVetoMinImpactScore
-            );
-            recordGate('news_veto', symbolNews.length === 0, { matchingClusters: symbolNews.length });
+            const fourHoursAgo = new Date(nowMs - tradingSafety.newsVetoWindowMs).toISOString();
+            let symbolNews: any[] = [];
+            if (replay) {
+                const pitNews = newsVisibleAt(replay.news, replay.cutoff, proposal.symbol);
+                symbolNews = pitNews.filter((n) => n.publishedAt >= nowMs - tradingSafety.newsVetoWindowMs && typeof n.sentiment === 'number' && n.sentiment < -0.99);
+            } else {
+                const recentClusters = await db.select().from(schema.newsClusters)
+                    .where(gte(schema.newsClusters.updatedAt, fourHoursAgo));
+                symbolNews = recentClusters.filter((n: any) =>
+                    clusterCoversSymbol(n.symbols, proposal.symbol) &&
+                    typeof n.impactScore === 'number' &&
+                    newsImpactOnVetoScale(n.impactScore) > tradingSafety.newsVetoMinImpactScore
+                );
+            }
+            recordGate('news_veto', symbolNews.length === 0, { matchingClusters: symbolNews.length, replay: !!replay });
             const newsVetoReason = "High volatility news event detected, overriding AI decision.";
 
             // 4. Position Sizing Math - using actual buying power and portfolio value
@@ -406,8 +449,8 @@ export class RiskEngine {
                 // BacktestEngine can use the byte-for-byte identical logic instead of its
                 // previous flat-10%-of-initial-cash rule - a real, previously-documented
                 // inconsistency (FINAL_ANALYSIS.md 15.9).
-                const maxOpenPositions = restrictedLiveCaps.maxOpenPositions;
-                openPositionsCapReasonHolder.text = `Maximum open positions (${maxOpenPositions}) already reached; cannot open a new position in ${proposal.symbol} until an existing position is closed.`;
+                const maxOpenPositionsForSizing = maxOpenPositions;
+                openPositionsCapReasonHolder.text = `Maximum open positions (${maxOpenPositionsForSizing}) already reached; cannot open a new position in ${proposal.symbol} until an existing position is closed.`;
                 sufficientSizeReasonHolder.text = `Insufficient buying power or risk limits exceeded. Required: ${currentPrice}, Available BP: ${buyingPower}`;
 
                 // E2B - feature-flagged, defaults to 'FIXED_DOLLAR' (today's exact behavior) for
@@ -424,11 +467,11 @@ export class RiskEngine {
                     maxTradeSizeDollar,
                     maxPortfolioRiskPct,
                     existingPositions: portfolio.positions.map((p: any) => ({ symbol: p.symbol, quantity: p.quantity })),
-                    maxOpenPositions,
+                    maxOpenPositions: maxOpenPositionsForSizing,
                     getRecentCloses,
                     sizingMode,
                     percentOfEquityPct,
-                    failClosedUnknownInputs: tradingEngine.state.tradingMode === 'LIVE',
+                    failClosedUnknownInputs: tradingEngine.state.tradingMode === 'LIVE' && !replay,
                 });
                 maxQuantity = sizingResult.maxQuantity;
                 for (const g of sizingResult.gates) recordGate(g.gate, g.passed, g.detail);
@@ -445,12 +488,16 @@ export class RiskEngine {
                 }
 
                 // Argus allocation is a hard authority ceiling, distinct from broker buying power.
-                // settings.budget (same field the Autobot "Allocated Budget Limit" writes) is the
-                // slice Argus may commit. Broker equity of $2,000 never authorizes a $101 BUY
-                // against a $100 allocation. Pending BUY notionals count as reserved.
-                const rawBudget = settings[0]?.budget ?? tradingEngine.state.budget;
+                // Replay uses allocationBudget from ReplayConfig; live uses settings.budget.
+                const rawBudget = replay
+                    ? replay.config.allocationBudget
+                    : (settings[0]?.budget ?? tradingEngine.state.budget);
                 const allocated = isPositiveFiniteMoney(rawBudget) ? rawBudget : Number.NaN;
-                const allTrades = await db.select().from(schema.trades);
+                const allTrades = (await db.select().from(schema.trades)).filter((t: any) =>
+                    replay
+                        ? String(t.traceId || '').includes(replay.replayId)
+                        : t.executionEnvironment !== 'REPLAY' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix)
+                );
                 const pendingBuys = (allTrades || []).filter((t: any) =>
                     t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
                 );

@@ -53,3 +53,26 @@ export function compareExecutionModels(a: string, b: string): {
     executionModelVersion: executionModelVersion(),
   };
 }
+
+/** Canonical research fill used for promotion. BacktestEngine SAME_BAR_CLOSE is quarantined. */
+export const CANONICAL_PROMOTION_FILL = 'NEXT_BAR_OPEN';
+
+export function isCanonicalPromotionFill(model: string | undefined | null): boolean {
+  return model === CANONICAL_PROMOTION_FILL;
+}
+
+export const SAME_BAR_PROMOTION_QUARANTINE = {
+  promotable: false as const,
+  promotionRejection: 'SAME_BAR_CLOSE_NOT_PROMOTABLE' as const,
+  comparableToCanonicalResearch: false as const,
+  engineMismatchVsNextBarOpen: true as const,
+  walkForwardPass: false as const,
+};
+
+export function stampSameBarPromotionQuarantine<T extends Record<string, unknown>>(result: T): T & typeof SAME_BAR_PROMOTION_QUARANTINE & { executionModel: string } {
+  return {
+    ...result,
+    ...SAME_BAR_PROMOTION_QUARANTINE,
+    executionModel: getExecutionModel('SAME_BAR_CLOSE').executionModel,
+  };
+}

@@ -133,6 +133,8 @@ describe('AuthConfig - enforceAuthConfigOrExit', () => {
     enforceAuthConfigOrExit({ NODE_ENV: 'development' }, log, exit);
     expect(exit).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalled();
+    const logged = log.warn.mock.calls.map((c: string[]) => String(c[0])).join('\n');
+    expect(logged).not.toMatch(/ARGUS_DEV_TOKEN=/);
   });
 });
 

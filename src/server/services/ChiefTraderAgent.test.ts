@@ -226,6 +226,37 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
   });
 
+  it('does not approve when adversarial debate throws (fail-closed HOLD)', async () => {
+    routeConsensus.mockRejectedValue(new Error('llm down'));
+
+    await agent.reviewIdea({ traceId: 'df1', symbol: 'NVDA', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'df1', symbol: 'NVDA', side: 'BUY', confidence: 0.55, agent: 'NewsAgent', reasoning: 'confirm' });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && i.side === 'HOLD')) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && i.side === 'HOLD')).toBe(true);
+  });
+
+  it('does not approve when adversarial debate returns no verdict (fail-closed HOLD)', async () => {
+    routeConsensus.mockResolvedValue({});
+
+    await agent.reviewIdea({ traceId: 'df2', symbol: 'AMD', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'df2', symbol: 'AMD', side: 'BUY', confidence: 0.55, agent: 'NewsAgent', reasoning: 'confirm' });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && i.side === 'HOLD')) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
   it('Phase 8: attaches real structured supportingQuantDetail when QuantEngine contributed evidence, without ever changing the deterministic side/confidence', async () => {
     agent.recentIdeas = [
       {

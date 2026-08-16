@@ -8,10 +8,14 @@
  * compared honestly against the window it (implicitly) tuned on. Never
  * optimizes any parameter on the test window - BacktestEngine's rules are
  * fixed, deterministic, and identical across every window.
+ *
+ * Fill model is SAME_BAR_CLOSE. This harness is not promotion evidence
+ * (promotable:false). Canonical WFO for promotion must use NEXT_BAR_OPEN.
  * ==========================================================
  */
 import { backtestEngine } from './BacktestEngine';
 import { evaluateWalkForwardHarness } from '../../quant/analysis/MonteCarlo';
+import { stampSameBarPromotionQuarantine } from '../../research/executionModel';
 
 export interface WalkForwardConfig {
   /** Required unless strategyId+symbol are given (see below) - the original run()-backed mode. */
@@ -130,7 +134,7 @@ export class WalkForwardValidator {
       avgOosWinRatePct,
     });
 
-    return {
+    return stampSameBarPromotionQuarantine({
       periods,
       periodCount: periods.length,
       avgInSampleReturnPct: Number(avgIS.toFixed(2)),
@@ -144,8 +148,8 @@ export class WalkForwardValidator {
       oosWinRate: harness.oosWinRate,
       verdict: harness.verdict,
       insufficientPeriods: periods.length < 5,
-      note: harness.reason,
-    };
+      note: `${harness.reason} SAME_BAR_CLOSE WalkForwardValidator is not promotion evidence.`,
+    });
   }
 }
 

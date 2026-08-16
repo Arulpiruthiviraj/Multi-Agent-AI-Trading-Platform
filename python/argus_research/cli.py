@@ -24,7 +24,17 @@ def sma_at(closes, n, i):
     return sum(closes[i - n + 1 : i + 1]) / n
 
 
-def run_sma(bars, fast, slow, commission_per_share=0.0):
+def load_default_commission():
+    root = Path(__file__).resolve().parents[2]
+    cfg = json.loads((root / "config" / "researchSafety.json").read_text(encoding="utf-8"))
+    if "commissionPerShare" not in cfg:
+        raise ValueError("researchSafety.json missing commissionPerShare")
+    return float(cfg["commissionPerShare"])
+
+
+def run_sma(bars, fast, slow, commission_per_share=None):
+    if commission_per_share is None:
+        commission_per_share = load_default_commission()
     closes = [b["close"] for b in bars]
     trades = []
     long = False
@@ -131,7 +141,7 @@ def golden_sma(payload):
     ds = load_golden()
     fast = int(payload.get("fast", 3))
     slow = int(payload.get("slow", 8))
-    result = run_sma(ds["bars"], fast, slow, float(payload.get("commissionPerShare", 0)))
+    result = run_sma(ds["bars"], fast, slow, float(payload["commissionPerShare"]) if "commissionPerShare" in payload else load_default_commission())
     cap = capability()
     engine_req = str(payload.get("engine", "auto"))
     result["vectorbt"] = cap["vectorbt"]
@@ -172,10 +182,11 @@ def core_feature_parity(payload):
         "ok": True,
         "canPlaceOrders": False,
         "engineUsed": "python_core_features",
-        "adapter": "FEATURE_TRANSLATION",
+        "adapter": "FEATURE_VECTOR_PARITY_ESTABLISHED",
+        "strategyParity": "FEATURE_SUBSET_PARITY",
         "vector": vec,
         "vectorbt": cap["vectorbt"],
-        "note": "BOS/RVOL/Keltner/S-R translation of Argus TS engines. Not an SMA proxy. Not live orders.",
+        "note": "BOS/RVOL/Keltner/S-R vectors match TS UNIT_FIXTURE. Not full StrategyContext evaluate(). Not live orders.",
     }
 
 

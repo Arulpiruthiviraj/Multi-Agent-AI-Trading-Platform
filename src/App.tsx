@@ -43,6 +43,7 @@ import tradingSafetyConfig from "../config/tradingSafety.json";
 import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
 import ReplayResearchPanel from "./components/ReplayResearchPanel";
+import HistoricalReplayLab from "./components/HistoricalReplayLab";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
@@ -56,6 +57,7 @@ import { KronosDashboard } from "./components/KronosDashboard";
 import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
 import DiagnosticCenter from "./components/DiagnosticCenter";
 import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
+import LiveReadinessBanner from "./components/LiveReadinessBanner";
 import WeightAdjustmentVisualizer from "./components/WeightAdjustmentVisualizer";
 import GuardrailsPanel from "./components/GuardrailsPanel";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
@@ -237,52 +239,9 @@ interface AgentMetric {
   sharpeRatio: number;
 }
 
-const mockBacktestData = Array.from({ length: 90 }).map((_, i) => {
-  const d = new Date();
-  d.setDate(d.getDate() - (89 - i));
-  return {
-    date: d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    roi1: 0,
-    roi2: 0,
-    benchmark: 0,
-  };
-});
+const mockBacktestData: Array<{ date: string; roi1: number; roi2: number; benchmark: number }> = [];
 
-
-const mockSwarmTranscripts = [
-  {
-    id: "TRD-8492",
-    date: "14:30:00",
-    symbol: "NVDA",
-    proposer: {
-      agent: "MacroAgent (Quant)",
-      decision: "BUY",
-      reasoning: "Quantitative indicators show strong momentum. Beta relative to QQQ is expanding. Implied volatility crush post-earnings suggests favorable risk/reward. Suggest allocating 10% of portfolio."
-    },
-    verifier: {
-      agent: "RiskVerification Node",
-      decision: "OVERRIDE to HOLD",
-      reasoning: "CRITIQUE: The proposer is exhibiting recency bias ignoring the macro regime shift. While momentum is high, the sector rotation metrics indicate potential exhaustion. The proposed position size (10%) violates our 5% max exposure limit per ticker under the current 'High Volatility' regime. \n\nCONCLUSION: Vetoing buy order. Adjust weighting and wait for consolidation."
-    },
-    finalAction: "HOLD"
-  },
-  {
-    id: "TRD-8491",
-    date: "09:45:00",
-    symbol: "AAPL",
-    proposer: {
-      agent: "NewsAgent (NLP)",
-      decision: "SELL",
-      reasoning: "Recent headlines indicate significant supply chain disruptions in Southeast Asia impacting Q3 production timelines. Sentiment analysis score is -0.84 (Highly Negative)."
-    },
-    verifier: {
-      agent: "RiskVerification Node",
-      decision: "CONFIRM",
-      reasoning: "CRITIQUE: The proposer's assessment of the supply chain disruption is accurate and corroborated by cross-referencing alternative data sources. The negative sentiment is validated without exaggeration. Selling aligns with our downside risk mitigation strategy.\n\nCONCLUSION: Approving sell order. Proceeding with execution."
-    },
-    finalAction: "SELL"
-  }
-];
+/* Educational swarm copy removed from production Learning tab (was shown as EXECUTED). */
 
 const STRATEGY_DETAILS: Record<string, { desc: string; signals: string; timeframe: string }> = {
   "Momentum & Breakout": { desc: "Stocks moving aggressively in one direction on high volume.", signals: "VWAP, Volume, EMA", timeframe: "Intraday (Mins - Hours)" },
@@ -6085,48 +6044,13 @@ export default function App() {
                </div>
                
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                 {mockSwarmTranscripts.map((transcript, idx) => (
-                   <div key={idx} className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col gap-3 group hover:border-slate-700 transition-colors">
-                     <div className="flex justify-between items-center border-b border-slate-800 pb-2">
-                       <div className="flex items-center gap-2">
-                         <span className="text-xs font-bold text-white">{transcript.symbol}</span>
-                         <span className="text-[9px] font-mono text-slate-500">{transcript.id} • {transcript.date}</span>
-                       </div>
-                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider ${transcript.finalAction === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : transcript.finalAction === 'SELL' ? 'bg-rose-500/20 text-rose-400' : 'bg-slate-700 text-slate-300'}`}>
-                         {transcript.finalAction} EXECUTED
-                       </span>
-                     </div>
-                     
-                     <div className="space-y-3">
-                       {/* Proposer */}
-                       <div>
-                         <div className="flex gap-2 items-center mb-1">
-                           <span className="text-slate-400 font-bold uppercase tracking-widest text-[9px]"><BrainCircuit size={10} className="inline mr-1"/> {transcript.proposer.agent}</span>
-                           <span className={`px-1.5 py-0.5 rounded font-bold text-[9px] ${transcript.proposer.decision === 'BUY' ? 'text-emerald-400 bg-emerald-400/10 border border-emerald-500/20' : transcript.proposer.decision === 'SELL' ? 'text-rose-400 bg-rose-400/10 border border-rose-500/20' : 'text-slate-400 bg-slate-800 border border-slate-700'}`}>
-                             PROPOSED: {transcript.proposer.decision}
-                           </span>
-                         </div>
-                         <p className="text-slate-300 text-[11px] ml-1 border-l-2 border-slate-800 pl-2 py-1 leading-relaxed">
-                           {transcript.proposer.reasoning}
-                         </p>
-                       </div>
-                       
-                       {/* Verifier */}
-                       <div className="pt-2">
-                         <div className="flex gap-2 items-center mb-1">
-                           <CornerDownRight size={10} className="text-indigo-400" />
-                           <span className="text-indigo-400 font-bold uppercase tracking-widest text-[9px]"><ShieldAlert size={10} className="inline mr-1"/> {transcript.verifier.agent}</span>
-                           <span className={`px-1.5 py-0.5 rounded font-bold text-[9px] ${transcript.verifier.decision.includes('CONFIRM') ? 'text-emerald-400 bg-emerald-400/10 border border-emerald-500/20' : 'text-rose-400 bg-rose-400/10 border border-rose-500/20'}`}>
-                             {transcript.verifier.decision}
-                           </span>
-                         </div>
-                         <p className="text-slate-300 text-[11px] ml-[15px] border-l-2 border-indigo-900/50 pl-2 py-1 leading-relaxed whitespace-pre-wrap">
-                           {transcript.verifier.reasoning}
-                         </p>
-                       </div>
-                     </div>
-                   </div>
-                 ))}
+                 <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 col-span-full">
+                   <p className="text-[10px] font-mono uppercase tracking-widest text-amber-400 mb-2">UNAVAILABLE — NOT PRODUCTION TELEMETRY</p>
+                   <p className="text-xs text-slate-400">
+                     Fabricated swarm transcripts were removed. Live consensus appears on Command Center / event traces when agents emit real decisions.
+                     Historical Replay Lab records authentic agent/risk/OMS chains for research periods.
+                   </p>
+                 </div>
                </div>
             </div>
             
@@ -6585,32 +6509,14 @@ export default function App() {
             {/* Right Column - Weight Evolution & Kelly */}
             <div className="lg:col-span-1 flex flex-col gap-6">
                
-               {/* Weight Evolution */}
+               {/* Weight Evolution — no fabricated bars */}
                <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
                   <h3 className="text-sm font-bold text-white mb-4 uppercase tracking-wide flex items-center gap-2">
                     <TrendingUp size={16} className="text-indigo-400" />
                     WEIGHT EVOLUTION (7D)
                   </h3>
-                  
-                  {/* Mock Chart Layout representing weight evolution */}
-                  <div className="h-40 w-full flex items-end justify-between px-2 gap-2 relative border-b border-slate-800 pb-2">
-                     <div className="absolute inset-0 bg-gradient-to-t from-indigo-500/5 to-transparent border-t border-indigo-500/10 pointer-events-none"></div>
-                     <div className="w-1/7 bg-rose-500/20 hover:bg-rose-500/40 transition-colors h-[20%] rounded-t border-t border-rose-500/50 relative group">
-                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-[10px] text-white px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap">Political: 0.45x</div>
-                     </div>
-                     <div className="w-1/7 bg-slate-600/30 hover:bg-slate-600/50 transition-colors h-[30%] rounded-t border-t border-slate-500/50 relative"></div>
-                     <div className="w-1/7 bg-rose-500/20 hover:bg-rose-500/40 transition-colors h-[25%] rounded-t border-t border-rose-500/50 relative"></div>
-                     <div className="w-1/7 bg-emerald-500/30 hover:bg-emerald-500/50 transition-colors h-[45%] rounded-t border-t border-emerald-500/50 relative"></div>
-                     <div className="w-1/7 bg-emerald-500/30 hover:bg-emerald-500/50 transition-colors h-[60%] rounded-t border-t border-emerald-500/50 relative"></div>
-                     <div className="w-1/7 bg-indigo-500/30 hover:bg-indigo-500/50 transition-colors h-[80%] rounded-t border-t border-indigo-500/50 relative"></div>
-                     <div className="w-1/7 bg-indigo-500/40 hover:bg-indigo-500/60 transition-colors h-[90%] rounded-t border-t border-indigo-500/50 relative group">
-                        <div className="absolute -top-6 left-1/2 -translate-x-1/2 bg-slate-800 text-[10px] text-white px-2 py-0.5 rounded opacity-0 group-hover:opacity-100 whitespace-nowrap">Narrative: 1.85x</div>
-                     </div>
-                  </div>
-                  <div className="flex justify-between mt-2 text-[9px] font-mono text-slate-500">
-                     <span>Political Intel</span>
-                     <span className="text-indigo-400">Narrative/News</span>
-                  </div>
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-amber-400 mb-2">UNAVAILABLE</p>
+                  <p className="text-xs text-slate-500">Agent weights come from agent_performance_stats when ReflectionEngine scores real predictions — not decorative mock bars.</p>
                </div>
 
                {/* Kelly Position Sizing Learner */}
@@ -6619,7 +6525,7 @@ export default function App() {
                     <Target size={16} className="text-indigo-400" />
                     KELLY POSITION-SIZING LEARNER
                   </h3>
-                  <p className="text-[10px] text-slate-400 font-mono mb-4">Last adjustment: <span className="text-rose-400 font-bold">-12% base allocation</span> due to rising macro VIX.</p>
+                  <p className="text-[10px] text-slate-400 font-mono mb-4">Last adjustment: <span className="text-slate-500 font-bold">UNAVAILABLE</span> — no fabricated VIX/allocation telemetry.</p>
                   
                   <div className="space-y-4">
                      <div className="bg-[#111822] p-4 rounded border border-slate-800">
@@ -6803,57 +6709,45 @@ export default function App() {
                     <option>Last 12 Months</option>
                     <option>Custom Range</option>
                   </select>
-                  <button onClick={() => setRunBacktest(true)} className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] uppercase font-bold py-1.5 px-4 rounded transition-colors flex items-center gap-2 shadow-[0_0_10px_rgba(79,70,229,0.2)]">
+                  <button
+                    onClick={() => {
+                      setRunBacktest(false);
+                      window.location.hash = 'historical-replay-lab';
+                    }}
+                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] uppercase font-bold py-1.5 px-4 rounded transition-colors flex items-center gap-2 shadow-[0_0_10px_rgba(79,70,229,0.2)]"
+                  >
                     <Play size={12} />
-                    EXECUTE
+                    Open Historical Replay
                   </button>
                 </div>
               </div>
 
               {/* Chart container */}
               <div className="h-[250px] bg-[#111822] rounded-lg border border-slate-800 flex items-center justify-center p-4">
-                 {runBacktest ? (
-                   <SafeResponsiveContainer>
-                    <LineChart data={mockBacktestData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                      <XAxis dataKey="date" stroke="#475569" fontSize={10} tickLine={false} axisLine={false} />
-                      <YAxis stroke="#475569" fontSize={10} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}%`} />
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#111822', borderColor: '#1e293b', fontSize: '10px', color: '#f8fafc' }}
-                        itemStyle={{ fontSize: '10px' }}
-                        labelStyle={{ color: '#94a3b8', marginBottom: '4px' }}
-                      />
-                      {showStrategy1 && <Line type="monotone" dataKey="roi1" stroke="#10b981" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name={selectedStrategy1} />}
-                      {showStrategy2 && <Line type="monotone" dataKey="roi2" stroke="#a855f7" strokeWidth={2} dot={false} activeDot={{ r: 4 }} name={selectedStrategy2} />}
-                      <Line type="monotone" dataKey="benchmark" stroke="#475569" strokeWidth={2} dot={false} strokeDasharray="3 3" name="S&P 500 Benchmark" />
-                    </LineChart>
-                  </SafeResponsiveContainer>
-                 ) : (
-                    <div className="text-center text-slate-500 flex flex-col items-center gap-2">
+                 <div className="text-center text-slate-500 flex flex-col items-center gap-2 max-w-md">
                        <BarChart3 size={24} className="opacity-20 mb-1"/>
-                       <span className="text-[10px] uppercase tracking-widest font-mono">Select parameters and execute to generate backtest</span>
+                       <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400/90">UNAVAILABLE — NO FABRICATED BACKTEST</span>
+                       <span className="text-[10px] uppercase tracking-widest font-mono">Use Research Lab → Historical Replay for real NEXT_BAR_OPEN results. This Learning chart does not invent P&amp;L.</span>
                     </div>
-                 )}
               </div>
-              {runBacktest && (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
                  <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
                     <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1">Total Return</span>
-                    <span className="text-lg font-bold text-emerald-400">+14.2%</span>
+                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
                     <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="maxDrawdown">Max Drawdown</Explainer></span>
-                    <span className="text-lg font-bold text-rose-400">-4.1%</span>
+                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
                     <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="sharpeRatio">Sharpe Ratio</Explainer></span>
-                    <span className="text-lg font-bold text-white">1.85</span>
+                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
                     <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="winRate">Win Rate</Explainer></span>
-                    <span className="text-lg font-bold text-emerald-400">62.5%</span>
+                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
                  </div>
               </div>
-              )}
             </div>
 
             {/* Agent Learning & Context Evolution Journal */}
@@ -7213,6 +7107,7 @@ export default function App() {
             />
           ) : (
             <div className="animate-fade-in flex flex-col gap-6" id="command-center-view">
+             <LiveReadinessBanner />
              <WhyNotTradingStrip />
              
              {/* Master Control & Granular Toggles Row */}
@@ -7432,7 +7327,7 @@ export default function App() {
                      FULLY AUTONOMOUS BLACK-BOX TRADING BOT
                    </h3>
                    <p className="text-xs text-slate-400 max-w-3xl leading-relaxed">
-                     A highly experimental continuous evaluation loop. The system will autonomously select random targets, use multi-LLM verification (Proposer + Risk Manager), and continuously buy/sell 24/7 without human input until the allocated budget is exhausted.
+                     When Autobot is enabled, idea agents emit through EventBus → ChiefTrader → RiskEngine → OMS → the active broker. LIVE remains NO-GO until GET /api/v2/live-readiness reports LIVE_READY. This loop does not bypass RiskEngine.
                    </p>
                    {autoBotStartError && (
                      <p className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2 mt-3 max-w-3xl leading-relaxed">
@@ -8054,6 +7949,7 @@ export default function App() {
 
         {activeTab === "evaluation" && (
           <div className="animate-fade-in flex flex-col gap-6" id="evaluation-view">
+            <HistoricalReplayLab />
             <AgentEvaluationDashboard />
             <ReplayResearchPanel />
           </div>

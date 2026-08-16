@@ -111,6 +111,10 @@ describe('WalkForwardValidator.run', () => {
     }
     expect(typeof result.avgOutOfSampleReturnPct).toBe('number');
     expect(typeof result.inSampleVsOutOfSampleGapPct).toBe('number');
+    expect(result.promotable).toBe(false);
+    expect(result.promotionRejection).toBe('SAME_BAR_CLOSE_NOT_PROMOTABLE');
+    expect(result.walkForwardPass).toBe(false);
+    expect(result.executionModel).toBe('SAME_BAR_CLOSE');
   });
 
   it('E5: splits into rolling windows via runStrategyBacktest()-backed mode when strategyId+symbol are given', async () => {
@@ -136,5 +140,7 @@ describe('WalkForwardValidator.run', () => {
       expect(period.test.strategyId).toBe('TREND_FOLLOWING');
       expect(typeof period.test.totalReturnPct).toBe('number');
     }
+    expect(result.promotable).toBe(false);
+    expect(result.walkForwardPass).toBe(false);
   });
 });

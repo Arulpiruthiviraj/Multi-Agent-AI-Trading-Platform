@@ -4,6 +4,8 @@
  *
  * Usage: npx tsx scripts/ingest_research_warehouse.ts
  */
+import dotenv from 'dotenv';
+dotenv.config();
 import { ingestWarehouseDataset, warehouseSymbols, WAREHOUSE_TIMEFRAMES } from '../src/server/research/ingestAlpacaWarehouse';
 
 async function main() {
@@ -11,6 +13,8 @@ async function main() {
     console.log(JSON.stringify({ ok: false, error: 'NO_ALPACA_KEYS', written: false, note: 'No bars fabricated.' }));
     process.exit(0);
   }
+  // Fail-closed durable write: without this flag, GREEN ingest never materializes parquet.
+  process.env.ARGUS_WRITE_RESEARCH_PARQUET = 'true';
   const end = new Date();
   const start = new Date(end.getTime() - 7 * 86400000);
   const startIso = start.toISOString();
@@ -18,7 +22,7 @@ async function main() {
   const out = [];
   for (const symbol of warehouseSymbols().slice(0, 3)) {
     for (const timeframe of WAREHOUSE_TIMEFRAMES) {
-      const r = await ingestWarehouseDataset({ symbol, timeframe, startIso, endIso });
+      const r = await ingestWarehouseDataset({ symbol, timeframe, startIso, endIso, writeParquet: true });
       out.push({
         symbol,
         timeframe,

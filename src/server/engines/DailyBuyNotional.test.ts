@@ -3,9 +3,9 @@ import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotion
 import { tradingSafety } from '../config/tradingSafety';
 
 describe('DailyBuyNotional', () => {
-  it('does not cap paper when maxDailyBuyNotionalDollars is 0', () => {
-    expect(tradingSafety.maxDailyBuyNotionalDollars).toBe(0);
-    expect(resolveDailyBuyNotionalCap('PAPER')).toBeNull();
+  it('caps paper at maxDailyBuyNotionalDollars from reviewed JSON', () => {
+    expect(tradingSafety.maxDailyBuyNotionalDollars).toBeGreaterThan(0);
+    expect(resolveDailyBuyNotionalCap('PAPER')).toBe(tradingSafety.maxDailyBuyNotionalDollars);
   });
 
   it('always applies the restricted-live file ceiling in LIVE', () => {

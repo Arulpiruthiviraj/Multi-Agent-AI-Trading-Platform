@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { baseFixture } from './testHelpers';
 import { evaluateAll, findStrategy, ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES } from './StrategyEngine';
 import { quantExperimentalStrategies } from '../../config/quantExperimentalStrategies';
-import { allTaxonomyTechniques, codedModuleIdsFromTaxonomy } from '../../config/quantStrategyTaxonomy';
+import { allTaxonomyTechniques, codedModuleIdsFromTaxonomy, quantMasterTaxonomy, allMasterArchetypes } from '../../config/quantStrategyTaxonomy';
 import { maCrossover } from './maCrossover';
 import { oscillatorMomentum } from './oscillatorMomentum';
 import { bollingerVolatility } from './bollingerVolatility';
@@ -47,6 +47,25 @@ describe('experimental family strategies + taxonomy', () => {
     for (const id of codedModuleIdsFromTaxonomy()) {
       expect(known.has(id)).toBe(true);
     }
+  });
+
+  it('maps 10 master families; coded archetypes exist; NOT_SUPPORTED has reasons; does not expand live evaluateAll', () => {
+    expect(quantMasterTaxonomy.families).toHaveLength(10);
+    const archetypes = allMasterArchetypes();
+    expect(archetypes.length).toBe(60);
+    const known = new Set([...ALL_STRATEGIES, ...EXPERIMENTAL_STRATEGIES].map(s => s.id));
+    for (const a of archetypes) {
+      expect(a.edgeHypothesis.length).toBeGreaterThan(0);
+      expect(a.invalidation.length).toBeGreaterThan(0);
+      if (a.status === 'NOT_SUPPORTED') {
+        expect(a.reason && a.reason.length > 0).toBe(true);
+        expect(a.moduleId).toBeUndefined();
+      } else {
+        expect(a.moduleId && known.has(a.moduleId)).toBe(true);
+        expect(a.implementationNote && a.implementationNote.length > 0).toBe(true);
+      }
+    }
+    expect(evaluateAll(baseFixture())).toHaveLength(5);
   });
 
   it('MA_CROSSOVER scores a golden-cross stack', () => {

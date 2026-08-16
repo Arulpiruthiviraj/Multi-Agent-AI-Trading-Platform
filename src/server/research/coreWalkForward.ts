@@ -42,9 +42,9 @@ export function runCoreWalkForward(strategyId: string, dataset: CanonicalDataset
   const n = bars.length;
   const embargo = researchSafety.wfoEmbargoBars;
   const minFolds = researchSafety.minWalkForwardWindows;
-  const trainLen = Math.floor(n * 0.5);
-  const valLen = Math.floor(n * 0.2);
-  const testLen = Math.floor(n * 0.2);
+  const trainLen = researchSafety.wfoTrainBars;
+  const valLen = researchSafety.wfoValBars;
+  const testLen = researchSafety.wfoTestBars;
   const base: CoreWalkForwardReport = {
     strategyId,
     executionModel: 'NEXT_BAR_OPEN',
@@ -55,9 +55,10 @@ export function runCoreWalkForward(strategyId: string, dataset: CanonicalDataset
     medianTestNetPnl: null,
     status: 'INSUFFICIENT_SAMPLE',
     folds: [],
-    note: 'Canonical NEXT_BAR only. Not SAME_BAR BacktestEngine. Not promotion unless REAL_MARKET_DATA GREEN and foldCount >= minWalkForwardWindows.',
+    note: 'Canonical NEXT_BAR only. Rolling fixed windows from researchSafety.json. Not SAME_BAR BacktestEngine. Not promotion unless REAL_MARKET_DATA GREEN and foldCount >= minWalkForwardWindows.',
   };
   if (trainLen < 10 || valLen < 5 || testLen < 5) return base;
+  if (n < trainLen + valLen + embargo + testLen) return base;
 
   const folds: CoreWalkForwardFold[] = [];
   let start = 0;

@@ -67,7 +67,7 @@ describe('POST /api/v2/trading/execute-override - Phase 3C real manual-override 
   });
 
   it('submits a real override that mints a real transaction and flows into real RiskEngine gate evaluation', async () => {
-    (marketDataWorker as any).latestPrices.set('OVRTEST', 123.45);
+    marketDataWorker.cacheObservedQuote('OVRTEST', 123.45);
 
     const res = await request(app).post('/api/v2/trading/execute-override').send({ symbol: 'OVRTEST', side: 'BUY' });
     expect(res.status).toBe(200);
@@ -75,6 +75,7 @@ describe('POST /api/v2/trading/execute-override - Phase 3C real manual-override 
     expect(res.body.currentPrice).toBe(123.45);
     expect(res.body.traceId).toMatch(/^manual-override-/);
     expect(res.body.transactionId).toBeTruthy();
+    expect(res.body.source).toBe('MANUAL_OVERRIDE');
 
     // Real transactions/consensus_decisions/consensus_evidence rows, honestly tagged as a
     // manual override rather than pretending an AI agent produced this signal.
@@ -87,11 +88,13 @@ describe('POST /api/v2/trading/execute-override - Phase 3C real manual-override 
     const myDecision = decisions.find((d: any) => d.transactionId === res.body.transactionId);
     expect(myDecision).toBeTruthy();
     expect(myDecision.debateUsed).toBe(false);
+    expect(String(myDecision.reasoning || '')).toMatch(/SOURCE: MANUAL_OVERRIDE/);
 
     const evidence = await db.select().from(schema.consensusEvidence);
     const myEvidence = evidence.filter((e: any) => e.transactionId === res.body.transactionId);
     expect(myEvidence).toHaveLength(1);
     expect(myEvidence[0].agent).toBe('ManualOverride');
+    expect(String(myEvidence[0].reasoning || '')).toMatch(/SOURCE: MANUAL_OVERRIDE/);
 
     // Real RiskEngine.evaluateRisk() runs asynchronously off the CHIEF_APPROVED_IDEA emit - give
     // it a tick to actually execute and write its real risk_assessments row via persistAssessment().
@@ -100,5 +103,22 @@ describe('POST /api/v2/trading/execute-override - Phase 3C real manual-override 
     const myAssessment = assessments.find((a: any) => a.traceId === res.body.traceId);
     expect(myAssessment).toBeTruthy();
     expect(myAssessment.transactionId).toBe(res.body.transactionId);
+  });
+
+  it('refuses BUY override when Autobot is off; SELL still reaches RiskEngine', async () => {
+    tradingEngine.state.enabled = false;
+    marketDataWorker.cacheObservedQuote('OVRTEST', 123.45);
+
+    const buy = await request(app).post('/api/v2/trading/execute-override').send({ symbol: 'OVRTEST', side: 'BUY' });
+    expect(buy.status).toBe(409);
+    expect(buy.body.ok).toBe(false);
+    expect(buy.body.error).toMatch(/Autobot is off/i);
+
+    const sell = await request(app).post('/api/v2/trading/execute-override').send({ symbol: 'OVRTEST', side: 'SELL' });
+    expect(sell.status).toBe(200);
+    expect(sell.body.ok).toBe(true);
+    expect(sell.body.traceId).toMatch(/^manual-override-/);
+
+    tradingEngine.state.enabled = true;
   });
 });

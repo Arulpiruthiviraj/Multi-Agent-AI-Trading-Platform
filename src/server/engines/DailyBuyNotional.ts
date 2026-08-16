@@ -5,7 +5,7 @@
  * Cumulative BUY dollars deployed on the current America/New_York trading day
  * (FILLED + still-open BUY rows). Distinct from daily-loss kill-switch.
  *
- * Paper: enforced only when tradingSafety.maxDailyBuyNotionalDollars > 0 (default 0 = off).
+ * Paper: tradingSafety.maxDailyBuyNotionalDollars (reviewed; 0 would mean uncapped — do not ship 0).
  * LIVE: always clamped by restrictedLiveMaxDailyBuyNotionalDollars (file-reviewed, not a UI knob).
  * ==========================================================
  */

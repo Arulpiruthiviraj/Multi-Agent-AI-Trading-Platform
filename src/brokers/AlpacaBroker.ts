@@ -35,6 +35,7 @@
 
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter.js';
 import { tradingSafety } from '../server/config/tradingSafety';
+import { assertLiveOrdersArmed } from '../server/core/LiveTradingConfirmation';
 
 // Timeouts/retries live in tradingSafety.json — not TypeScript literals.
 const ALPACA_REQUEST_TIMEOUT_MS = tradingSafety.alpacaRequestTimeoutMs;
@@ -284,12 +285,20 @@ export class AlpacaBroker implements BrokerPlugin {
       price: o.limit_price ? parseFloat(o.limit_price) : undefined,
       stopPrice: o.stop_price ? parseFloat(o.stop_price) : undefined,
       averageFillPrice: o.filled_avg_price ? parseFloat(o.filled_avg_price) : undefined,
+      // Required for OMS inbound reconcile — without this, Argus fills look EXTERNAL_MANUAL.
+      clientOrderId: o.client_order_id || undefined,
       createdAt: new Date(o.created_at),
       updatedAt: new Date(o.updated_at)
     }));
   }
 
   async placeOrder(orderData: Partial<Order>): Promise<Order> {
+    // Defense in depth: live Alpaca host refuses unless this process was armed with the
+    // confirmation phrase (OMS also checks). Dual flags alone after a restart are not enough.
+    if (this.baseUrl.includes('://api.alpaca.markets')) {
+      const arm = assertLiveOrdersArmed();
+      if (!arm.ok) throw new Error(arm.reason);
+    }
     const payload: any = {
       symbol: orderData.symbol,
       qty: orderData.quantity,

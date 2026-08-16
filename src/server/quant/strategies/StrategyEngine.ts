@@ -14,7 +14,8 @@
  *   Backtestable via findStrategy(); live evaluateAll() includes a module only when ITS
  *   env var from config/quantExperimentalStrategies.json is the string 'true'.
  *   QUANT_SMC_STRATEGY_ENABLED does not enable the others. Named-technique aliases live in
- *   config/quantStrategyTaxonomy.json — they are not 1,000 live evaluate() edges.
+ *   config/quantStrategyTaxonomy.json (760 aliases) and config/quantMasterTaxonomy.json
+ *   (10 families) — they are not 1,000 live evaluate() edges.
  *
  * ALL_STRATEGIES keeps the historical name so GET /api/v2/quant/strategies `strategies` array
  * and existing tests still see exactly five ids unless an experimental env flag is set.
@@ -44,6 +45,7 @@ import { relativeStrengthRotation } from './relativeStrengthRotation';
 import { tradingSafety } from '../../config/tradingSafety';
 import { isExperimentalStrategyLive } from '../../config/quantExperimentalStrategies';
 import type { RegimeLabel } from '../RegimeEngine';
+import { resolvePaperTestingOverlay } from '../../research/paperTestingOverlay';
 
 /** Original five. Also exported as ALL_STRATEGIES for callers that list "live default" strategies. */
 export const CORE_STRATEGIES: StrategyDefinition[] = [momentumBreakout, pullbackContinuation, meanReversion, trendFollowing, rangeReversion];
@@ -96,6 +98,11 @@ export function findStrategy(id: string): StrategyDefinition | undefined {
 const REGIME_MISMATCH_CONFIDENCE_MULTIPLIER = tradingSafety.regimeMismatchConfidenceMultiplier;
 
 export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
+  // Research-param inbox may load rows; they are NOT merged into evaluate() (quantThresholds.json wins).
+  const overlay = resolvePaperTestingOverlay(ctx.regime.regime);
+  if (overlay.rows.length > 0) {
+    console.log(`[StrategyEngine] research-param inbox: ${overlay.reason}`);
+  }
   return resolveStrategiesForLiveEvaluation()
     .map(strategy => {
       const evaluation = strategy.evaluate(ctx);

@@ -22,6 +22,10 @@ import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 const RECONNECT_MS = runtimeIntervals.marketDataReconnectMs;
 
+function quoteKey(symbol: string): string {
+  return String(symbol || '').trim().toUpperCase();
+}
+
 function defaultSubscribeSymbols(): string[] {
   try {
     const cfg = loadRepoConfigJson<{ markets?: { US?: { benchmarks?: string[] } } }>('markets.json');
@@ -45,7 +49,9 @@ export class MarketDataWorker {
   private authenticated = false;
 
   getLatestPrice(symbol: string): number | null {
-    return this.latestPrices.get(symbol) || null;
+    const key = quoteKey(symbol);
+    if (!key) return null;
+    return this.latestPrices.get(key) ?? this.latestPrices.get(symbol) ?? null;
   }
 
   /** Snapshot of the single IEX socket cache — InternalPaper.tick source of truth (no second WS). */
@@ -62,8 +68,27 @@ export class MarketDataWorker {
   }
 
   getLatestPriceAgeMs(symbol: string): number | null {
-    const t = this.latestPriceTimestamps.get(symbol);
-    return typeof t === 'number' ? Date.now() - t : null;
+    const key = quoteKey(symbol);
+    const t = this.latestPriceTimestamps.get(key) ?? this.latestPriceTimestamps.get(symbol);
+    if (typeof t !== 'number') return null;
+    try {
+      const { getActiveReplaySession } = require('../replay/ReplayContext');
+      const replay = getActiveReplaySession();
+      if (replay) return Math.max(0, replay.clock.now() - t);
+    } catch { /* replay module optional during early boot */ }
+    return Date.now() - t;
+  }
+
+  /**
+   * Record an observed quote for freshness/sizing without a WebSocket session.
+   * Does not emit MARKET_DATA (no idea-agent warmup). Tests and InternalPaper must not invent
+   * broker fills here.
+   */
+  cacheObservedQuote(symbol: string, price: number, observedAtMs: number = Date.now()): void {
+    const sym = quoteKey(symbol);
+    if (!sym || !Number.isFinite(price) || price <= 0) return;
+    this.latestPrices.set(sym, price);
+    this.latestPriceTimestamps.set(sym, observedAtMs);
   }
 
   isConnected(): boolean {
@@ -95,7 +120,7 @@ export class MarketDataWorker {
   }
 
   private isDuplicateTick(symbol: string, timestampMs: number, price: number): boolean {
-    const last = this.lastTick.get(symbol);
+    const last = this.lastTick.get(quoteKey(symbol));
     return !!last && last.timestampMs === timestampMs && last.price === price;
   }
 
@@ -231,19 +256,23 @@ export class MarketDataWorker {
           console.error(`[MarketDataWorker] Feed error: ${this.lastError}`);
           eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: this.lastError });
         } else if (msg.T === "q") {
+          const sym = quoteKey(msg.S);
+          if (!sym) continue;
           const timestampMs = new Date(msg.t).getTime();
-          if (this.isDuplicateTick(msg.S, timestampMs, msg.bp)) continue;
-          this.lastTick.set(msg.S, { timestampMs, price: msg.bp });
-          this.latestPrices.set(msg.S, msg.bp);
-          this.latestPriceTimestamps.set(msg.S, Date.now());
-          this.maybeEmitMarketData(msg.S, msg.bp, msg.bs, new Date(msg.t).toISOString());
+          if (this.isDuplicateTick(sym, timestampMs, msg.bp)) continue;
+          this.lastTick.set(sym, { timestampMs, price: msg.bp });
+          this.latestPrices.set(sym, msg.bp);
+          this.latestPriceTimestamps.set(sym, Date.now());
+          this.maybeEmitMarketData(sym, msg.bp, msg.bs, new Date(msg.t).toISOString());
         } else if (msg.T === "t") {
+          const sym = quoteKey(msg.S);
+          if (!sym) continue;
           const timestampMs = new Date(msg.t).getTime();
-          if (this.isDuplicateTick(msg.S, timestampMs, msg.p)) continue;
-          this.lastTick.set(msg.S, { timestampMs, price: msg.p });
-          this.latestPrices.set(msg.S, msg.p);
-          this.latestPriceTimestamps.set(msg.S, Date.now());
-          this.maybeEmitMarketData(msg.S, msg.p, msg.s, new Date(msg.t).toISOString());
+          if (this.isDuplicateTick(sym, timestampMs, msg.p)) continue;
+          this.lastTick.set(sym, { timestampMs, price: msg.p });
+          this.latestPrices.set(sym, msg.p);
+          this.latestPriceTimestamps.set(sym, Date.now());
+          this.maybeEmitMarketData(sym, msg.p, msg.s, new Date(msg.t).toISOString());
         }
       }
     });

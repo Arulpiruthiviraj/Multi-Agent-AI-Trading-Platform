@@ -3,6 +3,7 @@
  */
 import { isTheoreticalZeroCost, researchSafety } from '../config/researchSafety';
 import type { CanonicalBacktestResult } from './canonicalNextBarEngine';
+import { CANONICAL_PROMOTION_FILL, isCanonicalPromotionFill } from './executionModel';
 
 export type StrategyLifecycleStatus =
   | 'UNTESTED'
@@ -45,6 +46,8 @@ export interface StrategyEvidence {
   manualLiveApproval: boolean;
   organicPaperOnly: boolean;
   dataProvenance: import('./ohlcvTypes').DataProvenance;
+  /** Must be NEXT_BAR_OPEN for any lifecycle past UNTESTED. SAME_BAR_CLOSE cannot promote. */
+  executionModel: string;
 }
 
 export function emptyEvidence(strategyId: string, strategyVersion = '0'): StrategyEvidence {
@@ -75,6 +78,7 @@ export function emptyEvidence(strategyId: string, strategyVersion = '0'): Strate
     manualLiveApproval: false,
     organicPaperOnly: true,
     dataProvenance: 'UNKNOWN',
+    executionModel: 'UNKNOWN',
   };
 }
 
@@ -84,7 +88,16 @@ export function evidenceFromCanonicalRun(run: CanonicalBacktestResult): Strategy
   e.dataQualityPass = run.quality === 'GREEN' && run.provenance === 'REAL_MARKET_DATA';
   e.backtestPass = run.backtestPass === true;
   e.engineMismatch = false;
+  e.executionModel = CANONICAL_PROMOTION_FILL;
+  if (run.executionModel !== CANONICAL_PROMOTION_FILL) {
+    e.engineMismatch = true;
+    e.executionModel = run.executionModel;
+    e.backtestPass = false;
+  }
   if (isTheoreticalZeroCost()) e.backtestPass = false;
+  if (run.costModel === 'THEORETICAL_ZERO_COST' || run.rejection === 'THEORETICAL_ZERO_COST') {
+    e.backtestPass = false;
+  }
   return e;
 }
 
@@ -93,6 +106,9 @@ export function deriveLifecycleStatus(e: StrategyEvidence): StrategyLifecycleSta
   if (e.degraded) return 'DEGRADED';
   if (e.dataProvenance !== 'REAL_MARKET_DATA') return 'UNTESTED';
   if (e.engineMismatch) return 'UNTESTED';
+  if (!isCanonicalPromotionFill(e.executionModel)) return 'UNTESTED';
+  // Theoretical zero-cost research cannot climb the lifecycle ladder (not live-readiness evidence).
+  if (isTheoreticalZeroCost()) return 'UNTESTED';
   const robustness =
     e.monteCarloPass && e.permutationPass && e.sensitivityPass && e.costStressPass;
   const paper =
@@ -145,6 +161,7 @@ export function liveGoNoGo(e: StrategyEvidence): { live: 'GO' | 'NO-GO'; failedG
   if (!e.startupHealthPass) failedGates.push('STARTUP_HEALTH_PASS');
   if (e.isCanadianSecurity && !e.canadianExecutionApproved) failedGates.push('CANADIAN_EXECUTION_APPROVED');
   if (e.engineMismatch) failedGates.push('ENGINE_MISMATCH');
+  if (!isCanonicalPromotionFill(e.executionModel)) failedGates.push('EXECUTION_MODEL_NOT_CANONICAL');
   if (!e.manualLiveApproval) failedGates.push('MANUAL_APPROVAL');
   if (e.degraded) failedGates.push('DEGRADED');
   if (status === 'LIVE_APPROVED' && failedGates.length === 0) return { live: 'GO', failedGates };

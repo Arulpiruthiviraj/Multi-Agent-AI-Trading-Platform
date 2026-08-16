@@ -18,5 +18,6 @@ data/shadow_portfolio.json
 data/backups/
 data/ohlcv_export.json
 data/research/
+data/replays/
 models/
 sqlite.db

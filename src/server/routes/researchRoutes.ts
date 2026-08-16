@@ -30,6 +30,7 @@ import { recordExperimentTrial, experimentLedgerSnapshot } from '../research/exp
 import { runCoreWalkForward } from '../research/coreWalkForward';
 import { runCoreRobustness } from '../research/coreRobustness';
 import { reconcilePaperVsResearch } from '../research/paperReconciliation';
+import { inspectResearchWarehouse } from '../research/warehouseInventory';
 import { tradingEdgeScore } from '../research/edgeScore';
 import { db } from '../db';
 import { trades } from '../db/schema';
@@ -85,7 +86,7 @@ export function mountResearchRoutes(v2Router: Router): void {
       if (bars.length === 0) {
         return res.json({
           ok: true,
-          adapter: 'FEATURE_TRANSLATION',
+          adapter: 'FEATURE_SUBSET_PARITY',
           status: 'UNTESTED',
           data: 'UNAVAILABLE',
           inventedResults: false,
@@ -96,9 +97,11 @@ export function mountResearchRoutes(v2Router: Router): void {
       const py = await runResearchCli({ job: 'core_feature_parity', bars, strategyId, engine }) as any;
       return res.json({
         ok: py?.ok !== false,
-        adapter: 'FEATURE_TRANSLATION',
+        adapter: 'FEATURE_SUBSET_PARITY',
+        vectorAdapter: py?.adapter || 'FEATURE_VECTOR_PARITY_ESTABLISHED',
         python: py,
         inventedResults: false,
+        note: 'Strategy-level Python/VectorBT is FEATURE_SUBSET_PARITY (not full StrategyContext). Vector job may report FEATURE_VECTOR_PARITY_ESTABLISHED for BOS/RVOL/Keltner/S-R only.',
         canPlaceOrders: false,
       });
     }
@@ -229,10 +232,28 @@ export function mountResearchRoutes(v2Router: Router): void {
     });
   });
 
-  v2Router.get('/research/promotion/:strategyId', (req, res) => {
+  v2Router.get('/research/promotion/:strategyId', async (req, res) => {
     const id = String(req.params.strategyId);
     const rec = latestRunForStrategy(id);
     const e = rec ? evidenceFromCanonicalRun(rec.manifest) : emptyEvidence(id);
+    try {
+      const rows = await db.select({
+        status: trades.status,
+        side: trades.side,
+        profitLoss: trades.profitLoss,
+        traceId: trades.traceId,
+        reasoning: trades.reasoning,
+        executionEnvironment: trades.executionEnvironment,
+        timestamp: trades.timestamp,
+        filledAt: trades.filledAt,
+      }).from(trades);
+      const paper = summarizeOrganicPaper(rows, researchSafety.minPaperTrades);
+      e.paperTrades = paper.closedTradeCount;
+      e.paperSessions = paper.sessionCount;
+      e.paperExpectancyPositive = paper.closedTradeCount >= researchSafety.minPaperTrades && (paper.expectancy ?? 0) > 0;
+    } catch {
+      // Missing DB is not invented paper.
+    }
     res.json({
       ok: true,
       status: deriveLifecycleStatus(e),
@@ -396,6 +417,9 @@ export function mountResearchRoutes(v2Router: Router): void {
         profitLoss: trades.profitLoss,
         traceId: trades.traceId,
         reasoning: trades.reasoning,
+        executionEnvironment: trades.executionEnvironment,
+        timestamp: trades.timestamp,
+        filledAt: trades.filledAt,
       }).from(trades);
     } catch {
       rows = [];
@@ -446,7 +470,25 @@ export function mountResearchRoutes(v2Router: Router): void {
     const ds = loadGoldenSmaDataset();
     const fromSignals = replayArgusStrategy({ strategyId, bars: ds.bars, provenance: ds.provenance ?? 'UNIT_FIXTURE' });
     const report = runCoreRobustness(ds.bars, fromSignals.signals);
-    res.json({ ok: true, ...report, canPlaceOrders: false, live: 'NO-GO' });
+    res.json({
+      ok: true,
+      ...report,
+      evidenceGates: report.gates,
+      canPlaceOrders: false,
+      live: 'NO-GO',
+      note: 'Gates may pass only with sufficient after-cost sample. LIVE still NO-GO without paper + manual approval.',
+    });
+  });
+
+  v2Router.get('/research/warehouse', (_req, res) => {
+    const inventory = inspectResearchWarehouse();
+    res.json({
+      ok: true,
+      ...inventory,
+      canPlaceOrders: false,
+      live: 'NO-GO',
+      note: inventory.note,
+    });
   });
 
   v2Router.get('/research/edge-score', (_req, res) => {
@@ -456,5 +498,172 @@ export function mountResearchRoutes(v2Router: Router): void {
 
   v2Router.get('/research/experiment-ledger', (_req, res) => {
     res.json({ ok: true, ...experimentLedgerSnapshot(), canPlaceOrders: false });
+  });
+
+  v2Router.get('/research/replay/providers', async (_req, res) => {
+    const { listHistoricalProviders } = await import('../replay/HistoricalDataProviderRegistry');
+    res.json({ ok: true, providers: listHistoricalProviders(), live: 'NO-GO', canPlaceOrders: false });
+  });
+
+  v2Router.post('/research/datasets/download', backtestLimiter, async (req, res) => {
+    try {
+      assertNoArbitraryCode(req.body ?? {});
+      const { getHistoricalProvider } = await import('../replay/HistoricalDataProviderRegistry');
+      const providerId = String(req.body?.provider || 'golden_replay');
+      const symbol = String(req.body?.symbol || 'AAPL');
+      const frequency = String(req.body?.frequency || '1Day');
+      const provider = getHistoricalProvider(providerId);
+      if (!provider) return res.status(404).json({ ok: false, error: 'DATA_PROVIDER_UNAVAILABLE' });
+      const startMs = Date.parse(String(req.body?.startDate || '2024-01-02'));
+      const endMs = Date.parse(String(req.body?.endDate || '2024-12-31'));
+      const fetched = await provider.fetch({ symbol, startMs, endMs, frequency });
+      if ('error' in fetched) return res.status(409).json({ ok: false, ...fetched, canPlaceOrders: false });
+      const quality = assessDataQuality(fetched);
+      res.json({
+        ok: true,
+        datasetId: fetched.datasetId,
+        dataHash: hashCanonicalDataset(fetched),
+        quality,
+        barCount: fetched.bars.length,
+        provenance: fetched.provenance,
+        canPlaceOrders: false,
+        live: 'NO-GO',
+      });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false });
+    }
+  });
+
+  v2Router.post('/research/replay/create', backtestLimiter, async (req, res) => {
+    try {
+      assertNoArbitraryCode(req.body ?? {});
+      const { createReplayRun } = await import('../replay/FullArgusReplayEngine');
+      const row = await createReplayRun(req.body || {});
+      res.json({ ok: true, ...row, canPlaceOrders: false });
+    } catch (e: any) {
+      res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false, live: 'NO-GO' });
+    }
+  });
+
+  v2Router.post('/research/replay/:id/start', backtestLimiter, async (req, res) => {
+    const { startReplay } = await import('../replay/FullArgusReplayEngine');
+    const asyncMode = req.query.async === '1' || req.body?.async === true;
+    const row = await startReplay(String(req.params.id), { async: asyncMode });
+    if (row && (row as any).ok === false) return res.status(404).json(row);
+    res.json({ ok: true, ...(row || {}), canPlaceOrders: false, live: 'NO-GO' });
+  });
+
+  v2Router.post('/research/replay/:id/pause', (req, res) => {
+    const { pauseReplay } = require('../replay/FullArgusReplayEngine');
+    res.json(pauseReplay(String(req.params.id)));
+  });
+  v2Router.post('/research/replay/:id/resume', (req, res) => {
+    const { resumeReplay } = require('../replay/FullArgusReplayEngine');
+    res.json(resumeReplay(String(req.params.id)));
+  });
+  v2Router.post('/research/replay/:id/stop', (req, res) => {
+    const { stopReplay } = require('../replay/FullArgusReplayEngine');
+    res.json(stopReplay(String(req.params.id)));
+  });
+  v2Router.post('/research/replay/:id/step', (req, res) => {
+    const { stepReplay } = require('../replay/FullArgusReplayEngine');
+    res.json(stepReplay(String(req.params.id)));
+  });
+
+  v2Router.get('/research/replay/:id', (req, res) => {
+    const { getReplayRun } = require('../replay/FullArgusReplayEngine');
+    const row = getReplayRun(String(req.params.id));
+    if (!row) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
+    const { session, ...rest } = row;
+    res.json({
+      ok: true,
+      ...rest,
+      status: session?.status || rest.status,
+      eventCount: rest.events?.length || session?.events?.length || 0,
+      live: 'NO-GO',
+      executionEnvironment: 'REPLAY',
+      organicPaper: false,
+    });
+  });
+
+  v2Router.get('/research/replay/:id/events', (req, res) => {
+    const { getReplayRun } = require('../replay/FullArgusReplayEngine');
+    const row = getReplayRun(String(req.params.id));
+    if (!row) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
+    const events = row.events || (row as any).session?.events || [];
+    res.json({ ok: true, events, live: 'NO-GO' });
+  });
+
+  v2Router.get('/research/replay/:id/trades', (req, res) => {
+    const { getReplayTrades } = require('../replay/FullArgusReplayEngine');
+    const trades = getReplayTrades(String(req.params.id));
+    if (trades == null) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
+    res.json({ ok: true, trades, live: 'NO-GO', executionEnvironment: 'REPLAY', organicPaper: false });
+  });
+
+  v2Router.get('/research/replay/:id/portfolio', async (req, res) => {
+    const { getReplayPortfolio } = await import('../replay/FullArgusReplayEngine');
+    const portfolio = await getReplayPortfolio(String(req.params.id));
+    if (portfolio == null) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
+    res.json({ ok: true, portfolio, live: 'NO-GO', executionEnvironment: 'REPLAY' });
+  });
+
+  v2Router.get('/research/replay/:id/equity', (req, res) => {
+    const { getReplayEquity } = require('../replay/FullArgusReplayEngine');
+    const equity = getReplayEquity(String(req.params.id));
+    if (equity == null) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
+    res.json({ ok: true, equity, live: 'NO-GO' });
+  });
+
+  v2Router.get('/research/replay/:id/report', (req, res) => {
+    const { getReplayRun } = require('../replay/FullArgusReplayEngine');
+    const row = getReplayRun(String(req.params.id));
+    if (!row) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
+    res.json({
+      ok: true,
+      report: row.report,
+      promotion: row.promotion,
+      hashes: row.hashes,
+      agentAvailability: row.agentAvailability,
+      live: 'NO-GO',
+      notPaper: true,
+      notLive: true,
+    });
+  });
+
+  v2Router.get('/research/replay/:id/export', (req, res) => {
+    const format = String(req.query.format || 'manifest').toLowerCase();
+    const id = String(req.params.id);
+    const {
+      exportReplayManifest,
+      readReplayArtifact,
+      exportTradesCsv,
+      exportEquityCsv,
+    } = require('../replay/replayStore');
+    if (format === 'manifest') {
+      return res.json({ ok: true, ...exportReplayManifest(id), live: 'NO-GO', format: 'manifest' });
+    }
+    if (format === 'json') {
+      const art = readReplayArtifact(id, 'summary.json');
+      if (!art) return res.status(404).json({ ok: false, error: 'EXPORT_UNAVAILABLE' });
+      res.setHeader('Content-Type', art.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="replay-${id}-summary.json"`);
+      return res.send(art.content);
+    }
+    if (format === 'jsonl') {
+      const art = readReplayArtifact(id, 'events.jsonl');
+      if (!art) return res.status(404).json({ ok: false, error: 'EXPORT_UNAVAILABLE' });
+      res.setHeader('Content-Type', art.contentType);
+      res.setHeader('Content-Disposition', `attachment; filename="replay-${id}-events.jsonl"`);
+      return res.send(art.content);
+    }
+    if (format === 'csv') {
+      const kind = String(req.query.kind || 'trades');
+      const csv = kind === 'equity' ? exportEquityCsv(id) : exportTradesCsv(id);
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="replay-${id}-${kind}.csv"`);
+      return res.send(csv);
+    }
+    return res.status(400).json({ ok: false, error: 'Unsupported format. Use manifest|json|jsonl|csv' });
   });
 }

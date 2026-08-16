@@ -34,6 +34,7 @@
  */
 
 import React, { useState, useEffect } from "react";
+import AwaitingSignal from "./shared/AwaitingSignal";
 import {
   BrainCircuit,
   Sliders,
@@ -163,13 +164,7 @@ export function AutonomousMissionControl({
   // 2. 24/7 Scanner State (Feature 2)
   const [scanningStatus, setScanningStatus] = useState<string>("Idling");
   const [scannerSearchQuery, setScannerSearchQuery] = useState<string>("");
-  const [scannedAssets, setScannedAssets] = useState<any[]>([
-    { symbol: "NVDA", assetClass: "Stock", matchScore: 91, reasons: ["Earnings momentum", "Institutional buying", "Technical breakout", "Positive AI news"] },
-    { symbol: "TSLA", assetClass: "Stock", matchScore: 84, reasons: ["High relative volume", "Retail options flow buy-skew"] },
-    { symbol: "BTC-USD", assetClass: "Crypto", matchScore: 88, reasons: ["MACD crossover on daily chart", "Support holding at $58,000"] },
-    { symbol: "SPY", assetClass: "ETF", matchScore: 76, reasons: ["Passive inflow momentum", "Low implied volatility"] },
-    { symbol: "AMD", assetClass: "Stock", matchScore: 68, reasons: ["Consolidating inside key range"] }
-  ]);
+  const [scannedAssets, setScannedAssets] = useState<any[]>([]);
 
   // 3. Trade Simulation State (Feature 9)
   const [simulatingAsset, setSimulatingAsset] = useState<string>("NVDA");
@@ -185,13 +180,13 @@ export function AutonomousMissionControl({
     news: true,
     earnings: true,
     riskReward: true,
-    stopLossDefined: true,
-    rewardRiskRatio: 2.4
+    stopLossDefined: false,
+    rewardRiskRatio: null
   });
 
   // 5. Market Regime (Feature 5)
-  const [marketRegime, setMarketRegime] = useState<"BULL" | "BEAR" | "VOLATILE">("BULL");
-  const [regimeConfidence, setRegimeConfidence] = useState<number>(88);
+  const [marketRegime, setMarketRegime] = useState<"BULL" | "BEAR" | "VOLATILE" | "UNAVAILABLE">("UNAVAILABLE");
+  const [regimeConfidence, setRegimeConfidence] = useState<number | null>(null);
 
   // 6. Custom Strategy Generator (Feature 14)
   const [userStrategyPrompt, setUserStrategyPrompt] = useState<string>("Find a high reward strategy for volatile crypto under $100 budget");
@@ -210,52 +205,14 @@ export function AutonomousMissionControl({
   const [logSearchQuery, setLogSearchQuery] = useState<string>("");
   const [isLogPaused, setIsLogPaused] = useState<boolean>(false);
   const [logsList, setLogsList] = useState<any[]>([
-    { timestamp: "08:30:05", severity: "INFO", component: "CIO", text: "Chief Investment Officer active. Selected profile: Balanced Growth." },
-    { timestamp: "08:31:12", severity: "SUCCESS", component: "Scanner", text: "24/7 Scanner detected unusual block institutional purchases on NVDA." },
-    { timestamp: "08:31:15", severity: "INFO", component: "Regime", text: "Market Regime analysis locked in: Bull Market (88% confidence)." },
-    { timestamp: "08:32:01", severity: "WARNING", component: "Devil's Advocate", text: "Bear Agent raises warning: Near resistance level of $185.00." },
-    { timestamp: "08:32:04", severity: "SUCCESS", component: "Pre-Trade", text: "Pre-Trade Checklist complete: 7/7 requirements met successfully." },
-    { timestamp: "08:32:10", severity: "SUCCESS", component: "Risk Manager", text: "Dynamic ATR Stop Loss calculated at $177.20. Capital allocated: 1.5%." },
-    { timestamp: "08:32:15", severity: "SUCCESS", component: "Execution", text: "Hedge Fund Mode: Order routed & filled at $182.40." }
+    { timestamp: "00:00:00", severity: "INFO", component: "Honesty", text: "Mission Control sandbox is UI theater. Not RiskEngine, not OMS fills, not validated OOS." }
   ]);
 
   // 9. Trading Journal State (Feature 3, 17)
-  const [journalEntries, setJournalEntries] = useState<any[]>([
-    {
-      id: "TRD-2026-001",
-      symbol: "NVDA",
-      entryPrice: 182.40,
-      exitPrice: 188.50,
-      pnl: 12.40,
-      outcome: "Profit",
-      strategy: "Momentum & Breakout",
-      notes: "Clean support bounce off EMA 20 with volume verification. Exited early near short-term daily target.",
-      coachFeedback: "Excellent discipline waiting for volume. However, you underestimated the strength of the breakout and could have trailed your stop-loss further for an extra 3% profit.",
-      emotionRating: "Calm & Objective",
-      checklistFailed: false
-    },
-    {
-      id: "TRD-2026-002",
-      symbol: "TSLA",
-      entryPrice: 248.50,
-      exitPrice: 238.22,
-      pnl: -41.20,
-      outcome: "Loss",
-      strategy: "High Volatility Scalp",
-      notes: "Tried to chase top near RSI of 78 without waiting for structural confirmation. Revenge scalp attempt.",
-      coachFeedback: "Classic FOMO. Historically, 70% of your trades initiated with RSI > 75 fail. Avoid chasing breakouts in overheated markets.",
-      emotionRating: "Impulsive / Overtrading",
-      checklistFailed: true
-    }
-  ]);
+  const [journalEntries, setJournalEntries] = useState<any[]>([]);
 
   // Strategy Competition Arena (Feature 15)
-  const [arenaStrategies, setArenaStrategies] = useState<Strategy[]>([
-    { name: "Momentum Breakout", returnPct: 21.4, volatility: 14.2, maxDrawdown: 5.8, winRate: 64, active: true },
-    { name: "Mean Reversion", returnPct: 12.1, volatility: 8.5, maxDrawdown: 4.1, winRate: 58, active: true },
-    { name: "AI Generated (Low Capital Volatility)", returnPct: 27.5, volatility: 11.8, maxDrawdown: 6.2, winRate: 71, active: true },
-    { name: "Hedge Fund Optimized Portfolio", returnPct: 34.2, volatility: 10.5, maxDrawdown: 3.9, winRate: 74, active: true }
-  ]);
+  const [arenaStrategies, setArenaStrategies] = useState<Strategy[]>([]);
 
   // Handle live simulations for Trading Arena
   useEffect(() => {
@@ -269,12 +226,8 @@ export function AutonomousMissionControl({
     setIsSimulating(true);
     setTimeout(() => {
       setSimResults({
-        probabilityProfit: 74,
-        probabilityLoss: 26,
-        expectedReturn: 6.84,
-        riskRewardRatio: 2.5,
-        targetPrice: 195.00,
-        stopPrice: 177.20
+        available: false,
+        note: "UNAVAILABLE — this sandbox does not run BacktestEngine or RiskEngine. Not promotion evidence."
       });
       setIsSimulating(false);
     }, 1500);
@@ -285,22 +238,20 @@ export function AutonomousMissionControl({
     setIsGeneratingStrategy(true);
     setTimeout(() => {
       setGeneratedStrategy({
-        name: "Low Capital Momentum Core",
-        indicators: "RSI (40-60), VWAP Deviation < 1%, Price > 50 EMA",
-        winRate: 68,
-        historicalReturn: "18% annualized",
-        bestAsset: "Crypto Assets (BTC, ETH, SOL)",
-        ruleDescription: "Enter long when relative volume exceeds 2x and daily candles close above the 50-period Exponential Moving Average."
+        name: "NOT VALIDATED",
+        indicators: "UNAVAILABLE",
+        winRate: null,
+        historicalReturn: "No OOS/WFO evidence. CORE remains UNTESTED.",
+        bestAsset: "UNAVAILABLE",
+        ruleDescription: "This generator does not invent win rates. Strategies promote only after REAL_MARKET_DATA OOS, non-FRAGILE WFO, robustness, and organic paper."
       });
       setIsGeneratingStrategy(false);
     }, 1800);
   };
 
   // Trigger dynamic stop loss calculation (Feature 8)
-  const calculateDynamicStop = (symbol: string, currentPrice: number) => {
-    const atrValue = 3.42;
-    const supportLevel = currentPrice - 1.2 * atrValue;
-    return supportLevel.toFixed(2);
+  const calculateDynamicStop = (_symbol: string, _currentPrice: number) => {
+    return "UNAVAILABLE";
   };
 
   // === NEW: CHIEF TRADER AGENT CIO HELPERS ===
@@ -335,23 +286,8 @@ export function AutonomousMissionControl({
     setTimeout(() => {
       let findingsMsg = "";
       switch (newTaskType) {
-        case "Sentiment Harvesting":
-          findingsMsg = `Harvested sentiment on target assets. Social heat index is moderate (58/100). No short squeeze threats detected.`;
-          break;
-        case "Volatility Analysis":
-          findingsMsg = `14-day ATR for selected assets is healthy. Detected standard deviation levels inside 1-sigma historical boundaries.`;
-          break;
-        case "Regime Detection":
-          findingsMsg = `Market structural shift indicators indicate continuation of current regime. No imminent macro trend reversal flags.`;
-          break;
-        case "Correlation Mapping":
-          findingsMsg = `Asset correlation matrix checked. Broad equity sector correlation stands at 0.65, well within safe portfolio bounds.`;
-          break;
-        case "Order Flow Audit":
-          findingsMsg = `Institutional block order sizes increased by 14% on support retests. Retail options buy-skew remains dominant.`;
-          break;
         default:
-          findingsMsg = `Analysis finished successfully. All key metrics are locked within nominal bounds.`;
+          findingsMsg = `UNAVAILABLE — this CIO task is a UI sandbox. It does not query NewsEngine, ATR, or RiskEngine.`;
       }
 
       setCioTasks(prev => prev.map(t => {
@@ -417,26 +353,17 @@ export function AutonomousMissionControl({
       setVetoPipelineResults(prev => ({
         ...prev,
         layer1: sentimentPass ? "PASS" : "WARN",
-        reasoning: sentimentPass 
-          ? "Layer 1 (Sentiment): Retail and news sentiment consensus is positive (74% confidence)."
-          : "Layer 1 (Sentiment): WARNING - Overheated sentiment or emotional chasing detected."
+        reasoning: "Layer 1 (Sentiment): UNAVAILABLE — this sandbox is not NewsEngine or RiskEngine news_veto."
       }));
 
       // 2. Layer 2: Hard ATR Risk Ceiling
       setTimeout(() => {
         setVetoPipelineStep(2);
         // ATR check
-        const atrValue = 3.42;
-        const stopDistance = price * 0.05; // default stop loss distance (5%)
-        const minDistanceRequired = strategyParameters.minAtrFilter * atrValue;
-        const atrPass = stopDistance >= minDistanceRequired;
-
         setVetoPipelineResults(prev => ({
           ...prev,
-          layer2: atrPass ? "PASS" : "FAILED",
-          reasoning: atrPass
-            ? `Layer 2 (Hard ATR): Stop loss buffer of $${stopDistance.toFixed(2)} exceeds minimum of $${minDistanceRequired.toFixed(2)} required by ${strategyParameters.minAtrFilter}x ATR filter.`
-            : `Layer 2 (Hard ATR): FAILED - Stop loss buffer is too tight. Noise stop-out risk is extremely high.`
+          layer2: "FAILED",
+          reasoning: "Layer 2 (Hard ATR): UNAVAILABLE — this sandbox is not RiskEngine. Live stops are not ATR-sized (tradingSafety.stopLossAssumptionPct)."
         }));
 
         // 3. Layer 3: Correlation Safety Cap
@@ -446,9 +373,7 @@ export function AutonomousMissionControl({
           setVetoPipelineResults(prev => ({
             ...prev,
             layer3: !isCorrelationBreached ? "PASS" : "FAILED",
-            reasoning: !isCorrelationBreached
-              ? `Layer 3 (Correlation Limit): Current correlation is 0.65 (below your safety limit of ${strategyParameters.correlationLimit}).`
-              : `Layer 3 (Correlation Limit): FAILED - Target asset correlation is 0.87 (exceeds limit of ${strategyParameters.correlationLimit}).`
+            reasoning: "Layer 3 (Correlation Limit): UNAVAILABLE — this sandbox is not RiskEngine correlation_exposure."
           }));
 
           // 4. Layer 4: CIO Discretionary Overlay / Final Veto Switch
@@ -985,11 +910,15 @@ export function AutonomousMissionControl({
                   </p>
 
                   <div className="space-y-2 mb-4">
+                    <AwaitingSignal
+                      label="CIO Strategy Selection"
+                      reason="AWAITING_ORGANIC_PAPER_EVIDENCE — fabricated CIO win-rate percentages removed. CORE remains UNTESTED until organic PAPER fills exist in argus.db."
+                    />
                     {[
-                      { name: "Volatility Breakout Core", desc: "Seeks ATR momentum expansions", win: 74 },
-                      { name: "Funding Rate Arb Node", desc: "Hedges neutral spot/futures premium", win: 81 },
-                      { name: "Liquidity Sweeping Alpha", desc: "Hunts support/resistance stop hunts", win: 68 },
-                      { name: "Macro Regime Tracker", desc: "Identifies cyclical structural shifts", win: 62 }
+                      { name: "Volatility Breakout Core", desc: "Seeks ATR momentum expansions" },
+                      { name: "Funding Rate Arb Node", desc: "Hedges neutral spot/futures premium" },
+                      { name: "Liquidity Sweeping Alpha", desc: "Hunts support/resistance stop hunts" },
+                      { name: "Macro Regime Tracker", desc: "Identifies cyclical structural shifts" },
                     ].map((strat) => (
                       <button
                         key={strat.name}
@@ -1002,7 +931,7 @@ export function AutonomousMissionControl({
                       >
                         <div className="flex justify-between items-center">
                           <span className="text-[11px] font-mono font-bold">{strat.name}</span>
-                          <span className="text-[9px] font-mono text-emerald-400">{strat.win}% WR</span>
+                          <span className="text-[9px] font-mono text-amber-400">UNAVAILABLE</span>
                         </div>
                         <p className="text-[9px] text-slate-500 mt-0.5 font-mono">{strat.desc}</p>
                       </button>
@@ -1274,6 +1203,9 @@ export function AutonomousMissionControl({
 
             {/* List */}
             <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
+              {scannedAssets.length === 0 && (
+                <p className="text-[10px] font-mono text-amber-400 p-3">Scanner UNAVAILABLE — not a live opportunity feed. Awaiting Evidence.</p>
+              )}
               {scannedAssets
                 .filter(a => a.symbol.includes(scannerSearchQuery.toUpperCase()))
                 .map((asset, i) => (
@@ -1334,26 +1266,14 @@ export function AutonomousMissionControl({
                 </div>
 
                 {simResults ? (
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3 pt-3 border-t border-slate-800/60 font-mono text-xs">
-                    <div>
-                      <span className="text-[9px] text-slate-500 uppercase block">Profit Probability</span>
-                      <span className="text-sm font-bold text-emerald-400">{simResults.probabilityProfit}%</span>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 uppercase block">Loss Probability</span>
-                      <span className="text-sm font-bold text-rose-400">{simResults.probabilityLoss}%</span>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 uppercase block">Dynamic Stop Loss</span>
-                      <span className="text-sm font-bold text-slate-300">${simResults.stopPrice}</span>
-                    </div>
-                    <div>
-                      <span className="text-[9px] text-slate-500 uppercase block">Target Price</span>
-                      <span className="text-sm font-bold text-indigo-400">${simResults.targetPrice}</span>
-                    </div>
+                  <div className="mt-3 pt-3 border-t border-slate-800/60 font-mono text-xs text-amber-400">
+                    {simResults.note || "AWAITING_ORGANIC_PAPER_EVIDENCE"}
                   </div>
                 ) : (
-                  <p className="text-[10px] text-slate-500 font-mono text-center py-2">Click Calculate to build predictive outcome probability matrix.</p>
+                  <AwaitingSignal
+                    compact
+                    reason="AWAITING_ORGANIC_PAPER_EVIDENCE — no fabricated probability or win-rate matrix from this sandbox."
+                  />
                 )}
               </div>
 
@@ -1368,7 +1288,7 @@ export function AutonomousMissionControl({
                       <span className="text-[8px] font-mono text-emerald-500">BUY OPTIMIST</span>
                     </div>
                     <p className="text-[10px] text-slate-400 leading-relaxed font-mono">
-                      "Strong trend support and institutional buying. Technical patterns show high velocity momentum above key Resistance lines."
+                      UNAVAILABLE — this panel is not ChiefTrader. No fabricated institutional-flow narrative.
                     </p>
                   </div>
 
@@ -1379,7 +1299,7 @@ export function AutonomousMissionControl({
                       <span className="text-[8px] font-mono text-rose-500">VETO COUNTER</span>
                     </div>
                     <p className="text-[10px] text-slate-400 leading-relaxed font-mono">
-                      "Resistance at $185.00 has held 3 times historically. Overbought RSI suggests high pullback probability. Risk of chasing top is elevated."
+                      UNAVAILABLE — this panel is not RiskEngine. No invented RSI or $185 resistance series.
                     </p>
                   </div>
                 </div>
@@ -1419,23 +1339,23 @@ export function AutonomousMissionControl({
               <div className="space-y-2 font-mono text-[10px]">
                 <div className="flex justify-between items-center bg-slate-950 p-2 rounded">
                   <span className="text-slate-300">Trend Confirmed (EMA above EMA)</span>
-                  <span className="text-emerald-400 font-bold">✓ PASS</span>
+                  <span className="text-amber-400 font-bold">UNAVAILABLE</span>
                 </div>
                 <div className="flex justify-between items-center bg-slate-950 p-2 rounded">
                   <span className="text-slate-300">Volume Confirmation & Flow</span>
-                  <span className="text-emerald-400 font-bold">✓ PASS</span>
+                  <span className="text-amber-400 font-bold">UNAVAILABLE</span>
                 </div>
                 <div className="flex justify-between items-center bg-slate-950 p-2 rounded">
                   <span className="text-slate-300">Earnings Date checked (&gt; 5 days out)</span>
-                  <span className="text-emerald-400 font-bold">✓ PASS</span>
+                  <span className="text-amber-400 font-bold">UNAVAILABLE</span>
                 </div>
                 <div className="flex justify-between items-center bg-slate-950 p-2 rounded">
                   <span className="text-slate-300">Volatility Regime Check</span>
-                  <span className="text-emerald-400 font-bold">✓ PASS</span>
+                  <span className="text-amber-400 font-bold">UNAVAILABLE</span>
                 </div>
                 <div className="flex justify-between items-center bg-slate-950 p-2 rounded">
                   <span className="text-slate-300">Risk/Reward Ratio check (&gt; 2.0)</span>
-                  <span className="text-emerald-400 font-bold">✓ PASS ({checklistResults.rewardRiskRatio})</span>
+                  <span className="text-amber-400 font-bold">UNAVAILABLE</span>
                 </div>
               </div>
             </div>
@@ -1475,7 +1395,7 @@ export function AutonomousMissionControl({
                   <span className="text-[10px] font-mono uppercase text-slate-500 tracking-wider">Market Regime</span>
                   <div className="flex items-center gap-2 mt-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
-                    <span className="text-sm font-mono font-bold text-white uppercase">{marketRegime} Market ({regimeConfidence}% conf)</span>
+                    <span className="text-sm font-mono font-bold text-white uppercase">{marketRegime}{regimeConfidence == null ? "" : ` Market (${regimeConfidence}% conf)`}</span>
                   </div>
                   <div className="mt-4 space-y-1 text-xs font-mono text-slate-400">
                     <div>• Recommended: <span className="text-emerald-400">Momentum strategies</span></div>
@@ -1552,7 +1472,7 @@ export function AutonomousMissionControl({
               <div className="bg-slate-950 p-4 rounded border border-slate-800 mt-4 font-mono text-xs text-slate-300 space-y-2">
                 <div className="flex justify-between text-indigo-400 font-bold">
                   <span>{generatedStrategy.name}</span>
-                  <span className="text-emerald-400">{generatedStrategy.winRate}% Win-Rate</span>
+                  <span className="text-amber-400">{generatedStrategy.winRate == null ? "UNAVAILABLE" : `${generatedStrategy.winRate}% Win-Rate`}</span>
                 </div>
                 <div><span className="text-slate-500 text-[10px] block">Indicators:</span> {generatedStrategy.indicators}</div>
                 <div><span className="text-slate-500 text-[10px] block">Backtest:</span> {generatedStrategy.historicalReturn}</div>
@@ -1582,34 +1502,21 @@ export function AutonomousMissionControl({
                 </div>
               )}
 
-              {/* Tournament Leaderboard */}
-              <div className="space-y-3">
-                {arenaStrategies.map((s, i) => (
-                  <div key={i} className="bg-[#111822] border border-slate-800/80 rounded p-3 flex justify-between items-center">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-mono font-bold text-slate-200">{s.name}</span>
-                        {i === 0 && <span className="text-[8px] bg-amber-500/10 text-amber-400 font-bold uppercase px-1 rounded">LEADER</span>}
-                      </div>
-                      <div className="flex gap-4 text-[10px] text-slate-400 font-mono mt-1">
-                        <span>Win-rate: <span className="text-slate-200">{s.winRate}%</span></span>
-                        <span>Max DD: <span className="text-rose-400">-{s.maxDrawdown}%</span></span>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <span className={`text-sm font-mono font-bold ${s.returnPct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                        {s.returnPct >= 0 ? "+" : ""}{s.returnPct}%
-                      </span>
-                      <span className="text-[9px] font-mono text-slate-500 block mt-0.5">Return Pct</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {/* Tournament Leaderboard — no fabricated returns */}
+              <AwaitingSignal
+                label="Strategy Competition Arena"
+                reason="AWAITING_ORGANIC_PAPER_EVIDENCE — arena return%/win-rate UI removed. Metrics must come from FILLED trades in argus.db only. CORE is UNTESTED."
+              />
+              {arenaStrategies.length > 0 && (
+                <p className="text-[10px] font-mono text-amber-400 mt-2">
+                  Unexpected arenaStrategies state — performance numbers are not rendered from this panel.
+                </p>
+              )}
             </div>
 
             <div className="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center text-[10px] font-mono text-slate-500">
-              <span>Dynamic live updates actively streaming...</span>
-              <span className="text-indigo-400 font-bold">Hedge Fund Optimized Portfolio winning</span>
+              <span>No live arena stream. Not production fills.</span>
+              <span className="text-amber-400 font-bold">AWAITING_ORGANIC_PAPER_EVIDENCE</span>
             </div>
           </div>
 
@@ -1643,6 +1550,9 @@ export function AutonomousMissionControl({
 
               {/* Journal list */}
               <div className="space-y-4 max-h-96 overflow-y-auto pr-1">
+                {journalEntries.length === 0 && (
+                  <p className="text-[10px] font-mono text-amber-400">No organic journal rows. Fabricated NVDA/TSLA P&amp;L is not shown.</p>
+                )}
                 {journalEntries.map((item, i) => (
                   <div key={i} className="bg-slate-950 p-4 border border-slate-850 rounded">
                     <div className="flex justify-between items-start mb-2">
@@ -1782,7 +1692,7 @@ export function AutonomousMissionControl({
 
             {/* 8. EXPORT COMPLETE TRADING TRACE BUTTONS */}
             <div className="flex flex-wrap items-center justify-between border-t border-slate-800/80 pt-4 mt-6 gap-3">
-              <span className="text-[10px] font-mono text-slate-500">Audit trace records package size: ~24.1KB</span>
+              <span className="text-[10px] font-mono text-slate-500">Audit package size UNAVAILABLE until a real export is generated</span>
               <div className="flex items-center gap-2">
                 <span className="text-[9px] font-mono text-slate-500 uppercase mr-1">Export:</span>
                 <button

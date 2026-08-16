@@ -591,7 +591,12 @@ async function getCurrentActor(req: Request): Promise<string> {
 
 const SECRETS_FILE_IGNORED = path.join(process.cwd(), "data", "secrets.json");
 if (fs.existsSync(SECRETS_FILE_IGNORED)) {
-  console.warn('[SECURITY] data/secrets.json is ignored. Keys must live in .env or encrypted SQLite (broker_connections / ai_providers). Plaintext file is not read or written.');
+  const msg = '[SECURITY] data/secrets.json must not exist. Keys must live in .env or encrypted SQLite (broker_connections / ai_providers). Plaintext file is not read or written.';
+  if (process.env.ARGUS_ALLOW_PLAINTEXT_SECRETS_FILE === 'true') {
+    console.warn(`${msg} Boot continues only because ARGUS_ALLOW_PLAINTEXT_SECRETS_FILE=true.`);
+  } else {
+    throw new Error(`${msg} Move keys, delete the file, then restart. (Override only with ARGUS_ALLOW_PLAINTEXT_SECRETS_FILE=true.)`);
+  }
 }
 
   const app = express();
@@ -1545,13 +1550,19 @@ let portfolioState = loadPortfolio();
     }
   }
 
-  // Mirrors every Chief Trader decision into the unconstrained Shadow Portfolio, regardless
-  // of what Risk Engine decides - this is what ShadowPortfolioBenchmark's "Shadow" line means.
-  // Never places a real order and never touches the real broker.
-  eventBus.on('CHIEF_APPROVED_IDEA', (idea: any) => {
-    if (typeof idea.currentPrice === 'number' && idea.currentPrice > 0 && (idea.side === 'BUY' || idea.side === 'SELL')) {
-      executeAutoBotTradeInShadow(idea.symbol, idea.side, idea.currentPrice, tradingEngine.state.maxTradeSize);
-    }
+  // Mirrors RiskEngine-approved OMS fills into the unconstrained Shadow Portfolio for the
+  // ShadowPortfolioBenchmark "Shadow" line. Never places a broker order. Does NOT book on
+  // CHIEF_APPROVED_IDEA (that predated RiskEngine and looked like paper P&L).
+  eventBus.on('ORDER_EXECUTED', (order: any) => {
+    if (order?.status !== 'FILLED') return;
+    if (order?.side !== 'BUY' && order?.side !== 'SELL') return;
+    const env = String(order.executionEnvironment || '').toUpperCase();
+    if (env === 'REPLAY' || env === 'BACKTEST' || env === 'SIMULATION') return;
+    if (typeof order.traceId === 'string' && order.traceId.startsWith('replay-')) return;
+    const price = Number(order.price);
+    const qty = Number(order.quantity);
+    if (!(price > 0) || !(qty > 0)) return;
+    executeAutoBotTradeInShadow(order.symbol, order.side, price, price * qty);
   });
 
   // Logs every Risk Engine veto to the bypassed-trades ledger shown by ShadowPortfolioBenchmark.

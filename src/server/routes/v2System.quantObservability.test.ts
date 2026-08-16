@@ -60,7 +60,10 @@ describe('v2System quant observability routes', () => {
       expect(quantExperimentalStrategies.strategies.map((s: { id: string }) => s.id)).toEqual(EXPERIMENTAL_STRATEGIES.map((s) => s.id));
       expect(EXPERIMENTAL_STRATEGIES.every((s) => isExperimentalStrategyLive(s.id) === false)).toBe(true);
       expect(quantStrategyTaxonomySummary().namedTechniqueCount).toBe(760);
+      expect(quantStrategyTaxonomySummary().masterFamilyCount).toBe(10);
+      expect(quantStrategyTaxonomySummary().masterArchetypeCount).toBe(60);
       expect(quantStrategyTaxonomySummary().notSupportedCount).toBeGreaterThan(0);
+      expect(quantStrategyTaxonomySummary().liveEvaluateAllRemainsCoreUnlessEnvFlag).toBe(true);
       const trendFollowing = ALL_STRATEGIES.find((s) => s.id === 'TREND_FOLLOWING');
       expect(trendFollowing?.applicableRegimes).toEqual(['BULLISH_TREND', 'BEARISH_TREND']);
       expect(STRATEGY_TYPICAL_HOLDING_PERIOD['TREND_FOLLOWING']).toContain('Open-ended');
@@ -129,6 +132,8 @@ describe('v2System quant observability routes', () => {
       const row = res.body.data.find((r: any) => r.id === 'sb-1');
       expect(row.regimeBreakdown.BULLISH_TREND.count).toBe(1); // genuinely parsed
       expect(row.tradeLog).toBeUndefined(); // summary endpoint deliberately omits the full trade log
+      expect(row.promotable).toBe(false);
+      expect(row.promotionRejection).toBe('SAME_BAR_CLOSE_NOT_PROMOTABLE');
     });
   });
 
@@ -138,6 +143,8 @@ describe('v2System quant observability routes', () => {
       expect(res.status).toBe(200);
       expect(res.body.data.tradeLog).toEqual([{ side: 'BUY' }]);
       expect(res.body.data.equityCurve).toEqual([{ equity: 100000 }]);
+      expect(res.body.data.promotable).toBe(false);
+      expect(res.body.data.promotionRejection).toBe('SAME_BAR_CLOSE_NOT_PROMOTABLE');
     });
 
     it('returns a real 404 for an unknown run id', async () => {

@@ -1,0 +1,11 @@
+{
+  "$comment": "WFO bar windows (~6m/1m/1m on 21-session months) and CORE grid. Research-only. fullStrategyParity false until Python evaluate() matches TS StrategyContext evaluate(), not just BOS/RVOL/Keltner.",
+  "trainBars": 126,
+  "validateBars": 21,
+  "testBars": 21,
+  "fullStrategyParity": false,
+  "allowedUpsertStatus": "PAPER_TESTING",
+  "forbiddenUpsertStatuses": ["LIVE_CANDIDATE", "VALIDATED", "LIVE_APPROVED", "LIVE"],
+  "rvolThresholds": [1.5, 2.0],
+  "keltnerMultipliers": [2.0]
+}

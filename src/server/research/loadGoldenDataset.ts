@@ -1,17 +1,10 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fixtureJsonCandidates, readFirstExistingJson } from '../config/repoPaths';
 import type { CanonicalDataset } from './ohlcvTypes';
 
 export function loadGoldenSmaDataset(): CanonicalDataset {
-  const candidates = [
-    join(process.cwd(), 'fixtures', 'research', 'golden_sma.json'),
-    join(dirname(fileURLToPath(import.meta.url)), '../../../fixtures/research/golden_sma.json'),
-  ];
-  for (const p of candidates) {
-    if (existsSync(p)) {
-      return { ...JSON.parse(readFileSync(p, 'utf8')), provenance: 'UNIT_FIXTURE' } as CanonicalDataset;
-    }
-  }
-  throw new Error('fixtures/research/golden_sma.json not found');
+  const ds = readFirstExistingJson<CanonicalDataset>(
+    fixtureJsonCandidates('fixtures', 'research', 'golden_sma.json'),
+    'fixtures/research/golden_sma.json',
+  );
+  return { ...ds, provenance: 'UNIT_FIXTURE' };
 }

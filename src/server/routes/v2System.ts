@@ -42,6 +42,7 @@ import { computeFailureBreakdown } from '../quant/analysis/FailureClassification
 import { runMonteCarlo } from '../quant/analysis/MonteCarlo';
 import { desc, eq } from 'drizzle-orm';
 import { backtestEngine } from '../engines/backtest/BacktestEngine';
+import { stampSameBarPromotionQuarantine } from '../research/executionModel';
 import { tradingLimiter, backtestLimiter } from '../core/RateLimiters';
 import { rsiEngine } from '../engines/RSIEngine';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
@@ -101,7 +102,7 @@ v2Router.get('/system/status', (req, res) => {
       { id: "technical-engine", name: "Technical Quant Engine", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Computing RSI, MACD, SMA across feature store" },
       { id: "portfolio-monitor", name: "Portfolio Manager", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Scanning current positions for exit criteria" },
       { id: "chief-trader", name: "Chief Trader Node", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Gathering consensus, routing to Risk layer" },
-      { id: "risk-manager", name: "Risk Management Node", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Validating budget, ATR stop-distance caps" },
+      { id: "risk-manager", name: "Risk Management Node", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Validating budget and PositionSizing / RiskEngine caps" },
       { id: "order-management", name: "Order Management System", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Executing trades against live/paper Broker API" }
     ]
   });
@@ -624,7 +625,7 @@ v2Router.get('/strategy/agent-synergy', async (req, res) => {
 // emits a real CHIEF_APPROVED_IDEA event - the same event RiskAgent already listens for after
 // ChiefTraderAgent's own AI-consensus approval - carrying a real live price from
 // marketDataWorker. That means a manual override still passes through every real RiskEngine gate
-// (emergency stop, circuit breakers, ATR-based sizing, sector/correlation caps) and the real
+// (emergency stop, circuit breakers, PositionSizing caps, sector/correlation caps) and the real
 // OrderManagementService/broker call; only ChiefTraderAgent's AI-consensus step is skipped, which
 // is the entire point of an operator override. recordConsensusTransaction() mints a real
 // transactions/consensus_decisions row so this stays visible in the Transaction Observatory,
@@ -634,10 +635,22 @@ v2Router.get('/strategy/agent-synergy', async (req, res) => {
 // RISK_ASSESSMENT_COMPLETED / ORDER_EXECUTED WebSocket broadcasts every other real trade uses.
 // ==========================================================================================
 v2Router.post('/trading/execute-override', tradingLimiter, async (req, res) => {
+  // Operator override: skips ChiefTrader consensus only. Still RiskEngine → OMS → BrokerManager.
+  // Never placeOrder-direct. BUY refused while Autobot off. Stamps SOURCE: MANUAL_OVERRIDE.
   try {
     const { symbol, side } = req.body || {};
     if (typeof symbol !== 'string' || !symbol || (side !== 'BUY' && side !== 'SELL')) {
       return res.status(400).json({ ok: false, error: 'symbol (string) and side ("BUY" | "SELL") are required' });
+    }
+
+    // BUY still cannot skip Autobot-off. SELL/flatten remains available while TRADING_ENABLED
+    // so operators can reduce risk; RiskEngine still evaluates every emit.
+    if (side === 'BUY' && !isLiveIdeaGenerationEnabled()) {
+      console.warn(`[Override] BUY refused — Autobot off or tradingState not TRADING_ENABLED (symbol=${symbol})`);
+      return res.status(409).json({
+        ok: false,
+        error: 'BUY override refused while Autobot is off or tradingState is not TRADING_ENABLED. SELL/flatten still goes through RiskEngine.',
+      });
     }
 
     const currentPrice = marketDataWorker.getLatestPrice(symbol);
@@ -646,11 +659,13 @@ v2Router.post('/trading/execute-override', tradingLimiter, async (req, res) => {
     }
 
     const traceId = `manual-override-${uuidv4()}`;
-    const reasoning = 'Manual consensus override submitted via the Advanced Trade Sandbox - a human operator deliberately bypassed AI swarm consensus.';
+    // SOURCE: MANUAL_OVERRIDE permanently excludes this from autonomous organic paper stats.
+    const reasoning = 'SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.';
+    console.warn(`[Override] ${side} ${symbol} @ ${currentPrice} traceId=${traceId} (skips ChiefTrader only; RiskEngine+OMS required)`);
     const transactionId = await recordConsensusTransaction({
       symbol, side, weightedConfidence: 1.0, threshold: 0, approved: true,
       reasoning, debateUsed: false,
-      evidence: [{ agent: 'ManualOverride', side, confidence: 1.0, weight: 1.0, reasoning: 'Human-submitted override - not an AI agent signal.', currentPrice }],
+      evidence: [{ agent: 'ManualOverride', side, confidence: 1.0, weight: 1.0, reasoning: 'SOURCE: MANUAL_OVERRIDE — Human-submitted override - not an AI agent signal.', currentPrice }],
     });
 
     eventBus.emit('CHIEF_APPROVED_IDEA', {
@@ -658,7 +673,7 @@ v2Router.post('/trading/execute-override', tradingLimiter, async (req, res) => {
       agentsContext: 'ManualOverride', currentPrice,
     });
 
-    res.json({ ok: true, traceId, transactionId, currentPrice });
+    res.json({ ok: true, traceId, transactionId, currentPrice, source: 'MANUAL_OVERRIDE' });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -1263,7 +1278,7 @@ v2Router.get('/quant/strategy-backtests', async (req, res) => {
       ok: true,
       // Summary fields only (no tradeLog/equityCurve) - keeps the list payload small; the detail
       // route below returns the full real trade-by-trade record for one specific run.
-      data: rows.map(r => ({
+      data: rows.map(r => stampSameBarPromotionQuarantine({
         id: r.id, strategyId: r.strategyId, symbol: r.symbol, timeframe: r.timeframe,
         startDate: r.startDate, endDate: r.endDate, status: r.status, errorMessage: r.errorMessage,
         initialCash: r.initialCash, finalEquity: r.finalEquity, totalTrades: r.totalTrades,
@@ -1274,7 +1289,7 @@ v2Router.get('/quant/strategy-backtests', async (req, res) => {
         expectedValue: r.expectedValue ? JSON.parse(r.expectedValue) : null,
         kelly: r.kelly ? JSON.parse(r.kelly) : null,
         createdAt: r.createdAt,
-      })),
+      } as Record<string, unknown>)),
     });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });

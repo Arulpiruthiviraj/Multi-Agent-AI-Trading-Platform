@@ -117,7 +117,7 @@ describe('Phase 17 research evidence engine', () => {
   it('CORE inventory stays UNTESTED with feature-translation adapters and no invented results', () => {
     const core = coreStrategyInventory();
     expect(core.map((c) => c.strategyId)).toEqual(researchSafety.coreStrategyIds);
-    expect(core.every((c) => c.status === 'UNTESTED' && c.inventedResults === false && c.adapter === 'FEATURE_TRANSLATION')).toBe(true);
+    expect(core.every((c) => c.status === 'UNTESTED' && c.inventedResults === false && c.adapter === 'FEATURE_SUBSET_PARITY')).toBe(true);
   });
 
   it('refuses non-allowlisted research jobs', () => {

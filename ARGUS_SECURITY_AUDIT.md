@@ -1,18 +1,18 @@
 # ARGUS_SECURITY_AUDIT
 
-Scope: this increment does not re-litigate Phase 20; it restates production blockers.
+## This increment
 
-## Findings that remain binding
+`enforceAuthConfigOrExit` no longer logs `ARGUS_DEV_TOKEN=...`. Token is still generated for loopback/header auth.
 
-- `ENCRYPTION_SECRET` or `data/.encryption_key`; encrypt/decrypt fail-closed.
-- Production must not boot unauthenticated (`AUTH_PASSWORD`).
-- Do not log API keys/tokens.
-- Research import forbids `eval`/`placeOrder` payload keys.
-- LLM cannot `placeOrder`.
-- Dev unauthenticated mutating APIs: loopback / token patterns (Phase 20); GET/`/ws` may still be open if auth unset — **do not expose that on the public internet**.
+## Standing controls
 
-## Not claimed
+- Production without `AUTH_PASSWORD`: fatal exit.
+- Mutating `/api/v1` `/api/v2` require session or loopback+dev token.
+- WS session when auth enabled.
+- EncryptionService fail-closed.
+- Override is an authenticated order **proposal**, still RiskEngine.
+- Research cannot place orders.
 
-Penetration test of a deployed host, broker OAuth token theft model, and WAF posture are **UNAVAILABLE** as certified PASS.
+## Residual
 
-LIVE remains **NO-GO** independent of this file.
+Unauthenticated **GET** if password unset. Bind localhost. No pentest **PASS**. LIVE independent **NO-GO**.

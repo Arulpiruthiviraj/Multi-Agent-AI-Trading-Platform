@@ -4,6 +4,12 @@ import { evaluateLiveReadiness } from './liveReadinessEngine';
 import { researchSafety } from '../config/researchSafety';
 
 describe('LIVE readiness engine and broker environment', () => {
+  it('empty tradingMode or unknown paperMode is UNKNOWN, never inferred as PAPER', () => {
+    expect(classifyBrokerEnvironment({ tradingMode: '', paperMode: true })).toBe('UNKNOWN');
+    expect(classifyBrokerEnvironment({ tradingMode: 'Paper', paperMode: null })).toBe('UNKNOWN');
+    expect(assertBrokerEnvironmentAllowsOrder({ tradingMode: 'Paper', paperMode: null }).ok).toBe(false);
+  });
+
   it('LIVE + paperMode true is UNKNOWN and cannot order', () => {
     expect(classifyBrokerEnvironment({ tradingMode: 'LIVE', paperMode: true })).toBe('UNKNOWN');
     expect(assertBrokerEnvironmentAllowsOrder({ tradingMode: 'LIVE', paperMode: true }).ok).toBe(false);
@@ -36,11 +42,15 @@ describe('LIVE readiness engine and broker environment', () => {
     expect(r.organicPaper).toBe('NOT_ESTABLISHED');
     expect(r.canadianLive).toBe('NOT_AVAILABLE');
     expect(r.canPlaceOrdersViaResearch).toBe(false);
-    expect(r.failedMandatory).toContain('PAPER');
     expect(r.failedMandatory).toContain('OOS');
     expect(r.failedMandatory).toContain('LEGAL_CA');
     expect(r.gates.find((g) => g.id === 'LEGAL_CA')?.verdict).toBe('BLOCKED');
+    expect(r.gates.find((g) => g.id === 'PAPER')?.detail).toMatch(/Organic PAPER FILLED SELL P&L:/);
     expect(r.gates.find((g) => g.id === 'STRATEGY_CORE')?.verdict).toBe('FAIL');
+    expect(r.gates.find((g) => g.id === 'ZERO_COST_RESEARCH')?.verdict).toBe('PASS');
+    const warehouse = r.gates.find((g) => g.id === 'RESEARCH_WAREHOUSE')?.verdict;
+    expect(['UNAVAILABLE', 'PASS']).toContain(warehouse);
+    expect(r.result).toBe('LIVE_NO_GO');
     expect(researchSafety.coreStrategyIds).toHaveLength(5);
   });
 

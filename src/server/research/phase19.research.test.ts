@@ -31,9 +31,9 @@ describe('Phase 19 hygiene and CORE feature translation', () => {
     expect(tradingSafety.internalPaperDefaultCash).not.toBe(tradingSafety.defaultMaxTradeSizeDollars);
   });
 
-  it('CORE spec is FEATURE_TRANSLATION not an SMA proxy', () => {
+  it('CORE spec is FEATURE_SUBSET_PARITY for BOS/RVOL/Keltner/S-R vectors, not an SMA proxy', () => {
     const spec = loadStrategySpec('MOMENTUM_BREAKOUT') as any;
-    expect(spec.vectorbtParity).toBe('FEATURE_TRANSLATION');
+    expect(spec.vectorbtParity).toBe('FEATURE_SUBSET_PARITY');
     expect(spec.sourceFile).toContain('momentumBreakout.ts');
   });
 
@@ -68,10 +68,10 @@ describe('Phase 19 hygiene and CORE feature translation', () => {
     expect(compareEngines(ts, vbt).status).toBe('PASS');
   });
 
-  it('Argus CORE replay on golden fixture stays INSUFFICIENT_SAMPLE and FEATURE_TRANSLATION', () => {
+  it('Argus CORE replay on golden fixture stays INSUFFICIENT_SAMPLE; vector adapter is FEATURE_SUBSET_PARITY', () => {
     const ds = loadGoldenSmaDataset();
     const r = replayArgusStrategy({ strategyId: 'MOMENTUM_BREAKOUT', bars: ds.bars, provenance: ds.provenance ?? 'UNIT_FIXTURE' });
-    expect(r.vectorbtParity).toBe('FEATURE_TRANSLATION');
+    expect(r.vectorbtParity).toBe('FEATURE_SUBSET_PARITY');
     expect(r.rejection).toBe('INSUFFICIENT_SAMPLE');
     expect(r.canPlaceOrders).toBe(false);
   });

@@ -27,7 +27,7 @@ export function expectedStepMs(frequency: string): number | null {
   const f = frequency.toLowerCase();
   if (f === '1min' || f === '1m') return 60_000;
   if (f === '5min' || f === '5m') return 300_000;
-  if (f === '15min' || f === '15m') return 900_000;
+  if (f === '30min' || f === '30m') return 1_800_000;
   if (f === '1hour' || f === '1h' || f === '60min') return 3_600_000;
   if (f === '1day' || f === '1d' || f === 'day') return 86_400_000;
   return null;

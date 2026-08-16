@@ -101,7 +101,7 @@ describe('RiskEngine.evaluateRisk', () => {
     resetTableRows();
     emitRiskAssessment.mockClear();
     mockMarketDataWorker.getLatestPriceAgeMs.mockReset();
-    mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(null);
+    mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(1_000);
     mockTradingEngine.state.dayStartDateStr = null;
     mockTradingEngine.state.dayStartEquity = null;
     mockTradingEngine.state.currentDailyLoss = 0;
@@ -552,6 +552,16 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.approved).toBe(false);
     expect(assessment.reasoning).toMatch(/Stale market data/);
+  });
+
+  it('vetoes a trade when quote age is unknown (null is not treated as fresh)', async () => {
+    mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(null);
+
+    await riskEngine.evaluateRisk({ traceId: 't14-unknown', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.reasoning).toMatch(/UNKNOWN_FRESHNESS/);
   });
 
   it('approves a well-sized trade with no active gates', async () => {

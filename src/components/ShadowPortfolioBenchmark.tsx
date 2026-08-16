@@ -64,7 +64,7 @@ export default function ShadowPortfolioBenchmark({ autoBotConfig }: { autoBotCon
             SHADOW PORTFOLIO BENCHMARKING ENGINE
           </h3>
           <p className="text-xs text-slate-400 mt-1">
-            Compare the performance of the risk-gated **Sovereign Portfolio** against an unconstrained, parallel **Shadow Portfolio** that executes all Proposer decisions directly (bypassing the Risk Manager and 1.5x ATR dynamic safeguards).
+            Compare broker (risk-gated) equity against an unconstrained JSON ledger that books ChiefTrader ideas without RiskEngine or OMS. That ledger is SIMULATION, not organic paper, not live P&L, and does not use ATR sizing.
           </p>
         </div>
         
@@ -96,7 +96,7 @@ export default function ShadowPortfolioBenchmark({ autoBotConfig }: { autoBotCon
             ) : (
               <span className="text-rose-400 flex items-center font-bold"><ArrowDownRight size={14} /> {sovereignRoi.toFixed(2)}% ROI</span>
             )}
-            <span className="text-slate-500 font-mono text-[10px] uppercase">Gated ATR Protection</span>
+            <span className="text-slate-500 font-mono text-[10px] uppercase">Broker path · not a live certificate</span>
           </div>
         </div>
 

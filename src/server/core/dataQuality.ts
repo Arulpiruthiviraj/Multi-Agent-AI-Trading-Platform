@@ -8,6 +8,7 @@ import { tradingSafety } from '../config/tradingSafety';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
 import { evaluateQuoteFreshness, type MarketDataGrade } from './marketDataQuality';
+import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 
 export type DataQualityColor = MarketDataGrade;
 
@@ -61,10 +62,23 @@ export function assessDataQuality(symbol: string): DataQualitySnapshot {
   channels.push({ channel: 'broker', status: 'YELLOW', reason: 'Broker snapshot freshness is not measured here. RiskEngine still requires a live portfolio() call.' });
   const overall = channels.reduce((acc, c) => worst(acc, c.status), 'GREEN' as DataQualityColor);
   const tradeBlocked = market.status === 'RED' || market.status === 'UNKNOWN';
-  return {
+  const result: DataQualitySnapshot = {
     overall,
     tradeBlocked,
     blockReason: tradeBlocked ? market.reason : null,
     channels,
   };
+  recordPitLive({
+    kind: 'DATA_QUALITY',
+    symbol,
+    agent: 'MarketDataQuality',
+    payloadJson: JSON.stringify({
+      overall: result.overall,
+      tradeBlocked: result.tradeBlocked,
+      blockReason: result.blockReason,
+      market: market.status,
+    }),
+    source: 'assessDataQuality',
+  });
+  return result;
 }

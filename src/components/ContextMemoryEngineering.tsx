@@ -76,7 +76,7 @@ export default function ContextMemoryEngineering({ memoryRules, onAddRule, onDel
             Context & Memory Engineering
           </h3>
           <p className="text-xs text-slate-400 mt-1">
-            Dynamic context injections shielded by Deflated Sharpe Ratio (DSR) analysis.
+            Learned rules inject into ChiefTrader debate text only. They do not shield RiskEngine and are not Deflated Sharpe evidence.
           </p>
         </div>
         <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded text-[10px] uppercase font-mono tracking-widest flex items-center gap-2">
@@ -155,7 +155,7 @@ export default function ContextMemoryEngineering({ memoryRules, onAddRule, onDel
                         </span>
                       ) : (
                         <span className="bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded border border-emerald-500/20 font-bold">
-                          🛡️ OPTIMIZED SHIELDED
+                          🛡️ DSR UNAVAILABLE
                         </span>
                       )}
                     </div>

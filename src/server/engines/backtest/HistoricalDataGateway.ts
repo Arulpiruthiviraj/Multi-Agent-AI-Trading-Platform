@@ -168,7 +168,7 @@ export class HistoricalDataGateway {
     asOfMs: number;
     publishedAtMs: number;
     symbol: string;
-    kind: 'NEWS' | 'NEWS_AGENT' | 'CHIEF_TRADER' | 'AGENT_REASONING';
+    kind: 'NEWS' | 'NEWS_AGENT' | 'CHIEF_TRADER' | 'AGENT_REASONING' | 'DATA_QUALITY';
     agent?: string;
     side?: 'BUY' | 'SELL' | 'HOLD';
     confidence?: number;

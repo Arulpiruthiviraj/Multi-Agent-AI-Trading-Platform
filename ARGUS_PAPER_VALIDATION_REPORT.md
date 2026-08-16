@@ -1,12 +1,13 @@
 # ARGUS_PAPER_VALIDATION_REPORT
 
-Organic paper requires: `executionEnvironment=PAPER` + `FILLED` + `SELL` + numeric P&L.  
-Excludes: BACKTEST, REPLAY, TEST traces, REJECTED, EXTERNAL_MANUAL, UNKNOWN.
+Organic = `executionEnvironment=PAPER` + FILLED + SELL + numeric P&L + non-test/non-diag trace.
 
-**Closed organic sample: NOT ESTABLISHED.**
+`TEST_TRACE` now includes `diag-`.
 
-Need (config): `minPaperTrades` and `minPaperSessions` from `researchSafety.json` **plus** positive expectancy / drawdown gates — numbers alone are not automatic PASS.
+**This checkout `data/argus.db`:**  
+trades=6, all PENDING BUY diagnostic, FILLED SELL P&L=0, organic=**0**, sessions=**0**.
 
-Research vs paper reconciliation: **UNAVAILABLE** until both sides exist.
+Rows were **not** deleted to improve metrics.
 
-Do not count Vitest OMS stub fills as organic paper.
+Infrastructure: InternalPaper / Alpaca paper + Autobot + RiskEngine + OMS = **CONDITIONAL GO**.  
+Evidence of edge: **NONE**.

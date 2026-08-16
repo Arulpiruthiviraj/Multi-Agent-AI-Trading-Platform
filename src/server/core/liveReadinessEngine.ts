@@ -6,6 +6,11 @@ import { canadianMarketReadiness } from '../markets/canadianReadiness';
 import { emptyEvidence, deriveLifecycleStatus, liveGoNoGo } from '../research/promotionEngine';
 import { researchSafety, isTheoreticalZeroCost } from '../config/researchSafety';
 import { tradingEdgeScore } from '../research/edgeScore';
+import { inspectResearchWarehouse } from '../research/warehouseInventory';
+import { summarizeOrganicPaper } from '../research/organicPaper';
+import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+import { db } from '../db';
+import { trades } from '../db/schema';
 
 export type ReadinessVerdict = 'PASS' | 'FAIL' | 'BLOCKED' | 'UNAVAILABLE';
 
@@ -32,28 +37,44 @@ function gate(id: string, category: string, verdict: ReadinessVerdict, detail: s
   return { id, category, verdict, detail, mandatory };
 }
 
+function organicPaperSnapshot(): { closedTradeCount: number; sessionCount: number; note: string } {
+  try {
+    const rows = db.select().from(trades).all();
+    const s = summarizeOrganicPaper(rows, researchSafety.minPaperTrades);
+    return { closedTradeCount: s.closedTradeCount, sessionCount: s.sessionCount, note: s.note };
+  } catch {
+    return { closedTradeCount: 0, sessionCount: 0, note: 'Organic paper query UNAVAILABLE. Counted as 0, not PASS.' };
+  }
+}
+
 export function evaluateLiveReadiness(): LiveReadinessReport {
   const e = emptyEvidence('MOMENTUM_BREAKOUT');
   const promo = liveGoNoGo(e);
   const edge = tradingEdgeScore(e);
   const ca = canadianMarketReadiness();
   const quantOn = process.env.QUANT_ENGINE_ENABLED === 'true';
+  const paper = organicPaperSnapshot();
+  const paperFloorsMet =
+    paper.closedTradeCount >= researchSafety.minPaperTrades
+    && paper.sessionCount >= researchSafety.minPaperSessions;
+  const riskGateCount = loadRepoConfigJson<{ gates: string[] }>('riskGateOrder.json').gates.length;
 
+  const warehouse = inspectResearchWarehouse();
   const gates: LiveReadinessGate[] = [
     gate('SOFTWARE_ORDER_PATH', 'SOFTWARE', 'PASS', 'Production .placeOrder is OMS + broker adapters only (file-scan invariant).'),
     gate('SOFTWARE_TESTS', 'SOFTWARE', 'UNAVAILABLE', 'CI/tsc/vitest are not evaluated inside this process. Last measured suite is not LIVE evidence.'),
     gate('EXECUTION_OMS', 'EXECUTION', 'PASS', 'OMS is the only production executeOrder path. Not proof of LIVE equity.'),
-    gate('RISK_GATES', 'RISK', 'PASS', `RiskEngine records ${24} named gates. Presence is not profitability.`),
-    gate('MARKET_DATA', 'MARKET DATA', 'UNAVAILABLE', 'Live tick health is runtime. Stale/missing price fail-closed in RiskEngine when a proposal is evaluated.'),
-    gate('RESEARCH_WAREHOUSE', 'RESEARCH', 'UNAVAILABLE', 'No GREEN REAL_MARKET_DATA parquet is assumed present. Empty warehouse is not complete.'),
+    gate('RISK_GATES', 'RISK', 'PASS', `RiskEngine catalog has ${riskGateCount} named gates. Presence is not profitability.`),
+    gate('MARKET_DATA', 'MARKET DATA', 'UNAVAILABLE', 'Quote age null is UNKNOWN and fails RiskEngine data_freshness. Standing LIVE_READY still requires a live feed certificate, which this process does not invent.'),
+    gate('RESEARCH_WAREHOUSE', 'RESEARCH', warehouse.greenRealMarketData ? 'PASS' : 'UNAVAILABLE', warehouse.note),
     gate('STRATEGY_CORE', 'STRATEGY', 'FAIL', `CORE strategies are ${deriveLifecycleStatus(e)}. ${researchSafety.coreStrategyIds.length} CORE ids in config; UNTESTED ≠ VALIDATED.`),
     gate('STRATEGY_SMC', 'STRATEGY', 'FAIL', 'SMC_LIQUIDITY_SWEEP is UNVALIDATED. Live evaluateAll excludes it unless env is true.'),
     gate('OOS', 'OOS', 'FAIL', 'REAL_MARKET_DATA OOS is NOT ESTABLISHED.'),
     gate('WFO', 'WFO', 'FAIL', 'CORE NEXT_BAR WFO is NOT ESTABLISHED. SAME_BAR WALKFORWARD_CHECK_RESULTS.json is quarantined.'),
     gate('ROBUSTNESS', 'ROBUSTNESS', 'FAIL', 'CORE robustness on real data is NOT ESTABLISHED.'),
     gate('STATISTICS', 'STATISTICS', 'UNAVAILABLE', 'No statistically justified CORE NEXT_BAR sample.'),
-    gate('PAPER', 'PAPER', 'FAIL', 'Organic PAPER FILLED SELL P&L is NOT ESTABLISHED.'),
-    gate('BROKER_LIVE_CONFIRM', 'BROKER', 'FAIL', 'LIVE requires explicit confirmation phrase. Dual paperMode/tradingMode can be UNKNOWN.'),
+    gate('PAPER', 'PAPER', paperFloorsMet ? 'PASS' : 'FAIL', `Organic PAPER FILLED SELL P&L: ${paper.closedTradeCount} trades / ${paper.sessionCount} NY sessions. ${paper.note}`),
+    gate('BROKER_LIVE_CONFIRM', 'BROKER', 'FAIL', 'LIVE requires ENABLE LIVE TRADING to enable settings/broker mode, plus runtime LIVE_ARM for each process (OMS + live Alpaca host). Dual paperMode/tradingMode alone is UNKNOWN or insufficient after restart. Not a LIVE_READY certificate.'),
     gate('RECONCILIATION', 'RECONCILIATION', 'UNAVAILABLE', 'Mismatch pauses trading when a cycle runs; not a standing LIVE_READY certificate.'),
     gate('SECURITY', 'SECURITY', 'UNAVAILABLE', 'Encryption/auth exist; production AUTH_PASSWORD must be set. Not auto-PASS.'),
     gate('OBSERVABILITY', 'OBSERVABILITY', 'UNAVAILABLE', 'Traces exist on the live path. Dashboards may still show Awaiting Evidence.'),
@@ -63,7 +84,7 @@ export function evaluateLiveReadiness(): LiveReadinessReport {
     gate('MANUAL_APPROVAL', 'MANUAL APPROVAL', promo.live === 'GO' ? 'PASS' : 'FAIL', `promotion liveGoNoGo=${promo.live}. ${promo.failedGates.slice(0, 8).join(', ')}`),
     gate('ZERO_COST_RESEARCH', 'RESEARCH', isTheoreticalZeroCost() ? 'FAIL' : 'PASS', isTheoreticalZeroCost() ? 'Research costs are theoretical zero; cannot promote.' : 'Non-zero research costs configured.'),
     gate('QUANT_DEFAULT', 'STRATEGY', quantOn ? 'UNAVAILABLE' : 'PASS', quantOn ? 'QUANT_ENGINE_ENABLED=true does not imply VALIDATED.' : 'QUANT_ENGINE_ENABLED defaults off.'),
-    gate('MIN_PAPER', 'PAPER', 'FAIL', `Need >= ${researchSafety.minPaperTrades} organic trades and ${researchSafety.minPaperSessions} sessions.`),
+    gate('MIN_PAPER', 'PAPER', paperFloorsMet ? 'PASS' : 'FAIL', `Need >= ${researchSafety.minPaperTrades} organic trades and ${researchSafety.minPaperSessions} sessions. Observed ${paper.closedTradeCount}/${paper.sessionCount}.`),
   ];
 
   const failedMandatory = gates.filter((g) => g.mandatory && g.verdict !== 'PASS').map((g) => g.id);

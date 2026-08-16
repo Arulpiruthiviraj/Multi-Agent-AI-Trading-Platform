@@ -182,6 +182,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.25, bs: 100, t: '2026-01-15T14:30:00.000000000Z' });
     expect(emitMarketData).not.toHaveBeenCalled();
     expect(worker.getLatestPrice('AAPL')).toBe(150.25);
+    expect(worker.getLatestPrice('aapl')).toBe(150.25);
   });
 
   it('after authenticate, subscribes to config/markets.json US benchmarks when nothing else was subscribed', () => {

@@ -9,7 +9,7 @@
  */
 import { historicalDataGateway } from './HistoricalDataGateway';
 
-export type PitLiveKind = 'NEWS' | 'NEWS_AGENT' | 'CHIEF_TRADER' | 'AGENT_REASONING';
+export type PitLiveKind = 'NEWS' | 'NEWS_AGENT' | 'CHIEF_TRADER' | 'AGENT_REASONING' | 'DATA_QUALITY';
 
 export interface PitLiveRecord {
   kind: PitLiveKind;

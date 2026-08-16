@@ -553,7 +553,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
               <span className="text-[10px] font-mono text-slate-300 uppercase font-bold block mb-1">Gate 12: Daily BUY Notional</span>
               <h3 className="text-sm font-bold text-white mb-2">Cumulative Buys This NY Session</h3>
               <p className="text-xs text-slate-400 leading-relaxed">
-                Distinct from the daily-loss kill-switch. Paper is unlimited unless <code className="text-[10px]">maxDailyBuyNotionalDollars</code> &gt; 0 (currently {tradingSafety.maxDailyBuyNotionalDollars}). LIVE always uses <code className="text-[10px]">restrictedLiveMaxDailyBuyNotionalDollars</code> (${tradingSafety.restrictedLiveMaxDailyBuyNotionalDollars}).
+                Distinct from the daily-loss kill-switch. Paper uses reviewed <code className="text-[10px]">maxDailyBuyNotionalDollars</code> (currently ${tradingSafety.maxDailyBuyNotionalDollars}). LIVE always uses <code className="text-[10px]">restrictedLiveMaxDailyBuyNotionalDollars</code> (${tradingSafety.restrictedLiveMaxDailyBuyNotionalDollars}).
               </p>
             </div>
 
@@ -832,7 +832,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
         <div className="space-y-6 animate-fade-in">
           <h2 className="text-2xl font-bold text-white tracking-tight">A Deterministic Quant Layer, Entirely Additive</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            <code className="text-xs">src/server/quant/</code> and <code className="text-xs">QuantSignalAgent.ts</code> add a deterministic regime/strategy/scoring engine on top of the agent pipeline. Off unless <code className="text-xs">QUANT_ENGINE_ENABLED=true</code>. Live <code className="text-xs">evaluateAll()</code> is the original five CORE strategies unless a per-id env flag from <code className="text-xs">config/quantExperimentalStrategies.json</code> is the string <code className="text-xs">true</code>. Named techniques (760 aliases) live in <code className="text-xs">config/quantStrategyTaxonomy.json</code> — they are not 1,000 independent live edges. Experimental modules stay UNVALIDATED. Backtest is long-only. Walk-forward OOS for checked combos failed. Options, L2, breadth, volume profile, pairs, and similar families are honest NOT_SUPPORTED.
+            <code className="text-xs">src/server/quant/</code> and <code className="text-xs">QuantSignalAgent.ts</code> add a deterministic regime/strategy/scoring engine on top of the agent pipeline. Off unless <code className="text-xs">QUANT_ENGINE_ENABLED=true</code>. Live <code className="text-xs">evaluateAll()</code> is the original five CORE strategies unless a per-id env flag from <code className="text-xs">config/quantExperimentalStrategies.json</code> is the string <code className="text-xs">true</code>. The 10-family master catalog lives in <code className="text-xs">config/quantMasterTaxonomy.json</code>; 760 named aliases live in <code className="text-xs">config/quantStrategyTaxonomy.json</code> — they are not 1,000 independent live edges. Experimental modules stay UNVALIDATED. Backtest is long-only. Walk-forward OOS for checked combos failed. Options, L2, HFT, pairs, PEAD, and similar families are honest NOT_SUPPORTED.
           </p>
 
           <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg">

@@ -41,7 +41,7 @@ describe('Phase 18 research validation', () => {
     const ds = loadGoldenSmaDataset();
     const r = replayArgusStrategy({ strategyId: 'MOMENTUM_BREAKOUT', bars: ds.bars, provenance: ds.provenance ?? 'UNIT_FIXTURE' });
     expect(r.canPlaceOrders).toBe(false);
-    expect(r.vectorbtParity).toBe('FEATURE_TRANSLATION');
+    expect(r.vectorbtParity).toBe('FEATURE_SUBSET_PARITY');
     expect(r.rejection).toBe('INSUFFICIENT_SAMPLE');
     expect(r.promotable).toBe(false);
   });
@@ -54,7 +54,7 @@ describe('Phase 18 research validation', () => {
   it('strategy spec numbers come from quantThresholds.json', () => {
     const spec = loadStrategySpec('MOMENTUM_BREAKOUT') as any;
     expect(spec.thresholds.rvolThreshold).toBe(quantThresholds.rvolThreshold);
-    expect(spec.vectorbtParity).toBe('FEATURE_TRANSLATION');
+    expect(spec.vectorbtParity).toBe('FEATURE_SUBSET_PARITY');
     expect(spec.sourceFile).toContain('momentumBreakout.ts');
   });
 

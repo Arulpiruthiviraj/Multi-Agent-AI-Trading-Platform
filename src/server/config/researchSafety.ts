@@ -25,6 +25,11 @@ export interface ResearchSafetyConfig {
   zeroCostBlocksPromotion: boolean;
   researchQtyShares: number;
   wfoEmbargoBars: number;
+  wfoTrainBars: number;
+  wfoValBars: number;
+  wfoTestBars: number;
+  ingestDailyLookbackDays: number;
+  alpacaBarsFeed: string;
   missingIntervalYellowCount: number;
   missingIntervalRedCount: number;
   ingestMaxPages: number;
@@ -51,12 +56,32 @@ export const researchSafety: ResearchSafetyConfig = {
   coreStrategyIds: Array.isArray(raw.coreStrategyIds) ? raw.coreStrategyIds.map(String) : [],
   experimentalStrategyIds: Array.isArray(raw.experimentalStrategyIds) ? raw.experimentalStrategyIds.map(String) : ['SMC_LIQUIDITY_SWEEP'],
   proxyAdapterNote: String(raw.proxyAdapterNote ?? 'CORE adapters are proxies.'),
-  commissionPerShare: Number(raw.commissionPerShare ?? 0),
-  spreadBps: Number(raw.spreadBps ?? 0),
-  slippageBps: Number(raw.slippageBps ?? 0),
+  commissionPerShare: (() => {
+    if (raw.commissionPerShare == null || !Number.isFinite(Number(raw.commissionPerShare))) {
+      throw new Error('researchSafety.json must define numeric commissionPerShare (no silent zero default)');
+    }
+    return Number(raw.commissionPerShare);
+  })(),
+  spreadBps: (() => {
+    if (raw.spreadBps == null || !Number.isFinite(Number(raw.spreadBps))) {
+      throw new Error('researchSafety.json must define numeric spreadBps (no silent zero default)');
+    }
+    return Number(raw.spreadBps);
+  })(),
+  slippageBps: (() => {
+    if (raw.slippageBps == null || !Number.isFinite(Number(raw.slippageBps))) {
+      throw new Error('researchSafety.json must define numeric slippageBps (no silent zero default)');
+    }
+    return Number(raw.slippageBps);
+  })(),
   zeroCostBlocksPromotion: raw.zeroCostBlocksPromotion !== false,
   researchQtyShares: Number(raw.researchQtyShares ?? 1),
   wfoEmbargoBars: Number(raw.wfoEmbargoBars ?? 5),
+  wfoTrainBars: Number(raw.wfoTrainBars ?? 60),
+  wfoValBars: Number(raw.wfoValBars ?? 20),
+  wfoTestBars: Number(raw.wfoTestBars ?? 20),
+  ingestDailyLookbackDays: Number(raw.ingestDailyLookbackDays ?? 756),
+  alpacaBarsFeed: String(raw.alpacaBarsFeed ?? 'iex'),
   missingIntervalYellowCount: Number(raw.missingIntervalYellowCount ?? 3),
   missingIntervalRedCount: Number(raw.missingIntervalRedCount ?? 10),
   ingestMaxPages: Number(raw.ingestMaxPages ?? 50),

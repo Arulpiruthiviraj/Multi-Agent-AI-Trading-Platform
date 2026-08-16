@@ -35,6 +35,7 @@ import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../quant/indicators/supportResistance';
 import { computeSmcFeatures } from '../quant/indicators/smc';
 import { evaluateAll, bestStrategyIdea } from '../quant/strategies/StrategyEngine';
+import { resolvePaperTestingOverlay } from '../research/paperTestingOverlay';
 import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine';
 import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
@@ -164,6 +165,10 @@ export class QuantSignalAgent {
       smc: computeSmcFeatures(bars),
     };
     const strategyEvaluations = evaluateAll(strategyContext);
+    const paperOverlay = resolvePaperTestingOverlay(regime.regime);
+    if (!paperOverlay.applied) {
+      console.log(`[QuantSignalAgent] paper-testing overlay idle: ${paperOverlay.reason}`);
+    }
 
     // Phase 6: grouped/probabilistic scores are direction-specific (see GroupedScores.ts's own
     // header on why), so both real candidate directions are computed and persisted here - whoever

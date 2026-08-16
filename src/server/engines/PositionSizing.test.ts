@@ -93,6 +93,30 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     }));
     const gate = result.gates.find(g => g.gate === 'correlation_exposure');
     expect(gate?.detail.skipped).toBe(true);
+    expect(gate?.passed).toBe(true);
+    expect(gate?.detail.status).toBe('SKIPPED');
+  });
+
+  it('LIVE fail-closed: missing correlation history is UNKNOWN FAIL not PASS', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      existingPositions: [{ symbol: 'MSFT', quantity: 1 }],
+      getRecentCloses: async () => null,
+      failClosedUnknownInputs: true,
+    }));
+    const gate = result.gates.find(g => g.gate === 'correlation_exposure');
+    expect(gate?.passed).toBe(false);
+    expect(gate?.detail.status).toBe('UNKNOWN');
+    expect(result.maxQuantity).toBe(0);
+  });
+
+  it('fails symbol_concentration when remaining dollars floor to zero shares', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      accountEquity: 100000, currentPrice: 100, maxTradeSizeDollar: 100000, buyingPower: 100000,
+      existingPositions: [{ symbol: 'AAPL', quantity: 199.6 }],
+    }));
+    expect(result.maxQuantity).toBe(0);
+    expect(result.gates.find(g => g.gate === 'symbol_concentration')?.passed).toBe(false);
+    expect(result.gates.find(g => g.gate === 'sufficient_size')?.passed).toBe(false);
   });
 
   it('BUY-only gates (symbol/sector/open-positions/correlation) are not evaluated for a SELL proposal, matching RiskEngine\'s pre-refactor behavior', async () => {

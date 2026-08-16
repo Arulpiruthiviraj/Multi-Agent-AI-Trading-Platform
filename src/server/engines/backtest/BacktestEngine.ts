@@ -11,7 +11,11 @@
  *
  * Scope, honestly stated: this backtests the deterministic technical
  * strategy (and named quant strategies via runStrategyBacktest) against
- * point-in-time bars. Each simulated BUY is evaluated by evaluatePitRisk
+ * point-in-time bars. Fill model is SAME_BAR_CLOSE (signal and fill on the
+ * same bar close). Results are quarantined from promotion
+ * (promotable:false / SAME_BAR_CLOSE_NOT_PROMOTABLE). Canonical research
+ * promotion uses NEXT_BAR_OPEN only (canonicalNextBarEngine).
+ * Each simulated BUY is evaluated by evaluatePitRisk
  * (the live RiskEngine gate ladder on simulated state). NewsAgent and
  * ChiefTrader LLM debate are not replayed unless rows exist in
  * pit_decision_ledger with publishedAtMs <= the simulated clock.
@@ -27,7 +31,7 @@ import { rsiEngine } from '../RSIEngine';
 import { macdEngine } from '../MACDEngine';
 import { CORRELATION_MIN_OVERLAP, getSector } from '../PositionSizing';
 import { calculateCommission } from './Commissions';
-import { executionModelVersion, getExecutionModel } from '../../research/executionModel';
+import { executionModelVersion, stampSameBarPromotionQuarantine } from '../../research/executionModel';
 import { calculateDynamicSlippagePct } from './Slippage';
 import { classifyRegime, RegimeLabel, MIN_BARS as REGIME_MIN_BARS } from '../../quant/RegimeEngine';
 import { getMarketContext, BarsFetcher, BENCHMARK_SYMBOLS, SECTOR_ETF_MAP } from '../../quant/MarketContext';
@@ -426,13 +430,10 @@ export class BacktestEngine {
       }).where(eq(schema.backtestRuns.id, runId));
 
       const statisticalSignificance = permutationTestSharpe(periodReturnsFromEquityCurve(equityCurve));
-      return {
+      return stampSameBarPromotionQuarantine({
         id: runId, status: 'COMPLETED', initialCash, finalEquity, totalReturnPct: metrics.totalReturnPct, ...metrics, trades: tradeLog.length, equityCurve, tradeLog, statisticalSignificance,
-        executionModel: getExecutionModel('SAME_BAR_CLOSE').executionModel,
         executionModelVersion: executionModelVersion(),
-        comparableToCanonicalResearch: false,
-        engineMismatchVsNextBarOpen: true,
-      };
+      });
     } catch (e: any) {
       await db.update(schema.backtestRuns).set({ status: 'FAILED', errorMessage: e.message }).where(eq(schema.backtestRuns.id, runId));
       throw e;
@@ -441,20 +442,22 @@ export class BacktestEngine {
 
   async getRun(id: string) {
     const rows = await db.select().from(schema.backtestRuns).where(eq(schema.backtestRuns.id, id)).limit(1);
-    return rows[0] || null;
+    return rows[0] ? stampSameBarPromotionQuarantine({ ...rows[0] } as Record<string, unknown>) : null;
   }
 
   async listRuns() {
-    return db.select().from(schema.backtestRuns);
+    const rows = await db.select().from(schema.backtestRuns);
+    return rows.map((r) => stampSameBarPromotionQuarantine({ ...r } as Record<string, unknown>));
   }
 
   async getStrategyRun(id: string) {
     const rows = await db.select().from(schema.quantStrategyBacktests).where(eq(schema.quantStrategyBacktests.id, id)).limit(1);
-    return rows[0] || null;
+    return rows[0] ? stampSameBarPromotionQuarantine({ ...rows[0] } as Record<string, unknown>) : null;
   }
 
   async listStrategyRuns() {
-    return db.select().from(schema.quantStrategyBacktests);
+    const rows = await db.select().from(schema.quantStrategyBacktests);
+    return rows.map((r) => stampSameBarPromotionQuarantine({ ...r } as Record<string, unknown>));
   }
 
   /**
@@ -854,17 +857,14 @@ export class BacktestEngine {
       const accountSizeReport = buildAccountSizeReport(bars[0].close);
 
       const statisticalSignificance = permutationTestSharpe(periodReturnsFromEquityCurve(equityCurve));
-      return {
+      return stampSameBarPromotionQuarantine({
         id: runId, status: 'COMPLETED', strategyId: config.strategyId, symbol, initialCash, finalEquity,
         ...baseMetrics, avgWinR, avgLossR, avgR, maxConsecutiveLosses, regimeBreakdown,
         expectedValue: ev, kelly, trades: tradeLog.length, equityCurve, tradeLog, failureBreakdown,
         benchmarkComparison, accountSizeReport, statisticalSignificance,
         drawdownCircuitBreakerTriggeredAt,
-        executionModel: getExecutionModel('SAME_BAR_CLOSE').executionModel,
         executionModelVersion: executionModelVersion(),
-        comparableToCanonicalResearch: false,
-        engineMismatchVsNextBarOpen: true,
-      };
+      });
     } catch (e: any) {
       await db.update(schema.quantStrategyBacktests).set({ status: 'FAILED', errorMessage: e.message }).where(eq(schema.quantStrategyBacktests.id, runId));
       throw e;

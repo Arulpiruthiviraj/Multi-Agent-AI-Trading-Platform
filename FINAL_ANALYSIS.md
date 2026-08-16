@@ -1,396 +1,297 @@
-# Argus Autonomous Trading Platform — FINAL ANALYSIS
+# Argus — Hostile Read-Only Verification Audit
 
-**Audit date:** 2026-08-16 (forensic pass)  
-**Audience:** Operator / engineer deciding paper vs live.  
-**Method:** Current `.ts` / `.tsx` / `config/*.json`; read-only `data/argus.db`; `npx tsc --noEmit` (PASS); `npx vitest run` **1011/1011** (154 files).  
-**Authoritative long-form:** `ARGUS_FINAL_FORENSIC_AUDIT.md` (do not trust older ARGUS_*.md as truth).  
-**Not used as truth:** older markdown, VectorBT being installed, a busy Agent Network graph, or “the system should…”. Adding files does **not** raise scores.
+**Date:** 2026-08-16 (updated same day after Phase 18 / 25 + LIVE-arm / OMS-fill shadow work)  
+**Role:** Lead Systems Auditor / Quantitative Risk Officer  
+**Method:** Source inspection of the live tree (`server.ts`, `src/`, `config/`, `python/argus_research/`, `scripts/`) plus commands run this session. Old markdown claims were not used as evidence.
 
-Companions (implementation, not extra points):
+This document does **not** authorize LIVE. It does **not** invent paper P&L, OOS, or edge.
 
-| Doc | Use |
-|---|---|
-| `ARGUS_PHASE19_IMPLEMENTATION_REPORT.md` | Leak gates, CORE feature translation, warehouse ingest, PIT reconstruct |
-| `ARGUS_PHASE18_*.md` | Provenance, Argus `evaluate()` replay, rejection catalog |
-| `ARGUS_PHASE17_*.md` | Research VectorBT CLI, promotion engine, organic-paper filter |
-| `ARGUS_PHASE16_IMPLEMENTATION_REPORT.md` | Desk overlay, extra BUY gates, event-memory 410 |
-| `ARGUS_TRADING_EDGE_REPORT.md` | Edge score **8** |
-| `ARGUS_REAL_MONEY_READINESS.md` | Scorecard (do not inflate) |
-| `ARGUS_LIVE_CANDIDATE_CHECKLIST.md` | Promotion gates |
-| `docs/ARGUS.md` / `CLAUDE.md` | Architecture contract. **This file wins** where ARGUS.md still says 18 gates or Autobot-off ticks reach TechnicalAgent. |
+Companion gap roadmap (planning only): `ARGUS_REAL_MONEY_GAP_ANALYSIS.md`.
 
 ---
 
-## 1. Executive verdict
+## Gate 1 — Compiler and test integrity
 
-| Question | Verdict |
+| Command | Result |
 |---|---|
-| Ready for **real money (LIVE)**? | **NO-GO** |
-| Ready for **paper plumbing** (InternalPaper / Alpaca paper)? | **CONDITIONAL GO** — pipes, not expectancy |
-| Autobot **off** ⇒ no **new BUY** fills? | **GO** — RiskEngine `autobot_enabled` + ChiefTrader drop + no `MARKET_DATA` emit |
-| Validated trading edge? | **NO** (score **8 / 100**) |
-| Organic paper in this `data/argus.db` | **NONE** (6 PENDING diagnostic BUYs; 0 FILLED SELL P&L) |
-| CORE strategies promotion status? | All **UNTESTED** |
-| SMC live? | **UNVALIDATED**; env-gated off |
-| Quant live cycle? | **Off** unless `QUANT_ENGINE_ENABLED=true` |
-| VectorBT / Python / Rust can `placeOrder`? | **NO** (`canPlaceOrders: false`) |
-| Canadian automated live routing? | **NOT AVAILABLE** (IIROC) |
-| `npx tsc --noEmit` | **PASS** |
-| `npx vitest run` (this pass) | **1011 passed / 1011 total** (154 files). Isolation: OpenAlice/Chronos/Ollama sockets mocked; VectorBT CLI skipped unless `ARGUS_TEST_ALLOW_VECTORBT=true` |
+| `npx tsc --noEmit` | **PASS** — exit code 0, zero TypeScript errors |
+| `npx vitest run` | **PASS** — **1066** tests, **162** files, 0 failed (vitest 4.1.10, ~115s) |
 
-Argus is a **multi-agent trading terminal with a real fail-closed fill path**. It is **not** an elite discretionary trader and is **not** profitable because research libraries exist. Plumbing + research ≠ expectancy.
-
-**One-line operator rule:** keep `tradingMode` PAPER; keep Autobot off unless you accept unattended paper orders through RiskEngine/OMS; never enable LIVE until organic paper + OOS/WFO **pass** on a named `strategyVersion` and you still approve manually.
+Tests passing are not a trading edge. They are not organic paper. They are not LIVE readiness.
 
 ---
 
-## 2. What the system is
+## Gate 2 — Execution and security invariants
 
-Single Node.js process: Express + Vite SPA (`src/App.tsx`) + raw `ws`. Package name `my-money-miner`. Listen port **3000** hardcoded (`PORT` unused). SQLite `data/argus.db` (WAL). LLM calls only through `AIRouter`.
+### 2.1 Sovereign / shadow ledgers
 
-**Live fill path (do not rewrite):**
+**`executeAutoBotTradeInSovereign`:** **Deleted.** Repo-wide search: zero matches.
+
+**`BrokerEngine.ts`:** **Deleted** (Phase 25). No dormant `submitOrder` parallel to OMS.
+
+**Shadow ledger (OMS fills only):** `executeAutoBotTradeInShadow` in `server.ts` listens to `ORDER_EXECUTED` with `status=FILLED` after RiskEngine→OMS. It does **not** book on `CHIEF_APPROVED_IDEA`. Replay/backtest/simulation environments and `replay-` traces are skipped. Still **not** organic paper / not broker P&L.
+
+### 2.2 `placeOrder` isolation
+
+Production TypeScript (excluding `*.test.ts`):
+
+- **OMS** `src/server/services/OrderManagement.ts` — `activeBroker.placeOrder(...)` after RiskEngine `RISK_ASSESSMENT_COMPLETED`.
+- **Broker adapters only:** `AlpacaBroker`, `InternalPaperBroker`, `InteractiveBrokersAdapter`, `CoinbaseBroker`, `QuestradeBroker` (throws), `HistoricalReplayBroker` (replay session only via `BrokerManager.getActiveBroker()`).
+- **`server.ts`:** no `.placeOrder(`.
+- **`src/server/routes/`:** no `.closePosition(` (invariant test `phase21.invariants.test.ts`).
+- **UI `App.tsx`:** no `BrokerManager` / `.placeOrder(`.
+- **Python / VectorBT:** `canPlaceOrders: false`; no `BrokerManager`.
+
+Adapter `closePosition` / flatten helpers call `this.placeOrder` **inside the adapter**. HTTP routes do not.
+
+**Verdict:** Production broker orders are isolated to OMS → BrokerManager → adapter. Research/UI cannot place.
+
+**OMS unknown submit:** `placeOrder` throw with no `brokerOrderId` keeps status **PENDING**, stamps `submitOutcome=UNKNOWN`, sets `TRADING_PAUSED`. It does **not** guess REJECTED. Crash recovery may later REJECTED only if `getOrderByClientOrderId` finds nothing (Alpaca-capable only).
+
+**Manual override:** `POST /api/v2/trading/execute-override` skips ChiefTrader consensus only; still RiskEngine→OMS. Reasoning stamped `SOURCE: MANUAL_OVERRIDE`. BUY refused while Autobot off. Organic paper filters exclude overrides (`organicPaper.ts`).
+
+### 2.3 Encryption and `data/secrets.json`
+
+`EncryptionService.ts`:
+
+- Missing `ENCRYPTION_SECRET` → **throw at module load**.
+- `encrypt` / `decrypt` catch paths **throw** `ENCRYPTION_FAILED` / `DECRYPTION_FAILED`. Not a plaintext passthrough.
+- Ciphertext without `iv:hex` → throw. Empty string short-circuits unchanged (not decrypt-fail-open).
+
+`server.ts` boot: if `data/secrets.json` **exists**, process **throws** unless `ARGUS_ALLOW_PLAINTEXT_SECRETS_FILE=true`. File is never read for keys. `persistEncryptedSecrets.ts` writes encrypted SQLite only.
+
+### 2.4 LIVE vs `paperMode` vs confirmation phrase
+
+**Where LIVE is blocked:**
+
+1. `TradingEngine.toggle`: enabling LIVE requires `confirmLiveTrading === 'ENABLE LIVE TRADING'` → **arms** this process (`LiveTradingConfirmation.ts`).
+2. `POST /api/v1/config/settings` calls `toggle` first; LIVE without phrase → 400, no write.
+3. `BrokerManager.setLiveMode(true, phrase)` arms; paper disarm clears arm; capability-gated; persists `paperMode: !live`.
+4. **Per-order OMS:** `assertBrokerEnvironmentAllowsOrder` — LIVE only if `tradingMode=LIVE` **and** `paperMode=false`; disagreement → **UNKNOWN** → no order.
+5. **Per-order LIVE arm:** OMS rejects LIVE env unless `isLiveTradingArmed()`. `AlpacaBroker.placeOrder` refuses live host (`api.alpaca.markets`) without arm. Restart clears arm even if SQLite still says LIVE.
+6. Replay refuses while `tradingMode === 'LIVE'`.
+
+**Verdict:** Dual-flag disagreement cannot trade. Phrase enables + arms. Live Alpaca POSTs without arm fail closed.
+
+### 2.5 RiskEngine sizing honesty and `data_freshness`
+
+**Freshness:** `evaluateQuoteFreshness({ priceAgeMs: null })` → grade **UNKNOWN**, `passed: false`. Gate `data_freshness`. **Fail-closed.**
+
+**Sizing (`PositionSizing.ts`):**
+
+| Gate | At qty 0 |
+|---|---|
+| `order_notional_cap` | `passed: false` when `maxSharesByCapital <= 0` |
+| `symbol_concentration` / sector / correlation | `passed: false` when floor shares ≤ 0; honesty pass flips binding CLAMP→FAIL at zero |
+| `sufficient_size` | **`passed: false` iff `maxQuantity === 0`** (blocks OMS) |
+
+LIVE unknown sector/correlation: `failClosedUnknownInputs: tradingMode === 'LIVE'` → those gates `passed: false`.
+
+---
+
+## Gate 3 — Research parity and VectorBT
+
+### 3.1 `BacktestEngine.ts` fill model
+
+**Still SAME_BAR_CLOSE** (not converted to NEXT_BAR_OPEN). Stamped `promotable: false` / `SAME_BAR_CLOSE_NOT_PROMOTABLE`.
+
+Canonical promotion fills: `canonicalNextBarEngine.ts` (`NEXT_BAR_OPEN`). Mixing models → `ENGINE_MISMATCH`. Do not re-label BacktestEngine as NEXT_BAR without a full parity rewrite.
+
+### 3.2 `config/researchSafety.json` costs
 
 ```
-Alpaca WS (MarketDataWorker) → MARKET_DATA  [only if Autobot on AND TRADING_ENABLED]
-  → idea agents → TRADE_IDEA_GENERATED
-  → ChiefTraderAgent.reviewIdea  [entry ideas ignored if Autobot off]
-  → CHIEF_APPROVED_IDEA
-  → RiskAgent → RiskEngine.evaluateRisk  (all gates recorded; first failure is reported)
-  → OMS → BrokerManager.getActiveBroker().placeOrder
-  → trades / fills
+commissionPerShare: 0.005
+spreadBps: 2
+slippageBps: 5
+zeroCostBlocksPromotion: true
 ```
 
-There is **no** second OMS. UI, Quant, News, Chronos, OpenAlice, Python, and Rust **cannot** place orders.
+**Non-zero.** `isTheoreticalZeroCost()` is false → readiness gate `ZERO_COST_RESEARCH` **PASS**. Costs are research assumptions, not a live broker fee schedule.
 
-**Quarantined / not that path:**
+### 3.3 CORE vs VectorBT / Python
 
-- `GET /api/v1/signals` → HTTP **410** `SIGNALS_PATH_QUARANTINED`
-- `POST /api/v1/llm/dual-verify-trade` → 410
-- Event-memory theater `GET`/`POST` `/api/v1/event-memory*` → **410** `EVENT_MEMORY_QUARANTINED`
+- Feature vectors (BOS/RVOL/Keltner/S-R): **`FEATURE_PARITY_ESTABLISHED`** vs UNIT_FIXTURE (`strategySpecs.json`).
+- Full `StrategyContext.evaluate()` Python parity: **`fullStrategyParity: false`** (`quantWfoGrid.json`, `core_strategies.py`).
+- SMC: **`PROXY_NOT_FEATURE_PARITY`** / UNVALIDATED.
+- Overlay must not retune live `quantThresholds.json` while full parity is false.
 
----
+**Verdict:** Vector subset ≠ live strategy parity ≠ validated edge.
 
-## 3. How a BUY happens (honest)
+### 3.4 Warehouse GREEN before Parquet
 
-1. Autobot `enabled === true` and `tradingState === TRADING_ENABLED`.
-2. An idea agent emits `TRADE_IDEA_GENERATED` with `{traceId, symbol, side, confidence, reasoning, agent, currentPrice?}`.
-3. ChiefTrader: weights from `agent_performance_stats` (defaults `config/agentWeights.json`). Optional debate if confidence > `debateTriggerConfidence` (0.6). Min **2** independent agreeing agents. Weighted confidence vs `consensusApprovalThreshold` (**0.75** in `tradingSafety.json`). HOLD with confidence > 0 penalizes both sides. ConsensusDebate does **not** count as an independent agent.
-4. `CHIEF_APPROVED_IDEA` → RiskEngine. **No live price ⇒ refuse.** Every gate is recorded. First failure in evaluation order is the reported rejection.
-5. Whole-share `Math.floor(dollars / price)`. Alpaca `qty` only, never `notional`. No fractionals.
-6. OpenAlice (if enabled) is fire-and-forget; it does **not** block the fill.
+`ingestAlpacaWarehouse.ts` + `scripts/ingest_research_warehouse.ts`: Parquet only after GREEN; no keys → no fabricated bars.
 
-**SELL:** same path + `sell_position_exists`. PortfolioMonitor (~60s) emits SELL ideas (`PortfolioManager` / risk-exit agent). Risk-exits skip multi-agent debate. They **still** hit RiskEngine/OMS. Liquidate/`PipelineFlatten` emits ManualOverride `CHIEF_APPROVED_IDEA` (skips consensus, **not** RiskEngine). Rebalance: **501**.
+On disk this environment: `SPY_1Day_2024-07-21.meta.json` is GREEN REAL_MARKET_DATA (519 bars) with **`parquetBytesWritten: false`** (pyarrow / write job incomplete). Sidecar can exist without parquet. Quality engine: `assessDataQuality` (no class named `ResearchDataQualityEngine`).
 
-`settings.budget` is Argus **allocation**, not broker equity. Enforced by `CapitalAllocation` + gate `argus_capital_allocation`. Example: broker $2000, budget $100 → $101 BUY fails allocation.
+### 3.5 Phase 18 historical replay (MODE B)
+
+Full Argus replay exists (`FullArgusReplayEngine`, `HistoricalReplayBroker`, `config/replaySafety.json`). Path: PIT bars → Chief vote math → RiskEngine → OMS → replay broker (NEXT_BAR_OPEN + costs). Does **not** emit live `TRADE_IDEA_GENERATED`. Golden UNIT_FIXTURE schedule exercises path correctness only — **not** REAL_MARKET_DATA edge. `executionEnvironment=REPLAY` excluded from organic paper. VectorBT remains MODE A `canPlaceOrders: false`.
 
 ---
 
-## 4. RiskEngine gate ladder
+## Gate 4 — UI honesty
 
-Catalog: `config/riskGateOrder.json` (**24** names). Pass/fail comes from `RISK_GATE_EVALUATED` / `risk_gate_results`, **not** from painting the JSON green. `sell_position_exists` is recorded on SELL only.
+### 4.1 Quarantined routes
 
-| Seq | Gate | Notes |
-|---|---|---|
-| 1 | `emergency_stop` | Also blocks `TRADING_PAUSED` |
-| 2 | `autobot_enabled` | **BUY** only when Autobot off |
-| 3–6 | `same_symbol_cooldown`, `post_loss_cooldown`, `daily_trade_limit`, `duplicate_signal` | BUY-only overtrading (Phase 16). `daily_trade_limit` **0** = unlimited |
-| 7 | `invalid_account_equity` | No `equity \|\| 10000` |
-| 8 | `daily_loss` | Kill-switch fraction `dailyLossKillSwitchFraction` (0.8 of daily limit). LIVE min $1000 via restricted-live |
-| 9 | `consecutive_loss` | 3 |
-| 10 | `portfolio_drawdown` | settings; fallback 15% from peak |
-| 11 | `order_rate_limit` | settings; fallback 5/min |
-| 12 | `market_hours` | Alpaca clock; skip if no keys; **fail-closed** if keys exist and clock HTTP fails |
-| 13 | `data_freshness` | stale tick > `stalePriceThresholdMs` (5 min) |
-| 14 | `news_veto` | `news_clusters.impactScore`, 4h, **direction-blind** |
-| 15 | `price_validity` | |
-| 16–21 | PositionSizing | `order_notional_cap`, concentration, `open_positions_cap`, correlation, `sufficient_size` |
-| 22 | `sell_position_exists` | SELL only |
-| 23 | `argus_capital_allocation` | `settings.budget` |
-| 24 | `daily_buy_notional` | paper unlimited unless JSON > 0; LIVE uses `restrictedLiveMaxDailyBuyNotionalDollars` ($15k) |
+- `app.all("/api/v1/signals")` → **410** `SIGNALS_PATH_QUARANTINED`
+- Event-memory routes → **410**
 
-Stop-per-share assumption in sizing: `stopLossAssumptionPct` **0.05**, **not ATR**. Kelly/EV can suppress **Quant ideas** only; RiskEngine does **not** size from Kelly.
+Command Center does not restore fabricated signals. Memory UI handles 410.
 
-**Restricted LIVE** (`RestrictedLiveMode.ts`, file-reviewed, not a UI knob): $5k order, 3 open positions, $1k daily loss. No-op in paper.
+### 4.2 Agent Network Focus Mode
 
-Do **not** add a second kill switch. `emergency-stop` / `TRADING_PAUSED` already exist.
+`DigitalTwinVisualizer` / `AgentFocusMode`: real EventBus only. `AgentWorkflowTheater`: educational loops — not ticks.
+
+### 4.3 Phase 25 Mission Control purge
+
+`AutonomousMissionControl.tsx`: fabricated CIO win-rate percentages and arena return theater removed. Empty states use `AwaitingSignal` / `AWAITING_ORGANIC_PAPER_EVIDENCE`. Metrics must not be invented client-side.
+
+Remaining `34.2%` strings in the tree are **NewsAgent calibration comments** (real measured bucket accuracy), not Mission Control P&L.
 
 ---
 
-## 5. Agents (who votes)
+# Technical readiness (software execution safety)
 
-| Role | Source | Default |
-|---|---|---|
-| TechnicalAgent | RSI/MACD/BB | `MARKET_DATA` when idea-gen enabled; 50-tick warmup |
-| NewsEngine | RSS + APIs + optional LLM | Timer; **does not** emit trade ideas unless `deskIntelligence.newsEmitsTradeIdeas` (default **false**) |
-| Fundamental / Macro | AlphaVantage + AIRouter | Autobot 60s / 75s |
-| QuantEngine | `StrategyEngine` CORE five | Off until `QUANT_ENGINE_ENABLED=true`. Live emit = `strategyIdea` only (no regime-only BUY) |
-| KronosEngine | local Chronos | Ticks if `/health`; honest warning if down |
-| PortfolioManager | TP / trail / thesis invalidation | ~60s **SELL** ideas |
-| ChiefTrader / RiskAgent | Consensus / gates | Always constructed |
+**Score (hostile, this session):** ~73/100 infrastructure. **Not 100.** Not unattended-certified.
 
-**Not live voters:** `MarketRegimeAgent` (LLM), `AdvancedQuantEngines` (telemetry only). **No classes:** SentimentAgent, OrderFlowAgent (UI names only).
+What the code actually does today:
 
-NewsAgent last scored pass: **44.6% on 242 predictions**. News is **not** a default voter.
+- Sacred path: `TRADE_IDEA_GENERATED` → ChiefTrader → RiskEngine → OMS → BrokerManager → broker.
+- Dual paper/LIVE flags + LIVE_ARM fail closed.
+- Unknown quote age fails `data_freshness`.
+- Unknown broker submit pauses trading.
+- Quant off unless `QUANT_ENGINE_ENABLED=true`; SMC live only with `QUANT_SMC_STRATEGY_ENABLED=true`.
+- Restricted-live dollar caps when `tradingMode === 'LIVE'` (not a profit proof).
+- Auth: production refuses no-password boot (`enforceAuthConfigOrExit`). **Dev with `AUTH_PASSWORD` unset still exposes `/api` + `/ws`** (gap A5 in gap analysis).
 
-LLM providers with classes: Gemini, OpenAI, DeepSeek, Nvidia, OpenAI-compatible (Ollama). Extra env keys (Anthropic, Grok, …) may exist without a provider class. Bull/Bear (`QUANT_BULL_BEAR_ENABLED`) **nulls** LLM-invented prices/EV.
+Remaining gaps that still matter for money:
+
+- Shadow is a second ledger (OMS-fill-only) — not organic paper.
+- `BacktestEngine` SAME_BAR remains (labeled).
+- No L2; no Canadian automated routing; IBKR 2FA; Questrade cannot place; Coinbase paper refuses `placeOrder`.
+- OpenAlice / IBKR companion health may FAIL without blocking RiskEngine (wrong MCP / Gateway 401 are ops, not edge).
+
+### Paper trading — infrastructural GO / NO-GO
+
+**Refuse** stamp `PAPER TRADING READY (TECHNICAL)` as 100% autonomy.
+
+1. Autobot / idea generation off unless enabled.
+2. `data_freshness` blocks until a real tick age exists.
+3. Organic closed paper in `data/argus.db` this session: **0** (`6` rows, all `PENDING` BUY, `execution_environment` null).
+4. Shadow ≠ `trades` table.
+
+**Paper path (PAPER + paperMode + Autobot on + ticks + InternalPaper or Alpaca paper):** fail-closed and usable → **CONDITIONAL GO (supervised)**.
+
+**Unattended 100% autonomous paper certificate: NO-GO.**
 
 ---
 
-## 6. Brokers
+# Trading-edge readiness (empirical statistical validation)
 
-| Broker | Reality |
+**Score: 8/100** (`tradingEdgeScore` / empty CORE evidence).
+
+| Claim | Code / data reality |
 |---|---|
-| InternalPaperBroker | Default. Seed cash `internalPaperDefaultCash` = **$100,000**. Not broker equity. Not `maxTradeSize`. |
-| Alpaca | Paper or live REST. Only fully unattended US-equity broker. IEX top-of-book (no L2). |
-| IBKR | Client Portal Web API. Local Gateway + **human 2FA** ~24h. `canadianEquities: false`. |
-| Questrade | Read-only OAuth. `placeOrder` throws. Never the order-placing broker. |
-| Coinbase | Real Advanced Trade JWT. **`placeOrder` refuses in paper** (no sandbox). Not funded-account verified here. |
+| CORE validated | **UNTESTED** |
+| SMC | **UNVALIDATED** |
+| OOS / WFO / robustness on GREEN REAL_MARKET_DATA | Prior SPY 1Day NEXT_BAR run: WFO **FRAGILE**, robustness **FAILED** / insufficient — **not** promotion-ready |
+| Non-zero research costs | **Configured** (0.005 / 2 / 5) |
+| VectorBT full strategy parity | **`fullStrategyParity: false`** |
+| Organic paper expectancy | **NOT ESTABLISHED** (0 closed PAPER SELLs) |
+| Historical replay / golden schedule | Path test only — **not** edge |
+| LLM confidence = P(win) | **Forbidden** |
 
-`PAPER_TRADING_ONLY` does **not** by itself force `BrokerManager` paper. Operator must keep `tradingMode === 'PAPER'`.
+No strategy may be called profitable from this repository state.
 
----
-
-## 7. Quant, research, Phase 18–19
-
-### CORE five (`StrategyEngine.ts`)
-
-`MOMENTUM_BREAKOUT`, `PULLBACK_CONTINUATION`, `MEAN_REVERSION`, `TREND_FOLLOWING`, `RANGE_REVERSION`.
-
-Live `evaluateAll()` is these five. SMC (`SMC_LIQUIDITY_SWEEP`) only if `QUANT_SMC_STRATEGY_ENABLED=true` at **call time**. `findStrategy(id)` still finds experimental for **backtest** without the live flag.
-
-Phase 19: CORE VectorBT adapters are **`FEATURE_TRANSLATION`** of BOS / RVOL / Keltner / swing S/R (`python/argus_research/core_features.py` + `coreParityVectors.ts`). **Not** an SMA proxy. **Not** byte-identical RegimeEngine/DMI/MACD/CMF. **Not** an edge. Status **UNTESTED**. SMC stays `PROXY_NOT_FEATURE_PARITY` / **UNVALIDATED**.
-
-`BacktestEngine.runStrategyBacktest` is long-only and uses a **same-bar** fill model. Research replay uses **NEXT_BAR_OPEN**. Do not paper over `ENGINE_MISMATCH` by picking the better PnL.
-
-Golden SMA fixture = **determinism** (signal at T uses closes through T; execute next open). It is **UNIT_FIXTURE**, not CORE OOS, not `BACKTEST_PASS` for promotion.
-
-### Warehouse
-
-`scripts/ingest_research_warehouse.ts` can fetch 1m/5m/15m/1h/1D from Alpaca REST for `markets.json` US benchmarks. `cleanOhlcv` drops invalid bars. Parquet write **only if** `ResearchDataQualityEngine` grade is **GREEN**. No keys ⇒ no bars fabricated. Empty `data/research/*.parquet` = **UNAVAILABLE**, not a fake SPY book.
-
-### PIT LLM
-
-`debateReplayed: true` **only** when stored `ai_calls` has prompt **and** `rawResponse` with `createdAt <= asOfMs` **and** a matching `news_clusters` row. Otherwise false. Empty PIT ledger ⇒ `allowBuy: false` (unless explicit technical-only option — labeled TECHNICAL_BACKTEST, not AI consensus).
-
-### Promotion
-
-`promotionEngine.ts` **derives** status. `LIVE_CANDIDATE` needs data quality, backtest, OOS, WFO, robustness, organic paper floors (`minTradesForPaperValidation` = 30; `minPaperSessions`), risk/ops health, Canadian approval if CA, then **manual** `LIVE_APPROVED`. None of those evidence flags are true for CORE today.
-
-Organic paper: `executionEnvironment=PAPER` FILLED **SELL** with P&L. UNKNOWN / BACKTEST / REPLAY / test traces / REJECTED do **not** count. This pass **did not** query `data/argus.db` — **do not invent** a closed-trade count.
+**Trading-edge: NO-GO.**
 
 ---
 
-## 8. Capital labels (do not confuse)
+# Phase status (code-verified)
 
-| Label | Source | Typical |
-|---|---|---|
-| `paperInitialCapital` | `tradingSafety.internalPaperDefaultCash` | $100,000 InternalPaper seed |
-| `defaultMaxTradeSizeDollars` | `tradingSafety.defaultMaxTradeSizeDollars` | $3,000 order-notional **fallback** when settings unset |
-| `argusAllocationBudget` | `settings.budget` | Argus allocation, not equity |
-| `researchInitialCapital` | `researchSafety.goldenInitialCapital` | $10,000 golden fixture |
-| `brokerEquity` | live broker | **null** when unavailable — never 10000 |
+### Phase 20 — secrets / LIVE enablement
 
-`GET /api/v2/research/capital-labels` returns these explicitly.
-
----
-
-## 9. Autobot-off behavior (Phase 19)
-
-| Module | Autobot off |
+| Item | Status |
 |---|---|
-| MarketDataWorker | Caches last quote; **no** `MARKET_DATA` EventBus emit |
-| Technical / Kronos / AdvancedQuant | No tick ingest / no ideas (also gated by `isLiveIdeaGenerationEnabled`) |
-| ChiefTrader | Drops stray **entry** ideas before LLM |
-| Fundamental / Macro | No ideas |
-| QuantSignalAgent | May persist assessments; no ideas unless Autobot on **and** EV + min R:R |
-| NewsEngine | `NEWS_CATALYST` only unless `newsEmitsTradeIdeas` |
-| PortfolioMonitor | **Still emits SELL** (exits) through RiskEngine |
-| RiskEngine BUY | Fails `autobot_enabled` |
+| Encryption fail-closed | **CLOSED** |
+| Refuse boot on leftover `secrets.json` | **CLOSED** |
+| LIVE phrase + settings allowlist | **CLOSED** |
+| Per-order LIVE_ARM (OMS + live Alpaca) | **CLOSED** |
 
-`docs/ARGUS.md` still says Autobot-off ticks can drive Technical if `TRADING_ENABLED`. **Code:** emit is gated. Trust this file.
+### Phase 21 — one OMS / environment hygiene
 
----
-
-## 10. Scorecard (evidence-gated; not raised for more files)
-
-From `ARGUS_REAL_MONEY_READINESS.md`. Phase 19 did **not** move these numbers.
-
-| Area | Score | Why it is not 100 |
-|---|---|---|
-| Software | 78 | tsc/vitest strong; SPA almost untested |
-| Execution | 55 | Path is real; IBKR 2FA; Questrade cannot place; Coinbase paper refuses |
-| Risk | 72 | 24 recorded gates; still no L2; stop model is 5% not ATR |
-| AI | 40 | Debate conf ≠ calibrated win rate; news 44.6%; PIT only if logs exist |
-| Quant | 48 | CORE UNTESTED; QUANT default off; SMC UNVALIDATED |
-| Paper validation | 28 | Filter exists; sample not proven here |
-| **Trading edge** | **8** | No OOS+WFO+robustness+organic paper for a named version |
-| Canadian | 35 | Live routing blocked |
-| Observability | 58 | Real traces + Agent Network; other widgets still mock/`AwaitingSignal` |
-| Data (research) | 40 | Contract + ingest script; warehouse empty until keyed GREEN write |
-| Research harness | 45 | Golden SMA / translation tests ≠ book of business |
-| Broker honesty | 55 | Equity fail-closed; paper seed easy to misread as buying power |
-| Operational recovery | 50 | Startup health exists; 2FA and recon still operator work |
-
----
-
-## 11. §25.3 — UI tab honesty matrix
-
-SPA: ~21 nav surfaces in `App.tsx`. Login early-return is **after** most hooks — effects still run on the login screen; gate fetches on `isAuthenticated`.
-
-**Rule:** unlabeled charts are **untrusted** until the component is read. `AwaitingSignal` / `NOT_IMPLEMENTED` is honest. Do not treat Research Lab or Focus Mode as Sharpe.
-
-| Tab id | Honesty |
+| Item | Status |
 |---|---|
-| `dashboard` | Mix. Live quotes/positions where wired. Several overlays use `AwaitingSignal` (historian, fake RSI overlay, risk decomposition). |
-| `command` | Real Autobot/settings/guardrails. `AutoBotFlowVisualizer` of legacy `activeCycle` is **NOT** the live path (`AwaitingSignal`). |
-| `portfolio` | Real `trades` / broker portfolio where APIs exist. Stress/counterfactual widgets `AwaitingSignal` if no real parallel sim. |
-| `arena` | RNG performance widgets replaced with `AwaitingSignal` (2026-08-15). |
-| `news` | Real news pipeline UI where backed by `news_*` tables / EventBus. |
-| `opportunities` | `GET /api/v2/opportunities` — real high-confidence `agent_predictions` or empty `AwaitingSignal`. Not hardcoded NVDA cards. |
-| `scanner` | Strategy Scanner / Research Lab. RSI scan uses cached `ohlcv_bars`. Research Lab = capability + promotion, **not** edge. |
-| `intelligence` | Desk overlay (`EliteDeskPanel`) — reviewed catalog, not a live edge claim. |
-| `agents` | **See §11.1.** DigitalTwin + Focus Mode = EventBus only. Dialogue graph = `AwaitingSignal`. |
-| `evaluation` | Mixed; treat as untrusted except labeled APIs. |
-| `kronos` | `KronosDashboard` — honest if Chronos `/health` down. |
-| `learning` | `GET /api/v2/agents/learning-summary` + `learned_rules`. No fabricated “Alpha Generated by RL”. |
-| `memory` | Event-memory **410** quarantined. Do not show 82% Trade War theater. |
-| `observatory` | `TransactionObservatory` via `GET /api/v2/transactions/:id` — real joins. |
-| `activity` | Process/activity; do not assume P&L. |
-| `diagnostics` | Real health/AI usage where routed. |
-| `audit` | Lists real `GET /api/v2/transactions` (not a fake LLM council timeline). |
-| `validation` | `AwaitingSignal` / research status — not a live GO. |
-| `deployment` | Real instance health check. |
-| `settings` | Real settings + broker keys (encrypted). Restricted-live caps are **not** knobs. |
-| `documentation` | Docs tab. |
+| Single production `placeOrder` path | **CLOSED** |
+| Organic filter (excludes UNKNOWN / test / MANUAL_OVERRIDE / REPLAY) | **CLOSED** (count still **0**) |
+| BacktestEngine → NEXT_BAR | **OPEN** (intentionally labeled SAME_BAR) |
 
-### 11.1 Agent Network (`agents`) — Focus Mode
+### Phase 22 — canonical research / warehouse / UI quarantine
 
-| Widget | Status |
+| Item | Status |
 |---|---|
-| `DigitalTwinVisualizer` | REAL EventBus pulses/packets. Tick throttle 125ms + rAF. Idle tape ⇒ idle graph. |
-| `AgentFocusMode` | REAL internals; expand ≤280ms. Backdrop / Escape / Close. |
-| Technical | RSI/MACD/BB from TechnicalEngine calcs; confidence only on TechnicalAgent ideas |
-| News / Ollama | Completed JSON only — **no** token stream on EventBus |
-| Chief | Live stack + `EvidenceAggregator` math vs 0.75; official bar from `CHIEF_CONSENSUS_COMPLETED` |
-| Risk | 24-gate catalog; colors after `RISK_GATE_EVALUATED` or persisted `risk_gate_results` |
-| `OrchestrationStatus` | `/api/v2/orchestration/*` |
-| Win-rate bar | `agent_performance_stats` or empty |
-| Multi-Agent Dialogue Graph | **NOT SHOWN** (`AwaitingSignal`) |
-| `AgentWorkflowTheater.tsx` | File exists; **not mounted** |
+| Canonical NEXT_BAR | **CLOSED** |
+| Non-zero research costs | **CLOSED** |
+| GREEN warehouse + Parquet bytes on disk | **PARTIAL** (meta/bars GREEN; parquet write incomplete here) |
+| Signals / event-memory 410 | **CLOSED** |
 
-Copy drift: App still says “Click a node for the process log.” Click opens Focus Mode. Not a data lie.
+### Phase 23 — VectorBT / overlay
 
-**Does not raise** Observability (58) or edge (8).
+| Item | Status |
+|---|---|
+| Vector FEATURE_PARITY_ESTABLISHED | **CLOSED** (vector claim only) |
+| Full strategy parity | **OPEN** |
+| CORE OOS/WFO/robustness pass on GREEN | **OPEN — EXTERNAL** |
 
----
+### Phase 18 — historical replay
 
-## 12. §31 — Honesty pass (do / do not)
+| Item | Status |
+|---|---|
+| MODE B RiskEngine→OMS→HistoricalReplayBroker | **CLOSED** (path) |
+| Replay ≠ paper ≠ LIVE; golden schedule = UNIT_FIXTURE | **CLOSED** (honesty) |
+| Replay as promotion / edge | **FORBIDDEN** |
 
-**Do**
+### Phase 25 — UI honesty / pre-soak hardening
 
-- Say LIVE **NO-GO** and paper **CONDITIONAL GO**.
-- Cite EventBus / `trades` / `risk_gate_results` for live decisions.
-- Show `—` / Awaiting when payloads are missing.
-- Keep QUANT and SMC flags **off** until evidence exists.
-- Distinguish paper seed $100k vs $3k notional cap vs budget vs broker equity.
+| Item | Status |
+|---|---|
+| Mission Control fabricated WR/arena returns removed | **CLOSED** |
+| `BrokerEngine` deleted | **CLOSED** |
+| Warehouse empty-dir test cwd isolation | **CLOSED** |
+| `SOURCE: MANUAL_OVERRIDE` on execute-override | **CLOSED** |
 
-**Do not**
+### Phase 24+ (roadmap, not started)
 
-- Enable LIVE to “see if it works.”
-- Count golden SMA, VectorBT version, or Focus Mode as edge.
-- Describe unused agents as voters.
-- Invent organic paper counts, 2022 LLM debates, or L2 ladders.
-- Treat `riskGateOrder.json` as pass/fail.
-- Claim CORE VectorBT = `runStrategyBacktest` PnL.
-- Vendor TradingAgents source (inspiration only, Apache-2.0).
-
-Known unavailable (never fill zeros): L2, options, breadth, volume profile, TSI, anchored VWAP, pairs, CAD FX, ORB/gap/HOD as live detectors unless that experimental env is on **and** validated.
+Auth harden when `AUTH_PASSWORD` unset (non-prod), parquet ops, full parity decision, CORE research until not FRAGILE, organic paper soak, tiny LIVE human gate — see `ARGUS_REAL_MONEY_GAP_ANALYSIS.md`. **Await authorization.**
 
 ---
 
-## 13. P0 / P1 register (this date)
+## Scorecard (this session)
 
-### Closed
+| Dimension | Verdict |
+|---|---|
+| Compiler | GO |
+| Unit/integration tests | GO (1066 / 162 files) |
+| Production order path | GO (single OMS) |
+| LIVE enablement | Fail-closed (phrase + dual flags + LIVE_ARM) |
+| Paper **path** | CONDITIONAL GO (supervised) |
+| Paper **100% autonomous** | **NO-GO** |
+| Trading edge | **NO-GO (8/100)** |
+| LIVE capital | **NO-GO** |
+| Canadian automated live | **BLOCKED — EXTERNAL** |
+| Organic paper closed SELLs | **0** |
 
-| ID | Item | Evidence |
-|---|---|---|
-| P0 | Autobot unused on BUY | `autobot_enabled` |
-| P0 | News/Fund/Macro ideas Autobot off | agent files + `newsEmitsTradeIdeas: false` |
-| P0 | VectorBT as second broker | `canPlaceOrders: false` |
-| P0 | `VALIDATED` without evidence | `promotionEngine.ts` |
-| P1 | Quant regime-only live BUY | live emit = `strategyIdea` only |
-| P1 | Empty PIT = AI BUY | `allowBuy: false` |
-| P1 | Event-memory 82% | HTTP 410 |
-| P1 | Vitest optional AI sockets | `vitest.setup.ts`; VectorBT skipped |
-| P1 | Golden SMA look-ahead | `smaCrossover.ts` |
-| P1 | WFO test leakage | `optimizedOnTest: false` |
-| P1 | UNKNOWN/BACKTEST as organic paper | `organicPaper.ts` |
-| P1 | MarketDataWorker Autobot-off emit | `isLiveIdeaGenerationEnabled` |
-| P1 | ChiefTrader Autobot-off debate | `reviewIdea` early return |
-| P1 | $100k vs $3000 confusion | named `tradingSafety` keys |
-| P1 | SMA-as-CORE VectorBT | `FEATURE_TRANSLATION` |
-| P1 | `debateReplayed` hardcoded false | `PitLlmReplay.ts` (true only if reconstructed) |
-
-### Open
-
-| ID | Item | Evidence |
-|---|---|---|
-| P1 | PortfolioMonitor SELL Autobot off | by design; still RiskEngine |
-| P1 | Live MTF 1m–daily execution | not a live path |
-| P1 | ORB / gap / HOD / L2 | `UNAVAILABLE` or experimental |
-| P1 | Full VectorBT RegimeEngine port | only BOS/RVOL/Keltner/S-R translated |
-| P1 | Years of GREEN parquet on disk | pipeline yes; files only after ingest |
-| P0* | No measured edge | trading-edge, not a missing kill-switch |
+`evaluateLiveReadiness()`: **`LIVE_NO_GO`**. Organic paper: **`NOT_ESTABLISHED`**. Canadian: **`NOT_AVAILABLE`**.
 
 ---
 
-## 14. Is unattended paper “safe”?
+## Strict GO / NO-GO
 
-**Autobot off:** no new BUY (RiskEngine + ChiefTrader + no tick emit). VectorBT cannot fill. Residual: PortfolioMonitor **SELL** and recon flatten if that flag is on.
+| Question | Call |
+|---|---|
+| **Paper trading (supervised, InternalPaper or Alpaca paper, Autobot on, ticks, PAPER+paperMode aligned)** | **CONDITIONAL GO** — path fail-closed. Not profitability. |
+| **Paper trading (100% unattended / “PAPER TRADING READY (TECHNICAL)”)** | **NO-GO** |
+| **Live capital / autonomous real-money** | **NO-GO** |
+| **Start 30-day organic paper soak after Phase 25?** | **Infrastructure CONDITIONAL GO** — evidence still 0 until NY sessions produce real OMS PAPER closes. |
 
-**Autobot on, paper broker, `autoFlattenOnReconciliationMismatch: false`:** orders still full RiskEngine/OMS. QUANT off unless env. News does not independently vote BUY. Default is still **NO TRADE** until consensus + gates pass.
-
-**Not safe to claim:** profitable, OOS-validated CORE, elite-trader, LIVE-ready, “VectorBT found an edge.”
-
----
-
-## 15. GO / NO-GO
-
-### Paper
-
-- Autobot off, no new BUY: **GO**
-- Autobot on, paper/internal, flatten flag false: **CONDITIONAL GO** (infrastructure)
-- Do **not** size up from golden SMA, Research Lab, Scanner, VectorBT/Rust versions, or Focus Mode
-
-### Live capital
-
-**NO-GO** until **all** of:
-
-1. Organic paper fills exist (honest filter; floors 30 trades / 10 sessions).
-2. Walk-forward / permutation **pass** on that ledger for a named `strategyVersion`.
-3. Experimental flags stay off unless separately validated.
-4. RiskEngine/OMS remain the only fill path.
-5. Canadian routing verified only if legally permitted — never by flipping `canadianEquities`.
-6. Manual approval after `LIVE_CANDIDATE`.
-
-Remaining blockers even then: IBKR 2FA, Questrade cannot place, restricted-live caps are ceilings not an edge, no L2, debate confidence uncalibrated.
-
----
-
-## 16. Commands (ground truth)
-
-```
-npm run dev              # companions + tsx server.ts :3000
-npm run dev:server-only  # Node only
-npm run build            # Vite SPA + esbuild → dist/server.cjs
-npm test                 # vitest run — trust the runner count
-npm run lint             # tsc --noEmit
-npx tsx scripts/assert_core_vectorbt_parity.ts
-npx tsx scripts/ingest_research_warehouse.ts   # needs Alpaca keys; no fabricate
-```
-
-`npm run db:migrate` now exists as a thin re-import of `src/server/db/index.ts`. Boot still migrates on first import. Prefer `npm run dev` / `npm run start` as the real path.
-
----
-
-*End of analysis. Forensic companion: `ARGUS_FINAL_FORENSIC_AUDIT.md`. Scores not raised for more reports. LIVE NO-GO. Trading edge 8. Organic paper in this DB: NONE. Paper CONDITIONAL GO for plumbing only.*
+Do not enable LIVE. Do not treat VectorBT, Phase 18 replay, passing tests, or CORE strategy files as edge. Do not count Shadow or manual overrides as organic paper.

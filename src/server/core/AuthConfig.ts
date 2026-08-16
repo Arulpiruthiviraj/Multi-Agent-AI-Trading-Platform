@@ -129,9 +129,8 @@ export function enforceAuthConfigOrExit(
   if (isAuthEnabled(env)) {
     log.info('[SECURITY] Authentication is ENABLED (AUTH_PASSWORD configured).');
   } else if (!isProduction(env)) {
-    const token = ensureDevToken(env);
-    log.warn(`[SECURITY] Mutating /api/v1 and /api/v2 require loopback or X-Argus-Dev-Token (token generated for this process).`);
-    log.warn(`[SECURITY] ARGUS_DEV_TOKEN=${token}`);
+    ensureDevToken(env);
+    log.warn(`[SECURITY] Mutating /api/v1 and /api/v2 require loopback or X-Argus-Dev-Token (token generated for this process; value is not logged).`);
   }
 }
 

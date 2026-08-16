@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { resolveLivePitTimes } from './PitLedgerRecorder';
 
 describe('resolveLivePitTimes', () => {
@@ -16,5 +18,13 @@ describe('resolveLivePitTimes', () => {
   it('refuses future publishedAt (look-ahead)', () => {
     const now = 1_700_000_000_000;
     expect(resolveLivePitTimes(now + 1, now)).toBeNull();
+  });
+});
+
+describe('DATA_QUALITY PIT kind', () => {
+  it('is a first-class ledger kind distinct from agent votes', () => {
+    const src = readFileSync(join(process.cwd(), 'src/server/engines/backtest/PitLedgerRecorder.ts'), 'utf8');
+    expect(src).toMatch(/DATA_QUALITY/);
+    expect(src).not.toMatch(/side: 'HOLD'.*DATA_QUALITY/);
   });
 });

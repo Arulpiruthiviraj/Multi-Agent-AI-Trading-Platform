@@ -3,6 +3,7 @@
  * Signal at bar i uses closes[0..i] only. Fill modeled at bar i+1 open (next-bar execution).
  */
 import type { ResearchBar } from './ohlcvTypes';
+import { researchSafety } from '../config/researchSafety';
 
 export interface SmaTrade {
   entryBarIndex: number;
@@ -41,7 +42,7 @@ export function runSmaCrossover(
   fast: number,
   slow: number,
   initialCapital: number,
-  commissionPerShare = 0,
+  commissionPerShare: number = researchSafety.commissionPerShare,
 ): SmaBacktestResult {
   const closes = bars.map((b) => b.close);
   const trades: SmaTrade[] = [];

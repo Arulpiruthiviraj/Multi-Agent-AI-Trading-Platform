@@ -1,9 +1,11 @@
 /**
  * Organic paper counting. Rejected, cancelled, unit-test, replay, and backtest rows are not organic.
  */
+import { getTradingDateStr } from '../core/TradingCalendar';
+
 export type ExecutionEnvironment = 'BACKTEST' | 'REPLAY' | 'SIMULATION' | 'PAPER' | 'LIVE' | 'UNKNOWN';
 
-const TEST_TRACE = /^(test|qa-|gates-|crash-|lifecycle-|vitest)/i;
+const TEST_TRACE = /^(test|qa-|gates-|crash-|lifecycle-|vitest|diag-)/i;
 
 export function classifyTradeEnvironment(row: {
   traceId?: string | null;
@@ -15,13 +17,15 @@ export function classifyTradeEnvironment(row: {
     return tagged;
   }
   const reason = (row.reasoning ?? '');
+  const upper = reason.toUpperCase();
+  // Operator overrides must not be classified as PAPER even if OMS later stamps executionEnvironment=PAPER.
+  if (upper.includes('SOURCE: MANUAL_OVERRIDE') || upper.includes('SOURCE: EXTERNAL_MANUAL')) return 'UNKNOWN';
+  if (row.traceId && /^manual-override-/i.test(row.traceId)) return 'UNKNOWN';
   const stamped = reason.match(/executionEnvironment=(BACKTEST|REPLAY|SIMULATION|PAPER|LIVE)\b/i);
   if (stamped) return stamped[1].toUpperCase() as ExecutionEnvironment;
-  const upper = reason.toUpperCase();
   if (upper.includes('BACKTEST')) return 'BACKTEST';
   if (upper.includes('REPLAY')) return 'REPLAY';
   if (upper.includes('SIMULATION')) return 'SIMULATION';
-  if (upper.includes('SOURCE: EXTERNAL_MANUAL')) return 'UNKNOWN';
   if (row.traceId && TEST_TRACE.test(row.traceId)) return 'UNKNOWN';
   return 'UNKNOWN';
 }
@@ -32,9 +36,14 @@ export function isOrganicClosedPaper(row: {
   profitLoss?: number | null;
   traceId?: string | null;
   reasoning?: string | null;
+  timestamp?: string | null;
+  filledAt?: string | null;
   executionEnvironment?: string | null;
 }): boolean {
   if (row.status !== 'FILLED' || row.side !== 'SELL' || typeof row.profitLoss !== 'number') return false;
+  const reason = (row.reasoning ?? '').toUpperCase();
+  if (reason.includes('SOURCE: MANUAL_OVERRIDE') || reason.includes('SOURCE: EXTERNAL_MANUAL')) return false;
+  if (row.traceId && /^manual-override-/i.test(row.traceId)) return false;
   const env = classifyTradeEnvironment(row);
   if (env !== 'PAPER') return false;
   if (row.traceId && TEST_TRACE.test(row.traceId)) return false;
@@ -48,7 +57,11 @@ export function resolveOmsExecutionEnvironment(opts: {
 }): ExecutionEnvironment {
   const mode = String(opts.tradingMode || '').toUpperCase();
   const id = String(opts.brokerId || '');
-  if (mode === 'LIVE') return 'LIVE';
+  if (id === 'historical_replay') return 'REPLAY';
+  if (mode === 'LIVE') {
+    if (id === 'alpaca' || id === 'ibkr' || id === 'coinbase') return 'LIVE';
+    return 'UNKNOWN';
+  }
   if (id === 'internal_paper') return 'PAPER';
   if (mode === 'PAPER' && (id === 'alpaca' || id === 'ibkr' || id === 'coinbase' || id === 'questrade')) {
     return 'PAPER';
@@ -62,6 +75,30 @@ export function stampExecutionEnvironment(reasoning: string, env: ExecutionEnvir
   return base ? `${base} executionEnvironment=${env}` : `executionEnvironment=${env}`;
 }
 
+export function countOrganicPaperSessions(
+  rows: Array<{
+    status: string;
+    side: string;
+    profitLoss?: number | null;
+    traceId?: string | null;
+    reasoning?: string | null;
+    executionEnvironment?: string | null;
+    timestamp?: string | null;
+    filledAt?: string | null;
+  }>,
+): number {
+  const days = new Set<string>();
+  for (const row of rows) {
+    if (!isOrganicClosedPaper(row)) continue;
+    const raw = row.filledAt || row.timestamp;
+    if (!raw) continue;
+    const t = new Date(raw);
+    if (Number.isNaN(t.getTime())) continue;
+    days.add(getTradingDateStr(t));
+  }
+  return days.size;
+}
+
 export function summarizeOrganicPaper(
   rows: Array<{
     status: string;
@@ -70,10 +107,13 @@ export function summarizeOrganicPaper(
     traceId?: string | null;
     reasoning?: string | null;
     executionEnvironment?: string | null;
+    timestamp?: string | null;
+    filledAt?: string | null;
   }>,
   minSampleForSharpe: number,
 ): {
   closedTradeCount: number;
+  sessionCount: number;
   sampleSize: number;
   grossPnl: number | null;
   winRate: number | null;
@@ -86,8 +126,10 @@ export function summarizeOrganicPaper(
   const organic = rows.filter(isOrganicClosedPaper);
   const pnls = organic.map((r) => r.profitLoss as number);
   const n = pnls.length;
+  const sessionCount = countOrganicPaperSessions(rows);
   const empty = {
     closedTradeCount: n,
+    sessionCount,
     sampleSize: n,
     grossPnl: n ? pnls.reduce((s, v) => s + v, 0) : null,
     winRate: null as number | null,

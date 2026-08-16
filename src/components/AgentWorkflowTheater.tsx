@@ -138,7 +138,7 @@ const AGENTS: AgentSpec[] = [
     ideaAgentNames: ['QuantEngine'],
     steps: [
       { title: 'Features', detail: 'Regime, MarketContext, GroupedScores, optional SMC snapshot.' },
-      { title: 'Strategies', detail: 'Five core evaluateAll(); family modules + 760-name taxonomy are experimental/NOT_SUPPORTED, never auto-live.' },
+      { title: 'Strategies', detail: 'Five core evaluateAll(); 10-family master catalog + 760 aliases are not 1,000 live edges. Experimental/NOT_SUPPORTED never auto-live.' },
       { title: 'EV gate', detail: 'No idea if EV ≤ 0 or too few closed trades. Thesis is additive.' },
     ],
   },

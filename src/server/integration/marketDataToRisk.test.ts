@@ -82,6 +82,8 @@ describe('Integration: MARKET_DATA -> TechnicalAgent -> ChiefTrader -> RiskAgent
       eventBus.emit('MARKET_DATA', { symbol, price: 100, volume: 1000, timestamp: new Date().toISOString() });
     }
     eventBus.emit('MARKET_DATA', { symbol, price: 10, volume: 1000, timestamp: new Date().toISOString() });
+    const { marketDataWorker } = await import('../services/MarketDataWorker');
+    marketDataWorker.cacheObservedQuote(symbol, 10);
 
     // A professional trader needs a second independent source - TechnicalAgent alone is not
     // confirmation. Emit a real agreeing NewsAgent idea on the same symbol so ChiefTrader can

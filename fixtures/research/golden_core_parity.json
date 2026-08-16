@@ -1,0 +1,347 @@
+{
+  "$comment": "UNIT_FIXTURE for CORE BOS/RVOL/Keltner/S-R vector parity. Not REAL_MARKET_DATA. Not an edge.",
+  "provenance": "UNIT_FIXTURE",
+  "fullStrategyParity": false,
+  "parityScope": [
+    "structureEvent",
+    "structureTrend",
+    "rvol",
+    "keltner",
+    "nearestSupport",
+    "nearestResistance"
+  ],
+  "bars": [
+    {
+      "timestamp": 0,
+      "open": 100,
+      "high": 101,
+      "low": 99,
+      "close": 100.5,
+      "volume": 10
+    },
+    {
+      "timestamp": 86400000,
+      "open": 100.1,
+      "high": 101.1,
+      "low": 99.1,
+      "close": 100.6,
+      "volume": 10
+    },
+    {
+      "timestamp": 172800000,
+      "open": 100.2,
+      "high": 101.2,
+      "low": 99.2,
+      "close": 100.7,
+      "volume": 10
+    },
+    {
+      "timestamp": 259200000,
+      "open": 100.3,
+      "high": 101.3,
+      "low": 99.3,
+      "close": 100.8,
+      "volume": 10
+    },
+    {
+      "timestamp": 345600000,
+      "open": 100.4,
+      "high": 101.4,
+      "low": 99.4,
+      "close": 100.9,
+      "volume": 10
+    },
+    {
+      "timestamp": 432000000,
+      "open": 100.5,
+      "high": 101.5,
+      "low": 99.5,
+      "close": 101,
+      "volume": 10
+    },
+    {
+      "timestamp": 518400000,
+      "open": 100.6,
+      "high": 101.6,
+      "low": 99.6,
+      "close": 101.1,
+      "volume": 10
+    },
+    {
+      "timestamp": 604800000,
+      "open": 100.7,
+      "high": 101.7,
+      "low": 99.7,
+      "close": 101.2,
+      "volume": 10
+    },
+    {
+      "timestamp": 691200000,
+      "open": 100.8,
+      "high": 101.8,
+      "low": 99.8,
+      "close": 101.3,
+      "volume": 10
+    },
+    {
+      "timestamp": 777600000,
+      "open": 100.9,
+      "high": 101.9,
+      "low": 99.9,
+      "close": 101.4,
+      "volume": 10
+    },
+    {
+      "timestamp": 864000000,
+      "open": 101,
+      "high": 102,
+      "low": 100,
+      "close": 101.5,
+      "volume": 10
+    },
+    {
+      "timestamp": 950400000,
+      "open": 101.1,
+      "high": 102.1,
+      "low": 100.1,
+      "close": 101.6,
+      "volume": 10
+    },
+    {
+      "timestamp": 1036800000,
+      "open": 101.2,
+      "high": 102.2,
+      "low": 100.2,
+      "close": 101.7,
+      "volume": 10
+    },
+    {
+      "timestamp": 1123200000,
+      "open": 101.3,
+      "high": 102.3,
+      "low": 100.3,
+      "close": 101.8,
+      "volume": 10
+    },
+    {
+      "timestamp": 1209600000,
+      "open": 101.4,
+      "high": 102.4,
+      "low": 100.4,
+      "close": 101.9,
+      "volume": 10
+    },
+    {
+      "timestamp": 1296000000,
+      "open": 101.5,
+      "high": 102.5,
+      "low": 100.5,
+      "close": 102,
+      "volume": 10
+    },
+    {
+      "timestamp": 1382400000,
+      "open": 101.6,
+      "high": 102.6,
+      "low": 100.6,
+      "close": 102.1,
+      "volume": 10
+    },
+    {
+      "timestamp": 1468800000,
+      "open": 101.7,
+      "high": 102.7,
+      "low": 100.7,
+      "close": 102.2,
+      "volume": 10
+    },
+    {
+      "timestamp": 1555200000,
+      "open": 101.8,
+      "high": 102.8,
+      "low": 100.8,
+      "close": 102.3,
+      "volume": 10
+    },
+    {
+      "timestamp": 1641600000,
+      "open": 101.9,
+      "high": 102.9,
+      "low": 100.9,
+      "close": 102.4,
+      "volume": 10
+    },
+    {
+      "timestamp": 1728000000,
+      "open": 102,
+      "high": 103,
+      "low": 101,
+      "close": 102.5,
+      "volume": 10
+    },
+    {
+      "timestamp": 1814400000,
+      "open": 102.1,
+      "high": 103.1,
+      "low": 101.1,
+      "close": 102.6,
+      "volume": 10
+    },
+    {
+      "timestamp": 1900800000,
+      "open": 102.2,
+      "high": 103.2,
+      "low": 101.2,
+      "close": 102.7,
+      "volume": 10
+    },
+    {
+      "timestamp": 1987200000,
+      "open": 102.3,
+      "high": 103.3,
+      "low": 101.3,
+      "close": 102.8,
+      "volume": 10
+    },
+    {
+      "timestamp": 2073600000,
+      "open": 102.4,
+      "high": 103.4,
+      "low": 101.4,
+      "close": 102.9,
+      "volume": 10
+    },
+    {
+      "timestamp": 2160000000,
+      "open": 102.5,
+      "high": 103.5,
+      "low": 101.5,
+      "close": 103,
+      "volume": 10
+    },
+    {
+      "timestamp": 2246400000,
+      "open": 102.6,
+      "high": 103.6,
+      "low": 101.6,
+      "close": 103.1,
+      "volume": 10
+    },
+    {
+      "timestamp": 2332800000,
+      "open": 102.7,
+      "high": 103.7,
+      "low": 101.7,
+      "close": 103.2,
+      "volume": 10
+    },
+    {
+      "timestamp": 2419200000,
+      "open": 102.8,
+      "high": 103.8,
+      "low": 101.8,
+      "close": 103.3,
+      "volume": 10
+    },
+    {
+      "timestamp": 2505600000,
+      "open": 102.9,
+      "high": 103.9,
+      "low": 101.9,
+      "close": 103.4,
+      "volume": 10
+    },
+    {
+      "timestamp": 2592000000,
+      "open": 103,
+      "high": 104,
+      "low": 102,
+      "close": 103.5,
+      "volume": 10
+    },
+    {
+      "timestamp": 2678400000,
+      "open": 103.1,
+      "high": 104.1,
+      "low": 102.1,
+      "close": 103.6,
+      "volume": 10
+    },
+    {
+      "timestamp": 2764800000,
+      "open": 103.2,
+      "high": 104.2,
+      "low": 102.2,
+      "close": 103.7,
+      "volume": 10
+    },
+    {
+      "timestamp": 2851200000,
+      "open": 103.3,
+      "high": 104.3,
+      "low": 102.3,
+      "close": 103.8,
+      "volume": 10
+    },
+    {
+      "timestamp": 2937600000,
+      "open": 103.4,
+      "high": 104.4,
+      "low": 102.4,
+      "close": 103.9,
+      "volume": 10
+    },
+    {
+      "timestamp": 3024000000,
+      "open": 103.5,
+      "high": 104.5,
+      "low": 102.5,
+      "close": 104,
+      "volume": 10
+    },
+    {
+      "timestamp": 3110400000,
+      "open": 103.6,
+      "high": 104.6,
+      "low": 102.6,
+      "close": 104.1,
+      "volume": 10
+    },
+    {
+      "timestamp": 3196800000,
+      "open": 103.7,
+      "high": 104.7,
+      "low": 102.7,
+      "close": 104.2,
+      "volume": 10
+    },
+    {
+      "timestamp": 3283200000,
+      "open": 103.8,
+      "high": 104.8,
+      "low": 102.8,
+      "close": 104.3,
+      "volume": 10
+    },
+    {
+      "timestamp": 3369600000,
+      "open": 103.9,
+      "high": 104.9,
+      "low": 102.9,
+      "close": 104.4,
+      "volume": 40
+    }
+  ],
+  "expectedTsVector": {
+    "structureEvent": "NONE",
+    "structureTrend": "SIDEWAYS",
+    "rvol": 4,
+    "keltner": {
+      "middle": 103.44999999999999,
+      "upper": 107.44999999999999,
+      "lower": 99.44999999999999
+    },
+    "nearestSupport": null,
+    "nearestResistance": null
+  }
+}

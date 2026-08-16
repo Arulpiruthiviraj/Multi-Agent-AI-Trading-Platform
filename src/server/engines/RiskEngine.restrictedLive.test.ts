@@ -29,6 +29,9 @@ describe('RiskEngine - restricted live mode caps (Phase 13)', () => {
     schema = await import('../db/schema');
     ({ riskEngine } = await import('./RiskEngine'));
     ({ tradingEngine } = await import('./TradingEngine'));
+    const { marketDataWorker } = await import('../services/MarketDataWorker');
+    marketDataWorker.cacheObservedQuote('AAPL', 100);
+    marketDataWorker.cacheObservedQuote('MSFT', 100);
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
 

@@ -26,6 +26,6 @@ export function aiHistoricalReplayAvailability(): AiReplayAvailability {
     fix: 'Keep recording agent_predictions and prediction_outcomes on the live/paper path. A licensed point-in-time news/fundamentals feed would be required before any historical AI backtest.',
     severity: 'WARNING',
     lookaheadRisk: 'Invoking current cloud/local LLMs inside a 2022 ReplayClock loop would use 2026 weights and possibly information that did not exist at T.',
-    alternative: 'Use QUANT_STRATEGY mode: BacktestEngine.runStrategyBacktest() with ReplayClock on real OHLCV only.',
+    alternative: 'MODE B: POST /api/v2/research/replay/create then /start (Quant + RiskEngine + OMS + HistoricalReplayBroker). MODE A: QUANT_STRATEGY ReplayClock / VectorBT research. Neither is historical LLM consensus.',
   };
 }

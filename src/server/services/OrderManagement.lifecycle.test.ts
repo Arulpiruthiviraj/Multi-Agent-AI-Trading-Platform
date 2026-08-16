@@ -96,6 +96,10 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     const broker = stubBroker();
     BrokerManager.getInstance().registerBroker(broker);
     await BrokerManager.getInstance().setActiveBroker('lifecycle-stub', {});
+    const existingSettings = await db.select().from(schema.settings).limit(1);
+    if (existingSettings.length === 0) {
+      await db.insert(schema.settings).values({ tradingMode: 'Paper' });
+    }
   });
 
   async function ageOrder(orderId: string, ageMs: number) {

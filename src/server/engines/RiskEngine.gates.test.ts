@@ -30,6 +30,8 @@ describe('RiskEngine gate accumulation (Phase 2)', () => {
     eventBus.on('RISK_GATE_EVALUATED', (e: any) => gateEvents.push(e));
     ({ riskEngine } = await import('./RiskEngine'));
     ({ tradingEngine } = await import('./TradingEngine'));
+    const { marketDataWorker } = await import('../services/MarketDataWorker');
+    marketDataWorker.cacheObservedQuote('AAPL', 150);
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
 

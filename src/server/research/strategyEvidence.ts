@@ -7,7 +7,7 @@ export function coreStrategyInventory() {
     strategyId,
     strategyVersion: 'CORE_REPO',
     family: 'CORE',
-    adapter: 'FEATURE_TRANSLATION',
+    adapter: strategyId === 'SMC_LIQUIDITY_SWEEP' ? 'PROXY_NOT_FEATURE_PARITY' : 'FEATURE_SUBSET_PARITY',
     status: deriveLifecycleStatus(emptyEvidence(strategyId)),
     smcUnvalidated: false,
     note: researchSafety.proxyAdapterNote,
@@ -31,7 +31,7 @@ export function researchComparisonMatrix() {
     const e = emptyEvidence(strategyId);
     return {
       strategy: strategyId,
-      featureParity: strategyId === 'SMC_LIQUIDITY_SWEEP' ? 'PROXY_NOT_FEATURE_PARITY' : 'FEATURE_TRANSLATION',
+      featureParity: strategyId === 'SMC_LIQUIDITY_SWEEP' ? 'PROXY_NOT_FEATURE_PARITY' : 'FEATURE_SUBSET_PARITY',
       data: 'UNAVAILABLE',
       backtest: 'UNTESTED',
       oos: 'UNTESTED',

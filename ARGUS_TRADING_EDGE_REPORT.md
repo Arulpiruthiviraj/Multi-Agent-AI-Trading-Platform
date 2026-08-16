@@ -1,11 +1,19 @@
-# ARGUS trading-edge report (Phase 18)
+# ARGUS_TRADING_EDGE_REPORT
 
-**Score: 8 / 100** (unchanged from Phase 16/17)
+**Edge score: 8 / 100. NO EDGE demonstrated.**
 
-Phase 18 added provenance, Argus `evaluate()` replay, and strategy specs. **NO EDGE FOUND** on real market data because no `REAL_MARKET_DATA` warehouse was imported and CORE VectorBT remains `PROXY_NOT_FEATURE_PARITY`.
+`tradingEdgeScore(emptyEvidence)` remains 8 until REAL_MARKET_DATA + NEXT_BAR OOS + WFO + robustness + organic paper exist for a frozen `strategyVersion`.
 
-Golden SMA / CSV unit imports are **UNIT_FIXTURE** and cannot raise this score.
+This session’s software work (freshness, sizing honesty) **does not raise** the edge score.
 
-## CORE / SMC
+| Claim | Verdict |
+|---|---|
+| CORE profitable | **NOT PROVEN** |
+| OOS | **NOT ESTABLISHED** |
+| WFO | **NOT ESTABLISHED** |
+| Robustness | **UNTESTED** (not FRAGILE — no run) |
+| Organic paper expectancy | **NONE** (0 trades) |
+| Golden SMA / VectorBT | **NOT** edge |
+| Zero-cost backtest | **THEORETICAL**; promotion blocked |
 
-All CORE: **UNTESTED**. SMC: **UNVALIDATED**. See `ARGUS_PHASE18_RESEARCH_RESULTS.md`.
+**BLOCKED — EXTERNAL EVIDENCE REQUIRED** for any score above the 0–20 band.

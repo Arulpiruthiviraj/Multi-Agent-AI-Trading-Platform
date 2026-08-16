@@ -279,11 +279,15 @@ export class QuestradeBroker implements BrokerPlugin {
     const res = await this.fetchQuestrade(`v1/markets/quotes/${symbolId}`);
     const q = res?.quotes?.[0];
     if (!q) throw new Error(`Questrade: no quote returned for ${symbol}`);
+    const last = q.lastTradePrice ?? q.bidPrice ?? q.askPrice;
+    if (!(typeof last === 'number' && Number.isFinite(last) && last > 0)) {
+      throw new Error(`Questrade: no positive last/bid/ask for ${symbol} (refuse fabricated 0 quote)`);
+    }
     return {
       symbol,
-      bid: q.bidPrice ?? 0,
-      ask: q.askPrice ?? 0,
-      last: q.lastTradePrice ?? q.bidPrice ?? q.askPrice ?? 0,
+      bid: typeof q.bidPrice === 'number' && q.bidPrice > 0 ? q.bidPrice : 0,
+      ask: typeof q.askPrice === 'number' && q.askPrice > 0 ? q.askPrice : 0,
+      last,
       volume: q.volume ?? 0,
       timestamp: new Date().toISOString(),
     };

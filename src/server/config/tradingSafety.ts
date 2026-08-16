@@ -27,7 +27,7 @@ export interface TradingSafety {
   restrictedLiveMaxOrderNotionalDollars: number;
   restrictedLiveMaxOpenPositions: number;
   restrictedLiveMaxDailyLossDollars: number;
-  /** 0 = unlimited in paper/simulation. LIVE always also applies restrictedLiveMaxDailyBuyNotionalDollars. */
+  /** Paper/simulation daily BUY notional. 0 would skip the gate; production JSON must be > 0. LIVE also applies restrictedLiveMaxDailyBuyNotionalDollars. */
   maxDailyBuyNotionalDollars: number;
   restrictedLiveMaxDailyBuyNotionalDollars: number;
   alpacaRequestTimeoutMs: number;

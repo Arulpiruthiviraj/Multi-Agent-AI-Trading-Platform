@@ -100,6 +100,8 @@ describe('BacktestEngine.runStrategyBacktest', () => {
     });
 
     expect(result.status).toBe('COMPLETED');
+    expect(result.promotable).toBe(false);
+    expect(result.promotionRejection).toBe('SAME_BAR_CLOSE_NOT_PROMOTABLE');
     expect(Array.isArray(result.tradeLog)).toBe(true);
     expect(Array.isArray(result.equityCurve)).toBe(true);
     expect(result.equityCurve.length).toBeGreaterThan(0);

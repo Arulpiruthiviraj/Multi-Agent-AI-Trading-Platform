@@ -1,0 +1,573 @@
+{
+  "$comment": "Operator master taxonomy (10 families). Catalog only — not 1,000 live evaluate() edges. Live Quant evaluateAll() remains five CORE unless a per-id env flag in quantExperimentalStrategies.json is the string true. Do not enable those flags to see if it works. Walk-forward OOS for checked combos failed; experimental stays UNVALIDATED.",
+  "note": "A named archetype is not a validated edge. CORE/EXPERIMENTAL mappings are partial implementations of the named mechanic. NOT_SUPPORTED means Argus has no honest evaluate() for that mechanic (missing data, missing model, or not on the Quant path).",
+  "families": [
+    {
+      "id": "TREND_MOMENTUM",
+      "name": "Trend-Following & Momentum",
+      "premise": "Prices can show intermediate-horizon autocorrelation from underreaction, allocator flows, and herding. Not proven in this environment.",
+      "archetypes": [
+        {
+          "id": "DUAL_MA_CROSSOVER",
+          "name": "Dual Moving Average Crossover",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER",
+          "implementationNote": "Current SMA50/SMA200 + EMA9/EMA20 stack and ADX. Not a same-bar 10/30 or 50/200 cross event.",
+          "edgeHypothesis": "Fast/slow MA alignment can mark a regime shift from chop to directional markup/markdown.",
+          "invalidation": "Whipsaw in range-bound markets; stack lag at inflections."
+        },
+        {
+          "id": "TRIPLE_MA_RIBBON",
+          "name": "Triple Moving Average Ribbon",
+          "status": "EXPERIMENTAL",
+          "moduleId": "MA_CROSSOVER",
+          "implementationNote": "Same MA_CROSSOVER stack; not a dedicated 20/50/200 ribbon detector.",
+          "edgeHypothesis": "Multi-period MA agreement filters some false dual-MA crosses.",
+          "invalidation": "Late entry; high lag at turning points."
+        },
+        {
+          "id": "DONCHIAN_TURTLE",
+          "name": "Donchian Channel Breakout (Turtle)",
+          "status": "EXPERIMENTAL",
+          "moduleId": "DONCHIAN_CHANNEL_BREAKOUT",
+          "implementationNote": "Prior N-bar high/low excluding current bar (donchianPriorLookback). No Turtle 10-bar exit unit.",
+          "edgeHypothesis": "N-period channel breaks can capture fat-tail trend runs.",
+          "invalidation": "Low win rate; needs positive skew; UNVALIDATED here."
+        },
+        {
+          "id": "TIME_SERIES_MOMENTUM",
+          "name": "Time-Series (Absolute) Momentum",
+          "status": "CORE",
+          "moduleId": "TREND_FOLLOWING",
+          "implementationNote": "Regime + structure trend module. Not 12-1 month excess return vs rf, not cash overlay.",
+          "edgeHypothesis": "Persistent directional regimes can continue over intermediate horizons.",
+          "invalidation": "V-reversals; CORE is UNTESTED on NEXT_BAR OOS in this environment."
+        },
+        {
+          "id": "CROSS_SECTIONAL_RS",
+          "name": "Cross-Sectional Relative Strength (12-1)",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION",
+          "implementationNote": "Symbol vs SPY plus sector regime. Not a universe decile long/short skipping t-1.",
+          "edgeHypothesis": "Leaders can continue to attract institutional flow versus the benchmark.",
+          "invalidation": "Momentum crashes; not a market-neutral factor book."
+        },
+        {
+          "id": "MACD_SIGNAL",
+          "name": "MACD / Signal Line / Zero-Cross",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OSCILLATOR_MOMENTUM",
+          "implementationNote": "MACD histogram + RSI midline + ROC family. Divergence remains a feature (isTradeSignal false), not a standalone trade.",
+          "edgeHypothesis": "Momentum acceleration can confirm a directional regime.",
+          "invalidation": "False zero-crosses in volatility contraction."
+        },
+        {
+          "id": "PARABOLIC_SAR",
+          "name": "Parabolic SAR Trend Acceleration",
+          "status": "NOT_SUPPORTED",
+          "reason": "No Parabolic SAR series on StrategyContext. Live stops use tradingSafety.stopLossAssumptionPct, not SAR.",
+          "edgeHypothesis": "Accelerating trailing stop-and-reverse can lock trend velocity.",
+          "invalidation": "Premature flips in high-vol chop."
+        },
+        {
+          "id": "ICHIMOKU_KUMO",
+          "name": "Ichimoku Kinko Hyo (Kumo Breakout)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No Tenkan/Kijun/Span A/B cloud features. Do not fake Ichimoku from SMA.",
+          "edgeHypothesis": "Cloud equilibrium can filter trend vs balance.",
+          "invalidation": "Parameter sensitivity; missing cloud data here."
+        },
+        {
+          "id": "KAMA_TREND",
+          "name": "Kaufman Adaptive Moving Average (KAMA)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No Efficiency Ratio or KAMA series. MA_CROSSOVER uses SMA/EMA only.",
+          "edgeHypothesis": "Adaptive smoothing can slow in chop and speed in trends.",
+          "invalidation": "Can lag static MAs in parabolic runs."
+        },
+        {
+          "id": "SUPERTREND_ATR",
+          "name": "SuperTrend / ATR Trailing Stop Following",
+          "status": "NOT_SUPPORTED",
+          "reason": "No SuperTrend bands. Live RiskEngine sizing is not ATR-based.",
+          "edgeHypothesis": "k×ATR offset from median can trail volatility expansion.",
+          "invalidation": "Vol spikes false-exit; not implemented."
+        }
+      ]
+    },
+    {
+      "id": "MEAN_REVERSION_FAMILY",
+      "name": "Mean Reversion & Counter-Trend",
+      "premise": "Temporary liquidity shocks can pull price from a statistical or session mean, then revert. Left-tail risk if the mean walks away.",
+      "archetypes": [
+        {
+          "id": "BOLLINGER_MEAN_REVERSION",
+          "name": "Bollinger Band Mean Reversion",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION",
+          "implementationNote": "Keltner extremes + RSI + StochRSI in SIDEWAYS_RANGE. VolatilityFeatures expose BB width%, not 2σ/3σ band levels — not a Gaussian BB fade.",
+          "edgeHypothesis": "Extensions from a volatility envelope can revert inside a range.",
+          "invalidation": "Riding the bands in breakout regimes; CORE UNTESTED OOS."
+        },
+        {
+          "id": "CONNORS_RSI2",
+          "name": "2-Period RSI (Connors RSI)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No RSI(2)<5/10 with 200-SMA filter as specified. OSCILLATOR_MOMENTUM uses RSI midline, not Connors.",
+          "edgeHypothesis": "Short-term seller exhaustion in a structural uptrend.",
+          "invalidation": "Falling-knife fundamental breakdowns."
+        },
+        {
+          "id": "KELTNER_SQUEEZE_REVERSION",
+          "name": "Keltner / Bollinger Squeeze Reversion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY",
+          "implementationNote": "Squeeze then Keltner expansion breakout (continuation), not a fade of a failed expansion.",
+          "edgeHypothesis": "Vol contraction/expansion cycles can precede directional range expansion.",
+          "invalidation": "This module is breakout-oriented; a true squeeze-fade is not coded."
+        },
+        {
+          "id": "ZSCORE_PRICE_REVERSION",
+          "name": "Standardized Z-Score Price Reversion",
+          "status": "NOT_SUPPORTED",
+          "reason": "No rolling Z=(P-μ)/σ entry at -2.5 / exit at 0. MEAN_REVERSION is Keltner/RSI, not a z-score book.",
+          "edgeHypothesis": "Stationary normalized price can revert to zero z.",
+          "invalidation": "Non-stationary fat-tail regime shifts."
+        },
+        {
+          "id": "OVERNIGHT_GAP_FILL",
+          "name": "Overnight Gap Fill",
+          "status": "NOT_SUPPORTED",
+          "reason": "GAP_CONTINUATION is gap-and-go with RVOL, not a fade to prior close. No earnings calendar to exclude gap-and-go.",
+          "edgeHypothesis": "RTH liquidity can fill overnight overreaction.",
+          "invalidation": "Catalyst gap-and-go."
+        },
+        {
+          "id": "STOCHASTIC_HOOK",
+          "name": "Stochastic Oscillator %K/%D Hook",
+          "status": "CORE",
+          "moduleId": "MEAN_REVERSION",
+          "implementationNote": "Stochastic RSI extremes, not classic %K/%D hook from 20/80.",
+          "edgeHypothesis": "Short-cycle oscillator exhaustion in a range.",
+          "invalidation": "Oscillator saturation in strong trends."
+        },
+        {
+          "id": "VWAP_MEAN_REVERSION_ARCH",
+          "name": "VWAP Mean Reversion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "VWAP_MEAN_REVERSION",
+          "implementationNote": "Session VWAP distance in a low-ADX range. Not ±2 VWAP σ bands (no VWAP stdev series).",
+          "edgeHypothesis": "Intraday volume-weighted mean can attract mean-reverting flow.",
+          "invalidation": "Trend days; VWAP unavailable on some daily-only contexts."
+        },
+        {
+          "id": "DEMARK_SEQUENTIAL",
+          "name": "DeMark Sequential Exhaustion (TD Sequential)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No TD 9/13 countdown features.",
+          "edgeHypothesis": "Fixed countdown of closes vs close-4 can time exhaustion.",
+          "invalidation": "Weak on high-beta breakouts; not implemented."
+        }
+      ]
+    },
+    {
+      "id": "BREAKOUT_VOLATILITY",
+      "name": "Breakout & Volatility Expansion",
+      "premise": "Compression can precede directional expansion when ranges and stops are breached. High fake-out rate.",
+      "archetypes": [
+        {
+          "id": "OPENING_RANGE_BREAKOUT_ARCH",
+          "name": "Opening Range Breakout (ORB)",
+          "status": "EXPERIMENTAL",
+          "moduleId": "OPENING_RANGE_BREAKOUT",
+          "implementationNote": "Opening range is unavailable on daily bars (honest fail, not a fabricated OR).",
+          "edgeHypothesis": "First RTH range can express session directional intent.",
+          "invalidation": "Morning fake-outs; daily-bar OR missing."
+        },
+        {
+          "id": "NR7_INSIDE_BAR",
+          "name": "Narrow Range 7 / Inside Bar Breakout",
+          "status": "NOT_SUPPORTED",
+          "reason": "No NR7 / inside-bar detector on PriceActionFeatures.",
+          "edgeHypothesis": "Narrowest recent range can precede expansion.",
+          "invalidation": "Secondary contraction whipsaw."
+        },
+        {
+          "id": "PRIOR_PERIOD_RVOL_BREAKOUT",
+          "name": "Prior Period High/Low Breakout",
+          "status": "EXPERIMENTAL",
+          "moduleId": "PREVIOUS_PERIOD_BREAKOUT",
+          "implementationNote": "Previous-day high/low with RVOL. Weekly is a 5-day approximation on daily bars.",
+          "edgeHypothesis": "Breaks of widely watched prior highs can cascade stops.",
+          "invalidation": "Failed break / liquidity sweep."
+        },
+        {
+          "id": "BBW_EXPANSION",
+          "name": "Bollinger Band Width Expansion",
+          "status": "EXPERIMENTAL",
+          "moduleId": "BOLLINGER_VOLATILITY",
+          "implementationNote": "Band-width squeeze then Keltner expansion. Direction from the expansion break, not a separate BBW oscillator.",
+          "edgeHypothesis": "Multi-session low bandwidth then expansion can start markup.",
+          "invalidation": "First expansion bar direction ambiguity."
+        },
+        {
+          "id": "ATR_EXPANSION_BREAKOUT",
+          "name": "ATR Expansion Breakout",
+          "status": "CORE",
+          "moduleId": "MOMENTUM_BREAKOUT",
+          "implementationNote": "Momentum breakout + RVOL/structure. Not today's range > 2.0×ATR(14) as a named condition.",
+          "edgeHypothesis": "Range expansion with volume can mark institutional aggression.",
+          "invalidation": "Climax bars at the end of a move."
+        },
+        {
+          "id": "PIVOT_POINT_BREAKOUT",
+          "name": "Floor Trader Pivot Point Breakouts",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SR_BOUNCE",
+          "implementationNote": "Nearest S/R bounce with reversal candle. Not R1/S1/R2/S2 pivot formula breakouts with volume delta.",
+          "edgeHypothesis": "Widely watched reference levels can attract algorithmic flow.",
+          "invalidation": "Pivots as reversal magnets; no L2 delta."
+        }
+      ]
+    },
+    {
+      "id": "MARKET_STRUCTURE_FLOW",
+      "name": "Market Structure, Price Action & Order Flow",
+      "premise": "Auction and institutional liquidity hypotheses. Argus has daily/bar SMC pattern classification, not L2/DOM/footprint.",
+      "archetypes": [
+        {
+          "id": "FVG_IMBALANCE",
+          "name": "Fair Value Gap / Imbalance Fill",
+          "status": "NOT_SUPPORTED",
+          "reason": "SMC module classifies sweep/liquidity patterns; FVG fill-as-entry is not a standalone evaluate() with 3-candle displacement gaps as the trade.",
+          "edgeHypothesis": "Markets may re-auction inefficient gaps.",
+          "invalidation": "Displacement through the gap without pause."
+        },
+        {
+          "id": "LIQUIDITY_SWEEP",
+          "name": "Liquidity Sweep / Stop Hunt Reversal",
+          "status": "EXPERIMENTAL",
+          "moduleId": "SMC_LIQUIDITY_SWEEP",
+          "implementationNote": "UNVALIDATED. Sweep is a pattern (isTradeSignal false on the detector). Live evaluateAll excludes unless QUANT_SMC_STRATEGY_ENABLED=true. Backtest long-only.",
+          "edgeHypothesis": "Wick through equal highs/lows then close back can mark stop absorption.",
+          "invalidation": "Sweep that becomes a genuine breakout."
+        },
+        {
+          "id": "ORDER_BLOCK_RETEST",
+          "name": "Order Block Retest",
+          "status": "NOT_SUPPORTED",
+          "reason": "No dedicated last-opposing-candle OB mitigation evaluate(). Do not treat SMC sweep as OB.",
+          "edgeHypothesis": "Unfilled institutional limit origin may be revisited.",
+          "invalidation": "Displacement without BOS."
+        },
+        {
+          "id": "VPOC_BOUNCE",
+          "name": "Volume Profile Point of Control Bounce",
+          "status": "NOT_SUPPORTED",
+          "reason": "QuantitativeFeatureEngine reports volume profile / POC as NOT_SUPPORTED. VOLUME_CONFIRMATION is RVOL+CMF/MFI, not VPOC.",
+          "edgeHypothesis": "Highest-volume node can act as accepted fair value.",
+          "invalidation": "POC migration."
+        },
+        {
+          "id": "VAH_VAL_REJECTION",
+          "name": "Value Area High/Low Rejection",
+          "status": "NOT_SUPPORTED",
+          "reason": "No Market Profile VAH/VAL / 80% rule features.",
+          "edgeHypothesis": "Failure to accept outside value can rotate to the opposite bound.",
+          "invalidation": "Value-area breakout trend day."
+        },
+        {
+          "id": "CVD_ABSORPTION",
+          "name": "Cumulative Volume Delta Absorption Divergence",
+          "status": "NOT_SUPPORTED",
+          "reason": "No footprint/CVD feed. Alpaca IEX is top-of-book, not L2.",
+          "edgeHypothesis": "Passive limits absorbing aggressive sells can precede a squeeze.",
+          "invalidation": "Limits pulled; slippage."
+        },
+        {
+          "id": "FOOTPRINT_IMBALANCE",
+          "name": "Footprint / Order Book Imbalance Stacking",
+          "status": "NOT_SUPPORTED",
+          "reason": "No L2/L3 DOM. UI must not show a fake ladder.",
+          "edgeHypothesis": "Stacked bid/ask imbalance can mark aggressive initiation.",
+          "invalidation": "Latency and adverse selection; no book here."
+        }
+      ]
+    },
+    {
+      "id": "STATISTICAL_ARBITRAGE",
+      "name": "Statistical Arbitrage & Relative Value",
+      "premise": "Cointegration and factor-neutral books need universe, hedge ratios, and execution. Argus equity Quant is single-name directional, not a pairs engine.",
+      "archetypes": [
+        {
+          "id": "ENGLE_GRANGER_PAIRS",
+          "name": "Cointegrated Pairs Trading (Engle-Granger)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No Engle-Granger/Johansen spread, no β hedge, no pairs execution. Feature engine marks pairs NOT_SUPPORTED.",
+          "edgeHypothesis": "Stationary spread mean reversion if cointegration holds.",
+          "invalidation": "Structural break (M&A, bankruptcy)."
+        },
+        {
+          "id": "FAMA_FRENCH_LS",
+          "name": "Fama-French Multi-Factor Long/Short",
+          "status": "NOT_SUPPORTED",
+          "reason": "No P/B, ROE, size decile ranking universe. Not a factor-neutral book.",
+          "edgeHypothesis": "Factor premia with market-beta neutralization.",
+          "invalidation": "Factor crowding and multi-year factor drawdowns."
+        },
+        {
+          "id": "LEAD_LAG_ARB",
+          "name": "Statistical Lead-Lag Arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No cross-listed/ADR latency book; not an HFT venue.",
+          "edgeHypothesis": "Information diffusion lag across venues.",
+          "invalidation": "Colocation and HFT close the gap."
+        },
+        {
+          "id": "INDEX_ARB",
+          "name": "Index Arbitrage (Cash vs Futures)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No index-future basis vs fair carry; no basket execution.",
+          "edgeHypothesis": "Creation/redemption bounds the basis.",
+          "invalidation": "Tracking error and latency."
+        },
+        {
+          "id": "KALMAN_PAIRS",
+          "name": "Kalman Filter Dynamic Beta Pairs",
+          "status": "NOT_SUPPORTED",
+          "reason": "No state-space β_t estimator.",
+          "edgeHypothesis": "Adaptive hedge ratio reduces window bias.",
+          "invalidation": "Over-smoothing in vol shocks."
+        }
+      ]
+    },
+    {
+      "id": "MARKET_MAKING_HFT",
+      "name": "Market Making, High-Frequency & Microstructure",
+      "premise": "Requires colocated quotes, inventory, and rebate economics. Argus OMS is retail-broker market orders, not a maker engine.",
+      "archetypes": [
+        {
+          "id": "AVELLANEDA_STOIKOV",
+          "name": "Avellaneda-Stoikov Inventory Market Making",
+          "status": "NOT_SUPPORTED",
+          "reason": "No two-sided quoting, no inventory-skew quotes, no maker OMS.",
+          "edgeHypothesis": "Earn spread while skewing quotes with inventory q.",
+          "invalidation": "Adverse selection from informed flow."
+        },
+        {
+          "id": "VPIN_TOXICITY",
+          "name": "VPIN Toxicity Sizing",
+          "status": "NOT_SUPPORTED",
+          "reason": "No volume-synchronized toxicity estimator.",
+          "edgeHypothesis": "Widen or pull when flow is toxic.",
+          "invalidation": "False positives cutting rebate income."
+        },
+        {
+          "id": "QUEUE_REBATE",
+          "name": "Queue Position / Maker Rebate Harvesting",
+          "status": "NOT_SUPPORTED",
+          "reason": "Alpaca qty market orders; no queue-priority limit path.",
+          "edgeHypothesis": "Maker rebates with short holding.",
+          "invalidation": "Filled only when the book is about to run."
+        },
+        {
+          "id": "LATENCY_ARB",
+          "name": "Cross-Exchange Latency Arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No SIP vs direct feed, no colocated router.",
+          "edgeHypothesis": "Sub-ms discrepancies across venues.",
+          "invalidation": "Infrastructure cost; not this process."
+        }
+      ]
+    },
+    {
+      "id": "OPTIONS_VOLATILITY",
+      "name": "Options, Volatility Surface & Derivatives",
+      "premise": "Needs listed options, IV/RV, greeks, and an options broker. Argus does not invent an options book.",
+      "archetypes": [
+        {
+          "id": "SHORT_STRADDLE",
+          "name": "Delta-Neutral Straddle / Strangle Selling",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options chain, IV, or delta hedge. Feature engine options = NOT_SUPPORTED.",
+          "edgeHypothesis": "IV often exceeds RV (volatility risk premium).",
+          "invalidation": "Gap/gamma blowups; undefined loss on shorts."
+        },
+        {
+          "id": "GAMMA_SCALP",
+          "name": "Gamma Scalping",
+          "status": "NOT_SUPPORTED",
+          "reason": "No long-option + underlying delta hedge loop.",
+          "edgeHypothesis": "RV > IV can pay gamma vs theta.",
+          "invalidation": "Theta bleed if RV undershoots."
+        },
+        {
+          "id": "IRON_CONDOR",
+          "name": "Iron Condor / Iron Butterfly",
+          "status": "NOT_SUPPORTED",
+          "reason": "No defined-risk option spreads.",
+          "edgeHypothesis": "Range-bound premium decay.",
+          "invalidation": "Directional break of wings."
+        },
+        {
+          "id": "EARNINGS_IV_CRUSH",
+          "name": "Earnings Volatility Crush",
+          "status": "NOT_SUPPORTED",
+          "reason": "No earnings calendar and no options IV crush trade.",
+          "edgeHypothesis": "Post-event IV collapse.",
+          "invalidation": "Move beyond implied expected move."
+        },
+        {
+          "id": "VIX_TERM_STRUCTURE",
+          "name": "Volatility Term Structure Arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No VIX futures curve book.",
+          "edgeHypothesis": "Roll yield in contango/backwardation.",
+          "invalidation": "Curve inversion on vol spikes."
+        },
+        {
+          "id": "RISK_REVERSAL_SKEW",
+          "name": "Risk Reversal Skew Arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No vol smile/skew surface.",
+          "edgeHypothesis": "Skew mean-reversion vs hedging demand.",
+          "invalidation": "Tail event expands skew further."
+        }
+      ]
+    },
+    {
+      "id": "EVENT_CATALYST",
+      "name": "Event-Driven, News & Catalyst",
+      "premise": "NewsAgent and MacroAgent exist on the live idea path; they are not Quant evaluate() modules and do not bypass RiskEngine. No PEAD/SUE or merger book.",
+      "archetypes": [
+        {
+          "id": "PEAD",
+          "name": "Post-Earnings Announcement Drift (PEAD)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No SUE ranking or earnings-day systematic book. News sentiment is not PEAD.",
+          "edgeHypothesis": "Slow institutional reweighting after earnings surprises.",
+          "invalidation": "Guidance reversal."
+        },
+        {
+          "id": "MERGER_ARB",
+          "name": "Merger Arbitrage (Cash / Stock)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No deal-spread book or acquirer short overlay.",
+          "edgeHypothesis": "Deal spread compensates completion risk.",
+          "invalidation": "Antitrust / deal break."
+        },
+        {
+          "id": "INDEX_REBALANCE",
+          "name": "Index Rebalance Pre-Positioning",
+          "status": "NOT_SUPPORTED",
+          "reason": "No S&P/MSCI reconstitution calendar.",
+          "edgeHypothesis": "Passive funds must trade the close.",
+          "invalidation": "Overcrowded front-run; committee surprises."
+        },
+        {
+          "id": "NLP_HEADLINE",
+          "name": "Ultra-Fast NLP Headline Sentiment",
+          "status": "NOT_SUPPORTED",
+          "reason": "NewsAgent is not a sub-second FinBERT OMS. Quant taxonomy must not claim NewsAgent as this archetype. Last scored NewsAgent accuracy was not a live edge.",
+          "edgeHypothesis": "Fast parsing of wires before slower capital reacts.",
+          "invalidation": "Misclassification; retractions; 44.6% scored accuracy is not an edge."
+        },
+        {
+          "id": "FOMC_STRADDLE",
+          "name": "Central Bank Rate Decision Straddle",
+          "status": "NOT_SUPPORTED",
+          "reason": "No options straddle and no event-vol booking of FOMC.",
+          "edgeHypothesis": "Surprise rate moves can exceed implied vol.",
+          "invalidation": "On-consensus statement; IV crush."
+        }
+      ]
+    },
+    {
+      "id": "MACRO_CROSS_ASSET",
+      "name": "Macroeconomic, Cross-Asset & Global Cycle",
+      "premise": "MacroAgent can attach qualitative macro context. It does not trade FX carry, curve flies, or commodity rolls. Canadian automated equity routing remains NOT AVAILABLE.",
+      "archetypes": [
+        {
+          "id": "G10_FX_CARRY",
+          "name": "G10 FX Carry Trade",
+          "status": "NOT_SUPPORTED",
+          "reason": "No FX carry book; Coinbase is crypto spot only; no CAD automated equity routing via this taxonomy.",
+          "edgeHypothesis": "UIP often fails in stable regimes.",
+          "invalidation": "Risk-off carry crash."
+        },
+        {
+          "id": "YIELD_CURVE_FLATTENER",
+          "name": "Yield Curve Steepener / Flattener",
+          "status": "NOT_SUPPORTED",
+          "reason": "No Treasury futures curve book.",
+          "edgeHypothesis": "Policy vs long-term growth/inflation repricing.",
+          "invalidation": "Forward-guidance shocks."
+        },
+        {
+          "id": "COMMODITY_ROLL",
+          "name": "Commodity Roll Yield (Backwardation)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No commodity futures curve / roll engine.",
+          "edgeHypothesis": "Positive roll in backwardation.",
+          "invalidation": "Curve shape regime change."
+        },
+        {
+          "id": "SECTOR_ROTATION",
+          "name": "Global Sector Rotation (Risk-On/Off)",
+          "status": "EXPERIMENTAL",
+          "moduleId": "RELATIVE_STRENGTH_ROTATION",
+          "implementationNote": "Symbol vs SPY + sector ETF regime. Not PMI/yield-curve systematic rotation across XLU/XLP/XLK.",
+          "edgeHypothesis": "Sector leadership can persist with benchmark relative strength.",
+          "invalidation": "Stagflation breaking typical correlations."
+        }
+      ]
+    },
+    {
+      "id": "ML_AI_ALPHA",
+      "name": "Machine Learning, Deep Learning & Quantitative AI",
+      "premise": "LLMs on the live path interpret; they do not invent prices/EV or bypass RiskEngine. Kronos/Chronos is a separate forecast agent, not a Quant strategy id.",
+      "archetypes": [
+        {
+          "id": "XGBOOST_DIRECTION",
+          "name": "Gradient Boosted Trees (XGBoost / CatBoost)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No trained GBDT directional classifier in Quant evaluate(). Do not treat indicator stacks as XGBoost.",
+          "edgeHypothesis": "Non-linear feature interactions can beat linear models.",
+          "invalidation": "Concept drift; OOS feature decay."
+        },
+        {
+          "id": "CHRONOS_FORECAST",
+          "name": "Foundation Time-Series Forecasting (Chronos)",
+          "status": "NOT_SUPPORTED",
+          "reason": "KronosForecastAgent is not a StrategyEngine id. Health-down is an honest warning, not a fabricated path. Not in CORE/EXPERIMENTAL lists.",
+          "edgeHypothesis": "Pretrained temporal models can emit probabilistic paths.",
+          "invalidation": "Latency; compounding forecast error."
+        },
+        {
+          "id": "RL_ALLOCATOR",
+          "name": "Reinforcement Learning Dynamic Allocator (PPO/SAC)",
+          "status": "NOT_SUPPORTED",
+          "reason": "No PPO/SAC policy. PositionSizing is FIXED_DOLLAR or PERCENT_OF_EQUITY; Kelly is Quant-side EV gate only, not RL.",
+          "edgeHypothesis": "Learned sizing/rebalance policy vs a reward (e.g. Sharpe).",
+          "invalidation": "Sample inefficiency; catastrophic forgetting."
+        },
+        {
+          "id": "LLM_MULTI_AGENT_DEBATE",
+          "name": "LLM Multi-Agent Adversarial Debate Consensus",
+          "status": "NOT_SUPPORTED",
+          "reason": "ChiefTrader + optional Bull/Bear notes are the live debate path, not a Quant evaluate() archetype. Mapping it here as CORE would falsely imply QuantEngine emits this id. LLM numeric invention is rejected (parseResearchNote).",
+          "edgeHypothesis": "Qualitative synthesis of unstructured catalysts under risk bounds.",
+          "invalidation": "Hallucination; uncalibrated confidence. Not a Quant module."
+        },
+        {
+          "id": "GNN_SPILLOVER",
+          "name": "Graph Neural Network Spillover Arbitrage",
+          "status": "NOT_SUPPORTED",
+          "reason": "No supply-chain GNN.",
+          "edgeHypothesis": "Customer/supplier graphs can delay-price earnings contagion.",
+          "invalidation": "M&A and chain restructuring."
+        }
+      ]
+    }
+  ]
+}

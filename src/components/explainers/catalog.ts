@@ -117,7 +117,7 @@ export const EXPLAINER_CATALOG = {
     title: 'Daily Buy Notional',
     what: 'Cumulative dollars of BUY orders (filled or still open) on the current NY session.',
     why: 'A daily-loss kill-switch only fires after you are already losing. A buy-notional cap limits how much you can put to work in one day.',
-    how: 'RiskEngine gate `daily_buy_notional`. Paper is unlimited unless `maxDailyBuyNotionalDollars` > 0. LIVE always applies `restrictedLiveMaxDailyBuyNotionalDollars`.',
+    how: 'RiskEngine gate `daily_buy_notional`. Paper uses reviewed `maxDailyBuyNotionalDollars`. LIVE always applies `restrictedLiveMaxDailyBuyNotionalDollars`.',
   },
   paperVsLive: {
     title: 'Paper vs LIVE',

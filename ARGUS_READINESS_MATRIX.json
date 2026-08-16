@@ -1,0 +1,50 @@
+{
+  "artifact": "ARGUS_READINESS_MATRIX",
+  "generatedAt": "2026-08-16T18:06:44Z",
+  "method": "Code + config + tsc/vitest this session. Not a profitability certificate.",
+  "overall": {
+    "softwareReadiness": 72,
+    "tradingEdgeReadiness": 8,
+    "paper": "CONDITIONAL_GO",
+    "live": "LIVE_NO_GO",
+    "unattended": "NO-GO",
+    "note": "Scores are evidence-gated. Tests passing do not raise trading-edge."
+  },
+  "categories": {
+    "software": { "status": "PARTIAL", "score": 72, "evidence": "tsc PASS; vitest 1038/1038 (160 files)", "blockingReasons": ["SPA almost untested"], "lastVerified": "2026-08-16", "dataProvenance": "CI_LOCAL" },
+    "execution": { "status": "IMPLEMENTED_TESTED", "score": 64, "evidence": "Single OMS placeOrder; placeOrder throw without brokerOrderId stays PENDING + TRADING_PAUSED (not REJECTED); empty tradingMode/unknown paperMode FAIL CLOSED; /api/v1/signals 410", "blockingReasons": ["IBKR 2FA", "Questrade cannot place", "Coinbase paper refuses"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "risk": { "status": "IMPLEMENTED_TESTED", "score": 73, "evidence": "24 gates; unknown freshness FAIL; broker environment UNKNOWN cannot order", "blockingReasons": ["5% stop assumption not ATR"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "marketData": { "status": "PARTIAL", "score": 50, "evidence": "UNKNOWN/RED fail-closed; DATA_QUALITY rows persist to pit_decision_ledger (not agent votes)", "blockingReasons": ["No live feed certificate", "No L2", "GREEN warehouse missing"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "strategy": { "status": "FAIL", "score": 22, "evidence": "5 CORE UNTESTED; experimental UNVALIDATED; QUANT default off", "blockingReasons": ["No GREEN REAL_MARKET_DATA promotion artifacts"], "lastVerified": "2026-08-16", "dataProvenance": "CONFIG" },
+    "ai": { "status": "PARTIAL", "score": 42, "evidence": "AIRouter; invented numerics nulled; adversarial debate throw/no-verdict is fail-closed HOLD", "blockingReasons": ["Calibration sample empty", "LLM confidence is not P(win)"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "backtest": { "status": "PARTIAL", "score": 38, "evidence": "Canonical NEXT_BAR_OPEN only for promotion; SAME_BAR_CLOSE stamped promotable:false / SAME_BAR_CLOSE_NOT_PROMOTABLE including WalkForwardValidator and GET strategy-backtests", "blockingReasons": ["No GREEN dataset", "CORE UNTESTED"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "oos": { "status": "FAIL", "score": 4, "evidence": "Pipeline only", "blockingReasons": ["BLOCKED — EXTERNAL EVIDENCE REQUIRED"], "lastVerified": "2026-08-16", "dataProvenance": "UNAVAILABLE" },
+    "wfo": { "status": "FAIL", "score": 4, "evidence": "Pipeline only", "blockingReasons": ["BLOCKED — EXTERNAL EVIDENCE REQUIRED"], "lastVerified": "2026-08-16", "dataProvenance": "UNAVAILABLE" },
+    "robustness": { "status": "FAIL", "score": 4, "evidence": "Pipeline only", "blockingReasons": ["BLOCKED — EXTERNAL EVIDENCE REQUIRED"], "lastVerified": "2026-08-16", "dataProvenance": "UNAVAILABLE" },
+    "paper": { "status": "FAIL", "score": 8, "evidence": "Filter excludes TEST/DIAG/UNKNOWN; organic closed paper not established", "blockingReasons": ["0 FILLED SELL P&L PAPER organic"], "lastVerified": "2026-08-16", "dataProvenance": "DATABASE" },
+    "statistics": { "status": "UNAVAILABLE", "score": 8, "evidence": "Libraries exist; no CORE sample", "blockingReasons": ["INSUFFICIENT_SAMPLE"], "lastVerified": "2026-08-16", "dataProvenance": "UNAVAILABLE" },
+    "broker": { "status": "PARTIAL", "score": 52, "evidence": "Alpaca/InternalPaper/IBKR/Coinbase/Questrade as implemented", "blockingReasons": ["Funded LIVE account UNVERIFIED", "Canadian routing BLOCKED"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "security": { "status": "PARTIAL", "score": 66, "evidence": "Production refuses no-auth; mutating APIs gated", "blockingReasons": ["GET open if AUTH_PASSWORD unset", "Penetration test UNAVAILABLE"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "reconciliation": { "status": "IMPLEMENTED_TESTED", "score": 55, "evidence": "Mismatch -> TRADING_PAUSED -> emergency_stop", "blockingReasons": ["Not a standing LIVE certificate"], "lastVerified": "2026-08-16", "dataProvenance": "TEST" },
+    "recovery": { "status": "PARTIAL", "score": 50, "evidence": "OMS crash recovery; unknown submit pauses instead of guessing REJECTED", "blockingReasons": ["30-day unattended UNAVAILABLE"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "observability": { "status": "PARTIAL", "score": 56, "evidence": "traceId, risk_gate_results, execution_environment column, DATA_QUALITY PIT kind", "blockingReasons": ["UI AwaitingSignal widgets"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" },
+    "canadian": { "status": "BLOCKED", "score": 15, "evidence": "canadianReadiness NOT_AVAILABLE; canadianEquities false", "blockingReasons": ["BLOCKED — EXTERNAL EVIDENCE REQUIRED (legal/broker)"], "lastVerified": "2026-08-16", "dataProvenance": "CONFIG" },
+    "live": { "status": "LIVE_NO_GO", "score": 0, "evidence": "evaluateLiveReadiness() LIVE_NO_GO; no manual approval", "blockingReasons": ["All promotion gates failed or UNAVAILABLE"], "lastVerified": "2026-08-16", "dataProvenance": "SOURCE_CODE" }
+  },
+  "strategies": {
+    "validated": 0,
+    "untestedCore": ["MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION", "MEAN_REVERSION", "TREND_FOLLOWING", "RANGE_REVERSION"],
+    "oosValidated": 0,
+    "wfoValidated": 0,
+    "robustnessValidated": 0,
+    "paperValidated": 0
+  },
+  "organicPaper": {
+    "closedTrades": 0,
+    "sessions": 0
+  },
+  "commands": {
+    "tsc": "npx tsc --noEmit PASS",
+    "vitest": "npx vitest run 1038/1038 PASS 160 files"
+  }
+}

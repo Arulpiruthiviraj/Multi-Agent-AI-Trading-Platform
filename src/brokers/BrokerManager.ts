@@ -44,9 +44,10 @@ import { db } from '../server/db';
 import * as schema from '../server/db/schema';
 import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../server/core/EncryptionService';
-import { LIVE_TRADING_CONFIRMATION_PHRASE } from '../server/core/LiveTradingConfirmation';
+import { LIVE_TRADING_CONFIRMATION_PHRASE, armLiveTrading, disarmLiveTrading } from '../server/core/LiveTradingConfirmation';
 import { eventBus } from '../server/core/EventBus';
 import { EVENTS } from '../server/core/eventNames';
+import { getActiveReplaySession } from '../server/replay/ReplayContext';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
@@ -198,6 +199,8 @@ export class BrokerManager {
   }
 
   public getActiveBroker(): BrokerPlugin {
+    const replay = getActiveReplaySession();
+    if (replay?.broker) return replay.broker;
     return this.activeBroker;
   }
 
@@ -262,6 +265,10 @@ export class BrokerManager {
     if (live && confirmationPhrase !== LIVE_TRADING_CONFIRMATION_PHRASE) {
       return { ok: false, error: `Enabling live trading on ${broker.name} requires the exact confirmation phrase "${LIVE_TRADING_CONFIRMATION_PHRASE}".` };
     }
+    if (live && !armLiveTrading(confirmationPhrase)) {
+      return { ok: false, error: `Enabling live trading on ${broker.name} requires the exact confirmation phrase "${LIVE_TRADING_CONFIRMATION_PHRASE}".` };
+    }
+    if (!live) disarmLiveTrading();
 
     const existing = await db.select().from(schema.brokerConnections).where(eq(schema.brokerConnections.brokerName, broker.name));
     if (existing.length > 0) {

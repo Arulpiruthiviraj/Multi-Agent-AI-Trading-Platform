@@ -52,6 +52,8 @@ interface StrategyBacktestSummary {
   expectedValue: { expectedValueR: number } | null;
   kelly: { suggestedFraction: number; statisticallyJustified: boolean; reason: string } | null;
   createdAt: string;
+  promotable?: boolean;
+  promotionRejection?: string;
 }
 
 const REGIME_COLOR: Record<string, string> = {
@@ -81,6 +83,15 @@ export default function QuantSignalsPanel() {
   const [loadingAssessments, setLoadingAssessments] = useState(false);
 
   const [strategies, setStrategies] = useState<QuantStrategy[]>([]);
+  const [masterFamilies, setMasterFamilies] = useState<Array<{
+    id: string;
+    name: string;
+    premise: string;
+    archetypeCount: number;
+    mappedCount: number;
+    notSupportedCount: number;
+  }>>([]);
+  const [taxonomyNote, setTaxonomyNote] = useState<string | null>(null);
   const [selectedStrategy, setSelectedStrategy] = useState("TREND_FOLLOWING");
   const [backtestSymbol, setBacktestSymbol] = useState("AAPL");
   const [startDate, setStartDate] = useState(() => new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split("T")[0]);
@@ -100,6 +111,18 @@ export default function QuantSignalsPanel() {
           displayName: `${s.displayName} [UNVALIDATED]`,
         }));
         setStrategies([...core, ...experimental]);
+        const tax = json.taxonomy;
+        if (tax?.masterFamilies) {
+          setMasterFamilies(tax.masterFamilies.map((f: any) => ({
+            id: f.id,
+            name: f.name,
+            premise: f.premise,
+            archetypeCount: f.archetypeCount,
+            mappedCount: f.mappedCount,
+            notSupportedCount: f.notSupportedCount,
+          })));
+          setTaxonomyNote(tax.masterNote || tax.note || null);
+        }
       })
       .catch(() => {});
   }, []);
@@ -160,7 +183,7 @@ export default function QuantSignalsPanel() {
             <div>
               <h3 className="text-xl font-bold text-white uppercase tracking-widest">Quant Decision Layer</h3>
               <p className="text-slate-400 text-sm leading-relaxed">
-                Real regime/strategy/probabilistic scoring - off by default (QUANT_ENGINE_ENABLED).
+                Real regime/strategy/probabilistic scoring - off by default (QUANT_ENGINE_ENABLED). Live evaluateAll is five CORE unless a reviewed env flag is true. A named archetype is not an edge.
               </p>
             </div>
           </div>
@@ -172,6 +195,23 @@ export default function QuantSignalsPanel() {
             className="bg-[#111822] border border-slate-800 rounded px-3 py-2 text-sm text-white font-mono w-40"
           />
         </div>
+
+        {masterFamilies.length > 0 && (
+          <div className="mb-6 bg-[#111822] border border-slate-800 rounded-lg p-4">
+            <div className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2">Master taxonomy (catalog)</div>
+            {taxonomyNote && <p className="text-[10px] text-slate-500 leading-relaxed mb-3 font-mono">{taxonomyNote}</p>}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-2">
+              {masterFamilies.map((f) => (
+                <div key={f.id} className="border border-slate-800 rounded p-2">
+                  <div className="text-[10px] font-mono text-slate-300 uppercase tracking-wide">{f.name}</div>
+                  <div className="text-[10px] font-mono text-slate-500 mt-1">
+                    {f.mappedCount} mapped · {f.notSupportedCount} not supported · {f.archetypeCount} archetypes
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {loadingAssessments ? (
           <div className="py-8 text-center text-slate-500 text-sm font-mono">Loading real quant assessments...</div>
@@ -238,7 +278,8 @@ export default function QuantSignalsPanel() {
 
       {/* Real per-strategy backtest launcher + results */}
       <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6">
-        <h3 className="text-lg font-bold text-white uppercase tracking-widest mb-4">Real Per-Strategy Backtest</h3>
+        <h3 className="text-lg font-bold text-white uppercase tracking-widest mb-1">Real Per-Strategy Backtest</h3>
+        <p className="text-[10px] font-mono text-amber-500/90 uppercase tracking-wider mb-4">Same-bar close fills — not promotion evidence. Canonical research is next-bar open.</p>
         <div className="flex flex-wrap items-end gap-3 mb-6">
           <div className="flex flex-col gap-1">
             <label className="text-[10px] font-mono text-slate-500 uppercase">Strategy</label>
@@ -279,11 +320,12 @@ export default function QuantSignalsPanel() {
                 <th className="pb-2 font-medium text-center">Win Rate</th>
                 <th className="pb-2 font-medium text-center">Avg R</th>
                 <th className="pb-2 font-medium text-center">Kelly</th>
+                <th className="pb-2 font-medium text-center">Promotion</th>
               </tr>
             </thead>
             <tbody>
               {runs.length === 0 ? (
-                <tr><td colSpan={6} className="py-6 text-center text-slate-500 text-sm font-mono">No real backtest runs yet.</td></tr>
+                <tr><td colSpan={7} className="py-6 text-center text-slate-500 text-sm font-mono">No real backtest runs yet.</td></tr>
               ) : runs.map(r => (
                 <tr key={r.id} className="border-b border-slate-800/50">
                   <td className="py-2 text-slate-300 font-mono text-xs">{r.strategyId} / {r.symbol}</td>
@@ -295,6 +337,9 @@ export default function QuantSignalsPanel() {
                   <td className="py-2 text-center font-mono text-xs text-slate-400">{r.avgR !== null ? r.avgR.toFixed(2) : "--"}</td>
                   <td className="py-2 text-center font-mono text-[10px] text-slate-400">
                     {r.kelly?.statisticallyJustified ? `${(r.kelly.suggestedFraction * 100).toFixed(1)}%` : <span className="text-slate-600">insufficient sample</span>}
+                  </td>
+                  <td className="py-2 text-center font-mono text-[10px] text-amber-400">
+                    {r.promotable === false ? (r.promotionRejection ?? "NOT PROMOTABLE") : "UNAVAILABLE"}
                   </td>
                 </tr>
               ))}

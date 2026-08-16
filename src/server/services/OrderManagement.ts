@@ -3,7 +3,8 @@
  * Module: OrderManagement.ts
  *
  * Purpose:
- * Executes broker orders safely, logging failures as REJECTED.
+ * Executes broker orders safely. A placeOrder throw without a brokerOrderId is SUBMIT_UNKNOWN
+ * (row stays PENDING + TRADING_PAUSED), not a fabricated REJECTED.
  *
  * Responsibilities:
  * - Communicate with active broker.
@@ -50,11 +51,21 @@ import { runtimeIntervals } from '../config/runtimeIntervals';
 import { triggerWebhooks } from '../routes/webhooks';
 import { resolveOmsExecutionEnvironment, stampExecutionEnvironment } from '../research/organicPaper';
 import { assertBrokerEnvironmentAllowsOrder } from '../core/brokerEnvironment';
+import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
+import { assertLiveOrdersArmed } from '../core/LiveTradingConfirmation';
+
+function getActiveReplaySessionSafe(): { replayId: string } | null {
+  try {
+    return getActiveReplaySession();
+  } catch {
+    return null;
+  }
+}
 
 // Shared with TradingEngine.cancelAllOpenOrders(), which previously only matched the literal
 // string 'PENDING' - real broker adapters (Alpaca) can report other non-terminal statuses
 // ('NEW', 'ACCEPTED', 'PARTIALLY_FILLED', ...) that were silently excluded from that query too.
-export const TERMINAL_ORDER_STATUSES: string[] = ['FILLED', 'REJECTED', 'CANCELED', 'EXTERNAL_MANUAL'];
+export const TERMINAL_ORDER_STATUSES: string[] = ['FILLED', 'REJECTED', 'CANCELED', 'EXTERNAL_MANUAL', 'ARCHIVED_DIAGNOSTIC'];
 export function isTerminalOrderStatus(status: string | null | undefined): boolean {
   return !!status && TERMINAL_ORDER_STATUSES.includes(status);
 }
@@ -76,11 +87,11 @@ const FOLLOWUP_INTERVAL_MS = runtimeIntervals.omsFollowUpIntervalMs;
 // Phase 1, item 3 (ARGUS_SAFETY_HARDENING_REPORT.md) - order-level crash recovery. Distinct from
 // FOLLOWUP_* above: followUpOpenOrders() only ever looks at rows that already have a real
 // brokerOrderId recorded - it structurally cannot help a row that crashed BEFORE that update
-// landed (still PENDING with brokerOrderId=null), or a row executeOrder()'s catch block marked
-// REJECTED purely because the broker call threw (timeout/network error), with no way to know
-// whether the broker actually received it first. This runs on a slower cadence (order-lookup-by-
-// client-order-id is a real broker API call per candidate row, not worth polling every 15s) and
-// once immediately on start(), matching PortfolioReconciliation's own "runs on boot too" pattern.
+// landed (still PENDING with brokerOrderId=null). executeOrder() leaves those rows PENDING
+// (submitOutcome=UNKNOWN) and pauses trading rather than guessing REJECTED. This runs on a
+// slower cadence (order-lookup-by-client-order-id is a real broker API call per candidate
+// row, not worth polling every 15s) and once immediately on start(), matching
+// PortfolioReconciliation's own "runs on boot too" pattern.
 const CRASH_RECOVERY_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
 const CRASH_RECOVERY_LOOKBACK_MS = tradingSafety.crashRecoveryLookbackMs;
 
@@ -98,12 +109,16 @@ export class OrderManagementService {
   }
 
   private resolveFillEnvironment() {
+    try {
+      if (getActiveReplaySession()) return 'REPLAY';
+    } catch { /* ignore */ }
     let brokerId = '';
     try {
       brokerId = BrokerManager.getInstance().getActiveBroker().id;
     } catch {
       brokerId = '';
     }
+    if (brokerId === 'historical_replay') return 'REPLAY';
     return resolveOmsExecutionEnvironment({ brokerId, tradingMode: readTradingMode() });
   }
 
@@ -199,10 +214,12 @@ export class OrderManagementService {
       const existing = await db.select().from(trades).where(eq(trades.traceId, traceId)).limit(1);
       if (existing.length > 0) {
         console.warn(`[OMS] Duplicate execution attempt for traceId ${traceId} - an order was already placed (${existing[0].id}). Skipping.`);
+        try { notifyReplayOrder(traceId); } catch { /* optional */ }
         return;
       }
     } catch (e) {
-      console.error('[OMS] Idempotency check failed, proceeding without it', e);
+      console.error('[OMS] Idempotency check failed — aborting before broker. Unique index is backup, not a license to place a second untracked order.', e);
+      return;
     }
 
     const orderId = crypto.randomUUID();
@@ -212,13 +229,9 @@ export class OrderManagementService {
     // moment, not a post-hoc record of whatever happened. If this insert itself fails, there's
     // no row to update later, so abort rather than placing a real order Argus can't track.
     //
-    // Hardening pass, Phase 2: `idx_trades_trace_id_unique` (schema.ts) is the real, authoritative
-    // idempotency guarantee now - the select-then-insert check above it is a check-then-act race
-    // (two concurrent calls for the same traceId could both pass it before either insert lands),
-    // so it's kept only as a fast-path optimization to skip an unnecessary broker call in the
-    // common case; it's safe for it to fail open on a transient error, because this insert - and
-    // the real DB constraint behind it - is what actually enforces "never two orders for one
-    // traceId," unconditionally, even if the check above never ran or itself failed.
+    // Unique index `idx_trades_trace_id_unique` still backs concurrent races. A failed
+    // select is not fail-open: abort so a downed lookup cannot place a broker order Argus
+    // cannot prove is unique.
     try {
       await db.insert(trades).values({
         id: orderId,
@@ -244,6 +257,7 @@ export class OrderManagementService {
         quantStopPrice: quantStopPrice ?? null,
         quantTargetPrice: quantTargetPrice ?? null,
         quantInvalidationJson: quantInvalidationJson ?? null,
+        executionEnvironment: this.resolveFillEnvironment(),
       } as any);
     } catch (e: any) {
       const isDuplicate = e?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(String(e?.message || ''));
@@ -267,21 +281,52 @@ export class OrderManagementService {
       const activeBroker = BrokerManager.getInstance().getActiveBroker();
       console.log(`[OMS] Submitting order to ${activeBroker.name}: ${side} ${quantity}x ${symbol}`);
 
-      let paperMode: boolean | null = true;
-      try {
-        const conn = db.select().from(brokerConnections).where(eq(brokerConnections.brokerName, activeBroker.name)).limit(1).get();
-        paperMode = conn ? (conn.paperMode as boolean) : true;
-      } catch {
+      // Historical replay broker is always paper-sim — never LIVE. Do not depend on settings
+      // dual-flag lookup (brokerConnections row may not exist for this in-memory adapter).
+      const replayActive = !!getActiveReplaySessionSafe() || activeBroker.id === 'historical_replay';
+      let paperMode: boolean | null = null;
+      if (replayActive) {
         paperMode = true;
+      } else {
+        try {
+          const conn = db.select().from(brokerConnections).where(eq(brokerConnections.brokerName, activeBroker.name)).limit(1).get();
+          if (conn) {
+            paperMode = conn.paperMode as boolean;
+          } else {
+            const caps = activeBroker.getCapabilities?.();
+            if (caps?.paperTrading === true && caps?.liveTrading === false) paperMode = true;
+            else paperMode = null;
+          }
+        } catch {
+          paperMode = null;
+        }
       }
-      const envGate = assertBrokerEnvironmentAllowsOrder({ tradingMode: readTradingMode(), paperMode });
+      const envGate = assertBrokerEnvironmentAllowsOrder({
+        tradingMode: replayActive ? 'Paper' : readTradingMode(),
+        paperMode: replayActive ? true : paperMode,
+      });
       if (!envGate.ok) {
         await db.update(trades).set({
           status: 'REJECTED',
+          executionEnvironment: 'UNKNOWN',
           reasoning: stampExecutionEnvironment(envGate.reason, 'UNKNOWN'),
         }).where(eq(trades.id, orderId));
         console.error(`[OMS] ${envGate.reason}`);
+        try { if (traceId) notifyReplayOrder(traceId); } catch { /* optional */ }
         return;
+      }
+      if (envGate.environment === 'LIVE') {
+        const arm = assertLiveOrdersArmed();
+        if (!arm.ok) {
+          await db.update(trades).set({
+            status: 'REJECTED',
+            executionEnvironment: 'LIVE',
+            reasoning: stampExecutionEnvironment(arm.reason, 'LIVE'),
+          }).where(eq(trades.id, orderId));
+          console.error(`[OMS] ${arm.reason}`);
+          try { if (traceId) notifyReplayOrder(traceId); } catch { /* optional */ }
+          return;
+        }
       }
 
       // Capture the pre-trade entry price so a SELL's realized P&L can be computed once it fills.
@@ -339,7 +384,19 @@ export class OrderManagementService {
       }
     } catch (e) {
       console.error("[OMS] Broker execution failed.", e);
-      status = "REJECTED";
+      // Timeout/network throw is not a broker REJECTED. The order may have been accepted.
+      // Keep PENDING, pause trading, let reconcileStaleOrders / follow-up resolve. Never retry blindly.
+      if (!brokerOrderId) {
+        status = 'PENDING';
+        reasoning = `${reasoning} submitOutcome=UNKNOWN placeOrderThrew`;
+        try {
+          await this.pauseTradingForOrphan(
+            `OMS placeOrder threw before brokerOrderId for ${orderId}. Row stays PENDING (not REJECTED). Reconcile before any retry.`,
+          );
+        } catch (pauseErr) {
+          console.error('[OMS] Failed to pause after unknown submit', pauseErr);
+        }
+      }
     }
 
     try {
@@ -349,6 +406,7 @@ export class OrderManagementService {
         profitLoss,
         brokerOrderId,
         filledAt,
+        reasoning,
       }).where(eq(trades.id, orderId));
 
       // transactionId was missing from this payload - the ONLY event that fires for every
@@ -367,12 +425,15 @@ export class OrderManagementService {
         quantity,
         price: fillPrice,
         status,
-        profitLoss
+        profitLoss,
+        executionEnvironment: this.resolveFillEnvironment(),
       });
 
       console.log(`[OMS] Order ${orderId} finalized with status: ${status}.`);
+      try { if (traceId) notifyReplayOrder(traceId); } catch { /* replay optional */ }
     } catch (error) {
       console.error(`[OMS] Failed to record order for ${symbol}:`, error);
+      try { if (traceId) notifyReplayOrder(traceId); } catch { /* replay optional */ }
     }
   }
 
@@ -437,6 +498,11 @@ export class OrderManagementService {
    * instead of abandoning last-known status. If cancel is unavailable or fails, pause trading.
    */
   private async pauseTradingForOrphan(reason: string): Promise<void> {
+    const { getActiveReplaySession } = await import('../replay/ReplayContext');
+    if (getActiveReplaySession()) {
+      console.error('[OMS] Replay session active — not pausing live tradingEngine for', reason);
+      return;
+    }
     const { tradingEngine } = await import('../engines/TradingEngine');
     await tradingEngine.setTradingState('TRADING_PAUSED', { reason, actor: 'OrderManagement' });
   }
@@ -520,7 +586,8 @@ export class OrderManagementService {
           price: fillPrice,
           status: 'EXTERNAL_MANUAL',
           timestamp: nowIso,
-          reasoning: 'SOURCE: EXTERNAL_MANUAL. Inbound broker fill with no matching local OMS row. Not RiskEngine-approved. Operator intervention required. Argus will not auto-manage or auto-trade around this position.',
+          reasoning: 'SOURCE: EXTERNAL_MANUAL. Inbound broker fill with no matching local OMS row. Not RiskEngine-approved. Operator intervention required. Argus will not auto-manage or auto-trade around this position. executionEnvironment=UNKNOWN',
+          executionEnvironment: 'UNKNOWN',
           traceId: `EXTERNAL_MANUAL-${o.id}`,
           brokerOrderId: o.id,
           requestId: o.clientOrderId || id,
@@ -542,10 +609,8 @@ export class OrderManagementService {
 
   /**
    * Phase 1, item 3 (ARGUS_SAFETY_HARDENING_REPORT.md) - real order-level crash recovery. Finds
-   * local `trades` rows with NO recorded brokerOrderId that are either still PENDING (the process
-   * crashed somewhere between submitting the order and recording the broker's response) or
-   * REJECTED purely because the broker call itself threw (a timeout/network error, NOT a
-   * definitive broker rejection - executeOrder()'s catch block cannot tell the difference). For
+   * local `trades` rows with NO recorded brokerOrderId that are still PENDING (the process
+   * crashed between submitting and recording the broker response, or placeOrder threw). For
    * each, asks the broker directly "do you have a real order under this client_order_id?" - the
    * exact real-world dangerous scenario this closes: Argus sends an order, the broker accepts or
    * even fills it, Argus crashes before recording the result, and the local row is left wrong

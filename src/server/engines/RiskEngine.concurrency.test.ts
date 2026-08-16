@@ -106,7 +106,7 @@ describe('RiskEngine concurrency - real TOCTOU race regression tests', () => {
     mockTradingEngine.state.dayStartEquity = null;
     mockTradingEngine.state.currentDailyLoss = 0;
     mockTradingEngine.state.tradingState = 'TRADING_ENABLED';
-    mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(null);
+    mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(1_000);
     state.tables.set(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxOrdersPerMinute: 3, maxPortfolioDrawdownPct: 0.5, maxOpenPositions: 10, peakEquity: null }]);
   });
 

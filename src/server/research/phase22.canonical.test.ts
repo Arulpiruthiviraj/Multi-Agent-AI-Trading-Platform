@@ -43,8 +43,11 @@ describe('Canonical NEXT_BAR CORE research', () => {
     expect(trades[0].fillPrice).toBe(8);
   });
 
-  it('golden CORE canonical run is not promotable and cannot backtestPass under zero cost', () => {
-    expect(isTheoreticalZeroCost()).toBe(true);
+  it('golden CORE canonical run is not promotable on UNIT_FIXTURE even with non-zero costs', () => {
+    expect(isTheoreticalZeroCost()).toBe(false);
+    expect(researchSafety.commissionPerShare).toBeGreaterThan(0);
+    expect(researchSafety.spreadBps).toBeGreaterThan(0);
+    expect(researchSafety.slippageBps).toBeGreaterThan(0);
     expect(researchSafety.zeroCostBlocksPromotion).toBe(true);
     const ds = loadGoldenSmaDataset();
     const run = runCanonicalCoreBacktest({ strategyId: 'MOMENTUM_BREAKOUT', dataset: ds });
@@ -53,7 +56,7 @@ describe('Canonical NEXT_BAR CORE research', () => {
     expect(run.comparableToSameBarClose).toBe(false);
     expect(run.promotable).toBe(false);
     expect(run.backtestPass).toBe(false);
-    expect(run.costModel).toBe('THEORETICAL_ZERO_COST');
+    expect(run.costModel).toBe('CONFIG');
     expect(run.provenance).toBe('UNIT_FIXTURE');
     const e = evidenceFromCanonicalRun(run);
     expect(deriveLifecycleStatus(e)).toBe('UNTESTED');
@@ -102,6 +105,28 @@ describe('Canonical NEXT_BAR CORE research', () => {
     expect(wf.comparableToSameBarClose).toBe(false);
     expect(wf.foldCount).toBeLessThan(researchSafety.minWalkForwardWindows);
     expect(wf.status).toBe('INSUFFICIENT_SAMPLE');
+  });
+
+  it('fixed WFO windows can produce minWalkForwardWindows folds without claiming promotion', () => {
+    const day = 86_400_000;
+    const bars = Array.from({ length: 150 }, (_, i) => ({
+      timestamp: 1_700_000_000_000 + i * day,
+      open: 100 + i * 0.01,
+      high: 101 + i * 0.01,
+      low: 99 + i * 0.01,
+      close: 100.5 + i * 0.01,
+      volume: 1_000_000,
+    }));
+    const ds = {
+      ...loadGoldenSmaDataset(),
+      bars,
+      provenance: 'UNIT_FIXTURE' as const,
+      datasetId: 'wfo_window_shape_only',
+    };
+    const wf = runCoreWalkForward('TREND_FOLLOWING', ds);
+    expect(wf.foldCount).toBeGreaterThanOrEqual(researchSafety.minWalkForwardWindows);
+    expect(wf.optimizedOnTest).toBe(false);
+    expect(wf.executionModel).toBe('NEXT_BAR_OPEN');
   });
 
   it('CORE robustness on empty signals is INSUFFICIENT_SAMPLE not ROBUST', () => {

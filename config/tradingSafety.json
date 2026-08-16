@@ -20,7 +20,7 @@
   "restrictedLiveMaxOrderNotionalDollars": 5000,
   "restrictedLiveMaxOpenPositions": 3,
   "restrictedLiveMaxDailyLossDollars": 1000,
-  "maxDailyBuyNotionalDollars": 0,
+  "maxDailyBuyNotionalDollars": 100000,
   "restrictedLiveMaxDailyBuyNotionalDollars": 15000,
   "alpacaRequestTimeoutMs": 15000,
   "alpacaMaxRetries": 2,
