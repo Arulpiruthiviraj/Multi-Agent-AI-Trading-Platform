@@ -96,7 +96,7 @@ import { webhooksRouter, triggerWebhooks } from "./src/server/routes/webhooks";
 import { generateContentWithRetry, cleanAndParseJSON } from "./src/server/ai/legacyGeminiHelpers";
 import { auditLog, AUDIT_LOG_FILE } from "./src/server/core/auditLog";
 import { chaosRouter } from "./src/server/routes/chaosRoutes";
-import { systemRouter } from "./src/server/routes/systemRoutes";
+import { systemRouter, handlePipelineAgentsGet, handlePipelineAgentsPost } from "./src/server/routes/systemRoutes";
 import { newsRouter } from "./src/server/routes/newsRoutes";
 import { autobotRouter } from "./src/server/routes/autobotRoutes";
 import { shadowPortfolioState, saveShadowPortfolio } from "./src/server/state/shadowPortfolio";
@@ -105,6 +105,7 @@ import { tradingEngine } from "./src/server/engines/TradingEngine";
 import { system } from "./src/server/core/SystemBootstrap";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
+import { validateTargetAllocations, executeRebalance } from "./src/server/services/PortfolioRebalance";
 import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest } from "./src/server/core/AuthConfig";
 import { persistAllowlistedSecrets, secretsStatusFromEnvAndDb, SECRET_ALLOWLIST } from "./src/server/core/persistEncryptedSecrets";
 import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter, webhookLimiter } from "./src/server/core/RateLimiters";
@@ -1202,11 +1203,27 @@ let portfolioState = loadPortfolio();
     }
   });
 
-  app.post("/api/v1/portfolio/rebalance", tradingLimiter, async (_req: Request, res: Response) => {
-    res.status(501).json({
-      ok: false,
-      error: "Target-allocation rebalance is not implemented. Closing every position via broker.closePosition is forbidden (bypasses RiskEngine). Use Emergency Stop and/or POST /api/v1/portfolio/liquidate, which submits SELL ideas through RiskEngine/OMS.",
-    });
+  // Real implementation (previously a permanent 501 refusal - see git history for why the naive
+  // version was refused: closing/opening positions via broker.closePosition/placeOrder directly
+  // bypasses RiskEngine). This submits one directional BUY/SELL idea per symbol whose real
+  // current value drifts from its requested target by more than
+  // tradingSafety.rebalanceMinDriftPctOfEquity, through the same CHIEF_APPROVED_IDEA pipeline
+  // POST /portfolio/liquidate already uses - RiskEngine/OMS still run and still size every order.
+  app.post("/api/v1/portfolio/rebalance", tradingLimiter, async (req: Request, res: Response) => {
+    try {
+      const validated = validateTargetAllocations(req.body?.targetAllocations);
+      if (validated.ok === false) {
+        return res.status(400).json({ ok: false, error: validated.error as string });
+      }
+      const result = await executeRebalance(validated.targets);
+      res.json({
+        ok: result.refused.length === 0,
+        ...result,
+        note: "Direction-only rebalance: BUY/SELL ideas were emitted as CHIEF_APPROVED_IDEA for symbols outside the drift tolerance. RiskEngine's own independent caps (order-notional, risk, buying-power, concentration, held-quantity for SELL) size the resulting orders - this does not guarantee landing exactly on the requested target percentages in one pass, and never calls broker.closePosition/placeOrder directly.",
+      });
+    } catch (e: any) {
+      res.status(502).json({ ok: false, error: e.message });
+    }
   });
 
   app.get("/api/v1/secrets", async (_req: Request, res: Response) => {
@@ -1469,6 +1486,38 @@ let portfolioState = loadPortfolio();
     
   
   app.use("/api/v1", systemRouter);
+  // Explicit full-path failsafe (same pattern as app.get('/api/v2/live-readiness') above).
+  // Nested `app.use('/api/v1', systemRouter)` alone left a long-lived tsx process (started before
+  // these handlers existed) returning catch-all "API route not found: /api/v1/system/pipeline-agents".
+  // Registering on `app` with the exact SPA path cannot be stripped by a stale nested router.
+  app.get('/api/v1/system/pipeline-agents', handlePipelineAgentsGet);
+  app.post('/api/v1/system/pipeline-agents', tradingLimiter, handlePipelineAgentsPost);
+  {
+    const systemGets: string[] = [];
+    const stack = (app as any)._router?.stack || [];
+    for (const layer of stack) {
+      if (layer?.route?.path && typeof layer.route.path === 'string' && layer.route.methods?.get) {
+        if (layer.route.path.includes('/api/v1/system') || layer.route.path.includes('/system/')) {
+          systemGets.push(`GET ${layer.route.path}`);
+        }
+      }
+      if (layer?.name === 'router' && layer?.regexp) {
+        const nested = layer.handle?.stack || [];
+        for (const n of nested) {
+          if (n?.route?.path && n.route.methods?.get && String(n.route.path).includes('system')) {
+            systemGets.push(`GET ${n.route.path} (via /api/v1 router)`);
+          }
+        }
+      }
+    }
+    console.log(`[boot] GET /api/v1/system/* registrations (${systemGets.length}): ${systemGets.join(' | ') || '(none)'}`);
+    const hasPipeline = systemGets.some((s) => s.includes('pipeline-agents'));
+    if (!hasPipeline) {
+      console.error('[boot] FATAL-ISH: pipeline-agents GET not visible in Express stack — Mission Control will 404');
+    } else {
+      console.log('[boot] pipeline-agents explicit + router mounts OK');
+    }
+  }
 
   app.post("/api/v1/llm/dual-verify-trade", tradingLimiter, aiLimiter, async (req: Request, res: Response) => {
     return res.status(410).json({
@@ -1671,6 +1720,11 @@ let portfolioState = loadPortfolio();
       next(err);
     }
   });
+
+  // Last-chance explicit registration immediately before the catch-all (live-readiness pattern:
+  // full path on `app`, not a nested Router). First matching route wins; duplicates are harmless.
+  app.get('/api/v1/system/pipeline-agents', handlePipelineAgentsGet);
+  app.post('/api/v1/system/pipeline-agents', tradingLimiter, handlePipelineAgentsPost);
 
   app.all('/api/*', (req, res) => {
     // Prefer req.originalUrl so nested mount stripping does not hide the full path operators hit.

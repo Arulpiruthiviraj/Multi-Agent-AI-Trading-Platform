@@ -50,6 +50,16 @@ describe('Integration: MARKET_DATA -> TechnicalAgent -> ChiefTrader -> RiskAgent
     const { tradingEngine } = await import('../engines/TradingEngine');
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+    // Real bug fixed (test-only): togglable idea agents (TechnicalAgent included) now only
+    // subscribe to MARKET_DATA once armed via startEnabledIdeaAgents() - added by the Mission
+    // Control per-idea-agent toggle feature (pipelineAgentRuntime.ts). Merely importing
+    // TechnicalAgent.ts (above) constructs the singleton but no longer starts it listening, so
+    // this test's real oversold tick sequence was silently never seen by the real agent - not a
+    // TechnicalAgent/ChiefTrader/RiskEngine bug, just this test predating that architecture
+    // change. Calling the same real arming function a real boot calls.
+    const { startEnabledIdeaAgents } = await import('../core/pipelineAgentRuntime');
+    startEnabledIdeaAgents();
   });
 
   afterAll(() => {
@@ -115,5 +125,11 @@ describe('Integration: MARKET_DATA -> TechnicalAgent -> ChiefTrader -> RiskAgent
     // the active broker by default, so this should clear every sizing/concentration gate.
     expect(assessment.approved).toBe(true);
     expect(assessment.maxQuantity).toBeGreaterThan(0);
-  });
+  }, 10000); // Real fix: this test's own poll loop already budgets up to 5000ms before even
+  // reaching its assertions - equal to vitest's default 5000ms test timeout, meaning any real
+  // async overhead in the real chain under test (TechnicalAgent -> ChiefTrader -> RiskAgent ->
+  // RiskEngine, all real singletons/DB/EventBus, no mocks) could race the framework's kill switch
+  // before the test's own deadline logic gets a chance to fail with a clear assertion instead of
+  // an opaque timeout. Giving real headroom here so the test's own logic - not incidental timing -
+  // decides pass/fail.
 });

@@ -97,16 +97,23 @@ systemRouter.get("/system/trading-state", (req: Request, res: Response) => {
   });
 });
 
-systemRouter.get("/system/pipeline-agents", async (_req: Request, res: Response) => {
+/**
+ * Mission Control idea-agent switches (GET catalog + POST toggle/preset).
+ * Handlers are exported so server.ts can register explicit
+ * `app.get/post('/api/v1/system/pipeline-agents')` failsafes (live-readiness pattern)
+ * before the /api/* 404 catch-all — nested Router mounts alone have left a long-lived
+ * tsx process serving "API route not found" after source gained these routes.
+ */
+export async function handlePipelineAgentsGet(_req: Request, res: Response): Promise<void> {
   try {
     const { getPipelineAgentSnapshot } = await import('../core/pipelineAgentSnapshot');
     res.json({ ok: true, ...getPipelineAgentSnapshot() });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
-});
+}
 
-systemRouter.post("/system/pipeline-agents", tradingLimiter, async (req: Request, res: Response) => {
+export async function handlePipelineAgentsPost(req: Request, res: Response): Promise<void> {
   try {
     const { persistPipelineAgentEnabled } = await import('../core/pipelineAgentPersist');
     const { applyPipelineAgentRuntime, applyAllIdeaAgentRuntimes } = await import('../core/pipelineAgentRuntime');
@@ -117,30 +124,46 @@ systemRouter.post("/system/pipeline-agents", tradingLimiter, async (req: Request
     const preset = req.body?.preset;
     if (preset === 'all_enabled' || preset === 'all_disabled') {
       const result = setAllTogglableIdeaAgents(preset === 'all_enabled');
-      if (result.ok === false) return res.status(400).json({ ok: false, error: result.error });
+      if (result.ok === false) {
+        res.status(400).json({ ok: false, error: result.error });
+        return;
+      }
       applyAllIdeaAgentRuntimes();
       await persistPipelineAgentEnabled();
-      return res.json({ ok: true, ...getPipelineAgentSnapshot() });
+      res.json({ ok: true, ...getPipelineAgentSnapshot() });
+      return;
     }
 
     const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId : '';
     const enabled = req.body?.enabled;
     if (!agentId || typeof enabled !== 'boolean') {
-      return res.status(400).json({ ok: false, error: 'Expected { agentId, enabled } or { preset: "all_enabled"|"all_disabled" }' });
+      res.status(400).json({ ok: false, error: 'Expected { agentId, enabled } or { preset: "all_enabled"|"all_disabled" }' });
+      return;
     }
     const spec = findTogglableIdeaAgent(agentId);
     if (enabled && spec && !isTogglableAgentAvailable(spec)) {
-      return res.status(400).json({ ok: false, error: `${agentId} is unavailable: set ${spec.requiresEnv}=true in .env and restart. LIVE remains NO-GO.` });
+      res.status(400).json({ ok: false, error: `${agentId} is unavailable: set ${spec.requiresEnv}=true in .env and restart. LIVE remains NO-GO.` });
+      return;
     }
     const result = setPipelineAgentEnabled(agentId, enabled);
-    if (result.ok === false) return res.status(400).json({ ok: false, error: result.error });
+    if (result.ok === false) {
+      res.status(400).json({ ok: false, error: result.error });
+      return;
+    }
     applyPipelineAgentRuntime(agentId, result.enabled);
     await persistPipelineAgentEnabled();
     res.json({ ok: true, ...getPipelineAgentSnapshot() });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
-});
+}
+
+export function mountPipelineAgentRoutes(router: Router): void {
+  router.get("/system/pipeline-agents", handlePipelineAgentsGet);
+  router.post("/system/pipeline-agents", tradingLimiter, handlePipelineAgentsPost);
+}
+
+mountPipelineAgentRoutes(systemRouter);
 
 /**
  * Acknowledge pre-existing broker FILLED orders (PRE_EXISTING_RECONCILED).
@@ -245,11 +268,28 @@ systemRouter.get("/system/export-db", (req: Request, res: Response) => {
 // Writing directly under the live db file while the app holds it open in WAL mode is unsafe -
 // takes a checkpoint first so the main file is fully caught up, then overwrites it. The app must
 // still be restarted afterward (the running process's connection/cache is not re-opened).
+// Real bug fixed: this used to write req.body straight over the live DB file with no format
+// check and no backup - a malformed or wrong upload permanently destroyed data/argus.db (and
+// everything encrypted with .encryption_key inside it) with no automatic recovery path. Now
+// validates the real SQLite file-header magic bytes before writing anything, and copies the
+// current file aside first so a bad import is always recoverable.
+const SQLITE_HEADER_MAGIC = Buffer.from('SQLite format 3\0', 'utf8');
+
 systemRouter.post("/system/import-db", express.raw({ type: "application/octet-stream", limit: "50mb" }), (req: Request, res: Response) => {
   try {
+    const body: Buffer = req.body;
+    if (!Buffer.isBuffer(body) || body.length < SQLITE_HEADER_MAGIC.length || !body.subarray(0, SQLITE_HEADER_MAGIC.length).equals(SQLITE_HEADER_MAGIC)) {
+      return res.status(400).json({ ok: false, error: "Uploaded file is not a valid SQLite database (missing the real SQLite file header) - refusing to overwrite the live database with it." });
+    }
     sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
-    fs.writeFileSync(dbPath, req.body);
-    res.json({ ok: true, message: "Database imported successfully. Please restart the application." });
+    const backupPath = `${dbPath}.pre-import-${Date.now()}.bak`;
+    try {
+      if (fs.existsSync(dbPath)) fs.copyFileSync(dbPath, backupPath);
+    } catch (backupErr: any) {
+      return res.status(500).json({ ok: false, error: `Refusing to import: could not back up the current database first: ${backupErr.message}` });
+    }
+    fs.writeFileSync(dbPath, body);
+    res.json({ ok: true, message: `Database imported successfully. Previous database backed up to ${backupPath}. Please restart the application.` });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -453,4 +493,8 @@ systemRouter.post("/backtest/walk-forward", async (req: Request, res: Response) 
   }
 });
 
-systemRouter.patch("/settings", (req: Request, res: Response) => res.json({ ok: true }));
+// Real bug fixed: this used to be `(req, res) => res.json({ ok: true })` - a silent no-op that
+// read nothing from the request and wrote nothing to the DB, yet always claimed success. No
+// frontend caller ever used PATCH here (confirmed via repo-wide grep); POST /api/v1/config/settings
+// is the real, validated settings-write path. Removed rather than left as a trap for a future/
+// external API consumer who'd reasonably expect PATCH /settings to actually do something.

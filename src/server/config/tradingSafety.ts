@@ -123,6 +123,10 @@ export interface TradingSafety {
   settingsBoundTrailingStopPctMax: number;
   settingsBoundBudgetMin: number;
   settingsBoundBudgetMax: number;
+  /** PortfolioRebalance.ts: skip a symbol whose current-vs-target drift is smaller than this many
+   * percentage points of total equity - avoids submitting noise-sized trades for a position
+   * that's already effectively at its target allocation. */
+  rebalanceMinDriftPctOfEquity: number;
 }
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
@@ -231,6 +235,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'settingsBoundTrailingStopPctMax',
   'settingsBoundBudgetMin',
   'settingsBoundBudgetMax',
+  'rebalanceMinDriftPctOfEquity',
 ];
 
 function loadTradingSafety(): TradingSafety {

@@ -105,5 +105,6 @@
   "settingsBoundTrailingStopPctMin": 0.1,
   "settingsBoundTrailingStopPctMax": 100,
   "settingsBoundBudgetMin": 1,
-  "settingsBoundBudgetMax": 100000000
+  "settingsBoundBudgetMax": 100000000,
+  "rebalanceMinDriftPctOfEquity": 1
 }
