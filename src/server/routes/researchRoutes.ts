@@ -35,7 +35,7 @@ import { tradingEdgeScore } from '../research/edgeScore';
 import { db } from '../db';
 import { trades } from '../db/schema';
 import { pauseReplay, resumeReplay, stopReplay, stepReplay, getReplayRun, getReplayTrades, getReplayEquity } from '../replay/FullArgusReplayEngine';
-import { exportReplayManifest, readReplayArtifact, exportTradesCsv, exportEquityCsv } from '../replay/replayStore';
+import { exportReplayManifest, readReplayArtifact, exportTradesCsv, exportEquityCsv, isValidReplayId } from '../replay/replayStore';
 
 export function mountResearchRoutes(v2Router: Router): void {
   v2Router.get('/research/vectorbt/status', async (_req, res) => {
@@ -670,6 +670,13 @@ export function mountResearchRoutes(v2Router: Router): void {
   v2Router.get('/research/replay/:id/export', (req, res) => {
     const format = String(req.query.format || 'manifest').toLowerCase();
     const id = String(req.params.id);
+    // Real bug fixed: id used to be joined straight into a filesystem path (replayStore.ts's
+    // replayDir()) with zero sanitization - "../../../etc" style ids could list/read files
+    // outside data/replays. Real replay ids are always crypto.randomUUID(); anything else is
+    // rejected here with a clean 400 (replayDir() itself now also throws defense-in-depth).
+    if (!isValidReplayId(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid replay id (must be a UUID).' });
+    }
     if (format === 'manifest') {
       return res.json({ ok: true, ...exportReplayManifest(id), live: 'NO-GO', format: 'manifest' });
     }

@@ -699,8 +699,8 @@ async function runReplayLoop(id: string) {
       else if (session.config.speed === '10x') await new Promise((r) => setTimeout(r, 100));
       else if (session.config.speed === '100x') await new Promise((r) => setTimeout(r, 10));
     }
-    if (session.status !== 'CANCELLED') session.status = session.partial ? 'PARTIAL' : 'COMPLETED';
     // Flatten leftover positions so report is not silently open-ended.
+    // Do not mark COMPLETED until the finally block attaches report — UI polls stop on COMPLETED.
     for (const symbol of [...session.openStops.keys()]) {
       const pos = (await session.broker.positions()).find((p) => p.symbol === symbol);
       const px = pos?.currentPrice || session.broker.nextFillPrice.get(symbol);
@@ -724,6 +724,10 @@ async function runReplayLoop(id: string) {
     emit(session, 'FAILED', { error: e.message });
     (row as any).error = e.message;
   } finally {
+    const st = session.status as ReplayRunStatus;
+    if (st === 'RUNNING' || st === 'PAUSED' || st === 'READY') {
+      session.status = session.partial ? 'PARTIAL' : 'COMPLETED';
+    }
     const costs = session.broker.snapshotCosts();
     const port = await session.broker.portfolio();
     const brokerOrders = await session.broker.orders();

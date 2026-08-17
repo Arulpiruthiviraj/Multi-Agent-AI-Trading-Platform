@@ -144,20 +144,39 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     ? ctx.accountEquity * ((ctx.percentOfEquityPct ?? tradingSafety.defaultPercentOfEquityPct) / 100)
     : ctx.maxTradeSizeDollar;
 
-  const maxSharesByRisk = Math.floor(maxRiskAmount / riskPerShare);
-  const maxSharesByCapital = Math.floor(effectiveNotionalCapDollar / ctx.currentPrice);
-  const maxSharesByBuyingPower = Math.floor(ctx.buyingPower / ctx.currentPrice);
+  let maxQuantity: number;
 
-  const orderNotionalIsBinding = maxSharesByCapital <= maxSharesByRisk && maxSharesByCapital <= maxSharesByBuyingPower;
-  const notionalStatus: SizingHonesty = maxSharesByCapital <= 0 ? 'FAIL' : orderNotionalIsBinding ? 'CLAMPED' : 'PASS';
-  record('order_notional_cap', maxSharesByCapital > 0, {
-    status: notionalStatus,
-    sizingMode, effectiveNotionalCapDollar,
-    maxTradeSizeDollar: ctx.maxTradeSizeDollar, percentOfEquityPct: ctx.percentOfEquityPct,
-    maxSharesByCapital, maxSharesByRisk, maxSharesByBuyingPower, isBinding: orderNotionalIsBinding,
-  });
+  if (ctx.side === 'BUY') {
+    // Real bug fixed: these three caps (order-notional, risk-per-share, buying-power) are all
+    // "how much NEW capital/risk can be deployed" concepts - they used to apply unconditionally to
+    // SELL too, meaning a protective stop-loss/thesis-invalidation exit could be silently shrunk or
+    // (if buying power was near zero, normal for a mostly-deployed portfolio) rejected outright by
+    // sufficient_size, exactly when the system had decided to reduce risk. SELL never consumes
+    // buying power or deploys new capital - it frees both - matching CapitalAllocation.ts's
+    // explicit "SELL frees capital and never consumes allocation" rule for the identical reason.
+    // The real cap for a SELL is how many shares are actually held, applied by the caller
+    // (RiskEngine.ts clamps to existingPosition.quantity) - this module imposes none for SELL.
+    const maxSharesByRisk = Math.floor(maxRiskAmount / riskPerShare);
+    const maxSharesByCapital = Math.floor(effectiveNotionalCapDollar / ctx.currentPrice);
+    const maxSharesByBuyingPower = Math.floor(ctx.buyingPower / ctx.currentPrice);
 
-  let maxQuantity = Math.min(maxSharesByRisk, maxSharesByCapital, maxSharesByBuyingPower);
+    const orderNotionalIsBinding = maxSharesByCapital <= maxSharesByRisk && maxSharesByCapital <= maxSharesByBuyingPower;
+    const notionalStatus: SizingHonesty = maxSharesByCapital <= 0 ? 'FAIL' : orderNotionalIsBinding ? 'CLAMPED' : 'PASS';
+    record('order_notional_cap', maxSharesByCapital > 0, {
+      status: notionalStatus,
+      sizingMode, effectiveNotionalCapDollar,
+      maxTradeSizeDollar: ctx.maxTradeSizeDollar, percentOfEquityPct: ctx.percentOfEquityPct,
+      maxSharesByCapital, maxSharesByRisk, maxSharesByBuyingPower, isBinding: orderNotionalIsBinding,
+    });
+
+    maxQuantity = Math.min(maxSharesByRisk, maxSharesByCapital, maxSharesByBuyingPower);
+  } else {
+    record('order_notional_cap', true, {
+      status: 'SKIPPED',
+      reason: 'SELL/exit is not capped by notional/risk-per-share/buying-power - those limit new capital deployment and new position risk, not position reduction.',
+    });
+    maxQuantity = Number.MAX_SAFE_INTEGER;
+  }
 
   if (ctx.side === 'BUY') {
     const existingPosition = ctx.existingPositions.find(p => p.symbol === ctx.symbol);

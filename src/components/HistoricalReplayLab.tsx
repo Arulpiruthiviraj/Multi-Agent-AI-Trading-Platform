@@ -80,9 +80,18 @@ export default function HistoricalReplayLab() {
     pollRef.current = setInterval(async () => {
       try {
         const status = await refreshRun(replayId);
-        if (['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED', 'DATA_UNAVAILABLE'].includes(status.status)) {
+        const terminal = ['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED', 'DATA_UNAVAILABLE'].includes(status.status);
+        // Wait until performance report is attached (COMPLETED used to race ahead of report build).
+        if (terminal && (status.report || status.status !== 'COMPLETED' && status.status !== 'PARTIAL')) {
           stopPolling();
           setBusy(false);
+        } else if (terminal && !status.report) {
+          const rep = await fetch(`/api/v2/research/replay/${replayId}/report`).then((r) => r.json()).catch(() => null);
+          if (rep?.report) {
+            setRun((prev: any) => ({ ...prev, ...status, report: rep.report, rejectedOrders: status.rejectedOrders || rep.rejectedOrders }));
+            stopPolling();
+            setBusy(false);
+          }
         }
       } catch {
         /* keep polling briefly */
@@ -215,6 +224,8 @@ export default function HistoricalReplayLab() {
   }
 
   const report = run?.report;
+  const rejectedOrders = run?.rejectedOrders || [];
+  const noTrade = report?.noTrade || {};
   const qualityLabel = run?.quality?.quality
     ? `DATA QUALITY: ${run.quality.quality}${run.quality.quality === 'RED' ? ' — REPLAY BLOCKED' : ''}`
     : 'DATA QUALITY: NOT RUN';
@@ -350,8 +361,8 @@ export default function HistoricalReplayLab() {
           <div>AI {run.ai?.mode || run.aiLabel || form.aiMode}</div>
           <div>Exec {run.executionModel || report?.executionModel || 'NEXT_BAR_OPEN'}</div>
           <div>Initial {report?.startingCapital ?? form.initialCapital}</div>
-          <div>Final {report?.endingCapital ?? '—'}</div>
-          <div>Net {report?.netPnl ?? '—'}</div>
+          <div>Final {report?.endingCapital != null ? report.endingCapital : '—'}</div>
+          <div>Net {report?.netPnl != null ? report.netPnl : '—'}</div>
           <div>Return% {report?.netReturnPct != null ? Number(report.netReturnPct).toFixed(3) : '—'}</div>
           <div>Sharpe {report?.sharpe?.status || '—'}</div>
           <div>Sortino {report?.sortino?.status || '—'}</div>
@@ -384,7 +395,12 @@ export default function HistoricalReplayLab() {
       <h3 className="text-[10px] font-mono uppercase text-slate-500 mb-2">Trades</h3>
       <div className="overflow-x-auto mb-4 max-h-48 overflow-y-auto">
         {trades.length === 0 ? (
-          <div className="text-[10px] text-slate-500">NO DATA</div>
+          <div className="text-[10px] text-slate-500 space-y-1">
+            <div>NO FILLS — P&amp;L stays 0 until a BUY clears RiskEngine/OMS.</div>
+            {Object.keys(noTrade).length > 0 && (
+              <div className="text-amber-400/90">NO_TRADE counts: {JSON.stringify(noTrade)}</div>
+            )}
+          </div>
         ) : (
           <table className="w-full text-[10px] font-mono text-slate-300">
             <thead className="text-slate-500 sticky top-0 bg-[#1A1F2B]">
@@ -415,6 +431,17 @@ export default function HistoricalReplayLab() {
         )}
       </div>
 
+      {rejectedOrders.length > 0 && (
+        <div className="mb-4">
+          <h3 className="text-[10px] font-mono uppercase text-amber-500/80 mb-2">Rejected orders (why no P&amp;L)</h3>
+          <ul className="text-[10px] font-mono text-slate-400 space-y-1">
+            {rejectedOrders.map((r: any, i: number) => (
+              <li key={r.traceId || i}>{r.symbol} {r.side}: {r.reason}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <h3 className="text-[10px] font-mono uppercase text-slate-500 mb-2">Equity curve ({equity.length || 0} pts)</h3>
       <div className="text-[10px] font-mono text-slate-400 mb-4">
         {equity.length === 0 ? 'NO DATA' : `First ${equity[0]?.equity} → Last ${equity[equity.length - 1]?.equity}`}
@@ -433,9 +460,9 @@ export default function HistoricalReplayLab() {
         )}
       </div>
 
-      {run?.noTrade && (
+      {Object.keys(noTrade).length > 0 && trades.length > 0 && (
         <div className="mt-3 text-[10px] font-mono text-slate-400">
-          NO_TRADE counts: {JSON.stringify(run.report?.noTrade || run.noTrade || {})}
+          NO_TRADE counts: {JSON.stringify(noTrade)}
         </div>
       )}
     </div>

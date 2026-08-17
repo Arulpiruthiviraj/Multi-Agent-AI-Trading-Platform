@@ -97,6 +97,32 @@ export interface TradingSafety {
   /** 0 = unlimited FILLED trades per NY session. */
   maxDailyTrades: number;
   duplicateSignalWindowMs: number;
+  /** Value bounds for the safety-relevant numeric fields client-writable via POST /settings.
+   * Real bug fixed: SETTINGS_ALLOWED_FIELDS only ever allowlisted field *names*, never validated
+   * *values* - posting e.g. {"maxPortfolioDrawdownPct": 999} silently disabled the portfolio-
+   * drawdown circuit breaker (the gate is just `drawdownPct < maxPortfolioDrawdownPct`). These
+   * bounds close that class of bug for every numeric settings field RiskEngine/PositionSizing
+   * reads a threshold from - see validateSettingsBounds in configRoutes.ts. */
+  settingsBoundMaxPortfolioDrawdownPctMin: number;
+  settingsBoundMaxPortfolioDrawdownPctMax: number;
+  settingsBoundMaxOrdersPerMinuteMin: number;
+  settingsBoundMaxOrdersPerMinuteMax: number;
+  settingsBoundMaxOpenPositionsMin: number;
+  settingsBoundMaxOpenPositionsMax: number;
+  settingsBoundDailyLossLimitMin: number;
+  settingsBoundDailyLossLimitMax: number;
+  settingsBoundMaxTradeSizeMin: number;
+  settingsBoundMaxTradeSizeMax: number;
+  settingsBoundPercentOfEquityPctMin: number;
+  settingsBoundPercentOfEquityPctMax: number;
+  settingsBoundMinAiConfidenceMin: number;
+  settingsBoundMinAiConfidenceMax: number;
+  settingsBoundTakeProfitPctMin: number;
+  settingsBoundTakeProfitPctMax: number;
+  settingsBoundTrailingStopPctMin: number;
+  settingsBoundTrailingStopPctMax: number;
+  settingsBoundBudgetMin: number;
+  settingsBoundBudgetMax: number;
 }
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
@@ -185,6 +211,26 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'postLossCooldownMs',
   'maxDailyTrades',
   'duplicateSignalWindowMs',
+  'settingsBoundMaxPortfolioDrawdownPctMin',
+  'settingsBoundMaxPortfolioDrawdownPctMax',
+  'settingsBoundMaxOrdersPerMinuteMin',
+  'settingsBoundMaxOrdersPerMinuteMax',
+  'settingsBoundMaxOpenPositionsMin',
+  'settingsBoundMaxOpenPositionsMax',
+  'settingsBoundDailyLossLimitMin',
+  'settingsBoundDailyLossLimitMax',
+  'settingsBoundMaxTradeSizeMin',
+  'settingsBoundMaxTradeSizeMax',
+  'settingsBoundPercentOfEquityPctMin',
+  'settingsBoundPercentOfEquityPctMax',
+  'settingsBoundMinAiConfidenceMin',
+  'settingsBoundMinAiConfidenceMax',
+  'settingsBoundTakeProfitPctMin',
+  'settingsBoundTakeProfitPctMax',
+  'settingsBoundTrailingStopPctMin',
+  'settingsBoundTrailingStopPctMax',
+  'settingsBoundBudgetMin',
+  'settingsBoundBudgetMax',
 ];
 
 function loadTradingSafety(): TradingSafety {

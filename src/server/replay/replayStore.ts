@@ -10,7 +10,21 @@ export function replayRootDir(): string {
   return join(process.cwd(), 'data', 'replays');
 }
 
+// Real replay IDs are always crypto.randomUUID() (FullArgusReplayEngine.ts). Validating the
+// format here - the one chokepoint every function in this file joins a replayId into a
+// filesystem path through - closes a real path-traversal bug: replayDir() used to join
+// req.params.id straight into a path with zero sanitization, so an id like "../../../etc" could
+// list or read files outside data/replays entirely via the export routes.
+const REPLAY_ID_PATTERN = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+export function isValidReplayId(replayId: string): boolean {
+  return typeof replayId === 'string' && REPLAY_ID_PATTERN.test(replayId);
+}
+
 export function replayDir(replayId: string): string {
+  if (!isValidReplayId(replayId)) {
+    throw new Error(`Invalid replayId (must be a UUID): ${JSON.stringify(replayId)}`);
+  }
   return join(replayRootDir(), replayId);
 }
 

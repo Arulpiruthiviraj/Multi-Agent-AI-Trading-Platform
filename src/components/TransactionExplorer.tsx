@@ -13,6 +13,12 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Search, RefreshCw } from 'lucide-react';
 import TransactionObservatory from './TransactionObservatory';
 import MissionControlBar from './MissionControlBar';
+import { UnavailableHint } from './UnavailableHint';
+import {
+  formatStatusHint,
+  formatTransactionDecision,
+  formatTransactionOutcome,
+} from './observatoryHonesty';
 
 interface TxRow {
   id: string;
@@ -22,6 +28,9 @@ interface TxRow {
   status: string;
   finalDecision: string | null;
   outcome: string;
+  proposedSide?: string | null;
+  weightedConfidence?: number | null;
+  consensusThreshold?: number | null;
 }
 
 const STATUS_OPTIONS = ['', 'OPEN', 'NO_CONSENSUS', 'RISK_REJECTED', 'EXECUTED', 'FILLED', 'RECONCILED'];
@@ -122,16 +131,36 @@ export default function TransactionExplorer() {
                   <td className="py-2 px-3 text-indigo-400">{row.id}</td>
                   <td className="py-2 px-3 font-bold text-white">{row.symbol}</td>
                   <td className="py-2 px-3">
-                    {row.finalDecision ? (
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${row.finalDecision === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : row.finalDecision === 'SELL' ? 'bg-amber-500/20 text-amber-500' : 'bg-slate-800 text-slate-400'}`}>
-                        {row.finalDecision}
-                      </span>
-                    ) : <span className="text-slate-600">--</span>}
+                    {(() => {
+                      const d = formatTransactionDecision(row);
+                      if (d.kind === 'none') {
+                        return (
+                          <UnavailableHint reason={d.title} className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">
+                            {d.label}
+                          </UnavailableHint>
+                        );
+                      }
+                      return (
+                        <span
+                          title={d.title}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold ${d.kind === 'buy' ? 'bg-emerald-500/20 text-emerald-400' : d.kind === 'sell' ? 'bg-amber-500/20 text-amber-500' : 'bg-slate-800 text-slate-400'}`}
+                        >
+                          {d.label}
+                        </span>
+                      );
+                    })()}
                   </td>
                   <td className="py-2 px-3">
-                    <span className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border ${statusColor(row.status)}`}>{row.status}</span>
+                    <span title={formatStatusHint(row.status)} className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase tracking-widest border cursor-help ${statusColor(row.status)}`}>{row.status}</span>
                   </td>
-                  <td className="py-2 px-3 text-slate-400">{row.outcome}</td>
+                  <td className="py-2 px-3 text-slate-400">
+                    {(() => {
+                      const o = formatTransactionOutcome(row);
+                      return o.label === 'N/A' || o.label === '--'
+                        ? <UnavailableHint reason={o.title} className="text-slate-500">{o.label}</UnavailableHint>
+                        : <span title={o.title}>{o.label}</span>;
+                    })()}
+                  </td>
                   <td className="py-2 px-3 text-slate-500">{new Date(row.openedAt).toLocaleString()}</td>
                 </tr>
               ))}

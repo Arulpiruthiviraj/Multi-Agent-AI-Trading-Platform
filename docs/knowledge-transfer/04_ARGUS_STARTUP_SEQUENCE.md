@@ -18,7 +18,7 @@
 | Vibe-Trading MCP | `ENABLE_VIBE_TRADING_MCP=true` + path + `.venv` | Warn; continue |
 | AutoHedge | `ENABLE_AUTOHEDGE_WORKER=true` + path + `.venv`; wallet keys forced empty | Warn; continue |
 | FinceptTerminal | `ENABLE_FINCEPT_TERMINAL=true` **and** `FINCEPT_CMD` set | Warn / skip if CMD missing |
-| OpenAlice Guardian | `ENABLE_OPENALICE` (default on) + checkout | Skip; Argus may set MCP URL |
+| OpenAlice Guardian | `ENABLE_OPENALICE` (default on) + checkout | Core waits for MCP `:47332/mcp`; log + Diagnostics if missing |
 | Chronos/Kronos+FinBERT `:8008` | Port free, Python on PATH (`dev:core`) | Log skip; Kronos **EXTERNAL-DEPENDENCY-DEPENDENT** |
 | Ollama `:11434` | Port free, `ollama` on PATH | Non-blocking log |
 | IBKR Gateway | `IBKR_GATEWAY_PATH` | 2FA still manual |

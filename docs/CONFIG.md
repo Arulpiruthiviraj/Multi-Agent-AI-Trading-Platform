@@ -26,7 +26,7 @@ Living system: [ARGUS.md](ARGUS.md) · catalogs: [ARGUS_REFERENCE.md](ARGUS_REFE
 | `FINCEPT_TERMINAL_PATH` | Absolute path to FinceptTerminal (optional) |
 | `ENABLE_VIBE_TRADING_MCP` | `true` → spawn Vibe MCP via `.venv` |
 | `ENABLE_AUTOHEDGE_WORKER` | `true` → spawn AutoHedge via `.venv` |
-| `ENABLE_OPENALICE` | `false` → skip Guardian spawn in ecosystem |
+| `ENABLE_OPENALICE` | `false` → skip Guardian spawn (core also skips) |
 | `ENABLE_FINCEPT_TERMINAL` | `true` → spawn only if `FINCEPT_CMD` is set |
 | `VIBE_TRADING_MCP_PORT` | Default `8900` |
 | `VIBE_TRADING_MCP_ARGS` | Override CLI args (whitespace-separated) |
@@ -45,7 +45,7 @@ Used by `npm run dev` only. `npm run dev:core` / `dev:server-only` ignore vibe/a
 | `OPENALICE_ENABLED` | Argus client may call MCP |
 | `OPENALICE_MCP_URL` | Must be Guardian tools, not trading MCP |
 | `OPENALICE_REPO_PATH` / `OPENALICE_PATH` | Checkout location |
-| `ARGUS_SKIP_OPENALICE` | Skip spawn in `dev:core` / when ecosystem already started it |
+| `ARGUS_SKIP_OPENALICE` | Skip Guardian spawn in `dev:core` / `npm run dev` |
 | `ARGUS_KEEP_OPENALICE_MCP_URL` | Keep a non-Guardian URL (Argus will FAIL if tools wrong) |
 
 ---

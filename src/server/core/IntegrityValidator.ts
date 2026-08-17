@@ -18,7 +18,7 @@ import { getTableConfig } from 'drizzle-orm/sqlite-core';
 import { sqliteDb } from '../db';
 import * as schema from '../db/schema';
 import { BrokerManager } from '../../brokers/BrokerManager';
-import { preferIpv4Loopback } from '../ai/preferIpv4Loopback';
+import { resolveLocalAiServiceUrl } from '../ai/preferIpv4Loopback';
 import { newsEngine } from '../news/NewsEngine';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 
@@ -104,7 +104,7 @@ function checkNewsProvidersRegistered(): IntegrityCheck {
 }
 
 async function checkLocalAiServiceReachable(): Promise<IntegrityCheck> {
-  const url = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008');
+  const url = resolveLocalAiServiceUrl();
   try {
     const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(2000) });
     if (!res.ok) return { id: 'local_ai_service_reachable', description: 'The local Chronos/FinBERT inference service answers /health', status: 'FAIL', detail: `${url}/health returned ${res.status}` };

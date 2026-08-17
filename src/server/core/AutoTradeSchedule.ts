@@ -16,6 +16,19 @@ export function isValidHHMM(value: unknown): value is string {
   return typeof value === 'string' && HHMM_PATTERN.test(value);
 }
 
+// No hardcoded allowlist - delegates to the ICU timezone database Node already ships (the same
+// one getTimeHHMMInZone uses to actually compute the time), so this can never drift out of date
+// against real IANA tzdata updates the way a hand-maintained list of zone strings would.
+export function isValidTimezone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    new Intl.DateTimeFormat('en-GB', { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // "HH:MM" strings compare correctly with plain string comparison because they're fixed-width and
 // zero-padded (validated by isValidHHMM before this is ever called) - no need to parse to minutes.
 export function isWithinScheduledWindow(nowHHMM: string, startHHMM: string, endHHMM: string): boolean {

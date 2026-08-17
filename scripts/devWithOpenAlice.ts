@@ -10,9 +10,10 @@
  *   1. Chronos/Kronos + FinBERT (`scripts/local_ai_service.py` on LOCAL_AI_SERVICE_PORT, default
  *      8008) unless ARGUS_SKIP_CHRONOS=true. This is what KronosEngine / KronosForecastAgent call.
  *   2. Ollama (`ollama serve` on 11434) unless ARGUS_SKIP_OLLAMA=true or something already listens.
- *   3. OpenAlice Guardian (sibling checkout, OPENALICE_REPO_PATH, or git clone) unless
- *      ARGUS_SKIP_OPENALICE=true. Always points Argus at http://127.0.0.1:47332/mcp and sets
- *      OPENALICE_ENABLED=true for the Node process. Never the UTA trading MCP.
+ *   3. OpenAlice Guardian (sibling checkout, OPENALICE_PATH / OPENALICE_REPO_PATH, or git clone)
+ *      unless ARGUS_SKIP_OPENALICE=true or ENABLE_OPENALICE=false. Waits for MCP readiness at
+ *      http://127.0.0.1:47332/mcp (OPENALICE_MCP_ENABLED=1) before starting Node. Never the UTA
+ *      trading MCP.
  *   4. IBKR Client Portal Gateway when IBKR_GATEWAY_PATH is set or a common install path is found.
  *      Opens https://localhost:<port> for login. Does NOT complete 2FA (not possible).
  *
@@ -26,17 +27,23 @@ import fs from 'fs';
 import path from 'path';
 import net from 'net';
 import { fileURLToPath } from 'url';
+import {
+  GUARDIAN_MCP_PORT,
+  GUARDIAN_MCP_URL,
+  GUARDIAN_WEB_PORT,
+  mcpEndpointAccepting,
+  openAliceHowToEnable,
+  openAliceSkipReason,
+  shouldSkipOpenAlice,
+  waitForOpenAliceMcp,
+} from './openAliceDevSupport';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 
 const children: ChildProcess[] = [];
 let shuttingDown = false;
-
-/** OpenAlice Guardian MCP (issue_create / inbox_read). Not the UTA trading MCP on 47333. */
-const GUARDIAN_MCP_PORT = 47332;
-const GUARDIAN_WEB_PORT = 47331;
-const GUARDIAN_MCP_URL = `http://127.0.0.1:${GUARDIAN_MCP_PORT}/mcp`;
+let openAliceLaunchError: string | null = null;
 
 function preferIpv4Loopback(url: string): string {
   try {
@@ -128,9 +135,8 @@ function ensureOpenAliceCheckout(): string | null {
   if (openAliceCheckoutExists()) return openAlicePath;
 
   if (!commandWorks('git', ['--version'])) {
-    console.warn(
-      `[dev] No OpenAlice checkout at ${openAlicePath} and git is not on PATH. Clone https://github.com/TraderAlice/OpenAlice.git there (or set OPENALICE_REPO_PATH), then re-run npm run dev.`
-    );
+    openAliceLaunchError = `No OpenAlice checkout at ${openAlicePath} and git is not on PATH. ${openAliceHowToEnable(openAlicePath)}`;
+    console.warn(`[dev] ${openAliceLaunchError}`);
     return null;
   }
 
@@ -141,7 +147,8 @@ function ensureOpenAliceCheckout(): string | null {
     { encoding: 'utf8', timeout: 180_000, windowsHide: true, shell: process.platform === 'win32', stdio: 'inherit' },
   );
   if (clone.status !== 0 || !openAliceCheckoutExists()) {
-    console.warn(`[dev] git clone of OpenAlice failed (code=${clone.status}). Skipping Guardian.`);
+    openAliceLaunchError = `git clone of OpenAlice into ${openAlicePath} failed (code=${clone.status}). ${openAliceHowToEnable(openAlicePath)}`;
+    console.warn(`[dev] ${openAliceLaunchError}`);
     return null;
   }
   return openAlicePath;
@@ -160,7 +167,8 @@ function ensureOpenAliceDeps(openAlicePath: string, pnpmCmd: string): boolean {
     stdio: 'inherit',
   });
   if (install.status !== 0) {
-    console.warn(`[dev] OpenAlice ${pnpmCmd} install failed (code=${install.status}). Guardian will not start.`);
+    openAliceLaunchError = `OpenAlice ${pnpmCmd} install failed (code=${install.status}) in ${openAlicePath}. ${openAliceHowToEnable(openAlicePath)}`;
+    console.warn(`[dev] ${openAliceLaunchError}`);
     return false;
   }
   return true;
@@ -224,10 +232,29 @@ async function startOllama(): Promise<void> {
 
 async function startChronosAndWait(): Promise<void> {
   const port = Number(process.env.LOCAL_AI_SERVICE_PORT || '8008');
-  const healthUrl = `${preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || `http://127.0.0.1:${port}`)}/health`;
+  // Always pin to 8008 unless explicitly overridden — never silently use :8000 (old docs).
+  const rawUrl = process.env.LOCAL_AI_SERVICE_URL || `http://127.0.0.1:${port}`;
+  const healthUrl = `${preferIpv4Loopback(rawUrl.replace(/:8000(?=\/|$)/, ':8008'))}/health`;
+
+  // Port open is not enough — a stale listener can accept TCP while /health fails.
+  try {
+    const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2500) });
+    if (res.ok) {
+      console.log(`[dev] Chronos/Kronos already healthy at ${healthUrl} - not starting a second copy.`);
+      return;
+    }
+  } catch {
+    // need start or wait
+  }
 
   if (await isPortOpen(port)) {
-    console.log(`[dev] Chronos/Kronos local_ai_service already reachable on port ${port} - not starting a second copy.`);
+    console.log(`[dev] Port ${port} is open but ${healthUrl} is not healthy yet — waiting for model load (up to 3 min)...`);
+    const ok = await waitForHttpOk(healthUrl, 180_000, 'Chronos/Kronos GET /health');
+    if (ok) {
+      console.log(`[dev] Chronos/Kronos is healthy at ${healthUrl}`);
+      return;
+    }
+    console.warn(`[dev] Port ${port} stayed unhealthy. Will still start Node; Kronos tab will keep probing.`);
     return;
   }
 
@@ -285,20 +312,40 @@ async function startOpenAliceGuardian(): Promise<string | null> {
   const openAlicePath = ensureOpenAliceCheckout();
   if (!openAlicePath) return null;
 
+  if (await mcpEndpointAccepting(GUARDIAN_MCP_URL)) {
+    console.log(`[dev] OpenAlice Guardian MCP already accepting at ${GUARDIAN_MCP_URL} - not starting a second pnpm dev.`);
+    return GUARDIAN_MCP_URL;
+  }
+
   if (await isPortOpen(GUARDIAN_MCP_PORT)) {
-    console.log(`[dev] OpenAlice Guardian MCP already listening on ${GUARDIAN_MCP_PORT} - not starting a second pnpm dev.`);
+    console.log(`[dev] Port ${GUARDIAN_MCP_PORT} is open but ${GUARDIAN_MCP_URL} is not accepting MCP yet — waiting (up to 60s)...`);
+    const ready = await waitForOpenAliceMcp(GUARDIAN_MCP_URL, 60_000, console.warn);
+    if (ready) {
+      console.log(`[dev] OpenAlice Guardian MCP is ready at ${GUARDIAN_MCP_URL}`);
+      return GUARDIAN_MCP_URL;
+    }
+    openAliceLaunchError =
+      `Port ${GUARDIAN_MCP_PORT} is occupied but ${GUARDIAN_MCP_URL} did not accept MCP initialize. ` +
+      `The other process may have MCP disabled (OpenAlice requires OPENALICE_MCP_ENABLED=1, the string "1"). ` +
+      `Stop that instance or isolate with OPENALICE_HOME, then re-run npm run dev. ${openAliceHowToEnable(openAlicePath)}`;
+    console.warn(`[dev] ${openAliceLaunchError}`);
     return GUARDIAN_MCP_URL;
   }
 
   const pnpmCmd = pnpmBin();
   if (!pnpmCmd) {
-    console.warn('[dev] pnpm is not on PATH. OpenAlice requires pnpm (packageManager pnpm@11). Install with `corepack enable` then `corepack prepare pnpm@11.7.0 --activate`, and re-run npm run dev.');
+    openAliceLaunchError =
+      `pnpm is not on PATH. OpenAlice requires pnpm (packageManager pnpm@11). ` +
+      `Install with \`corepack enable\` then \`corepack prepare pnpm@11.7.0 --activate\`, and re-run npm run dev. ` +
+      openAliceHowToEnable(openAlicePath);
+    console.warn(`[dev] ${openAliceLaunchError}`);
     return null;
   }
 
   if (!ensureOpenAliceDeps(openAlicePath, pnpmCmd)) return null;
 
   const envOverrides: Record<string, string> = {
+    // OpenAlice main.ts enables MCP only when this is the string "1" (not "true").
     OPENALICE_MCP_ENABLED: '1',
     OPENALICE_MCP_PORT: String(GUARDIAN_MCP_PORT),
     OPENALICE_WEB_PORT: String(GUARDIAN_WEB_PORT),
@@ -325,22 +372,42 @@ async function startOpenAliceGuardian(): Promise<string | null> {
   });
   children.push(openAlice);
 
+  let exitedEarly = false;
   openAlice.on('exit', (code, signal) => {
+    exitedEarly = true;
     if (!shuttingDown) {
       const likelyAlreadyRunning = code === 2;
-      console.warn(
+      const msg =
         `[dev] OpenAlice's Guardian process exited (code=${code}, signal=${signal})` +
         (likelyAlreadyRunning
-          ? ` - likely because another instance already owns it; if so that existing instance is the MCP server.`
-          : ` unexpectedly.`) +
-        ` Argus keeps running; OpenAlice stays FAILED until Guardian tools issue_create and inbox_read are reachable.`
-      );
+          ? ` — another OpenAlice instance already owns ~/.openalice. Argus will probe ${GUARDIAN_MCP_URL}. If that MCP is down, stop the other instance or run \`pnpm dev --takeover\` in the OpenAlice checkout.`
+          : ` unexpectedly. ${openAliceHowToEnable(openAlicePath)}`);
+      console.warn(msg);
+      if (!likelyAlreadyRunning) {
+        openAliceLaunchError = msg.replace(/^\[dev\] /, '');
+      }
     }
   });
 
-  const up = await waitForPort(GUARDIAN_MCP_PORT, 120_000, 'OpenAlice Guardian MCP');
-  if (!up) {
-    console.warn('[dev] Guardian MCP port did not open in time. Argus will keep probing.');
+  const ready = await waitForOpenAliceMcp(GUARDIAN_MCP_URL, 180_000, console.warn, () => exitedEarly);
+  if (ready) {
+    console.log(`[dev] OpenAlice Guardian MCP is ready at ${GUARDIAN_MCP_URL}`);
+    return GUARDIAN_MCP_URL;
+  }
+  if (!exitedEarly) {
+    openAliceLaunchError =
+      `Guardian MCP did not become ready at ${GUARDIAN_MCP_URL} within 180s. Watch the OpenAlice log above. ` +
+      openAliceHowToEnable(openAlicePath);
+    console.warn(`[dev] ${openAliceLaunchError}`);
+  } else if (!openAliceLaunchError) {
+    const mcpStillUp = await mcpEndpointAccepting(GUARDIAN_MCP_URL);
+    if (mcpStillUp) {
+      console.log(`[dev] Guardian process exited but ${GUARDIAN_MCP_URL} is accepting MCP (existing instance).`);
+      return GUARDIAN_MCP_URL;
+    }
+    openAliceLaunchError =
+      `OpenAlice Guardian exited before ${GUARDIAN_MCP_URL} accepted MCP. ` + openAliceHowToEnable(openAlicePath);
+    console.warn(`[dev] ${openAliceLaunchError}`);
   }
   return GUARDIAN_MCP_URL;
 }
@@ -499,18 +566,20 @@ async function main() {
     await startOllama();
   }
 
-  if (process.env.ARGUS_SKIP_CHRONOS === 'true') {
+  const skipChronos = process.env.ARGUS_SKIP_CHRONOS === 'true';
+  if (skipChronos) {
     console.log('[dev] ARGUS_SKIP_CHRONOS=true - Kronos stays KRONOS_UNAVAILABLE until you run npm run ai:serve.');
-  } else {
-    await startChronosAndWait();
   }
 
-  let guardianMcpUrl: string | null = null;
-  if (process.env.ARGUS_SKIP_OPENALICE === 'true') {
-    console.log('[dev] ARGUS_SKIP_OPENALICE=true - skipping OpenAlice Guardian.');
-  } else {
-    guardianMcpUrl = await startOpenAliceGuardian();
+  const skipOpenAlice = shouldSkipOpenAlice();
+  if (skipOpenAlice) {
+    console.log(`[dev] ${openAliceSkipReason()}`);
   }
+
+  const [, guardianMcpUrl] = await Promise.all([
+    skipChronos ? Promise.resolve() : startChronosAndWait(),
+    skipOpenAlice ? Promise.resolve(null) : startOpenAliceGuardian(),
+  ]);
 
   if (process.env.ARGUS_SKIP_IBKR === 'true') {
     console.log('[dev] ARGUS_SKIP_IBKR=true - not starting IBKR Gateway.');
@@ -523,12 +592,18 @@ async function main() {
     ARGUS_START_LOCAL_MODELS: process.env.ARGUS_START_LOCAL_MODELS === 'false' ? 'false' : 'true',
     ARGUS_START_CHRONOS: process.env.ARGUS_SKIP_CHRONOS === 'true' ? 'false' : 'true',
     ARGUS_PROBE_IBKR: process.env.ARGUS_PROBE_IBKR === 'false' ? 'false' : 'true',
-    LOCAL_AI_SERVICE_URL: preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008'),
+    LOCAL_AI_SERVICE_PORT: process.env.LOCAL_AI_SERVICE_PORT || '8008',
+    LOCAL_AI_SERVICE_URL: preferIpv4Loopback(
+      (process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008').replace(/:8000(?=\/|$)/, ':8008'),
+    ),
   };
 
-  if (process.env.ARGUS_SKIP_OPENALICE !== 'true' && process.env.ARGUS_KEEP_OPENALICE_MCP_URL !== 'true') {
+  if (!skipOpenAlice && process.env.ARGUS_KEEP_OPENALICE_MCP_URL !== 'true') {
     childEnv.OPENALICE_ENABLED = 'true';
     childEnv.OPENALICE_MCP_URL = guardianMcpUrl || GUARDIAN_MCP_URL;
+  }
+  if (openAliceLaunchError) {
+    childEnv.OPENALICE_LAUNCH_ERROR = openAliceLaunchError;
   }
 
   startTradingPlatform(childEnv);

@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 
 /**
  * Real integration test (isolated temp SQLite DB, no per-module mocks) for the P0 trading-safety
@@ -174,6 +176,26 @@ describe('TradingEngine - trading-safety kill switch (P0)', () => {
     await tradingEngine.toggle({ enabled: false } as any);
   });
 
+  it('toggle() treats settings.autoBotEnabled as the same lever as enabled (DB vs in-memory name)', async () => {
+    const broker = BrokerManager.getInstance().getActiveBroker();
+    const portfolio = await broker.portfolio();
+    const availableToTrade = portfolio.buyingPower ?? portfolio.cash ?? 0;
+
+    tradingEngine.state.enabled = false;
+    const on = await tradingEngine.toggle({ autoBotEnabled: true, budget: Math.max(1, availableToTrade - 1) } as any);
+    expect(on.ok).toBe(true);
+    expect(tradingEngine.state.enabled).toBe(true);
+
+    const [rowOn] = await db.select().from(schema.settings).limit(1);
+    expect(rowOn.autoBotEnabled).toBe(true);
+
+    const off = await tradingEngine.toggle({ autoBotEnabled: false } as any);
+    expect(off.ok).toBe(true);
+    expect(tradingEngine.state.enabled).toBe(false);
+    const [rowOff] = await db.select().from(schema.settings).limit(1);
+    expect(rowOff.autoBotEnabled).toBe(false);
+  });
+
   it('persists tradingState across a re-initialize (simulating a process restart while stopped)', async () => {
     await tradingEngine.setTradingState('EMERGENCY_STOP', { reason: 'restart persistence test', actor: 'tester' });
     expect(tradingEngine.state.tradingState).toBe('EMERGENCY_STOP');
@@ -189,5 +211,37 @@ describe('TradingEngine - trading-safety kill switch (P0)', () => {
     expect(tradingEngine.state.emergencyStopActive).toBe(true);
 
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'cleanup', actor: 'tester' });
+  });
+
+  it('Activity Log SCAN/VETO rows keep agent, gate, traceId from real EventBus payloads', () => {
+    tradingEngine.state.history = [];
+    eventBus.emit(EVENTS.TRADE_IDEA_GENERATED, {
+      agent: 'FundamentalAgent',
+      symbol: 'AAPL',
+      side: 'HOLD',
+      confidence: 0,
+      currentPrice: 188.42,
+      reasoning: 'DATA_UNAVAILABLE: Fundamental data providers not configured.',
+      traceId: 'trace-fundamental-aapl-001',
+    });
+    const scan = tradingEngine.state.history[0];
+    expect(scan.type).toBe('scan');
+    expect(scan.msg).toContain('FundamentalAgent proposed HOLD AAPL');
+    expect(scan.msg).toContain('DATA_UNAVAILABLE');
+    expect(scan.detail.traceId).toBe('trace-fundamental-aapl-001');
+
+    eventBus.emit(EVENTS.RISK_ASSESSMENT_COMPLETED, {
+      approved: false,
+      symbol: 'AAPL',
+      side: 'BUY',
+      rejectionGate: 'duplicate_signal',
+      reasoning: 'Duplicate BUY signal for AAPL within 60s.',
+      traceId: 'risk-dup-aaaaaaaa',
+      currentPrice: 190.1,
+    });
+    const veto = tradingEngine.state.history[0];
+    expect(veto.type).toBe('veto');
+    expect(veto.msg).toContain('[gate=duplicate_signal]');
+    expect(veto.detail.gate).toBe('duplicate_signal');
   });
 });

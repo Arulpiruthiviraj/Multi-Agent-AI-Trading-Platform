@@ -10,8 +10,10 @@
  * Flow:
  *   1. Load Argus root `.env` (central API keys + ecosystem paths).
  *   2. Optionally start Vibe-Trading MCP, AutoHedge, and Fincept (Python `.venv` / explicit CMD).
- *   3. Optionally start OpenAlice Guardian (pnpm), then skip duplicate spawn in core.
- *   4. Spawn `scripts/devWithOpenAlice.ts` (Chronos / Ollama / IBKR / `tsx server.ts`).
+ *   3. Pass OpenAlice checkout path into core. Core starts Guardian and waits for MCP
+ *      readiness unless ENABLE_OPENALICE=false or ARGUS_SKIP_OPENALICE=true.
+ *      Do not spawn-and-skip here — that left Diagnostics probing a port that was not up yet.
+ *   4. Spawn `scripts/devWithOpenAlice.ts` (Chronos / Ollama / OpenAlice / IBKR / `tsx server.ts`).
  *
  * Ctrl+C / SIGTERM kills every child PID this script started (Windows: taskkill /T).
  * Missing dirs or binaries log a warning and continue — Argus still boots.
@@ -25,6 +27,7 @@ import { spawn, spawnSync, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { openAliceSkipReason, shouldSkipOpenAlice } from './openAliceDevSupport';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -215,64 +218,9 @@ function spawnPythonService(
   return true;
 }
 
-function commandWorks(cmd: string, args: string[]): boolean {
-  const r = spawnSync(cmd, args, {
-    encoding: 'utf8',
-    timeout: 8000,
-    windowsHide: true,
-    shell: process.platform === 'win32',
-  });
-  return r.status === 0;
-}
-
-function resolvePnpmCommand(): string | null {
-  if (commandWorks('pnpm', ['--version'])) return 'pnpm';
-  if (process.platform === 'win32' && commandWorks('pnpm.cmd', ['--version'])) return 'pnpm.cmd';
-  if (commandWorks('corepack', ['--version'])) return 'corepack';
-  return null;
-}
-
-/**
- * OpenAlice Guardian (Node/pnpm). Research/verification only — lite mode, no trading MCP.
- * Returns the Guardian MCP URL when spawn was attempted/already up, else null.
- */
-function spawnOpenAlice(openAlicePath: string): string | null {
-  const GUARDIAN_MCP_PORT = Number(process.env.OPENALICE_MCP_PORT || '47332');
-  const GUARDIAN_WEB_PORT = Number(process.env.OPENALICE_WEB_PORT || '47331');
-  const GUARDIAN_MCP_URL = `http://127.0.0.1:${GUARDIAN_MCP_PORT}/mcp`;
-
-  if (!fs.existsSync(openAlicePath) || !fs.existsSync(path.join(openAlicePath, 'package.json'))) {
-    warn(`OpenAlice: checkout missing or incomplete at ${openAlicePath} — skip.`);
-    return null;
-  }
-
-  const pnpmCmd = resolvePnpmCommand();
-  if (!pnpmCmd) {
-    warn('OpenAlice: pnpm not on PATH — skip Guardian spawn.');
-    return null;
-  }
-
-  const spawnArgs = pnpmCmd === 'corepack' ? ['pnpm', 'dev'] : ['dev'];
-  log(`Starting OpenAlice Guardian from ${openAlicePath} (${pnpmCmd} ${spawnArgs.join(' ')})`);
-  const child = spawn(pnpmCmd, spawnArgs, {
-    cwd: openAlicePath,
-    shell: true,
-    stdio: 'inherit',
-    env: {
-      ...process.env,
-      OPENALICE_MCP_ENABLED: '1',
-      OPENALICE_MCP_PORT: String(GUARDIAN_MCP_PORT),
-      OPENALICE_WEB_PORT: String(GUARDIAN_WEB_PORT),
-      OPENALICE_LITE_MODE: '1',
-    },
-  });
-  track('OpenAlice', child);
-  return GUARDIAN_MCP_URL;
-}
-
 function startArgusCore(extraEnv: NodeJS.ProcessEnv): void {
   const coreScript = path.join(repoRoot, 'scripts', 'devWithOpenAlice.ts');
-  log(`Starting Argus core (Chronos/Ollama/IBKR + Express/Vite) via ${coreScript}`);
+  log(`Starting Argus core (Chronos/Ollama/OpenAlice/IBKR + Express/Vite) via ${coreScript}`);
   const child = spawn('npx', ['tsx', coreScript], {
     cwd: repoRoot,
     env: { ...process.env, ...extraEnv },
@@ -383,18 +331,13 @@ function main(): void {
   }
 
   // --- OpenAlice Guardian ---
-  // If we spawn it here, tell devWithOpenAlice not to spawn a second copy.
-  if (envFlag('ENABLE_OPENALICE', true) && process.env.ARGUS_SKIP_OPENALICE !== 'true') {
-    const url = spawnOpenAlice(openAlicePath);
-    if (url) {
-      coreEnv.ARGUS_SKIP_OPENALICE = 'true';
-      coreEnv.OPENALICE_ENABLED = 'true';
-      if (process.env.ARGUS_KEEP_OPENALICE_MCP_URL !== 'true') {
-        coreEnv.OPENALICE_MCP_URL = url;
-      }
-    }
+  // Core (devWithOpenAlice.ts) clones/installs/starts Guardian and waits for MCP /mcp.
+  // Spawn-and-set ARGUS_SKIP_OPENALICE here used to start Argus before :47332 was listening.
+  if (shouldSkipOpenAlice()) {
+    coreEnv.ARGUS_SKIP_OPENALICE = 'true';
+    log(openAliceSkipReason() || 'OpenAlice spawn skipped.');
   } else {
-    log('OpenAlice spawn skipped (ENABLE_OPENALICE=false or ARGUS_SKIP_OPENALICE=true).');
+    log(`OpenAlice Guardian will start from ${openAlicePath} (core waits for MCP http://127.0.0.1:47332/mcp).`);
   }
 
   startArgusCore(coreEnv);

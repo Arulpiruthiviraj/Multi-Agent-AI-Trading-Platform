@@ -61,6 +61,19 @@ export const backtestLimiter = rateLimit({
   message: { error: 'Backtest rate limit exceeded. Try again in a few minutes.' },
 });
 
+// Real bug fixed: webhooks.ts's create/update/test routes fetch an operator-supplied URL
+// server-side (SSRF surface, see urlSafety.ts) and previously had no limiter at all, unlike every
+// other mutating route in this file - meaning nothing stopped it being used as a rapid internal
+// port-scanning oracle even after URL validation. 15/min is generous for real webhook setup
+// (add, edit, test a few endpoints) while bounding scan throughput.
+export const webhookLimiter = rateLimit({
+  windowMs: MINUTE,
+  limit: 15,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Webhook endpoint rate limit exceeded. Try again shortly.' },
+});
+
 // MODE B Historical Replay Lab (create/start/download). Interactive operators retry often while
 // tuning forms; share neither the VectorBT 5/5min budget nor the trading limiter. Still bounded
 // so a runaway tab cannot spam RiskEngine→OMS replay loops forever.

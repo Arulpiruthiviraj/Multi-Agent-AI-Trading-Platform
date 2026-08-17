@@ -106,6 +106,56 @@ export function AutonomousMissionControl({
   setHaltReason,
   setHaltTime
 }: AutonomousMissionControlProps) {
+  // Real bug fixed: this dropdown used to be entirely fake - onChange just showed a
+  // window.confirm() then an alert() claiming "Broker switched to X successfully" without ever
+  // calling an API or touching BrokerManager. Now backed by the real broker-capabilities/active
+  // routes (the same ones BrokerManagement.tsx in Settings uses) - fetched on mount, switched via
+  // a real POST, with real success/failure feedback instead of a fabricated alert.
+  const [availableBrokers, setAvailableBrokers] = useState<Array<{ id: string; name: string }>>([]);
+  const [activeBrokerId, setActiveBrokerId] = useState<string>("");
+  const [brokerSwitchStatus, setBrokerSwitchStatus] = useState<string>("");
+  const [brokerSwitching, setBrokerSwitching] = useState(false);
+
+  const fetchBrokerCapabilities = () => {
+    fetch("/api/v1/broker-capabilities")
+      .then((r) => r.json())
+      .then((data) => {
+        setAvailableBrokers(data.brokers || []);
+        setActiveBrokerId(data.activeBroker || "");
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchBrokerCapabilities();
+  }, []);
+
+  const handleBrokerSwitch = async (id: string) => {
+    if (!id || id === activeBrokerId) return;
+    const confirmed = window.confirm(`Switch the execution broker to ${availableBrokers.find((b) => b.id === id)?.name || id}? This does not cancel already-submitted orders.`);
+    if (!confirmed) return;
+    setBrokerSwitching(true);
+    setBrokerSwitchStatus("");
+    try {
+      const res = await fetch("/api/v1/brokers/active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setBrokerSwitchStatus(`Switched to ${availableBrokers.find((b) => b.id === id)?.name || id}.`);
+        fetchBrokerCapabilities();
+      } else {
+        setBrokerSwitchStatus(data.error || "Broker switch failed.");
+      }
+    } catch (e: any) {
+      setBrokerSwitchStatus(e?.message || "Failed to reach the server.");
+    }
+    setBrokerSwitching(false);
+    setTimeout(() => setBrokerSwitchStatus(""), 5000);
+  };
+
   // Global View Configurations (Feature 19)
   const [tradingMode, setTradingMode] = useState<"BEGINNER" | "ASSISTED" | "AUTONOMOUS" | "HEDGE_FUND">("AUTONOMOUS");
   const [isBeginnerExplanation, setIsBeginnerExplanation] = useState<boolean>(false);
@@ -153,14 +203,15 @@ export function AutonomousMissionControl({
 
   // 1. AI CIO Configuration & Weights (Feature 1, 20)
   const [cioStrategyFocus, setCioStrategyFocus] = useState<string>("Balanced Growth");
-  const [agentWeights, setAgentWeights] = useState({
-    technical: 84,
-    news: 79,
-    risk: 93,
-    claude: 82,
-    chatgpt: 86,
-    gemini: 80
-  });
+  // Real bug fixed: this used to be a hardcoded, never-fetched, never-updated set of made-up
+  // percentages (technical/news/risk/claude/chatgpt/gemini) with zero connection to any agent
+  // that actually exists. Real per-agent weights live in agent_performance_stats.currentWeight
+  // (ReflectionEngine scores real prediction outcomes and updates this - see CLAUDE.md's
+  // Reflection/Learning section), exposed at GET /api/v2/agents/performance. currentWeight is a
+  // multiplier around 1.0, not a 0-100 score, so the display bar below shows each agent's real
+  // share of total weight across all agents instead of pretending it's a percentage.
+  const [agentStats, setAgentStats] = useState<Array<{ agentName: string; currentWeight: number; winRate: number; totalPredictions: number }>>([]);
+  const [evolutionSweepStatus, setEvolutionSweepStatus] = useState<string>("");
 
   // 2. 24/7 Scanner State (Feature 2)
   const [scanningStatus, setScanningStatus] = useState<string>("Idling");
@@ -419,10 +470,39 @@ export function AutonomousMissionControl({
   };
 
 
-  // Dynamic weights update based on evolution success rates (Feature 20)
+  const fetchAgentStats = () => {
+    fetch('/api/v2/agents/performance')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok && Array.isArray(data.stats)) setAgentStats(data.stats);
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    fetchAgentStats();
+  }, []);
+
+  // Real bug fixed: this fetched /api/v2/agents/performance but never read the response, so
+  // clicking "Force Evolution Sweep" did nothing visible - the button just silently discarded a
+  // real API's real data. There is no separate backend "evolution sweep" to trigger (agent
+  // weights update continuously via ReflectionEngine scoring real trade outcomes, not on demand),
+  // so this now honestly does what it can do for real: re-fetch and display the current real
+  // weights, with real feedback instead of implying a sweep it can't actually run.
   const triggerEvolutionShift = () => {
-    // Implement real API call to trigger backend agent evolution sweep
-    fetch('/api/v2/agents/performance'); // Trigger backend refresh
+    setEvolutionSweepStatus("Refreshing...");
+    fetch('/api/v2/agents/performance')
+      .then((r) => r.json())
+      .then((data) => {
+        if (data?.ok && Array.isArray(data.stats)) {
+          setAgentStats(data.stats);
+          setEvolutionSweepStatus(`Refreshed ${data.stats.length} agent(s). Weights update continuously from real trade outcomes, not on a manual sweep.`);
+        } else {
+          setEvolutionSweepStatus(data?.error || "Failed to refresh agent stats.");
+        }
+      })
+      .catch((e: any) => setEvolutionSweepStatus(e?.message || "Failed to reach the server."))
+      .finally(() => setTimeout(() => setEvolutionSweepStatus(""), 5000));
   };
 
   
@@ -438,7 +518,7 @@ export function AutonomousMissionControl({
         systemStatus: enginesHalted ? "HALTED" : "ACTIVE",
         activeMode: tradingMode,
         activeRegime: marketRegime,
-        agentPerformance: agentWeights,
+        agentPerformance: agentStats,
         scannedOpportunities: scannedAssets,
         journalAudit: journalEntries
       }, null, 2);
@@ -464,25 +544,22 @@ export function AutonomousMissionControl({
   return (
     <div className="bg-[#0A0F16] border border-[#1E293B] rounded-xl p-6 min-h-screen text-slate-100 flex flex-col font-sans relative overflow-hidden" id="argus-mission-control-panel">
       
-      {/* Runtime Broker Switching Widget */}
+      {/* Runtime Broker Switching Widget - real: fetches BrokerManager's actual registered
+          brokers/active id and switches via the real POST /api/v1/brokers/active route. */}
       <div className="absolute top-6 right-[300px] bg-[#1A1F2B] border border-slate-800 p-2 rounded-lg flex items-center gap-3 z-50">
         <span className="text-[10px] text-slate-400 uppercase tracking-widest font-mono">Execution Broker:</span>
-        <select 
-          className="bg-[#111822] text-emerald-400 text-xs font-bold tracking-widest font-mono border border-emerald-900/50 p-1 rounded outline-none"
-          onChange={(e) => {
-            const confirmed = window.confirm("Switching brokers will cancel pending orders and re-connect. Proceed?");
-            if (confirmed) {
-              console.log("Switching broker to", e.target.value);
-              alert("Broker switched to " + e.target.value + " successfully.");
-            }
-          }}
+        <select
+          className="bg-[#111822] text-emerald-400 text-xs font-bold tracking-widest font-mono border border-emerald-900/50 p-1 rounded outline-none disabled:opacity-50"
+          value={activeBrokerId}
+          disabled={brokerSwitching || availableBrokers.length === 0}
+          onChange={(e) => handleBrokerSwitch(e.target.value)}
         >
-          <option>Interactive Brokers Paper</option>
-          <option>Alpaca Paper</option>
-          <option>Questrade Margin</option>
-          <option>Coinbase</option>
-          <option>GLOBAL DEFAULT</option>
+          {availableBrokers.length === 0 && <option value="">Loading...</option>}
+          {availableBrokers.map((b) => (
+            <option key={b.id} value={b.id}>{b.name}</option>
+          ))}
         </select>
+        {brokerSwitchStatus && <span className="text-[10px] font-mono text-slate-400 max-w-[220px] truncate">{brokerSwitchStatus}</span>}
       </div>
 
       {/* Background Ambience */}
@@ -710,31 +787,47 @@ export function AutonomousMissionControl({
                 </div>
               )}
 
-              {/* Progress Gauges for Agents */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-                {Object.entries(agentWeights).map(([key, val]) => (
-                  <div key={key} className="bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between">
-                    <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">{key} Node</span>
-                    <div className="flex items-end gap-1.5 my-2">
-                      <span className="text-lg font-mono font-bold text-white">{val}%</span>
-                      <span className="text-[9px] font-mono text-emerald-400 mb-1">Influence</span>
-                    </div>
-                    {/* Visual bar */}
-                    <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
-                      <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${val}%` }}></div>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              {/* Progress Gauges for Agents - real agent_performance_stats.currentWeight, fetched
+                  from GET /api/v2/agents/performance. Empty until ReflectionEngine has scored at
+                  least one real prediction outcome for an agent. */}
+              {agentStats.length > 0 ? (
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                  {(() => {
+                    const totalWeight = agentStats.reduce((s, a) => s + (a.currentWeight || 0), 0) || 1;
+                    return agentStats.map((a) => {
+                      const sharePct = Math.round((a.currentWeight / totalWeight) * 1000) / 10;
+                      return (
+                        <div key={a.agentName} className="bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between">
+                          <span className="text-[10px] font-mono uppercase text-slate-400 font-bold">{a.agentName}</span>
+                          <div className="flex items-end gap-1.5 my-2">
+                            <span className="text-lg font-mono font-bold text-white">{sharePct}%</span>
+                            <span className="text-[9px] font-mono text-emerald-400 mb-1">of total weight</span>
+                          </div>
+                          <div className="w-full bg-slate-950 h-1.5 rounded-full overflow-hidden">
+                            <div className="bg-indigo-500 h-full rounded-full transition-all duration-1000" style={{ width: `${sharePct}%` }}></div>
+                          </div>
+                          <span className="text-[9px] font-mono text-slate-500 mt-1">{a.totalPredictions} predictions, {(a.winRate * 100).toFixed(0)}% win rate</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-600 font-mono text-center py-6 border border-dashed border-slate-800 rounded">
+                  No real agent_performance_stats rows yet - ReflectionEngine hasn't scored a prediction outcome for any agent in this environment.
+                </div>
+              )}
             </div>
 
             <div className="flex justify-between items-center mt-6 pt-4 border-t border-slate-800 text-[10px] font-mono text-slate-400">
-              <span className="flex items-center gap-1"><RefreshCw size={10} className="animate-spin text-indigo-400" /> Auto-optimizing database models every 10 seconds...</span>
+              <span className="flex items-center gap-1 truncate">
+                {evolutionSweepStatus || "Weights update continuously as ReflectionEngine scores real trade outcomes (no fixed on-demand sweep exists)."}
+              </span>
               <button
                 onClick={triggerEvolutionShift}
-                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold uppercase tracking-wider px-2.5 py-1 rounded transition-all text-[9px]"
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold uppercase tracking-wider px-2.5 py-1 rounded transition-all text-[9px] shrink-0"
               >
-                Force Evolution Sweep
+                Refresh Real Weights
               </button>
             </div>
           </div>

@@ -8,6 +8,7 @@
  *   remaining callers are explicit webhook test/dispatch routes.
  */
 import { Router, Request, Response } from "express";
+import { isSafeOutboundUrl } from "../core/urlSafety";
 
 export interface Webhook {
   id: string;
@@ -88,9 +89,15 @@ webhooksRouter.get("/", (req: Request, res: Response) => {
   res.json(webhooks);
 });
 
-webhooksRouter.post("/", (req: Request, res: Response) => {
+webhooksRouter.post("/", async (req: Request, res: Response) => {
   const { name, url, type, enabled, events } = req.body;
   if (!name || !url) return res.status(400).json({ error: "Name and URL required" });
+  // Real bug fixed: a stored webhook URL is auto-fetched by triggerWebhooks() on every future
+  // real trading/system event, not just once - an unvalidated URL here was a standing SSRF
+  // vector, not a one-time test. Validated on write (not on every trigger) to avoid adding a DNS
+  // lookup to the hot event-notification path.
+  const safety = await isSafeOutboundUrl(url);
+  if (!safety.safe) return res.status(400).json({ error: `Unsafe webhook URL: ${safety.reason}` });
   const newWh: Webhook = {
     id: "wh_" + Date.now() + "_" + Math.floor(Math.random() * 1000),
     name,
@@ -104,19 +111,25 @@ webhooksRouter.post("/", (req: Request, res: Response) => {
   res.json(newWh);
 });
 
-webhooksRouter.put("/:id", (req: Request, res: Response) => {
+webhooksRouter.put("/:id", async (req: Request, res: Response) => {
   const { id } = req.params;
   const wh = webhooks.find((w) => w.id === id);
   if (!wh) return res.status(404).json({ error: "Not found" });
+  if (req.body.url !== undefined) {
+    const safety = await isSafeOutboundUrl(req.body.url);
+    if (!safety.safe) return res.status(400).json({ error: `Unsafe webhook URL: ${safety.reason}` });
+    wh.url = req.body.url;
+  }
   if (req.body.enabled !== undefined) wh.enabled = req.body.enabled;
   if (req.body.name !== undefined) wh.name = req.body.name;
-  if (req.body.url !== undefined) wh.url = req.body.url;
   if (req.body.events !== undefined) wh.events = req.body.events;
   res.json(wh);
 });
 
 webhooksRouter.post("/test", async (req: Request, res: Response) => {
   const { url, type } = req.body;
+  const safety = await isSafeOutboundUrl(url);
+  if (!safety.safe) return res.status(400).json({ error: `Unsafe webhook URL: ${safety.reason}` });
   let payload: Record<string, unknown> = {};
   const timestamp = new Date().toISOString();
 

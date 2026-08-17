@@ -4,7 +4,13 @@ import { runtimeIntervals } from '../../config/runtimeIntervals';
 
 export type KronosStatus = 'Loading...' | 'Downloading...' | 'Initializing...' | 'Ready' | 'Warning: Kronos unavailable';
 
-const SERVICE_URL = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008');
+function resolveChronosServiceUrl(): string {
+  const raw = process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008';
+  // Legacy docs used :8000; Chronos always serves LOCAL_AI_SERVICE_PORT (default 8008).
+  return preferIpv4Loopback(raw.replace(/:8000(?=\/|$)/, ':8008'));
+}
+
+const SERVICE_URL = resolveChronosServiceUrl();
 // Re-checked lazily rather than once at boot - the local inference service (scripts/
 // local_ai_service.py) is meant to be started/stopped independently of the Node process, like
 // Ollama. A one-shot boot-time check would permanently report unavailable if the service was
@@ -19,6 +25,7 @@ export class KronosModelManager {
   private gpuUsage: string | null = null;
   private inferenceTime: number = 0;
   private lastCheckedAt: number = 0;
+  private refreshInFlight: Promise<void> | null = null;
 
   constructor() {}
 
@@ -29,7 +36,7 @@ export class KronosModelManager {
   private async refreshAvailability(): Promise<void> {
     this.lastCheckedAt = Date.now();
     try {
-      const res = await fetch(`${SERVICE_URL}/health`, { signal: AbortSignal.timeout(2000) });
+      const res = await fetch(`${SERVICE_URL}/health`, { signal: AbortSignal.timeout(3000) });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const body = await res.json();
       this.isAvailable = true;
@@ -43,11 +50,18 @@ export class KronosModelManager {
     }
   }
 
+  private scheduleRefresh(): void {
+    if (this.refreshInFlight) return;
+    this.refreshInFlight = this.refreshAvailability()
+      .catch(() => {})
+      .finally(() => { this.refreshInFlight = null; });
+  }
+
   // Fire-and-forget refresh if the last check is stale, but always return synchronously with the
   // last known state - callers on the hot tick path must never block on a network round-trip.
   private maybeRefresh(): void {
     if (Date.now() - this.lastCheckedAt > RECHECK_INTERVAL_MS) {
-      this.refreshAvailability().catch(() => {});
+      this.scheduleRefresh();
     }
   }
 
@@ -65,7 +79,14 @@ export class KronosModelManager {
       gpuUsage: this.gpuUsage,
       inferenceTime: this.inferenceTime,
       isAvailable: this.isAvailable,
+      serviceUrl: SERVICE_URL,
     };
+  }
+
+  /** HTTP status route — always re-probe so the Kronos tab is not stuck on a stale boot failure. */
+  public async getStatusReportFresh() {
+    await this.refreshAvailability();
+    return this.getStatusReport();
   }
 
   public isReady(): boolean {

@@ -112,6 +112,10 @@ export class KronosEngine implements IForecastEngine {
   public getStatus() {
     return this.manager.getStatusReport();
   }
+
+  public async getStatusFresh() {
+    return this.manager.getStatusReportFresh();
+  }
 }
 
 // Export singleton instance

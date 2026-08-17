@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { collectStartupHealth } from './StartupHealthRegistry';
 
 describe('StartupHealthRegistry', () => {
@@ -17,5 +17,25 @@ describe('StartupHealthRegistry', () => {
     const rows = await collectStartupHealth(200);
     const oa = rows.find((r) => r.service === 'OpenAlice');
     expect(oa?.status).toBe('DISABLED');
+  });
+
+  it('probes Chronos on :8008 even if LOCAL_AI_SERVICE_URL still says :8000', async () => {
+    const prev = process.env.LOCAL_AI_SERVICE_URL;
+    process.env.LOCAL_AI_SERVICE_URL = 'http://127.0.0.1:8000';
+    const seen: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (url: any) => {
+      seen.push(String(url));
+      throw new Error('ECONNREFUSED');
+    }) as any;
+    try {
+      await collectStartupHealth(50);
+      expect(seen.some((u) => u.includes(':8008/health'))).toBe(true);
+      expect(seen.some((u) => u.includes(':8000/health'))).toBe(false);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (prev === undefined) delete process.env.LOCAL_AI_SERVICE_URL;
+      else process.env.LOCAL_AI_SERVICE_URL = prev;
+    }
   });
 });

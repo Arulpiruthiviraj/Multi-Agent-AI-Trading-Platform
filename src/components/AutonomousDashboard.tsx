@@ -29,11 +29,12 @@
 import React, { useState, useEffect } from "react";
 import { 
   Activity, ShieldCheck, Zap, TrendingUp, Cpu, Server, CheckCircle2, 
-  Clock, CheckCircle, FileText, Database, Radio, Settings, Sliders, AlertTriangle 
+  Clock, CheckCircle, FileText, Database, Radio, Settings, Sliders, AlertTriangle, X
 } from "lucide-react";
 import { XAxis, YAxis, Tooltip, AreaChart, Area } from "recharts";
 import { SafeResponsiveContainer } from "./shared/SafeResponsiveContainer";
 import { Explainer } from "./ContextualTooltip";
+import { UnavailableHint } from "./UnavailableHint";
 
 interface AutonomousDashboardProps {
   autoBotConfig?: any;
@@ -43,6 +44,9 @@ interface AutonomousDashboardProps {
   systemState?: string;
   setSystemState?: any;
   setShowLaunchDialog?: any;
+  /** Persist settings.budget (Argus allocation, not broker equity). */
+  onSaveAllocatedBudget?: (budget: number) => Promise<{ ok: boolean; error?: string }>;
+  onOpenMissionControl?: () => void;
 }
 
 export function AutonomousDashboard({ 
@@ -52,10 +56,17 @@ export function AutonomousDashboard({
   assetPrices = {},
   systemState,
   setSystemState,
-  setShowLaunchDialog 
+  setShowLaunchDialog,
+  onSaveAllocatedBudget,
+  onOpenMissionControl,
 }: AutonomousDashboardProps) {
-  const [handsOffMode, setHandsOffMode] = useState(true);
   const [currentTime, setCurrentTime] = useState(new Date());
+  // Allocation editor is config, not an order. Hands-Off Mode and ENGINE PAUSED must not
+  // block it - that toggle is local UX only and does not pause TradingEngine or RiskEngine.
+  const [budgetEditorOpen, setBudgetEditorOpen] = useState(false);
+  const [budgetDraft, setBudgetDraft] = useState("");
+  const [budgetSaving, setBudgetSaving] = useState(false);
+  const [budgetSaveError, setBudgetSaveError] = useState<string | null>(null);
 
   // Real data states with fallback fetch
   const [livePortfolio, setLivePortfolio] = useState<any>(initialPortfolioData || null);
@@ -200,9 +211,46 @@ export function AutonomousDashboard({
   }, []);
 
   // Compute live portfolio values
-  const allocatedBudget = autoBotConfig?.budget ?? autoBotConfig?.targetBudget ?? 50000;
+  const allocatedBudget = autoBotConfig?.budget ?? autoBotConfig?.targetBudget;
   const rawEquity = livePortfolio?.equity ?? livePortfolio?.snapshot?.total_equity;
-  const portfolioEquity = typeof rawEquity === "number" ? rawEquity : (livePortfolio?.cash ? Number(livePortfolio.cash) : allocatedBudget);
+  const cashFallback = typeof livePortfolio?.cash === "number" ? Number(livePortfolio.cash) : undefined;
+  const portfolioEquity = typeof rawEquity === "number" ? rawEquity : cashFallback;
+  const brokerAvailableRaw = livePortfolio?.buying_power ?? livePortfolio?.buyingPower ?? livePortfolio?.cash;
+  const brokerAvailableToTrade = typeof brokerAvailableRaw === "number" ? brokerAvailableRaw : Number(brokerAvailableRaw);
+  const hasBrokerFundsSnapshot = Number.isFinite(brokerAvailableToTrade);
+  const draftBudget = Number(budgetDraft);
+  const draftOverBuyingPower = hasBrokerFundsSnapshot && Number.isFinite(draftBudget) && draftBudget > brokerAvailableToTrade;
+
+  const openBudgetEditor = () => {
+    setBudgetDraft(String(Number(allocatedBudget) || ""));
+    setBudgetSaveError(null);
+    setBudgetEditorOpen(true);
+  };
+
+  const saveBudgetFromEditor = async () => {
+    if (!onSaveAllocatedBudget) {
+      setBudgetSaveError("Allocated capital cannot be saved from this view.");
+      return;
+    }
+    if (!Number.isFinite(draftBudget) || draftBudget <= 0) {
+      setBudgetSaveError("Allocated capital must be a positive dollar amount.");
+      return;
+    }
+    setBudgetSaving(true);
+    setBudgetSaveError(null);
+    try {
+      const result = await onSaveAllocatedBudget(draftBudget);
+      if (result.ok) {
+        setBudgetEditorOpen(false);
+      } else {
+        setBudgetSaveError(result.error || "Failed to save allocated capital.");
+      }
+    } catch (e: any) {
+      setBudgetSaveError(e?.message || "Failed to reach the server.");
+    } finally {
+      setBudgetSaving(false);
+    }
+  };
   
   // Calculate today's unrealized / daily PnL
   let todaysPnl = 0;
@@ -217,13 +265,17 @@ export function AutonomousDashboard({
     }, 0);
   }
 
-  const pnlPercent = portfolioEquity > 0 ? (todaysPnl / portfolioEquity) * 100 : 0;
+  const pnlPercent = typeof portfolioEquity === "number" && portfolioEquity > 0 ? (todaysPnl / portfolioEquity) * 100 : 0;
   const isPnlPositive = todaysPnl >= 0;
 
   // Active positions and recent trades
   const activePositions = Array.isArray(livePortfolio?.positions) ? livePortfolio.positions : [];
   const recentTrades = liveTrades.slice(0, 3);
-  const isEngineActive = autoBotConfig?.autoBotEnabled && autoBotConfig?.tradingState !== "EMERGENCY_STOP";
+  // Canonical flag is TradingEngine.state.enabled (GET /api/v1/autobot `enabled`).
+  // `autoBotEnabled` is the DB column name — accept either so this badge cannot show
+  // ACTIVE while Observatory AutoBot is STOPPED, or STANDBY while the engine is on.
+  const autobotOn = autoBotConfig?.enabled === true || autoBotConfig?.autoBotEnabled === true;
+  const isEngineActive = autobotOn && autoBotConfig?.tradingState !== "EMERGENCY_STOP";
 
   return (
     <div className="flex-1 p-6 overflow-y-auto custom-scrollbar animate-fade-in space-y-6">
@@ -261,11 +313,14 @@ export function AutonomousDashboard({
               {String(autoBotConfig?.tradingMode || "PAPER").toUpperCase()}
             </span>
           </div>
-          <div className="px-3 flex items-center gap-3 cursor-pointer" onClick={() => setHandsOffMode(!handsOffMode)}>
-             <div className={`w-12 h-6 rounded-full border p-0.5 transition-all ${handsOffMode ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-slate-800 border-slate-700'}`}>
-                <div className={`w-4 h-4 rounded-full bg-white transition-transform ${handsOffMode ? 'translate-x-6' : 'translate-x-0'}`}></div>
-             </div>
-             <span className="text-xs font-bold text-slate-400"><Explainer id="handsOffMode" quiet>Hands-Off Mode</Explainer></span>
+          <div
+            className="px-3 flex items-center gap-3 cursor-pointer"
+            onClick={() => onOpenMissionControl?.()}
+            title="Hands-Off is not a safety switch. Start/stop Autobot on Mission Control."
+          >
+             <span className="text-xs font-bold text-indigo-300">
+               <Explainer id="handsOffMode" quiet>Open Mission Control</Explainer>
+             </span>
           </div>
         </div>
       </div>
@@ -276,13 +331,23 @@ export function AutonomousDashboard({
         <div className="xl:col-span-2 space-y-6">
           {/* Key Metrics */}
           <div className="grid grid-cols-3 gap-4">
-            <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm">
+            <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-5 shadow-sm relative z-10">
               <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-2 flex justify-between items-center">
                 <Explainer id="allocatedCapital">Allocated Capital</Explainer>
-                <Settings size={12} className="text-slate-600 hover:text-slate-300 cursor-pointer transition-colors" />
+                <button
+                  type="button"
+                  title="Set Argus allocation (not broker equity)"
+                  aria-label="Edit allocated capital"
+                  onClick={openBudgetEditor}
+                  className="relative z-20 p-1 -m-1 rounded text-slate-600 hover:text-slate-300 cursor-pointer transition-colors"
+                >
+                  <Settings size={12} />
+                </button>
               </div>
               <div className="text-3xl font-bold text-white">
-                ${Number(allocatedBudget).toLocaleString("en-US", { maximumFractionDigits: 0 })}
+                {typeof allocatedBudget === "number"
+                  ? `$${Number(allocatedBudget).toLocaleString("en-US", { maximumFractionDigits: 0 })}`
+                  : <UnavailableHint reason="settings.budget has not loaded from GET /api/v1/autobot yet.">--</UnavailableHint>}
               </div>
             </div>
             
@@ -291,7 +356,9 @@ export function AutonomousDashboard({
                 <Explainer id="portfolioValuation">Portfolio Valuation</Explainer>
               </div>
               <div className="text-3xl font-bold text-indigo-400">
-                ${Number(portfolioEquity).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                {typeof portfolioEquity === "number"
+                  ? `$${Number(portfolioEquity).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                  : <UnavailableHint reason="Broker equity/cash has not returned from GET /api/v1/portfolio. This is not Argus allocated capital.">--</UnavailableHint>}
               </div>
             </div>
 
@@ -302,10 +369,16 @@ export function AutonomousDashboard({
                 <Explainer id="todaysPnl">Today's P/L</Explainer>
               </div>
               <div className={`text-3xl font-bold ${isPnlPositive ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {!livePortfolio ? (
+                  <UnavailableHint reason="Today's P/L waits on the broker portfolio snapshot. $0.00 is only shown after a real book is loaded.">--</UnavailableHint>
+                ) : (
+                  <>
                 {isPnlPositive ? '+' : ''}${Number(todaysPnl).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 <span className="text-xs font-mono ml-2 font-normal opacity-80">
                   ({isPnlPositive ? '+' : ''}{pnlPercent.toFixed(2)}%)
                 </span>
+                  </>
+                )}
               </div>
             </div>
           </div>
@@ -383,9 +456,17 @@ export function AutonomousDashboard({
                </div>
                <div className="flex items-center gap-3 text-xs pt-1 border-t border-slate-800">
                  <div className={`w-2 h-2 rounded-full ${isEngineActive ? 'bg-indigo-400 animate-pulse' : 'bg-amber-500'}`}></div>
-                 <span className={isEngineActive ? "text-indigo-300 font-bold" : "text-amber-400 font-bold"}>
-                   {isEngineActive ? "Autonomous EventBus polling active" : "Engine on standby — click Start in Mission Control"}
-                 </span>
+                 {isEngineActive ? (
+                   <span className="text-indigo-300 font-bold">Autonomous EventBus polling active</span>
+                 ) : (
+                   <button
+                     type="button"
+                     onClick={() => onOpenMissionControl?.()}
+                     className="text-amber-400 font-bold text-left hover:text-amber-300"
+                   >
+                     Engine on standby — click Start in Mission Control
+                   </button>
+                 )}
                </div>
             </div>
           </div>
@@ -399,11 +480,17 @@ export function AutonomousDashboard({
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400 flex items-center gap-2"><Radio size={12}/> <Explainer id="newsEngineStatus">News Engine</Explainer></span>
                 <span className={`font-bold px-2 py-0.5 rounded text-[10px] ${
-                  systemIntegrity?.checks?.news_provider_configured?.status === 'PASS' || !systemIntegrity
-                    ? 'text-emerald-400 bg-emerald-500/10' 
+                  !systemIntegrity
+                    ? 'text-slate-400 bg-slate-800'
+                    : systemIntegrity?.checks?.news_provider_configured?.status === 'PASS'
+                    ? 'text-emerald-400 bg-emerald-500/10'
                     : 'text-amber-400 bg-amber-500/10'
                 }`}>
-                  {systemIntegrity?.checks?.news_provider_configured?.status === 'PASS' || !systemIntegrity ? 'Online' : 'Warning'}
+                  {!systemIntegrity
+                    ? 'Checking…'
+                    : systemIntegrity?.checks?.news_provider_configured?.status === 'PASS'
+                      ? 'Configured'
+                      : 'Warning'}
                 </span>
               </div>
               
@@ -417,7 +504,7 @@ export function AutonomousDashboard({
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400 flex items-center gap-2"><Cpu size={12}/> <Explainer id="riskEngineGates">Risk Engine Gates</Explainer></span>
                 <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded text-[10px]">
-                  11 Gates Armed
+                  Ordered gates armed
                 </span>
               </div>
 
@@ -438,7 +525,14 @@ export function AutonomousDashboard({
               <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
                 <ShieldCheck size={14} className="text-emerald-400" /> <Explainer id="activeRiskLimits">Active Risk Limits</Explainer>
               </h3>
-              <Sliders size={14} className="text-slate-500 cursor-pointer hover:text-white" />
+              <button
+                type="button"
+                title="Edit daily loss / max trade / max positions on Mission Control"
+                onClick={() => onOpenMissionControl?.()}
+                className="text-slate-500 hover:text-white"
+              >
+                <Sliders size={14} />
+              </button>
             </div>
             <div className="space-y-2 text-xs">
               <div className="flex justify-between text-slate-400">
@@ -554,7 +648,7 @@ export function AutonomousDashboard({
                </div>
              ) : (
                <div className="bg-[#0A0F16] border border-slate-800 rounded-lg p-4 text-xs font-mono text-slate-500 text-center">
-                 No recent trades recorded on ledger. Engine is scanning for risk-verified opportunities.
+                 No recent trades recorded on the ledger. {isEngineActive ? "Autobot is on — fills appear after consensus and RiskEngine pass." : "Autobot is paused. Start it from Mission Control; this panel does not invent fills."}
                </div>
              )}
              
@@ -590,6 +684,94 @@ export function AutonomousDashboard({
           </div>
         </div>
       </div>
+
+      {budgetEditorOpen && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm"
+          onClick={() => !budgetSaving && setBudgetEditorOpen(false)}
+        >
+          <form
+            className="bg-[#0A0F16] border border-slate-800 rounded-xl w-full max-w-md shadow-2xl font-mono"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveBudgetFromEditor();
+            }}
+          >
+            <div className="flex justify-between items-center p-4 border-b border-slate-800 bg-[#111822]">
+              <div>
+                <h2 className="text-white font-bold tracking-widest uppercase text-sm">Allocated Capital</h2>
+                <p className="text-[10px] text-slate-500 uppercase mt-1">Argus allocation cap, not broker equity</p>
+              </div>
+              <button
+                type="button"
+                aria-label="Close allocated capital editor"
+                disabled={budgetSaving}
+                onClick={() => setBudgetEditorOpen(false)}
+                className="text-slate-500 hover:text-white transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                This is the dollar slice Argus may commit (`settings.budget`). RiskEngine still sizes and refuses orders. It is not the broker account value shown as Portfolio Valuation.
+              </p>
+              <div>
+                <label className="text-[10px] text-slate-500 uppercase tracking-widest block mb-2">Current allocation</label>
+                <div className="flex items-center gap-2 border-b border-slate-700 pb-1">
+                  <span className="text-xl font-bold text-slate-200">$</span>
+                  <input
+                    type="number"
+                    min="1"
+                    step="1"
+                    autoFocus
+                    className={"w-full bg-transparent text-xl font-bold outline-none " + (draftOverBuyingPower ? "text-rose-400" : "text-white")}
+                    value={budgetDraft}
+                    onChange={(e) => setBudgetDraft(e.target.value)}
+                    disabled={budgetSaving}
+                  />
+                </div>
+              </div>
+              <div className="flex justify-between text-[10px] font-mono text-slate-500">
+                <span>Broker available</span>
+                <span className={draftOverBuyingPower ? "text-rose-400 font-bold" : "text-emerald-400"}>
+                  {hasBrokerFundsSnapshot
+                    ? `$${brokerAvailableToTrade.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+                    : <UnavailableHint reason="Broker buying power/cash has not returned yet.">--</UnavailableHint>}
+                </span>
+              </div>
+              {draftOverBuyingPower && (
+                <p className="text-[10px] text-rose-400 leading-relaxed">
+                  This exceeds the active broker's buying power/cash. You can still save the allocation, but Autobot Start will reject until you lower it or the broker reports more available funds.
+                </p>
+              )}
+              {budgetSaveError && (
+                <p className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2 leading-relaxed">
+                  {budgetSaveError}
+                </p>
+              )}
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={budgetSaving}
+                  onClick={() => setBudgetEditorOpen(false)}
+                  className="px-4 py-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={budgetSaving}
+                  className="px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest bg-indigo-500 hover:bg-indigo-400 text-white disabled:opacity-50"
+                >
+                  {budgetSaving ? "Saving..." : "Save"}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
       
     </div>
   );

@@ -251,7 +251,7 @@ export const DIAGNOSTIC_CATALOG: Record<string, CatalogEntry> = {
     tradingImpact: 'OPTIONAL. Live orders are not blocked by OpenAlice failure.',
     tradingBlocked: false,
     canContinueSafely: true,
-    recommendedFix: 'Start OpenAlice Guardian (npm run dev) and point OPENALICE_MCP_URL at http://127.0.0.1:47332/mcp (issue_create + inbox_read). A trading MCP with placeOrder is the wrong server.',
+    recommendedFix: 'Start OpenAlice Guardian (npm run dev waits for http://127.0.0.1:47332/mcp). Point OPENALICE_MCP_URL at that Guardian URL (issue_create + inbox_read). A trading MCP with placeOrder is the wrong server. Skip with ARGUS_SKIP_OPENALICE=true or ENABLE_OPENALICE=false.',
     troubleshootingSteps: ['Confirm MCP URL (never log secrets)', 'Retry health'],
     documentationReference: 'docs/archive/historical/OPENALICE_INTEGRATION_AUDIT.md',
     retryable: true,

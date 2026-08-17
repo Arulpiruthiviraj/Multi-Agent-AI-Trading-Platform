@@ -29,6 +29,257 @@ const AI_PROVIDER_ENV_MAP: Record<string, string> = {
   Mistral:    'MISTRAL_API_KEY',
   NVIDIA:     'NVIDIA_API_KEY',
 };
+
+/** Alternate DB display names that map to the same env credential as a catalog entry. */
+const AI_PROVIDER_NAME_ALIASES: Record<string, string[]> = {
+  Claude: ['Anthropic'],
+  NVIDIA: ['Nvidia'],
+  OpenRouter: ['OpenRouter Free', 'OpenRouter (Free Tier)'],
+};
+
+/** Local / no-key engines AIRouter seeds or operators commonly add — always listed even with no DB row. */
+const KNOWN_LOCAL_PROVIDERS: Array<{ providerName: string; apiEndpoint: string }> = [
+  { providerName: 'Ollama (Local)', apiEndpoint: 'http://localhost:11434/v1' },
+  { providerName: 'LiteLLM Gateway', apiEndpoint: 'http://localhost:4000' },
+];
+
+export type ProviderUsageStatus = 'active' | 'inactive' | 'no_credentials' | 'not_configured';
+
+function isLocalAiEndpoint(endpoint: string | null | undefined): boolean {
+  if (!endpoint) return false;
+  return endpoint.includes('localhost') || endpoint.includes('127.0.0.1') || endpoint.includes('::1');
+}
+
+function providerNamesMatch(a: string, b: string): boolean {
+  return a.trim().toLowerCase() === b.trim().toLowerCase();
+}
+
+function catalogNamesFor(providerName: string): string[] {
+  const names = [providerName];
+  for (const [canonical, aliases] of Object.entries(AI_PROVIDER_NAME_ALIASES)) {
+    if (providerNamesMatch(canonical, providerName) || aliases.some((a) => providerNamesMatch(a, providerName))) {
+      names.push(canonical, ...aliases);
+    }
+  }
+  return names;
+}
+
+function resolveEnvKeyForProvider(providerName: string): string | null {
+  for (const name of catalogNamesFor(providerName)) {
+    const direct = AI_PROVIDER_ENV_MAP[name];
+    if (direct) return direct;
+    const fuzzy = Object.entries(AI_PROVIDER_ENV_MAP).find(([k]) => providerNamesMatch(k, name));
+    if (fuzzy) return fuzzy[1];
+  }
+  return null;
+}
+
+function resolveProviderCredentials(
+  providerName: string,
+  apiKeyEncrypted: string | null | undefined,
+): { hasCredentials: boolean; credentialSource: 'env' | 'database' | null } {
+  const envKey = resolveEnvKeyForProvider(providerName);
+  if (envKey && process.env[envKey]) {
+    return { hasCredentials: true, credentialSource: 'env' };
+  }
+  // AIRouter also falls back to `${PROVIDERNAME}_API_KEY` for exact providerName uppercase.
+  const looseEnv = process.env[`${providerName.toUpperCase().replace(/[^A-Z0-9]+/g, '_')}_API_KEY`];
+  if (looseEnv) {
+    return { hasCredentials: true, credentialSource: 'env' };
+  }
+  if (apiKeyEncrypted) {
+    return { hasCredentials: true, credentialSource: 'database' };
+  }
+  return { hasCredentials: false, credentialSource: null };
+}
+
+function classifyProviderUsage(input: {
+  inDatabase: boolean;
+  enabled: boolean | null | undefined;
+  apiEndpoint: string | null | undefined;
+  hasCredentials: boolean;
+}): ProviderUsageStatus {
+  if (!input.inDatabase) return 'not_configured';
+  if (input.enabled === false) return 'inactive';
+  if (isLocalAiEndpoint(input.apiEndpoint) || input.hasCredentials) return 'active';
+  return 'no_credentials';
+}
+
+/** Rolling success vs last-call health can disagree (AIRouter sets Healthy on any success). */
+function deriveDisplayHealth(row: {
+  health: string | null;
+  successRate: number | null;
+  requests: number | null;
+  lastSuccess: string | null;
+  lastFailure: string | null;
+  latency: number | null;
+}): { displayHealth: string | null; metricsAvailable: boolean; latencyAvailable: boolean; healthNote: string | null } {
+  const samples = (row.requests || 0) > 0 || !!row.lastSuccess || !!row.lastFailure;
+  if (!samples) {
+    return {
+      displayHealth: null,
+      metricsAvailable: false,
+      latencyAvailable: false,
+      healthNote: 'No completed AIRouter calls for this provider yet — health/latency are not probed live.',
+    };
+  }
+  const rate = row.successRate ?? 100;
+  let displayHealth = row.health || 'Unknown';
+  let healthNote: string | null = null;
+  // Prefer rolling success when it contradicts a last-success Healthy stamp.
+  if (rate < 50) {
+    displayHealth = 'Offline';
+    if (row.health === 'Healthy') {
+      healthNote = `Last call succeeded, but rolling success rate is ${Math.round(rate)}% — shown as Offline.`;
+    }
+  } else if (rate < 80) {
+    displayHealth = 'Degraded';
+    if (row.health === 'Healthy') {
+      healthNote = `Last call succeeded, but rolling success rate is ${Math.round(rate)}% — shown as Degraded.`;
+    }
+  }
+  // Failures do not update EMA latency — 0ms after only failures is a schema default, not a measurement.
+  const latencyAvailable = (row.latency || 0) > 0 || !!row.lastSuccess;
+  return { displayHealth, metricsAvailable: true, latencyAvailable, healthNote };
+}
+
+/** Exported for unit tests — merges DB rows with the known provider catalog. */
+export function buildProviderInventory(dbProviders: Array<{
+  id: string;
+  providerName: string;
+  displayName?: string | null;
+  apiEndpoint?: string | null;
+  apiKeyEncrypted?: string | null;
+  defaultModel?: string | null;
+  enabled?: boolean | null;
+  priority?: number | null;
+  active?: boolean | null;
+  health?: string | null;
+  latency?: number | null;
+  successRate?: number | null;
+  requests?: number | null;
+  lastSuccess?: string | null;
+  lastFailure?: string | null;
+  [key: string]: unknown;
+}>) {
+  const matchedCatalog = new Set<string>();
+  const matchedLocal = new Set<string>();
+
+  const enrichedDb = dbProviders.map((p) => {
+    for (const canonical of Object.keys(AI_PROVIDER_ENV_MAP)) {
+      const aliases = AI_PROVIDER_NAME_ALIASES[canonical] || [];
+      if (
+        providerNamesMatch(p.providerName, canonical) ||
+        aliases.some((a) => providerNamesMatch(p.providerName, a)) ||
+        // Free-tier OpenRouter row is a distinct DB entry; still counts the OpenRouter catalog as seen.
+        (canonical === 'OpenRouter' && p.providerName.toLowerCase().includes('openrouter'))
+      ) {
+        matchedCatalog.add(canonical);
+      }
+    }
+    for (const local of KNOWN_LOCAL_PROVIDERS) {
+      if (
+        providerNamesMatch(p.providerName, local.providerName) ||
+        p.providerName.toLowerCase().includes(local.providerName.split(' ')[0].toLowerCase())
+      ) {
+        matchedLocal.add(local.providerName);
+      }
+    }
+
+    const creds = resolveProviderCredentials(p.providerName, p.apiKeyEncrypted);
+    const usageStatus = classifyProviderUsage({
+      inDatabase: true,
+      enabled: p.enabled,
+      apiEndpoint: p.apiEndpoint,
+      hasCredentials: creds.hasCredentials,
+    });
+    const healthMeta = deriveDisplayHealth({
+      health: p.health ?? null,
+      successRate: p.successRate ?? null,
+      requests: p.requests ?? null,
+      lastSuccess: p.lastSuccess ?? null,
+      lastFailure: p.lastFailure ?? null,
+      latency: p.latency ?? null,
+    });
+
+    return {
+      ...p,
+      // Never return ciphertext to the UI — only whether a key exists.
+      apiKeyEncrypted: undefined,
+      hasCredentials: creds.hasCredentials,
+      credentialSource: creds.credentialSource,
+      usageStatus,
+      isLocal: isLocalAiEndpoint(p.apiEndpoint),
+      metricsAvailable: healthMeta.metricsAvailable,
+      latencyAvailable: healthMeta.latencyAvailable,
+      displayHealth: healthMeta.displayHealth,
+      healthNote: healthMeta.healthNote,
+      inDatabase: true,
+    };
+  });
+
+  const missingCatalog = Object.keys(AI_PROVIDER_ENV_MAP)
+    .filter((name) => !matchedCatalog.has(name))
+    .map((providerName) => {
+      const creds = resolveProviderCredentials(providerName, null);
+      // Env key present but no DB row: still not routable until AIRouter has a row (Add Provider / restart seed).
+      return {
+        id: `catalog:${providerName}`,
+        providerName,
+        displayName: providerName,
+        apiEndpoint: null,
+        apiKeyEncrypted: undefined,
+        defaultModel: null,
+        enabled: false,
+        priority: null,
+        active: false,
+        health: null,
+        latency: null,
+        successRate: null,
+        requests: 0,
+        hasCredentials: creds.hasCredentials,
+        credentialSource: creds.credentialSource,
+        usageStatus: 'not_configured' as ProviderUsageStatus,
+        isLocal: false,
+        metricsAvailable: false,
+        latencyAvailable: false,
+        displayHealth: null,
+        healthNote: creds.hasCredentials
+          ? 'Env key is set, but this provider has no ai_providers row yet — Add Provider (or restart after seed) so AIRouter can load it.'
+          : 'Known to Argus but not in ai_providers — no credentials and not configured for routing.',
+        inDatabase: false,
+      };
+    });
+
+  const missingLocal = KNOWN_LOCAL_PROVIDERS
+    .filter((local) => !matchedLocal.has(local.providerName))
+    .map((local) => ({
+      id: `catalog:${local.providerName}`,
+      providerName: local.providerName,
+      displayName: local.providerName,
+      apiEndpoint: local.apiEndpoint,
+      apiKeyEncrypted: undefined,
+      defaultModel: null,
+      enabled: false,
+      priority: null,
+      active: false,
+      health: null,
+      latency: null,
+      successRate: null,
+      requests: 0,
+      hasCredentials: false,
+      credentialSource: null as 'env' | 'database' | null,
+      usageStatus: 'not_configured' as ProviderUsageStatus,
+      isLocal: true,
+      metricsAvailable: false,
+      latencyAvailable: false,
+      displayHealth: null,
+      healthNote: 'Local endpoint is known to Argus but has no ai_providers row yet.',
+      inDatabase: false,
+    }));
+
+  return [...enrichedDb, ...missingCatalog, ...missingLocal];
+}
 /**
  * ==========================================================
  * Module:
@@ -87,6 +338,7 @@ const SETTINGS_ALLOWED_FIELDS: (keyof typeof schema.settings.$inferInsert)[] = [
   'autoBotEnabled', 'adversarialDebateMode', 'maxPortfolioDrawdownPct', 'maxOpenPositions',
   'maxOrdersPerMinute', 'positionSizingMode', 'percentOfEquityPct',
   'autoTradeScheduleEnabled', 'autoTradeScheduleStartTime', 'autoTradeScheduleEndTime',
+  'autoTradeScheduleTimezone',
 ];
 
 configRouter.get('/settings', async (req, res) => {
@@ -112,11 +364,24 @@ configRouter.post('/settings', async (req, res) => {
     // Reject an invalid schedule window before writing anything, rather than persisting garbage
     // AutoTradeScheduler.tick() would then silently skip forever (isValidHHMM fails closed there,
     // but a client should get a real 400, not a feature that quietly never engages).
-    const { isValidHHMM } = await import('../core/AutoTradeSchedule');
+    const { isValidHHMM, isValidTimezone } = await import('../core/AutoTradeSchedule');
     for (const field of ['autoTradeScheduleStartTime', 'autoTradeScheduleEndTime'] as const) {
       if (Object.prototype.hasOwnProperty.call(req.body || {}, field) && !isValidHHMM(req.body[field])) {
         return res.status(400).json({ ok: false, error: `${field} must be "HH:MM" 24-hour format, got ${JSON.stringify(req.body[field])}` });
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'autoTradeScheduleTimezone') && !isValidTimezone(req.body.autoTradeScheduleTimezone)) {
+      return res.status(400).json({ ok: false, error: `autoTradeScheduleTimezone is not a recognized IANA timezone: ${JSON.stringify(req.body.autoTradeScheduleTimezone)}` });
+    }
+
+    // Real bug fixed: SETTINGS_ALLOWED_FIELDS only ever allowlisted field *names*; a client could
+    // post e.g. {"maxPortfolioDrawdownPct": 999} and silently disable the portfolio-drawdown
+    // circuit breaker (that gate is just `drawdownPct < maxPortfolioDrawdownPct`). Same pattern
+    // for maxOrdersPerMinute/order_rate_limit and maxOpenPositions/open_positions_cap.
+    const { validateSettingsBounds } = await import('../core/settingsValidation');
+    const boundsCheck = validateSettingsBounds(req.body || {});
+    if (boundsCheck.ok === false) {
+      return res.status(400).json({ ok: false, error: boundsCheck.error as string });
     }
 
     // Check the LIVE-trading confirmation gate BEFORE writing anything - toggle() already
@@ -163,7 +428,20 @@ configRouter.post('/onboarding-complete', async (req, res) => {
 configRouter.get('/brokers', async (req, res) => {
   try {
     const brokers = await db.select().from(schema.brokerConnections);
-    res.json(brokers);
+    // Real bug fixed: this returned raw rows including apiKeyEncrypted/secretEncrypted ciphertext
+    // - unlike every other credential-status surface in this file (see buildProviderInventory's
+    // "Never return ciphertext to the UI" and /wizard-status's own "never reads or returns
+    // key/secret values" comment). This route is also reachable via the duplicate bare
+    // app.use("/api/v1", configRouter) mount in server.ts, so masking here (rather than relying on
+    // the caller to know which mount served the request) protects both paths.
+    const masked = brokers.map((b) => ({
+      ...b,
+      apiKeyEncrypted: undefined,
+      secretEncrypted: undefined,
+      hasApiKey: !!b.apiKeyEncrypted,
+      hasSecret: !!b.secretEncrypted,
+    }));
+    res.json(masked);
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -218,8 +496,10 @@ configRouter.post('/brokers', async (req, res) => {
 
 configRouter.get('/providers', async (req, res) => {
   try {
+    // Merge ai_providers rows with the known env catalog + local engines so Settings can show
+    // not-configured / no-key providers — previously the UI only listed DB rows and labeled them all "Active".
     const providers = await db.select().from(schema.aiProviders);
-    res.json(providers);
+    res.json(buildProviderInventory(providers));
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

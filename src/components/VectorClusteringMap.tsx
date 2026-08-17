@@ -25,7 +25,7 @@ export default function VectorClusteringMap() {
         Vector Space Clustering (t-SNE)
       </h3>
       <p className="text-xs text-slate-400 mb-6 leading-relaxed font-mono">
-        2D projection of historical event embeddings, clustering market regimes to find real precedents.
+        No embedding model or vector store is wired. This is not a 2D projection of real event embeddings.
       </p>
 
       <div className="flex-1 w-full min-h-[300px] flex items-center justify-center">

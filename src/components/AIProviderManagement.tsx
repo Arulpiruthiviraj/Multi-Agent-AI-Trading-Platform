@@ -4,54 +4,108 @@
  * AIProviderManagement.tsx
  *
  * Purpose:
- * Core implementation and logic for the AIProviderManagement.tsx module within the Argus Trading Terminal.
+ * Settings → Providers & Keys surface for the Argus AIRouter inventory.
  *
  * Responsibilities:
- * - State management and logic execution for AIProviderManagementx
- * - Interface with backend APIs and EventBus
- * - Render UI components (if React)
+ * - List every known AI provider (DB rows + env catalog + local engines)
+ * - Filter Active / Inactive (not in use) / All with honest usage status
+ * - Show latency/success only when AIRouter has real call samples
  *
  * Inputs:
- * - Module dependencies and injected props
+ * - GET /api/v1/config/providers (enriched inventory)
+ * - GET /api/v1/config/usage
  *
  * Outputs:
- * - Formatted data or React Elements
- *
- * Emits:
- * - Relevant system events
- *
- * Dependencies:
- * - Standard Argus architecture layers
- *
- * Called By:
- * - Argus Routing / Parent Components
+ * - React UI for providers, agent routing, router logs, costs
  *
  * Never:
- * - Mutate global state directly without EventBus
+ * - Invent health metrics for unused / never-called providers
  * - Call AI providers directly (Must use AIRouter)
  *
  * ==========================================================
  */
 
+import React, { useMemo, useState, useEffect } from 'react';
+import { Key, DollarSign, Route, Network, BrainCircuit, CheckCircle2, XCircle } from 'lucide-react';
+import { UnavailableHint } from './UnavailableHint';
 
-import React, { useState, useEffect } from 'react';
-import { Cpu, Server, Key, Clock, DollarSign, Activity, Zap, CheckCircle2, XCircle, Settings, ShieldAlert, BarChart3, Route, Layers, Network, ChevronRight, BrainCircuit } from 'lucide-react';
+type ProviderFilter = 'all' | 'active' | 'inactive';
+
+type UsageStatus = 'active' | 'inactive' | 'no_credentials' | 'not_configured';
+
+interface ProviderRow {
+  id: string;
+  providerName: string;
+  apiEndpoint?: string | null;
+  priority?: number | null;
+  enabled?: boolean | null;
+  health?: string | null;
+  latency?: number | null;
+  successRate?: number | null;
+  requests?: number | null;
+  usageStatus?: UsageStatus;
+  hasCredentials?: boolean;
+  credentialSource?: 'env' | 'database' | null;
+  isLocal?: boolean;
+  metricsAvailable?: boolean;
+  latencyAvailable?: boolean;
+  displayHealth?: string | null;
+  healthNote?: string | null;
+  inDatabase?: boolean;
+}
+
+const USAGE_STATUS_LABEL: Record<UsageStatus, string> = {
+  active: 'Active',
+  inactive: 'Inactive',
+  no_credentials: 'No credentials',
+  not_configured: 'Not configured',
+};
+
+function usageStatusOf(p: ProviderRow): UsageStatus {
+  return p.usageStatus || 'active';
+}
+
+function isInactiveBucket(status: UsageStatus): boolean {
+  return status === 'inactive' || status === 'no_credentials' || status === 'not_configured';
+}
+
+function statusBadgeClass(status: UsageStatus): string {
+  switch (status) {
+    case 'active':
+      return 'text-emerald-400';
+    case 'inactive':
+      return 'text-slate-400';
+    case 'no_credentials':
+      return 'text-amber-400';
+    case 'not_configured':
+      return 'text-slate-500';
+    default:
+      return 'text-slate-400';
+  }
+}
+
+function healthDotClass(health: string | null | undefined): string {
+  if (!health) return 'bg-slate-600';
+  if (health === 'Healthy') return 'bg-emerald-500';
+  if (health === 'Offline') return 'bg-rose-500';
+  return 'bg-amber-500';
+}
 
 export default function AIProviderManagement() {
   const [activeSubTab, setActiveSubTab] = useState<'providers' | 'routing' | 'agents' | 'benchmarks' | 'costs' | 'playground'>('providers');
-  const [providers, setProviders] = useState<any[]>([]);
+  const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [usage, setUsage] = useState<any[]>([]);
-  
+  const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
+
   useEffect(() => {
     fetch('/api/v1/config/providers')
       .then(res => res.json())
-      .then(data => setProviders(data));
-      
+      .then(data => setProviders(Array.isArray(data) ? data : []));
+
     fetch('/api/v1/config/usage')
       .then(res => res.json())
-      .then(data => setUsage(data));
-      
-    // Set up WebSocket for real-time metrics
+      .then(data => setUsage(Array.isArray(data) ? data : []));
+
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
     ws.onmessage = (event) => {
@@ -68,17 +122,34 @@ export default function AIProviderManagement() {
     return () => ws.close();
   }, []);
 
-  const totalTokens = (Array.isArray(usage) ? usage : []).reduce((acc, curr) => acc + (curr.completionTokens || curr.tokens || 0), 0);
-  const totalCost = (Array.isArray(usage) ? usage : []).reduce((acc, curr) => acc + (curr.cost || 0), 0);
-  const successCount = (Array.isArray(usage) ? usage : []).filter(u => u.success !== false && (!u.responseStatus || !u.responseStatus.includes('error'))).length;
-  const successRate = (Array.isArray(usage) ? usage : []).length > 0 ? Math.round((successCount / usage.length) * 100) : 100;
+  const totalTokens = usage.reduce((acc, curr) => acc + (curr.completionTokens || curr.tokens || 0), 0);
+  const totalCost = usage.reduce((acc, curr) => acc + (curr.cost || 0), 0);
+  const successCount = usage.filter(u => u.success !== false && (!u.responseStatus || !u.responseStatus.includes('error'))).length;
+  const callSuccessRate = usage.length > 0 ? Math.round((successCount / usage.length) * 100) : null;
+
+  const activeProviders = useMemo(
+    () => providers.filter(p => usageStatusOf(p) === 'active'),
+    [providers],
+  );
+  const inactiveProviders = useMemo(
+    () => providers.filter(p => isInactiveBucket(usageStatusOf(p))),
+    [providers],
+  );
+
+  const filteredProviders = useMemo(() => {
+    if (providerFilter === 'active') return activeProviders;
+    if (providerFilter === 'inactive') return inactiveProviders;
+    return providers;
+  }, [providerFilter, providers, activeProviders, inactiveProviders]);
+
+  const routableProviders = activeProviders.filter(p => p.inDatabase !== false);
 
   return (
     <div className="flex flex-col gap-6 font-mono text-slate-200">
-      
+
       {/* Sub-Navigation */}
       <div className="flex flex-wrap gap-2 mb-2">
-        
+
         {[
           { id: 'providers', label: 'Providers & Keys', icon: <Key size={14} /> },
           { id: 'agents', label: 'Agent Routing', icon: <BrainCircuit size={14} /> },
@@ -104,7 +175,9 @@ export default function AIProviderManagement() {
                 <h3 className="text-xs font-bold text-slate-100 uppercase tracking-widest flex items-center gap-2">
                   <Network size={14} className="text-indigo-500" /> Universal AI Provider Network
                 </h3>
-                <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-1">Configure access to commercial, aggregator, and local AI inference engines.</p>
+                <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-1">
+                  DB rows plus known catalog providers — including not configured / no key / disabled.
+                </p>
               </div>
               <button onClick={() => {
     const provider = window.prompt("Provider Name (e.g. OpenRouter, OpenAI, Local LM Studio):");
@@ -121,22 +194,59 @@ export default function AIProviderManagement() {
                 <Key size={12} /> Add Provider
               </button>
             </div>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-                 <div className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex flex-col">
+                 <div className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex flex-col" title="Enabled providers with credentials (or local endpoints) that AIRouter can load.">
                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Active Providers</div>
-                   <div className="text-2xl font-bold text-indigo-400">{(Array.isArray(providers) ? providers : []).length}</div>
+                   <div className="text-2xl font-bold text-indigo-400">{activeProviders.length}</div>
+                   <div className="text-[10px] text-slate-600 mt-1">
+                     {inactiveProviders.length} not in use · {providers.length} total
+                   </div>
                  </div>
                  <div className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex flex-col">
                    <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Total Tokens</div>
                    <div className="text-2xl font-bold text-emerald-400">{totalTokens.toLocaleString()}</div>
                  </div>
-                 <div className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex flex-col">
-                   <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Network Health</div>
-                   <div className="text-2xl font-bold text-sky-400">{successRate}%</div>
+                 <div
+                   className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex flex-col"
+                   title="Share of ai_usage rows that succeeded — not a live probe of every provider card."
+                 >
+                   <div className="text-[10px] text-slate-500 uppercase font-bold tracking-widest mb-1">Call Success Rate</div>
+                   <div className="text-2xl font-bold text-sky-400">
+                     {callSuccessRate === null ? (
+                       <UnavailableHint reason="No ai_usage rows yet — this is not a live network probe of every provider.">
+                         --
+                       </UnavailableHint>
+                     ) : (
+                       `${callSuccessRate}%`
+                     )}
+                   </div>
+                   <div className="text-[10px] text-slate-600 mt-1">From recorded AIRouter calls</div>
                  </div>
             </div>
-            
+
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <span className="text-[10px] text-slate-500 uppercase tracking-widest mr-1">Show</span>
+              {([
+                { id: 'all', label: `All (${providers.length})` },
+                { id: 'active', label: `Active (${activeProviders.length})` },
+                { id: 'inactive', label: `Not in use (${inactiveProviders.length})` },
+              ] as const).map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setProviderFilter(opt.id)}
+                  className={`px-3 py-1.5 rounded text-[10px] font-bold uppercase tracking-widest border transition-colors ${
+                    providerFilter === opt.id
+                      ? 'bg-indigo-600/20 border-indigo-500/50 text-indigo-300'
+                      : 'bg-[#0A0F16] border-slate-800 text-slate-500 hover:border-slate-600'
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -145,27 +255,77 @@ export default function AIProviderManagement() {
                     <th className="pb-3 font-medium">Endpoint</th>
                     <th className="pb-3 font-medium">Avg Latency</th>
                     <th className="pb-3 font-medium">Success</th>
-                    <th className="pb-3 font-medium">Status</th>
+                    <th className="pb-3 font-medium">Health</th>
+                    <th className="pb-3 font-medium">Usage</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(Array.isArray(providers) ? providers : []).map(p => (
+                  {filteredProviders.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-xs text-slate-500">
+                        No providers in this filter.
+                      </td>
+                    </tr>
+                  ) : filteredProviders.map(p => {
+                    const status = usageStatusOf(p);
+                    const metricsOk = !!p.metricsAvailable;
+                    const health = p.displayHealth ?? (metricsOk ? p.health : null);
+                    return (
                   <tr key={p.id} className="border-b border-slate-800/50 hover:bg-slate-800/20 transition-colors">
                     <td className="py-4">
                       <div className="flex items-center gap-3">
-                        <div className={`w-2 h-2 rounded-full ${p.health === 'Healthy' ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                        <div className={`w-2 h-2 rounded-full ${healthDotClass(health)}`} title={p.healthNote || undefined}></div>
                         <div>
                           <div className="text-xs font-bold text-slate-300">{p.providerName}</div>
-                          <div className="text-[10px] text-slate-500 uppercase tracking-widest">Priority {p.priority}</div>
+                          <div className="text-[10px] text-slate-500 uppercase tracking-widest">
+                            {p.inDatabase === false
+                              ? 'Catalog only'
+                              : `Priority ${p.priority ?? '—'}`}
+                            {p.hasCredentials
+                              ? ` · Key (${p.credentialSource || 'set'})`
+                              : p.isLocal
+                                ? ' · Local (no key required)'
+                                : ' · No key'}
+                          </div>
                         </div>
                       </div>
                     </td>
                     <td className="py-4 text-xs text-slate-400">{p.apiEndpoint || 'SDK Default'}</td>
-                    <td className="py-4 text-xs font-mono text-amber-400">{Math.round(p.latency || 0)}ms</td>
-                    <td className="py-4 text-xs text-slate-400">{p.successRate}%</td>
-                    <td className="py-4 text-xs font-bold text-indigo-400">{p.health}</td>
+                    <td className="py-4 text-xs font-mono text-amber-400">
+                      {p.latencyAvailable ? (
+                        `${Math.round(p.latency || 0)}ms`
+                      ) : (
+                        <UnavailableHint reason={p.healthNote || 'No successful call has updated latency yet — 0ms would be a default, not a measurement.'}>
+                          --
+                        </UnavailableHint>
+                      )}
+                    </td>
+                    <td className="py-4 text-xs text-slate-400">
+                      {metricsOk ? (
+                        `${Math.round(p.successRate ?? 0)}%`
+                      ) : (
+                        <UnavailableHint reason={p.healthNote || 'Success rate is only meaningful after AIRouter has called this provider.'}>
+                          --
+                        </UnavailableHint>
+                      )}
+                    </td>
+                    <td className="py-4 text-xs font-bold" title={p.healthNote || undefined}>
+                      {health ? (
+                        <span className={health === 'Healthy' ? 'text-emerald-400' : health === 'Offline' ? 'text-rose-400' : 'text-amber-400'}>
+                          {health}
+                        </span>
+                      ) : (
+                        <UnavailableHint reason={p.healthNote || 'Health is updated from real AIRouter calls, not a background ping.'}>
+                          --
+                        </UnavailableHint>
+                      )}
+                    </td>
+                    <td className={`py-4 text-xs font-bold ${statusBadgeClass(status)}`} title={p.healthNote || undefined}>
+                      {USAGE_STATUS_LABEL[status]}
+                    </td>
                   </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -173,7 +333,7 @@ export default function AIProviderManagement() {
         </div>
       )}
 
-      
+
       {activeSubTab === 'agents' && (
         <div className="animate-fade-in flex flex-col gap-6">
            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg border-l-4 border-l-sky-500">
@@ -181,12 +341,12 @@ export default function AIProviderManagement() {
                 <BrainCircuit size={14} className="text-sky-500" /> Multi-Agent Routing Table
               </h3>
               <p className="text-[10px] text-slate-400 uppercase tracking-widest mb-6">Assign specific AI providers to different trading agents to optimize cost, latency, and reasoning capability.</p>
-              
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {['Technical', 'News', 'Fundamental', 'Macro', 'Risk', 'Reflection', 'Memory', 'Chief Trader', 'Market Regime', 'Options', 'Portfolio', 'Execution', 'Compliance', 'Performance', 'Cost Optimizer', 'Router'].map(agent => (
                       <div key={agent} className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex justify-between items-center">
                           <div className="text-xs font-bold text-slate-300">{agent} Agent</div>
-                          <select 
+                          <select
                             className="bg-[#111822] border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 outline-none"
                             onChange={(e) => {
                                 fetch('/api/v1/config/routing', {
@@ -199,7 +359,7 @@ export default function AIProviderManagement() {
                             }}
                           >
                              <option value="auto">Auto-Select (Best Available)</option>
-                             {(Array.isArray(providers) ? providers : []).map(p => (
+                             {routableProviders.map(p => (
                                 <option key={p.id} value={p.id}>{p.providerName}</option>
                              ))}
                           </select>
@@ -217,7 +377,7 @@ export default function AIProviderManagement() {
                 <Route size={14} className="text-emerald-500" /> Argus AI Router Logs
               </h3>
               <p className="text-[10px] text-slate-400 uppercase tracking-widest mb-6">Real-time routing decisions, failovers, and latency tracking.</p>
-              
+
               <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -230,7 +390,7 @@ export default function AIProviderManagement() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(Array.isArray(usage) ? usage : []).map((u, i) => (
+                  {usage.map((u, i) => (
                   <tr key={i} className="border-b border-slate-800/50 hover:bg-slate-800/20 transition-colors">
                     <td className="py-4 text-xs text-slate-500">{new Date(u.timestamp || Date.now()).toLocaleTimeString()}</td>
                     <td className="py-4 text-xs text-sky-400 font-bold">{u.agent}</td>
@@ -254,7 +414,7 @@ export default function AIProviderManagement() {
            </div>
         </div>
       )}
-      
+
       {activeSubTab === 'costs' && (
         <div className="animate-fade-in flex flex-col gap-6">
            <div className="bg-[#111822] border border-slate-800 p-5 rounded-lg border-l-4 border-l-amber-500">
@@ -262,7 +422,7 @@ export default function AIProviderManagement() {
                 <DollarSign size={14} className="text-amber-500" /> Usage & Cost Monitoring
               </h3>
               <p className="text-[10px] text-slate-400 uppercase tracking-widest mb-6">Aggregate token usage across all providers.</p>
-              
+
               <div className="flex justify-center py-10">
                  <div className="text-center">
                     <div className="text-4xl font-bold text-emerald-400 mb-2">${totalCost.toFixed(4)}</div>

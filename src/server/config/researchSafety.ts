@@ -7,7 +7,12 @@ export interface ResearchSafetyConfig {
   pythonTimeoutMs: number;
   minPaperTrades: number;
   minPaperSessions: number;
+  minPaperCalendarDays: number;
+  minPaperProfitFactor: number;
+  minPaperExpectancy: number;
+  maxPaperDrawdownPct: number;
   minOosTrades: number;
+  minOosExpectancy: number;
   minWalkForwardWindows: number;
   permutationAlpha: number;
   costStressMaxMultipleStillProfitable: number;
@@ -49,7 +54,12 @@ export const researchSafety: ResearchSafetyConfig = {
   pythonTimeoutMs: Number(raw.pythonTimeoutMs ?? 25000),
   minPaperTrades: Number(raw.minPaperTrades ?? 30),
   minPaperSessions: Number(raw.minPaperSessions ?? 10),
+  minPaperCalendarDays: Number(raw.minPaperCalendarDays ?? 30),
+  minPaperProfitFactor: Number(raw.minPaperProfitFactor ?? 1.2),
+  minPaperExpectancy: Number(raw.minPaperExpectancy ?? 0),
+  maxPaperDrawdownPct: Number(raw.maxPaperDrawdownPct ?? 0.15),
   minOosTrades: Number(raw.minOosTrades ?? 30),
+  minOosExpectancy: Number(raw.minOosExpectancy ?? 0),
   minWalkForwardWindows: Number(raw.minWalkForwardWindows ?? 3),
   permutationAlpha: Number(raw.permutationAlpha ?? 0.05),
   costStressMaxMultipleStillProfitable: Number(raw.costStressMaxMultipleStillProfitable ?? 2),

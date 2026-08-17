@@ -14,3 +14,13 @@ export function preferIpv4Loopback(url: string): string {
     return url.replace(/\/$/, '');
   }
 }
+
+/**
+ * Chronos/Kronos Python (`scripts/local_ai_service.py`) listens on LOCAL_AI_SERVICE_PORT
+ * (default 8008). Older docs used :8000 — remap so Diagnostics never probes the wrong port.
+ */
+export function resolveLocalAiServiceUrl(raw?: string): string {
+  const port = process.env.LOCAL_AI_SERVICE_PORT || '8008';
+  const input = raw ?? process.env.LOCAL_AI_SERVICE_URL ?? `http://127.0.0.1:${port}`;
+  return preferIpv4Loopback(input.replace(/:8000(?=\/|$)/, ':8008'));
+}

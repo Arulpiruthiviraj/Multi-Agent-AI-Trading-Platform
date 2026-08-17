@@ -2,6 +2,8 @@
  * Process-local registry of optional services. Never marks READY without evidence.
  * Probes use short timeouts; failures leave the app usable.
  */
+import { resolveLocalAiServiceUrl } from '../ai/preferIpv4Loopback';
+
 export type StartupHealthStatus = 'STARTING' | 'READY' | 'DEGRADED' | 'FAILED' | 'DISABLED' | 'NOT_CONFIGURED';
 
 export interface StartupHealthEntry {
@@ -51,16 +53,44 @@ export async function collectStartupHealth(timeoutMs = 2000): Promise<StartupHea
     latencyMs: null,
   }));
   if (envOn('OPENALICE_ENABLED') && configured('OPENALICE_MCP_URL')) {
-    const p = await probe(process.env.OPENALICE_MCP_URL as string, timeoutMs);
-    const last = entries[entries.length - 1];
-    last.status = p.ok ? 'READY' : 'FAILED';
-    last.error = p.error ?? null;
-    last.rootCause = p.ok ? null : p.error ?? 'unreachable';
-    last.latencyMs = p.latencyMs;
+    const mcpUrl = process.env.OPENALICE_MCP_URL as string;
+    const t0 = Date.now();
+    try {
+      const res = await fetch(mcpUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json, text/event-stream',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {
+            protocolVersion: '2024-11-05',
+            capabilities: {},
+            clientInfo: { name: 'argus-startup-health', version: '0' },
+          },
+        }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const last = entries[entries.length - 1];
+      const ok = res.status > 0;
+      last.status = ok ? 'READY' : 'FAILED';
+      last.error = ok ? null : `HTTP ${res.status}`;
+      last.rootCause = ok ? null : last.error;
+      last.latencyMs = Date.now() - t0;
+    } catch (e: any) {
+      const last = entries[entries.length - 1];
+      last.status = 'FAILED';
+      last.error = e?.message ?? String(e);
+      last.rootCause = last.error;
+      last.latencyMs = Date.now() - t0;
+    }
   }
 
-  const chronosUrl = process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008';
-  const chronos = await probe(`${chronosUrl.replace(/\/$/, '')}/health`, timeoutMs);
+  const chronosUrl = resolveLocalAiServiceUrl();
+  const chronos = await probe(`${chronosUrl}/health`, timeoutMs);
   entries.push(stamp({
     service: 'Chronos/Kronos',
     status: chronos.ok ? 'READY' : 'FAILED',

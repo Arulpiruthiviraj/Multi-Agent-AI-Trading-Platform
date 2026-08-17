@@ -98,8 +98,16 @@ export const settings = sqliteTable('settings', {
   // kill switch, not a new RiskEngine gate) so it can only ever start/stop the bot, never bypass
   // any of the 24 RiskEngine gates a proposal still has to clear once Autobot is on.
   autoTradeScheduleEnabled: integer('auto_trade_schedule_enabled', { mode: 'boolean' }).default(false),
-  autoTradeScheduleStartTime: text('auto_trade_schedule_start_time').default('09:30'), // HH:MM, America/New_York
-  autoTradeScheduleEndTime: text('auto_trade_schedule_end_time').default('16:00'), // HH:MM, America/New_York
+  autoTradeScheduleStartTime: text('auto_trade_schedule_start_time').default('09:30'), // HH:MM, in autoTradeScheduleTimezone
+  autoTradeScheduleEndTime: text('auto_trade_schedule_end_time').default('16:00'), // HH:MM, in autoTradeScheduleTimezone
+  // IANA zone the two HH:MM values above are interpreted in. Defaults to the exchange's own zone
+  // (America/New_York); America/Toronto is offered as an equivalent, more locally-recognizable
+  // label for Eastern-time users - Toronto and New York share the identical civil clock (both
+  // Eastern Time, both moved to the harmonized US DST schedule in 2007), so picking either
+  // produces byte-identical scheduling behavior. Not restricted to just these two - any valid
+  // IANA zone Node's ICU database recognizes is accepted (see isValidTimezone in
+  // AutoTradeSchedule.ts).
+  autoTradeScheduleTimezone: text('auto_trade_schedule_timezone').default('America/New_York'),
 });
 
 // Immutable audit trail for every kill-switch state transition (Phase 1.4: "every

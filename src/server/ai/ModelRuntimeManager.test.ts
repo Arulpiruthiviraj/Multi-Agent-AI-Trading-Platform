@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { preferIpv4Loopback } from './preferIpv4Loopback';
+import { preferIpv4Loopback, resolveLocalAiServiceUrl } from './preferIpv4Loopback';
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emit: vi.fn() } }));
 vi.mock('../integrations/openalice/OpenAliceVerificationService', () => ({
@@ -57,5 +57,10 @@ describe('preferIpv4Loopback', () => {
     expect(preferIpv4Loopback('http://localhost:8008')).toBe('http://127.0.0.1:8008');
     expect(preferIpv4Loopback('http://127.0.0.1:8008/')).toBe('http://127.0.0.1:8008');
     expect(preferIpv4Loopback('https://example.com/v1')).toBe('https://example.com/v1');
+  });
+
+  it('remaps legacy Chronos :8000 to :8008', () => {
+    expect(resolveLocalAiServiceUrl('http://127.0.0.1:8000')).toBe('http://127.0.0.1:8008');
+    expect(resolveLocalAiServiceUrl('http://localhost:8000/')).toBe('http://127.0.0.1:8008');
   });
 });

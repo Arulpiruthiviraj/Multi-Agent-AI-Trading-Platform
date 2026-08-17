@@ -14,7 +14,9 @@ import { preferIpv4Loopback } from '../../ai/preferIpv4Loopback';
 import { quantThresholds } from '../../config/quantThresholds';
 import { runtimeIntervals } from '../../config/runtimeIntervals';
 
-const SERVICE_URL = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008');
+const SERVICE_URL = preferIpv4Loopback(
+  (process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008').replace(/:8000(?=\/|$)/, ':8008'),
+);
 
 // A forecast within this band of the current price is treated as noise, not a directional
 // call - avoids flooding ChiefTraderAgent with BUY/SELL ideas on sub-tenth-of-a-percent wobble.

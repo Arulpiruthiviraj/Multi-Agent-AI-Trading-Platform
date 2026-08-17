@@ -107,7 +107,7 @@ import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
 import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest } from "./src/server/core/AuthConfig";
 import { persistAllowlistedSecrets, secretsStatusFromEnvAndDb, SECRET_ALLOWLIST } from "./src/server/core/persistEncryptedSecrets";
-import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter } from "./src/server/core/RateLimiters";
+import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter, webhookLimiter } from "./src/server/core/RateLimiters";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -1146,7 +1146,7 @@ function savePortfolio(state: any) {
 
 let portfolioState = loadPortfolio();
 
-  app.use("/api/v1/webhooks", webhooksRouter);
+  app.use("/api/v1/webhooks", webhookLimiter, webhooksRouter);
 
   app.get("/api/v1/portfolio", async (req: Request, res: Response) => {
     try {
@@ -1637,7 +1637,15 @@ let portfolioState = loadPortfolio();
 
   // Endpoints for Prompt Evolution
   app.use("/api/v1/autobot", autobotRouter);
-  app.get("/api/v1/kronos/status", (req, res) => { try { res.json(kronosEngine.getStatus()); } catch(e: any) { res.status(500).json({error: e.message}); } });
+  // Fresh /health probe — sync getStatus() can stay UNAVAILABLE for up to kronosRecheckMs
+  // after Chronos finishes loading (common: Node booted while HF model still downloading).
+  app.get("/api/v1/kronos/status", async (_req, res) => {
+    try {
+      res.json(await kronosEngine.getStatusFresh());
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
 
   // Serves Static build directory of React SPA client in production
   if (isProd) {
@@ -1764,7 +1772,13 @@ let portfolioState = loadPortfolio();
       if (client.readyState === 1) { // WebSocket.OPEN
         client.send(JSON.stringify({
           type: 'AUTOBOT_STATE_UPDATED',
-          data: tradingEngine.state
+          data: {
+            ...tradingEngine.state,
+            enabled: tradingEngine.state.enabled,
+            autoBotEnabled: tradingEngine.state.enabled,
+            remaining: tradingEngine.state.budget - tradingEngine.state.spent,
+            scheduleWindow: tradingEngine.getScheduleWindowStatus(),
+          },
         }));
       }
     });

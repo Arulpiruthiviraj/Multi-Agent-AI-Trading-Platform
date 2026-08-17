@@ -126,6 +126,37 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     }
   });
 
+  it('real bug fixed: a SELL is never capped by buying power, order-notional, or risk-per-share - those are new-capital-deployment concepts and must never shrink or block a protective exit', async () => {
+    // A near-fully-deployed portfolio: almost no buying power left, and a position (500 shares)
+    // worth far more than the flat order-notional cap or the risk-based cap would allow to BUY.
+    // Before the fix, maxSharesByBuyingPower = floor(50/100) = 0 alone would have zeroed out the
+    // entire SELL - the real, verified failure mode this test guards against.
+    const result = await calculatePositionSizing(baseCtx({
+      side: 'SELL',
+      currentPrice: 100,
+      buyingPower: 50, // far less than one share's worth
+      maxTradeSizeDollar: 3000, // would cap a BUY at 30 shares
+      maxPortfolioRiskPct: 0.02, // would cap a BUY well under 500 shares too
+      existingPositions: [{ symbol: 'AAPL', quantity: 500 }],
+    }));
+    expect(result.maxQuantity).toBeGreaterThanOrEqual(500);
+    const notionalGate = result.gates.find(g => g.gate === 'order_notional_cap');
+    expect(notionalGate?.passed).toBe(true);
+    expect(notionalGate?.detail.status).toBe('SKIPPED');
+    expect(result.gates.find(g => g.gate === 'sufficient_size')?.passed).toBe(true);
+  });
+
+  it('a SELL with zero buying power and zero equity-derived room still is not blocked by this module (RiskEngine.ts clamps to held quantity downstream)', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      side: 'SELL',
+      buyingPower: 0,
+      maxTradeSizeDollar: 0,
+      existingPositions: [{ symbol: 'AAPL', quantity: 10 }],
+    }));
+    expect(result.maxQuantity).toBeGreaterThan(0);
+    expect(result.gates.find(g => g.gate === 'sufficient_size')?.passed).toBe(true);
+  });
+
   it('fail-closes INVALID_ACCOUNT_EQUITY when account equity is missing or not positive', async () => {
     const result = await calculatePositionSizing(baseCtx({ accountEquity: 0 }));
     expect(result.maxQuantity).toBe(0);

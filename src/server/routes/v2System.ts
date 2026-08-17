@@ -282,7 +282,7 @@ v2Router.get('/data/explainability/:traceId', async (req, res) => {
 // simply absent (null) - never fabricated.
 // ==========================================================================================
 import { transactions, consensusDecisions, consensusEvidence, riskAssessments, riskGateResults, fills } from '../db/schema';
-import { desc as descOrder, like as likeOp, and as andOp } from 'drizzle-orm';
+import { desc as descOrder, like as likeOp, and as andOp, inArray as inArrayForTx } from 'drizzle-orm';
 
 v2Router.get('/transactions', async (req, res) => {
   try {
@@ -295,7 +295,32 @@ v2Router.get('/transactions', async (req, res) => {
     const rows = conditions.length > 0
       ? await db.select().from(transactions).where(andOp(...conditions)).orderBy(descOrder(transactions.openedAt)).limit(capped)
       : await db.select().from(transactions).orderBy(descOrder(transactions.openedAt)).limit(capped);
-    res.json({ ok: true, transactions: rows });
+
+    // Join consensus side/confidence so the Observatory list can label NO_CONSENSUS as NO TRADE
+    // with an honest "best aggregated side was X at Y% vs threshold" tooltip — without treating
+    // that side as an approved Decision (finalDecision stays null on the row).
+    const ids = rows.map(r => r.id);
+    const decisions = ids.length > 0
+      ? await db.select({
+          transactionId: consensusDecisions.transactionId,
+          side: consensusDecisions.side,
+          weightedConfidence: consensusDecisions.weightedConfidence,
+          threshold: consensusDecisions.threshold,
+        }).from(consensusDecisions).where(inArrayForTx(consensusDecisions.transactionId, ids))
+      : [];
+    const byId = new Map(decisions.map(d => [d.transactionId, d]));
+    res.json({
+      ok: true,
+      transactions: rows.map(r => {
+        const d = byId.get(r.id);
+        return {
+          ...r,
+          proposedSide: d?.side ?? null,
+          weightedConfidence: d?.weightedConfidence ?? null,
+          consensusThreshold: d?.threshold ?? null,
+        };
+      }),
+    });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -565,6 +590,16 @@ v2Router.get('/system/mission-control', async (req, res) => {
     const wins = withPnl.filter(t => (t.profitLoss ?? 0) > 0).length;
     const winRate = withPnl.length > 0 ? wins / withPnl.length : null;
     const realizedPnlToday = withPnl.length > 0 ? withPnl.reduce((s, t) => s + (t.profitLoss ?? 0), 0) : null;
+    const winRateUnavailableReason = winRate === null
+      ? (todaysFilled.length === 0
+        ? 'No filled trades today. Win rate is not 0% — there is nothing to score. It appears after a filled close books profitLoss. Observatory NO_CONSENSUS rows are not trades.'
+        : 'Filled trades today exist but none have booked profitLoss yet (typical for still-open BUYs). Win rate scores closed P&L, not open marks.')
+      : null;
+    const realizedPnlUnavailableReason = realizedPnlToday === null
+      ? (todaysFilled.length === 0
+        ? 'No filled trades today, so there is no realized P&L to sum (not a fabricated $0.00 session result). It appears after a filled SELL books profitLoss.'
+        : 'Filled trades today have no booked profitLoss yet. Realized P&L is not unrealized marks on open positions.')
+      : null;
 
     // AI cost today: real ai_calls.cost, not ai_usage's aggregate (this is the forensic ledger).
     const callsToday = await db.select().from(aiCallsTable).where(gteOp(aiCallsTable.createdAt, todayStr));
@@ -582,10 +617,15 @@ v2Router.get('/system/mission-control', async (req, res) => {
       aiModels: { healthy: aiModelsHealthy, total: providers.length },
       broker: { name: brokerName, capabilities: brokerCapabilities },
       riskEngine: { armed: !tradingEngine.state.emergencyStopActive },
-      autobot: { running: tradingEngine.state.enabled === true },
+      autobot: {
+        running: tradingEngine.state.enabled === true,
+        ...tradingEngine.getScheduleWindowStatus(),
+      },
       tradesToday: todaysFilled.length,
       winRate,
       realizedPnlToday,
+      winRateUnavailableReason,
+      realizedPnlUnavailableReason,
       aiCostToday: Number(aiCostToday.toFixed(4)),
       eventsPerSec,
     });

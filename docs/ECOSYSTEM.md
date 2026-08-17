@@ -13,7 +13,7 @@ npm run dev
   └─ scripts/ecosystem-dev.ts          ← loads Argus .env; tracks child PIDs
         ├─ (opt) Vibe-Trading MCP      ← .venv python / vibe-trading-mcp
         ├─ (opt) AutoHedge             ← .venv; WALLET_PRIVATE_KEY forced ""
-        ├─ (opt) OpenAlice Guardian    ← pnpm; lite mode; no trading MCP
+        ├─ (opt) OpenAlice Guardian    ← started+waited by core, not spawn-and-forget here
         ├─ (opt) FinceptTerminal       ← only if ENABLE + FINCEPT_CMD set
         └─ scripts/devWithOpenAlice.ts ← Chronos, Ollama, IBKR, tsx server.ts
               └─ Express + Vite SPA :3000
@@ -46,7 +46,7 @@ Missing sibling directories or `.venv` binaries → **warn and continue**. Argus
 |---|---|---|
 | `ENABLE_VIBE_TRADING_MCP` | off unless `true` | Spawn Vibe MCP |
 | `ENABLE_AUTOHEDGE_WORKER` | off unless `true` | Spawn AutoHedge CLI/worker |
-| `ENABLE_OPENALICE` | on unless `false` | Spawn Guardian; sets `ARGUS_SKIP_OPENALICE` for core to avoid double spawn |
+| `ENABLE_OPENALICE` | on unless `false` | Core starts Guardian and waits for MCP at `:47332/mcp`. Skip with `ENABLE_OPENALICE=false` or `ARGUS_SKIP_OPENALICE=true`. |
 | `ENABLE_FINCEPT_TERMINAL` | off unless `true` | Spawn only when `FINCEPT_CMD` is also set |
 | `ARGUS_SKIP_*` | see `.env.example` | Skip Chronos / Ollama / OpenAlice / IBKR inside `dev:core` |
 

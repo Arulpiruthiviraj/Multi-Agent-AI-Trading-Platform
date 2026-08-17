@@ -198,7 +198,9 @@ export default function BrokerManagement() {
           {brokers.map(b => {
             const isActive = b.id === activeBrokerId;
             const test = testResults[b.id];
-            const hasSavedCreds = savedConnections.some((c: any) => c.brokerName === b.name && c.apiKeyEncrypted);
+            // GET /api/v1/brokers no longer returns apiKeyEncrypted ciphertext (real credential-leak
+            // fix) - it returns hasApiKey instead, computed server-side from the same real value.
+            const hasSavedCreds = savedConnections.some((c: any) => c.brokerName === b.name && c.hasApiKey);
             return (
               <div key={b.id} className={`border rounded-lg p-4 ${isActive ? 'border-emerald-500/50 bg-emerald-500/5' : 'border-slate-800 bg-[#0A0F16]'}`}>
                 <div className="flex justify-between items-start flex-wrap gap-3">

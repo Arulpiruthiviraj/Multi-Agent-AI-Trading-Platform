@@ -40,6 +40,8 @@ autobotRouter.get("/", async (req: Request, res: Response) => {
   const envMode = resolveEnvTradingMode();
   res.json({
     enabled: tradingEngine.state.enabled,
+    autoBotEnabled: tradingEngine.state.enabled,
+    scheduleWindow: tradingEngine.getScheduleWindowStatus(),
     tradingMode: tradingEngine.state.tradingMode,
     envTradingMode: envMode.mode,
     envTradingModeSource: envMode.source,
@@ -63,6 +65,10 @@ autobotRouter.get("/", async (req: Request, res: Response) => {
     activeCycle: tradingEngine.state.activeCycle,
     memoryRules: await db.select().from(schema.memoryRules),
     adversarialDebateMode: tradingEngine.state.adversarialDebateMode,
+    autoTradeScheduleEnabled: tradingEngine.state.autoTradeScheduleEnabled,
+    autoTradeScheduleStartTime: tradingEngine.state.autoTradeScheduleStartTime,
+    autoTradeScheduleEndTime: tradingEngine.state.autoTradeScheduleEndTime,
+    autoTradeScheduleTimezone: tradingEngine.state.autoTradeScheduleTimezone,
     equityHistory: tradingEngine.state.equityHistory,
     bypassedTrades: tradingEngine.state.bypassedTrades,
     shadowPortfolio: shadowPortfolioState,

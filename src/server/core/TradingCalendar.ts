@@ -50,3 +50,11 @@ const tradingTimeFormatter = new Intl.DateTimeFormat('en-GB', {
 export function getTradingTimeHHMM(date: Date = new Date()): string {
   return tradingTimeFormatter.format(date);
 }
+
+// Same as getTradingTimeHHMM but for an arbitrary IANA zone (AutoTradeScheduler.ts's
+// settings.autoTradeScheduleTimezone) instead of the hardcoded exchange zone. A fresh
+// Intl.DateTimeFormat per call is deliberate and cheap here - this only runs once per scheduler
+// tick (default every 60s), not in a hot path, so per-zone formatter caching would be premature.
+export function getTimeHHMMInZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+}

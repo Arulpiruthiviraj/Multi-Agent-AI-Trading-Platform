@@ -34,6 +34,19 @@
  */
 
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
+import { isTelemetryPulsePayload } from '../core/telemetryPulse';
+import {
+  formatAutobotDisabledLog,
+  formatAutobotEnabledLog,
+  formatChiefApprovedLog,
+  formatDeskNoTradeLog,
+  formatLearnedRuleLog,
+  formatOrderExecutedLog,
+  formatRiskAssessmentLog,
+  formatTradeIdeaLog,
+  type ActivityLogDetail,
+} from '../core/activityLog';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { and, eq, isNotNull, notInArray } from 'drizzle-orm';
@@ -47,6 +60,8 @@ import {
   normalizeTradingMode,
   resolveEnvTradingMode,
 } from '../core/tradingModeEnv';
+import { isValidHHMM, isValidTimezone, isWithinScheduledWindow } from '../core/AutoTradeSchedule';
+import { getTimeHHMMInZone, TRADING_TIMEZONE } from '../core/TradingCalendar';
 
 export type TradingState = 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP';
 
@@ -60,6 +75,8 @@ export type TradingState = 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STO
 const TOGGLE_ALLOWED_FIELDS: (keyof AutoBotState)[] = [
     'enabled', 'tradingMode', 'budget', 'strategy', 'riskLevel', 'maxTradeSize',
     'dailyLossLimit', 'takeProfitPct', 'trailingStopPct', 'minAiConfidence', 'adversarialDebateMode',
+    'autoTradeScheduleEnabled', 'autoTradeScheduleStartTime', 'autoTradeScheduleEndTime',
+    'autoTradeScheduleTimezone',
 ];
 
 export interface AutoBotState {
@@ -98,6 +115,12 @@ export interface AutoBotState {
     tradingState: TradingState;
     dayStartEquity: number | null;
     dayStartDateStr: string | null;
+    // AutoTradeScheduler.ts: when true, that background worker owns `enabled` and drives it
+    // through this same toggle() on a timer instead of a human clicking Start/Stop.
+    autoTradeScheduleEnabled: boolean;
+    autoTradeScheduleStartTime: string; // "HH:MM", in autoTradeScheduleTimezone
+    autoTradeScheduleEndTime: string; // "HH:MM", in autoTradeScheduleTimezone
+    autoTradeScheduleTimezone: string; // IANA zone, e.g. "America/New_York" or "America/Toronto"
 }
 
 class TradingEngine {
@@ -119,6 +142,10 @@ class TradingEngine {
             tradingState: 'TRADING_ENABLED',
             dayStartEquity: null,
             dayStartDateStr: null,
+            autoTradeScheduleEnabled: false,
+            autoTradeScheduleStartTime: '09:30',
+            autoTradeScheduleEndTime: '16:00',
+            autoTradeScheduleTimezone: 'America/New_York',
             takeProfitPct: 15,
             trailingStopPct: 5,
             minAiConfidence: 75,
@@ -159,9 +186,13 @@ class TradingEngine {
                 detectedAt: new Date().toISOString()
             }
         };
-// Listen to events to update state
-        eventBus.on('TRADE_IDEA_GENERATED', (idea) => {
-           this.logHistory('scan', `Agent proposed ${idea.side} on ${idea.symbol}`);
+        // Activity Log is this in-memory history. Listeners persist structured detail from
+        // real EventBus payloads (agent/side/conf/gate/traceId) — no fabricated CoT.
+        // Telemetry-pulse sequences are UI animation only and must not look like organic trades.
+        eventBus.on(EVENTS.TRADE_IDEA_GENERATED, (idea) => {
+           if (isTelemetryPulsePayload(idea)) return;
+           const row = formatTradeIdeaLog(idea);
+           this.logHistory(row.type, row.msg, row.detail);
 
            // Start (or continue) the live decision-flow cycle shown by AutoBotFlowVisualizer.
            // Only real fields from the emitted idea are used - no fabricated stage data.
@@ -178,25 +209,31 @@ class TradingEngine {
            }
         });
 
-        eventBus.on('CHIEF_APPROVED_IDEA', (idea) => {
-           this.logHistory('scan', `Chief Trader approved ${idea.side} on ${idea.symbol} (Confidence: ${idea.confidence.toFixed(2)})`);
+        eventBus.on(EVENTS.CHIEF_APPROVED_IDEA, (idea) => {
+           if (isTelemetryPulsePayload(idea)) return;
+           const row = formatChiefApprovedLog(idea);
+           this.logHistory(row.type, row.msg, row.detail);
 
            if (this.state.activeCycle?.symbol === idea.symbol) {
                this.state.activeCycle.status = 'verifying';
                this.state.activeCycle.proposerData = {
                    decision: idea.side,
-                   confidence: Math.round(idea.confidence * 100),
+                   confidence: typeof idea.confidence === 'number' ? Math.round(idea.confidence * 100) : undefined,
                    thinking: idea.reasoning
                };
            }
         });
 
-        eventBus.on('RISK_ASSESSMENT_COMPLETED', (assessment) => {
-           if (assessment.approved) {
-               this.logHistory('execute', `Risk Engine approved ${assessment.symbol}. Executing ${assessment.maxQuantity} shares.`);
-           } else {
-               this.logHistory('veto', `Risk Engine vetoed ${assessment.symbol}: ${assessment.reasoning}`);
-           }
+        eventBus.on(EVENTS.DESK_NO_TRADE, (payload) => {
+           if (isTelemetryPulsePayload(payload)) return;
+           const row = formatDeskNoTradeLog(payload);
+           this.logHistory(row.type, row.msg, row.detail);
+        });
+
+        eventBus.on(EVENTS.RISK_ASSESSMENT_COMPLETED, (assessment) => {
+           if (isTelemetryPulsePayload(assessment)) return;
+           const row = formatRiskAssessmentLog(assessment);
+           this.logHistory(row.type, row.msg, row.detail);
 
            if (this.state.activeCycle?.symbol === assessment.symbol) {
                this.state.activeCycle.riskData = {
@@ -208,9 +245,15 @@ class TradingEngine {
            }
         });
 
-        eventBus.on('ORDER_EXECUTED', (order) => {
-           this.logHistory('execute', `Executed ${order.side} ${order.quantity}x ${order.symbol} @ $${order.price.toFixed(2)}`);
-           this.state.spent += (order.quantity * order.price);
+        eventBus.on(EVENTS.ORDER_EXECUTED, (order) => {
+           if (isTelemetryPulsePayload(order)) return;
+           const row = formatOrderExecutedLog(order);
+           this.logHistory(row.type, row.msg, row.detail);
+           const qty = typeof order.quantity === 'number' ? order.quantity : 0;
+           const price = typeof order.price === 'number' ? order.price : 0;
+           if ((order.status || 'FILLED') === 'FILLED' || order.status === 'PARTIALLY_FILLED') {
+               this.state.spent += qty * price;
+           }
 
            if (this.state.activeCycle?.symbol === order.symbol) {
                this.state.activeCycle.status = 'executed';
@@ -219,10 +262,11 @@ class TradingEngine {
            }
         });
         
-        eventBus.on('LEARNED_NEW_RULE', (rule) => {
+        eventBus.on(EVENTS.LEARNED_NEW_RULE, (rule) => {
            this.state.memoryRules.unshift(rule);
            if (this.state.memoryRules.length > 50) this.state.memoryRules.pop();
-           this.logHistory('reflect', `Reflection Engine extracted rule: ${rule.rule}`);
+           const row = formatLearnedRuleLog(rule);
+           this.logHistory(row.type, row.msg, row.detail);
         });
         
         eventBus.on('CALCULATION_COMPLETED', (calc) => {
@@ -250,19 +294,20 @@ class TradingEngine {
         return TradingEngine.instance;
     }
     
-    public logHistory(type: string, msg: string) {
+    public logHistory(type: string, msg: string, detail?: ActivityLogDetail) {
        const eventTime = new Date().toISOString();
-       this.state.history.unshift({ time: eventTime, type, msg });
-       if (this.state.history.length > 100) this.state.history = this.state.history.slice(0, 100);
+       const entry = detail ? { time: eventTime, type, msg, detail } : { time: eventTime, type, msg };
+       this.state.history.unshift(entry);
+       if (this.state.history.length > 200) this.state.history = this.state.history.slice(0, 200);
        
        try {
-          // Changed to eventBus publish to handle schema constraints
+          // In-process ring for AutoBot UI; durable lifecycle is event_traces / Observatory.
           this.state.eventBus.unshift({
              id: "evt_" + Date.now(),
              type: type,
              source: "TradingEngine",
              timestamp: eventTime,
-             payload: msg
+             payload: detail ? { msg, ...detail } : msg
           });
           if (this.state.eventBus.length > 50) this.state.eventBus.pop();
        } catch (e) {}
@@ -293,6 +338,10 @@ class TradingEngine {
                 this.state.minAiConfidence = s.minAiConfidence || 75;
                 this.state.adversarialDebateMode = s.adversarialDebateMode !== false;
                 this.state.enabled = s.autoBotEnabled === true;
+                this.state.autoTradeScheduleEnabled = s.autoTradeScheduleEnabled === true;
+                this.state.autoTradeScheduleStartTime = isValidHHMM(s.autoTradeScheduleStartTime) ? s.autoTradeScheduleStartTime : '09:30';
+                this.state.autoTradeScheduleEndTime = isValidHHMM(s.autoTradeScheduleEndTime) ? s.autoTradeScheduleEndTime : '16:00';
+                this.state.autoTradeScheduleTimezone = isValidTimezone(s.autoTradeScheduleTimezone) ? s.autoTradeScheduleTimezone! : 'America/New_York';
                 // Real fix this pass: the kill switch used to live only in memory
                 // (emergencyStopActive on TradingEngine.state), so a process restart while
                 // EMERGENCY_STOP was active silently resumed trading - defeating "require
@@ -338,9 +387,58 @@ class TradingEngine {
         }
     }
 
-    public async toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string }): Promise<{ ok: boolean; error?: string }> {
+    /**
+     * Whether AutoTradeScheduler currently wants Autobot on. Distinct from `state.enabled`:
+     * a saved schedule can be on while the engine is off (outside the HH:MM window, or a
+     * start-gate rejection). UI must not treat schedule-enabled as Autobot-running.
+     */
+    public getScheduleWindowStatus(): {
+        scheduleEnabled: boolean;
+        inWindow: boolean | null;
+        startTime: string;
+        endTime: string;
+        timezone: string;
+    } {
+        const scheduleEnabled = this.state.autoTradeScheduleEnabled === true;
+        const startTime = this.state.autoTradeScheduleStartTime;
+        const endTime = this.state.autoTradeScheduleEndTime;
+        const timezone = isValidTimezone(this.state.autoTradeScheduleTimezone)
+            ? this.state.autoTradeScheduleTimezone
+            : TRADING_TIMEZONE;
+        if (!scheduleEnabled || !isValidHHMM(startTime) || !isValidHHMM(endTime)) {
+            return { scheduleEnabled, inWindow: null, startTime, endTime, timezone };
+        }
+        const nowHHMM = getTimeHHMMInZone(new Date(), timezone);
+        return {
+            scheduleEnabled,
+            inWindow: isWithinScheduledWindow(nowHHMM, startTime, endTime),
+            startTime,
+            endTime,
+            timezone,
+        };
+    }
+
+    public async toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string; autoBotEnabled?: boolean }): Promise<{ ok: boolean; error?: string }> {
+        // Validated here (the one real entry point both /autobot/toggle and /config/settings go
+        // through) rather than only at the route layer, so a bad value can never be silently
+        // persisted and then silently skipped forever by AutoTradeScheduler.tick().
+        for (const field of ['autoTradeScheduleStartTime', 'autoTradeScheduleEndTime'] as const) {
+            if (Object.prototype.hasOwnProperty.call(config, field) && !isValidHHMM(config[field])) {
+                return { ok: false, error: `${field} must be "HH:MM" 24-hour format, got ${JSON.stringify(config[field])}` };
+            }
+        }
+        if (Object.prototype.hasOwnProperty.call(config, 'autoTradeScheduleTimezone') && !isValidTimezone(config.autoTradeScheduleTimezone)) {
+            return { ok: false, error: `autoTradeScheduleTimezone is not a recognized IANA timezone: ${JSON.stringify(config.autoTradeScheduleTimezone)}` };
+        }
         if (Object.prototype.hasOwnProperty.call(config, 'tradingMode') && config.tradingMode != null) {
             config.tradingMode = normalizeTradingMode(config.tradingMode);
+        }
+        // settings.autoBotEnabled is the DB column; in-memory state uses `enabled`. POST
+        // /config/settings sends the DB name. Map it so both names drive the same lever —
+        // otherwise the DB flag can flip without TradingEngine.state.enabled changing.
+        if (!Object.prototype.hasOwnProperty.call(config, 'enabled')
+            && Object.prototype.hasOwnProperty.call(config, 'autoBotEnabled')) {
+            config.enabled = config.autoBotEnabled === true;
         }
         if (config.tradingMode === 'LIVE' && isPaperTradingOnlyEnforced()) {
             return {
@@ -357,16 +455,14 @@ class TradingEngine {
         if (goingLive && this.state.tradingState !== 'TRADING_ENABLED') {
             return { ok: false, error: `Cannot enable LIVE trading while tradingState is ${this.state.tradingState}. Resume via the kill-switch endpoint first.` };
         }
-        if (goingLive) armLiveTrading(config.confirmLiveTrading);
-        if (goingPaper) disarmLiveTrading();
-        else if (
-          Object.prototype.hasOwnProperty.call(config, 'tradingMode')
-          && config.tradingMode !== 'LIVE'
-          && this.state.tradingMode === 'LIVE'
-        ) {
-            disarmLiveTrading();
-        }
-
+        // Real bug fixed: this budget-vs-buying-power check used to run AFTER armLiveTrading()
+        // below, so a single call combining tradingMode:'LIVE', enabled:true, a too-large budget,
+        // and the correct confirmLiveTrading phrase would arm live trading and THEN fail this
+        // check - returning a clean { ok: false } while leaving the process-wide liveOrdersArmed
+        // flag set with no rollback. An arm must only ever be a side effect of a call that fully
+        // succeeds, never a call that gets rejected one check later. Moved before arm/disarm so a
+        // rejected toggle() never has any side effect on the live-arm state.
+        //
         // Allocated budget must not exceed what the active broker actually reports as available -
         // otherwise the bot starts "funded" on paper against capital that isn't really there. Only
         // checked on the enable transition (not on every config edit while already running), and
@@ -390,6 +486,16 @@ class TradingEngine {
             }
         }
 
+        if (goingLive) armLiveTrading(config.confirmLiveTrading);
+        if (goingPaper) disarmLiveTrading();
+        else if (
+          Object.prototype.hasOwnProperty.call(config, 'tradingMode')
+          && config.tradingMode !== 'LIVE'
+          && this.state.tradingMode === 'LIVE'
+        ) {
+            disarmLiveTrading();
+        }
+
         const wasEnabled = this.state.enabled;
         // Only an explicit allowlist of client-settable config fields is applied - see
         // TOGGLE_ALLOWED_FIELDS' comment for why this isn't a blanket Object.assign anymore.
@@ -411,7 +517,11 @@ class TradingEngine {
                 takeProfitPct: this.state.takeProfitPct,
                 trailingStopPct: this.state.trailingStopPct,
                 minAiConfidence: this.state.minAiConfidence,
-                adversarialDebateMode: this.state.adversarialDebateMode
+                adversarialDebateMode: this.state.adversarialDebateMode,
+                autoTradeScheduleEnabled: this.state.autoTradeScheduleEnabled,
+                autoTradeScheduleStartTime: this.state.autoTradeScheduleStartTime,
+                autoTradeScheduleEndTime: this.state.autoTradeScheduleEndTime,
+                autoTradeScheduleTimezone: this.state.autoTradeScheduleTimezone,
             }).run();
             console.log('[TradingEngine] SQLite settings updated after toggle.');
         } catch (e) {
@@ -419,10 +529,12 @@ class TradingEngine {
         }
         
         if (this.state.enabled && !wasEnabled) {
-            this.logHistory('start', `Autonomous bot ENABLED. Mode: ${this.state.tradingMode} | Budget: $${this.state.budget}`);
+            const row = formatAutobotEnabledLog(this.state);
+            this.logHistory(row.type, row.msg, row.detail);
             system.start(this.state.tradingMode as any);
         } else if (!this.state.enabled && wasEnabled) {
-            this.logHistory('stop', 'Autonomous bot DISABLED.');
+            const row = formatAutobotDisabledLog();
+            this.logHistory(row.type, row.msg, row.detail);
             system.stop();
         }
 

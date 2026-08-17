@@ -247,14 +247,27 @@ export class RiskEngine {
             recordGate(postLoss.gate, postLoss.passed, postLoss.detail);
             const dailyTrades = evaluateDailyTradeLimit({ side: proposal.side, nowMs, trades: tradeRows });
             recordGate(dailyTrades.gate, dailyTrades.passed, dailyTrades.detail);
-            const dupAssessments = await db.select().from(schema.riskAssessments)
-              .where(gte(schema.riskAssessments.createdAt, new Date(nowMs - tradingSafety.duplicateSignalWindowMs).toISOString()));
-            const duplicate = evaluateDuplicateSignal({
-              side: proposal.side,
-              symbol: proposal.symbol,
-              nowMs,
-              assessments: dupAssessments as any,
-            });
+            // duplicate_signal rows use wall-clock createdAt. Replay nowMs is historical (bar T),
+            // so `gte(createdAt, T-60s)` would match years of live/prior assessments and false-block
+            // MODE B. Scope to this replayId + wall clock, or skip (replay already dedupes via openStops).
+            let duplicate: { gate: string; passed: boolean; detail: Record<string, unknown>; reason: string };
+            if (replay) {
+              duplicate = {
+                gate: 'duplicate_signal',
+                passed: true,
+                detail: { skipped: true, reason: 'replay_session_uses_openStops_dedup', replayId: replay.replayId },
+                reason: 'n/a',
+              };
+            } else {
+              const dupAssessments = await db.select().from(schema.riskAssessments)
+                .where(gte(schema.riskAssessments.createdAt, new Date(nowMs - tradingSafety.duplicateSignalWindowMs).toISOString()));
+              duplicate = evaluateDuplicateSignal({
+                side: proposal.side,
+                symbol: proposal.symbol,
+                nowMs,
+                assessments: dupAssessments as any,
+              });
+            }
             recordGate(duplicate.gate, duplicate.passed, duplicate.detail);
 
             // 1. Fetch real broker portfolio state
@@ -373,15 +386,19 @@ export class RiskEngine {
             // bug generating far more proposals than any real strategy should, independent of
             // whether any individual proposal would otherwise pass every other gate.
             const maxOrdersPerMinute = settings[0]?.maxOrdersPerMinute ?? 5;
-            const oneMinuteAgo = new Date(nowMs - 60 * 1000).toISOString();
+            // createdAt is wall-clock; never use historical replay nowMs as the SQL lower bound.
+            const orderRateWindowStartMs = replay ? Date.now() - 60 * 1000 : nowMs - 60 * 1000;
+            const oneMinuteAgo = new Date(orderRateWindowStartMs).toISOString();
             const recentAssessmentsRaw = await db.select().from(schema.riskAssessments)
                 .where(gte(schema.riskAssessments.createdAt, oneMinuteAgo));
             const recentAssessments = replay
                 ? recentAssessmentsRaw.filter((a: any) => String(a.traceId || '').includes(replay.replayId))
                 : recentAssessmentsRaw.filter((a: any) => !String(a.traceId || '').startsWith(replaySafety.replayTracePrefix));
             const recentOrderCount = recentAssessments.length;
-            const orderRatePassed = recentOrderCount < maxOrdersPerMinute;
-            recordGate('order_rate_limit', orderRatePassed, { recentOrderCount, maxOrdersPerMinute });
+            // MAX-speed replay can evaluate many bars within one wall-clock minute; rate limit is a
+            // live runaway guard, not a historical path constraint.
+            const orderRatePassed = replay ? true : recentOrderCount < maxOrdersPerMinute;
+            recordGate('order_rate_limit', orderRatePassed, { recentOrderCount, maxOrdersPerMinute, replay: !!replay, skipped: !!replay });
             const orderRateReason = `Order rate limit exceeded: ${recentOrderCount} risk assessments in the last 60s (limit ${maxOrdersPerMinute}). Possible runaway signal loop - new trades blocked until the rate subsides.`;
 
             // 2b. Alpaca /v2/clock. Unconfigured → skip. Closed or clock outage → block.
@@ -601,6 +618,7 @@ export class RiskEngine {
                 approved,
                 maxQuantity,
                 reasoning,
+                rejectionGate: firstFailure?.gate ?? null,
                 newsDetails: proposal.newsDetails,
                 // Phase 16B - only meaningful (and only ever consumed by OrderManagement) on a
                 // real approval; forwarded unconditionally here regardless of approved/rejected
@@ -624,6 +642,7 @@ export class RiskEngine {
                 approved: false,
                 maxQuantity: 0,
                 reasoning,
+                rejectionGate: 'system_error',
             });
             await this.persistAssessment(proposal, { approved: false, maxQuantity: 0, reasoning, rejectionGate: 'system_error', accountEquity, buyingPower, gateResults });
         }

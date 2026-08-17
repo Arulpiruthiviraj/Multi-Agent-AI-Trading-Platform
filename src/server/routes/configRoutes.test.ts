@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -96,5 +96,102 @@ describe('configRoutes - POST /settings field allowlist (P0 regression)', () => 
     const [row] = await db.select().from(schema.settings).limit(1);
     expect(row.tradingMode).not.toBe('LIVE');
     expect(row.maxTradeSize).not.toBe(999);
+  });
+
+  it('maps autoBotEnabled onto TradingEngine.state.enabled so settings and Autobot stay one lever', async () => {
+    tradingEngine.state.enabled = false;
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const portfolio = await broker.portfolio();
+    const available = portfolio.buyingPower ?? portfolio.cash ?? 0;
+
+    const on = await request(app).post('/api/v1/config/settings').send({
+      autoBotEnabled: true,
+      budget: Math.max(1, available - 1),
+    });
+    expect(on.status).toBe(200);
+    expect(tradingEngine.state.enabled).toBe(true);
+    const [rowOn] = await db.select().from(schema.settings).limit(1);
+    expect(rowOn.autoBotEnabled).toBe(true);
+
+    const off = await request(app).post('/api/v1/config/settings').send({ autoBotEnabled: false });
+    expect(off.status).toBe(200);
+    expect(tradingEngine.state.enabled).toBe(false);
+    const [rowOff] = await db.select().from(schema.settings).limit(1);
+    expect(rowOff.autoBotEnabled).toBe(false);
+  });
+
+  // Real bug fixed: SETTINGS_ALLOWED_FIELDS only ever allowlisted field *names*; posting an
+  // absurd value for a field a RiskEngine gate reads as a "less-than" threshold silently defeated
+  // that gate (e.g. maxPortfolioDrawdownPct: 999 permanently disabled the drawdown circuit
+  // breaker). validateSettingsBounds (settingsValidation.ts) now rejects out-of-range values.
+  it('rejects an out-of-range maxPortfolioDrawdownPct instead of silently disabling the drawdown gate', async () => {
+    const res = await request(app).post('/api/v1/config/settings').send({ maxPortfolioDrawdownPct: 999 });
+    expect(res.status).toBe(400);
+    const [row] = await db.select().from(schema.settings).limit(1);
+    expect(row.maxPortfolioDrawdownPct).not.toBe(999);
+  });
+
+  it('rejects an out-of-range maxOrdersPerMinute instead of silently defeating the order-rate-limit gate', async () => {
+    const res = await request(app).post('/api/v1/config/settings').send({ maxOrdersPerMinute: 100000 });
+    expect(res.status).toBe(400);
+    const [row] = await db.select().from(schema.settings).limit(1);
+    expect(row.maxOrdersPerMinute).not.toBe(100000);
+  });
+
+  it('accepts an in-range maxPortfolioDrawdownPct', async () => {
+    const res = await request(app).post('/api/v1/config/settings').send({ maxPortfolioDrawdownPct: 0.2 });
+    expect(res.status).toBe(200);
+    const [row] = await db.select().from(schema.settings).limit(1);
+    expect(row.maxPortfolioDrawdownPct).toBe(0.2);
+  });
+});
+
+// Real bug fixed: GET /brokers (also reachable via the duplicate bare app.use("/api/v1",
+// configRouter) mount in server.ts) used to return raw rows including apiKeyEncrypted/
+// secretEncrypted ciphertext - inconsistent with the "never return ciphertext to the UI" masking
+// pattern used everywhere else in this file.
+describe('configRoutes - GET /brokers never leaks credential ciphertext', () => {
+  let tmpDbPath: string;
+  let db: any;
+  let sqliteDb: any;
+  let schema: any;
+  let app: express.Express;
+
+  beforeAll(async () => {
+    tmpDbPath = path.join(os.tmpdir(), `argus_configroutes_brokers_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+    vi.resetModules();
+    ({ db, sqliteDb } = await import('../db'));
+    schema = await import('../db/schema');
+    await db.insert(schema.settings).values({});
+    await db.insert(schema.brokerConnections).values({
+      brokerName: 'Alpaca', paperMode: true,
+      apiKeyEncrypted: 'iv:realciphertextvalue', secretEncrypted: 'iv:realsecretciphertext',
+    });
+
+    const { configRouter } = await import('./configRoutes');
+    app = express();
+    app.use(express.json());
+    app.use('/api/v1/config', configRouter);
+  });
+
+  afterAll(() => {
+    try { sqliteDb.close(); } catch { /* already closed */ }
+    for (const suffix of ['', '-shm', '-wal']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }
+    }
+    delete process.env.ARGUS_DB_PATH;
+  });
+
+  it('never returns apiKeyEncrypted/secretEncrypted values, but does report whether they exist', async () => {
+    const res = await request(app).get('/api/v1/config/brokers');
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].apiKeyEncrypted).toBeUndefined();
+    expect(res.body[0].secretEncrypted).toBeUndefined();
+    expect(JSON.stringify(res.body)).not.toContain('realciphertextvalue');
+    expect(JSON.stringify(res.body)).not.toContain('realsecretciphertext');
+    expect(res.body[0].hasApiKey).toBe(true);
+    expect(res.body[0].hasSecret).toBe(true);
   });
 });

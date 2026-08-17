@@ -11,7 +11,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import https from 'https';
 import { eventBus } from '../core/EventBus';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
-import { preferIpv4Loopback } from './preferIpv4Loopback';
+import { preferIpv4Loopback, resolveLocalAiServiceUrl } from './preferIpv4Loopback';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 
 export type ModelHealthStatus = 'READY' | 'FAILED' | 'DISABLED' | 'STARTING';
@@ -34,7 +34,7 @@ export interface ModelRegistryEntry {
 }
 
 const OLLAMA_HOST = preferIpv4Loopback(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434');
-const CHRONOS_URL = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008');
+const CHRONOS_URL = resolveLocalAiServiceUrl();
 const IBKR_URL = process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api';
 
 const children: ChildProcess[] = [];
@@ -65,6 +65,26 @@ function trySpawn(command: string, args: string[], label: string): void {
     console.log(`[ModelRuntime] Spawned ${label}: ${command} ${args.join(' ')} (pid ${child.pid})`);
   } catch (e: any) {
     console.warn(`[ModelRuntime] Failed to spawn ${label}: ${e.message}`);
+  }
+}
+
+function trySpawnChronos(): void {
+  const port = process.env.LOCAL_AI_SERVICE_PORT || '8008';
+  const script = require('path').join(process.cwd(), 'scripts', 'local_ai_service.py');
+  const py = process.platform === 'win32' ? 'python' : 'python3';
+  try {
+    const child = spawn(py, [script], {
+      stdio: 'ignore',
+      detached: true,
+      shell: true,
+      env: { ...process.env, LOCAL_AI_SERVICE_PORT: String(port) },
+    });
+    child.unref();
+    children.push(child);
+    console.log(`[ModelRuntime] Spawned Chronos/Kronos: ${py} ${script} (pid ${child.pid}, port ${port})`);
+  } catch (e: any) {
+    console.warn(`[ModelRuntime] Failed to spawn Chronos via python; falling back to npm run ai:serve: ${e.message}`);
+    trySpawn('npm', ['run', 'ai:serve'], 'Chronos/Kronos local_ai_service');
   }
 }
 
@@ -162,7 +182,7 @@ export class ModelRuntimeManager {
     let chronos = await probe(`${CHRONOS_URL}/health`);
     if (!chronos.ok && allowStart && allowChronos) {
       eventBus.emit('MODEL_STARTED', { modelId: 'chronos', endpoint: CHRONOS_URL });
-      trySpawn('npm', ['run', 'ai:serve'], 'Chronos/Kronos local_ai_service');
+      trySpawnChronos();
       for (let i = 0; i < 45 && !chronos.ok; i++) {
         await sleep(2000);
         chronos = await probe(`${CHRONOS_URL}/health`, 3000);
@@ -179,7 +199,7 @@ export class ModelRuntimeManager {
     let chronos = await probe(`${CHRONOS_URL}/health`, 3000);
     if (!chronos.ok && allowStart && allowChronos) {
       eventBus.emit('MODEL_STARTED', { modelId: 'chronos', endpoint: CHRONOS_URL });
-      trySpawn('npm', ['run', 'ai:serve'], 'Chronos/Kronos local_ai_service');
+      trySpawnChronos();
       for (let i = 0; i < 20 && !chronos.ok; i++) {
         await sleep(2000);
         chronos = await probe(`${CHRONOS_URL}/health`, 3000);
@@ -251,6 +271,8 @@ export class ModelRuntimeManager {
     const h = await openAliceVerificationService.health();
     const enabled = openAliceVerificationService.enabled;
     const wrongMcp = /wrong MCP|trading\/broker|missing expected tools/i.test(h.detail || '');
+    const launchError = process.env.OPENALICE_LAUNCH_ERROR?.trim();
+    const detail = !h.reachable && launchError ? `${h.detail} — ${launchError}` : h.detail;
     return {
       modelId: 'openalice',
       provider: 'OpenAlice MCP',
@@ -264,11 +286,11 @@ export class ModelRuntimeManager {
       loaded: !!h.reachable,
       lastCheckedAt: h.checkedAt,
       failureCount: h.reachable ? 0 : (enabled ? 1 : 0),
-      detail: h.detail,
+      detail,
       action: enabled && !h.reachable
         ? (wrongMcp
-          ? 'Point OPENALICE_MCP_URL at OpenAlice Guardian (http://127.0.0.1:47332/mcp), not a trading MCP. npm run dev starts Guardian from OPENALICE_REPO_PATH.'
-          : 'Start OpenAlice Guardian (npm run dev clones/starts sibling OpenAlice) and set OPENALICE_ENABLED=true plus OPENALICE_MCP_URL=http://127.0.0.1:47332/mcp')
+          ? 'Point OPENALICE_MCP_URL at OpenAlice Guardian (http://127.0.0.1:47332/mcp), not a trading MCP. npm run dev starts Guardian from OPENALICE_PATH / OPENALICE_REPO_PATH.'
+          : (launchError || 'Start OpenAlice Guardian (npm run dev) and set OPENALICE_ENABLED=true plus OPENALICE_MCP_URL=http://127.0.0.1:47332/mcp. Skip with ARGUS_SKIP_OPENALICE=true or ENABLE_OPENALICE=false.'))
         : null,
     };
   }

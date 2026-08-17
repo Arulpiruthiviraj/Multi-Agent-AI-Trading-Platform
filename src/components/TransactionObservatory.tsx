@@ -20,6 +20,8 @@ import {
   X, Play, Pause, SkipBack, SkipForward, RotateCcw, Activity, Users, Scale, ShieldCheck,
   ShieldAlert, Send, CheckCircle2, XCircle, HelpCircle, ChevronDown, ChevronRight,
 } from 'lucide-react';
+import { UnavailableHint } from './UnavailableHint';
+import { formatStatusHint, formatTransactionDecision, formatTransactionOutcome } from './observatoryHonesty';
 
 interface Evidence {
   id: number;
@@ -74,6 +76,12 @@ function fmtTime(ts: string | number | null | undefined): string {
   const d = typeof ts === 'number' ? new Date(ts) : new Date(ts);
   if (isNaN(d.getTime())) return '--';
   return d.toLocaleTimeString(undefined, { hour12: false }) + '.' + String(d.getMilliseconds()).padStart(3, '0');
+}
+
+function TimeOrUnavailable({ ts, why }: { ts: string | number | null | undefined; why: string }) {
+  const text = fmtTime(ts);
+  if (text === '--') return <UnavailableHint reason={why}>--</UnavailableHint>;
+  return <>{text}</>;
 }
 
 interface Stage {
@@ -162,8 +170,15 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
     return idx !== -1 && idx <= stageIndex;
   };
 
-  const decisionColor = transaction.finalDecision === 'BUY' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
-    : transaction.finalDecision === 'SELL' ? 'text-amber-400 bg-amber-500/10 border-amber-500/30'
+  const decision = formatTransactionDecision({
+    ...transaction,
+    proposedSide: consensusDecision?.side ?? null,
+    weightedConfidence: consensusDecision?.weightedConfidence ?? null,
+    consensusThreshold: consensusDecision?.threshold ?? null,
+  });
+  const outcome = formatTransactionOutcome(transaction);
+  const decisionColor = decision.kind === 'buy' ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+    : decision.kind === 'sell' ? 'text-amber-400 bg-amber-500/10 border-amber-500/30'
     : 'text-slate-400 bg-slate-800 border-slate-700';
 
   return (
@@ -177,11 +192,14 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
               <h2 className="text-white font-bold tracking-widest uppercase text-sm">{transaction.id}</h2>
               <p className="text-slate-500 text-[10px]">{transaction.symbol} &middot; Transaction Observatory</p>
             </div>
-            <span className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded border ${decisionColor}`}>
-              {transaction.finalDecision || transaction.status}
+            <span title={decision.title} className={`text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded border cursor-help ${decisionColor}`}>
+              {decision.label}
             </span>
-            <span className="text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded border border-slate-700 text-slate-400">
+            <span title={formatStatusHint(transaction.status)} className="text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded border border-slate-700 text-slate-400 cursor-help">
               {transaction.status}
+            </span>
+            <span title={outcome.title} className="text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded border border-slate-700 text-slate-400 cursor-help">
+              {outcome.label}
             </span>
           </div>
           <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors"><X size={20} /></button>
@@ -297,7 +315,11 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
                           {expandedGate === g.id ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                           {skipped ? <HelpCircle size={14} className="shrink-0" /> : g.passed ? <CheckCircle2 size={14} className="shrink-0" /> : <XCircle size={14} className="shrink-0" />}
                           <span className="text-[11px] font-bold uppercase tracking-widest flex-1">{GATE_LABELS[g.gateName] || g.gateName}</span>
-                          <span className="text-[9px] uppercase tracking-widest">{skipped ? 'N/A' : g.passed ? 'PASS' : 'FAIL'}</span>
+                          <span className="text-[9px] uppercase tracking-widest">
+                            {skipped
+                              ? <UnavailableHint reason="This gate was skipped for this evaluation (see expanded detail). N/A is not a pass and not a fabricated fail.">N/A</UnavailableHint>
+                              : g.passed ? 'PASS' : 'FAIL'}
+                          </span>
                         </button>
                         {expandedGate === g.id && (
                           <pre className="text-[10px] text-slate-400 bg-black/30 rounded p-2 mt-1 overflow-x-auto">{JSON.stringify(g.detail, null, 2)}</pre>
@@ -324,11 +346,18 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
             ) : (
               <div className="flex flex-col gap-3">
                 <div className="grid grid-cols-2 md:grid-cols-5 gap-3 text-center text-[10px]">
-                  <div><p className="text-slate-500 uppercase tracking-widest">Submitted</p><p className="text-white">{fmtTime(order.submittedAt)}</p></div>
-                  <div><p className="text-slate-500 uppercase tracking-widest">Accepted</p><p className="text-white">{fmtTime(order.acceptedAt)}</p></div>
-                  <div><p className="text-slate-500 uppercase tracking-widest">Filled</p><p className="text-white">{fmtTime(order.filledAt)}</p></div>
+                  <div><p className="text-slate-500 uppercase tracking-widest">Submitted</p><p className="text-white"><TimeOrUnavailable ts={order.submittedAt} why="Order was never submitted — this transaction did not reach OMS (typical for NO_CONSENSUS / RISK_REJECTED)." /></p></div>
+                  <div><p className="text-slate-500 uppercase tracking-widest">Accepted</p><p className="text-white"><TimeOrUnavailable ts={order.acceptedAt} why="Broker never accepted this order. Timestamp appears after the broker ACK." /></p></div>
+                  <div><p className="text-slate-500 uppercase tracking-widest">Filled</p><p className="text-white"><TimeOrUnavailable ts={order.filledAt} why="No fill recorded. Filled time appears after the broker reports a fill." /></p></div>
                   <div><p className="text-slate-500 uppercase tracking-widest">Status</p><p className={order.status === 'FILLED' ? 'text-emerald-400' : order.status === 'REJECTED' ? 'text-rose-400' : 'text-amber-400'}>{order.status}</p></div>
-                  <div><p className="text-slate-500 uppercase tracking-widest">Broker Order ID</p><p className="text-white truncate">{order.brokerOrderId || '--'}</p></div>
+                  <div>
+                    <p className="text-slate-500 uppercase tracking-widest">Broker Order ID</p>
+                    <p className="text-white truncate">
+                      {order.brokerOrderId || (
+                        <UnavailableHint reason="No broker order id — the order was not accepted by a live/paper broker, or the adapter never returned one.">--</UnavailableHint>
+                      )}
+                    </p>
+                  </div>
                 </div>
                 {fills.length > 0 && (
                   <div className="border-t border-slate-800 pt-3">

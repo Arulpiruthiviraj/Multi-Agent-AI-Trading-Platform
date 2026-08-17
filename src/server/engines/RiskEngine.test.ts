@@ -629,7 +629,22 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.approved).toBe(false);
     expect(assessment.reasoning).toMatch(/AUTOBOT_DISABLED/);
+    expect(assessment.rejectionGate).toBe('autobot_enabled');
     mockTradingEngine.state.enabled = true;
+  });
+
+  it('live path still vetoes duplicate_signal and publishes rejectionGate on the assessment event', async () => {
+    setTableRows(schema.riskAssessments, [{
+      symbol: 'AAPL',
+      side: 'BUY',
+      approved: true,
+      createdAt: new Date().toISOString(),
+    }]);
+    await riskEngine.evaluateRisk({ traceId: 'dup-live', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.rejectionGate).toBe('duplicate_signal');
+    expect(assessment.reasoning).toMatch(/Duplicate BUY signal for AAPL within/);
   });
 
   it('does not use autobot_enabled to block SELL/exits while TRADING_ENABLED', async () => {
