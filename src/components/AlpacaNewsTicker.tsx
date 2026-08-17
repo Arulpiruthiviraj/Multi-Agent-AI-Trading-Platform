@@ -65,28 +65,29 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
 
   const fetchAlpacaNews = async () => {
     setIsLoading(true);
-    setErrorStatus(null);
     try {
-      // Endpoint `/api/v1/alpaca/news?symbol=XXX`
       const response = await fetch(`/api/v1/alpaca/news?symbol=${targetSymbol}`);
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
-      if (response.ok && data.news && Array.isArray(data.news) && data.news.length > 0) {
+      if (response.ok && data.available !== false && Array.isArray(data.news) && data.news.length > 0) {
         const formatted = data.news.map((item: any, idx: number) => ({
           id: item.id?.toString() || `live-${idx}`,
           headline: item.headline,
           symbols: item.symbols || [targetSymbol],
           created_at: item.created_at || new Date().toISOString(),
-          source: item.source || "Alpaca",
+          source: item.source || (data.source === "NewsEngine" ? "NewsEngine" : "Alpaca"),
           url: item.url
         }));
         setNews(formatted);
-        setIsLive(true);
-      } else {
-        // Fall back to robust executed news but log unconfigured / zero results
-        const msg = data.error || "No current news items found";
-        handleFallback(msg);
+        setIsLive(data.source === "alpaca" || data.source === "alpaca-ws");
+        setErrorStatus(data.alpacaFallbackReason || null);
+        return;
       }
+      handleFallback(
+        data.reason
+        || data.error
+        || (response.ok ? "No current news items found" : `News endpoint HTTP ${response.status}`),
+      );
     } catch (err: any) {
       handleFallback(err.message || "Network error querying news endpoint");
     } finally {
@@ -101,9 +102,20 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
   };
 
   useEffect(() => {
-    fetchAlpacaNews();
-    const interval = setInterval(fetchAlpacaNews, 5000); // Refresh frequently for WebSocket prioritization
-    return () => clearInterval(interval);
+    let cancelled = false;
+    let delayMs = 30000;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const tick = async () => {
+      await fetchAlpacaNews();
+      if (cancelled) return;
+      timer = setTimeout(tick, delayMs);
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [targetSymbol]);
 
   // Double the list to support seamless infinite loop transition
@@ -152,7 +164,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
               <span className={`relative inline-flex rounded-full h-2 w-2 ${isLive ? "bg-emerald-500" : "bg-amber-500"}`}></span>
             </span>
             <span className={isLive ? "text-emerald-400 font-semibold" : "text-amber-500"}>
-              {isLive ? "ALPACA API LIVE" : "executeD NEWS STREAM"}
+              {isLive ? "ALPACA API LIVE" : news.length > 0 ? "NEWSENGINE FALLBACK" : "NEWS UNAVAILABLE"}
             </span>
           </div>
 
@@ -216,7 +228,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
           </div>
         ) : (
           <div className="w-full text-center text-xs font-mono text-slate-500 uppercase tracking-widest pl-4">
-            Awaiting News Stream buffers...
+            Awaiting News Stream buffers...{errorStatus ? ` (${errorStatus})` : ""}
           </div>
         )}
       </div>

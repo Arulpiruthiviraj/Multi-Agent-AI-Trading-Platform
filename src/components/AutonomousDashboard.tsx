@@ -70,15 +70,19 @@ export function AutonomousDashboard({
 
   // Real data states with fallback fetch
   const [livePortfolio, setLivePortfolio] = useState<any>(initialPortfolioData || null);
+  const [portfolioError, setPortfolioError] = useState<string | null>(null);
   const [liveTrades, setLiveTrades] = useState<any[]>(initialTrades || []);
   const [performanceData, setPerformanceData] = useState<any[]>([]);
   const [systemIntegrity, setSystemIntegrity] = useState<any>(null);
   const [learningStats, setLearningStats] = useState<any>(null);
   const [isLoadingChart, setIsLoadingChart] = useState(true);
 
-  // Sync props to state if provided
+  // Sync props to state if provided (including fail-closed null — do not keep stale equity).
   useEffect(() => {
-    if (initialPortfolioData) setLivePortfolio(initialPortfolioData);
+    if (initialPortfolioData !== undefined) {
+      setLivePortfolio(initialPortfolioData);
+      if (initialPortfolioData) setPortfolioError(null);
+    }
   }, [initialPortfolioData]);
 
   useEffect(() => {
@@ -91,25 +95,51 @@ export function AutonomousDashboard({
     return () => clearInterval(timer);
   }, []);
 
-  // Fetch real portfolio data if not provided via props
+  // Parent App.tsx already polls GET /api/v1/portfolio. A second 10s loop here was the
+  // "broken KPI" 502 spam after Alpaca/proxy failures. Only self-fetch when used standalone.
   useEffect(() => {
+    if (initialPortfolioData !== undefined) return;
     let isMounted = true;
+    let failStreak = 0;
+    let backoffUntil = 0;
     const fetchPortfolio = async () => {
+      if (Date.now() < backoffUntil) return;
       try {
         const res = await fetch("/api/v1/portfolio");
-        if (res.ok) {
-          const data = await res.json();
-          if (isMounted) setLivePortfolio(data);
+        if (!res.ok) {
+          if (isMounted) {
+            setLivePortfolio(null);
+            setPortfolioError((await res.json().catch(() => ({})))?.reason || `HTTP ${res.status}`);
+          }
+          failStreak += 1;
+          backoffUntil = Date.now() + Math.min(60_000, 10_000 * 2 ** (failStreak - 1));
+          return;
+        }
+        const data = await res.json();
+        if (data?.available === false) {
+          if (isMounted) {
+            setLivePortfolio(null);
+            setPortfolioError(data.reason || data.error || "Broker portfolio unavailable");
+          }
+          return;
+        }
+        failStreak = 0;
+        backoffUntil = 0;
+        if (isMounted) {
+          setLivePortfolio(data);
+          setPortfolioError(null);
         }
       } catch (e) {
-        console.error("AutonomousDashboard portfolio fetch error:", e);
+        if (isMounted) {
+          setLivePortfolio(null);
+          setPortfolioError(e instanceof Error ? e.message : "Network error");
+        }
+        failStreak += 1;
+        backoffUntil = Date.now() + Math.min(60_000, 10_000 * 2 ** (failStreak - 1));
       }
     };
 
-    if (!initialPortfolioData) {
-      fetchPortfolio();
-    }
-
+    fetchPortfolio();
     const interval = setInterval(fetchPortfolio, 10000);
     return () => {
       isMounted = false;
@@ -358,7 +388,9 @@ export function AutonomousDashboard({
               <div className="text-3xl font-bold text-indigo-400">
                 {typeof portfolioEquity === "number"
                   ? `$${Number(portfolioEquity).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                  : <UnavailableHint reason="Broker equity/cash has not returned from GET /api/v1/portfolio. This is not Argus allocated capital.">--</UnavailableHint>}
+                  : <UnavailableHint reason={portfolioError
+                    ? `GET /api/v1/portfolio failed: ${portfolioError} This is not Argus allocated capital.`
+                    : "Broker equity/cash has not returned from GET /api/v1/portfolio. This is not Argus allocated capital."}>--</UnavailableHint>}
               </div>
             </div>
 

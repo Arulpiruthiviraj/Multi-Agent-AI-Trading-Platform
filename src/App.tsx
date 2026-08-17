@@ -1760,6 +1760,9 @@ export default function App() {
 
   // Platform ledger data - declared at the top to avoid Temporal Dead Zone issues in earlier useEffects
   const [portfolioData, setPortfolioData] = useState<any | null>(null);
+  const [portfolioFetchError, setPortfolioFetchError] = useState<string | null>(null);
+  const portfolioBackoffUntil = useRef(0);
+  const portfolioFailStreak = useRef(0);
   const [scheduledTasks, setScheduledTasks] = useState<any[]>([]);
   const [schedulerFreq, setSchedulerFreq] = useState("Daily");
   const [schedulerWeights, setSchedulerWeights] = useState('{"Technology": 40, "Financials": 20, "Healthcare": 20, "Energy": 20}');
@@ -1872,8 +1875,11 @@ export default function App() {
       unrealized = positions.reduce((s: number, p: any) => s + (Number(p.unrealizedPnl) || 0), 0);
     }
     const health = typeof snap?.health_score === "number" ? snap.health_score : undefined;
-    return { equity, cash, positionsValue, unrealized, health, positionCount: positions?.length };
-  }, [portfolioData]);
+    const unavailableReason = portfolioFetchError
+      ? `GET /api/v1/portfolio failed: ${portfolioFetchError} Equity stays -- (not invented).`
+      : RIBBON_BROKER_UNAVAILABLE;
+    return { equity, cash, positionsValue, unrealized, health, positionCount: positions?.length, unavailableReason };
+  }, [portfolioData, portfolioFetchError]);
 
   const [globalAutoLiquidation, setGlobalAutoLiquidation] = useState(false);
   const hasAutoLiquidatedRef = useRef(false);
@@ -2657,14 +2663,44 @@ export default function App() {
   const fetchState = async () => {
     const fetchItem = async (url: string, setter: (data: any) => void, transform?: (data: any) => any) => {
       try {
+        if (url === "/api/v1/portfolio" && Date.now() < portfolioBackoffUntil.current) return;
         const res = await fetch(url);
-        if (!res.ok) return;
+        if (!res.ok) {
+          if (url === "/api/v1/portfolio") {
+            let reason = `HTTP ${res.status}`;
+            try {
+              const errBody = await res.json();
+              reason = errBody.reason || errBody.error || reason;
+            } catch { /* Vite 502 HTML while Node is restarting */ }
+            setPortfolioData(null);
+            setPortfolioFetchError(reason);
+            portfolioFailStreak.current += 1;
+            portfolioBackoffUntil.current = Date.now() + Math.min(60_000, 6_000 * 2 ** (portfolioFailStreak.current - 1));
+          }
+          return;
+        }
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
           const data = await res.json();
+          if (url === "/api/v1/portfolio") {
+            if (data?.available === false) {
+              setPortfolioData(null);
+              setPortfolioFetchError(data.reason || data.error || "Broker portfolio unavailable");
+              return;
+            }
+            portfolioFailStreak.current = 0;
+            portfolioBackoffUntil.current = 0;
+            setPortfolioFetchError(null);
+          }
           setter(transform ? transform(data) : data);
         }
       } catch (e) {
+        if (url === "/api/v1/portfolio") {
+          setPortfolioData(null);
+          setPortfolioFetchError(e instanceof Error ? e.message : "Network error");
+          portfolioFailStreak.current += 1;
+          portfolioBackoffUntil.current = Date.now() + Math.min(60_000, 6_000 * 2 ** (portfolioFailStreak.current - 1));
+        }
         console.warn(`Failed to fetch ${url}:`, e);
       }
     };
@@ -3343,7 +3379,7 @@ export default function App() {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}`
-              : <UnavailableHint reason={RIBBON_BROKER_UNAVAILABLE}>--</UnavailableHint>}
+              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
           </div>
           <div className="text-[10px] text-emerald-400 font-mono flex items-center gap-0.5 mt-0.5">
             <ArrowUpRight size={10} />
@@ -3361,7 +3397,7 @@ export default function App() {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}`
-              : <UnavailableHint reason={RIBBON_BROKER_UNAVAILABLE}>--</UnavailableHint>}
+              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
           </div>
           <div className="text-[10px] text-slate-500 font-mono mt-0.5">
             Ready allocation collateral
@@ -3378,10 +3414,10 @@ export default function App() {
                   minimumFractionDigits: 2,
                   maximumFractionDigits: 2,
                 })}`
-              : <UnavailableHint reason={RIBBON_BROKER_UNAVAILABLE}>--</UnavailableHint>}
+              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
           </div>
           <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-            {brokerRibbon.positionCount !== undefined ? brokerRibbon.positionCount : <UnavailableHint reason={RIBBON_BROKER_UNAVAILABLE}>--</UnavailableHint>} active stock allocations
+            {brokerRibbon.positionCount !== undefined ? brokerRibbon.positionCount : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>} active stock allocations
           </div>
         </div>
 
@@ -3392,7 +3428,7 @@ export default function App() {
           <div className={`text-lg font-semibold ${brokerRibbon.unrealized !== undefined && brokerRibbon.unrealized < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
             {brokerRibbon.unrealized !== undefined
               ? `${brokerRibbon.unrealized >= 0 ? '+' : ''}$${brokerRibbon.unrealized.toFixed(2)}`
-              : <UnavailableHint reason={RIBBON_BROKER_UNAVAILABLE}>--</UnavailableHint>}
+              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
           </div>
           <div className={`text-[10px] font-mono mt-0.5 ${brokerRibbon.unrealized !== undefined && brokerRibbon.unrealized < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
             Active returns gain indices
@@ -7519,7 +7555,7 @@ export default function App() {
                           ? <span className={autoBotTargetBudget > (portfolioData.buying_power ?? portfolioData.cash ?? 0) ? "text-rose-400 font-bold" : "text-emerald-400"}>
                               ${(portfolioData.buying_power ?? portfolioData.cash ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
                             </span>
-                          : <UnavailableHint reason={RIBBON_BROKER_UNAVAILABLE}>--</UnavailableHint>}
+                          : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
                       </span>
                     </div>
                     <div className="flex items-center gap-2">

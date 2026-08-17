@@ -6,36 +6,48 @@
  * ResizeObserver runs. That logs "width(-1) and height(-1) of chart should be
  * greater than 0" on first paint (and again for flex/grid parents that collapse).
  *
- * Mount the chart only after the parent has a real positive box, and pin
- * minWidth={0} so flex children can shrink without going negative.
+ * Do not mount a Recharts chart until the parent has a real positive box, and
+ * inject numeric width/height so ResponsiveContainer never renders at -1.
  * ==========================================================
  */
-import { useLayoutEffect, useRef, useState, type ReactElement } from 'react';
-import { ResponsiveContainer } from 'recharts';
+import { cloneElement, useLayoutEffect, useRef, useState, type ReactElement } from 'react';
 
-export function SafeResponsiveContainer({ children }: { children: ReactElement }) {
+const MIN_CHART_SIZE = 1;
+
+export function SafeResponsiveContainer({
+  children,
+  minWidth = MIN_CHART_SIZE,
+  minHeight = MIN_CHART_SIZE,
+}: {
+  children: ReactElement;
+  minWidth?: number;
+  minHeight?: number;
+}) {
   const ref = useRef<HTMLDivElement>(null);
-  const [ready, setReady] = useState(false);
+  const [box, setBox] = useState<{ width: number; height: number } | null>(null);
 
   useLayoutEffect(() => {
     const el = ref.current;
     if (!el) return;
     const update = () => {
-      setReady(el.clientWidth > 0 && el.clientHeight > 0);
+      const width = el.clientWidth;
+      const height = el.clientHeight;
+      setBox(width >= minWidth && height >= minHeight ? { width, height } : null);
     };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(el);
     return () => observer.disconnect();
-  }, []);
+  }, [minWidth, minHeight]);
 
   return (
     <div ref={ref} className="h-full w-full min-h-0 min-w-0">
-      {ready ? (
-        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-          {children}
-        </ResponsiveContainer>
-      ) : null}
+      {box
+        ? cloneElement(children as ReactElement<{ width?: number; height?: number }>, {
+            width: box.width,
+            height: box.height,
+          })
+        : null}
     </div>
   );
 }

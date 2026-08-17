@@ -65,6 +65,7 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   // live event for the same occurrence arriving over the newly-reopened socket - bounded so it
   // can't grow unbounded over a long session.
   const appliedBackfillEventIds = useRef<Set<string>>(new Set());
+  const disposedRef = useRef(false);
 
   // Shared by both a live WS message and a backfilled event, so a replayed event reaches
   // subscribers identically to how it would have if the client had never disconnected.
@@ -106,13 +107,18 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const connect = () => {
-    if (ws.current?.readyState === WebSocket.OPEN) return;
+    if (disposedRef.current) return;
+    if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
 
     setStatus('connecting');
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const newWs = new WebSocket(`${protocol}//${window.location.host}/ws`);
 
     newWs.onopen = () => {
+      if (disposedRef.current) {
+        newWs.close();
+        return;
+      }
       setStatus('connected');
       reconnectAttempts.current = 0;
       console.log('[WebSocketContext] Connected to server.');
@@ -153,8 +159,12 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
 
     newWs.onclose = () => {
       if (heartbeatInterval.current) clearInterval(heartbeatInterval.current);
+      if (ws.current === newWs) ws.current = null;
+      if (disposedRef.current) {
+        setStatus('disconnected');
+        return;
+      }
       setStatus('disconnected');
-      ws.current = null;
       // Captured at the moment of disconnect (not when the reconnect attempt later succeeds) -
       // this is the real start of the gap a backfill needs to cover.
       lastDisconnectedAt.current = Date.now();
@@ -177,11 +187,31 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   };
 
   useEffect(() => {
-    connect();
+    disposedRef.current = false;
+    // React 19 Strict Mode unmounts immediately after the first mount. Connecting
+    // synchronously would close a still-CONNECTING socket ("WebSocket is closed before
+    // the connection is established"). Delay until after that cleanup, then connect once.
+    const start = window.setTimeout(connect, 0);
     return () => {
-      if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
-      if (ws.current) {
-        ws.current.close();
+      disposedRef.current = true;
+      window.clearTimeout(start);
+      if (reconnectTimeout.current) {
+        clearTimeout(reconnectTimeout.current);
+        reconnectTimeout.current = null;
+      }
+      if (heartbeatInterval.current) {
+        clearInterval(heartbeatInterval.current);
+        heartbeatInterval.current = null;
+      }
+      const socket = ws.current;
+      ws.current = null;
+      if (!socket) return;
+      socket.onclose = null;
+      socket.onerror = null;
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.close();
+      } else if (socket.readyState === WebSocket.CONNECTING) {
+        socket.onopen = () => socket.close();
       }
     };
   }, []);

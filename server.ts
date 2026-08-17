@@ -106,6 +106,9 @@ import { system } from "./src/server/core/SystemBootstrap";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
 import { validateTargetAllocations, executeRebalance } from "./src/server/services/PortfolioRebalance";
+import { brokerPortfolioError, withTimeout } from "./src/server/services/brokerPortfolioResponse";
+import { loadInternalNewsForTicker } from "./src/server/services/internalNewsForTicker";
+import { tradingSafety } from "./src/server/config/tradingSafety";
 import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest } from "./src/server/core/AuthConfig";
 import { persistAllowlistedSecrets, secretsStatusFromEnvAndDb, SECRET_ALLOWLIST } from "./src/server/core/persistEncryptedSecrets";
 import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter, webhookLimiter } from "./src/server/core/RateLimiters";
@@ -1152,9 +1155,20 @@ let portfolioState = loadPortfolio();
   app.get("/api/v1/portfolio", async (req: Request, res: Response) => {
     try {
       const broker = BrokerManager.getInstance().getActiveBroker();
+      if (!broker) {
+        return res.status(503).json({
+          available: false,
+          error: "Broker unavailable: no active broker",
+          reason: "No active broker is initialized.",
+        });
+      }
       // No fabricated fallback if the broker call fails - a real error surfaces as a real error
       // instead of a fake $10,000 placeholder that looks like a real (if small) account.
-      const portfolio = await broker.portfolio();
+      const portfolio = await withTimeout(
+        broker.portfolio(),
+        tradingSafety.alpacaRequestTimeoutMs,
+        "broker.portfolio()",
+      );
 
       // Positions come from the active broker directly, not from schema.portfolio - that table
       // has no writer in the live pipeline (OrderManagement.ts writes trades, not portfolio rows)
@@ -1168,6 +1182,7 @@ let portfolioState = loadPortfolio();
       const drawdown = (portfolioState.peakValuation - portfolio.equity) / portfolioState.peakValuation;
 
       res.json({
+         available: true,
          cash: portfolio.cash,
          buying_power: portfolio.buyingPower,
          equity: portfolio.equity,
@@ -1176,8 +1191,9 @@ let portfolioState = loadPortfolio();
          drawdown: Number(drawdown.toFixed(4))
       });
     } catch(e: any) {
-      console.error("Broker Portfolio Error:", e.message);
-      res.status(502).json({ error: `Broker unavailable: ${e.message}` });
+      const mapped = brokerPortfolioError(e);
+      console.error("Broker Portfolio Error:", mapped.body.reason);
+      res.status(mapped.status).json(mapped.body);
     }
   });
 
@@ -1352,33 +1368,30 @@ let portfolioState = loadPortfolio();
 
   // Endpoint: Alpaca Integration - Real Market News
   app.get("/api/v1/alpaca/news", async (req: Request, res: Response) => {
-    const symbol = req.query.symbol as string;
-    
-    // Fallback to our internal News Engine Memory if Alpaca keys are missing
-    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
-      try {
-        const { NewsMemoryEngine } = await import('./src/server/news/NewsMemoryEngine.ts');
-        const engine = new NewsMemoryEngine();
-        const events = await engine.getRecentEventsForSymbol(symbol || '');
+    try {
+    const symbol = (req.query.symbol as string) || "";
+
+    const respondInternal = async (alpacaReason: string) => {
+      const internal = await loadInternalNewsForTicker(symbol);
+      if (internal.available) {
         return res.json({
-          news: events.map((item: any) => ({
-            id: item.id,
-            headline: item.title,
-            summary: item.summary,
-            author: item.source || 'News Engine',
-            created_at: item.createdAt,
-            url: item.url,
-            symbols: item.symbols ? JSON.parse(item.symbols) : [symbol]
-          }))
+          ...internal,
+          alpacaFallbackReason: alpacaReason,
         });
-      } catch (e: any) {
-        return res.status(500).json({ error: e.message });
       }
-    }
-    
-    // Check WebSocket first
-    if (liveNews[symbol] && liveNews[symbol].length > 0) {
       return res.json({
+        available: false,
+        news: [],
+        source: internal.source,
+        reason: `${alpacaReason}${internal.reason ? `; ${internal.reason}` : ""}`,
+      });
+    };
+
+    // Check WebSocket first
+    if (symbol && liveNews[symbol] && liveNews[symbol].length > 0) {
+      return res.json({
+        available: true,
+        source: "alpaca-ws",
         news: liveNews[symbol].map((n: any) => ({
            id: n.id,
            headline: n.headline,
@@ -1387,31 +1400,47 @@ let portfolioState = loadPortfolio();
            created_at: n.created_at,
            updated_at: n.updated_at,
            url: n.url,
-           source: n.source || 'websocket'
-        }))
+           source: n.source || "websocket",
+           symbols: n.symbols || [symbol],
+        })),
       });
     }
-    
-    try {
-      const response = await fetch(
-        `https://data.alpaca.markets/v1beta1/news?symbols=${symbol}&limit=5`,
-        {
-          headers: {
-            "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
-            "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY,
+
+    if (process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
+      try {
+        const response = await fetch(
+          `https://data.alpaca.markets/v1beta1/news?symbols=${encodeURIComponent(symbol)}&limit=5`,
+          {
+            signal: AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs),
+            headers: {
+              "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
+              "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY,
+            },
           },
-        },
-      );
-      const data = await response.json();
-      if (!response.ok) return res.status(response.status).json(data);
-      res.json(data);
+        );
+        if (response.ok) {
+          const data = await response.json();
+          const news = Array.isArray(data?.news) ? data.news : [];
+          if (news.length > 0) {
+            return res.json({ available: true, source: "alpaca", news });
+          }
+          return respondInternal("Alpaca news API returned no items");
+        }
+        return respondInternal(`Alpaca news API HTTP ${response.status}`);
+      } catch (e: any) {
+        return respondInternal(`Alpaca news API unreachable: ${e.message}`);
+      }
+    }
+
+    return respondInternal("Alpaca API keys are not configured");
     } catch (e: any) {
-      res
-        .status(500)
-        .json({
-          error: "Failed to reach Alpaca Markets News API.",
-          details: e.message,
+      if (!res.headersSent) {
+        res.json({
+          available: false,
+          news: [],
+          reason: e?.message || "News lookup failed",
         });
+      }
     }
   });
 
