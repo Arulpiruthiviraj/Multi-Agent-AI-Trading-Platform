@@ -101,16 +101,30 @@ async function computeRelativeStrength(symbolBars: Bar[], benchmarkSymbol: strin
     const benchmarkPeriodPct = pctChange(benchmarkBars);
     const relativeStrengthPct = periodPct !== null && benchmarkPeriodPct !== null ? periodPct - benchmarkPeriodPct : null;
 
-    const symbolCloses = symbolBars.map(b => b.close);
-    const benchCloses = benchmarkBars.map(b => b.close);
+    // Real bug fixed: correlation()/beta() used to be fed raw closing prices instead of period
+    // returns. Two trending, non-stationary price series (nearly any stock vs. SPY over most
+    // real historical windows) show spuriously high price-LEVEL correlation regardless of actual
+    // day-to-day co-movement, and a price-level regression slope is not a real return-sensitivity
+    // beta. PositionSizing.ts's returnCorrelation() already does this correctly ("real Pearson
+    // correlation of daily returns (not raw prices)") - mirrored here for the same reason.
+    const toReturns = (bars: Bar[]): number[] => {
+      const closes = bars.map(b => b.close);
+      const rets: number[] = [];
+      for (let i = 1; i < closes.length; i++) {
+        if (closes[i - 1] !== 0) rets.push(closes[i] / closes[i - 1] - 1);
+      }
+      return rets;
+    };
+    const symbolReturns = toReturns(symbolBars);
+    const benchReturns = toReturns(benchmarkBars);
 
     return {
       vsSymbol: benchmarkSymbol,
       periodPct,
       benchmarkPeriodPct,
       relativeStrengthPct,
-      correlation: correlation(symbolCloses, benchCloses),
-      beta: beta(symbolCloses, benchCloses),
+      correlation: correlation(symbolReturns, benchReturns),
+      beta: beta(symbolReturns, benchReturns),
       source: `ohlcv_bars(alpaca):${benchmarkSymbol}:${timeframe}`,
     };
   } catch {

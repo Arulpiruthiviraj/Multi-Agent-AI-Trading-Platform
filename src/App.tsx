@@ -1159,14 +1159,16 @@ export default function App() {
           return snapshot;
         });
         setSystemState(isAutobotEngineOn(snapshot) ? 'RUNNING' : 'STOPPED');
+        if (typeof data?.emergencyStopActive === 'boolean') {
+          setEnginesHalted(data.emergencyStopActive);
+          if (data.emergencyStopActive) {
+            setHaltReason((prev) => prev || "Emergency Stop (backend)");
+            setHaltTime((prev) => prev || new Date().toLocaleTimeString());
+          }
+        }
         if (data?.tradingMode) {
           const mode = String(data.tradingMode).toUpperCase();
           setAutoBotTradingMode(mode === 'PAPER' || mode === 'LIVE' || mode === 'SIMULATOR' ? mode : 'PAPER');
-          setToggles((t) => ({
-            ...t,
-            paper: mode === 'PAPER' || mode === 'SIMULATOR',
-            live: mode === 'LIVE',
-          }));
         }
         if (typeof data?.autoTradeScheduleEnabled === 'boolean') setAutoTradeScheduleEnabled(data.autoTradeScheduleEnabled);
         if (typeof data?.autoTradeScheduleStartTime === 'string') setAutoTradeScheduleStartTime(data.autoTradeScheduleStartTime);
@@ -1488,36 +1490,98 @@ export default function App() {
     }
   }, [auditLogs, isAutoScrollAudit]);
 
-  const [autoMode, setAutoMode] = useState<"full_auto" | "scanning_only" | "signal_only" | "paused">("full_auto");
-  const [toggles, setToggles] = useState({
-    scanning: true,
-    news: true,
-    political: true,
-    macro: true,
-    buy: true,
-    sell: true,
-    live: false,
-    paper: true
-  });
-  
-  const handleSetMode = (mode: "full_auto" | "scanning_only" | "signal_only" | "paused") => {
-    setAutoMode(mode);
-    setEnginesHalted(false);
-    setHaltReason("");
-    setHaltTime("");
-    
-    if (mode === "full_auto") setToggles(t => ({ ...t, scanning: true, news: true, political: true, macro: true, buy: true, sell: true, paper: true }));
-    if (mode === "scanning_only") setToggles(t => ({ ...t, scanning: true, news: true, political: true, macro: true, buy: false, sell: false, live: false, paper: false }));
-    if (mode === "signal_only") setToggles(t => ({ ...t, scanning: true, news: true, political: true, macro: true, buy: true, sell: true, live: false, paper: false }));
-    if (mode === "paused") setToggles(t => ({ ...t, scanning: false, news: false, political: false, macro: false, buy: false, sell: false, live: false, paper: false }));
+  const [pipelineAgents, setPipelineAgents] = useState<{
+    togglable: Array<{
+      id: string;
+      label: string;
+      description: string;
+      enabled: boolean;
+      available: boolean;
+      unavailableReason: string | null;
+      keepsBackgroundPipeline?: boolean;
+    }>;
+    alwaysOn: Array<{ id: string; label: string; reason: string; enabled: boolean }>;
+    autobotEnabled: boolean;
+    liveIdeaGenerationEnabled: boolean;
+  }>({ togglable: [], alwaysOn: [], autobotEnabled: false, liveIdeaGenerationEnabled: false });
+  const [pipelineAgentError, setPipelineAgentError] = useState<string | null>(null);
+
+  const fetchPipelineAgents = async () => {
+    try {
+      const res = await fetch("/api/v1/system/pipeline-agents");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        setPipelineAgentError(data?.error || `Pipeline agents fetch failed (${res.status})`);
+        return;
+      }
+      setPipelineAgents({
+        togglable: Array.isArray(data.togglable) ? data.togglable : [],
+        alwaysOn: Array.isArray(data.alwaysOn) ? data.alwaysOn : [],
+        autobotEnabled: data.autobotEnabled === true,
+        liveIdeaGenerationEnabled: data.liveIdeaGenerationEnabled === true,
+      });
+      if (typeof data.emergencyStopActive === "boolean") {
+        setEnginesHalted(data.emergencyStopActive);
+      }
+      setPipelineAgentError(null);
+    } catch (e: any) {
+      setPipelineAgentError(e?.message || "Pipeline agents fetch failed");
+    }
   };
 
-  const handleToggle = (key: keyof typeof toggles) => {
-    if (enginesHalted) return;
-    // Execution mode is owned by Market Execution (synced from ARGUS_TRADING_MODE / TradingEngine).
-    if (key === 'live' || key === 'paper') return;
-    setToggles(t => ({ ...t, [key]: !t[key] }));
+  const handlePipelineAgentToggle = async (agentId: string, currentlyEnabled: boolean, available: boolean) => {
+    if (!available) return;
+    setPipelineAgentError(null);
+    try {
+      const res = await fetch("/api/v1/system/pipeline-agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agentId, enabled: !currentlyEnabled }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        setPipelineAgentError(data?.error || `Toggle failed (${res.status})`);
+        return;
+      }
+      setPipelineAgents({
+        togglable: Array.isArray(data.togglable) ? data.togglable : [],
+        alwaysOn: Array.isArray(data.alwaysOn) ? data.alwaysOn : [],
+        autobotEnabled: data.autobotEnabled === true,
+        liveIdeaGenerationEnabled: data.liveIdeaGenerationEnabled === true,
+      });
+    } catch (e: any) {
+      setPipelineAgentError(e?.message || "Toggle failed");
+    }
   };
+
+  const handlePipelineAgentPreset = async (preset: "all_enabled" | "all_disabled") => {
+    setPipelineAgentError(null);
+    try {
+      const res = await fetch("/api/v1/system/pipeline-agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preset }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.ok === false) {
+        setPipelineAgentError(data?.error || `Preset failed (${res.status})`);
+        return;
+      }
+      setPipelineAgents({
+        togglable: Array.isArray(data.togglable) ? data.togglable : [],
+        alwaysOn: Array.isArray(data.alwaysOn) ? data.alwaysOn : [],
+        autobotEnabled: data.autobotEnabled === true,
+        liveIdeaGenerationEnabled: data.liveIdeaGenerationEnabled === true,
+      });
+    } catch (e: any) {
+      setPipelineAgentError(e?.message || "Preset failed");
+    }
+  };
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void fetchPipelineAgents();
+  }, [isAuthenticated]);
 
   const setMarketExecutionMode = (newMode: string) => {
     const mode = String(newMode).toUpperCase();
@@ -1526,11 +1590,6 @@ export default function App() {
       return;
     }
     setAutoBotTradingMode(mode);
-    setToggles((t) => ({
-      ...t,
-      paper: mode === 'PAPER' || mode === 'SIMULATOR',
-      live: mode === 'LIVE',
-    }));
     fetch("/api/v1/autobot/toggle", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2056,7 +2115,10 @@ export default function App() {
   const [auditTransactionsLoading, setAuditTransactionsLoading] = useState(true);
 
   useEffect(() => {
-    if (activeTab !== "audit") return;
+    // Real bug fixed: gated only on activeTab, not isAuthenticated - logging out while on this
+    // tab left this 15s interval running forever (activeTab doesn't change on logout, so this
+    // effect never re-ran to clear it), repeatedly hitting a now-401ing endpoint post-logout.
+    if (activeTab !== "audit" || !isAuthenticated) return;
     let cancelled = false;
     const load = () => {
       fetch('/api/v2/transactions?limit=25')
@@ -2067,7 +2129,7 @@ export default function App() {
     load();
     const interval = setInterval(load, 15_000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [activeTab]);
+  }, [activeTab, isAuthenticated]);
 
   // Real replacement for the Opportunity Feed tab's 3 hardcoded NVDA/TSLA/RIVN cards (invented
   // "Regime"/"Algorithm" fields, "LIVE SCAN ACTIVE" badge with no fetch behind it at all) -
@@ -2077,7 +2139,8 @@ export default function App() {
   const [opportunitiesReason, setOpportunitiesReason] = useState<string | null>(null);
 
   useEffect(() => {
-    if (activeTab !== "opportunities") return;
+    // Same post-logout interval leak as the audit-tab effect above - gated only on activeTab.
+    if (activeTab !== "opportunities" || !isAuthenticated) return;
     let cancelled = false;
     const load = () => {
       fetch('/api/v2/opportunities')
@@ -2093,7 +2156,7 @@ export default function App() {
     load();
     const interval = setInterval(load, 30_000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [activeTab]);
+  }, [activeTab, isAuthenticated]);
 
   // Real replacement for the Learning & Evolution tab's fabricated "Mistakes Corrected"/"Models
   // Retrained"/"Alpha Generated by RL" KPIs and "PER-STRATEGY SCORECARD" (invented strategy
@@ -2102,7 +2165,8 @@ export default function App() {
   const [learningSummary, setLearningSummary] = useState<any | null>(null);
 
   useEffect(() => {
-    if (activeTab !== "learning" && activeTab !== "agents") return;
+    // Same post-logout interval leak as the audit-tab effect above - gated only on activeTab.
+    if ((activeTab !== "learning" && activeTab !== "agents") || !isAuthenticated) return;
     let cancelled = false;
     const load = () => {
       fetch('/api/v2/agents/learning-summary')
@@ -2113,7 +2177,7 @@ export default function App() {
     load();
     const interval = setInterval(load, 30_000);
     return () => { cancelled = true; clearInterval(interval); };
-  }, [activeTab]);
+  }, [activeTab, isAuthenticated]);
 
   // Structural integrity probe for Settings → Deployment readiness (same real endpoint as
   // Validation's SystemValidationSuite / IntegrityValidator). Counts schema/broker/AI reachability
@@ -2121,9 +2185,9 @@ export default function App() {
   const [deploymentIntegrity, setDeploymentIntegrity] = useState<any | null>(null);
 
   useEffect(() => {
-    if (activeTab !== "settings") return;
+    if (activeTab !== "settings" || !isAuthenticated) return;
     fetch('/api/v1/system/integrity').then(r => r.json()).then(setDeploymentIntegrity).catch(() => {});
-  }, [activeTab]);
+  }, [activeTab, isAuthenticated]);
 
   const [selectedAgentNode, setSelectedAgentNode] = useState<any | null>(null);
   const [standardLLMProvider, setStandardLLMProvider] = useState<"Gemini Flash" | "GPT-4o-mini" | "Claude 3 Haiku" | "DeepSeek-Coder">("Gemini Flash");
@@ -2201,6 +2265,10 @@ export default function App() {
   const [tokenConsumptionAvailable, setTokenConsumptionAvailable] = useState<boolean | null>(null);
 
   useEffect(() => {
+    // Same pre-auth-flooding bug as the other fetch-on-mount effects in this component - this ran
+    // unconditionally on mount regardless of isAuthenticated, firing a failing 401 at
+    // /api/v2/ai/token-consumption from the login screen. Gated the same way.
+    if (!isAuthenticated) return;
     let cancelled = false;
     fetch('/api/v2/ai/token-consumption')
       .then(r => r.json())
@@ -2212,7 +2280,7 @@ export default function App() {
       })
       .catch(() => { if (!cancelled) setTokenConsumptionAvailable(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [isAuthenticated]);
 
   const [agentStressTests, setAgentStressTests] = useState<Record<string, boolean>>({
     "NewsAgent (NLP)": false,
@@ -7287,81 +7355,72 @@ export default function App() {
                    </div>
                 </div>
 
-                {/* Granular Module Toggles */}
+                {/* Pipeline idea-agent EventBus switches */}
                 <div className="lg:col-span-3 bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 flex flex-col justify-between">
-                   <div className="flex justify-between items-start mb-6">
+                   <div className="flex justify-between items-start mb-4 gap-4">
                      <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
                        <Settings size={16} className="text-indigo-400" />
-                       GRANULAR MODULE TOGGLES
+                       PIPELINE AGENT SWITCHES
                      </h3>
-                     <p className="text-[10px] font-mono text-amber-400/90 max-w-md leading-relaxed mx-4">
-                       UNAVAILABLE as live agent switches — local UI only. They do not start or stop EventBus agents. Use BLACK BOX Autobot below. Emergency Stop is real.
+                     <p className="text-[10px] font-mono text-slate-400 max-w-xl leading-relaxed">
+                       Idea-agent lamps start/stop that agent&apos;s EventBus listener or timer. Autobot Start/Stop below is still required for any <span className="text-slate-300">entry</span> idea. Emergency Stop is the global kill switch. RiskEngine, OMS, ChiefTrader, portfolio exits, and market data stay always-on.
                      </p>
-                     <div className="flex gap-1">
-                       <button onClick={() => handleSetMode("full_auto")} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (!enginesHalted && autoMode === "full_auto" ? "bg-indigo-600 text-white" : "bg-[#111822] text-slate-400 hover:bg-slate-800")}>FULL AUTO</button>
-                       <button onClick={() => handleSetMode("scanning_only")} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (!enginesHalted && autoMode === "scanning_only" ? "bg-indigo-600 text-white" : "bg-[#111822] text-slate-400 hover:bg-slate-800")}>SCANNING ONLY</button>
-                       <button onClick={() => handleSetMode("signal_only")} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (!enginesHalted && autoMode === "signal_only" ? "bg-indigo-600 text-white" : "bg-[#111822] text-slate-400 hover:bg-slate-800")}>SIGNAL ONLY</button>
-                       <button onClick={() => handleSetMode("paused")} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (!enginesHalted && autoMode === "paused" ? "bg-indigo-600 text-white" : "bg-[#111822] text-slate-400 hover:bg-slate-800")}>PAUSED</button>
+                     <div className="flex gap-1 shrink-0">
+                       <button onClick={() => void handlePipelineAgentPreset("all_enabled")} className="px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors bg-[#111822] text-slate-400 hover:bg-slate-800">ENABLE ALL IDEAS</button>
+                       <button onClick={() => void handlePipelineAgentPreset("all_disabled")} className="px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors bg-[#111822] text-slate-400 hover:bg-slate-800">DISABLE ALL IDEAS</button>
                        <button onClick={() => { setEnginesHalted(true); setHaltReason("UI emergency stop"); setHaltTime(new Date().toLocaleTimeString()); fetch("/api/v1/system/emergency-stop", { method: "POST" }).catch(() => {}); }} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (enginesHalted ? "bg-indigo-600 text-white" : "bg-[#111822] text-rose-400 hover:bg-slate-800")}>EMERGENCY STOP</button>
                      </div>
                    </div>
+                   {!autoBotConfig.enabled && (
+                     <p className="text-[9px] font-mono text-amber-400/90 mb-3">
+                       Autobot is off — these switches persist, but no entry TRADE_IDEA_GENERATED until you start BLACK BOX Autobot below.
+                     </p>
+                   )}
+                   {pipelineAgentError && (
+                     <p className="text-[9px] font-mono text-rose-400 mb-3">{pipelineAgentError}</p>
+                   )}
 
-                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                     {/* Scanning Engine */}
-                     <div className="bg-[#111822] border border-slate-800 rounded p-4 flex flex-col justify-between h-[120px]">
-                       <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest">
-                         <Activity size={12} className="text-slate-400"/> SCANNING ENGINE
-                       </div>
-                       <div className="flex justify-between items-center cursor-pointer" onClick={() => handleToggle("scanning")}>
-                         <span className={"font-bold text-xs uppercase tracking-wider transition-colors " + (enginesHalted || !toggles.scanning ? "text-slate-500" : "text-emerald-400")}>
-                           {enginesHalted || !toggles.scanning ? "OFFLINE" : "ONLINE"}
-                         </span>
-                         <div className={"w-8 h-4 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.scanning ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-emerald-500/20 border-emerald-500/50 justify-end")}>
-                           <div className={"w-3 h-3 rounded-full transition-all " + (enginesHalted || !toggles.scanning ? "bg-slate-600" : "bg-emerald-400")}></div>
+                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
+                     {pipelineAgents.togglable.map((agent) => {
+                       const on = agent.available && agent.enabled;
+                       return (
+                         <div
+                           key={agent.id}
+                           title={agent.available ? agent.description : (agent.unavailableReason || agent.description)}
+                           className={"bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between min-h-[88px] " + (agent.available ? "cursor-pointer" : "opacity-60 cursor-not-allowed")}
+                           onClick={() => void handlePipelineAgentToggle(agent.id, agent.enabled, agent.available)}
+                         >
+                           <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest">
+                             <Activity size={12} className="text-slate-400"/> {agent.label}
+                           </div>
+                           <div className="flex justify-between items-center mt-2">
+                             <span className={"font-bold text-[10px] uppercase tracking-wider " + (!agent.available ? "text-amber-500" : on ? "text-emerald-400" : "text-slate-500")}>
+                               {!agent.available ? "ENV OFF" : on ? "ONLINE" : "OFFLINE"}
+                             </span>
+                             <div className={"w-8 h-4 rounded-full border flex items-center px-0.5 " + (on ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}>
+                               <div className={"w-3 h-3 rounded-full " + (on ? "bg-emerald-400" : "bg-slate-600")}></div>
+                             </div>
+                           </div>
                          </div>
-                       </div>
-                     </div>
+                       );
+                     })}
+                   </div>
 
-                     {/* Intelligence Ops */}
-                     <div className="bg-[#111822] border border-slate-800 rounded p-4 flex flex-col justify-between h-[120px]">
+                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                     <div className="bg-[#111822] border border-slate-800 rounded p-3">
                        <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest mb-2">
-                         <Globe size={12} className="text-slate-400"/> INTELLIGENCE OPS
+                         <ShieldAlert size={12} className="text-slate-400"/> ALWAYS ON
                        </div>
-                       <div className="space-y-2">
-                         <div className="flex justify-between items-center text-[10px] cursor-pointer" onClick={() => handleToggle("news")}>
-                           <span className={"transition-colors " + (enginesHalted || !toggles.news ? "text-slate-500" : "text-slate-300")}>News</span>
-                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.news ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-emerald-500/20 border-emerald-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (enginesHalted || !toggles.news ? "bg-slate-600" : "bg-emerald-400")}></div></div>
-                         </div>
-                         <div className="flex justify-between items-center text-[10px] cursor-pointer" onClick={() => handleToggle("political")}>
-                           <span className={"transition-colors " + (enginesHalted || !toggles.political ? "text-slate-500" : "text-slate-300")}>Political</span>
-                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.political ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-emerald-500/20 border-emerald-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (enginesHalted || !toggles.political ? "bg-slate-600" : "bg-emerald-400")}></div></div>
-                         </div>
-                         <div className="flex justify-between items-center text-[10px] cursor-pointer" onClick={() => handleToggle("macro")}>
-                           <span className={"transition-colors " + (enginesHalted || !toggles.macro ? "text-slate-500" : "text-slate-300")}>Macro/Hist</span>
-                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.macro ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-emerald-500/20 border-emerald-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (enginesHalted || !toggles.macro ? "bg-slate-600" : "bg-emerald-400")}></div></div>
-                         </div>
+                       <div className="space-y-1.5">
+                         {pipelineAgents.alwaysOn.map((row) => (
+                           <div key={row.id} className="flex justify-between items-center text-[10px]" title={row.reason}>
+                             <span className="text-slate-400">{row.label}</span>
+                             <span className="text-emerald-500/80 font-mono uppercase tracking-wider">Locked on</span>
+                           </div>
+                         ))}
                        </div>
                      </div>
-
-                     {/* Decision Core */}
-                     <div className="bg-[#111822] border border-slate-800 rounded p-4 flex flex-col justify-between h-[120px]">
-                       <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest mb-2">
-                         <Target size={12} className="text-slate-400"/> DECISION CORE
-                       </div>
-                       <div className="space-y-2">
-                         <div className="flex justify-between items-center text-[10px] cursor-pointer" onClick={() => handleToggle("buy")}>
-                           <span className={"transition-colors " + (enginesHalted || !toggles.buy ? "text-slate-500" : "text-slate-300")}>Buy Models</span>
-                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.buy ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-emerald-500/20 border-emerald-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (enginesHalted || !toggles.buy ? "bg-slate-600" : "bg-emerald-400")}></div></div>
-                         </div>
-                         <div className="flex justify-between items-center text-[10px] cursor-pointer" onClick={() => handleToggle("sell")}>
-                           <span className={"transition-colors " + (enginesHalted || !toggles.sell ? "text-slate-500" : "text-slate-300")}>Sell Models</span>
-                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.sell ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-emerald-500/20 border-emerald-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (enginesHalted || !toggles.sell ? "bg-slate-600" : "bg-emerald-400")}></div></div>
-                         </div>
-                       </div>
-                     </div>
-
-                     {/* Execution — mirrors Market Execution (not a second independent toggle) */}
-                     <div className="bg-[#111822] border border-slate-800 rounded p-4 flex flex-col justify-between h-[120px]">
+                     <div className="bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between">
                        <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest mb-2">
                          <Zap size={12} className="text-slate-400"/> EXECUTION STATUS
                        </div>
@@ -7374,7 +7433,7 @@ export default function App() {
                            <span className={"transition-colors " + (autoBotTradingMode === 'PAPER' || autoBotTradingMode === 'SIMULATOR' ? "text-amber-400 font-bold" : "text-slate-500")}>Paper / Sim</span>
                            <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (autoBotTradingMode === 'LIVE' ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-amber-500/20 border-amber-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (autoBotTradingMode === 'LIVE' ? "bg-slate-600" : "bg-amber-400")}></div></div>
                          </div>
-                         <p className="text-[8px] font-mono text-slate-600">Change via Market Execution only</p>
+                         <p className="text-[8px] font-mono text-slate-600">Change via Market Execution only. LIVE remains NO-GO until live-readiness says LIVE_READY.</p>
                        </div>
                      </div>
                    </div>

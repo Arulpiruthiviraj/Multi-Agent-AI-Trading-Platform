@@ -97,6 +97,51 @@ systemRouter.get("/system/trading-state", (req: Request, res: Response) => {
   });
 });
 
+systemRouter.get("/system/pipeline-agents", async (_req: Request, res: Response) => {
+  try {
+    const { getPipelineAgentSnapshot } = await import('../core/pipelineAgentSnapshot');
+    res.json({ ok: true, ...getPipelineAgentSnapshot() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+systemRouter.post("/system/pipeline-agents", tradingLimiter, async (req: Request, res: Response) => {
+  try {
+    const { persistPipelineAgentEnabled } = await import('../core/pipelineAgentPersist');
+    const { applyPipelineAgentRuntime, applyAllIdeaAgentRuntimes } = await import('../core/pipelineAgentRuntime');
+    const { setAllTogglableIdeaAgents, setPipelineAgentEnabled } = await import('../core/pipelineAgentGate');
+    const { findTogglableIdeaAgent, isTogglableAgentAvailable } = await import('../config/pipelineAgents');
+    const { getPipelineAgentSnapshot } = await import('../core/pipelineAgentSnapshot');
+
+    const preset = req.body?.preset;
+    if (preset === 'all_enabled' || preset === 'all_disabled') {
+      const result = setAllTogglableIdeaAgents(preset === 'all_enabled');
+      if (result.ok === false) return res.status(400).json({ ok: false, error: result.error });
+      applyAllIdeaAgentRuntimes();
+      await persistPipelineAgentEnabled();
+      return res.json({ ok: true, ...getPipelineAgentSnapshot() });
+    }
+
+    const agentId = typeof req.body?.agentId === 'string' ? req.body.agentId : '';
+    const enabled = req.body?.enabled;
+    if (!agentId || typeof enabled !== 'boolean') {
+      return res.status(400).json({ ok: false, error: 'Expected { agentId, enabled } or { preset: "all_enabled"|"all_disabled" }' });
+    }
+    const spec = findTogglableIdeaAgent(agentId);
+    if (enabled && spec && !isTogglableAgentAvailable(spec)) {
+      return res.status(400).json({ ok: false, error: `${agentId} is unavailable: set ${spec.requiresEnv}=true in .env and restart. LIVE remains NO-GO.` });
+    }
+    const result = setPipelineAgentEnabled(agentId, enabled);
+    if (result.ok === false) return res.status(400).json({ ok: false, error: result.error });
+    applyPipelineAgentRuntime(agentId, result.enabled);
+    await persistPipelineAgentEnabled();
+    res.json({ ok: true, ...getPipelineAgentSnapshot() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 /**
  * Acknowledge pre-existing broker FILLED orders (PRE_EXISTING_RECONCILED).
  * Does not resume trading, place orders, invent fills, or count as organic paper.

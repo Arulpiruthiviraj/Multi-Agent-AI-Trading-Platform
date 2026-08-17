@@ -5,8 +5,8 @@ const TEST_PASSWORD = 'e2e-test-password-not-real';
 
 /**
  * Real E2E proof of UI/backend parity (Phase 4B). Logs into the actual running app, clicks a
- * real module toggle (Mission Control's Emergency Stop - a genuinely wired control, unlike the
- * confirmed-fabricated "Granular Module Toggles" on the same tab per FINAL_ANALYSIS.md 15.1),
+ * real module toggle (Mission Control's Emergency Stop — still the global kill switch; idea-agent
+ * lamps are separately wired to POST /api/v1/system/pipeline-agents),
  * and verifies the real backend state - not just a UI class name - actually changed via the same
  * REST endpoint the rest of the app reads from. Restores state afterward so the run is repeatable.
  */

@@ -43,7 +43,7 @@ import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, findStrategy, MIN_STRATEGY_CON
 import { StrategyContext } from '../../quant/strategies/types';
 import { expectedValue, fractionalKelly, ExpectedValueResult, KellyResult } from '../../quant/risk/ExpectedValue';
 import { classifyTradeFailure, computeFailureBreakdown } from '../../quant/analysis/FailureClassification';
-import { tradingSafety } from '../../config/tradingSafety';
+import { tradingSafety, portfolioRiskPctForLevel } from '../../config/tradingSafety';
 import { buildAccountSizeReport } from '../../quant/analysis/AccountSizeReport';
 import {
   nySessionKey,
@@ -52,6 +52,7 @@ import { evaluatePitRisk } from './PitRiskEngine';
 import { evaluatePitAiBuyGate } from './PitReplay';
 import { permutationTestSharpe, periodReturnsFromEquityCurve } from '../../quant/analysis/MonteCarlo';
 import { isPositiveFiniteMoney } from '../AccountEquity';
+import { getTradingDateStr } from '../../core/TradingCalendar';
 
 export interface BacktestConfig {
   symbols: string[];
@@ -196,9 +197,15 @@ export class BacktestEngine {
       // (maxTradeSize/riskLevel/maxOpenPositions), so backtest sizing genuinely reflects what live
       // trading would actually have allowed instead of an arbitrary backtest-only rule.
       const liveSettings = await db.select().from(schema.settings).limit(1);
-      const maxTradeSizeDollar = liveSettings[0]?.maxTradeSize ?? 3000;
+      // Real bug fixed: maxTradeSizeDollar's fallback and maxPortfolioRiskPct's per-riskLevel
+      // values used to be literals duplicated from RiskEngine.ts/tradingSafety.json instead of
+      // reading the same config - they happened to match today, but config/tradingSafety.json's
+      // riskPctAggressive/Conservative/Balanced or defaultMaxTradeSizeDollars could be retuned
+      // without this file's numbers following, silently making backtest sizing diverge from what
+      // live RiskEngine would actually have allowed for the same nominal inputs.
+      const maxTradeSizeDollar = liveSettings[0]?.maxTradeSize ?? tradingSafety.defaultMaxTradeSizeDollars;
       const riskLevel = liveSettings[0]?.riskLevel ?? 'Balanced';
-      const maxPortfolioRiskPct = riskLevel === 'Aggressive' ? 0.03 : riskLevel === 'Conservative' ? 0.01 : 0.02;
+      const maxPortfolioRiskPct = portfolioRiskPctForLevel(riskLevel);
       const maxOpenPositions = liveSettings[0]?.maxOpenPositions ?? 10;
       // E2A (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - previously hardcoded -0.05/0.15 literals in
       // the exit check below with no connection to settings.trailingStopPct/takeProfitPct, the
@@ -540,9 +547,11 @@ export class BacktestEngine {
       };
 
       const liveSettings = await db.select().from(schema.settings).limit(1);
-      const maxTradeSizeDollar = liveSettings[0]?.maxTradeSize ?? 3000;
+      // Real bug fixed: same drift risk as run() above - these used to be literals duplicated
+      // from tradingSafety.json instead of reading it, see that comment for the full rationale.
+      const maxTradeSizeDollar = liveSettings[0]?.maxTradeSize ?? tradingSafety.defaultMaxTradeSizeDollars;
       const riskLevel = liveSettings[0]?.riskLevel ?? 'Balanced';
-      const maxPortfolioRiskPct = riskLevel === 'Aggressive' ? 0.03 : riskLevel === 'Conservative' ? 0.01 : 0.02;
+      const maxPortfolioRiskPct = portfolioRiskPctForLevel(riskLevel);
       // E2B - same feature-flagged sizing mode run() now reads (see its own comment above).
       const sizingMode = (liveSettings[0]?.positionSizingMode as 'FIXED_DOLLAR' | 'PERCENT_OF_EQUITY') || 'FIXED_DOLLAR';
       const percentOfEquityPct = liveSettings[0]?.percentOfEquityPct ?? 2;
@@ -936,8 +945,28 @@ export class BacktestEngine {
     const stdRet = returns.length ? Math.sqrt(returns.reduce((s, r) => s + Math.pow(r - meanRet, 2), 0) / returns.length) : 0;
     const downside = returns.filter(r => r < 0);
     const downsideStd = downside.length ? Math.sqrt(downside.reduce((s, r) => s + Math.pow(r, 2), 0) / downside.length) : 0;
-    const sharpe = stdRet > 0 ? (meanRet / stdRet) * Math.sqrt(PERIODS_PER_YEAR) : 0;
-    const sortino = downsideStd > 0 ? (meanRet / downsideStd) * Math.sqrt(PERIODS_PER_YEAR) : 0;
+    // Real bug fixed: this used to always annualize with sqrt(252) (a daily-bar assumption)
+    // regardless of the backtest's actual timeframe. BacktestConfig.timeframe/
+    // StrategyBacktestConfig.timeframe accept arbitrary Alpaca intervals ('1Min', '15Min',
+    // '1Hour', ...) with no validation restricting them to daily, so a non-daily backtest
+    // annualized Sharpe/Sortino as if it had ~252 observations/year when it actually had far more
+    // (e.g. hourly RTH bars: ~252*6.5 ≈ 1638/year) - understating annualized Sharpe by roughly
+    // that same factor. Derived from real bars/trading-day inferred from equityCurve's own
+    // timestamps via the same trading-calendar bucketing RiskEngine uses elsewhere (NOT raw
+    // calendar-time spacing - that would wrongly count weekend gaps and change daily-bar
+    // annualization from 252 to 365.25, a regression for the default/dominant case). For real
+    // daily bars this is mathematically identical to the old constant (1 bar/trading day * 252 =
+    // 252); it only changes behavior for genuinely intraday backtests.
+    const periodsPerYear = (() => {
+      if (equityCurve.length < 3) return PERIODS_PER_YEAR;
+      const distinctTradingDays = new Set(equityCurve.map((pt) => getTradingDateStr(new Date(pt.timestamp))));
+      if (distinctTradingDays.size === 0) return PERIODS_PER_YEAR;
+      const barsPerTradingDay = equityCurve.length / distinctTradingDays.size;
+      const inferred = barsPerTradingDay * PERIODS_PER_YEAR;
+      return Number.isFinite(inferred) && inferred > 0 ? inferred : PERIODS_PER_YEAR;
+    })();
+    const sharpe = stdRet > 0 ? (meanRet / stdRet) * Math.sqrt(periodsPerYear) : 0;
+    const sortino = downsideStd > 0 ? (meanRet / downsideStd) * Math.sqrt(periodsPerYear) : 0;
 
     let peak = -Infinity;
     let maxDD = 0;

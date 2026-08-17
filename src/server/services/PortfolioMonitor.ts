@@ -59,6 +59,13 @@ const FALLBACK_TRAILING_STOP_PCT = tradingSafety.fallbackTrailingStopPct;
 
 export class PortfolioMonitorWorker {
   private intervalId: NodeJS.Timeout | null = null;
+  // Real bug fixed: setInterval had no in-flight guard. reviewPortfolio() awaits a real bars
+  // fetch (evaluateLiveThesis, up to 400 days) plus a DB lookup per holding - with several open
+  // positions this can plausibly exceed the 60s tick, letting a second invocation start while the
+  // first is still running. Each independently able to emit a SELL TRADE_IDEA_GENERATED for the
+  // same holding - a real duplicate/over-sell risk (see also ChiefTraderAgent's own per-symbol
+  // serialization fix for risk-exit ideas, same class of bug at the next stage).
+  private isReviewing = false;
 
   start() {
     if (this.intervalId) return;
@@ -76,6 +83,11 @@ export class PortfolioMonitorWorker {
   }
 
   async reviewPortfolio() {
+    if (this.isReviewing) {
+      console.warn("[PortfolioWorker] Previous review cycle still running - skipping this tick instead of overlapping.");
+      return;
+    }
+    this.isReviewing = true;
     try {
       const holdings = await db.select().from(portfolio).all();
       if (holdings.length === 0) return;
@@ -213,6 +225,8 @@ export class PortfolioMonitorWorker {
       }
     } catch (e) {
       console.error("[PortfolioWorker] Error during review:", e);
+    } finally {
+      this.isReviewing = false;
     }
   }
 

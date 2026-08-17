@@ -8,6 +8,13 @@ import { researchSafety, isTheoreticalZeroCost } from '../config/researchSafety'
 import { tradingEdgeScore } from '../research/edgeScore';
 import { inspectResearchWarehouse } from '../research/warehouseInventory';
 import { summarizeOrganicPaper } from '../research/organicPaper';
+import {
+  buildLiveRequirementMatrix,
+  buildStrategyBoard,
+  liveEligibilityFromMatrix,
+  type LiveRequirementRow,
+  type StrategyBoardRow,
+} from '../research/liveRequirementMatrix';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { db } from '../db';
 import { trades } from '../db/schema';
@@ -31,19 +38,44 @@ export interface LiveReadinessReport {
   gates: LiveReadinessGate[];
   failedMandatory: string[];
   canPlaceOrdersViaResearch: false;
+  /** Engineering can route a LIVE order. That is not permission to risk capital. */
+  engineeringCapableOfLiveExecution: boolean;
+  /** Research + organic paper + soak must all be IMPLEMENTED. Currently false. */
+  empiricallyJustifiedToRiskCapital: boolean;
+  liveEligibility: 'PASS' | 'FAIL';
+  requirementMatrix: LiveRequirementRow[];
+  strategyBoard: StrategyBoardRow[];
 }
 
 function gate(id: string, category: string, verdict: ReadinessVerdict, detail: string, mandatory = true): LiveReadinessGate {
   return { id, category, verdict, detail, mandatory };
 }
 
-function organicPaperSnapshot(): { closedTradeCount: number; sessionCount: number; note: string } {
+function organicPaperSnapshot(): {
+  closedTradeCount: number;
+  sessionCount: number;
+  expectancy: number | null;
+  profitFactor: number | null;
+  note: string;
+} {
   try {
     const rows = db.select().from(trades).all();
     const s = summarizeOrganicPaper(rows, researchSafety.minPaperTrades);
-    return { closedTradeCount: s.closedTradeCount, sessionCount: s.sessionCount, note: s.note };
+    return {
+      closedTradeCount: s.closedTradeCount,
+      sessionCount: s.sessionCount,
+      expectancy: s.expectancy,
+      profitFactor: s.profitFactor,
+      note: s.note,
+    };
   } catch {
-    return { closedTradeCount: 0, sessionCount: 0, note: 'Organic paper query UNAVAILABLE. Counted as 0, not PASS.' };
+    return {
+      closedTradeCount: 0,
+      sessionCount: 0,
+      expectancy: null,
+      profitFactor: null,
+      note: 'Organic paper query UNAVAILABLE. Counted as 0, not PASS.',
+    };
   }
 }
 
@@ -54,10 +86,20 @@ export function evaluateLiveReadiness(): LiveReadinessReport {
   const ca = canadianMarketReadiness();
   const quantOn = process.env.QUANT_ENGINE_ENABLED === 'true';
   const paper = organicPaperSnapshot();
-  const paperFloorsMet =
+  const paperCountFloorsMet =
     paper.closedTradeCount >= researchSafety.minPaperTrades
     && paper.sessionCount >= researchSafety.minPaperSessions;
+  const paperProfitFactorPass =
+    paper.profitFactor != null && paper.profitFactor >= researchSafety.minPaperProfitFactor;
+  const paperExpectancyPass =
+    paper.expectancy != null && paper.expectancy > researchSafety.minPaperExpectancy;
+  const paperCalendarDaysPass = paper.sessionCount >= researchSafety.minPaperCalendarDays;
+  const paperFloorsMet =
+    paperCountFloorsMet && paperProfitFactorPass && paperExpectancyPass && paperCalendarDaysPass;
   const riskGateCount = loadRepoConfigJson<{ gates: string[] }>('riskGateOrder.json').gates.length;
+  const requirementMatrix = buildLiveRequirementMatrix();
+  const strategyBoard = buildStrategyBoard();
+  const eligibility = liveEligibilityFromMatrix(requirementMatrix);
 
   const warehouse = inspectResearchWarehouse();
   const gates: LiveReadinessGate[] = [
@@ -84,7 +126,11 @@ export function evaluateLiveReadiness(): LiveReadinessReport {
     gate('MANUAL_APPROVAL', 'MANUAL APPROVAL', promo.live === 'GO' ? 'PASS' : 'FAIL', `promotion liveGoNoGo=${promo.live}. ${promo.failedGates.slice(0, 8).join(', ')}`),
     gate('ZERO_COST_RESEARCH', 'RESEARCH', isTheoreticalZeroCost() ? 'FAIL' : 'PASS', isTheoreticalZeroCost() ? 'Research costs are theoretical zero; cannot promote.' : 'Non-zero research costs configured.'),
     gate('QUANT_DEFAULT', 'STRATEGY', quantOn ? 'UNAVAILABLE' : 'PASS', quantOn ? 'QUANT_ENGINE_ENABLED=true does not imply VALIDATED.' : 'QUANT_ENGINE_ENABLED defaults off.'),
-    gate('MIN_PAPER', 'PAPER', paperFloorsMet ? 'PASS' : 'FAIL', `Need >= ${researchSafety.minPaperTrades} organic trades and ${researchSafety.minPaperSessions} sessions. Observed ${paper.closedTradeCount}/${paper.sessionCount}.`),
+    gate('MIN_PAPER', 'PAPER', paperCountFloorsMet ? 'PASS' : 'FAIL', `Need >= ${researchSafety.minPaperTrades} organic trades and ${researchSafety.minPaperSessions} sessions. Observed ${paper.closedTradeCount}/${paper.sessionCount}.`),
+    gate('PAPER_PROFIT_FACTOR', 'PAPER', paperProfitFactorPass ? 'PASS' : 'FAIL', `Organic profit factor ${paper.profitFactor ?? 'null'} vs min ${researchSafety.minPaperProfitFactor}. Null is FAIL.`),
+    gate('PAPER_EXPECTANCY', 'PAPER', paperExpectancyPass ? 'PASS' : 'FAIL', `Organic expectancy ${paper.expectancy ?? 'null'} vs min ${researchSafety.minPaperExpectancy} (must be strictly greater). Null is FAIL.`),
+    gate('PAPER_CALENDAR_DAYS', 'PAPER', paperCalendarDaysPass ? 'PASS' : 'FAIL', `Organic NY sessions ${paper.sessionCount} vs minPaperCalendarDays ${researchSafety.minPaperCalendarDays}.`),
+    gate('OMS_HEALTH', 'OMS', 'UNAVAILABLE', 'OMS PENDING-first is implemented. Promotion omsHealthPass stays false until a paper soak with zero unknown orphans.'),
   ];
 
   const failedMandatory = gates.filter((g) => g.mandatory && g.verdict !== 'PASS').map((g) => g.id);
@@ -97,5 +143,10 @@ export function evaluateLiveReadiness(): LiveReadinessReport {
     gates,
     failedMandatory,
     canPlaceOrdersViaResearch: false,
+    engineeringCapableOfLiveExecution: eligibility.engineeringCapableOfLiveExecution,
+    empiricallyJustifiedToRiskCapital: eligibility.empiricallyJustifiedToRiskCapital,
+    liveEligibility: eligibility.liveEligibility,
+    requirementMatrix,
+    strategyBoard,
   };
 }

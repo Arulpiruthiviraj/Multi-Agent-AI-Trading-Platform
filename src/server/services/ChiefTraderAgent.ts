@@ -337,7 +337,24 @@ export class ChiefTraderAgent {
     }
   }
 
-  async evaluateConsensus(symbol: string, traceId: string) {
+  // Real bug fixed: two risk-exit ideas for the same symbol (e.g. two overlapping
+  // PortfolioMonitor review cycles, or a risk-exit arriving while another is mid-evaluation)
+  // could each independently call evaluateConsensus(), both read this.recentIdeas before either
+  // finished, and both approve a SELL with different traceIds - RiskEngine's own serialization
+  // doesn't prevent this because it queues per-call, not per-symbol, and each of these is a
+  // distinct call. Mirrors RiskEngine.evaluateRisk()'s own promise-chain mutex pattern, but keyed
+  // per-symbol (not global) so unrelated symbols' evaluations never wait on each other.
+  private consensusQueues: Map<string, Promise<void>> = new Map();
+
+  async evaluateConsensus(symbol: string, traceId: string): Promise<void> {
+    const prior = this.consensusQueues.get(symbol) || Promise.resolve();
+    const run = prior.then(() => this.evaluateConsensusSerialized(symbol, traceId));
+    // Never let one evaluation's rejection break the queue for evaluations queued after it.
+    this.consensusQueues.set(symbol, run.then(() => undefined, () => undefined));
+    return run;
+  }
+
+  private async evaluateConsensusSerialized(symbol: string, traceId: string) {
     if (this.debatePending(symbol)) {
       console.log(`[ChiefTrader] Refusing to evaluate ${symbol} while an adversarial debate is still in flight.`);
       return;

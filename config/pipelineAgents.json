@@ -1,0 +1,86 @@
+{
+  "$comment": "Reviewed catalog of EventBus pipeline agents. Togglable entries may be started/stopped from Mission Control. Always-on entries cannot be operator-disabled (RiskEngine/OMS/ChiefTrader/exits/market data). Not a UI knob for thresholds.",
+  "togglableIdeaAgents": [
+    {
+      "id": "TechnicalAgent",
+      "label": "Technical",
+      "description": "RSI/MACD/Bollinger tick ideas on MARKET_DATA."
+    },
+    {
+      "id": "NewsAgent",
+      "label": "News",
+      "description": "News TRADE_IDEA_GENERATED when desk policy allows. Cluster ingest for RiskEngine news_veto stays on with Autobot.",
+      "keepsBackgroundPipeline": true
+    },
+    {
+      "id": "FundamentalAgent",
+      "label": "Fundamental",
+      "description": "Alpha Vantage + AIRouter fundamental ideas."
+    },
+    {
+      "id": "MacroAgent",
+      "label": "Macro",
+      "description": "Alpha Vantage + AIRouter macro ideas."
+    },
+    {
+      "id": "KronosEngine",
+      "label": "Kronos",
+      "description": "Local Chronos forecast ideas on MARKET_DATA."
+    },
+    {
+      "id": "QuantEngine",
+      "label": "Quant",
+      "description": "Additive QuantSignalAgent ideas. Requires QUANT_ENGINE_ENABLED=true.",
+      "requiresEnv": "QUANT_ENGINE_ENABLED"
+    }
+  ],
+  "alwaysOn": [
+    {
+      "id": "ChiefTrader",
+      "label": "Chief Trader",
+      "aliases": ["ChiefTraderAgent"],
+      "reason": "Consensus must stay on whenever Autobot is on so remaining agent ideas still go through weighted debate. Not an entry generator."
+    },
+    {
+      "id": "RiskEngine",
+      "label": "Risk Engine",
+      "aliases": ["RiskAgent", "RiskValidationAgent"],
+      "reason": "Operator must not disable RiskEngine. Every approved idea still evaluates every gate."
+    },
+    {
+      "id": "OMS",
+      "label": "Order Management",
+      "aliases": ["OrderManagement", "OrderManagementService"],
+      "reason": "OMS is the only order path. Disabling it from a lamp would leave approvals with nowhere honest to go."
+    },
+    {
+      "id": "PortfolioMonitor",
+      "label": "Portfolio exits",
+      "aliases": ["PortfolioManager"],
+      "reason": "Take-profit / trailing-stop / thesis-invalidation SELLs are capital preservation, not entry votes."
+    },
+    {
+      "id": "MarketData",
+      "label": "Market data",
+      "aliases": ["MarketDataWorker"],
+      "reason": "Price feed stays up so RiskEngine and Diagnostics have live ticks even when idea agents are off."
+    }
+  ],
+  "cannotDisableIds": [
+    "ChiefTrader",
+    "ChiefTraderAgent",
+    "RiskEngine",
+    "RiskAgent",
+    "RiskValidationAgent",
+    "OMS",
+    "OrderManagement",
+    "OrderManagementService",
+    "PortfolioMonitor",
+    "PortfolioManager",
+    "MarketData",
+    "MarketDataWorker",
+    "emergency-stop",
+    "killSwitch",
+    "TRADING_PAUSED"
+  ]
+}

@@ -44,6 +44,13 @@ describe('LIVE readiness engine and broker environment', () => {
     expect(r.canPlaceOrdersViaResearch).toBe(false);
     expect(r.failedMandatory).toContain('OOS');
     expect(r.failedMandatory).toContain('LEGAL_CA');
+    expect(r.failedMandatory).toContain('PAPER_PROFIT_FACTOR');
+    expect(r.failedMandatory).toContain('OMS_HEALTH');
+    expect(r.empiricallyJustifiedToRiskCapital).toBe(false);
+    expect(r.liveEligibility).toBe('FAIL');
+    expect(r.engineeringCapableOfLiveExecution).toBe(true);
+    expect(r.requirementMatrix.length).toBeGreaterThan(20);
+    expect(r.strategyBoard.length).toBeGreaterThanOrEqual(researchSafety.coreStrategyIds.length);
     expect(r.gates.find((g) => g.id === 'LEGAL_CA')?.verdict).toBe('BLOCKED');
     expect(r.gates.find((g) => g.id === 'PAPER')?.detail).toMatch(/Organic PAPER FILLED SELL P&L:/);
     expect(r.gates.find((g) => g.id === 'STRATEGY_CORE')?.verdict).toBe('FAIL');

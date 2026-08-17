@@ -40,10 +40,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { portfolioMonitor } from '../services/PortfolioMonitor';
 import { oms } from '../services/OrderManagement'; 
 import { riskAgent } from '../services/RiskAgent'; 
-import { technicalAgent } from '../services/TechnicalAgent'; 
 import { newsEngine } from '../news/NewsEngine';
-import { fundamentalAgent } from '../services/FundamentalAgent';
-import { macroAgent } from '../services/MacroAgent';
 import { chiefTrader } from '../services/ChiefTraderAgent';
 import { reflectionEngine } from '../services/ReflectionEngine';
 import { predictionOutcomeEvaluator } from '../services/PredictionOutcomeEvaluator';
@@ -53,13 +50,12 @@ import { marketRegimeAgent } from '../services/MarketRegimeAgent';
 import { explainabilityAgent } from '../services/ExplainabilityAgent';
 import { kronosEngine } from '../engines/kronos/KronosEngine';
 
-import { kronosForecastAgent } from "../services/KronosForecastAgent";
 import { dbBackupService } from '../services/DbBackupService';
 import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
-import { quantSignalAgent } from '../services/QuantSignalAgent';
 import { alertingService } from '../services/AlertingService';
 import { aiFailureCircuitBreaker } from '../services/AIFailureCircuitBreaker';
+import { startEnabledIdeaAgents, stopAllIdeaAgents } from './pipelineAgentRuntime';
 
 export class SystemBootstrap {
   private isRunning = false;
@@ -75,7 +71,6 @@ export class SystemBootstrap {
     alertingService.start();
     aiFailureCircuitBreaker.start();
     riskAgent;
-    technicalAgent;
     chiefTrader;
     transactionLifecycleTracker;
     advancedQuantEngines.start();
@@ -83,20 +78,17 @@ export class SystemBootstrap {
     marketDataWorker.start();
     portfolioMonitor.start();
     portfolioReconciliationWorker.start();
-    newsEngine.start();
-    fundamentalAgent.start();
-    macroAgent.start();
+    newsEngine.start(); // clustering for news_veto; NewsAgent ideas gated separately
     reflectionEngine.start();
     predictionOutcomeEvaluator.start();
     trainingExampleBuilder.start();
     systemMetricsWorker.start();
     dbBackupService.start();
     marketDataCrossChecker.start();
-    quantSignalAgent.start(); // no-op unless QUANT_ENGINE_ENABLED=true - see QuantSignalAgent.ts
     marketRegimeAgent;
     explainabilityAgent;
-    kronosForecastAgent;
     kronosEngine.initialize();
+    startEnabledIdeaAgents();
     
     this.isRunning = true;
     console.log("[Argus System] All workers online.");
@@ -114,15 +106,13 @@ export class SystemBootstrap {
     portfolioMonitor.stop();
     portfolioReconciliationWorker.stop();
     newsEngine.stop();
-    fundamentalAgent.stop();
-    macroAgent.stop();
+    stopAllIdeaAgents();
     reflectionEngine.stop();
     predictionOutcomeEvaluator.stop();
     trainingExampleBuilder.stop();
     systemMetricsWorker.stop();
     dbBackupService.stop();
     marketDataCrossChecker.stop();
-    quantSignalAgent.stop();
 
     this.isRunning = false;
     console.log("[Argus System] Shutdown complete.");

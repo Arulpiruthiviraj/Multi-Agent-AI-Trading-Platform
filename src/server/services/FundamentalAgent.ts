@@ -14,6 +14,7 @@ import { logErrorSafely } from '../core/SecretRedaction';
 import crypto from 'crypto';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 
 const UNKNOWN_FUNDAMENTALS = { peRatio: 'UNKNOWN', epsGrowth: 'UNKNOWN', debtToEquity: 'UNKNOWN' };
 // Fundamentals (P/E, EPS growth, debt/equity) are quarterly-cadence data in reality - refetching
@@ -92,6 +93,7 @@ export class FundamentalAnalysisAgent {
 
   private async analyzeFundamentals() {
     if (!isLiveIdeaGenerationEnabled()) return;
+    if (!isPipelineAgentEnabled('FundamentalAgent')) return;
     // We just pick a symbol round-robin or randomly from our list
     const symbol = this.watchedSymbols[Math.floor(Date.now() / 60000) % this.watchedSymbols.length];
     const traceId = crypto.randomUUID();

@@ -41,10 +41,20 @@ export interface StrategyEvidence {
   paperSessions: number;
   paperExpectancyPositive: boolean;
   paperDrawdownWithinLimit: boolean;
+  /** Organic paper profit factor ≥ researchSafety.minPaperProfitFactor. */
+  paperProfitFactorPass: boolean;
+  /** Distinct NY calendar days with organic closes ≥ researchSafety.minPaperCalendarDays. */
+  paperCalendarDaysPass: boolean;
   riskGatePass: boolean;
   brokerHealthPass: boolean;
   marketDataHealthPass: boolean;
   startupHealthPass: boolean;
+  omsHealthPass: boolean;
+  reconciliationHealthPass: boolean;
+  restartRecoveryPass: boolean;
+  failureRecoveryPass: boolean;
+  observabilityPass: boolean;
+  securityPass: boolean;
   canadianExecutionApproved: boolean;
   isCanadianSecurity: boolean;
   engineMismatch: boolean;
@@ -98,10 +108,18 @@ export function emptyEvidence(strategyId: string, strategyVersion = '0'): Strate
     paperSessions: 0,
     paperExpectancyPositive: false,
     paperDrawdownWithinLimit: false,
+    paperProfitFactorPass: false,
+    paperCalendarDaysPass: false,
     riskGatePass: false,
     brokerHealthPass: false,
     marketDataHealthPass: false,
     startupHealthPass: false,
+    omsHealthPass: false,
+    reconciliationHealthPass: false,
+    restartRecoveryPass: false,
+    failureRecoveryPass: false,
+    observabilityPass: false,
+    securityPass: false,
     canadianExecutionApproved: false,
     isCanadianSecurity: false,
     engineMismatch: false,
@@ -170,6 +188,8 @@ export function deriveLifecycleStatus(e: StrategyEvidence): StrategyLifecycleSta
     e.paperSessions >= researchSafety.minPaperSessions &&
     e.paperExpectancyPositive &&
     e.paperDrawdownWithinLimit &&
+    e.paperProfitFactorPass &&
+    e.paperCalendarDaysPass &&
     e.organicPaperOnly;
   const liveGates =
     e.dataQualityPass &&
@@ -182,6 +202,12 @@ export function deriveLifecycleStatus(e: StrategyEvidence): StrategyLifecycleSta
     e.brokerHealthPass &&
     e.marketDataHealthPass &&
     e.startupHealthPass &&
+    e.omsHealthPass &&
+    e.reconciliationHealthPass &&
+    e.restartRecoveryPass &&
+    e.failureRecoveryPass &&
+    e.observabilityPass &&
+    e.securityPass &&
     (!e.isCanadianSecurity || e.canadianExecutionApproved);
   if (liveGates && e.manualLiveApproval) return 'LIVE_APPROVED';
   if (liveGates) return 'LIVE_CANDIDATE';
@@ -215,10 +241,18 @@ export function liveGoNoGo(e: StrategyEvidence): { live: 'GO' | 'NO-GO'; failedG
   if (e.paperSessions < researchSafety.minPaperSessions) failedGates.push('MIN_PAPER_SESSIONS');
   if (!e.paperExpectancyPositive) failedGates.push('PAPER_EXPECTANCY_POSITIVE');
   if (!e.paperDrawdownWithinLimit) failedGates.push('PAPER_DRAWDOWN_WITHIN_LIMIT');
+  if (!e.paperProfitFactorPass) failedGates.push('PAPER_PROFIT_FACTOR');
+  if (!e.paperCalendarDaysPass) failedGates.push('PAPER_CALENDAR_DAYS');
   if (!e.riskGatePass) failedGates.push('RISK_GATE_PASS');
   if (!e.brokerHealthPass) failedGates.push('BROKER_HEALTH_PASS');
   if (!e.marketDataHealthPass) failedGates.push('MARKET_DATA_HEALTH_PASS');
   if (!e.startupHealthPass) failedGates.push('STARTUP_HEALTH_PASS');
+  if (!e.omsHealthPass) failedGates.push('OMS_HEALTH');
+  if (!e.reconciliationHealthPass) failedGates.push('RECONCILIATION_HEALTH');
+  if (!e.restartRecoveryPass) failedGates.push('RESTART_RECOVERY');
+  if (!e.failureRecoveryPass) failedGates.push('FAILURE_RECOVERY');
+  if (!e.observabilityPass) failedGates.push('OBSERVABILITY');
+  if (!e.securityPass) failedGates.push('SECURITY');
   if (e.isCanadianSecurity && !e.canadianExecutionApproved) failedGates.push('CANADIAN_EXECUTION_APPROVED');
   if (e.engineMismatch) failedGates.push('ENGINE_MISMATCH');
   if (!e.manualLiveApproval) failedGates.push('MANUAL_APPROVAL');

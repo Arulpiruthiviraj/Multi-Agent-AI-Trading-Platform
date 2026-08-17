@@ -108,6 +108,11 @@ export const settings = sqliteTable('settings', {
   // IANA zone Node's ICU database recognizes is accepted (see isValidTimezone in
   // AutoTradeSchedule.ts).
   autoTradeScheduleTimezone: text('auto_trade_schedule_timezone').default('America/New_York'),
+
+  // Mission Control per-idea-agent EventBus switches (pipelineAgents.json catalog).
+  // JSON map of togglable agent id → boolean. Empty object means all togglable idea agents on
+  // (backward compatible). Cannot disable RiskEngine/OMS/ChiefTrader — those are not in this map.
+  pipelineAgentEnabledJson: text('pipeline_agent_enabled_json').default('{}'),
 });
 
 // Immutable audit trail for every kill-switch state transition (Phase 1.4: "every

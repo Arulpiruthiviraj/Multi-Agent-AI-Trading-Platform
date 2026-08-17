@@ -354,4 +354,42 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     });
     expect(agent.recentIdeas.length).toBeGreaterThan(0);
   });
+
+  // Real bug fixed: two evaluateConsensus() calls for the same symbol (e.g. two overlapping
+  // risk-exit ideas) used to run fully independently/concurrently - both could read
+  // this.recentIdeas and both approve before either finished. Now queued per-symbol, mirroring
+  // RiskEngine.evaluateRisk()'s own promise-chain mutex. Proven deterministically by holding the
+  // first call open with a manually-released gate and asserting the second call has not started
+  // while the first is still in flight - no reliance on real timing races.
+  it('serializes two concurrent evaluateConsensus calls for the same symbol - the second never starts before the first finishes', async () => {
+    agent.recentIdeas = [...buyPair('AAPL', fixtures.strongAgreementConfidence)];
+    const order: string[] = [];
+    const realSerialized = agent.evaluateConsensusSerialized.bind(agent);
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    vi.spyOn(agent, 'evaluateConsensusSerialized').mockImplementation(async (symbol: string, traceId: string) => {
+      order.push(`start:${traceId}`);
+      if (traceId === 't1') await gate;
+      await realSerialized(symbol, traceId);
+      order.push(`end:${traceId}`);
+    });
+
+    const p1 = agent.evaluateConsensus('AAPL', 't1');
+    const p2 = agent.evaluateConsensus('AAPL', 't2');
+    await new Promise((r) => setTimeout(r, 0));
+    // t2 must not have started yet - it's queued behind t1, which is still held open by the gate.
+    expect(order).toEqual(['start:t1']);
+
+    releaseFirst();
+    await Promise.all([p1, p2]);
+    expect(order).toEqual(['start:t1', 'end:t1', 'start:t2', 'end:t2']);
+  });
+
+  it('does not serialize two different symbols against each other', async () => {
+    agent.recentIdeas = [...buyPair('AAPL', fixtures.strongAgreementConfidence), ...buyPair('MSFT', fixtures.strongAgreementConfidence)];
+    const pAAPL = agent.evaluateConsensus('AAPL', 't-aapl');
+    const pMSFT = agent.evaluateConsensus('MSFT', 't-msft');
+    await Promise.all([pAAPL, pMSFT]);
+    expect(emitChiefApproval).toHaveBeenCalledTimes(2);
+  });
 });

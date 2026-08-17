@@ -14,6 +14,7 @@ import { logErrorSafely } from '../core/SecretRedaction';
 import crypto from 'crypto';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 
 const UNKNOWN_MACRO = { inflation: 'UNKNOWN', fedFundsRate: 'UNKNOWN', unemployment: 'UNKNOWN' };
 const RATE_LIMITED_MACRO = { inflation: 'RATE_LIMITED', fedFundsRate: 'RATE_LIMITED', unemployment: 'RATE_LIMITED' };
@@ -100,6 +101,7 @@ export class MacroEconomyAgent {
 
   private async analyzeMacro() {
     if (!isLiveIdeaGenerationEnabled()) return;
+    if (!isPipelineAgentEnabled('MacroAgent')) return;
     const symbol = this.watchedSymbols[Math.floor(Date.now() / 75000) % this.watchedSymbols.length];
     const traceId = crypto.randomUUID();
     

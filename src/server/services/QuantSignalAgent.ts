@@ -47,6 +47,7 @@ import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety } from '../config/tradingSafety';
 import { deskIntelligence, rankEvaluationsForRegime } from '../config/deskIntelligence';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { assessDataQuality } from '../core/dataQuality';
 import { getNewsCatalysts } from './NewsCatalystStore';
 import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
@@ -248,7 +249,7 @@ export class QuantSignalAgent {
     }
 
     let emittedTradeIdea = false;
-    if (idea && isLiveIdeaGenerationEnabled()) {
+    if (idea && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('QuantEngine')) {
       const dataQuality = assessDataQuality(symbol);
       if (dataQuality.tradeBlocked) {
         eventBus.emit(EVENTS.DESK_NO_TRADE, {

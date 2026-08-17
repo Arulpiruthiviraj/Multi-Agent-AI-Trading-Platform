@@ -36,6 +36,7 @@
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { rsiEngine } from '../engines/RSIEngine';
 import { macdEngine } from '../engines/MACDEngine';
 import { quantThresholds } from '../config/quantThresholds';
@@ -43,13 +44,24 @@ import { randomUUID } from 'node:crypto';
 
 export class TechnicalProposerAgent {
   private priceHistory: Record<string, number[]> = {};
+  private listening = false;
+  private readonly onMarketData = (data: { symbol: string, price: number, volume: number, timestamp: string }) => this.analyzeTick(data);
 
-  constructor() {
-    eventBus.on('MARKET_DATA', (data) => this.analyzeTick(data));
+  start() {
+    if (this.listening) return;
+    eventBus.subscribe('MARKET_DATA', this.onMarketData);
+    this.listening = true;
+  }
+
+  stop() {
+    if (!this.listening) return;
+    eventBus.unsubscribe('MARKET_DATA', this.onMarketData);
+    this.listening = false;
   }
 
   analyzeTick(data: { symbol: string, price: number, volume: number, timestamp: string }) {
     if (!isLiveIdeaGenerationEnabled()) return;
+    if (!isPipelineAgentEnabled('TechnicalAgent')) return;
 
     if (!this.priceHistory[data.symbol]) {
       this.priceHistory[data.symbol] = [];

@@ -1,7 +1,12 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled, setPipelineAgentEnabled } from '../core/pipelineAgentGate';
+import { pipelineAgentsConfig } from '../config/pipelineAgents';
 import { tradingEngine } from '../engines/TradingEngine';
 import { technicalAgent } from './TechnicalAgent';
+import { eventBus } from '../core/EventBus';
+
+const technicalId = pipelineAgentsConfig.togglableIdeaAgents.find((a) => a.label === 'Technical')!.id;
 
 describe('idea generation start gate', () => {
   const originalEnabled = tradingEngine.state.enabled;
@@ -10,6 +15,7 @@ describe('idea generation start gate', () => {
   afterEach(() => {
     tradingEngine.state.enabled = originalEnabled;
     tradingEngine.state.tradingState = originalTradingState;
+    setPipelineAgentEnabled(technicalId, true);
     delete (technicalAgent as any).priceHistory['GATE_TEST_XYZ'];
   });
 
@@ -30,5 +36,19 @@ describe('idea generation start gate', () => {
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
     technicalAgent.analyzeTick({ symbol: 'GATE_TEST_XYZ', price: 10, volume: 1, timestamp: new Date().toISOString() });
     expect((technicalAgent as any).priceHistory['GATE_TEST_XYZ']).toBeUndefined();
+  });
+
+  it('toggling TechnicalAgent off prevents TRADE_IDEA_GENERATED while Autobot is on', () => {
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    expect(isLiveIdeaGenerationEnabled()).toBe(true);
+    expect(setPipelineAgentEnabled(technicalId, false).ok).toBe(true);
+    expect(isPipelineAgentEnabled(technicalId)).toBe(false);
+
+    const spy = vi.spyOn(eventBus, 'emitTradeIdea');
+    technicalAgent.analyzeTick({ symbol: 'GATE_TEST_XYZ', price: 10, volume: 1, timestamp: new Date().toISOString() });
+    expect(spy).not.toHaveBeenCalled();
+    expect((technicalAgent as any).priceHistory['GATE_TEST_XYZ']).toBeUndefined();
+    spy.mockRestore();
   });
 });

@@ -75,4 +75,36 @@ describe('MarketContext.getMarketContext', () => {
     expect(result.spy.regime).toBeNull();
     expect(result.spy.source).toContain('simulated Alpaca outage');
   });
+
+  // Real bug fixed: correlation/beta used to be computed on raw closing PRICE LEVELS instead of
+  // period returns. Two series sharing the same overall linear trend but with independent,
+  // uncorrelated day-to-day noise show near-perfect price-level correlation (both are ~straight
+  // lines trending the same direction) even though their actual day-to-day co-movement is weak -
+  // exactly the spurious-correlation failure mode the fix closes.
+  it('reports real return-based correlation, not spurious price-level correlation from a shared trend', async () => {
+    const days = 220;
+    // Same linear drift as the shared trend (so raw price levels for both series correlate
+    // strongly), but each has its own independent oscillation added on top driving day-to-day
+    // returns - different frequency/phase so the two noise components are not in sync.
+    const symbolBars: Bar[] = Array.from({ length: days }, (_, i) => {
+      const close = 100 + i * 0.5 + Math.sin(i * 0.9) * 8;
+      return { timestamp: i * 86_400_000, open: close, close, high: close * 1.01, low: close * 0.99, volume: 1_000_000 };
+    });
+    const spyLikeFetcher: BarsFetcher = async (symbol) => {
+      if (symbol !== 'SPY') return [];
+      return Array.from({ length: days }, (_, i) => {
+        const close = 400 + i * 0.5 + Math.sin(i * 2.3 + 1.1) * 8; // same drift, unrelated oscillation
+        return { timestamp: i * 86_400_000, open: close, close, high: close * 1.01, low: close * 0.99, volume: 1_000_000 };
+      });
+    };
+
+    const result = await getMarketContext('NOISY', symbolBars, '1Day', 0, days * 86_400_000, spyLikeFetcher);
+
+    expect(result.relativeStrengthVsSPY).not.toBeNull();
+    const corr = result.relativeStrengthVsSPY!.correlation;
+    expect(corr).not.toBeNull();
+    // Raw price-level correlation between these two would be well above 0.9 (both dominated by
+    // the identical shared linear drift). Real return-based correlation must be far lower.
+    expect(Math.abs(corr as number)).toBeLessThan(0.5);
+  });
 });

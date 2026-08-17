@@ -253,4 +253,26 @@ describe('PortfolioMonitorWorker.reviewPortfolio - quant strategy-aware exits (P
     expect(invCall).toBeDefined();
     expect((invCall![0] as any).reasoning).toMatch(/thesis invalidated/i);
   });
+
+  // Real bug fixed: reviewPortfolio() had no in-flight guard, so a slow cycle (real bars fetch +
+  // DB lookups) overlapping with the next 60s timer tick could run twice concurrently, each able
+  // to independently emit a SELL idea for the same holding. isReviewing is set synchronously
+  // before the first await, so two back-to-back calls (no await between them) deterministically
+  // prove the guard - the second call always observes the flag already set.
+  it('skips a second reviewPortfolio() call while one is still in flight, instead of overlapping', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const first = portfolioMonitor.reviewPortfolio();
+    const second = portfolioMonitor.reviewPortfolio();
+    await Promise.all([first, second]);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Previous review cycle still running'));
+    warnSpy.mockRestore();
+  });
+
+  it('accepts a new reviewPortfolio() call once the prior one has finished', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await portfolioMonitor.reviewPortfolio();
+    await portfolioMonitor.reviewPortfolio();
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('Previous review cycle still running'));
+    warnSpy.mockRestore();
+  });
 });

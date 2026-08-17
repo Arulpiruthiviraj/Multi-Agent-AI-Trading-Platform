@@ -19,6 +19,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 import { deskIntelligence } from '../config/deskIntelligence';
 import { recordNewsCatalyst } from '../services/NewsCatalystStore';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 
 // A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
 // entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.
@@ -217,7 +219,9 @@ export class NewsEngine {
               recordNewsCatalyst(catalyst);
               eventBus.emit(EVENTS.NEWS_CATALYST, catalyst);
               // Default desk policy: news is a catalyst, not an independent BUY/SELL vote.
-              if (deskIntelligence.newsEmitsTradeIdeas) {
+              // Mission Control NewsAgent switch gates ideas only; clustering above still runs
+              // so RiskEngine news_veto is not starved.
+              if (deskIntelligence.newsEmitsTradeIdeas && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('NewsAgent')) {
                 eventBus.emitTradeIdea({
                    traceId,
                    symbol,

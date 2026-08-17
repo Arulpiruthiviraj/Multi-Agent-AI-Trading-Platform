@@ -145,3 +145,59 @@ describe('BacktestEngine.run', () => {
     expect(run.status).toBe('FAILED');
   });
 });
+
+// Real bug fixed: computeMetrics() used to always annualize Sharpe/Sortino with sqrt(252)
+// regardless of the equity curve's actual bar spacing, understating annualized Sharpe for any
+// non-daily backtest (e.g. hourly bars have ~6.5x more observations/year than daily). Now
+// inferred from real bars-per-trading-day. Calling the private method directly (backtestEngine is
+// typed `any` in this file) since it isn't part of the public run()/runStrategyBacktest() surface.
+describe('BacktestEngine.computeMetrics - real timeframe-aware Sharpe/Sortino annualization', () => {
+  let backtestEngine: any;
+
+  beforeAll(async () => {
+    ({ backtestEngine } = await import('./BacktestEngine'));
+  });
+
+  function buildEquityCurve(pointsPerDay: number, days: number, seed = 1): { timestamp: number; equity: number }[] {
+    // A real, fixed NY trading day (2024-06-03 was a Monday, no holiday) - every point that day
+    // falls in the same getTradingDateStr() bucket regardless of pointsPerDay.
+    const dayStartMs = Date.UTC(2024, 5, 3, 14, 30); // 09:30 ET in UTC for that date (EDT = UTC-4)
+    const dayMs = 24 * 60 * 60 * 1000;
+    const curve: { timestamp: number; equity: number }[] = [];
+    let equity = 100000;
+    let i = 0;
+    for (let d = 0; d < days; d++) {
+      for (let p = 0; p < pointsPerDay; p++) {
+        const stepMs = pointsPerDay > 1 ? (p * (6.5 * 60 * 60 * 1000)) / (pointsPerDay - 1) : 0;
+        curve.push({ timestamp: dayStartMs + d * dayMs + stepMs, equity });
+        // Deterministic pseudo-random-ish return so stdRet > 0, not identical every step.
+        const ret = Math.sin((i + seed) * 1.7) * 0.004;
+        equity = equity * (1 + ret);
+        i++;
+      }
+    }
+    return curve;
+  }
+
+  it('matches the original sqrt(252) constant exactly for real daily bars (no regression)', () => {
+    const curve = buildEquityCurve(1, 60);
+    const metrics = backtestEngine.computeMetrics(100000, curve, [], curve[0].timestamp, curve[curve.length - 1].timestamp);
+    // Manual reference calc using the untouched, original always-252 formula.
+    const returns: number[] = [];
+    for (let i = 1; i < curve.length; i++) returns.push((curve[i].equity - curve[i - 1].equity) / curve[i - 1].equity);
+    const mean = returns.reduce((a, b) => a + b, 0) / returns.length;
+    const std = Math.sqrt(returns.reduce((s, r) => s + (r - mean) ** 2, 0) / returns.length);
+    const expectedSharpe = Number(((mean / std) * Math.sqrt(252)).toFixed(2));
+    expect(metrics.sharpe).toBe(expectedSharpe);
+  });
+
+  it('annualizes hourly (intraday) bars using real bars-per-trading-day, not a flat sqrt(252)', () => {
+    const dailyCurve = buildEquityCurve(1, 60);
+    const hourlyCurve = buildEquityCurve(7, 60); // ~7 bars/trading day, same seed/shape per day
+    const dailyMetrics = backtestEngine.computeMetrics(100000, dailyCurve, [], dailyCurve[0].timestamp, dailyCurve[dailyCurve.length - 1].timestamp);
+    const hourlyMetrics = backtestEngine.computeMetrics(100000, hourlyCurve, [], hourlyCurve[0].timestamp, hourlyCurve[hourlyCurve.length - 1].timestamp);
+    // The old, buggy behavior would produce roughly the same magnitude Sharpe for both (both used
+    // the same flat sqrt(252)). The real fix scales the hourly one up by ~sqrt(7) instead.
+    expect(Math.abs(hourlyMetrics.sharpe)).toBeGreaterThan(Math.abs(dailyMetrics.sharpe) * 1.5);
+  });
+});

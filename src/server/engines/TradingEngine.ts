@@ -374,6 +374,9 @@ class TradingEngine {
                 console.log(`[TradingEngine] Initialized default SQLite settings (mode=${this.state.tradingMode})`);
             }
             
+            const { loadPipelineAgentEnabledFromDb } = await import('../core/pipelineAgentPersist');
+            await loadPipelineAgentEnabledFromDb();
+
             if (this.state.enabled) {
                 console.log('[TradingEngine] AutoBot enabled from prior state. Starting engines...');
                 system.start(this.state.tradingMode as any);
