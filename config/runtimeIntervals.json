@@ -31,5 +31,6 @@
   "omsFollowUpMinAgeMs": 6000,
   "omsFollowUpIntervalMs": 15000,
   "omsPollForFillTimeoutMs": 4000,
-  "omsPollForFillIntervalMs": 400
+  "omsPollForFillIntervalMs": 400,
+  "autoTradeSchedulerMs": 60000
 }

@@ -91,6 +91,15 @@ export const settings = sqliteTable('settings', {
   // and still bind under either mode; this only changes which number feeds the notional cap.
   positionSizingMode: text('position_sizing_mode').notNull().default('FIXED_DOLLAR'), // FIXED_DOLLAR | PERCENT_OF_EQUITY
   percentOfEquityPct: real('percent_of_equity_pct').default(2), // only read when positionSizingMode='PERCENT_OF_EQUITY'
+
+  // Scheduled auto-trading window (AutoTradeScheduler.ts). Off by default - zero behavior change
+  // for anyone who hasn't opted in. When on, the scheduler drives tradingEngine.toggle({enabled})
+  // through the same single Autobot on/off lever the manual Start/Stop button uses (not a second
+  // kill switch, not a new RiskEngine gate) so it can only ever start/stop the bot, never bypass
+  // any of the 24 RiskEngine gates a proposal still has to clear once Autobot is on.
+  autoTradeScheduleEnabled: integer('auto_trade_schedule_enabled', { mode: 'boolean' }).default(false),
+  autoTradeScheduleStartTime: text('auto_trade_schedule_start_time').default('09:30'), // HH:MM, America/New_York
+  autoTradeScheduleEndTime: text('auto_trade_schedule_end_time').default('16:00'), // HH:MM, America/New_York
 });
 
 // Immutable audit trail for every kill-switch state transition (Phase 1.4: "every

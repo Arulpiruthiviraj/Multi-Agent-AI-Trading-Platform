@@ -74,7 +74,7 @@ def grid_params(cfg):
     out = []
     for r in cfg["rvolThresholds"]:
         for k in cfg["keltnerMultipliers"]:
-            out.append({"rvolThreshold": r, "keltnerMultiplier": k, "fullStrategyParity": bool(cfg.get("fullStrategyParity"))})
+            out.append({"rvolThreshold": r, "keltnerMultiplier": k, "fullStrategyParity": False})
     return out
 
 

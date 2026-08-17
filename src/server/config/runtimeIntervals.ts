@@ -37,6 +37,7 @@ export interface RuntimeIntervals {
   omsFollowUpIntervalMs: number;
   omsPollForFillTimeoutMs: number;
   omsPollForFillIntervalMs: number;
+  autoTradeSchedulerMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -48,7 +49,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
-  'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs',
+  'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

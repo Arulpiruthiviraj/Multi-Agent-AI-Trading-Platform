@@ -35,3 +35,18 @@ const tradingDateFormatter = new Intl.DateTimeFormat('en-CA', {
 export function getTradingDateStr(date: Date = new Date()): string {
   return tradingDateFormatter.format(date);
 }
+
+const tradingTimeFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TRADING_TIMEZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+// Returns the real exchange-local wall-clock time (HH:MM, 24h, America/New_York) for the given
+// instant. Same DST rationale as getTradingDateStr above - used by AutoTradeSchedule.ts to compare
+// against a user-configured HH:MM trading window without a manual EST/EDT offset table. `en-GB`
+// with hour12:false gives zero-padded 24h HH:MM directly.
+export function getTradingTimeHHMM(date: Date = new Date()): string {
+  return tradingTimeFormatter.format(date);
+}

@@ -49,12 +49,10 @@ function evictOldTraces() {
 const NO_PERSIST_TYPES = new Set([EVENTS.MARKET_DATA, EVENTS.CALCULATION_COMPLETED]);
 
 const trackEvent = (type: string) => (payload: any) => {
+  // Digital Twin telemetry pulse — keep in-memory ring for live UI, skip SQLite pollution.
+  const skipPersist = !!(payload?.telemetryPulse || payload?.diagnosticTelemetry
+    || String(payload?.traceId || '').startsWith('telemetry-pulse-'));
   const correlationId: string | null = payload?.traceId || payload?.trace_id || payload?.correlationId || null;
-  // The canonical transaction id (TRANSACTION_OBSERVATORY_ARCHITECTURE.md Phase 0) - only
-  // CHIEF_APPROVED_IDEA and everything emitted downstream of it carry one today. Deliberately
-  // NOT falling back to correlationId when absent: a per-agent traceId (e.g. from a lone
-  // TRADE_IDEA_GENERATED that never reached consensus) is not the same thing as a transaction,
-  // and mislabeling it as one would misrepresent event_traces queries by transaction_id.
   const transactionId: string | null = payload?.transactionId ?? null;
   const envelope: EventEnvelope = {
     eventId: uuidv4(),
@@ -78,7 +76,7 @@ const trackEvent = (type: string) => (payload: any) => {
     tradeTraces[correlationId].push(envelope);
   }
 
-  if (!NO_PERSIST_TYPES.has(type)) {
+  if (!NO_PERSIST_TYPES.has(type) && !skipPersist) {
     db.insert(schema.eventTraces).values({
       id: envelope.eventId,
       correlationId,
@@ -90,7 +88,7 @@ const trackEvent = (type: string) => (payload: any) => {
     }).catch((e) => console.error('[EventStore] Failed to persist event trace', e));
   }
 
-  if (type === EVENTS.TRADE_LIFECYCLE || type === EVENTS.DESK_NO_TRADE) {
+  if (!skipPersist && (type === EVENTS.TRADE_LIFECYCLE || type === EVENTS.DESK_NO_TRADE)) {
     const candidateId = correlationId || envelope.eventId;
     const state = type === EVENTS.DESK_NO_TRADE ? (payload?.code || 'NO_TRADE') : (payload?.state || 'UNKNOWN');
     import('./TradeLifecycleStore').then(({ persistLifecycleTransition }) => {

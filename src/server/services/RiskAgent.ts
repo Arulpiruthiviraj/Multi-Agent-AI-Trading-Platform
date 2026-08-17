@@ -20,10 +20,15 @@
 
 import { eventBus } from '../core/EventBus';
 import { riskEngine } from '../engines/RiskEngine';
+import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 
 export class RiskValidationAgent {
   constructor() {
-    eventBus.on('CHIEF_APPROVED_IDEA', (approval) => this.assessRisk(approval));
+    eventBus.on('CHIEF_APPROVED_IDEA', (approval) => {
+      // Digital Twin telemetry pulse — UI animation only; never enter RiskEngine/OMS.
+      if (isTelemetryPulsePayload(approval)) return;
+      this.assessRisk(approval);
+    });
   }
 
   assessRisk(approval: { traceId: string, transactionId?: string, symbol: string, side: string, confidence: number, reasoning: string, agentsContext: string, currentPrice?: number, newsDetails?: any, supportingQuantDetail?: any }) {

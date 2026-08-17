@@ -49,6 +49,8 @@ interface LastSnapshot {
 interface Packet {
   id: string;
   color: string;
+  /** flow = travel source→target; reject = stop mid-edge + fade (blocked) */
+  kind?: 'flow' | 'reject';
 }
 
 const CATEGORY_STYLE: Record<NodeCategory, { border: string; glow: string; iconBg: string; iconText: string; accent: string }> = {
@@ -208,6 +210,23 @@ const TelemetryNode = ({ id, data }: { id: string; data: any }) => {
           style={{ boxShadow: `0 0 0 2px ${style.glow}`, background: style.glow }}
         />
       )}
+      {status === 'FAIL' && (
+        <motion.div
+          key={`fail-${data.pulseKey ?? id}`}
+          className="absolute inset-0 rounded-xl pointer-events-none"
+          initial={{ opacity: 0.9, scale: 1 }}
+          animate={{ opacity: 0, scale: 1.6 }}
+          transition={{ duration: 0.8, ease: 'easeOut' }}
+          style={{ boxShadow: '0 0 0 2px rgba(251,113,133,0.95)', background: 'rgba(244,63,94,0.28)' }}
+        />
+      )}
+      {status === 'PROCESSING' && (
+        <motion.div
+          className="absolute -inset-1 rounded-xl pointer-events-none border border-cyan-400/40"
+          animate={{ opacity: [0.35, 0.85, 0.35], scale: [1, 1.04, 1] }}
+          transition={{ duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
+        />
+      )}
       <motion.div
         layoutId={data.focused ? undefined : `agent-node-${id}`}
         transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
@@ -248,6 +267,10 @@ function PacketEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, ta
   const [edgePath] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
   const packets: Packet[] = data?.packets || [];
   const lit = packets.length > 0;
+  const lastKind = packets[packets.length - 1]?.kind;
+  const strokeColor = lit
+    ? (packets[packets.length - 1]?.color || '#22d3ee')
+    : (style?.stroke || '#334155');
   return (
     <>
       <BaseEdge
@@ -255,16 +278,37 @@ function PacketEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, ta
         path={edgePath}
         style={{
           ...style,
-          stroke: lit ? (packets[packets.length - 1]?.color || '#22d3ee') : (style?.stroke || '#334155'),
+          stroke: strokeColor,
           strokeWidth: lit ? 2.5 : 1.5,
           opacity: lit ? 1 : 0.45,
+          strokeDasharray: lastKind === 'reject' ? '4 3' : undefined,
         }}
       />
-      {packets.map((p) => (
-        <circle key={p.id} r={3.5} fill={p.color} opacity={0.95}>
-          <animateMotion dur={`${PACKET_MS}ms`} fill="remove" path={edgePath} />
-        </circle>
-      ))}
+      {packets.map((p) => {
+        const reject = p.kind === 'reject';
+        const dur = reject ? PACKET_MS + 180 : PACKET_MS;
+        return (
+          <circle key={p.id} r={reject ? 4.5 : 3.5} fill={p.color} opacity={0.95}>
+            <animateMotion
+              dur={`${dur}ms`}
+              fill="remove"
+              path={edgePath}
+              keyPoints={reject ? '0;0.48;0.48' : '0;1'}
+              keyTimes={reject ? '0;0.55;1' : '0;1'}
+              calcMode="linear"
+            />
+            {reject && (
+              <animate
+                attributeName="opacity"
+                values="1;1;0"
+                keyTimes="0;0.55;1"
+                dur={`${dur}ms`}
+                fill="remove"
+              />
+            )}
+          </circle>
+        );
+      })}
     </>
   );
 }
@@ -338,9 +382,13 @@ export default function DigitalTwinVisualizer() {
   const pendingRef = useRef<{
     snapshots: Map<string, LastSnapshot>;
     pulses: Map<string, VisualStatus>;
-    packets: { edgeId: string; color: string }[];
+    packets: { edgeId: string; color: string; kind?: 'flow' | 'reject' }[];
     events: any[];
   }>({ snapshots: new Map(), pulses: new Map(), packets: [], events: [] });
+  const [pulseBusy, setPulseBusy] = useState(false);
+  const [pulseNote, setPulseNote] = useState<string | null>(null);
+  const [settingsTradingMode, setSettingsTradingMode] = useState<string>('PAPER');
+  const showTelemetryPulse = String(settingsTradingMode).toUpperCase() !== 'LIVE';
 
   const initialNodes: Node[] = useMemo(() => [
     { id: 'market-data-worker', type: 'custom', position: { x: 20, y: 40 }, data: { label: 'Market Data', icon: <Activity size={18} />, description: 'Alpaca WS ticks', category: 'source', status: 'IDLE', hoverRows: hoverRows('market-data-worker', undefined, []) } },
@@ -444,7 +492,7 @@ export default function DigitalTwinVisualizer() {
         data: {
           ...n.data,
           status: st ?? n.data.status,
-          pulseKey: st === 'PULSE' ? pulseKey : n.data.pulseKey,
+          pulseKey: (st === 'PULSE' || st === 'FAIL') ? pulseKey : n.data.pulseKey,
           lastSnapshot: snap,
           focused: n.data.focused,
           hoverRows: hoverRows(n.id, snap, weightsRef.current),
@@ -455,20 +503,25 @@ export default function DigitalTwinVisualizer() {
     if (pending.packets.length) {
       const stamped = pending.packets.map((p) => {
         seqRef.current += 1;
-        return { edgeId: p.edgeId, packet: { id: `pkt-${seqRef.current}`, color: p.color } };
+        return {
+          edgeId: p.edgeId,
+          packet: { id: `pkt-${seqRef.current}`, color: p.color, kind: p.kind || 'flow' } as Packet,
+          clearMs: (p.kind === 'reject' ? PACKET_MS + 180 : PACKET_MS) + 40,
+        };
       });
       setEdges((eds) => eds.map((e) => {
         const hit = stamped.filter((p) => p.edgeId === e.id);
         if (hit.length === 0) return e;
         return { ...e, data: { ...e.data, packets: [...(e.data?.packets || []), ...hit.map((h) => h.packet)] } };
       }));
+      const maxClear = Math.max(...stamped.map((s) => s.clearMs));
       const tid = window.setTimeout(() => {
         const ids = new Set(stamped.map((s) => s.packet.id));
         setEdges((eds) => eds.map((e) => ({
           ...e,
           data: { ...e.data, packets: (e.data?.packets || []).filter((pk: Packet) => !ids.has(pk.id)) },
         })));
-      }, PACKET_MS + 40);
+      }, maxClear);
       packetTimers.current.push(tid);
     }
 
@@ -490,7 +543,7 @@ export default function DigitalTwinVisualizer() {
 
   const enqueueEvent = useCallback((type: string, data: any, visuals: {
     nodes?: { id: string; status: VisualStatus }[];
-    packets?: { edgeId: string; color: string }[];
+    packets?: { edgeId: string; color: string; kind?: 'flow' | 'reject' }[];
     skipLog?: boolean;
   }) => {
     seqRef.current += 1;
@@ -515,6 +568,43 @@ export default function DigitalTwinVisualizer() {
       data: { ...n.data, focused: n.id === selectedNodeId },
     })));
   }, [selectedNodeId, setNodes]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v1/config/settings')
+      .then((r) => r.json())
+      .then((body) => {
+        if (cancelled) return;
+        const mode = body?.tradingMode ?? body?.settings?.tradingMode;
+        if (typeof mode === 'string') setSettingsTradingMode(mode);
+      })
+      .catch(() => { /* default PAPER — pulse button still available in DEV */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  const runTelemetryPulse = useCallback(async (mode: 'approve' | 'reject') => {
+    if (pulseBusy) return;
+    setPulseBusy(true);
+    setPulseNote(mode === 'approve' ? 'Pulsing approve chain…' : 'Pulsing reject chain…');
+    try {
+      const res = await fetch('/api/v2/system/telemetry-pulse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode, symbol: 'AAPL' }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || !body?.ok) {
+        setPulseNote(body?.error || `Pulse failed (${res.status})`);
+        return;
+      }
+      setPulseNote(`Pulse ${String(body.traceId || '').slice(0, 28)}…`);
+      window.setTimeout(() => setPulseNote(null), 4200);
+    } catch (e: any) {
+      setPulseNote(e?.message || 'Pulse request failed');
+    } finally {
+      window.setTimeout(() => setPulseBusy(false), 3200);
+    }
+  }, [pulseBusy]);
 
   useEffect(() => {
     let cancelled = false;
@@ -544,6 +634,16 @@ export default function DigitalTwinVisualizer() {
             { id: 'kronos-forecast', status: 'PULSE' },
           ],
           packets: throttled ? [] : MARKET_FANOUT_EDGES.map((edgeId) => ({ edgeId, color: '#22d3ee' })),
+        });
+      }),
+      subscribe(eventCatalog.MARKET_DATA_UPDATED, (data: any) => {
+        const now = Date.now();
+        const throttled = now - lastTickPulseRef.current < TICK_THROTTLE_MS;
+        if (!throttled) lastTickPulseRef.current = now;
+        enqueueEvent('MARKET_DATA_UPDATED', data, {
+          skipLog: true,
+          nodes: [{ id: 'market-data-worker', status: 'PULSE' }],
+          packets: throttled ? [] : [{ edgeId: 'e-market-tech', color: '#22d3ee' }],
         });
       }),
       subscribe('NEWS_ANALYSIS_STARTED', (data: any) => enqueueEvent('NEWS_ANALYSIS_STARTED', data, {
@@ -611,11 +711,22 @@ export default function DigitalTwinVisualizer() {
       subscribe('CHIEF_CONSENSUS_STARTED', (data: any) => enqueueEvent('CHIEF_CONSENSUS_STARTED', data, {
         nodes: [{ id: 'chief-trader', status: 'PROCESSING' }, { id: 'paid-llm-pool', status: 'PROCESSING' }],
       })),
-      subscribe('CHIEF_CONSENSUS_COMPLETED', (data: any) => enqueueEvent('CHIEF_CONSENSUS_COMPLETED', data, {
-        nodes: [
-          { id: 'chief-trader', status: data?.approved ? 'SUCCESS' : 'FAIL' },
-          { id: 'paid-llm-pool', status: 'SUCCESS' },
-        ],
+      subscribe('CHIEF_CONSENSUS_COMPLETED', (data: any) => {
+        const approved = data?.approved === true;
+        const rejectLabel = data?.reason === 'NO_CONSENSUS' || data?.code === 'NO_CONSENSUS';
+        enqueueEvent('CHIEF_CONSENSUS_COMPLETED', data, {
+          nodes: [
+            { id: 'chief-trader', status: approved ? 'SUCCESS' : 'FAIL' },
+            { id: 'paid-llm-pool', status: approved ? 'SUCCESS' : 'PULSE' },
+          ],
+          packets: approved
+            ? []
+            : [{ edgeId: 'e-chief-risk', color: rejectLabel ? '#f59e0b' : '#fb7185', kind: 'reject' }],
+        });
+      }),
+      subscribe(eventCatalog.DESK_NO_TRADE, (data: any) => enqueueEvent(eventCatalog.DESK_NO_TRADE, data, {
+        nodes: [{ id: 'chief-trader', status: 'FAIL' }],
+        packets: [{ edgeId: 'e-chief-risk', color: '#f59e0b', kind: 'reject' }],
       })),
       subscribe('CHIEF_APPROVED_IDEA', (data: any) => enqueueEvent('CHIEF_APPROVED_IDEA', data, {
         nodes: [{ id: 'chief-trader', status: 'SUCCESS' }, { id: 'risk-manager', status: 'PROCESSING' }],
@@ -627,15 +738,29 @@ export default function DigitalTwinVisualizer() {
       subscribe('RISK_GATE_EVALUATED', (data: any) => enqueueEvent('RISK_GATE_EVALUATED', data, {
         nodes: [{ id: 'risk-manager', status: 'PULSE' }],
       })),
-      subscribe('RISK_ASSESSMENT_COMPLETED', (data: any) => enqueueEvent('RISK_ASSESSMENT_COMPLETED', data, {
-        nodes: [
-          { id: 'risk-manager', status: data?.approved ? 'SUCCESS' : 'FAIL' },
-          ...(data?.approved ? [{ id: 'order-management', status: 'PROCESSING' as VisualStatus }] : []),
-        ],
-        packets: data?.approved
-          ? [{ edgeId: 'e-risk-capital', color: '#34d399' }, { edgeId: 'e-capital-exec', color: '#34d399' }]
-          : [],
-      })),
+      subscribe('RISK_ASSESSMENT_COMPLETED', (data: any) => {
+        const approved = data?.approved === true;
+        enqueueEvent('RISK_ASSESSMENT_COMPLETED', data, {
+          nodes: [
+            { id: 'risk-manager', status: approved ? 'SUCCESS' : 'FAIL' },
+            ...(approved
+              ? [
+                  { id: 'capital-guard', status: 'SUCCESS' as VisualStatus },
+                  { id: 'order-management', status: 'PROCESSING' as VisualStatus },
+                ]
+              : []),
+          ],
+          packets: approved
+            ? [
+                { edgeId: 'e-risk-capital', color: '#34d399' },
+                { edgeId: 'e-capital-exec', color: '#34d399' },
+              ]
+            : [
+                { edgeId: 'e-risk-capital', color: '#fb7185', kind: 'reject' },
+                { edgeId: 'e-capital-exec', color: '#fb7185', kind: 'reject' },
+              ],
+        });
+      }),
       subscribe('ORDER_SUBMITTED', (data: any) => enqueueEvent('ORDER_SUBMITTED', data, {
         nodes: [{ id: 'order-management', status: 'PROCESSING' }],
         packets: [{ edgeId: 'e-capital-exec', color: '#2dd4bf' }],
@@ -720,6 +845,34 @@ export default function DigitalTwinVisualizer() {
             <span className="text-emerald-300">ok</span>
             <span className="text-rose-300">fail</span>
           </div>
+          {showTelemetryPulse && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={pulseBusy}
+                onClick={() => void runTelemetryPulse('approve')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[10px] font-bold tracking-widest uppercase transition-colors ${pulseBusy ? 'bg-slate-800 text-slate-500' : 'bg-emerald-800/80 text-emerald-100 hover:bg-emerald-700'}`}
+                title="Synthetic EventBus chain for UI only — never places orders"
+              >
+                <Activity size={14} />
+                Test Live Flow
+              </button>
+              <button
+                type="button"
+                disabled={pulseBusy}
+                onClick={() => void runTelemetryPulse('reject')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[10px] font-bold tracking-widest uppercase transition-colors ${pulseBusy ? 'bg-slate-800 text-slate-500' : 'bg-rose-900/70 text-rose-200 hover:bg-rose-800'}`}
+                title="Synthetic NO_CONSENSUS + RISK reject flash — UI only"
+              >
+                Reject Pulse
+              </button>
+            </div>
+          )}
+          {pulseNote && (
+            <span className="text-[9px] font-mono text-amber-300/90 max-w-[14rem] truncate" title={pulseNote}>
+              {pulseNote}
+            </span>
+          )}
           <button
             onClick={() => setIsPlaying(!isPlaying)}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[10px] font-bold tracking-widest uppercase transition-colors ${isPlaying ? 'bg-cyan-700 text-white' : 'bg-slate-800 text-slate-400'}`}

@@ -1,12 +1,25 @@
-import React, { useEffect, useState } from "react";
+import tradingSafety from "../../config/tradingSafety.json";
+import React, { useEffect, useMemo, useState } from "react";
 import { Newspaper, Globe, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, ShieldCheck, Database, Server, Crosshair } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
+
+/** Match RiskEngine news_veto scale: cluster impactScore is 0–1; threshold is 0–100. */
+function impactOnVetoScale(raw: number): number {
+  if (!Number.isFinite(raw)) return 0;
+  return raw <= 1 ? raw * 100 : raw;
+}
 
 export function NewsDashboardTab() {
   const [clusters, setClusters] = useState<any[]>([]);
   const [articles, setArticles] = useState<any[]>([]);
   const [providers, setProviders] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const vetoThreshold = Number((tradingSafety as any).newsVetoMinImpactScore ?? 80);
+
+  const highImpactClusters = useMemo(
+    () => clusters.filter((c) => impactOnVetoScale(Number(c.impactScore ?? 0)) > vetoThreshold),
+    [clusters, vetoThreshold],
+  );
 
   useEffect(() => {
     const fetchNewsData = async () => {
@@ -200,14 +213,24 @@ export function NewsDashboardTab() {
             claim this card used to make (no embeddings/vector infrastructure exists in this
             codebase at all - ChiefTraderAgent never sees impactScore in any form). */}
         <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col justify-center items-center">
-             <Crosshair size={32} className="text-slate-700 mb-3" />
+             <Crosshair size={32} className={`mb-3 ${highImpactClusters.length > 0 ? 'text-amber-400' : 'text-slate-700'}`} />
              <h4 className="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">
-               {clusters.filter(c => (c.impactScore ?? 0) > 80).length} High-Impact Event{clusters.filter(c => (c.impactScore ?? 0) > 80).length === 1 ? '' : 's'} Tracked
+               {highImpactClusters.length} High-Impact Event{highImpactClusters.length === 1 ? '' : 's'} Tracked
              </h4>
              <p className="text-[10px] text-slate-500 font-mono text-center max-w-xs">
-               RiskEngine vetoes new trades on a symbol with a tracked event cluster scoring above 80
-               within the last 4 hours. This score does not otherwise influence Chief Trader's consensus.
+               Counts news_clusters whose impactScore scales above {vetoThreshold} (RiskEngine news_veto).
+               Article IMPACT labels are 0–1 per story; this panel uses cluster scores (0–1 → ×100) within the veto window.
+               This score does not otherwise influence Chief Trader's consensus.
              </p>
+             {highImpactClusters.length > 0 && (
+               <ul className="mt-3 w-full max-h-28 overflow-y-auto space-y-1 text-left">
+                 {highImpactClusters.slice(0, 5).map((c, i) => (
+                   <li key={c.id || i} className="text-[9px] font-mono text-amber-300/90 truncate">
+                     {impactOnVetoScale(Number(c.impactScore)).toFixed(0)} · {c.title || c.eventType || 'cluster'}
+                   </li>
+                 ))}
+               </ul>
+             )}
         </div>
       </div>
     </div>

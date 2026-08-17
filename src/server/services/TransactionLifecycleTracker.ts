@@ -18,6 +18,7 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { updateTransactionStatus } from '../core/TransactionRegistry';
 
 export class TransactionLifecycleTracker {
@@ -25,6 +26,7 @@ export class TransactionLifecycleTracker {
     // Fires for BOTH outcomes (RiskEngine's own catch block also calls emitRiskAssessment), so
     // this is a real, always-reached hook for a risk rejection - not just the happy path.
     eventBus.on('RISK_ASSESSMENT_COMPLETED', (assessment: any) => {
+      if (isTelemetryPulsePayload(assessment)) return;
       if (!assessment.transactionId) return; // no transaction was minted for this proposal - nothing to update
       if (assessment.approved) return; // approval doesn't close the transaction - the order stages below do
       updateTransactionStatus(assessment.transactionId, 'RISK_REJECTED', { outcome: 'N_A', closed: true });

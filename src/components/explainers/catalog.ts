@@ -229,9 +229,9 @@ export const EXPLAINER_CATALOG = {
   },
   tabIntelligence: {
     title: 'Intelligence',
-    what: 'Macro / research-style workspace.',
-    why: 'Qualitative notes are not prices or EV.',
-    how: 'Bull/Bear research (if enabled) is interpretive. LLM-invented numbers are rejected.',
+    what: 'Real quant scanner surface (same engine as Strategy Scanner).',
+    why: 'Fabricated ADX/RSI/Options theater was removed — empty was intentional honesty, not a crashed feed.',
+    how: 'Uses QuantSignalsPanel / GET /api/v2/quant/*. Needs OHLCV bars; live Quant ideas need QUANT_ENGINE_ENABLED + Autobot.',
   },
   tabAgents: {
     title: 'Agent Network',

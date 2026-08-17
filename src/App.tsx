@@ -1076,6 +1076,15 @@ export default function App() {
           } catch { /* fall through */ }
           return data;
         });
+        if (data?.tradingMode) {
+          const mode = String(data.tradingMode).toUpperCase();
+          setAutoBotTradingMode(mode === 'PAPER' || mode === 'LIVE' || mode === 'SIMULATOR' ? mode : 'PAPER');
+          setToggles((t) => ({
+            ...t,
+            paper: mode === 'PAPER' || mode === 'SIMULATOR',
+            live: mode === 'LIVE',
+          }));
+        }
       })
       .catch(e => console.error("Initial fetch failed:", e));
 
@@ -1348,7 +1357,38 @@ export default function App() {
 
   const handleToggle = (key: keyof typeof toggles) => {
     if (enginesHalted) return;
+    // Execution mode is owned by Market Execution (synced from ARGUS_TRADING_MODE / TradingEngine).
+    if (key === 'live' || key === 'paper') return;
     setToggles(t => ({ ...t, [key]: !t[key] }));
+  };
+
+  const setMarketExecutionMode = (newMode: string) => {
+    const mode = String(newMode).toUpperCase();
+    if (mode === 'LIVE' && autoBotConfig?.paperTradingOnly) {
+      setAutoBotStartError('LIVE blocked: PAPER_TRADING_ONLY=true in .env. Set false and restart to allow LIVE.');
+      return;
+    }
+    setAutoBotTradingMode(mode);
+    setToggles((t) => ({
+      ...t,
+      paper: mode === 'PAPER' || mode === 'SIMULATOR',
+      live: mode === 'LIVE',
+    }));
+    fetch("/api/v1/autobot/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tradingMode: mode }),
+    })
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (!r.ok || body?.ok === false) {
+          setAutoBotStartError(body?.error || `Mode change failed (${r.status})`);
+          return;
+        }
+        setAutoBotStartError(null);
+        if (body?.state?.tradingMode) setAutoBotTradingMode(String(body.state.tradingMode).toUpperCase());
+      })
+      .catch((e) => setAutoBotStartError(e?.message || 'Mode change failed'));
   };
 
   const handleExportLogs = () => {
@@ -5551,10 +5591,12 @@ export default function App() {
           <div className="animate-fade-in flex flex-col gap-6" id="intelligence-view">
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
               <h3 className="text-sm font-bold text-white mb-2 uppercase tracking-wide">Quantitative Intelligence</h3>
-              <AwaitingSignal
-                label="Fabricated engine grid"
-                reason="This tab used hardcoded fallbacks (ADX 28, RSI 64, Options P/C, EXECUTED BUY theater). Real quant lives on Strategy Scanner / GET /api/v2/quant/*. DATA_UNAVAILABLE."
-              />
+              <p className="text-[11px] text-slate-400 font-mono mb-4 leading-relaxed">
+                The old fabricated ADX/RSI/Options theater was removed. This tab now shows the same real quant scanner as Strategy Scanner
+                (OHLCV + strategies via <code className="text-cyan-500">/api/v2/quant/*</code>). Requires cached bars; Quant agent ideas need
+                <code className="text-cyan-500"> QUANT_ENGINE_ENABLED=true</code> and Autobot started. Kronos/Chronos is optional evidence on :8008.
+              </p>
+              <QuantSignalsPanel />
             </div>
           </div>
         )}
@@ -6359,7 +6401,18 @@ export default function App() {
                </div>
 
                {opportunitiesAvailable === false && (
-                 <AwaitingSignal reason={opportunitiesReason || 'No real agent prediction in the last 24h cleared the confidence floor.'} label="Opportunity Feed" />
+                 <div className="p-6 space-y-3">
+                   <AwaitingSignal reason={opportunitiesReason || 'No real agent prediction in the last 24h cleared the confidence floor.'} label="Opportunity Feed" />
+                   <div className="bg-[#111822] border border-amber-500/20 rounded-lg p-4 text-[11px] font-mono text-slate-400 leading-relaxed">
+                     <p className="text-amber-400 font-bold uppercase tracking-wider mb-2">Why empty (honest)</p>
+                     <ul className="list-disc pl-4 space-y-1">
+                       <li>Feed lists real BUY/SELL rows from <code className="text-cyan-500">agent_predictions</code> (≥60% confidence, last 24h) — not invented cards.</li>
+                       <li>Start Autobot in Mission Control (Autobot was off / TRADING_DISABLED in your screenshots).</li>
+                       <li>Market CLOSED still allows some agents; empty tape means no qualifying predictions yet.</li>
+                       <li>Chronos/OpenAlice FAILED does not empty this feed — they are optional verification/forecast, not the opportunity source.</li>
+                     </ul>
+                   </div>
+                 </div>
                )}
 
                {opportunitiesAvailable === null && (
@@ -7104,31 +7157,25 @@ export default function App() {
                      </button>
                    )}
 
-                   {/* LIVE PAPER TRADING INTEGRATION */}
                    <div className="bg-[#111822] border border-slate-800 rounded p-3">
                      <div className="flex items-center justify-between mb-2">
                        <h4 className="text-[10px] font-mono font-bold text-slate-300 flex items-center gap-1.5 uppercase">
                          <Terminal size={12} className={autoBotTradingMode === "LIVE" ? "text-rose-500" : autoBotTradingMode === "PAPER" ? "text-emerald-400" : "text-amber-500"} />
-                         Market Execution
+                         Market Execution (single control)
                        </h4>
                        <select 
                          value={autoBotTradingMode}
-                         onChange={(e) => {
-                            const newMode = e.target.value;
-                            setAutoBotTradingMode(newMode);
-                            fetch("/api/v1/autobot/toggle", {
-                              method: "POST",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ tradingMode: newMode })
-                            }).catch(() => {});
-                         }}
+                         onChange={(e) => setMarketExecutionMode(e.target.value)}
                          className="bg-[#0A0F16] border border-slate-700 rounded text-xs text-white px-2 py-1 outline-none font-mono"
                        >
                          <option value="SIMULATOR">SIMULATOR</option>
                          <option value="PAPER">PAPER TRADING</option>
-                         <option value="LIVE">LIVE TRADING</option>
+                         <option value="LIVE" disabled={!!autoBotConfig?.paperTradingOnly}>LIVE TRADING</option>
                        </select>
                      </div>
+                     <p className="text-[9px] font-mono text-slate-500 leading-relaxed mb-1">
+                       Preselected from .env ARGUS_TRADING_MODE / PAPER_TRADING_ONLY ({autoBotConfig?.envTradingModeSource || 'boot'} → {autoBotConfig?.envTradingMode || autoBotTradingMode}).
+                     </p>
                      {autoBotTradingMode === "LIVE" ? (
                        <p className="text-[9px] font-mono text-rose-500/80 leading-relaxed uppercase">
                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-rose-500 mr-1 animate-pulse"></span>
@@ -7218,20 +7265,21 @@ export default function App() {
                        </div>
                      </div>
 
-                     {/* Execution */}
+                     {/* Execution — mirrors Market Execution (not a second independent toggle) */}
                      <div className="bg-[#111822] border border-slate-800 rounded p-4 flex flex-col justify-between h-[120px]">
                        <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest mb-2">
-                         <Zap size={12} className="text-slate-400"/> EXECUTION
+                         <Zap size={12} className="text-slate-400"/> EXECUTION STATUS
                        </div>
                        <div className="space-y-2">
-                         <div className="flex justify-between items-center text-[10px] cursor-pointer" onClick={() => handleToggle("live")}>
-                           <span className={"transition-colors " + (enginesHalted || !toggles.live ? "text-slate-500" : "text-indigo-400 font-bold")}>Live Trade</span>
-                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.live ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-indigo-500/20 border-indigo-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (enginesHalted || !toggles.live ? "bg-slate-600" : "bg-indigo-400")}></div></div>
+                         <div className="flex justify-between items-center text-[10px]">
+                           <span className={"transition-colors " + (autoBotTradingMode === 'LIVE' ? "text-indigo-400 font-bold" : "text-slate-500")}>Live Trade</span>
+                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (autoBotTradingMode !== 'LIVE' ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-indigo-500/20 border-indigo-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (autoBotTradingMode !== 'LIVE' ? "bg-slate-600" : "bg-indigo-400")}></div></div>
                          </div>
-                         <div className="flex justify-between items-center text-[10px] cursor-pointer" onClick={() => handleToggle("paper")}>
-                           <span className={"transition-colors " + (enginesHalted || !toggles.paper ? "text-slate-500" : "text-amber-400 font-bold")}>Paper Trade</span>
-                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (enginesHalted || !toggles.paper ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-amber-500/20 border-amber-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (enginesHalted || !toggles.paper ? "bg-slate-600" : "bg-amber-400")}></div></div>
+                         <div className="flex justify-between items-center text-[10px]">
+                           <span className={"transition-colors " + (autoBotTradingMode === 'PAPER' || autoBotTradingMode === 'SIMULATOR' ? "text-amber-400 font-bold" : "text-slate-500")}>Paper / Sim</span>
+                           <div className={"w-6 h-3 rounded-full border flex items-center px-0.5 transition-all " + (autoBotTradingMode === 'LIVE' ? "bg-[#1A1F2B] border-slate-700 justify-start" : "bg-amber-500/20 border-amber-500/50 justify-end")}><div className={"w-2 h-2 rounded-full transition-all " + (autoBotTradingMode === 'LIVE' ? "bg-slate-600" : "bg-amber-400")}></div></div>
                          </div>
+                         <p className="text-[8px] font-mono text-slate-600">Change via Market Execution only</p>
                        </div>
                      </div>
                    </div>

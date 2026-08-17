@@ -258,7 +258,7 @@ export function AutonomousDashboard({
           <div className="flex flex-col px-4 border-r border-slate-800">
             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest"><Explainer id="operationMode">Operation Mode</Explainer></span>
             <span className="text-sm font-bold text-white mt-1">
-              {autoBotConfig?.tradingMode || "Autonomous Paper"}
+              {String(autoBotConfig?.tradingMode || "PAPER").toUpperCase()}
             </span>
           </div>
           <div className="px-3 flex items-center gap-3 cursor-pointer" onClick={() => setHandsOffMode(!handsOffMode)}>

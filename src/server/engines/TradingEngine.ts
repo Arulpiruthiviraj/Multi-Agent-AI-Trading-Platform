@@ -42,6 +42,11 @@ import { LIVE_TRADING_CONFIRMATION_PHRASE, armLiveTrading, disarmLiveTrading } f
 import { tradingSafety } from '../config/tradingSafety';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { TERMINAL_ORDER_STATUSES } from '../services/OrderManagement';
+import {
+  isPaperTradingOnlyEnforced,
+  normalizeTradingMode,
+  resolveEnvTradingMode,
+} from '../core/tradingModeEnv';
 
 export type TradingState = 'TRADING_ENABLED' | 'TRADING_PAUSED' | 'EMERGENCY_STOP';
 
@@ -265,10 +270,19 @@ class TradingEngine {
 
         public async initialize() {
         try {
+            const envMode = resolveEnvTradingMode();
             const allSettings = await db.select().from(schema.settings).limit(1);
             if (allSettings.length > 0) {
                 const s = allSettings[0];
-                this.state.tradingMode = s.tradingMode || "PAPER";
+                // ARGUS_TRADING_MODE preselects on boot so UI/.env agree; otherwise keep DB mode.
+                // PAPER_TRADING_ONLY only demotes LIVE → PAPER (never wipes SIMULATOR).
+                let resolvedMode = envMode.source === 'ARGUS_TRADING_MODE'
+                  ? envMode.mode
+                  : normalizeTradingMode(s.tradingMode || envMode.mode);
+                if (resolvedMode === 'LIVE' && envMode.paperTradingOnly) {
+                  resolvedMode = 'PAPER';
+                }
+                this.state.tradingMode = resolvedMode;
                 this.state.riskLevel = s.riskLevel || "Balanced";
                 this.state.budget = s.budget || 50000;
                 this.state.strategy = s.strategy || "Momentum Focus";
@@ -288,9 +302,13 @@ class TradingEngine {
                 if (this.state.tradingState !== 'TRADING_ENABLED') {
                     console.warn(`[TradingEngine] Restored from a non-enabled trading state: ${this.state.tradingState}. Explicit reactivation required.`);
                 }
+                if (normalizeTradingMode(s.tradingMode) !== this.state.tradingMode) {
+                  await db.update(schema.settings).set({ tradingMode: this.state.tradingMode }).where(eq(schema.settings.id, s.id)).run();
+                }
 
-                console.log('[TradingEngine] Initialized from SQLite settings');
+                console.log(`[TradingEngine] Initialized from SQLite settings (mode=${this.state.tradingMode}, envSource=${envMode.source})`);
             } else {
+                this.state.tradingMode = envMode.mode;
                 await db.insert(schema.settings).values({
                     autoBotEnabled: this.state.enabled,
                     tradingMode: this.state.tradingMode,
@@ -304,7 +322,7 @@ class TradingEngine {
                     minAiConfidence: this.state.minAiConfidence,
                     adversarialDebateMode: this.state.adversarialDebateMode
                 }).run();
-                console.log('[TradingEngine] Initialized default SQLite settings');
+                console.log(`[TradingEngine] Initialized default SQLite settings (mode=${this.state.tradingMode})`);
             }
             
             if (this.state.enabled) {
@@ -321,8 +339,17 @@ class TradingEngine {
     }
 
     public async toggle(config: Partial<AutoBotState> & { confirmLiveTrading?: string }): Promise<{ ok: boolean; error?: string }> {
+        if (Object.prototype.hasOwnProperty.call(config, 'tradingMode') && config.tradingMode != null) {
+            config.tradingMode = normalizeTradingMode(config.tradingMode);
+        }
+        if (config.tradingMode === 'LIVE' && isPaperTradingOnlyEnforced()) {
+            return {
+              ok: false,
+              error: 'Cannot enable LIVE while PAPER_TRADING_ONLY=true in .env. Set PAPER_TRADING_ONLY=false and restart, then confirm LIVE.',
+            };
+        }
         const goingLive = config.tradingMode === 'LIVE' && this.state.tradingMode !== 'LIVE';
-        const goingPaper = config.tradingMode === 'Paper' && this.state.tradingMode === 'LIVE';
+        const goingPaper = (config.tradingMode === 'PAPER' || config.tradingMode === 'SIMULATOR') && this.state.tradingMode === 'LIVE';
         if (goingLive && config.confirmLiveTrading !== LIVE_TRADING_CONFIRMATION_PHRASE) {
             this.logHistory('veto', 'Blocked attempt to enable LIVE trading mode without explicit confirmation.');
             return { ok: false, error: `Enabling LIVE trading mode requires confirmLiveTrading: "${LIVE_TRADING_CONFIRMATION_PHRASE}"` };

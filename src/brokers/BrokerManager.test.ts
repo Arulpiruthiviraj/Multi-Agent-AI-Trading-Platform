@@ -46,12 +46,17 @@ describe('BrokerManager.setLiveMode capability gate', () => {
     };
   }
 
+  let prevPaperTradingOnly: string | undefined;
+
   beforeAll(async () => {
     tmpDbPath = path.join(os.tmpdir(), `argus_brokermgr_${Date.now()}_${process.pid}.db`);
     process.env.ARGUS_DB_PATH = tmpDbPath;
+    prevPaperTradingOnly = process.env.PAPER_TRADING_ONLY;
     ({ db, sqliteDb } = await import('../server/db'));
     schema = await import('../server/db/schema');
     ({ BrokerManager } = await import('./BrokerManager'));
+    // dotenv.config() during db import may re-apply developer PAPER_TRADING_ONLY — clear after.
+    delete process.env.PAPER_TRADING_ONLY;
   });
 
   afterAll(() => {
@@ -60,9 +65,12 @@ describe('BrokerManager.setLiveMode capability gate', () => {
       try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }
     }
     delete process.env.ARGUS_DB_PATH;
+    if (prevPaperTradingOnly === undefined) delete process.env.PAPER_TRADING_ONLY;
+    else process.env.PAPER_TRADING_ONLY = prevPaperTradingOnly;
   });
 
   it('refuses to switch to LIVE for a broker whose capabilities say liveTrading:false, even with the confirmation phrase', async () => {
+    delete process.env.PAPER_TRADING_ONLY;
     const manager = BrokerManager.getInstance();
     manager.registerBroker(fakeBroker('paper_only', { paperTrading: true, liveTrading: false }));
 
@@ -84,6 +92,7 @@ describe('BrokerManager.setLiveMode capability gate', () => {
   });
 
   it('allows switching to LIVE for a broker that genuinely supports it, with the real confirmation phrase', async () => {
+    delete process.env.PAPER_TRADING_ONLY;
     const manager = BrokerManager.getInstance();
     manager.registerBroker(fakeBroker('full_support', { paperTrading: true, liveTrading: true }));
 
@@ -104,6 +113,7 @@ describe('BrokerManager.setLiveMode capability gate', () => {
   });
 
   it('still refuses live mode for a NON_FUNCTIONAL_BROKER_ID (questrade) before the capability check even runs', async () => {
+    delete process.env.PAPER_TRADING_ONLY;
     const manager = BrokerManager.getInstance();
     // The real QuestradeBroker isn't registered in this test (that only happens via
     // initialize(), which this test deliberately avoids to skip its real auth side effects) - a

@@ -29,6 +29,11 @@ export interface ResearchSafetyConfig {
   wfoValBars: number;
   wfoTestBars: number;
   ingestDailyLookbackDays: number;
+  ingestIntradayLookbackDays: number;
+  ingestDefaultSymbols: string[];
+  ingestAllowedTimeframes: string[];
+  ingestMinYears: number;
+  ingestMaxYears: number;
   alpacaBarsFeed: string;
   missingIntervalYellowCount: number;
   missingIntervalRedCount: number;
@@ -80,7 +85,16 @@ export const researchSafety: ResearchSafetyConfig = {
   wfoTrainBars: Number(raw.wfoTrainBars ?? 60),
   wfoValBars: Number(raw.wfoValBars ?? 20),
   wfoTestBars: Number(raw.wfoTestBars ?? 20),
-  ingestDailyLookbackDays: Number(raw.ingestDailyLookbackDays ?? 756),
+  ingestDailyLookbackDays: Number(raw.ingestDailyLookbackDays ?? 2520),
+  ingestIntradayLookbackDays: Number(raw.ingestIntradayLookbackDays ?? 60),
+  ingestDefaultSymbols: Array.isArray(raw.ingestDefaultSymbols)
+    ? raw.ingestDefaultSymbols.map(String)
+    : ['SPY', 'QQQ', 'IWM', 'AAPL', 'MSFT', 'NVDA', 'AMD'],
+  ingestAllowedTimeframes: Array.isArray(raw.ingestAllowedTimeframes)
+    ? raw.ingestAllowedTimeframes.map(String)
+    : ['1Day', '1Hour', '5Min', '15Min', '1Min'],
+  ingestMinYears: Number(raw.ingestMinYears ?? 5),
+  ingestMaxYears: Number(raw.ingestMaxYears ?? 10),
   alpacaBarsFeed: String(raw.alpacaBarsFeed ?? 'iex'),
   missingIntervalYellowCount: Number(raw.missingIntervalYellowCount ?? 3),
   missingIntervalRedCount: Number(raw.missingIntervalRedCount ?? 10),

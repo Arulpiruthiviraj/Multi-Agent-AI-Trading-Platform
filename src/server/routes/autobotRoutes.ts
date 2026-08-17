@@ -15,6 +15,7 @@ import * as schema from "../db/schema";
 import { tradingEngine } from "../engines/TradingEngine";
 import { shadowPortfolioState } from "../state/shadowPortfolio";
 import { tradingLimiter, aiLimiter } from "../core/RateLimiters";
+import { resolveEnvTradingMode } from "../core/tradingModeEnv";
 
 export const autobotRouter = Router();
 
@@ -36,9 +37,14 @@ autobotRouter.post("/evolve", aiLimiter, async (req: Request, res: Response) => 
 });
 
 autobotRouter.get("/", async (req: Request, res: Response) => {
+  const envMode = resolveEnvTradingMode();
   res.json({
     enabled: tradingEngine.state.enabled,
     tradingMode: tradingEngine.state.tradingMode,
+    envTradingMode: envMode.mode,
+    envTradingModeSource: envMode.source,
+    paperTradingOnly: envMode.paperTradingOnly,
+    liveBlockedByEnv: envMode.liveBlockedByEnv,
     budget: tradingEngine.state.budget,
     spent: tradingEngine.state.spent,
     remaining: tradingEngine.state.budget - tradingEngine.state.spent,

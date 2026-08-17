@@ -86,12 +86,22 @@ const SETTINGS_ALLOWED_FIELDS: (keyof typeof schema.settings.$inferInsert)[] = [
   'maxTradeSize', 'dailyLossLimit', 'takeProfitPct', 'trailingStopPct', 'minAiConfidence',
   'autoBotEnabled', 'adversarialDebateMode', 'maxPortfolioDrawdownPct', 'maxOpenPositions',
   'maxOrdersPerMinute', 'positionSizingMode', 'percentOfEquityPct',
+  'autoTradeScheduleEnabled', 'autoTradeScheduleStartTime', 'autoTradeScheduleEndTime',
 ];
 
 configRouter.get('/settings', async (req, res) => {
   try {
+    const { resolveEnvTradingMode } = await import('../core/tradingModeEnv');
+    const envMode = resolveEnvTradingMode();
     const allSettings = await db.select().from(schema.settings).limit(1);
-    res.json(allSettings[0] || { tradingMode: 'Paper', riskLevel: 'Balanced' });
+    const row = allSettings[0] || { tradingMode: envMode.mode, riskLevel: 'Balanced' };
+    res.json({
+      ...row,
+      tradingMode: tradingEngine.state.tradingMode || row.tradingMode || envMode.mode,
+      PAPER_TRADING_ONLY: envMode.paperTradingOnly,
+      envTradingMode: envMode.mode,
+      envTradingModeSource: envMode.source,
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -99,6 +109,16 @@ configRouter.get('/settings', async (req, res) => {
 
 configRouter.post('/settings', async (req, res) => {
   try {
+    // Reject an invalid schedule window before writing anything, rather than persisting garbage
+    // AutoTradeScheduler.tick() would then silently skip forever (isValidHHMM fails closed there,
+    // but a client should get a real 400, not a feature that quietly never engages).
+    const { isValidHHMM } = await import('../core/AutoTradeSchedule');
+    for (const field of ['autoTradeScheduleStartTime', 'autoTradeScheduleEndTime'] as const) {
+      if (Object.prototype.hasOwnProperty.call(req.body || {}, field) && !isValidHHMM(req.body[field])) {
+        return res.status(400).json({ ok: false, error: `${field} must be "HH:MM" 24-hour format, got ${JSON.stringify(req.body[field])}` });
+      }
+    }
+
     // Check the LIVE-trading confirmation gate BEFORE writing anything - toggle() already
     // applies its own (narrower) allowlist and updates tradingEngine.state/settings for the
     // fields it owns; this route additionally persists the broker/AI-provider selection fields

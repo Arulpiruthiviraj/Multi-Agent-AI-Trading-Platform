@@ -36,6 +36,7 @@ import * as schema from '../db/schema';
  */
 
 import { eventBus } from '../core/EventBus';
+import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { db } from '../db';
 import { agentPerformanceStats, agentConfidenceCalibration } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
@@ -95,7 +96,11 @@ export class ChiefTraderAgent {
   private agentWeights: Record<string, number> = { ...defaultAgentWeights };
 
   constructor() {
-    eventBus.on('TRADE_IDEA_GENERATED', (idea) => this.reviewIdea(idea));
+    eventBus.on('TRADE_IDEA_GENERATED', (idea) => {
+      // Digital Twin telemetry pulse — UI only; do not start consensus/LLM.
+      if (isTelemetryPulsePayload(idea)) return;
+      this.reviewIdea(idea);
+    });
 
     setInterval(() => {
        this.recordUnresolvedAsNoConsensus().catch(e => console.error('[ChiefTrader] Failed to record NO_CONSENSUS transactions', e));

@@ -74,6 +74,7 @@ import {
 } from "lucide-react";
 
 import DigitalTwinVisualizer from "./DigitalTwinVisualizer";
+import OrganicPaperSoakTracker from "./OrganicPaperSoakTracker";
 
 interface AutonomousMissionControlProps {
   autoBotConfig: any;
@@ -527,7 +528,7 @@ export function AutonomousMissionControl({
                   mode === "BEGINNER" ? "AI acts as educational simulation guide." :
                   mode === "ASSISTED" ? "AI scouts and drafts trades, awaits user confirmation." :
                   mode === "AUTONOMOUS" ? "AI handles entries, stop-loss calculations, and exits." :
-                  "Dynamic portfolio allocations, multi-strategy tournament, continuous evolution."
+                  "Institutional-grade multi-agent risk checks."
                 }
               >
                 {mode.replace("_", " ")}
@@ -555,6 +556,8 @@ export function AutonomousMissionControl({
           </button>
         </div>
       </div>
+
+      <OrganicPaperSoakTracker />
 
       {/* BEGINNER EDUCATIONAL ANCHOR */}
       {isBeginnerExplanation && (

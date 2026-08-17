@@ -39,6 +39,7 @@
  */
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
+import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { db } from '../db';
 import { trades, fills, settings, brokerConnections } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
@@ -102,6 +103,8 @@ export class OrderManagementService {
 
   constructor() {
     eventBus.on('RISK_ASSESSMENT_COMPLETED', async (assessment) => {
+      // Digital Twin telemetry pulse — never placeOrder from synthetic risk pass.
+      if (isTelemetryPulsePayload(assessment)) return;
       if (assessment.approved && assessment.maxQuantity > 0) {
         await this.executeOrder(assessment.symbol, assessment.side, assessment.maxQuantity, assessment.reasoning, assessment.traceId, assessment.newsDetails, assessment.transactionId, assessment.selectedQuantStrategy, assessment.quantStopPrice, assessment.quantTargetPrice, assessment.quantInvalidationJson, assessment.currentPrice);
       }

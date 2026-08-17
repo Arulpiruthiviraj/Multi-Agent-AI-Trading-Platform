@@ -449,9 +449,23 @@ export function mountResearchRoutes(v2Router: Router): void {
       tradingState: tradingEngine.state.tradingState,
       reconciliationBlocking: tradingEngine.state.tradingState === 'TRADING_PAUSED',
     });
+    const { classifyMarketSession } = await import('../replay/marketSession');
+    const rawSession = classifyMarketSession(Date.now(), 'America/New_York', true);
+    const weekday = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short' }).format(new Date());
+    const weekend = weekday === 'Sat' || weekday === 'Sun';
+    let marketSession: 'MARKET_OPEN' | 'PRE_MARKET' | 'AFTER_HOURS' | 'WEEKEND_CLOSED' | 'CLOSED' = 'CLOSED';
+    if (weekend) marketSession = 'WEEKEND_CLOSED';
+    else if (rawSession === 'REGULAR') marketSession = 'MARKET_OPEN';
+    else if (rawSession === 'PRE_MARKET') marketSession = 'PRE_MARKET';
+    else if (rawSession === 'AFTER_HOURS') marketSession = 'AFTER_HOURS';
+    else marketSession = 'CLOSED';
     res.json({
       ok: true,
       ...summary,
+      minPaperTrades: researchSafety.minPaperTrades,
+      minPaperSessions: researchSafety.minPaperSessions,
+      marketSession,
+      exclusions: ['REPLAY', 'EXTERNAL_SYNC', 'PRE_EXISTING_RECONCILED', 'HISTORICAL_SIMULATION', 'DIAG*', 'MANUAL_OVERRIDE'],
       soak: {
         ...soak,
         // Backward-compatible dual field

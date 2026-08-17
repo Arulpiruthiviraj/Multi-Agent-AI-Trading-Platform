@@ -347,6 +347,14 @@ async function startServer() {
   }
 
   try {
+    const { autoTradeScheduler } = await import('./src/server/services/AutoTradeScheduler');
+    autoTradeScheduler.start();
+    console.log('[AutoTradeScheduler] Started at boot (independent of Autobot state; no-op unless settings.autoTradeScheduleEnabled is true).');
+  } catch (e: any) {
+    console.warn(`[AutoTradeScheduler] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { modelRuntimeManager } = await import("./src/server/ai/ModelRuntimeManager");
     const models = await modelRuntimeManager.startAndProbe();
     for (const m of models) {

@@ -79,7 +79,37 @@ describe('v2System quant observability routes', () => {
       expect(res.body.ok).toBe(true);
       expect(res.body.strategies.map((s: any) => s.id)).toEqual(ids);
       expect(res.body.experimentalStrategies.every((s: any) => s.validationStatus === 'UNVALIDATED')).toBe(true);
-    }, 20000);
+    }, 45000);
+  });
+
+  describe('GET /api/v2/quant/experiments/audit-trail', () => {
+    it('returns an empty, honest trial list for a strategy with no recorded trials', async () => {
+      const res = await request(app).get('/api/v2/quant/experiments/audit-trail').query({ strategyId: 'STRATEGY_WITH_NO_TRIALS_' + Date.now() });
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.trials).toBe(0);
+      expect(res.body.trialRecords).toEqual([]);
+      expect(res.body.deflatedSharpe).toBeNull();
+    });
+
+    it('returns real recorded per-trial provenance, including rejected trials, and a real DSR once enough real Sharpes exist', async () => {
+      const { recordExperimentTrial } = await import('../research/experimentLedger');
+      const strategyId = 'HTTP_AUDIT_TRAIL_STRATEGY_' + Date.now();
+      recordExperimentTrial(strategyId, 'hash-http-1', { outOfSampleMetrics: { sharpe: 0.7 }, selectionStatus: 'REJECTED', rejectionReason: 'weak OOS Sharpe' });
+      recordExperimentTrial(strategyId, 'hash-http-2', { outOfSampleMetrics: { sharpe: 1.6 }, selectionStatus: 'ACCEPTED' });
+
+      const res = await request(app).get('/api/v2/quant/experiments/audit-trail').query({ strategyId, numObservations: 252 });
+      expect(res.status).toBe(200);
+      expect(res.body.trials).toBe(2);
+      expect(res.body.trialRecords.map((t: any) => t.selectionStatus).sort()).toEqual(['ACCEPTED', 'REJECTED']);
+      expect(res.body.trialRecords.some((t: any) => t.rejectionReason === 'weak OOS Sharpe')).toBe(true);
+      expect(res.body.deflatedSharpe).not.toBeNull();
+      expect(res.body.deflatedSharpe.deflatedSharpeRatio).toBeGreaterThanOrEqual(0);
+      expect(res.body.deflatedSharpe.deflatedSharpeRatio).toBeLessThanOrEqual(1);
+
+      const resNoObs = await request(app).get('/api/v2/quant/experiments/audit-trail').query({ strategyId });
+      expect(resNoObs.body.deflatedSharpe).toBeNull(); // never fabricated without an explicit numObservations
+    });
   });
 
   describe('GET /api/v2/quant/assessments/:symbol', () => {

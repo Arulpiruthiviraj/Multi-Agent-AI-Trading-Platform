@@ -86,6 +86,39 @@ v2Router.get('/live-readiness', (_req, res) => {
   }
 });
 
+/**
+ * Dev / PAPER diagnostic: synthetic EventBus sequence for DigitalTwinVisualizer only.
+ * Payloads tagged telemetryPulse — ChiefTrader / RiskAgent / OMS ignore them.
+ * Refused when settings.tradingMode is LIVE.
+ */
+v2Router.post('/system/telemetry-pulse', tradingLimiter, async (req, res) => {
+  try {
+    const rows = await db.select({ tradingMode: settings.tradingMode }).from(settings).limit(1);
+    const mode = String(rows[0]?.tradingMode || 'PAPER').toUpperCase();
+    if (mode === 'LIVE') {
+      return res.status(403).json({
+        ok: false,
+        error: 'TELEMETRY_PULSE_REFUSED_IN_LIVE — switch to PAPER first.',
+        canPlaceOrders: false,
+      });
+    }
+    const pulseMode = req.body?.mode === 'reject' ? 'reject' : 'approve';
+    const symbol = typeof req.body?.symbol === 'string' && req.body.symbol ? req.body.symbol : 'AAPL';
+    const { startDigitalTwinTelemetryPulse } = await import('../core/telemetryPulse');
+    const result = startDigitalTwinTelemetryPulse({ mode: pulseMode, symbol });
+    res.json({
+      ok: true,
+      ...result,
+      started: true,
+      note: 'Synthetic UI pulse only. Not organic paper. Not LIVE. OMS/Risk ignore telemetryPulse payloads.',
+      live: 'NO-GO',
+      canPlaceOrders: false,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e?.message || String(e), canPlaceOrders: false });
+  }
+});
+
 v2Router.get('/agents/performance', async (req, res) => {
   try {
     const stats = await db.select().from(agentPerformanceStats).all();
@@ -1257,6 +1290,33 @@ v2Router.get('/quant/strategies', (req, res) => {
     })),
     taxonomy: quantStrategyTaxonomySummary(),
   });
+});
+
+// Multiple-testing experiment provenance (ARGUS_FINAL_FORENSIC_AUDIT.md §14/§22) - full per-trial
+// audit trail (accepted AND rejected/pruned trials), not just the aggregate trial count already
+// exposed via researchRoutes.ts's job responses. Read-only; never accepts writes from this route -
+// trials are only ever recorded from the real backtest/research call sites themselves.
+v2Router.get('/quant/experiments/audit-trail', async (req, res) => {
+  try {
+    const { experimentAuditTrail, experimentLedgerSnapshot, deflatedSharpeRatioFromLedger } = await import('../research/experimentLedger');
+    const strategyId = typeof req.query.strategyId === 'string' ? req.query.strategyId : undefined;
+    const trials = experimentAuditTrail(strategyId);
+    const numObservationsRaw = Number(req.query.numObservations);
+    const numObservations = Number.isFinite(numObservationsRaw) && numObservationsRaw > 1 ? numObservationsRaw : null;
+    const deflatedSharpe = strategyId && numObservations
+      ? deflatedSharpeRatioFromLedger(strategyId, numObservations)
+      : null;
+    res.json({
+      ok: true,
+      ...experimentLedgerSnapshot(),
+      trials: trials.length,
+      trialRecords: trials,
+      deflatedSharpe,
+      note: 'Full experiment provenance, including rejected/pruned trials - never only the winning search result. deflatedSharpe is null unless both strategyId and a numObservations query param are supplied and at least 2 trials for that strategy carry a real outOfSampleMetrics.sharpe value.',
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 v2Router.get('/quant/assessments/:symbol', async (req, res) => {
