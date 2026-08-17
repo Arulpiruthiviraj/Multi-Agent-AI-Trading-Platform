@@ -441,23 +441,23 @@ export function mountResearchRoutes(v2Router: Router): void {
     const recon = reconcilePaperVsResearch(rec?.manifest ?? null, rows);
     const closed = summary.closedTradeCount ?? 0;
     const sessions = summary.sessionCount ?? 0;
-    const soak = {
-      status: closed >= researchSafety.minPaperTrades && sessions >= researchSafety.minPaperSessions
-        ? 'SOAK_FLOOR_MET'
-        : 'SOAK_IN_PROGRESS',
-      minPaperTrades: researchSafety.minPaperTrades,
-      minPaperSessions: researchSafety.minPaperSessions,
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    const { derivePaperSoakStatus } = await import('../research/paperSoakState');
+    const soak = derivePaperSoakStatus({
       closedTradeCount: closed,
       sessionCount: sessions,
-      remainingTrades: Math.max(0, researchSafety.minPaperTrades - closed),
-      remainingSessions: Math.max(0, researchSafety.minPaperSessions - sessions),
-      note: 'Organic PAPER FILLED SELL only. Replay/shadow/overrides excluded. Cannot be fabricated.',
-      live: 'NO-GO' as const,
-    };
+      tradingState: tradingEngine.state.tradingState,
+      reconciliationBlocking: tradingEngine.state.tradingState === 'TRADING_PAUSED',
+    });
     res.json({
       ok: true,
       ...summary,
-      soak,
+      soak: {
+        ...soak,
+        // Backward-compatible dual field
+        status: soak.status,
+        legacyStatus: soak.legacyStatus,
+      },
       reconciliation: recon,
       invented: false,
       live: 'NO-GO',

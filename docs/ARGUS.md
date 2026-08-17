@@ -1,12 +1,16 @@
 # Argus
 
-Living system document. **LIVE real-money: NO-GO.** Code + tests beat old reports. Dated audits: `docs/archive/historical/`. Local models: [LOCAL_AI_SETUP.md](LOCAL_AI_SETUP.md). Catalogs (strategies, gates, tables, env): [ARGUS_REFERENCE.md](ARGUS_REFERENCE.md). Agent contract: root `CLAUDE.md`. UI tab matrix: root `FINAL_ANALYSIS.md` §25.3 / §31.
+Living system document. **LIVE real-money: NO-GO.** Code + tests beat old reports. Dated audits: `docs/archive/historical/`. Local models: [LOCAL_AI_SETUP.md](LOCAL_AI_SETUP.md). Setup/ecosystem: [GETTING_STARTED.md](GETTING_STARTED.md) · [ECOSYSTEM.md](ECOSYSTEM.md) · [CONFIG.md](CONFIG.md). Catalogs: [ARGUS_REFERENCE.md](ARGUS_REFERENCE.md). Agent contract: root `CLAUDE.md`. UI tab matrix: root `FINAL_ANALYSIS.md` §25.3 / §31.
 
 NewsAgent last scored pass: **44.6% on 242 predictions**. Walk-forward OOS for checked quant combos **failed**. Do not invent a new readiness percentage. Adding markdown does not raise scores.
 
+## Trust boundary
+
+**Argus is the sole execution authority and system of record.** Sibling engines (`vibe-trading`, `autohedge`, `OpenAlice`, `FinceptTerminal`) started by `scripts/ecosystem-dev.ts` are **untrusted research / verification**. They do not place Argus orders, do not receive broker credentials for OMS, and AutoHedge wallet keys are forcibly emptied. See [ECOSYSTEM.md](ECOSYSTEM.md).
+
 ## What it is
 
-Node.js trading terminal: Express + Vite SPA + raw `ws` + SQLite (`data/argus.db`, WAL). Package name `my-money-miner`. Port **3000** hardcoded (`PORT` unused). One process.
+Node.js trading terminal: Express + Vite SPA + raw `ws` + SQLite (`data/argus.db`, WAL). Package name `my-money-miner`. Port **3000** hardcoded (`PORT` unused). One Node process for the trading app; optional sibling processes for research only.
 
 **Live path (do not rewrite):** EventBus → idea agents → ChiefTrader → RiskAgent → RiskEngine → OMS → `BrokerManager.getActiveBroker().placeOrder` → `trades` / `fills`.
 
@@ -16,15 +20,15 @@ Do not bypass RiskEngine. Do not add a second kill switch. `settings.budget` is 
 
 ## What it does / does not
 
-Does: paper or Alpaca unattended orders through the live path; 18 recorded risk gates; recon `TRADING_PAUSED` **does** fail `emergency_stop`; Alpaca/AI AbortController timeouts; OMS inbound fill ingest + orphan cancel/pause; backtest capital-gate inequalities + live TP/trail exits on strategy runs; optional Quant/Chronos/Ollama/OpenAlice/IBKR Gateway.
+Does: paper or Alpaca unattended orders through the live path; 18 recorded risk gates; recon `TRADING_PAUSED` **does** fail `emergency_stop`; Alpaca/AI AbortController timeouts; OMS inbound fill ingest + orphan cancel/pause; backtest capital-gate inequalities + live TP/trail exits on strategy runs; optional Quant/Chronos/Ollama/OpenAlice/IBKR Gateway; optional ecosystem spawn of vibe/autohedge/Fincept for **local research sidecars**.
 
-Does not: proven edge; L2/options/breadth/volume profile/pairs/anchored VWAP/TSI/CAD FX; fractional shares; Canadian automated routing (IIROC); historical AI replay of past years.
+Does not: proven edge; L2/options/breadth/volume profile/pairs/anchored VWAP/TSI/CAD FX; fractional shares; Canadian automated routing (IIROC); historical AI replay of past years; automatic promotion of external MCP/PnL into RiskEngine.
 
 Paper: mechanically possible. Live: **NO-GO**.
 
 ## Startup
 
-`npm run dev` → `scripts/devWithOpenAlice.ts` (Chronos :8008, Ollama, optional OpenAlice :47332, optional IBKR) + `tsx server.ts`. `npm run dev:server-only` = Node only.
+`npm run dev` → `scripts/ecosystem-dev.ts` (optional sibling Vibe-Trading / AutoHedge / OpenAlice / Fincept from `.env` paths) → `scripts/devWithOpenAlice.ts` (`dev:core`: Chronos :8008, Ollama, optional OpenAlice :47332, optional IBKR) → `tsx server.ts`. `npm run dev:core` skips vibe/autohedge/Fincept. `npm run dev:server-only` = Node only.
 
 Boot: import constructors (OMS, RiskAgent, TechnicalAgent, ChiefTrader, Kronos, MarketRegimeAgent timer) → AIRouter → TradingEngine (Autobot `system.start` only if `autoBotEnabled`) → seed settings → BrokerManager → **MarketDataWorker.start always** → model probes → listen. Bind host: **`127.0.0.1` when `AUTH_PASSWORD` unset** (loud WARNING); `0.0.0.0` only when auth is enabled. Port **3000**. Migrations run on first import of `src/server/db/index.ts`. **`npm run db:migrate` is broken** (`database/migrate.ts` missing).
 

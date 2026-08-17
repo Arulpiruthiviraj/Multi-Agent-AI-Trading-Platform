@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import React, { createContext, useContext, useEffect, useState, useRef, ReactNode } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo, ReactNode } from 'react';
 
 type WebSocketStatus = 'connecting' | 'connected' | 'disconnected';
 
@@ -186,29 +186,37 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
     };
   }, []);
 
-  const sendMessage = (msg: any) => {
+  // Stable identities: App.tsx (and others) put `subscribe` in useEffect deps. Recreating
+  // subscribe on every lastMessage/status update re-ran those effects → fetch → setState →
+  // Maximum update depth exceeded (see App.tsx ~1071 AUTOBOT_STATE_UPDATED effect).
+  const sendMessage = useCallback((msg: any) => {
     if (ws.current?.readyState === WebSocket.OPEN) {
       ws.current.send(JSON.stringify(msg));
     } else {
       console.warn('[WebSocketContext] Cannot send message, WebSocket not open.');
     }
-  };
+  }, []);
 
-  const subscribe = (eventType: string, callback: (data: any) => void) => {
+  const subscribe = useCallback((eventType: string, callback: (data: any) => void) => {
     if (!subscribers.current.has(eventType)) {
       subscribers.current.set(eventType, new Set());
     }
     subscribers.current.get(eventType)!.add(callback);
-    
+
     return () => {
       if (subscribers.current.has(eventType)) {
         subscribers.current.get(eventType)!.delete(callback);
       }
     };
-  };
+  }, []);
+
+  const value = useMemo(
+    () => ({ status, lastMessage, sendMessage, subscribe }),
+    [status, lastMessage, sendMessage, subscribe],
+  );
 
   return (
-    <WebSocketContext.Provider value={{ status, lastMessage, sendMessage, subscribe }}>
+    <WebSocketContext.Provider value={value}>
       {children}
     </WebSocketContext.Provider>
   );

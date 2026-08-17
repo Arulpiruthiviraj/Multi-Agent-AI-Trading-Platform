@@ -7,7 +7,8 @@
     "node": "24.18.0"
   },
   "scripts": {
-    "dev": "tsx scripts/devWithOpenAlice.ts",
+    "dev": "tsx scripts/ecosystem-dev.ts",
+    "dev:core": "tsx scripts/devWithOpenAlice.ts",
     "dev:server-only": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
@@ -16,6 +17,9 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "security:scan-writes": "tsx scripts/scan_unallowlisted_writes.ts",
+    "research:probe-env": "python scripts/probe_research_env.py",
+    "research:ingest-warehouse": "tsx scripts/ingest_research_warehouse.ts",
+    "research:canonical": "tsx scripts/run_canonical_research.ts",
     "setup:ai": "python scripts/bootstrap_models.py",
     "ai:serve": "python scripts/local_ai_service.py",
     "db:migrate": "tsx database/migrate.ts"

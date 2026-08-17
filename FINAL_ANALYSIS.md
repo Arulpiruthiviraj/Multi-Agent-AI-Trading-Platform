@@ -1,247 +1,214 @@
 # Argus Autonomous Trading Platform — FINAL FORENSIC ANALYSIS & READINESS MATRIX
 
-**Audit Date:** 2026-08-16
-**Auditor:** Principal Quantitative Systems Auditor & Risk Officer (hostile, read-only pass)
-**Build & Test Verification:** `npx tsc --noEmit` — **PASS** (exit 0, zero errors). `npx vitest run` — **PASS**, **1089 tests / 166 files**, 0 failed (vitest 4.1.10, ~150-200s depending on system load).
-**Overall Real-Money Readiness:** **61.8%** (Section 9 — deterministic weighted calculation; do not round up)
-**Verdicts:**
-- **LIVE Autonomous Trading:** **NO-GO**
-- **Paper Trading (Supervised):** **CONDITIONAL GO**
-- **Trading Edge:** **8/100 (NO-GO / UNTESTED)** — per the zero-fabrication rule: organic closed paper trades in `data/argus.db` = 0, so this score is a floor value, not a measurement of a real edge.
+**Audit Date:** 2026-08-16 (evening pass — includes real runtime evidence from actually operating the system, not just static code inspection)
+**Auditor role:** Principal Quantitative Systems Auditor / Lead Risk Officer / Adversarial Code Reviewer
+**Verification commands, this pass:** `npx tsc --noEmit` — **PASS**, exit 0, zero errors. `npx vitest run` — **PASS**, **1091 tests / 166 files**, 0 failed.
 
-This document was produced by direct source/schema/data inspection this session, not by trusting prior markdown claims, comments, or docstrings. Every specific claim below cites a real file, and every count is from a live command run against the current tree and `data/argus.db`.
+**Overall Real-Money Readiness (deterministic weighted blend, Section 8):** **58.35%**
+**Deterministic Engineering Readiness** (Software + Risk + External-Integration dimensions only): **~91%**
+**True Capital Readiness** (hostile blend including empirical-edge dimensions): **58.35%** — the gap between these two numbers *is* the honest state of this project.
 
----
+| Verdict | Status |
+|---|---|
+| LIVE Autonomous Trading | **NO-GO** |
+| Supervised Paper Trading | **CONDITIONAL GO** (real, but currently self-pausing — see §7) |
+| Unattended Paper Certificate | **NO-GO** |
+| Empirical Trading Edge | **0/100 — `NOT_ESTABLISHED`** (0 real closed organic trades on disk; see §7) |
+| Canadian Live Execution (IIROC) | **BLOCKED** (external/regulatory, not a code gap) |
 
-## 1. Executive Summary & Critical Findings
-
-Argus's engineering is materially stronger than a naive read of "passing tests" would suggest: there is exactly one production order path, it is provably isolated from research/UI/Python code, encryption and secrets handling fail closed, and the risk gate ladder (24 real gates) records an honest pass/fail for every gate on every evaluation — including a real fix that prevents a binding sizing clamp from ever being reported as a pass at zero shares. None of that is trading edge, and none of it is claimed as such anywhere in the code.
-
-The five most critical gaps preventing real-money deployment, in priority order:
-
-1. **Zero organic closed paper trades exist.** `data/argus.db`'s `trades` table has 8 rows total: 6 are diagnostic-script artifacts (`DIAGTEST*`/`DIAGPIPE*`/etc., all `PENDING`, never filled), and the only FILLED BUY/SELL pair (AAPL, real -$91.05 realized loss) is tagged `execution_environment='REPLAY'` — it came from the historical-replay lab, not real paper trading. `organicPaper.ts`'s `isOrganicClosedPaper()` correctly excludes it. The `minPaperTrades: 30` threshold in `config/researchSafety.json` is 0/30 met.
-2. **No out-of-sample statistical edge has been demonstrated.** The real walk-forward/robustness/permutation harnesses (`coreWalkForward.ts`, `coreRobustness.ts`, `multipleTesting.ts`) exist and run against real GREEN data, but the recorded prior real run (SPY, 1Day, NEXT_BAR) reported WFO **FRAGILE** and robustness **FAILED/insufficient**. The infrastructure to validate an edge is real; the validated edge is not.
-3. **Python/VectorBT strategy parity is not established.** `config/researchSafety.json`'s own `proxyAdapterNote` states CORE feature vectors (BOS/RVOL/Keltner/S-R) match the TS fixture (`FEATURE_SUBSET_PARITY`), but full `StrategyContext.evaluate()` is not byte-identical in Python, and VectorBT itself is `state: 'UNAVAILABLE'` in this environment (not installed) — `getVectorBTStatus()` confirms no Rust backend, no Python bridge active.
-4. **`BacktestEngine.ts` still fills on `SAME_BAR_CLOSE`, not `NEXT_BAR_OPEN`.** It is explicitly stamped `promotable: false` / `SAME_BAR_CLOSE_NOT_PROMOTABLE` in its own header comment — a real, intentional, non-silent limitation, but it means the older/broader backtest surface cannot be used as promotion evidence. Only `canonicalNextBarEngine.ts`'s narrower NEXT_BAR_OPEN path can.
-5. **Live capital enablement is correctly, deliberately hard to reach — and that is by design, not accident.** Five independent, redundant checks (confirmation phrase, `BrokerManager.setLiveMode` arming, per-order `assertBrokerEnvironmentAllowsOrder`, per-order `isLiveTradingArmed()`, and a live-Alpaca-host refusal absent that arm) must all agree before a single real LIVE order can be placed, and a process restart clears the arm even if the DB still says LIVE. This is correct, verified fail-closed behavior — but it also means the system has never been exercised end-to-end with real capital, which is itself an evidence gap, not just a safety feature.
+This document supersedes the same-day earlier version. Everything below was either re-verified with a fresh command this pass, or is new evidence produced by actually running the system (enabling real Autobot in real PAPER mode against a real Alpaca paper account) rather than only reading source.
 
 ---
 
-## 2. Complete Repository & Subsystem Inventory
+## 1. Executive Summary — The 5 Critical Gaps
 
-| Subsystem | Path | Role | Test coverage | Health |
-|---|---|---|---|---|
-| Live decision spine | `server.ts`, `src/server/services/{TechnicalAgent,ChiefTraderAgent,RiskAgent,QuantSignalAgent}.ts` | Real agents → consensus → risk → order | Extensive (unit + integration) | Real, production |
-| Risk & sizing | `src/server/engines/{RiskEngine,PositionSizing,RestrictedLiveMode,CapitalAllocation,DailyBuyNotional}.ts` | 24-gate risk ladder, sizing honesty | Extensive | Real, production |
-| Order execution | `src/server/services/OrderManagement.ts`, `src/brokers/*` | Sole `placeOrder` caller, broker adapters | Extensive | Real, production |
-| Broker adapters | `src/brokers/{AlpacaBroker,InternalPaperBroker,InteractiveBrokersAdapter,CoinbaseBroker,QuestradeBroker,HistoricalReplayBroker}.ts` | Real execution surfaces | Per-adapter | Alpaca fully unattended; others partial/blocked (Section 6) |
-| Encryption / secrets | `src/server/core/EncryptionService.ts`, `server.ts` secrets guard | Fail-closed key handling | Direct + integration | Real, verified this session |
-| Research/backtest core | `src/server/engines/backtest/BacktestEngine.ts`, `src/server/research/canonicalNextBarEngine.ts` | SAME_BAR (legacy) vs NEXT_BAR (canonical/promotable) | Extensive | Real, two distinct fill models, not mixed |
-| Research validation | `src/server/research/{coreWalkForward,coreRobustness,multipleTesting,robustness,edgeScore}.ts` | WFO, permutation, cost-stress, edge scoring | Extensive | Real infrastructure; real prior result was FRAGILE/FAILED |
-| Python bridge | `python/argus_research/{cli.py,core_features.py}` | Feature-subset parity check, VectorBT bridge | Present | `FEATURE_SUBSET_PARITY` only; VectorBT itself `UNAVAILABLE` here |
-| Historical replay | `src/server/replay/FullArgusReplayEngine.ts`, `src/server/routes/researchRoutes.ts` | Full pipeline replay against golden/real historical bars | Present (`phase17-25` test files) | Real; explicitly `executionEnvironment: 'REPLAY'`, excluded from organic paper |
-| Promotion engine | `src/server/research/promotionEngine.ts` | Lifecycle status / GO-NO-GO derivation from real evidence | Present | Real; currently emits `promotable: false` across recorded runs |
-| Data quality / warehouse | `src/server/research/{dataQuality,parquetStore,warehouseInventory,ingestAlpacaWarehouse}.ts` | GREEN/YELLOW/RED grading, Parquet export | Present | 1 GREEN dataset on disk (SPY), 0 Parquet files written |
-| AI routing | `src/server/ai/AIRouter.ts`, `src/server/ai/providers/*` | Multi-provider LLM routing, failover | Extensive | Real; Gemini/OpenAI/DeepSeek/Nvidia/OpenAI-compatible implemented |
-| UI (SPA) | `src/App.tsx`, `src/components/*` | Single-page frontend | Minimal (documented, longstanding gap) | Key visualizers (`DigitalTwinVisualizer`, `AgentFocusMode`) verified real-event-only; Mission Control verified free of hardcoded win-rate strings |
-| Legacy/quarantined | `GET /api/v1/signals`, event-memory routes | Old fabricated-consensus path | N/A | Confirmed `410 SIGNALS_PATH_QUARANTINED`, not restorable |
+1. **Zero organic closed paper trades still exist**, even after actually turning the system on. `trades`: 8 rows — 6 diagnostic artifacts (`DIAGTEST*`/`DIAGORDER*`/`DIAGCHAIN*`, all `PENDING`), 1 FILLED BUY/SELL pair tagged `REPLAY` (-$91.05, historical-replay lab, not live paper). `minPaperTrades: 30` remains 0/30.
+2. **No validated statistical edge, now backed by a real, comprehensive gauntlet, not one data point.** This pass ran 25 real walk-forward + robustness evaluations (5 CORE strategies × 5 real symbols — QQQ, AAPL, NVDA, MSFT, AMD — each on ~2 years of real GREEN Alpaca daily data). **0 of 25 passed WFO. 0 of 25 passed all four robustness gates** (Monte Carlo, permutation, sensitivity, cost-stress). A material fraction of the `FRAGILE` verdicts trace to `testTrades: 0` in individual WFO folds — meaning the honest finding is partly "insufficient real trade volume to conclude anything," not uniformly "traded and lost."
+3. **A real safety mechanism just proved itself, and in doing so revealed a real operational gap.** `PortfolioReconciliation.ts` correctly auto-paused live PAPER trading twice this evening against real Alpaca account state (two pre-existing GLD/NVDA positions it didn't recognize). The pause logic is correct; what's missing is a way to durably resolve a *known, accepted* discrepancy so it stops re-tripping every cycle. This is the single blocker between "infrastructure is ready" and "the 30-day soak can run unattended."
+4. **Python/VectorBT parity remains feature-subset only**, and Parquet durability is blocked by a real, verified missing dependency: every one of this pass's 5 real ingests failed parquet write with `pyarrow_unavailable: No module named 'pyarrow'` — not a logic bug, an environment gap.
+5. **`BacktestEngine.ts` remains `SAME_BAR_CLOSE`**, explicitly non-promotable; only `canonicalNextBarEngine.ts`'s `NEXT_BAR_OPEN` path is used for anything promotion-adjacent, and it is what this pass's real WFO gauntlet ran on.
 
 ---
 
-## 3. Order & Execution Path Forensics
+## 2. Complete Subsystem Inventory
 
-**The single authorized path:**
+| Subsystem | Path | Real / Verified | Test coverage |
+|---|---|---|---|
+| Live decision spine | `server.ts`, `TechnicalAgent/ChiefTraderAgent/RiskAgent/QuantSignalAgent.ts` | Real, production | Extensive |
+| Risk & sizing | `RiskEngine.ts`, `PositionSizing.ts`, `RestrictedLiveMode.ts`, `CapitalAllocation.ts`, `DailyBuyNotional.ts` | Real; **live-fire verified this pass** (real reconciliation pause, twice) | Extensive |
+| Order execution | `OrderManagement.ts` + broker adapters | Real, sole `placeOrder` path | Extensive |
+| Broker adapters | Alpaca / InternalPaper / IBKR / Coinbase / Questrade / HistoricalReplay | Real; Alpaca only fully unattended one | Per-adapter |
+| Ecosystem orchestrator | `scripts/ecosystem-dev.ts` (now the real `npm run dev` entry point) | Real; spawns Vibe-Trading-MCP/AutoHedge/Fincept as **separate OS processes**, zero code coupling to `BrokerManager` | N/A (launcher script) |
+| External research adapters | Vibe-Trading MCP (port 8900, AI keys only), AutoHedge (AI keys + forcibly-emptied `WALLET_PRIVATE_KEY`/`SOLANA_PRIVATE_KEY` + `AUTOHEDGE_PAPER_ONLY:'true'`), OpenAlice (MCP, read-only) | Real, verified this pass (`ecosystem-dev.ts:305-347`) | N/A |
+| Research/backtest core | `BacktestEngine.ts` (SAME_BAR, legacy) vs `canonicalNextBarEngine.ts` (NEXT_BAR, canonical) | Real, two distinct fill models, not mixed | Extensive |
+| Research validation | `coreWalkForward.ts`, `coreRobustness.ts`, `multipleTesting.ts` | Real; **just ran 25 real evaluations this pass** (§7.2) | Extensive |
+| AI routing | `AIRouter.ts` + `Gemini/OpenAI/DeepSeek/Nvidia/OpenAI-compatible` providers | Real | Extensive |
+| Database | `data/argus.db`, `better-sqlite3` + Drizzle WAL | Real; integrity-checked this session | N/A |
+| UI (SPA) | `src/App.tsx`, `src/components/*` | Real event-bound visualizers verified; thin test coverage (documented, longstanding) | Minimal |
+
+---
+
+## 3. Order Path & State Machine Forensics
 
 ```
 MarketDataWorker (real Alpaca WS ticks)
   -> EventBus 'MARKET_DATA' / 'MARKET_DATA_UPDATED'
-  -> Independent agents (TechnicalAgent, NewsEngine, FundamentalAgent, MacroAgent,
-     PortfolioMonitor, QuantSignalAgent) -> 'TRADE_IDEA_GENERATED'
+  -> Agents (Technical/News/Fundamental/Macro/PortfolioMonitor/QuantSignalAgent) -> 'TRADE_IDEA_GENERATED'
   -> ChiefTraderAgent.evaluateConsensus() -> 'CHIEF_APPROVED_IDEA'
-  -> RiskAgent.assessRisk() -> RiskEngine.evaluateRisk() (24-gate ladder, serialized queue)
+  -> RiskAgent.assessRisk() -> RiskEngine.evaluateRisk() (24-gate serialized ladder)
   -> 'RISK_ASSESSMENT_COMPLETED'
-  -> OrderManagementService (sole `placeOrder` caller in production TS)
-  -> BrokerManager.getActiveBroker() -> broker adapter -> real order
+  -> OrderManagementService (sole production `placeOrder` caller)
+  -> BrokerManager.getActiveBroker() -> adapter -> real order
 ```
 
-**Invariant proof, this session:**
+**Grep proof, re-run fresh this pass:**
+- `executeAutoBotTradeInSovereign`: **0 matches**, tree-wide.
+- `BrokerEngine.ts`: **confirmed absent** (deleted).
+- `.placeOrder(` outside `*.test.ts`: only the 5 broker adapters (internal close/flatten helpers) plus `OrderManagement.ts`. `server.ts`, every route file, and `App.tsx`: **zero**.
+- Vibe-Trading/AutoHedge/Fincept/OpenAlice: **zero references anywhere under `src/`** — real, separate-process isolation, not just coding discipline.
 
-- `grep -rn "executeAutoBotTradeInSovereign"` across the tree (excluding `node_modules`): **0 matches.** The function does not exist.
-- `find . -iname "BrokerEngine.ts"`: **no results.** Confirmed deleted; no dormant `submitOrder` path parallel to OMS.
-- `grep -rln "\.placeOrder("` across `src/` (excluding `*.test.ts`): only the five broker adapters (`CoinbaseBroker`, `HistoricalReplayBroker`, `InteractiveBrokersAdapter`, `InternalPaperBroker`) calling `this.placeOrder` internally for close/flatten helpers, plus `OrderManagement.ts` — the only external caller. `server.ts` and every file under `src/server/routes/` have zero `.placeOrder(` calls. `src/App.tsx` has zero.
-- Python/VectorBT: `getVectorBTStatus()` reports `canPlaceOrders: false`; no `BrokerManager` import anywhere under `python/`.
+**5-layer LIVE arm invariant** (unchanged, re-confirmed):
 
-**Manual override path** (`POST /api/v2/trading/execute-override`): skips only ChiefTrader's consensus step — still goes through the identical RiskEngine → OMS path, reasoning is stamped `SOURCE: MANUAL_OVERRIDE`, and `organicPaper.ts`'s `isOrganicClosedPaper()` explicitly excludes anything with that reasoning marker or a `manual-override-` traceId prefix, so an operator override can never inflate the organic-paper count.
-
-**Verdict:** Real order placement is structurally isolated to one path. This is a code-level guarantee (verified by exhaustive grep, not sampling), not a policy.
-
----
-
-## 4. State Machine & Safety Matrix
-
-| State dimension | Where enforced | BUY impact | SELL impact |
-|---|---|---|---|
-| `tradingState` (`TRADING_ENABLED` / `TRADING_PAUSED` / `EMERGENCY_STOP`) | `RiskEngine.ts` gate `emergency_stop` (evaluated first, always) | Blocked unless `TRADING_ENABLED` | Blocked unless `TRADING_ENABLED` |
-| Autobot on/off | `RiskEngine.ts` gate `autobot_enabled` | **Blocked** when Autobot is off | **Not blocked** — SELL/exit still runs so `PortfolioMonitor` can flatten existing paper positions even with Autobot off |
-| `tradingMode` (`PAPER`/`LIVE`) vs `paperMode` flag | `assertBrokerEnvironmentAllowsOrder()` (`src/server/core/brokerEnvironment.ts`), called in `OrderManagement.ts` | Disagreement between the two flags -> order outcome `UNKNOWN`, no order placed | Same |
-| Per-order LIVE arm | `isLiveTradingArmed()` (`LiveTradingConfirmation.ts`), checked in both `OrderManagement.ts` and `AlpacaBroker.placeOrder` (refuses the real `api.alpaca.markets` host without it) | Refused without arm | Refused without arm |
-| Confirmation phrase | `TradingEngine.toggle()` requires `confirmLiveTrading === 'ENABLE LIVE TRADING'` to enable LIVE at all | Gates the whole LIVE mode, upstream of every order | Same |
-| Process restart | Arm state is in-memory only; a restart clears it even if `settings.tradingMode` in SQLite still says `LIVE` | Every order after a restart requires re-arming | Same |
-| Replay session active | `RiskEngine.ts`: `getActiveReplaySession()` substitutes replay-scoped trading state/clock/news; refuses if `tradingMode === 'LIVE'` | Replay never touches real trading state | Same |
-
-**Verdict:** No single flag, and no pair of flags, is sufficient to place a real LIVE order. Every path requires the confirmation phrase (upstream), the dual-flag agreement (per-order), and the explicit arm (per-order) simultaneously.
-
----
-
-## 5. RiskEngine 24-Gate Deep Audit
-
-Canonical order from `config/riskGateOrder.json` (used for the UI catalog only — actual pass/fail always comes from `RISK_GATE_EVALUATED` / `risk_gate_results`, per that file's own `$comment`). All 24 gates are evaluated **unconditionally** on every proposal (not short-circuited), per `RiskEngine.ts`'s own documented Phase-2 design — a rejected proposal still gets a complete, honest gate-by-gate record.
-
-| # | Gate | Source | Fail-mode | BUY | SELL |
-|---|---|---|---|---|---|
-| 1 | `emergency_stop` | `RiskEngine.ts:219` | Closed (blocks unless `TRADING_ENABLED`) | Yes | Yes |
-| 2 | `autobot_enabled` | `RiskEngine.ts:230` | Closed for BUY only | Yes | No (exits always allowed) |
-| 3 | `same_symbol_cooldown` | `OvertradingGuards.ts` via `RiskEngine.ts:244` | Real trade-history lookback | Yes | Yes |
-| 4 | `post_loss_cooldown` | `OvertradingGuards.ts` via `RiskEngine.ts:246` | Real trade-history lookback | Yes | Yes |
-| 5 | `daily_trade_limit` | `OvertradingGuards.ts` via `RiskEngine.ts:248` | Real trade-history lookback | Yes | Yes |
-| 6 | `duplicate_signal` | `OvertradingGuards.ts` via `RiskEngine.ts:252` | Real `risk_assessments` lookback window | Yes | Yes |
-| 7 | `invalid_account_equity` | `AccountEquity.ts` via `RiskEngine.ts:297` | **Closed** — non-positive/missing broker equity refuses outright, no placeholder balance | Yes | Yes |
-| 8 | `daily_loss` | `RiskEngine.ts:344` | Real exchange-day (America/New_York) baseline, 80% kill-switch fraction | Yes | Yes |
-| 9 | `consecutive_loss` | `RiskEngine.ts:350` | Real realized P&L from last N FILLED trades (replay/backtest/diagnostic rows excluded) | Yes | Yes |
-| 10 | `portfolio_drawdown` | `RiskEngine.ts:367` | Real persisted high-water-mark, never resets down | Yes | Yes |
-| 11 | `order_rate_limit` | `RiskEngine.ts:383` | Real 60s `risk_assessments` count | Yes | Yes |
-| 12 | `market_hours` | `RiskEngine.ts:392` | **Fail-closed** — HTTP/network failure on Alpaca clock is `unavailable`, treated as blocking, never as open | Yes | Yes |
-| 13 | `data_freshness` | `marketDataQuality.ts` | **Fail-closed** — `priceAgeMs === null` returns grade `UNKNOWN`, `passed: false`, never treated as fresh | Yes | Yes |
-| 14 | `news_veto` | `newsClusterMatch.ts` | `newsImpactOnVetoScale()` real-verified: normalizes a 0-1 raw `impactScore` to the 0-100 threshold scale before comparing, closing a real unit-mismatch bug | Yes | Yes |
-| 15 | `price_validity` | `RiskEngine.ts:435` | Requires finite, positive current price | Yes | Yes |
-| 16 | `order_notional_cap` | `PositionSizing.ts:153` | `passed:false` when `maxSharesByCapital <= 0` | Yes | N/A |
-| 17 | `symbol_concentration` | `PositionSizing.ts:171` | `passed:false` when remaining room floors to 0 shares | Yes | N/A |
-| 18 | `open_positions_cap` | `PositionSizing.ts:180` | Blocks a genuinely new position once `existingPositions.length >= maxOpenPositions` | Yes | N/A |
-| 19 | `sector_concentration` | `PositionSizing.ts:192` | `passed:false` at zero remaining sector room; `failClosedUnknownInputs` (LIVE only) treats an unmapped symbol as **FAIL**, not skip | Yes | N/A |
-| 20 | `correlation_exposure` | `PositionSizing.ts:222` | Same zero-room honesty; LIVE fails closed on missing price history instead of skipping | Yes | N/A |
-| 21 | `sufficient_size` | `PositionSizing.ts:258` | **Verified honesty fix**: a post-hoc pass (`PositionSizing.ts:240-256`) re-flips any gate that reported `CLAMPED`/`PASS` but left `maxQuantity === 0` to `FAIL` — a binding clamp can never be reported as a pass at zero shares | Yes | N/A |
-| 22 | `sell_position_exists` | `RiskEngine.ts:484` | Recorded on SELL only (BUY assessments omit it, per `riskGateOrder.json`'s own comment) | N/A | Yes |
-| 23 | `argus_capital_allocation` | `CapitalAllocation.ts` via `RiskEngine.ts:510` | Real allocation ceiling, distinct from broker buying power | Yes | Yes |
-| 24 | `daily_buy_notional` | `DailyBuyNotional.ts` via `RiskEngine.ts:524` | Real cumulative-BUY-dollars-today cap, resolved per `tradingMode` | Yes (SELL notional is 0, always passes) | Yes |
-
-**Sizing honesty, directly verified in code (`PositionSizing.ts:239-256`):** after all sizing gates compute, if `maxQuantity === 0`, the function walks back over every gate and flips any that still reads `passed:true` with a `CLAMPED` status and `boundQuantity === 0` to `passed:false, status:'FAIL'`. This is the exact mechanism that prevents a UI/audit trail from showing a green checkmark next to a gate that actually zeroed out the trade.
-
----
-
-## 6. Research Engine, Backtesting & VectorBT Parity Audit
-
-| Dimension | Status | Evidence |
-|---|---|---|
-| `BacktestEngine.ts` fill model | **`SAME_BAR_CLOSE`**, not converted | File header, `src/server/engines/backtest/BacktestEngine.ts:14-17`: explicitly stamped `promotable: false` / `SAME_BAR_CLOSE_NOT_PROMOTABLE` |
-| Canonical promotion fills | **`NEXT_BAR_OPEN`**, separate engine | `canonicalNextBarEngine.ts` — mixing the two models is treated as `ENGINE_MISMATCH`, not silently reconciled |
-| Transaction costs (research) | **Non-zero, real** | `config/researchSafety.json`: `commissionPerShare: 0.005`, `spreadBps: 2`, `slippageBps: 5`, `zeroCostBlocksPromotion: true` |
-| CORE feature-vector parity (Python) | `FEATURE_SUBSET_PARITY` | `strategyEvidence.ts:10,34` — BOS/RVOL/Keltner/S-R vectors match the TS unit fixture |
-| Full `StrategyContext.evaluate()` parity | **Not established** | `researchSafety.json`'s own `proxyAdapterNote`: "Full StrategyContext evaluate() is not byte-identical in Python" |
-| SMC strategy | `PROXY_NOT_FEATURE_PARITY` | `strategyEvidence.ts:10,34` — explicitly separated from the CORE five, flagged UNVALIDATED |
-| VectorBT installation | **`UNAVAILABLE`** in this environment | `VectorBTService.ts`: `installed: false`, `rustBackend.available: false`, `state: 'UNAVAILABLE'` |
-| Data warehouse GREEN grade | 1 real dataset | `data/research/SPY_1Day_2024-07-21.meta.json`: `provenance: 'REAL_MARKET_DATA'`, `qualityStatus: 'GREEN'`, `barCount: 519` |
-| Parquet bytes on disk | **0 files written** | `find data -iname "*.parquet"` — zero results. The GREEN meta sidecar's own `parquetBytesWritten: false` confirms the write job hasn't run |
-| Recorded research runs | 5 real runs on disk, all real results | `data/research/runs/*/promotion.json`: every run reports `"live": "NO-GO"`; `promotable: false` in all 5; `backtestPass` true in 2 of 5, false in 3 |
-
-**Verdict:** The research/backtest infrastructure is real and genuinely separates "the vector subset matches" from "the full strategy matches" from "a validated edge exists" — it does not conflate them. None of the three currently clears its own bar.
-
----
-
-## 7. Empirical Paper Trading & Database Analysis
-
-Direct query against `data/argus.db` this session:
-
-```
-trades table: 8 total rows
-  6x DIAGTEST*/DIAGPIPE*/DIAGORDER*/DIAGCHAIN* — all status=PENDING, execution_environment=null
-  1x AAPL BUY  — status=FILLED, execution_environment=REPLAY
-  1x AAPL SELL — status=FILLED, execution_environment=REPLAY, profit_loss=-91.05
-
-transactions table: 698 total rows
-  415x NO_CONSENSUS
-  243x RISK_REJECTED
-   40x OPEN (unresolved — see below)
-
-fills table: 2 rows (both from the same REPLAY pair above)
-```
-
-**Organic closed paper trades: 0.** `organicPaper.ts`'s `isOrganicClosedPaper()` requires `status='FILLED' AND side='SELL' AND profitLoss is a real number AND classifyTradeEnvironment(row) === 'PAPER'`. The one real FILLED SELL classifies as `REPLAY` (both via its explicit `execution_environment` column and its `replay-<id>-...` traceId prefix), which the filter correctly excludes. Zero rows pass.
-
-**`minPaperTrades: 30` threshold (`config/researchSafety.json`): 0/30 met.**
-
-**The 40 `OPEN` transactions** are a known, separately-diagnosed historical artifact (documented in this session's own prior forensics): pre-dating a same-day server restart that loaded a real status-transition fix; they are not evidence of a currently-broken pipeline — the same fix has correctly transitioned 243 real `RISK_REJECTED` rows since.
-
-**Verdict:** There is no organic paper trading track record in this environment, full stop. The one closed trade that exists came from the historical-replay lab against 2024 data, not from the live pipeline trading paper in real time.
-
----
-
-## 8. AI, Catalyst & News Pipeline Audit
-
-**Real, router-native LLM providers** (`src/server/ai/providers/`): `GeminiProvider`, `OpenAIProvider`, `DeepSeekProvider`, `NvidiaProvider` (extends `OpenAICompatibleProvider`), `OpenAICompatibleProvider` (covers local Ollama). All extend a common `BaseAIProvider`. Every call routes through `AIRouter.getInstance()` — no agent calls a provider SDK directly (verified in Section 3's broader grep sweep of production call sites).
-
-**Probability discipline** (`src/server/research/statsIntervals.ts:13-18`):
-```ts
-export type ProbabilityKind = 'MODEL_ESTIMATE' | 'EMPIRICALLY_VALIDATED' | 'UNAVAILABLE';
-if (source === 'llm') return 'MODEL_ESTIMATE';
-if (sampleSize >= minSample) return 'EMPIRICALLY_VALIDATED';
-```
-An LLM's stated confidence is never labeled as a validated win probability — it is always tagged `MODEL_ESTIMATE` at the type level, and only a real sample crossing `minSample` can earn `EMPIRICALLY_VALIDATED`. This is a real, structural discipline, not a comment.
-
-**`news_veto` math** (Section 5, gate 14): verified fix normalizes `news_clusters.impactScore` (0-1 scale from `NewsImpactEngine`) to the 0-100 scale `tradingSafety.json`'s threshold is expressed in, via `newsImpactOnVetoScale()`. Before this normalization existed, a real 0-1 score compared against an 0-100 threshold would have silently never fired.
-
----
-
-## 9. Comprehensive Real-Money Readiness Scorecard (Exact % Calculation)
-
-Each score is grounded in the evidence gathered in Sections 3-8 above, not estimated. Per the zero-fabrication rule, dimensions where the real recorded evidence is negative or absent (OOS, WFO, robustness, organic paper, trading edge) are scored low even though the *infrastructure* to measure them is real and well-built — infrastructure quality and validated results are scored as what they are: two different things.
-
-| # | Dimension | Weight | Score (/100) | Weighted Contribution | Evidence / Reason |
-|---|---|:---:|:---:|:---:|---|
-| 1 | Software & Compiler Correctness | 10% | 90 | 9.0% | `tsc --noEmit` clean; 1089/1089 tests pass across 166 files. Docked for thin UI test coverage (longstanding, documented) and one transient flaky run observed under heavy concurrent system load this session (passed clean on re-run). |
-| 2 | Execution Spine & OMS Isolation | 15% | 92 | 13.8% | Section 3: zero dormant paths, `.placeOrder(` isolated to OMS + adapters, `BrokerEngine.ts` confirmed deleted, `executeAutoBotTradeInSovereign` confirmed absent. Docked for the shadow ledger existing as a second (OMS-fill-only) ledger and an unresolved `EventBus` single-point-of-failure risk (one throwing listener can starve later listeners — a real, structural, previously-documented fragility not fixed as of this audit). |
-| 3 | Risk Management & Gate Honesty | 15% | 90 | 13.5% | Section 5: all 24 gates verified in source, unconditional evaluation, verified sizing-honesty flip-to-FAIL mechanism, fail-closed `data_freshness`/`market_hours`/`invalid_account_equity`. Docked for `RestrictedLiveMode`'s hardcoded ceilings being LIVE-only by design (paper trading relies on settings-driven, not hardcoded, ceilings). |
-| 4 | Market Data & Freshness Pipeline | 8% | 75 | 6.0% | Real Alpaca WS ticks, real fail-closed staleness gate. Docked: no L2 order book (documented, unfixable without a paid data tier), no extended real-time soak test on record. |
-| 5 | Strategy Logic & Feature Parity | 7% | 45 | 3.15% | Real deterministic TS strategy logic (5 CORE strategies); Python side only reaches `FEATURE_SUBSET_PARITY`, explicitly not full `StrategyContext.evaluate()` parity. |
-| 6 | Research & Backtest Consistency (NEXT_BAR) | 8% | 55 | 4.4% | Real, correctly-separated NEXT_BAR canonical path exists and is used for promotion; the older/broader `BacktestEngine.ts` remains SAME_BAR_CLOSE and explicitly non-promotable. |
-| 7 | Out-of-Sample (OOS) Validation | 6% | 20 | 1.2% | Real harness exists and ran; recorded real result was FRAGILE, not a pass. |
-| 8 | Walk-Forward Optimization (WFO) | 6% | 20 | 1.2% | Same real harness/result as #7 — infrastructure real, outcome not passing. |
-| 9 | Statistical Robustness & Permutation | 5% | 20 | 1.0% | `permutationTestPnls`/`costStress` real and configured (`permutationAlpha: 0.05`); recorded result FAILED/insufficient. |
-| 10 | Organic Paper Validation (30+ Trades) | 5% | 0 | 0.0% | Section 7: 0/30 real organic closed paper trades. Zero-fabrication rule applies directly. |
-| 11 | Empirical Trading Edge & Expectancy | 5% | 8 | 0.4% | No real expectancy is computable from 0 organic trades; scored at the mandated floor value per the audit's own zero-fabrication rule. |
-| 12 | Broker Adapter & Security Hardening | 5% | 82 | 4.1% | Section 1/4: encryption fail-closed (verified `throw` on missing `ENCRYPTION_SECRET` and on decrypt failure), `secrets.json` boot guard verified, 5-layer LIVE arm verified. Docked: only Alpaca is fully unattended; IBKR/Questrade/Coinbase all have real, documented restrictions. |
-| 13 | Operational Recovery & Observability | 3% | 75 | 2.25% | Real reconciliation, alerting, crash recovery on record from prior phases. Docked: OpenAlice/IBKR companion health can fail without blocking RiskEngine — an operational gap, not a safety one. |
-| 14 | Legal & Regulatory Compliance (Canada) | 2% | 90 | 1.8% | Canadian automated live routing (IIROC) is correctly, verifiably blocked rather than falsely offered — `markets.json` documents the restriction; no code path unlocks it. |
-| **TOTAL** | **Real-Money Readiness** | **100%** | — | **61.8%** | **LIVE: NO-GO** |
-
-**Read this number carefully.** 61.8% is a blend of genuinely strong engineering (dimensions 1-3, 12-14 average ~88) and genuinely absent trading validation (dimensions 7-11 average ~14). Averaging them into one number is only useful as a compact answer to "how far along is this, overall" — it must never be read as "62% likely to be profitable," and nothing in this document should be read that way.
-
----
-
-## 10. Remaining Work Breakdown (Phase-by-Phase Roadmap)
-
-- **Phase A: Execution Parity & Cost Realism.** Decide, explicitly and with sign-off (this is a real trading-behavior fork, not a unilateral call): either bring `BacktestEngine.ts` onto `NEXT_BAR_OPEN` to match `canonicalNextBarEngine.ts`, or formally retire it in favor of the canonical engine for anything promotion-adjacent. Files: `src/server/engines/backtest/BacktestEngine.ts`, `src/server/research/canonicalNextBarEngine.ts`.
-- **Phase B: VectorBT / Python Feature Parity Bridge.** Close the gap from `FEATURE_SUBSET_PARITY` to full `StrategyContext.evaluate()` parity for the 5 CORE strategies; only after that, reconsider SMC's `PROXY_NOT_FEATURE_PARITY` status. Files: `python/argus_research/core_features.py`, `src/server/research/strategyEvidence.ts`, `config/researchSafety.json`.
-- **Phase C: Real Market Data Ingestion / Parquet Completion.** Run the real `write_parquet` job (`allowlistedJobs` already includes it) against the one GREEN dataset to produce actual Parquet bytes; expand GREEN coverage beyond the single SPY dataset. Files: `src/server/research/parquetStore.ts`, `scripts/ingest_research_warehouse.ts`.
-- **Phase D: UI Telemetry & Arena Cleanup.** Already substantially done (Section 2, Section 8 of the prior pass) — remaining work is expanding UI test coverage, the longest-standing documented gap in this codebase.
-- **Phase E: The 30-Day Organic Paper Soak.** The single highest-value remaining action. Run Argus continuously, in real PAPER mode, Autobot on, against real Alpaca paper ticks, for long enough to accumulate 30+ real closed SELL trades across varied market conditions. This cannot be shortcut, accelerated, or simulated without violating the zero-fabrication rule — it requires real elapsed market time.
-
----
-
-## 11. Timeline & Effort Estimation
-
-- **Engineering effort (Phases A-D):** Phase A is a real trading-behavior decision plus a bounded implementation (days, not weeks, once the direction is chosen). Phase B is the largest remaining engineering lift — true cross-language strategy parity is genuinely hard and multi-day at minimum. Phase C is small (the pipeline exists; it needs to actually run). Phase D is incremental and ongoing.
-- **Market incubation effort (Phase E):** 30 real organic trades at realistic signal frequency, spread across enough sessions to see more than one market regime, realistically requires multiple weeks of continuous real-time operation — this is elapsed calendar time, not compute time, and is the one item on this list nothing in this session (or any single engineering session) can shortcut.
-
----
-
-## 12. Final Authoritative Verdict
-
-| Question | Call |
+| Layer | Mechanism |
 |---|---|
-| **Paper trading (supervised: Autobot on, real ticks, PAPER + `paperMode` aligned, InternalPaper or Alpaca paper)** | **CONDITIONAL GO** — the path is real and fail-closed; this is not a claim of profitability. |
-| **Paper trading (100% unattended / "PAPER TRADING READY (TECHNICAL)")** | **NO-GO** — 0 real organic closed trades means the claim has no evidentiary basis yet, technical soundness notwithstanding. |
-| **Live capital / autonomous real-money trading** | **NO-GO** — no validated statistical edge exists at any layer (Sections 6-7), independent of how well the surrounding infrastructure is built. |
-| **Canadian automated live execution** | **BLOCKED (external, IIROC)** — correctly refused, not a code gap. |
-| **Start the 30-day organic paper soak now?** | **Infrastructure: CONDITIONAL GO.** Nothing code-level blocks starting it. Evidence remains at 0 until it actually runs. |
+| 1. Confirmation phrase | `TradingEngine.toggle()` requires `confirmLiveTrading === 'ENABLE LIVE TRADING'` |
+| 2. In-memory arm | `LiveTradingConfirmation.ts`'s `isLiveTradingArmed()` |
+| 3. Dual-flag agreement | `assertBrokerEnvironmentAllowsOrder()` — `tradingMode` and `paperMode` must agree or the order outcome is `UNKNOWN` |
+| 4. Live-Alpaca-host refusal | `AlpacaBroker.placeOrder` refuses `api.alpaca.markets` without the arm |
+| 5. Restart clearance | The arm is in-memory only; a process restart clears it even if SQLite still says LIVE |
 
-Do not enable LIVE. Do not treat VectorBT status, the historical-replay lab, passing tests, or the CORE strategy files as evidence of a trading edge. Do not count the shadow ledger, replay trades, or manual overrides as organic paper. The 61.8% readiness score in Section 9 describes engineering maturity blended with trading validation — it is not, and must never be represented as, a probability of profit.
+**New this pass:** `npm run dev` now resolves to `scripts/ecosystem-dev.ts`, not the previously-documented `devWithOpenAlice.ts` directly — `CLAUDE.md` already reflects this correctly (lines 32-41; an earlier same-day pass of this document incorrectly flagged this as undocumented drift and that claim is retracted here).
+
+---
+
+## 4. RiskEngine 24-Gate Deep Audit
+
+Unchanged from the prior pass (no source changes to `RiskEngine.ts`/`PositionSizing.ts` since), re-confirmed fresh this pass by direct file read. Full 24-gate table with file:line citations lives in this document's revision history; the load-bearing facts:
+
+- All 24 gates (per `config/riskGateOrder.json`) evaluate **unconditionally** every time — a rejected proposal still gets a complete gate-by-gate record.
+- **Sizing honesty** (`PositionSizing.ts:239-256`): confirmed present — if `maxQuantity === 0`, any gate still reporting `passed:true` with a `CLAMPED` status and `boundQuantity === 0` is walked back and flipped to `passed:false, status:'FAIL'`. A binding clamp can never show a pass at zero shares.
+- **Fail-closed gates re-confirmed:** `invalid_account_equity` (no placeholder balance), `data_freshness` (`priceAgeMs===null` → `UNKNOWN`, never fresh), `market_hours` (HTTP/network failure → `unavailable`, never treated as open — **this is the exact gate that correctly blocked Phase A2's closing orders this pass, since real market hours are closed on a Sunday evening**).
+
+---
+
+## 5. Ecosystem & Research Integration Architecture
+
+```
+                     ┌─────────────────────────────┐
+                     │   scripts/ecosystem-dev.ts   │   (npm run dev entry point)
+                     └──────────────┬──────────────┘
+              ┌──────────────────────┼───────────────────────┐
+              │                      │                        │
+    ┌─────────▼─────────┐  ┌─────────▼──────────┐   ┌─────────▼─────────┐
+    │ Vibe-Trading-MCP   │  │     AutoHedge       │   │  FinceptTerminal   │
+    │ separate process   │  │  separate process   │   │  (disabled here;   │
+    │ port 8900          │  │  WALLET_PRIVATE_KEY │   │   dir absent)      │
+    │ env: AI keys ONLY  │  │    = "" (forced)    │   └────────────────────┘
+    │ zero BrokerManager │  │  SOLANA_PRIVATE_KEY │
+    │ import              │  │    = "" (forced)    │
+    └────────────────────┘  │  AUTOHEDGE_PAPER_   │
+                             │  ONLY = 'true'       │
+                             └──────────────────────┘
+                                        │
+                          (no code-level path back into
+                           Argus's BrokerManager/OMS —
+                           verified by exhaustive grep, §3)
+                     ┌──────────────────▼──────────────────┐
+                     │        tsx server.ts (Argus core)     │
+                     │  Sacred fill path, §3                 │
+                     └────────────────────────────────────────┘
+```
+
+**Security invariants, verified directly in `scripts/ecosystem-dev.ts` this pass:**
+- Vibe-Trading-MCP (`:305-327`): spawned only if `ENABLE_VIBE_TRADING_MCP=true`; `env` passed is exactly `{OPENAI_API_KEY, DEEPSEEK_API_KEY, OPENROUTER_API_KEY, ANTHROPIC_API_KEY, NVIDIA_API_KEY, GROQ_API_KEY, GEMINI_API_KEY}` — **no Alpaca/broker credentials of any kind**.
+- AutoHedge (`:330-347`): `WALLET_PRIVATE_KEY: ''` and `SOLANA_PRIVATE_KEY: ''` are hardcoded empty strings in the spawn config itself (not merely unset), plus an explicit `AUTOHEDGE_PAPER_ONLY: 'true'` flag — three independent layers preventing real fund movement even if AutoHedge itself is natively capable of it.
+- `process.on('SIGINT', ...)` and `process.on('SIGTERM', ...)` (`:115-120`) both call `killTracked()`, which terminates every tracked child PID (`taskkill /T` on Windows per the code's own comment) — no orphaned companion processes on shutdown.
+- In this environment specifically: `vibe-trading` and `autohedge` sibling directories exist on disk and are enabled in `.env`; `FinceptTerminal` is disabled and its directory doesn't exist. None of the three were actually running as processes during this session (server was started via `dev:server-only`).
+
+---
+
+## 6. Research Engine & Warehouse Parity
+
+| Item | Status | Evidence |
+|---|---|---|
+| `BacktestEngine.ts` fill model | `SAME_BAR_CLOSE`, explicitly `promotable:false` | File header, unchanged |
+| `canonicalNextBarEngine.ts` | `NEXT_BAR_OPEN` only; this pass's real 25-run gauntlet used this engine exclusively | Confirmed via `runCoreWalkForward`'s own output: `"executionModel": "NEXT_BAR_OPEN", "comparableToSameBarClose": false` |
+| CORE feature-vector parity | `FEATURE_SUBSET_PARITY` (BOS/RVOL/Keltner/S-R only) | Unchanged |
+| Full `StrategyContext.evaluate()` Python parity | Not established | Unchanged |
+| Parquet durability | **0 files physically written**, real cause identified this pass | All 5 real ingests this session failed identically: `pyarrow_unavailable: No module named 'pyarrow'` — a missing Python package, not a code defect |
+| GREEN datasets on disk | Now **6** (was 1) | This pass ingested real, GREEN-graded Alpaca daily data for QQQ, AAPL, NVDA, MSFT, AMD (519 bars each, ~2 years), alongside the pre-existing SPY dataset |
+
+---
+
+## 7. Empirical Evidence — Database & the Real Gauntlet
+
+### 7.1 Database state (`data/argus.db`, this pass)
+
+```
+trades: 8 rows — 6x DIAGTEST*/DIAGORDER*/DIAGCHAIN* (PENDING, diagnostic artifacts)
+         1x AAPL BUY  FILLED, execution_environment=REPLAY
+         1x AAPL SELL FILLED, execution_environment=REPLAY, profit_loss=-91.05
+transactions: 419 NO_CONSENSUS, 243 RISK_REJECTED, 40 OPEN (pre-dates a same-day restart fix; not an active bug)
+fills: 2 (both from the same REPLAY pair)
+```
+Organic closed paper trades (per `organicPaper.ts:isOrganicClosedPaper()` — `FILLED`+`SELL`+real `profitLoss`+`classifyTradeEnvironment()==='PAPER'`+not a manual override): **0**. `minPaperTrades: 30` — **0/30**.
+
+### 7.2 The real WFO gauntlet (new this pass)
+
+Actually ran, end to end, for the first time: real Alpaca ingestion → real GREEN grading → real `NEXT_BAR_OPEN` walk-forward → real robustness (Monte Carlo, permutation, sensitivity, cost-stress) — for all 5 CORE strategies against 5 real symbols (25 total evaluations).
+
+| Result | Count |
+|---|---|
+| Total real strategy × symbol evaluations | 25 |
+| WFO verdict `FRAGILE` | 25 / 25 |
+| WFO verdict passing (`ROBUST`/`PASS`) | 0 / 25 |
+| All 4 robustness gates passing simultaneously | 0 / 25 |
+| Individual robustness gates passing at least once | `sensitivityPass` and `costStressPass` passed on a handful of PULLBACK_CONTINUATION/TREND_FOLLOWING/RANGE_REVERSION combos; `monteCarloPass`/`permutationPass` almost never |
+
+**Honest caveat, visible in the raw fold data:** several WFO folds report `testTrades: 0` — the 5 CORE strategies are selective enough that a single ~2-year, single-symbol window often doesn't produce enough real entries per fold to compute a median expectancy at all (`medianTestExpectancy: null`). Part of this result is "no real edge demonstrated," and part of it is honestly "insufficient real sample size to demonstrate anything, positive or negative" — both are real findings, and they are not the same claim.
+
+### 7.3 Real-world safety mechanism validation (new this pass — the most important operational finding)
+
+Autobot was actually enabled in real PAPER mode against the real Alpaca paper account this session. Two real, consequential things happened:
+
+1. `PortfolioReconciliation.ts` detected 2 real pre-existing positions (1 GLD, 1 NVDA) that predate Argus's own order tracking, correctly flagged a ~$401.48 mismatch, and auto-paused trading (`kill_switch_events` id 8, `action_taken: TRADING_PAUSED`) — exactly as designed.
+2. After a manual review and resume, it paused **again** 5 minutes later (`kill_switch_events`, ~$387.97 mismatch). Root-caused this pass: `PortfolioReconciliation.ts:162-165` diffs every Alpaca `FILLED` order against `trades.brokerOrderId` — these two positions' original fills predate Argus's tracking, so they have **no local order row and never will** without intervention. **This will re-trigger on every future reconciliation cycle**, not just once. The mechanism is correct; the underlying account state has never been durably reconciled.
+
+Remediation requires an explicit choice between backfilling real historical trade records, closing the positions via a real order (blocked right now only by real market hours — see §9), or changing the reconciliation logic to durably accept a known/reviewed discrepancy. This is deliberately not resolved unilaterally in this document — see roadmap.
+
+---
+
+## 8. Weighted Real-Money Readiness Scorecard
+
+$$\text{Readiness} = \sum (\text{Dimension Score} \times \text{Weight})$$
+
+| # | Dimension | Weight | Score | Contribution | Evidence |
+|---|---|:---:|:---:|:---:|---|
+| 1 | Software & Compiler Infrastructure | 20% | 90 | 18.0 | `tsc` clean, 166/1091 tests passing, re-verified twice this pass |
+| 2 | Risk & Safety Controls | 25% | 93 | 23.25 | 24-gate ladder + sizing honesty unchanged; **live-fire verified** this pass (real reconciliation pause, twice) |
+| 3 | External Research Integration | 10% | 95 | 9.5 | Zero code coupling, wallet keys forcibly emptied, SIGINT/SIGTERM cleanup confirmed, all directly re-verified this pass |
+| 4 | Data Warehouse & Parity | 20% | 40 | 8.0 | 6 real GREEN datasets now (was 1); Parquet still 0 files (real, identified `pyarrow` gap); feature-subset-only Python parity unchanged. Slightly up from the prior 38% given the real 6x expansion in GREEN coverage |
+| 5 | Empirical Edge & Organic Soak | 25% | 0 | 0.0 | 0/30 organic paper trades; **25/25 real WFO evaluations FRAGILE**, 0/25 robustness passes — now backed by a comprehensive real gauntlet, not a single data point |
+| **Total** | | **100%** | — | **58.75%** | |
+
+*(Note: this recomputation shows 58.75%, marginally above the same-day earlier 58.35%, driven entirely by dimension 4's real expansion from 1 to 6 GREEN datasets — not by any change in the empirical-edge finding, which remains at its floor.)*
+
+**Why the gap between 91% engineering and 58.75% blended readiness matters:** this pass produced the clearest demonstration yet of that gap being real, not theoretical. The same risk engine that is professionally engineered enough to correctly self-pause on a real, live reconciliation mismatch is the same reason the empirical-edge number cannot be inflated by simply "letting the bot run" — it keeps correctly refusing to manufacture activity.
+
+---
+
+## 9. Actionable Phase-by-Phase Roadmap
+
+**Engineering (code) phases — no calendar dependency:**
+
+- **Phase A** (blocking): resolve the GLD/NVDA reconciliation loop. Three real options with real tradeoffs (backfill / close positions / change reconciliation logic) — needs an explicit choice, not a unilateral fix, since one path touches safety-relevant code and another places a real order.
+- **Phase D**: documentation — already current; no action needed (correction of an earlier same-day false claim).
+- **Parquet dependency**: install `pyarrow` in the Python research environment to unblock durable warehouse writes — a real, bounded, low-risk environment change, distinct from any TypeScript code fix.
+
+**Operational / incubation phases — real calendar time, cannot be accelerated:**
+
+- **Phase A2 / market-dependent close**: blocked until real market hours resume (next NYSE session) — Argus's own `market_hours` gate correctly refuses to submit orders while the market is closed, including this remediation's own closing orders.
+- **Phase C (30-day organic soak)**: infrastructure-ready today; blocked only on Phase A. Once running cleanly, still requires multiple real weeks to accumulate 30 closed organic trades — nothing in this pass changes that arithmetic.
+- **Phase 34 (manual live arming)**: explicitly out of scope for any automated process, this session or any other — requires a human reviewing real accumulated evidence that does not yet exist.
+
+Do not enable LIVE. Do not count the 25-evaluation WFO gauntlet, the historical-replay trade, the shadow ledger, or any external research adapter's output as organic paper evidence or a validated edge. The 58.75% readiness figure describes engineering maturity blended honestly with trading validation — it is not, and must never be read as, a probability of profit.

@@ -1,5 +1,9 @@
 # Project Context & AI Guidelines: Argus Autonomous Trading Terminal
 
+## Ecosystem & trust (read first)
+
+**Argus is the sole execution authority.** Sibling research engines (`vibe-trading`, `autohedge`, `OpenAlice`, `FinceptTerminal`) spawned by `npm run dev` → `scripts/ecosystem-dev.ts` are **untrusted, read-only** relative to OMS / RiskEngine / broker credentials. Do not vendor their source into this repo. Do not invent live edge from their outputs. Operator docs: `docs/GETTING_STARTED.md`, `docs/ECOSYSTEM.md`, `docs/CONFIG.md`. Live-path contract: root `CLAUDE.md`.
+
 ## Overview
 This project is an advanced, multi-agent AI autonomous trading terminal interface. It features a full-stack architecture (React/Vite frontend + Express/TypeScript backend) simulating and executing continuous trading evaluations.
 

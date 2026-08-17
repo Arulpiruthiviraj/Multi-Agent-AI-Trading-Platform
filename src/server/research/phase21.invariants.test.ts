@@ -9,7 +9,7 @@ import {
   stampExecutionEnvironment,
   summarizeOrganicPaper,
 } from './organicPaper';
-import { deriveLifecycleStatus, emptyEvidence, liveGoNoGo } from './promotionEngine';
+import { deriveLifecycleStatus, emptyEvidence, liveGoNoGo, assertPromotionQuarantine } from './promotionEngine';
 import { freezeStrategyVersion } from './strategySpecs';
 import { findStrategy, resolveStrategiesForLiveEvaluation } from '../quant/strategies/StrategyEngine';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
@@ -48,6 +48,8 @@ describe('Phase 21 evidence-path invariants', () => {
       ...emptyEvidence('MOMENTUM_BREAKOUT', '1.0.0'),
       dataProvenance: 'REAL_MARKET_DATA' as const,
       executionModel: 'SAME_BAR_CLOSE',
+      qualityStatus: 'GREEN' as const,
+      parquetBytesWritten: true,
       dataQualityPass: true,
       backtestPass: true,
       oosPass: true,
@@ -84,6 +86,8 @@ describe('Phase 21 evidence-path invariants', () => {
       ...emptyEvidence('MOMENTUM_BREAKOUT', '1.0.0'),
       dataProvenance: 'REAL_MARKET_DATA' as const,
       executionModel: 'NEXT_BAR_OPEN',
+      qualityStatus: 'GREEN' as const,
+      parquetBytesWritten: true,
       dataQualityPass: true,
       backtestPass: true,
       oosPass: true,
@@ -105,6 +109,29 @@ describe('Phase 21 evidence-path invariants', () => {
     };
     expect(deriveLifecycleStatus(e)).toBe('LIVE_CANDIDATE');
     expect(liveGoNoGo(e).live).toBe('NO-GO');
+  });
+
+  it('promotion quarantine rejects SAME_BAR_CLOSE, non-GREEN, or missing parquet', () => {
+    expect(assertPromotionQuarantine({
+      executionModel: 'SAME_BAR_CLOSE',
+      qualityStatus: 'GREEN',
+      parquetBytesWritten: true,
+    }).ok).toBe(false);
+    expect(assertPromotionQuarantine({
+      executionModel: 'NEXT_BAR_OPEN',
+      qualityStatus: 'YELLOW',
+      parquetBytesWritten: true,
+    }).reasons).toContain('QUALITY_STATUS_NOT_GREEN');
+    expect(assertPromotionQuarantine({
+      executionModel: 'NEXT_BAR_OPEN',
+      qualityStatus: 'GREEN',
+      parquetBytesWritten: false,
+    }).reasons).toContain('PARQUET_BYTES_NOT_WRITTEN');
+    expect(assertPromotionQuarantine({
+      executionModel: 'NEXT_BAR_OPEN',
+      qualityStatus: 'GREEN',
+      parquetBytesWritten: true,
+    }).ok).toBe(true);
   });
 
   it('untagged fills are UNKNOWN and do not count as organic paper', () => {

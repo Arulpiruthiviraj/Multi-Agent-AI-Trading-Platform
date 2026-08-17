@@ -9,12 +9,15 @@
  *
  * Flow:
  *   1. Load Argus root `.env` (central API keys + ecosystem paths).
- *   2. Optionally start Vibe-Trading MCP and AutoHedge (Python `.venv` binaries).
+ *   2. Optionally start Vibe-Trading MCP, AutoHedge, and Fincept (Python `.venv` / explicit CMD).
  *   3. Optionally start OpenAlice Guardian (pnpm), then skip duplicate spawn in core.
  *   4. Spawn `scripts/devWithOpenAlice.ts` (Chronos / Ollama / IBKR / `tsx server.ts`).
  *
  * Ctrl+C / SIGTERM kills every child PID this script started (Windows: taskkill /T).
  * Missing dirs or binaries log a warning and continue — Argus still boots.
+ *
+ * Trust: Argus remains sole execution authority. External children are research/verification only.
+ * AutoHedge always gets WALLET_PRIVATE_KEY="" / SOLANA_PRIVATE_KEY="".
  * ==========================================================
  */
 import 'dotenv/config';
@@ -134,16 +137,22 @@ function track(name: string, child: ChildProcess): void {
 /**
  * Spawn a Python-backed service using the repo `.venv` interpreter (or a named console script).
  * Returns false on soft failure (missing path / python) so Argus can still start.
+ *
+ * Resolution order:
+ *   1. `.venv/Scripts|<bin>/<preferScript>` if preferScript is set and exists
+ *   2. `.venv` python + `args` (e.g. `-m vibe_trading.mcp ...`)
  */
 function spawnPythonService(
   serviceName: string,
   dirPath: string | undefined,
-  moduleOrCommand: string | string[],
+  args: string[],
   options?: {
     port?: number;
     env?: NodeJS.ProcessEnv;
-    /** Prefer a venv console script (e.g. vibe-trading-mcp) over `python -m ...`. */
+    /** Prefer a venv console script (e.g. vibe-trading-mcp) over python -m. */
     preferScript?: string;
+    /** When console script is missing, run `python -m <fallbackModule> ...args`. */
+    fallbackModule?: string;
   },
 ): boolean {
   const resolvedDir = (dirPath || '').trim();
@@ -173,31 +182,29 @@ function spawnPythonService(
   }
 
   let cmd = python;
-  let args: string[];
+  let spawnArgs = [...args];
 
   if (options?.preferScript) {
     const script = resolveVenvScript(resolvedDir, options.preferScript);
     if (script) {
       cmd = script;
-      args = Array.isArray(moduleOrCommand) ? moduleOrCommand : moduleOrCommand.split(/\s+/).filter(Boolean);
-    } else {
-      // Fall back to python -m <module> when console script is missing.
-      const mod = Array.isArray(moduleOrCommand) ? moduleOrCommand : moduleOrCommand.split(/\s+/).filter(Boolean);
-      if (mod[0] === '-m' || mod[0]?.includes('.')) {
-        args = mod[0] === '-m' ? mod : ['-m', ...mod];
-      } else {
-        args = ['-m', options.preferScript.replace(/-/g, '_')];
-        warn(`${serviceName}: console script '${options.preferScript}' not found; trying python -m fallback may fail.`);
-      }
+      spawnArgs = [...args];
+    } else if (options.fallbackModule) {
+      warn(
+        `${serviceName}: console script '${options.preferScript}' not in .venv — falling back to python -m ${options.fallbackModule}.`,
+      );
       cmd = python;
-      if (!args) args = [];
+      spawnArgs = ['-m', options.fallbackModule, ...args];
+    } else {
+      warn(
+        `${serviceName}: console script '${options.preferScript}' not found under .venv and no fallbackModule — skip.`,
+      );
+      return false;
     }
-  } else {
-    args = Array.isArray(moduleOrCommand) ? moduleOrCommand : moduleOrCommand.split(/\s+/).filter(Boolean);
   }
 
-  log(`Starting ${serviceName} in ${resolvedDir} → ${cmd} ${args.join(' ')}`);
-  const child = spawn(cmd, args, {
+  log(`Starting ${serviceName} in ${resolvedDir} → ${cmd} ${spawnArgs.join(' ')}`);
+  const child = spawn(cmd, spawnArgs, {
     cwd: resolvedDir,
     env: childEnv,
     stdio: 'inherit',
@@ -303,6 +310,7 @@ function main(): void {
     spawnPythonService('Vibe-Trading-MCP', vibePath, mcpArgs, {
       port,
       preferScript: 'vibe-trading-mcp',
+      fallbackModule: 'vibe_trading.mcp',
       env: {
         // Pass Argus-central keys into the child (do not require a second .env).
         OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
@@ -321,11 +329,10 @@ function main(): void {
   // --- AutoHedge (analysis worker only; wallet keys forcibly emptied) ---
   if (envFlag('ENABLE_AUTOHEDGE_WORKER', false)) {
     const cmdOverride = process.env.AUTOHEDGE_CMD?.trim();
-    const args = cmdOverride
-      ? cmdOverride.split(/\s+/).filter(Boolean)
-      : []; // empty → use preferScript `autohedge`
-    spawnPythonService('AutoHedge', autohedgePath, args.length ? args : ['--help'], {
+    const args = cmdOverride ? cmdOverride.split(/\s+/).filter(Boolean) : [];
+    spawnPythonService('AutoHedge', autohedgePath, args, {
       preferScript: 'autohedge',
+      fallbackModule: 'autohedge',
       env: {
         OPENAI_API_KEY: process.env.OPENAI_API_KEY || '',
         ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY || '',
@@ -340,6 +347,39 @@ function main(): void {
     });
   } else {
     log('ENABLE_AUTOHEDGE_WORKER is off — skip AutoHedge.');
+  }
+
+  // --- FinceptTerminal (optional research UI; no invented default CLI) ---
+  if (envFlag('ENABLE_FINCEPT_TERMINAL', false)) {
+    const finceptPath =
+      process.env.FINCEPT_TERMINAL_PATH || path.resolve(repoRoot, '..', 'FinceptTerminal');
+    const finceptCmd = process.env.FINCEPT_CMD?.trim();
+    if (!finceptCmd) {
+      warn(
+        'ENABLE_FINCEPT_TERMINAL=true but FINCEPT_CMD is empty — skip (refuse invented default binary). See docs/ECOSYSTEM.md.',
+      );
+    } else if (!fs.existsSync(finceptPath)) {
+      warn(`FinceptTerminal: directory does not exist (${finceptPath}) — skip.`);
+    } else {
+      const parts = finceptCmd.split(/\s+/).filter(Boolean);
+      const cmd = parts[0];
+      const args = parts.slice(1);
+      log(`Starting FinceptTerminal in ${finceptPath} → ${cmd} ${args.join(' ')}`);
+      const child = spawn(cmd, args, {
+        cwd: finceptPath,
+        env: {
+          ...process.env,
+          // Research sidecar only — do not forward a trading mandate.
+          FINCEPT_READ_ONLY: 'true',
+        },
+        stdio: 'inherit',
+        windowsHide: true,
+        shell: process.platform === 'win32',
+      });
+      track('FinceptTerminal', child);
+    }
+  } else {
+    log('ENABLE_FINCEPT_TERMINAL is off — skip Fincept.');
   }
 
   // --- OpenAlice Guardian ---
@@ -360,4 +400,10 @@ function main(): void {
   startArgusCore(coreEnv);
 }
 
-main();
+const isDirectRun =
+  process.argv[1] &&
+  path.resolve(fileURLToPath(import.meta.url)) === path.resolve(process.argv[1]);
+
+if (isDirectRun) {
+  main();
+}

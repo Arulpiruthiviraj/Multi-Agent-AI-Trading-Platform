@@ -4,6 +4,7 @@
 import { isTheoreticalZeroCost, researchSafety } from '../config/researchSafety';
 import type { CanonicalBacktestResult } from './canonicalNextBarEngine';
 import { CANONICAL_PROMOTION_FILL, isCanonicalPromotionFill } from './executionModel';
+import { parquetBytesExistOnDisk } from './parquetStore';
 
 export type StrategyLifecycleStatus =
   | 'UNTESTED'
@@ -19,10 +20,16 @@ export type StrategyLifecycleStatus =
   | 'DEGRADED'
   | 'RETIRED';
 
+export type EvidenceQualityStatus = 'GREEN' | 'YELLOW' | 'RED' | 'UNAVAILABLE' | 'UNKNOWN';
+
 export interface StrategyEvidence {
   strategyId: string;
   strategyVersion: string;
   dataQualityPass: boolean;
+  /** Explicit warehouse quality — must be GREEN for promotion past UNTESTED. */
+  qualityStatus: EvidenceQualityStatus;
+  /** Physical .parquet must exist; sidecar flag alone is insufficient. */
+  parquetBytesWritten: boolean;
   backtestPass: boolean;
   oosPass: boolean;
   walkForwardPass: boolean;
@@ -48,6 +55,29 @@ export interface StrategyEvidence {
   dataProvenance: import('./ohlcvTypes').DataProvenance;
   /** Must be NEXT_BAR_OPEN for any lifecycle past UNTESTED. SAME_BAR_CLOSE cannot promote. */
   executionModel: string;
+  datasetId?: string | null;
+}
+
+/** Fail-closed promotion storage / execution quarantine. */
+export function assertPromotionQuarantine(opts: {
+  executionModel: string;
+  qualityStatus: string;
+  parquetBytesWritten: boolean;
+}): { ok: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  if (opts.executionModel === 'SAME_BAR_CLOSE') {
+    reasons.push('SAME_BAR_CLOSE_NOT_PROMOTABLE');
+  }
+  if (!isCanonicalPromotionFill(opts.executionModel)) {
+    reasons.push('EXECUTION_MODEL_NOT_CANONICAL');
+  }
+  if (opts.qualityStatus !== 'GREEN') {
+    reasons.push('QUALITY_STATUS_NOT_GREEN');
+  }
+  if (opts.parquetBytesWritten !== true) {
+    reasons.push('PARQUET_BYTES_NOT_WRITTEN');
+  }
+  return { ok: reasons.length === 0, reasons };
 }
 
 export function emptyEvidence(strategyId: string, strategyVersion = '0'): StrategyEvidence {
@@ -55,6 +85,8 @@ export function emptyEvidence(strategyId: string, strategyVersion = '0'): Strate
     strategyId,
     strategyVersion,
     dataQualityPass: false,
+    qualityStatus: 'UNKNOWN',
+    parquetBytesWritten: false,
     backtestPass: false,
     oosPass: false,
     walkForwardPass: false,
@@ -79,13 +111,20 @@ export function emptyEvidence(strategyId: string, strategyVersion = '0'): Strate
     organicPaperOnly: true,
     dataProvenance: 'UNKNOWN',
     executionModel: 'UNKNOWN',
+    datasetId: null,
   };
 }
 
 export function evidenceFromCanonicalRun(run: CanonicalBacktestResult): StrategyEvidence {
   const e = emptyEvidence(run.strategyId, run.strategyVersion ?? '0');
   e.dataProvenance = run.provenance;
-  e.dataQualityPass = run.quality === 'GREEN' && run.provenance === 'REAL_MARKET_DATA';
+  e.qualityStatus = (run.quality as EvidenceQualityStatus) || 'UNKNOWN';
+  e.datasetId = run.datasetId ?? null;
+  e.parquetBytesWritten = run.datasetId ? parquetBytesExistOnDisk(run.datasetId) : false;
+  e.dataQualityPass =
+    e.qualityStatus === 'GREEN' &&
+    run.provenance === 'REAL_MARKET_DATA' &&
+    e.parquetBytesWritten === true;
   e.backtestPass = run.backtestPass === true;
   e.engineMismatch = false;
   e.executionModel = CANONICAL_PROMOTION_FILL;
@@ -93,6 +132,15 @@ export function evidenceFromCanonicalRun(run: CanonicalBacktestResult): Strategy
     e.engineMismatch = true;
     e.executionModel = run.executionModel;
     e.backtestPass = false;
+  }
+  const q = assertPromotionQuarantine({
+    executionModel: e.executionModel,
+    qualityStatus: e.qualityStatus,
+    parquetBytesWritten: e.parquetBytesWritten,
+  });
+  if (!q.ok) {
+    e.backtestPass = false;
+    e.dataQualityPass = false;
   }
   if (isTheoreticalZeroCost()) e.backtestPass = false;
   if (run.costModel === 'THEORETICAL_ZERO_COST' || run.rejection === 'THEORETICAL_ZERO_COST') {
@@ -107,6 +155,12 @@ export function deriveLifecycleStatus(e: StrategyEvidence): StrategyLifecycleSta
   if (e.dataProvenance !== 'REAL_MARKET_DATA') return 'UNTESTED';
   if (e.engineMismatch) return 'UNTESTED';
   if (!isCanonicalPromotionFill(e.executionModel)) return 'UNTESTED';
+  const quarantine = assertPromotionQuarantine({
+    executionModel: e.executionModel,
+    qualityStatus: e.qualityStatus,
+    parquetBytesWritten: e.parquetBytesWritten,
+  });
+  if (!quarantine.ok) return 'UNTESTED';
   // Theoretical zero-cost research cannot climb the lifecycle ladder (not live-readiness evidence).
   if (isTheoreticalZeroCost()) return 'UNTESTED';
   const robustness =
@@ -143,6 +197,12 @@ export function deriveLifecycleStatus(e: StrategyEvidence): StrategyLifecycleSta
 export function liveGoNoGo(e: StrategyEvidence): { live: 'GO' | 'NO-GO'; failedGates: string[] } {
   const status = deriveLifecycleStatus(e);
   const failedGates: string[] = [];
+  const quarantine = assertPromotionQuarantine({
+    executionModel: e.executionModel,
+    qualityStatus: e.qualityStatus,
+    parquetBytesWritten: e.parquetBytesWritten,
+  });
+  for (const r of quarantine.reasons) failedGates.push(r);
   if (!e.dataQualityPass) failedGates.push('DATA_QUALITY_PASS');
   if (!e.backtestPass) failedGates.push('BACKTEST_PASS');
   if (!e.oosPass) failedGates.push('OOS_PASS');
@@ -161,11 +221,10 @@ export function liveGoNoGo(e: StrategyEvidence): { live: 'GO' | 'NO-GO'; failedG
   if (!e.startupHealthPass) failedGates.push('STARTUP_HEALTH_PASS');
   if (e.isCanadianSecurity && !e.canadianExecutionApproved) failedGates.push('CANADIAN_EXECUTION_APPROVED');
   if (e.engineMismatch) failedGates.push('ENGINE_MISMATCH');
-  if (!isCanonicalPromotionFill(e.executionModel)) failedGates.push('EXECUTION_MODEL_NOT_CANONICAL');
   if (!e.manualLiveApproval) failedGates.push('MANUAL_APPROVAL');
   if (e.degraded) failedGates.push('DEGRADED');
   if (status === 'LIVE_APPROVED' && failedGates.length === 0) return { live: 'GO', failedGates };
-  return { live: 'NO-GO', failedGates };
+  return { live: 'NO-GO', failedGates: [...new Set(failedGates)] };
 }
 
 export function applyDegradation(e: StrategyEvidence, rollingExpectancy: number | null, drawdownPct: number | null, maxDd = 15): StrategyEvidence {

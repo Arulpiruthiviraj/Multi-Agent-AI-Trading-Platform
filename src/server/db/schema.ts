@@ -303,6 +303,30 @@ export const reconciliationEvents = sqliteTable('reconciliation_events', {
   actionTaken: text('action_taken'), // e.g. 'TRADING_PAUSED', null if no action
 });
 
+/**
+ * Explicit operator acknowledgement of pre-existing broker FILLED orders that Argus never
+ * submitted. Prevents FILLED_ORDER_MISSING_LOCALLY from re-pausing on identical orphans.
+ * NEVER authorizes orders. NEVER counts toward organic paper. Revocation restores pause logic.
+ */
+export const reconciliationAcknowledgements = sqliteTable('reconciliation_acknowledgements', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  broker: text('broker').notNull(),
+  brokerOrderId: text('broker_order_id').notNull(),
+  symbol: text('symbol').notNull(),
+  side: text('side'),
+  quantity: real('quantity'),
+  averageFillPrice: real('average_fill_price'),
+  status: text('status').notNull(), // PRE_EXISTING_RECONCILED | REVOKED
+  actor: text('actor').notNull(),
+  reason: text('reason').notNull(),
+  fingerprint: text('fingerprint').notNull(),
+  brokerSnapshotJson: text('broker_snapshot_json'),
+  acknowledgedAt: text('acknowledged_at').notNull(),
+  revokedAt: text('revoked_at'),
+  revokedBy: text('revoked_by'),
+  revokeReason: text('revoke_reason'),
+});
+
 export const portfolioSnapshots = sqliteTable('portfolio_snapshots', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   symbol: text('symbol').notNull(),

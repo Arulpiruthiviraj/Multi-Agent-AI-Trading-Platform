@@ -10,6 +10,8 @@ async function main() {
   const { trades } = await import('../src/server/db/schema');
   const { summarizeOrganicPaper } = await import('../src/server/research/organicPaper');
   const { researchSafety } = await import('../src/server/config/researchSafety');
+  const { derivePaperSoakStatus } = await import('../src/server/research/paperSoakState');
+  const { tradingEngine } = await import('../src/server/engines/TradingEngine');
 
   let rows: any[] = [];
   try {
@@ -22,31 +24,25 @@ async function main() {
       executionEnvironment: trades.executionEnvironment,
       timestamp: trades.timestamp,
       filledAt: trades.filledAt,
+      symbol: trades.symbol,
     }).from(trades);
   } catch {
     rows = [];
   }
 
   const summary = summarizeOrganicPaper(rows, researchSafety.minPaperTrades);
-  const closed = summary.closedTradeCount;
-  const sessions = summary.sessionCount;
+  const soak = derivePaperSoakStatus({
+    closedTradeCount: summary.closedTradeCount,
+    sessionCount: summary.sessionCount,
+    tradingState: tradingEngine.state.tradingState,
+    reconciliationBlocking: tradingEngine.state.tradingState === 'TRADING_PAUSED',
+  });
   const out = {
     ok: true,
-    live: 'NO-GO',
+    live: 'NO-GO' as const,
     canPlaceOrders: false,
     invented: false,
-    soak: {
-      status:
-        closed >= researchSafety.minPaperTrades && sessions >= researchSafety.minPaperSessions
-          ? 'SOAK_FLOOR_MET'
-          : 'SOAK_IN_PROGRESS',
-      minPaperTrades: researchSafety.minPaperTrades,
-      minPaperSessions: researchSafety.minPaperSessions,
-      closedTradeCount: closed,
-      sessionCount: sessions,
-      remainingTrades: Math.max(0, researchSafety.minPaperTrades - closed),
-      remainingSessions: Math.max(0, researchSafety.minPaperSessions - sessions),
-    },
+    soak,
     summary,
     note: 'Start supervised PAPER Autobot against real ticks. Do not fabricate trades. Do not arm LIVE.',
   };

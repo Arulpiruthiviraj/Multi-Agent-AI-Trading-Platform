@@ -40,7 +40,7 @@ users, sessions, settings, kill_switch_events, broker_connections, ai_providers,
 
 ## Env (important)
 
-Alpaca keys (ticks/history). `PAPER_TRADING_ONLY` = quote WS only. IBKR path/URL. Questrade env **unread for orders**. AUTH_* / ENCRYPTION_SECRET. `QUANT_*` flags default false. `OPENALICE_*`. `ARGUS_SKIP_*`. `PORT` unused. Full list: `.env.example`.
+Alpaca keys (ticks/history). `PAPER_TRADING_ONLY` = BrokerManager/Alpaca refuse LIVE arm. IBKR path/URL. Questrade env **unread for orders**. AUTH_* / ENCRYPTION_SECRET. `QUANT_*` flags default false. `OPENALICE_*`. Ecosystem: `VIBE_TRADING_PATH` / `AUTOHEDGE_PATH` / `OPENALICE_PATH` / `FINCEPT_TERMINAL_PATH` + `ENABLE_*` (orchestrator only; see [CONFIG.md](CONFIG.md) · [ECOSYSTEM.md](ECOSYSTEM.md)). `ARGUS_SKIP_*`. `PORT` unused. Full list: `.env.example`.
 
 JSON config (fail boot if required keys missing): `tradingSafety`, `eventNames`, `agentWeights`, `markets`, `smcConfluence`, `thesisInvalidation`, `noTradeReasons`, `bullBearResearch`, `quantExperimentalStrategies`, `quantStrategyTaxonomy`.
 

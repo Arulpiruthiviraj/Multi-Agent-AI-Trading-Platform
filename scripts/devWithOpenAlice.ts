@@ -3,7 +3,8 @@
  * Script: devWithOpenAlice.ts
  *
  * Purpose:
- * `npm run dev` entry point. Starts `tsx server.ts` plus local companions so Kronos is not left
+ * `npm run dev:core` entry point (also invoked by `npm run dev` → ecosystem-dev.ts).
+ * Starts `tsx server.ts` plus local companions so Kronos is not left
  * KRONOS_UNAVAILABLE just because nobody ran `npm run ai:serve` in another terminal.
  *
  *   1. Chronos/Kronos + FinBERT (`scripts/local_ai_service.py` on LOCAL_AI_SERVICE_PORT, default

@@ -29,12 +29,15 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 ## Commands
 
 ```bash
-npm run dev          # scripts/devWithOpenAlice.ts → tsx server.ts (port 3000 hardcoded).
+npm run dev          # scripts/ecosystem-dev.ts → optional vibe/autohedge/OpenAlice/Fincept →
+                     # scripts/devWithOpenAlice.ts → tsx server.ts (port 3000 hardcoded).
                      # Also starts Chronos/Kronos (`npm run ai:serve`, :8008) and Ollama if
-                     # missing; OpenAlice Guardian if a checkout exists or OPENALICE_ENABLED=true;
-                     # IBKR Gateway if IBKR_GATEWAY_PATH is set. Skip with ARGUS_SKIP_CHRONOS /
-                     # ARGUS_SKIP_OLLAMA / ARGUS_SKIP_OPENALICE. Use npm run dev:server-only for
+                     # missing; OpenAlice Guardian if enabled; IBKR Gateway if IBKR_GATEWAY_PATH
+                     # is set. Skip with ARGUS_SKIP_CHRONOS / ARGUS_SKIP_OLLAMA /
+                     # ARGUS_SKIP_OPENALICE / ENABLE_*=false. Use npm run dev:core for the prior
+                     # companion launcher without vibe/autohedge/Fincept; npm run dev:server-only for
                      # the Node process alone.
+npm run dev:core     # scripts/devWithOpenAlice.ts only (Chronos/Ollama/OpenAlice/IBKR + server)
 npm run dev:server-only  # tsx server.ts only (no companion processes)
 npm run build        # Vite SPA + esbuild server bundle → dist/server.cjs
 npm run start        # node dist/server.cjs

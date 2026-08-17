@@ -26,6 +26,15 @@ const defaultDbPath = path.join(
 );
 process.env.ARGUS_DB_PATH = defaultDbPath;
 
+// Isolate research warehouse so Vitest never reads developer data/research baselines
+// (parquet / runs / strategyEvidence) as if they were unit-test fixtures.
+const defaultResearchDir = path.join(
+  os.tmpdir(),
+  `argus_research_test_${process.pid}_${Date.now()}_${Math.random().toString(36).slice(2)}`
+);
+fs.mkdirSync(defaultResearchDir, { recursive: true });
+process.env.ARGUS_RESEARCH_DIR = defaultResearchDir;
+
 // Isolate optional MCP/Chronos probes from the developer's .env. dotenv.config() does not
 // override keys that are already set, so this must be assigned (not deleted) before any
 // EncryptionService import. OpenAlice health against a half-open Guardian caused ECONNRESET

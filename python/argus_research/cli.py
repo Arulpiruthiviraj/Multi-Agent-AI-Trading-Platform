@@ -204,7 +204,12 @@ def write_parquet(payload):
     except Exception as exc:
         return {"ok": False, "error": f"pyarrow_unavailable:{exc}", "written": False, "canPlaceOrders": False, "sidecarOnly": True}
     root = Path(__file__).resolve().parents[2]
-    out_dir = root / "data" / "research"
+    # Prefer explicit outDir from TS (ARGUS_RESEARCH_DIR), else repo data/research.
+    out_override = payload.get("outDir")
+    if isinstance(out_override, str) and out_override.strip():
+        out_dir = Path(out_override)
+    else:
+        out_dir = root / "data" / "research"
     out_dir.mkdir(parents=True, exist_ok=True)
     table = pa.table({
         "timestamp": [int(b["timestamp"]) for b in bars],

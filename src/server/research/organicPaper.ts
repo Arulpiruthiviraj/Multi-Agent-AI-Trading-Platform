@@ -13,6 +13,16 @@ export function classifyTradeEnvironment(row: {
   executionEnvironment?: string | null;
 }): ExecutionEnvironment {
   const tagged = row.executionEnvironment?.toUpperCase();
+  // EXTERNAL_SYNC / PRE_EXISTING_RECONCILED / HISTORICAL_SIMULATION never count as PAPER.
+  if (
+    tagged === 'EXTERNAL_SYNC'
+    || tagged === 'PRE_EXISTING_RECONCILED'
+    || tagged === 'EXTERNAL_MANUAL'
+    || tagged === 'HISTORICAL_SIMULATION'
+    || tagged === 'HISTORICAL_REPLAY'
+  ) {
+    return 'UNKNOWN';
+  }
   if (tagged === 'BACKTEST' || tagged === 'REPLAY' || tagged === 'SIMULATION' || tagged === 'PAPER' || tagged === 'LIVE') {
     return tagged;
   }
@@ -20,9 +30,17 @@ export function classifyTradeEnvironment(row: {
   const upper = reason.toUpperCase();
   // Operator overrides must not be classified as PAPER even if OMS later stamps executionEnvironment=PAPER.
   if (upper.includes('SOURCE: MANUAL_OVERRIDE') || upper.includes('SOURCE: EXTERNAL_MANUAL')) return 'UNKNOWN';
+  if (upper.includes('PRE_EXISTING_RECONCILED') || upper.includes('EXTERNAL_SYNC')) return 'UNKNOWN';
+  if (upper.includes('HISTORICAL_SIMULATION') || upper.includes('HISTORICAL REPLAY')) return 'REPLAY';
   if (row.traceId && /^manual-override-/i.test(row.traceId)) return 'UNKNOWN';
-  const stamped = reason.match(/executionEnvironment=(BACKTEST|REPLAY|SIMULATION|PAPER|LIVE)\b/i);
-  if (stamped) return stamped[1].toUpperCase() as ExecutionEnvironment;
+  // DIAG* symbols / traces from diagnostic harnesses are never organic paper.
+  if (row.traceId && /diag/i.test(row.traceId)) return 'UNKNOWN';
+  const stamped = reason.match(/executionEnvironment=(BACKTEST|REPLAY|SIMULATION|PAPER|LIVE|HISTORICAL_SIMULATION|EXTERNAL_SYNC)\b/i);
+  if (stamped) {
+    const v = stamped[1].toUpperCase();
+    if (v === 'HISTORICAL_SIMULATION' || v === 'EXTERNAL_SYNC') return 'UNKNOWN';
+    return v as ExecutionEnvironment;
+  }
   if (upper.includes('BACKTEST')) return 'BACKTEST';
   if (upper.includes('REPLAY')) return 'REPLAY';
   if (upper.includes('SIMULATION')) return 'SIMULATION';
@@ -39,8 +57,10 @@ export function isOrganicClosedPaper(row: {
   timestamp?: string | null;
   filledAt?: string | null;
   executionEnvironment?: string | null;
+  symbol?: string | null;
 }): boolean {
   if (row.status !== 'FILLED' || row.side !== 'SELL' || typeof row.profitLoss !== 'number') return false;
+  if (row.symbol && /^DIAG/i.test(row.symbol)) return false;
   const reason = (row.reasoning ?? '').toUpperCase();
   if (reason.includes('SOURCE: MANUAL_OVERRIDE') || reason.includes('SOURCE: EXTERNAL_MANUAL')) return false;
   if (row.traceId && /^manual-override-/i.test(row.traceId)) return false;

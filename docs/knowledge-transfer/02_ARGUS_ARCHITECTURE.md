@@ -1,14 +1,22 @@
 # 02 — Architecture
 
-Single process. Two execution paths that **do not share state**.
+Single Node trading process. Two execution paths that **do not share state**. Optional sibling research processes are **outside** this diagram’s order path — see [ECOSYSTEM.md](../ECOSYSTEM.md).
+
+**Trust:** Argus alone executes (ChiefTrader → RiskEngine → OMS → Broker). vibe-trading / autohedge / OpenAlice / FinceptTerminal are untrusted research/verification sidecars.
 
 ```mermaid
 flowchart TB
+  subgraph research [External research - untrusted]
+    Vibe[Vibe-Trading MCP]
+    AH[AutoHedge]
+    OA[OpenAlice Guardian]
+    Fincept[FinceptTerminal]
+  end
   subgraph ui [SPA]
     App[src/App.tsx]
     WS[raw WebSocket]
   end
-  subgraph node [Node process :3000]
+  subgraph node [Node process :3000 - sole execution]
     Express
     EventBus
     Agents[Idea agents]
@@ -23,6 +31,7 @@ flowchart TB
   Agents --> Chief --> Risk --> OMS --> BM
   EventBus --> WS --> App
   OMS --> SQLite
+  research -.->|signals/notes only - never placeOrder| Agents
 ```
 
 ## Layer map

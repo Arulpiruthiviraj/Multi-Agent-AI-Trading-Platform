@@ -1068,7 +1068,15 @@ export default function App() {
     // Initial fetch to populate state immediately
     fetch("/api/v1/autobot")
       .then(r => r.json())
-      .then(data => setAutoBotConfig(data))
+      .then(data => {
+        setAutoBotConfig((prev: any) => {
+          // Bail out when payload is unchanged so a stray effect re-run cannot thrash renders.
+          try {
+            if (prev && JSON.stringify(prev) === JSON.stringify(data)) return prev;
+          } catch { /* fall through */ }
+          return data;
+        });
+      })
       .catch(e => console.error("Initial fetch failed:", e));
 
     return () => {

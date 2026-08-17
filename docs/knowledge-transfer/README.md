@@ -2,6 +2,8 @@
 
 **LIVE: NO-GO.** These files do not raise readiness. Source + tests beat this pack if they disagree.
 
+Operator onboarding for the multi-repo ecosystem: [`../GETTING_STARTED.md`](../GETTING_STARTED.md), [`../ECOSYSTEM.md`](../ECOSYSTEM.md), [`../CONFIG.md`](../CONFIG.md).
+
 Numbered files match the reverse-engineering outline. Living short docs remain [`../ARGUS.md`](../ARGUS.md) and [`../ARGUS_REFERENCE.md`](../ARGUS_REFERENCE.md). Full narrative: [`../ARGUS_COMPLETE_SYSTEM_SUMMARY.md`](../ARGUS_COMPLETE_SYSTEM_SUMMARY.md). UI: root `FINAL_ANALYSIS.md` §32.
 
 | # | File | Topic |

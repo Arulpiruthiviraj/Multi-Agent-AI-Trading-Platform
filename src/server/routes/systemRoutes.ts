@@ -97,6 +97,80 @@ systemRouter.get("/system/trading-state", (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Acknowledge pre-existing broker FILLED orders (PRE_EXISTING_RECONCILED).
+ * Does not resume trading, place orders, invent fills, or count as organic paper.
+ */
+systemRouter.get("/system/reconciliation/acknowledgements", async (req: Request, res: Response) => {
+  try {
+    const { listActiveAcknowledgements } = await import('../services/ReconciliationAcknowledgements');
+    const broker = typeof req.query.broker === 'string' ? req.query.broker : undefined;
+    const rows = await listActiveAcknowledgements(broker);
+    res.json({
+      status: 'PRE_EXISTING_RECONCILED',
+      count: rows.length,
+      acknowledgements: rows,
+      note: 'Acknowledged orphans are excluded from FILLED_ORDER_MISSING_LOCALLY pause impact only. Not organic paper. Not order authorization.',
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+systemRouter.post("/system/reconciliation/acknowledge", tradingLimiter, async (req: Request & { actor?: string }, res: Response) => {
+  try {
+    const { acknowledgePreExistingOrders } = await import('../services/ReconciliationAcknowledgements');
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const brokerName = String(req.body?.broker || BrokerManager.getInstance().getActiveBroker().name);
+    const reason = String(req.body?.reason || '').trim();
+    const orders = Array.isArray(req.body?.orders) ? req.body.orders : [];
+    const result = await acknowledgePreExistingOrders({
+      broker: brokerName,
+      actor: req.actor || 'unknown',
+      reason,
+      orders: orders.map((o: any) => ({
+        brokerOrderId: String(o.brokerOrderId || o.id || ''),
+        symbol: String(o.symbol || ''),
+        side: o.side,
+        quantity: typeof o.quantity === 'number' ? o.quantity : undefined,
+        averageFillPrice: typeof o.averageFillPrice === 'number' ? o.averageFillPrice : undefined,
+        snapshot: o,
+      })),
+    });
+    res.json({
+      ok: true,
+      status: 'PRE_EXISTING_RECONCILED',
+      ...result,
+      note: 'Does not auto-resume. Call POST /system/resume after review. Does not authorize orders.',
+    });
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
+systemRouter.post("/system/reconciliation/revoke", tradingLimiter, async (req: Request & { actor?: string }, res: Response) => {
+  try {
+    const { revokeAcknowledgement } = await import('../services/ReconciliationAcknowledgements');
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const brokerName = String(req.body?.broker || BrokerManager.getInstance().getActiveBroker().name);
+    const brokerOrderId = String(req.body?.brokerOrderId || '').trim();
+    const reason = String(req.body?.reason || '').trim();
+    const ok = await revokeAcknowledgement({
+      broker: brokerName,
+      brokerOrderId,
+      actor: req.actor || 'unknown',
+      reason,
+    });
+    res.status(ok ? 200 : 404).json({
+      ok,
+      status: ok ? 'REVOKED' : 'NOT_FOUND',
+      note: 'Revoked ids re-enter FILLED_ORDER_MISSING_LOCALLY pause logic on next reconcile cycle.',
+    });
+  } catch (e: any) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
+});
+
 // Real, durable audit trail for every kill-switch transition - distinct from the ephemeral,
 // capped in-memory activity feed at GET /api/v1/autobot (history field).
 systemRouter.get("/system/kill-switch-events", async (req: Request, res: Response) => {

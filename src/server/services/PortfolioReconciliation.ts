@@ -17,6 +17,7 @@ import { runtimeIntervals } from '../config/runtimeIntervals';
 import { EVENTS } from '../core/eventNames';
 import { TERMINAL_ORDER_STATUSES } from './OrderManagement';
 import { submitPipelineSells } from './PipelineFlatten';
+import { getActiveAcknowledgedOrderIds } from './ReconciliationAcknowledgements';
 
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
@@ -140,6 +141,8 @@ export class PortfolioReconciliationWorker {
         const localTrades = await db.select().from(trades);
         const openLocalTrades = localTrades.filter(t => !TERMINAL_ORDER_STATUSES.includes(t.status));
         const localBrokerOrderIds = new Set(localTrades.map(t => t.brokerOrderId).filter(Boolean));
+        // Operator-reviewed pre-existing fills: skip pause impact only for identical brokerOrderIds.
+        const acknowledgedOrderIds = await getActiveAcknowledgedOrderIds(broker.name);
 
         for (const bo of openBrokerOrders) {
           const local = openLocalTrades.find(t => t.brokerOrderId === bo.id);
@@ -161,6 +164,10 @@ export class PortfolioReconciliationWorker {
 
         for (const bo of brokerOrders.filter(o => o.status === 'FILLED')) {
           if (!bo.id || localBrokerOrderIds.has(bo.id)) continue;
+          if (acknowledgedOrderIds.has(bo.id)) {
+            console.log(`[PortfolioReconciliation] FILLED order ${bo.id} (${bo.symbol}) is PRE_EXISTING_RECONCILED — excluded from pause impact (not organic paper).`);
+            continue;
+          }
           const impact = (bo.averageFillPrice || bo.price || 0) * (bo.filledQuantity || bo.quantity || 0);
           mismatches.push({ symbol: bo.symbol, type: 'FILLED_ORDER_MISSING_LOCALLY', localQty: 0, remoteQty: bo.filledQuantity || bo.quantity, approxDollarImpact: impact });
           console.warn(`[PortfolioReconciliation] Broker reports FILLED order ${bo.id} for ${bo.symbol} with no matching local trades.brokerOrderId.`);

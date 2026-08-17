@@ -226,7 +226,7 @@ export default function HistoricalReplayLab() {
         Historical Replay Lab
       </h2>
       <p className="text-[10px] font-mono uppercase tracking-widest text-amber-400 mb-2">
-        HISTORICAL REPLAY · SIMULATION ONLY · NOT LIVE · NOT PAPER · NOT ACTUAL TRADING
+        HISTORICAL_SIMULATION · HISTORICAL REPLAY · SIMULATION ONLY · NOT LIVE · NOT PAPER · NOT ORGANIC_PAPER
       </p>
       <p className="text-xs text-slate-400 mb-4">
         MODE B runs Quant → ChiefTrader vote math → RiskEngine → OMS → HistoricalReplayBroker.

@@ -424,7 +424,7 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
     live: 'NO-GO',
     executionEnvironment: 'REPLAY',
     organicPaper: false,
-    labels: ['HISTORICAL REPLAY', 'SIMULATION ONLY', 'NOT LIVE', 'NOT PAPER', 'NOT ACTUAL TRADING', session.aiLabel],
+    labels: ['HISTORICAL_SIMULATION', 'HISTORICAL REPLAY', 'SIMULATION ONLY', 'NOT LIVE', 'NOT PAPER', 'NOT ORGANIC_PAPER', 'NOT ACTUAL TRADING', session.aiLabel],
     survivorshipBiasWarning: config.universeSource === 'OPERATOR_SELECTED' ? replaySafety.survivorshipBiasWarning : null,
     delistedWarning: replaySafety.delistedWarning,
     lookAheadProtection: 'INFORMATION_AVAILABLE_AT_TIME_T',
