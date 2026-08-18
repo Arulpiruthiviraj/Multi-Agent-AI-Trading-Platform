@@ -218,6 +218,93 @@ systemRouter.post("/system/reconciliation/acknowledge", tradingLimiter, async (r
   }
 });
 
+/**
+ * Read-only operator evidence for Mission Control. Does not resume, pause, flatten, or ack.
+ * Ack remains POST /system/reconciliation/acknowledge (pre-existing FILLED orphans only).
+ * Resume remains POST /system/resume.
+ */
+systemRouter.get("/system/reconciliation/status", async (_req: Request, res: Response) => {
+  try {
+    const { listActiveAcknowledgements, getActiveAcknowledgedOrderIds } = await import('../services/ReconciliationAcknowledgements');
+    const { latestCycleIsMatch, selectUnackedFilledOrphans } = await import('../services/reconciliationOperatorSnapshot');
+    const brokerManager = BrokerManager.getInstance();
+    let brokerName = 'unknown';
+    let unackedFilledOrphans: Array<{
+      brokerOrderId: string;
+      symbol: string;
+      side?: string;
+      quantity?: number;
+      averageFillPrice?: number;
+    }> = [];
+    let ordersError: string | null = null;
+    try {
+      const broker = brokerManager.getActiveBroker();
+      brokerName = broker.name;
+      const acked = await getActiveAcknowledgedOrderIds(brokerName);
+      const localTrades = await db.select().from(schema.trades);
+      const brokerOrders = await broker.orders();
+      const filled = (brokerOrders || []).filter((o: { status?: string }) => o.status === 'FILLED');
+      unackedFilledOrphans = selectUnackedFilledOrphans({
+        filledBrokerOrders: filled,
+        localBrokerOrderIds: localTrades.map((t) => t.brokerOrderId),
+        acknowledgedOrderIds: acked,
+      });
+    } catch (e: any) {
+      ordersError = e?.message || String(e);
+    }
+
+    const recent = await db.select().from(schema.reconciliationEvents)
+      .orderBy(desc(schema.reconciliationEvents.id))
+      .limit(20);
+    const latest = recent[0];
+    const lastPause = recent.find((r) => String(r.actionTaken || '').includes('TRADING_PAUSED')) || null;
+    const acks = await listActiveAcknowledgements(brokerName === 'unknown' ? undefined : brokerName);
+    const mismatchCount = latest?.mismatches
+      ? (() => { try { const p = JSON.parse(latest.mismatches as string); return Array.isArray(p) ? p.length : 0; } catch { return 0; } })()
+      : 0;
+
+    res.json({
+      tradingState: tradingEngine.state.tradingState,
+      emergencyStopActive: tradingEngine.state.emergencyStopActive,
+      broker: {
+        name: brokerName,
+        syncState: brokerManager.getSyncState(),
+        readyForReconciliation: brokerManager.isReadyForReconciliation(),
+      },
+      latest: latest ? {
+        id: latest.id,
+        checkedAt: latest.checkedAt,
+        broker: latest.broker,
+        matches: latestCycleIsMatch(latest),
+        mismatchCount,
+        actionTaken: latest.actionTaken,
+      } : {
+        id: null,
+        checkedAt: null,
+        broker: null,
+        matches: false,
+        mismatchCount: 0,
+        actionTaken: null,
+      },
+      lastPause: lastPause ? {
+        id: lastPause.id,
+        checkedAt: lastPause.checkedAt,
+        actionTaken: lastPause.actionTaken,
+        broker: lastPause.broker,
+      } : null,
+      acknowledgements: {
+        count: acks.length,
+        note: 'PRE_EXISTING_RECONCILED rows exclude FILLED_ORDER_MISSING_LOCALLY pause impact only. Not organic paper. Not a resume.',
+      },
+      unackedFilledOrphans,
+      ordersError,
+      note: 'This GET does not change tradingState. Acknowledge is POST /api/v1/system/reconciliation/acknowledge. Resume is POST /api/v1/system/resume.',
+    });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 systemRouter.post("/system/reconciliation/revoke", tradingLimiter, async (req: Request & { actor?: string }, res: Response) => {
   try {
     const { revokeAcknowledgement } = await import('../services/ReconciliationAcknowledgements');
