@@ -32,7 +32,7 @@ import {
   GUARDIAN_MCP_URL,
   GUARDIAN_WEB_PORT,
   mcpEndpointAccepting,
-  mcpEndpointHasGuardianTools,
+  mcpEndpointIsOpenAlice,
   openAliceHowToEnable,
   openAliceSkipReason,
   shouldSkipOpenAlice,
@@ -305,26 +305,29 @@ async function startChronosAndWait(): Promise<void> {
 }
 
 /**
- * Argus verification talks to Guardian (`issue_create` / `inbox_read` on :47332).
- * A URL that already lists placeOrder/getQuote is OpenAlice UTA (or another trading MCP),
- * not Guardian — pinning Guardian to that port would collide and keep Model Runtime FAILED.
+ * Argus verification talks to OpenAlice's MCP server on :47332. This launcher's only job is
+ * confirming that's genuinely OpenAlice (serverInfo.name === 'open-alice'), not an unrelated
+ * process squatting the port. `issue_create`/`inbox_read` reachability is a separate, later
+ * concern that needs a workspace id (Argus's OpenAliceAdapter/OpenAliceWorkspace handle that at
+ * runtime, once this process is actually up) — see OpenAliceWorkspace.ts for why.
  */
 async function startOpenAliceGuardian(): Promise<string | null> {
   const openAlicePath = ensureOpenAliceCheckout();
   if (!openAlicePath) return null;
 
   if (await mcpEndpointAccepting(GUARDIAN_MCP_URL)) {
-    // Real bug fix (2026-08-18): an MCP responding to `initialize` is not proof it's Guardian -
-    // OpenAlice's own UTA (trading MCP) answers the same handshake. Only defer to "already up"
-    // once the SAME capability check Argus itself uses (issue_create/inbox_read) passes; a wrong
-    // MCP here used to make the launcher silently skip starting its own compliant instance.
-    const capability = await mcpEndpointHasGuardianTools(GUARDIAN_MCP_URL);
-    if (capability.ok) {
-      console.log(`[dev] OpenAlice Guardian MCP already accepting at ${GUARDIAN_MCP_URL} - not starting a second pnpm dev. ${capability.reason}`);
+    // Real bug fix (2026-08-18), corrected same day: an MCP responding to `initialize` is not
+    // proof it's OpenAlice at all - confirm identity via serverInfo.name before deferring. (An
+    // earlier version of this check required issue_create/inbox_read via tools/list, but those
+    // are workspace-scoped in OpenAlice - see OpenAliceWorkspace.ts - and can never appear on
+    // this bare URL, so that check would reject every healthy Guardian boot.)
+    const identity = await mcpEndpointIsOpenAlice(GUARDIAN_MCP_URL);
+    if (identity.ok) {
+      console.log(`[dev] OpenAlice Guardian MCP already accepting at ${GUARDIAN_MCP_URL} - not starting a second pnpm dev. ${identity.reason}`);
       return GUARDIAN_MCP_URL;
     }
     openAliceLaunchError =
-      `${capability.reason} Stop whatever is bound to port ${GUARDIAN_MCP_PORT} (likely another OpenAlice instance started without OPENALICE_LITE_MODE=1), ` +
+      `${identity.reason} Stop whatever is bound to port ${GUARDIAN_MCP_PORT} (likely an unrelated process), ` +
       `or set OPENALICE_HOME to isolate this launch, then re-run npm run dev. ${openAliceHowToEnable(openAlicePath)}`;
     console.warn(`[dev] ${openAliceLaunchError}`);
     return GUARDIAN_MCP_URL;
@@ -334,12 +337,12 @@ async function startOpenAliceGuardian(): Promise<string | null> {
     console.log(`[dev] Port ${GUARDIAN_MCP_PORT} is open but ${GUARDIAN_MCP_URL} is not accepting MCP yet — waiting (up to 60s)...`);
     const ready = await waitForOpenAliceMcp(GUARDIAN_MCP_URL, 60_000, console.warn);
     if (ready) {
-      const capability = await mcpEndpointHasGuardianTools(GUARDIAN_MCP_URL);
-      if (capability.ok) {
-        console.log(`[dev] OpenAlice Guardian MCP is ready at ${GUARDIAN_MCP_URL}. ${capability.reason}`);
+      const identity = await mcpEndpointIsOpenAlice(GUARDIAN_MCP_URL);
+      if (identity.ok) {
+        console.log(`[dev] OpenAlice Guardian MCP is ready at ${GUARDIAN_MCP_URL}. ${identity.reason}`);
         return GUARDIAN_MCP_URL;
       }
-      openAliceLaunchError = capability.reason + ` ${openAliceHowToEnable(openAlicePath)}`;
+      openAliceLaunchError = identity.reason + ` ${openAliceHowToEnable(openAlicePath)}`;
       console.warn(`[dev] ${openAliceLaunchError}`);
       return GUARDIAN_MCP_URL;
     }

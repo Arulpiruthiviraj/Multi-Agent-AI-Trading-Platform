@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { canonicalPortfolioSymbol, confirmMissingLocally, confirmStillHeldLocally, findHolding } from './portfolioReconcileCompare';
+import { canonicalPortfolioSymbol, confirmMissingLocally, confirmStillHeldLocally, confirmConsecutiveFault, discrepancyFaultKey, findHolding, positionSetDelta, pruneResolvedFaults, summarizePositionSet } from './portfolioReconcileCompare';
 import { tradingSafety } from '../config/tradingSafety';
 
 describe('canonicalPortfolioSymbol', () => {
@@ -65,5 +65,45 @@ describe('confirmStillHeldLocally (false MISSING_REMOTELY race)', () => {
       async () => [{ symbol: 'AAPL', quantity: 1 }],
     );
     expect(stillHeld).toBe(true);
+  });
+});
+
+describe('consecutive fault debounce (GLD/NVDA flap)', () => {
+  const required = tradingSafety.reconPauseConsecutiveMismatchCycles;
+
+  it('does not confirm a one-off miss', () => {
+    const store = new Map<string, number>();
+    const key = discrepancyFaultKey('MISSING_LOCALLY', 'gld');
+    expect(confirmConsecutiveFault(store, key, required)).toBe(false);
+    expect(store.get(key)).toBe(1);
+  });
+
+  it('confirms the same discrepancy on the second consecutive cycle', () => {
+    const store = new Map<string, number>();
+    const key = discrepancyFaultKey('MISSING_LOCALLY', 'NVDA');
+    expect(confirmConsecutiveFault(store, key, required)).toBe(false);
+    expect(confirmConsecutiveFault(store, key, required)).toBe(true);
+  });
+
+  it('resets a symbol that matched on the next cycle', () => {
+    const store = new Map<string, number>();
+    const gld = discrepancyFaultKey('MISSING_LOCALLY', 'GLD');
+    confirmConsecutiveFault(store, gld, required);
+    pruneResolvedFaults(store, []);
+    expect(store.size).toBe(0);
+    expect(confirmConsecutiveFault(store, gld, required)).toBe(false);
+  });
+});
+
+describe('positionSetDelta', () => {
+  const tol = tradingSafety.reconQtyTolerance;
+
+  it('normalizes case and reports only real set differences', () => {
+    const remote = summarizePositionSet([{ symbol: 'gld', quantity: 1 }, { symbol: 'NVDA', quantity: 2 }], tol);
+    const local = summarizePositionSet([{ symbol: 'GLD', quantity: 1 }, { symbol: 'nvda', quantity: 2 }], tol);
+    const delta = positionSetDelta(remote, local, tol);
+    expect(delta.missingLocally).toEqual([]);
+    expect(delta.missingRemotely).toEqual([]);
+    expect(delta.qtyDrift).toEqual([]);
   });
 });

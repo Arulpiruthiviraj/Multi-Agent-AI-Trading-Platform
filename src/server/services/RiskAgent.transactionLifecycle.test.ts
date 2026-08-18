@@ -97,11 +97,11 @@ describe('CHIEF_APPROVED_IDEA -> RiskEngine -> transactions.status (Phase 16A re
     expect(txn.outcome).toBe('N_A');
     expect(txn.closedAt).not.toBeNull();
 
-    // Whichever real gate fires first (market_hours when the test runs outside real trading
-    // hours, price_validity otherwise - both are real, not fabricated) is not the point under
-    // test here; what matters is that a real rejection reached transactions.status at all.
+    // Whichever real gate fires first (market_hours outside RTH, price_validity for the
+    // invalid price, or data_freshness with no cached tick) is not the point under test;
+    // what matters is that a real rejection reached transactions.status at all.
     const [assessment] = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.transactionId, transactionId));
     expect(assessment.approved).toBe(false);
-    expect(['price_validity', 'market_hours']).toContain(assessment.rejectionGate);
+    expect(['price_validity', 'market_hours', 'data_freshness']).toContain(assessment.rejectionGate);
   });
 });

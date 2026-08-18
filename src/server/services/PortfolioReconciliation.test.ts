@@ -33,6 +33,7 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
   beforeEach(async () => {
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     BrokerManager.getInstance().resetSyncStateForTests('READY');
+    portfolioReconciliationWorker.resetFaultDebounceForTests();
   });
 
   afterAll(() => {
@@ -53,7 +54,7 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     expect(last.mismatches).toBeNull();
   });
 
-  it('persists a MISSING_LOCALLY mismatch and a BROKER-side portfolio_snapshots row when the broker holds a position Argus does not know about', async () => {
+  it('persists a MATCH row and hydrates local when the broker holds a position Argus does not yet have', async () => {
     const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
     // Monkey-patch portfolio() to simulate a broker-side position Argus's local table doesn't
     // know about, without needing a real fill to have happened first.
@@ -67,9 +68,10 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
 
     const events = await db.select().from(schema.reconciliationEvents);
     const last = events[events.length - 1];
-    expect(last.matches).toBe(false);
-    const mismatches = JSON.parse(last.mismatches);
-    expect(mismatches.some((m: any) => m.symbol === 'ZZZTEST' && m.type === 'MISSING_LOCALLY')).toBe(true);
+    expect(last.matches).toBe(true);
+
+    const local = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, 'ZZZTEST'));
+    expect(local[0]?.quantity).toBe(42);
 
     const snapshots = await db.select().from(schema.portfolioSnapshots).where(eq(schema.portfolioSnapshots.reconciliationId, last.id));
     const brokerSnapshot = snapshots.find((s: any) => s.symbol === 'ZZZTEST' && s.source === 'BROKER');
@@ -109,11 +111,10 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     (broker as any).portfolio = originalPortfolio;
   });
 
-  it('a significant dollar QUANTITY_DRIFT on an already-tracked position sets tradingState TRADING_PAUSED (RiskEngine emergency_stop), not only emergencyStopActive', async () => {
+  it('a significant dollar QUANTITY_DRIFT is written to broker qty without pausing (self-heal, not a flap)', async () => {
     const { tradingEngine } = await import('../engines/TradingEngine');
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test reset', actor: 'tester' });
 
-    // Seed a local row first so the broker later reporting a different quantity is QUANTITY_DRIFT.
     await db.insert(schema.portfolio).values({
       symbol: 'DRIFTTEST', quantity: 20, averagePrice: 10, currentPrice: 10, lastUpdated: new Date().toISOString(), brokerSource: 'test',
     });
@@ -127,13 +128,14 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
 
     await portfolioReconciliationWorker.reconcile();
 
-    expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+    expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
+    const local = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, 'DRIFTTEST'));
+    expect(local[0]?.quantity).toBe(5);
     (broker as any).portfolio = originalPortfolio;
     await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'DRIFTTEST'));
-    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'tester' });
   });
 
-  it('genuine MISSING_LOCALLY (fresh local still empty) records mismatch and pauses after warmup', async () => {
+  it('hydrates a broker-only name without recording MISSING_LOCALLY or pausing', async () => {
     const { tradingEngine } = await import('../engines/TradingEngine');
     const { runtimeIntervals } = await import('../config/runtimeIntervals');
     const { resetBootTimestampForTests } = await import('../core/startup');
@@ -149,20 +151,17 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
 
     await portfolioReconciliationWorker.reconcile();
 
-    expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+    expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
 
     const events = await db.select().from(schema.reconciliationEvents);
     const last = events[events.length - 1];
-    expect(last.actionTaken).toBe('TRADING_PAUSED');
-    const mismatches = JSON.parse(last.mismatches);
-    expect(mismatches.some((m: any) => m.symbol === 'BASELINETEST' && m.type === 'MISSING_LOCALLY')).toBe(true);
+    expect(last.matches).toBe(true);
 
     const local = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, 'BASELINETEST'));
     expect(local[0]?.quantity).toBe(20);
 
     (broker as any).portfolio = originalPortfolio;
     await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'BASELINETEST'));
-    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'tester' });
   });
 
   it('a call after a previous cycle has fully completed runs normally (the guard does not get stuck)', async () => {

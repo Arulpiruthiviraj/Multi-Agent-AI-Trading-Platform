@@ -6,7 +6,7 @@
  * Syncs actual broker positions with local portfolio database.
  * ==========================================================
  */
-import { db } from '../db';
+import { db, sqliteDb } from '../db';
 import { portfolio, reconciliationEvents, portfolioSnapshots, trades } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
@@ -19,13 +19,14 @@ import { TERMINAL_ORDER_STATUSES } from './OrderManagement';
 import { submitPipelineSells } from './PipelineFlatten';
 import { getActiveAcknowledgedOrderIds } from './ReconciliationAcknowledgements';
 import { isReconciliationWarmupActive, reconciliationWarmupRemainingMs } from '../core/startup';
-import { canonicalPortfolioSymbol, confirmMissingLocally, confirmStillHeldLocally, findHolding } from './portfolioReconcileCompare';
+import { canonicalPortfolioSymbol, confirmConsecutiveFault, confirmMissingLocally, confirmStillHeldLocally, discrepancyFaultKey, findHolding, positionSetDelta, pruneResolvedFaults, summarizePositionSet } from './portfolioReconcileCompare';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
 const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = tradingSafety.reconAccountConsistencyTolerancePct;
 const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = tradingSafety.reconAccountConsistencyToleranceFloorDollars;
+const PAUSE_CONSECUTIVE_CYCLES = tradingSafety.reconPauseConsecutiveMismatchCycles;
 
 interface MismatchDetail {
   symbol: string;
@@ -49,6 +50,13 @@ export class PortfolioReconciliationWorker {
   // same `portfolio` table writes and double-emit RECONCILIATION_MISMATCH/MATCH.
   private isReconciling = false;
   private workerStartedAt = 0;
+  /** Symbol-level MISSING_LOCALLY / MISSING_REMOTELY streaks. Cleared when that key matches. */
+  private consecutiveFaults = new Map<string, number>();
+
+  /** Test hook: shared worker singleton must not leak debounce state across cases. */
+  resetFaultDebounceForTests() {
+    this.consecutiveFaults.clear();
+  }
 
   start() {
     if (this.intervalId) return;
@@ -94,14 +102,61 @@ export class PortfolioReconciliationWorker {
       const brokerPortfolio = await broker.portfolio();
 
       const remotePositions = brokerPortfolio.positions || [];
-      const loadLocalHoldings = () => db.select().from(portfolio).all();
-      const localHoldings = await loadLocalHoldings();
+      // Raw SQL inside a better-sqlite3 transaction (same writer connection) — drizzle's
+      // thenable query builder inside a transaction has returned a non-array, which the
+      // Array.isArray guard treated as "no local positions" and flapped GLD/NVDA.
+      const loadLocalHoldings = () => sqliteDb.transaction(() => {
+        const rows = sqliteDb.prepare(`
+          SELECT
+            symbol,
+            quantity,
+            average_price AS averagePrice,
+            current_price AS currentPrice,
+            unrealized_pnl AS unrealizedPnL,
+            last_updated AS lastUpdated,
+            broker_source AS brokerSource
+          FROM portfolio
+        `).all() as Array<{
+          symbol: string;
+          quantity: number;
+          averagePrice: number;
+          currentPrice: number | null;
+          unrealizedPnL: number | null;
+          lastUpdated: string;
+          brokerSource: string | null;
+        }>;
+        return Array.isArray(rows) ? rows : [];
+      })();
+      let localHoldings = loadLocalHoldings();
+      // One retry when the broker reports names but the first WAL snapshot was empty — the
+      // GLD/NVDA flap was a one-cycle empty local read, not a real missing row.
+      if (remotePositions.length > 0 && localHoldings.length === 0) {
+        await new Promise((r) => setTimeout(r, 20));
+        localHoldings = loadLocalHoldings();
+      }
+      const remoteSet = summarizePositionSet(
+        remotePositions.map((p: any) => ({ symbol: p.symbol, quantity: p.quantity })),
+        QTY_TOLERANCE,
+      );
+      const localSet = summarizePositionSet(localHoldings, QTY_TOLERANCE);
+      const delta = positionSetDelta(remoteSet, localSet, QTY_TOLERANCE);
+      observeSafe(() => structuredLogger.info('reconciliation_position_sets', {
+        category: 'RECONCILIATION',
+        component: 'PortfolioReconciliation',
+        metadata: { remote: remoteSet, local: localSet, delta },
+      }));
+      console.log(
+        `[PortfolioReconciliation] sets remote=[${remoteSet.map((r) => `${r.symbol}:${r.quantity}`).join(',') || 'none'}] ` +
+        `local=[${localSet.map((r) => `${r.symbol}:${r.quantity}`).join(',') || 'none'}] ` +
+        `delta missingLocally=${delta.missingLocally.length} missingRemotely=${delta.missingRemotely.length} qtyDrift=${delta.qtyDrift.length}`,
+      );
       // Stamp the position-compare clock HERE — not after broker.orders(). Hydrate sets
       // last_updated immediately; a slow orders() call used to stamp checkedAt ~1.7s later
       // so live rows looked like they already existed before the check.
       const positionsComparedAt = new Date().toISOString();
       const mismatches: MismatchDetail[] = [];
       const remoteCanon = new Set(remotePositions.map((p: any) => canonicalPortfolioSymbol(p.symbol)).filter(Boolean));
+      const liveFaultKeys = new Set<string>();
 
       // Update local to match remote - the broker is always the source of truth.
       for (const pos of remotePositions) {
@@ -140,9 +195,8 @@ export class PortfolioReconciliationWorker {
         }
 
         if (verdict === 'present_drift' || (local && Math.abs((local.quantity ?? 0) - qty) > QTY_TOLERANCE)) {
-          const localQty = (findHolding(await loadLocalHoldings(), symbol)?.quantity ?? local?.quantity) ?? 0;
-          mismatches.push({ symbol, type: 'QUANTITY_DRIFT', localQty, remoteQty: qty, approxDollarImpact: Math.abs(localQty - qty) * price });
-          console.warn(`[PortfolioReconciliation] DRIFT ${symbol}: local qty ${localQty}, broker qty ${qty}`);
+          const localQty = (findHolding(loadLocalHoldings(), symbol)?.quantity ?? local?.quantity) ?? 0;
+          console.warn(`[PortfolioReconciliation] DRIFT ${symbol}: local qty ${localQty}, broker qty ${qty} — writing broker qty (not a pause by itself).`);
           await db.update(portfolio).set({
             quantity: qty,
             averagePrice: avgPrice,
@@ -154,9 +208,11 @@ export class PortfolioReconciliationWorker {
           continue;
         }
 
-        // Genuine miss: fresh query still has no row. Record, then hydrate from this broker payload.
-        mismatches.push({ symbol, type: 'MISSING_LOCALLY', localQty: 0, remoteQty: qty, approxDollarImpact: qty * price });
-        console.warn(`[PortfolioReconciliation] Broker holds ${symbol} (${qty}) with no local record after fresh re-read - adding it.`);
+        // Genuine miss: fresh query still has no row. Hydrate from this broker payload first.
+        // A successful read-back means local now matches the broker — do not record MISSING_LOCALLY
+        // (that MATCH/MISMATCH oscillation was GLD/NVDA every other 5-minute cycle).
+        console.warn(`[PortfolioReconciliation] Broker holds ${symbol} (${qty}) with no local record after fresh re-read - hydrating.`);
+        let hydrated = false;
         try {
           await db.insert(portfolio).values({
             symbol,
@@ -167,16 +223,7 @@ export class PortfolioReconciliationWorker {
             lastUpdated: new Date().toISOString(),
             brokerSource: broker.name,
           });
-          // Real gap found by the 2026-08-18 zero-trust audit (D-2): the GLD/NVDA MISSING_LOCALLY
-          // pattern has recurred across multiple separate server boots despite this insert path
-          // reporting success each time, and no code anywhere DELETEs from `portfolio` in
-          // production - meaning either this insert isn't actually persisting despite not
-          // throwing, or the broker itself is intermittently omitting these positions on a later
-          // boot's first portfolio() call. A plain `console.error` on the throw path couldn't
-          // distinguish those - this read-after-write check gives durable, queryable evidence
-          // (via structuredLogger, not just stdout) the next time this recurs, without changing
-          // any pause/resume/trading behavior.
-          const verify = findHolding(await loadLocalHoldings(), symbol);
+          const verify = findHolding(loadLocalHoldings(), symbol);
           if (!verify || Math.abs((verify.quantity ?? 0) - qty) > QTY_TOLERANCE) {
             observeSafe(() => structuredLogger.error('reconciliation_hydrate_verify_failed', {
               category: 'RECONCILIATION',
@@ -185,13 +232,14 @@ export class PortfolioReconciliationWorker {
               metadata: { expectedQty: qty, readBackQty: verify?.quantity ?? null, broker: broker.name },
             }));
             console.error(`[PortfolioReconciliation] ${symbol} insert reported success but a fresh read-back does not confirm it (expected qty ${qty}, read back ${verify?.quantity ?? 'no row'}) - see reconciliation_hydrate_verify_failed in structured logs.`);
+          } else {
+            hydrated = true;
           }
         } catch (insertErr) {
-          // Unique PK TOCTOU: another writer inserted the same canonical symbol. Do not throw the cycle.
-          const raced = findHolding(await loadLocalHoldings(), symbol);
+          const raced = findHolding(loadLocalHoldings(), symbol);
           if (raced && Math.abs((raced.quantity ?? 0) - qty) <= QTY_TOLERANCE) {
-            mismatches.pop();
-            console.log(`[PortfolioReconciliation] ${symbol} insert raced with another writer — dropping false MISSING_LOCALLY.`);
+            hydrated = true;
+            console.log(`[PortfolioReconciliation] ${symbol} insert raced with another writer — local already matches broker.`);
           } else {
             observeSafe(() => structuredLogger.error('reconciliation_hydrate_insert_failed', {
               category: 'RECONCILIATION',
@@ -203,6 +251,17 @@ export class PortfolioReconciliationWorker {
             console.error(`[PortfolioReconciliation] Failed to hydrate ${symbol} locally`, insertErr);
           }
         }
+        if (hydrated) {
+          console.log(`[PortfolioReconciliation] ${symbol} hydrated locally — not recording MISSING_LOCALLY.`);
+          continue;
+        }
+        const faultKey = discrepancyFaultKey('MISSING_LOCALLY', symbol);
+        liveFaultKeys.add(faultKey);
+        if (!confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+          console.warn(`[PortfolioReconciliation] ${symbol} MISSING_LOCALLY deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) — not pausing on a one-off fetch miss.`);
+          continue;
+        }
+        mismatches.push({ symbol, type: 'MISSING_LOCALLY', localQty: 0, remoteQty: qty, approxDollarImpact: qty * price });
       }
 
       // Remove locals the broker no longer holds (canonical match, not raw string equality).
@@ -217,6 +276,12 @@ export class PortfolioReconciliationWorker {
           loadLocalHoldings,
         );
         if (!stillHeld) continue;
+        const faultKey = discrepancyFaultKey('MISSING_REMOTELY', localCanon || local.symbol);
+        liveFaultKeys.add(faultKey);
+        if (!confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+          console.warn(`[PortfolioReconciliation] ${local.symbol} MISSING_REMOTELY deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) — not zeroing local on a one-off broker omission.`);
+          continue;
+        }
         const price = local.currentPrice || local.averagePrice;
         mismatches.push({ symbol: localCanon || local.symbol, type: 'MISSING_REMOTELY', localQty: local.quantity, remoteQty: 0, approxDollarImpact: local.quantity * price });
         console.warn(`[PortfolioReconciliation] Local record for ${local.symbol} (${local.quantity}) has no matching broker position - clearing it.`);
@@ -225,6 +290,7 @@ export class PortfolioReconciliationWorker {
           lastUpdated: new Date().toISOString()
         }).where(eq(portfolio.symbol, local.symbol));
       }
+      pruneResolvedFaults(this.consecutiveFaults, liveFaultKeys);
 
       // Phase 1, item 4 - open-order reconciliation. Previously only positions were checked;
       // real broker orders and real cash/buying-power were entirely unreconciled (confirmed by
@@ -376,7 +442,7 @@ export class PortfolioReconciliationWorker {
         }).returning({ id: reconciliationEvents.id });
         const reconciliationId = inserted[0]?.id;
 
-        const argusSnapshot = await loadLocalHoldings();
+        const argusSnapshot = loadLocalHoldings();
         const snapshotRows = [
           ...argusSnapshot.map((h: any) => ({ symbol: h.symbol, quantity: h.quantity ?? 0, averagePrice: h.averagePrice, currentPrice: h.currentPrice, source: 'ARGUS', snapshotAt: timestamp, reconciliationId })),
           ...remotePositions.map((p: any) => ({ symbol: p.symbol, quantity: p.quantity, averagePrice: p.entryPrice, currentPrice: p.currentPrice, source: 'BROKER', snapshotAt: timestamp, reconciliationId })),

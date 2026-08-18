@@ -61,21 +61,43 @@ export async function mcpEndpointAccepting(mcpUrl: string, timeoutMs = 2500): Pr
 }
 
 /**
- * Real bug found and fixed (2026-08-18): `mcpEndpointAccepting()` only proves an MCP server is
- * listening at all - OpenAlice's own UTA (Universal Trading Adapter, a DIFFERENT MCP inside the
- * same OpenAlice checkout, with placeOrder/getQuote/tradingCommit/etc.) answers the exact same
- * `initialize` handshake just as successfully as Guardian does. `startOpenAliceGuardian()` used
- * to call only `mcpEndpointAccepting()` to decide "Guardian is already up, don't start my own" -
- * if UTA (or any other MCP) happened to already be bound to :47332 for any reason, the launcher
- * would wrongly defer to it, never attempt its own correctly-configured
- * (OPENALICE_LITE_MODE=1/OPENALICE_MCP_ENABLED=1) instance, and leave Argus's own later
- * OpenAliceAdapter.healthCheck() to discover the mismatch after the fact - exactly the live
- * "Wrong MCP: this URL is a trading/broker server" failure this closes. Does a real `tools/list`
- * call and requires both `issue_create` and `inbox_read` - the same check
- * OpenAliceAdapter.healthCheck() already performs inside the running server - so the launcher and
- * the app agree on what "Guardian" means, checked at the one place that decides whether to defer.
+ * Real bug found and fixed (2026-08-18), corrected same day: `mcpEndpointAccepting()` only
+ * proves an MCP server is listening at all, so `startOpenAliceGuardian()` used to defer to
+ * whatever answered :47332 without checking it was really OpenAlice. The first fix checked
+ * `tools/list` for `issue_create`/`inbox_read` - but reading OpenAlice's own source
+ * (src/main.ts:113-130, src/server/mcp.ts:29-35) showed those tools are registered ONLY on the
+ * per-workspace MCP path (`/mcp/:wsId`); the bare `/mcp` URL this launcher probes always serves
+ * the global tool catalog (market/economy/UTA-shaped tools), regardless of OPENALICE_LITE_MODE -
+ * which only disables the trading carrier's ability to execute, not tool registration. So that
+ * check could never pass here and would flag every healthy Guardian boot as "wrong MCP".
+ *
+ * The launcher's actual job is narrower than app-level Guardian verification: confirm this is
+ * genuinely an OpenAlice MCP server (not an unrelated process squatting the port), not which
+ * mode it's running in. OpenAlice's McpServer always identifies itself as `open-alice` in the
+ * MCP `initialize` handshake's `serverInfo.name` (src/server/mcp.ts:83) - that's a stable, real
+ * identity signal `tools/list` isn't. Guardian-tool reachability (which does need a workspace) is
+ * Argus's own OpenAliceAdapter/OpenAliceWorkspace's job at runtime, not this launcher's.
+ *
+ * Confirmed live (2026-08-18) that OpenAlice's Streamable HTTP transport answers `initialize`
+ * with `content-type: text/event-stream` - the body is SSE-framed (`event: message\ndata: {...}`),
+ * not plain JSON - so a bare `res.json()` throws, gets swallowed, and always reports "unknown".
+ * `parseInitializeBody()` below reads the raw text and accepts either framing.
  */
-export async function mcpEndpointHasGuardianTools(mcpUrl: string, timeoutMs = 2500): Promise<{ ok: boolean; reason: string }> {
+function parseInitializeBody(raw: string): any {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    const dataLine = raw.split('\n').map((l) => l.trim()).find((l) => l.startsWith('data:'));
+    if (!dataLine) return null;
+    try {
+      return JSON.parse(dataLine.slice('data:'.length).trim());
+    } catch {
+      return null;
+    }
+  }
+}
+
+export async function mcpEndpointIsOpenAlice(mcpUrl: string, timeoutMs = 2500): Promise<{ ok: boolean; reason: string }> {
   try {
     const res = await fetch(mcpUrl, {
       method: 'POST',
@@ -83,22 +105,31 @@ export async function mcpEndpointHasGuardianTools(mcpUrl: string, timeoutMs = 25
         'Content-Type': 'application/json',
         Accept: 'application/json, text/event-stream',
       },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'argus-dev-launcher', version: '0' },
+        },
+      }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!res.ok) return { ok: false, reason: `tools/list HTTP ${res.status}` };
-    const body: any = await res.json().catch(() => null);
-    const tools: string[] = Array.isArray(body?.result?.tools)
-      ? body.result.tools.map((t: any) => String(t?.name ?? ''))
-      : [];
-    const hasRequired = tools.includes('issue_create') && tools.includes('inbox_read');
-    if (hasRequired) return { ok: true, reason: `Connected. ${tools.length} tool(s) available, including issue_create and inbox_read.` };
+    if (!res.ok) return { ok: false, reason: `initialize HTTP ${res.status}` };
+    const raw = await res.text();
+    const body: any = parseInitializeBody(raw);
+    const serverName = body?.result?.serverInfo?.name;
+    if (serverName === 'open-alice') {
+      return { ok: true, reason: `Connected. serverInfo.name=open-alice at ${mcpUrl}.` };
+    }
     return {
       ok: false,
-      reason: `Wrong MCP: an MCP server answered at ${mcpUrl} but lacks issue_create/inbox_read (this is OpenAlice UTA or another trading MCP, not Guardian). Available: ${tools.join(', ') || 'none'}`,
+      reason: `Wrong server: an MCP server answered at ${mcpUrl} but identified itself as "${serverName ?? 'unknown'}", not open-alice.`,
     };
   } catch (e: any) {
-    return { ok: false, reason: `tools/list failed: ${e?.message ?? e}` };
+    return { ok: false, reason: `initialize failed: ${e?.message ?? e}` };
   }
 }
 

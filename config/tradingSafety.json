@@ -77,6 +77,7 @@
   "reconAccountConsistencyTolerancePct": 0.01,
   "reconAccountConsistencyToleranceFloorDollars": 50,
   "reconQtyTolerance": 0.001,
+  "reconPauseConsecutiveMismatchCycles": 2,
   "fallbackTakeProfitPct": 15,
   "fallbackTrailingStopPct": 5,
   "internalPaperDefaultCash": 100000,

@@ -54,6 +54,8 @@ describe('Portfolio reconciliation mismatch actually blocks new orders (Phase 1 
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     BrokerManager.getInstance().resetSyncStateForTests('READY');
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    portfolioReconciliationWorker.resetFaultDebounceForTests();
+    await db.delete(schema.portfolio);
   });
 
   afterAll(() => {
@@ -75,16 +77,20 @@ describe('Portfolio reconciliation mismatch actually blocks new orders (Phase 1 
     const [baseline] = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, baselineTraceId));
     expect(baseline.rejectionGate).not.toBe('emergency_stop');
 
-    // Real broker mismatch: the active broker reports a position the local DB has never heard of,
-    // well above the $100 SIGNIFICANT_MISMATCH_DOLLARS threshold.
-    const { BrokerManager } = await import('../../brokers/BrokerManager');
-    const broker = BrokerManager.getInstance().getActiveBroker();
-    const originalPortfolio = broker.portfolio.bind(broker);
-    (broker as any).portfolio = async () => {
-      const real = await originalPortfolio();
-      return { ...real, positions: [...real.positions, { symbol: 'MISMATCHCO', quantity: 100, entryPrice: 50, currentPrice: 50 }] };
-    };
+    // Persistent mismatch: local holds a name the broker does not. One cycle is deferred;
+    // the second matching MISSING_REMOTELY cycle pauses (reconPauseConsecutiveMismatchCycles).
+    await db.delete(schema.portfolio);
+    await db.insert(schema.portfolio).values({
+      symbol: 'MISMATCHCO',
+      quantity: 100,
+      averagePrice: 50,
+      currentPrice: 50,
+      lastUpdated: new Date().toISOString(),
+      brokerSource: 'test',
+    });
 
+    await portfolioReconciliationWorker.reconcile();
+    expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
     await portfolioReconciliationWorker.reconcile();
 
     // The real, previously-broken assertion: tradingState itself must actually change.
@@ -113,7 +119,5 @@ describe('Portfolio reconciliation mismatch actually blocks new orders (Phase 1 
     // resumption call itself is worth proving works too).
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'test' });
     expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
-
-    (broker as any).portfolio = originalPortfolio;
   });
 });

@@ -39,6 +39,8 @@ describe('PortfolioReconciliation boot warmup guard', () => {
     armReconciliationBootWarmup(Date.now());
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     BrokerManager.getInstance().resetSyncStateForTests('READY');
+    portfolioReconciliationWorker.resetFaultDebounceForTests();
+    await db.delete(schema.portfolio);
   });
 
   afterAll(() => {
@@ -71,11 +73,21 @@ describe('PortfolioReconciliation boot warmup guard', () => {
     }
   });
 
-  it('after boot warmup expires, the same mismatch class DOES pause TRADING_ENABLED', async () => {
+  it('after boot warmup expires, two consecutive MISSING_REMOTELY cycles pause TRADING_ENABLED', async () => {
     const { runtimeIntervals } = await import('../config/runtimeIntervals');
     resetBootTimestampForTests(Date.now() - runtimeIntervals.reconciliationBootWarmupMs - 1);
 
-    await injectBrokerMismatch('WARMUP_B');
+    await db.insert(schema.portfolio).values({
+      symbol: 'WARMUP_B',
+      quantity: 100,
+      averagePrice: 50,
+      currentPrice: 50,
+      lastUpdated: new Date().toISOString(),
+      brokerSource: 'test',
+    });
+    await portfolioReconciliationWorker.reconcile();
+    expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
+    await portfolioReconciliationWorker.reconcile();
     expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
 
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'test' });

@@ -93,4 +93,19 @@ describe('NewsScoringEngine.analyzeWithAI - AI output validation (Phase 5 harden
 
     expect(result).toBeNull();
   });
+
+  it('buildLocalFirstNewsAnalysis maps FinBERT signed score without inventing an LLM result', async () => {
+    const { buildLocalFirstNewsAnalysis } = await import('./NewsScoringEngine');
+    const result = buildLocalFirstNewsAnalysis(article(), {
+      symbol: 'NVDA',
+      category: 'Earnings',
+      sentiment: 0.8,
+      impactScore01: 0.9,
+      reasoning: '[Local-First] Remote LLM failed; using finbert sentiment 0.80.',
+    });
+    expect(result.tradingBias).toBe('BULLISH');
+    expect(result.sentimentScore).toBe(0.8);
+    expect(result._provider).toBeUndefined();
+    expect(result.reasoning).toContain('finbert');
+  });
 });

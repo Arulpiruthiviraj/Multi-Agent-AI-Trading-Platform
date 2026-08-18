@@ -36,6 +36,7 @@ describe('PortfolioReconciliation stale-snapshot / in-flight upsert race', () =>
     await db.delete(schema.reconciliationEvents);
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    portfolioReconciliationWorker.resetFaultDebounceForTests();
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     BrokerManager.getInstance().resetSyncStateForTests('READY');
   });
@@ -79,7 +80,7 @@ describe('PortfolioReconciliation stale-snapshot / in-flight upsert race', () =>
     expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
   });
 
-  it('records genuine MISSING_LOCALLY and pauses after warmup when local is still empty on fresh re-read', async () => {
+  it('hydrating a broker-only name is MATCH, not a MISSING_LOCALLY pause (GLD/NVDA flap)', async () => {
     const { runtimeIntervals } = await import('../config/runtimeIntervals');
     resetBootTimestampForTests(Date.now() - runtimeIntervals.reconciliationBootWarmupMs - 1);
 
@@ -99,11 +100,39 @@ describe('PortfolioReconciliation stale-snapshot / in-flight upsert race', () =>
 
     const events = await db.select().from(schema.reconciliationEvents);
     const last = events[events.length - 1];
-    expect(last.matches).toBe(false);
-    const mismatches = JSON.parse(last.mismatches);
-    expect(mismatches.some((m: any) => m.symbol === 'NVDA' && m.type === 'MISSING_LOCALLY')).toBe(true);
+    expect(last.matches).toBe(true);
+    expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
+    const local = await db.select().from(schema.portfolio);
+    expect(local.some((r: any) => r.symbol === 'NVDA' && r.quantity === 1)).toBe(true);
+  });
+
+  it('pauses only after two consecutive MISSING_REMOTELY cycles (not a one-off broker omission)', async () => {
+    const { runtimeIntervals } = await import('../config/runtimeIntervals');
+    const { tradingSafety } = await import('../config/tradingSafety');
+    resetBootTimestampForTests(Date.now() - runtimeIntervals.reconciliationBootWarmupMs - 1);
+
+    await db.insert(schema.portfolio).values({
+      symbol: 'GLD',
+      quantity: 1,
+      averagePrice: 400,
+      currentPrice: 403.38,
+      lastUpdated: new Date().toISOString(),
+      brokerSource: 'test',
+    });
+
+    await portfolioReconciliationWorker.reconcile();
+    expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED');
+    const afterFirst = await db.select().from(schema.portfolio);
+    expect(afterFirst.find((r: any) => r.symbol === 'GLD')?.quantity).toBe(1);
+
+    await portfolioReconciliationWorker.reconcile();
     expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+    const events = await db.select().from(schema.reconciliationEvents);
+    const last = events[events.length - 1];
     expect(last.actionTaken).toBe('TRADING_PAUSED');
+    const mismatches = JSON.parse(last.mismatches);
+    expect(mismatches.some((m: any) => m.symbol === 'GLD' && m.type === 'MISSING_REMOTELY')).toBe(true);
+    expect(tradingSafety.reconPauseConsecutiveMismatchCycles).toBe(2);
 
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'test' });
   });

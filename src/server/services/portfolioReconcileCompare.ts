@@ -16,6 +16,68 @@ export function canonicalPortfolioSymbol(raw: unknown): string {
   return String(raw ?? '').trim().toUpperCase();
 }
 
+export type PositionQtyRow = { symbol: string; quantity: number };
+
+export function summarizePositionSet(
+  rows: Array<{ symbol?: unknown; quantity?: number | null }>,
+  qtyTolerance: number,
+): PositionQtyRow[] {
+  const bySymbol = new Map<string, number>();
+  for (const row of rows) {
+    const symbol = canonicalPortfolioSymbol(row.symbol);
+    if (!symbol) continue;
+    bySymbol.set(symbol, (bySymbol.get(symbol) ?? 0) + (Number(row.quantity) || 0));
+  }
+  return [...bySymbol.entries()]
+    .filter(([, quantity]) => quantity > qtyTolerance)
+    .map(([symbol, quantity]) => ({ symbol, quantity }))
+    .sort((a, b) => a.symbol.localeCompare(b.symbol));
+}
+
+export function positionSetDelta(
+  remote: PositionQtyRow[],
+  local: PositionQtyRow[],
+  qtyTolerance: number,
+): {
+  missingLocally: PositionQtyRow[];
+  missingRemotely: PositionQtyRow[];
+  qtyDrift: Array<PositionQtyRow & { localQty: number }>;
+} {
+  const localMap = new Map(local.map((r) => [r.symbol, r.quantity]));
+  const remoteMap = new Map(remote.map((r) => [r.symbol, r.quantity]));
+  return {
+    missingLocally: remote.filter((r) => !localMap.has(r.symbol)),
+    missingRemotely: local.filter((r) => !remoteMap.has(r.symbol)),
+    qtyDrift: remote.flatMap((r) => {
+      const localQty = localMap.get(r.symbol);
+      if (localQty == null || Math.abs(localQty - r.quantity) <= qtyTolerance) return [];
+      return [{ ...r, localQty }];
+    }),
+  };
+}
+
+export function discrepancyFaultKey(type: string, symbol: string): string {
+  return `${type}:${canonicalPortfolioSymbol(symbol)}`;
+}
+
+/** Returns true once `key` has been seen `required` times without being pruned. */
+export function confirmConsecutiveFault(
+  store: Map<string, number>,
+  key: string,
+  required: number,
+): boolean {
+  const n = (store.get(key) ?? 0) + 1;
+  store.set(key, n);
+  return n >= Math.max(1, required);
+}
+
+export function pruneResolvedFaults(store: Map<string, number>, liveKeys: Iterable<string>): void {
+  const live = new Set(liveKeys);
+  for (const key of [...store.keys()]) {
+    if (!live.has(key)) store.delete(key);
+  }
+}
+
 export function findHolding<T extends { symbol: string }>(holdings: T[], symbol: string): T | undefined {
   const canon = canonicalPortfolioSymbol(symbol);
   if (!canon) return undefined;

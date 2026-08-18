@@ -1,6 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { OpenAliceAdapter, parseVerificationJson } from './OpenAliceAdapter';
+import { ensureArgusWorkspaceId } from './OpenAliceWorkspace';
 import type { VerificationRequest } from './types';
+
+// Real network calls to OpenAlice's web API (workspace list/create) are exercised by
+// OpenAliceWorkspace's own tests. These adapter tests mock the resolver so they stay hermetic -
+// otherwise a real OpenAlice instance running on this machine (as it did during development)
+// resolves a real workspace id, silently rebinds `this.mcp` past the test's injected mock, and
+// every test below starts hitting a real (or refused) network connection instead.
+vi.mock('./OpenAliceWorkspace', () => ({
+  ensureArgusWorkspaceId: vi.fn().mockResolvedValue(null),
+}));
 
 describe('parseVerificationJson', () => {
   it('parses a well-formed fenced json block', () => {
@@ -55,6 +65,32 @@ describe('OpenAliceAdapter', () => {
     return adapter;
   }
 
+  beforeEach(() => {
+    vi.mocked(ensureArgusWorkspaceId).mockReset().mockResolvedValue(null);
+  });
+
+  it('rebinds to the workspace-scoped MCP URL once a workspace id resolves', async () => {
+    vi.mocked(ensureArgusWorkspaceId).mockResolvedValueOnce('ws-123');
+    const adapter = new OpenAliceAdapter('http://localhost:9999/mcp');
+    const initialMcp = (adapter as any).mcp;
+
+    await (adapter as any).ensureWorkspaceScoped();
+
+    expect((adapter as any).workspaceScoped).toBe(true);
+    expect((adapter as any).mcp).not.toBe(initialMcp);
+    expect((adapter as any).mcp.mcpUrl).toBe('http://localhost:9999/mcp/ws-123');
+  });
+
+  it('leaves the bare MCP URL bound when no workspace id resolves', async () => {
+    const adapter = new OpenAliceAdapter('http://localhost:9999/mcp');
+    const initialMcp = (adapter as any).mcp;
+
+    await (adapter as any).ensureWorkspaceScoped();
+
+    expect((adapter as any).workspaceScoped).toBe(false);
+    expect((adapter as any).mcp).toBe(initialMcp);
+  });
+
   it('requestVerification calls issue_create with an immediate "when" and the request id', async () => {
     const callTool = vi.fn().mockResolvedValue({});
     const adapter = adapterWithMockClient(callTool);
@@ -92,7 +128,7 @@ describe('OpenAliceAdapter', () => {
     const health = await adapter.healthCheck();
     expect(health.reachable).toBe(false);
     expect(health.detail).toMatch(/Wrong MCP/);
-    expect(health.detail).toMatch(/47332/);
+    expect(health.detail).toMatch(/:wsId/);
   });
 
   it('healthCheck reports unreachable on a connection failure, never throws', async () => {

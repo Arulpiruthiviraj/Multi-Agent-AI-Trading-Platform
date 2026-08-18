@@ -6,7 +6,7 @@ import { NewsClassifier } from './NewsClassifier';
 import { NewsSymbolExtractor } from './NewsSymbolExtractor';
 import { NewsImpactEngine } from './NewsImpactEngine';
 import { NewsClusterEngine } from './NewsClusterEngine';
-import { NewsScoringEngine, AIAnalysisResult } from './NewsScoringEngine';
+import { NewsScoringEngine, AIAnalysisResult, buildLocalFirstNewsAnalysis } from './NewsScoringEngine';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { tradingSafety } from '../config/tradingSafety';
@@ -124,28 +124,35 @@ export class NewsEngine {
         let aiAnalysis: AIAnalysisResult | null = null;
         if (escalationDecision.escalate && llmCallsThisCycle < tradingSafety.newsLlmMaxCallsPerCycle) {
           llmCallsThisCycle += 1;
-          aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId);
+          try {
+            aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId);
+          } catch (llmErr) {
+            console.warn(`[NewsEngine] LLM analysis threw; using ${impact.sentimentSource} so the NewsAgent cycle is not blocked.`, llmErr);
+            aiAnalysis = null;
+          }
+          if (!aiAnalysis && finalSymbols.length > 0) {
+            console.warn(`[NewsEngine] LLM analysis failed (404/timeout/parse); using ${impact.sentimentSource} so the NewsAgent cycle is not blocked.`);
+            aiAnalysis = buildLocalFirstNewsAnalysis(normalized, {
+              symbol: finalSymbols[0],
+              category,
+              sentiment: impact.sentiment,
+              impactScore01: impact.impactScore,
+              reasoning: `[Local-First] Remote LLM failed; using ${impact.sentimentSource} sentiment ${impact.sentiment.toFixed(2)}.`,
+            });
+          }
         } else if (finalSymbols.length > 0 && (!escalationDecision.escalate || llmCallsThisCycle >= tradingSafety.newsLlmMaxCallsPerCycle)) {
           if (escalationDecision.escalate) {
             console.warn(`[NewsEngine] Skipping LLM escalation — cycle cap ${tradingSafety.newsLlmMaxCallsPerCycle} reached (DEF-14).`);
           }
-          const localConfidencePct = Math.round(Math.min(85, 50 + Math.abs(impact.sentiment) * 40));
-          aiAnalysis = {
+          aiAnalysis = buildLocalFirstNewsAnalysis(normalized, {
             symbol: finalSymbols[0],
-            headline: normalized.title,
-            source: normalized.source,
-            timestamp: normalized.publishedAt,
             category,
-            sentimentScore: impact.sentiment,
-            marketImpactScore: impact.impactScore * 100,
-            confidence: localConfidencePct,
-            affectedSectors: [],
-            tradingBias: impact.sentiment > 0 ? 'BULLISH' : 'BEARISH',
+            sentiment: impact.sentiment,
+            impactScore01: impact.impactScore,
             reasoning: escalationDecision.escalate
               ? `[Local-First] LLM cycle cap reached; using FinBERT sentiment ${impact.sentiment.toFixed(2)}.`
               : `[Local-First] FinBERT sentiment ${impact.sentiment > 0 ? 'positive' : 'negative'} (${impact.sentiment.toFixed(2)}) was decisive enough to skip the LLM call.`,
-            riskFlags: [],
-          };
+          });
         }
 
         try {

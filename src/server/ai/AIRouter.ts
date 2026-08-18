@@ -693,20 +693,16 @@ export class AIRouter {
             // or a persisted override sharing the same agentType), use that route's own
             // temperature/timeout/fallback-model list instead of the generic defaults - additive,
             // every other agent/provider combination behaves exactly as before.
-            const route = reqModel ? aiModels.routes[agentType] : undefined;
+            const route = aiModels.routes[agentType];
+            const providerRow = dbStats.find(s => s.id === providerId);
+            // Ollama model-name fallbacks (fingpt → plutus → llama3.2) must not run on NVIDIA
+            // or other remotes — each 404 was billed against NewsAgent's 12s×3 = 36s outer budget.
+            const fallbackModels = (reqModel && isLocalProviderRow(providerRow)) ? route?.fallback : undefined;
             const perModelTimeoutMs = route?.timeoutMs ?? AI_PROVIDER_TIMEOUT_MS;
             const effectiveTemperature = route?.temperature ?? AI_DECISION_TEMPERATURE;
-            // Real bug fix (found live): the outer deadline here used to be ONE model's worth of
-            // time shared across the primary model AND every fallback model inside it, so a
-            // fallback attempt could fail instantly ("aborted") the moment the shared clock ran
-            // out, before it ever got a real try. The outer withTimeout is now sized to cover
-            // every model OpenAICompatibleProvider might attempt (primary + all fallbacks), each
-            // getting perModelTimeoutMs via options.timeoutMs - a real per-model budget, not a
-            // shared remainder. This is a pure safety-net ceiling; the real per-model timing is
-            // enforced inside OpenAICompatibleProvider.chat() itself.
-            const fallbackCount = route?.fallback?.length ?? 0;
+            const fallbackCount = fallbackModels?.length ?? 0;
             const totalTimeoutMs = perModelTimeoutMs * (1 + fallbackCount);
-            res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: effectiveTemperature, signal, fallbackModels: route?.fallback, timeoutMs: route ? perModelTimeoutMs : undefined }), totalTimeoutMs, providerId);
+            res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: effectiveTemperature, signal, fallbackModels, timeoutMs: route ? perModelTimeoutMs : undefined }), totalTimeoutMs, providerId);
             
             latency = Date.now() - startTime;
             

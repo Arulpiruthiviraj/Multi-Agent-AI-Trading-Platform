@@ -22,6 +22,33 @@ export interface AIAnalysisResult {
   _latencyMs?: number;
 }
 
+export function buildLocalFirstNewsAnalysis(
+  article: NormalizedArticle,
+  opts: {
+    symbol: string;
+    category: string;
+    sentiment: number;
+    impactScore01: number;
+    reasoning: string;
+  },
+): AIAnalysisResult {
+  const localConfidencePct = Math.round(Math.min(85, 50 + Math.abs(opts.sentiment) * 40));
+  return {
+    symbol: looksLikeListedTicker(opts.symbol) ?? 'UNKNOWN',
+    headline: article.title,
+    source: article.source,
+    timestamp: article.publishedAt,
+    category: opts.category,
+    sentimentScore: opts.sentiment,
+    marketImpactScore: opts.impactScore01 * 100,
+    confidence: localConfidencePct,
+    affectedSectors: [],
+    tradingBias: opts.sentiment > 0 ? 'BULLISH' : opts.sentiment < 0 ? 'BEARISH' : 'NEUTRAL',
+    reasoning: opts.reasoning,
+    riskFlags: [],
+  };
+}
+
 export class NewsScoringEngine {
   public async analyzeWithAI(article: NormalizedArticle, traceId: string): Promise<AIAnalysisResult | null> {
     const prompt = `Analyze this news article for its impact on financial markets.

@@ -22,6 +22,7 @@
  * ==========================================================
  */
 import { OpenAliceMcpClient } from './OpenAliceMcpClient';
+import { ensureArgusWorkspaceId } from './OpenAliceWorkspace';
 import { runtimeIntervals } from '../../config/runtimeIntervals';
 import { buildVerificationPrompt } from './prompt';
 import type {
@@ -82,16 +83,35 @@ export function parseVerificationJson(raw: string): {
 
 export class OpenAliceAdapter implements ExternalVerificationProvider {
   readonly name = 'OpenAlice';
-  private readonly mcp: OpenAliceMcpClient;
+  private readonly baseMcpUrl: string;
+  private mcp: OpenAliceMcpClient;
+  private workspaceScoped = false;
 
   constructor(mcpUrl: string) {
-    this.mcp = new OpenAliceMcpClient(mcpUrl);
+    this.baseMcpUrl = mcpUrl.replace(/\/$/, '');
+    this.mcp = new OpenAliceMcpClient(this.baseMcpUrl);
+  }
+
+  /**
+   * issue_create/inbox_read live only on OpenAlice's workspace-scoped MCP path (/mcp/:wsId),
+   * never at the bare URL this adapter is constructed with (see OpenAliceWorkspace.ts). Resolves
+   * (or creates) the Argus-Core workspace once per process and rebinds to /mcp/:wsId when found;
+   * leaves this.mcp on the bare URL (unchanged behavior) if resolution fails.
+   */
+  private async ensureWorkspaceScoped(): Promise<void> {
+    if (this.workspaceScoped) return;
+    const wsId = await ensureArgusWorkspaceId();
+    if (wsId) {
+      this.mcp = new OpenAliceMcpClient(`${this.baseMcpUrl}/${wsId}`);
+      this.workspaceScoped = true;
+    }
   }
 
   async healthCheck(): Promise<VerificationHealth> {
     const checkedAt = new Date().toISOString();
     const timeoutMs = runtimeIntervals.modelRuntimeProbeTimeoutMs;
     try {
+      await this.ensureWorkspaceScoped();
       const tools = await Promise.race([
         this.mcp.listToolNames(),
         new Promise<never>((_, reject) => {
@@ -103,8 +123,10 @@ export class OpenAliceAdapter implements ExternalVerificationProvider {
       let detail: string;
       if (hasRequired) {
         detail = `Connected. ${tools.length} tool(s) available, including issue_create and inbox_read.`;
+      } else if (!this.workspaceScoped) {
+        detail = `Wrong MCP, or the Argus-Core workspace could not be resolved: this URL exposes a trading/broker-shaped global catalog, not Guardian's workspace tools. Argus verification needs issue_create and inbox_read (workspace-scoped at ${this.baseMcpUrl}/:wsId). Do not send Argus credentials into a trading MCP. Available: ${tools.join(', ') || 'none'}`;
       } else if (looksLikeTradingMcp) {
-        detail = `Wrong MCP: this URL is a trading/broker server, not OpenAlice Guardian. Argus verification needs issue_create and inbox_read (Guardian at http://127.0.0.1:47332/mcp). Do not send Argus credentials into a trading MCP. Available: ${tools.join(', ') || 'none'}`;
+        detail = `Wrong MCP: this URL is a trading/broker server, not OpenAlice Guardian. Available: ${tools.join(', ') || 'none'}`;
       } else {
         detail = `Connected but missing expected tools. Available: ${tools.join(', ') || 'none'}`;
       }
@@ -120,6 +142,7 @@ export class OpenAliceAdapter implements ExternalVerificationProvider {
 
   /** Fire-and-forget. Files the OpenAlice issue and returns - never awaits a verdict. */
   async requestVerification(request: VerificationRequest): Promise<void> {
+    await this.ensureWorkspaceScoped();
     const what = buildVerificationPrompt(request);
     await this.mcp.callTool('issue_create', {
       id: request.requestId,
@@ -138,6 +161,7 @@ export class OpenAliceAdapter implements ExternalVerificationProvider {
     const found = new Map<string, VerificationResult>();
     if (pendingRequestIds.size === 0) return found;
 
+    await this.ensureWorkspaceScoped();
     const raw = await this.mcp.callTool('inbox_read', { self: true, limit: 50 });
     const text = extractToolText(raw);
     let parsed: InboxReadResponse | null = null;

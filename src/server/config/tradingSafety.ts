@@ -93,6 +93,8 @@ export interface TradingSafety {
   reconAccountConsistencyTolerancePct: number;
   reconAccountConsistencyToleranceFloorDollars: number;
   reconQtyTolerance: number;
+  /** Position MISSING_LOCALLY / MISSING_REMOTELY must repeat this many cycles before TRADING_PAUSED. */
+  reconPauseConsecutiveMismatchCycles: number;
   fallbackTakeProfitPct: number;
   fallbackTrailingStopPct: number;
   /** InternalPaperBroker seed cash. Not broker equity. Not researchInitialCapital. Not maxTradeSize. */
@@ -223,6 +225,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'reconAccountConsistencyTolerancePct',
   'reconAccountConsistencyToleranceFloorDollars',
   'reconQtyTolerance',
+  'reconPauseConsecutiveMismatchCycles',
   'fallbackTakeProfitPct',
   'fallbackTrailingStopPct',
   'internalPaperDefaultCash',

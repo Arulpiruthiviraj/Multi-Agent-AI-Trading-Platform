@@ -16,6 +16,7 @@ describe('tradingSafety.json', () => {
     expect(tradingSafety.permutationSignificanceAlpha).toBe(0.05);
     expect(tradingSafety.minSampleSizeForTrust).toBeGreaterThan(0);
     expect(tradingSafety.reconSignificantMismatchDollars).toBeGreaterThan(0);
+    expect(tradingSafety.reconPauseConsecutiveMismatchCycles).toBe(2);
     expect(tradingSafety.evaluationHorizonMs).toBeGreaterThan(0);
     expect(tradingSafety.newsVetoMinImpactScore).toBeGreaterThan(0);
     expect(tradingSafety.alphaVantageDailyRequestBudget).toBeGreaterThan(0);
