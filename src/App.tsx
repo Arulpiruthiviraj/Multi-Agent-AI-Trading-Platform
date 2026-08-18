@@ -104,13 +104,14 @@ import { MobilePullRefresh } from "./components/mobile/MobilePullRefresh";
 import { useCompactNav } from "./hooks/useBreakpoint";
 import { ResponsiveBottomNav } from "./components/responsive/ResponsiveBottomNav";
 import { ResponsiveNavDrawer } from "./components/responsive/ResponsiveNavDrawer";
+import { DesktopNavStrip } from "./components/responsive/DesktopNavStrip";
 import { ResponsiveStatsSection } from "./components/responsive/ResponsiveStatsSection";
 import { PositionsDataView } from "./components/responsive/PositionsDataView";
+import { toPositionLedgerRow } from "./components/responsive/positionLedgerRow";
 import { TradeHistoryDataView } from "./components/responsive/TradeHistoryDataView";
 import type { AppTabId } from "./components/responsive/responsiveNavConfig";
 import { AutonomousLaunchDialog } from "./components/AutonomousLaunchDialog";
 import VectorClusteringMap from "./components/VectorClusteringMap";
-import { motion } from "motion/react";
 import {
   LineChart,
   Line,
@@ -2701,6 +2702,12 @@ export default function App() {
   const [systemSettings, setSystemSettings] = useState<any | null>(null);
   const [systemHealthy, setSystemHealthy] = useState(true);
   const [alpacaConfigured, setAlpacaConfigured] = useState(false);
+  // Real bug fix (2026-08-18): the header's "MARKET: CLOSED" badge was a hardcoded, unconditional
+  // literal string with no state binding at all - it always rendered red/closed regardless of
+  // actual market hours. classifyMarketSession() (src/server/replay/marketSession.ts) is the same
+  // real, live session classifier the mobile header already uses via GET /api/v2/research/organic-paper
+  // (see useMobileMissionData.ts) - reused here rather than inventing a second classifier.
+  const [marketSessionLabel, setMarketSessionLabel] = useState<'MARKET_OPEN' | 'PRE_MARKET' | 'AFTER_HOURS' | 'WEEKEND_CLOSED' | 'CLOSED' | null>(null);
 
   const [secrets, setSecrets] = useState<any[]>([]);
   const [secretEdits, setSecretEdits] = useState<Record<string, string>>({});
@@ -2909,6 +2916,9 @@ export default function App() {
       }),
       fetchItem("/api/v1/alpaca/config", (algData) => {
         setAlpacaConfigured(algData.hasAlpacaKeys);
+      }),
+      fetchItem("/api/v2/research/organic-paper", (data) => {
+        if (typeof data?.marketSession === 'string') setMarketSessionLabel(data.marketSession);
       }),
       fetchItem("/api/v1/pnl/analytics", (pnlData) => {
         if (pnlData.history && pnlData.history.length > 0) {
@@ -3566,10 +3576,27 @@ export default function App() {
             <Explainer id="riskEngineGates" quiet>RISK ENGINE</Explainer>: <span className="text-emerald-400 font-bold">ARMED</span>
           </div>
           <Explainer id="headerMarketSession" quiet>
-            <div className="bg-rose-500/10 text-rose-400 border border-rose-500/30 px-3 py-1.5 rounded flex items-center gap-2">
-              <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
-              MARKET: CLOSED
-            </div>
+            {marketSessionLabel === 'MARKET_OPEN' ? (
+              <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-3 py-1.5 rounded flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                MARKET: OPEN
+              </div>
+            ) : marketSessionLabel === 'PRE_MARKET' || marketSessionLabel === 'AFTER_HOURS' ? (
+              <div className="bg-amber-500/10 text-amber-400 border border-amber-500/30 px-3 py-1.5 rounded flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                MARKET: {marketSessionLabel === 'PRE_MARKET' ? 'PRE-MARKET' : 'AFTER HOURS'}
+              </div>
+            ) : marketSessionLabel === 'CLOSED' || marketSessionLabel === 'WEEKEND_CLOSED' ? (
+              <div className="bg-rose-500/10 text-rose-400 border border-rose-500/30 px-3 py-1.5 rounded flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-rose-500 animate-pulse"></span>
+                MARKET: {marketSessionLabel === 'WEEKEND_CLOSED' ? 'CLOSED (WEEKEND)' : 'CLOSED'}
+              </div>
+            ) : (
+              <div className="bg-slate-800/60 text-slate-500 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-slate-600"></span>
+                MARKET: --
+              </div>
+            )}
           </Explainer>
           <div className="flex items-center gap-2 ml-2">
             <Explainer id="headerSearch" quiet>
@@ -3628,312 +3655,7 @@ export default function App() {
         className="argus-desktop-only sticky top-0 z-50 bg-[#1A1F2B]/95 backdrop-blur-md border-b border-slate-850 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
         id="tabs-navigation"
       >
-        <nav className="flex flex-wrap gap-x-0 gap-y-0 py-0.5 items-center" aria-label="Tabs navigation">
-          {/* Desk: operate the engine, book, then symbol work. */}
-          <button
-            id="tab-dashboard-btn"
-            onClick={() => setActiveTab("dashboard")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "dashboard"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Activity size={14} />
-            <Explainer id="tabDashboard" quiet>AUTONOMOUS DASHBOARD</Explainer>
-          </button>
-
-          <button
-            id="tab-command-btn"
-            onClick={() => setActiveTab("command")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "command"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Cpu size={14} />
-            <Explainer id="tabCommand" quiet>MISSION CONTROL</Explainer>
-          </button>
-
-          <button
-            id="tab-portfolio-btn"
-            onClick={() => setActiveTab("portfolio")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "portfolio"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Wallet size={14} />
-            <Explainer id="tabPortfolio" quiet>HOLDINGS & POSITIONS</Explainer>
-          </button>
-
-          <button
-            id="tab-arena-btn"
-            onClick={() => setActiveTab("arena")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "arena"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Layers size={14} />
-            <Explainer id="tabArena" quiet>TRADING ARENA</Explainer>
-          </button>
-
-          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
-
-          {/* Markets: news and ideas before agent internals. */}
-          <button
-            id="tab-news-btn"
-            onClick={() => setActiveTab("news")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "news"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Newspaper size={14} />
-            <Explainer id="tabNews" quiet>NEWS INTEL</Explainer>
-          </button>
-
-          <button
-            id="tab-opportunities-btn"
-            onClick={() => setActiveTab("opportunities")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "opportunities"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Target size={14} />
-            <Explainer id="tabOpportunities" quiet>OPPORTUNITY FEED</Explainer>
-          </button>
-
-          <button
-            id="tab-scanner-btn"
-            onClick={() => setActiveTab("scanner")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "scanner"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Activity size={14} />
-            <Explainer id="tabScanner" quiet>STRATEGY SCANNER</Explainer>
-          </button>
-
-          <button
-            id="tab-intelligence-btn"
-            onClick={() => setActiveTab("intelligence")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "intelligence"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Globe size={14} />
-            <Explainer id="tabIntelligence" quiet>INTELLIGENCE</Explainer>
-          </button>
-
-          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
-
-          <motion.button
-            id="tab-agents-btn"
-            onClick={() => setActiveTab("agents")}
-            className={`relative whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "agents"
-                ? "border-emerald-500 text-emerald-400"
-                : "border-transparent text-slate-400"
-            }`}
-            whileHover={
-              activeTab !== "agents" ? {
-                backgroundColor: [
-                  "rgba(30, 41, 59, 1)",
-                  "rgba(16, 185, 129, 0.1)",
-                  "rgba(30, 41, 59, 1)"
-                ],
-                color: "#e2e8f0",
-                transition: { duration: 1.5, repeat: Infinity, ease: "easeInOut" }
-              } : undefined
-            }
-            animate={
-              activeTab === "agents"
-                ? {
-                    backgroundColor: [
-                      "rgba(16, 185, 129, 0.02)",
-                      "rgba(16, 185, 129, 0.15)",
-                      "rgba(16, 185, 129, 0.02)"
-                    ],
-                  }
-                : {}
-            }
-            transition={
-              activeTab === "agents"
-                ? { duration: 2, repeat: Infinity, ease: "easeInOut" }
-                : {}
-            }
-          >
-            <BarChart3 size={14} />
-            <Explainer id="tabAgents" quiet>AGENT NETWORK</Explainer>
-        {activeTab === "agents" && (
-              <motion.span
-                className="absolute top-2 right-2 w-1.5 h-1.5 rounded-full bg-emerald-400"
-                animate={{ opacity: [0.2, 1, 0.2] }}
-                transition={{ duration: 1.5, repeat: Infinity, ease: "easeInOut" }}
-              />
-            )}
-          </motion.button>
-
-          <button
-            id="tab-evaluation-btn"
-            onClick={() => setActiveTab("evaluation")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "evaluation"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Activity size={14} />
-            <Explainer id="tabEvaluation" quiet>AGENT EVALUATION</Explainer>
-          </button>
-
-          <button
-            onClick={() => setActiveTab("kronos")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "kronos"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <BrainCircuit size={14} />
-            <Explainer id="tabKronos" quiet>KRONOS MODEL</Explainer>
-          </button>
-
-          <button
-            id="tab-learning-btn"
-            onClick={() => setActiveTab("learning")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "learning"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <BrainCircuit size={14} />
-            <Explainer id="tabLearning" quiet>LEARNING & EVOLUTION</Explainer>
-          </button>
-
-          <button
-            id="tab-memory-btn"
-            onClick={() => setActiveTab("memory")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "memory"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Clock size={14} />
-            <Explainer id="tabMemory" quiet>VEC EVENT MEMORY</Explainer>
-          </button>
-
-          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
-
-          {/* Ops: real traces first, then logs and health. */}
-          <button
-            id="tab-observatory-btn"
-            onClick={() => setActiveTab("observatory")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "observatory"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Search size={14} />
-            <Explainer id="tabObservatory" quiet>OBSERVATORY</Explainer>
-          </button>
-
-          <button
-            id="tab-activity-btn"
-            onClick={() => setActiveTab("activity")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "activity"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <List size={14} />
-            <Explainer id="tabActivity" quiet>ACTIVITY LOG</Explainer>
-          </button>
-
-          <button
-            id="tab-diagnostics-btn"
-            onClick={() => setActiveTab("diagnostics")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "diagnostics"
-                ? "border-amber-500 text-amber-400 bg-amber-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <AlertTriangle size={14} />
-            <Explainer id="tabDiagnostics" quiet>DIAGNOSTICS</Explainer>
-          </button>
-
-          <button
-            id="tab-audit-btn"
-            onClick={() => setActiveTab("audit")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "audit"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Shield size={14} />
-            <Explainer id="tabAudit" quiet>OBSERVABILITY & TRACING</Explainer>
-          </button>
-
-          <div className="w-px h-5 bg-slate-800 mx-2 flex-shrink-0"></div>
-
-          {/* System last: validation, keys (+ deployment readiness), then the academy. */}
-          <button
-            id="tab-validation-btn"
-            onClick={() => setActiveTab("validation")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "validation"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <ShieldCheck size={14} />
-            <Explainer id="tabValidation" quiet>VALIDATION</Explainer>
-          </button>
-
-          <button
-            id="tab-settings-btn"
-            onClick={() => setActiveTab("settings")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "settings"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <Settings size={14} />
-            <Explainer id="tabSettings" quiet>SETTINGS & KEYS</Explainer>
-          </button>
-
-          <button
-            id="tab-documentation-btn"
-            onClick={() => setActiveTab("documentation")}
-            className={`whitespace-nowrap flex-shrink-0 px-2.5 py-2 text-[9px] font-mono font-medium border-b-2 transition-all flex items-center gap-1.5 ${
-              activeTab === "documentation"
-                ? "border-emerald-500 text-emerald-400 bg-emerald-500/[0.02]"
-                : "border-transparent text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-            }`}
-          >
-            <BookOpen size={14} />
-            <Explainer id="tabDocumentation" quiet>DOCUMENTATION</Explainer>
-          </button>
-        </nav>
+        <DesktopNavStrip activeTab={activeTab} onSelectTab={(tab) => setActiveTab(tab)} />
 
         <div className="flex flex-wrap items-center gap-2 pb-1.5 text-[10px] text-slate-500">
           <span>Active Risk Rules:</span>
@@ -5691,23 +5413,9 @@ export default function App() {
             </div>
 
             <PositionsDataView
-              positions={(portfolioData?.positions ?? []).map((p: any) => {
-                const livePrice = assetPrices[p.symbol] || p.currentPrice;
-                const marketValue = p.quantity * livePrice;
-                const unrealizedPnl = marketValue - p.totalCost;
-                const unrealizedPnlPercent = p.totalCost > 0 ? (unrealizedPnl / p.totalCost) * 100 : 0;
-                return {
-                  symbol: p.symbol,
-                  sector: p.sector,
-                  quantity: p.quantity,
-                  entryPrice: p.entryPrice,
-                  livePrice,
-                  marketValue,
-                  unrealizedPnl,
-                  unrealizedPnlPercent,
-                  isPositive: unrealizedPnl >= 0,
-                };
-              })}
+              positions={(portfolioData?.positions ?? []).map((p: any) =>
+                toPositionLedgerRow(p, assetPrices[p?.symbol]),
+              )}
               cashBalance={portfolioData?.snapshot?.cash_balance}
               emptyMessage="No active allocations found in the broker portfolio. Emergency Liquidation submits SELL ideas through RiskEngine when positions exist; target-allocation rebalance is not implemented."
             />

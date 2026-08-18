@@ -94,6 +94,27 @@ a.argus-touch-target {
   padding-bottom: max(0.5rem, var(--safe-bottom));
 }
 
+/* Nav / explainer tooltip entrance — inner wrapper so positioning transforms stay on the portal node */
+@keyframes argus-tooltip-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.argus-tooltip-in {
+  animation: argus-tooltip-in 140ms ease-out;
+  transform-origin: top center;
+}
+
+.argus-tooltip-in[data-place="above"] {
+  transform-origin: bottom center;
+}
+
 /* Form inputs — full width on narrow viewports */
 @media (max-width: 767px) {
   .argus-responsive-form input:not([type="checkbox"]):not([type="radio"]),

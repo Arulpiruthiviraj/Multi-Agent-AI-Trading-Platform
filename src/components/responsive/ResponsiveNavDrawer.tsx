@@ -2,6 +2,8 @@ import React from 'react';
 import { X } from 'lucide-react';
 import type { AppTabId } from './responsiveNavConfig';
 import { ALL_TABS, NAV_DOMAINS } from './responsiveNavConfig';
+import { NavTabTooltip } from './NavTabTooltip';
+import { NAV_TAB_TOOLTIPS } from './navTabTooltips';
 
 export type ResponsiveNavDrawerProps = {
   open: boolean;
@@ -52,18 +54,25 @@ export function ResponsiveNavDrawer({ open, activeTab, onClose, onSelectTab }: R
                 <ul className="space-y-1">
                   {tabs.map(({ id: tabId, label: tabLabel, icon: Icon }) => (
                     <li key={tabId}>
-                      <button
-                        type="button"
-                        onClick={() => handleSelect(tabId)}
-                        className={`w-full argus-touch-target flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-[11px] font-mono transition-colors ${
-                          activeTab === tabId
-                            ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
-                            : 'text-slate-300 hover:bg-slate-800/80 border border-transparent'
-                        }`}
-                      >
-                        <Icon size={16} className="shrink-0" />
-                        <span className="uppercase tracking-wide">{tabLabel}</span>
-                      </button>
+                      <NavTabTooltip tabId={tabId} className="block w-full">
+                        <button
+                          type="button"
+                          onClick={() => handleSelect(tabId)}
+                          className={`w-full argus-touch-target flex items-center gap-3 px-3 py-2.5 rounded-lg text-left text-[11px] font-mono transition-colors ${
+                            activeTab === tabId
+                              ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400'
+                              : 'text-slate-300 hover:bg-slate-800/80 border border-transparent'
+                          }`}
+                        >
+                          <Icon size={16} className="shrink-0" />
+                          <span className="min-w-0 flex-1">
+                            <span className="uppercase tracking-wide block">{tabLabel}</span>
+                            <span className="block text-[9px] font-sans normal-case tracking-normal text-slate-500 leading-snug mt-0.5 line-clamp-2">
+                              {NAV_TAB_TOOLTIPS[tabId].purpose}
+                            </span>
+                          </span>
+                        </button>
+                      </NavTabTooltip>
                     </li>
                   ))}
                 </ul>

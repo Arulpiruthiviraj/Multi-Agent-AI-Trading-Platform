@@ -61,6 +61,48 @@ export async function mcpEndpointAccepting(mcpUrl: string, timeoutMs = 2500): Pr
 }
 
 /**
+ * Real bug found and fixed (2026-08-18): `mcpEndpointAccepting()` only proves an MCP server is
+ * listening at all - OpenAlice's own UTA (Universal Trading Adapter, a DIFFERENT MCP inside the
+ * same OpenAlice checkout, with placeOrder/getQuote/tradingCommit/etc.) answers the exact same
+ * `initialize` handshake just as successfully as Guardian does. `startOpenAliceGuardian()` used
+ * to call only `mcpEndpointAccepting()` to decide "Guardian is already up, don't start my own" -
+ * if UTA (or any other MCP) happened to already be bound to :47332 for any reason, the launcher
+ * would wrongly defer to it, never attempt its own correctly-configured
+ * (OPENALICE_LITE_MODE=1/OPENALICE_MCP_ENABLED=1) instance, and leave Argus's own later
+ * OpenAliceAdapter.healthCheck() to discover the mismatch after the fact - exactly the live
+ * "Wrong MCP: this URL is a trading/broker server" failure this closes. Does a real `tools/list`
+ * call and requires both `issue_create` and `inbox_read` - the same check
+ * OpenAliceAdapter.healthCheck() already performs inside the running server - so the launcher and
+ * the app agree on what "Guardian" means, checked at the one place that decides whether to defer.
+ */
+export async function mcpEndpointHasGuardianTools(mcpUrl: string, timeoutMs = 2500): Promise<{ ok: boolean; reason: string }> {
+  try {
+    const res = await fetch(mcpUrl, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!res.ok) return { ok: false, reason: `tools/list HTTP ${res.status}` };
+    const body: any = await res.json().catch(() => null);
+    const tools: string[] = Array.isArray(body?.result?.tools)
+      ? body.result.tools.map((t: any) => String(t?.name ?? ''))
+      : [];
+    const hasRequired = tools.includes('issue_create') && tools.includes('inbox_read');
+    if (hasRequired) return { ok: true, reason: `Connected. ${tools.length} tool(s) available, including issue_create and inbox_read.` };
+    return {
+      ok: false,
+      reason: `Wrong MCP: an MCP server answered at ${mcpUrl} but lacks issue_create/inbox_read (this is OpenAlice UTA or another trading MCP, not Guardian). Available: ${tools.join(', ') || 'none'}`,
+    };
+  } catch (e: any) {
+    return { ok: false, reason: `tools/list failed: ${e?.message ?? e}` };
+  }
+}
+
+/**
  * Wait until Guardian MCP accepts a connection (not just TCP).
  * Alice `/api/version` coming up first is a good sign; MCP on :47332 is the Argus probe target.
  */

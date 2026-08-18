@@ -2,6 +2,7 @@ import React from 'react';
 import { Menu } from 'lucide-react';
 import type { AppTabId } from './responsiveNavConfig';
 import { NAV_DOMAINS, domainForTab, tabDef } from './responsiveNavConfig';
+import { NavDomainTooltip } from './NavTabTooltip';
 
 export type ResponsiveBottomNavProps = {
   activeTab: AppTabId;
@@ -32,29 +33,34 @@ export function ResponsiveBottomNav({
         {NAV_DOMAINS.map(({ id, label, icon: Icon, defaultTab }) => {
           const active = activeDomain === id;
           return (
-            <button
-              key={id}
-              type="button"
-              onClick={() => onSelectTab(activeDomain === id ? activeTab : defaultTab)}
-              className={`argus-touch-target flex flex-1 flex-col items-center justify-center gap-0.5 py-1 text-[9px] font-mono uppercase tracking-wider transition-colors ${
-                active ? 'text-emerald-400' : 'text-slate-500 hover:text-slate-300'
-              }`}
-              aria-current={active ? 'page' : undefined}
-            >
-              <Icon size={18} strokeWidth={active ? 2.5 : 2} />
-              <span>{label}</span>
-            </button>
+            <React.Fragment key={id}>
+              <NavDomainTooltip domain={id}>
+                <button
+                  type="button"
+                  onClick={() => onSelectTab(activeDomain === id ? activeTab : defaultTab)}
+                  className={`argus-touch-target flex flex-1 flex-col items-center justify-center gap-0.5 py-1 text-[9px] font-mono uppercase tracking-wider transition-colors ${
+                    active ? 'text-emerald-400' : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                  aria-current={active ? 'page' : undefined}
+                >
+                  <Icon size={18} strokeWidth={active ? 2.5 : 2} />
+                  <span>{label}</span>
+                </button>
+              </NavDomainTooltip>
+            </React.Fragment>
           );
         })}
-        <button
-          type="button"
-          onClick={onOpenDrawer}
-          className="argus-touch-target flex flex-1 flex-col items-center justify-center gap-0.5 py-1 text-[9px] font-mono uppercase tracking-wider text-slate-500 hover:text-slate-300"
-          aria-label="Open all tabs"
-        >
-          <Menu size={18} />
-          <span>More</span>
-        </button>
+        <NavDomainTooltip domain="more">
+          <button
+            type="button"
+            onClick={onOpenDrawer}
+            className="argus-touch-target flex flex-1 flex-col items-center justify-center gap-0.5 py-1 text-[9px] font-mono uppercase tracking-wider text-slate-500 hover:text-slate-300"
+            aria-label="Open all tabs"
+          >
+            <Menu size={18} />
+            <span>More</span>
+          </button>
+        </NavDomainTooltip>
       </div>
       <div className="flex items-center justify-between px-3 py-1 border-t border-slate-800/80">
         <span

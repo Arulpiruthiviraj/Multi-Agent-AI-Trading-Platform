@@ -4,6 +4,7 @@ import { useMobileMissionSelector } from './useMobileMissionSelector';
 import { modeChipClass, sessionChipClass } from './mobileUtils';
 import { MOBILE_TABS, type MobileTabId } from './mobileTabs';
 import { patchMobileMissionSnapshot } from './mobileMissionStore';
+import { MobileNavTabTooltip } from '../responsive/NavTabTooltip';
 
 interface MobileTopBarProps {
   onKillTap: () => void;
@@ -85,17 +86,20 @@ export function MobileBottomNav() {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
           return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => patchMobileMissionSnapshot({ activeTab: tab.id as MobileTabId })}
-              className={`mobile-nav-item mobile-press flex flex-col items-center justify-center flex-1 gap-0.5 min-h-[44px] ${
-                active ? 'active' : 'text-slate-500'
-              }`}
-            >
-              <Icon size={20} strokeWidth={active ? 2.5 : 2} />
-              <span className="text-[9px] font-mono uppercase tracking-wider">{tab.shortLabel}</span>
-            </button>
+            <React.Fragment key={tab.id}>
+              <MobileNavTabTooltip tabId={tab.id}>
+                <button
+                  type="button"
+                  onClick={() => patchMobileMissionSnapshot({ activeTab: tab.id as MobileTabId })}
+                  className={`mobile-nav-item mobile-press flex flex-col items-center justify-center flex-1 gap-0.5 min-h-[44px] ${
+                    active ? 'active' : 'text-slate-500'
+                  }`}
+                >
+                  <Icon size={20} strokeWidth={active ? 2.5 : 2} />
+                  <span className="text-[9px] font-mono uppercase tracking-wider">{tab.shortLabel}</span>
+                </button>
+              </MobileNavTabTooltip>
+            </React.Fragment>
           );
         })}
       </div>

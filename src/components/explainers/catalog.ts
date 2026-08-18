@@ -9,6 +9,8 @@
  * ==========================================================
  */
 
+import { NAV_TAB_TOOLTIPS } from '../responsive/navTabTooltips';
+
 export interface ExplainerEntry {
   title: string;
   what: string;
@@ -186,8 +188,8 @@ export const EXPLAINER_CATALOG = {
     how: 'This strip is static UI copy (including Size $100). Live max trade size is `settings.maxTradeSize`; drawdown is `maxPortfolioDrawdownPct`.',
   },
   tabDashboard: {
-    title: 'Autonomous Dashboard',
-    what: 'Overview of Autobot status, allocation, session P&L, and subsystem lamps.',
+    title: NAV_TAB_TOOLTIPS.dashboard.title,
+    what: NAV_TAB_TOOLTIPS.dashboard.purpose,
     why: 'This is the “is the engine on and what is the book doing?” desk.',
     how: 'Reads broker snapshot, Autobot config, and integrity checks. Enabling Autobot is Mission Control, not this tab.',
   },
