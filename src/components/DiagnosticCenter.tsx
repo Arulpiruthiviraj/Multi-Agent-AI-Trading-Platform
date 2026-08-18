@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Activity, RefreshCw, HelpCircle } from 'lucide-react';
 import ExplainCard from './ExplainCard';
+import TradingPauseOperatorControls from './TradingPauseOperatorControls';
 
 export default function DiagnosticCenter() {
   const [snap, setSnap] = useState<any>(null);
@@ -95,6 +96,11 @@ export default function DiagnosticCenter() {
         {(snap?.diagnostics || []).map((d: any) => (
           <div key={d.id}>
             <ExplainCard d={d} compact />
+            {d.code === 'SYS-001' && (
+              <div className="mt-2">
+                <TradingPauseOperatorControls compact />
+              </div>
+            )}
             {d.retryable && (
               <button
                 onClick={() => retry(d.component.toLowerCase())}

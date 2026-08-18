@@ -75,6 +75,7 @@ import {
 
 import DigitalTwinVisualizer from "./DigitalTwinVisualizer";
 import OrganicPaperSoakTracker from "./OrganicPaperSoakTracker";
+import TradingPauseOperatorControls from "./TradingPauseOperatorControls";
 
 interface AutonomousMissionControlProps {
   autoBotConfig: any;
@@ -1829,18 +1830,13 @@ export function AutonomousMissionControl({
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <span className="text-[10px] font-mono text-slate-400 max-w-sm text-right hidden xl:block">
-              Force-halts all active strategy loops and blocks pending trade signals dynamically.
-            </span>
+          <div className="flex flex-col gap-3 w-full max-w-xl">
+            {enginesHalted && (
+              <TradingPauseOperatorControls />
+            )}
             <button
               onClick={async () => {
                 await toggleAutoBot();
-                if (!autoBotConfig.enabled) {
-                  setEnginesHalted(true);
-                  setHaltReason("MANUAL INTERVENTION — KILLS SWITCH TRIGGERED BY RISK OFFICER");
-                  setHaltTime(new Date().toLocaleTimeString());
-                }
               }}
               className={`px-5 py-2.5 rounded font-mono font-bold uppercase text-[10px] tracking-widest border transition-all ${
                 autoBotConfig.enabled

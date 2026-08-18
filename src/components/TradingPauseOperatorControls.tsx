@@ -2,7 +2,7 @@
  * Safety-critical operator controls for TRADING_PAUSED / EMERGENCY_STOP.
  * Backend remains authority: ack = POST /api/v1/system/reconciliation/acknowledge
  * (pre-existing FILLED orphans only); resume = POST /api/v1/system/resume then
- * GET /api/v1/system/trading-state. Never writes trading_state locally.
+ * GET /api/v1/system/trading-state. Never patches settings.tradingState from the client.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {

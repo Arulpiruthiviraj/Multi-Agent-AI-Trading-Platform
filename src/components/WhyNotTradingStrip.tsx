@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ExplainCard from './ExplainCard';
+import TradingPauseOperatorControls from './TradingPauseOperatorControls';
 
 /** Compact command-center strip: live why-not-trading from GET /api/v2/diagnostics/why-not-trading */
 export default function WhyNotTradingStrip() {
@@ -23,6 +24,11 @@ export default function WhyNotTradingStrip() {
         {data.isTrading ? 'No blocking diagnostic — Autobot enabled and RiskEngine is in TRADING_ENABLED.' : 'New entries are not flowing (Autobot off, a blocking gate, or a feed/config issue).'}
       </div>
       {data.primary && <ExplainCard d={data.primary} compact />}
+      {data.primary?.code === 'SYS-001' && (
+        <div className="mt-3">
+          <TradingPauseOperatorControls />
+        </div>
+      )}
     </div>
   );
 }

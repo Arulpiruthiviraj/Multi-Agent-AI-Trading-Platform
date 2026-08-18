@@ -459,21 +459,20 @@ export async function toggleAutobotRemote(currentEnabled: boolean): Promise<{ ok
 // this sheet at all. This is the same real POST /api/v1/system/resume the desktop banner's
 // resumeTrading() calls - one authoritative resume flow, not a second implementation.
 export async function triggerResume(): Promise<{ ok: boolean; error?: string }> {
-  const res = await apiFetch('/api/v1/system/resume', { method: 'POST' });
-  if (res.unauthorized) {
-    patchMobileMissionSnapshot({ sessionExpired: true, actionBanner: { tone: 'error', message: 'Session expired — please log in again.' } });
-    return { ok: false, error: res.error || 'Session expired' };
+  const { resumeAndConfirm } = await import('../../lib/tradingSafetyActions');
+  const result = await resumeAndConfirm('Operator resumed from mobile Mission Control.');
+  if (!result.ok) {
+    const unauthorized = result.error === 'Authentication required. Please sign in again.';
+    patchMobileMissionSnapshot({
+      sessionExpired: unauthorized,
+      actionBanner: { tone: 'error', message: result.error || 'Resume failed' },
+    });
+    return { ok: false, error: result.error };
   }
-  if (!res.ok) {
-    patchMobileMissionSnapshot({ actionBanner: { tone: 'error', message: res.error || 'Resume failed' } });
-    return { ok: false, error: res.error || `HTTP ${res.status}` };
-  }
-  const data = res.data as Record<string, unknown>;
-  const tradingState = String(data.tradingState ?? 'TRADING_ENABLED');
   patchMobileMissionSnapshot({
     emergencyStopActive: false,
-    tradingState,
-    actionBanner: { tone: 'success', message: 'Trading resumed' },
+    tradingState: result.tradingState || 'TRADING_ENABLED',
+    actionBanner: { tone: 'success', message: 'Trading Enabled. Awaiting real TRADE_IDEA_GENERATED — not a pipeline certificate.' },
   });
   return { ok: true };
 }

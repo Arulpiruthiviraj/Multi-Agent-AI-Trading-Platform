@@ -19,4 +19,10 @@ describe('SPA order-path invariants', () => {
     expect(banner).toMatch(/\/api\/v2\/live-readiness/);
     expect(banner).toMatch(/LIVE_NO_GO/);
   });
+
+  it('does not write trading_state from the SPA', () => {
+    const app = readFileSync(join(ROOT, 'src/App.tsx'), 'utf8');
+    expect(app).not.toMatch(/trading_state\s*:/);
+    expect(app).toMatch(/TradingPauseOperatorControls/);
+  });
 });

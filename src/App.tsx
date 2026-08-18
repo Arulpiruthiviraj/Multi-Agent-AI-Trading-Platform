@@ -44,6 +44,7 @@ import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
 import ReplayResearchPanel from "./components/ReplayResearchPanel";
 import HistoricalReplayLab from "./components/HistoricalReplayLab";
+import { resumeAndConfirm } from "./lib/tradingSafetyActions";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
@@ -57,6 +58,7 @@ import { KronosDashboard } from "./components/KronosDashboard";
 import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
 import DiagnosticCenter from "./components/DiagnosticCenter";
 import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
+import TradingPauseOperatorControls from "./components/TradingPauseOperatorControls";
 import LiveReadinessBanner from "./components/LiveReadinessBanner";
 import WealthAffirmationOverlay from "./components/WealthAffirmationOverlay";
 import HyperAbundanceVortex from "./components/HyperAbundanceVortex";
@@ -1043,33 +1045,23 @@ export default function App() {
   const [resumeInFlight, setResumeInFlight] = useState<boolean>(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
 
-  // Real POST /api/v1/system/resume call - the "START ALL ENGINES" button used to only clear
-  // local React state (setEnginesHalted(false)) without ever telling the backend to leave
-  // EMERGENCY_STOP/TRADING_PAUSED, so RiskEngine's emergency_stop gate stayed tripped and the
-  // banner would reappear (or silently mismatch Autobot's own status) on the next poll. This is
-  // the one real path that clears tradingState server-side; the banner only disappears on success.
+  // Real POST /api/v1/system/resume — banner drops only after GET trading-state is TRADING_ENABLED.
   const resumeTrading = async (): Promise<boolean> => {
+    if (resumeInFlight) return false;
     setResumeInFlight(true);
     setResumeError(null);
     try {
-      const res = await fetch("/api/v1/system/resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ reason: "Operator acknowledged and resumed from the emergency banner." }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data?.status !== "ok") {
-        setResumeError(data?.error || `Resume failed (${res.status})`);
+      const result = await resumeAndConfirm("Operator acknowledged and resumed from the emergency banner.");
+      if (!result.ok) {
+        setResumeError(result.error || `Resume failed`);
+        if (result.tradingState) applyTradingState(result.tradingState);
         setTimeout(() => setResumeError(null), 4000);
         return false;
       }
-      setEnginesHalted(false);
-      setHaltReason("");
-      setHaltTime("");
+      applyTradingState(result.tradingState || 'TRADING_ENABLED', result.tradingState || undefined);
       return true;
     } catch (e: any) {
-      setResumeError(e?.message || "Failed to reach the server.");
+      setResumeError(e?.message || "Unable to contact Argus backend. Trading state was not changed.");
       setTimeout(() => setResumeError(null), 4000);
       return false;
     } finally {
@@ -3346,17 +3338,11 @@ export default function App() {
         <AppWalkthrough />
         {enginesHalted && (
           <div
-            className="bg-rose-600 px-4 py-2 text-white text-xs font-mono uppercase tracking-wider flex flex-col sm:flex-row items-center justify-between gap-2 text-center"
+            className="bg-rose-600 px-4 py-2 text-white text-xs font-mono tracking-wider flex flex-col gap-2"
             style={{ paddingTop: 'max(8px, env(safe-area-inset-top))' }}
           >
-            <span>Emergency stop active{resumeError ? ` — resume failed: ${resumeError}` : ""}</span>
-            <button
-              onClick={() => { void resumeTrading(); }}
-              disabled={resumeInFlight}
-              className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-white px-3 py-1 rounded text-[10px] font-bold tracking-wider uppercase border border-emerald-400/50 shrink-0"
-            >
-              {resumeInFlight ? "Resuming..." : "Acknowledge & Resume"}
-            </button>
+            <TradingPauseOperatorControls compact onAuthoritativeTradingState={applyTradingState} />
+            {resumeError && <span className="text-[10px]">Resume failed: {resumeError}</span>}
           </div>
         )}
         <MobileMissionControl
@@ -3448,11 +3434,10 @@ export default function App() {
       )}
       <LiveMarketNewsTicker />
       {enginesHalted && (
-        <div className="bg-rose-600 px-4 py-1.5 flex flex-col sm:flex-row justify-between items-center gap-2 text-white w-full">
+        <div className="bg-rose-600 px-4 py-2 flex flex-col gap-2 text-white w-full">
           <div className="flex items-center gap-2 font-bold text-xs tracking-wide uppercase flex-wrap">
             <ShieldAlert size={14} />
-            EMERGENCY STOP ACTIVE — ALL ENGINES HALTED
-            <span className="text-[10px] font-mono text-rose-200 tracking-normal ml-2">
+            <span className="text-[10px] font-mono text-rose-200 tracking-normal">
               SINCE {haltTime} • REASON: {haltReason}
             </span>
             {resumeError && (
@@ -3461,14 +3446,7 @@ export default function App() {
               </span>
             )}
           </div>
-          <button
-            onClick={() => { void resumeTrading(); }}
-            disabled={resumeInFlight}
-            className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-[10px] font-bold tracking-wider flex items-center gap-1 transition-colors uppercase border border-emerald-400/50 hover:border-emerald-300 shrink-0"
-          >
-            <Power size={12}/>
-            {resumeInFlight ? "RESUMING..." : "ACKNOWLEDGE & RESUME"}
-          </button>
+          <TradingPauseOperatorControls compact onAuthoritativeTradingState={applyTradingState} />
         </div>
       )}
 
@@ -7175,14 +7153,7 @@ export default function App() {
                      )}
                    </div>
                    {enginesHalted ? (
-                     <button
-                       onClick={() => { void resumeTrading(); }}
-                       disabled={resumeInFlight}
-                       className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-6 rounded-lg text-lg uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] mb-4"
-                     >
-                       <Power size={24} />
-                       {resumeInFlight ? "RESUMING..." : "START ALL ENGINES"}
-                     </button>
+                     <TradingPauseOperatorControls onAuthoritativeTradingState={applyTradingState} />
                    ) : (
                      <button
                        onClick={async () => {
@@ -7191,7 +7162,8 @@ export default function App() {
                          try {
                            const res = await fetch("/api/v1/system/emergency-stop", { method: "POST" });
                            if (res.ok) {
-                             setEnginesHalted(true);
+                             const data = await res.json().catch(() => ({}));
+                             applyTradingState(typeof data?.tradingState === 'string' ? data.tradingState : 'EMERGENCY_STOP', 'UI emergency stop');
                            } else {
                              setHaltReason("");
                              setHaltTime("");
@@ -9069,28 +9041,21 @@ export default function App() {
         enginesHalted={enginesHalted}
         onEmergencyStop={() => {
           if (enginesHalted) {
-            // Real bug fix (2026-08-18 zero-trust audit, D-1): this used to clear the halt
-            // banner locally with no backend call at all - the mobile bottom nav could show
-            // "resumed" while tradingState stayed EMERGENCY_STOP/TRADING_PAUSED server-side.
-            void resumeTrading();
+            setActiveTab('command');
           } else {
             setHaltReason('UI emergency stop');
             setHaltTime(new Date().toLocaleTimeString());
-            fetch("/api/v1/system/emergency-stop", { method: "POST" }).then((res) => {
+            fetch("/api/v1/system/emergency-stop", { method: "POST", credentials: "include" }).then(async (res) => {
+              const data = await res.json().catch(() => ({}));
               if (res.ok) {
-                triggerEmergencyStop();
-                setEnginesHalted(true);
+                applyTradingState(typeof data?.tradingState === 'string' ? data.tradingState : 'EMERGENCY_STOP', 'UI emergency stop');
               } else {
                 setHaltReason('');
                 setHaltTime('');
-                setResumeError(`Emergency stop failed (${res.status})`);
-                setTimeout(() => setResumeError(null), 4000);
               }
-            }).catch((e) => {
+            }).catch(() => {
               setHaltReason('');
               setHaltTime('');
-              setResumeError(e?.message || "Failed to reach the server.");
-              setTimeout(() => setResumeError(null), 4000);
             });
           }
         }}

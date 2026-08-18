@@ -10,6 +10,7 @@ import { apiFetch, type ApiFetchResult } from './clientFetch';
 export const TRADING_RESUME_PATH = '/api/v1/system/resume';
 export const TRADING_STATE_PATH = '/api/v1/system/trading-state';
 export const RECON_ACKNOWLEDGE_PATH = '/api/v1/system/reconciliation/acknowledge';
+export const ACKNOWLEDGEMENTS_PATH = '/api/v1/system/reconciliation/acknowledgements';
 export const RECON_STATUS_PATH = '/api/v1/system/reconciliation/status';
 
 export const ACK_OPERATOR_REASON =
@@ -66,7 +67,25 @@ export function haltBannerTitle(tradingState: string | undefined | null): string
 }
 
 export async function fetchReconOperatorStatus(): Promise<ApiFetchResult<ReconOperatorStatus>> {
-  return apiFetch<ReconOperatorStatus>(RECON_STATUS_PATH);
+  const primary = await apiFetch<ReconOperatorStatus>(RECON_STATUS_PATH);
+  if (primary.ok || primary.unauthorized) return primary;
+  const state = await fetchAuthoritativeTradingState();
+  if (state.unauthorized) return { ...state, data: {} as ReconOperatorStatus };
+  if (!state.ok) return { ...primary, error: mapSafetyActionError(primary, primary.error || 'Unable to contact Argus backend. Trading state was not changed.') };
+  const acks = await apiFetch<{ count?: number }>(ACKNOWLEDGEMENTS_PATH);
+  const data: ReconOperatorStatus = {
+    tradingState: String(state.data?.tradingState || ''),
+    emergencyStopActive: state.data?.emergencyStopActive === true,
+    broker: { name: 'unknown', syncState: 'UNKNOWN', readyForReconciliation: false },
+    latest: { id: null, checkedAt: null, broker: null, matches: false, mismatchCount: 0, actionTaken: null },
+    acknowledgements: {
+      count: typeof acks.data?.count === 'number' ? acks.data.count : 0,
+      note: 'Loaded from GET /acknowledgements because /status was unavailable. Latest MATCH/MISMATCH row not in this fallback.',
+    },
+    unackedFilledOrphans: [],
+    note: 'Fallback evidence: GET /system/reconciliation/status was not available. Resume still uses POST /api/v1/system/resume.',
+  };
+  return { ok: true, status: 200, data };
 }
 
 export async function fetchAuthoritativeTradingState(): Promise<ApiFetchResult<{ tradingState: string; emergencyStopActive: boolean }>> {
