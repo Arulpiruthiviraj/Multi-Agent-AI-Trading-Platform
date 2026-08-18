@@ -11,7 +11,7 @@
   "chiefTraderIdeaTtlMs": 60000,
   "systemMetricsMs": 2000,
   "portfolioReconciliationMs": 300000,
-  "reconciliationBootWarmupMs": 15000,
+  "reconciliationBootWarmupMs": 30000,
   "marketDataReconnectMs": 5000,
   "networkReconnectBackoffMs": [1000, 2000, 5000, 10000, 30000],
   "marketDataCrossCheckMs": 60000,

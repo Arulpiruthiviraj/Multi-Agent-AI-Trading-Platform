@@ -1,0 +1,85 @@
+{
+  "$comment": "Maps publicly discussed forum playbooks onto Argus Quant modules. Catalog only — not a live enablement switch. Default evaluateAll() remains five CORE strategies. Do not set experimental env vars to true to see if it works. Forum-claimed win rates / R:R are NOT Argus evidence. Forum 0.5–1% equity risk is NOT Argus sizing (RiskEngine uses PositionSizing + settings.maxTradeSize).",
+  "riskNote": "Argus does not adopt forum position-sizing, daily 2R circuit breakers, or structural stops as RiskEngine replacements. RiskEngine uses PositionSizing + settings.maxTradeSize. Invalidation text on experimental modules is thesis language only.",
+  "strategies": [
+    {
+      "id": "FORUM_RS_RW_SPY",
+      "forumName": "Relative Strength / Weakness vs SPY",
+      "forum": "r/RealDayTrading",
+      "typicalAssets": "Large-cap US equities",
+      "status": "EXPERIMENTAL",
+      "moduleId": "RELATIVE_STRENGTH_ROTATION",
+      "honesty": "Uses MarketContext relativeStrengthVsSPY (period % vs SPY), stock-up/SPY-down divergence, SMA50/SMA200 stack, and EMA9/EMA20 as the closest existing EMAs (not 8/21). 1OP is not a data source. Breadth remains NOT_SUPPORTED. UNVALIDATED."
+    },
+    {
+      "id": "FORUM_ORB",
+      "forumName": "Opening Range Breakout + VWAP",
+      "forum": "r/Daytrading",
+      "typicalAssets": "SPY, QQQ, large-cap tech",
+      "status": "EXPERIMENTAL",
+      "moduleId": "OPENING_RANGE_BREAKOUT",
+      "honesty": "Requires real intraday bars for openingRange. Daily bars fail closed (no fabricated OR). VWAP alignment and RVOL are existing VolumeFeatures. Window minutes come from quantExperimentalStrategies.thresholds.openingRangeWindowMinutes. UNVALIDATED. Backtest is long-only."
+    },
+    {
+      "id": "FORUM_AUCTION_ORDER_FLOW",
+      "forumName": "Auction Market Theory, footprint, DOM, CVD, Bookmap",
+      "forum": "Futures.io / r/FuturesTrading",
+      "typicalAssets": "ES, NQ, CL, GC",
+      "status": "NOT_SUPPORTED",
+      "reason": "No L2/DOM, no footprint, no CVD, no volume profile VAH/VAL/POC. Alpaca IEX is top-of-book. VOLUME_CONFIRMATION is RVOL+CMF/MFI only. UI must not show a fake ladder."
+    },
+    {
+      "id": "FORUM_SMC_ICT",
+      "forumName": "Smart Money Concepts / ICT",
+      "forum": "r/Daytrading",
+      "typicalAssets": "Equities (Argus); forum also Forex/crypto/futures",
+      "status": "EXPERIMENTAL",
+      "moduleId": "SMC_LIQUIDITY_SWEEP",
+      "honesty": "Pattern classification (sweep + structure). FVG-fill-as-entry and order-block mitigation are NOT standalone evaluate() modules. Sweep detector isTradeSignal false. UNVALIDATED. Live only if QUANT_SMC_STRATEGY_ENABLED=true. Backtest long-only."
+    },
+    {
+      "id": "FORUM_VWAP_MR",
+      "forumName": "VWAP mean reversion and VWAP trend pullback",
+      "forum": "r/Daytrading",
+      "typicalAssets": "Equities",
+      "status": "EXPERIMENTAL",
+      "moduleId": "VWAP_MEAN_REVERSION",
+      "relatedModuleIds": ["VWAP_VOLUME_STRUCTURE"],
+      "honesty": "VWAP_MEAN_REVERSION fades distancePct vs session VWAP in a range. VWAP_VOLUME_STRUCTURE is the trend-pullback cousin. Standard-deviation VWAP bands are not a separate feature (distancePct only). UNVALIDATED."
+    },
+    {
+      "id": "FORUM_WHEEL_OPTIONS",
+      "forumName": "The Wheel (CSP / covered call) and premium selling",
+      "forum": "r/thetagang",
+      "typicalAssets": "Blue-chip stocks, ETFs",
+      "status": "NOT_SUPPORTED",
+      "reason": "No options chain, delta, IV rank, assignment, or multi-leg OMS. Argus does not sell cash-secured puts or covered calls."
+    },
+    {
+      "id": "FORUM_0DTE_GEX",
+      "forumName": "0DTE index options and dealer GEX / gamma walls",
+      "forum": "r/options",
+      "typicalAssets": "SPX, SPY, QQQ options",
+      "status": "NOT_SUPPORTED",
+      "reason": "No options chain, no GEX/DEX, no dealer positioning feed, no 0DTE expiration engine. Gamma-exposure aliases in the 760-name taxonomy are already NOT_SUPPORTED."
+    },
+    {
+      "id": "FORUM_BB_KELTNER_SQUEEZE",
+      "forumName": "Bollinger / Keltner squeeze expansion",
+      "forum": "r/algotrading",
+      "typicalAssets": "Equities",
+      "status": "EXPERIMENTAL",
+      "moduleId": "BOLLINGER_VOLATILITY",
+      "honesty": "Uses existing VolatilityFeatures (band width + CONTRACTING then Keltner expansion break). Not a second Bollinger library. UNVALIDATED."
+    },
+    {
+      "id": "FORUM_ZSCORE_MR",
+      "forumName": "Statistical mean reversion (≥2.5σ / z-score)",
+      "forum": "r/algotrading",
+      "typicalAssets": "Equities",
+      "status": "EXPERIMENTAL",
+      "moduleId": "STATISTICAL_MEAN_REVERSION",
+      "honesty": "Rolling close z-score from statistics.ts plus RSI extreme in SIDEWAYS_RANGE. Lookback and |z| threshold live in quantExperimentalStrategies.json. Not pairs/cointegration. UNVALIDATED."
+    }
+  ]
+}

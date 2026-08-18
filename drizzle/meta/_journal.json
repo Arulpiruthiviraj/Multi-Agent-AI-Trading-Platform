@@ -267,6 +267,20 @@
       "when": 1786970000000,
       "tag": "0037_fills_cumulative_unique",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "6",
+      "when": 1786980000000,
+      "tag": "0038_observability_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "6",
+      "when": 1786990000000,
+      "tag": "0039_global_auto_liquidation",
+      "breakpoints": true
     }
   ]
 }

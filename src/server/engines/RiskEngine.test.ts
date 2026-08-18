@@ -263,6 +263,20 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.reasoning).toMatch(/No valid price/);
   });
 
+  it('records INVALID_SYMBOL on price_validity for garbled LLM tickers (gate stays fail-closed)', async () => {
+    await riskEngine.evaluateRisk({
+      traceId: 't7-toast',
+      symbol: 'Toast Stock (not specified...)',
+      side: 'BUY',
+      currentPrice: 30,
+    });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.rejectionGate).toBe('price_validity');
+    expect(assessment.reasoning).toMatch(/INVALID_SYMBOL/);
+  });
+
   it('sizes a BUY down to the max-trade-size dollar cap when it is the binding constraint', async () => {
     setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 1000 }]);
     mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 1000000, buyingPower: 1000000 }));

@@ -304,7 +304,7 @@ function main(): void {
     const finceptCmd = process.env.FINCEPT_CMD?.trim();
     if (!finceptCmd) {
       warn(
-        'ENABLE_FINCEPT_TERMINAL=true but FINCEPT_CMD is empty — skip (refuse invented default binary). See docs/ECOSYSTEM.md.',
+        'ENABLE_FINCEPT_TERMINAL=true but FINCEPT_CMD is empty — skip (refuse invented default binary). See README.md (ecosystem).',
       );
     } else if (!fs.existsSync(finceptPath)) {
       warn(`FinceptTerminal: directory does not exist (${finceptPath}) — skip.`);

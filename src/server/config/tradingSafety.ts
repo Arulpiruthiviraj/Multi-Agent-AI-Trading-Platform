@@ -8,6 +8,12 @@ import { loadRepoConfigJson } from './loadRepoConfigJson';
 
 export interface TradingSafety {
   stalePriceThresholdMs: number;
+  /** Reject ticks whose source timestamp is this far in the future (clock skew budget). */
+  tickFutureSkewMs: number;
+  /** Ignore out-of-order ticks older than last accepted tick by more than this epsilon. */
+  tickOutOfOrderEpsilonMs: number;
+  /** Dedup window for MARKET_DATA_REJECTED structured events (do not flood). */
+  marketDataRejectLogDedupMs: number;
   marketClockCacheMs: number;
   maxConsecutiveLosses: number;
   correlationLookbackMs: number;
@@ -142,6 +148,9 @@ export interface TradingSafety {
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'stalePriceThresholdMs',
+  'tickFutureSkewMs',
+  'tickOutOfOrderEpsilonMs',
+  'marketDataRejectLogDedupMs',
   'marketClockCacheMs',
   'maxConsecutiveLosses',
   'correlationLookbackMs',

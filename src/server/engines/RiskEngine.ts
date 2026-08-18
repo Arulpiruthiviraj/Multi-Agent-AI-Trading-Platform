@@ -22,6 +22,7 @@ import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { historicalDataGateway } from './backtest/HistoricalDataGateway';
 import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizing';
+import { runWithObservabilityContext } from '../observability/ObservabilityContext';
 import { getTradingDateStr } from '../core/TradingCalendar';
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
@@ -37,6 +38,7 @@ import {
   evaluateSameSymbolCooldown,
 } from '../risk/OvertradingGuards';
 import { clusterCoversSymbol, newsImpactOnVetoScale } from '../news/newsClusterMatch';
+import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { evaluateQuoteFreshness } from '../core/marketDataQuality';
 import { getActiveReplaySession, replayVisibleBars } from '../replay/ReplayContext';
 import { classifyMarketSession, sessionAllowsFills } from '../replay/marketSession';
@@ -192,7 +194,15 @@ export class RiskEngine {
     }
 
     public async evaluateRisk(proposal: any): Promise<void> {
-        const run = this.evaluationQueue.then(() => this.evaluateRiskSerialized(proposal));
+        const run = this.evaluationQueue.then(() => {
+            if (proposal?.traceId) {
+                return runWithObservabilityContext(
+                    { decisionId: proposal.traceId, correlationId: proposal.traceId, symbol: proposal.symbol },
+                    () => this.evaluateRiskSerialized(proposal),
+                );
+            }
+            return this.evaluateRiskSerialized(proposal);
+        });
         // Never let one evaluation's rejection break the queue for evaluations queued after it -
         // evaluateRiskSerialized already has its own internal top-level try/catch, so a rejection
         // reaching here would only be a truly unexpected error; the queue must still advance.
@@ -457,9 +467,31 @@ export class RiskEngine {
 
             // 4. Position Sizing Math - using actual buying power and portfolio value
             const currentPrice = proposal.currentPrice;
-            const priceValid = typeof currentPrice === 'number' && Number.isFinite(currentPrice) && currentPrice > 0;
-            recordGate('price_validity', priceValid, { currentPrice });
-            const priceValidityReason = "No valid price";
+            const tickerOk = !!looksLikeListedTicker(proposal.symbol);
+            const priceNumericOk = typeof currentPrice === 'number' && Number.isFinite(currentPrice) && currentPrice > 0;
+            const priceValid = tickerOk && priceNumericOk;
+            const priceValidityReasonCode = !tickerOk
+              ? 'INVALID_SYMBOL'
+              : priceNumericOk
+                ? 'OK'
+                : currentPrice == null
+                  ? 'MISSING_PRICE'
+                  : typeof currentPrice !== 'number'
+                    ? 'NON_NUMERIC_PRICE'
+                    : Number.isNaN(currentPrice)
+                      ? 'NAN_PRICE'
+                      : !Number.isFinite(currentPrice)
+                        ? 'NON_FINITE_PRICE'
+                        : currentPrice <= 0
+                          ? 'NON_POSITIVE_PRICE'
+                          : 'INVALID_PRICE';
+            recordGate('price_validity', priceValid, {
+              currentPrice,
+              reasonCode: priceValidityReasonCode,
+            });
+            const priceValidityReason = priceValid
+              ? 'OK'
+              : `No valid price (${priceValidityReasonCode})`;
 
             let sufficientSizePassed = false;
             let sellPositionPassed = true; // only meaningful for SELL - stays true (n/a) for BUY

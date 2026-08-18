@@ -4,6 +4,7 @@
   "warnOnlyOnMissingTraceId": true,
   "batchFlushMs": 50,
   "maxBatchSize": 64,
+  "maxQueueSize": 5000,
   "traceIdPrefix": "trace",
   "coreEventsRequiringTraceId": [
     "TRADE_IDEA_GENERATED",

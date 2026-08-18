@@ -87,7 +87,7 @@ describe('Integration: MARKET_DATA -> TechnicalAgent -> ChiefTrader -> RiskAgent
     delete process.env.ALPACA_API_KEY;
     delete process.env.ALPACA_SECRET_KEY;
 
-    const symbol = 'INTGTEST';
+    const symbol = 'INTG';
     for (let i = 0; i < 49; i++) {
       eventBus.emit('MARKET_DATA', { symbol, price: 100, volume: 1000, timestamp: new Date().toISOString() });
     }

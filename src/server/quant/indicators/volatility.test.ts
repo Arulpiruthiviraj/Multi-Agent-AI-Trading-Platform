@@ -105,6 +105,7 @@ describe('indicators/volatility', () => {
       const features = computeVolatilityFeatures(bars);
       expect(features.atr).toBeGreaterThan(0);
       expect(features.atrPercent).not.toBeNull();
+      expect(features.closePriceZScore === null || Number.isFinite(features.closePriceZScore)).toBe(true);
     });
   });
 });

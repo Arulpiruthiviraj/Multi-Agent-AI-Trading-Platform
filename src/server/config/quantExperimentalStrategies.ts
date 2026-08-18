@@ -30,6 +30,8 @@ export interface QuantExperimentalThresholds {
   fibProximityPct: number;
   bbSqueezeWidthPct: number;
   gapMinSizePct: number;
+  closePriceZScoreLookback: number;
+  closePriceZScoreAbs: number;
 }
 
 export interface QuantExperimentalStrategiesConfig {
@@ -51,6 +53,8 @@ const THRESHOLD_KEYS: (keyof QuantExperimentalThresholds)[] = [
   'fibProximityPct',
   'bbSqueezeWidthPct',
   'gapMinSizePct',
+  'closePriceZScoreLookback',
+  'closePriceZScoreAbs',
 ];
 
 function loadQuantExperimentalStrategies(): QuantExperimentalStrategiesConfig {

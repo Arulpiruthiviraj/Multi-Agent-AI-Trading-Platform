@@ -33,30 +33,31 @@
  * ==========================================================
  */
 
-import React, { useState } from 'react';
+import React from 'react';
 import { Shield, ShieldAlert, Activity, AlertTriangle, Zap, ServerCrash } from 'lucide-react';
 import { ContextualTooltip } from './ContextualTooltip';
 
-export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLiquidation }: any) {
-  const [toggles, setToggles] = useState({
-    riskSizing: true,
-    hardCap: true,
-    killSwitch: true,
-    circuitBreaker: true,
-    volSkip: false,
-    spreadFilter: true,
-    backtestGate: true,
-    obvDivergence: true,
-    watchdog: true,
-    webhook: false,
-    driftReconcile: true
-  });
+// Real bug fix (2026-08-18 UI audit): every switch below used to be backed by one local
+// useState() with zero backend calls - toggling any of them changed a CSS class and nothing
+// else, silently resetting to these defaults on reload. Verified against the actual engines
+// which of these are real:
+//  - riskSizing: real and unconditional - PositionSizing.ts:135-136 computes riskPerShare from
+//    tradingSafety.stopLossAssumptionPct and clamps maxQuantity by it on every BUY.
+//  - hardCap / killSwitch: already correctly shown locked (real RiskEngine gates).
+//  - driftReconcile: real and unconditional - PortfolioReconciliationWorker.reconcile() always
+//    syncs local `portfolio` to the broker's reported state every cycle; there is no flag that
+//    turns this off.
+//  - Everything else (Kelly sizing cap, circuit-breaker auto-flatten, Amihud illiquidity veto,
+//    Choppiness Index, Z-score check, OBV divergence veto, feed-health auto-emergency-stop,
+//    a master webhook-alerts switch) has no corresponding RiskEngine gate, config flag, or
+//    server-side toggle anywhere in this codebase - `grep`ed across src/server. Rather than wire
+//    fake persistence to a fake backend, these render as honestly disabled with a real
+//    explanation, the same pattern App.tsx's "REBALANCE ALL" already uses correctly.
+type GuardrailStatus = 'ALWAYS_ON' | 'NOT_IMPLEMENTED';
 
-  const toggle = (key: keyof typeof toggles) => {
-    setToggles(prev => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const ToggleSwitch = ({ label, icon: Icon, stateKey, description, locked }: any) => (
+export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLiquidation, maxDrawdownPct }: any) {
+  const drawdownPctLabel = typeof maxDrawdownPct === 'number' ? `${(maxDrawdownPct * 100).toFixed(0)}%` : '15%';
+  const ToggleSwitch = ({ label, icon: Icon, description, status, notImplementedReason }: { label: string; icon: any; description: string; status: GuardrailStatus; notImplementedReason?: string }) => (
     <div className="flex items-start justify-between p-3 bg-[#111822] border border-slate-800 rounded gap-3">
       <div className="flex gap-3 min-w-0 flex-1">
         <div className="mt-0.5 text-slate-500 shrink-0">
@@ -66,23 +67,25 @@ export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLi
           <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center gap-1.5 mb-0.5 flex-wrap">
             {label}
             <ContextualTooltip title={label} content={description} showIcon />
-            {locked && <span className="text-[8px] font-bold text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">REAL · ALWAYS ON</span>}
+            {status === 'ALWAYS_ON' && <span className="text-[8px] font-bold text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">REAL · ALWAYS ON</span>}
+            {status === 'NOT_IMPLEMENTED' && <span className="text-[8px] font-bold text-slate-500 bg-slate-700/30 px-1.5 py-0.5 rounded">NOT IMPLEMENTED</span>}
           </span>
           <p className="text-[9px] font-mono text-slate-500 max-w-none md:max-w-[200px]">{description}</p>
         </div>
       </div>
-      {locked ? (
+      {status === 'ALWAYS_ON' ? (
         <div className="argus-touch-target w-11 h-6 rounded-full border flex items-center px-0.5 bg-emerald-500/20 border-emerald-500/50 justify-end cursor-not-allowed shrink-0" title="Enforced unconditionally in RiskEngine - not user-disableable">
           <div className="w-4 h-4 rounded-full bg-emerald-400"></div>
         </div>
       ) : (
         <div
-          className={"argus-touch-target w-11 h-6 rounded-full border flex items-center px-0.5 transition-all cursor-pointer shrink-0 " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}
-          onClick={() => toggle(stateKey as keyof typeof toggles)}
+          className="argus-touch-target w-11 h-6 rounded-full border flex items-center px-0.5 bg-[#1A1F2B] border-slate-800 justify-start cursor-not-allowed shrink-0 opacity-60"
+          title={notImplementedReason || "Not implemented - no backend enforcement exists for this yet. Left off so the switch cannot imply protection that isn't real."}
           role="switch"
-          aria-checked={toggles[stateKey as keyof typeof toggles]}
+          aria-checked={false}
+          aria-disabled
         >
-          <div className={"w-4 h-4 rounded-full transition-all " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-400" : "bg-slate-600")}></div>
+          <div className="w-4 h-4 rounded-full bg-slate-700"></div>
         </div>
       )}
     </div>
@@ -131,92 +134,98 @@ export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLi
              label="Global Auto-Liquidation" 
              stateValue={globalAutoLiquidation} 
              stateSetter={setGlobalAutoLiquidation} 
-             icon={AlertTriangle} 
-             description="Liquidates all positions immediately if daily drawdown exceeds 15%." 
+             icon={AlertTriangle}
+             description={`Liquidates all positions immediately if portfolio drawdown exceeds ${drawdownPctLabel} (settings.maxPortfolioDrawdownPct).`}
            />
-           <ToggleSwitch 
-              label="Risk-Based Sizing" 
-              stateKey="riskSizing" 
-              icon={Activity} 
-              description="Size each position so stop-loss = fixed % of equity (e.g. 0.5%)." 
+           <ToggleSwitch
+              label="Risk-Based Sizing"
+              icon={Activity}
+              description="Size each position so stop-loss = fixed % of equity (tradingSafety.stopLossAssumptionPct)."
+              status="ALWAYS_ON"
             />
            <ToggleSwitch
               label="Hard Per-Position Cap"
-              stateKey="hardCap"
               icon={ShieldAlert}
               description="No position exceeds 20% of total available equity."
-              locked
+              status="ALWAYS_ON"
             />
            <ToggleSwitch
               label="Daily Loss Kill-Switch"
-              stateKey="killSwitch"
               icon={AlertTriangle}
               description="Blocks new entries at >= 80% daily-loss cap."
-              locked
+              status="ALWAYS_ON"
             />
-           <ToggleSwitch 
-              label="Circuit Breaker Auto-Flatten" 
-              stateKey="circuitBreaker" 
-              icon={Zap} 
-              description="Flattens all positions if severe market crash detected." 
+           <ToggleSwitch
+              label="Circuit Breaker Auto-Flatten"
+              icon={Zap}
+              description="Flattens all positions if severe market crash detected."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="No circuit-breaker/auto-flatten-on-crash gate exists in RiskEngine yet."
             />
         </div>
 
         {/* Tier 2: Decision Quality (Math Overrides) */}
         <div className="space-y-3">
            <h4 className="text-[10px] font-mono text-indigo-400 uppercase tracking-widest border-b border-indigo-400/20 pb-1 mb-3">Tier 2: Math Verification (Dual-Engine)</h4>
-           <ToggleSwitch 
-              label="Kelly Criterion Sizing Cap" 
-              stateKey="riskSizing" 
-              icon={Shield} 
-              description="Overrides requested size with mathematically optimal Kelly limit." 
+           <ToggleSwitch
+              label="Kelly Criterion Sizing Cap"
+              icon={Shield}
+              description="Overrides requested size with mathematically optimal Kelly limit."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="quant/risk/ExpectedValue.ts computes a real Kelly fraction, but RiskEngine's live sizing does not consume it yet - Kelly currently only gates whether QuantSignalAgent emits an idea at all."
             />
-           <ToggleSwitch 
-              label="Amihud Illiquidity Veto" 
-              stateKey="spreadFilter" 
-              icon={Activity} 
-              description="Vetoes trades on illiquid micro-caps to prevent massive slippage." 
+           <ToggleSwitch
+              label="Amihud Illiquidity Veto"
+              icon={Activity}
+              description="Vetoes trades on illiquid micro-caps to prevent massive slippage."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="No Amihud illiquidity gate exists in RiskEngine yet."
             />
-           <ToggleSwitch 
-              label="Choppiness Index (CHOP)" 
-              stateKey="volSkip" 
-              icon={AlertTriangle} 
-              description="Vetoes trend-following entries during sideways/choppy markets." 
+           <ToggleSwitch
+              label="Choppiness Index (CHOP)"
+              icon={AlertTriangle}
+              description="Vetoes trend-following entries during sideways/choppy markets."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="No CHOP-based veto gate exists in RiskEngine yet."
             />
-           <ToggleSwitch 
-              label="Statistical Z-Score Check" 
-              stateKey="backtestGate" 
-              icon={AlertTriangle} 
-              description="Vetoes buys when price is > +2.5 std devs overextended." 
+           <ToggleSwitch
+              label="Statistical Z-Score Check"
+              icon={AlertTriangle}
+              description="Vetoes buys when price is > +2.5 std devs overextended."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="No z-score overextension gate exists in RiskEngine yet."
             />
-           <ToggleSwitch 
-              label="OBV Bearish Divergence" 
-              stateKey="obvDivergence" 
-              icon={Activity} 
-              description="Vetoes breakouts that lack underlying volume conviction." 
+           <ToggleSwitch
+              label="OBV Bearish Divergence"
+              icon={Activity}
+              description="Vetoes breakouts that lack underlying volume conviction."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="RSI/MACD-style divergence is computed as a quant feature (isTradeSignal: false) but is not wired as a live veto."
             />
         </div>
 
         {/* Tier 4: Reliability & Ops */}
         <div className="space-y-3">
            <h4 className="text-[10px] font-mono text-rose-400 uppercase tracking-widest border-b border-rose-400/20 pb-1 mb-3">Tier 4: Reliability & Ops</h4>
-           <ToggleSwitch 
-              label="Feed-Health Watchdog" 
-              stateKey="watchdog" 
-              icon={ServerCrash} 
-              description="Emergency-stop if live data stream goes stale." 
+           <ToggleSwitch
+              label="Feed-Health Watchdog"
+              icon={ServerCrash}
+              description="Emergency-stop if live data stream goes stale."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="RiskEngine's data_freshness gate blocks an individual stale-price trade proposal, but nothing automatically triggers a full emergency stop on stale market data yet."
             />
-           <ToggleSwitch 
-              label="Broker Status Auto-Reconcile" 
-              stateKey="driftReconcile" 
-              icon={Activity} 
-              description="Sync positions from broker on drift detection." 
+           <ToggleSwitch
+              label="Broker Status Auto-Reconcile"
+              icon={Activity}
+              description="Sync positions from broker on drift detection."
+              status="ALWAYS_ON"
             />
-           <ToggleSwitch 
-              label="Webhook Alerts" 
-              stateKey="webhook" 
-              icon={Zap} 
-              description="Push notifications on fills, kill-switches, API errors." 
+           <ToggleSwitch
+              label="Webhook Alerts"
+              icon={Zap}
+              description="Push notifications on fills, kill-switches, API errors."
+              status="NOT_IMPLEMENTED"
+              notImplementedReason="Webhooks fire per-URL from Settings > Webhooks when one is configured there - there is no single master on/off flag for all webhook alerts."
             />
         </div>
       </div>

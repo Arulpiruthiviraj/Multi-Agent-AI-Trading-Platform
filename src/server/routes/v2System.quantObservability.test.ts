@@ -79,6 +79,9 @@ describe('v2System quant observability routes', () => {
       expect(res.body.ok).toBe(true);
       expect(res.body.strategies.map((s: any) => s.id)).toEqual(ids);
       expect(res.body.experimentalStrategies.every((s: any) => s.validationStatus === 'UNVALIDATED')).toBe(true);
+      expect(res.body.forumStrategies.strategies.length).toBeGreaterThanOrEqual(7);
+      expect(res.body.forumStrategies.strategies.find((s: any) => s.id === 'FORUM_WHEEL_OPTIONS').status).toBe('NOT_SUPPORTED');
+      expect(res.body.strategies).toHaveLength(5);
     }, 45000);
   });
 

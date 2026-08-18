@@ -100,11 +100,12 @@ export class KronosForecastAgent {
         eventBus.publish(EVENTS.KRONOS_BREAKOUT, prediction);
       }
 
-      eventBus.publish(EVENTS.TRADE_IDEA_GENERATED, {
+      eventBus.emitTradeIdea({
         traceId: `kronos-${Date.now()}`,
         symbol: prediction.symbol,
         side: prediction.prediction,
         confidence: prediction.confidence,
+        currentPrice: this.priceHistory[prediction.symbol]?.slice(-1)[0],
         reasoning: `Chronos forecasts ${prediction.prediction} (expected move ${prediction.expectedMove} over ${prediction.forecastHorizon} steps, support ${prediction.support}, resistance ${prediction.resistance}).`,
         agent: 'KronosEngine',
       });

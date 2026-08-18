@@ -5,9 +5,13 @@ import {
   experimentAuditTrail,
   calculateDeflatedSharpeRatio,
   deflatedSharpeRatioFromLedger,
+  resetExperimentLedgerForTests,
 } from './experimentLedger';
 
 describe('experimentLedger - per-trial provenance', () => {
+  beforeEach(() => {
+    resetExperimentLedgerForTests();
+  });
   it('recordExperimentTrial keeps its original 2-argument call working unchanged (backward compatible)', () => {
     const before = experimentLedgerSnapshot().trials;
     const result = recordExperimentTrial('MOMENTUM_BREAKOUT', 'hash-legacy-call');
@@ -30,6 +34,44 @@ describe('experimentLedger - per-trial provenance', () => {
     expect(rejected).toBeDefined();
     expect(rejected!.selectionStatus).toBe('REJECTED');
     expect(rejected!.parameterSet).toEqual({ lookback: 20, zScore: 2 });
+  });
+
+  it('records full experiment provenance (2026-08-18 remediation pass): symbol, dataset period, execution model, cost/slippage assumptions, WFO/OOS/robustness config, and a parent-trial link', () => {
+    const parent = recordExperimentTrial('MOMENTUM_BREAKOUT', 'hash-provenance-parent', {
+      selectionStatus: 'REJECTED',
+      rejectionReason: 'initial parameter set unstable',
+    });
+    const parentId = parent.trialRecords[parent.trialRecords.length - 1].trialId;
+
+    recordExperimentTrial('MOMENTUM_BREAKOUT', 'hash-provenance-child', {
+      symbol: 'AAPL',
+      datasetPeriod: { start: '2024-01-01', end: '2025-01-01' },
+      executionModel: 'NEXT_BAR_OPEN',
+      transactionCostAssumptions: { commissionPerShare: 0.005 },
+      slippageAssumptions: { bps: 2 },
+      wfoConfig: { windows: 12, trainDays: 60, testDays: 20 },
+      oosConfig: { minOosTrades: 30 },
+      robustnessConfig: { monteCarloRuns: 1000 },
+      parentTrialId: parentId,
+      selectionStatus: 'ACCEPTED',
+    });
+
+    const trials = experimentAuditTrail('MOMENTUM_BREAKOUT');
+    const child = trials.find(t => t.datasetHash === 'hash-provenance-child')!;
+    expect(child.symbol).toBe('AAPL');
+    expect(child.datasetPeriod).toEqual({ start: '2024-01-01', end: '2025-01-01' });
+    expect(child.executionModel).toBe('NEXT_BAR_OPEN');
+    expect(child.transactionCostAssumptions).toEqual({ commissionPerShare: 0.005 });
+    expect(child.slippageAssumptions).toEqual({ bps: 2 });
+    expect(child.wfoConfig).toEqual({ windows: 12, trainDays: 60, testDays: 20 });
+    expect(child.oosConfig).toEqual({ minOosTrades: 30 });
+    expect(child.robustnessConfig).toEqual({ monteCarloRuns: 1000 });
+    expect(child.parentTrialId).toBe(parentId);
+
+    // Omitted fields stay null, never a fabricated default.
+    const legacy = trials.find(t => t.datasetHash === 'hash-provenance-parent')!;
+    expect(legacy.symbol).toBeNull();
+    expect(legacy.parentTrialId).toBeNull();
   });
 
   it('experimentAuditTrail(strategyId) never leaks another strategy\'s trials', () => {

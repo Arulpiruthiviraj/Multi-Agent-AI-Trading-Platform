@@ -1,6 +1,9 @@
 {
   "$comment": "Operational and safety thresholds. Changing this file is a reviewed config change, not an API or UI knob. Restricted-live caps must never be loosened via settings. Numbers preserve pre-extraction behavior.",
   "stalePriceThresholdMs": 300000,
+  "tickFutureSkewMs": 2000,
+  "tickOutOfOrderEpsilonMs": 5000,
+  "marketDataRejectLogDedupMs": 60000,
   "marketClockCacheMs": 60000,
   "maxConsecutiveLosses": 3,
   "correlationLookbackMs": 7776000000,

@@ -54,6 +54,8 @@ import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADE_SIDE_VAL
 import { tradingSafety } from '../config/tradingSafety';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { aiModels } from '../config/aiModels';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { hashSensitive } from '../observability/hashSensitive';
 
 // Router timeout (tradingSafety.aiProviderTimeoutMs) plus AbortController so fetch-based
 // providers cancel in-flight HTTP instead of hanging after the caller has already failed over.
@@ -204,6 +206,22 @@ async function logAiCall(input: AiCallLogInput): Promise<string> {
   } catch (e) {
     console.error('[AIRouter] Failed to persist ai_calls row', e);
   }
+  observeSafe(() => {
+    structuredLogger.info('ai_call', {
+      category: 'AI',
+      component: 'AIRouter',
+      eventType: 'AI_CALL',
+      traceId: input.traceId,
+      decisionId: input.traceId,
+      agent: input.agent,
+      provider: input.provider,
+      model: input.model,
+      status: input.status,
+      latencyMs: input.latencyMs,
+      promptHash: hashSensitive(input.prompt),
+      responseHash: hashSensitive(input.rawResponse),
+    });
+  });
   return id;
 }
 

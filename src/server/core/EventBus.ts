@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import { EVENTS } from './eventNames';
 import { tracingConfig } from '../config/tracing';
 import { eventName } from './eventNames';
+import { contextFromEventPayload, getObservabilityContext, runWithObservabilityContext } from '../observability/ObservabilityContext';
+import { gateTradeIdea } from './tradeIdeaContract';
 
 const CORE_EVENTS_REQUIRING_TRACE_ID = new Set(
   tracingConfig.coreEventsRequiringTraceId.map(k => eventName(k)),
@@ -55,6 +57,25 @@ class EventBus extends EventEmitter {
 
   // Support wildcard listening
   public emit(event: string | symbol, ...args: any[]): boolean {
+    if (event === EVENTS.TRADE_IDEA_GENERATED) {
+      const payload = args[0];
+      const skipGate = !!(payload?.telemetryPulse || payload?.diagnosticTelemetry
+        || String(payload?.traceId || '').startsWith('telemetry-pulse-'));
+      if (!skipGate) {
+        const gated = gateTradeIdea(payload);
+        if (gated.ok === false) {
+          return this.emit(EVENTS.TRADE_IDEA_REJECTED, {
+            reason: gated.reason,
+            symbol: gated.symbol,
+            currentPrice: gated.currentPrice,
+            agent: payload?.agent,
+            traceId: payload?.traceId,
+            bypassedEmitTradeIdea: true,
+          });
+        }
+        args[0] = gated.idea;
+      }
+    }
     // Phase 16A follow-up: Node's default EventEmitter.emit() aborts remaining listeners when
     // one throws. That is the exact class of failure that left 101 real CHIEF_APPROVED_IDEA
     // events with a RiskEngine rejection never written to transactions.status (a stale process
@@ -70,7 +91,14 @@ class EventBus extends EventEmitter {
     }
     for (const listener of named) {
       try {
-        listener.apply(this, args);
+        const payload = args[0];
+        const parent = getObservabilityContext();
+        const ctx = contextFromEventPayload(payload, parent);
+        if (ctx.decisionId || ctx.correlationId) {
+          runWithObservabilityContext(ctx, () => listener.apply(this, args));
+        } else {
+          listener.apply(this, args);
+        }
       } catch (e) {
         console.error(`[EventBus] Listener for ${String(event)} threw - remaining listeners still run`, e);
       }
@@ -78,7 +106,14 @@ class EventBus extends EventEmitter {
     if (event !== '*') {
       for (const listener of this.rawListeners('*')) {
         try {
-          listener.apply(this, [event, ...args]);
+          const payload = args[0];
+          const parent = getObservabilityContext();
+          const ctx = contextFromEventPayload(payload, parent);
+          if (ctx.decisionId || ctx.correlationId) {
+            runWithObservabilityContext(ctx, () => listener.apply(this, [event, ...args]));
+          } else {
+            listener.apply(this, [event, ...args]);
+          }
         } catch (e) {
           console.error('[EventBus] Wildcard listener threw - remaining listeners still run', e);
         }
@@ -94,8 +129,19 @@ class EventBus extends EventEmitter {
      this.emit(EVENTS.MARKET_DATA_UPDATED, payload);
   }
   public emitTradeIdea(idea: any) {
-     assertTraceId(EVENTS.TRADE_IDEA_GENERATED, idea);
-     this.emit(EVENTS.TRADE_IDEA_GENERATED, idea);
+     const gated = gateTradeIdea(idea);
+     if (gated.ok === false) {
+       this.emit(EVENTS.TRADE_IDEA_REJECTED, {
+         reason: gated.reason,
+         symbol: gated.symbol,
+         currentPrice: gated.currentPrice,
+         agent: idea?.agent,
+         traceId: idea?.traceId,
+       });
+       return;
+     }
+     assertTraceId(EVENTS.TRADE_IDEA_GENERATED, gated.idea);
+     this.emit(EVENTS.TRADE_IDEA_GENERATED, gated.idea);
   }
   public emitCalculation(traceId: string, engine: string, symbol: string, data: any) {
      this.emit(EVENTS.CALCULATION_COMPLETED, { traceId, engine, symbol, data });

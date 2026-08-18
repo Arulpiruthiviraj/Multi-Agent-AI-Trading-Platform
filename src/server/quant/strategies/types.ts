@@ -98,5 +98,6 @@ export const STRATEGY_TYPICAL_HOLDING_PERIOD: Record<string, string> = {
   FIBONACCI_PULLBACK: 'Short-term - 61.8% of trailing daily range. UNVALIDATED. No Fib time zones or arcs.',
   VOLUME_CONFIRMATION: 'Short-term - RVOL + CMF/MFI. UNVALIDATED. Not volume profile/POC.',
   SR_BOUNCE: 'Short-term - bounce at nearest S/R with reversal candle. UNVALIDATED.',
-  RELATIVE_STRENGTH_ROTATION: 'Medium-term - vs SPY RS + sector regime. UNVALIDATED. Breadth remains NOT_SUPPORTED.',
+  RELATIVE_STRENGTH_ROTATION: 'Medium-term - vs SPY RS + sector regime + SPY-divergence. UNVALIDATED. Breadth remains NOT_SUPPORTED. EMA9/EMA20 stand in for 8/21.',
+  STATISTICAL_MEAN_REVERSION: 'Very short-term - fade a close z-score extreme toward the rolling mean in a range. UNVALIDATED. Not pairs.',
 };

@@ -175,13 +175,15 @@ describe('experimental family strategies + taxonomy', () => {
     expect(result.setupScore).toBe(100);
   });
 
-  it('RELATIVE_STRENGTH_ROTATION scores vs-SPY RS + sector', () => {
+  it('RELATIVE_STRENGTH_ROTATION scores vs-SPY RS + SPY-down divergence + SMA stack', () => {
     const ctx = baseFixture();
+    ctx.currentPrice = 111;
+    ctx.trend.movingAverages = { ...ctx.trend.movingAverages, sma50: 105, sma200: 90, ema9: 112, ema20: 108 };
     ctx.marketContext.relativeStrengthVsSPY = {
       vsSymbol: 'SPY',
       periodPct: 3,
-      benchmarkPeriodPct: 1,
-      relativeStrengthPct: 2,
+      benchmarkPeriodPct: -1,
+      relativeStrengthPct: 4,
       correlation: null,
       beta: null,
       source: 'test',
@@ -194,6 +196,19 @@ describe('experimental family strategies + taxonomy', () => {
     };
     ctx.trend.dmi.adx = t.adxTrendMin;
     const result = relativeStrengthRotation.evaluate(ctx);
+    expect(result.side).toBe('BUY');
+    expect(result.setupScore).toBe(100);
+  });
+
+  it('STATISTICAL_MEAN_REVERSION fades a negative z-score with RSI oversold', async () => {
+    const { statisticalMeanReversion } = await import('./statisticalMeanReversion');
+    const { quantThresholds } = await import('../../config/quantThresholds');
+    const ctx = baseFixture();
+    ctx.volatility.closePriceZScore = -t.closePriceZScoreAbs;
+    ctx.momentum.rsi = quantThresholds.rsiOversold;
+    ctx.regime.regime = 'SIDEWAYS_RANGE';
+    ctx.trend.dmi.adx = t.adxRangeMax - 1;
+    const result = statisticalMeanReversion.evaluate(ctx);
     expect(result.side).toBe('BUY');
     expect(result.setupScore).toBe(100);
   });

@@ -75,6 +75,11 @@
       "id": "RELATIVE_STRENGTH_ROTATION",
       "enabledEnvVar": "QUANT_RELATIVE_STRENGTH_ENABLED",
       "apiNote": "Symbol vs SPY relative strength plus sector regime. Breadth thrust / McClellan / TRIN remain NOT_SUPPORTED. Live evaluateAll only if QUANT_RELATIVE_STRENGTH_ENABLED=true."
+    },
+    {
+      "id": "STATISTICAL_MEAN_REVERSION",
+      "enabledEnvVar": "QUANT_STATISTICAL_REVERSION_ENABLED",
+      "apiNote": "Fade |close z-score| vs a rolling SMA window (statistics.ts zScore) with RSI extreme in a range. Distinct from MEAN_REVERSION (Keltner). UNVALIDATED. Live evaluateAll only if QUANT_STATISTICAL_REVERSION_ENABLED=true."
     }
   ],
   "thresholds": {
@@ -90,6 +95,8 @@
     "nearLevelPct": 0.4,
     "fibProximityPct": 0.35,
     "bbSqueezeWidthPct": 4,
-    "gapMinSizePct": 0.5
+    "gapMinSizePct": 0.5,
+    "closePriceZScoreLookback": 20,
+    "closePriceZScoreAbs": 2.5
   }
 }

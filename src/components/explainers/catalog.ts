@@ -207,7 +207,7 @@ export const EXPLAINER_CATALOG = {
     title: 'Trading Arena',
     what: 'Visualizer desk for correlation-style views and trade ledgers.',
     why: 'Some widgets here are live; others are educational. Hover labels call out which.',
-    how: 'Do not treat every chart as a live accuracy feed. FINAL_ANALYSIS.md is the honesty matrix for fabricated vs real.',
+    how: 'Do not treat every chart as a live accuracy feed. CLAUDE.md Frontend honesty is the matrix for fabricated vs real.',
   },
   tabNews: {
     title: 'News Intel',

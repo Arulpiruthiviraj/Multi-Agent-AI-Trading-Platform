@@ -1,0 +1,180 @@
+{
+  "artifact": "ARGUS_LIVE_READINESS",
+  "generatedAt": "2026-08-18T04:10:00Z",
+  "method": "evaluateLiveReadiness() against data/argus.db plus this session tsc/vitest/build. Not a profitability certificate.",
+  "liveEnabledThisSession": false,
+  "paperTradingOnlyMutated": false,
+  "realOrdersPlaced": false,
+  "overall": {
+    "result": "LIVE_NO_GO",
+    "liveEligibility": "FAIL",
+    "engineeringCapableOfLiveExecution": true,
+    "empiricallyJustifiedToRiskCapital": false,
+    "tradingEdgeScore": 8,
+    "tradingEdgeBand": "0-20",
+    "tradingEdgeReason": "No demonstrated repeatable edge. CORE UNTESTED on REAL_MARKET_DATA NEXT_BAR_OPEN.",
+    "organicPaper": "NOT_ESTABLISHED",
+    "canadianLive": "NOT_AVAILABLE",
+    "quantEngineDefault": "OFF",
+    "canPlaceOrdersViaResearch": false,
+    "mandatoryGatesPass": 6,
+    "mandatoryGatesTotal": 28,
+    "mandatoryPassPct": 21,
+    "note": "mandatoryPassPct is 6/28 PASS from evaluateLiveReadiness(). P0 unit-test verification does not raise this percentage. Tests passing are not LIVE evidence."
+  },
+  "organicPaperSnapshot": {
+    "closedFilledSellPnlTrades": 0,
+    "nySessions": 0,
+    "needMinPaperTrades": 30,
+    "needMinPaperSessions": 10,
+    "needMinPaperCalendarDays": 30,
+    "profitFactor": null,
+    "expectancy": null,
+    "note": "No organic PAPER FILLED SELL rows with P&L. REPLAY/EXTERNAL_SYNC/DIAGNOSTIC/shadow are excluded by summarizeOrganicPaper."
+  },
+  "commands": {
+    "tsc": { "command": "npx tsc --noEmit", "result": "PASS", "exitCode": 0, "verifiedAt": "2026-08-18" },
+    "vitest": {
+      "command": "npx vitest run",
+      "result": "PASS",
+      "numPassedTests": 1475,
+      "numFailedTests": 0,
+      "numTotalTests": 1475,
+      "files": 233,
+      "suites": 630,
+      "verifiedAt": "2026-08-18",
+      "note": "In-process tests are not a standing SOFTWARE_TESTS PASS inside evaluateLiveReadiness()."
+    },
+    "build": { "command": "npm run build", "result": "PASS", "exitCode": 0, "outputs": ["dist/index.html", "dist/server.cjs"], "verifiedAt": "2026-08-18" }
+  },
+  "p0Remediation": [
+    {
+      "id": "P0.1",
+      "title": "LIVE_NO_GO blocks OMS placeOrder; paper unaffected",
+      "status": "VERIFIED",
+      "files": ["src/server/core/liveOrderAuthorization.ts", "src/server/services/OrderManagement.ts"],
+      "tests": ["src/server/core/liveReadiness.test.ts", "src/server/services/OrderManagement.test.ts"]
+    },
+    {
+      "id": "P0.2",
+      "title": "IBKR paper/live account isolation fail-closed",
+      "status": "VERIFIED",
+      "files": ["config/ibkrAccountClassification.json", "src/brokers/ibkrAccountClassification.ts", "src/brokers/InteractiveBrokersAdapter.ts"],
+      "tests": ["src/brokers/ibkrAccountClassification.test.ts", "src/brokers/InteractiveBrokersAdapter.sessionIsolation.test.ts"]
+    },
+    {
+      "id": "P0.3",
+      "title": "RiskEngine persist-then-emit; persist fail does not emit RISK_ASSESSMENT_COMPLETED",
+      "status": "VERIFIED",
+      "files": ["src/server/engines/RiskEngine.ts"],
+      "tests": ["src/server/engines/RiskEngine.test.ts"]
+    },
+    {
+      "id": "P0.4",
+      "title": "Fill ledger unique (orderId, cumulativeQuantity)",
+      "status": "VERIFIED",
+      "files": ["src/server/services/fillLedger.ts", "src/server/db/schema.ts", "drizzle/0037_fills_cumulative_unique.sql"],
+      "tests": ["src/server/services/fillLedger.test.ts"]
+    },
+    {
+      "id": "P0.5",
+      "title": "tsc + vitest + build green",
+      "status": "VERIFIED",
+      "files": ["src/server/core/gracefulShutdown.ts"],
+      "tests": ["npx tsc --noEmit", "npx vitest run", "npm run build"]
+    },
+    {
+      "id": "P0.6",
+      "title": "unhandledRejection/uncaughtException crash.log + SYSTEM_ANOMALY",
+      "status": "VERIFIED",
+      "files": ["src/server/core/globalErrorHandlers.ts", "server.ts"],
+      "tests": ["src/server/core/globalErrorHandlers.test.ts"],
+      "note": "Pre-existing; re-verified by this session's full vitest."
+    },
+    {
+      "id": "P0.7",
+      "title": "Reconciliation acknowledgement for FILLED_ORDER_MISSING_LOCALLY",
+      "status": "VERIFIED",
+      "files": ["src/server/services/ReconciliationAcknowledgements.ts"],
+      "tests": ["src/server/services/ReconciliationAcknowledgements.test.ts"],
+      "note": "Pre-existing; RECONCILIATION LIVE gate remains UNAVAILABLE."
+    }
+  ],
+  "p1Remediation": [
+    {
+      "id": "P1.1",
+      "title": "SIGTERM/SIGINT drain: TRADING_PAUSED, stop workers, SQLite checkpoint, close HTTP/WS",
+      "status": "VERIFIED",
+      "files": ["src/server/core/gracefulShutdown.ts", "server.ts"],
+      "tests": ["src/server/core/gracefulShutdown.test.ts"]
+    },
+    {
+      "id": "P1.7",
+      "title": "Coinbase live placeOrder requires LIVE_ARM and PAPER_TRADING_ONLY check",
+      "status": "VERIFIED",
+      "files": ["src/brokers/CoinbaseBroker.ts"],
+      "tests": ["src/brokers/CoinbaseBroker.test.ts"]
+    }
+  ],
+  "evaluateLiveReadiness": {
+    "result": "LIVE_NO_GO",
+    "failedMandatory": [
+      "SOFTWARE_TESTS",
+      "MARKET_DATA",
+      "STRATEGY_CORE",
+      "STRATEGY_SMC",
+      "OOS",
+      "WFO",
+      "ROBUSTNESS",
+      "STATISTICS",
+      "PAPER",
+      "BROKER_LIVE_CONFIRM",
+      "RECONCILIATION",
+      "SECURITY",
+      "OBSERVABILITY",
+      "RECOVERY",
+      "OPERATIONS",
+      "LEGAL_CA",
+      "MANUAL_APPROVAL",
+      "MIN_PAPER",
+      "PAPER_PROFIT_FACTOR",
+      "PAPER_EXPECTANCY",
+      "PAPER_CALENDAR_DAYS",
+      "OMS_HEALTH"
+    ],
+    "passMandatory": [
+      "SOFTWARE_ORDER_PATH",
+      "EXECUTION_OMS",
+      "RISK_GATES",
+      "RESEARCH_WAREHOUSE",
+      "ZERO_COST_RESEARCH",
+      "QUANT_DEFAULT"
+    ],
+    "researchWarehouseNote": "GREEN REAL_MARKET_DATA parquet present. Presence is not OOS/WFO/paper validation.",
+    "strategyCore": "UNTESTED",
+    "smc": "UNVALIDATED"
+  },
+  "strategies": {
+    "validated": 0,
+    "untestedCore": [
+      "MOMENTUM_BREAKOUT",
+      "PULLBACK_CONTINUATION",
+      "MEAN_REVERSION",
+      "TREND_FOLLOWING",
+      "RANGE_REVERSION"
+    ],
+    "experimental": ["SMC_LIQUIDITY_SWEEP"],
+    "oosValidated": 0,
+    "wfoValidated": 0,
+    "robustnessValidated": 0,
+    "paperValidated": 0
+  },
+  "remainingBlockers": [
+    "Organic PAPER FILLED SELL P&L soak (calendar/evidence; cannot be unit-tested into existence)",
+    "CORE NEXT_BAR REAL_MARKET_DATA OOS/WFO/robustness GREEN artifacts",
+    "Human ENABLE LIVE TRADING + per-process LIVE_ARM after research+paper gates actually PASS",
+    "Canadian automated live routing BLOCKED (legal/broker)",
+    "NVIDIA OpenAI-compatible default still gpt-3.5-turbo when default_model is null (NIM 404); operator/model-id fix remaining",
+    "SOFTWARE_TESTS/MARKET_DATA/RECONCILIATION/SECURITY/OBSERVABILITY/RECOVERY/OPERATIONS/OMS_HEALTH remain UNAVAILABLE inside the engine by design"
+  ]
+}

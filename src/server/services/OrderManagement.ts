@@ -54,6 +54,7 @@ import { resolveOmsExecutionEnvironment, stampExecutionEnvironment } from '../re
 import { authorizeProductionOrder } from '../core/liveOrderAuthorization';
 import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
 import { insertIncrementalFill } from './fillLedger';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 function getActiveReplaySessionSafe(): { replayId: string } | null {
   try {
@@ -374,6 +375,19 @@ export class OrderManagementService {
       if (!brokerOrderId) {
         status = 'PENDING';
         reasoning = `${reasoning} submitOutcome=UNKNOWN placeOrderThrew`;
+        observeSafe(() => {
+          structuredLogger.error('oms_submit_unknown', {
+            category: 'BROKER',
+            component: 'OMS',
+            eventType: 'ORDER_SUBMIT_UNKNOWN',
+            traceId,
+            decisionId: traceId,
+            orderId,
+            symbol,
+            status: 'PENDING',
+            submitOutcome: 'UNKNOWN',
+          });
+        });
         try {
           await this.pauseTradingForOrphan(
             `OMS placeOrder threw before brokerOrderId for ${orderId}. Row stays PENDING (not REJECTED). Reconcile before any retry.`,

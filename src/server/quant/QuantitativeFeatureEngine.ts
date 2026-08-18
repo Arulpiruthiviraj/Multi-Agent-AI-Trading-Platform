@@ -224,7 +224,7 @@ export function snapshotFromStrategyContext(input: {
       canadianCommoditiesFx: notSupported(
         'CAD/USD, crude, gold, natural gas, TSX breadth as live context',
         'MarketRegistry can classify Canadian symbols; no FX/commodity feed is wired into MarketContext.',
-        'See ARGUS_CANADIAN_MARKET_READINESS.md. Do not enable Canadian live routing (IIROC).',
+        'See CLAUDE.md (Canadian automated routing BLOCKED). Do not enable Canadian live routing (IIROC).',
       ),
     },
   };

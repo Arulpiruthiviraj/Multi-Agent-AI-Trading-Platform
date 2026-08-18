@@ -23,6 +23,7 @@
 
 import { tradingSafety } from '../config/tradingSafety';
 import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 export const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = tradingSafety.maxSingleSymbolConcentrationPct;
 export const MAX_SECTOR_CONCENTRATION_PCT = tradingSafety.maxSectorConcentrationPct;
@@ -276,6 +277,17 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
 
   const sufficientSizePassed = maxQuantity > 0;
   record('sufficient_size', sufficientSizePassed, { maxQuantity, buyingPower: ctx.buyingPower });
+
+  observeSafe(() => {
+    structuredLogger.debug('position_sizing', {
+      category: 'SIZING',
+      component: 'PositionSizing',
+      symbol: ctx.symbol,
+      maxQuantity: Math.max(0, maxQuantity),
+      gateCount: gates.length,
+      failedGates: gates.filter(g => !g.passed).map(g => g.gate),
+    });
+  });
 
   return { maxQuantity: Math.max(0, maxQuantity), gates };
 }

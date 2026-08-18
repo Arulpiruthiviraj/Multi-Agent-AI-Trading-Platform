@@ -28,6 +28,20 @@ export interface TrialRecord {
   outOfSampleMetrics: Record<string, unknown> | null;
   rejectionReason: string | null;
   selectionStatus: TrialSelectionStatus;
+  // Additive provenance fields (2026-08-18 remediation pass) - all optional/nullable so the
+  // existing 2-argument recordExperimentTrial() call site and every existing TrialRecord in a
+  // persisted ledger.json remain valid without a migration. Populate what a given caller
+  // actually knows; never fabricate a value here to fill a field.
+  symbol: string | null;
+  datasetPeriod: { start: string; end: string } | null;
+  executionModel: string | null;
+  transactionCostAssumptions: Record<string, unknown> | null;
+  slippageAssumptions: Record<string, unknown> | null;
+  wfoConfig: Record<string, unknown> | null;
+  oosConfig: Record<string, unknown> | null;
+  robustnessConfig: Record<string, unknown> | null;
+  /** Links a re-run/refinement trial back to the trial it was derived from - null for a root trial. */
+  parentTrialId: string | null;
 }
 
 export interface ExperimentLedger {
@@ -45,6 +59,15 @@ export interface RecordTrialDetail {
   /** Defaults to 'ACCEPTED' - matches the pre-existing call site's real semantics (it records a
    *  completed backtest run, not a rejection), so omitting this argument is not a behavior change. */
   selectionStatus?: TrialSelectionStatus;
+  symbol?: string;
+  datasetPeriod?: { start: string; end: string };
+  executionModel?: string;
+  transactionCostAssumptions?: Record<string, unknown>;
+  slippageAssumptions?: Record<string, unknown>;
+  wfoConfig?: Record<string, unknown>;
+  oosConfig?: Record<string, unknown>;
+  robustnessConfig?: Record<string, unknown>;
+  parentTrialId?: string;
 }
 
 const ledger: ExperimentLedger = { trials: 0, byStrategy: {}, lastDatasetHash: null, trialRecords: [] };
@@ -70,9 +93,26 @@ export function recordExperimentTrial(strategyId: string, datasetHash: string, d
     outOfSampleMetrics: detail?.outOfSampleMetrics ?? null,
     rejectionReason: detail?.rejectionReason ?? null,
     selectionStatus: detail?.selectionStatus ?? 'ACCEPTED',
+    symbol: detail?.symbol ?? null,
+    datasetPeriod: detail?.datasetPeriod ?? null,
+    executionModel: detail?.executionModel ?? null,
+    transactionCostAssumptions: detail?.transactionCostAssumptions ?? null,
+    slippageAssumptions: detail?.slippageAssumptions ?? null,
+    wfoConfig: detail?.wfoConfig ?? null,
+    oosConfig: detail?.oosConfig ?? null,
+    robustnessConfig: detail?.robustnessConfig ?? null,
+    parentTrialId: detail?.parentTrialId ?? null,
   });
   persist();
   return { ...ledger, byStrategy: { ...ledger.byStrategy }, trialRecords: [...ledger.trialRecords] };
+}
+
+/** Vitest isolation: fileParallelism is false so this singleton survives across files. */
+export function resetExperimentLedgerForTests(): void {
+  ledger.trials = 0;
+  ledger.byStrategy = {};
+  ledger.lastDatasetHash = null;
+  ledger.trialRecords = [];
 }
 
 export function experimentLedgerSnapshot(): ExperimentLedger & ReturnType<typeof multipleTestingWarning> {

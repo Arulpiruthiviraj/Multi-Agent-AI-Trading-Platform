@@ -74,9 +74,20 @@ class TracingService {
   private queue: PendingWrite[] = [];
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private flushing = false;
+  // Real gap found by the 2026-08-18 observability program (Phase 15 - "bounded queues"): a
+  // sustained SQLite outage re-queues every failed flush batch (see flush()'s catch below) with
+  // no ceiling, so this fire-and-forget forensic sink could grow unboundedly and exhaust memory
+  // during exactly the kind of outage it should be recording, not the live decision spine (this
+  // service is never awaited by RiskEngine/OMS - only its own DB writes are at risk here).
+  private droppedSinceLastWarn = 0;
 
   constructor() {
     this.registerEventListeners();
+  }
+
+  /** Test-only. */
+  queueLengthForTests(): number {
+    return this.queue.length;
   }
 
   logAgentThought(input: AgentThoughtInput): void {
@@ -165,6 +176,15 @@ class TracingService {
   }
 
   private enqueue(item: PendingWrite): void {
+    if (this.queue.length >= tracingConfig.maxQueueSize) {
+      // Drop the oldest pending item, not the new one - forensic recency matters more than
+      // completeness during a real outage, and this never blocks or throws for the caller.
+      this.queue.shift();
+      this.droppedSinceLastWarn++;
+      if (this.droppedSinceLastWarn === 1 || this.droppedSinceLastWarn % 500 === 0) {
+        console.error(`[TracingService] Queue at maxQueueSize (${tracingConfig.maxQueueSize}) - dropping oldest pending trace rows (${this.droppedSinceLastWarn} dropped so far). This does not affect trading; only forensic trace completeness during this outage.`);
+      }
+    }
     this.queue.push(item);
     if (this.queue.length >= tracingConfig.maxBatchSize) {
       void this.flush();
@@ -211,8 +231,19 @@ class TracingService {
     } catch (e) {
       console.error('[TracingService] Batch flush failed', e);
       this.queue.unshift(...batch);
+      // unshift() bypasses enqueue()'s cap check - re-enforce it here so a sustained outage can
+      // never grow the queue past maxQueueSize regardless of which path added items.
+      const overflow = this.queue.length - tracingConfig.maxQueueSize;
+      if (overflow > 0) {
+        this.queue.splice(tracingConfig.maxQueueSize, overflow);
+        this.droppedSinceLastWarn += overflow;
+      }
     } finally {
       this.flushing = false;
+      if (this.queue.length === 0 && this.droppedSinceLastWarn > 0) {
+        console.log(`[TracingService] Flush recovered - ${this.droppedSinceLastWarn} trace row(s) were dropped during the outage (forensic gap only, no trading impact).`);
+        this.droppedSinceLastWarn = 0;
+      }
       if (this.queue.length > 0 && !this.flushTimer) {
         this.flushTimer = setTimeout(() => void this.flush(), tracingConfig.batchFlushMs);
       }

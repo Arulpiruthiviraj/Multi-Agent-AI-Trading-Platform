@@ -22,6 +22,7 @@ import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { ReconnectBackoff } from '../core/reconnectBackoff';
 import { alpacaWebSocketTlsOptions } from '../core/alpacaTls';
+import { tradingSafety } from '../config/tradingSafety';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
@@ -46,6 +47,7 @@ export class MarketDataWorker {
   private latestPrices: Map<string, number> = new Map();
   private latestPriceTimestamps: Map<string, number> = new Map();
   private lastTick: Map<string, { timestampMs: number; price: number }> = new Map();
+  private lastRejectLogMs: Map<string, number> = new Map();
   private disconnectedAt: number | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectBackoff = new ReconnectBackoff();
@@ -126,6 +128,36 @@ export class MarketDataWorker {
   private isDuplicateTick(symbol: string, timestampMs: number, price: number): boolean {
     const last = this.lastTick.get(quoteKey(symbol));
     return !!last && last.timestampMs === timestampMs && last.price === price;
+  }
+
+  /** Reject future / stale-reorder ticks. Does not bypass RiskEngine data_freshness. */
+  private acceptTickTimestamp(symbol: string, timestampMs: number, price: number): boolean {
+    const now = Date.now();
+    if (!Number.isFinite(timestampMs)) {
+      this.rejectTick(symbol, 'INVALID_TIMESTAMP', { timestampMs, price });
+      return false;
+    }
+    if (timestampMs > now + tradingSafety.tickFutureSkewMs) {
+      this.rejectTick(symbol, 'FUTURE_TIMESTAMP', { timestampMs, now, skewMs: timestampMs - now, price });
+      return false;
+    }
+    const last = this.lastTick.get(quoteKey(symbol));
+    if (last && timestampMs < last.timestampMs - tradingSafety.tickOutOfOrderEpsilonMs) {
+      this.rejectTick(symbol, 'OUT_OF_ORDER', {
+        timestampMs, lastAcceptedMs: last.timestampMs, lagMs: last.timestampMs - timestampMs, price,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  private rejectTick(symbol: string, reason: string, detail: Record<string, unknown>): void {
+    const key = `${symbol}|${reason}`;
+    const now = Date.now();
+    const lastLog = this.lastRejectLogMs.get(key) ?? 0;
+    if (now - lastLog < tradingSafety.marketDataRejectLogDedupMs) return;
+    this.lastRejectLogMs.set(key, now);
+    eventBus.emit(EVENTS.MARKET_DATA_REJECTED, { symbol, reason, ...detail });
   }
 
   start() {
@@ -276,6 +308,7 @@ export class MarketDataWorker {
           if (!sym) continue;
           const timestampMs = new Date(msg.t).getTime();
           if (this.isDuplicateTick(sym, timestampMs, msg.bp)) continue;
+          if (!this.acceptTickTimestamp(sym, timestampMs, msg.bp)) continue;
           this.lastTick.set(sym, { timestampMs, price: msg.bp });
           this.latestPrices.set(sym, msg.bp);
           this.latestPriceTimestamps.set(sym, Date.now());
@@ -285,6 +318,7 @@ export class MarketDataWorker {
           if (!sym) continue;
           const timestampMs = new Date(msg.t).getTime();
           if (this.isDuplicateTick(sym, timestampMs, msg.p)) continue;
+          if (!this.acceptTickTimestamp(sym, timestampMs, msg.p)) continue;
           this.lastTick.set(sym, { timestampMs, price: msg.p });
           this.latestPrices.set(sym, msg.p);
           this.latestPriceTimestamps.set(sym, Date.now());
@@ -315,3 +349,6 @@ export class MarketDataWorker {
 
 }
 export const marketDataWorker = new MarketDataWorker();
+
+import { setTradeIdeaLivePriceLookup } from '../core/tradeIdeaContract';
+setTradeIdeaLivePriceLookup((symbol) => marketDataWorker.getLatestPrice(symbol));

@@ -141,7 +141,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
             <div className="bg-[#111822] p-5 rounded-lg border border-slate-800 hover:border-rose-500/30 transition-colors group">
               <h3 className="text-rose-400 font-bold mb-2 flex items-center gap-2"><Network size={16} className="group-hover:animate-pulse"/> 4. Local AI Stack (optional)</h3>
               <p className="text-slate-400 text-xs leading-relaxed">
-                Ollama-hosted chat models and a local Chronos time-series forecaster can run entirely on your machine at $0 marginal cost, as an alternative to a paid cloud LLM for some tasks. See <code className="text-[10px]">docs/LOCAL_AI_SETUP.md</code> and <code className="text-[10px]">npm run setup:ai</code>.
+                Ollama-hosted chat models and a local Chronos time-series forecaster can run entirely on your machine at $0 marginal cost, as an alternative to a paid cloud LLM for some tasks. See <code className="text-[10px]">README.md</code> (Local AI) / <code className="text-[10px]">CLAUDE.md</code> and <code className="text-[10px]">npm run setup:ai</code>.
               </p>
             </div>
           </div>
@@ -739,7 +739,7 @@ const DocumentationTab: React.FC<DocumentationTabProps> = ({ setActiveTab }) => 
         <div className="space-y-6 animate-fade-in">
           <h2 className="text-2xl font-bold text-white tracking-tight">Configuring Argus, and the Real Live-Trading Gate</h2>
           <p className="text-slate-300 text-sm leading-relaxed">
-            Broker connections have paper vs live state. Enabling LIVE requires an explicit confirmation phrase — there is no env var that silently turns real-money trading on. <strong className="text-rose-300">This environment remains LIVE NO-GO</strong> per <code className="text-[10px]">docs/archive/historical/ARGUS_REAL_MONEY_READINESS.md</code>. Adding files does not raise that score.
+            Broker connections have paper vs live state. Enabling LIVE requires an explicit confirmation phrase — there is no env var that silently turns real-money trading on. <strong className="text-rose-300">This environment remains LIVE NO-GO</strong> per <code className="text-[10px]">CLAUDE.md</code>. Adding files does not raise that score.
           </p>
 
           <div className="space-y-5">

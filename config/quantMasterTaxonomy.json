@@ -129,10 +129,11 @@
         {
           "id": "ZSCORE_PRICE_REVERSION",
           "name": "Standardized Z-Score Price Reversion",
-          "status": "NOT_SUPPORTED",
-          "reason": "No rolling Z=(P-μ)/σ entry at -2.5 / exit at 0. MEAN_REVERSION is Keltner/RSI, not a z-score book.",
-          "edgeHypothesis": "Stationary normalized price can revert to zero z.",
-          "invalidation": "Non-stationary fat-tail regime shifts."
+          "status": "EXPERIMENTAL",
+          "moduleId": "STATISTICAL_MEAN_REVERSION",
+          "implementationNote": "UNVALIDATED. Rolling close z-score from statistics.ts plus RSI in SIDEWAYS_RANGE. |z| and lookback from quantExperimentalStrategies.json. Not pairs/cointegration. Live evaluateAll only if QUANT_STATISTICAL_REVERSION_ENABLED=true.",
+          "edgeHypothesis": "Stationary normalized close can revert toward zero z.",
+          "invalidation": "Non-stationary fat-tail regime shifts; z-score keeps extending."
         },
         {
           "id": "OVERNIGHT_GAP_FILL",

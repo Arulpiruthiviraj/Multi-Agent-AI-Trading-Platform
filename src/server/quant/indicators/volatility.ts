@@ -11,7 +11,8 @@
  */
 import { TechnicalIndicators } from '../../engines/TechnicalIndicators';
 import { Bar } from '../../engines/backtest/HistoricalDataGateway';
-import { rollingVolatility, percentileRank } from '../statistics';
+import { rollingVolatility, percentileRank, zScore } from '../statistics';
+import { quantExperimentalStrategies } from '../../config/quantExperimentalStrategies';
 
 /** ATR expressed as a % of current price - the size-independent form most comparisons actually
  *  want (a $2 ATR means something different on a $10 stock vs. a $500 stock). */
@@ -112,6 +113,8 @@ export interface VolatilityFeatures {
   bollingerBandWidthPct: number | null;
   keltner: KeltnerChannels | null;
   regime: VolatilityRegime | null;
+  /** Rolling (close − SMA) / stdev. Null when the window is too short or stdev is degenerate. */
+  closePriceZScore: number | null;
 }
 
 export function computeVolatilityFeatures(bars: Bar[]): VolatilityFeatures {
@@ -127,5 +130,6 @@ export function computeVolatilityFeatures(bars: Bar[]): VolatilityFeatures {
     bollingerBandWidthPct: bollingerBandWidth(closes),
     keltner: keltnerChannels(highs, lows, closes),
     regime: classifyVolatilityRegime(bars),
+    closePriceZScore: zScore(closes, quantExperimentalStrategies.thresholds.closePriceZScoreLookback),
   };
 }

@@ -109,21 +109,59 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     (broker as any).portfolio = originalPortfolio;
   });
 
-  it('a significant dollar mismatch sets tradingState TRADING_PAUSED (RiskEngine emergency_stop), not only emergencyStopActive', async () => {
+  it('a significant dollar QUANTITY_DRIFT on an already-tracked position sets tradingState TRADING_PAUSED (RiskEngine emergency_stop), not only emergencyStopActive', async () => {
     const { tradingEngine } = await import('../engines/TradingEngine');
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test reset', actor: 'tester' });
+
+    // Seed a local row first so the broker later reporting a different quantity is QUANTITY_DRIFT.
+    await db.insert(schema.portfolio).values({
+      symbol: 'DRIFTTEST', quantity: 20, averagePrice: 10, currentPrice: 10, lastUpdated: new Date().toISOString(), brokerSource: 'test',
+    });
 
     const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
     const originalPortfolio = broker.portfolio.bind(broker);
     (broker as any).portfolio = async () => {
       const real = await originalPortfolio();
-      return { ...real, positions: [...real.positions, { symbol: 'PAUSETEST', quantity: 20, entryPrice: 10, currentPrice: 10 }] };
+      return { ...real, positions: [...real.positions, { symbol: 'DRIFTTEST', quantity: 5, entryPrice: 10, currentPrice: 10 }] };
     };
 
     await portfolioReconciliationWorker.reconcile();
 
     expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
     (broker as any).portfolio = originalPortfolio;
+    await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'DRIFTTEST'));
+    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'tester' });
+  });
+
+  it('genuine MISSING_LOCALLY (fresh local still empty) records mismatch and pauses after warmup', async () => {
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    const { runtimeIntervals } = await import('../config/runtimeIntervals');
+    const { resetBootTimestampForTests } = await import('../core/startup');
+    resetBootTimestampForTests(Date.now() - runtimeIntervals.reconciliationBootWarmupMs - 1);
+    await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test reset', actor: 'tester' });
+
+    const broker = (await import('../../brokers/BrokerManager')).BrokerManager.getInstance().getActiveBroker();
+    const originalPortfolio = broker.portfolio.bind(broker);
+    (broker as any).portfolio = async () => {
+      const real = await originalPortfolio();
+      return { ...real, positions: [...real.positions, { symbol: 'BASELINETEST', quantity: 20, entryPrice: 10, currentPrice: 10 }] };
+    };
+
+    await portfolioReconciliationWorker.reconcile();
+
+    expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
+
+    const events = await db.select().from(schema.reconciliationEvents);
+    const last = events[events.length - 1];
+    expect(last.actionTaken).toBe('TRADING_PAUSED');
+    const mismatches = JSON.parse(last.mismatches);
+    expect(mismatches.some((m: any) => m.symbol === 'BASELINETEST' && m.type === 'MISSING_LOCALLY')).toBe(true);
+
+    const local = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, 'BASELINETEST'));
+    expect(local[0]?.quantity).toBe(20);
+
+    (broker as any).portfolio = originalPortfolio;
+    await db.delete(schema.portfolio).where(eq(schema.portfolio.symbol, 'BASELINETEST'));
     await tradingEngine.setTradingState('TRADING_ENABLED', { reason: 'test cleanup', actor: 'tester' });
   });
 

@@ -56,6 +56,7 @@ import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } f
 import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
 import { experimentalStrategyRow } from '../config/quantExperimentalStrategies';
 import { quantStrategyTaxonomySummary } from '../config/quantStrategyTaxonomy';
+import { quantForumStrategies } from '../config/quantForumStrategies';
 import { deskIntelligence } from '../config/deskIntelligence';
 import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
 import { noTradeReasonsConfig } from '../config/noTradeReasons';
@@ -64,10 +65,12 @@ import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
 import { mountResearchRoutes } from './researchRoutes';
 import { mountRemoteOpsRoutes } from './remoteOpsRoutes';
 import { traceRouter } from './traceRoutes';
+import { observabilityRouter } from './observabilityRoutes';
 
 export const v2Router = Router();
 
 v2Router.use('/traces', traceRouter);
+v2Router.use('/observability', observabilityRouter);
 mountResearchRoutes(v2Router);
 mountRemoteOpsRoutes(v2Router);
 
@@ -1334,6 +1337,10 @@ v2Router.get('/quant/strategies', (req, res) => {
       note: experimentalStrategyRow(s.id)?.apiNote ?? 'Experimental. Not in live Quant evaluateAll unless its config env var is true.',
     })),
     taxonomy: quantStrategyTaxonomySummary(),
+    forumStrategies: {
+      riskNote: quantForumStrategies.riskNote,
+      strategies: quantForumStrategies.strategies,
+    },
   });
 });
 

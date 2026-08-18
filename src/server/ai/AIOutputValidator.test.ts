@@ -98,6 +98,8 @@ describe('looksLikeListedTicker (Phase 16G)', () => {
     expect(looksLikeListedTicker('(Coca-Cola)')).toBeNull();
     expect(looksLikeListedTicker('Apple Inc')).toBeNull();
     expect(looksLikeListedTicker('UNKNOWN')).toBeNull();
+    expect(looksLikeListedTicker('Toast Stock (not specified...)')).toBeNull();
+    expect(looksLikeListedTicker('Toast Stock (not specified)')).toBeNull();
     expect(looksLikeListedTicker('')).toBeNull();
     expect(looksLikeListedTicker(null)).toBeNull();
   });

@@ -38,7 +38,7 @@
     },
     {
       "type": "structure_trend_against_side",
-      "strategies": ["MEAN_REVERSION", "PULLBACK_CONTINUATION", "VWAP_MEAN_REVERSION", "VWAP_VOLUME_STRUCTURE", "FIBONACCI_PULLBACK", "CANDLESTICK_REVERSAL", "SR_BOUNCE", "OSCILLATOR_MOMENTUM"],
+      "strategies": ["MEAN_REVERSION", "PULLBACK_CONTINUATION", "VWAP_MEAN_REVERSION", "VWAP_VOLUME_STRUCTURE", "FIBONACCI_PULLBACK", "CANDLESTICK_REVERSAL", "SR_BOUNCE", "OSCILLATOR_MOMENTUM", "STATISTICAL_MEAN_REVERSION"],
       "message": "Market structure trend flipped to {structureTrend}."
     },
     {

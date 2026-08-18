@@ -9,10 +9,20 @@
  * window (`autoTradeScheduleStartTime` / `autoTradeScheduleEndTime`). It never touches RiskEngine,
  * never adds a gate, and never places or blocks an individual order - once Autobot is "on" (by
  * schedule or by hand), every proposal still has to clear the real 24-gate RiskEngine ladder
- * exactly as before. Notably, RiskEngine's own `market_hours` gate (the real Alpaca /v2/clock)
- * still independently blocks new entries whenever the real US session is closed, regardless of
- * what this schedule says - a wide/24h schedule window does not and cannot widen real market
- * hours; it only controls whether Autobot is listening at all.
+ * exactly as before.
+ *
+ * Notably, RiskEngine's own `market_hours` gate (Alpaca /v2/clock; catalog order in
+ * `config/riskGateOrder.json`) still independently blocks new entries whenever the real US
+ * session is closed, regardless of what this schedule says. A window that starts before the
+ * opening bell (engine already RUNNING) does not widen market hours: pre-open proposals still
+ * fail `market_hours`, and at 09:30 America/New_York that gate evaluates from the clock, not
+ * from this timer. This scheduler never calls RiskEngine and never auto-resumes
+ * `TRADING_PAUSED` / `EMERGENCY_STOP`.
+ *
+ * Idempotent 09:30 activation: if Autobot is already `enabled` when the window says it should
+ * be on, the tick is a no-op. It does not call `toggle()`, restart workers, respawn intervals,
+ * or reset in-memory / SQLite positions and orders. `SystemBootstrap.start` and worker
+ * `start()` methods are themselves guarded (`isRunning` / `intervalId` / open WebSocket).
  *
  * Ownership semantics while a schedule is enabled: the schedule is authoritative for the enabled
  * flag. If someone manually starts/stops Autobot mid-window while a schedule is active, the next
@@ -25,11 +35,13 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { tradingEngine } from '../engines/TradingEngine';
 import { runtimeIntervals } from '../config/runtimeIntervals';
-import { getTimeHHMMInZone, TRADING_TIMEZONE } from '../core/TradingCalendar';
+import { getTimeHHMMInZone, getTradingDateStr, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { isValidHHMM, isValidTimezone, isWithinScheduledWindow } from '../core/AutoTradeSchedule';
 
 export class AutoTradeSchedulerWorker {
   private intervalId: NodeJS.Timeout | null = null;
+  /** Once per NY session date + tradingState, so a 60s poll does not flood logs. */
+  private lastIdempotentLogKey: string | null = null;
 
   start() {
     if (this.intervalId) return;
@@ -60,7 +72,13 @@ export class AutoTradeSchedulerWorker {
 
     const nowHHMM = getTimeHHMMInZone(new Date(), zone);
     const shouldBeEnabled = isWithinScheduledWindow(nowHHMM, start, end);
-    if (shouldBeEnabled === tradingEngine.state.enabled) return; // already in the right state
+    const alreadyEnabled = tradingEngine.state.enabled === true;
+    const tradingState = tradingEngine.state.tradingState;
+
+    if (shouldBeEnabled === alreadyEnabled) {
+      this.logIdempotentNoOp(shouldBeEnabled, tradingState, start, end, zone, nowHHMM);
+      return;
+    }
 
     const result = await tradingEngine.toggle({ enabled: shouldBeEnabled });
     if (!result.ok) {
@@ -68,6 +86,33 @@ export class AutoTradeSchedulerWorker {
       return;
     }
     console.log(`[AutoTradeScheduler] ${shouldBeEnabled ? 'Enabled' : 'Disabled'} Autobot per configured schedule (${start}-${end} ${zone}, now ${nowHHMM}).`);
+  }
+
+  /**
+   * Confirm the schedule already matches Autobot `enabled`. Must not call toggle(),
+   * setTradingState(), or SystemBootstrap — a pause/kill-switch is operator-owned.
+   */
+  private logIdempotentNoOp(
+    shouldBeEnabled: boolean,
+    tradingState: string,
+    start: string,
+    end: string,
+    zone: string,
+    nowHHMM: string,
+  ) {
+    if (!shouldBeEnabled) return;
+    const key = `${getTradingDateStr()}|on|${tradingState}`;
+    if (this.lastIdempotentLogKey === key) return;
+    this.lastIdempotentLogKey = key;
+    if (tradingState === 'TRADING_ENABLED') {
+      console.log(
+        `[AutoTradeScheduler] Scheduled activation: engine already RUNNING/ENABLED (tradingState=${tradingState}, ${start}-${end} ${zone}, now ${nowHHMM}). No toggle, restart, or worker respawn.`,
+      );
+      return;
+    }
+    console.log(
+      `[AutoTradeScheduler] Scheduled activation: Autobot already enabled (tradingState=${tradingState}). Not toggling, restarting, or auto-resuming pause/kill-switch (${start}-${end} ${zone}, now ${nowHHMM}).`,
+    );
   }
 }
 

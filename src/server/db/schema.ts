@@ -67,6 +67,11 @@ export const settings = sqliteTable('settings', {
   minAiConfidence: real('min_ai_confidence').default(75),
   autoBotEnabled: integer('auto_bot_enabled', { mode: 'boolean' }).default(false),
   adversarialDebateMode: integer('adversarial_debate_mode', { mode: 'boolean' }).default(true),
+  // Real bug fix (2026-08-18 UI audit, Phase 3): GuardrailsPanel's "Global Auto-Liquidation"
+  // toggle was plain useState(false) in App.tsx - a reload silently turned off this real safety
+  // net (it genuinely calls POST /api/v1/portfolio/liquidate on a critical drawdown) with zero
+  // warning that it had reset. Persisted here the same way every other operator-set guardrail is.
+  globalAutoLiquidationEnabled: integer('global_auto_liquidation_enabled', { mode: 'boolean' }).default(false),
   // Persists whether the Setup Wizard has ever been completed/skipped - the wizard previously
   // had no persistence at all (a plain useState(false) in App.tsx), so it force-reopened on
   // every single page load/reload regardless of prior completion.
@@ -1136,4 +1141,29 @@ export const transactionTraces = sqliteTable('transaction_traces', {
 }, (table) => ({
   symbolIdx: index('idx_transaction_traces_symbol').on(table.symbol, table.createdAt),
   statusIdx: index('idx_transaction_traces_status').on(table.lifecycleStatus, table.createdAt),
+}));
+
+/** Structured observability log rows. Isolated from the live trading spine (async batched writes). */
+export const observabilityEvents = sqliteTable('observability_events', {
+  id: text('id').primaryKey(),
+  ts: integer('ts').notNull(),
+  level: text('level').notNull(),
+  category: text('category').notNull(),
+  eventType: text('event_type'),
+  loggerName: text('logger_name').notNull(),
+  message: text('message').notNull(),
+  sessionId: text('session_id').notNull(),
+  correlationId: text('correlation_id'),
+  decisionId: text('decision_id'),
+  traceId: text('trace_id'),
+  orderId: text('order_id'),
+  symbol: text('symbol'),
+  component: text('component'),
+  payload: text('payload'),
+}, (table) => ({
+  decisionIdx: index('idx_observability_events_decision').on(table.decisionId, table.ts),
+  orderIdx: index('idx_observability_events_order').on(table.orderId, table.ts),
+  tsIdx: index('idx_observability_events_ts').on(table.ts),
+  categoryIdx: index('idx_observability_events_category').on(table.category, table.ts),
+  eventTypeIdx: index('idx_observability_events_type').on(table.eventType, table.ts),
 }));

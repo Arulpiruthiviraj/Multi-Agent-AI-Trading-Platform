@@ -1,6 +1,8 @@
 import { db } from '../db';
 import { fills } from '../db/schema';
 import { eq } from 'drizzle-orm';
+  import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { incMetric } from '../observability/ObservabilityMetrics';
 
 function isUniqueConstraint(err: unknown): boolean {
   const e = err as { code?: string; message?: string };
@@ -52,9 +54,30 @@ export async function insertIncrementalFill(opts: {
       filledAt,
       cumulativeQuantity: reportedQty,
     });
+    incMetric('fills_recorded');
+    observeSafe(() => {
+      structuredLogger.info('fill_recorded', {
+        category: 'FILL',
+        component: 'fillLedger',
+        eventType: 'FILL_RECORDED',
+        orderId: opts.orderId,
+        newQty,
+        cumulativeQuantity: reportedQty,
+      });
+    });
     return { newQty, cumulativeQuantity: reportedQty, duplicate: false };
   } catch (e) {
     if (isUniqueConstraint(e)) {
+      incMetric('fills_duplicate');
+      observeSafe(() => {
+        structuredLogger.info('fill_duplicate', {
+          category: 'FILL',
+          component: 'fillLedger',
+          eventType: 'FILL_DUPLICATE',
+          orderId: opts.orderId,
+          cumulativeQuantity: reportedQty,
+        });
+      });
       return { newQty: 0, cumulativeQuantity: reportedQty, duplicate: true };
     }
     console.error(`[fillLedger] Failed to insert fill for order ${opts.orderId}`, e);

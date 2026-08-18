@@ -8,7 +8,8 @@ export class NewsMemoryEngine {
       // Find recent clusters mentioning this symbol
       // In SQLite, we can just use LIKE or better, a JSON query if symbols was JSON.
       // We'll just fetch recent clusters. In a real app we'd have a junction table.
-      const clusters = await db.select().from(schema.newsClusters).where(sql`${schema.newsClusters.symbols} LIKE ${'%' + symbol + '%'}`).orderBy(sql`${schema.newsClusters.createdAt} DESC`).limit(limit);
+      const needle = String(symbol || '').replace(/[%_]/g, '');
+      const clusters = await db.select().from(schema.newsClusters).where(sql`${schema.newsClusters.symbols} LIKE ${'%' + needle + '%'}`).orderBy(sql`${schema.newsClusters.createdAt} DESC`).limit(limit);
       return clusters;
     } catch (e) {
       console.error('[NewsMemoryEngine] Error:', e);

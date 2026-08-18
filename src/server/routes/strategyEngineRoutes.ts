@@ -36,7 +36,7 @@ strategyEngineRouter.get('/status', async (req, res) => {
       maxActive: row?.strategyEngineMaxActive ?? 25,
       minConfidence: row?.strategyEngineMinConfidence ?? 0.6,
       stats: getEngineStats(),
-      note: 'This subsystem never places or influences a real order at any setting value - see STRATEGIES_ENGINE.md and ARGUS_STRATEGY_ENGINE_IMPLEMENTATION.md.',
+      note: 'This subsystem never places or influences a real order at any setting value - see CLAUDE.md (isolated strategiesEngine).',
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

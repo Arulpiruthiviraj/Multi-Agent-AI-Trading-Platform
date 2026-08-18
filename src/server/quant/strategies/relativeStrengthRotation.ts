@@ -57,6 +57,34 @@ export const relativeStrengthRotation: StrategyDefinition = {
       `ADX trend strength (>= ${t.adxTrendMin})`,
       trend.dmi.adx !== null && trend.dmi.adx >= t.adxTrendMin,
     );
+    const stockPct = marketContext.relativeStrengthVsSPY?.periodPct;
+    const spyPct = marketContext.relativeStrengthVsSPY?.benchmarkPeriodPct;
+    check(
+      bullish
+        ? 'Stock period % > 0 while SPY period % < 0 (RS while SPY is down)'
+        : 'Stock period % < 0 while SPY period % > 0 (RW while SPY is up)',
+      stockPct !== null && stockPct !== undefined && spyPct !== null && spyPct !== undefined
+        && (bullish ? stockPct > 0 && spyPct < 0 : stockPct < 0 && spyPct > 0),
+    );
+    const sma50 = trend.movingAverages.sma50;
+    const sma200 = trend.movingAverages.sma200;
+    check(
+      bullish
+        ? 'Bullish daily stack (price > SMA50 > SMA200)'
+        : 'Bearish daily stack (price < SMA50 < SMA200)',
+      sma50 !== null && sma200 !== null
+        && (bullish
+          ? currentPrice > sma50 && sma50 > sma200
+          : currentPrice < sma50 && sma50 < sma200),
+    );
+    const emaFast = trend.movingAverages.ema9;
+    const emaSlow = trend.movingAverages.ema20;
+    check(
+      bullish
+        ? 'EMA9 > EMA20 (existing EMAs; Argus does not compute EMA8/EMA21)'
+        : 'EMA9 < EMA20 (existing EMAs; Argus does not compute EMA8/EMA21)',
+      emaFast !== null && emaSlow !== null && (bullish ? emaFast > emaSlow : emaFast < emaSlow),
+    );
 
     if (marketContext.breadth?.available === false) {
       contradictions.push(marketContext.breadth.reason || 'Market breadth is NOT_SUPPORTED — this module does not invent A/D or TRIN.');

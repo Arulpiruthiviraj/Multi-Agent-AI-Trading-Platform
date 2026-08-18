@@ -813,7 +813,7 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
     }
   }
 
-  // Non-blocking check for the local hybrid AI stack (see docs/LOCAL_AI_SETUP.md, `npm run
+  // Non-blocking check for the local hybrid AI stack (see README.md Local AI / CLAUDE.md, `npm run
   // setup:ai`). Never fails startup - the app is fully functional on cloud providers alone.
   (async () => {
     const OLLAMA_HOST = process.env.OLLAMA_HOST || "http://localhost:11434";

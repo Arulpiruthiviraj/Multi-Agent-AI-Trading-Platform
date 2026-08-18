@@ -27,8 +27,15 @@ const SECRET_ENV_VARS = [
   'ALPHAVANTAGE_API_KEY', 'POLYGON_API_KEY', 'FMP_API_KEY', 'FINNHUB_API_KEY',
   'ENCRYPTION_SECRET', 'AUTH_SESSION_SECRET', 'APP_PASSWORD', 'AUTH_PASSWORD',
   'DEEPSEEK_API_KEY', 'NVIDIA_API_KEY', 'OPENALICE_MCP_URL',
-  'IBKR_GATEWAY_URL', 'QUESTRADE_REFRESH_TOKEN', 'COINBASE_API_KEY', 'COINBASE_API_SECRET',
+  'IBKR_GATEWAY_URL', 'QUESTRADE_REFRESH_TOKEN', 'QUESTRADE_ACCESS_TOKEN',
+  'COINBASE_API_KEY', 'COINBASE_API_SECRET', 'COINBASE_PRIVATE_KEY',
+  'LIVE_ARM_TOKEN', 'WEBHOOK_SECRET',
 ];
+
+const SENSITIVE_KEY = /^(authorization|api[_-]?key|apikey|secret|password|token|access_token|refresh_token|jwt|private[_-]?key|client_secret|session)$/i;
+const BEARER_RE = /Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi;
+const JWT_RE = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
+const QUERY_SECRET_RE = /([?&](?:api[_-]?key|apikey|token|secret|password|access_token|refresh_token|auth)=)([^&\s]+)/gi;
 
 // A short/common env value (e.g. a dev placeholder like "test" or "1") would cause this to
 // over-redact unrelated log text - only real, credential-shaped values are worth protecting.
@@ -48,7 +55,32 @@ export function redactSecrets(input: string): string {
   for (const secret of currentSecretValues()) {
     if (out.includes(secret)) out = out.split(secret).join('[REDACTED]');
   }
+  out = out.replace(BEARER_RE, 'Bearer [REDACTED]');
+  out = out.replace(JWT_RE, '[REDACTED_JWT]');
+  out = out.replace(QUERY_SECRET_RE, '$1[REDACTED]');
   return out;
+}
+
+/** Recursively redact strings and sensitive-key fields in JSON-like values. Never throws. */
+export function redactSecretsDeep(value: unknown, depth = 0): unknown {
+  try {
+    if (value == null) return value;
+    if (typeof value === 'string') return redactSecrets(value);
+    if (typeof value !== 'object' || depth > 8) return value;
+    if (Array.isArray(value)) return value.map((v) => redactSecretsDeep(v, depth + 1));
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(obj)) {
+      if (SENSITIVE_KEY.test(k)) {
+        out[k] = '[REDACTED]';
+      } else {
+        out[k] = redactSecretsDeep(v, depth + 1);
+      }
+    }
+    return out;
+  } catch {
+    return '[REDACTION_FAILED]';
+  }
 }
 
 // Drop-in replacement for `console.error(prefix, error)` at any site that might be logging a raw

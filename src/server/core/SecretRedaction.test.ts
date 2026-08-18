@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { redactSecrets, logErrorSafely } from './SecretRedaction';
+import { redactSecrets, logErrorSafely, redactSecretsDeep } from './SecretRedaction';
 
 describe('redactSecrets', () => {
   const ORIGINAL_ENV = { ...process.env };
@@ -72,5 +72,37 @@ describe('logErrorSafely', () => {
     logErrorSafely('[TestProvider] Error', 'a plain string error containing AV-real-secret-key-12345');
     const loggedText = consoleErrorSpy.mock.calls[0][1] as string;
     expect(loggedText).not.toContain('AV-real-secret-key-12345');
+  });
+});
+
+describe('redactSecrets - JWT / Bearer / query / objects', () => {
+  it('redacts Bearer tokens', () => {
+    const text = 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaaaaaabbbbbbbb.ccccccccdddddddd';
+    const out = redactSecrets(text);
+    expect(out).toContain('Bearer [REDACTED]');
+    expect(out).not.toMatch(/Bearer eyJ/);
+  });
+
+  it('redacts compact JWTs', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payloadpartxx.signaturepartxxxx';
+    expect(redactSecrets(`token=${jwt}`)).toContain('[REDACTED_JWT]');
+    expect(redactSecrets(`token=${jwt}`)).not.toContain('payloadpartxx');
+  });
+
+  it('redacts apikey query parameters', () => {
+    expect(redactSecrets('https://x.test/q?apikey=supersecretvalue')).toContain('apikey=[REDACTED]');
+    expect(redactSecrets('https://x.test/q?apikey=supersecretvalue')).not.toContain('supersecretvalue');
+  });
+
+  it('redacts sensitive object keys recursively', () => {
+    const out = redactSecretsDeep({
+      symbol: 'AAPL',
+      apiKey: 'should-not-leak',
+      nested: { authorization: 'Bearer abc', price: 10 },
+    }) as any;
+    expect(out.symbol).toBe('AAPL');
+    expect(out.apiKey).toBe('[REDACTED]');
+    expect(out.nested.authorization).toBe('[REDACTED]');
+    expect(out.nested.price).toBe(10);
   });
 });

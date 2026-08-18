@@ -1,12 +1,10 @@
 # Argus
 
-Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite).
+Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite). Package name `my-money-miner`.
 
-**LIVE real-money: NO-GO.** Paper: conditional. Empirical edge is not established by documentation.
+**LIVE real-money: NO-GO.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is not established by documentation.
 
-**Docs:** [docs/ARGUS.md](docs/ARGUS.md) · [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) · [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md) · [docs/CONFIG.md](docs/CONFIG.md) · [docs/ARGUS_REFERENCE.md](docs/ARGUS_REFERENCE.md) · [docs/LOCAL_AI_SETUP.md](docs/LOCAL_AI_SETUP.md)
-
-**Agents:** root `CLAUDE.md` is the live-path contract.
+**Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects).
 
 ---
 
@@ -14,66 +12,177 @@ Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite).
 
 **Argus is the sole execution authority and system of record.**
 
-External engines (`vibe-trading`, `autohedge`, `OpenAlice`, `FinceptTerminal`) are **untrusted, read-only research / signal / verification providers**. They must never:
-
-- receive Argus broker credentials or Alpaca/IBKR secrets for order placement
-- hold or use wallet private keys for on-chain execution (AutoHedge `WALLET_PRIVATE_KEY` is forcibly emptied by the orchestrator)
-- bypass RiskEngine, OMS, or BrokerManager
-- write to the live `trades` / `fills` path except through Argus’s own EventBus → ChiefTrader → RiskEngine → OMS pipeline
-
-Inspiration repos (e.g. TradingAgents) are **not vendored**. Sibling checkouts stay outside this git tree.
-
----
-
-## Architecture (execution + external research)
-
 ```text
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ EXTERNAL RESEARCH LAYER (untrusted · read-only · never places Argus orders) │
+│ EXTERNAL RESEARCH (untrusted · read-only · never places Argus orders)     │
 │  Vibe-Trading MCP (:8900) · AutoHedge worker · OpenAlice Guardian (:47332) │
 │  FinceptTerminal (optional) · Chronos/Kronos (:8008) · Ollama (:11434)     │
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 │ signals / notes / verification only
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│ ARGUS — SOLE EXECUTION AUTHORITY (system of record)                        │
-│                                                                            │
+│ ARGUS — SOLE EXECUTION AUTHORITY                                           │
 │  MarketData / Idea Agents ──► TRADE_IDEA_GENERATED                         │
-│         │                                                                  │
-│         ▼                                                                  │
-│  ChiefTrader (consensus) ──► CHIEF_APPROVED_IDEA                           │
-│         │                                                                  │
-│         ▼                                                                  │
-│  RiskEngine (all gates recorded) ──► RISK_ASSESSMENT_COMPLETED             │
-│         │                                                                  │
-│         ▼                                                                  │
-│  OMS ──► BrokerManager.getActiveBroker().placeOrder() ──► trades / fills   │
+│  ChiefTrader (consensus)  ──► CHIEF_APPROVED_IDEA                          │
+│  RiskEngine (24 gates)    ──► RISK_ASSESSMENT_COMPLETED                    │
+│  OMS ──► BrokerManager.placeOrder() ──► trades / fills                     │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
+
+External engines (`vibe-trading`, `autohedge`, `OpenAlice`, `FinceptTerminal`) spawned by `npm run dev` must never:
+
+- receive Argus broker credentials or Alpaca/IBKR secrets for order placement
+- hold wallet private keys for on-chain execution (orchestrator forces `WALLET_PRIVATE_KEY=""` and `SOLANA_PRIVATE_KEY=""`)
+- bypass RiskEngine, OMS, or BrokerManager
+
+Inspiration repos (e.g. TradingAgents) are **not vendored**. Sibling checkouts stay **outside** this git tree.
 
 Legacy `GET /api/v1/signals` is **HTTP 410 quarantined** — not an alternate order path.
 
 ---
 
-## Quickstart
+## Tech stack
+
+| Layer | Tech |
+|---|---|
+| Runtime | Node.js **24.18.0** (`package.json` `engines`) |
+| API / realtime | Express, raw `ws` |
+| SPA | React, Vite, Tailwind |
+| DB | better-sqlite3 + Drizzle, WAL, `data/argus.db` (gitignored) |
+| Brokers | InternalPaper (default), Alpaca, IBKR Gateway, Coinbase (live-arm), Questrade (read-only) |
+| Local AI | Ollama (`:11434`), Chronos-T5-mini (`:8008`) |
+
+Port **3000** is hardcoded. `PORT` is unused. Without `AUTH_PASSWORD`, the API binds **`127.0.0.1` only**.
+
+---
+
+## Prerequisites
+
+| Requirement | Notes |
+|---|---|
+| Node.js **24.18.0** | Matches `engines` |
+| npm | Ships with Node |
+| Python 3.10+ | Chronos (`npm run setup:ai` / `npm run ai:serve`) and sibling `.venv`s |
+| Optional: Ollama | Local LLMs — [ollama.com/download](https://ollama.com/download) |
+| Optional: pnpm | OpenAlice Guardian (`corepack prepare pnpm@11 --activate`) |
+| Optional: IBKR Client Portal Gateway | `IBKR_GATEWAY_PATH`; 2FA is still manual |
+
+Disk for local models: ~18 GB Ollama (llama3.2 / plutus / fingpt) + ~1 GB Hugging Face (FinBERT, Chronos-T5-mini). RAM: 8 GB min; 16 GB+ for 7–8B models. 14B models (`qwen2.5:14b`, `deepseek-r1:14b`) are serialized to **one** concurrent load (see `CLAUDE.md`).
+
+Recommended sibling layout (not git submodules):
+
+```text
+WorkProjects/
+├── Multi-Agent-AI-Trading-Platform/   ← this repo
+├── vibe-trading/
+├── autohedge/
+├── OpenAlice/
+└── FinceptTerminal/                   ← optional
+```
+
+---
+
+## Environment
 
 ```bash
-cp .env.example .env          # add AI/broker keys; set ecosystem paths/toggles
+cp .env.example .env
+```
+
+Canonical commentary lives in `.env.example`. Do not commit secrets.
+
+### Auth, bind, crypto
+
+| Variable | Role |
+|---|---|
+| `AUTH_USERNAME` / `AUTH_PASSWORD` | Auth on when password set; production refuses unauthenticated boot |
+| `AUTH_SESSION_SECRET` | Required with `AUTH_PASSWORD` in any real deployment |
+| `ENCRYPTION_SECRET` | AES key for stored API keys; else generated to `data/.encryption_key` |
+
+### Trading / brokers
+
+| Variable | Role |
+|---|---|
+| `PAPER_TRADING_ONLY` | Force paper; LIVE arm throws |
+| `ALPACA_API_KEY` / `ALPACA_SECRET_KEY` | Market data + paper/live execution |
+| `IBKR_GATEWAY_URL` | Default `https://localhost:5000/v1/api` |
+| `IBKR_GATEWAY_PATH` | Optional spawn from `npm run dev` |
+
+### AI / data
+
+| Variable | Role |
+|---|---|
+| `GEMINI_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY` / `NVIDIA_API_KEY` | Router-native cloud providers |
+| `ALPHAVANTAGE_API_KEY` / `POLYGON_API_KEY` / `FMP_API_KEY` / `FRED_API_KEY` / `FINNHUB_API_KEY` | Market/news |
+| Extra keys in `.env.example` | May exist for future endpoints — not every key has a provider class |
+
+### Quant / OpenAlice (default off)
+
+| Variable | Role |
+|---|---|
+| `QUANT_ENGINE_ENABLED` | Additive Quant agent |
+| `QUANT_ENGINE_INTERVAL_MS` | Else `tradingSafety.quantCycleIntervalMs` |
+| `QUANT_SMC_STRATEGY_ENABLED` | Include SMC in live `evaluateAll()` |
+| `QUANT_BULL_BEAR_ENABLED` | Qualitative Bull/Bear notes only |
+| `OPENALICE_ENABLED` / `OPENALICE_MCP_URL` | Both required; Guardian tools, **not** a trading MCP |
+
+### Ecosystem (`npm run dev` only)
+
+| Variable | Role |
+|---|---|
+| `VIBE_TRADING_PATH` / `ENABLE_VIBE_TRADING_MCP` | Vibe MCP (default port 8900) |
+| `AUTOHEDGE_PATH` / `ENABLE_AUTOHEDGE_WORKER` | Analysis worker; wallet keys stripped |
+| `OPENALICE_PATH` / `ENABLE_OPENALICE` | Guardian spawn |
+| `FINCEPT_TERMINAL_PATH` / `ENABLE_FINCEPT_TERMINAL` | Requires explicit `FINCEPT_CMD` |
+| `ARGUS_SKIP_CHRONOS` / `ARGUS_SKIP_OLLAMA` / `ARGUS_SKIP_OPENALICE` / `ARGUS_SKIP_IBKR` | Skip companions |
+
+Missing sibling directories log a warning; **Argus still boots**. Python children use each repo’s `.venv` interpreter directly (no `activate`). Ctrl+C the **top-level** `npm run dev` so the orchestrator can `taskkill` the process tree on Windows.
+
+`npm run dev:core` and `dev:server-only` ignore vibe/autohedge/Fincept toggles.
+
+---
+
+## Run, test, build
+
+```bash
 npm install
-npm run dev                   # scripts/ecosystem-dev.ts → companions + Argus :3000
-npm test
+npm run dev                 # http://127.0.0.1:3000
+npx tsc --noEmit
+npx vitest run
+npm run build
+npm run start               # node dist/server.cjs
 ```
 
 | Command | What it starts |
 |---|---|
-| `npm run dev` | `scripts/ecosystem-dev.ts`: optional Vibe / AutoHedge / OpenAlice / Fincept from `.env`, then Chronos/Ollama/IBKR + Express/Vite |
-| `npm run dev:core` | Prior launcher only (`devWithOpenAlice.ts`) — Argus + Chronos/Ollama/OpenAlice/IBKR, **no** vibe/autohedge/Fincept |
-| `npm run dev:server-only` | `tsx server.ts` alone (no companion processes) |
+| `npm run dev` | `scripts/ecosystem-dev.ts`: optional Vibe / AutoHedge / OpenAlice / Fincept, then Chronos/Ollama/IBKR + Express/Vite |
+| `npm run dev:core` | `devWithOpenAlice.ts` — Argus + Chronos/Ollama/OpenAlice/IBKR |
+| `npm run dev:server-only` | `tsx server.ts` alone |
+| `npm run lint` | `tsc --noEmit` |
+| `npm test` | `vitest run` |
+| `npm run test:e2e` | Playwright (`e2e/moduleToggleParity.spec.ts`) — seed **both** onboarding wizard and tour |
+| `npm run security:scan-writes` | `scripts/scan_unallowlisted_writes.ts` |
+| `npm run setup:ai` | `scripts/bootstrap_models.py` — Ollama pull + HF cache |
+| `npm run ai:serve` | Chronos on `:8008` |
+| `npm run clean` | Remove `dist/` |
 
-`PORT` is unused; the server listens on **3000**. Without `AUTH_PASSWORD`, the API binds **`127.0.0.1` only**.
+Migrations run when `src/server/db/index.ts` is first imported. **Do not run `npm run db:migrate`** — `database/migrate.ts` does not exist.
 
-### Ecosystem paths (`.env`)
+### Local AI (`npm run setup:ai`)
 
-Absolute paths to sibling repos + toggles. Missing directories log a warning and **Argus still boots**. Python services use each repo’s `.venv` interpreter directly (no `activate` required).
+Idempotent. Pulls `llama3.2:latest`, `llama3.2:1b`, `0xroyce/plutus:latest`. FinGPT: place a GGUF at `models/fingpt.gguf` (or `FINGPT_GGUF_PATH`) then re-run to `ollama create fingpt`. Boot log `[LocalAI] ...` is **non-blocking**.
 
-See [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) and [docs/ECOSYSTEM.md](docs/ECOSYSTEM.md).
+`ollama list` should show `llama3.2:latest`, `llama3.2:1b`, `0xroyce/plutus:latest`, `fingpt:latest` when fully set up. Heavy 14B models (`deepseek-r1:14b`, `qwen2.5:14b`) are operator-pulled; the process serializes them (see `CLAUDE.md`).
+
+### Paper soak (calendar, not a unit test)
+
+Organic floor: **30** closed PAPER FILLED SELL P&L trades, **10** NY sessions, **30** calendar days (`config/researchSafety.json`). Replay / EXTERNAL_SYNC / DIAGNOSTIC do not count.
+
+```bash
+npx tsx scripts/organic_paper_soak_status.ts
+```
+
+---
+
+## Docs
+
+Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Dated `ARGUS_*.md` / `FINAL_ANALYSIS.md` phase reports were consolidated into that file and removed.

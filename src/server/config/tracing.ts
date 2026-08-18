@@ -5,6 +5,7 @@ export interface TracingConfig {
   warnOnlyOnMissingTraceId: boolean;
   batchFlushMs: number;
   maxBatchSize: number;
+  maxQueueSize: number;
   traceIdPrefix: string;
   coreEventsRequiringTraceId: string[];
 }

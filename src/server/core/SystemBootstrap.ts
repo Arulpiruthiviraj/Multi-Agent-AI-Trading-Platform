@@ -52,6 +52,9 @@ import { kronosEngine } from '../engines/kronos/KronosEngine';
 
 import { dbBackupService } from '../services/DbBackupService';
 import { tracingService } from '../services/TracingService';
+import { installObservabilityEventBridge } from '../observability/instrumentEventBus';
+import { startObservabilityRetentionSweep, stopObservabilityRetentionSweep } from '../observability/ObservabilityStore';
+import { startProcessTelemetry, stopProcessTelemetry } from '../observability/processTelemetry';
 import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
 import { alertingService } from '../services/AlertingService';
@@ -75,6 +78,9 @@ export class SystemBootstrap {
     chiefTrader;
     transactionLifecycleTracker;
     tracingService;
+    installObservabilityEventBridge();
+    startObservabilityRetentionSweep();
+    startProcessTelemetry();
     advancedQuantEngines.start();
     
     marketDataWorker.start();
@@ -115,6 +121,8 @@ export class SystemBootstrap {
     systemMetricsWorker.stop();
     dbBackupService.stop();
     marketDataCrossChecker.stop();
+    stopObservabilityRetentionSweep();
+    stopProcessTelemetry();
 
     this.isRunning = false;
     console.log("[Argus System] Shutdown complete.");

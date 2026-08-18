@@ -337,7 +337,7 @@ export const configRouter = Router();
 const SETTINGS_ALLOWED_FIELDS: (keyof typeof schema.settings.$inferInsert)[] = [
   'tradingMode', 'riskLevel', 'selectedBroker', 'selectedAiProvider', 'budget', 'strategy',
   'maxTradeSize', 'dailyLossLimit', 'takeProfitPct', 'trailingStopPct', 'minAiConfidence',
-  'autoBotEnabled', 'adversarialDebateMode', 'maxPortfolioDrawdownPct', 'maxOpenPositions',
+  'autoBotEnabled', 'adversarialDebateMode', 'globalAutoLiquidationEnabled', 'maxPortfolioDrawdownPct', 'maxOpenPositions',
   'maxOrdersPerMinute', 'positionSizingMode', 'percentOfEquityPct',
   'autoTradeScheduleEnabled', 'autoTradeScheduleStartTime', 'autoTradeScheduleEndTime',
   'autoTradeScheduleTimezone',

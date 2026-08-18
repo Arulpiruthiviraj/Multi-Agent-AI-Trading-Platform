@@ -42,6 +42,7 @@ import { fibonacciPullback } from './fibonacciPullback';
 import { volumeConfirmation } from './volumeConfirmation';
 import { srBounce } from './srBounce';
 import { relativeStrengthRotation } from './relativeStrengthRotation';
+import { statisticalMeanReversion } from './statisticalMeanReversion';
 import { tradingSafety } from '../../config/tradingSafety';
 import { isExperimentalStrategyLive } from '../../config/quantExperimentalStrategies';
 import type { RegimeLabel } from '../RegimeEngine';
@@ -70,6 +71,7 @@ export const EXPERIMENTAL_STRATEGIES: StrategyDefinition[] = [
   volumeConfirmation,
   srBounce,
   relativeStrengthRotation,
+  statisticalMeanReversion,
 ];
 
 /** Live Quant may include SMC only when QUANT_SMC_STRATEGY_ENABLED is the string 'true'. */

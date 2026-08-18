@@ -92,7 +92,9 @@ export class NewsEngine {
         }
 
         const category = this.classifier.classify(normalized);
-        let finalSymbols = this.symbolExtractor.extract(normalized).filter(s => looksLikeListedTicker(s));
+        let finalSymbols = this.symbolExtractor.extract(normalized)
+          .map(s => looksLikeListedTicker(s))
+          .filter((s): s is string => !!s);
         const impact = await this.impactEngine.assess(normalized, category);
         
         const clusterId = await this.clusterEngine.createOrUpdateCluster(
@@ -223,9 +225,11 @@ export class NewsEngine {
               // Mission Control NewsAgent switch gates ideas only; clustering above still runs
               // so RiskEngine news_veto is not starved.
               if (deskIntelligence.newsEmitsTradeIdeas && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('NewsAgent')) {
+                const ticker = looksLikeListedTicker(symbol);
+                if (!ticker) return;
                 eventBus.emitTradeIdea({
                    traceId,
-                   symbol,
+                   symbol: ticker,
                    side: newsSide,
                    confidence: newsConfidence,
                    reasoning: `[News Intelligence] ${aiAnalysis.reasoning}`,

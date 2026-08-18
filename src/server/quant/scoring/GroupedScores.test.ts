@@ -13,7 +13,7 @@ function baseInput(): GroupedScoresInput {
       structure: { trend: 'SIDEWAYS', event: 'NONE', lastSwingHigh: null, lastSwingLow: null },
     },
     momentum: { rsi: 50, macd: { macd: 0, signal: 0, histogram: 0 }, stochasticRSI: 50, roc: 0, momentum: 0, williamsR: -50, cci: 0 },
-    volatility: { atr: 1, atrPercent: 1, historicalVolatilityPct: 20, volatilityPercentile: 50, bollingerBandWidthPct: 5, keltner: { middle: 100, upper: 105, lower: 95 }, regime: 'STABLE' },
+    volatility: { atr: 1, atrPercent: 1, historicalVolatilityPct: 20, volatilityPercentile: 50, bollingerBandWidthPct: 5, keltner: { middle: 100, upper: 105, lower: 95 }, regime: 'STABLE', closePriceZScore: 0 },
     volume: { volumeSMA20: 1_000_000, relativeVolume: 1, isSpike: false, volumeROC: 0, obv: 0, mfi: 50, vwap: { vwap: 100, distancePct: 0, slopePct: 0, event: 'NONE' }, cmf: 0, ad: 0 },
     priceAction: { gap: { type: null, sizePct: null }, consolidating: false, rangeRegime: 'STABLE', candlestick: null },
     regime: { regime: 'SIDEWAYS_RANGE', trendStrength: 10, volatility: 'NORMAL', marketStructure: 'CHOPPY', confidence: 0.3, features: {} as any, insufficientData: false },

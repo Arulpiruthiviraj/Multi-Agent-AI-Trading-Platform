@@ -77,6 +77,7 @@ import ExecutionQualityChart from "./components/ExecutionQualityChart";
 import TradeReplayModal from "./components/TradeReplayModal";
 import TransactionObservatory from "./components/TransactionObservatory";
 import TransactionExplorer from "./components/TransactionExplorer";
+import DecisionTracePanel from "./components/DecisionTracePanel";
 import LiveTradeJourneyOverlay from "./components/LiveTradeJourneyOverlay";
 import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
@@ -203,7 +204,8 @@ import {
   ArrowUp,
   ArrowDown,
   Crosshair,
-  Newspaper
+  Newspaper,
+  Smartphone
 } from "lucide-react";
 
 interface Position {
@@ -968,7 +970,7 @@ export default function App() {
   useEffect(() => {
     setWsEnabled(isAuthenticated);
   }, [isAuthenticated, setWsEnabled]);
-  const { isMobileMode, override, toggleMobileView } = useMobileLayout();
+  const { isMobileMode, viewportMobile, override, toggleMobileView } = useMobileLayout();
   const compactNav = useCompactNav();
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [showCoach, setShowCoach] = useState(false);
@@ -1084,6 +1086,14 @@ export default function App() {
   // ("Max Sector Exp 35%" vs the real 40% ceiling; "Size $100" vs the real $3,000 default).
   const [ribbonMaxDrawdownPct, setRibbonMaxDrawdownPct] = useState<number | null>(null);
   const [ribbonMaxSectorPct, setRibbonMaxSectorPct] = useState<number | null>(null);
+  // Real bug fix (2026-08-18 UI audit, Phase 3): this used to be declared much later as a plain
+  // useState(false) with no persistence at all - a reload silently turned off this real safety
+  // net (it genuinely calls POST /api/v1/portfolio/liquidate on a critical drawdown). Hoisted up
+  // here so the settings-hydration effect below (which runs earlier in render order) can
+  // reference its setter without a temporal-dead-zone error, matching ribbonMaxDrawdownPct's own
+  // pattern immediately above.
+  const [globalAutoLiquidation, setGlobalAutoLiquidation] = useState(false);
+  const [globalAutoLiquidationSaveError, setGlobalAutoLiquidationSaveError] = useState<string | null>(null);
   const [autoBotDailyLossLimit, setAutoBotDailyLossLimit] = useState(5000);
   const [autoBotTakeProfit, setAutoBotTakeProfit] = useState(15);
   const [autoBotTrailingStop, setAutoBotTrailingStop] = useState(5);
@@ -1242,6 +1252,7 @@ export default function App() {
         if (typeof data?.strategyEngineMaxActive === 'number') setStrategyEngineMaxActive(data.strategyEngineMaxActive);
         if (typeof data?.strategyEngineMinConfidence === 'number') setStrategyEngineMinConfidence(data.strategyEngineMinConfidence);
         if (typeof data?.maxPortfolioDrawdownPct === 'number') setRibbonMaxDrawdownPct(data.maxPortfolioDrawdownPct);
+        if (typeof data?.globalAutoLiquidationEnabled === 'boolean') setGlobalAutoLiquidation(data.globalAutoLiquidationEnabled);
         if (typeof data?.maxSectorConcentrationPct === 'number') setRibbonMaxSectorPct(data.maxSectorConcentrationPct);
         if (typeof data?.maxTradeSize === 'number' && Number.isFinite(data.maxTradeSize) && data.maxTradeSize > 0) {
           setAutoBotMaxTradeSize(data.maxTradeSize);
@@ -1957,9 +1968,17 @@ export default function App() {
     
     const totalUnrealizedPnL = currentTotalMarketValue - totalCost;
     const portfolioDrawdownPercent = totalCost > 0 ? (totalUnrealizedPnL / totalCost) * 100 : 0;
-    const isDrawdownCritical = portfolioDrawdownPercent <= -15.0;
+    // Real bug fix (2026-08-18 UI audit, Phase 6): this used to hardcode -15.0 independent of the
+    // real settings.maxPortfolioDrawdownPct RiskEngine's portfolio_drawdown gate actually enforces
+    // - if an operator changed that setting, this button's enabled state would silently drift out
+    // of sync with what the backend considers critical. ribbonMaxDrawdownPct is the same real,
+    // already-fetched value (App.tsx:1246) the "Active Risk Rules" ribbon displays; 0.15 (the
+    // tradingSafety.json default) is used only as a placeholder before that fetch resolves, never
+    // as a second independent source of truth.
+    const effectiveMaxDrawdownPct = (ribbonMaxDrawdownPct ?? 0.15) * 100;
+    const isDrawdownCritical = portfolioDrawdownPercent <= -effectiveMaxDrawdownPct;
     return { portfolioDrawdownPercent, isDrawdownCritical };
-  }, [portfolioData, assetPrices]);
+  }, [portfolioData, assetPrices, ribbonMaxDrawdownPct]);
 
   // GET /api/v1/portfolio returns { cash, buying_power, equity, positions } — not snapshot.total_equity.
   // The ribbon used to always show "--" even when InternalPaperBroker had $100k cash.
@@ -1999,8 +2018,33 @@ export default function App() {
     return { equity, cash, positionsValue, unrealized, health, positionCount: positions?.length, unavailableReason };
   }, [portfolioData, portfolioFetchError]);
 
-  const [globalAutoLiquidation, setGlobalAutoLiquidation] = useState(false);
   const hasAutoLiquidatedRef = useRef(false);
+
+  // Persists the toggle (settings.globalAutoLiquidationEnabled) so it survives a reload instead
+  // of silently reverting to off with no warning. Optimistic update, rolled back on a failed/
+  // errored save so the displayed state never lies about what's actually persisted.
+  const updateGlobalAutoLiquidation = async (next: boolean) => {
+    const prev = globalAutoLiquidation;
+    setGlobalAutoLiquidation(next);
+    setGlobalAutoLiquidationSaveError(null);
+    try {
+      const res = await fetch("/api/v1/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ globalAutoLiquidationEnabled: next }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok || body?.ok === false) {
+        setGlobalAutoLiquidation(prev);
+        setGlobalAutoLiquidationSaveError(body?.error || `Failed to save (${res.status})`);
+        setTimeout(() => setGlobalAutoLiquidationSaveError(null), 5000);
+      }
+    } catch (e: any) {
+      setGlobalAutoLiquidation(prev);
+      setGlobalAutoLiquidationSaveError(e?.message || "Failed to reach the server.");
+      setTimeout(() => setGlobalAutoLiquidationSaveError(null), 5000);
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -2008,7 +2052,14 @@ export default function App() {
         hasAutoLiquidatedRef.current = true; // prevent loop
         fetch("/api/v1/portfolio/liquidate", { method: "POST" })
            .then(res => {
-               if (res.ok) fetchState();
+               if (res.ok) {
+                 fetchState();
+               } else {
+                 setGlobalAutoLiquidationSaveError(`Auto-liquidation request failed (${res.status}) - positions were NOT liquidated. Check manually.`);
+               }
+           })
+           .catch((e) => {
+               setGlobalAutoLiquidationSaveError(e?.message || "Auto-liquidation request failed to reach the server - positions were NOT liquidated. Check manually.");
            });
     }
   }, [globalAutoLiquidation, isDrawdownCritical, isAuthenticated]);
@@ -2358,6 +2409,10 @@ export default function App() {
     executionPaper: true,
   });
 
+  // Local UI-only state reset - callers are responsible for the real POST /api/v1/system/emergency-stop
+  // call themselves and only invoking this once the backend confirms success (2026-08-18 audit, D-1:
+  // this used to fire its own fire-and-forget fetch with the error swallowed, duplicating whatever
+  // checked call the caller already made).
   const triggerEmergencyStop = () => {
     setTradingMode("emergency_stop");
     setModuleStates({
@@ -2372,7 +2427,6 @@ export default function App() {
       executionPaper: false,
     });
     console.warn("CRITICAL: GLOBAL EMERGENCY STOP TRIGGERED");
-    fetch("/api/v1/system/emergency-stop", { method: "POST" }).catch(() => {});
   };
 
   const toggleModule = (module: keyof typeof moduleStates) => {
@@ -3298,6 +3352,23 @@ export default function App() {
       className="min-h-screen bg-[#111822] text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-slate-950"
       id="trading-platform-root"
     >
+      {/* Real bug fix: a phone that overrides into Desktop Enterprise View lands on an 18-tab,
+          multi-column layout sized for a monitor - the only way back (MobileLayoutToggle) lives
+          inside #platform-header's un-wrapped icon row, which overflows horizontally on a
+          390-430px viewport and can scroll the toggle itself off-screen. This floating button is
+          reachable regardless of header overflow - fixed position, own stacking context, shown
+          only for an actual narrow viewport that has overridden away from mobile mode (not on a
+          real desktop browser, which never sets viewportMobile). */}
+      {viewportMobile && !isMobileMode && (
+        <button
+          onClick={toggleMobileView}
+          style={{ paddingBottom: 'env(safe-area-inset-bottom)', paddingRight: 'env(safe-area-inset-right)' }}
+          className="fixed bottom-4 right-4 z-[300] flex items-center gap-2 px-4 py-3 rounded-full bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-bold uppercase tracking-wider shadow-[0_4px_20px_rgba(99,102,241,0.5)] border border-indigo-400/50 min-h-[44px]"
+        >
+          <Smartphone size={16} />
+          Mobile View
+        </button>
+      )}
       {!setupComplete && (
         <SetupWizard onSkip={() => {
           fetch("/api/v1/config/onboarding-complete", { method: "POST" }).catch(() => {});
@@ -3495,8 +3566,10 @@ export default function App() {
           </div>
         </div>
 
-        {/* Live Status Indicators */}
-        <div className="flex items-center gap-3 text-[10px] font-mono tracking-widest uppercase">
+        {/* Live Status Indicators - overflow-x-auto so a narrow viewport scrolls this row instead
+            of silently clipping it (the floating Mobile View button above is the primary way
+            back to mobile layout on a phone; this keeps every other header control reachable too). */}
+        <div className="flex items-center gap-3 text-[10px] font-mono tracking-widest uppercase overflow-x-auto max-w-full">
           <Explainer id="headerApiStatus" quiet>
             <div className="bg-slate-800/60 text-slate-400 border border-slate-700 px-3 py-1.5 rounded flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span> API: <span className="text-white font-bold ml-0.5">ACTIVE</span></div>
           </Explainer>
@@ -6685,6 +6758,8 @@ export default function App() {
                )}
             </div>
 
+            <DecisionTracePanel />
+
           </div>
         )}
 
@@ -7353,24 +7428,34 @@ export default function App() {
                    </div>
                    {enginesHalted ? (
                      <button
-                       onClick={() => {
-                         setEnginesHalted(false);
-                         setHaltReason("");
-                         setHaltTime("");
-                         fetch("/api/v1/system/resume", { method: "POST" }).catch(() => {});
-                       }}
-                       className="w-full bg-emerald-500 hover:bg-emerald-400 text-white font-bold py-6 rounded-lg text-lg uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] mb-4"
+                       onClick={() => { void resumeTrading(); }}
+                       disabled={resumeInFlight}
+                       className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-6 rounded-lg text-lg uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] mb-4"
                      >
                        <Power size={24} />
-                       START ALL ENGINES
+                       {resumeInFlight ? "RESUMING..." : "START ALL ENGINES"}
                      </button>
                    ) : (
                      <button
-                       onClick={() => {
-                         setEnginesHalted(true);
+                       onClick={async () => {
                          setHaltReason("UI emergency stop");
                          setHaltTime(new Date().toLocaleTimeString());
-                         fetch("/api/v1/system/emergency-stop", { method: "POST" }).catch(() => {});
+                         try {
+                           const res = await fetch("/api/v1/system/emergency-stop", { method: "POST" });
+                           if (res.ok) {
+                             setEnginesHalted(true);
+                           } else {
+                             setHaltReason("");
+                             setHaltTime("");
+                             setResumeError(`Emergency stop failed (${res.status})`);
+                             setTimeout(() => setResumeError(null), 4000);
+                           }
+                         } catch (e: any) {
+                           setHaltReason("");
+                           setHaltTime("");
+                           setResumeError(e?.message || "Failed to reach the server.");
+                           setTimeout(() => setResumeError(null), 4000);
+                         }
                        }}
                        className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-6 rounded-lg text-lg uppercase tracking-wider transition-all flex flex-col items-center justify-center gap-2 shadow-[0_0_20px_rgba(225,29,72,0.4)] mb-4"
                      >
@@ -7430,7 +7515,29 @@ export default function App() {
                      <div className="flex gap-1 shrink-0">
                        <button onClick={() => void handlePipelineAgentPreset("all_enabled")} className="px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors bg-[#111822] text-slate-400 hover:bg-slate-800">ENABLE ALL IDEAS</button>
                        <button onClick={() => void handlePipelineAgentPreset("all_disabled")} className="px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors bg-[#111822] text-slate-400 hover:bg-slate-800">DISABLE ALL IDEAS</button>
-                       <button onClick={() => { setEnginesHalted(true); setHaltReason("UI emergency stop"); setHaltTime(new Date().toLocaleTimeString()); fetch("/api/v1/system/emergency-stop", { method: "POST" }).catch(() => {}); }} className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (enginesHalted ? "bg-indigo-600 text-white" : "bg-[#111822] text-rose-400 hover:bg-slate-800")}>EMERGENCY STOP</button>
+                       <button
+                         onClick={async () => {
+                           setHaltReason("UI emergency stop");
+                           setHaltTime(new Date().toLocaleTimeString());
+                           try {
+                             const res = await fetch("/api/v1/system/emergency-stop", { method: "POST" });
+                             if (res.ok) {
+                               setEnginesHalted(true);
+                             } else {
+                               setHaltReason("");
+                               setHaltTime("");
+                               setResumeError(`Emergency stop failed (${res.status})`);
+                               setTimeout(() => setResumeError(null), 4000);
+                             }
+                           } catch (e: any) {
+                             setHaltReason("");
+                             setHaltTime("");
+                             setResumeError(e?.message || "Failed to reach the server.");
+                             setTimeout(() => setResumeError(null), 4000);
+                           }
+                         }}
+                         className={"px-2 py-1 text-[9px] font-bold rounded uppercase tracking-wider transition-colors " + (enginesHalted ? "bg-indigo-600 text-white" : "bg-[#111822] text-rose-400 hover:bg-slate-800")}
+                       >EMERGENCY STOP</button>
                      </div>
                    </div>
                    {!autoBotConfig.enabled && (
@@ -7504,9 +7611,14 @@ export default function App() {
              </div>
 
              <div id="risk-guardrails-panel">
-               <GuardrailsPanel 
-                 globalAutoLiquidation={globalAutoLiquidation} 
-                 setGlobalAutoLiquidation={setGlobalAutoLiquidation} 
+               {globalAutoLiquidationSaveError && (
+                 <p className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2 mb-3 leading-relaxed">
+                   {globalAutoLiquidationSaveError}
+                 </p>
+               )}
+               <GuardrailsPanel
+                 globalAutoLiquidation={globalAutoLiquidation}
+                 setGlobalAutoLiquidation={updateGlobalAutoLiquidation}
                />
              </div>
              
@@ -7847,7 +7959,7 @@ export default function App() {
                    (src/server/strategiesEngine/). Off by default. Even in SHADOW/ANALYSIS_ONLY
                    mode it only ever records hypothetical signals to strategy_engine_signals - it
                    never places an order, never calls RiskEngine, never touches Autobot/OMS/broker
-                   state. See STRATEGIES_ENGINE.md / ARGUS_STRATEGY_ENGINE_IMPLEMENTATION.md. */}
+                   state. See CLAUDE.md (isolated strategiesEngine). */}
                <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 mb-6">
                  <div className="flex items-center justify-between mb-4">
                    <span className="text-[10px] text-indigo-400 uppercase tracking-widest font-mono flex items-center gap-2">
@@ -8386,7 +8498,8 @@ export default function App() {
 
         {activeTab === "kronos" && <KronosDashboard />}
         {activeTab === "observatory" && (
-          <div className="animate-fade-in">
+          <div className="animate-fade-in flex flex-col gap-6">
+            <DecisionTracePanel />
             <TransactionExplorer />
           </div>
         )}
@@ -9266,14 +9379,29 @@ export default function App() {
         enginesHalted={enginesHalted}
         onEmergencyStop={() => {
           if (enginesHalted) {
-            setEnginesHalted(false);
-            setHaltReason('');
-            setHaltTime('');
+            // Real bug fix (2026-08-18 zero-trust audit, D-1): this used to clear the halt
+            // banner locally with no backend call at all - the mobile bottom nav could show
+            // "resumed" while tradingState stayed EMERGENCY_STOP/TRADING_PAUSED server-side.
+            void resumeTrading();
           } else {
-            triggerEmergencyStop();
-            setEnginesHalted(true);
             setHaltReason('UI emergency stop');
             setHaltTime(new Date().toLocaleTimeString());
+            fetch("/api/v1/system/emergency-stop", { method: "POST" }).then((res) => {
+              if (res.ok) {
+                triggerEmergencyStop();
+                setEnginesHalted(true);
+              } else {
+                setHaltReason('');
+                setHaltTime('');
+                setResumeError(`Emergency stop failed (${res.status})`);
+                setTimeout(() => setResumeError(null), 4000);
+              }
+            }).catch((e) => {
+              setHaltReason('');
+              setHaltTime('');
+              setResumeError(e?.message || "Failed to reach the server.");
+              setTimeout(() => setResumeError(null), 4000);
+            });
           }
         }}
       />

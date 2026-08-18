@@ -185,6 +185,48 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     expect(worker.getLatestPrice('aapl')).toBe(150.25);
   });
 
+  it('rejects a future-timestamp tick and does not cache or emit it', () => {
+    const ws = instances[0];
+    authenticate(ws);
+    const future = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.25, bs: 100, t: future });
+    expect(emitMarketData).not.toHaveBeenCalled();
+    expect(worker.getLatestPrice('AAPL')).toBeNull();
+    expect(emitSpy).toHaveBeenCalledWith('MARKET_DATA_REJECTED', expect.objectContaining({
+      symbol: 'AAPL',
+      reason: 'FUTURE_TIMESTAMP',
+    }));
+  });
+
+  it('rejects an out-of-order tick older than last accepted by more than tickOutOfOrderEpsilonMs', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const ws = instances[0];
+    authenticate(ws);
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.25, bs: 100, t: '2026-01-15T14:30:10.000000000Z' });
+    expect(emitMarketData).toHaveBeenCalledTimes(1);
+    emitMarketData.mockClear();
+    emitSpy.mockClear();
+    const older = new Date(Date.parse('2026-01-15T14:30:10.000Z') - tradingSafety.tickOutOfOrderEpsilonMs - 1000).toISOString();
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 149.0, bs: 100, t: older });
+    expect(emitMarketData).not.toHaveBeenCalled();
+    expect(worker.getLatestPrice('AAPL')).toBe(150.25);
+    expect(emitSpy).toHaveBeenCalledWith('MARKET_DATA_REJECTED', expect.objectContaining({
+      symbol: 'AAPL',
+      reason: 'OUT_OF_ORDER',
+    }));
+  });
+
+  it('does not drop a delayed WS reorder within tickOutOfOrderEpsilonMs', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const ws = instances[0];
+    authenticate(ws);
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.25, bs: 100, t: '2026-01-15T14:30:10.000000000Z' });
+    emitMarketData.mockClear();
+    const slightlyOlder = new Date(Date.parse('2026-01-15T14:30:10.000Z') - Math.min(1000, tradingSafety.tickOutOfOrderEpsilonMs / 2)).toISOString();
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.10, bs: 100, t: slightlyOlder });
+    expect(emitMarketData).toHaveBeenCalledTimes(1);
+  });
+
   it('after authenticate, subscribes to config/markets.json US benchmarks when nothing else was subscribed', () => {
     const ws = instances[0];
     authenticate(ws);
