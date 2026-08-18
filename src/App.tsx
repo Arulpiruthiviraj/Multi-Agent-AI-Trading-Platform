@@ -7619,6 +7619,7 @@ export default function App() {
                <GuardrailsPanel
                  globalAutoLiquidation={globalAutoLiquidation}
                  setGlobalAutoLiquidation={updateGlobalAutoLiquidation}
+                 maxDrawdownPct={ribbonMaxDrawdownPct}
                />
              </div>
              
