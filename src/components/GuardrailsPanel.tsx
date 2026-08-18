@@ -57,61 +57,64 @@ export default function GuardrailsPanel({ globalAutoLiquidation, setGlobalAutoLi
   };
 
   const ToggleSwitch = ({ label, icon: Icon, stateKey, description, locked }: any) => (
-    <div className="flex items-start justify-between p-3 bg-[#111822] border border-slate-800 rounded">
-      <div className="flex gap-3">
-        <div className="mt-0.5 text-slate-500">
+    <div className="flex items-start justify-between p-3 bg-[#111822] border border-slate-800 rounded gap-3">
+      <div className="flex gap-3 min-w-0 flex-1">
+        <div className="mt-0.5 text-slate-500 shrink-0">
           <Icon size={14} />
         </div>
-        <div>
-          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center gap-1.5 mb-0.5">
+        <div className="min-w-0">
+          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center gap-1.5 mb-0.5 flex-wrap">
             {label}
-            {/* Hover-only (?) — portal tooltip; no-op when tooltipsEnabled is off */}
             <ContextualTooltip title={label} content={description} showIcon />
             {locked && <span className="text-[8px] font-bold text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded">REAL · ALWAYS ON</span>}
           </span>
-          <p className="text-[9px] font-mono text-slate-500 max-w-[200px]">{description}</p>
+          <p className="text-[9px] font-mono text-slate-500 max-w-none md:max-w-[200px]">{description}</p>
         </div>
       </div>
       {locked ? (
-        <div className="w-8 h-4 rounded-full border flex items-center px-0.5 bg-emerald-500/20 border-emerald-500/50 justify-end cursor-not-allowed" title="Enforced unconditionally in RiskEngine - not user-disableable">
-          <div className="w-3 h-3 rounded-full bg-emerald-400"></div>
+        <div className="argus-touch-target w-11 h-6 rounded-full border flex items-center px-0.5 bg-emerald-500/20 border-emerald-500/50 justify-end cursor-not-allowed shrink-0" title="Enforced unconditionally in RiskEngine - not user-disableable">
+          <div className="w-4 h-4 rounded-full bg-emerald-400"></div>
         </div>
       ) : (
         <div
-          className={"w-8 h-4 rounded-full border flex items-center px-0.5 transition-all cursor-pointer " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}
+          className={"argus-touch-target w-11 h-6 rounded-full border flex items-center px-0.5 transition-all cursor-pointer shrink-0 " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}
           onClick={() => toggle(stateKey as keyof typeof toggles)}
+          role="switch"
+          aria-checked={toggles[stateKey as keyof typeof toggles]}
         >
-          <div className={"w-3 h-3 rounded-full transition-all " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-400" : "bg-slate-600")}></div>
+          <div className={"w-4 h-4 rounded-full transition-all " + (toggles[stateKey as keyof typeof toggles] ? "bg-emerald-400" : "bg-slate-600")}></div>
         </div>
       )}
     </div>
   );
 
   const GlobalToggleSwitch = ({ label, icon: Icon, stateValue, stateSetter, description }: any) => (
-    <div className="flex items-start justify-between p-3 bg-[#111822] border border-slate-800 rounded">
-      <div className="flex gap-3">
-        <div className="mt-0.5 text-slate-500">
+    <div className="flex items-start justify-between p-3 bg-[#111822] border border-slate-800 rounded gap-3">
+      <div className="flex gap-3 min-w-0 flex-1">
+        <div className="mt-0.5 text-slate-500 shrink-0">
           <Icon size={14} />
         </div>
-        <div>
-          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center mb-0.5">
+        <div className="min-w-0">
+          <span className="text-[10px] uppercase font-bold tracking-widest text-slate-300 flex items-center mb-0.5 flex-wrap">
             {label}
             <ContextualTooltip title={label} content={description} showIcon />
           </span>
-          <p className="text-[9px] font-mono text-slate-500 max-w-[200px]">{description}</p>
+          <p className="text-[9px] font-mono text-slate-500 max-w-none md:max-w-[200px]">{description}</p>
         </div>
       </div>
-      <div 
-        className={"w-8 h-4 rounded-full border flex items-center px-0.5 transition-all cursor-pointer " + (stateValue ? "bg-rose-500/20 border-rose-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}
+      <div
+        className={"argus-touch-target w-11 h-6 rounded-full border flex items-center px-0.5 transition-all cursor-pointer shrink-0 " + (stateValue ? "bg-rose-500/20 border-rose-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}
         onClick={() => stateSetter(!stateValue)}
+        role="switch"
+        aria-checked={stateValue}
       >
-        <div className={"w-3 h-3 rounded-full transition-all " + (stateValue ? "bg-rose-400" : "bg-slate-600")}></div>
+        <div className={"w-4 h-4 rounded-full transition-all " + (stateValue ? "bg-rose-400" : "bg-slate-600")}></div>
       </div>
     </div>
   );
 
   return (
-    <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6 mb-6">
+    <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6 mb-6 argus-responsive-form">
       <h3 className="text-sm font-bold text-white mb-4 flex items-center gap-2 uppercase tracking-wide">
         <Shield size={16} className="text-emerald-400" />
         GUARDRAILS & OPS CONTROL (Tier 1-4)

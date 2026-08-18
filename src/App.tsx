@@ -97,6 +97,16 @@ import { AICoachPanel } from "./components/AICoachPanel";
 import { SetupWizard } from "./components/SetupWizard";
 import { AutonomousDashboard } from "./components/AutonomousDashboard";
 import { AutonomousMissionControl } from "./components/AutonomousMissionControl";
+import MobileMissionControl from "./components/mobile/MobileMissionControl";
+import { useMobileLayout, MobileLayoutToggle } from "./components/mobile/useMobileLayout";
+import { MobilePullRefresh } from "./components/mobile/MobilePullRefresh";
+import { useCompactNav } from "./hooks/useBreakpoint";
+import { ResponsiveBottomNav } from "./components/responsive/ResponsiveBottomNav";
+import { ResponsiveNavDrawer } from "./components/responsive/ResponsiveNavDrawer";
+import { ResponsiveStatsSection } from "./components/responsive/ResponsiveStatsSection";
+import { PositionsDataView } from "./components/responsive/PositionsDataView";
+import { TradeHistoryDataView } from "./components/responsive/TradeHistoryDataView";
+import type { AppTabId } from "./components/responsive/responsiveNavConfig";
 import { AutonomousLaunchDialog } from "./components/AutonomousLaunchDialog";
 import VectorClusteringMap from "./components/VectorClusteringMap";
 import { motion } from "motion/react";
@@ -947,7 +957,7 @@ function withCanonicalAutobotFlag(snapshot: any): any {
  * Manages all frontend state including active tabs, websocket feeds, and simulated price data.
  */
 export default function App() {
-  const { subscribe } = useWebSocket();
+  const { subscribe, setEnabled: setWsEnabled } = useWebSocket();
   const { enableWealthAffirmations, enableHyperAbundanceMode, enableDivineWealthMode } = useWealthAffirmationSettings();
   // Hoisted from further down in this component: several fetch-on-mount effects earlier in the
   // function body need to depend on this (see the /api/v1/autobot effect below) - a useEffect's
@@ -955,6 +965,12 @@ export default function App() {
   // later in the same function body would throw "Cannot access before initialization". A plain
   // useState call has no ordering dependency on anything else, so hoisting just this one is safe.
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  useEffect(() => {
+    setWsEnabled(isAuthenticated);
+  }, [isAuthenticated, setWsEnabled]);
+  const { isMobileMode, override, toggleMobileView } = useMobileLayout();
+  const compactNav = useCompactNav();
+  const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [showCoach, setShowCoach] = useState(false);
   const [runBacktest, setRunBacktest] = useState(false);
   const [showTradeHistory, setShowTradeHistory] = useState(true);
@@ -1021,6 +1037,42 @@ export default function App() {
   const [showMissionControl, setShowMissionControl] = useState<boolean>(false);
   const [haltReason, setHaltReason] = useState<string>("");
   const [haltTime, setHaltTime] = useState<string>("");
+  const [resumeInFlight, setResumeInFlight] = useState<boolean>(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
+
+  // Real POST /api/v1/system/resume call - the "START ALL ENGINES" button used to only clear
+  // local React state (setEnginesHalted(false)) without ever telling the backend to leave
+  // EMERGENCY_STOP/TRADING_PAUSED, so RiskEngine's emergency_stop gate stayed tripped and the
+  // banner would reappear (or silently mismatch Autobot's own status) on the next poll. This is
+  // the one real path that clears tradingState server-side; the banner only disappears on success.
+  const resumeTrading = async (): Promise<boolean> => {
+    setResumeInFlight(true);
+    setResumeError(null);
+    try {
+      const res = await fetch("/api/v1/system/resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ reason: "Operator acknowledged and resumed from the emergency banner." }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.status !== "ok") {
+        setResumeError(data?.error || `Resume failed (${res.status})`);
+        setTimeout(() => setResumeError(null), 4000);
+        return false;
+      }
+      setEnginesHalted(false);
+      setHaltReason("");
+      setHaltTime("");
+      return true;
+    } catch (e: any) {
+      setResumeError(e?.message || "Failed to reach the server.");
+      setTimeout(() => setResumeError(null), 4000);
+      return false;
+    } finally {
+      setResumeInFlight(false);
+    }
+  };
   
   const [autoBotConfig, setAutoBotConfig] = useState<any>({ enabled: false, budget: 50000, spent: 0, remaining: 50000, strategy: "Momentum & Breakout", riskLevel: "Medium", maxTradeSize: 3000, dailyLossLimit: 5000, currentDailyLoss: 0, logs: [] });
   const [autoBotTargetBudget, setAutoBotTargetBudget] = useState(50000);
@@ -1028,6 +1080,10 @@ export default function App() {
   const [autoBotStrategy, setAutoBotStrategy] = useState("Momentum & Breakout");
   const [autoBotRiskLevel, setAutoBotRiskLevel] = useState("Medium");
   const [autoBotMaxTradeSize, setAutoBotMaxTradeSize] = useState(3000);
+  // Real values for the "Active Risk Rules" ribbon below - previously a hardcoded, stale string
+  // ("Max Sector Exp 35%" vs the real 40% ceiling; "Size $100" vs the real $3,000 default).
+  const [ribbonMaxDrawdownPct, setRibbonMaxDrawdownPct] = useState<number | null>(null);
+  const [ribbonMaxSectorPct, setRibbonMaxSectorPct] = useState<number | null>(null);
   const [autoBotDailyLossLimit, setAutoBotDailyLossLimit] = useState(5000);
   const [autoBotTakeProfit, setAutoBotTakeProfit] = useState(15);
   const [autoBotTrailingStop, setAutoBotTrailingStop] = useState(5);
@@ -1044,6 +1100,13 @@ export default function App() {
   // both Eastern Time, both on the harmonized post-2007 US/Canada DST schedule - so this list
   // exists for locally-recognizable labels, not because the underlying time math differs.
   const [autoTradeScheduleTimezone, setAutoTradeScheduleTimezone] = useState("America/New_York");
+  // Strategy Engine (src/server/strategiesEngine/) - an isolated, optional research subsystem.
+  // Off by default. Even when on, it only ever records hypothetical SHADOW/ANALYSIS_ONLY signals
+  // to strategy_engine_signals - it never places or influences a real order at any setting here.
+  const [strategyEngineEnabled, setStrategyEngineEnabled] = useState(false);
+  const [strategyEngineMode, setStrategyEngineMode] = useState("OFF");
+  const [strategyEngineMaxActive, setStrategyEngineMaxActive] = useState(25);
+  const [strategyEngineMinConfidence, setStrategyEngineMinConfidence] = useState(0.6);
   // Real error from the last failed /api/v1/autobot/toggle call (e.g. allocated budget exceeds
   // the active broker's real available buying power) - surfaced next to the Allocated Budget
   // Limit input instead of being silently swallowed.
@@ -1174,6 +1237,15 @@ export default function App() {
         if (typeof data?.autoTradeScheduleStartTime === 'string') setAutoTradeScheduleStartTime(data.autoTradeScheduleStartTime);
         if (typeof data?.autoTradeScheduleEndTime === 'string') setAutoTradeScheduleEndTime(data.autoTradeScheduleEndTime);
         if (typeof data?.autoTradeScheduleTimezone === 'string') setAutoTradeScheduleTimezone(data.autoTradeScheduleTimezone);
+        if (typeof data?.strategyEngineEnabled === 'boolean') setStrategyEngineEnabled(data.strategyEngineEnabled);
+        if (typeof data?.strategyEngineMode === 'string') setStrategyEngineMode(data.strategyEngineMode);
+        if (typeof data?.strategyEngineMaxActive === 'number') setStrategyEngineMaxActive(data.strategyEngineMaxActive);
+        if (typeof data?.strategyEngineMinConfidence === 'number') setStrategyEngineMinConfidence(data.strategyEngineMinConfidence);
+        if (typeof data?.maxPortfolioDrawdownPct === 'number') setRibbonMaxDrawdownPct(data.maxPortfolioDrawdownPct);
+        if (typeof data?.maxSectorConcentrationPct === 'number') setRibbonMaxSectorPct(data.maxSectorConcentrationPct);
+        if (typeof data?.maxTradeSize === 'number' && Number.isFinite(data.maxTradeSize) && data.maxTradeSize > 0) {
+          setAutoBotMaxTradeSize(data.maxTradeSize);
+        }
         if (typeof data?.budget === 'number' && Number.isFinite(data.budget) && data.budget > 0) {
           setAutoBotTargetBudget(data.budget);
         }
@@ -1298,6 +1370,17 @@ export default function App() {
 
   const toggleAutoBot = async (sessionConfig?: any) => {
      try {
+       // Starting Autobot while EMERGENCY_STOP/TRADING_PAUSED is active would just have
+       // RiskEngine's emergency_stop gate reject every idea it generates - confirm intent and
+       // actually clear the halt server-side first rather than let the toggle silently no-op.
+       if (!autoBotConfig.enabled && enginesHalted) {
+         const proceed = window.confirm(
+           "System is currently halted (emergency stop / trading paused). Clear the halt and start Autobot?"
+         );
+         if (!proceed) return;
+         const resumed = await resumeTrading();
+         if (!resumed) return;
+       }
        // AutonomousLaunchDialog's tradingMode/riskProfile use display strings; translate them to
        // the values TradingEngine/SystemBootstrap actually understand. executionBroker, marketData,
        // account, and agents are collected by the dialog but have no real backend support yet
@@ -1412,6 +1495,41 @@ export default function App() {
     } catch (e: any) {
       setAutoTradeScheduleSaveStatus("error");
       setAutoTradeScheduleSaveError(e?.message || "Failed to reach the server.");
+    }
+  };
+
+  const [strategyEngineSaveStatus, setStrategyEngineSaveStatus] = useState<null | "saving" | "saved" | "error">(null);
+  const [strategyEngineSaveError, setStrategyEngineSaveError] = useState<string | null>(null);
+
+  // Independent of toggleAutoBot()/Autobot state entirely, same isolation as saveAutoTradeSchedule
+  // above - this only persists configuration for the isolated Strategy Engine subsystem
+  // (StrategyEngineShadowRunner.ts is the only thing that later reads it, on its own timer, and it
+  // never calls a broker/OMS function at any setting value).
+  const saveStrategyEngineSettings = async () => {
+    setStrategyEngineSaveStatus("saving");
+    setStrategyEngineSaveError(null);
+    try {
+      const res = await fetch("/api/v1/config/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          strategyEngineEnabled,
+          strategyEngineMode,
+          strategyEngineMaxActive,
+          strategyEngineMinConfidence,
+        })
+      });
+      const data = await res.json();
+      if (data.ok === false || !res.ok) {
+        setStrategyEngineSaveStatus("error");
+        setStrategyEngineSaveError(data.error || "Failed to save Strategy Engine settings.");
+        return;
+      }
+      setStrategyEngineSaveStatus("saved");
+      setTimeout(() => setStrategyEngineSaveStatus(null), 3000);
+    } catch (e: any) {
+      setStrategyEngineSaveStatus("error");
+      setStrategyEngineSaveError(e?.message || "Failed to reach the server.");
     }
   };
 
@@ -1697,7 +1815,7 @@ export default function App() {
   useEffect(() => {
     const verifyAuth = async () => {
       try {
-        const res = await fetch("/api/v1/auth/status");
+        const res = await fetch("/api/v1/auth/status", { credentials: "include" });
         if (res.ok) {
           const data = await res.json();
           setIsAuthenticated(data.authenticated === true);
@@ -1885,6 +2003,7 @@ export default function App() {
   const hasAutoLiquidatedRef = useRef(false);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     if (globalAutoLiquidation && isDrawdownCritical && !hasAutoLiquidatedRef.current) {
         hasAutoLiquidatedRef.current = true; // prevent loop
         fetch("/api/v1/portfolio/liquidate", { method: "POST" })
@@ -1892,7 +2011,7 @@ export default function App() {
                if (res.ok) fetchState();
            });
     }
-  }, [globalAutoLiquidation, isDrawdownCritical]);
+  }, [globalAutoLiquidation, isDrawdownCritical, isAuthenticated]);
   
   // reset hasAutoLiquidatedRef.current when drawdown is no longer critical
   useEffect(() => {
@@ -2189,10 +2308,27 @@ export default function App() {
   // Validation's SystemValidationSuite / IntegrityValidator). Counts schema/broker/AI reachability
   // only — not LIVE authorization. LIVE remains NO-GO.
   const [deploymentIntegrity, setDeploymentIntegrity] = useState<any | null>(null);
+  // Real bug fix: the fetch below used to .catch(() => {}) silently, so a network error or non-2xx
+  // response left deploymentIntegrity stuck at null forever - the "Loading real integrity check..."
+  // label had no way to ever change to an error state, and "Re-check Now" was the only (undiscoverable)
+  // recovery. This now surfaces a real error message and lets the loading label distinguish
+  // "still in flight" from "failed" instead of looking identical.
+  const [deploymentIntegrityError, setDeploymentIntegrityError] = useState<string | null>(null);
+
+  const fetchDeploymentIntegrity = () => {
+    setDeploymentIntegrityError(null);
+    fetch('/api/v1/system/integrity')
+      .then(r => {
+        if (!r.ok) throw new Error(`Server returned HTTP ${r.status}`);
+        return r.json();
+      })
+      .then(setDeploymentIntegrity)
+      .catch((e: any) => setDeploymentIntegrityError(e?.message || 'Failed to reach the server.'));
+  };
 
   useEffect(() => {
     if (activeTab !== "settings" || !isAuthenticated) return;
-    fetch('/api/v1/system/integrity').then(r => r.json()).then(setDeploymentIntegrity).catch(() => {});
+    fetchDeploymentIntegrity();
   }, [activeTab, isAuthenticated]);
 
   const [selectedAgentNode, setSelectedAgentNode] = useState<any | null>(null);
@@ -2378,7 +2514,7 @@ export default function App() {
   const [sandboxOutcome, setSandboxOutcome] = useState<any | null>(null);
 
   useEffect(() => {
-    if (!sandboxPending) return;
+    if (!sandboxPending || !isAuthenticated) return;
     const unsubRisk = subscribe('RISK_ASSESSMENT_COMPLETED', (data: any) => {
       if (data.traceId !== sandboxPending.traceId) return;
       setSandboxOutcome({ stage: data.approved ? 'RISK_APPROVED' : 'RISK_REJECTED', ...data });
@@ -2423,7 +2559,7 @@ export default function App() {
       }
     });
     return () => { unsubRisk(); unsubOrder(); };
-  }, [subscribe, sandboxPending]);
+  }, [subscribe, sandboxPending, isAuthenticated]);
 
   const handleExecuteOverride = async () => {
     setSandboxSubmitting(true);
@@ -2466,6 +2602,7 @@ export default function App() {
   const [liveTradeTrigger, setLiveTradeTrigger] = useState<any | null>(null);
 
   useEffect(() => {
+    if (!isAuthenticated) return;
     const unsubscribe = subscribe('TRADE_IDEA_GENERATED', (data) => {
       setLiveTradeTrigger((prev: any) => {
          if (prev) return prev;
@@ -2473,7 +2610,7 @@ export default function App() {
       });
     });
     return () => unsubscribe();
-  }, [subscribe]);
+  }, [subscribe, isAuthenticated]);
 
   const [vetos, setVetos] = useState<RiskVeto[]>([]);
   const [selectedRiskVetoForModal, setSelectedRiskVetoForModal] = useState<any | null>(null);
@@ -2653,10 +2790,10 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab === "settings") {
+    if (activeTab === "settings" && isAuthenticated) {
       fetchSecrets();
     }
-  }, [activeTab]);
+  }, [activeTab, isAuthenticated]);
 
 
   // Fetch initial system metrics on load
@@ -2873,7 +3010,7 @@ export default function App() {
 
   useEffect(() => {
     let loopId: NodeJS.Timeout;
-    if (isAutonomous && !isAnalyzing) {
+    if (isAuthenticated && isAutonomous && !isAnalyzing) {
       loopId = setTimeout(() => {
         const assets = ["AAPL", "NVDA", "AMD", "GLD", "TLT"];
         const headlines = [
@@ -2891,7 +3028,7 @@ export default function App() {
       }, 8000);
     }
     return () => clearTimeout(loopId);
-  }, [isAutonomous, isAnalyzing]);
+  }, [isAutonomous, isAnalyzing, isAuthenticated]);
 
   // Trigger server-side Multi-agent consensus analysis
   // Trigger MCP Natural Language Trade
@@ -3079,6 +3216,64 @@ export default function App() {
      );
   }
 
+  if (isMobileMode) {
+    return (
+      <div
+        className="min-h-screen bg-[#111822] text-slate-100 flex flex-col font-sans selection:bg-emerald-500 selection:text-slate-950"
+        id="trading-platform-root"
+      >
+        {!setupComplete && (
+          <SetupWizard onSkip={() => {
+            fetch("/api/v1/config/onboarding-complete", { method: "POST" }).catch(() => {});
+            setSetupComplete(true);
+          }} onComplete={async (config) => {
+            fetch("/api/v1/config/onboarding-complete", { method: "POST" }).catch(() => {});
+            if (config.aiProviders) {
+              for (const [provider, data] of Object.entries(config.aiProviders) as [string, any][]) {
+                if (data.connected && data.key && data.key !== "mock") {
+                  try {
+                    await fetch("/api/v1/config/providers", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ provider, apiKey: data.key })
+                    });
+                  } catch (e) { console.error("Failed to save provider:", provider, e); }
+                }
+              }
+            }
+            setAutoBotTargetBudget(config.initialCapital);
+            setAutoBotRiskLevel(config.riskProfile);
+            setAutoBotTradingMode(config.tradingMode);
+            setAutoBotConfig({ ...autoBotConfig, enabled: true, budget: config.initialCapital, riskLevel: config.riskProfile, strategy: config.aiProvider });
+            setSystemState('READY');
+            setSetupComplete(true);
+          }} />
+        )}
+        <AppWalkthrough />
+        {enginesHalted && (
+          <div
+            className="bg-rose-600 px-4 py-2 text-white text-xs font-mono uppercase tracking-wider flex flex-col sm:flex-row items-center justify-between gap-2 text-center"
+            style={{ paddingTop: 'max(8px, env(safe-area-inset-top))' }}
+          >
+            <span>Emergency stop active{resumeError ? ` — resume failed: ${resumeError}` : ""}</span>
+            <button
+              onClick={() => { void resumeTrading(); }}
+              disabled={resumeInFlight}
+              className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 text-white px-3 py-1 rounded text-[10px] font-bold tracking-wider uppercase border border-emerald-400/50 shrink-0"
+            >
+              {resumeInFlight ? "Resuming..." : "Acknowledge & Resume"}
+            </button>
+          </div>
+        )}
+        <MobileMissionControl
+          isMobileMode={isMobileMode}
+          layoutOverride={override}
+          onToggleLayout={toggleMobileView}
+        />
+      </div>
+    );
+  }
+
   // --- Calculate dynamic risk veto distribution ---
   const vetoCounts = vetos.reduce((acc: Record<string, number>, curr) => {
     const agent = curr.vetoed_by || "Unknown Agent";
@@ -3142,24 +3337,26 @@ export default function App() {
       )}
       <LiveMarketNewsTicker />
       {enginesHalted && (
-        <div className="bg-rose-600 px-4 py-1.5 flex justify-between items-center text-white">
-          <div className="flex items-center gap-2 font-bold text-xs tracking-wide uppercase">
+        <div className="bg-rose-600 px-4 py-1.5 flex flex-col sm:flex-row justify-between items-center gap-2 text-white w-full">
+          <div className="flex items-center gap-2 font-bold text-xs tracking-wide uppercase flex-wrap">
             <ShieldAlert size={14} />
             EMERGENCY STOP ACTIVE — ALL ENGINES HALTED
             <span className="text-[10px] font-mono text-rose-200 tracking-normal ml-2">
               SINCE {haltTime} • REASON: {haltReason}
             </span>
+            {resumeError && (
+              <span className="text-[10px] font-mono bg-black/30 text-white px-2 py-0.5 rounded ml-2">
+                RESUME FAILED: {resumeError}
+              </span>
+            )}
           </div>
           <button
-            onClick={() => {
-              setEnginesHalted(false);
-              setHaltReason("");
-              setHaltTime("");
-            }}
-            className="bg-emerald-500 hover:bg-emerald-400 text-white px-3 py-1 rounded text-[10px] font-bold tracking-wider flex items-center gap-1 transition-colors uppercase border border-emerald-400/50 hover:border-emerald-300"
+            onClick={() => { void resumeTrading(); }}
+            disabled={resumeInFlight}
+            className="bg-emerald-500 hover:bg-emerald-400 disabled:opacity-60 disabled:cursor-not-allowed text-white px-3 py-1 rounded text-[10px] font-bold tracking-wider flex items-center gap-1 transition-colors uppercase border border-emerald-400/50 hover:border-emerald-300 shrink-0"
           >
             <Power size={12}/>
-            START ALL ENGINES
+            {resumeInFlight ? "RESUMING..." : "ACKNOWLEDGE & RESUME"}
           </button>
         </div>
       )}
@@ -3349,6 +3546,7 @@ export default function App() {
               <DownloadCloud size={14} className="text-emerald-400" />
             </button>
             </Explainer>
+            <MobileLayoutToggle isMobileMode={isMobileMode} override={override} onToggle={toggleMobileView} />
             <button onClick={handleLogout} className="bg-slate-800/60 hover:bg-rose-500/20 text-slate-300 hover:text-rose-400 border border-slate-700 hover:border-rose-500/40 px-2.5 py-1.5 rounded flex items-center gap-1 cursor-pointer transition-colors shadow-sm" title="Log Out">
               <LogOut size={14} />
             </button>
@@ -3363,105 +3561,12 @@ export default function App() {
         setActiveTab={setActiveTab} 
       />
 
-      {/* Hero Stats Panel */}
-      <section
-        className="bg-[#1A1F2B]/40 border-b border-slate-850 px-6 py-5 grid grid-cols-2 md:grid-cols-5 gap-4"
-        id="stats-ribbon"
-      >
-        <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
-          <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1 flex items-center justify-between">
-            <span><Explainer id="totalEquity">Total Equity</Explainer></span>
-            <Wallet size={12} className="text-slate-500" />
-          </div>
-          <div className="text-lg font-bold text-white">
-            {brokerRibbon.equity !== undefined
-              ? `$${brokerRibbon.equity.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}`
-              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
-          </div>
-          <div className="text-[10px] text-emerald-400 font-mono flex items-center gap-0.5 mt-0.5">
-            <ArrowUpRight size={10} />
-            <span>Overall P&L Tracking</span>
-          </div>
-        </div>
-
-        <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
-          <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1">
-            <Explainer id="cashBalance">Cash Balance</Explainer>
-          </div>
-          <div className="text-lg font-semibold text-slate-200">
-            {brokerRibbon.cash !== undefined
-              ? `$${brokerRibbon.cash.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}`
-              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
-          </div>
-          <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-            Ready allocation collateral
-          </div>
-        </div>
-
-        <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
-          <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1">
-            <Explainer id="positionsValuation">Positions Valuation</Explainer>
-          </div>
-          <div className="text-lg font-semibold text-slate-200">
-            {brokerRibbon.positionsValue !== undefined
-              ? `$${brokerRibbon.positionsValue.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}`
-              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
-          </div>
-          <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-            {brokerRibbon.positionCount !== undefined ? brokerRibbon.positionCount : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>} active stock allocations
-          </div>
-        </div>
-
-        <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60">
-          <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1">
-            <Explainer id="unrealizedPnl">Unrealized profit/losses</Explainer>
-          </div>
-          <div className={`text-lg font-semibold ${brokerRibbon.unrealized !== undefined && brokerRibbon.unrealized < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-            {brokerRibbon.unrealized !== undefined
-              ? `${brokerRibbon.unrealized >= 0 ? '+' : ''}$${brokerRibbon.unrealized.toFixed(2)}`
-              : <UnavailableHint reason={brokerRibbon.unavailableReason}>--</UnavailableHint>}
-          </div>
-          <div className={`text-[10px] font-mono mt-0.5 ${brokerRibbon.unrealized !== undefined && brokerRibbon.unrealized < 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
-            Active returns gain indices
-          </div>
-        </div>
-
-        <div className="p-3 bg-[#1A1F2B]/50 rounded border border-slate-800/60 col-span-2 md:col-span-1">
-          <div className="text-[10px] uppercase font-mono tracking-wider text-slate-400 mb-1 flex items-center justify-between">
-            <span><Explainer id="portfolioHealthscore">Portfolio Healthscore</Explainer></span>
-            <Shield size={12} className="text-emerald-400" />
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="text-lg font-bold text-white">
-              {brokerRibbon.health !== undefined
-                ? brokerRibbon.health.toFixed(1)
-                : <UnavailableHint reason={RIBBON_HEALTH_UNAVAILABLE}>--</UnavailableHint>}
-              {brokerRibbon.health !== undefined && "/100"}
-            </div>
-            {brokerRibbon.health !== undefined && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 font-semibold tracking-wide uppercase font-mono">
-                <Explainer id="ribbonNominal" quiet>NOMINAL</Explainer>
-              </span>
-            )}
-          </div>
-          <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-            Exposure index &lt;35% check
-          </div>
-        </div>
-      </section>
+      {/* Hero Stats Panel — carousel on compact, grid on desktop */}
+      <ResponsiveStatsSection brokerRibbon={brokerRibbon} />
 
       {/* Tab strip stays on screen while the workspace scrolls. Wrap — do not hide desks behind a scrollbar. */}
       <div
-        className="sticky top-0 z-50 bg-[#1A1F2B]/95 backdrop-blur-md border-b border-slate-850 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
+        className="argus-desktop-only sticky top-0 z-50 bg-[#1A1F2B]/95 backdrop-blur-md border-b border-slate-850 px-4 shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
         id="tabs-navigation"
       >
         <nav className="flex flex-wrap gap-x-0 gap-y-0 py-0.5 items-center" aria-label="Tabs navigation">
@@ -3775,14 +3880,18 @@ export default function App() {
           <span>Active Risk Rules:</span>
           <Explainer id="ribbonRiskRules" quiet>
             <span className="text-slate-400 font-mono bg-[#111822] px-2 py-0.5 rounded border border-slate-800">
-              Max Drawdown 15% | Max Sector Exp 35% | Size $100
+              Max Drawdown {ribbonMaxDrawdownPct !== null ? `${(ribbonMaxDrawdownPct * 100).toFixed(0)}%` : '--'}
+              {' | '}Max Sector Exp {ribbonMaxSectorPct !== null ? `${(ribbonMaxSectorPct * 100).toFixed(0)}%` : '--'}
+              {' | '}Size ${autoBotMaxTradeSize.toLocaleString()}
             </span>
           </Explainer>
         </div>
       </div>
 
       {/* Main Workspace Frame container */}
-      <main className="flex-1 p-6" id="workspace-main">
+      <main className={`flex-1 p-4 md:p-6 argus-fluid-container ${compactNav ? 'pb-28' : ''}`} id="workspace-main">
+        <MobilePullRefresh onRefresh={async () => { await fetchState(); }}>
+        <div className="min-h-full">
         {activeTab === "dashboard" && (
           <AutonomousDashboard 
              autoBotConfig={autoBotConfig} 
@@ -5512,81 +5621,27 @@ export default function App() {
               </div>
             </div>
 
-            <div
-              className="overflow-x-auto min-w-full"
-              id="positions-table-box"
-            >
-              <table
-                className="w-full text-left border-collapse"
-                id="positions-table"
-              >
-                <thead>
-                  <tr className="border-b border-slate-800/80 text-[10px] font-mono text-slate-500 uppercase tracking-widest bg-[#111822]/50">
-                    <th className="py-3 px-4 rounded-tl">TICKER</th>
-                    <th className="py-3 px-4">SECTOR</th>
-                    <th className="py-3 px-4">SHARES</th>
-                    <th className="py-3 px-4">ENTRY PRICE</th>
-                    <th className="py-3 px-4">LIVE PRICE</th>
-                    <th className="py-3 px-4">STOP-LOSS</th>
-                    <th className="py-3 px-4">TAKE-PROFIT</th>
-                    <th className="py-3 px-4">MARKET VALUE</th>
-                    <th className="py-3 px-4 text-right rounded-tr">UNREALIZED P&L</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/80 text-xs font-mono">
-                  {portfolioData?.positions && portfolioData.positions.length > 0 ? (
-                    portfolioData.positions.map((p: any) => {
-                      const livePrice = assetPrices[p.symbol] || p.currentPrice;
-                      const marketValue = p.quantity * livePrice;
-                      const unrealizedPnl = marketValue - p.totalCost;
-                      const unrealizedPnlPercent = p.totalCost > 0 ? (unrealizedPnl / p.totalCost) * 100 : 0;
-                      const isPositive = unrealizedPnl >= 0;
-
-                      return (
-                        <tr key={p.symbol} className="hover:bg-[#111822]/50 transition-colors">
-                          <td className="py-4 px-4 font-bold text-white tracking-wider flex items-center gap-2">
-                            {p.symbol}
-                            <span className={"h-1.5 w-1.5 rounded-full " + (isPositive ? "bg-emerald-400" : "bg-rose-400")}></span>
-                          </td>
-                          <td className="py-4 px-4 font-normal text-slate-300">{p.sector || <UnavailableHint reason="No GICS/sector field on this broker position row.">--</UnavailableHint>}</td>
-                          <td className="py-4 px-4 font-medium text-slate-200">{p.quantity}</td>
-                          <td className="py-4 px-4 text-slate-350">${p.entryPrice.toFixed(2)}</td>
-                          <td className="py-4 px-4 text-slate-200">${livePrice.toFixed(2)}</td>
-                          <td className="py-4 px-4 text-slate-400">
-                            <UnavailableHint reason="No resting broker stop is stored on positions. PortfolioMonitor emits SELL ideas from settings.takeProfitPct / trailingStopPct through RiskEngine — this column is not a live stop price.">--</UnavailableHint>
-                          </td>
-                          <td className="py-4 px-4 text-slate-400">
-                            <UnavailableHint reason="No resting take-profit order is stored on positions. Monitor targets come from settings.takeProfitPct when Autobot is started.">--</UnavailableHint>
-                          </td>
-                          <td className="py-4 px-4 font-medium text-slate-100">${marketValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
-                          <td className={"py-4 px-4 text-right font-semibold " + (isPositive ? "text-emerald-400" : "text-rose-400")}>
-                            <span className="flex items-center justify-end gap-1.5">
-                              {isPositive ? "+" : ""}${unrealizedPnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ({isPositive ? "+" : ""}{unrealizedPnlPercent.toFixed(2)}%)
-                            </span>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  ) : (
-                    <tr>
-                      <td colSpan={9} className="py-8 text-center text-slate-500 font-mono">
-                        No active allocations found in the broker portfolio. Emergency Liquidation submits SELL ideas through RiskEngine when positions exist; target-allocation rebalance is not implemented.
-                      </td>
-                    </tr>
-                  )}
-                  {portfolioData?.snapshot && (
-                    <tr className="bg-[#111822]/30 font-bold border-t border-slate-800">
-                      <td className="py-3.5 px-4 text-slate-400">CASH</td>
-                      <td className="py-3.5 px-4 text-slate-500 font-normal">Liquidity Reservoir</td>
-                      <td className="py-3.5 px-4 text-slate-500 font-normal" colSpan={5}>—</td>
-                      <td className="py-3.5 px-4 text-slate-200" colSpan={2}>
-                        ${portfolioData.snapshot.cash_balance?.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <PositionsDataView
+              positions={(portfolioData?.positions ?? []).map((p: any) => {
+                const livePrice = assetPrices[p.symbol] || p.currentPrice;
+                const marketValue = p.quantity * livePrice;
+                const unrealizedPnl = marketValue - p.totalCost;
+                const unrealizedPnlPercent = p.totalCost > 0 ? (unrealizedPnl / p.totalCost) * 100 : 0;
+                return {
+                  symbol: p.symbol,
+                  sector: p.sector,
+                  quantity: p.quantity,
+                  entryPrice: p.entryPrice,
+                  livePrice,
+                  marketValue,
+                  unrealizedPnl,
+                  unrealizedPnlPercent,
+                  isPositive: unrealizedPnl >= 0,
+                };
+              })}
+              cashBalance={portfolioData?.snapshot?.cash_balance}
+              emptyMessage="No active allocations found in the broker portfolio. Emergency Liquidation submits SELL ideas through RiskEngine when positions exist; target-allocation rebalance is not implemented."
+            />
             
             {/* PORTFOLIO STRESS TESTING (SCENARIO SIMULATOR) */}
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6">
@@ -7138,50 +7193,21 @@ export default function App() {
                </p>
 
                {showTradeHistory && (
-                 <div className="overflow-x-auto mt-4">
-                    <table className="w-full text-left border-collapse min-w-max">
-                      <thead>
-                        <tr className="border-b border-slate-800 text-[9px] font-mono text-slate-500 uppercase tracking-wider">
-                          <th className="py-2 px-2">Date</th>
-                          <th className="py-2 px-2">Symbol</th>
-                          <th className="py-2 px-2">Decision</th>
-                          <th className="py-2 px-2">Sizing Weight</th>
-                          <th className="py-2 px-2 text-right">P&L Outcome</th>
-                          <th className="py-2 px-2 text-center">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="text-xs font-mono text-slate-300">
-                        {activeHistoricalTrades.map((trade, idx) => (
-                           <tr key={idx} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-colors">
-                              <td className="py-3 px-2 text-slate-400">{trade.date}</td>
-                              <td className="py-3 px-2 font-bold text-white">{trade.symbol}</td>
-                              <td className="py-3 px-2">
-                                 <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.decision === 'BUY' ? 'bg-emerald-500/20 text-emerald-400' : trade.decision === 'SELL' ? 'bg-amber-500/20 text-amber-500' : 'bg-slate-800 text-slate-400'}`}>
-                                    {trade.decision}
-                                 </span>
-                              </td>
-                              <td className="py-3 px-2">{trade.weight}x</td>
-                              <td className={`py-3 px-2 font-bold text-right ${trade.outcomeClass}`}>{trade.outcome}</td>
-                              <td className="py-3 px-2 text-center flex items-center justify-center gap-2">
-                                <button
-                                  onClick={() => handleOpenReplay(trade.rawTrade)}
-                                  className="text-[10px] font-mono uppercase tracking-widest text-sky-400 hover:text-sky-300 transition-colors border border-sky-500/30 hover:border-sky-400/50 rounded px-2 py-1 bg-sky-500/10 flex items-center justify-center gap-1.5"
-                                >
-                                  <Play size={10} />
-                                  Replay
-                                </button>
-                                <button 
-                                  onClick={() => handleOpenJournal(trade, idx)}
-                                  className="text-[10px] font-mono uppercase tracking-widest text-indigo-400 hover:text-indigo-300 transition-colors border border-indigo-500/30 hover:border-indigo-400/50 rounded px-2 py-1 bg-indigo-500/10 flex items-center justify-center gap-1.5"
-                                >
-                                  <BookOpen size={10} />
-                                  {tradeJournals[idx] ? "Edit" : "Journal"}
-                                </button>
-                              </td>
-                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                 <div className="mt-4">
+                   <TradeHistoryDataView
+                     rows={activeHistoricalTrades.map((trade, idx) => ({
+                       date: trade.date,
+                       symbol: trade.symbol,
+                       decision: trade.decision,
+                       weight: trade.weight,
+                       outcome: trade.outcome,
+                       outcomeClass: trade.outcomeClass,
+                       index: idx,
+                       journalLabel: tradeJournals[idx] ? 'Edit' : 'Journal',
+                       onReplay: () => handleOpenReplay(trade.rawTrade),
+                       onJournal: () => handleOpenJournal(trade, idx),
+                     }))}
+                   />
                  </div>
                )}
             </div>
@@ -7506,8 +7532,20 @@ export default function App() {
                <div className="flex justify-between items-start mb-4">
                  <div>
                    <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2 uppercase tracking-wide">
-                     <BrainCircuit size={16} className={autoBotConfig.enabled ? "text-rose-400 animate-pulse" : "text-slate-400"} />
+                     <BrainCircuit size={16} className={enginesHalted ? "text-amber-400" : autoBotConfig.enabled ? "text-rose-400 animate-pulse" : "text-slate-400"} />
                      FULLY AUTONOMOUS BLACK-BOX TRADING BOT
+                     {/* Real operational status - engine-level emergency_stop/trading_paused always wins over the
+                         autobot enabled preference, so this never shows a green RUNNING state while halted. */}
+                     <span className={
+                       "px-2 py-0.5 rounded text-[9px] font-mono tracking-widest normal-case " +
+                       (enginesHalted
+                         ? "bg-amber-500/15 text-amber-400 border border-amber-500/40"
+                         : autoBotConfig.enabled
+                           ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/40"
+                           : "bg-slate-800 text-slate-500 border border-slate-700")
+                     }>
+                       {enginesHalted ? "HALTED" : autoBotConfig.enabled ? "RUNNING" : "STANDBY"}
+                     </span>
                    </h3>
                    <p className="text-xs text-slate-400 max-w-3xl leading-relaxed">
                      When Autobot is enabled, idea agents emit through EventBus → ChiefTrader → RiskEngine → OMS → the active broker. LIVE remains NO-GO until GET /api/v2/live-readiness reports LIVE_READY. This loop does not bypass RiskEngine.
@@ -7537,9 +7575,9 @@ export default function App() {
                    )}
                    <button
                      onClick={autoBotConfig.enabled ? toggleAutoBot : () => setShowLaunchDialog(true)}
-                     className={"px-6 py-3 rounded-lg font-bold font-mono tracking-widest text-xs transition-all " + (autoBotConfig.enabled ? "bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.4)]" : "bg-indigo-500 hover:bg-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.3)]")}
+                     className={"px-6 py-3 rounded-lg font-bold font-mono tracking-widest text-xs transition-all " + (autoBotConfig.enabled ? "bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.4)]" : enginesHalted ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.3)]" : "bg-indigo-500 hover:bg-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.3)]")}
                    >
-                     {autoBotConfig.enabled ? "HALT ALL BLACK-BOX SYSTEMS" : "INITIALIZE AUTONOMOUS TRADING"}
+                     {autoBotConfig.enabled ? "HALT ALL BLACK-BOX SYSTEMS" : enginesHalted ? "RESUME & START" : "INITIALIZE AUTONOMOUS TRADING"}
                    </button>
                  </div>
                </div>
@@ -7801,6 +7839,81 @@ export default function App() {
                      widely-known market-structure behavior, not a backtested Argus recommendation - Argus has not validated any
                      specific sub-window as more profitable (see the Live Readiness panel for the real, current strategy-validation
                      status).
+                   </p>
+                 </div>
+               </div>
+
+               {/* STRATEGY ENGINE - a completely separate, isolated research subsystem
+                   (src/server/strategiesEngine/). Off by default. Even in SHADOW/ANALYSIS_ONLY
+                   mode it only ever records hypothetical signals to strategy_engine_signals - it
+                   never places an order, never calls RiskEngine, never touches Autobot/OMS/broker
+                   state. See STRATEGIES_ENGINE.md / ARGUS_STRATEGY_ENGINE_IMPLEMENTATION.md. */}
+               <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 mb-6">
+                 <div className="flex items-center justify-between mb-4">
+                   <span className="text-[10px] text-indigo-400 uppercase tracking-widest font-mono flex items-center gap-2">
+                     <Layers size={13} /> Strategy Engine (Research, Isolated)
+                   </span>
+                   <div className="flex items-center gap-3">
+                     <span className="text-[11px] font-mono text-slate-400 uppercase">{strategyEngineEnabled ? `Enabled - ${strategyEngineMode}` : "Off"}</span>
+                     <button
+                       onClick={() => setStrategyEngineEnabled(!strategyEngineEnabled)}
+                       className={"w-10 h-5 rounded-full p-0.5 transition-colors duration-200 outline-none cursor-pointer " + (strategyEngineEnabled ? "bg-indigo-500" : "bg-slate-700")}
+                     >
+                       <div className={"w-4 h-4 rounded-full bg-white transform transition-transform duration-200 " + (strategyEngineEnabled ? "translate-x-5" : "translate-x-0")}></div>
+                     </button>
+                   </div>
+                 </div>
+
+                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                   <div>
+                     <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block">Mode</span>
+                     <select
+                       className="w-full bg-transparent text-xs font-bold text-indigo-400 outline-none border-b border-slate-700 pb-1 h-6 cursor-pointer"
+                       value={strategyEngineMode}
+                       onChange={e => setStrategyEngineMode(e.target.value)}
+                       disabled={!strategyEngineEnabled}
+                     >
+                       <option value="OFF">OFF</option>
+                       <option value="SHADOW">SHADOW (records hypothetical signals only)</option>
+                       <option value="ANALYSIS_ONLY">ANALYSIS_ONLY (same as SHADOW in this pass)</option>
+                     </select>
+                   </div>
+                   <div>
+                     <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block">Max Active Strategies</span>
+                     <input type="number" min="1" max="500" className="w-full bg-transparent text-sm font-bold text-emerald-400 outline-none border-b border-slate-700 pb-1" value={strategyEngineMaxActive} onChange={e => setStrategyEngineMaxActive(Number(e.target.value))} disabled={!strategyEngineEnabled} />
+                   </div>
+                   <div>
+                     <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block">Min. Confidence</span>
+                     <div className="flex items-center gap-4 border-b border-slate-700 pb-1">
+                       <input type="range" min="0" max="1" step="0.05" className="w-full h-1 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-sky-500" value={strategyEngineMinConfidence} onChange={e => setStrategyEngineMinConfidence(Number(e.target.value))} disabled={!strategyEngineEnabled} />
+                       <span className="text-sm font-bold text-sky-400 shrink-0">{strategyEngineMinConfidence.toFixed(2)}</span>
+                     </div>
+                   </div>
+                   <div className="flex flex-col justify-end">
+                     <button
+                       onClick={saveStrategyEngineSettings}
+                       disabled={strategyEngineSaveStatus === "saving"}
+                       className="w-full h-8 rounded-md bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-bold uppercase tracking-widest hover:bg-indigo-500/30 disabled:opacity-50"
+                     >
+                       {strategyEngineSaveStatus === "saving" ? "Saving..." : strategyEngineSaveStatus === "saved" ? "Saved" : "Save"}
+                     </button>
+                   </div>
+                 </div>
+                 {strategyEngineSaveStatus === "error" && (
+                   <div className="mt-2 text-[11px] font-mono text-rose-400">{strategyEngineSaveError}</div>
+                 )}
+
+                 <div className="mt-4 pt-3 border-t border-slate-800 text-[11px] text-slate-500 leading-relaxed space-y-1">
+                   <p className="text-amber-400 font-bold">
+                     Strategy Engine does not directly execute trades.
+                   </p>
+                   <p>
+                     This is a separate, isolated research subsystem holding 10,000+ candidate strategy configurations
+                     (browsable via GET /api/v2/strategy-engine/strategies). Enabling it and setting a mode other than OFF only
+                     makes a background evaluator compute real signals against real market data and record them as a
+                     hypothetical log entry - it never calls the broker, never bypasses RiskEngine, and never places
+                     or influences a real order, at any setting on this page. SIGNAL_ADVISORY / CONSENSUS_PARTICIPANT /
+                     PAPER_ONLY / LIVE_ELIGIBLE modes are reserved for a future phase and are rejected by the server today.
                    </p>
                  </div>
                </div>
@@ -8291,18 +8404,20 @@ export default function App() {
                <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 mb-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                  <div>
                    <h4 className="text-xs font-bold text-white uppercase tracking-wide mb-1">System integrity check</h4>
-                   <p className="text-[10px] text-slate-500 font-mono">
-                     {deploymentIntegrity
+                   <p className={"text-[10px] font-mono " + (deploymentIntegrityError ? "text-rose-400" : "text-slate-500")}>
+                     {deploymentIntegrityError
+                       ? `Integrity check failed: ${deploymentIntegrityError} — click Retry.`
+                       : deploymentIntegrity
                        ? `${deploymentIntegrity.score} real structural checks passed (${deploymentIntegrity.scorePct}%) — schema/broker/AI-provider/local-AI-service reachability.`
                        : 'Loading real integrity check...'}
                    </p>
                  </div>
                  <div className="flex flex-wrap gap-2 shrink-0">
                    <button
-                     onClick={() => fetch('/api/v1/system/integrity').then(r => r.json()).then(setDeploymentIntegrity).catch(() => {})}
+                     onClick={fetchDeploymentIntegrity}
                      className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
                    >
-                     Re-check Now
+                     {deploymentIntegrityError ? "Retry" : "Re-check Now"}
                    </button>
                    <button
                      onClick={() => setActiveTab("validation")}
@@ -9133,7 +9248,35 @@ export default function App() {
 
           </div>
         )}
+        </div>
+        </MobilePullRefresh>
       </main>
+
+      <ResponsiveNavDrawer
+        open={navDrawerOpen}
+        activeTab={activeTab as AppTabId}
+        onClose={() => setNavDrawerOpen(false)}
+        onSelectTab={(tab) => setActiveTab(tab)}
+      />
+      <ResponsiveBottomNav
+        activeTab={activeTab as AppTabId}
+        onSelectTab={(tab) => setActiveTab(tab)}
+        onOpenDrawer={() => setNavDrawerOpen(true)}
+        tradingMode={autoBotTradingMode}
+        enginesHalted={enginesHalted}
+        onEmergencyStop={() => {
+          if (enginesHalted) {
+            setEnginesHalted(false);
+            setHaltReason('');
+            setHaltTime('');
+          } else {
+            triggerEmergencyStop();
+            setEnginesHalted(true);
+            setHaltReason('UI emergency stop');
+            setHaltTime(new Date().toLocaleTimeString());
+          }
+        }}
+      />
 
       {/* Selected Agent Modal */}
       {selectedAgentNode && (

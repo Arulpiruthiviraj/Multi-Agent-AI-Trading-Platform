@@ -52,10 +52,15 @@ import { v4 as uuidv4 } from 'uuid';
 import { EncryptionService } from '../core/EncryptionService';
 import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADE_SIDE_VALUES } from './AIOutputValidator';
 import { tradingSafety } from '../config/tradingSafety';
+import { networkEndpoints } from '../config/networkEndpoints';
+import { aiModels } from '../config/aiModels';
 
 // Router timeout (tradingSafety.aiProviderTimeoutMs) plus AbortController so fetch-based
 // providers cancel in-flight HTTP instead of hanging after the caller has already failed over.
 const AI_PROVIDER_TIMEOUT_MS = tradingSafety.aiProviderTimeoutMs;
+const AI_AUTH_FAILURE_COOLDOWN_MS = tradingSafety.aiProviderAuthFailureCooldownMs;
+const AI_UNREACHABLE_COOLDOWN_MS = tradingSafety.aiProviderUnreachableCooldownMs;
+const AI_TIMEOUT_SKIP_COOLDOWN_MS = tradingSafety.aiProviderTimeoutSkipCooldownMs;
 // Phase 7 (AI_MODEL_INVENTORY.md) - a low, non-zero temperature for every real trading-decision
 // call. Previously unset anywhere (each provider's own undocumented default sampling applied) -
 // this makes AI-influenced consensus votes measurably more reproducible without forcing fully
@@ -63,6 +68,34 @@ const AI_PROVIDER_TIMEOUT_MS = tradingSafety.aiProviderTimeoutMs;
 // structured-JSON responses. Centralized here rather than duplicated per-provider so the policy
 // lives in one place.
 const AI_DECISION_TEMPERATURE = tradingSafety.aiDecisionTemperature;
+
+export function shouldSkipUnconfiguredProvider(opts: { apiKey?: string | null; isLocal: boolean }): boolean {
+  return !opts.isLocal && !opts.apiKey;
+}
+
+export function selectConsensusProviders<T>(providers: [string, T][], maxProviders: number): [string, T][] {
+  if (maxProviders <= 0) return [];
+  return providers.slice(0, maxProviders);
+}
+
+function envKeyForProviderName(providerName: string): string | undefined {
+  const compact = providerName.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+  const candidates = [
+    `${compact}_API_KEY`,
+    `${providerName.toUpperCase()}_API_KEY`,
+  ];
+  if (providerName.toLowerCase().includes('openrouter')) candidates.unshift('OPENROUTER_API_KEY');
+  if (providerName.toLowerCase().includes('gemini')) candidates.unshift('GEMINI_API_KEY');
+  if (providerName.toLowerCase().includes('openai')) candidates.unshift('OPENAI_API_KEY');
+  if (providerName.toLowerCase().includes('nvidia')) candidates.unshift('NVIDIA_API_KEY');
+  if (providerName.toLowerCase().includes('deepseek')) candidates.unshift('DEEPSEEK_API_KEY');
+  if (providerName.toLowerCase().includes('grok') || providerName.toLowerCase().includes('x.ai')) candidates.unshift('XAI_API_KEY', 'GROK_API_KEY');
+  for (const name of candidates) {
+    const v = process.env[name];
+    if (v) return v;
+  }
+  return undefined;
+}
 
 class AITimeoutError extends Error {
   constructor(providerId: string, ms: number) {
@@ -91,6 +124,40 @@ function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number, pro
 // failed before any tokens were counted (0 tokens -> 0 cost regardless of pricing formula).
 function isLocalProviderRow(row: { apiEndpoint: string | null } | undefined): boolean {
   return !!row?.apiEndpoint && (row.apiEndpoint.includes('localhost') || row.apiEndpoint.includes('127.0.0.1'));
+}
+
+// Real bug fix, found live: Gemini's actual real-key-rejection message is "API key not valid.
+// Please pass a valid API key." (status field API_KEY_INVALID) - it never contained the literal
+// substring "invalid api key" the original regex looked for ("API key not valid" is phrased the
+// other way around), so a permanently-dead Gemini key was never circuit-broken and kept being
+// retried every single cycle, unlike every other provider's 401/403. Broadened to also catch
+// Gemini's real phrasing and its machine-readable status string.
+export function isAuthFailureError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b(401|403)\b/.test(msg)
+    || /unauthorized|forbidden|invalid api key|api key not valid|api_key_invalid|authentication/i.test(msg);
+}
+
+/** 404 / network-down — skip for aiProviderUnreachableCooldownMs; do not flip DB enabled. */
+export function isUnreachableProviderError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b404\b/.test(msg)
+    || /fetch failed/i.test(msg)
+    || /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET/i.test(msg);
+}
+
+/** Hung / aborted chat — skip for aiProviderTimeoutSkipCooldownMs so NewsAgent does not re-pay 12s every cycle. */
+export function isTimeoutSkipError(err: unknown): boolean {
+  if (err instanceof AITimeoutError) return true;
+  if (err instanceof Error && err.name === 'AbortError') return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /did not respond within/i.test(msg);
+}
+
+function extractHttpStatus(err: unknown): number | undefined {
+  const msg = err instanceof Error ? err.message : String(err);
+  const m = msg.match(/\b(401|403|404)\b/);
+  return m ? Number(m[1]) : undefined;
 }
 
 // Phase 1 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - the AI call forensic ledger. Previously
@@ -145,6 +212,10 @@ export class AIRouter {
   private providers: Map<string, AIProvider> = new Map();
   // Map agent name to provider and model
   private agentRouting: Map<string, { providerId: string, model: string }> = new Map();
+  /** Auth-failed providers stay out of the routing pool until this wall-clock ms. */
+  private authDisabledUntil: Map<string, number> = new Map();
+  /** 404 / timeout / fetch-failed skip (in-memory only — not a DB enabled:false). */
+  private skipUntil: Map<string, number> = new Map();
 
   private constructor() {}
 
@@ -163,6 +234,95 @@ export class AIRouter {
    *  registered providers without initialize()'s DB reads/seeding side effects. */
   public clearProviders() {
     this.providers.clear();
+    this.authDisabledUntil.clear();
+    this.skipUntil.clear();
+  }
+
+  /** Test-only — inspect auth circuit state without reaching into private fields elsewhere. */
+  public isProviderAuthDisabled(providerId: string, nowMs: number = Date.now()): boolean {
+    const until = this.authDisabledUntil.get(providerId);
+    return typeof until === 'number' && until > nowMs;
+  }
+
+  /** Test-only — inspect 404/timeout skip without reaching into private fields. */
+  public isProviderTemporarilySkipped(providerId: string, nowMs: number = Date.now()): boolean {
+    const until = this.skipUntil.get(providerId);
+    return typeof until === 'number' && until > nowMs;
+  }
+
+  private async disableProviderForAuthFailure(providerId: string, reason: string): Promise<void> {
+    const until = Date.now() + AI_AUTH_FAILURE_COOLDOWN_MS;
+    this.authDisabledUntil.set(providerId, until);
+    this.providers.delete(providerId);
+    try {
+      await db.update(schema.aiProviders).set({
+        enabled: false,
+        health: 'Offline',
+        lastFailure: new Date().toISOString(),
+      }).where(eq(schema.aiProviders.id, providerId));
+    } catch (e) {
+      console.error(`[AIRouter] Failed to disable provider ${providerId} after auth failure`, e);
+    }
+    console.warn(`[AIRouter] Provider ${providerId} disabled for auth failure (${reason}) — removed from routing pool for ${AI_AUTH_FAILURE_COOLDOWN_MS / 1000}s.`);
+  }
+
+  private skipProviderTemporarily(providerId: string, cooldownMs: number, reason: string): void {
+    const now = Date.now();
+    const existing = this.skipUntil.get(providerId);
+    if (typeof existing === 'number' && existing > now) {
+      const extended = now + cooldownMs;
+      if (extended > existing) this.skipUntil.set(providerId, extended);
+      return;
+    }
+    this.skipUntil.set(providerId, now + cooldownMs);
+    console.warn(`[AIRouter] Provider ${providerId} skipped for ${cooldownMs / 1000}s (${reason})`);
+  }
+
+  private noteProviderSkipFromError(providerId: string, err: unknown): void {
+    if (isTimeoutSkipError(err)) {
+      this.skipProviderTemporarily(providerId, AI_TIMEOUT_SKIP_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (isUnreachableProviderError(err)) {
+      this.skipProviderTemporarily(providerId, AI_UNREACHABLE_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  private filterRoutableProviders(entries: [string, AIProvider][], dbStats: typeof schema.aiProviders.$inferSelect[]): [string, AIProvider][] {
+    const now = Date.now();
+    return entries.filter(([id]) => {
+      const until = this.authDisabledUntil.get(id);
+      if (typeof until === 'number' && until > now) return false;
+      const skipUntil = this.skipUntil.get(id);
+      if (typeof skipUntil === 'number' && skipUntil > now) return false;
+      const stat = dbStats.find(s => s.id === id);
+      return !stat || stat.enabled;
+    });
+  }
+
+  private async probeProviderAtStartup(providerId: string, provider: AIProvider): Promise<void> {
+    try {
+      if (!(await provider.authenticate())) {
+        await this.disableProviderForAuthFailure(providerId, 'startup authenticate() returned false');
+        return;
+      }
+      const res = await withTimeout(
+        (signal) => provider.chat('Reply with exactly: OK', { temperature: 0, signal }),
+        Math.min(AI_PROVIDER_TIMEOUT_MS, 8000),
+        providerId,
+      );
+      if (!res.content) {
+        await this.disableProviderForAuthFailure(providerId, 'startup health probe returned empty content');
+      }
+    } catch (e: any) {
+      const status = extractHttpStatus(e);
+      if (status === 401 || status === 403 || isAuthFailureError(e)) {
+        await this.disableProviderForAuthFailure(providerId, e.message);
+      } else {
+        this.noteProviderSkipFromError(providerId, e);
+        console.warn(`[AIRouter] Startup health probe for ${providerId} failed (non-auth): ${e.message}`);
+      }
+    }
   }
 
   public async initialize() {
@@ -181,10 +341,10 @@ export class AIRouter {
         // Seed some defaults
         const defaultProviders = [
             { id: uuidv4(), providerName: 'Gemini', apiEndpoint: null, priority: 0, enabled: true },
-            { id: uuidv4(), providerName: 'Grok', apiEndpoint: 'https://api.x.ai/v1', priority: 1, enabled: true, defaultModel: 'grok-4' },
-            { id: uuidv4(), providerName: 'OpenRouter (Free Tier)', apiEndpoint: 'https://openrouter.ai/api/v1', priority: 2, enabled: true },
-            { id: uuidv4(), providerName: 'LiteLLM Gateway', apiEndpoint: 'http://localhost:4000', priority: 3, enabled: true },
-            { id: uuidv4(), providerName: 'Ollama (Local)', apiEndpoint: 'http://localhost:11434/v1', priority: 4, enabled: true },
+            { id: uuidv4(), providerName: 'Grok', apiEndpoint: networkEndpoints.aiCloud.grokBaseUrl, priority: 1, enabled: true, defaultModel: 'grok-4' },
+            { id: uuidv4(), providerName: 'OpenRouter (Free Tier)', apiEndpoint: networkEndpoints.aiCloud.openRouterBaseUrl, priority: 2, enabled: true },
+            { id: uuidv4(), providerName: 'LiteLLM Gateway', apiEndpoint: networkEndpoints.aiLocal.liteLlmGatewayDefault, priority: 3, enabled: true },
+            { id: uuidv4(), providerName: 'Ollama (Local)', apiEndpoint: `${networkEndpoints.aiLocal.ollamaDefault}/v1`, priority: 4, enabled: true },
         ];
         try {
             for (const p of defaultProviders) {
@@ -199,7 +359,7 @@ export class AIRouter {
          
          let apiKey: string | undefined;
          try {
-           apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : process.env[`${p.providerName.toUpperCase()}_API_KEY`];
+           apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : envKeyForProviderName(p.providerName);
          } catch {
            console.error(`[AIRouter] DECRYPTION_FAILED for provider ${p.providerName} — skipping that provider.`);
            continue;
@@ -207,6 +367,12 @@ export class AIRouter {
          let providerInstance: AIProvider | null = null;
          
          const nameLower = p.providerName.toLowerCase();
+         const endpointHint = p.apiEndpoint || '';
+         const isLocalEndpoint = endpointHint.includes('localhost') || endpointHint.includes('127.0.0.1');
+         if (shouldSkipUnconfiguredProvider({ apiKey, isLocal: isLocalEndpoint })) {
+           console.warn(`[AIRouter] Skipping ${p.providerName} — no API key configured (DEF-14).`);
+           continue;
+         }
          if (nameLower.includes('gemini') && !p.apiEndpoint) {
              providerInstance = new GeminiProvider();
              await (providerInstance as GeminiProvider).initialize(apiKey);
@@ -223,7 +389,7 @@ export class AIRouter {
          } else {
 
              // Universal compatible (LiteLLM, OpenRouter, Local, Groq, etc)
-             const endpoint = p.apiEndpoint || 'https://openrouter.ai/api/v1';
+             const endpoint = p.apiEndpoint || networkEndpoints.aiCloud.openRouterBaseUrl;
              const isLocal = endpoint.includes('localhost') || endpoint.includes('127.0.0.1');
              providerInstance = new OpenAICompatibleProvider(p.providerName, endpoint, isLocal);
              await (providerInstance as OpenAICompatibleProvider).initialize(apiKey, p.defaultModel || undefined);
@@ -232,6 +398,26 @@ export class AIRouter {
          if (providerInstance) {
              this.registerProvider(p.id, providerInstance);
          }
+     }
+
+     for (const [id, provider] of Array.from(this.providers.entries())) {
+       await this.probeProviderAtStartup(id, provider);
+     }
+
+     // Apply config/aiModels.json's per-agent local-model specialization as the DEFAULT routing -
+     // real agentType keys only (grepped from actual routeTask() call sites, see that file's own
+     // header). Runs BEFORE persisted agent_routing_overrides below so a user's own Settings
+     // choice always wins over this file, exactly like every other config-vs-DB-override
+     // precedence in this codebase.
+     try {
+         const ollamaRow = dbProviders.find(p => p.providerName === 'Ollama (Local)');
+         if (ollamaRow && this.providers.has(ollamaRow.id)) {
+             for (const [agentType, route] of Object.entries(aiModels.routes)) {
+                 this.setAgentRoute(agentType, ollamaRow.id, route.model);
+             }
+         }
+     } catch (e) {
+         console.error('[AIRouter] Failed to apply config/aiModels.json default routes', e);
      }
 
      // Load persisted per-agent routing overrides (Phase 6) - setAgentRoute() already existed
@@ -265,10 +451,7 @@ export class AIRouter {
     let dbStats: (typeof schema.aiProviders.$inferSelect)[] = [];
     try {
         dbStats = await db.select().from(schema.aiProviders);
-        availableProviders = availableProviders.filter(([id, p]) => {
-           const stat = dbStats.find(s => s.id === id);
-           return !stat || stat.enabled;
-        });
+        availableProviders = this.filterRoutableProviders(availableProviders, dbStats);
 
         // Same known-dead exclusion as routeTask() - a multi-provider debate shouldn't spend real
         // parallel calls on providers whose keys have already failed repeatedly, unless every
@@ -276,7 +459,21 @@ export class AIRouter {
         const isKnownDead = (id: string) => dbStats.find(s => s.id === id)?.health === 'Offline';
         const live = availableProviders.filter(([id]) => !isKnownDead(id));
         if (live.length > 0) availableProviders = live;
+
+        availableProviders.sort((a, b) => {
+           const statA = dbStats.find(s => s.id === a[0]);
+           const statB = dbStats.find(s => s.id === b[0]);
+           if (statA && statB) {
+               if (statA.priority !== statB.priority) return (statA.priority ?? 99) - (statB.priority ?? 99);
+               if (statA.health === 'Healthy' && statB.health !== 'Healthy') return -1;
+               if (statB.health === 'Healthy' && statA.health !== 'Healthy') return 1;
+               if ((statA.successRate || 0) !== (statB.successRate || 0)) return (statB.successRate || 0) - (statA.successRate || 0);
+               return (statA.latency || 9999) - (statB.latency || 9999);
+           }
+           return 0;
+        });
     } catch (e) {}
+    availableProviders = selectConsensusProviders(availableProviders, tradingSafety.consensusMaxProviders);
 
     if (availableProviders.length === 0) {
        throw new Error("No AI Providers available for consensus");
@@ -378,6 +575,7 @@ export class AIRouter {
                 traceId, agent: agentType, provider: providerId, model: 'consensus',
                 status: 'error', error: e.message, latencyMs: Date.now() - pStart,
             });
+            this.noteProviderSkipFromError(providerId, e);
             return { provider: providerId, status: "error", error: e.message, latencyMs: Date.now() - pStart, aiCallId };
         }
     });
@@ -416,6 +614,7 @@ export class AIRouter {
     let dbStats: (typeof schema.aiProviders.$inferSelect)[] = [];
     try {
         dbStats = await db.select().from(schema.aiProviders);
+        availableProviders = this.filterRoutableProviders(availableProviders, dbStats);
         availableProviders.sort((a, b) => {
            const statA = dbStats.find(s => s.id === a[0]);
            const statB = dbStats.find(s => s.id === b[0]);
@@ -434,14 +633,12 @@ export class AIRouter {
         });
 
         // Providers real calls have already driven to 'Offline' (successRate decayed below 50
-        // from repeated real failures - see the failure branch below) are moved to the very end
-        // rather than tried in their normal priority slot. They're still tried last-resort if
-        // every live provider fails, but a call no longer burns N dead round-trips (e.g. expired
-        // API keys) before reaching a provider that's actually going to answer.
+        // from repeated real failures - see the failure branch below) are excluded when any
+        // live provider remains. Same policy as routeConsensus: do not burn last-resort
+        // round-trips on a 404/dead endpoint every NewsAgent cycle.
         const isKnownDead = (id: string) => dbStats.find(s => s.id === id)?.health === 'Offline';
         const live = availableProviders.filter(([id]) => !isKnownDead(id));
-        const dead = availableProviders.filter(([id]) => isKnownDead(id));
-        availableProviders = [...live, ...dead];
+        if (live.length > 0) availableProviders = live;
     } catch (e) {}
 
     // If agent has a preferred provider, put it first
@@ -474,7 +671,24 @@ export class AIRouter {
             console.log(`[AIRouter] Agent '${agentType}' routing to ${providerId}`);
             
             reqModel = (providerId === preferredConfig?.providerId) ? preferredConfig?.model : undefined;
-            res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: AI_DECISION_TEMPERATURE, signal }), AI_PROVIDER_TIMEOUT_MS, providerId);
+            // When this call is going through the agentType's routed model (config/aiModels.json
+            // or a persisted override sharing the same agentType), use that route's own
+            // temperature/timeout/fallback-model list instead of the generic defaults - additive,
+            // every other agent/provider combination behaves exactly as before.
+            const route = reqModel ? aiModels.routes[agentType] : undefined;
+            const perModelTimeoutMs = route?.timeoutMs ?? AI_PROVIDER_TIMEOUT_MS;
+            const effectiveTemperature = route?.temperature ?? AI_DECISION_TEMPERATURE;
+            // Real bug fix (found live): the outer deadline here used to be ONE model's worth of
+            // time shared across the primary model AND every fallback model inside it, so a
+            // fallback attempt could fail instantly ("aborted") the moment the shared clock ran
+            // out, before it ever got a real try. The outer withTimeout is now sized to cover
+            // every model OpenAICompatibleProvider might attempt (primary + all fallbacks), each
+            // getting perModelTimeoutMs via options.timeoutMs - a real per-model budget, not a
+            // shared remainder. This is a pure safety-net ceiling; the real per-model timing is
+            // enforced inside OpenAICompatibleProvider.chat() itself.
+            const fallbackCount = route?.fallback?.length ?? 0;
+            const totalTimeoutMs = perModelTimeoutMs * (1 + fallbackCount);
+            res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: effectiveTemperature, signal, fallbackModels: route?.fallback, timeoutMs: route ? perModelTimeoutMs : undefined }), totalTimeoutMs, providerId);
             
             latency = Date.now() - startTime;
             
@@ -555,6 +769,12 @@ export class AIRouter {
             console.warn(`[AIRouter] Provider ${providerId} failed: ${e.message}. Failing over...`);
             lastError = e;
             failedProviders.push({ id: providerId, reason: e.message });
+            const status = extractHttpStatus(e);
+            if (status === 401 || status === 403 || isAuthFailureError(e)) {
+              await this.disableProviderForAuthFailure(providerId, e.message);
+            } else {
+              this.noteProviderSkipFromError(providerId, e);
+            }
             // Record failure in usage log
             try {
                 // Broadcast to UI

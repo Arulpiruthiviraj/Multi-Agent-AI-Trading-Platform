@@ -163,6 +163,23 @@ export function latestRunForStrategy(strategyId: string): ResearchRunRecord | nu
         try {
           const m = JSON.parse(readFileSync(manifestPath, 'utf8')) as CanonicalBacktestResult & { runId?: string };
           if (m.strategyId !== strategyId) continue;
+          // Real bug fix: recordResearchRun() above deliberately writes `metrics`/`trades` to their
+          // OWN sibling files (metrics.json/trades.json), not into manifest.json - manifest.json is
+          // a real, intentionally-trimmed summary. This disk-fallback path used to cast the trimmed
+          // manifest.json directly as a full CanonicalBacktestResult and hand it to callers like
+          // reconcilePaperVsResearch(), which unconditionally reads `.metrics.expectancy` - a real,
+          // reproducing crash (TypeError: Cannot read properties of undefined) any time a research
+          // run only exists on disk (not in the in-memory `memory` map from this same process).
+          // Read the sibling files back in and merge, so this reconstructs the SAME real object
+          // recordResearchRun() was given, not a partial one.
+          const metricsPath = join(runsDir, name, 'metrics.json');
+          const tradesPath = join(runsDir, name, 'trades.json');
+          if (existsSync(metricsPath)) {
+            try { m.metrics = JSON.parse(readFileSync(metricsPath, 'utf8')); } catch { /* leave whatever manifest.json had, if anything */ }
+          }
+          if (existsSync(tradesPath)) {
+            try { m.trades = JSON.parse(readFileSync(tradesPath, 'utf8')); } catch { /* leave whatever manifest.json had, if anything */ }
+          }
           const rec: ResearchRunRecord = { runId: m.runId || name, manifest: m as CanonicalBacktestResult };
           if (!best || rec.manifest.createdAt > best.manifest.createdAt) best = rec;
         } catch {

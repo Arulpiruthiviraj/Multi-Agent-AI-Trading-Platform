@@ -1,5 +1,6 @@
 import { NewsProviderPlugin, NewsArticleRaw } from './NewsProviderPlugin';
 import { logErrorSafely } from '../../core/SecretRedaction';
+import { networkEndpoints } from '../../config/networkEndpoints';
 
 export class FMPNewsProvider implements NewsProviderPlugin {
   public id = 'fmp_news';
@@ -18,7 +19,7 @@ export class FMPNewsProvider implements NewsProviderPlugin {
     }
 
     try {
-      const res = await fetch(`https://financialmodelingprep.com/api/v3/fmp/articles?page=0&size=10&apikey=${process.env.FMP_API_KEY}`);
+      const res = await fetch(`${networkEndpoints.marketData.fmpBaseUrl}/fmp/articles?page=0&size=10&apikey=${process.env.FMP_API_KEY}`);
       if (!res.ok) return [];
       const data = await res.json();
       

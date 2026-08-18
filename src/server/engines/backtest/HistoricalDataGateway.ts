@@ -15,6 +15,7 @@ import { db } from '../../db';
 import * as schema from '../../db/schema';
 import { and, eq, gte, lte, asc, ne, sql } from 'drizzle-orm';
 import { tradingSafety } from '../../config/tradingSafety';
+import { networkEndpoints } from '../../config/networkEndpoints';
 import crypto from 'crypto';
 
 export interface Bar {
@@ -27,8 +28,9 @@ export interface Bar {
 }
 
 // Alpaca's real market-data host - distinct from the paper/live trading hosts, since market data
-// is not paper/live-scoped the way order execution is.
-const ALPACA_DATA_HOST = 'https://data.alpaca.markets';
+// is not paper/live-scoped the way order execution is. Sourced from config/networkEndpoints.json
+// (also used by ingestAlpacaWarehouse.ts, which independently hardcoded the same host before).
+const ALPACA_DATA_HOST = networkEndpoints.broker.alpaca.dataBaseUrl;
 
 export class HistoricalDataGateway {
   private static instance: HistoricalDataGateway;
@@ -56,6 +58,10 @@ export class HistoricalDataGateway {
       url.searchParams.set('end', new Date(endMs).toISOString());
       url.searchParams.set('limit', '10000');
       url.searchParams.set('adjustment', 'raw');
+      // Unspecified defaults to the SIP feed, which recent-data requests 403 on unless the
+      // account has a paid SIP subscription. The live WebSocket only ever connects to IEX
+      // (wss://stream.data.alpaca.markets/v2/iex), so historical bars must match that entitlement.
+      url.searchParams.set('feed', 'iex');
       if (pageToken) url.searchParams.set('page_token', pageToken);
 
       const res = await fetch(url.toString(), {
@@ -134,6 +140,7 @@ export class HistoricalDataGateway {
         url.searchParams.set('end', new Date(endMs).toISOString());
         url.searchParams.set('limit', '10000');
         url.searchParams.set('adjustment', 'split');
+        url.searchParams.set('feed', 'iex');
         if (pageToken) url.searchParams.set('page_token', pageToken);
 
         const res = await fetch(url.toString(), {

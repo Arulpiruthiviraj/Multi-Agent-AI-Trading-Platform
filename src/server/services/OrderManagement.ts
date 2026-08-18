@@ -41,7 +41,7 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { db } from '../db';
-import { trades, fills, settings, brokerConnections } from '../db/schema';
+import { trades, settings, brokerConnections } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
@@ -51,9 +51,9 @@ import { tradingSafety } from '../config/tradingSafety';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { triggerWebhooks } from '../routes/webhooks';
 import { resolveOmsExecutionEnvironment, stampExecutionEnvironment } from '../research/organicPaper';
-import { assertBrokerEnvironmentAllowsOrder } from '../core/brokerEnvironment';
+import { authorizeProductionOrder } from '../core/liveOrderAuthorization';
 import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
-import { assertLiveOrdersArmed } from '../core/LiveTradingConfirmation';
+import { insertIncrementalFill } from './fillLedger';
 
 function getActiveReplaySessionSafe(): { replayId: string } | null {
   try {
@@ -185,28 +185,23 @@ export class OrderManagementService {
       : (status === 'FILLED' ? requestedQuantity : 0);
     if (reportedQty <= 0) return 0;
 
-    let priorQty = 0;
     try {
-      const priorFills = await db.select().from(fills).where(eq(fills.orderId, orderId));
-      priorQty = priorFills.reduce((sum: number, f: any) => sum + f.quantity, 0);
+      const result = await insertIncrementalFill({
+        orderId,
+        brokerOrderId,
+        requestedQuantity,
+        status,
+        filledQuantity,
+        averageFillPrice,
+      });
+      if (result.newQty <= 0) return 0;
+      const fillPrice = averageFillPrice || 0;
+      eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
+      return result.newQty;
     } catch (e) {
-      console.error(`[OMS] Failed to read prior fills for order ${orderId} - skipping fill recording to avoid double-counting`, e);
+      console.error(`[OMS] Failed to persist fill for order ${orderId}`, e);
       return 0;
     }
-
-    const newQty = reportedQty - priorQty;
-    if (newQty <= 1e-9) return 0;
-
-    const fillPrice = averageFillPrice || 0;
-    await db.insert(fills).values({
-      orderId,
-      brokerFillId: brokerOrderId,
-      quantity: newQty,
-      price: fillPrice,
-      filledAt: new Date().toISOString(),
-    });
-    eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
-    return newQty;
   }
 
   async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any, transactionId?: string, quantStrategyId?: string | null, quantStopPrice?: number | null, quantTargetPrice?: number | null, quantInvalidationJson?: string | null, intendedPrice?: number | null) {
@@ -304,32 +299,19 @@ export class OrderManagementService {
           paperMode = null;
         }
       }
-      const envGate = assertBrokerEnvironmentAllowsOrder({
+      const envGate = authorizeProductionOrder({
         tradingMode: replayActive ? 'Paper' : readTradingMode(),
         paperMode: replayActive ? true : paperMode,
       });
       if (!envGate.ok) {
         await db.update(trades).set({
           status: 'REJECTED',
-          executionEnvironment: 'UNKNOWN',
-          reasoning: stampExecutionEnvironment(envGate.reason, 'UNKNOWN'),
+          executionEnvironment: envGate.environment === 'LIVE' ? 'LIVE' : envGate.environment === 'PAPER' ? 'PAPER' : 'UNKNOWN',
+          reasoning: stampExecutionEnvironment(envGate.reason, envGate.environment === 'LIVE' ? 'LIVE' : 'UNKNOWN'),
         }).where(eq(trades.id, orderId));
         console.error(`[OMS] ${envGate.reason}`);
         try { if (traceId) notifyReplayOrder(traceId); } catch { /* optional */ }
         return;
-      }
-      if (envGate.environment === 'LIVE') {
-        const arm = assertLiveOrdersArmed();
-        if (!arm.ok) {
-          await db.update(trades).set({
-            status: 'REJECTED',
-            executionEnvironment: 'LIVE',
-            reasoning: stampExecutionEnvironment(arm.reason, 'LIVE'),
-          }).where(eq(trades.id, orderId));
-          console.error(`[OMS] ${arm.reason}`);
-          try { if (traceId) notifyReplayOrder(traceId); } catch { /* optional */ }
-          return;
-        }
       }
 
       // Capture the pre-trade entry price so a SELL's realized P&L can be computed once it fills.

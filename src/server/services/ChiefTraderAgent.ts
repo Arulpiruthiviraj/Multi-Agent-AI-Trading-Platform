@@ -45,6 +45,7 @@ import { bucketFor } from './ConfidenceCalibration';
 import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 import { recordConsensusTransaction } from '../core/TransactionRegistry';
+import { tracingService } from './TracingService';
 import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
 import { tradingSafety } from '../config/tradingSafety';
 import { runtimeIntervals } from '../config/runtimeIntervals';
@@ -435,6 +436,23 @@ export class ChiefTraderAgent {
     // lets live animation show the Chief Trader node finishing its evaluation even when the
     // result is "not yet, waiting for more evidence," not just on a successful approval.
     eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, { traceId, symbol, approved, confidence: approvedConfidence, side: approvedSide, threshold: CONSENSUS_APPROVAL_THRESHOLD });
+
+    tracingService.logChiefConsensus({
+      traceId,
+      symbol,
+      approved,
+      consensusScore: approvedConfidence,
+      consensusThreshold: CONSENSUS_APPROVAL_THRESHOLD,
+      terminalReason: reason || `Consensus ${(approvedConfidence * 100).toFixed(1)}% vs threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%`,
+      votingMatrix: approvedEvidence.map(e => ({
+        agent: e.agent,
+        side: e.side,
+        confidence: e.confidence,
+        weight: e.weight,
+        agreed: e.side === approvedSide,
+        sourceTraceId: e.traceId,
+      })),
+    });
 
     for (const e of approvedEvidence) {
       if (e.side !== 'BUY' && e.side !== 'SELL' && e.side !== 'HOLD') continue;

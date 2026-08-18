@@ -76,6 +76,27 @@ export async function runDigitalTwinTelemetryPulse(opts?: {
     currentPrice: 188.42,
   });
 
+  await sleep(350);
+  eventBus.emit(EVENTS.TRADE_IDEA_GENERATED, {
+    ...base,
+    symbol,
+    side: 'BUY',
+    confidence: 0.78,
+    reasoning: 'TELEMETRY_PULSE — synthetic QuantEngine idea (UI only)',
+    agent: 'QuantEngine',
+    quant_strategy_id: 'MOMENTUM_BREAKOUT',
+    currentPrice: 188.42,
+  });
+
+  await sleep(300);
+  eventBus.emit(EVENTS.KRONOS_FORECAST_COMPLETED, {
+    ...base,
+    symbol,
+    side: 'BUY',
+    confidence: 0.71,
+    agent: 'KronosForecastAgent',
+  });
+
   await sleep(400);
   eventBus.emit(EVENTS.CHIEF_CONSENSUS_STARTED, {
     ...base,

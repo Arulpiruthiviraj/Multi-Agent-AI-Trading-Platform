@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { assertBrokerEnvironmentAllowsOrder, classifyBrokerEnvironment } from './brokerEnvironment';
 import { evaluateLiveReadiness } from './liveReadinessEngine';
+import { authorizeProductionOrder, assertLiveReadinessAllowsOrder } from './liveOrderAuthorization';
+import { armLiveTrading, disarmLiveTrading, LIVE_TRADING_CONFIRMATION_PHRASE } from './LiveTradingConfirmation';
 import { researchSafety } from '../config/researchSafety';
 
 describe('LIVE readiness engine and broker environment', () => {
@@ -64,5 +66,24 @@ describe('LIVE readiness engine and broker environment', () => {
   it('cannot return LIVE_READY while CORE is UNTESTED and paper is empty', () => {
     const r = evaluateLiveReadiness();
     expect(r.gates.every((g) => g.verdict === 'PASS')).toBe(false);
+  });
+
+  it('assertLiveReadinessAllowsOrder does not block PAPER', () => {
+    expect(assertLiveReadinessAllowsOrder('PAPER').ok).toBe(true);
+  });
+
+  it('LIVE authorization is rejected while evaluateLiveReadiness is LIVE_NO_GO even if LIVE_ARM is set', () => {
+    const prev = process.env.PAPER_TRADING_ONLY;
+    process.env.PAPER_TRADING_ONLY = 'false';
+    armLiveTrading(LIVE_TRADING_CONFIRMATION_PHRASE);
+    try {
+      const gate = authorizeProductionOrder({ tradingMode: 'LIVE', paperMode: false });
+      expect(gate.ok).toBe(false);
+      expect(gate.reason).toMatch(/LIVE_NO_GO/);
+    } finally {
+      disarmLiveTrading();
+      if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
+      else process.env.PAPER_TRADING_ONLY = prev;
+    }
   });
 });

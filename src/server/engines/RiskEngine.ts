@@ -27,7 +27,9 @@ import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
+import { alpacaFetch } from '../core/alpacaTls';
 import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
+import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import {
   evaluateDailyTradeLimit,
   evaluateDuplicateSignal,
@@ -112,7 +114,7 @@ export async function readMarketClock(): Promise<MarketClockStatus> {
     try {
         const isPaper = tradingEngine.state.tradingMode !== 'LIVE';
         const base = isPaper ? 'paper-api.alpaca.markets' : 'api.alpaca.markets';
-        const res = await fetch(`https://${base}/v2/clock`, {
+        const res = await alpacaFetch(`https://${base}/v2/clock`, {
             headers: {
                 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
                 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
@@ -141,6 +143,23 @@ interface GateResult {
     passed: boolean;
     detail: any;
 }
+
+/**
+ * Real bug fix: the invalid_account_equity early-return below used to leave every gate AFTER it
+ * in config/riskGateOrder.json completely unrecorded for that assessment - 17 of 24 gates missing
+ * from risk_gate_results, contradicting this file's own "every gate is recorded" comment (and
+ * CLAUDE.md's documented invariant). Most of those 17 gates genuinely cannot run a real check
+ * without valid equity (portfolio_drawdown, order_notional_cap, concentration/correlation caps,
+ * capital allocation, daily buy notional all need it) - so this does NOT fabricate a pass/fail for
+ * them. It records each as an explicit, honestly-labeled SKIPPED entry so the audit trail is
+ * complete (all 24 gate names present for every real assessment) without inventing a result.
+ * sell_position_exists is excluded here - it's already a documented BUY/SELL-conditional
+ * exception (config/riskGateOrder.json's own $comment), not something this fix should force in.
+ */
+const RISK_GATE_ORDER: string[] = loadRepoConfigJson<{ gates: string[] }>('riskGateOrder.json').gates;
+const GATES_SKIPPED_ON_INVALID_EQUITY: string[] = RISK_GATE_ORDER
+    .slice(RISK_GATE_ORDER.indexOf(INVALID_ACCOUNT_EQUITY) + 1)
+    .filter(gate => gate !== 'sell_position_exists');
 
 export class RiskEngine {
     private static instance: RiskEngine;
@@ -309,24 +328,13 @@ export class RiskEngine {
 
             if (!isPositiveFiniteMoney(portfolio.equity)) {
                 recordGate(INVALID_ACCOUNT_EQUITY, false, { equity: portfolio.equity, buyingPower: portfolio.buyingPower });
+                for (const gate of GATES_SKIPPED_ON_INVALID_EQUITY) {
+                    recordGate(gate, false, { status: 'SKIPPED_INVALID_ACCOUNT_EQUITY', reason: 'Not evaluated - trading already fail-closed on invalid_account_equity before this gate could run.' });
+                }
                 approved = false;
                 maxQuantity = 0;
                 reasoning = 'INVALID_ACCOUNT_EQUITY: broker equity is missing or not positive. No placeholder balance is used.';
-                eventBus.emitRiskAssessment({
-                    traceId: proposal.traceId, transactionId: proposal.transactionId,
-                    symbol: proposal.symbol,
-                    side: proposal.side,
-                    currentPrice: proposal.currentPrice,
-                    approved: false,
-                    maxQuantity: 0,
-                    reasoning,
-                    newsDetails: proposal.newsDetails,
-                    selectedQuantStrategy: proposal.selectedQuantStrategy ?? null,
-                    quantStopPrice: proposal.quantStopPrice ?? null,
-                    quantTargetPrice: proposal.quantTargetPrice ?? null,
-                    quantInvalidationJson: proposal.quantInvalidationJson ?? null,
-                });
-                await this.persistAssessment(proposal, {
+                await this.persistThenPublishAssessment(proposal, {
                     approved: false, maxQuantity: 0, reasoning,
                     rejectionGate: INVALID_ACCOUNT_EQUITY,
                     accountEquity: undefined, buyingPower: portfolio.buyingPower,
@@ -610,45 +618,44 @@ export class RiskEngine {
                 }
             }
 
-            eventBus.emitRiskAssessment({
-                traceId: proposal.traceId, transactionId: proposal.transactionId,
-                symbol: proposal.symbol,
-                side: proposal.side,
-                currentPrice: proposal.currentPrice,
-                approved,
-                maxQuantity,
-                reasoning,
-                rejectionGate: firstFailure?.gate ?? null,
-                newsDetails: proposal.newsDetails,
-                // Phase 16B - only meaningful (and only ever consumed by OrderManagement) on a
-                // real approval; forwarded unconditionally here regardless of approved/rejected
-                // since RiskEngine never bypasses or reinterprets it either way.
-                selectedQuantStrategy: proposal.selectedQuantStrategy ?? null,
-                quantStopPrice: proposal.quantStopPrice ?? null,
-                quantTargetPrice: proposal.quantTargetPrice ?? null,
-                quantInvalidationJson: proposal.quantInvalidationJson ?? null,
-            });
-
-            await this.persistAssessment(proposal, { approved, maxQuantity, reasoning, rejectionGate: firstFailure?.gate ?? null, accountEquity, buyingPower, gateResults });
+            await this.persistThenPublishAssessment(proposal, { approved, maxQuantity, reasoning, rejectionGate: firstFailure?.gate ?? null, accountEquity, buyingPower, gateResults });
         } catch (e) {
             console.error('[Risk Engine] Error evaluating risk', e);
             approved = false;
             maxQuantity = 0;
             reasoning = `Risk evaluation crashed: ${(e as Error).message}`;
-            eventBus.emitRiskAssessment({
-                traceId: proposal.traceId, transactionId: proposal.transactionId,
-                symbol: proposal.symbol,
-                side: proposal.side,
-                approved: false,
-                maxQuantity: 0,
-                reasoning,
-                rejectionGate: 'system_error',
-            });
-            await this.persistAssessment(proposal, { approved: false, maxQuantity: 0, reasoning, rejectionGate: 'system_error', accountEquity, buyingPower, gateResults });
+            await this.persistThenPublishAssessment(proposal, { approved: false, maxQuantity: 0, reasoning, rejectionGate: 'system_error', accountEquity, buyingPower, gateResults });
         }
     }
 
-    private async persistAssessment(proposal: any, result: { approved: boolean, maxQuantity: number, reasoning: string, rejectionGate: string | null, accountEquity?: number, buyingPower?: number, gateResults: GateResult[] }) {
+    private async persistThenPublishAssessment(proposal: any, result: { approved: boolean, maxQuantity: number, reasoning: string, rejectionGate: string | null, accountEquity?: number, buyingPower?: number, gateResults: GateResult[] }) {
+        const persisted = await this.persistAssessment(proposal, result);
+        if (!persisted) {
+            eventBus.emit(EVENTS.RISK_BLOCK, {
+                gate: 'risk_assessment_persist',
+                reasoning: 'RISK_ASSESSMENT_PERSIST_FAILED: assessment was not written; OMS will not execute.',
+                recommendedFix: 'Inspect SQLite risk_assessments insert errors. Do not bypass RiskEngine.',
+            });
+            return;
+        }
+        eventBus.emitRiskAssessment({
+            traceId: proposal.traceId, transactionId: proposal.transactionId,
+            symbol: proposal.symbol,
+            side: proposal.side,
+            currentPrice: proposal.currentPrice,
+            approved: result.approved,
+            maxQuantity: result.maxQuantity,
+            reasoning: result.reasoning,
+            rejectionGate: result.rejectionGate,
+            newsDetails: proposal.newsDetails,
+            selectedQuantStrategy: proposal.selectedQuantStrategy ?? null,
+            quantStopPrice: proposal.quantStopPrice ?? null,
+            quantTargetPrice: proposal.quantTargetPrice ?? null,
+            quantInvalidationJson: proposal.quantInvalidationJson ?? null,
+        });
+    }
+
+    private async persistAssessment(proposal: any, result: { approved: boolean, maxQuantity: number, reasoning: string, rejectionGate: string | null, accountEquity?: number, buyingPower?: number, gateResults: GateResult[] }): Promise<boolean> {
         try {
             await db.insert(schema.riskAssessments).values({
                 transactionId: proposal.transactionId,
@@ -674,8 +681,10 @@ export class RiskEngine {
                     }))
                 );
             }
+            return true;
         } catch (e) {
             console.error('[Risk Engine] Failed to persist risk assessment', e);
+            return false;
         }
     }
 }

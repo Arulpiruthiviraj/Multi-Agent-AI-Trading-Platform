@@ -3,3 +3,102 @@
 @theme {
   --font-mono: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
+
+/* ── Global viewport reset ────────────────────────────────────────────────
+   Real defect: html/body/#root had no explicit width/background, so an environment where the
+   body isn't a pure block-formatting context top-to-bottom (browser UA styles, extensions, or a
+   host page wrapper) can leave the app's own dark background short of 100% width/height, showing
+   the browser's default white canvas as a margin. Explicit here rather than assumed from Tailwind
+   preflight, which resets margins/borders but does not itself guarantee width:100%. */
+html,
+body,
+#root {
+  width: 100%;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  background-color: #070a12;
+  overflow-x: hidden;
+}
+
+/* ── Responsive global utilities ─────────────────────────────────────────── */
+
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --touch-min: 44px;
+}
+
+#trading-platform-root {
+  padding-top: var(--safe-top);
+  padding-left: var(--safe-left);
+  padding-right: var(--safe-right);
+}
+
+.argus-fluid-container {
+  width: 100%;
+  max-width: 100%;
+  margin-inline: auto;
+  padding-inline: clamp(0.75rem, 3vw, 1.5rem);
+}
+
+.argus-scroll-touch {
+  -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+}
+
+.argus-touch-target {
+  min-height: var(--touch-min);
+  min-width: var(--touch-min);
+  touch-action: manipulation;
+}
+
+button,
+[role="button"],
+a.argus-touch-target {
+  touch-action: manipulation;
+}
+
+@media (max-width: 1023px) {
+  .argus-desktop-only {
+    display: none !important;
+  }
+}
+
+@media (min-width: 1024px) {
+  .argus-compact-only {
+    display: none !important;
+  }
+}
+
+@media (max-width: 767px) {
+  .argus-phone-hide {
+    display: none !important;
+  }
+}
+
+/* Metric carousel snap */
+.argus-metric-carousel {
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+}
+
+.argus-metric-carousel > * {
+  scroll-snap-align: start;
+}
+
+/* Bottom nav safe area */
+.argus-bottom-nav {
+  padding-bottom: max(0.5rem, var(--safe-bottom));
+}
+
+/* Form inputs — full width on narrow viewports */
+@media (max-width: 767px) {
+  .argus-responsive-form input:not([type="checkbox"]):not([type="radio"]),
+  .argus-responsive-form select,
+  .argus-responsive-form textarea {
+    width: 100%;
+  }
+}

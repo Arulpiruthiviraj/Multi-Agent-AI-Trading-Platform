@@ -21,7 +21,7 @@
  * opted in sees zero behavior change.
  * ==========================================================
  */
-import crypto from 'crypto';
+import { generateTraceId } from '../core/traceId';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
@@ -181,7 +181,7 @@ export class QuantSignalAgent {
       SELL: computeGroupedScores(strategyContext, 'SELL'),
     };
 
-    const traceId = `quant-${symbol}-${crypto.randomUUID()}`;
+    const traceId = generateTraceId(symbol);
     // Phase 4: the real Strategy Engine is the primary idea source; the Phase-3 regime-only mapping
     // is an honest fallback for when no individual strategy's own conditions clear its confidence bar.
     const ranked = rankEvaluationsForRegime(strategyEvaluations, regime.regime);

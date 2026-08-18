@@ -9,12 +9,14 @@
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
 import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './ExternalDataCache';
+import { AlphaVantageBudget } from './AlphaVantageBudget';
 import { coerceEnum, normalizeConfidence01, coerceString, TRADE_SIDE_VALUES } from '../ai/AIOutputValidator';
 import { logErrorSafely } from '../core/SecretRedaction';
-import crypto from 'crypto';
+import { generateTraceId } from '../core/traceId';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
+import { networkEndpoints } from '../config/networkEndpoints';
 
 const UNKNOWN_FUNDAMENTALS = { peRatio: 'UNKNOWN', epsGrowth: 'UNKNOWN', debtToEquity: 'UNKNOWN' };
 // Fundamentals (P/E, EPS growth, debt/equity) are quarterly-cadence data in reality - refetching
@@ -61,14 +63,43 @@ export class FundamentalAnalysisAgent {
     if (cached) return cached;
 
     if (await ExternalDataCache.isRateLimited('alphavantage', 'fundamentals', symbol)) {
+      const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
+      if (stale) {
+        console.warn(`[FundamentalAgent] AlphaVantage backoff active for ${symbol} — serving cached fundamentals.`);
+        return stale;
+      }
+      return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
+    }
+
+    if (!(await AlphaVantageBudget.tryConsume(1))) {
+      const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
+      if (stale) {
+        console.warn(`[FundamentalAgent] AlphaVantage daily budget exhausted — serving cached fundamentals for ${symbol}.`);
+        return stale;
+      }
       return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
     }
 
     try {
-      const response = await fetch(`https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
+      const response = await fetch(`${networkEndpoints.marketData.alphaVantageBaseUrl}?function=OVERVIEW&symbol=${symbol}&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
+      if (response.status === 429) {
+        const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
+        if (stale) {
+          console.warn(`[FundamentalAgent] AlphaVantage HTTP 429 for ${symbol} — serving cached fundamentals.`);
+          return stale;
+        }
+        console.warn(`[FundamentalAgent] AlphaVantage rate limit hit for ${symbol} - backing off for 24h.`);
+        await ExternalDataCache.markRateLimited('alphavantage', 'fundamentals', symbol);
+        return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
+      }
       const data = await response.json() as any;
 
       if (looksLikeRateLimitResponse(data)) {
+        const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
+        if (stale) {
+          console.warn(`[FundamentalAgent] AlphaVantage rate-limit body for ${symbol} — serving cached fundamentals.`);
+          return stale;
+        }
         console.warn(`[FundamentalAgent] AlphaVantage rate limit hit for ${symbol} - backing off for 24h.`);
         await ExternalDataCache.markRateLimited('alphavantage', 'fundamentals', symbol);
         return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
@@ -96,7 +127,7 @@ export class FundamentalAnalysisAgent {
     if (!isPipelineAgentEnabled('FundamentalAgent')) return;
     // We just pick a symbol round-robin or randomly from our list
     const symbol = this.watchedSymbols[Math.floor(Date.now() / 60000) % this.watchedSymbols.length];
-    const traceId = crypto.randomUUID();
+    const traceId = generateTraceId(symbol);
     
     try {
        const data = await this.fetchFundamentals(symbol);

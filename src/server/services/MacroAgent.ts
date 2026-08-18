@@ -9,12 +9,14 @@
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
 import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './ExternalDataCache';
+import { AlphaVantageBudget } from './AlphaVantageBudget';
 import { coerceEnum, normalizeConfidence01, coerceString, TRADE_SIDE_VALUES } from '../ai/AIOutputValidator';
 import { logErrorSafely } from '../core/SecretRedaction';
-import crypto from 'crypto';
+import { generateTraceId } from '../core/traceId';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
+import { networkEndpoints } from '../config/networkEndpoints';
 
 const UNKNOWN_MACRO = { inflation: 'UNKNOWN', fedFundsRate: 'UNKNOWN', unemployment: 'UNKNOWN' };
 const RATE_LIMITED_MACRO = { inflation: 'RATE_LIMITED', fedFundsRate: 'RATE_LIMITED', unemployment: 'RATE_LIMITED' };
@@ -60,19 +62,34 @@ export class MacroEconomyAgent {
      if (cached) return cached;
 
      if (await ExternalDataCache.isRateLimited('alphavantage', 'macro', null)) {
+        const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
+        if (stale) {
+          console.warn('[MacroAgent] AlphaVantage backoff active — serving cached macro data.');
+          return stale;
+        }
         return RATE_LIMITED_MACRO;
      }
 
      try {
          const key = process.env.ALPHAVANTAGE_API_KEY;
 
-         const [inflRes, fedRes, unempRes] = await Promise.all([
-             fetch(`https://www.alphavantage.co/query?function=INFLATION&apikey=${key}`).then(r => r.json() as any),
-             fetch(`https://www.alphavantage.co/query?function=FEDERAL_FUNDS_RATE&apikey=${key}`).then(r => r.json() as any),
-             fetch(`https://www.alphavantage.co/query?function=UNEMPLOYMENT&apikey=${key}`).then(r => r.json() as any)
-         ]);
+         const avBase = networkEndpoints.marketData.alphaVantageBaseUrl;
+         const fetchOne = async (fn: string): Promise<any> => {
+           if (!(await AlphaVantageBudget.tryConsume(1))) return { __budgetExhausted: true };
+           const r = await fetch(`${avBase}?function=${fn}&apikey=${key}`);
+           if (r.status === 429) return { __http429: true };
+           return r.json() as any;
+         };
+         const inflRes = await fetchOne('INFLATION');
+         const fedRes = await fetchOne('FEDERAL_FUNDS_RATE');
+         const unempRes = await fetchOne('UNEMPLOYMENT');
 
-         if ([inflRes, fedRes, unempRes].some(looksLikeRateLimitResponse)) {
+         if ([inflRes, fedRes, unempRes].some(r => r?.__http429 || r?.__budgetExhausted || looksLikeRateLimitResponse(r))) {
+            const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
+            if (stale) {
+              console.warn('[MacroAgent] AlphaVantage rate limit — serving cached macro data.');
+              return stale;
+            }
             console.warn('[MacroAgent] AlphaVantage rate limit hit - backing off for 24h.');
             await ExternalDataCache.markRateLimited('alphavantage', 'macro', null);
             return RATE_LIMITED_MACRO;
@@ -103,7 +120,7 @@ export class MacroEconomyAgent {
     if (!isLiveIdeaGenerationEnabled()) return;
     if (!isPipelineAgentEnabled('MacroAgent')) return;
     const symbol = this.watchedSymbols[Math.floor(Date.now() / 75000) % this.watchedSymbols.length];
-    const traceId = crypto.randomUUID();
+    const traceId = generateTraceId(symbol);
     
     try {
        const data = await this.fetchMacro();

@@ -8,6 +8,7 @@ import { runResearchCli } from './VectorBTService';
 import { writeDatasetSidecar, writeDatasetBars } from './parquetStore';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { researchSafety } from '../config/researchSafety';
+import { networkEndpoints } from '../config/networkEndpoints';
 
 export const WAREHOUSE_TIMEFRAMES = ['1Min', '5Min', '15Min', '1Hour', '1Day'] as const;
 
@@ -77,7 +78,7 @@ export async function fetchAlpacaBars(symbol: string, timeframe: string, startIs
   let pageToken: string | undefined;
   let pages = 0;
   do {
-    const url = new URL(`https://data.alpaca.markets/v2/stocks/${encodeURIComponent(symbol)}/bars`);
+    const url = new URL(`${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/${encodeURIComponent(symbol)}/bars`);
     url.searchParams.set('timeframe', alpacaTimeframe(timeframe));
     url.searchParams.set('start', startIso);
     url.searchParams.set('end', endIso);

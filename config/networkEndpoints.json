@@ -1,0 +1,56 @@
+{
+  "$comment": "Centralized network endpoint defaults. Reviewed config change, not a UI/API knob. Every value here is a DEFAULT — real deployments should still prefer the matching env var where one already exists (documented per section below); this file only removes the duplicated/inconsistent hardcoded literals that used to live directly in TS source. Deliberately excluded: OpenAliceVerificationService.ts's GUARDIAN_MCP_URL constant (a safety-net fallback that must stay a reviewed, non-operator-configurable constant — see that file's own header comment) and server.ts's own PORT/bindHost (security-relevant AUTH_ENABLED-gated bind logic, not a plain literal).",
+
+  "broker": {
+    "alpaca": {
+      "paperBaseUrl": "https://paper-api.alpaca.markets",
+      "liveBaseUrl": "https://api.alpaca.markets",
+      "dataBaseUrl": "https://data.alpaca.markets",
+      "dataStreamUrl": "wss://stream.data.alpaca.markets/v2/iex"
+    },
+    "ibkr": {
+      "gatewayUrlDefault": "https://localhost:5000/v1/api",
+      "gatewayPortDefault": 5000
+    },
+    "coinbase": {
+      "apiHost": "api.coinbase.com"
+    },
+    "questrade": {
+      "oauthTokenUrl": "https://login.questrade.com/oauth2/token"
+    }
+  },
+
+  "marketData": {
+    "alphaVantageBaseUrl": "https://www.alphavantage.co/query",
+    "finnhubBaseUrl": "https://finnhub.io/api/v1",
+    "fmpBaseUrl": "https://financialmodelingprep.com/api/v3",
+    "polygonBaseUrl": "https://api.polygon.io/v2"
+  },
+
+  "newsRss": {
+    "userAgent": "ArgusTradingTerminal/1.0 (RSS reader)",
+    "yahooFinance": "https://finance.yahoo.com/news/rssindex",
+    "cnbc": "https://search.cnbc.com/rs/search/combinedcms/view.xml?profile=120000000&id=100003114",
+    "wsj": "https://feeds.a.dj.com/rss/RSSMarketsMain.xml"
+  },
+
+  "aiLocal": {
+    "ollamaDefault": "http://127.0.0.1:11434",
+    "chronosDefault": "http://127.0.0.1:8008",
+    "guardianMcpUrl": "http://127.0.0.1:47332/mcp",
+    "liteLlmGatewayDefault": "http://localhost:4000"
+  },
+
+  "aiCloud": {
+    "openAiChatCompletionsUrl": "https://api.openai.com/v1/chat/completions",
+    "deepSeekChatCompletionsUrl": "https://api.deepseek.com/v1/chat/completions",
+    "nvidiaBaseUrl": "https://integrate.api.nvidia.com/v1",
+    "grokBaseUrl": "https://api.x.ai/v1",
+    "openRouterBaseUrl": "https://openrouter.ai/api/v1"
+  },
+
+  "ecosystem": {
+    "vibeTradingMcpPortDefault": 8900,
+    "guardianMcpPortDefault": 47332
+  }
+}

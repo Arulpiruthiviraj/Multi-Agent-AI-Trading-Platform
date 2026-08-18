@@ -1,0 +1,71 @@
+{
+  "$comment": "Per-agent local Ollama model specialization. Reviewed config change, not a UI knob. Every key under 'routes' is a REAL, confirmed agentType string from an actual AIRouter.routeTask('<agentType>', ...) call site (grepped across src/server before this file was written) - not an abstract domain label with no real code behind it. Applied at AIRouter.initialize() via setAgentRoute() as a DEFAULT, BEFORE persisted agent_routing_overrides load - a user's own routing choice from Settings still wins over this file. 'fallback' is a same-provider model retry (OpenAICompatibleProvider.ts), tried in order before AIRouter's own cross-provider failover takes over.",
+  "notes": [
+    "TechnicalAgent has no AI call to bind - it is deterministic real RSI/MACD/Bollinger math (CLAUDE.md), never calls AIRouter. Not listed here; do not fabricate a routing entry for it. There is no RULE_BASED fallback token to wire up here for the same reason - it is already 100% rule-based, always.",
+    "ChiefTraderAgent's consensus debate uses AIRouter.routeConsensus('ConsensusDebate', ...), which calls MULTIPLE providers in parallel to build a real weighted vote - it has no per-call model-override parameter the way routeTask() does, so a single model cannot be 'the' Chief Trader model without a deeper routeConsensus change not made in this pass. Not listed here.",
+    "BullResearcher/BearResearcher (config/bullBearResearch.json) are real routeTask() call sites from ChiefTraderAgent's optional debate feature (QUANT_BULL_BEAR_ENABLED) - bound to the same deep-reasoning model as ReflectionEngine since both are adversarial/critical-review roles.",
+    "'ollama.baseUrl' mirrors config/networkEndpoints.json's aiLocal.ollamaDefault + '/v1' - kept as its own explicit field here (not re-derived) so this file stays a complete, standalone routing spec.",
+    "Every agent already fails closed on an AI failure independent of this file (HOLD/confidence 0, never a fabricated side) - see FundamentalAgent.ts/MacroAgent.ts's DATA_UNAVAILABLE path and RiskEngine's own deterministic gates, which never call an LLM at all."
+  ],
+  "ollama": {
+    "baseUrl": "http://127.0.0.1:11434/v1",
+    "keepAlive": "5m",
+    "enabled": true
+  },
+  "heavyModels": ["qwen2.5:14b", "deepseek-r1:14b"],
+  "concurrency": {
+    "maxConcurrentHeavyModels": 1,
+    "maxQueueDepth": 10
+  },
+  "routes": {
+    "NewsAgent": {
+      "model": "fingpt:latest",
+      "temperature": 0.2,
+      "timeoutMs": 12000,
+      "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
+      "rationale": "Fine-tuned on financial news/headlines/sentiment - real specialization match for NewsScoringEngine's sentiment+catalyst scoring."
+    },
+    "FundamentalAgent": {
+      "model": "0xroyce/plutus:latest",
+      "temperature": 0.2,
+      "timeoutMs": 15000,
+      "fallback": ["llama3.2:latest"],
+      "rationale": "Fine-tuned on financial/economic/valuation texts - balance-sheet-style analysis matches FundamentalAgent's P/E, EPS growth, debt/equity prompt."
+    },
+    "MacroAgent": {
+      "model": "0xroyce/plutus:latest",
+      "temperature": 0.2,
+      "timeoutMs": 15000,
+      "fallback": ["llama3.2:latest"],
+      "rationale": "Same model as FundamentalAgent - Plutus's training explicitly covers macroeconomic regime evaluation (yield curves, rate shifts), matching MacroAgent's CPI/Fed Funds/unemployment prompt."
+    },
+    "ReflectionEngine": {
+      "model": "deepseek-r1:14b",
+      "temperature": 0.3,
+      "timeoutMs": 30000,
+      "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
+      "rationale": "Deep chain-of-thought model for real post-trade post-mortem analysis on actual outcomes (ReflectionEngine.ts)."
+    },
+    "BullResearcher": {
+      "model": "deepseek-r1:14b",
+      "temperature": 0.3,
+      "timeoutMs": 25000,
+      "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
+      "rationale": "Adversarial debate role (config/bullBearResearch.json) - same deep-reasoning model as ReflectionEngine for the same class of critical-review task."
+    },
+    "BearResearcher": {
+      "model": "deepseek-r1:14b",
+      "temperature": 0.3,
+      "timeoutMs": 25000,
+      "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
+      "rationale": "Same as BullResearcher."
+    },
+    "ExplainabilityAgent": {
+      "model": "llama3.2:1b",
+      "temperature": 0.1,
+      "timeoutMs": 3000,
+      "fallback": ["llama3.2:latest"],
+      "rationale": "Sub-second UI tooltip/explanation text generation - matches the 'fast telemetry/mobile explainer' domain exactly."
+    }
+  }
+}

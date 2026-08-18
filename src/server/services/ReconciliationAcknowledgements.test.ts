@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -21,6 +21,11 @@ describe('PRE_EXISTING_RECONCILED acknowledgements', () => {
     ({ tradingEngine } = await import('../engines/TradingEngine'));
     ({ portfolioReconciliationWorker } = await import('./PortfolioReconciliation'));
     ({ acknowledgePreExistingOrders, revokeAcknowledgement } = await import('./ReconciliationAcknowledgements'));
+  });
+
+  beforeEach(async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    BrokerManager.getInstance().resetSyncStateForTests('READY');
   });
 
   afterAll(() => {

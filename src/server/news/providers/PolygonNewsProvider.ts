@@ -1,5 +1,6 @@
 import { NewsProviderPlugin, NewsArticleRaw } from './NewsProviderPlugin';
 import { logErrorSafely } from '../../core/SecretRedaction';
+import { networkEndpoints } from '../../config/networkEndpoints';
 
 export class PolygonNewsProvider implements NewsProviderPlugin {
   public id = 'polygon_news';
@@ -22,7 +23,7 @@ export class PolygonNewsProvider implements NewsProviderPlugin {
       // (Authorization: Bearer), unlike AlphaVantage/FMP - moved off key-in-query-string entirely
       // rather than relying on redaction alone, since a header never appears in the request URL a
       // caught fetch error might otherwise expose.
-      const res = await fetch('https://api.polygon.io/v2/reference/news?limit=10', {
+      const res = await fetch(`${networkEndpoints.marketData.polygonBaseUrl}/reference/news?limit=10`, {
         headers: { Authorization: `Bearer ${process.env.POLYGON_API_KEY}` },
       });
       if (!res.ok) return [];

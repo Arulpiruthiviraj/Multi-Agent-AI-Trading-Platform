@@ -20,7 +20,7 @@ const { emitChiefApproval } = vi.hoisted(() => ({ emitChiefApproval: vi.fn() }))
 const { routeConsensus, routeTask } = vi.hoisted(() => ({ routeConsensus: vi.fn(), routeTask: vi.fn() }));
 
 vi.mock('../db', () => ({ db: mockDb }));
-vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitChiefApproval } }));
+vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), publish: vi.fn(), emitChiefApproval } }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus, routeTask }) } }));
 const { ideaGenEnabled } = vi.hoisted(() => ({ ideaGenEnabled: { value: true } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));

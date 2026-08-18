@@ -15,53 +15,45 @@
 import { useWebSocket } from '../context/WebSocketContext';
 import eventCatalog from '../../config/eventNames.json';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { usePhoneLayout } from '../hooks/useBreakpoint';
+import { MobileBottomSheet } from './mobile/MobileBottomSheet';
+import { DigitalTwinMobilePipeline } from './responsive/DigitalTwinMobilePipeline';
 import { motion, AnimatePresence, LayoutGroup } from 'motion/react';
 import ReactFlow, {
   Background,
-  BaseEdge,
   Controls,
   Edge,
-  EdgeProps,
-  Handle,
   Node,
-  Position,
-  getBezierPath,
+  ReactFlowInstance,
   useEdgesState,
   useNodesState,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
+import { TelemetryNode, PacketEdge, type Packet, type VisualStatus } from './digitalTwinFlowTypes';
 import {
   Activity, Newspaper, Clock, BookOpen, Terminal,
   BrainCircuit, TrendingUp, ShieldCheck, UserCheck, Send, X, Pause, Play,
   Cpu, DollarSign, Layers, Hash,
 } from 'lucide-react';
 import AgentFocusMode from './AgentFocusMode';
-
-type NodeCategory = 'source' | 'agent' | 'local-model' | 'paid-model' | 'decision' | 'risk' | 'execution';
-type VisualStatus = 'IDLE' | 'PULSE' | 'PROCESSING' | 'SUCCESS' | 'FAIL';
+import {
+  buildPipelineSteps,
+  buildTransactions,
+  classifyEventLog,
+  getNodeMicroMetric,
+  matchesLogFilter,
+  MAX_EVENT_BUFFER,
+  PACKET_COLOR,
+  STAGE_ORDER,
+  type LogFilter,
+  type Transaction,
+} from './digitalTwinTelemetryUtils';
 
 interface LastSnapshot {
   eventType: string;
   timestamp: string;
   payload: any;
 }
-
-interface Packet {
-  id: string;
-  color: string;
-  /** flow = travel source→target; reject = stop mid-edge + fade (blocked) */
-  kind?: 'flow' | 'reject';
-}
-
-const CATEGORY_STYLE: Record<NodeCategory, { border: string; glow: string; iconBg: string; iconText: string; accent: string }> = {
-  source: { border: 'border-cyan-500', glow: 'rgba(34,211,238,0.55)', iconBg: 'bg-cyan-500/20', iconText: 'text-cyan-300', accent: '#22d3ee' },
-  agent: { border: 'border-violet-500', glow: 'rgba(167,139,250,0.5)', iconBg: 'bg-violet-500/20', iconText: 'text-violet-300', accent: '#a78bfa' },
-  'local-model': { border: 'border-emerald-500', glow: 'rgba(16,185,129,0.5)', iconBg: 'bg-emerald-500/20', iconText: 'text-emerald-300', accent: '#34d399' },
-  'paid-model': { border: 'border-amber-500', glow: 'rgba(245,158,11,0.5)', iconBg: 'bg-amber-500/20', iconText: 'text-amber-300', accent: '#fbbf24' },
-  decision: { border: 'border-fuchsia-500', glow: 'rgba(232,121,249,0.5)', iconBg: 'bg-fuchsia-500/20', iconText: 'text-fuchsia-300', accent: '#e879f9' },
-  risk: { border: 'border-rose-500', glow: 'rgba(244,63,94,0.5)', iconBg: 'bg-rose-500/20', iconText: 'text-rose-300', accent: '#fb7185' },
-  execution: { border: 'border-teal-500', glow: 'rgba(45,212,191,0.5)', iconBg: 'bg-teal-500/20', iconText: 'text-teal-300', accent: '#2dd4bf' },
-};
 
 const AGENT_NODE: Record<string, string> = {
   TechnicalAgent: 'technical-engine',
@@ -184,194 +176,47 @@ function hoverRows(nodeId: string, snap: LastSnapshot | undefined, weights: { ag
   ];
 }
 
-const TelemetryNode = ({ id, data }: { id: string; data: any }) => {
-  const style = CATEGORY_STYLE[data.category as NodeCategory] || CATEGORY_STYLE.agent;
-  const status: VisualStatus = data.status || 'IDLE';
-  const active = status !== 'IDLE';
-  const border =
-    status === 'FAIL' ? 'border-rose-400' :
-    status === 'SUCCESS' ? 'border-emerald-400' :
-    status === 'PROCESSING' ? style.border :
-    status === 'PULSE' ? style.border : 'border-slate-800';
-  const glow =
-    status === 'FAIL' ? 'rgba(244,63,94,0.7)' :
-    status === 'SUCCESS' ? 'rgba(16,185,129,0.7)' :
-    active ? style.glow : undefined;
-
-  return (
-    <div className="group relative">
-      {status === 'PULSE' && (
-        <motion.div
-          key={data.pulseKey}
-          className="absolute inset-0 rounded-xl pointer-events-none"
-          initial={{ opacity: 0.7, scale: 1 }}
-          animate={{ opacity: 0, scale: 1.28 }}
-          transition={{ duration: 0.55, ease: 'easeOut' }}
-          style={{ boxShadow: `0 0 0 2px ${style.glow}`, background: style.glow }}
-        />
-      )}
-      {status === 'FAIL' && (
-        <motion.div
-          key={`fail-${data.pulseKey ?? id}`}
-          className="absolute inset-0 rounded-xl pointer-events-none"
-          initial={{ opacity: 0.9, scale: 1 }}
-          animate={{ opacity: 0, scale: 1.6 }}
-          transition={{ duration: 0.8, ease: 'easeOut' }}
-          style={{ boxShadow: '0 0 0 2px rgba(251,113,133,0.95)', background: 'rgba(244,63,94,0.28)' }}
-        />
-      )}
-      {status === 'PROCESSING' && (
-        <motion.div
-          className="absolute -inset-1 rounded-xl pointer-events-none border border-cyan-400/40"
-          animate={{ opacity: [0.35, 0.85, 0.35], scale: [1, 1.04, 1] }}
-          transition={{ duration: 1.1, repeat: Infinity, ease: 'easeInOut' }}
-        />
-      )}
-      <motion.div
-        layoutId={data.focused ? undefined : `agent-node-${id}`}
-        transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-        className={`relative cursor-pointer px-4 py-3 w-52 shadow-lg rounded-xl bg-[#0A0F16] border-2 ${border} font-mono`}
-        style={active && glow ? { boxShadow: `0 0 18px ${glow}` } : undefined}
-      >
-        <Handle type="target" position={Position.Top} className="w-2 h-2 bg-slate-500 border-none" />
-        <div className="flex items-center gap-3">
-          <div className={`rounded-lg p-2.5 ${active ? `${style.iconBg} ${style.iconText}` : 'bg-slate-800 text-slate-500'}`}>
-            {data.icon}
-          </div>
-          <div className="min-w-0">
-            <div className="text-[10px] font-bold text-white uppercase tracking-widest leading-tight truncate">{data.label}</div>
-            <div className="text-[8px] text-slate-400 mt-0.5">{data.description}</div>
-            <div className={`text-[8px] mt-1 font-mono ${status === 'FAIL' ? 'text-rose-400' : status === 'SUCCESS' ? 'text-emerald-400' : status === 'PROCESSING' ? 'text-amber-300' : active ? style.iconText : 'text-slate-600'}`}>
-              {status === 'IDLE' ? 'IDLE' : status}
-            </div>
-          </div>
-        </div>
-        <Handle type="source" position={Position.Bottom} className="w-2 h-2 bg-slate-500 border-none" />
-      </motion.div>
-      <div className="pointer-events-none absolute left-full top-0 z-50 ml-2 hidden w-64 group-hover:block">
-        <div className="rounded-lg border border-cyan-500/30 bg-[#0A0F16]/95 p-3 shadow-[0_0_24px_rgba(34,211,238,0.15)] backdrop-blur-sm">
-          <div className="mb-2 text-[9px] font-bold uppercase tracking-widest text-cyan-300">{data.label}</div>
-          {(data.hoverRows as { label: string; value: string }[] || []).map((row) => (
-            <div key={row.label} className="mb-1 flex justify-between gap-2 font-mono text-[9px]">
-              <span className="text-slate-500">{row.label}</span>
-              <span className="max-w-[9rem] truncate text-right text-slate-200" title={row.value}>{row.value}</span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-function PacketEdge({ id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, style, data }: EdgeProps) {
-  const [edgePath] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-  const packets: Packet[] = data?.packets || [];
-  const lit = packets.length > 0;
-  const lastKind = packets[packets.length - 1]?.kind;
-  const strokeColor = lit
-    ? (packets[packets.length - 1]?.color || '#22d3ee')
-    : (style?.stroke || '#334155');
-  return (
-    <>
-      <BaseEdge
-        id={id}
-        path={edgePath}
-        style={{
-          ...style,
-          stroke: strokeColor,
-          strokeWidth: lit ? 2.5 : 1.5,
-          opacity: lit ? 1 : 0.45,
-          strokeDasharray: lastKind === 'reject' ? '4 3' : undefined,
-        }}
-      />
-      {packets.map((p) => {
-        const reject = p.kind === 'reject';
-        const dur = reject ? PACKET_MS + 180 : PACKET_MS;
-        return (
-          <circle key={p.id} r={reject ? 4.5 : 3.5} fill={p.color} opacity={0.95}>
-            <animateMotion
-              dur={`${dur}ms`}
-              fill="remove"
-              path={edgePath}
-              keyPoints={reject ? '0;0.48;0.48' : '0;1'}
-              keyTimes={reject ? '0;0.55;1' : '0;1'}
-              calcMode="linear"
-            />
-            {reject && (
-              <animate
-                attributeName="opacity"
-                values="1;1;0"
-                keyTimes="0;0.55;1"
-                dur={`${dur}ms`}
-                fill="remove"
-              />
-            )}
-          </circle>
-        );
-      })}
-    </>
-  );
-}
-
-const nodeTypes = { custom: TelemetryNode };
-const edgeTypes = { packet: PacketEdge };
-
-interface TxStage { type: string; timestamp: string; payload: any }
-interface Transaction {
-  traceId: string;
-  symbol?: string;
-  originAgent?: string;
-  stages: TxStage[];
-  status: 'IDEA' | 'CHIEF_APPROVED' | 'RISK_APPROVED' | 'RISK_VETOED' | 'EXECUTED';
-  startedAt: string;
-  lastUpdate: string;
-}
-
-const STAGE_ORDER = [
-  'TRADE_IDEA_GENERATED', 'CHIEF_APPROVED_IDEA', 'CAPITAL_CHECK', 'RISK_ASSESSMENT_COMPLETED',
-  'ORDER_SUBMITTED', 'ORDER_ACCEPTED', 'ORDER_FILLED', 'ORDER_EXECUTED',
-];
-
-function buildTransactions(evts: any[]): Transaction[] {
-  const byTrace = new Map<string, Transaction>();
-  const chronological = [...evts].reverse();
-  for (const evt of chronological) {
-    const traceId: string | undefined = evt.payload?.traceId || evt.payload?.trace_id;
-    if (!traceId || !STAGE_ORDER.includes(evt.type)) continue;
-    let tx = byTrace.get(traceId);
-    if (!tx) {
-      tx = { traceId, stages: [], status: 'IDEA', startedAt: evt.timestamp, lastUpdate: evt.timestamp };
-      byTrace.set(traceId, tx);
-    }
-    tx.stages.push({ type: evt.type, timestamp: evt.timestamp, payload: evt.payload });
-    tx.lastUpdate = evt.timestamp;
-    tx.symbol = evt.payload?.symbol || tx.symbol;
-    if (evt.type === 'TRADE_IDEA_GENERATED') tx.originAgent = evt.payload?.agent || tx.originAgent;
-    if (evt.type === 'CHIEF_APPROVED_IDEA') tx.status = 'CHIEF_APPROVED';
-    if (evt.type === 'RISK_ASSESSMENT_COMPLETED') tx.status = evt.payload?.approved ? 'RISK_APPROVED' : 'RISK_VETOED';
-    if (evt.type === 'ORDER_EXECUTED') tx.status = 'EXECUTED';
-  }
-  return Array.from(byTrace.values()).sort((a, b) => new Date(b.lastUpdate).getTime() - new Date(a.lastUpdate).getTime());
-}
-
 const STATUS_BADGE: Record<Transaction['status'], { label: string; cls: string }> = {
   IDEA: { label: 'IDEA PROPOSED', cls: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' },
   CHIEF_APPROVED: { label: 'CHIEF APPROVED', cls: 'bg-fuchsia-500/10 text-fuchsia-400 border-fuchsia-500/30' },
   RISK_APPROVED: { label: 'RISK APPROVED', cls: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
   RISK_VETOED: { label: 'RISK VETOED', cls: 'bg-rose-500/10 text-rose-400 border-rose-500/30' },
-  EXECUTED: { label: 'EXECUTED', cls: 'bg-teal-500/10 text-teal-400 border-teal-500/30' },
+  EXECUTED: { label: 'EXECUTED', cls: 'bg-amber-500/10 text-amber-300 border-amber-500/30' },
+  NO_CONSENSUS: { label: 'NO CONSENSUS', cls: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+};
+
+const LOG_SEVERITY_CLS: Record<string, string> = {
+  INFO: 'text-slate-400 border-slate-700',
+  WARN: 'text-amber-400 border-amber-700/50',
+  REJECT: 'text-rose-400 border-rose-700/50',
+  EXECUTION: 'text-amber-300 border-amber-600/50',
+  ANOMALY: 'text-violet-400 border-violet-700/50',
 };
 
 const idleEdge = { stroke: '#334155', strokeWidth: 1.5 };
 
+const MOBILE_FLUSH_MS = 33;
+
 export default function DigitalTwinVisualizer() {
+  const isPhone = usePhoneLayout();
+  const reduceMotion = useMemo(
+    () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+    [],
+  );
+  const flowRef = useRef<ReactFlowInstance | null>(null);
+  const lastMobileFlushRef = useRef(0);
   const [events, setEvents] = useState<any[]>([]);
   const [selectedEvent, setSelectedEvent] = useState<any>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [panelTab, setPanelTab] = useState<'transactions' | 'raw'>('transactions');
+  const [rawLogFilter, setRawLogFilter] = useState<LogFilter>('ALL');
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [weights, setWeights] = useState<{ agentName: string; currentWeight: number | null }[]>([]);
+  const throughputRef = useRef<Map<string, number>>(new Map());
+
+  const flowNodeTypes = useMemo(() => ({ custom: TelemetryNode }), []);
+  const flowEdgeTypes = useMemo(() => ({ packet: PacketEdge }), []);
 
   const seqRef = useRef(0);
   const lastTickPulseRef = useRef(0);
@@ -473,7 +318,7 @@ export default function DigitalTwinVisualizer() {
             return keptCalc <= 24;
           });
         }
-        return next.slice(0, 150);
+        return next.slice(0, MAX_EVENT_BUFFER);
       });
     }
 
@@ -487,6 +332,10 @@ export default function DigitalTwinVisualizer() {
       const st = pending.pulses.get(n.id);
       const snap = pending.snapshots.get(n.id) || snapshotsRef.current.get(n.id);
       if (st == null && !pending.snapshots.has(n.id)) return n;
+      if (st != null && st !== 'IDLE') {
+        throughputRef.current.set(n.id, (throughputRef.current.get(n.id) || 0) + 1);
+      }
+      const microLabel = snap ? getNodeMicroMetric(n.id, snap) : n.data.microLabel;
       return {
         ...n,
         data: {
@@ -494,6 +343,8 @@ export default function DigitalTwinVisualizer() {
           status: st ?? n.data.status,
           pulseKey: (st === 'PULSE' || st === 'FAIL') ? pulseKey : n.data.pulseKey,
           lastSnapshot: snap,
+          microLabel: microLabel ?? n.data.microLabel,
+          throughput: throughputRef.current.get(n.id) || 0,
           focused: n.data.focused,
           hoverRows: hoverRows(n.id, snap, weightsRef.current),
         },
@@ -538,8 +389,28 @@ export default function DigitalTwinVisualizer() {
 
   const scheduleFlush = useCallback(() => {
     if (rafRef.current != null) return;
-    rafRef.current = window.requestAnimationFrame(flushPending);
-  }, [flushPending]);
+    const run = () => {
+      rafRef.current = null;
+      flushPending();
+    };
+    if (isPhone || reduceMotion) {
+      const now = performance.now();
+      const minGap = reduceMotion ? MOBILE_FLUSH_MS * 2 : MOBILE_FLUSH_MS;
+      const elapsed = now - lastMobileFlushRef.current;
+      if (elapsed < minGap) {
+        rafRef.current = window.setTimeout(() => {
+          rafRef.current = null;
+          lastMobileFlushRef.current = performance.now();
+          flushPending();
+        }, minGap - elapsed) as unknown as number;
+        return;
+      }
+      lastMobileFlushRef.current = now;
+      rafRef.current = window.requestAnimationFrame(run);
+      return;
+    }
+    rafRef.current = window.requestAnimationFrame(run);
+  }, [flushPending, isPhone, reduceMotion]);
 
   const enqueueEvent = useCallback((type: string, data: any, visuals: {
     nodes?: { id: string; status: VisualStatus }[];
@@ -705,9 +576,13 @@ export default function DigitalTwinVisualizer() {
             ...(node ? [{ id: node, status: 'PULSE' as VisualStatus }] : []),
             { id: 'chief-trader', status: 'PROCESSING' },
           ],
-          packets: edgeId ? [{ edgeId, color: '#c084fc' }] : [],
+          packets: edgeId ? [{ edgeId, color: PACKET_COLOR.idea }] : [],
         });
       }),
+      subscribe('KRONOS_FORECAST_COMPLETED', (data: any) => enqueueEvent('KRONOS_FORECAST_COMPLETED', data, {
+        nodes: [{ id: 'kronos-forecast', status: 'SUCCESS' }, { id: 'chief-trader', status: 'PULSE' }],
+        packets: [{ edgeId: 'e-kronos-chief', color: PACKET_COLOR.idea }],
+      })),
       subscribe('CHIEF_CONSENSUS_STARTED', (data: any) => enqueueEvent('CHIEF_CONSENSUS_STARTED', data, {
         nodes: [{ id: 'chief-trader', status: 'PROCESSING' }, { id: 'paid-llm-pool', status: 'PROCESSING' }],
       })),
@@ -730,7 +605,7 @@ export default function DigitalTwinVisualizer() {
       })),
       subscribe('CHIEF_APPROVED_IDEA', (data: any) => enqueueEvent('CHIEF_APPROVED_IDEA', data, {
         nodes: [{ id: 'chief-trader', status: 'SUCCESS' }, { id: 'risk-manager', status: 'PROCESSING' }],
-        packets: [{ edgeId: 'e-chief-risk', color: '#fbbf24' }],
+        packets: [{ edgeId: 'e-chief-risk', color: PACKET_COLOR.chief }],
       })),
       subscribe('RISK_ASSESSMENT_STARTED', (data: any) => enqueueEvent('RISK_ASSESSMENT_STARTED', data, {
         nodes: [{ id: 'risk-manager', status: 'PROCESSING' }],
@@ -752,12 +627,12 @@ export default function DigitalTwinVisualizer() {
           ],
           packets: approved
             ? [
-                { edgeId: 'e-risk-capital', color: '#34d399' },
-                { edgeId: 'e-capital-exec', color: '#34d399' },
+                { edgeId: 'e-risk-capital', color: PACKET_COLOR.riskOk },
+                { edgeId: 'e-capital-exec', color: PACKET_COLOR.riskOk },
               ]
             : [
-                { edgeId: 'e-risk-capital', color: '#fb7185', kind: 'reject' },
-                { edgeId: 'e-capital-exec', color: '#fb7185', kind: 'reject' },
+                { edgeId: 'e-risk-capital', color: PACKET_COLOR.fail, kind: 'reject' },
+                { edgeId: 'e-capital-exec', color: PACKET_COLOR.fail, kind: 'reject' },
               ],
         });
       }),
@@ -773,7 +648,7 @@ export default function DigitalTwinVisualizer() {
       })),
       subscribe('ORDER_EXECUTED', (data: any) => enqueueEvent('ORDER_EXECUTED', data, {
         nodes: [{ id: 'order-management', status: 'SUCCESS' }, { id: 'learning-engine', status: 'PULSE' }],
-        packets: [{ edgeId: 'e-exec-learn', color: '#2dd4bf' }],
+        packets: [{ edgeId: 'e-exec-learn', color: PACKET_COLOR.execution }, { edgeId: 'e-capital-exec', color: PACKET_COLOR.execution }],
       })),
       subscribe('LEARNED_NEW_RULE', (data: any) => enqueueEvent('LEARNED_NEW_RULE', data, {
         nodes: [{ id: 'learning-engine', status: 'SUCCESS' }],
@@ -813,7 +688,10 @@ export default function DigitalTwinVisualizer() {
 
     return () => {
       unsubs.forEach((u) => u());
-      if (rafRef.current != null) window.cancelAnimationFrame(rafRef.current);
+      if (rafRef.current != null) {
+        window.cancelAnimationFrame(rafRef.current);
+        window.clearTimeout(rafRef.current);
+      }
       rafRef.current = null;
       nodeTimers.current.forEach((tid) => window.clearTimeout(tid));
       nodeTimers.current.clear();
@@ -824,6 +702,14 @@ export default function DigitalTwinVisualizer() {
 
   const transactions = useMemo(() => buildTransactions(events), [events]);
   const selectedTx = transactions.find((t) => t.traceId === selectedTraceId) || null;
+  const selectedPipeline = useMemo(
+    () => (selectedTx ? buildPipelineSteps(selectedTx) : []),
+    [selectedTx],
+  );
+  const filteredRawEvents = useMemo(
+    () => events.filter((e) => matchesLogFilter(e.type, rawLogFilter)),
+    [events, rawLogFilter],
+  );
 
   return (
     <div className="flex flex-col h-[800px] gap-4">
@@ -855,7 +741,7 @@ export default function DigitalTwinVisualizer() {
                 title="Synthetic EventBus chain for UI only — never places orders"
               >
                 <Activity size={14} />
-                Test Live Flow
+                Test Event Pulse
               </button>
               <button
                 type="button"
@@ -864,7 +750,7 @@ export default function DigitalTwinVisualizer() {
                 className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-[10px] font-bold tracking-widest uppercase transition-colors ${pulseBusy ? 'bg-slate-800 text-slate-500' : 'bg-rose-900/70 text-rose-200 hover:bg-rose-800'}`}
                 title="Synthetic NO_CONSENSUS + RISK reject flash — UI only"
               >
-                Reject Pulse
+                Test Rejection Pulse
               </button>
             </div>
           )}
@@ -884,27 +770,35 @@ export default function DigitalTwinVisualizer() {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-4 flex-1 h-full">
-        <div className="flex-1 border border-slate-800 rounded-lg bg-[#0A0F16] relative overflow-hidden h-[600px] lg:h-full">
+        <div className="flex-1 border border-slate-800 rounded-lg bg-[#0A0F16] relative overflow-hidden h-[600px] lg:h-full touch-pan-y">
+          <DigitalTwinMobilePipeline nodes={nodes} onSelectNode={setSelectedNodeId} />
           <LayoutGroup id="agent-network-focus">
           <motion.div
-            className="h-full w-full"
+            className="h-full w-full hidden md:block"
             animate={{
               filter: selectedNodeId ? 'blur(8px)' : 'blur(0px)',
               opacity: selectedNodeId ? 0.38 : 1,
             }}
             transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
             style={{ pointerEvents: selectedNodeId ? 'none' : 'auto' }}
+            onDoubleClick={() => flowRef.current?.fitView({ padding: 0.15, duration: 280 })}
           >
             <ReactFlow
               nodes={nodes}
               edges={edges}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
+              onInit={(inst) => { flowRef.current = inst; }}
               onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-              nodeTypes={nodeTypes}
-              edgeTypes={edgeTypes}
+              nodeTypes={flowNodeTypes}
+              edgeTypes={flowEdgeTypes}
               fitView
-              className="bg-slate-950"
+              minZoom={0.25}
+              maxZoom={2.5}
+              zoomOnPinch
+              panOnDrag
+              panOnScroll
+              className="bg-slate-950 touch-manipulation"
               proOptions={{ hideAttribution: true }}
             >
               <Background color="#1e293b" gap={20} size={1} />
@@ -925,7 +819,7 @@ export default function DigitalTwinVisualizer() {
           </LayoutGroup>
         </div>
 
-        <div className="w-full lg:w-[420px] bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col h-[600px] lg:h-full overflow-hidden">
+        <div className={`w-full lg:w-[420px] bg-[#1A1F2B] border border-slate-800 rounded-lg p-4 flex flex-col overflow-hidden ${isPhone ? 'h-[360px]' : 'h-[600px] lg:h-full'}`}>
           <div className="flex items-center justify-between mb-3 border-b border-slate-800 pb-2">
             <div className="flex gap-1 bg-[#0A0F16] p-1 rounded-md">
               <button onClick={() => setPanelTab('transactions')} className={`px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider transition-colors ${panelTab === 'transactions' ? 'bg-cyan-700 text-white' : 'text-slate-500'}`}>
@@ -959,11 +853,21 @@ export default function DigitalTwinVisualizer() {
                       <span className="text-slate-500">{tx.originAgent}</span>
                     </div>
                     <div className="flex gap-1 mt-2">
-                      {STAGE_ORDER.map((stage) => {
+                      {STAGE_ORDER.slice(0, 8).map((stage) => {
                         const reached = tx.stages.some((s) => s.type === stage);
-                        return <div key={stage} className={`h-1 flex-1 rounded-full ${reached ? 'bg-cyan-500' : 'bg-slate-800'}`} />;
+                        return <div key={stage} className={`h-1 flex-1 rounded-full ${reached ? 'bg-cyan-500' : 'bg-slate-800'}`} title={stage} />;
                       })}
                     </div>
+                    {tx.stages.length > 0 && (
+                      <div className="mt-2 space-y-0.5 border-t border-slate-800/60 pt-2">
+                        {buildPipelineSteps(tx).slice(0, 4).map((step) => (
+                          <div key={`${step.eventType}-${step.offsetMs}`} className="text-[8px] font-mono text-slate-500 flex gap-2">
+                            <span className="text-cyan-600 shrink-0">t=+{step.offsetMs}ms</span>
+                            <span className="truncate text-slate-400">{step.label}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                     <div className="text-[8px] text-slate-600 mt-1 text-right">{new Date(tx.lastUpdate).toLocaleTimeString()}</div>
                   </motion.div>
                 );
@@ -973,15 +877,31 @@ export default function DigitalTwinVisualizer() {
               )}
             </div>
           ) : (
+            <div className="flex flex-col flex-1 min-h-0">
+              <div className="flex flex-wrap gap-1 mb-2">
+                {(['ALL', 'CONSENSUS', 'RISK', 'EXECUTION'] as LogFilter[]).map((f) => (
+                  <button
+                    key={f}
+                    type="button"
+                    onClick={() => setRawLogFilter(f)}
+                    className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-wider ${rawLogFilter === f ? 'bg-slate-700 text-white' : 'text-slate-500 hover:text-slate-300'}`}
+                  >
+                    {f}
+                  </button>
+                ))}
+              </div>
             <div className="flex-1 overflow-y-auto space-y-3 custom-scrollbar pr-2">
-              {events.map((evt) => (
+              {filteredRawEvents.map((evt) => {
+                const sev = classifyEventLog(evt.type);
+                return (
                 <div
                   key={evt.id}
                   onClick={() => setSelectedEvent(evt)}
-                  className="bg-[#0A0F16] border border-slate-800 rounded p-3 text-[10px] cursor-pointer hover:border-cyan-500 transition-colors"
+                  className={`bg-[#0A0F16] border rounded p-3 text-[10px] cursor-pointer hover:border-cyan-500 transition-colors ${LOG_SEVERITY_CLS[sev] || LOG_SEVERITY_CLS.INFO}`}
                 >
                   <div className="flex justify-between items-center mb-2 pb-1 border-b border-slate-800/50">
-                    <span className="font-bold text-cyan-400 font-mono flex items-center gap-1">
+                    <span className="font-bold font-mono flex items-center gap-1">
+                      <span className="text-[7px] uppercase opacity-70">{sev}</span>
                       <Terminal size={10} /> {evt.type}
                     </span>
                     <span className="text-slate-600 text-[9px]">{new Date(evt.timestamp).toLocaleTimeString()}</span>
@@ -990,41 +910,43 @@ export default function DigitalTwinVisualizer() {
                     {evt.type === 'MARKET_DATA' ? `${evt.payload?.symbol} @ ${evt.payload?.price}` : JSON.stringify(evt.payload).slice(0, 180)}
                   </div>
                 </div>
-              ))}
-              {events.length === 0 && (
-                <div className="text-center text-slate-600 font-mono text-[10px] mt-10 italic">Awaiting events…</div>
+              );})}
+              {filteredRawEvents.length === 0 && (
+                <div className="text-center text-slate-600 font-mono text-[10px] mt-10 italic">No events for filter {rawLogFilter}…</div>
               )}
+            </div>
             </div>
           )}
         </div>
       </div>
 
-      <AnimatePresence>
-        {selectedTx && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
-            onClick={() => setSelectedTraceId(null)}
-          >
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
-              onClick={(e) => e.stopPropagation()}
-              className="bg-[#1A1F2B] border border-slate-700 rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col"
-            >
-              <div className="flex justify-between items-center p-4 border-b border-slate-800">
-                <h3 className="text-cyan-400 font-mono font-bold tracking-wider flex items-center gap-2">
-                  <Hash size={16} /> Transaction {selectedTx.traceId}
-                </h3>
-                <button onClick={() => setSelectedTraceId(null)} className="text-slate-400 hover:text-white bg-slate-800 p-1 rounded">
-                  <X size={16} />
-                </button>
-              </div>
-              <div className="p-6 overflow-y-auto space-y-4">
-                <p className="text-[10px] text-slate-500 font-mono">Replay uses this trace&apos;s real persisted stages only.</p>
+      {isPhone ? (
+        <MobileBottomSheet
+          open={!!selectedTx}
+          title={selectedTx ? `Transaction ${selectedTx.traceId}` : ''}
+          onClose={() => setSelectedTraceId(null)}
+        >
+          {selectedTx && (
+            <div className="space-y-4">
+              <p className="text-[10px] text-slate-500 font-mono">Latency breakdown from first stage in this trace.</p>
+              {selectedPipeline.map((step, i) => (
+                <div key={`${step.eventType}-${step.offsetMs}`} className="relative pl-6">
+                  {i < selectedPipeline.length - 1 && <div className="absolute left-[5px] top-4 bottom-[-16px] w-px bg-slate-700" />}
+                  <div className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full bg-cyan-500" />
+                  <div className="text-[10px] font-mono mb-1">
+                    <span className="text-cyan-400">t=+{step.offsetMs}ms</span>
+                    <span className="text-slate-500 ml-2">{step.eventType}</span>
+                  </div>
+                  <div className="text-[11px] text-slate-200 mb-1">{step.label}</div>
+                  {step.detail && step.detail !== step.label && (
+                    <div className="text-[9px] text-slate-500 font-mono mb-2">{step.detail}</div>
+                  )}
+                </div>
+              ))}
+              <div className="border-t border-slate-800 pt-4 mt-2">
+                <p className="text-[9px] uppercase tracking-widest text-slate-500 mb-2">Raw payloads</p>
                 {selectedTx.stages.map((stage, i) => (
-                  <div key={`${stage.type}-${i}`} className="relative pl-6">
-                    {i < selectedTx.stages.length - 1 && <div className="absolute left-[5px] top-4 bottom-[-16px] w-px bg-slate-700" />}
-                    <div className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full bg-cyan-500" />
+                  <div key={`${stage.type}-${i}`} className="relative pl-6 mb-4">
                     <div className="text-[10px] text-slate-500 font-mono mb-1">{new Date(stage.timestamp).toLocaleTimeString()} · {stage.type}</div>
                     <pre className="bg-[#0A0F16] p-3 rounded border border-slate-800 text-[10px] text-emerald-400 font-mono whitespace-pre-wrap">
                       {JSON.stringify(stage.payload, null, 2)}
@@ -1032,12 +954,72 @@ export default function DigitalTwinVisualizer() {
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+        </MobileBottomSheet>
+      ) : (
+        <AnimatePresence>
+          {selectedTx && (
+            <motion.div
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+              onClick={() => setSelectedTraceId(null)}
+            >
+              <motion.div
+                initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+                onClick={(e) => e.stopPropagation()}
+                className="bg-[#1A1F2B] border border-slate-700 rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col"
+              >
+                <div className="flex justify-between items-center p-4 border-b border-slate-800">
+                  <h3 className="text-cyan-400 font-mono font-bold tracking-wider flex items-center gap-2">
+                    <Hash size={16} /> Transaction {selectedTx.traceId}
+                  </h3>
+                  <button onClick={() => setSelectedTraceId(null)} className="text-slate-400 hover:text-white bg-slate-800 p-1 rounded">
+                    <X size={16} />
+                  </button>
+                </div>
+                <div className="p-6 overflow-y-auto space-y-4">
+                  <p className="text-[10px] text-slate-500 font-mono">Latency breakdown from first stage in this trace.</p>
+                  {selectedPipeline.map((step, i) => (
+                    <div key={`${step.eventType}-${step.offsetMs}`} className="relative pl-6">
+                      {i < selectedPipeline.length - 1 && <div className="absolute left-[5px] top-4 bottom-[-16px] w-px bg-slate-700" />}
+                      <div className="absolute left-0 top-1 w-2.5 h-2.5 rounded-full bg-cyan-500" />
+                      <div className="text-[10px] font-mono mb-1">
+                        <span className="text-cyan-400">t=+{step.offsetMs}ms</span>
+                        <span className="text-slate-500 ml-2">{step.eventType}</span>
+                      </div>
+                      <div className="text-[11px] text-slate-200 mb-1">{step.label}</div>
+                      {step.detail && step.detail !== step.label && (
+                        <div className="text-[9px] text-slate-500 font-mono mb-2">{step.detail}</div>
+                      )}
+                    </div>
+                  ))}
+                  <div className="border-t border-slate-800 pt-4 mt-2">
+                    <p className="text-[9px] uppercase tracking-widest text-slate-500 mb-2">Raw payloads</p>
+                  {selectedTx.stages.map((stage, i) => (
+                    <div key={`${stage.type}-${i}`} className="relative pl-6 mb-4">
+                      <div className="text-[10px] text-slate-500 font-mono mb-1">{new Date(stage.timestamp).toLocaleTimeString()} · {stage.type}</div>
+                      <pre className="bg-[#0A0F16] p-3 rounded border border-slate-800 text-[10px] text-emerald-400 font-mono whitespace-pre-wrap">
+                        {JSON.stringify(stage.payload, null, 2)}
+                      </pre>
+                    </div>
+                  ))}
+                  </div>
+                </div>
+              </motion.div>
             </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+          )}
+        </AnimatePresence>
+      )}
 
       {selectedEvent && (
+        isPhone ? (
+          <MobileBottomSheet open title={`Event: ${selectedEvent.type}`} onClose={() => setSelectedEvent(null)}>
+            <pre className="bg-[#0A0F16] p-4 rounded border border-slate-800 text-[11px] text-emerald-400 font-mono whitespace-pre-wrap">
+              {JSON.stringify(selectedEvent.payload, null, 2)}
+            </pre>
+          </MobileBottomSheet>
+        ) : (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
           <div className="bg-[#1A1F2B] border border-slate-700 rounded-lg shadow-2xl w-full max-w-2xl max-h-[80vh] flex flex-col">
             <div className="flex justify-between items-center p-4 border-b border-slate-800">
@@ -1055,6 +1037,7 @@ export default function DigitalTwinVisualizer() {
             </div>
           </div>
         </div>
+        )
       )}
     </div>
   );

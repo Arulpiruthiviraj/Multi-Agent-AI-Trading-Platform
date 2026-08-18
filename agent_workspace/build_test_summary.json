@@ -1,0 +1,76 @@
+﻿{
+  "timestamp": "2026-08-17T18:22:00-04:00",
+  "tsc": {
+    "exitCode": 0,
+    "passed": true,
+    "resultFile": "agent_workspace/tsc_result.txt"
+  },
+  "build": {
+    "exitCode": 0,
+    "passed": true,
+    "resultFile": "agent_workspace/build_result.txt"
+  },
+  "vitest": {
+    "exitCode": 0,
+    "passed": true,
+    "testFiles": { "passed": 191, "failed": 0, "total": 191 },
+    "tests": { "passed": 1248, "failed": 0, "skipped": 0, "total": 1248 },
+    "durationSeconds": 168.06,
+    "resultFile": "agent_workspace/vitest_result.txt"
+  },
+  "liveReadiness": {
+    "url": "http://localhost:3000/api/v2/live-readiness",
+    "serverUp": true,
+    "httpStatus": 401,
+    "note": "401 Unauthorized — endpoint requires auth (AUTH_PASSWORD likely set)"
+  },
+  "researchSafetyPromotion": {
+    "liveCandidateRule": "LIVE_CANDIDATE requires every boolean gate true",
+    "paper": {
+      "minPaperTrades": 30,
+      "minPaperSessions": 10,
+      "minPaperCalendarDays": 30,
+      "minPaperProfitFactor": 1.2,
+      "minPaperExpectancy": 0,
+      "maxPaperDrawdownPct": 0.15
+    },
+    "oos": {
+      "minOosTrades": 30,
+      "minOosExpectancy": 0,
+      "minWalkForwardWindows": 3,
+      "permutationAlpha": 0.05
+    },
+    "costStress": {
+      "costStressMaxMultipleStillProfitable": 2,
+      "zeroCostBlocksPromotion": true,
+      "assumptions": {
+        "commissionPerShare": 0.005,
+        "spreadBps": 2,
+        "slippageBps": 5
+      }
+    },
+    "wfo": {
+      "wfoEmbargoBars": 5,
+      "wfoTrainBars": 60,
+      "wfoValBars": 20,
+      "wfoTestBars": 20
+    },
+    "other": {
+      "multipleTestingWarnAboveTrials": 100,
+      "pythonTimeoutMs": 25000
+    }
+  },
+  "envExampleKeyCategories": {
+    "brokers": ["ALPACA_*", "IBKR_*", "QUESTRADE_*", "COINBASE_*"],
+    "marketData": ["ALPHAVANTAGE_API_KEY", "POLYGON_API_KEY", "FINNHUB_API_KEY", "FMP_API_KEY", "FRED_API_KEY"],
+    "llm": ["GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MISTRAL_API_KEY", "NVIDIA_API_KEY", "DEEPSEEK_API_KEY", "OPENROUTER_API_KEY", "KIMI_API_KEY", "GROK_API_KEY", "GROQ_API_KEY", "ACTIVE_LLM"],
+    "auth": ["AUTH_USERNAME", "AUTH_PASSWORD", "AUTH_SESSION_SECRET", "AUTH_SESSION_TTL_DAYS", "ENCRYPTION_SECRET"],
+    "tradingSafety": ["ARGUS_TRADING_MODE", "PAPER_TRADING_ONLY", "QUANT_ENGINE_*", "QUANT_*_ENABLED"],
+    "ecosystem": ["OPENALICE_*", "VIBE_TRADING_PATH", "AUTOHEDGE_PATH", "ENABLE_*"],
+    "localAi": ["LOCAL_AI_SERVICE_*", "OLLAMA_HOST", "ARGUS_SKIP_CHRONOS", "ARGUS_SKIP_OLLAMA"]
+  },
+  "overall": {
+    "allChecksPassed": true,
+    "failures": []
+  }
+}

@@ -34,6 +34,19 @@
  */
 
 import { BaseAIProvider } from './AIProvider';
+import { heavyModelMutex } from './../HeavyModelMutex';
+import { aiModels } from './../../config/aiModels';
+
+/**
+ * DeepSeek R1 (and other reasoning-tuned local models) prefix their real answer with a
+ * `<think>...</think>` chain-of-thought block. Every consumer of `.content` downstream expects
+ * clean JSON/text, not that reasoning preamble - stripped once, centrally, here (the one place
+ * ANY Ollama-served model's raw content passes through), rather than patched into every agent
+ * that happens to call a reasoning model.
+ */
+export function stripThinkTags(content: string): string {
+  return content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+}
 
 export class OpenAICompatibleProvider extends BaseAIProvider {
   public apiKey: string = '';
@@ -58,22 +71,9 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     return !!this.apiKey;
   }
 
-  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
-    if (!this.authenticate()) throw new Error(`${this.providerName} not authenticated`);
-    
-    const headers: Record<string, string> = {
-        "Content-Type": "application/json"
-    };
-    if (this.apiKey) {
-        headers["Authorization"] = `Bearer ${this.apiKey}`;
-    }
-    
-    // OpenRouter specific headers
-    if (this.baseUrl.includes('openrouter.ai')) {
-        headers["HTTP-Referer"] = "https://argus.ai";
-        headers["X-Title"] = "Argus Trading Terminal";
-    }
-
+  /** One real HTTP attempt against exactly `model` - the pre-existing 429/5xx/network retry loop,
+   *  unchanged, just parameterized so chat() can call it once per fallback model. */
+  private async chatOnce(model: string, prompt: string, options: any, headers: Record<string, string>): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
     let retries = 0;
     const maxRetries = 2;
     let delay = 500;
@@ -84,7 +84,7 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     // Scoped to local backends only - not every OpenAI-compatible aggregator supports this param,
     // and a paid call failing on an unsupported param would be a worse outcome than skipping it.
     const body: Record<string, any> = {
-        model: options?.model || this.defaultModel,
+        model,
         messages: [{ role: "user", content: prompt }]
     };
     if (options?.jsonMode && this.isLocal) {
@@ -93,6 +93,12 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     // Phase 7 - see OpenAIProvider.ts's identical comment. Additive, opt-in only.
     if (options?.temperature !== undefined) {
         body.temperature = options.temperature;
+    }
+    // Real memory-management hint for local Ollama specifically - lets Ollama unload an inactive
+    // 14B model after this many idle minutes instead of holding it (and its VRAM) resident
+    // forever. No-op for non-Ollama OpenAI-compatible backends, which don't read this field.
+    if (this.isLocal) {
+        body.keep_alive = aiModels.ollama.keepAlive;
     }
 
     while (retries <= maxRetries) {
@@ -103,7 +109,7 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
             signal: options?.signal,
             body: JSON.stringify(body)
         });
-        
+
         if (!response.ok) {
             if (response.status === 429 || response.status >= 500) {
                if (retries < maxRetries) {
@@ -115,12 +121,12 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
             }
             throw new Error(`${this.providerName} API error: ${response.status} ${response.statusText}`);
         }
-        
+
         const data = await response.json();
         const inputTokens = data.usage?.prompt_tokens || 0;
         const outputTokens = data.usage?.completion_tokens || 0;
         return {
-            content: data.choices[0]?.message?.content || '',
+            content: stripThinkTags(data.choices[0]?.message?.content || ''),
             tokens: data.usage?.total_tokens || (inputTokens + outputTokens),
             inputTokens,
             outputTokens,
@@ -136,6 +142,72 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
       }
     }
     throw new Error(`${this.providerName} failed after retries`);
+  }
+
+  async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> {
+    if (!this.authenticate()) throw new Error(`${this.providerName} not authenticated`);
+
+    const headers: Record<string, string> = {
+        "Content-Type": "application/json"
+    };
+    if (this.apiKey) {
+        headers["Authorization"] = `Bearer ${this.apiKey}`;
+    }
+
+    // OpenRouter specific headers
+    if (this.baseUrl.includes('openrouter.ai')) {
+        headers["HTTP-Referer"] = "https://argus.ai";
+        headers["X-Title"] = "Argus Trading Terminal";
+    }
+
+    // Real same-provider model fallback (config/aiModels.json's per-route `fallback` list): if the
+    // primary model 404s/errors/times out (e.g. not pulled, or momentarily unavailable under
+    // heavy-model contention), retry the SAME request against each fallback model in order before
+    // this provider is considered failed - distinct from AIRouter's own cross-provider failover,
+    // which only kicks in once every model attempted here has failed.
+    const primaryModel = options?.model || this.defaultModel;
+    const modelsToTry = [primaryModel, ...(Array.isArray(options?.fallbackModels) ? options.fallbackModels : [])];
+
+    // Real bug fix, found live: every fallback attempt used to share the ONE AbortSignal/deadline
+    // AIRouter's outer withTimeout() created for the whole call - once that fired, every
+    // subsequent fallback model failed INSTANTLY with "This operation was aborted" rather than
+    // getting a real, fresh attempt (confirmed in production logs: llama3.2 and 0xroyce/plutus:latest
+    // both failed within the same call with that exact message). When `options.timeoutMs` is
+    // provided (AIRouter passes each route's own per-model budget), each model attempt now gets
+    // its OWN fresh AbortController/timer - a cold-starting fallback model gets the SAME real
+    // time budget the primary model had, not whatever was left over. The externally-supplied
+    // signal (if any) can still abort every attempt, e.g. a caller-level cancellation.
+    const perModelTimeoutMs: number | undefined = options?.timeoutMs;
+    const externalSignal: AbortSignal | undefined = options?.signal;
+
+    let lastError: Error | null = null;
+    for (const model of modelsToTry) {
+      let controller: AbortController | undefined;
+      let timer: NodeJS.Timeout | undefined;
+      let onExternalAbort: (() => void) | undefined;
+      try {
+        let attemptOptions = options;
+        if (perModelTimeoutMs) {
+          controller = new AbortController();
+          timer = setTimeout(() => controller!.abort(), perModelTimeoutMs);
+          if (externalSignal) {
+            onExternalAbort = () => controller!.abort();
+            externalSignal.addEventListener('abort', onExternalAbort);
+          }
+          attemptOptions = { ...options, signal: controller.signal };
+        }
+        return await heavyModelMutex.run(model, () => this.chatOnce(model, prompt, attemptOptions, headers));
+      } catch (err: any) {
+        lastError = err;
+        if (modelsToTry.indexOf(model) < modelsToTry.length - 1) {
+          console.warn(`[${this.providerName}] Model '${model}' failed (${err.message}) - trying fallback model.`);
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (externalSignal && onExternalAbort) externalSignal.removeEventListener('abort', onExternalAbort);
+      }
+    }
+    throw lastError ?? new Error(`${this.providerName} failed after retries`);
   }
 
   // This single class serves many different real backends (Grok, OpenRouter, Groq, LiteLLM,

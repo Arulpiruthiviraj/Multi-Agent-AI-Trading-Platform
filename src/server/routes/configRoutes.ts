@@ -1,5 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { ConfigItemStatus, WizardStatusResponse } from '../types/wizardStatus';
+import { networkEndpoints } from '../config/networkEndpoints';
+import { tradingSafety } from '../config/tradingSafety';
 
 interface ProviderStatus {
   provider: string;
@@ -39,8 +41,8 @@ const AI_PROVIDER_NAME_ALIASES: Record<string, string[]> = {
 
 /** Local / no-key engines AIRouter seeds or operators commonly add — always listed even with no DB row. */
 const KNOWN_LOCAL_PROVIDERS: Array<{ providerName: string; apiEndpoint: string }> = [
-  { providerName: 'Ollama (Local)', apiEndpoint: 'http://localhost:11434/v1' },
-  { providerName: 'LiteLLM Gateway', apiEndpoint: 'http://localhost:4000' },
+  { providerName: 'Ollama (Local)', apiEndpoint: `${networkEndpoints.aiLocal.ollamaDefault}/v1` },
+  { providerName: 'LiteLLM Gateway', apiEndpoint: networkEndpoints.aiLocal.liteLlmGatewayDefault },
 ];
 
 export type ProviderUsageStatus = 'active' | 'inactive' | 'no_credentials' | 'not_configured';
@@ -339,7 +341,15 @@ const SETTINGS_ALLOWED_FIELDS: (keyof typeof schema.settings.$inferInsert)[] = [
   'maxOrdersPerMinute', 'positionSizingMode', 'percentOfEquityPct',
   'autoTradeScheduleEnabled', 'autoTradeScheduleStartTime', 'autoTradeScheduleEndTime',
   'autoTradeScheduleTimezone',
+  'strategyEngineEnabled', 'strategyEngineMode', 'strategyEngineActiveIdsJson',
+  'strategyEngineMaxActive', 'strategyEngineMinConfidence',
 ];
+
+// Only these mode strings are real in this pass (StrategyEngineShadowRunner.ts only acts on
+// SHADOW/ANALYSIS_ONLY; OFF is the default). SIGNAL_ADVISORY/CONSENSUS_PARTICIPANT/PAPER_ONLY/
+// LIVE_ELIGIBLE are reserved for a future phase - accepting them here with no real behavior
+// behind them would silently mislead an operator into thinking they did something.
+const STRATEGY_ENGINE_REAL_MODES = ['OFF', 'SHADOW', 'ANALYSIS_ONLY'];
 
 configRouter.get('/settings', async (req, res) => {
   try {
@@ -353,6 +363,12 @@ configRouter.get('/settings', async (req, res) => {
       PAPER_TRADING_ONLY: envMode.paperTradingOnly,
       envTradingMode: envMode.mode,
       envTradingModeSource: envMode.source,
+      // Real bug fix: the Settings ribbon used to show a hardcoded "Max Sector Exp 35%" string
+      // that had drifted from the actual reviewed config value (0.4 = 40%) enforced by
+      // RiskEngine's real sector_concentration gate. Read-only (not in SETTINGS_ALLOWED_FIELDS -
+      // this is a file-reviewed safety ceiling, not a UI-settable value), exposed here purely so
+      // the frontend can display the REAL number instead of a stale literal.
+      maxSectorConcentrationPct: tradingSafety.maxSectorConcentrationPct,
     });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
@@ -372,6 +388,17 @@ configRouter.post('/settings', async (req, res) => {
     }
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'autoTradeScheduleTimezone') && !isValidTimezone(req.body.autoTradeScheduleTimezone)) {
       return res.status(400).json({ ok: false, error: `autoTradeScheduleTimezone is not a recognized IANA timezone: ${JSON.stringify(req.body.autoTradeScheduleTimezone)}` });
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'strategyEngineMode') && !STRATEGY_ENGINE_REAL_MODES.includes(req.body.strategyEngineMode)) {
+      return res.status(400).json({ ok: false, error: `strategyEngineMode must be one of ${STRATEGY_ENGINE_REAL_MODES.join(', ')} (other modes are reserved for a future phase): got ${JSON.stringify(req.body.strategyEngineMode)}` });
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'strategyEngineActiveIdsJson')) {
+      try {
+        const parsed = JSON.parse(req.body.strategyEngineActiveIdsJson);
+        if (!Array.isArray(parsed) || !parsed.every((x: unknown) => typeof x === 'string')) throw new Error('not a string[]');
+      } catch {
+        return res.status(400).json({ ok: false, error: 'strategyEngineActiveIdsJson must be a JSON array of strings.' });
+      }
     }
 
     // Real bug fixed: SETTINGS_ALLOWED_FIELDS only ever allowlisted field *names*; a client could

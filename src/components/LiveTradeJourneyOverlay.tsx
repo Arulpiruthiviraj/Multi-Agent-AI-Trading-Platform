@@ -33,37 +33,19 @@
  * ==========================================================
  */
 
-import React, { useState, useEffect } from 'react';
-import ReactFlow, { Background, Controls, Edge, Node, Position, Handle } from 'reactflow';
+import React, { useState, useEffect, useMemo } from 'react';
+import ReactFlow, { Background, Controls, Edge, Node } from 'reactflow';
 import 'reactflow/dist/style.css';
+import { JourneyNode } from './journeyFlowTypes';
 import { X, Play, Activity, TrendingUp, Newspaper, UserCheck, ShieldCheck, Send, CheckCircle2 } from 'lucide-react';
 import { useEventBusTrace } from '../hooks/useEventBusTrace';
-
-const JourneyNode = ({ data }: any) => {
-  return (
-    <div className={`px-4 py-2 w-48 shadow-xl rounded-lg bg-[#111822] border-2 transition-all duration-300 ${data.active ? 'border-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.4)] scale-105' : 'border-slate-800'}`}>
-      <Handle type="target" position={Position.Top} className="w-0 h-0 border-none bg-transparent" />
-      <div className="flex items-center gap-3">
-        <div className={`p-2 rounded ${data.active ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-500'}`}>
-          {data.icon}
-        </div>
-        <div>
-          <div className="text-[10px] font-bold text-white uppercase tracking-widest leading-tight">{data.label}</div>
-          <div className="text-[8px] text-slate-400 mt-0.5 max-w-xs overflow-hidden text-ellipsis whitespace-nowrap">{data.description || '...'}</div>
-        </div>
-      </div>
-      <Handle type="source" position={Position.Bottom} className="w-0 h-0 border-none bg-transparent" />
-    </div>
-  );
-};
-
-const nodeTypes = { journey: JourneyNode };
 
 export default function LiveTradeJourneyOverlay({ trade, onClose }: { trade: any, onClose: () => void }) {
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const traceEvents = useEventBusTrace(trade?.trace_id || null);
   const timelineIndex = traceEvents.length > 0 ? traceEvents.length - 1 : 0;
+  const flowNodeTypes = useMemo(() => ({ journey: JourneyNode }), []);
 
   useEffect(() => {
      if (traceEvents.length === 0) return;
@@ -130,7 +112,7 @@ export default function LiveTradeJourneyOverlay({ trade, onClose }: { trade: any
               <ReactFlow
                 nodes={nodes}
                 edges={edges}
-                nodeTypes={nodeTypes}
+                nodeTypes={flowNodeTypes}
                 fitView
                 proOptions={{ hideAttribution: true }}
                 zoomOnScroll={false}

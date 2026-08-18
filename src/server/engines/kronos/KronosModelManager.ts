@@ -1,16 +1,10 @@
 import { eventBus } from '../../core/EventBus';
-import { preferIpv4Loopback } from '../../ai/preferIpv4Loopback';
+import { resolveLocalAiServiceUrl } from '../../ai/preferIpv4Loopback';
 import { runtimeIntervals } from '../../config/runtimeIntervals';
 
 export type KronosStatus = 'Loading...' | 'Downloading...' | 'Initializing...' | 'Ready' | 'Warning: Kronos unavailable';
 
-function resolveChronosServiceUrl(): string {
-  const raw = process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008';
-  // Legacy docs used :8000; Chronos always serves LOCAL_AI_SERVICE_PORT (default 8008).
-  return preferIpv4Loopback(raw.replace(/:8000(?=\/|$)/, ':8008'));
-}
-
-const SERVICE_URL = resolveChronosServiceUrl();
+const SERVICE_URL = resolveLocalAiServiceUrl();
 // Re-checked lazily rather than once at boot - the local inference service (scripts/
 // local_ai_service.py) is meant to be started/stopped independently of the Node process, like
 // Ollama. A one-shot boot-time check would permanently report unavailable if the service was

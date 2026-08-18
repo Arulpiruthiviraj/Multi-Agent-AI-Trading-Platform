@@ -92,6 +92,7 @@ import { v2Router } from "./src/server/routes/v2System";
 import { mountResearchRoutes } from "./src/server/routes/researchRoutes";
 import { evaluateLiveReadiness } from "./src/server/core/liveReadinessEngine";
 import { analyticsRouter } from "./src/server/routes/analyticsRoutes";
+import { strategyEngineRouter } from "./src/server/routes/strategyEngineRoutes";
 import { webhooksRouter, triggerWebhooks } from "./src/server/routes/webhooks";
 import { generateContentWithRetry, cleanAndParseJSON } from "./src/server/ai/legacyGeminiHelpers";
 import { auditLog, AUDIT_LOG_FILE } from "./src/server/core/auditLog";
@@ -102,6 +103,7 @@ import { autobotRouter } from "./src/server/routes/autobotRoutes";
 import { shadowPortfolioState, saveShadowPortfolio } from "./src/server/state/shadowPortfolio";
 import { integrationRouter } from "./src/server/routes/integrationRoutes";
 import { tradingEngine } from "./src/server/engines/TradingEngine";
+import { armReconciliationBootWarmup } from "./src/server/core/startup";
 import { system } from "./src/server/core/SystemBootstrap";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
@@ -116,22 +118,19 @@ import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
+import { installGlobalErrorHandlers } from "./src/server/core/globalErrorHandlers.js";
+import { installProcessShutdown } from "./src/server/core/gracefulShutdown.js";
+import { alertingService } from "./src/server/services/AlertingService.js";
+import { installServerLogBuffer } from "./src/server/services/ServerLogBuffer.js";
+import { setGlobalWss, getGlobalWss } from "./src/server/core/wsRegistry.js";
+import { resolveListenHost, isAllowedCorsOrigin } from "./src/server/core/serverBind.js";
+import { buildInitialStateSnapshot } from "./src/server/core/wsInitialSnapshot.js";
 import WebSocket from "ws";
-
-
 
 import { createServer as createViteServer } from "vite";
 
-process.on('uncaughtException', (err) => {
-  console.error('[FATAL] uncaughtException:', err.stack || err);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-  const stack = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
-  console.error('[FATAL] unhandledRejection:', stack);
-  process.exit(1);
-});
+dotenv.config();
+installGlobalErrorHandlers();
 
 const AUTOBOT_SYMBOLS = ["TSLA", "NVDA", "AAPL", "MSTR", "PLTR", "CRWD", "AMD", "SNOW", "META", "GOOG", "COIN"];
 
@@ -193,7 +192,6 @@ function initializeAlpacaNewsWebSocket() {
   });
 }
 
-dotenv.config();
 if (process.env.ALPACA_SECRET_KEY && !process.env.ALPACA_API_SECRET) {
   process.env.ALPACA_API_SECRET = process.env.ALPACA_SECRET_KEY;
 }
@@ -311,11 +309,30 @@ const LLM_PROVIDER_REGISTRY: Record<LLMProviderId, { label: string; envKey: stri
 let activeLLMProvider: string = (process.env.ACTIVE_LLM || "gemini").toLowerCase();
 
 async function startServer() {
+  armReconciliationBootWarmup();
+  installServerLogBuffer();
   await AIRouter.getInstance().initialize();
+
+  // Real bug fixed: this used to run after tradingEngine.initialize() below. If Autobot was
+  // already enabled from a prior session (settings.autoBotEnabled=true persists across restarts
+  // by design), tradingEngine.initialize() calls system.start() synchronously as part of
+  // restoring that state - which starts PortfolioMonitor/PortfolioReconciliation immediately.
+  // Those call BrokerManager.getActiveBroker(), whose constructor defaults to a bare
+  // `new InternalPaperBroker()` ("Argus Internal Simulator") until .initialize() below has run
+  // and swapped in the real configured broker (Alpaca). The very first reconciliation cycle on a
+  // boot with Autobot already on could therefore compare real local records against the
+  // simulator's empty position list instead of the real broker - a guaranteed false-positive
+  // "position missing remotely" mismatch that clears real local portfolio rows and auto-pauses
+  // trading over nothing. Moved before tradingEngine.initialize() so the real broker is always
+  // active before anything that might start reconciling against it.
+  await BrokerManager.getInstance().initialize();
+
   await tradingEngine.initialize();
-  
+
+  alertingService.start();
+
   // -- SQLite Initialization --
-        
+
   // autoBotState initialization removed
 
 
@@ -339,9 +356,6 @@ async function startServer() {
     });
     settings = await db.select().from(schema.settings).limit(1);
   }
-  
-  // Initialize broker manager so configured broker selection is active at runtime
-  await BrokerManager.getInstance().initialize();
 
   try {
     marketDataWorker.start();
@@ -356,6 +370,14 @@ async function startServer() {
     console.log('[AutoTradeScheduler] Started at boot (independent of Autobot state; no-op unless settings.autoTradeScheduleEnabled is true).');
   } catch (e: any) {
     console.warn(`[AutoTradeScheduler] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { strategyEngineShadowRunner } = await import('./src/server/services/StrategyEngineShadowRunner');
+    strategyEngineShadowRunner.start();
+    console.log('[StrategyEngineShadowRunner] Started at boot (isolated, optional; no-op unless settings.strategyEngineEnabled is true and mode is SHADOW/ANALYSIS_ONLY. Never places or influences a real order.)');
+  } catch (e: any) {
+    console.warn(`[StrategyEngineShadowRunner] Boot start failed: ${e.message}`);
   }
 
   try {
@@ -616,6 +638,21 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
   const app = express();
   initializeAlpacaNewsWebSocket();
 
+  // Credentialed CORS for remote mobile (Tailscale / LAN) when Origin differs from host.
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && isAllowedCorsOrigin(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Access-Control-Allow-Credentials', 'true');
+      res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    }
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
+    }
+    next();
+  });
+
   app.use(async (req: Request & { actor?: string }, res, next) => {
     if (req.path.startsWith('/api/v1/auth')) return next();
     if (await isAuthed(req)) {
@@ -716,6 +753,7 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
     }
   }
   app.use("/api/v2/analytics", analyticsRouter);
+  app.use("/api/v2/strategy-engine", strategyEngineRouter);
   app.get('/api/v1/scheduler', (req, res) => {
     res.json({ tasks: scheduledTasks });
   });
@@ -1818,12 +1856,25 @@ let portfolioState = loadPortfolio();
   setGlobalWss(wss);
   wss.on('connection', (ws) => {
     console.log('[WS] Client connected');
+
+    void (async () => {
+      try {
+        const data = await buildInitialStateSnapshot();
+        if (ws.readyState === 1) {
+          ws.send(JSON.stringify({ type: 'INITIAL_STATE_SNAPSHOT', data }));
+        }
+      } catch (e) {
+        console.warn('[WS] INITIAL_STATE_SNAPSHOT failed:', e);
+      }
+    })();
     
     ws.on('message', (message) => {
       try {
         const msg = JSON.parse(message.toString());
-        if (msg.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong' }));
+        const kind = String(msg.type || '').toLowerCase();
+        if (kind === 'ping') {
+          const ts = typeof msg.timestamp === 'number' ? msg.timestamp : Date.now();
+          ws.send(JSON.stringify({ type: 'PONG', timestamp: ts }));
         }
       } catch (e) {}
     });
@@ -1873,18 +1924,20 @@ let portfolioState = loadPortfolio();
       process.exit(1);
     }
   });
-  // Fail-closed network posture: without AUTH_PASSWORD, bind loopback only so LAN/WAN cannot hit open APIs.
-  const bindHost = AUTH_ENABLED ? '0.0.0.0' : '127.0.0.1';
+  // Fail-closed without AUTH_PASSWORD unless ARGUS_BIND_HOST explicitly opens the interface.
+  const bindHost = resolveListenHost(AUTH_ENABLED);
   httpServer.listen(PORT, bindHost, () => {
-    if (!AUTH_ENABLED) {
-      console.warn('WARNING: AUTH_PASSWORD NOT SET. API BOUND TO LOCALHOST ONLY.');
+    if (!AUTH_ENABLED && bindHost === '127.0.0.1') {
+      console.warn('WARNING: AUTH_PASSWORD NOT SET. API BOUND TO LOCALHOST ONLY. Remote mobile requires AUTH_PASSWORD or ARGUS_BIND_HOST=0.0.0.0.');
+    } else if (!AUTH_ENABLED && bindHost !== '127.0.0.1') {
+      console.warn('WARNING: AUTH_PASSWORD NOT SET but server is listening on all interfaces. Set AUTH_PASSWORD before exposing Argus on a network.');
     }
     console.log(`Enterprise scale multi-agent backend running on ${bindHost}:${PORT}`);
+    alertingService.alertProcessBoot({ port: PORT, bindHost });
   });
+  installProcessShutdown({ httpServer, wss });
 }
 
 startServer();
 
-let globalWss: any = null;
-export const setGlobalWss = (w: any) => globalWss = w;
-export const getGlobalWss = () => globalWss;
+export { getGlobalWss, setGlobalWss };

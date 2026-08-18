@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -48,6 +48,12 @@ describe('Portfolio reconciliation mismatch actually blocks new orders (Phase 1 
     delete process.env.ALPACA_SECRET_KEY;
 
     await db.insert(schema.settings).values({ maxTradeSize: 5000, riskLevel: 'Balanced', maxOpenPositions: 10 });
+  });
+
+  beforeEach(async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    BrokerManager.getInstance().resetSyncStateForTests('READY');
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
   });
 
   afterAll(() => {

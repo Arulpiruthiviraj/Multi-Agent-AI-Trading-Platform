@@ -34,6 +34,7 @@
  */
 
 import { BaseAIProvider } from './AIProvider';
+import { networkEndpoints } from '../../config/networkEndpoints';
 
 // Hardening pass, Phase 6: see GeminiProvider.ts's identical comment - this provider previously
 // hardcoded "deepseek-coder" and silently ignored options.model.
@@ -69,7 +70,7 @@ export class DeepSeekProvider extends BaseAIProvider {
       }
     }
 
-    const response = await fetch("https://api.deepseek.com/v1/chat/completions", {
+    const response = await fetch(networkEndpoints.aiCloud.deepSeekChatCompletionsUrl, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",

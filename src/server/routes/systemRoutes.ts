@@ -13,6 +13,7 @@
  */
 import express, { Router, Request, Response } from "express";
 import fs from "fs";
+import { eventBus } from "../core/EventBus";
 import { db, dbPath, sqliteDb } from "../db/index";
 import * as schema from "../db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -61,6 +62,7 @@ systemRouter.post("/system/emergency-stop", tradingLimiter, async (req: Request 
     const actor = req.actor || 'unknown';
     console.warn(`CIRCUIT BREAKER: Emergency Stop activated by ${actor}.`);
     const result = await tradingEngine.setTradingState('EMERGENCY_STOP', { reason, actor, cancelOpenOrders });
+    eventBus.emit('KILL_SWITCH_TRIGGERED', { tradingState: result.toState, actor, reason });
     res.json({ status: "ok", active: true, tradingState: result.toState, cancelledOrderIds: result.cancelledOrderIds });
   } catch (e: any) {
     res.status(500).json({ error: e.message });

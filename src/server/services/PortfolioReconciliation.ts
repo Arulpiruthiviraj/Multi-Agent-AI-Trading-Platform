@@ -18,6 +18,7 @@ import { EVENTS } from '../core/eventNames';
 import { TERMINAL_ORDER_STATUSES } from './OrderManagement';
 import { submitPipelineSells } from './PipelineFlatten';
 import { getActiveAcknowledgedOrderIds } from './ReconciliationAcknowledgements';
+import { isReconciliationWarmupActive, reconciliationWarmupRemainingMs } from '../core/startup';
 
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismatchDollars;
@@ -45,11 +46,14 @@ export class PortfolioReconciliationWorker {
   // manual "reconcile now" trigger firing mid-cycle - could let two overlapping runs race on the
   // same `portfolio` table writes and double-emit RECONCILIATION_MISMATCH/MATCH.
   private isReconciling = false;
+  private workerStartedAt = 0;
 
   start() {
     if (this.intervalId) return;
+    this.workerStartedAt = Date.now();
     this.intervalId = setInterval(() => this.reconcile(), runtimeIntervals.portfolioReconciliationMs);
-    this.reconcile();
+    // Defer first cycle until boot warmup elapses (BrokerManager + portfolio cache settle).
+    setTimeout(() => this.reconcile(), runtimeIntervals.reconciliationBootWarmupMs);
   }
 
   stop() {
@@ -64,11 +68,25 @@ export class PortfolioReconciliationWorker {
       console.warn('[PortfolioReconciliation] A reconciliation cycle is already in progress - skipping this overlapping call.');
       return;
     }
+
+    const brokerManager = BrokerManager.getInstance();
+    if (!brokerManager.isReadyForReconciliation()) {
+      console.log(`[PortfolioReconciliation] RECONCILIATION_WARMUP: broker sync state is ${brokerManager.getSyncState()} — skipping this cycle.`);
+      eventBus.publish(EVENTS.RECONCILIATION_WARMUP, { reason: 'broker_not_ready', syncState: brokerManager.getSyncState() });
+      return;
+    }
+
+    const warmupActive = isReconciliationWarmupActive();
+    if (warmupActive) {
+      console.log('[PortfolioReconciliation] RECONCILIATION_WARMUP: boot grace active — sync runs but kill-switch evaluation is suppressed.');
+    }
+
     this.isReconciling = true;
+    brokerManager.beginBrokerSync();
     try {
       console.log("[PortfolioReconciliation] Syncing local portfolio with active broker...");
 
-      const broker = BrokerManager.getInstance().getActiveBroker();
+      const broker = brokerManager.getActiveBroker();
       const brokerPortfolio = await broker.portfolio();
 
       const remotePositions = brokerPortfolio.positions || [];
@@ -220,7 +238,11 @@ export class PortfolioReconciliationWorker {
         // pending review, not the more drastic EMERGENCY_STOP behavior of also cancelling every
         // real open order - open orders are left alone, matching the "existing positions remain
         // observable" requirement this fix was scoped against.
-        if (worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS && tradingEngine.state.tradingState === 'TRADING_ENABLED') {
+        const warmupActive = isReconciliationWarmupActive();
+        if (warmupActive) {
+          console.warn(`[PortfolioReconciliation] Boot warmup active (${reconciliationWarmupRemainingMs()}ms remaining) - mismatch recorded but TRADING_PAUSED suppressed until broker/portfolio sync stabilizes.`);
+        }
+        if (!warmupActive && worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS && tradingEngine.state.tradingState === 'TRADING_ENABLED') {
           if (tradingSafety.autoFlattenOnReconciliationMismatch) {
             const flattenSymbols = [...new Set(
               mismatches
@@ -249,6 +271,8 @@ export class PortfolioReconciliationWorker {
             mismatches,
             autoFlatten: tradingSafety.autoFlattenOnReconciliationMismatch,
           });
+        } else if (warmupActive && worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS) {
+          actionTaken = 'WARMUP_SUPPRESSED_PAUSE';
         }
       } else {
         eventBus.publish(EVENTS.RECONCILIATION_MATCH, { timestamp, broker: broker.name });
@@ -284,6 +308,7 @@ export class PortfolioReconciliationWorker {
     } catch (e) {
        console.error("[PortfolioReconciliation] Error during sync:", e);
     } finally {
+      brokerManager.endBrokerSync();
       this.isReconciling = false;
     }
   }

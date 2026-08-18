@@ -307,7 +307,7 @@ class TradingEngine {
              type: type,
              source: "TradingEngine",
              timestamp: eventTime,
-             payload: detail ? { msg, ...detail } : msg
+             payload: msg,
           });
           if (this.state.eventBus.length > 50) this.state.eventBus.pop();
        } catch (e) {}

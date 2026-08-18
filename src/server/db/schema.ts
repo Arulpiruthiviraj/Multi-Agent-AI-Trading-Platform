@@ -113,6 +113,20 @@ export const settings = sqliteTable('settings', {
   // JSON map of togglable agent id → boolean. Empty object means all togglable idea agents on
   // (backward compatible). Cannot disable RiskEngine/OMS/ChiefTrader — those are not in this map.
   pipelineAgentEnabledJson: text('pipeline_agent_enabled_json').default('{}'),
+
+  // Optional, isolated Strategy Engine (src/server/strategiesEngine/, see STRATEGIES_ENGINE.md and
+  // ARGUS_STRATEGY_ENGINE_IMPLEMENTATION.md). Off by default - zero behavior change for anyone who
+  // hasn't opted in. This subsystem NEVER calls OrderManagement/BrokerManager directly at any
+  // setting value; only 'OFF'/'SHADOW'/'ANALYSIS_ONLY' are currently real (SHADOW/ANALYSIS_ONLY
+  // record hypothetical signals to strategy_engine_signals, they never place or influence a real
+  // order). 'SIGNAL_ADVISORY'/'CONSENSUS_PARTICIPANT'/'PAPER_ONLY'/'LIVE_ELIGIBLE' are reserved
+  // mode strings for a future phase and are rejected by the settings route today - see that
+  // report's "Known limitations" for why those are not faked in this pass.
+  strategyEngineEnabled: integer('strategy_engine_enabled', { mode: 'boolean' }).default(false),
+  strategyEngineMode: text('strategy_engine_mode').notNull().default('OFF'), // OFF | SHADOW | ANALYSIS_ONLY (others reserved, rejected by the route)
+  strategyEngineActiveIdsJson: text('strategy_engine_active_ids_json').default('[]'), // JSON string[] of specific strategy ids to evaluate; empty = none active
+  strategyEngineMaxActive: integer('strategy_engine_max_active').default(25),
+  strategyEngineMinConfidence: real('strategy_engine_min_confidence').default(0.6),
 });
 
 // Immutable audit trail for every kill-switch state transition (Phase 1.4: "every
@@ -298,7 +312,11 @@ export const fills = sqliteTable('fills', {
   quantity: real('quantity').notNull(),
   price: real('price').notNull(),
   filledAt: text('filled_at').notNull(),
-});
+  /** Broker-reported cumulative filled qty. Unique with orderId so duplicate callbacks cannot double-count. */
+  cumulativeQuantity: real('cumulative_quantity'),
+}, (table) => ({
+  orderCumulativeUniqueIdx: uniqueIndex('idx_fills_order_cumulative').on(table.orderId, table.cumulativeQuantity),
+}));
 
 export const dailyTradingSummary = sqliteTable('daily_trading_summary', {
   date: text('date').primaryKey(),
@@ -1012,4 +1030,110 @@ export const replayRuns = sqliteTable('replay_runs', {
   updatedAt: text('updated_at').notNull(),
 }, (table) => ({
   statusIdx: index('idx_replay_runs_status').on(table.status),
+}));
+
+/**
+ * Strategy Engine (src/server/strategiesEngine/, ARGUS_STRATEGY_ENGINE_IMPLEMENTATION.md).
+ * strategyId/variantId are NOT foreign keys into a DB-stored definitions table on purpose - the
+ * ~10,000+ strategy definitions are deterministic (same source code => same id, see
+ * strategiesEngine/core/id.ts) and fully reconstructible from the in-memory registry, so storing
+ * a duplicate copy of every definition here would just be a driftable cache of something the code
+ * already reproduces exactly. Only real, non-reconstructible EVIDENCE is persisted: signals that
+ * were actually computed, backtest runs that actually ran, and promotion decisions that actually
+ * happened.
+ */
+
+/** Every real SHADOW/ANALYSIS_ONLY signal a strategy actually produced. Append-only - never
+ *  updated after insert, so this is a real audit trail, not a mutable cache. evidenceClass
+ *  distinguishes SHADOW/PAPER/LIVE the same way BACKTEST/REPLAY are already kept apart elsewhere
+ *  in this schema (see replayRuns above) - never mixed into one undifferentiated bucket. */
+export const strategyEngineSignals = sqliteTable('strategy_engine_signals', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id').notNull(),
+  strategyName: text('strategy_name').notNull(),
+  family: text('family').notNull(),
+  symbol: text('symbol').notNull(),
+  timeframe: text('timeframe').notNull(),
+  evidenceClass: text('evidence_class').notNull(), // SHADOW | ANALYSIS_ONLY - never LIVE/PAPER from this table (see report)
+  side: text('side').notNull(), // BUY | SELL | NONE
+  entryMet: integer('entry_met', { mode: 'boolean' }).notNull(),
+  confirmationMet: integer('confirmation_met', { mode: 'boolean' }),
+  reasonsJson: text('reasons_json').notNull(),
+  priceAtSignal: real('price_at_signal').notNull(),
+  timestamp: integer('timestamp').notNull(), // epoch ms of the bar this was evaluated on
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  strategyIdx: index('idx_strategy_engine_signals_strategy').on(table.strategyId, table.timestamp),
+  symbolIdx: index('idx_strategy_engine_signals_symbol').on(table.symbol, table.timestamp),
+}));
+
+/** One row per real, completed backtest run against real historical bars (HistoricalDataGateway).
+ *  metricsJson is a real StrategyPerformance object (strategiesEngine/core/StrategyPerformance.ts)
+ *  - never a fabricated/estimated one. */
+export const strategyEngineBacktestRuns = sqliteTable('strategy_engine_backtest_runs', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id').notNull(),
+  strategyName: text('strategy_name').notNull(),
+  symbol: text('symbol').notNull(),
+  timeframe: text('timeframe').notNull(),
+  periodStart: text('period_start').notNull(),
+  periodEnd: text('period_end').notNull(),
+  metricsJson: text('metrics_json').notNull(), // full StrategyPerformance
+  datasetHash: text('dataset_hash').notNull(), // real hash of the exact bars used - reproducibility (Section 13)
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  strategyIdx: index('idx_strategy_engine_backtest_strategy').on(table.strategyId),
+}));
+
+/** Append-only audit trail of every real evidence-state transition (core/types.ts EvidenceState).
+ *  A row here is only ever written by promoteEvidence() (strategiesEngine/core/evidence.ts), which
+ *  enforces the ladder is walked one real step at a time - this table records that it happened, it
+ *  does not itself decide whether a promotion is allowed. */
+export const strategyEnginePromotions = sqliteTable('strategy_engine_promotions', {
+  id: text('id').primaryKey(),
+  strategyId: text('strategy_id').notNull(),
+  fromState: text('from_state').notNull(),
+  toState: text('to_state').notNull(),
+  evidenceRefTable: text('evidence_ref_table'), // e.g. 'strategy_engine_backtest_runs' - what justified this step
+  evidenceRefId: text('evidence_ref_id'),
+  reason: text('reason').notNull(),
+  actor: text('actor').notNull(), // 'system' | a real username - never silently anonymous
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  strategyIdx: index('idx_strategy_engine_promotions_strategy').on(table.strategyId, table.createdAt),
+}));
+
+// Distributed tracing — per-agent chain-of-thought (additive to event_traces / consensus_evidence).
+export const agentReasoningLogs = sqliteTable('agent_reasoning_logs', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  traceId: text('trace_id').notNull(),
+  timestamp: text('timestamp').notNull(),
+  agentName: text('agent_name').notNull(),
+  symbol: text('symbol').notNull(),
+  action: text('action').notNull(),
+  confidence: real('confidence').notNull(),
+  indicatorsSnapshot: text('indicators_snapshot'),
+  promptContext: text('prompt_context'),
+  reasoningSummary: text('reasoning_summary').notNull(),
+  executionLatencyMs: real('execution_latency_ms'),
+}, (table) => ({
+  traceIdx: index('idx_agent_reasoning_logs_trace_id').on(table.traceId),
+  symbolIdx: index('idx_agent_reasoning_logs_symbol').on(table.symbol, table.timestamp),
+}));
+
+// Macro lifecycle keyed by trace_id (correlation id on the decision spine).
+export const transactionTraces = sqliteTable('transaction_traces', {
+  traceId: text('trace_id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  createdAt: text('created_at').notNull(),
+  lifecycleStatus: text('lifecycle_status').notNull(),
+  contributingAgents: text('contributing_agents'),
+  consensusScore: real('consensus_score'),
+  consensusThreshold: real('consensus_threshold'),
+  riskSummary: text('risk_summary'),
+  terminalReason: text('terminal_reason'),
+  orderId: text('order_id'),
+}, (table) => ({
+  symbolIdx: index('idx_transaction_traces_symbol').on(table.symbol, table.createdAt),
+  statusIdx: index('idx_transaction_traces_status').on(table.lifecycleStatus, table.createdAt),
 }));

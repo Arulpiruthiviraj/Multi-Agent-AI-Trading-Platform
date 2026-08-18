@@ -1,4 +1,5 @@
 import { NewsProviderPlugin, NewsArticleRaw } from './NewsProviderPlugin';
+import { networkEndpoints } from '../../config/networkEndpoints';
 
 export class FinnhubNewsProvider implements NewsProviderPlugin {
   public id = 'finnhub_market';
@@ -16,7 +17,7 @@ export class FinnhubNewsProvider implements NewsProviderPlugin {
     }
 
     try {
-      const res = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${process.env.FINNHUB_API_KEY}`);
+      const res = await fetch(`${networkEndpoints.marketData.finnhubBaseUrl}/news?category=general&token=${process.env.FINNHUB_API_KEY}`);
       if (!res.ok) return [];
       const data = await res.json();
       

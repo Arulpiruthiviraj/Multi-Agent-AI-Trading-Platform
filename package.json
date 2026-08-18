@@ -7,11 +7,14 @@
     "node": "24.18.0"
   },
   "scripts": {
-    "dev": "tsx scripts/ecosystem-dev.ts",
-    "dev:core": "tsx scripts/devWithOpenAlice.ts",
-    "dev:server-only": "tsx server.ts",
+    "dev": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/ecosystem-dev.ts",
+    "dev:core": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/devWithOpenAlice.ts",
+    "dev:server-only": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop argus",
+    "pm2:logs": "pm2 logs argus",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test": "vitest run",

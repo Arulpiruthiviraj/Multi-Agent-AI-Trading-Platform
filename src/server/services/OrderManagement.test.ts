@@ -5,18 +5,19 @@ import { trades, fills } from '../db/schema';
 // (PENDING at submission -> broker acceptance -> terminal fill/reject), so the mock now tracks
 // a mutable "current row" that both insert and update write into, plus separate insert logs for
 // `trades` vs `fills` so assertions can tell real order-lifecycle inserts apart from fill records.
-const { mockDb, setExistingTrades, setThrowOnIdempotency, tradesInserts, fillsInserts, getFinalTradeRow } = vi.hoisted(() => {
+const { mockDb, setExistingTrades, setThrowOnIdempotency, setEnvRow, tradesInserts, fillsInserts, getFinalTradeRow } = vi.hoisted(() => {
   const tradesInserts: any[] = [];
   const fillsInserts: any[] = [];
   let existingTrades: any[] = [];
   let currentRow: any = null;
   let throwOnIdempotency = false;
+  let envRow: any = { tradingMode: 'Paper', paperMode: true };
 
   const selectBuilder: any = {
     from() { return selectBuilder; },
     where() { return selectBuilder; },
     limit() { return selectBuilder; },
-    get() { return { tradingMode: 'Paper', paperMode: true }; },
+    get() { return envRow; },
     then(resolve: any, reject: any) {
       if (throwOnIdempotency) return Promise.reject(new Error('idempotency lookup failed')).then(resolve, reject);
       return Promise.resolve(existingTrades).then(resolve, reject);
@@ -41,6 +42,7 @@ const { mockDb, setExistingTrades, setThrowOnIdempotency, tradesInserts, fillsIn
     mockDb, tradesInserts, fillsInserts,
     setExistingTrades: (rows: any[]) => { existingTrades = rows; },
     setThrowOnIdempotency: (v: boolean) => { throwOnIdempotency = v; },
+    setEnvRow: (row: any) => { envRow = row; },
     getFinalTradeRow: () => currentRow,
   };
 });
@@ -71,6 +73,7 @@ describe('OrderManagementService.executeOrder', () => {
     setTradingState.mockClear();
     setExistingTrades([]);
     setThrowOnIdempotency(false);
+    setEnvRow({ tradingMode: 'Paper', paperMode: true });
   });
 
   afterEach(() => {
@@ -205,5 +208,40 @@ describe('OrderManagementService.executeOrder', () => {
     expect(setTradingState).toHaveBeenCalledWith('TRADING_PAUSED', expect.objectContaining({
       reason: expect.stringContaining('placeOrder threw'),
     }));
+  });
+
+  it('LIVE + LIVE_ARM + LIVE_NO_GO refuses placeOrder', async () => {
+    const prev = process.env.PAPER_TRADING_ONLY;
+    process.env.PAPER_TRADING_ONLY = 'false';
+    setEnvRow({ tradingMode: 'LIVE', paperMode: false });
+    const { armLiveTrading, disarmLiveTrading, LIVE_TRADING_CONFIRMATION_PHRASE } = await import('../core/LiveTradingConfirmation');
+    armLiveTrading(LIVE_TRADING_CONFIRMATION_PHRASE);
+    const placeOrder = vi.fn(async () => ({ id: 'live-1', status: 'FILLED', averageFillPrice: 1 }));
+    mockBrokerHolder.broker = {
+      id: 'alpaca',
+      name: 'Alpaca',
+      placeOrder,
+      orders: vi.fn(async () => []),
+      positions: vi.fn(async () => []),
+      getCapabilities: () => ({ paperTrading: true, liveTrading: true }),
+    };
+    try {
+      await oms.executeOrder('AAPL', 'BUY', 1, 'reasoning', 'live-nogo-trace');
+      expect(placeOrder).not.toHaveBeenCalled();
+      expect(getFinalTradeRow().status).toBe('REJECTED');
+      expect(String(getFinalTradeRow().reasoning)).toMatch(/LIVE_NO_GO/);
+    } finally {
+      disarmLiveTrading();
+      if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
+      else process.env.PAPER_TRADING_ONLY = prev;
+    }
+  });
+
+  it('PAPER orders still reach the broker when live readiness is LIVE_NO_GO', async () => {
+    const placeOrder = vi.fn(async () => ({ id: 'paper-ok', status: 'FILLED', averageFillPrice: 50 }));
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+    await oms.executeOrder('AAPL', 'BUY', 2, 'reasoning', 'paper-nogo-unaffected');
+    expect(placeOrder).toHaveBeenCalled();
+    expect(getFinalTradeRow().status).toBe('FILLED');
   });
 });

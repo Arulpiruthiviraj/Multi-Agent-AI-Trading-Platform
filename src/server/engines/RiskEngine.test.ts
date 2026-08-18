@@ -6,9 +6,10 @@ import { tradingSafety } from '../config/tradingSafety';
 // db.select().from(table)...limit()/where()/orderBy() all resolve to whatever rows were
 // registered for that specific table via setTableRows(). Mirrors drizzle's own thenable
 // query-builder shape closely enough for RiskEngine's read-only queries.
-const { mockDb, setTableRows, resetTableRows } = vi.hoisted(() => {
+const { mockDb, setTableRows, resetTableRows, setInsertFails } = vi.hoisted(() => {
   const resultsByTable = new Map<any, any[]>();
   let lastTable: any = null;
+  let insertFails = false;
   const builder: any = {
     from(table: any) { lastTable = table; return builder; },
     where() { return builder; },
@@ -20,13 +21,16 @@ const { mockDb, setTableRows, resetTableRows } = vi.hoisted(() => {
   };
   const mockDb = {
     select: () => builder,
-    insert: () => ({ values: () => Promise.resolve({}) }),
+    insert: () => ({
+      values: () => insertFails ? Promise.reject(new Error('SQLITE_BUSY')) : Promise.resolve({}),
+    }),
     update: () => ({ set: () => ({ run: () => Promise.resolve({}) }) }),
   };
   return {
     mockDb,
     setTableRows: (table: any, rows: any[]) => resultsByTable.set(table, rows),
     resetTableRows: () => resultsByTable.clear(),
+    setInsertFails: (v: boolean) => { insertFails = v; },
   };
 });
 
@@ -99,6 +103,7 @@ function lastAssessment() {
 describe('RiskEngine.evaluateRisk', () => {
   beforeEach(() => {
     resetTableRows();
+    setInsertFails(false);
     emitRiskAssessment.mockClear();
     mockMarketDataWorker.getLatestPriceAgeMs.mockReset();
     mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(1_000);
@@ -520,6 +525,17 @@ describe('RiskEngine.evaluateRisk', () => {
     expect(assessment.reasoning).toMatch(/Market is currently closed/);
   });
 
+  it('passes market_hours when Alpaca clock reports is_open during regular session', async () => {
+    process.env.ALPACA_API_KEY = 'key';
+    process.env.ALPACA_SECRET_KEY = 'secret';
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ is_open: true, next_open: '2026-08-18T13:30:00Z', next_close: '2026-08-18T20:00:00Z' }) })));
+
+    await riskEngine.evaluateRisk({ traceId: 't13-open', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+    const assessment = lastAssessment();
+    expect(assessment.rejectionGate).not.toBe('market_hours');
+  });
+
   it('fail-closes market_hours when Alpaca clock HTTP fails (does not treat outage as open)', async () => {
     process.env.ALPACA_API_KEY = 'key';
     process.env.ALPACA_SECRET_KEY = 'secret';
@@ -655,5 +671,12 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.reasoning).not.toMatch(/AUTOBOT_DISABLED/);
     mockTradingEngine.state.enabled = true;
+  });
+
+  it('does not emit RISK_ASSESSMENT_COMPLETED when persistence fails (fail closed for OMS)', async () => {
+    setInsertFails(true);
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 0 }));
+    await riskEngine.evaluateRisk({ traceId: 'persist-fail', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+    expect(emitRiskAssessment).not.toHaveBeenCalled();
   });
 });

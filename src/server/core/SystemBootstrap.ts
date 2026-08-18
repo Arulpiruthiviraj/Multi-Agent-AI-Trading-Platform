@@ -51,6 +51,7 @@ import { explainabilityAgent } from '../services/ExplainabilityAgent';
 import { kronosEngine } from '../engines/kronos/KronosEngine';
 
 import { dbBackupService } from '../services/DbBackupService';
+import { tracingService } from '../services/TracingService';
 import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
 import { alertingService } from '../services/AlertingService';
@@ -73,6 +74,7 @@ export class SystemBootstrap {
     riskAgent;
     chiefTrader;
     transactionLifecycleTracker;
+    tracingService;
     advancedQuantEngines.start();
     
     marketDataWorker.start();

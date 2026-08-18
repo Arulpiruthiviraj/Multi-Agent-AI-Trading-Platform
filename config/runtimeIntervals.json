@@ -5,11 +5,15 @@
   "portfolioMonitorMs": 60000,
   "reflectionEngineMs": 60000,
   "newsEngineMs": 10000,
+  "rssFeedErrorBackoffMs": 900000,
+  "rssFeedFetchTimeoutMs": 10000,
   "chiefTraderWeightSyncMs": 10000,
   "chiefTraderIdeaTtlMs": 60000,
   "systemMetricsMs": 2000,
   "portfolioReconciliationMs": 300000,
+  "reconciliationBootWarmupMs": 15000,
   "marketDataReconnectMs": 5000,
+  "networkReconnectBackoffMs": [1000, 2000, 5000, 10000, 30000],
   "marketDataCrossCheckMs": 60000,
   "kronosRecheckMs": 30000,
   "kronosPredictionCooldownMs": 60000,
@@ -32,5 +36,6 @@
   "omsFollowUpIntervalMs": 15000,
   "omsPollForFillTimeoutMs": 4000,
   "omsPollForFillIntervalMs": 400,
-  "autoTradeSchedulerMs": 60000
+  "autoTradeSchedulerMs": 60000,
+  "strategyEngineShadowMs": 300000
 }

@@ -36,6 +36,17 @@ export interface TradingSafety {
   alpacaCircuitBreakerFailureThreshold: number;
   alpacaCircuitBreakerCooldownMs: number;
   aiProviderTimeoutMs: number;
+  aiProviderAuthFailureCooldownMs: number;
+  /** Skip 404 / fetch-failed providers this long (in-memory; does not flip DB enabled). */
+  aiProviderUnreachableCooldownMs: number;
+  /** Skip a provider that timed out this long so NewsAgent does not re-pay the timeout every cycle. */
+  aiProviderTimeoutSkipCooldownMs: number;
+  /** Free-tier AlphaVantage shared daily HTTP cap (Fund + Macro). */
+  alphaVantageDailyRequestBudget: number;
+  /** Max parallel LLM providers for routeConsensus (top-K healthy). */
+  consensusMaxProviders: number;
+  /** Max NewsEngine LLM escalations per pipeline cycle. */
+  newsLlmMaxCallsPerCycle: number;
   omsFollowUpMaxAgeMs: number;
   aiFailureWindowMs: number;
   aiFailureThresholdForLivePause: number;
@@ -157,6 +168,12 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'alpacaRetryBaseDelayMs',
   'alpacaCircuitBreakerFailureThreshold',
   'aiProviderTimeoutMs',
+  'aiProviderAuthFailureCooldownMs',
+  'aiProviderUnreachableCooldownMs',
+  'aiProviderTimeoutSkipCooldownMs',
+  'alphaVantageDailyRequestBudget',
+  'consensusMaxProviders',
+  'newsLlmMaxCallsPerCycle',
   'omsFollowUpMaxAgeMs',
   'alpacaCircuitBreakerCooldownMs',
   'aiFailureWindowMs',

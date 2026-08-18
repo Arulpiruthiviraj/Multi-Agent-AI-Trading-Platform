@@ -1,0 +1,35 @@
+{
+  "$comment": "Allowlisted remote operations for MobileOpsConsole / POST /api/v2/system/ops/execute. No arbitrary shell — jobId must match a key here.",
+  "jobs": {
+    "RECONCILE_BASELINE": {
+      "command": "npx",
+      "args": ["tsx", "scripts/reconcile_broker_baseline.ts"],
+      "timeoutMs": 300000,
+      "description": "Sanctioned one-time baseline sync: adopt pre-existing broker positions into Argus without bypassing RiskEngine or OMS."
+    },
+    "INGEST_WAREHOUSE": {
+      "command": "npx",
+      "args": ["tsx", "scripts/ingest_research_warehouse.ts"],
+      "timeoutMs": 900000,
+      "description": "Fetch Alpaca historical bars into data/research warehouse parquet (research path only, not live trading)."
+    },
+    "RUN_TESTS": {
+      "command": "npx",
+      "args": ["vitest", "run"],
+      "timeoutMs": 900000,
+      "description": "Run the full vitest suite (npm test equivalent)."
+    },
+    "DB_BACKUP": {
+      "command": "npx",
+      "args": ["tsx", "scripts/run_db_backup.ts"],
+      "timeoutMs": 120000,
+      "description": "Checkpoint WAL and copy data/argus.db to data/backups/argus_YYYY-MM-DD.db."
+    },
+    "CLEANUP_DIAGNOSTICS": {
+      "command": "npx",
+      "args": ["tsx", "scripts/archive_diagnostic_pending.ts", "--apply"],
+      "timeoutMs": 120000,
+      "description": "Archive diag-* PENDING trades into diagnostic_trade_archive and mark ARCHIVED_DIAGNOSTIC (no deletes)."
+    }
+  }
+}

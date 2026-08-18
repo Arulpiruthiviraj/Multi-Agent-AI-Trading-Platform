@@ -40,9 +40,11 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { rsiEngine } from '../engines/RSIEngine';
 import { macdEngine } from '../engines/MACDEngine';
 import { quantThresholds } from '../config/quantThresholds';
-import { randomUUID } from 'node:crypto';
+import { generateTraceId } from '../core/traceId';
 
 export class TechnicalProposerAgent {
+  // Tick-driven via MARKET_DATA (MarketDataWorker WebSocket), not a standalone 60s timer.
+  // Requires quantThresholds.technicalHistoryBars ticks before checkStrategies fires.
   private priceHistory: Record<string, number[]> = {};
   private listening = false;
   private readonly onMarketData = (data: { symbol: string, price: number, volume: number, timestamp: string }) => this.analyzeTick(data);
@@ -109,7 +111,7 @@ export class TechnicalProposerAgent {
 
   private checkStrategies(symbol: string, prices: number[]) {
     const currentPrice = prices[prices.length - 1];
-    const traceId = randomUUID();
+    const traceId = generateTraceId(symbol);
     const startedAt = Date.now();
 
     // Real STARTED/COMPLETED bracket for live animation (previously only Kronos had one) -
@@ -139,7 +141,9 @@ export class TechnicalProposerAgent {
         confidence,
         currentPrice,
         reasoning: `Strong upward trend detected. MACD bullish crossover. RSI at ${rsi.toFixed(2)}.`,
-        agent: "TechnicalAgent"
+        agent: "TechnicalAgent",
+        latencyMs: Date.now() - startedAt,
+        indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, macdSignal: macd.signal, bbUpper: bb.upper, bbLower: bb.lower },
       });
     }
 
@@ -156,7 +160,9 @@ export class TechnicalProposerAgent {
         confidence,
         currentPrice,
         reasoning: `Oversold condition. Price breached lower Bollinger Band with RSI at ${rsi.toFixed(2)}.`,
-        agent: "TechnicalAgent"
+        agent: "TechnicalAgent",
+        latencyMs: Date.now() - startedAt,
+        indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower },
       });
     }
 
@@ -173,7 +179,9 @@ export class TechnicalProposerAgent {
         confidence,
         currentPrice,
         reasoning: `Overbought condition. Price exceeded upper Bollinger Band. RSI at ${rsi.toFixed(2)}.`,
-        agent: "TechnicalAgent"
+        agent: "TechnicalAgent",
+        latencyMs: Date.now() - startedAt,
+        indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower },
       });
     }
   }

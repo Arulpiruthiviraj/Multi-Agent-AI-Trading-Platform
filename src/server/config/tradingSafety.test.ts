@@ -18,6 +18,11 @@ describe('tradingSafety.json', () => {
     expect(tradingSafety.reconSignificantMismatchDollars).toBeGreaterThan(0);
     expect(tradingSafety.evaluationHorizonMs).toBeGreaterThan(0);
     expect(tradingSafety.newsVetoMinImpactScore).toBeGreaterThan(0);
+    expect(tradingSafety.alphaVantageDailyRequestBudget).toBeGreaterThan(0);
+    expect(tradingSafety.consensusMaxProviders).toBeGreaterThan(0);
+    expect(tradingSafety.newsLlmMaxCallsPerCycle).toBeGreaterThan(0);
+    expect(tradingSafety.aiProviderUnreachableCooldownMs).toBeGreaterThan(0);
+    expect(tradingSafety.aiProviderTimeoutSkipCooldownMs).toBeGreaterThan(0);
   });
 
   it('netConfidenceFromVotes uses the configured disagreement penalty, not a test-local 0.5', () => {

@@ -421,6 +421,7 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   v2Router.get('/research/organic-paper', async (_req, res) => {
+    try {
     let rows: Array<{ status: string; side: string; profitLoss: number | null; traceId: string | null; reasoning: string | null }> = [];
     try {
       rows = await db.select({
@@ -477,6 +478,11 @@ export function mountResearchRoutes(v2Router: Router): void {
       live: 'NO-GO',
       canPlaceOrders: false,
     });
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error('[organic-paper] handler failed:', message);
+      res.status(500).json({ ok: false, error: message, canPlaceOrders: false, live: 'NO-GO' });
+    }
   });
 
   v2Router.post('/research/canonical/core', backtestLimiter, (req, res) => {

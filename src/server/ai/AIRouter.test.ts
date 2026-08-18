@@ -107,4 +107,127 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     expect(statuses).toEqual(['error', 'success']);
     expect(result.consensus_verdict).toBe('SELL');
   }, 15_000);
+
+  it('routeTask() disables a provider on HTTP 401 and fails over to the next provider', async () => {
+    const authFailProvider = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => { throw new Error('HTTP 401 Unauthorized'); }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('auth-dead', authFailProvider);
+    aiRouter.registerProvider('fast-after-auth', fastProvider('{"ok":true}'));
+
+    const result = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-auth');
+    expect(result.provider).toBe('fast-after-auth');
+    expect(aiRouter.isProviderAuthDisabled('auth-dead')).toBe(true);
+  });
+
+  it('routeConsensus() calls at most tradingSafety.consensusMaxProviders providers (DEF-15)', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const chats: string[] = [];
+    const make = (id: string) => ({
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => {
+        chats.push(id);
+        return { content: '{"decision":"HOLD","confidence":10}', tokens: 1, inputTokens: 1, outputTokens: 1 };
+      }),
+      estimateCost: vi.fn(() => 0),
+    });
+    aiRouter.registerProvider('c1', make('c1'));
+    aiRouter.registerProvider('c2', make('c2'));
+    aiRouter.registerProvider('c3', make('c3'));
+
+    const result = await runAndAdvance(aiRouter.routeConsensus('TestAgent', 'prompt', 'trace-topk'));
+    expect(result.results).toHaveLength(tradingSafety.consensusMaxProviders);
+    expect(chats).toHaveLength(tradingSafety.consensusMaxProviders);
+  }, 15_000);
+
+  it('routeTask() skips a 404 provider on the next call without treating it as auth-disable', async () => {
+    const dead = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => { throw new Error('NVIDIA API error: 404 Not Found'); }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('nvidia-404', dead);
+    aiRouter.registerProvider('ok-provider', fastProvider('{"ok":true}'));
+
+    const first = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-404-a');
+    expect(first.provider).toBe('ok-provider');
+    expect(dead.chat).toHaveBeenCalledTimes(1);
+    expect(aiRouter.isProviderTemporarilySkipped('nvidia-404')).toBe(true);
+    expect(aiRouter.isProviderAuthDisabled('nvidia-404')).toBe(false);
+
+    const second = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-404-b');
+    expect(second.provider).toBe('ok-provider');
+    expect(dead.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('routeTask() skips a fetch-failed provider on the next call', async () => {
+    const dead = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => { throw new Error('fetch failed'); }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('litellm-dead', dead);
+    aiRouter.registerProvider('ok-provider', fastProvider('{"ok":true}'));
+
+    await aiRouter.routeTask('TestAgent', 'prompt', 'trace-fetch-a');
+    expect(aiRouter.isProviderTemporarilySkipped('litellm-dead')).toBe(true);
+    await aiRouter.routeTask('TestAgent', 'prompt', 'trace-fetch-b');
+    expect(dead.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('routeTask() skips a timed-out provider for tradingSafety.aiProviderTimeoutSkipCooldownMs', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const hung = hungProvider();
+    aiRouter.registerProvider('hung-ollama', hung);
+    aiRouter.registerProvider('ok-provider', fastProvider('{"ok":true}'));
+
+    const first = await runAndAdvance(aiRouter.routeTask('TestAgent', 'prompt', 'trace-to-a'));
+    expect(first.provider).toBe('ok-provider');
+    expect(aiRouter.isProviderTemporarilySkipped('hung-ollama')).toBe(true);
+
+    const second = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-to-b');
+    expect(second.provider).toBe('ok-provider');
+    expect(hung.chat).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(tradingSafety.aiProviderTimeoutSkipCooldownMs + 1);
+    expect(aiRouter.isProviderTemporarilySkipped('hung-ollama')).toBe(false);
+  }, 15_000);
+});
+
+describe('AIRouter provider selection helpers (DEF-14/15)', () => {
+  it('skips remote providers with no API key and keeps local ones', async () => {
+    const { shouldSkipUnconfiguredProvider, selectConsensusProviders } = await import('./AIRouter');
+    expect(shouldSkipUnconfiguredProvider({ apiKey: undefined, isLocal: false })).toBe(true);
+    expect(shouldSkipUnconfiguredProvider({ apiKey: 'sk-test', isLocal: false })).toBe(false);
+    expect(shouldSkipUnconfiguredProvider({ apiKey: undefined, isLocal: true })).toBe(false);
+    expect(selectConsensusProviders([['a', 1], ['b', 2], ['c', 3]] as [string, number][], 2).map(([id]) => id)).toEqual(['a', 'b']);
+  });
+});
+
+describe('isAuthFailureError - real bug fix: Gemini real-key-rejection phrasing was never caught', () => {
+  it('CRITICAL: catches Gemini\'s real "API key not valid" message (found live - was not caught before this fix)', async () => {
+    const { isAuthFailureError } = await import('./AIRouter');
+    const geminiRealMessage = '{"error":{"code":400,"message":"API key not valid. Please pass a valid API key.","status":"INVALID_ARGUMENT","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"API_KEY_INVALID"}]}}';
+    expect(isAuthFailureError(new Error(geminiRealMessage))).toBe(true);
+  });
+
+  it('still catches every previously-supported phrasing (no regression)', async () => {
+    const { isAuthFailureError } = await import('./AIRouter');
+    expect(isAuthFailureError(new Error('401 Unauthorized'))).toBe(true);
+    expect(isAuthFailureError(new Error('OpenAI API error: Unauthorized'))).toBe(true);
+    expect(isAuthFailureError(new Error('403 Forbidden'))).toBe(true);
+    expect(isAuthFailureError(new Error('invalid api key supplied'))).toBe(true);
+  });
+
+  it('does not misclassify genuinely non-auth failures (timeout, 404, network)', async () => {
+    const { isAuthFailureError, isUnreachableProviderError, isTimeoutSkipError } = await import('./AIRouter');
+    expect(isAuthFailureError(new Error('did not respond within 20000ms'))).toBe(false);
+    expect(isAuthFailureError(new Error('NVIDIA API error: 404 Not Found'))).toBe(false);
+    expect(isAuthFailureError(new Error('fetch failed'))).toBe(false);
+    expect(isUnreachableProviderError(new Error('NVIDIA API error: 404 Not Found'))).toBe(true);
+    expect(isUnreachableProviderError(new Error('fetch failed'))).toBe(true);
+    expect(isTimeoutSkipError(new Error('NVIDIA API error: 404 Not Found'))).toBe(false);
+  });
 });

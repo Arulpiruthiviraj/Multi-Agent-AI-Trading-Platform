@@ -1,0 +1,69 @@
+{
+  "generatedAt": "2026-08-17T22:24:43.368Z",
+  "tradingDay": "2026-08-17 (America/New_York, UTC-4 fallback)",
+  "tradingDayQuery": {
+    "after": "2026-08-17T04:00:00.000Z",
+    "until": "2026-08-18T04:00:00.000Z"
+  },
+  "alpacaBaseUrl": "https://paper-api.alpaca.markets",
+  "credentialsPresent": {
+    "ALPACA_API_KEY": true,
+    "ALPACA_SECRET_KEY": true
+  },
+  "alpacaReachable": true,
+  "tlsOrCertificateError": "fetch failed | cause: unable to verify the first certificate; if the root CA is installed locally, try running Node.js with --use-system-ca",
+  "tlsNotes": {
+    "nodeDefaultFetchFailedCertificateVerification": true,
+    "mitigatedWithSystemCaStore": true,
+    "hint": "Node fetch() failed TLS verification; retry used tls.getCACertificates(\"system\") via node:https (same as NODE_OPTIONS=--use-system-ca)."
+  },
+  "fetchErrors": [],
+  "account": {
+    "id": "d62aa516-6583-4ea5-bcdd-1fcc632eb3d7",
+    "status": "ACTIVE",
+    "currency": "USD",
+    "equity": 100035.17,
+    "cash": 99405.17,
+    "buying_power": 399384.68,
+    "portfolio_value": 100035.17,
+    "trading_blocked": false,
+    "account_blocked": false
+  },
+  "positions": [
+    {
+      "symbol": "GLD",
+      "qty": 1,
+      "side": "long",
+      "avg_entry_price": 387.97,
+      "market_value": 405,
+      "unrealized_pl": 17.03,
+      "current_price": 405
+    },
+    {
+      "symbol": "NVDA",
+      "qty": 1,
+      "side": "long",
+      "avg_entry_price": 206.85,
+      "market_value": 225,
+      "unrealized_pl": 18.15,
+      "current_price": 225
+    }
+  ],
+  "ordersForTradingDay": [],
+  "fillActivitiesForTradingDay": [],
+  "localDb": {
+    "path": "data/argus.db",
+    "exists": true,
+    "trades": []
+  },
+  "reconciliation": {
+    "status": "RECONCILED",
+    "details": [],
+    "summary": {
+      "localTradesOnTradingDay": 0,
+      "alpacaFilledOrdersOnTradingDay": 0,
+      "alpacaFillActivitiesOnTradingDay": 0,
+      "localTradesWithBrokerOrderId": 0
+    }
+  }
+}

@@ -33,15 +33,31 @@
  * ==========================================================
  */
 
-import React, { createContext, useContext, useEffect, useState, useRef, useCallback, useMemo, ReactNode } from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { resolveWebSocketUrl } from '../lib/clientFetch';
 
 type WebSocketStatus = 'connecting' | 'connected' | 'disconnected';
 
 interface WebSocketContextType {
   status: WebSocketStatus;
   lastMessage: any | null;
+  /** Round-trip ping→pong latency in ms; null until first pong. */
+  latencyMs: number | null;
   sendMessage: (msg: any) => void;
   subscribe: (eventType: string, callback: (data: any) => void) => () => void;
+  /** Close and reconnect (respects exponential backoff in onclose). */
+  forceReconnect: () => void;
+  /** DEF-22: connect only after the SPA has a confirmed session. */
+  setEnabled: (enabled: boolean) => void;
 }
 
 const WebSocketContext = createContext<WebSocketContextType | null>(null);
@@ -49,7 +65,10 @@ const WebSocketContext = createContext<WebSocketContextType | null>(null);
 export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   const [status, setStatus] = useState<WebSocketStatus>('disconnected');
   const [lastMessage, setLastMessage] = useState<any | null>(null);
+  const [latencyMs, setLatencyMs] = useState<number | null>(null);
   const ws = useRef<WebSocket | null>(null);
+  const pingSentAt = useRef<number | null>(null);
+  const connectRef = useRef<() => void>(() => {});
   const reconnectTimeout = useRef<NodeJS.Timeout | null>(null);
   const subscribers = useRef<Map<string, Set<(data: any) => void>>>(new Map());
   const reconnectAttempts = useRef(0);
@@ -61,11 +80,9 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   // EventStore.ts's own persistence scope - to backfill from GET /api/v2/system/events?since=.
   // null until the first disconnect, so the very first page load never triggers a backfill fetch.
   const lastDisconnectedAt = useRef<number | null>(null);
-  // Best-effort de-dup for the short overlap window between a backfill response landing and a
-  // live event for the same occurrence arriving over the newly-reopened socket - bounded so it
-  // can't grow unbounded over a long session.
   const appliedBackfillEventIds = useRef<Set<string>>(new Set());
   const disposedRef = useRef(false);
+  const enabledRef = useRef(false);
 
   // Shared by both a live WS message and a backfilled event, so a replayed event reaches
   // subscribers identically to how it would have if the client had never disconnected.
@@ -83,7 +100,8 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   // nice-to-have, not a safety-critical path.
   const backfillMissedEvents = async (sinceMs: number) => {
     try {
-      const res = await fetch(`/api/v2/system/events?since=${sinceMs}`);
+      const res = await fetch(`/api/v2/system/events?since=${sinceMs}`, { credentials: 'include' });
+      if (res.status === 401) return;
       if (!res.ok) return;
       const body = await res.json();
       if (!body.ok || !Array.isArray(body.events)) return;
@@ -107,12 +125,13 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const connect = () => {
+    if (!enabledRef.current) return;
     if (disposedRef.current) return;
     if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
 
     setStatus('connecting');
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const newWs = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    setLatencyMs(null);
+    const newWs = new WebSocket(resolveWebSocketUrl());
 
     newWs.onopen = () => {
       if (disposedRef.current) {
@@ -129,25 +148,37 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
         lastDisconnectedAt.current = null;
       }
 
-      // Start heartbeat
+      // Start heartbeat — 3s PING/PONG for live latency on mobile Mission Control.
       lastPong.current = Date.now();
-      heartbeatInterval.current = setInterval(() => {
+      const sendPing = () => {
         if (ws.current?.readyState === WebSocket.OPEN) {
-          ws.current.send(JSON.stringify({ type: 'ping' }));
-
-          if (Date.now() - lastPong.current > 15000) {
-            console.warn('[WebSocketContext] Heartbeat timeout. Reconnecting...');
-            ws.current.close();
-          }
+          const ts = Date.now();
+          pingSentAt.current = ts;
+          ws.current.send(JSON.stringify({ type: 'PING', timestamp: ts }));
         }
-      }, 5000);
+      };
+      sendPing();
+      heartbeatInterval.current = setInterval(() => {
+        sendPing();
+        if (Date.now() - lastPong.current > 12000) {
+          console.warn('[WebSocketContext] Heartbeat timeout. Reconnecting...');
+          ws.current?.close();
+        }
+      }, 3000);
     };
 
     newWs.onmessage = (event) => {
       try {
         const payload = JSON.parse(event.data);
-        if (payload.type === 'pong') {
+        const kind = String(payload.type || '').toLowerCase();
+        if (kind === 'pong') {
           lastPong.current = Date.now();
+          if (typeof payload.timestamp === 'number') {
+            setLatencyMs(Math.max(0, Date.now() - payload.timestamp));
+          } else if (pingSentAt.current != null) {
+            setLatencyMs(Math.max(0, Date.now() - pingSentAt.current));
+          }
+          pingSentAt.current = null;
           return;
         }
 
@@ -160,7 +191,7 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
     newWs.onclose = () => {
       if (heartbeatInterval.current) clearInterval(heartbeatInterval.current);
       if (ws.current === newWs) ws.current = null;
-      if (disposedRef.current) {
+      if (disposedRef.current || !enabledRef.current) {
         setStatus('disconnected');
         return;
       }
@@ -186,33 +217,72 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
     ws.current = newWs;
   };
 
-  useEffect(() => {
-    disposedRef.current = false;
-    // React 19 Strict Mode unmounts immediately after the first mount. Connecting
-    // synchronously would close a still-CONNECTING socket ("WebSocket is closed before
-    // the connection is established"). Delay until after that cleanup, then connect once.
-    const start = window.setTimeout(connect, 0);
-    return () => {
-      disposedRef.current = true;
-      window.clearTimeout(start);
-      if (reconnectTimeout.current) {
-        clearTimeout(reconnectTimeout.current);
-        reconnectTimeout.current = null;
-      }
-      if (heartbeatInterval.current) {
-        clearInterval(heartbeatInterval.current);
-        heartbeatInterval.current = null;
-      }
-      const socket = ws.current;
-      ws.current = null;
-      if (!socket) return;
+  connectRef.current = connect;
+
+  const forceReconnect = useCallback(() => {
+    if (disposedRef.current || !enabledRef.current) return;
+    if (heartbeatInterval.current) {
+      clearInterval(heartbeatInterval.current);
+      heartbeatInterval.current = null;
+    }
+    if (reconnectTimeout.current) {
+      clearTimeout(reconnectTimeout.current);
+      reconnectTimeout.current = null;
+    }
+    const socket = ws.current;
+    ws.current = null;
+    if (socket) {
       socket.onclose = null;
       socket.onerror = null;
-      if (socket.readyState === WebSocket.OPEN) {
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
         socket.close();
-      } else if (socket.readyState === WebSocket.CONNECTING) {
-        socket.onopen = () => socket.close();
       }
+    }
+    lastDisconnectedAt.current = Date.now();
+    setStatus('disconnected');
+    setLatencyMs(null);
+    reconnectAttempts.current = Math.min(reconnectAttempts.current, 8);
+    connectRef.current();
+  }, []);
+
+  const disconnectQuietly = () => {
+    if (heartbeatInterval.current) {
+      clearInterval(heartbeatInterval.current);
+      heartbeatInterval.current = null;
+    }
+    if (reconnectTimeout.current) {
+      clearTimeout(reconnectTimeout.current);
+      reconnectTimeout.current = null;
+    }
+    const socket = ws.current;
+    ws.current = null;
+    if (socket) {
+      socket.onclose = null;
+      socket.onerror = null;
+      if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+        socket.close();
+      }
+    }
+    setStatus('disconnected');
+    setLatencyMs(null);
+  };
+
+  const setEnabled = useCallback((enabled: boolean) => {
+    enabledRef.current = enabled;
+    if (!enabled) {
+      disconnectQuietly();
+      return;
+    }
+    disposedRef.current = false;
+    connectRef.current();
+  }, []);
+
+  useEffect(() => {
+    disposedRef.current = false;
+    // DEF-22: do not connect until App reports isAuthenticated via setEnabled.
+    return () => {
+      disposedRef.current = true;
+      disconnectQuietly();
     };
   }, []);
 
@@ -241,8 +311,8 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const value = useMemo(
-    () => ({ status, lastMessage, sendMessage, subscribe }),
-    [status, lastMessage, sendMessage, subscribe],
+    () => ({ status, lastMessage, latencyMs, sendMessage, subscribe, forceReconnect, setEnabled }),
+    [status, lastMessage, latencyMs, sendMessage, subscribe, forceReconnect, setEnabled],
   );
 
   return (

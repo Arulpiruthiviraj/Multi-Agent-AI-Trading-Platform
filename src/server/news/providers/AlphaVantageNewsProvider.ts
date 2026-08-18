@@ -1,5 +1,6 @@
 import { NewsProviderPlugin, NewsArticleRaw } from './NewsProviderPlugin';
 import { logErrorSafely } from '../../core/SecretRedaction';
+import { networkEndpoints } from '../../config/networkEndpoints';
 
 export class AlphaVantageNewsProvider implements NewsProviderPlugin {
   public id = 'alpha_vantage_news';
@@ -18,7 +19,7 @@ export class AlphaVantageNewsProvider implements NewsProviderPlugin {
     }
 
     try {
-      const res = await fetch(`https://www.alphavantage.co/query?function=NEWS_SENTIMENT&limit=10&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
+      const res = await fetch(`${networkEndpoints.marketData.alphaVantageBaseUrl}?function=NEWS_SENTIMENT&limit=10&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
       if (!res.ok) return [];
       const data = await res.json();
       

@@ -26,6 +26,7 @@ export interface WebhookEvent {
       // to real EventBus events for the first time by AlertingService.ts. Additive to the
       // pre-existing union - the 3 original values and their behavior are unchanged.
       | "reconciliation_mismatch" | "market_data_disconnected" | "trading_state_changed" | "ai_providers_exhausted"
+      | "order_executed" | "process_boot"
       | "external_manual_order";
   title: string;
   message: string;

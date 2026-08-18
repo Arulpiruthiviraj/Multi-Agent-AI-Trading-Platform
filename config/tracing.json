@@ -1,0 +1,14 @@
+{
+  "$comment": "Distributed tracing telemetry — batching and core-event traceId enforcement.",
+  "requireTraceIdOnCoreEvents": true,
+  "warnOnlyOnMissingTraceId": true,
+  "batchFlushMs": 50,
+  "maxBatchSize": 64,
+  "traceIdPrefix": "trace",
+  "coreEventsRequiringTraceId": [
+    "TRADE_IDEA_GENERATED",
+    "CHIEF_APPROVED_IDEA",
+    "RISK_ASSESSMENT_COMPLETED",
+    "ORDER_EXECUTED"
+  ]
+}

@@ -14,9 +14,9 @@
  * ==========================================================
  */
 
-import { preferIpv4Loopback } from './preferIpv4Loopback';
+import { resolveLocalAiServiceUrl } from './preferIpv4Loopback';
 
-const SERVICE_URL = preferIpv4Loopback(process.env.LOCAL_AI_SERVICE_URL || 'http://127.0.0.1:8008');
+const SERVICE_URL = resolveLocalAiServiceUrl();
 
 export interface FinBertSentiment {
   model: string;

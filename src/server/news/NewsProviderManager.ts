@@ -8,6 +8,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
+import { networkEndpoints } from '../config/networkEndpoints';
 
 export interface ProviderStats {
   lastFetchAt: string | null;
@@ -23,9 +24,9 @@ export class NewsProviderManager {
   private stats: Map<string, ProviderStats> = new Map();
 
   constructor() {
-    this.registerProvider(new RssNewsProvider('yahoo_finance', 'Yahoo Finance', 'https://finance.yahoo.com/news/rssindex', 0.9));
-    this.registerProvider(new RssNewsProvider('cnbc_top', 'CNBC Top News', 'https://search.cnbc.com/rs/search/combinedcms/view.xml?profile=120000000&id=100003114', 0.85));
-    this.registerProvider(new RssNewsProvider('wsj_markets', 'WSJ Markets', 'https://feeds.a.dj.com/rss/RSSMarketsMain.xml', 0.95));
+    this.registerProvider(new RssNewsProvider('yahoo_finance', 'Yahoo Finance', networkEndpoints.newsRss.yahooFinance, 0.9));
+    this.registerProvider(new RssNewsProvider('cnbc_top', 'CNBC Top News', networkEndpoints.newsRss.cnbc, 0.85));
+    this.registerProvider(new RssNewsProvider('wsj_markets', 'WSJ Markets', networkEndpoints.newsRss.wsj, 0.95));
     this.registerProvider(new FinnhubNewsProvider());
     this.registerProvider(new AlphaVantageNewsProvider());
     this.registerProvider(new PolygonNewsProvider());

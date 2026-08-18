@@ -246,6 +246,27 @@
       "when": 1786940000000,
       "tag": "0034_pipeline_agent_enabled",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1786950000000,
+      "tag": "0035_strategy_engine_tables",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1786960000000,
+      "tag": "0036_agent_tracing_telemetry",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "6",
+      "when": 1786970000000,
+      "tag": "0037_fills_cumulative_unique",
+      "breakpoints": true
     }
   ]
 }

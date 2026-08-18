@@ -1,5 +1,26 @@
 import { EventEmitter } from 'events';
 import { EVENTS } from './eventNames';
+import { tracingConfig } from '../config/tracing';
+import { eventName } from './eventNames';
+
+const CORE_EVENTS_REQUIRING_TRACE_ID = new Set(
+  tracingConfig.coreEventsRequiringTraceId.map(k => eventName(k)),
+);
+
+function assertTraceId(event: string, payload: any): void {
+  if (!tracingConfig.requireTraceIdOnCoreEvents) return;
+  if (!CORE_EVENTS_REQUIRING_TRACE_ID.has(event)) return;
+  if (payload?.telemetryPulse || payload?.diagnosticTelemetry) return;
+  if (String(payload?.traceId || '').startsWith('telemetry-pulse-')) return;
+  if (!payload?.traceId) {
+    const msg = `[EventBus] Missing traceId on core event ${event}`;
+    if (tracingConfig.warnOnlyOnMissingTraceId) {
+      console.warn(msg, { symbol: payload?.symbol, agent: payload?.agent });
+    } else {
+      throw new Error(msg);
+    }
+  }
+}
 
 class EventBus extends EventEmitter {
   private static instance: EventBus;
@@ -17,6 +38,7 @@ class EventBus extends EventEmitter {
   }
 
   public publish(event: string, payload: any) {
+    assertTraceId(event, payload);
     this.emit(event, payload);
     if (event === EVENTS.MARKET_DATA) {
       super.emit(EVENTS.MARKET_DATA_UPDATED, payload);
@@ -72,21 +94,25 @@ class EventBus extends EventEmitter {
      this.emit(EVENTS.MARKET_DATA_UPDATED, payload);
   }
   public emitTradeIdea(idea: any) {
+     assertTraceId(EVENTS.TRADE_IDEA_GENERATED, idea);
      this.emit(EVENTS.TRADE_IDEA_GENERATED, idea);
   }
   public emitCalculation(traceId: string, engine: string, symbol: string, data: any) {
      this.emit(EVENTS.CALCULATION_COMPLETED, { traceId, engine, symbol, data });
   }
   public emitRiskAssessment(assessment: any) {
+     assertTraceId(EVENTS.RISK_ASSESSMENT_COMPLETED, assessment);
      this.emit(EVENTS.RISK_ASSESSMENT_COMPLETED, assessment);
   }
   public emitOrderExecution(order: any) {
+     assertTraceId(EVENTS.ORDER_EXECUTED, order);
      this.emit(EVENTS.ORDER_EXECUTED, order);
   }
   public emitLearningEvent(event: any) {
      this.emit(EVENTS.LEARNED_NEW_RULE, event);
   }
   public emitChiefApproval(approval: any) {
+     assertTraceId(EVENTS.CHIEF_APPROVED_IDEA, approval);
      this.emit(EVENTS.CHIEF_APPROVED_IDEA, approval);
   }
 }

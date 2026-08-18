@@ -35,6 +35,12 @@ describe('ExternalDataCache', () => {
     expect(result).toBeNull();
   });
 
+  it('getStale returns the last successful payload even when outside the freshness window (429 fallback)', async () => {
+    await ExternalDataCache.set('alphavantage', 'fundamentals', 'STALE429', { peRatio: '22.1' });
+    expect(await ExternalDataCache.getFresh('alphavantage', 'fundamentals', 'STALE429', -1)).toBeNull();
+    expect(await ExternalDataCache.getStale('alphavantage', 'fundamentals', 'STALE429')).toEqual({ peRatio: '22.1' });
+  });
+
   it('stores and retrieves a real payload within the freshness window', async () => {
     await ExternalDataCache.set('alphavantage', 'fundamentals', 'AAPL', { peRatio: '31.2' });
     const result = await ExternalDataCache.getFresh('alphavantage', 'fundamentals', 'AAPL', 60_000);

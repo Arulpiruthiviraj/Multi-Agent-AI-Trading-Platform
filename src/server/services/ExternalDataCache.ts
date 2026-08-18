@@ -12,7 +12,8 @@
  * reality either.
  *
  * Never fabricates data: a cache miss/expiry/rate-limit returns null, and the caller is
- * responsible for deciding what an honest "unavailable" response looks like.
+ * responsible for deciding what an honest "unavailable" response looks like. getStale() is
+ * the explicit 429 fallback path — only used when a prior successful fetch exists.
  * ==========================================================
  */
 import { db } from '../db';
@@ -48,6 +49,17 @@ export function looksLikeRateLimitResponse(data: any): boolean {
 }
 
 export class ExternalDataCache {
+  /** Last cached payload regardless of freshness — honest stale fallback on rate-limit only. */
+  static async getStale<T = any>(provider: string, dataType: string, symbol: string | null): Promise<T | null> {
+    const row = await this.getRow(provider, dataType, symbol);
+    if (!row || !row.payload || row.fetchedAt <= 0) return null;
+    try {
+      return JSON.parse(row.payload) as T;
+    } catch {
+      return null;
+    }
+  }
+
   /** Real cached payload if fresh (younger than maxAgeMs), else null - never returns stale data silently. */
   static async getFresh<T = any>(provider: string, dataType: string, symbol: string | null, maxAgeMs: number): Promise<T | null> {
     const row = await this.getRow(provider, dataType, symbol);

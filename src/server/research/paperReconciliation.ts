@@ -34,6 +34,20 @@ export function reconcilePaperVsResearch(
       note: 'No canonical NEXT_BAR research run. Not divergence theater.',
     };
   }
+  // Defensive guard, real bug this closed: a malformed/incomplete research record (e.g. a
+  // researchRuns.ts disk-fallback read that failed to merge its sibling metrics.json) must
+  // degrade to an honest UNAVAILABLE, not crash the caller reading research.metrics.expectancy
+  // off undefined.
+  if (!research.metrics || typeof research.metrics.expectancy !== 'number' || typeof research.metrics.tradeCount !== 'number') {
+    return {
+      status: 'UNAVAILABLE',
+      researchExpectancy: null,
+      paperExpectancy: paper.expectancy,
+      expectancyDriftPct: null,
+      invented: false,
+      note: 'Research run record is missing real metrics - not comparing against an incomplete object.',
+    };
+  }
   if (paper.closedTradeCount < researchSafety.minPaperTrades || research.metrics.tradeCount < researchSafety.minOosTrades) {
     return {
       status: 'INSUFFICIENT_SAMPLE',

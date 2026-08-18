@@ -545,11 +545,11 @@ async function startIbkrGateway(): Promise<void> {
 }
 
 function startTradingPlatform(childEnv: NodeJS.ProcessEnv): void {
-  const server = spawn('npx tsx server.ts', {
+  const server = spawn('node --use-system-ca ./node_modules/tsx/dist/cli.mjs server.ts', {
     cwd: repoRoot,
     shell: true,
     stdio: 'inherit',
-    env: childEnv,
+    env: { ...childEnv, NODE_OPTIONS: [childEnv.NODE_OPTIONS, '--use-system-ca'].filter(Boolean).join(' ') },
   });
   children.push(server);
 

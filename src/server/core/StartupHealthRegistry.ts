@@ -3,6 +3,7 @@
  * Probes use short timeouts; failures leave the app usable.
  */
 import { resolveLocalAiServiceUrl } from '../ai/preferIpv4Loopback';
+import { networkEndpoints } from '../config/networkEndpoints';
 
 export type StartupHealthStatus = 'STARTING' | 'READY' | 'DEGRADED' | 'FAILED' | 'DISABLED' | 'NOT_CONFIGURED';
 
@@ -101,7 +102,7 @@ export async function collectStartupHealth(timeoutMs = 2000): Promise<StartupHea
     latencyMs: chronos.latencyMs,
   }));
 
-  const ollamaHost = process.env.OLLAMA_HOST || 'http://127.0.0.1:11434';
+  const ollamaHost = process.env.OLLAMA_HOST || networkEndpoints.aiLocal.ollamaDefault;
   const ollama = await probe(`${ollamaHost.replace(/\/$/, '')}/api/tags`, timeoutMs);
   entries.push(stamp({
     service: 'Ollama',

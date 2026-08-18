@@ -62,9 +62,14 @@ import { noTradeReasonsConfig } from '../config/noTradeReasons';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
 import { mountResearchRoutes } from './researchRoutes';
+import { mountRemoteOpsRoutes } from './remoteOpsRoutes';
+import { traceRouter } from './traceRoutes';
 
 export const v2Router = Router();
+
+v2Router.use('/traces', traceRouter);
 mountResearchRoutes(v2Router);
+mountRemoteOpsRoutes(v2Router);
 
 v2Router.get('/live-readiness', (_req, res) => {
   try {

@@ -9,6 +9,9 @@
  *   so a failed handshake never recovered except via a 5s close timer.
  * - POST /diagnostics/retry/market_data was status-only.
  * - Nobody called subscribe(), so even an OPEN socket requested zero quotes.
+ *
+ * TechnicalAgent listens to MARKET_DATA ticks (event-driven, not a fixed 60s interval).
+ * Fund/Macro poll on runtimeIntervals.fundamentalAgentMs / macroAgentMs (60s / 75s).
  * ==========================================================
  */
 
@@ -16,11 +19,11 @@ import WebSocket from 'ws';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
-import { runtimeIntervals } from '../config/runtimeIntervals';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { ReconnectBackoff } from '../core/reconnectBackoff';
+import { alpacaWebSocketTlsOptions } from '../core/alpacaTls';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
-const RECONNECT_MS = runtimeIntervals.marketDataReconnectMs;
 
 function quoteKey(symbol: string): string {
   return String(symbol || '').trim().toUpperCase();
@@ -45,6 +48,7 @@ export class MarketDataWorker {
   private lastTick: Map<string, { timestampMs: number; price: number }> = new Map();
   private disconnectedAt: number | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectBackoff = new ReconnectBackoff();
   private lastError: string | null = null;
   private authenticated = false;
 
@@ -138,6 +142,7 @@ export class MarketDataWorker {
   /** Diagnostics retry: tear down a dead socket and handshake again. Never bypasses RiskEngine. */
   reconnect(): ReturnType<MarketDataWorker['getFeedStatus']> {
     this.clearReconnectTimer();
+    this.reconnectBackoff.reset();
     this.tearDownSocket();
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       this.lastError = 'ALPACA_API_KEY or ALPACA_SECRET_KEY unset';
@@ -212,11 +217,21 @@ export class MarketDataWorker {
     socket.send(JSON.stringify({ action: 'subscribe', quotes: symbols, trades: symbols }));
   }
 
+  private scheduleReconnect(reason: string) {
+    if (this.reconnectTimer) return;
+    const delayMs = this.reconnectBackoff.nextDelayMs();
+    console.log(`[MarketDataWorker] Scheduling reconnect in ${delayMs}ms (${reason})`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connectAlpaca();
+    }, delayMs);
+  }
+
   private connectAlpaca() {
     this.clearReconnectTimer();
     const url = process.env.ALPACA_DATA_STREAM_URL || DEFAULT_STREAM_URL;
     console.log(`[MarketDataWorker] Connecting to Alpaca market-data WebSocket (${url})...`);
-    const socket = new WebSocket(url);
+    const socket = new WebSocket(url, alpacaWebSocketTlsOptions());
     this.ws = socket;
     this.authenticated = false;
 
@@ -244,6 +259,7 @@ export class MarketDataWorker {
         if (msg.T === "success" && msg.msg === "authenticated") {
           this.authenticated = true;
           this.lastError = null;
+          this.reconnectBackoff.reset();
           this.sendSubscribe(socket);
           if (this.disconnectedAt !== null) {
             const gapMs = Date.now() - this.disconnectedAt;
@@ -281,6 +297,9 @@ export class MarketDataWorker {
       if (this.ws !== socket) return;
       this.lastError = err?.message || String(err);
       console.error("[MarketDataWorker] WebSocket error:", err);
+      if (this.disconnectedAt === null) this.disconnectedAt = Date.now();
+      eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: this.lastError });
+      this.scheduleReconnect('socket error');
     });
 
     socket.on("close", () => {
@@ -290,8 +309,7 @@ export class MarketDataWorker {
       if (this.disconnectedAt === null) this.disconnectedAt = Date.now();
       console.log("[MarketDataWorker] WebSocket closed. Reconnecting...");
       eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: this.lastError || "socket closed" });
-      this.clearReconnectTimer();
-      this.reconnectTimer = setTimeout(() => this.connectAlpaca(), RECONNECT_MS);
+      this.scheduleReconnect('socket closed');
     });
   }
 

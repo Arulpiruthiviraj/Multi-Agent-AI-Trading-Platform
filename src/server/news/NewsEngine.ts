@@ -15,7 +15,8 @@ import { decideEscalation } from '../ai/EscalationPolicy';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
-import { v4 as uuidv4 } from 'uuid';
+import { generateTraceId } from '../core/traceId';
+import { randomUUID } from 'node:crypto';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 import { deskIntelligence } from '../config/deskIntelligence';
 import { recordNewsCatalyst } from '../services/NewsCatalystStore';
@@ -76,6 +77,7 @@ export class NewsEngine {
 
   private async runPipeline() {
     const rawArticles = await this.providerManager.fetchAllLatest();
+    let llmCallsThisCycle = 0;
     
     for (const raw of rawArticles) {
       try {
@@ -106,17 +108,10 @@ export class NewsEngine {
           continue;
         }
 
-        const traceId = uuidv4();
+        const traceId = generateTraceId(finalSymbols[0] ?? 'NEWS');
 
-        // Real STARTED event for live animation - NEWS_ANALYZED (published further below) is the
-        // real completed signal for this same traceId, kept under its existing name rather than
-        // adding a redundant near-duplicate event.
         eventBus.publish(EVENTS.NEWS_ANALYSIS_STARTED, { traceId, headline: normalized.title, source: normalized.source });
 
-        // Local-first escalation: FinBERT already ran inside impactEngine.assess() above. If its
-        // sentiment is decisive, derive the trading bias directly from it and skip the LLM call
-        // entirely - a real cost saving, not just a documented intention. Every decision (escalate
-        // or not) is logged to escalation_decisions with its real reason, win or lose.
         const escalationDecision = decideEscalation({
           localSource: 'finbert',
           localSignalAvailable: impact.sentimentSource === 'finbert',
@@ -125,9 +120,13 @@ export class NewsEngine {
         });
 
         let aiAnalysis: AIAnalysisResult | null = null;
-        if (escalationDecision.escalate) {
+        if (escalationDecision.escalate && llmCallsThisCycle < tradingSafety.newsLlmMaxCallsPerCycle) {
+          llmCallsThisCycle += 1;
           aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId);
-        } else if (finalSymbols.length > 0) {
+        } else if (finalSymbols.length > 0 && (!escalationDecision.escalate || llmCallsThisCycle >= tradingSafety.newsLlmMaxCallsPerCycle)) {
+          if (escalationDecision.escalate) {
+            console.warn(`[NewsEngine] Skipping LLM escalation — cycle cap ${tradingSafety.newsLlmMaxCallsPerCycle} reached (DEF-14).`);
+          }
           const localConfidencePct = Math.round(Math.min(85, 50 + Math.abs(impact.sentiment) * 40));
           aiAnalysis = {
             symbol: finalSymbols[0],
@@ -140,14 +139,16 @@ export class NewsEngine {
             confidence: localConfidencePct,
             affectedSectors: [],
             tradingBias: impact.sentiment > 0 ? 'BULLISH' : 'BEARISH',
-            reasoning: `[Local-First] FinBERT sentiment ${impact.sentiment > 0 ? 'positive' : 'negative'} (${impact.sentiment.toFixed(2)}) was decisive enough to skip the LLM call.`,
+            reasoning: escalationDecision.escalate
+              ? `[Local-First] LLM cycle cap reached; using FinBERT sentiment ${impact.sentiment.toFixed(2)}.`
+              : `[Local-First] FinBERT sentiment ${impact.sentiment > 0 ? 'positive' : 'negative'} (${impact.sentiment.toFixed(2)}) was decisive enough to skip the LLM call.`,
             riskFlags: [],
           };
         }
 
         try {
           await db.insert(schema.escalationDecisions).values({
-            id: uuidv4(),
+            id: randomUUID(),
             timestamp: new Date().toISOString(),
             traceId,
             agent: 'NewsAgent',

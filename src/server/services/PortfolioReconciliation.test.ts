@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -28,6 +28,11 @@ describe('PortfolioReconciliationWorker.reconcile persistence (Phase 3)', () => 
     // whatever env-driven broker selection would otherwise happen.
     void BrokerManager;
     ({ portfolioReconciliationWorker } = await import('./PortfolioReconciliation'));
+  });
+
+  beforeEach(async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    BrokerManager.getInstance().resetSyncStateForTests('READY');
   });
 
   afterAll(() => {

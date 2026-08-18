@@ -70,8 +70,38 @@ describe('AlertingService (Phase 12)', () => {
     expect(triggerWebhooks.mock.calls[0][0].type).toBe('trading_state_changed');
 
     triggerWebhooks.mockClear();
+    eventBus.emit('TRADING_STATE_CHANGED', { fromState: 'TRADING_PAUSED', toState: 'EMERGENCY_STOP', reason: 'kill switch' });
+    expect(triggerWebhooks).toHaveBeenCalledTimes(1);
+
+    triggerWebhooks.mockClear();
     eventBus.emit('TRADING_STATE_CHANGED', { fromState: 'TRADING_PAUSED', toState: 'TRADING_ENABLED', reason: 'resumed' });
     expect(triggerWebhooks).not.toHaveBeenCalled();
+  });
+
+  it('alerts on a real OMS ORDER_EXECUTED fill', () => {
+    eventBus.emit('ORDER_EXECUTED', {
+      id: 'ord-1',
+      symbol: 'AAPL',
+      side: 'BUY',
+      status: 'FILLED',
+      quantity: 10,
+      price: 150,
+      agent: 'OrderManagement',
+    });
+    expect(triggerWebhooks).toHaveBeenCalledTimes(1);
+    expect(triggerWebhooks.mock.calls[0][0].type).toBe('order_executed');
+  });
+
+  it('does not alert on simulated ORDER_EXECUTED', () => {
+    eventBus.emit('ORDER_EXECUTED', { symbol: 'AAPL', side: 'BUY', status: 'FILLED', executionEnvironment: 'SIMULATION' });
+    expect(triggerWebhooks).not.toHaveBeenCalled();
+  });
+
+  it('alertProcessBoot fires once on server startup hook', () => {
+    alertingService.alertProcessBoot({ port: 3000 });
+    alertingService.alertProcessBoot({ port: 3000 });
+    expect(triggerWebhooks).toHaveBeenCalledTimes(1);
+    expect(triggerWebhooks.mock.calls[0][0].type).toBe('process_boot');
   });
 
   it('alerts when all AI providers are exhausted for an agent', () => {

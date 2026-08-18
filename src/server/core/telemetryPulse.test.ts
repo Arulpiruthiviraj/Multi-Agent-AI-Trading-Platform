@@ -26,9 +26,11 @@ describe('telemetryPulse', () => {
   it('approve mode emits tagged UI-only pipeline events without organic paper claims', async () => {
     const seen: { type: string; payload: any }[] = [];
     const handler = (type: string) => (payload: any) => seen.push({ type, payload });
-    const types = [
+    const expectedSequence = [
       'MARKET_DATA',
       'TRADE_IDEA_GENERATED',
+      'TRADE_IDEA_GENERATED',
+      'KRONOS_FORECAST_COMPLETED',
       'CHIEF_CONSENSUS_STARTED',
       'CHIEF_CONSENSUS_COMPLETED',
       'CHIEF_APPROVED_IDEA',
@@ -37,7 +39,8 @@ describe('telemetryPulse', () => {
       'ORDER_SUBMITTED',
       'ORDER_EXECUTED',
     ];
-    const unsubs = types.map((t) => {
+    const uniqueTypes = [...new Set(expectedSequence)];
+    const unsubs = uniqueTypes.map((t) => {
       const fn = handler(t);
       eventBus.on(t, fn);
       return () => eventBus.off(t, fn);
@@ -49,7 +52,7 @@ describe('telemetryPulse', () => {
 
     expect(result.canPlaceOrders).toBe(false);
     expect(result.mode).toBe('approve');
-    expect(seen.map((s) => s.type)).toEqual(types);
+    expect(seen.map((s) => s.type)).toEqual(expectedSequence);
     for (const s of seen) {
       expect(s.payload.telemetryPulse).toBe(true);
       expect(String(s.payload.traceId).startsWith(TELEMETRY_PULSE_TRACE_PREFIX)).toBe(true);

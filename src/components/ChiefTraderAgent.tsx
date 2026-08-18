@@ -61,6 +61,7 @@ import {
   BookOpen
 } from "lucide-react";
 import { ContextualTooltip } from "./ContextualTooltip";
+import { formatEventBusPayload } from "../lib/formatEventBusPayload";
 
 interface TaskItem {
   id: string;
@@ -1310,7 +1311,7 @@ export default function ChiefTraderAgent() {
                         <span className="text-[8px] text-slate-500">{new Date(evt.timestamp).toISOString().split("T")[1].replace("Z", "")}</span>
                       </div>
                       <div className="text-[10px] text-slate-400 leading-snug">
-                        {evt.payload}
+                        {formatEventBusPayload(evt.payload)}
                       </div>
                     </div>
                   ))}

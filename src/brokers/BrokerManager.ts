@@ -61,11 +61,14 @@ import { getActiveReplaySession } from '../server/replay/ReplayContext';
 // developers - no implementation here can change that.
 const NON_FUNCTIONAL_BROKER_IDS = new Set(['questrade']);
 
+export type BrokerSyncState = 'INITIALIZING' | 'READY' | 'SYNCING' | 'FAILED';
+
 export class BrokerManager {
   private static instance: BrokerManager;
   private activeBroker: BrokerPlugin;
   private brokers: Map<string, BrokerPlugin> = new Map();
   private paperTickFromMarketData = false;
+  private syncState: BrokerSyncState = 'READY';
 
   private constructor() {
      // Default active broker is InternalPaperBroker, seeded with
@@ -80,8 +83,31 @@ export class BrokerManager {
     }
     return BrokerManager.instance;
   }
+
+  public getSyncState(): BrokerSyncState {
+    return this.syncState;
+  }
+
+  /** True when broker init finished and no in-flight portfolio sync holds SYNCING. */
+  public isReadyForReconciliation(): boolean {
+    return this.syncState === 'READY';
+  }
+
+  public beginBrokerSync(): void {
+    if (this.syncState === 'READY') this.syncState = 'SYNCING';
+  }
+
+  public endBrokerSync(): void {
+    if (this.syncState === 'SYNCING') this.syncState = 'READY';
+  }
+
+  /** Test-only: pin sync gate without running full initialize() (vitest workers share this singleton). */
+  public resetSyncStateForTests(state: BrokerSyncState = 'READY'): void {
+    this.syncState = state;
+  }
   
   public async initialize() {
+     this.syncState = 'INITIALIZING';
      try {
          const internalPaper = new InternalPaperBroker();
          const alpaca = new AlpacaBroker();
@@ -163,9 +189,11 @@ export class BrokerManager {
          this.wireInternalPaperTicksFromMarketData();
          
          console.log(`[BrokerManager] Initialized with Active Broker: ${this.activeBroker.name}`);
+         this.syncState = 'READY';
      } catch (e) {
          console.error('[BrokerManager] Init Failed', e);
          this.wireInternalPaperTicksFromMarketData();
+         this.syncState = 'FAILED';
      }
   }
 

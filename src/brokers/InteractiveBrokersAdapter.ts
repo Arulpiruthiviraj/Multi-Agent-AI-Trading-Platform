@@ -43,6 +43,8 @@
  */
 import https from 'https';
 import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './BrokerAdapter';
+import { networkEndpoints } from '../server/config/networkEndpoints';
+import { assertIbkrSessionAllowsOrder } from './ibkrAccountClassification';
 
 interface IBKRRequestOptions {
   method?: string;
@@ -61,9 +63,11 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
   private isAuthenticated = false;
   private tickleInterval: NodeJS.Timeout | null = null;
   private accountId: string | null = null;
+  /** Set by paperTrading()/liveTrading() — never inferred from the Gateway session. */
+  private requestedMode: 'PAPER' | 'LIVE' | null = null;
 
   constructor(baseUrl?: string) {
-    this.baseUrl = baseUrl || process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api';
+    this.baseUrl = baseUrl || process.env.IBKR_GATEWAY_URL || networkEndpoints.broker.ibkr.gatewayUrlDefault;
   }
 
   async initialize() {
@@ -76,7 +80,7 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
       const bodyStr = options.body ? JSON.stringify(options.body) : undefined;
       const req = https.request({
         hostname: url.hostname,
-        port: url.port || 5000,
+        port: url.port || networkEndpoints.broker.ibkr.gatewayPortDefault,
         path: url.pathname + url.search,
         method: options.method || 'GET',
         agent: this.agent,
@@ -176,13 +180,10 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
   }
 
   async validateCredentials(): Promise<boolean> { return this.isAuthenticated; }
-  // No-ops, deliberately: unlike AlpacaBroker (which really does switch a base URL), IBKR's
-  // Client Portal Gateway determines paper vs. live entirely by which account you log into at
-  // https://localhost:5000 - a separate paper-trading username, not something this adapter can
-  // switch after the fact. getCapabilities() still reports paperTrading:true/liveTrading:true
-  // since both really are supported, just gated by which session is already authenticated.
-  paperTrading() {}
-  liveTrading() {}
+  // Gateway session paper vs live is which account is logged in at localhost:5000.
+  // These methods record Argus's requested mode so placeOrder() can refuse a mismatch.
+  paperTrading() { this.requestedMode = 'PAPER'; }
+  liveTrading() { this.requestedMode = 'LIVE'; }
 
   async disconnect(): Promise<void> {
     if (this.tickleInterval) { clearInterval(this.tickleInterval); this.tickleInterval = null; }
@@ -280,6 +281,13 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
     }
 
     const accountId = await this.getAccountId();
+    const sessionGate = assertIbkrSessionAllowsOrder({
+      requestedMode: this.requestedMode,
+      accountId,
+    });
+    if (!sessionGate.ok) {
+      throw new Error(sessionGate.reason);
+    }
     const conid = await this.resolveConid(order.symbol);
 
     const orderPayload = {

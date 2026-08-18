@@ -77,6 +77,21 @@ describe('configRoutes - POST /settings field allowlist (P0 regression)', () => 
     expect(row.maxTradeSize).toBe(456);
   });
 
+  it('GET /settings exposes the REAL maxSectorConcentrationPct from tradingSafety.json, not a stale hardcoded value', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const res = await request(app).get('/api/v1/config/settings');
+    expect(res.status).toBe(200);
+    expect(res.body.maxSectorConcentrationPct).toBe(tradingSafety.maxSectorConcentrationPct);
+  });
+
+  it('maxSectorConcentrationPct is read-only - a client cannot change the reviewed safety ceiling via this route', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const res = await request(app).post('/api/v1/config/settings').send({ maxSectorConcentrationPct: 0.99 });
+    expect(res.status).toBe(200);
+    const getRes = await request(app).get('/api/v1/config/settings');
+    expect(getRes.body.maxSectorConcentrationPct).toBe(tradingSafety.maxSectorConcentrationPct); // unchanged
+  });
+
   it('ignores an attempt to overwrite id/createdAt', async () => {
     const [before] = await db.select().from(schema.settings).limit(1);
 

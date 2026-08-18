@@ -28,6 +28,13 @@ describe('v2System strategy routes - Phase 3B real RSI/synergy data', () => {
 
     ({ db, sqliteDb } = await import('../db'));
     schema = await import('../db/schema');
+    // Re-delete after the above imports: something in the '../db' chain (dotenv's default,
+    // non-override .config() re-populating any key that is currently absent) was observed to
+    // restore these from the real .env once HistoricalDataGateway's feed=iex fix made the
+    // resulting live Alpaca call actually succeed instead of 403ing - silently pulling real bars
+    // on top of this test's seeded fixture and breaking the exact-barsUsed assertions below.
+    delete process.env.ALPACA_API_KEY;
+    delete process.env.ALPACA_SECRET_KEY;
 
     // 25 daily bars for AAPL (above RSI_MIN_BARS=20), alternating up/down so RSI is a real,
     // non-trivial number rather than the 0/100 edge case.
@@ -69,6 +76,8 @@ describe('v2System strategy routes - Phase 3B real RSI/synergy data', () => {
     }
 
     const { v2Router } = await import('./v2System');
+    delete process.env.ALPACA_API_KEY;
+    delete process.env.ALPACA_SECRET_KEY;
     app = express();
     app.use(express.json());
     app.use('/api/v2', v2Router);

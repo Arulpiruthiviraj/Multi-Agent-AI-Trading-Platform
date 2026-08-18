@@ -1,7 +1,8 @@
 import { OpenAICompatibleProvider } from './OpenAICompatibleProvider';
+import { networkEndpoints } from '../../config/networkEndpoints';
 
 export class NvidiaProvider extends OpenAICompatibleProvider {
   constructor() {
-    super('NVIDIA', 'https://integrate.api.nvidia.com/v1', false);
+    super('NVIDIA', networkEndpoints.aiCloud.nvidiaBaseUrl, false);
   }
 }

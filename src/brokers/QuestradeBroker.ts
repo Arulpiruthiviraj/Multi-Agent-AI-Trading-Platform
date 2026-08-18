@@ -55,6 +55,7 @@ import { db } from '../server/db';
 import * as schema from '../server/db/schema';
 import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../server/core/EncryptionService';
+import { networkEndpoints } from '../server/config/networkEndpoints';
 
 // Alpaca-style timeframe strings (the format HistoricalDataGateway already uses) mapped to
 // Questrade's own interval enum + approximate bar duration in ms. Unrecognized timeframes fall
@@ -131,7 +132,7 @@ export class QuestradeBroker implements BrokerPlugin {
 
     try {
       const tokenRes = await fetch(
-        `https://login.questrade.com/oauth2/token?grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`
+        `${networkEndpoints.broker.questrade.oauthTokenUrl}?grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`
       );
       if (!tokenRes.ok) {
         console.error(`[${this.name}] Token refresh failed: HTTP ${tokenRes.status}`);

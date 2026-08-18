@@ -11,7 +11,10 @@
  * ==========================================================
  */
 
+import { agentWeightConfig } from '../config/agentWeights';
 import { tradingSafety } from '../config/tradingSafety';
+
+const HARD_VETO_AGENTS = new Set(agentWeightConfig.consensusHardVetoAgents);
 
 export interface Evidence {
   traceId: string;
@@ -55,11 +58,11 @@ export function netConfidenceFromVotes(
 export class EvidenceAggregator {
   /**
    * Weighted-vote consensus over one symbol's evidence. BUY vs SELL compete directly.
-   * A HOLD with real confidence (> 0) is a genuine "do not trade" vote and penalizes both
-   * directional sides the same way a contrary BUY/SELL would. HOLD at confidence 0 is the
-   * DATA_UNAVAILABLE shape (FundamentalAgent/MacroAgent when a provider is missing or
-   * rate-limited) and is excluded from the denominator so a dead agent cannot dilute a
-   * real directional vote.
+   * A HOLD with real confidence (> 0) from agents listed in config/agentWeights.json
+   * `consensusHardVetoAgents` penalizes directional votes. Other agents' HOLD votes
+   * (e.g. FundamentalAgent/MacroAgent on soft caution) do not block Technical+Quant
+   * consensus unless explicitly configured as hard vetoes. HOLD at confidence 0 is the
+   * DATA_UNAVAILABLE shape and is excluded from the denominator.
    */
   static aggregate(evidence: Evidence[]): AggregationResult {
     let bestSide: 'BUY' | 'SELL' | 'HOLD' = 'HOLD';
@@ -72,7 +75,7 @@ export class EvidenceAggregator {
     for (const testSide of ['BUY', 'SELL'] as const) {
       const agreeing = evidence.filter(e => e.side === testSide);
       const directionalDisagreeing = evidence.filter(e => e.side !== testSide && e.side !== 'HOLD');
-      const holdPenalties = evidence.filter(e => e.side === 'HOLD' && e.confidence > 0);
+      const holdPenalties = evidence.filter(e => e.side === 'HOLD' && e.confidence > 0 && HARD_VETO_AGENTS.has(e.agent));
       const disagreeing = [...directionalDisagreeing, ...holdPenalties];
 
       const finalConfidence = netConfidenceFromVotes(agreeing, disagreeing);

@@ -17,6 +17,9 @@ export default defineConfig(() => {
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // Remote mobile (Tailscale / LAN): accept connections on all interfaces.
+      host: true,
+      allowedHosts: true,
     },
     build: {
       // Vendor splits keep React/charts out of the app entry; App.tsx itself remains a large SPA chunk.

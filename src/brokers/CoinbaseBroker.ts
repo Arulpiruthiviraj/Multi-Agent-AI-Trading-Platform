@@ -38,8 +38,11 @@
  */
 import crypto from 'crypto';
 import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './BrokerAdapter';
+import { networkEndpoints } from '../server/config/networkEndpoints';
+import { assertLiveOrdersArmed } from '../server/core/LiveTradingConfirmation';
+import { isPaperTradingOnlyEnforced } from '../server/core/tradingModeEnv';
 
-const API_HOST = 'api.coinbase.com';
+const API_HOST = networkEndpoints.broker.coinbase.apiHost;
 const API_BASE = `https://${API_HOST}`;
 
 function base64url(input: Buffer): string {
@@ -225,6 +228,11 @@ export class CoinbaseBroker implements BrokerPlugin {
         `Switch this connection to live mode (with explicit confirmation) to place real orders, or use the Internal Paper Simulator for paper testing.`
       );
     }
+    if (isPaperTradingOnlyEnforced()) {
+      throw new Error('Cannot place a Coinbase live order when PAPER_TRADING_ONLY is enforced in environment.');
+    }
+    const arm = assertLiveOrdersArmed();
+    if (!arm.ok) throw new Error(arm.reason);
     if (!order.symbol || !order.side || !order.quantity) {
       throw new Error('placeOrder requires symbol, side, and quantity.');
     }

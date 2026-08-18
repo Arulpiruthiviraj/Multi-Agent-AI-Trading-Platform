@@ -9,6 +9,8 @@ describe('externalized runtime/quant config', () => {
     const raw = loadRepoConfigJson<typeof runtimeIntervals>('runtimeIntervals.json');
     expect(runtimeIntervals.macroAgentMs).toBe(raw.macroAgentMs);
     expect(runtimeIntervals.omsFollowUpMinAgeMs).toBe(raw.omsFollowUpMinAgeMs);
+    expect(runtimeIntervals.rssFeedErrorBackoffMs).toBe(raw.rssFeedErrorBackoffMs);
+    expect(runtimeIntervals.rssFeedFetchTimeoutMs).toBe(raw.rssFeedFetchTimeoutMs);
   });
 
   it('loads the same quantThresholds.json production uses', () => {

@@ -13,6 +13,7 @@ import { eventBus } from '../core/EventBus';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 import { preferIpv4Loopback, resolveLocalAiServiceUrl } from './preferIpv4Loopback';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { networkEndpoints } from '../config/networkEndpoints';
 
 export type ModelHealthStatus = 'READY' | 'FAILED' | 'DISABLED' | 'STARTING';
 
@@ -33,9 +34,9 @@ export interface ModelRegistryEntry {
   action: string | null;
 }
 
-const OLLAMA_HOST = preferIpv4Loopback(process.env.OLLAMA_HOST || 'http://127.0.0.1:11434');
+const OLLAMA_HOST = preferIpv4Loopback(process.env.OLLAMA_HOST || networkEndpoints.aiLocal.ollamaDefault);
 const CHRONOS_URL = resolveLocalAiServiceUrl();
-const IBKR_URL = process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api';
+const IBKR_URL = process.env.IBKR_GATEWAY_URL || networkEndpoints.broker.ibkr.gatewayUrlDefault;
 
 const children: ChildProcess[] = [];
 

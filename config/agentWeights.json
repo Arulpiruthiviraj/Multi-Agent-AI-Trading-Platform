@@ -10,5 +10,6 @@
   "consensusDebateWeight": 0.35,
   "unlistedAgentWeight": 1.0,
   "riskExitAgent": "PortfolioManager",
-  "pipelineAgents": ["TechnicalAgent", "NewsAgent", "FundamentalAgent", "MacroAgent", "KronosEngine"]
+  "pipelineAgents": ["TechnicalAgent", "NewsAgent", "FundamentalAgent", "MacroAgent", "KronosEngine"],
+  "consensusHardVetoAgents": ["NewsAgent", "ConsensusDebate"]
 }

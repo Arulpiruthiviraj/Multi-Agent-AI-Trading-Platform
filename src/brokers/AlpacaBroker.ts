@@ -36,11 +36,13 @@
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter.js';
 import { tradingSafety } from '../server/config/tradingSafety';
 import { assertLiveOrdersArmed } from '../server/core/LiveTradingConfirmation';
+import { alpacaFetch } from '../server/core/alpacaTls';
+import { networkReconnectDelayMs } from '../server/core/reconnectBackoff';
+import { networkEndpoints } from '../server/config/networkEndpoints';
 
 // Timeouts/retries live in tradingSafety.json — not TypeScript literals.
 const ALPACA_REQUEST_TIMEOUT_MS = tradingSafety.alpacaRequestTimeoutMs;
 const ALPACA_MAX_RETRIES = tradingSafety.alpacaMaxRetries;
-const ALPACA_RETRY_BASE_DELAY_MS = tradingSafety.alpacaRetryBaseDelayMs;
 const CIRCUIT_BREAKER_FAILURE_THRESHOLD = tradingSafety.alpacaCircuitBreakerFailureThreshold;
 const CIRCUIT_BREAKER_COOLDOWN_MS = tradingSafety.alpacaCircuitBreakerCooldownMs;
 
@@ -68,14 +70,14 @@ export class AlpacaBroker implements BrokerPlugin {
   async validateCredentials() { return !!this.apiKey; }
   paperTrading() {
     this.isPaper = true;
-    this.baseUrl = 'https://paper-api.alpaca.markets';
+    this.baseUrl = networkEndpoints.broker.alpaca.paperBaseUrl;
   }
   liveTrading() {
     if (process.env.PAPER_TRADING_ONLY === 'true') {
       throw new Error('Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced in environment.');
     }
     this.isPaper = false;
-    this.baseUrl = 'https://api.alpaca.markets';
+    this.baseUrl = networkEndpoints.broker.alpaca.liveBaseUrl;
   }
   getCapabilities(): BrokerCapabilities {
     return {
@@ -98,12 +100,13 @@ export class AlpacaBroker implements BrokerPlugin {
   private apiKey: string = '';
   private secretKey: string = '';
   private isPaper: boolean = true;
-  private baseUrl: string = 'https://paper-api.alpaca.markets';
+  private baseUrl: string = networkEndpoints.broker.alpaca.paperBaseUrl;
 
   // Phase 1 circuit-breaker state - per-instance (this class is used as a singleton via
   // BrokerManager in practice, so this really does track "the real Alpaca connection's" health).
   private consecutiveFailures = 0;
   private circuitOpenUntil = 0;
+  private cachedPortfolio: Portfolio | null = null;
 
   async connect(credentials: any): Promise<boolean> {
     return this.authenticate(credentials);
@@ -126,10 +129,10 @@ export class AlpacaBroker implements BrokerPlugin {
         throw new Error('Cannot enable LIVE mode when PAPER_TRADING_ONLY is enforced in environment.');
       }
       this.isPaper = false;
-      this.baseUrl = 'https://api.alpaca.markets';
+      this.baseUrl = networkEndpoints.broker.alpaca.liveBaseUrl;
     } else if (explicitLive === false || mode === 'PAPER') {
       this.isPaper = true;
-      this.baseUrl = 'https://paper-api.alpaca.markets';
+      this.baseUrl = networkEndpoints.broker.alpaca.paperBaseUrl;
     }
 
     if (!this.apiKey || !this.secretKey) return false;
@@ -173,13 +176,13 @@ export class AlpacaBroker implements BrokerPlugin {
 
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       if (attempt > 0) {
-        await sleep(ALPACA_RETRY_BASE_DELAY_MS * Math.pow(3, attempt - 1));
+        await sleep(networkReconnectDelayMs(attempt - 1));
       }
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), ALPACA_REQUEST_TIMEOUT_MS);
       try {
-        const res = await fetch(`${this.baseUrl}${path}`, {
+        const res = await alpacaFetch(`${this.baseUrl}${path}`, {
           ...fetchOptions,
           signal: controller.signal,
           headers: {
@@ -247,6 +250,11 @@ export class AlpacaBroker implements BrokerPlugin {
     this.circuitOpenUntil = 0;
   }
 
+  /** Last successful portfolio snapshot retained across transient network outages. */
+  getLastKnownPortfolio(): Portfolio | null {
+    return this.cachedPortfolio;
+  }
+
   async account(): Promise<any> {
     return this.fetchAlpaca('/v2/account', { idempotentRetrySafe: true });
   }
@@ -265,12 +273,14 @@ export class AlpacaBroker implements BrokerPlugin {
       unrealizedPnlPercent: parseFloat(p.unrealized_plpc),
     }));
 
-    return {
+    const portfolio: Portfolio = {
       cash: parseFloat(account.cash),
       buyingPower: parseFloat(account.buying_power),
       equity: parseFloat(account.equity),
       positions: mappedPositions,
     };
+    this.cachedPortfolio = portfolio;
+    return portfolio;
   }
 
   async getBuyingPower(): Promise<number> {

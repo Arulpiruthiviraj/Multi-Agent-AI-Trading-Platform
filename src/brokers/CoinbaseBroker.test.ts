@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import crypto from 'crypto';
 import { CoinbaseBroker } from './CoinbaseBroker';
+import { armLiveTrading, disarmLiveTrading, LIVE_TRADING_CONFIRMATION_PHRASE } from '../server/core/LiveTradingConfirmation';
 
 // A real EC (P-256) key pair, generated fresh for this test run - not a fixture pretending to be
 // a real Coinbase-issued key. Used to prove the JWT this broker builds is ACTUALLY verifiable with
@@ -33,7 +34,19 @@ async function authedBroker(): Promise<CoinbaseBroker> {
 }
 
 describe('CoinbaseBroker', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  const prevPaperTradingOnly = process.env.PAPER_TRADING_ONLY;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    disarmLiveTrading();
+    if (prevPaperTradingOnly === undefined) delete process.env.PAPER_TRADING_ONLY;
+    else process.env.PAPER_TRADING_ONLY = prevPaperTradingOnly;
+  });
+
+  function armLivePlacement() {
+    process.env.PAPER_TRADING_ONLY = 'false';
+    armLiveTrading(LIVE_TRADING_CONFIRMATION_PHRASE);
+  }
 
   describe('authenticate', () => {
     it('returns false when credentials are missing', async () => {
@@ -117,9 +130,18 @@ describe('CoinbaseBroker', () => {
         .rejects.toThrow(/paper/i);
     });
 
+    it('refuses live placement without LIVE_ARM even after liveTrading()', async () => {
+      const broker = await authedBroker();
+      broker.liveTrading();
+      process.env.PAPER_TRADING_ONLY = 'false';
+      await expect(broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', type: 'MARKET', quantity: 0.01 }))
+        .rejects.toThrow(/LIVE_ARM_REQUIRED/);
+    });
+
     it('places a real market order with the documented request shape once in live mode', async () => {
       const broker = await authedBroker();
       broker.liveTrading();
+      armLivePlacement();
 
       let capturedBody: any;
       vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: any) => {
@@ -139,6 +161,7 @@ describe('CoinbaseBroker', () => {
     it('throws with the real broker-reported reason when Coinbase rejects the order', async () => {
       const broker = await authedBroker();
       broker.liveTrading();
+      armLivePlacement();
       vi.stubGlobal('fetch', vi.fn(async () => ({
         ok: true,
         json: async () => ({ success: false, error_response: { message: 'Insufficient funds' } }),
@@ -151,6 +174,7 @@ describe('CoinbaseBroker', () => {
     it('places a real limit order with the documented request shape', async () => {
       const broker = await authedBroker();
       broker.liveTrading();
+      armLivePlacement();
       let capturedBody: any;
       vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: any) => {
         capturedBody = JSON.parse(opts.body);

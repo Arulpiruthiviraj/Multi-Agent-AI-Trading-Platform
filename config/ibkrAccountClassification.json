@@ -1,0 +1,5 @@
+{
+  "$comment": "IBKR Client Portal account-id prefixes. Paper prefixes MUST be checked before live prefixes because DU* also starts with U. Reviewed file, not a UI knob.",
+  "paperAccountIdPrefixes": ["DU", "DF"],
+  "liveAccountIdPrefixes": ["U", "F", "I"]
+}

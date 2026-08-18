@@ -51,6 +51,7 @@ if (!fs.existsSync(dbDir)) {
 const dbPath = process.env.ARGUS_DB_PATH || path.join(dbDir, 'argus.db');
 const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
+sqlite.pragma('busy_timeout = 5000');
 
 export const db = drizzle(sqlite, { schema });
 export const sqliteDb = sqlite;

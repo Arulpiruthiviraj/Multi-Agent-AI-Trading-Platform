@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { EvidenceAggregator, Evidence, netConfidenceFromVotes } from './EvidenceAggregator';
+import { agentWeightConfig } from '../config/agentWeights';
 
 function evidence(overrides: Partial<Evidence>): Evidence {
   return {
@@ -27,13 +28,24 @@ describe('EvidenceAggregator.aggregate', () => {
     expect(result.confidence).toBeCloseTo(0.9, 5);
   });
 
-  it('a real HOLD (confidence > 0) penalizes BUY/SELL the same way a contrary directional vote does', () => {
+  it('a configured hard-veto agent HOLD (confidence > 0) penalizes BUY/SELL', () => {
+    const hardVetoAgent = agentWeightConfig.consensusHardVetoAgents[0] ?? 'NewsAgent';
     const buy = evidence({ side: 'BUY', confidence: 0.9, agent: 'A', weight: 1.0 });
-    const hold = evidence({ side: 'HOLD', confidence: 0.9, agent: 'B', weight: 1.0 });
+    const hold = evidence({ side: 'HOLD', confidence: 0.9, agent: hardVetoAgent, weight: 1.0 });
     const result = EvidenceAggregator.aggregate([buy, hold]);
     expect(result.side).toBe('BUY');
     expect(result.confidence).toBeCloseTo(netConfidenceFromVotes([buy], [hold]), 5);
     expect(result.disagreements.some(e => e.side === 'HOLD')).toBe(true);
+  });
+
+  it('FundamentalAgent/MacroAgent HOLD with confidence > 0 does not hard-veto unless configured', () => {
+    const buy = evidence({ side: 'BUY', confidence: 0.9, agent: 'TechnicalAgent', weight: 0.25 });
+    const quant = evidence({ side: 'BUY', confidence: 0.85, agent: 'QuantEngine', weight: 0.15 });
+    const fundHold = evidence({ side: 'HOLD', confidence: 0.8, agent: 'FundamentalAgent', weight: 0.20, reasoning: 'soft caution' });
+    const withoutFund = EvidenceAggregator.aggregate([buy, quant]);
+    const withFund = EvidenceAggregator.aggregate([buy, quant, fundHold]);
+    expect(withFund.confidence).toBeCloseTo(withoutFund.confidence, 10);
+    expect(withFund.side).toBe('BUY');
   });
 
   it('pulls the winning side down by the configured disagreement penalty times the disagreeing evidence', () => {
