@@ -37,6 +37,7 @@ export interface QuantThresholds {
   nearBoundaryPct: number;
   groupedScoreNeutral: number;
   technicalHistoryBars: number;
+  technicalEvaluationCooldownMs: number;
   bollingerPeriod: number;
   rsiMinBars: number;
   kronosMinHistory: number;
@@ -58,7 +59,7 @@ const NUMERIC_KEYS: (keyof QuantThresholds)[] = [
   'minTrendStrength', 'minAdxTrending', 'minAdxRanging', 'minMeaningfulAdx',
   'minMeaningfulPriceVsMaPct', 'minMeaningfulSlopePct', 'volatilityPercentileHigh',
   'volatilityPercentileLow', 'rvolThreshold', 'pullbackTolerancePct', 'nearBoundaryPct',
-  'groupedScoreNeutral', 'technicalHistoryBars', 'bollingerPeriod', 'rsiMinBars',
+  'groupedScoreNeutral', 'technicalHistoryBars', 'technicalEvaluationCooldownMs', 'bollingerPeriod', 'rsiMinBars',
   'kronosMinHistory', 'kronosMaxHistory', 'kronosHorizon', 'kronosNeutralBandPct',
   'baseSlippagePct', 'atrSlippageMultiplier', 'sizeImpactMultiplier', 'maxSlippagePct',
   'priceSourceDivergencePct',

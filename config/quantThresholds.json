@@ -21,6 +21,7 @@
   "nearBoundaryPct": 1.5,
   "groupedScoreNeutral": 50,
   "technicalHistoryBars": 50,
+  "technicalEvaluationCooldownMs": 3000,
   "bollingerPeriod": 20,
   "rsiMinBars": 20,
   "kronosMinHistory": 30,

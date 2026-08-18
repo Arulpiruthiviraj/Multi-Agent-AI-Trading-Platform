@@ -47,6 +47,16 @@ export class TechnicalProposerAgent {
   // Requires quantThresholds.technicalHistoryBars ticks before checkStrategies fires.
   private priceHistory: Record<string, number[]> = {};
   private listening = false;
+  // Real bug found and fixed (2026-08-18): priceHistory is capped at technicalHistoryBars via
+  // shift(), so `history.length === technicalHistoryBars` is true on every tick forever once
+  // warmup completes - checkStrategies() (and everything downstream: TRADE_IDEA_GENERATED,
+  // ChiefTrader consensus, a real AI debate call) had no per-symbol cooldown at all. Confirmed
+  // live: with trading enabled, SPY/QQQ/IWM/DIA (high tick-rate benchmark ETFs) produced 543
+  // TRADE_IDEA_GENERATED and 15,183 AI_CALL rows in 60 seconds - each AI_CALL is a real DB write
+  // plus provider round-trip, and at that rate it saturated the event loop and crashed the
+  // process (observed: /health itself took 6-77s to respond, then the process exited). This does
+  // not change the strategy logic - only how often it's allowed to re-run per symbol.
+  private lastEvaluatedAt: Record<string, number> = {};
   private readonly onMarketData = (data: { symbol: string, price: number, volume: number, timestamp: string }) => this.analyzeTick(data);
 
   start() {
@@ -76,6 +86,10 @@ export class TechnicalProposerAgent {
     }
 
     if (history.length === quantThresholds.technicalHistoryBars) {
+      const now = Date.now();
+      const last = this.lastEvaluatedAt[data.symbol] ?? 0;
+      if (now - last < quantThresholds.technicalEvaluationCooldownMs) return;
+      this.lastEvaluatedAt[data.symbol] = now;
       this.checkStrategies(data.symbol, history);
     }
   }
