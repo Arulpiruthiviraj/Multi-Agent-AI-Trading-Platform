@@ -453,6 +453,31 @@ export async function toggleAutobotRemote(currentEnabled: boolean): Promise<{ ok
   return { ok: true };
 }
 
+// Real bug fix (2026-08-18 UI audit, Phase 8): the mobile "quick kill" sheet always showed
+// "Trigger emergency stop" / "Execute now" regardless of whether the system was already halted -
+// tapping it again while halted just re-POSTed the same stop call, with no way to resume from
+// this sheet at all. This is the same real POST /api/v1/system/resume the desktop banner's
+// resumeTrading() calls - one authoritative resume flow, not a second implementation.
+export async function triggerResume(): Promise<{ ok: boolean; error?: string }> {
+  const res = await apiFetch('/api/v1/system/resume', { method: 'POST' });
+  if (res.unauthorized) {
+    patchMobileMissionSnapshot({ sessionExpired: true, actionBanner: { tone: 'error', message: 'Session expired — please log in again.' } });
+    return { ok: false, error: res.error || 'Session expired' };
+  }
+  if (!res.ok) {
+    patchMobileMissionSnapshot({ actionBanner: { tone: 'error', message: res.error || 'Resume failed' } });
+    return { ok: false, error: res.error || `HTTP ${res.status}` };
+  }
+  const data = res.data as Record<string, unknown>;
+  const tradingState = String(data.tradingState ?? 'TRADING_ENABLED');
+  patchMobileMissionSnapshot({
+    emergencyStopActive: false,
+    tradingState,
+    actionBanner: { tone: 'success', message: 'Trading resumed' },
+  });
+  return { ok: true };
+}
+
 export async function triggerEmergencyStop(): Promise<{ ok: boolean; error?: string }> {
   const res = await apiFetch('/api/v1/system/emergency-stop', { method: 'POST' });
   if (res.unauthorized) {

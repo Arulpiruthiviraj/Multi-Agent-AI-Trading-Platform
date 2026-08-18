@@ -1777,8 +1777,6 @@ export default function App() {
   const [authUsername, setAuthUsername] = useState("admin");
   const [authPassword, setAuthPassword] = useState("");
   const [authError, setAuthError] = useState("");
-  const [isLiveMode, setIsLiveMode] = useState<boolean>(false);
-  const [showLiveConfirm, setShowLiveConfirm] = useState<boolean>(false);
   const [serverAuditTrail, setServerAuditTrail] = useState<any[]>([]);
 
   const handleLoginSubmit = async (e: any) => {
@@ -2654,6 +2652,11 @@ export default function App() {
 
   const [trades, setTrades] = useState<Trade[]>([]);
   const [liveTradeTrigger, setLiveTradeTrigger] = useState<any | null>(null);
+  // Real bug fix (2026-08-18 UI audit, Phase 7): the cancel-order button had no in-flight lock
+  // (repeat-clickable on a slow network) and its only failure signal was console.warn - nothing
+  // rendered, so an operator couldn't tell whether a cancel worked, failed, or vanished.
+  const [cancelingOrderIds, setCancelingOrderIds] = useState<Set<string>>(new Set());
+  const [cancelOrderErrors, setCancelOrderErrors] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -2903,7 +2906,6 @@ export default function App() {
       fetchItem("/api/v1/risk", setVetos),
       fetchItem("/api/v1/settings", (settings) => {
         setSystemSettings(settings);
-        setIsLiveMode(!settings.PAPER_TRADING_ONLY);
       }),
       fetchItem("/api/v1/alpaca/config", (algData) => {
         setAlpacaConfigured(algData.hasAlpacaKeys);
@@ -3045,22 +3047,6 @@ export default function App() {
     }, 6000);
     return () => clearInterval(interval);
   }, [isAuthenticated]);
-
-  const handleToggleLive = async (enabled: boolean) => {
-    try {
-      const res = await fetch("/api/v1/settings/toggle-live", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled })
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setIsLiveMode(!data.paper_trading_only);
-        fetchState();
-      }
-    } catch(e) {}
-    setShowLiveConfirm(false);
-  };
 
   useEffect(() => {
     let loopId: NodeJS.Timeout;
@@ -5534,20 +5520,27 @@ export default function App() {
                             {t.id && t.status && !["FILLED", "REJECTED", "CANCELED"].includes(t.status) && (
                               <button
                                 type="button"
-                                className="text-[9px] uppercase tracking-widest text-rose-300 border border-rose-500/40 px-1.5 py-0.5 rounded hover:bg-rose-500/10"
+                                disabled={cancelingOrderIds.has(t.id)}
+                                className="text-[9px] uppercase tracking-widest text-rose-300 border border-rose-500/40 px-1.5 py-0.5 rounded hover:bg-rose-500/10 disabled:opacity-50 disabled:cursor-not-allowed"
                                 onClick={async () => {
+                                  setCancelingOrderIds(prev => new Set(prev).add(t.id));
+                                  setCancelOrderErrors(prev => { const next = { ...prev }; delete next[t.id]; return next; });
                                   try {
                                     const res = await fetch(`/api/v2/trading/cancel-order/${encodeURIComponent(t.id)}`, { method: "POST" });
                                     const body = await res.json().catch(() => ({}));
                                     if (!res.ok || body.ok === false) {
-                                      console.warn("[Argus] cancel-order refused", body.error || res.status);
+                                      setCancelOrderErrors(prev => ({ ...prev, [t.id]: body.error || `Cancel refused (${res.status})` }));
+                                    } else {
+                                      fetchState();
                                     }
-                                  } catch (err) {
-                                    console.warn("[Argus] cancel-order failed", err);
+                                  } catch (err: any) {
+                                    setCancelOrderErrors(prev => ({ ...prev, [t.id]: err?.message || "Failed to reach the server." }));
+                                  } finally {
+                                    setCancelingOrderIds(prev => { const next = new Set(prev); next.delete(t.id); return next; });
                                   }
                                 }}
                               >
-                                Cancel
+                                {cancelingOrderIds.has(t.id) ? "Canceling..." : "Cancel"}
                               </button>
                             )}
                             <span>
@@ -5555,6 +5548,9 @@ export default function App() {
                             </span>
                           </span>
                         </div>
+                        {t.id && cancelOrderErrors[t.id] && (
+                          <p className="text-[9px] text-rose-400 pt-1">{cancelOrderErrors[t.id]}</p>
+                        )}
                       </div>
                     ))
                   )}
@@ -8578,73 +8574,14 @@ export default function App() {
                     <AIProviderManagement />
                     <ConnectionStatusDashboard />
                     <BrokerManagement />
-                    {/* Old Env Settings Hidden */}
-                    <div className="hidden">
-                       <h3 className="text-xs font-mono font-bold text-slate-100 uppercase tracking-widest mb-4 flex justify-between items-center">
-                         <span>Trading Environment</span>
-                         <span className={`px-2 py-0.5 rounded text-[10px] ${isLiveMode ? 'bg-rose-500/20 text-rose-400 animate-pulse' : 'bg-emerald-500/20 text-emerald-400'}`}>
-                           {isLiveMode ? '● LIVE TRADING ACTIVE' : '○ PAPER TRADING MODE'}
-                         </span>
-                       </h3>
-                       <div className="flex items-center justify-between gap-6">
-                          <div className="flex-1">
-                            <p className="text-xs text-slate-400 leading-relaxed max-w-xl">
-                              When <strong>Live Environment</strong> is active, all trade directives are routed to <code>api.alpaca.markets</code>. 
-                              Paper credentials will fail in this mode. Real capital risk is enabled.
-                            </p>
-                          </div>
-                          <div className="shrink-0">
-                             {isLiveMode ? (
-                               <button 
-                                onClick={() => handleToggleLive(false)}
-                                className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2.5 rounded-lg border border-slate-700 transition-all text-xs font-bold font-mono"
-                               >
-                                 <ToggleLeft className="text-slate-400" size={14} />
-                                 REVERT TO PAPER
-                               </button>
-                             ) : (
-                               <button 
-                                onClick={() => setShowLiveConfirm(true)}
-                                className="flex items-center gap-2 bg-rose-600/10 hover:bg-rose-600/20 text-rose-500 px-4 py-2.5 rounded-lg border border-rose-500/30 transition-all text-xs font-bold font-mono"
-                               >
-                                 <ToggleRight className="text-rose-400" size={14} />
-                                 ENABLE LIVE TRADING
-                               </button>
-                             )}
-                          </div>
-                       </div>
-                    </div>
-
-                    {showLiveConfirm && (
-                      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
-                        <div className="bg-[#1A1F2B] border border-rose-500/50 rounded-2xl p-8 max-w-md w-full shadow-[0_0_50px_-12px_rgba(244,63,94,0.3)]">
-                           <div className="h-16 w-16 bg-rose-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
-                              <ShieldAlert size={32} className="text-rose-500" />
-                           </div>
-                           <h2 className="text-xl font-bold text-white text-center mb-2">High Risk Protocol</h2>
-                           <p className="text-sm text-slate-400 text-center mb-8">
-                             You are about to enable <strong>Live Production Trading</strong>. 
-                             This will connect ARGUS directly to your real capital pool at Alpaca. 
-                             Confirm that all API keys and risk guardrails are correctly configured.
-                           </p>
-                           <div className="flex flex-col gap-3">
-                              <button 
-                                onClick={() => handleToggleLive(true)}
-                                className="w-full bg-rose-600 hover:bg-rose-500 text-white font-bold py-3 rounded-lg transition-all uppercase tracking-widest text-xs"
-                              >
-                                I Understand the Risk - Enable Live
-                              </button>
-                              <button 
-                                onClick={() => setShowLiveConfirm(false)}
-                                className="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-3 rounded-lg transition-all text-xs uppercase"
-                              >
-                                Cancel
-                              </button>
-                           </div>
-                        </div>
-                      </div>
-                    )}
-
+                    {/* Real bug fix (2026-08-18 UI audit, Phase 9): this "Old Env Settings" block and its
+                        confirm modal were dead code - wrapped in className="hidden" with the only button
+                        that could reach the modal living inside that same hidden div, and posting to
+                        /api/v1/settings/toggle-live, a route that doesn't exist anywhere in server.ts or
+                        src/server/routes/**. Removed rather than fixed: a real backend live-mode arming
+                        path already exists (POST /api/v1/brokers/:id/live-mode - phrase confirmation +
+                        liveOrderAuthorization.ts gates), but has no UI anywhere yet, here or elsewhere -
+                        building that UI is a deliberate, separate feature decision, not a dead-switch fix. */}
                     {secretsMsg && <div className="text-emerald-400 text-xs">{secretsMsg}</div>}
                    {["Broker", "LLM", "Market Data"].map(cat => (
                      <div key={cat} className="space-y-2">

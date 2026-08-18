@@ -96,6 +96,64 @@ export default function AIProviderManagement() {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [usage, setUsage] = useState<any[]>([]);
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
+  // Real bug fix (2026-08-18 UI audit, Phase 5): every dropdown used to POST the UI's display
+  // label ("News", "Chief Trader") as the routing key, but every real routeTask()/routeConsensus()
+  // call site keys itself by a different internal agentType string ('NewsAgent', 'ConsensusDebate',
+  // ...) - grepped across src/server for every real call site. The DB write always succeeded, but
+  // AIRouter's exact-string lookup meant every override silently had zero effect. Labels with no
+  // real caller anywhere (Technical, Risk, Options, Portfolio, Execution, Compliance, Performance,
+  // Cost Optimizer, Router, Memory) are removed rather than shown as if they could be routed.
+  const AGENT_ROUTING_KEYS: Record<string, string> = {
+    'News': 'NewsAgent',
+    'Fundamental': 'FundamentalAgent',
+    'Macro': 'MacroAgent',
+    'Chief Trader (Consensus Debate)': 'ConsensusDebate',
+    'Reflection': 'ReflectionEngine',
+    'Market Regime': 'MarketRegimeAgent',
+    'Explainability': 'ExplainabilityAgent',
+    'Quant Contradiction Analyzer': 'QuantContradictionAnalyzer',
+    'General (fallback/legacy)': 'General',
+  };
+  const [routingOverrides, setRoutingOverrides] = useState<Record<string, string>>({});
+  const [routingSaveState, setRoutingSaveState] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
+  const [routingSaveError, setRoutingSaveError] = useState<Record<string, string>>({});
+
+  const fetchRoutingOverrides = () => {
+    fetch('/api/v1/config/routing')
+      .then(res => res.json())
+      .then(data => {
+        if (!Array.isArray(data)) return;
+        const next: Record<string, string> = {};
+        for (const row of data) {
+          if (row?.agentName && row?.providerId) next[row.agentName] = row.providerId;
+        }
+        setRoutingOverrides(next);
+      })
+      .catch(() => { /* leave dropdowns at Auto-Select if this fails - not a fabricated state */ });
+  };
+
+  const saveAgentRoute = async (agentKey: string, providerId: string) => {
+    setRoutingSaveState(prev => ({ ...prev, [agentKey]: 'saving' }));
+    try {
+      const res = await fetch('/api/v1/config/routing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent: agentKey, providerId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data?.error) {
+        setRoutingSaveState(prev => ({ ...prev, [agentKey]: 'error' }));
+        setRoutingSaveError(prev => ({ ...prev, [agentKey]: data?.error || `Save failed (${res.status})` }));
+        return;
+      }
+      setRoutingOverrides(prev => ({ ...prev, [agentKey]: providerId }));
+      setRoutingSaveState(prev => ({ ...prev, [agentKey]: 'saved' }));
+      setTimeout(() => setRoutingSaveState(prev => ({ ...prev, [agentKey]: undefined as any })), 2500);
+    } catch (e: any) {
+      setRoutingSaveState(prev => ({ ...prev, [agentKey]: 'error' }));
+      setRoutingSaveError(prev => ({ ...prev, [agentKey]: e?.message || 'Failed to reach the server.' }));
+    }
+  };
 
   useEffect(() => {
     fetch('/api/v1/config/providers')
@@ -105,6 +163,8 @@ export default function AIProviderManagement() {
     fetch('/api/v1/config/usage')
       .then(res => res.json())
       .then(data => setUsage(Array.isArray(data) ? data : []));
+
+    fetchRoutingOverrides();
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
@@ -343,29 +403,38 @@ export default function AIProviderManagement() {
               <p className="text-[10px] text-slate-400 uppercase tracking-widest mb-6">Assign specific AI providers to different trading agents to optimize cost, latency, and reasoning capability.</p>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {['Technical', 'News', 'Fundamental', 'Macro', 'Risk', 'Reflection', 'Memory', 'Chief Trader', 'Market Regime', 'Options', 'Portfolio', 'Execution', 'Compliance', 'Performance', 'Cost Optimizer', 'Router'].map(agent => (
-                      <div key={agent} className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex justify-between items-center">
-                          <div className="text-xs font-bold text-slate-300">{agent} Agent</div>
-                          <select
-                            className="bg-[#111822] border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 outline-none"
-                            onChange={(e) => {
-                                fetch('/api/v1/config/routing', {
-                                   method: 'POST',
-                                   headers: { 'Content-Type': 'application/json' },
-                                   body: JSON.stringify({ agent, providerId: e.target.value })
-                                }).then(() => {
-                                   // Add toast or silent success
-                                });
-                            }}
-                          >
-                             <option value="auto">Auto-Select (Best Available)</option>
-                             {routableProviders.map(p => (
-                                <option key={p.id} value={p.id}>{p.providerName}</option>
-                             ))}
-                          </select>
+                  {Object.entries(AGENT_ROUTING_KEYS).map(([label, agentKey]) => {
+                    const saveState = routingSaveState[agentKey];
+                    return (
+                      <div key={agentKey} className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex flex-col gap-2">
+                          <div className="flex justify-between items-center gap-3">
+                            <div className="text-xs font-bold text-slate-300">{label}</div>
+                            <div className="flex items-center gap-2">
+                              {saveState === 'saving' && <span className="text-[9px] text-slate-500 uppercase tracking-widest">Saving...</span>}
+                              {saveState === 'saved' && <span className="text-[9px] text-emerald-400 uppercase tracking-widest flex items-center gap-1"><CheckCircle2 size={10}/> Saved</span>}
+                              {saveState === 'error' && <span className="text-[9px] text-rose-400 uppercase tracking-widest flex items-center gap-1"><XCircle size={10}/> Failed</span>}
+                              <select
+                                className="bg-[#111822] border border-slate-700 rounded px-2 py-1 text-xs text-slate-300 outline-none"
+                                value={routingOverrides[agentKey] || 'auto'}
+                                onChange={(e) => { void saveAgentRoute(agentKey, e.target.value); }}
+                              >
+                                 <option value="auto">Auto-Select (Best Available)</option>
+                                 {routableProviders.map(p => (
+                                    <option key={p.id} value={p.id}>{p.providerName}</option>
+                                 ))}
+                              </select>
+                            </div>
+                          </div>
+                          {saveState === 'error' && routingSaveError[agentKey] && (
+                            <p className="text-[10px] text-rose-400">{routingSaveError[agentKey]}</p>
+                          )}
                       </div>
-                  ))}
+                    );
+                  })}
               </div>
+              <p className="text-[9px] text-slate-600 mt-4 leading-relaxed">
+                Only agents that actually call AIRouter are listed - TechnicalAgent, RiskAgent, and several other display names in earlier versions of this table never called an LLM at all, so routing them had no effect regardless of what was selected.
+              </p>
            </div>
         </div>
       )}

@@ -381,7 +381,7 @@ export const EXPLAINER_CATALOG = {
     title: 'Recent executed trades',
     what: 'Latest rows from the real `trades` table (live path), not portfolio.json.',
     why: 'Legacy GET /api/v1/signals is quarantined (HTTP 410) and is not this list.',
-    how: 'SQLite trades. Empty means no fills on the EventBus path yet.',
+    how: 'SQLite trades. Timestamp is filledAt, else timestamp/submittedAt. Empty means no fills on the EventBus path yet. `--:--:--` means that row has no parseable time.',
   },
   aiEngineOps: {
     title: 'AI engine operations',

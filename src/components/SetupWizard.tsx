@@ -100,21 +100,78 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
       });
   }, []);
 
-  const calculateReadiness = () => {
+  const calculateReadiness = (overrides?: { broker?: boolean; market?: boolean; news?: boolean }) => {
     let score = 20; // DB is connected
     if (aiProviders.Gemini.connected || aiProviders.OpenAI.connected || aiProviders.Claude.connected) score += 20;
-    if (brokerage.connected) score += 20;
-    if (marketData.connected) score += 20;
-    if (newsApi.connected) score += 20;
+    if (overrides?.broker ?? brokerage.connected) score += 20;
+    if (overrides?.market ?? marketData.connected) score += 20;
+    if (overrides?.news ?? newsApi.connected) score += 20;
     setReadinessScore(score);
   };
 
-  const handleTestConnection = (type: string) => {
-    // Mock connection testing
-    if (type === 'broker') setBrokerage(prev => ({ ...prev, connected: true }));
-    if (type === 'market') setMarketData(prev => ({ ...prev, connected: true }));
-    if (type === 'news') setNewsApi(prev => ({ ...prev, connected: true }));
-    calculateReadiness();
+  // Real bug fix (2026-08-18 UI audit, Phase 4): handleTestConnection used to be a pure mock -
+  // no fetch call at all, reported "Connected" for every provider unconditionally, even with an
+  // empty API key field or Live Trading selected. Broker testing now reuses the same real,
+  // non-mutating POST /api/v1/brokers/:id/test BrokerManagement.tsx already uses (calls the real
+  // adapter's authenticate()/health() against the entered, not-yet-saved credentials - never
+  // persists them just from clicking Test). Only a real {ok:true} response ever sets connected.
+  const BROKER_ID_MAP: Record<string, string> = {
+    'Alpaca': 'alpaca',
+    'Interactive Brokers': 'ibkr',
+    'Coinbase': 'coinbase',
+    'Questrade': 'questrade',
+  };
+  const [testingConnection, setTestingConnection] = useState<'broker' | 'market' | 'news' | null>(null);
+  const [connectionTestError, setConnectionTestError] = useState<Record<string, string | null>>({});
+
+  const handleTestConnection = async (type: 'broker' | 'market' | 'news') => {
+    setTestingConnection(type);
+    setConnectionTestError(prev => ({ ...prev, [type]: null }));
+    try {
+      if (type === 'broker') {
+        if (!brokerage.apiKey.trim() || !brokerage.secretKey.trim()) {
+          setConnectionTestError(prev => ({ ...prev, broker: 'Enter both an API key and a secret key before testing.' }));
+          return;
+        }
+        const brokerId = BROKER_ID_MAP[brokerage.provider];
+        if (!brokerId) {
+          setConnectionTestError(prev => ({ ...prev, broker: `No connection test is implemented for ${brokerage.provider} yet - the key will be saved as-is and used when Argus starts.` }));
+          return;
+        }
+        const isLive = brokerage.mode === 'Live Trading';
+        const res = await fetch(`/api/v1/brokers/${brokerId}/test`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credentials: { apiKey: brokerage.apiKey, secretKey: brokerage.secretKey, isLive, tradingMode: isLive ? 'LIVE' : 'PAPER' } }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data?.ok) {
+          setBrokerage(prev => ({ ...prev, connected: true }));
+          calculateReadiness({ broker: true });
+        } else {
+          setConnectionTestError(prev => ({ ...prev, broker: data?.error || `Connection test failed (${res.status}).` }));
+        }
+      } else if (type === 'market') {
+        if (!marketData.apiKey.trim()) {
+          setConnectionTestError(prev => ({ ...prev, market: 'Enter an API key before testing.' }));
+          return;
+        }
+        // Honest limitation: unlike brokers, there is no real non-mutating "test these market-data
+        // credentials" endpoint in this codebase yet - only POST /marketdata/active, which actually
+        // switches the live adapter. Rather than fabricate a fake pass/fail, this is disclosed.
+        setConnectionTestError(prev => ({ ...prev, market: 'Connection testing is not implemented for market-data providers yet - the key is saved as entered and used once Argus starts; verify it under Settings > Market Data after setup.' }));
+      } else if (type === 'news') {
+        if (!newsApi.apiKey.trim()) {
+          setConnectionTestError(prev => ({ ...prev, news: 'Enter an API key before testing.' }));
+          return;
+        }
+        setConnectionTestError(prev => ({ ...prev, news: 'Connection testing is not implemented for news providers yet - the key is saved as entered and used once Argus starts; verify it under Settings > News after setup.' }));
+      }
+    } catch (e: any) {
+      setConnectionTestError(prev => ({ ...prev, [type]: e?.message || 'Failed to reach the server.' }));
+    } finally {
+      setTestingConnection(null);
+    }
   };
 
   const handleAiChange = (provider: string, val: string) => {
@@ -374,12 +431,17 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
                      </div>
                    </div>
 
-                   <div className="pt-4 flex justify-end items-center border-t border-slate-800">
-                      {brokerage.connected ? (
-                        <div className="text-emerald-400 font-bold uppercase tracking-widest text-xs flex items-center gap-2"><CheckCircle2 size={16}/> Connected</div>
-                      ) : (
-                        <button onClick={() => handleTestConnection('broker')} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs uppercase tracking-widest font-bold rounded">Test Connection</button>
+                   <div className="pt-4 flex flex-col items-end gap-2 border-t border-slate-800">
+                      {connectionTestError.broker && (
+                        <p className="text-[10px] text-rose-400 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2 max-w-md text-right leading-relaxed">{connectionTestError.broker}</p>
                       )}
+                      <div className="flex justify-end w-full pt-2">
+                        {brokerage.connected ? (
+                          <div className="text-emerald-400 font-bold uppercase tracking-widest text-xs flex items-center gap-2"><CheckCircle2 size={16}/> Connected</div>
+                        ) : (
+                          <button onClick={() => handleTestConnection('broker')} disabled={testingConnection === 'broker'} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs uppercase tracking-widest font-bold rounded">{testingConnection === 'broker' ? 'Testing...' : 'Test Connection'}</button>
+                        )}
+                      </div>
                    </div>
                 </div>
              </div>
@@ -421,12 +483,17 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
                        />
                       </div>
                    </div>
-                   <div className="pt-4 flex justify-end items-center border-t border-slate-800">
-                      {marketData.connected ? (
-                        <div className="text-emerald-400 font-bold uppercase tracking-widest text-xs flex items-center gap-2"><CheckCircle2 size={16}/> Connected</div>
-                      ) : (
-                        <button onClick={() => handleTestConnection('market')} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs uppercase tracking-widest font-bold rounded">Test Connection</button>
+                   <div className="pt-4 flex flex-col items-end gap-2 border-t border-slate-800">
+                      {connectionTestError.market && (
+                        <p className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2 max-w-md text-right leading-relaxed">{connectionTestError.market}</p>
                       )}
+                      <div className="flex justify-end w-full pt-2">
+                        {marketData.connected ? (
+                          <div className="text-emerald-400 font-bold uppercase tracking-widest text-xs flex items-center gap-2"><CheckCircle2 size={16}/> Connected</div>
+                        ) : (
+                          <button onClick={() => handleTestConnection('market')} disabled={testingConnection === 'market'} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs uppercase tracking-widest font-bold rounded">{testingConnection === 'market' ? 'Testing...' : 'Test Connection'}</button>
+                        )}
+                      </div>
                    </div>
                 </div>
              </div>
@@ -468,12 +535,17 @@ export function SetupWizard({ onComplete, onSkip }: { onComplete: (config: any) 
                        />
                       </div>
                    </div>
-                   <div className="pt-4 flex justify-end items-center border-t border-slate-800">
-                      {newsApi.connected ? (
-                        <div className="text-emerald-400 font-bold uppercase tracking-widest text-xs flex items-center gap-2"><CheckCircle2 size={16}/> Connected</div>
-                      ) : (
-                        <button onClick={() => handleTestConnection('news')} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-xs uppercase tracking-widest font-bold rounded">Test Connection</button>
+                   <div className="pt-4 flex flex-col items-end gap-2 border-t border-slate-800">
+                      {connectionTestError.news && (
+                        <p className="text-[10px] text-amber-400 bg-amber-500/10 border border-amber-500/30 rounded px-3 py-2 max-w-md text-right leading-relaxed">{connectionTestError.news}</p>
                       )}
+                      <div className="flex justify-end w-full pt-2">
+                        {newsApi.connected ? (
+                          <div className="text-emerald-400 font-bold uppercase tracking-widest text-xs flex items-center gap-2"><CheckCircle2 size={16}/> Connected</div>
+                        ) : (
+                          <button onClick={() => handleTestConnection('news')} disabled={testingConnection === 'news'} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 disabled:opacity-60 text-white text-xs uppercase tracking-widest font-bold rounded">{testingConnection === 'news' ? 'Testing...' : 'Test Connection'}</button>
+                        )}
+                      </div>
                    </div>
                 </div>
              </div>

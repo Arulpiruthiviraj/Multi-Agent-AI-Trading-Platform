@@ -36,6 +36,34 @@ import { SafeResponsiveContainer } from "./shared/SafeResponsiveContainer";
 import { Explainer } from "./ContextualTooltip";
 import { UnavailableHint } from "./UnavailableHint";
 
+/** Ledger fill/submit time for Recent Executed Trades. Prefers filledAt; never fabricates a clock. */
+const formatTradeTimestamp = (ts: string | number | null | undefined): string => {
+  if (ts == null || ts === '') return '--:--:--';
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '--:--:--';
+  return d.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
+};
+
+const tradeLedgerTimestamp = (t: {
+  filledAt?: string | null;
+  filled_at?: string | null;
+  timestamp?: string | number | null;
+  submittedAt?: string | null;
+  submitted_at?: string | null;
+  createdAt?: string | number | null;
+  created_at?: string | number | null;
+}): string =>
+  formatTradeTimestamp(
+    t.filledAt ?? t.filled_at ?? t.timestamp ?? t.submittedAt ?? t.submitted_at ?? t.createdAt ?? t.created_at,
+  );
+
 interface AutonomousDashboardProps {
   autoBotConfig?: any;
   portfolioData?: any;
@@ -663,6 +691,10 @@ export function AutonomousDashboard({
                            <div className="font-bold text-white font-mono">{t.symbol}</div>
                            <div className="text-[10px] text-slate-500 uppercase tracking-widest">
                              {t.quantity || t.shares || 1} shares @ ${Number(t.price || t.entryPrice || 0).toFixed(2)}
+                           </div>
+                           <div className="mt-1 flex items-center gap-1 text-[10px] font-mono text-slate-400 tabular-nums tracking-wide normal-case">
+                             <Clock size={10} className="text-slate-500 shrink-0" />
+                             {tradeLedgerTimestamp(t)}
                            </div>
                          </div>
                        </div>

@@ -5,7 +5,7 @@ import React, { useState } from 'react';
 import './mobileTheme.css';
 import { MobileTopBar, MobileBottomNav } from './MobileAppChrome';
 import { MobilePullRefresh } from './MobilePullRefresh';
-import { useMobileMissionData, triggerEmergencyStop } from './useMobileMissionData';
+import { useMobileMissionData, triggerEmergencyStop, triggerResume } from './useMobileMissionData';
 import { useMobileWsResume } from './useMobileWsResume';
 import { useMobileMissionSelector } from './useMobileMissionSelector';
 import { useMobileSwipeTabs } from './useMobileSwipeTabs';
@@ -46,6 +46,7 @@ export default function MobileMissionControl({
   const refreshing = useMobileMissionSelector((s) => s.refreshing);
   const lastRefreshAt = useMobileMissionSelector((s) => s.lastRefreshAt);
   const { onTouchStart, onTouchEnd } = useMobileSwipeTabs(activeTab);
+  const emergencyStopActive = useMobileMissionSelector((s) => s.emergencyStopActive);
   const [killSheet, setKillSheet] = useState(false);
 
   return (
@@ -79,20 +80,40 @@ export default function MobileMissionControl({
 
       <MobileBottomNav />
 
-      <MobileBottomSheet open={killSheet} title="Quick kill" onClose={() => setKillSheet(false)} danger>
-        <p className="text-sm text-slate-300 mb-4">Trigger emergency stop from the top bar.</p>
-        <button
-          type="button"
-          onClick={() => {
-            void triggerEmergencyStop().then(() => {
-              setKillSheet(false);
-              void refresh();
-            });
-          }}
-          className="w-full min-h-[48px] rounded-lg bg-rose-700 text-white font-bold text-xs uppercase mobile-press"
-        >
-          Execute now
-        </button>
+      <MobileBottomSheet open={killSheet} title={emergencyStopActive ? "Resume trading" : "Quick kill"} onClose={() => setKillSheet(false)} danger={!emergencyStopActive}>
+        {emergencyStopActive ? (
+          <>
+            <p className="text-sm text-slate-300 mb-4">Trading is currently halted. Resume clears the halt and re-enables new orders.</p>
+            <button
+              type="button"
+              onClick={() => {
+                void triggerResume().then(() => {
+                  setKillSheet(false);
+                  void refresh();
+                });
+              }}
+              className="w-full min-h-[48px] rounded-lg bg-emerald-600 text-white font-bold text-xs uppercase mobile-press"
+            >
+              Resume trading
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-slate-300 mb-4">Trigger emergency stop from the top bar.</p>
+            <button
+              type="button"
+              onClick={() => {
+                void triggerEmergencyStop().then(() => {
+                  setKillSheet(false);
+                  void refresh();
+                });
+              }}
+              className="w-full min-h-[48px] rounded-lg bg-rose-700 text-white font-bold text-xs uppercase mobile-press"
+            >
+              Execute now
+            </button>
+          </>
+        )}
       </MobileBottomSheet>
     </div>
   );
