@@ -638,6 +638,27 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
   const app = express();
   initializeAlpacaNewsWebSocket();
 
+  // Defensive backstop (2026-08-18): every currently-slow /api/ path already found this session
+  // (GET /api/v1/portfolio, /api/v1/pnl/analytics) turned out to be a live Alpaca call with its
+  // own explicit timeout - not a genuinely unbounded hang - and /api/v1/system/integrity /
+  // /api/v1/autobot were checked directly and are already fully bounded (every network call
+  // inside runIntegrityCheck has its own 2-10s timeout; /autobot's only await is a synchronous
+  // better-sqlite3 read). This does not replace fixing a real hang if one is ever found - it only
+  // makes sure a route that's accidentally missing its own timeout in the future fails loudly
+  // (504) instead of holding a browser connection slot forever. `res.headersSent` guards against
+  // racing a response that finishes right as the timer fires.
+  app.use('/api', (req, res, next) => {
+    const timer = setTimeout(() => {
+      if (!res.headersSent) {
+        console.error(`[server] Request timeout (15000ms) on ${req.method} ${req.path} - responding 504 instead of holding the connection.`);
+        res.status(504).json({ error: 'Request Timeout', path: req.path });
+      }
+    }, 15000);
+    res.once('finish', () => clearTimeout(timer));
+    res.once('close', () => clearTimeout(timer));
+    next();
+  });
+
   // Credentialed CORS for remote mobile (Tailscale / LAN) when Origin differs from host.
   app.use((req, res, next) => {
     const origin = req.headers.origin;

@@ -77,4 +77,69 @@ describe('getDecisionTrace + observability persist', () => {
     expect(assembled.aiCalls[0].promptHash).toBe(hashSensitive('SECRET_PROMPT_VALUE_DO_NOT_ECHO'));
     expect(JSON.stringify(assembled.aiCalls)).not.toContain('SECRET_PROMPT_VALUE_DO_NOT_ECHO');
   });
+
+  it('computes a stage-by-stage latency breakdown from real event_traces rows, and reports MARKET_DATA honestly unavailable', async () => {
+    vi.resetModules();
+    const { db } = await import('../db');
+    const { eventTraces } = await import('../db/schema');
+    const { getDecisionTrace } = await import('./queryTraces');
+
+    const traceId = 'trace_LAT_1700000000_beef';
+    const t0 = 1_700_000_000_000;
+    const rows: Array<[string, number]> = [
+      ['TRADE_IDEA_GENERATED', t0],
+      ['CHIEF_CONSENSUS_STARTED', t0 + 10],
+      ['CHIEF_CONSENSUS_COMPLETED', t0 + 45],
+      ['RISK_ASSESSMENT_STARTED', t0 + 50],
+      ['RISK_ASSESSMENT_COMPLETED', t0 + 90],
+      ['ORDER_SUBMITTED', t0 + 95],
+      ['ORDER_EXECUTED', t0 + 180],
+    ];
+    for (const [eventType, timestamp] of rows) {
+      await db.insert(eventTraces).values({
+        id: `evt-${eventType}`,
+        correlationId: traceId,
+        timestamp,
+        source: 'unit-test',
+        eventType,
+        payload: '{}',
+      });
+    }
+
+    const assembled = await getDecisionTrace(traceId);
+    const breakdown = (assembled as any).latencyBreakdown;
+    expect(breakdown.totalLatencyMs).toBe(180);
+    expect(breakdown.firstStage).toBe('ideaGenerated');
+    expect(breakdown.lastStage).toBe('orderExecuted');
+    expect(breakdown.stages.ideaGeneratedToConsensusStartedMs).toBe(10);
+    expect(breakdown.stages.consensusStartedToConsensusCompletedMs).toBe(35);
+    expect(breakdown.stages.consensusCompletedToRiskStartedMs).toBe(5);
+    expect(breakdown.stages.riskStartedToRiskCompletedMs).toBe(40);
+    expect(breakdown.stages.riskCompletedToOrderSubmittedMs).toBe(5);
+    expect(breakdown.stages.orderSubmittedToOrderExecutedMs).toBe(85);
+    expect(breakdown.marketDataToSignalMs).toBeNull();
+    expect(breakdown.marketDataToSignalUnavailableReason).toMatch(/not durably persisted/);
+  });
+
+  it('returns a null total when fewer than two milestone stages are present', async () => {
+    vi.resetModules();
+    const { db } = await import('../db');
+    const { eventTraces } = await import('../db/schema');
+    const { getDecisionTrace } = await import('./queryTraces');
+
+    const traceId = 'trace_LAT_1700000000_single';
+    await db.insert(eventTraces).values({
+      id: 'evt-only',
+      correlationId: traceId,
+      timestamp: Date.now(),
+      source: 'unit-test',
+      eventType: 'TRADE_IDEA_GENERATED',
+      payload: '{}',
+    });
+
+    const assembled = await getDecisionTrace(traceId);
+    const breakdown = (assembled as any).latencyBreakdown;
+    expect(breakdown.totalLatencyMs).toBeNull();
+    expect(Object.keys(breakdown.stages)).toHaveLength(0);
+  });
 });

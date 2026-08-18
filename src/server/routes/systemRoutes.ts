@@ -25,6 +25,7 @@ import { walkForwardValidator } from "../engines/backtest/WalkForwardValidator";
 import { runIntegrityCheck } from "../core/IntegrityValidator";
 import { tradingLimiter } from "../core/RateLimiters";
 import { BrokerManager } from "../../brokers/BrokerManager";
+import { tradingSafety } from "../config/tradingSafety";
 
 export const systemRouter = Router();
 
@@ -476,12 +477,26 @@ systemRouter.get("/pnl/analytics", async (req: Request, res: Response) => {
     try {
       const isPaper = tradingEngine.state.tradingMode === "PAPER";
       const alpacaBaseUrl = isPaper ? "paper-api.alpaca.markets" : "api.alpaca.markets";
-      const historyRes = await fetch(`https://${alpacaBaseUrl}/v2/account/portfolio/history?period=30d&timeframe=1D`, {
-        headers: {
-          "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
-          "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY,
-        },
-      });
+      // Real bug fix (2026-08-18): this call had no timeout at all - unlike GET /api/v1/portfolio
+      // (server.ts:1205, wrapped in withTimeout(..., tradingSafety.alpacaRequestTimeoutMs)), a slow
+      // or hanging Alpaca response here could leave the browser's request pending indefinitely,
+      // occupying one of Chrome's ~6 connections-per-host the whole time. Same config ceiling,
+      // and the AbortController actually cancels the outbound request (not just gives up waiting
+      // on it) so the server-side connection doesn't linger either.
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), tradingSafety.alpacaRequestTimeoutMs);
+      let historyRes: globalThis.Response;
+      try {
+        historyRes = await fetch(`https://${alpacaBaseUrl}/v2/account/portfolio/history?period=30d&timeframe=1D`, {
+          headers: {
+            "APCA-API-KEY-ID": process.env.ALPACA_API_KEY,
+            "APCA-API-SECRET-KEY": process.env.ALPACA_SECRET_KEY,
+          },
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
 
       if (historyRes.ok) {
         const history = await historyRes.json();

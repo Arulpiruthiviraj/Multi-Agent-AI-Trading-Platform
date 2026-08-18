@@ -58,6 +58,10 @@ sqlite.pragma('busy_timeout = 5000');
 // SQLITE_BUSY under concurrent readers/writers; this is a throughput improvement, not a new safety
 // mechanism.
 sqlite.pragma('synchronous = NORMAL');
+// Temp tables/indexes (ORDER BY, GROUP BY, subqueries) live in RAM instead of a temp file on
+// disk - a straightforward throughput win with no durability tradeoff (nothing here is data
+// that survives a restart anyway).
+sqlite.pragma('temp_store = MEMORY');
 
 export const db = drizzle(sqlite, { schema });
 export const sqliteDb = sqlite;

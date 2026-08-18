@@ -14,6 +14,68 @@ import { eq, desc, or, and, like } from 'drizzle-orm';
 import { loadAgentThoughts, loadRiskForTrace, tracingService } from '../services/TracingService';
 import { redactSecretsDeep } from '../core/SecretRedaction';
 import { hashSensitive } from './hashSensitive';
+import { EVENTS } from '../core/eventNames';
+
+/**
+ * Real perf fix (2026-08-18): every stage this computes from already exists as a durably
+ * persisted event_traces row (EventStore.ts's trackEvent - confirmed live: TRADE_IDEA_GENERATED,
+ * CHIEF_CONSENSUS_STARTED/COMPLETED, RISK_ASSESSMENT_STARTED/COMPLETED, ORDER_SUBMITTED,
+ * ORDER_EXECUTED are all real, persisted event types, not new instrumentation). This is a
+ * pure read-time rollup over rows already written by the live decision spine - it adds no
+ * listener, no timer map, no new table, and is never on the hot path (RiskEngine/OMS never call
+ * it; it only runs when an operator/UI requests a trace). MARKET_DATA is deliberately excluded:
+ * EventStore.ts's NO_PERSIST_TYPES skips it on purpose (many ticks/sec would flood event_traces),
+ * so there is no durable per-trace "market data received" timestamp to diff against - that stage
+ * is reported unavailable rather than fabricated from an inferred time.
+ */
+export interface LatencyBreakdownMs {
+  totalLatencyMs: number | null;
+  firstStage: string | null;
+  lastStage: string | null;
+  stages: Record<string, number>;
+  marketDataToSignalMs: null;
+  marketDataToSignalUnavailableReason: string;
+}
+
+const LATENCY_MILESTONES: Array<{ event: string; label: string }> = [
+  { event: EVENTS.TRADE_IDEA_GENERATED, label: 'ideaGenerated' },
+  { event: EVENTS.CHIEF_CONSENSUS_STARTED, label: 'consensusStarted' },
+  { event: EVENTS.CHIEF_CONSENSUS_COMPLETED, label: 'consensusCompleted' },
+  { event: EVENTS.RISK_ASSESSMENT_STARTED, label: 'riskStarted' },
+  { event: EVENTS.RISK_ASSESSMENT_COMPLETED, label: 'riskCompleted' },
+  { event: EVENTS.ORDER_SUBMITTED, label: 'orderSubmitted' },
+  { event: EVENTS.ORDER_EXECUTED, label: 'orderExecuted' },
+];
+
+function computeLatencyBreakdown(events: Array<{ eventType: string; timestamp: number }>): LatencyBreakdownMs {
+  const firstTimestampByEvent = new Map<string, number>();
+  for (const e of events) {
+    if (!firstTimestampByEvent.has(e.eventType) || e.timestamp < firstTimestampByEvent.get(e.eventType)!) {
+      firstTimestampByEvent.set(e.eventType, e.timestamp);
+    }
+  }
+
+  const present = LATENCY_MILESTONES
+    .map((m) => ({ ...m, ts: firstTimestampByEvent.get(m.event) }))
+    .filter((m): m is { event: string; label: string; ts: number } => typeof m.ts === 'number')
+    .sort((a, b) => a.ts - b.ts);
+
+  const stages: Record<string, number> = {};
+  for (let i = 1; i < present.length; i++) {
+    const key = `${present[i - 1].label}To${present[i].label[0].toUpperCase()}${present[i].label.slice(1)}Ms`;
+    stages[key] = present[i].ts - present[i - 1].ts;
+  }
+
+  return {
+    totalLatencyMs: present.length >= 2 ? present[present.length - 1].ts - present[0].ts : null,
+    firstStage: present[0]?.label ?? null,
+    lastStage: present[present.length - 1]?.label ?? null,
+    stages,
+    marketDataToSignalMs: null,
+    marketDataToSignalUnavailableReason:
+      'MARKET_DATA ticks are deliberately not durably persisted per-trace (EventStore.ts NO_PERSIST_TYPES - many ticks/sec would flood event_traces); not fabricated from an inferred time.',
+  };
+}
 
 function parseJson(raw: string | null | undefined): unknown {
   if (!raw) return null;
@@ -91,6 +153,7 @@ export async function getDecisionTrace(traceId: string) {
       ? parseJson(txTrace.contributingAgents)
       : agentThoughts.map((t) => t.agent),
     orderId: txTrace?.orderId ?? order?.id ?? null,
+    latencyBreakdown: computeLatencyBreakdown(events.map((e) => ({ eventType: e.eventType, timestamp: e.timestamp }))),
     timeline: timeline.map((e, i) => ({ step: i + 1, time: e.time, stage: e.stage, source: e.source, details: e.details })),
     agentThoughts,
     riskAssessment: assessment ?? null,
