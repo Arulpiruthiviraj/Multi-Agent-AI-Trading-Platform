@@ -38,22 +38,29 @@ export default function TradingPauseOperatorControls({
   const onStateRef = useRef(onAuthoritativeTradingState);
   onStateRef.current = onAuthoritativeTradingState;
 
+  const refreshInFlight = useRef(false);
   const refresh = useCallback(async () => {
-    const res = await fetchReconOperatorStatus();
-    if (res.unauthorized) {
-      setLoadError('Authentication required. Please sign in again.');
-      return null;
+    if (refreshInFlight.current) return null;
+    refreshInFlight.current = true;
+    try {
+      const res = await fetchReconOperatorStatus();
+      if (res.unauthorized) {
+        setLoadError('Authentication required. Please sign in again.');
+        return null;
+      }
+      if (!res.ok) {
+        setLoadError(mapSafetyActionError(res, 'Unable to contact Argus backend. Trading state was not changed.'));
+        return null;
+      }
+      setLoadError(null);
+      setStatus(res.data);
+      if (res.data.tradingState) {
+        onStateRef.current?.(res.data.tradingState);
+      }
+      return res.data;
+    } finally {
+      refreshInFlight.current = false;
     }
-    if (!res.ok) {
-      setLoadError(mapSafetyActionError(res, 'Unable to contact Argus backend. Trading state was not changed.'));
-      return null;
-    }
-    setLoadError(null);
-    setStatus(res.data);
-    if (res.data.tradingState) {
-      onStateRef.current?.(res.data.tradingState);
-    }
-    return res.data;
   }, []);
 
   useEffect(() => {

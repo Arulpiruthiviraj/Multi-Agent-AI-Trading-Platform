@@ -68,6 +68,7 @@ interface AutonomousDashboardProps {
   autoBotConfig?: any;
   portfolioData?: any;
   trades?: any[];
+  pnlHistory?: any[];
   assetPrices?: Record<string, number>;
   systemState?: string;
   setSystemState?: any;
@@ -81,6 +82,7 @@ export function AutonomousDashboard({
   autoBotConfig = {}, 
   portfolioData: initialPortfolioData,
   trades: initialTrades,
+  pnlHistory,
   assetPrices = {},
   systemState,
   setSystemState,
@@ -175,8 +177,11 @@ export function AutonomousDashboard({
     };
   }, [initialPortfolioData]);
 
-  // Fetch real trades if not provided via props
+  // Fetch real trades if not provided via props. Parent App.tsx already polls
+  // GET /api/v1/trades; a second 12s loop here doubled that traffic even when
+  // trades={[]} was passed (empty array is still "provided").
   useEffect(() => {
+    if (initialTrades !== undefined) return;
     let isMounted = true;
     const fetchTrades = async () => {
       try {
@@ -190,10 +195,7 @@ export function AutonomousDashboard({
       }
     };
 
-    if (!initialTrades || initialTrades.length === 0) {
-      fetchTrades();
-    }
-
+    fetchTrades();
     const interval = setInterval(fetchTrades, 12000);
     return () => {
       isMounted = false;
@@ -201,52 +203,67 @@ export function AutonomousDashboard({
     };
   }, [initialTrades]);
 
-  // Fetch real PnL analytics (History array from backend)
+  // Analytics is already polled by App.tsx into pnlHistory. A second fetch here,
+  // especially one that re-ran whenever portfolio/trades props changed, stacked
+  // /pnl/analytics and froze the chart on the loading label.
   useEffect(() => {
+    const formatHistory = (history: any[]) => history.map((h: any) => ({
+      time: h.date || (h.timestamp ? new Date(h.timestamp * 1000).toLocaleTimeString() : "N/A"),
+      value: Number(h.cumulative ?? h.equity ?? 0),
+      pnl: Number(h.pnl ?? h.profit_loss ?? 0)
+    }));
+    if (pnlHistory !== undefined) {
+      if (Array.isArray(pnlHistory) && pnlHistory.length > 0) {
+        setPerformanceData(formatHistory(pnlHistory));
+      }
+      setIsLoadingChart(false);
+      return;
+    }
     let isMounted = true;
-    setIsLoadingChart(true);
-    fetch("/api/v1/pnl/analytics")
-      .then(res => res.json())
-      .then(data => {
+    let inFlight = false;
+    const load = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const res = await fetch("/api/v1/pnl/analytics");
+        const data = await res.json();
         if (!isMounted) return;
         if (data.history && Array.isArray(data.history) && data.history.length > 0) {
-          const formatted = data.history.map((h: any) => ({
-            time: h.date || (h.timestamp ? new Date(h.timestamp * 1000).toLocaleTimeString() : "N/A"),
-            value: Number(h.cumulative ?? h.equity ?? 0),
-            pnl: Number(h.pnl ?? h.profit_loss ?? 0)
-          }));
-          setPerformanceData(formatted);
-        } else if (liveTrades.length > 0) {
-          // Construct cumulative realized equity curve from real trades if portfolio history is empty
-          let runningVal = Number(livePortfolio?.cash || autoBotConfig?.budget || 50000);
-          const tradeCurve = liveTrades
-            .slice(-20)
-            .reverse()
-            .map((t: any) => {
-              const pnl = Number(t.profitLoss || 0);
-              runningVal += pnl;
-              return {
-                time: t.timestamp ? new Date(t.timestamp).toLocaleDateString() : t.date || "Trade",
-                value: runningVal,
-                pnl: pnl
-              };
-            });
-          setPerformanceData(tradeCurve);
-        } else {
-          setPerformanceData([]);
+          setPerformanceData(formatHistory(data.history));
         }
-        setIsLoadingChart(false);
-      })
-      .catch(e => {
+      } catch (e) {
         console.error("AutonomousDashboard PnL analytics error:", e);
-        if (isMounted) {
-          setPerformanceData([]);
-          setIsLoadingChart(false);
-        }
-      });
+      } finally {
+        inFlight = false;
+        if (isMounted) setIsLoadingChart(false);
+      }
+    };
+    void load();
+    const interval = setInterval(() => { void load(); }, 60_000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [pnlHistory]);
 
-    return () => { isMounted = false; };
-  }, [liveTrades, livePortfolio, autoBotConfig?.budget]);
+  useEffect(() => {
+    if (performanceData.length > 0) return;
+    if (!Array.isArray(liveTrades) || liveTrades.length === 0) return;
+    let runningVal = Number(livePortfolio?.cash || autoBotConfig?.budget || 50000);
+    const tradeCurve = liveTrades
+      .slice(-20)
+      .reverse()
+      .map((t: any) => {
+        const pnl = Number(t.profitLoss || 0);
+        runningVal += pnl;
+        return {
+          time: t.timestamp ? new Date(t.timestamp).toLocaleDateString() : t.date || "Trade",
+          value: runningVal,
+          pnl: pnl
+        };
+      });
+    setPerformanceData(tradeCurve);
+  }, [liveTrades, livePortfolio, autoBotConfig?.budget, performanceData.length]);
 
   // Fetch real system integrity & AI providers health
   useEffect(() => {

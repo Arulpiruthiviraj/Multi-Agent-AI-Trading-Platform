@@ -3,7 +3,7 @@
  * Reads GET /api/v2/research/organic-paper only — never invents P&L.
  * REPLAY / EXTERNAL_SYNC / DIAG are excluded server-side by isOrganicClosedPaper.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Activity, AlertTriangle, Ban, CalendarDays, Target } from 'lucide-react';
 
 type MarketBadge = 'MARKET_OPEN' | 'PRE_MARKET' | 'AFTER_HOURS' | 'WEEKEND_CLOSED' | 'CLOSED' | 'UNKNOWN';
@@ -43,10 +43,15 @@ export default function OrganicPaperSoakTracker() {
   const [data, setData] = useState<OrganicPaperPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Real perf fix (2026-08-18): 60s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
 
   const load = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const res = await fetch('/api/v2/research/organic-paper');
+      const res = await fetch('/api/v2/research/organic-paper', { signal: controller.signal });
       const json = await res.json();
       if (!res.ok || json?.ok === false) {
         setError(json?.error || `HTTP ${res.status}`);
@@ -56,6 +61,7 @@ export default function OrganicPaperSoakTracker() {
       setError(null);
       setData(json);
     } catch (e: any) {
+      if (e?.name === 'AbortError') return;
       setError(e?.message || 'fetch failed');
       setData(null);
     } finally {
@@ -66,7 +72,10 @@ export default function OrganicPaperSoakTracker() {
   useEffect(() => {
     load();
     const t = setInterval(load, 60_000);
-    return () => clearInterval(t);
+    return () => {
+      clearInterval(t);
+      abortRef.current?.abort();
+    };
   }, [load]);
 
   const minTrades = data?.minPaperTrades ?? 30;

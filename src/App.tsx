@@ -1927,6 +1927,8 @@ export default function App() {
   const [portfolioFetchError, setPortfolioFetchError] = useState<string | null>(null);
   const portfolioBackoffUntil = useRef(0);
   const portfolioFailStreak = useRef(0);
+  const fetchStateInFlight = useRef<Promise<void> | null>(null);
+  const lastColdDashboardFetchAt = useRef(0);
   const [scheduledTasks, setScheduledTasks] = useState<any[]>([]);
   const [schedulerFreq, setSchedulerFreq] = useState("Daily");
   const [schedulerWeights, setSchedulerWeights] = useState('{"Technology": 40, "Financials": 20, "Healthcare": 20, "Energy": 20}');
@@ -2312,6 +2314,8 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<
     "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "validation" | "observatory" | "evaluation" | "diagnostics" | "news" | "intelligence" | "kronos"
   >("dashboard");
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
 
   // Task 3A (FINAL_ANALYSIS.md's 4-phase remediation plan) - "Observability & Trade Tracing" used
   // to render an entirely fabricated timeline (a hardcoded trace id, made-up latencies, an
@@ -2896,90 +2900,120 @@ export default function App() {
   }, [activeTab, isAuthenticated]);
 
 
-  // Fetch initial system metrics on load
-  const fetchState = async () => {
-    const fetchItem = async (url: string, setter: (data: any) => void, transform?: (data: any) => any) => {
-      try {
-        if (url === "/api/v1/portfolio" && Date.now() < portfolioBackoffUntil.current) return;
-        const res = await fetch(url);
-        if (!res.ok) {
+  // Fetch dashboard snapshots. Browsers allow ~6 HTTP/1.1 connections per host; a 6s
+  // setInterval that fires 12+ fetches without waiting for the previous Promise.all
+  // stacks (pending) requests until the SPA freezes. Join in-flight cycles, abort on
+  // teardown, and keep rarely-changing config off the hot path.
+  const DASHBOARD_POLL_MS = 15_000;
+  const DASHBOARD_COLD_MS = 60_000;
+
+  const isAbortError = (e: unknown) =>
+    (e instanceof DOMException && e.name === "AbortError")
+    || (e instanceof Error && e.name === "AbortError");
+
+  const fetchState = async (opts?: { signal?: AbortSignal; includeCold?: boolean }) => {
+    if (fetchStateInFlight.current) return fetchStateInFlight.current;
+    const run = (async () => {
+      const fetchItem = async (url: string, setter: (data: any) => void, transform?: (data: any) => any) => {
+        try {
+          if (opts?.signal?.aborted) return;
+          if (url === "/api/v1/portfolio" && Date.now() < portfolioBackoffUntil.current) return;
+          const res = await fetch(url, { signal: opts?.signal });
+          if (!res.ok) {
+            if (url === "/api/v1/portfolio") {
+              let reason = `HTTP ${res.status}`;
+              try {
+                const errBody = await res.json();
+                reason = errBody.reason || errBody.error || reason;
+              } catch { /* Vite 502 HTML while Node is restarting */ }
+              setPortfolioData(null);
+              setPortfolioFetchError(reason);
+              portfolioFailStreak.current += 1;
+              portfolioBackoffUntil.current = Date.now() + Math.min(60_000, 6_000 * 2 ** (portfolioFailStreak.current - 1));
+            }
+            return;
+          }
+          const contentType = res.headers.get("content-type");
+          if (contentType && contentType.includes("application/json")) {
+            const data = await res.json();
+            if (url === "/api/v1/portfolio") {
+              if (data?.available === false) {
+                setPortfolioData(null);
+                setPortfolioFetchError(data.reason || data.error || "Broker portfolio unavailable");
+                return;
+              }
+              portfolioFailStreak.current = 0;
+              portfolioBackoffUntil.current = 0;
+              setPortfolioFetchError(null);
+            }
+            setter(transform ? transform(data) : data);
+          }
+        } catch (e) {
+          if (isAbortError(e)) return;
           if (url === "/api/v1/portfolio") {
-            let reason = `HTTP ${res.status}`;
-            try {
-              const errBody = await res.json();
-              reason = errBody.reason || errBody.error || reason;
-            } catch { /* Vite 502 HTML while Node is restarting */ }
             setPortfolioData(null);
-            setPortfolioFetchError(reason);
+            setPortfolioFetchError(e instanceof Error ? e.message : "Network error");
             portfolioFailStreak.current += 1;
             portfolioBackoffUntil.current = Date.now() + Math.min(60_000, 6_000 * 2 ** (portfolioFailStreak.current - 1));
           }
-          return;
+          console.warn(`Failed to fetch ${url}:`, e);
         }
-        const contentType = res.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const data = await res.json();
-          if (url === "/api/v1/portfolio") {
-            if (data?.available === false) {
-              setPortfolioData(null);
-              setPortfolioFetchError(data.reason || data.error || "Broker portfolio unavailable");
-              return;
-            }
-            portfolioFailStreak.current = 0;
-            portfolioBackoffUntil.current = 0;
-            setPortfolioFetchError(null);
-          }
-          setter(transform ? transform(data) : data);
-        }
-      } catch (e) {
-        if (url === "/api/v1/portfolio") {
-          setPortfolioData(null);
-          setPortfolioFetchError(e instanceof Error ? e.message : "Network error");
-          portfolioFailStreak.current += 1;
-          portfolioBackoffUntil.current = Date.now() + Math.min(60_000, 6_000 * 2 ** (portfolioFailStreak.current - 1));
-        }
-        console.warn(`Failed to fetch ${url}:`, e);
-      }
-    };
+      };
 
-    await Promise.all([
-      fetchItem("/api/v1/portfolio", setPortfolioData),
-      fetchItem("/api/v1/scheduler", (data) => setScheduledTasks(data.tasks || [])),
-      fetchItem("/api/v1/trades", setTrades),
-      fetchItem("/api/v1/risk", setVetos),
-      fetchItem("/api/v1/settings", (settings) => {
-        setSystemSettings(settings);
-      }),
-      fetchItem("/api/v1/alpaca/config", (algData) => {
-        setAlpacaConfigured(algData.hasAlpacaKeys);
-      }),
-      fetchItem("/api/v2/research/organic-paper", (data) => {
-        if (typeof data?.marketSession === 'string') setMarketSessionLabel(data.marketSession);
-      }),
-      fetchItem("/api/v1/pnl/analytics", (pnlData) => {
-        if (pnlData.history && pnlData.history.length > 0) {
-          setDailyPnLData(pnlData.history);
-        }
-      }),
-      fetchItem("/api/v1/agents", (agData) => {
-        setAgentWeights(agData.weights || {});
-      }),
-      fetchItem("/api/v1/performance", setAgentMetrics),
-      fetchItem("/api/v2/orchestration/models", (data) => setOrchestrationModels(data.models || [])),
-      fetchItem("/api/v2/orchestration/capital", setOrchestrationCapital),
-    ]);
+      const includeCold = opts?.includeCold === true
+        || Date.now() - lastColdDashboardFetchAt.current >= DASHBOARD_COLD_MS;
+
+      const hot = [
+        fetchItem("/api/v1/portfolio", setPortfolioData),
+        fetchItem("/api/v1/trades", setTrades),
+        fetchItem("/api/v1/risk", setVetos),
+        fetchItem("/api/v2/research/organic-paper", (data) => {
+          if (typeof data?.marketSession === "string") setMarketSessionLabel(data.marketSession);
+        }),
+        fetchItem("/api/v1/pnl/analytics", (pnlData) => {
+          if (pnlData.history && pnlData.history.length > 0) {
+            setDailyPnLData(pnlData.history);
+          }
+        }),
+        fetchItem("/api/v1/performance", setAgentMetrics),
+      ];
+
+      const cold = includeCold ? [
+        fetchItem("/api/v1/scheduler", (data) => setScheduledTasks(data.tasks || [])),
+        fetchItem("/api/v1/settings", (settings) => {
+          setSystemSettings(settings);
+        }),
+        fetchItem("/api/v1/alpaca/config", (algData) => {
+          setAlpacaConfigured(algData.hasAlpacaKeys);
+        }),
+        fetchItem("/api/v1/agents", (agData) => {
+          setAgentWeights(agData.weights || {});
+        }),
+        fetchItem("/api/v2/orchestration/models", (data) => setOrchestrationModels(data.models || [])),
+        fetchItem("/api/v2/orchestration/capital", setOrchestrationCapital),
+      ] : [];
+
+      await Promise.all([...hot, ...cold]);
+      if (includeCold) lastColdDashboardFetchAt.current = Date.now();
+    })();
+    fetchStateInFlight.current = run.finally(() => {
+      fetchStateInFlight.current = null;
+    });
+    return fetchStateInFlight.current;
   };
 
-  const fetchServerAuditTrail = async () => {
+  const fetchServerAuditTrail = async (signal?: AbortSignal) => {
     try {
-      const res = await fetch("/api/v1/audit/trail");
+      const res = await fetch("/api/v1/audit/trail", { signal });
       if (res.ok) {
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
           setServerAuditTrail(await res.json());
         }
       }
-    } catch(e) {}
+    } catch (e) {
+      if (isAbortError(e)) return;
+    }
   };
 
   const handleRequestHumanReview = async (vetoId: string) => {
@@ -3014,7 +3048,7 @@ export default function App() {
       if (res.ok) {
         const data = await res.json();
         setRebalanceResult(data);
-        await fetchState();
+        await fetchState({ includeCold: true });
       } else {
         console.error("Failed to rebalance portfolio");
       }
@@ -3025,9 +3059,9 @@ export default function App() {
     }
   };
 
-  const fetchChaosConfig = async () => {
+  const fetchChaosConfig = async (signal?: AbortSignal) => {
     try {
-      const res = await fetch("/api/v1/chaos/config");
+      const res = await fetch("/api/v1/chaos/config", { signal });
       if (res.ok) {
         const contentType = res.headers.get("content-type");
         if (contentType && contentType.includes("application/json")) {
@@ -3040,6 +3074,7 @@ export default function App() {
         }
       }
     } catch (e) {
+      if (isAbortError(e)) return;
       console.error("Failed to load chaos config", e);
     }
   };
@@ -3074,24 +3109,41 @@ export default function App() {
   };
 
   useEffect(() => {
+    if (activeTab !== "settings" || !isAuthenticated) return;
+    void fetchChaosConfig();
+  }, [activeTab, isAuthenticated]);
+
+  useEffect(() => {
     // Real bug fix: this effect used to run unconditionally on mount ([] deps), regardless of
     // `isAuthenticated` - a hook registration always executes during render no matter what JSX a
     // later `if (!isAuthenticated) return <Login/>` in this same component conditionally returns.
-    // Every one of fetchState()'s 9 endpoints plus audit-trail/chaos-config polled every 6s meant
+    // Every one of fetchState()'s endpoints plus audit-trail/chaos-config polled every 6s meant
     // ~11 failing 401s per cycle sitting on the login screen alone, flooding the network and
     // starving the real login POST of connections on constrained setups. Gating on
     // `isAuthenticated` means this effect is a no-op until verifyAuth() or a real login resolves
     // it true, and the interval is torn down (not just left dangling) if that ever flips back.
+    //
+    // Second bug: setInterval(6000) did not wait for Promise.all. If SQLite/broker/analytics
+    // took >6s, cycles stacked until Chrome's ~6-connection/host cap left hundreds of (pending)
+    // requests and the dashboard froze on "Loading real-time performance analytics...".
     if (!isAuthenticated) return;
-    fetchState();
-    fetchServerAuditTrail();
-    fetchChaosConfig();
-    const interval = setInterval(() => {
-      fetchState();
-      fetchServerAuditTrail();
-      fetchChaosConfig();
-    }, 6000);
-    return () => clearInterval(interval);
+    const abort = new AbortController();
+    let stopped = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const loop = async () => {
+      await fetchState({ signal: abort.signal });
+      if (stopped || abort.signal.aborted) return;
+      if (activeTabRef.current === "audit") await fetchServerAuditTrail(abort.signal);
+      if (activeTabRef.current === "settings") await fetchChaosConfig(abort.signal);
+      if (stopped || abort.signal.aborted) return;
+      timeout = setTimeout(() => { void loop(); }, DASHBOARD_POLL_MS);
+    };
+    void loop();
+    return () => {
+      stopped = true;
+      abort.abort();
+      if (timeout) clearTimeout(timeout);
+    };
   }, [isAuthenticated]);
 
   useEffect(() => {
@@ -3693,13 +3745,14 @@ export default function App() {
 
       {/* Main Workspace Frame container */}
       <main className={`flex-1 p-4 md:p-6 argus-fluid-container ${compactNav ? 'pb-28' : ''}`} id="workspace-main">
-        <MobilePullRefresh onRefresh={async () => { await fetchState(); }}>
+        <MobilePullRefresh onRefresh={async () => { await fetchState({ includeCold: true }); }}>
         <div className="min-h-full">
         {activeTab === "dashboard" && (
           <AutonomousDashboard 
              autoBotConfig={autoBotConfig} 
              portfolioData={portfolioData}
              trades={trades}
+             pnlHistory={dailyPnLData}
              assetPrices={assetPrices}
              systemState={systemState}
              setSystemState={setSystemState}

@@ -14,7 +14,7 @@
  * ==========================================================
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Treemap, Tooltip } from 'recharts';
 import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 import { ShieldAlert } from 'lucide-react';
@@ -101,10 +101,16 @@ export default function RiskAttributionTreemap() {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [reason, setReason] = useState<string | null>(null);
 
+  // Real perf fix (2026-08-18): 30s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      fetch('/api/v2/portfolio/risk-attribution')
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      fetch('/api/v2/portfolio/risk-attribution', { signal: controller.signal })
         .then(r => r.json())
         .then(json => {
           if (cancelled) return;
@@ -131,11 +137,11 @@ export default function RiskAttributionTreemap() {
             setReason(json.error || 'Request failed.');
           }
         })
-        .catch(e => { if (!cancelled) { setAvailable(false); setReason(e.message); } });
+        .catch(e => { if (!cancelled && e?.name !== 'AbortError') { setAvailable(false); setReason(e.message); } });
     };
     load();
     const interval = setInterval(load, 30_000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => { cancelled = true; clearInterval(interval); abortRef.current?.abort(); };
   }, []);
 
   return (

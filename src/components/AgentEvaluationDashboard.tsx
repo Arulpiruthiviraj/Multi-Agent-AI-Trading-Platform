@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Target, TrendingUp, TrendingDown, Activity, Award, Scale, RefreshCw } from 'lucide-react';
 import {
   BarChart,
@@ -61,16 +61,27 @@ interface AgentPerformance {
 export default function AgentEvaluationDashboard() {
   const [stats, setStats] = useState<AgentPerformance[]>([]);
   const [loading, setLoading] = useState(true);
+  // Real perf fix (2026-08-18): this 10s poll had no cancellation, so a slow
+  // /api/v2/agents/performance response left the previous request pending while a new one fired
+  // on the next tick - one contributor to the pending-request pileup across ~19 independently
+  // polling components. Aborting the prior request before starting the next one is a no-op when
+  // responses are fast and prevents unbounded pileup when they're not; the eventual data shown
+  // never changes.
+  const abortRef = useRef<AbortController | null>(null);
 
   const fetchStats = async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     try {
-      const res = await fetch("/api/v2/agents/performance");
+      const res = await fetch("/api/v2/agents/performance", { signal: controller.signal });
       const data = await res.json();
       if (data.ok) {
         setStats(data.stats);
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
       console.error("Failed to fetch agent performance:", e);
     } finally {
       setLoading(false);
@@ -80,7 +91,10 @@ export default function AgentEvaluationDashboard() {
   useEffect(() => {
     fetchStats();
     const interval = setInterval(fetchStats, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      abortRef.current?.abort();
+    };
   }, []);
 
   return (

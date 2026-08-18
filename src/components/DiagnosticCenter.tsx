@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Activity, RefreshCw, HelpCircle } from 'lucide-react';
 import ExplainCard from './ExplainCard';
 import TradingPauseOperatorControls from './TradingPauseOperatorControls';
@@ -8,18 +8,26 @@ export default function DiagnosticCenter() {
   const [error, setError] = useState<string | null>(null);
   const [whyId, setWhyId] = useState('');
   const [why, setWhy] = useState<any>(null);
+  // Real perf fix (2026-08-18): 15s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
 
   const load = () => {
-    fetch('/api/v2/diagnostics')
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    fetch('/api/v2/diagnostics', { signal: controller.signal })
       .then(r => r.json())
       .then(j => { if (j.ok) { setSnap(j); setError(null); } else setError(j.error || 'diagnostics request failed'); })
-      .catch(e => setError(e.message));
+      .catch(e => { if (e?.name !== 'AbortError') setError(e.message); });
   };
 
   useEffect(() => {
     load();
     const id = setInterval(load, 15000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      abortRef.current?.abort();
+    };
   }, []);
 
   const retry = (component: string) => {

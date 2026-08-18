@@ -1,5 +1,5 @@
 /* === COMPONENT: LiveReadinessBanner === */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 
 interface LiveReadinessPayload {
   ok?: boolean;
@@ -13,10 +13,15 @@ interface LiveReadinessPayload {
 
 export default function LiveReadinessBanner() {
   const [data, setData] = useState<LiveReadinessPayload | null>(null);
+  // Real perf fix (2026-08-18): 30s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const load = () => {
-      fetch('/api/v2/live-readiness', { credentials: 'same-origin' })
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      fetch('/api/v2/live-readiness', { credentials: 'same-origin', signal: controller.signal })
         .then(async (r) => {
           if (!r.ok) {
             setData({
@@ -32,18 +37,24 @@ export default function LiveReadinessBanner() {
           const j = await r.json();
           setData(j);
         })
-        .catch((e) => setData({
-          ok: false,
-          result: 'LIVE_NO_GO',
-          organicPaper: 'NOT_ESTABLISHED',
-          canadianLive: 'NOT_AVAILABLE',
-          failedMandatory: ['FETCH_FAILED'],
-          error: e?.message || 'fetch failed',
-        }));
+        .catch((e) => {
+          if (e?.name === 'AbortError') return;
+          setData({
+            ok: false,
+            result: 'LIVE_NO_GO',
+            organicPaper: 'NOT_ESTABLISHED',
+            canadianLive: 'NOT_AVAILABLE',
+            failedMandatory: ['FETCH_FAILED'],
+            error: e?.message || 'fetch failed',
+          });
+        });
     };
     load();
     const id = setInterval(load, 30000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      abortRef.current?.abort();
+    };
   }, []);
 
   const result = data?.result || 'LIVE_NO_GO';

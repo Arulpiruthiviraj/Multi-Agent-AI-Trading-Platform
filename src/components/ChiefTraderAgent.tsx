@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Sliders,
   ShieldCheck,
@@ -99,11 +99,19 @@ export default function ChiefTraderAgent() {
     orchestratorWorkflows: any[];
   } | null>(null);
 
+  // Real perf fix (2026-08-18): 4s poll with no cancellation - a contributor to the
+  // pending-request pileup across ~19 independently polling components when /api/v1/autobot
+  // (or anything else) responds slowly.
+  const atosAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     let isMounted = true;
     const fetchAtosState = async () => {
+      atosAbortRef.current?.abort();
+      const controller = new AbortController();
+      atosAbortRef.current = controller;
       try {
-        const res = await fetch("/api/v1/autobot");
+        const res = await fetch("/api/v1/autobot", { signal: controller.signal });
         if (res.ok) {
           const data = await res.json();
           if (isMounted) {
@@ -117,16 +125,18 @@ export default function ChiefTraderAgent() {
             });
           }
         }
-      } catch (e) {
+      } catch (e: any) {
+        if (e?.name === 'AbortError') return;
         console.error("Failed to fetch ATOS live state:", e);
       }
     };
-    
+
     fetchAtosState();
     const interval = setInterval(fetchAtosState, 4000);
     return () => {
       isMounted = false;
       clearInterval(interval);
+      atosAbortRef.current?.abort();
     };
   }, []);
 

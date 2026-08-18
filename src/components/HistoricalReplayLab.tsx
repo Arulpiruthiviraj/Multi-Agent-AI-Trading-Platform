@@ -15,6 +15,10 @@ export default function HistoricalReplayLab() {
   const [events, setEvents] = useState<any[]>([]);
   const [equity, setEquity] = useState<any[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Real perf fix (2026-08-18): the 750ms replay-status poll fired 4 concurrent fetches with no
+  // cancellation between ticks - self-limiting (stops at a terminal run status) but still able to
+  // pile up pending requests if any single tick runs long.
+  const pollAbortRef = useRef<AbortController | null>(null);
   const [form, setForm] = useState({
     startDate: '2024-01-02',
     endDate: '2024-06-28',
@@ -51,15 +55,20 @@ export default function HistoricalReplayLab() {
       .catch((e) => setError(e.message));
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
+      pollAbortRef.current?.abort();
     };
   }, []);
 
   const refreshRun = useCallback(async (replayId: string) => {
+    pollAbortRef.current?.abort();
+    const controller = new AbortController();
+    pollAbortRef.current = controller;
+    const { signal } = controller;
     const [status, tradesRes, eventsRes, equityRes] = await Promise.all([
-      fetch(`/api/v2/research/replay/${replayId}`).then((r) => r.json()),
-      fetch(`/api/v2/research/replay/${replayId}/trades`).then((r) => r.json()).catch(() => ({ trades: [] })),
-      fetch(`/api/v2/research/replay/${replayId}/events`).then((r) => r.json()).catch(() => ({ events: [] })),
-      fetch(`/api/v2/research/replay/${replayId}/equity`).then((r) => r.json()).catch(() => ({ equity: [] })),
+      fetch(`/api/v2/research/replay/${replayId}`, { signal }).then((r) => r.json()),
+      fetch(`/api/v2/research/replay/${replayId}/trades`, { signal }).then((r) => r.json()).catch(() => ({ trades: [] })),
+      fetch(`/api/v2/research/replay/${replayId}/events`, { signal }).then((r) => r.json()).catch(() => ({ events: [] })),
+      fetch(`/api/v2/research/replay/${replayId}/equity`, { signal }).then((r) => r.json()).catch(() => ({ equity: [] })),
     ]);
     setRun(status);
     setTrades(tradesRes.trades || status.trades || []);

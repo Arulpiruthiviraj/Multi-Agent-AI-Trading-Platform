@@ -56,11 +56,15 @@ export default function MissionControlBar() {
 
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
     const load = () => {
+      if (inFlight) return;
+      inFlight = true;
       fetch('/api/v2/system/mission-control')
         .then(r => r.json())
         .then(json => { if (!cancelled && json.ok) setData(json); })
-        .catch(() => {});
+        .catch(() => {})
+        .finally(() => { inFlight = false; });
     };
     load();
     const interval = setInterval(load, 5000);

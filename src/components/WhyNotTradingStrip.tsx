@@ -1,20 +1,28 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import ExplainCard from './ExplainCard';
 import TradingPauseOperatorControls from './TradingPauseOperatorControls';
 
 /** Compact command-center strip: live why-not-trading from GET /api/v2/diagnostics/why-not-trading */
 export default function WhyNotTradingStrip() {
   const [data, setData] = useState<any>(null);
+  // Real perf fix (2026-08-18): 15s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
   useEffect(() => {
     const load = () => {
-      fetch('/api/v2/diagnostics/why-not-trading')
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      fetch('/api/v2/diagnostics/why-not-trading', { signal: controller.signal })
         .then(r => r.json())
         .then(j => { if (j.ok) setData(j); })
         .catch(() => {});
     };
     load();
     const id = setInterval(load, 15000);
-    return () => clearInterval(id);
+    return () => {
+      clearInterval(id);
+      abortRef.current?.abort();
+    };
   }, []);
   if (!data) return null;
   return (

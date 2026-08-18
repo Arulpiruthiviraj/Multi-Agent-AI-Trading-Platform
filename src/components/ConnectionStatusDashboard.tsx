@@ -1,16 +1,23 @@
 /**
  * Connection status from GET /api/v2/diagnostics — no fabricated latency or uptime.
  */
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Activity, RefreshCw } from 'lucide-react';
 import ExplainCard from './ExplainCard';
 
 export default function ConnectionStatusDashboard() {
   const [diagnostics, setDiagnostics] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Real perf fix (2026-08-18): 15s poll of a route that live-checks several external services
+  // (broker/Ollama/Chronos/OpenAlice/news) had no cancellation - exactly the kind of endpoint slow
+  // enough to leave pending requests piling up across ticks.
+  const abortRef = useRef<AbortController | null>(null);
 
   const fetchStatus = () => {
-    fetch('/api/v2/diagnostics')
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    fetch('/api/v2/diagnostics', { signal: controller.signal })
       .then(r => r.json())
       .then(d => {
         if (!d.ok) { setError(d.error || 'Diagnostics API returned ok:false'); return; }
@@ -18,13 +25,16 @@ export default function ConnectionStatusDashboard() {
         const wanted = new Set(['BROKER', 'MARKET_DATA', 'DATABASE', 'OLLAMA', 'CHRONOS', 'OPENALICE', 'NEWS']);
         setDiagnostics((d.diagnostics || []).filter((x: any) => wanted.has(x.component)));
       })
-      .catch(e => setError(e.message));
+      .catch(e => { if (e?.name !== 'AbortError') setError(e.message); });
   };
 
   useEffect(() => {
     fetchStatus();
     const interval = setInterval(fetchStatus, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      abortRef.current?.abort();
+    };
   }, []);
 
   return (

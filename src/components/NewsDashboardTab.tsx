@@ -1,5 +1,5 @@
 import tradingSafety from "../../config/tradingSafety.json";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Newspaper, Globe, AlertTriangle, TrendingUp, TrendingDown, Activity, Clock, ShieldCheck, Database, Server, Crosshair } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, BarChart, Bar, Cell } from "recharts";
 
@@ -21,28 +21,40 @@ export function NewsDashboardTab() {
     [clusters, vetoThreshold],
   );
 
+  // Real perf fix (2026-08-18): 15s poll firing 3 concurrent fetches with no cancellation between
+  // ticks - one of the larger contributors to the pending-request pileup, since a single slow
+  // tick here alone burns 3 of Chrome's ~6 connections-per-host.
+  const newsAbortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     const fetchNewsData = async () => {
+      newsAbortRef.current?.abort();
+      const controller = new AbortController();
+      newsAbortRef.current = controller;
       try {
         const [clustersRes, articlesRes, providersRes] = await Promise.all([
-          fetch("/api/v1/news/timeline"),
-          fetch("/api/v1/news/articles"),
-          fetch("/api/v1/news/providers")
+          fetch("/api/v1/news/timeline", { signal: controller.signal }),
+          fetch("/api/v1/news/articles", { signal: controller.signal }),
+          fetch("/api/v1/news/providers", { signal: controller.signal })
         ]);
-        
+
         if (clustersRes.ok) setClusters(await clustersRes.json());
         if (articlesRes.ok) setArticles(await articlesRes.json());
         if (providersRes.ok) setProviders(await providersRes.json());
-      } catch (err) {
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
         console.error("Failed to fetch news intelligence data", err);
       } finally {
         setIsLoading(false);
       }
     };
-    
+
     fetchNewsData();
     const interval = setInterval(fetchNewsData, 15000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      newsAbortRef.current?.abort();
+    };
   }, []);
 
   return (

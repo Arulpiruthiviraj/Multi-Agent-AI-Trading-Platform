@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Globe, RefreshCw, AlertCircle, Newspaper } from "lucide-react";
 
 interface NewsClusterItem {
@@ -13,12 +13,17 @@ export default function LiveMarketNewsTicker() {
   const [news, setNews] = useState<NewsClusterItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isError, setIsError] = useState(false);
+  // Real perf fix (2026-08-18): 15s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
 
   const fetchLiveNews = async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsLoading(true);
     setIsError(false);
     try {
-      const response = await fetch("/api/v1/news/timeline");
+      const response = await fetch("/api/v1/news/timeline", { signal: controller.signal });
       if (!response.ok) throw new Error("Failed to fetch news");
       const data = await response.json();
       if (Array.isArray(data)) {
@@ -26,7 +31,8 @@ export default function LiveMarketNewsTicker() {
       } else {
         setNews([]);
       }
-    } catch (e) {
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
       console.error(e);
       setIsError(true);
     } finally {
@@ -37,7 +43,10 @@ export default function LiveMarketNewsTicker() {
   useEffect(() => {
     fetchLiveNews();
     const interval = setInterval(fetchLiveNews, 15000); // 15s to poll news
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      abortRef.current?.abort();
+    };
   }, []);
 
   const doubledNews = [...news, ...news];

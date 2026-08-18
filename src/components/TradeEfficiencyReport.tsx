@@ -17,7 +17,7 @@
  * ==========================================================
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, CartesianGrid } from 'recharts';
 import { SafeResponsiveContainer } from './shared/SafeResponsiveContainer';
 import { Zap, AlertTriangle } from 'lucide-react';
@@ -57,10 +57,16 @@ export default function TradeEfficiencyReport() {
   const [available, setAvailable] = useState<boolean | null>(null);
   const [reason, setReason] = useState<string | null>(null);
 
+  // Real perf fix (2026-08-18): 60s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      fetch('/api/v2/agents/efficiency')
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      fetch('/api/v2/agents/efficiency', { signal: controller.signal })
         .then(r => r.json())
         .then(json => {
           if (cancelled) return;
@@ -74,14 +80,14 @@ export default function TradeEfficiencyReport() {
           }
         })
         .catch(e => {
-          if (cancelled) return;
+          if (cancelled || e?.name === 'AbortError') return;
           setAvailable(false);
           setReason(e.message);
         });
     };
     load();
     const interval = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => { cancelled = true; clearInterval(interval); abortRef.current?.abort(); };
   }, []);
 
   // recharts needs a numeric field even for "N/A" bars - render nulls as 0-height bars rather

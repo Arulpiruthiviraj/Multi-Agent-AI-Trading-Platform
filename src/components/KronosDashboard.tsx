@@ -1,4 +1,4 @@
-import React, { useState, useEffect, type ReactNode } from "react";
+import React, { useState, useEffect, useRef, type ReactNode } from "react";
 import { BrainCircuit, Activity, Database, Clock, AlertTriangle, Settings2, BarChart2, ActivitySquare, CheckCircle2 } from "lucide-react";
 import { ContextualTooltip } from "./ContextualTooltip";
 
@@ -53,10 +53,18 @@ export const KronosDashboard = () => {
   const [kronosStatus, setKronosStatus] = useState<KronosStatusPayload | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
+  // Real perf fix (2026-08-18): 10s poll with no cancellation. Kronos's own status endpoint can
+  // hang when the local Chronos service is unavailable - exactly the case where a slow response
+  // needs its stale request cancelled, not left to pile up alongside the next tick's.
+  const abortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      fetch("/api/v1/kronos/status")
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      fetch("/api/v1/kronos/status", { signal: controller.signal })
         .then(async (res) => {
           const data = await res.json();
           if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
@@ -68,7 +76,7 @@ export const KronosDashboard = () => {
           setKronosStatus(data);
         })
         .catch((err: Error) => {
-          if (cancelled) return;
+          if (cancelled || err?.name === 'AbortError') return;
           setLoadError(err.message || "status fetch failed");
           setKronosStatus({ status: "UNAVAILABLE", isAvailable: false });
         });
@@ -78,6 +86,7 @@ export const KronosDashboard = () => {
     return () => {
       cancelled = true;
       clearInterval(id);
+      abortRef.current?.abort();
     };
   }, []);
 

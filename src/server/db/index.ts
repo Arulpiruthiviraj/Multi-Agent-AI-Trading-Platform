@@ -52,6 +52,12 @@ const dbPath = process.env.ARGUS_DB_PATH || path.join(dbDir, 'argus.db');
 const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
 sqlite.pragma('busy_timeout = 5000');
+// Standard WAL-mode pairing (SQLite's own recommendation): NORMAL only fsyncs at WAL checkpoints
+// instead of every transaction. Durability is still covered by the WAL file itself - a full OS
+// crash could lose the most recent commit, not corrupt the DB. busy_timeout above already covers
+// SQLITE_BUSY under concurrent readers/writers; this is a throughput improvement, not a new safety
+// mechanism.
+sqlite.pragma('synchronous = NORMAL');
 
 export const db = drizzle(sqlite, { schema });
 export const sqliteDb = sqlite;

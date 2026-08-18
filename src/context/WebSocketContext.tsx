@@ -83,11 +83,27 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   const appliedBackfillEventIds = useRef<Set<string>>(new Set());
   const disposedRef = useRef(false);
   const enabledRef = useRef(false);
+  // Real perf fix (2026-08-18): `lastMessage` has no consumers anywhere in src/ (every real
+  // subscriber uses subscribe() below, which calls back directly - not through React state), but
+  // setLastMessage() fired on every single message including high-frequency MARKET_DATA/
+  // MODEL_HEALTH ticks. Each call gave the memoized context `value` a new identity (lastMessage is
+  // in its deps), re-rendering every component that merely calls useWebSocket() for
+  // sendMessage/subscribe, even though none of them read lastMessage. Throttled to 250ms here -
+  // only the exposed `lastMessage` state is delayed; subscriber callbacks below still fire
+  // synchronously on every message, so real-time correctness (fills, resumes, risk events) is
+  // unaffected.
+  const lastMessageThrottle = useRef<{ pending: any; timer: ReturnType<typeof setTimeout> | null }>({ pending: null, timer: null });
 
   // Shared by both a live WS message and a backfilled event, so a replayed event reaches
   // subscribers identically to how it would have if the client had never disconnected.
   const dispatchPayload = (payload: { type: string; data: any }) => {
-    setLastMessage(payload);
+    lastMessageThrottle.current.pending = payload;
+    if (!lastMessageThrottle.current.timer) {
+      lastMessageThrottle.current.timer = setTimeout(() => {
+        setLastMessage(lastMessageThrottle.current.pending);
+        lastMessageThrottle.current.timer = null;
+      }, 250);
+    }
     if (payload.type && subscribers.current.has(payload.type)) {
       subscribers.current.get(payload.type)!.forEach(cb => cb(payload.data));
     }
@@ -283,6 +299,10 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
     return () => {
       disposedRef.current = true;
       disconnectQuietly();
+      if (lastMessageThrottle.current.timer) {
+        clearTimeout(lastMessageThrottle.current.timer);
+        lastMessageThrottle.current.timer = null;
+      }
     };
   }, []);
 

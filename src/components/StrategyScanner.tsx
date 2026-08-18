@@ -13,7 +13,7 @@
  * ==========================================================
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Activity, TrendingUp, TrendingDown, Minus, Filter } from "lucide-react";
 import AwaitingSignal from "./shared/AwaitingSignal";
 
@@ -37,10 +37,16 @@ export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertS
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"ALL" | "BUY" | "SELL">("ALL");
 
+  // Real perf fix (2026-08-18): 60s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      fetch("/api/v2/strategy/rsi-scan")
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      fetch("/api/v2/strategy/rsi-scan", { signal: controller.signal })
         .then(r => r.json())
         .then(json => {
           if (!cancelled && json.ok) {
@@ -48,11 +54,11 @@ export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertS
             setLoading(false);
           }
         })
-        .catch(() => { if (!cancelled) setLoading(false); });
+        .catch((e) => { if (!cancelled && e?.name !== 'AbortError') setLoading(false); });
     };
     load();
     const interval = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => { cancelled = true; clearInterval(interval); abortRef.current?.abort(); };
   }, []);
 
   const signalOf = (row: RsiScanRow): "BUY" | "SELL" | "NEUTRAL" | "NONE" => {

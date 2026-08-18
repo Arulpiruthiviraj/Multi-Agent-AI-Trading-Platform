@@ -15,7 +15,7 @@
  * ==========================================================
  */
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Network } from 'lucide-react';
 import AwaitingSignal from './shared/AwaitingSignal';
 
@@ -50,10 +50,16 @@ const StrategySynergyMatrix = () => {
   const [data, setData] = useState<SynergyResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Real perf fix (2026-08-18): 60s poll with no cancellation.
+  const abortRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     const load = () => {
-      fetch('/api/v2/strategy/agent-synergy')
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      fetch('/api/v2/strategy/agent-synergy', { signal: controller.signal })
         .then(r => r.json())
         .then(json => {
           if (!cancelled && json.ok) {
@@ -61,11 +67,11 @@ const StrategySynergyMatrix = () => {
             setLoading(false);
           }
         })
-        .catch(() => { if (!cancelled) setLoading(false); });
+        .catch((e) => { if (!cancelled && e?.name !== 'AbortError') setLoading(false); });
     };
     load();
     const interval = setInterval(load, 60_000);
-    return () => { cancelled = true; clearInterval(interval); };
+    return () => { cancelled = true; clearInterval(interval); abortRef.current?.abort(); };
   }, []);
 
   const agents = data?.agents ?? [];

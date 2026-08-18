@@ -25,4 +25,11 @@ describe('SPA order-path invariants', () => {
     expect(app).not.toMatch(/trading_state\s*:/);
     expect(app).toMatch(/TradingPauseOperatorControls/);
   });
+
+  it('dashboard poll joins in-flight fetchState instead of stacking 6s bursts', () => {
+    const app = readFileSync(join(ROOT, 'src/App.tsx'), 'utf8');
+    expect(app).toMatch(/fetchStateInFlight/);
+    expect(app).toMatch(/DASHBOARD_POLL_MS/);
+    expect(app).not.toMatch(/setInterval\(\(\) => \{\s*fetchState\(\);\s*fetchServerAuditTrail\(\);\s*fetchChaosConfig\(\);/);
+  });
 });
