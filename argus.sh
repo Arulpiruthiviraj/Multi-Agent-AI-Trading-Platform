@@ -75,8 +75,26 @@ port_in_use() {
 kill_pid_tree() {
   local pid="$1"
   if is_windows; then
-    taskkill.exe //PID "$pid" //T //F >/dev/null 2>&1 || \
-      cmd.exe //c "taskkill /PID $pid /T /F" >/dev/null 2>&1
+    # Real bugs found and fixed (2026-08-18), confirmed live with a direct taskkill.exe call:
+    # 1) The double-slash `//PID`/`//T`/`//F`/`//c` forms were a leftover MSYS path-conversion
+    #    escape from before this script set MSYS_NO_PATHCONV=1/MSYS2_ARG_CONV_EXCL="*" above. With
+    #    those already disabling path conversion, the double slash is no longer collapsed to a
+    #    single one - it reaches taskkill.exe literally as "//PID", which it rejects outright
+    #    ("ERROR: Invalid argument/option - '//PID'."), and reaches cmd.exe as "//c", which it
+    #    doesn't recognize as /c either - so cmd.exe silently opens an interactive shell instead of
+    #    running the command, which then exits doing nothing the moment its stdin (redirected from
+    #    /dev/null below) hits EOF. Both the primary AND the fallback kill path were silently
+    #    no-ops this whole time (errors swallowed by >/dev/null 2>&1) - ports stayed occupied on
+    #    every restart/stop regardless of what the script printed. Single-slash is correct now.
+    # 2) Neither invocation redirected stdin, which is still connected to the interactive terminal
+    #    here. taskkill.exe can prompt for confirmation in some environments/PID-ownership cases
+    #    even with /F; with stdout/stderr sent to /dev/null that prompt was invisible, so the
+    #    script could sit there waiting on input that was never coming - the "stuck for long"
+    #    symptom seen against a heavily-loaded (739MB RSS, ~30min accumulated CPU) node process.
+    #    `</dev/null` guarantees EOF instead of a hang; `timeout 8` is defense-in-depth in case
+    #    something else (AV scanning a large process, etc.) still blocks it either way.
+    timeout 8 taskkill.exe /PID "$pid" /T /F </dev/null >/dev/null 2>&1 || \
+      timeout 8 cmd.exe /c "taskkill /PID $pid /T /F" </dev/null >/dev/null 2>&1
   else
     kill -TERM "$pid" >/dev/null 2>&1
     sleep 1
