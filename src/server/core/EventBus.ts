@@ -4,6 +4,7 @@ import { tracingConfig } from '../config/tracing';
 import { eventName } from './eventNames';
 import { contextFromEventPayload, getObservabilityContext, runWithObservabilityContext } from '../observability/ObservabilityContext';
 import { gateTradeIdea } from './tradeIdeaContract';
+import { applyAssetIdeaGate } from '../multiAsset/ideaEligibility';
 
 const CORE_EVENTS_REQUIRING_TRACE_ID = new Set(
   tracingConfig.coreEventsRequiringTraceId.map(k => eventName(k)),
@@ -73,7 +74,28 @@ class EventBus extends EventEmitter {
             bypassedEmitTradeIdea: true,
           });
         }
-        args[0] = gated.idea;
+        const eligible = applyAssetIdeaGate(gated.idea as Record<string, unknown>);
+        if (eligible.ok === false) {
+          this.emit(EVENTS.ASSET_CANDIDATE_BLOCKED, {
+            reason: eligible.reason,
+            reasons: eligible.reasons,
+            symbol: eligible.symbol,
+            assetClass: eligible.assetClass,
+            agent: payload?.agent,
+            traceId: payload?.traceId,
+            honesty: 'BLOCKED candidate — not an order. 24 RiskEngine gates never ran because no idea was emitted.',
+          });
+          return this.emit(EVENTS.TRADE_IDEA_REJECTED, {
+            reason: eligible.reason,
+            reasons: eligible.reasons,
+            symbol: eligible.symbol,
+            assetClass: eligible.assetClass,
+            agent: payload?.agent,
+            traceId: payload?.traceId,
+            assetOverlay: true,
+          });
+        }
+        args[0] = eligible.idea;
       }
     }
     // Phase 16A follow-up: Node's default EventEmitter.emit() aborts remaining listeners when

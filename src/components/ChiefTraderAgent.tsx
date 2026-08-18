@@ -85,60 +85,39 @@ interface Proposal {
   riskVote: "APPROVE" | "REJECT" | "WARN";
 }
 
-export default function ChiefTraderAgent() {
+// Real perf fix (2026-08-18): this component used to run its own independent 4s poll of
+// /api/v1/autobot (previously hardened with an AbortController, but still a fully redundant
+// second network caller). App.tsx already fetches that exact same endpoint once on mount and
+// keeps it live thereafter via the AUTOBOT_STATE_UPDATED WebSocket broadcast (server.ts:1903-1919
+// spreads `...tradingEngine.state` every 2s) - the same source, same shape, same fields this
+// component reads (workers/discoveredOpportunities/newsIntelligence/eventBus/
+// orchestratorWorkflows all come from autobotRoutes.ts's GET / response, which is what populates
+// App.tsx's autoBotConfig). Taking it as a prop eliminates the duplicate request entirely instead
+// of just making it safer.
+interface ChiefTraderAgentProps {
+  autoBotConfig?: {
+    enabled?: boolean;
+    workers?: any[];
+    discoveredOpportunities?: any[];
+    newsIntelligence?: any[];
+    eventBus?: any[];
+    orchestratorWorkflows?: any[];
+  } | null;
+}
+
+export default function ChiefTraderAgent({ autoBotConfig }: ChiefTraderAgentProps) {
   const [activeTab, setActiveTab] = useState<"tasks" | "veto" | "atos">("atos");
   const [isBeginnerExplanation, setIsBeginnerExplanation] = useState<boolean>(true);
-  
-  // === ATOS LIVE OPERATING DECK STATE ===
-  const [atosData, setAtosData] = useState<{
-    enabled: boolean;
-    workers: any[];
-    discoveredOpportunities: any[];
-    newsIntelligence: any[];
-    eventBus: any[];
-    orchestratorWorkflows: any[];
-  } | null>(null);
 
-  // Real perf fix (2026-08-18): 4s poll with no cancellation - a contributor to the
-  // pending-request pileup across ~19 independently polling components when /api/v1/autobot
-  // (or anything else) responds slowly.
-  const atosAbortRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    let isMounted = true;
-    const fetchAtosState = async () => {
-      atosAbortRef.current?.abort();
-      const controller = new AbortController();
-      atosAbortRef.current = controller;
-      try {
-        const res = await fetch("/api/v1/autobot", { signal: controller.signal });
-        if (res.ok) {
-          const data = await res.json();
-          if (isMounted) {
-            setAtosData({
-              enabled: data.enabled,
-              workers: data.workers || [],
-              discoveredOpportunities: data.discoveredOpportunities || [],
-              newsIntelligence: data.newsIntelligence || [],
-              eventBus: data.eventBus || [],
-              orchestratorWorkflows: data.orchestratorWorkflows || []
-            });
-          }
-        }
-      } catch (e: any) {
-        if (e?.name === 'AbortError') return;
-        console.error("Failed to fetch ATOS live state:", e);
-      }
-    };
-
-    fetchAtosState();
-    const interval = setInterval(fetchAtosState, 4000);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-      atosAbortRef.current?.abort();
-    };
-  }, []);
+  // === ATOS LIVE OPERATING DECK STATE — sourced from the autoBotConfig prop, not an own poll ===
+  const atosData = autoBotConfig ? {
+    enabled: !!autoBotConfig.enabled,
+    workers: autoBotConfig.workers || [],
+    discoveredOpportunities: autoBotConfig.discoveredOpportunities || [],
+    newsIntelligence: autoBotConfig.newsIntelligence || [],
+    eventBus: autoBotConfig.eventBus || [],
+    orchestratorWorkflows: autoBotConfig.orchestratorWorkflows || [],
+  } : null;
 
   // === TASK MANAGEMENT STATE ===
   const [newTaskAgent, setNewTaskAgent] = useState<string>("Quant Agent");

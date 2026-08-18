@@ -94,6 +94,14 @@ describe('PortfolioMonitorWorker.reviewPortfolio - settings-driven exit threshol
     expect(reasonsBySymbol.DOWN4).toContain('-8%');
     expect(reasonsBySymbol.UP10).toContain('+25%');
   });
+
+  it('does not fabricate a SELL when live price is missing', async () => {
+    await seedHolding('NOPX', 10, 100);
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockReset().mockReturnValue(null);
+    const emitSpy = vi.spyOn(eventBus, 'emitTradeIdea').mockReset().mockImplementation(() => {});
+    await portfolioMonitor.reviewPortfolio();
+    expect(emitSpy).not.toHaveBeenCalled();
+  });
 });
 
 /**

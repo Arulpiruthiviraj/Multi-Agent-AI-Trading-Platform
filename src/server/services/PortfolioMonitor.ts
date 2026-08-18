@@ -47,6 +47,11 @@ import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway
 import { classifyRegime, MIN_BARS } from '../quant/RegimeEngine';
 import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { evaluateThesisInvalidation, parseStoredThesis } from '../quant/analysis/ThesisInvalidation';
+import {
+  canEmitPortfolioExitIdea,
+  ensureHoldingSubscribed,
+  recordPortfolioDecision,
+} from '../continuous/portfolioIntel';
 
 // E2A (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - these were previously hardcoded literals
 // (+5%/-3%) unrelated to settings.takeProfitPct/trailingStopPct, which already existed in the
@@ -104,8 +109,17 @@ export class PortfolioMonitorWorker {
       for (const holding of holdings) {
         if (holding.quantity <= 0) continue;
 
+        ensureHoldingSubscribed(holding.symbol);
         const currentLivePrice = marketDataWorker.getLatestPrice(holding.symbol);
-        if (!currentLivePrice) continue;
+        if (!currentLivePrice) {
+          recordPortfolioDecision({
+            symbol: holding.symbol,
+            state: 'NO_PRICE',
+            reason: 'No live IEX tick yet — SELL not fabricated.',
+            currentPrice: null,
+          });
+          continue;
+        }
 
         // Phase 16B (ARGUS_PHASE16_READINESS_REPORT.md) - a QuantEngine-originated position
         // carries its own strategy's real stop/target, captured on the trade row at the exact
@@ -147,53 +161,53 @@ export class PortfolioMonitorWorker {
         if (quantStop !== null || quantTarget !== null || storedThesis) {
           if (quantTarget !== null && currentLivePrice >= quantTarget) {
             console.log(`[PortfolioWorker] Quant strategy (${openingTrade!.quantStrategyId}) target reached on ${holding.symbol}: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}`);
-            eventBus.emitTradeIdea({
-              traceId: randomUUID(),
+            this.emitRiskExit({
               symbol: holding.symbol,
-              side: "SELL",
-              confidence: tradingSafety.quantExitIdeaConfidence,
               currentPrice: currentLivePrice,
+              pnlPct: PnL,
+              confidence: tradingSafety.quantExitIdeaConfidence,
               reasoning: `EXIT_CODE=TARGET_REACHED Quant strategy (${openingTrade!.quantStrategyId}) target reached: $${currentLivePrice.toFixed(2)} >= $${quantTarget.toFixed(2)}. Scaling out to manage risk.`,
-              agent: agentWeightConfig.riskExitAgent
             });
             continue;
           } else if (quantStop !== null && currentLivePrice <= quantStop) {
             console.log(`[PortfolioWorker] Quant strategy (${openingTrade!.quantStrategyId}) stop hit on ${holding.symbol}: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}`);
-            eventBus.emitTradeIdea({
-              traceId: randomUUID(),
+            this.emitRiskExit({
               symbol: holding.symbol,
-              side: "SELL",
-              confidence: tradingSafety.quantStopExitConfidence,
               currentPrice: currentLivePrice,
+              pnlPct: PnL,
+              confidence: tradingSafety.quantStopExitConfidence,
               reasoning: `EXIT_CODE=HARD_STOP Quant strategy (${openingTrade!.quantStrategyId}) stop hit: $${currentLivePrice.toFixed(2)} <= $${quantStop.toFixed(2)}. Preserving capital.`,
-              agent: agentWeightConfig.riskExitAgent
             });
             continue;
           } else if (storedThesis) {
             const invalidation = await this.evaluateLiveThesis(holding.symbol, storedThesis);
             if (invalidation) {
               console.log(`[PortfolioWorker] Original thesis invalidated on ${holding.symbol}: ${invalidation}`);
-              eventBus.emitTradeIdea({
-                traceId: randomUUID(),
+              this.emitRiskExit({
                 symbol: holding.symbol,
-                side: "SELL",
-                confidence: tradingSafety.thesisInvalidationExitConfidence,
                 currentPrice: currentLivePrice,
+                pnlPct: PnL,
+                confidence: tradingSafety.thesisInvalidationExitConfidence,
                 reasoning: `EXIT_CODE=THESIS_INVALIDATION Original thesis invalidated (${openingTrade!.quantStrategyId ?? storedThesis.strategy}): ${invalidation}`,
-                agent: agentWeightConfig.riskExitAgent
               });
               continue;
             }
           }
           if (PnL < -trailingStopPct) {
-            eventBus.emitTradeIdea({
-              traceId: randomUUID(),
+            this.emitRiskExit({
               symbol: holding.symbol,
-              side: "SELL",
-              confidence: tradingSafety.quantStopExitConfidence,
               currentPrice: currentLivePrice,
+              pnlPct: PnL,
+              confidence: tradingSafety.quantStopExitConfidence,
               reasoning: `EXIT_CODE=TRAILING_STOP Live trailing-stop backstop (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%) in addition to strategy stop/target.`,
-              agent: agentWeightConfig.riskExitAgent
+            });
+          } else {
+            recordPortfolioDecision({
+              symbol: holding.symbol,
+              state: riskLevel === 'NORMAL' ? 'HEALTHY' : 'WARNING',
+              pnlPct: PnL,
+              currentPrice: currentLivePrice,
+              reason: 'Quant stop/target/thesis still valid. HOLD. Risk-exit SELL still skips entry quorum when triggered.',
             });
           }
           continue;
@@ -201,26 +215,30 @@ export class PortfolioMonitorWorker {
 
         if (PnL > takeProfitPct) {
            console.log(`[PortfolioWorker] Taking profit on ${holding.symbol} (+${PnL.toFixed(2)}%)`);
-           eventBus.emitTradeIdea({
-             traceId: randomUUID(),
+           this.emitRiskExit({
              symbol: holding.symbol,
-             side: "SELL",
-             confidence: tradingSafety.quantExitIdeaConfidence,
              currentPrice: currentLivePrice,
+             pnlPct: PnL,
+             confidence: tradingSafety.quantExitIdeaConfidence,
              reasoning: `EXIT_CODE=TARGET_REACHED Target profit reached (+${PnL.toFixed(2)}%, threshold +${takeProfitPct}%). Scaling out to manage risk.`,
-             agent: agentWeightConfig.riskExitAgent
            });
         } else if (PnL < -trailingStopPct) {
            console.log(`[PortfolioWorker] Cutting loss on ${holding.symbol} (${PnL.toFixed(2)}%)`);
-           eventBus.emitTradeIdea({
-             traceId: randomUUID(),
+           this.emitRiskExit({
              symbol: holding.symbol,
-             side: "SELL",
-             confidence: tradingSafety.quantStopExitConfidence,
              currentPrice: currentLivePrice,
+             pnlPct: PnL,
+             confidence: tradingSafety.quantStopExitConfidence,
              reasoning: `EXIT_CODE=HARD_STOP Hard stop hit (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%). Preserving capital.`,
-             agent: agentWeightConfig.riskExitAgent
            });
+        } else {
+          recordPortfolioDecision({
+            symbol: holding.symbol,
+            state: riskLevel === 'NORMAL' ? 'HEALTHY' : 'WARNING',
+            pnlPct: PnL,
+            currentPrice: currentLivePrice,
+            reason: 'No hard-exit trigger this cycle. HOLD is valid. Entry-style 2-agent consensus is not required for this HOLD.',
+          });
         }
       }
     } catch (e) {
@@ -228,6 +246,41 @@ export class PortfolioMonitorWorker {
     } finally {
       this.isReviewing = false;
     }
+  }
+
+  private emitRiskExit(args: {
+    symbol: string;
+    currentPrice: number;
+    pnlPct: number;
+    confidence: number;
+    reasoning: string;
+  }) {
+    if (!canEmitPortfolioExitIdea(args.symbol)) {
+      recordPortfolioDecision({
+        symbol: args.symbol,
+        state: 'WATCH',
+        pnlPct: args.pnlPct,
+        currentPrice: args.currentPrice,
+        reason: 'Exit idea suppressed by overlay cooldown — not a broker skip. Previous SELL idea still must clear RiskEngine/OMS.',
+      });
+      return;
+    }
+    eventBus.emitTradeIdea({
+      traceId: randomUUID(),
+      symbol: args.symbol,
+      side: 'SELL',
+      confidence: args.confidence,
+      currentPrice: args.currentPrice,
+      reasoning: args.reasoning,
+      agent: agentWeightConfig.riskExitAgent,
+    });
+    recordPortfolioDecision({
+      symbol: args.symbol,
+      state: 'EXIT_CANDIDATE',
+      pnlPct: args.pnlPct,
+      currentPrice: args.currentPrice,
+      reason: args.reasoning,
+    });
   }
 
   /**

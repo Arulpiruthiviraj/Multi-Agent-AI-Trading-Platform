@@ -17,8 +17,28 @@ function utcDateKey(nowMs: number): string {
 
 let chain: Promise<unknown> = Promise.resolve();
 
+// 2026-08-18 forensic finding: this chain is the one piece of state FundamentalAgent and
+// MacroAgent's setInterval loops actually share. If a single enqueued `fn` ever hangs (never
+// resolves or rejects - a stuck SQLite call, a dangling fetch), every future tryConsume() call
+// from either agent queues forever behind it with zero error/log output, which looks exactly
+// like both agents' timers silently dying at once. Racing each `fn` against a hard timeout
+// guarantees `chain` always settles, so a hang degrades to a loud per-cycle error instead of
+// permanent, silent starvation of both agents.
+function withLockTimeout<T>(fn: () => Promise<T>, ms: number): () => Promise<T> {
+  return () => new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`AlphaVantageBudget: enqueued operation exceeded ${ms}ms - releasing shared lock`));
+    }, ms);
+    fn().then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 function enqueue<T>(fn: () => Promise<T>): Promise<T> {
-  const run = chain.then(fn, fn);
+  const guarded = withLockTimeout(fn, tradingSafety.alphaVantageBudgetLockTimeoutMs);
+  const run = chain.then(guarded, guarded);
   chain = run.then(() => undefined, () => undefined);
   return run;
 }

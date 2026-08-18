@@ -226,9 +226,20 @@ export class ChiefTraderAgent {
         const debatePrompt = `Analyze this trading idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}.${learnedRulesText}${researchBlock} Actively search for reasons NOT to trade. If the setup is poor, verdict must be HOLD.`;
 
         AIRouter.getInstance().routeConsensus("ConsensusDebate", debatePrompt, idea.traceId).then(debateResult => {
-           if (debateResult && debateResult.consensus_verdict) {
+           const successCount: number = typeof debateResult?.successCount === 'number' ? debateResult.successCount : debateResult?.results?.length ?? 0;
+           if (successCount === 0) {
+              // Every provider errored/timed out - debateResult.consensus_verdict still defaults to
+              // a truthy "HOLD" string in that case, which used to slip past the `else` branch below
+              // and get reported as a real (0-model) debate result. Zero real models is not a debate.
+              console.warn(`[ChiefTrader] Debate for ${idea.symbol}: 0 of ${debateResult?.results?.length ?? 0} providers returned a usable verdict - fail-closed HOLD.`);
+              this.pushDebateFailClosed(idea, `0 of ${debateResult?.results?.length ?? 0} providers returned a usable verdict`);
+           } else if (debateResult && debateResult.consensus_verdict) {
               const consensusSide = debateResult.consensus_verdict;
-              const consensusConfidence = tradingSafety.debateResultConfidence;
+              // A single responding provider is not a multi-model consensus - do not weight it the
+              // same as a genuine 2+ model agreement.
+              const consensusConfidence = successCount >= 2
+                 ? tradingSafety.debateResultConfidence
+                 : tradingSafety.debateResultConfidence * tradingSafety.debateSingleModelConfidencePenalty;
 
               this.recentIdeas.push({
                  traceId: idea.traceId,
@@ -236,7 +247,9 @@ export class ChiefTraderAgent {
                  side: consensusSide,
                  confidence: consensusConfidence,
                  currentPrice: idea.currentPrice,
-                 reasoning: `Multi-Model Debate Concluded: ${consensusSide} (Based on ${debateResult.results.length} models)`,
+                 reasoning: successCount >= 2
+                    ? `Multi-Model Debate Concluded: ${consensusSide} (Based on ${successCount} models)`
+                    : `Single-Model Debate Concluded: ${consensusSide} (Based on 1 model - confidence discounted, not treated as multi-model consensus)`,
                  agent: 'ConsensusDebate'
               });
            } else {

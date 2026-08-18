@@ -47,6 +47,7 @@ import { tradingSafety } from '../../config/tradingSafety';
 import { isExperimentalStrategyLive } from '../../config/quantExperimentalStrategies';
 import type { RegimeLabel } from '../RegimeEngine';
 import { resolvePaperTestingOverlay } from '../../research/paperTestingOverlay';
+import { filterStrategiesForAsset } from '../../multiAsset/StrategyRouter';
 
 /** Original five. Also exported as ALL_STRATEGIES for callers that list "live default" strategies. */
 export const CORE_STRATEGIES: StrategyDefinition[] = [momentumBreakout, pullbackContinuation, meanReversion, trendFollowing, rangeReversion];
@@ -105,7 +106,7 @@ export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
   if (overlay.rows.length > 0) {
     console.log(`[StrategyEngine] research-param inbox: ${overlay.reason}`);
   }
-  return resolveStrategiesForLiveEvaluation()
+  return filterStrategiesForAsset(resolveStrategiesForLiveEvaluation(), ctx.assetClass)
     .map(strategy => {
       const evaluation = strategy.evaluate(ctx);
       const regimeMatches = evaluation.applicableRegimes.includes(ctx.regime.regime);

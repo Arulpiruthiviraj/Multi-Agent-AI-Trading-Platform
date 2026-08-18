@@ -116,6 +116,13 @@ export function AutonomousMissionControl({
   const [activeBrokerId, setActiveBrokerId] = useState<string>("");
   const [brokerSwitchStatus, setBrokerSwitchStatus] = useState<string>("");
   const [brokerSwitching, setBrokerSwitching] = useState(false);
+  const [intelStatus, setIntelStatus] = useState<{
+    opportunityLoopEnabled: boolean;
+    portfolioIntelEnabled: boolean;
+    honesty: string;
+    consensusNote: string;
+    lastOpportunityScan?: { scanned: number; rejected: number; shortlisted: number; subscribeRequested: number; ideasEmitted: number };
+  } | null>(null);
 
   const fetchBrokerCapabilities = () => {
     fetch("/api/v1/broker-capabilities")
@@ -129,6 +136,21 @@ export function AutonomousMissionControl({
 
   useEffect(() => {
     fetchBrokerCapabilities();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetch("/api/v2/continuous-intelligence/status")
+        .then((r) => r.json())
+        .then((json) => {
+          if (!cancelled && json.ok) setIntelStatus(json);
+        })
+        .catch(() => {});
+    };
+    load();
+    const interval = setInterval(load, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
   }, []);
 
   const handleBrokerSwitch = async (id: string) => {
@@ -636,6 +658,33 @@ export function AutonomousMissionControl({
       </div>
 
       <OrganicPaperSoakTracker />
+
+      <div className="mb-6 border border-slate-800 rounded-lg p-4 bg-[#111822]">
+        <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">Continuous intelligence</p>
+        <p className="text-xs text-slate-400">{intelStatus?.honesty || "Opportunity + portfolio loops default OFF. Scanner never emits TRADE_IDEA_GENERATED."}</p>
+        <p className="text-[10px] font-mono text-slate-500 mt-2">
+          OPPORTUNITY SCANNING {intelStatus?.opportunityLoopEnabled ? "ON" : "OFF"}
+          {" · "}
+          PORTFOLIO MONITORING {intelStatus?.portfolioIntelEnabled ? "ON" : "OFF"}
+          {" · "}
+          ENTRY consensus unchanged
+          {" · "}
+          EXIT still RiskEngine → OMS
+        </p>
+        {intelStatus?.lastOpportunityScan && (
+          <p className="text-[10px] font-mono text-slate-600 mt-1">
+            scanned {intelStatus.lastOpportunityScan.scanned}
+            {" · "}rejected {intelStatus.lastOpportunityScan.rejected}
+            {" · "}shortlisted {intelStatus.lastOpportunityScan.shortlisted}
+            {" · "}subscribe requested {intelStatus.lastOpportunityScan.subscribeRequested}
+            {" · "}ideas emitted {intelStatus.lastOpportunityScan.ideasEmitted} (must stay 0)
+            {" · "}NO_ACTION is a valid outcome
+          </p>
+        )}
+        {intelStatus?.consensusNote && (
+          <p className="text-[10px] text-slate-600 mt-2">{intelStatus.consensusNote}</p>
+        )}
+      </div>
 
       {/* BEGINNER EDUCATIONAL ANCHOR */}
       {isBeginnerExplanation && (

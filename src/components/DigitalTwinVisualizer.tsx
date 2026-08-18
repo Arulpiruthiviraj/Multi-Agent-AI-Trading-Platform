@@ -197,7 +197,16 @@ const idleEdge = { stroke: '#334155', strokeWidth: 1.5 };
 
 const MOBILE_FLUSH_MS = 33;
 
-export default function DigitalTwinVisualizer() {
+// Real perf fix (2026-08-18): App.tsx already runs its own 30s poll of the exact same
+// GET /api/v2/agents/learning-summary endpoint (App.tsx:2382-2395), gated on the "agents"/
+// "learning" tabs - which fired alongside this component's own one-shot mount fetch every time
+// the "agents" tab (where this component renders) becomes active. Reading the prop App.tsx
+// already maintains eliminates the second request instead of just leaving both in place.
+interface DigitalTwinVisualizerProps {
+  learningSummary?: { ok?: boolean; agentWeights?: { agentName: string; currentWeight: number | null }[] } | null;
+}
+
+export default function DigitalTwinVisualizer({ learningSummary }: DigitalTwinVisualizerProps = {}) {
   const isPhone = usePhoneLayout();
   const reduceMotion = useMemo(
     () => typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
@@ -478,16 +487,9 @@ export default function DigitalTwinVisualizer() {
   }, [pulseBusy]);
 
   useEffect(() => {
-    let cancelled = false;
-    fetch('/api/v2/agents/learning-summary')
-      .then((r) => r.json())
-      .then((body) => {
-        if (cancelled || !body?.ok || !Array.isArray(body.agentWeights)) return;
-        setWeights(body.agentWeights);
-      })
-      .catch(() => { /* hover still shows last consensus payload */ });
-    return () => { cancelled = true; };
-  }, []);
+    if (!learningSummary?.ok || !Array.isArray(learningSummary.agentWeights)) return;
+    setWeights(learningSummary.agentWeights);
+  }, [learningSummary]);
 
   useEffect(() => {
     if (!isPlaying) return;

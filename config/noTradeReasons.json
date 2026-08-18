@@ -45,6 +45,13 @@
     { "code": "EXECUTION_RISK", "label": "Execution risk" },
     { "code": "WAIT", "label": "WAIT — elite default when the setup is incomplete" },
     { "code": "WATCHLIST", "label": "WATCHLIST — interesting but not actionable" },
-    { "code": "PIT_LEDGER_EMPTY", "label": "PIT ledger empty — AI consensus was not present" }
+    { "code": "PIT_LEDGER_EMPTY", "label": "PIT ledger empty — AI consensus was not present" },
+    { "code": "ASSET_CLASS_BLOCKED", "label": "Asset-class overlay blocked the candidate" },
+    { "code": "ASSET_SPREAD_UNKNOWN", "label": "Bid/ask spread unknown — fail-closed for penny/micro" },
+    { "code": "ASSET_EXCESSIVE_SPREAD", "label": "Spread too wide for penny/micro policy" },
+    { "code": "ASSET_EXCESSIVE_SPREAD_BPS", "label": "Spread BPS too wide for penny/micro policy" },
+    { "code": "ASSET_DOLLAR_VOLUME_UNKNOWN", "label": "Dollar volume unknown — fail-closed for penny/micro" },
+    { "code": "ASSET_MARKET_ORDER_UNFIT", "label": "OMS MARKET orders are unfit for penny/micro — LIMIT not implemented" },
+    { "code": "ASSET_STRATEGY_NOT_ELIGIBLE", "label": "No validated live strategy for this asset class" }
   ]
 }

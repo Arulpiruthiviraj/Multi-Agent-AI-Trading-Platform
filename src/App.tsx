@@ -5779,10 +5779,10 @@ export default function App() {
                 Hover a node for the last real payload. Packets move only when the matching EventBus event arrives. Click a node for the process log; click a transaction to trace it by real trace ID.
               </p>
               <OrchestrationStatus models={orchestrationModels} capital={orchestrationCapital} />
-              <DigitalTwinVisualizer />
+              <DigitalTwinVisualizer learningSummary={learningSummary} />
             </div>
 
-            <ChiefTraderAgent />
+            <ChiefTraderAgent autoBotConfig={autoBotConfig} />
 
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
               <AwaitingSignal

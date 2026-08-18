@@ -365,6 +365,13 @@ async function startServer() {
   }
 
   try {
+    const { opportunityDiscoveryWorker } = await import('./src/server/continuous/OpportunityDiscovery');
+    opportunityDiscoveryWorker.start();
+  } catch (e: any) {
+    console.warn(`[OpportunityDiscovery] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { autoTradeScheduler } = await import('./src/server/services/AutoTradeScheduler');
     autoTradeScheduler.start();
     console.log('[AutoTradeScheduler] Started at boot (independent of Autobot state; no-op unless settings.autoTradeScheduleEnabled is true).');

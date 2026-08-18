@@ -41,6 +41,12 @@ interface CachedAnalysis { recommendation: string; confidence: number; reasoning
 export class FundamentalAnalysisAgent {
   private intervalId: NodeJS.Timeout | null = null;
   private watchedSymbols = ['NVDA', 'AAPL', 'TSLA'];
+  /** Set at the top of every analyzeFundamentals() tick, before any gate check - proves the
+   * setInterval callback itself is still firing, independent of whether Autobot/the pipeline
+   * toggle currently allows it to emit an idea. A stale value with the interval supposedly
+   * running is the signal a hung shared dependency (e.g. AlphaVantageBudget) has wedged this
+   * agent silently. */
+  public lastTickAt: number | null = null;
 
   start() {
     if (this.intervalId) return;
@@ -123,6 +129,7 @@ export class FundamentalAnalysisAgent {
   }
 
   private async analyzeFundamentals() {
+    this.lastTickAt = Date.now();
     if (!isLiveIdeaGenerationEnabled()) return;
     if (!isPipelineAgentEnabled('FundamentalAgent')) return;
     // We just pick a symbol round-robin or randomly from our list

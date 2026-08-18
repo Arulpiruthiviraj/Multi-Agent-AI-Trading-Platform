@@ -49,6 +49,8 @@ export interface TradingSafety {
   aiProviderTimeoutSkipCooldownMs: number;
   /** Free-tier AlphaVantage shared daily HTTP cap (Fund + Macro). */
   alphaVantageDailyRequestBudget: number;
+  /** Guard against a wedged shared budget-consumption lock permanently starving both Fundamental/MacroAgent. */
+  alphaVantageBudgetLockTimeoutMs: number;
   /** Max parallel LLM providers for routeConsensus (top-K healthy). */
   consensusMaxProviders: number;
   /** Max NewsEngine LLM escalations per pipeline cycle. */
@@ -71,6 +73,8 @@ export interface TradingSafety {
   positionRiskElevatedFraction: number;
   debateTriggerConfidence: number;
   debateResultConfidence: number;
+  /** Multiplier on debateResultConfidence when exactly 1 provider returned a usable verdict (not a genuine multi-model consensus). */
+  debateSingleModelConfidencePenalty: number;
   debateLearnedRulesCount: number;
   debateLearnedRuleMaxChars: number;
   quantExitIdeaConfidence: number;
@@ -183,6 +187,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'aiProviderUnreachableCooldownMs',
   'aiProviderTimeoutSkipCooldownMs',
   'alphaVantageDailyRequestBudget',
+  'alphaVantageBudgetLockTimeoutMs',
   'consensusMaxProviders',
   'newsLlmMaxCallsPerCycle',
   'omsFollowUpMaxAgeMs',
@@ -204,6 +209,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'positionRiskElevatedFraction',
   'debateTriggerConfidence',
   'debateResultConfidence',
+  'debateSingleModelConfidencePenalty',
   'debateLearnedRulesCount',
   'debateLearnedRuleMaxChars',
   'quantExitIdeaConfidence',

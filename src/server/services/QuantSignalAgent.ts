@@ -51,6 +51,8 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { assessDataQuality } from '../core/dataQuality';
 import { getNewsCatalysts } from './NewsCatalystStore';
 import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
+import { isMultiAssetEnabled } from '../config/multiAsset';
+import { classifyAsset } from '../multiAsset/AssetClassifier';
 
 const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
 const LOOKBACK_DAYS = tradingSafety.quantLookbackDays;
@@ -164,6 +166,7 @@ export class QuantSignalAgent {
       marketContext,
       // Additive SMC snapshot. Does not change evaluateAll() unless QUANT_SMC_STRATEGY_ENABLED.
       smc: computeSmcFeatures(bars),
+      ...(isMultiAssetEnabled() ? { assetClass: classifyAsset({ symbol, price: currentPrice }).assetClass } : {}),
     };
     const strategyEvaluations = evaluateAll(strategyContext);
     const paperOverlay = resolvePaperTestingOverlay(regime.regime);

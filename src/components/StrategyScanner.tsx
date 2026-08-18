@@ -32,10 +32,24 @@ interface RsiScanRow {
   reason?: string;
 }
 
+interface AssetOpportunityRow {
+  symbol: string;
+  assetClass: string;
+  safety: "SAFE" | "WATCH" | "BLOCK";
+  eligibleForTradeIdea: boolean;
+  reasons: string[];
+  honesty: string;
+}
+
 export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertSymbol }: ScannerProps) {
   const [scannerData, setScannerData] = useState<RsiScanRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<"ALL" | "BUY" | "SELL">("ALL");
+  const [overlayEnabled, setOverlayEnabled] = useState(false);
+  const [overlayOpps, setOverlayOpps] = useState<AssetOpportunityRow[]>([]);
+  const [overlayNote, setOverlayNote] = useState("Multi-asset overlay default OFF — existing Argus RSI scan unchanged.");
+  const [intelNote, setIntelNote] = useState("Opportunity loop default OFF — IEX universe stays markets.json benchmarks.");
+  const [intelScan, setIntelScan] = useState<{ scanned: number; rejected: number; shortlisted: number; subscribeRequested: number; ideasEmitted: number } | null>(null);
 
   // Real perf fix (2026-08-18): 60s poll with no cancellation.
   const abortRef = useRef<AbortController | null>(null);
@@ -55,6 +69,23 @@ export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertS
           }
         })
         .catch((e) => { if (!cancelled && e?.name !== 'AbortError') setLoading(false); });
+      fetch("/api/v2/multi-asset/universe", { signal: controller.signal })
+        .then(r => r.json())
+        .then(json => {
+          if (cancelled || !json.ok) return;
+          setOverlayEnabled(!!json.enabled);
+          setOverlayOpps(Array.isArray(json.opportunities) ? json.opportunities : []);
+          setOverlayNote(json.reason || json.honesty || "OPPORTUNITY is not an order.");
+        })
+        .catch((e) => { if (!cancelled && e?.name !== 'AbortError') { /* overlay optional */ } });
+      fetch("/api/v2/continuous-intelligence/status", { signal: controller.signal })
+        .then(r => r.json())
+        .then(json => {
+          if (cancelled || !json.ok) return;
+          setIntelNote(json.honesty || json.consensusNote);
+          if (json.lastOpportunityScan) setIntelScan(json.lastOpportunityScan);
+        })
+        .catch(() => {});
     };
     load();
     const interval = setInterval(load, 60_000);
@@ -107,6 +138,48 @@ export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertS
               SELL SIGNALS
             </button>
           </div>
+        </div>
+
+        <div className="mb-6 border border-slate-800 rounded-lg p-4 bg-[#111822]">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">Continuous intelligence</p>
+          <p className="text-xs text-slate-400">{intelNote}</p>
+          {intelScan && (
+            <p className="text-[10px] font-mono text-slate-500 mt-2">
+              scanned {intelScan.scanned} · rejected {intelScan.rejected} · shortlisted {intelScan.shortlisted} · subscribe requested {intelScan.subscribeRequested} · ideas emitted {intelScan.ideasEmitted} (must stay 0)
+            </p>
+          )}
+        </div>
+
+        <div className="mb-6 border border-slate-800 rounded-lg p-4 bg-[#111822]">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">Asset class overlay</p>
+          <p className="text-xs text-slate-400 mb-3">{overlayEnabled ? overlayNote : overlayNote}</p>
+          {!overlayEnabled && (
+            <p className="text-[10px] font-mono text-slate-600">ARGUS_MULTI_ASSET_ENABLED is not true. AAPL/QQQ/IWM RSI scan is unchanged. LIVE remains NO-GO.</p>
+          )}
+          {overlayEnabled && overlayOpps.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-[10px] font-mono">
+                <thead>
+                  <tr className="text-slate-500 uppercase tracking-widest">
+                    <th className="py-1 pr-3">Symbol</th>
+                    <th className="py-1 pr-3">Class</th>
+                    <th className="py-1 pr-3">Safety</th>
+                    <th className="py-1">Idea-eligible</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {overlayOpps.map((row) => (
+                    <tr key={row.symbol} className="border-t border-slate-800 text-slate-300">
+                      <td className="py-1 pr-3">{row.symbol}</td>
+                      <td className="py-1 pr-3">{row.assetClass}</td>
+                      <td className={`py-1 pr-3 ${row.safety === 'BLOCK' ? 'text-rose-400' : row.safety === 'WATCH' ? 'text-amber-400' : 'text-emerald-400'}`}>{row.safety}</td>
+                      <td className="py-1">{row.eligibleForTradeIdea ? 'YES (still needs ChiefTrader + 24 gates)' : 'NO — not an order'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
 
         <div className="overflow-x-auto">

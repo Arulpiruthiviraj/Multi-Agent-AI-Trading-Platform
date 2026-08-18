@@ -1,0 +1,12 @@
+{
+  "$comment": "Continuous opportunity + portfolio-intel overlay. Default OFF. Does not lower ChiefTrader quorum, does not enable QUANT or LIVE, does not call placeOrder. Intervals are reviewed config, not UI knobs. Scanning thousands of IEX symbols is intentionally not supported — Alpaca IEX is a bounded subscription feed.",
+  "opportunityLoopEnabledEnvVar": "ARGUS_OPPORTUNITY_LOOP_ENABLED",
+  "portfolioIntelEnabledEnvVar": "ARGUS_PORTFOLIO_INTEL_ENABLED",
+  "opportunityScanMs": 120000,
+  "maxActiveSubscriptions": 32,
+  "maxNewSubscriptionsPerCycle": 4,
+  "exitIdeaCooldownMs": 300000,
+  "protectedSymbols": ["SPY", "QQQ", "IWM", "DIA"],
+  "seedSymbols": ["AAPL", "MSFT", "NVDA", "AMZN", "TSLA", "SPY", "QQQ", "IWM", "DIA"],
+  "honesty": "Continuous intelligence, not continuous trading. Scanner never emits TRADE_IDEA_GENERATED. Portfolio exits still use PortfolioManager risk-exit ideas through RiskEngine and OMS."
+}

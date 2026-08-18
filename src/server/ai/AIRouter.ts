@@ -617,6 +617,10 @@ export class AIRouter {
     return {
         consensus_verdict: verdict,
         latency_ms: Date.now() - start,
+        // successCount is the honest model-participation count for anything downstream that
+        // reports "based on N models" - results (below) intentionally still includes failed/timed
+        // out attempts too, for cost/telemetry consumers that need the raw per-provider outcome.
+        successCount: successfulResults.length,
         results
     };
   }

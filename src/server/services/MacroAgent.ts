@@ -40,6 +40,9 @@ interface CachedAnalysis { recommendation: string; confidence: number; reasoning
 export class MacroEconomyAgent {
   private intervalId: NodeJS.Timeout | null = null;
   private watchedSymbols = ['NVDA', 'AAPL', 'TSLA'];
+  /** See FundamentalAgent.ts's identical field - set before any gate check so a stale value with
+   * the interval supposedly running reveals a silently wedged tick rather than a gated-off one. */
+  public lastTickAt: number | null = null;
 
   start() {
     if (this.intervalId) return;
@@ -117,6 +120,7 @@ export class MacroEconomyAgent {
   }
 
   private async analyzeMacro() {
+    this.lastTickAt = Date.now();
     if (!isLiveIdeaGenerationEnabled()) return;
     if (!isPipelineAgentEnabled('MacroAgent')) return;
     const symbol = this.watchedSymbols[Math.floor(Date.now() / 75000) % this.watchedSymbols.length];

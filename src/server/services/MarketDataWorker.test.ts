@@ -48,12 +48,13 @@ vi.mock('ws', () => ({
   },
 }));
 
-const { emitMarketData, emitSpy, ideaGenEnabled } = vi.hoisted(() => ({
+const { emitMarketData, emitSpy, subscribeSpy, ideaGenEnabled } = vi.hoisted(() => ({
   emitMarketData: vi.fn(),
   emitSpy: vi.fn(),
+  subscribeSpy: vi.fn(),
   ideaGenEnabled: { value: true },
 }));
-vi.mock('../core/EventBus', () => ({ eventBus: { emitMarketData, emit: emitSpy } }));
+vi.mock('../core/EventBus', () => ({ eventBus: { emitMarketData, emit: emitSpy, subscribe: subscribeSpy } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
 
 import { MarketDataWorker } from './MarketDataWorker';
@@ -69,6 +70,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     instances.length = 0;
     emitMarketData.mockClear();
     emitSpy.mockClear();
+    subscribeSpy.mockClear();
     ideaGenEnabled.value = true;
     process.env.ALPACA_API_KEY = 'test-key';
     process.env.ALPACA_SECRET_KEY = 'test-secret';
@@ -233,5 +235,46 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     const sub = ws.sentMessages.find((m: any) => m.action === 'subscribe');
     expect(sub).toBeTruthy();
     expect(sub.quotes).toEqual(expect.arrayContaining(['SPY', 'QQQ']));
+  });
+
+  it('unions US benchmarks even if a pre-auth subscribe already added another name', () => {
+    worker.subscribe('AAPL');
+    const ws = instances[0];
+    authenticate(ws);
+    const subs = ws.sentMessages.filter((m: any) => m.action === 'subscribe');
+    const afterAuth = subs[subs.length - 1];
+    expect(afterAuth.quotes).toEqual(expect.arrayContaining(['AAPL', 'SPY', 'QQQ', 'IWM', 'DIA']));
+  });
+
+  it('rejects garbage tickers and never evicts protected benchmarks', () => {
+    authenticate(instances[0]);
+    worker.subscribe('NOT A TICKER');
+    worker.subscribe('!!!!!!');
+    expect(worker.getActiveSymbols()).not.toContain('NOT A TICKER');
+    worker.unsubscribe('SPY');
+    expect(worker.getActiveSymbols()).toContain('SPY');
+  });
+
+  it('refuses non-protected subscribes once the configured cap is reached', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    const cap = continuousIntelligence.maxActiveSubscriptions;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let requested = 0;
+    outer: for (let i = 0; i < 26; i++) {
+      for (let j = 0; j < 26; j++) {
+        worker.subscribe(`ZZ${alphabet[i]}${alphabet[j]}`);
+        requested += 1;
+        if (requested > cap + 8) break outer;
+      }
+    }
+    expect(worker.getActiveSymbols().length).toBe(cap);
+  });
+
+  it('WATCHLIST_SUBSCRIBE_REQUESTED expands the IEX set without placing an order', () => {
+    const handler = subscribeSpy.mock.calls.find((c: unknown[]) => c[0] === 'WATCHLIST_SUBSCRIBE_REQUESTED')?.[1] as ((p: { symbol?: string }) => void) | undefined;
+    expect(handler).toBeTypeOf('function');
+    handler!({ symbol: 'MSFT' });
+    expect(worker.getActiveSymbols()).toContain('MSFT');
+    expect(emitSpy).not.toHaveBeenCalledWith(expect.stringMatching(/ORDER/), expect.anything());
   });
 });

@@ -23,6 +23,8 @@ import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { ReconnectBackoff } from '../core/reconnectBackoff';
 import { alpacaWebSocketTlsOptions } from '../core/alpacaTls';
 import { tradingSafety } from '../config/tradingSafety';
+import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { continuousIntelligence } from '../config/continuousIntelligence';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
@@ -53,6 +55,7 @@ export class MarketDataWorker {
   private reconnectBackoff = new ReconnectBackoff();
   private lastError: string | null = null;
   private authenticated = false;
+  private watchlistListening = false;
 
   getLatestPrice(symbol: string): number | null {
     const key = quoteKey(symbol);
@@ -161,6 +164,7 @@ export class MarketDataWorker {
   }
 
   start() {
+    this.ensureWatchlistListener();
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       console.log("[MarketDataWorker] No Alpaca keys provided. MarketDataWorker will idle in disconnected state without fabricating data.");
       eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: "Missing API keys" });
@@ -196,20 +200,37 @@ export class MarketDataWorker {
   }
 
   subscribe(symbol: string) {
-    const sym = String(symbol || '').trim().toUpperCase();
-    if (!sym) return;
-    this.activeStreams.add(sym);
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: "subscribe", quotes: [sym], trades: [sym] }));
+    const ticker = looksLikeListedTicker(symbol);
+    if (!ticker) return;
+    if (this.activeStreams.has(ticker)) return;
+    const protectedSet = new Set(continuousIntelligence.protectedSymbols);
+    if (!protectedSet.has(ticker) && this.activeStreams.size >= continuousIntelligence.maxActiveSubscriptions) {
+      console.warn(`[MarketDataWorker] Refusing subscribe ${ticker} — at cap ${continuousIntelligence.maxActiveSubscriptions}`);
+      return;
     }
-    console.log(`[MarketDataWorker] Subscribed to ${sym}`);
+    this.activeStreams.add(ticker);
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify({ action: "subscribe", quotes: [ticker], trades: [ticker] }));
+    }
+    console.log(`[MarketDataWorker] Subscribed to ${ticker}`);
   }
 
   unsubscribe(symbol: string) {
-    this.activeStreams.delete(symbol);
+    const ticker = looksLikeListedTicker(symbol) || String(symbol || '').trim().toUpperCase();
+    if (!ticker) return;
+    if (continuousIntelligence.protectedSymbols.includes(ticker)) return;
+    this.activeStreams.delete(ticker);
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify({ action: "unsubscribe", quotes: [symbol], trades: [symbol] }));
+      this.ws.send(JSON.stringify({ action: "unsubscribe", quotes: [ticker], trades: [ticker] }));
     }
+  }
+
+  private ensureWatchlistListener() {
+    if (this.watchlistListening) return;
+    this.watchlistListening = true;
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, (payload: { symbol?: string }) => {
+      this.subscribe(payload?.symbol || '');
+    });
   }
 
   private clearReconnectTimer() {
@@ -235,8 +256,10 @@ export class MarketDataWorker {
   }
 
   private ensureDefaultSubscriptions() {
-    if (this.activeStreams.size > 0) return;
-    for (const s of defaultSubscribeSymbols()) this.activeStreams.add(s);
+    for (const s of defaultSubscribeSymbols()) {
+      const ticker = looksLikeListedTicker(s);
+      if (ticker) this.activeStreams.add(ticker);
+    }
   }
 
   private sendSubscribe(socket: WebSocket) {

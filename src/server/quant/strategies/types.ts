@@ -33,6 +33,8 @@ export interface StrategyContext {
   /** Optional SMC/ICT pattern snapshot from computeSmcFeatures(bars).
    *  Older unit fixtures omit it; smcLiquiditySweep then treats every condition as unmet. */
   smc?: SmcFeatures;
+  /** Optional overlay class from config/multiAsset.json. Omitted = existing live set (no extra filter). */
+  assetClass?: string;
 }
 
 export interface LevelSuggestion {

@@ -25,6 +25,7 @@ import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizi
 import { runWithObservabilityContext } from '../observability/ObservabilityContext';
 import { getTradingDateStr } from '../core/TradingCalendar';
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
+import { applySubordinateAssetNotionalCap } from '../multiAsset/ideaEligibility';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
@@ -521,7 +522,11 @@ export class RiskEngine {
                     currentPrice,
                     accountEquity,
                     buyingPower,
-                    maxTradeSizeDollar,
+                    maxTradeSizeDollar: applySubordinateAssetNotionalCap({
+                        symbol: proposal.symbol,
+                        currentPrice,
+                        maxTradeSizeDollar,
+                    }),
                     maxPortfolioRiskPct,
                     existingPositions: portfolio.positions.map((p: any) => ({ symbol: p.symbol, quantity: p.quantity })),
                     maxOpenPositions: maxOpenPositionsForSizing,
