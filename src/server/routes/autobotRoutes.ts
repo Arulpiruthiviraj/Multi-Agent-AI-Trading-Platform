@@ -56,6 +56,11 @@ autobotRouter.get("/", async (req: Request, res: Response) => {
     dailyLossLimit: tradingEngine.state.dailyLossLimit,
     currentDailyLoss: tradingEngine.state.currentDailyLoss,
     emergencyStopActive: tradingEngine.state.emergencyStopActive,
+    // Real bug fix (2026-08-18): the frontend halt banner only ever read emergencyStopActive,
+    // which is true ONLY for the literal EMERGENCY_STOP state (TradingEngine.ts:566) - never for
+    // TRADING_PAUSED, even though RiskEngine's emergency_stop gate blocks both identically. This
+    // field lets a cold page load correctly detect a reconciliation-triggered pause too.
+    tradingState: tradingEngine.state.tradingState,
     takeProfitPct: tradingEngine.state.takeProfitPct,
     trailingStopPct: tradingEngine.state.trailingStopPct,
     minAiConfidence: tradingEngine.state.minAiConfidence,

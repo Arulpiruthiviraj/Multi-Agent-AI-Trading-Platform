@@ -1076,7 +1076,30 @@ export default function App() {
       setResumeInFlight(false);
     }
   };
-  
+
+  // Real bug fix (2026-08-18): the halt banner/resume button only ever lit up for
+  // emergencyStopActive, which TradingEngine.ts:566 sets true ONLY for the literal EMERGENCY_STOP
+  // state (`newState === 'EMERGENCY_STOP'`) - never for TRADING_PAUSED. PortfolioReconciliation's
+  // real pause today (13:06:44Z, "Portfolio reconciliation found a ~$403.20 mismatch") is
+  // TRADING_PAUSED, not EMERGENCY_STOP, and blocks new trades exactly the same way (RiskEngine's
+  // emergency_stop gate checks tradingState, not the boolean) - so the banner never appeared and
+  // stayed dark for the full ~4 hours trading was actually blocked. `tradingState` was already
+  // present in every payload this reads (pipelineAgentSnapshot.ts:36, the AUTOBOT_STATE_UPDATED
+  // broadcast's `...tradingEngine.state` spread at server.ts:1910) - it just wasn't being read.
+  const HALTED_TRADING_STATES = new Set(['EMERGENCY_STOP', 'TRADING_PAUSED']);
+  const applyTradingState = (tradingState: string | undefined, reason?: string) => {
+    if (!tradingState) return;
+    const halted = HALTED_TRADING_STATES.has(tradingState);
+    setEnginesHalted(halted);
+    if (halted) {
+      setHaltReason((prev) => reason || prev || tradingState);
+      setHaltTime((prev) => prev || new Date().toLocaleTimeString());
+    } else {
+      setHaltReason("");
+      setHaltTime("");
+    }
+  };
+
   const [autoBotConfig, setAutoBotConfig] = useState<any>({ enabled: false, budget: 50000, spent: 0, remaining: 50000, strategy: "Momentum & Breakout", riskLevel: "Medium", maxTradeSize: 3000, dailyLossLimit: 5000, currentDailyLoss: 0, logs: [] });
   const [autoBotTargetBudget, setAutoBotTargetBudget] = useState(50000);
   const [autoBotTradingMode, setAutoBotTradingMode] = useState("PAPER");
@@ -1206,7 +1229,7 @@ export default function App() {
     if (!isAuthenticated) return;
 
     // Replaced interval polling with WebSocket subscription
-    const unsubscribe = subscribe('AUTOBOT_STATE_UPDATED', (data) => {
+    const unsubscribeAutobot = subscribe('AUTOBOT_STATE_UPDATED', (data) => {
       const snapshot = withCanonicalAutobotFlag(data);
       setAutoBotConfig(snapshot);
       setSystemState(isAutobotEngineOn(snapshot) ? 'RUNNING' : 'STOPPED');
@@ -1218,6 +1241,18 @@ export default function App() {
           message: h.msg,
         })));
       }
+      // server.ts:1907-1916 spreads `...tradingEngine.state` into this same broadcast every 2s -
+      // tradingState/emergencyStopActive are already in `data`, this just now reads them.
+      applyTradingState(data.tradingState, typeof data.haltReason === 'string' ? data.haltReason : undefined);
+    });
+
+    // Real bug fix (2026-08-18): TradingEngine.setTradingState() emits a real
+    // TRADING_STATE_CHANGED EventBus event (TradingEngine.ts:580) with the actual {fromState,
+    // toState, reason, actor} - the wildcard WS forwarder (server.ts:1886-1891) already relays it
+    // to every client. Subscribing here gives an immediate, reason-carrying banner update the
+    // moment a pause/resume happens, instead of waiting for the next 2s AUTOBOT_STATE_UPDATED tick.
+    const unsubscribeTradingState = subscribe('TRADING_STATE_CHANGED', (data) => {
+      applyTradingState(data?.toState, typeof data?.reason === 'string' ? data.reason : undefined);
     });
 
     // Initial fetch to populate state immediately
@@ -1233,7 +1268,11 @@ export default function App() {
           return snapshot;
         });
         setSystemState(isAutobotEngineOn(snapshot) ? 'RUNNING' : 'STOPPED');
-        if (typeof data?.emergencyStopActive === 'boolean') {
+        // tradingState (added to this response alongside emergencyStopActive - autobotRoutes.ts)
+        // catches a cold load that lands mid-pause; emergencyStopActive alone missed TRADING_PAUSED.
+        if (typeof data?.tradingState === 'string') {
+          applyTradingState(data.tradingState);
+        } else if (typeof data?.emergencyStopActive === 'boolean') {
           setEnginesHalted(data.emergencyStopActive);
           if (data.emergencyStopActive) {
             setHaltReason((prev) => prev || "Emergency Stop (backend)");
@@ -1265,7 +1304,8 @@ export default function App() {
       .catch(e => console.error("Initial fetch failed:", e));
 
     return () => {
-      unsubscribe();
+      unsubscribeAutobot();
+      unsubscribeTradingState();
     };
   }, [subscribe, isAuthenticated]);
 
@@ -1650,7 +1690,11 @@ export default function App() {
         autobotEnabled: data.autobotEnabled === true,
         liveIdeaGenerationEnabled: data.liveIdeaGenerationEnabled === true,
       });
-      if (typeof data.emergencyStopActive === "boolean") {
+      // pipelineAgentSnapshot.ts:36 already includes tradingState - catches TRADING_PAUSED,
+      // which emergencyStopActive alone (EMERGENCY_STOP only) never did.
+      if (typeof data.tradingState === "string") {
+        applyTradingState(data.tradingState);
+      } else if (typeof data.emergencyStopActive === "boolean") {
         setEnginesHalted(data.emergencyStopActive);
       }
       setPipelineAgentError(null);
