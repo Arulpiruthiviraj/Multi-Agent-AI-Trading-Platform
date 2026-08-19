@@ -170,4 +170,8 @@ export const MOBILE_TAB_TOOLTIPS: Record<MobileTabId, NavTooltipCopy> = {
     title: 'Terminal',
     purpose: 'Operator logs, diagnostics heartbeats, and process health on a compact surface.',
   },
+  settings: {
+    title: 'Settings',
+    purpose: 'Touch-first dual-config overlays, paper-locked broker selection, and secret-safe credential status. Does not arm LIVE.',
+  },
 };

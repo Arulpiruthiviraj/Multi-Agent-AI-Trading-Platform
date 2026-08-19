@@ -51,9 +51,13 @@ describe('v2System quant observability routes', () => {
 
   describe('GET /api/v2/quant/strategies', () => {
     it('lists the 5 real strategies with their real applicable regimes and holding-period description', async () => {
+      const { quantExperimentalStrategies } = await import('../config/quantExperimentalStrategies');
+      const experimentalVars = quantExperimentalStrategies.strategies.map((s: { enabledEnvVar: string }) => s.enabledEnvVar);
+      const prev = Object.fromEntries(experimentalVars.map((k: string) => [k, process.env[k]]));
+      for (const k of experimentalVars) delete process.env[k];
+      try {
       const { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } = await import('../quant/strategies/StrategyEngine');
       const { STRATEGY_TYPICAL_HOLDING_PERIOD } = await import('../quant/strategies/types');
-      const { quantExperimentalStrategies } = await import('../config/quantExperimentalStrategies');
       const { quantStrategyTaxonomySummary } = await import('../config/quantStrategyTaxonomy');
       const ids = ALL_STRATEGIES.map((s) => s.id);
       expect(ids).toEqual(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'MEAN_REVERSION', 'TREND_FOLLOWING', 'RANGE_REVERSION']);
@@ -82,6 +86,12 @@ describe('v2System quant observability routes', () => {
       expect(res.body.forumStrategies.strategies.length).toBeGreaterThanOrEqual(7);
       expect(res.body.forumStrategies.strategies.find((s: any) => s.id === 'FORUM_WHEEL_OPTIONS').status).toBe('NOT_SUPPORTED');
       expect(res.body.strategies).toHaveLength(5);
+      } finally {
+        for (const k of experimentalVars) {
+          if (prev[k] === undefined) delete process.env[k];
+          else process.env[k] = prev[k];
+        }
+      }
     }, 45000);
   });
 

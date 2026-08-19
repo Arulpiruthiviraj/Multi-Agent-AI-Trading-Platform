@@ -230,6 +230,12 @@ describe('OrderManagementService.executeOrder', () => {
       expect(placeOrder).not.toHaveBeenCalled();
       expect(getFinalTradeRow().status).toBe('REJECTED');
       expect(String(getFinalTradeRow().reasoning)).toMatch(/LIVE_NO_GO/);
+      // Real bug found and fixed this pass: the env-gate rejection branch used to `return` before
+      // ever calling emitOrderExecution(), so ORDER_EXECUTED never fired for this outcome.
+      // ORDER_SUBMITTED (emitted earlier in executeOrder) had already moved the transaction to
+      // EXECUTED in TransactionLifecycleTracker, and nothing ever closed it out - a rejected
+      // transaction stayed EXECUTED forever. ORDER_EXECUTED is the only event that can close it.
+      expect(emitOrderExecution).toHaveBeenCalledWith(expect.objectContaining({ status: 'REJECTED' }));
     } finally {
       disarmLiveTrading();
       if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;

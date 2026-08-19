@@ -31,6 +31,9 @@ export default function WhyNotTradingStrip() {
       <div className="text-xs text-white font-bold mb-2">
         {data.isTrading ? 'No blocking diagnostic — Autobot enabled and RiskEngine is in TRADING_ENABLED.' : 'New entries are not flowing (Autobot off, a blocking gate, or a feed/config issue).'}
       </div>
+      {data.explanation && (
+        <pre className="text-[10px] font-mono text-slate-300 whitespace-pre-wrap bg-[#0d1117] border border-slate-800 rounded p-2 mb-2">{data.explanation}</pre>
+      )}
       {data.primary && <ExplainCard d={data.primary} compact />}
       {data.primary?.code === 'SYS-001' && (
         <div className="mt-3">

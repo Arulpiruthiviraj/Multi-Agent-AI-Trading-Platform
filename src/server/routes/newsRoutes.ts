@@ -74,7 +74,11 @@ newsRouter.get("/providers", async (req: Request, res: Response) => {
 
 newsRouter.get("/articles", async (req: Request, res: Response) => {
   try {
-    const limit = parseInt((req.query.limit as string) || "50");
+    // Real bug found and fixed this pass: parseInt(...) with no isFinite guard let
+    // ?limit=abc produce NaN, passed straight into Drizzle's .limit(NaN) - unvalidated
+    // query input reaching a DB call instead of a clean fallback, unlike every other
+    // limit-clamping route in this codebase (traceRoutes.ts, observabilityRoutes.ts, ...).
+    const limit = Math.min(parseInt((req.query.limit as string) || "50", 10) || 50, 200);
     const articles = await db.select().from(schema.newsArticles).orderBy(desc(schema.newsArticles.publishedAt)).limit(limit);
     res.json(articles);
   } catch (e: any) {

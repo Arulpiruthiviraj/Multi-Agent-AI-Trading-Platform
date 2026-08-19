@@ -32,10 +32,21 @@ const SECRET_ENV_VARS = [
   'LIVE_ARM_TOKEN', 'WEBHOOK_SECRET',
 ];
 
-const SENSITIVE_KEY = /^(authorization|api[_-]?key|apikey|secret|password|token|access_token|refresh_token|jwt|private[_-]?key|client_secret|session)$/i;
+// Real bug found and fixed this pass: this was previously anchored (`^(...)$`), an EXACT match
+// only - so a field literally named "secret" or "token" was caught, but the camelCase compound
+// names this codebase actually uses for broker credentials ("secretKey" in
+// BrokerManager.ts's authenticate() call, "apiSecret" read by CoinbaseBroker.ts) were not, and
+// redactSecretsDeep() passed them through untouched. Those same values are also not always in
+// currentSecretValues() (decrypted DB-stored broker connection credentials never populate
+// process.env), so the value-matching fallback in redactSecrets() didn't catch them either - a
+// real, unredacted leak path. Unanchored on purpose: over-redacting an unrelated field that
+// happens to contain "token"/"secret" as a substring is the safe direction for a redaction
+// function; under-redacting a real credential is not.
+const SENSITIVE_KEY = /(authorization|api[_-]?key|apikey|secret|password|token|jwt|private[_-]?key|session)/i;
 const BEARER_RE = /Bearer\s+[A-Za-z0-9\-._~+/]+=*/gi;
+const BASIC_AUTH_RE = /Basic\s+[A-Za-z0-9+/]+=*/gi;
 const JWT_RE = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g;
-const QUERY_SECRET_RE = /([?&](?:api[_-]?key|apikey|token|secret|password|access_token|refresh_token|auth)=)([^&\s]+)/gi;
+const QUERY_SECRET_RE = /([?&](?:api[_-]?key|apikey|token|secret|client_secret|password|access_token|refresh_token|auth)=)([^&\s]+)/gi;
 
 // A short/common env value (e.g. a dev placeholder like "test" or "1") would cause this to
 // over-redact unrelated log text - only real, credential-shaped values are worth protecting.
@@ -56,6 +67,7 @@ export function redactSecrets(input: string): string {
     if (out.includes(secret)) out = out.split(secret).join('[REDACTED]');
   }
   out = out.replace(BEARER_RE, 'Bearer [REDACTED]');
+  out = out.replace(BASIC_AUTH_RE, 'Basic [REDACTED]');
   out = out.replace(JWT_RE, '[REDACTED_JWT]');
   out = out.replace(QUERY_SECRET_RE, '$1[REDACTED]');
   return out;

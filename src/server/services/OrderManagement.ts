@@ -311,6 +311,22 @@ export class OrderManagementService {
           reasoning: stampExecutionEnvironment(envGate.reason, envGate.environment === 'LIVE' ? 'LIVE' : 'UNKNOWN'),
         }).where(eq(trades.id, orderId));
         console.error(`[OMS] ${envGate.reason}`);
+        // Real bug found this pass: this early return skipped the unconditional ORDER_EXECUTED
+        // emit below entirely. ORDER_SUBMITTED (emitted earlier in this method) had already moved
+        // the transaction to EXECUTED; without this, TransactionLifecycleTracker never saw a
+        // terminal event for an env-gate rejection and the transaction stayed EXECUTED forever.
+        eventBus.emitOrderExecution({
+          traceId,
+          transactionId,
+          id: orderId,
+          symbol,
+          side,
+          quantity,
+          price: 0,
+          status: 'REJECTED',
+          profitLoss: null,
+          executionEnvironment: envGate.environment === 'LIVE' ? 'LIVE' : envGate.environment === 'PAPER' ? 'PAPER' : 'UNKNOWN',
+        });
         try { if (traceId) notifyReplayOrder(traceId); } catch { /* optional */ }
         return;
       }

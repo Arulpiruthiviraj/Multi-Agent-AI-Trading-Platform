@@ -1,5 +1,5 @@
 /**
- * ARGUS Mobile PWA — 5-tab cyber-fintech remote cockpit.
+ * ARGUS Mobile PWA — 6-tab cyber-fintech remote cockpit.
  */
 import React, { useState } from 'react';
 import './mobileTheme.css';
@@ -16,7 +16,9 @@ import { MobilePositionsView } from './views/MobilePositionsView';
 import { MobileAiBrainView } from './views/MobileAiBrainView';
 import { MobileRiskView } from './views/MobileRiskView';
 import { MobileTerminalView } from './views/MobileTerminalView';
+import { MobileSettingsView } from './MobileSettingsView';
 import { MobileBottomSheet } from './MobileBottomSheet';
+import { MobileArchitectureGuide } from './MobileArchitectureGuide';
 
 interface MobileMissionControlProps {
   onToggleLayout: () => void;
@@ -31,6 +33,7 @@ function MobileActiveView({ tab, onRefresh }: { tab: MobileTabId; onRefresh: () 
     case 'brain': return <MobileAiBrainView />;
     case 'risk': return <MobileRiskView />;
     case 'terminal': return <MobileTerminalView />;
+    case 'settings': return <MobileSettingsView />;
     default: return <MobileCockpitView onRefresh={onRefresh} />;
   }
 }
@@ -48,6 +51,7 @@ export default function MobileMissionControl({
   const { onTouchStart, onTouchEnd } = useMobileSwipeTabs(activeTab);
   const emergencyStopActive = useMobileMissionSelector((s) => s.emergencyStopActive);
   const [killSheet, setKillSheet] = useState(false);
+  const [guideSheet, setGuideSheet] = useState(false);
 
   return (
     <div
@@ -58,7 +62,7 @@ export default function MobileMissionControl({
         paddingRight: 'env(safe-area-inset-right)',
       }}
     >
-      <MobileTopBar onKillTap={() => setKillSheet(true)} />
+      <MobileTopBar onKillTap={() => setKillSheet(true)} onInfoTap={() => setGuideSheet(true)} />
 
       <div className="px-3 py-1.5 flex items-center justify-between border-b border-slate-800/50 bg-[#070a12]/80 shrink-0">
         <MobileLayoutToggle isMobileMode={isMobileMode} override={layoutOverride} onToggle={onToggleLayout} />
@@ -114,6 +118,10 @@ export default function MobileMissionControl({
             </button>
           </>
         )}
+      </MobileBottomSheet>
+
+      <MobileBottomSheet open={guideSheet} title="How Argus works" onClose={() => setGuideSheet(false)}>
+        <MobileArchitectureGuide />
       </MobileBottomSheet>
     </div>
   );

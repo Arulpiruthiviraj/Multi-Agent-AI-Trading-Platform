@@ -162,8 +162,14 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     const maxSharesByBuyingPower = Math.floor(ctx.buyingPower / ctx.currentPrice);
 
     const orderNotionalIsBinding = maxSharesByCapital <= maxSharesByRisk && maxSharesByCapital <= maxSharesByBuyingPower;
-    const notionalStatus: SizingHonesty = maxSharesByCapital <= 0 ? 'FAIL' : orderNotionalIsBinding ? 'CLAMPED' : 'PASS';
-    record('order_notional_cap', maxSharesByCapital > 0, {
+    // Real bug found and fixed this pass: this gate's passed/status only ever looked at
+    // maxSharesByCapital, even though the same recorded detail also carries maxSharesByRisk (the
+    // per-share stop-loss risk cap) as one of the three inputs to maxQuantity. A symbol whose
+    // risk-per-share cap alone zeroed out sizing (tight maxPortfolioRiskPct on a high-price
+    // symbol) still got order_notional_cap: PASS - the trade was still correctly rejected via
+    // sufficient_size below, but the audit trail hid the real reason.
+    const notionalStatus: SizingHonesty = (maxSharesByCapital <= 0 || maxSharesByRisk <= 0) ? 'FAIL' : orderNotionalIsBinding ? 'CLAMPED' : 'PASS';
+    record('order_notional_cap', maxSharesByCapital > 0 && maxSharesByRisk > 0, {
       status: notionalStatus,
       sizingMode, effectiveNotionalCapDollar,
       maxTradeSizeDollar: ctx.maxTradeSizeDollar, percentOfEquityPct: ctx.percentOfEquityPct,

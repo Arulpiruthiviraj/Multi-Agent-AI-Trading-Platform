@@ -4,6 +4,14 @@ Argus operational master specification. This file is the live-path contract for 
 
 Argus is a Node.js multi-agent trading terminal (Express + Vite SPA + `ws` + SQLite). Package name `my-money-miner`. The **live decision path** is EventBus → idea agents → ChiefTrader → RiskEngine → OMS → BrokerManager. Do not rewrite that path. New work is additive, modular, feature-flagged, tested, and backward compatible.
 
+## ARGUS CORE ARCHITECTURE — DO NOT MODIFY
+
+AI coding agents **must not** alter the protected trading architecture unless the repository owner explicitly authorizes an architectural change. Full contract: `ARGUS_ARCHITECTURE_PROTECTION.md`.
+
+Protected (extend through the documented interface only — never replace, bypass, weaken, or duplicate): `ChiefTraderAgent`, `RiskEngine`, `OrderManagementService`, `BrokerManager` + broker adapters, reconciliation, the kill-switch system, the trading-state machine, portfolio accounting, order lifecycle, fill processing, position reconciliation, the 24 risk gates, paper/live safety controls (5-layer LIVE arming).
+
+If a requested feature appears to require modifying anything in that list: **stop**, explain the architectural conflict to the user, and do not implement a bypass. Prefer adding an adapter, service, event, strategy, or integration point around the existing architecture — see the extension-zone examples (`src/server/multiAsset/`, `src/server/continuous/`) in `ARGUS_ARCHITECTURE_PROTECTION.md`.
+
 **LIVE real-money: `LIVE_NO_GO`.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is **not established**.
 
 TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is **inspiration only**. Vendor **zero** of that source. Argus stays system of record.
@@ -16,6 +24,7 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 |---|---|
 | This file | Live path, 24 gates, AI routing, traces, soak, defects, working rules |
 | `README.md` | Setup, commands, `.env`, local AI, ecosystem spawn |
+| `docs/ARGUS_DOCUMENTATION_INDEX.md` | Operator vs developer forensic debugging / DB / EventBus (does **not** replace this contract) |
 | `config/*.json` | Numbers, strategy IDs, event names — not TypeScript literals |
 | `src/server/db/schema.ts` | Table count (drifts; count `sqliteTable(`) |
 | `evaluateLiveReadiness()` / `ARGUS_LIVE_READINESS.json` | Machine LIVE gates (6/28 PASS as of 2026-08-18) |
@@ -48,7 +57,7 @@ Single Node.js process: Express + Vite middleware (dev) or static files (prod) +
 
 **Login-screen gotcha:** `if (!isAuthenticated) return <Login/>` sits in `App()` *after* most `useEffect` hooks. Hooks still run on the login screen. Gate every fetch/WebSocket effect on `isAuthenticated`. DEF-22: WebSocket must not connect until session confirmed.
 
-Boot (simplified): import constructors → AIRouter → **`await BrokerManager.initialize()` before `tradingEngine.initialize()`** (DEF-01) → seed settings → **MarketDataWorker.start always** → model probes → listen. Autobot `system.start` only if `autoBotEnabled`. Migrations run on first import of `src/server/db/index.ts`. **`npm run db:migrate` is broken** (`database/migrate.ts` missing).
+Boot (simplified): import constructors → AIRouter → **`await BrokerManager.initialize()` before `tradingEngine.initialize()`** (DEF-01) → seed settings → **MarketDataWorker.start always** → model probes → listen. Autobot `system.start` only if `autoBotEnabled`. Migrations run on first import of `src/server/db/index.ts`. `npm run db:migrate` (`database/migrate.ts`) imports that same module.
 
 Autobot off: ticks can still drive Technical/Kronos → pipeline if `TRADING_ENABLED`. `system.stop` does not stop MarketDataWorker (Diagnostics/RiskEngine still need a feed).
 
@@ -64,7 +73,8 @@ Idea agents (timer or MARKET_DATA):
   NewsEngine           → real RSS + paid news APIs (+ optional LLM)
   FundamentalAgent     → AlphaVantage + AIRouter (~60s, tracked symbols)
   MacroAgent           → AlphaVantage + AIRouter (~75s)
-  PortfolioMonitor     → ~60s; settings.takeProfitPct / trailingStopPct;
+  PortfolioMonitor     → ~60s; settings.takeProfitPct / trailingStopPct
+                         (cost-basis vs average, **not** ATR/peak trail);
                          Quant thesis invalidation (config/thesisInvalidation.json)
                          (exits are SELL *ideas*, not raw broker flattens)
   QuantSignalAgent     → off unless QUANT_ENGINE_ENABLED=true
@@ -78,7 +88,8 @@ ChiefTraderAgent
     tradingSafety.consensusApprovalThreshold (JSON, not a TS literal)
     Risk-exit agent PortfolioManager skips debate/min-agents
     Liquidate: PipelineFlatten emits ManualOverride CHIEF_APPROVED_IDEA
-      (skips consensus, **not** RiskEngine). Rebalance: 501.
+      (skips consensus, **not** RiskEngine). Rebalance: `PortfolioRebalance.ts`
+      same pipeline (direction only; RiskEngine sizes).
  ↓ CHIEF_APPROVED_IDEA  (mints transactionId; optional OpenAlice fire-and-forget)
 RiskAgent → RiskEngine.evaluateRisk()
   → evaluationQueue mutex (serialized)
@@ -208,7 +219,9 @@ Backtest `run()` = TA-like rules, no AI. `runStrategyBacktest()` = named strateg
 
 ## Frontend honesty
 
-21 tabs (dashboard, command, observatory, arena, scanner, opportunities, portfolio, agents, news, intelligence, learning, memory, activity, diagnostics, audit, documentation, evaluation, validation, deployment, kronos, settings). Mixed REAL/MOCK.
+**20** desktop `AppTabId`s (`src/components/responsive/responsiveNavConfig.ts` `ALL_TABS`): dashboard, command, portfolio, arena, agents, evaluation, memory, activity, observatory, scanner, intelligence, learning, kronos, opportunities, news, settings, diagnostics, audit, validation, documentation. There is **no** `deployment` tab (that copy lives inside validation). Mixed REAL/MOCK.
+
+Phone layout (`src/components/mobile/`, width <768 or Mobile toggle): **6** tabs `cockpit | positions | brain | risk | terminal | settings`. Operator how-to: `docs/ARGUS_MOBILE_SETTINGS.md`.
 
 | Surface | Honesty |
 |---|---|
@@ -221,6 +234,7 @@ Backtest `run()` = TA-like rules, no AI. `runStrategyBacktest()` = named strateg
 | Arena performance widgets | `AwaitingSignal` — not RNG win rates |
 | MultiAgentDialogueGraph / some Agent Network charts | Fabricated/mock series — do not cite as live accuracy |
 | DecisionTracePanel | Persisted rows by `traceId`; not a fabricated LLM council |
+| Mobile Settings | Dual-config overlays + operator knobs; `PAPER_TRADING_ONLY` padlocked; scan/watchlist/spread/quorum **read-only** from reviewed JSON. Does not arm LIVE. |
 
 Do not dump hidden chain-of-thought. Safe: side, confidence, EV, model name, latency, data-quality, NO_TRADE code, `inventedNumericFieldsRejected`.
 
@@ -444,6 +458,13 @@ npm run ai:serve         # Chronos on :8008
 ```
 
 E2E uses an isolated temp SQLite DB (never `data/argus.db`). Fresh DB opens **two** onboarding surfaces: Setup Wizard (`settings.onboardingComplete`) and guided tour (`localStorage["argus_tour_seen"]`). Seed both (`e2e/globalSetup.ts` + `page.addInitScript()`).
+
+## Forensic debugging (operators / developers)
+
+Do not duplicate this file. Pointers only:
+
+- **Operators:** `docs/ARGUS_DOCUMENTATION_INDEX.md` → why-not-trading, daily checklist, mobile Settings, SQL under `docs/sql/`.
+- **Developers:** same index → pipeline, IDs, database architecture, EventBus. `src/server/db/schema.ts` remains table-count ground truth.
 
 ## Adding a new agent
 

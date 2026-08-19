@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertOctagon, TrendingUp, Wifi } from 'lucide-react';
+import { AlertOctagon, Info, TrendingUp, Wifi } from 'lucide-react';
 import { useMobileMissionSelector } from './useMobileMissionSelector';
 import { modeChipClass, sessionChipClass } from './mobileUtils';
 import { MOBILE_TABS, type MobileTabId } from './mobileTabs';
@@ -8,6 +8,7 @@ import { MobileNavTabTooltip } from '../responsive/NavTabTooltip';
 
 interface MobileTopBarProps {
   onKillTap: () => void;
+  onInfoTap: () => void;
 }
 
 function sessionShortLabel(session: string): string {
@@ -18,7 +19,7 @@ function sessionShortLabel(session: string): string {
   return session === 'UNKNOWN' ? '—' : 'CLOSED';
 }
 
-export function MobileTopBar({ onKillTap }: MobileTopBarProps) {
+export function MobileTopBar({ onKillTap, onInfoTap }: MobileTopBarProps) {
   const tradingMode = useMobileMissionSelector((s) => s.tradingMode);
   const marketSession = useMobileMissionSelector((s) => s.marketSession);
   const wsStatus = useMobileMissionSelector((s) => s.wsStatus);
@@ -54,6 +55,14 @@ export function MobileTopBar({ onKillTap }: MobileTopBarProps) {
           </span>
           <button
             type="button"
+            aria-label="How Argus works"
+            onClick={onInfoTap}
+            className="mobile-press min-h-[36px] min-w-[36px] rounded-lg border border-slate-700 bg-slate-800/60 flex items-center justify-center"
+          >
+            <Info size={16} className="text-cyan-400" />
+          </button>
+          <button
+            type="button"
             aria-label="Emergency kill switch"
             onClick={onKillTap}
             className={`mobile-press min-h-[36px] min-w-[36px] rounded-lg border flex items-center justify-center ${
@@ -81,7 +90,7 @@ export function MobileBottomNav() {
         height: 'var(--mobile-nav-h)',
       }}
     >
-      <div className="flex items-stretch justify-around h-[56px] max-w-lg mx-auto">
+      <div className="flex items-stretch justify-around h-[56px] w-full max-w-lg mx-auto overflow-hidden">
         {MOBILE_TABS.map((tab) => {
           const Icon = tab.icon;
           const active = activeTab === tab.id;
@@ -91,12 +100,12 @@ export function MobileBottomNav() {
                 <button
                   type="button"
                   onClick={() => patchMobileMissionSnapshot({ activeTab: tab.id as MobileTabId })}
-                  className={`mobile-nav-item mobile-press flex flex-col items-center justify-center flex-1 gap-0.5 min-h-[44px] ${
+                  className={`mobile-nav-item mobile-press flex flex-col items-center justify-center flex-1 min-w-0 gap-0.5 min-h-[44px] px-0.5 ${
                     active ? 'active' : 'text-slate-500'
                   }`}
                 >
-                  <Icon size={20} strokeWidth={active ? 2.5 : 2} />
-                  <span className="text-[9px] font-mono uppercase tracking-wider">{tab.shortLabel}</span>
+                  <Icon size={18} strokeWidth={active ? 2.5 : 2} />
+                  <span className="text-[8px] font-mono uppercase tracking-wider truncate w-full text-center">{tab.shortLabel}</span>
                 </button>
               </MobileNavTabTooltip>
             </React.Fragment>

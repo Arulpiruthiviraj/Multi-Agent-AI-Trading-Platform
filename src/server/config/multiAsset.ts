@@ -3,6 +3,7 @@
  * Thresholds are UNCALIBRATED. This file does not enable the overlay.
  */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
+import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
 
 export const MULTI_ASSET_CLASSES = [
   'LARGE_CAP',
@@ -183,11 +184,11 @@ function loadMultiAssetConfig(): MultiAssetConfig {
 export const multiAssetConfig: MultiAssetConfig = loadMultiAssetConfig();
 
 export function isMultiAssetEnabled(): boolean {
-  return process.env[multiAssetConfig.multiAssetEnabledEnvVar] === 'true';
+  return isRuntimeFlagEnabled(multiAssetConfig.multiAssetEnabledEnvVar);
 }
 
 export function isPennyStockEnabled(): boolean {
-  return isMultiAssetEnabled() && process.env[multiAssetConfig.pennyStockEnabledEnvVar] === 'true';
+  return isMultiAssetEnabled() && isRuntimeFlagEnabled(multiAssetConfig.pennyStockEnabledEnvVar);
 }
 
 export function getAssetProfile(assetClass: MultiAssetClass): MultiAssetProfile {

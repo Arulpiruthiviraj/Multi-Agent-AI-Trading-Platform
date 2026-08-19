@@ -8,6 +8,7 @@ const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: 
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
+vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
@@ -46,7 +47,9 @@ describe('MacroEconomyAgent - AI output validation (Phase 5 hardening)', () => {
 
     await agent.analyzeMacro();
 
-    expect(emitTradeIdea).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.agent).toBe('MacroAgent');
   });
 
   it('normalizes a 0-100-scale confidence answer down to the real 0-1 TRADE_IDEA_GENERATED convention', async () => {

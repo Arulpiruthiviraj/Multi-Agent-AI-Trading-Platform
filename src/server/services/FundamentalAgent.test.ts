@@ -8,6 +8,7 @@ const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: 
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
+vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
@@ -47,9 +48,9 @@ describe('FundamentalAnalysisAgent - AI output validation (Phase 5 hardening)', 
 
     await agent.analyzeFundamentals();
 
-    // HOLD is never emitted as a trade idea (matches the pre-existing `!== "HOLD"` gate) - an
-    // invalid recommendation degrades to the safe no-op, not a fabricated BUY/SELL.
-    expect(emitTradeIdea).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.agent).toBe('FundamentalAgent');
   });
 
   it('normalizes a 0-100-scale confidence answer down to the real 0-1 TRADE_IDEA_GENERATED convention', async () => {
@@ -216,10 +217,23 @@ describe('FundamentalAnalysisAgent - all AI providers unavailable (Phase 11 chao
     delete process.env.GEMINI_API_KEY;
   });
 
-  it('emits no trade idea and does not throw when every real AI provider has failed', async () => {
+  it('emits HOLD DATA_UNAVAILABLE and does not throw when every real AI provider has failed', async () => {
     routeTask.mockRejectedValue(new Error('All AI providers failed for task FundamentalAgent. Last error: AI provider did not respond within 20000ms'));
 
     await expect(agent.analyzeFundamentals()).resolves.not.toThrow();
-    expect(emitTradeIdea).not.toHaveBeenCalled();
+    expect(emitTradeIdea).toHaveBeenCalled();
+    expect(emitTradeIdea.mock.calls[0][0].side).toBe('HOLD');
+    expect(emitTradeIdea.mock.calls[0][0].reasoning).toMatch(/DATA_UNAVAILABLE/);
+  });
+
+  it('a second tick still runs after the previous tick threw', async () => {
+    routeTask
+      .mockRejectedValueOnce(new Error('provider down'))
+      .mockResolvedValueOnce({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.8, reasoning: 'recovered' }), aiCallId: 'c-ok', provider: 'gemini', latency: 10 });
+    await agent.analyzeFundamentals();
+    emitTradeIdea.mockClear();
+    await agent.analyzeFundamentals();
+    expect(emitTradeIdea).toHaveBeenCalled();
+    expect(emitTradeIdea.mock.calls[0][0].side).toBe('BUY');
   });
 });

@@ -358,6 +358,14 @@ async function startServer() {
   }
 
   try {
+    const { hydrateRuntimeConfigFromDb } = await import('./src/server/config/effectiveRuntimeConfig');
+    const n = await hydrateRuntimeConfigFromDb();
+    console.log(`[EffectiveRuntimeConfig] Hydrated ${n} Settings overlay(s) from config_overrides (.env remains bootstrap; overlays win).`);
+  } catch (e: any) {
+    console.warn(`[EffectiveRuntimeConfig] Hydrate failed (env/defaults still apply): ${e.message}`);
+  }
+
+  try {
     marketDataWorker.start();
     console.log('[MarketDataWorker] Started at boot (independent of Autobot). RiskEngine data_freshness still requires a fresh tick.');
   } catch (e: any) {

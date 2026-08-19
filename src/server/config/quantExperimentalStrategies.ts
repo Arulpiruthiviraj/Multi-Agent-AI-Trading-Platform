@@ -9,6 +9,7 @@
  * ==========================================================
  */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
+import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
 
 export interface ExperimentalStrategyRow {
   id: string;
@@ -104,5 +105,5 @@ export function experimentalStrategyRow(id: string): ExperimentalStrategyRow | u
 export function isExperimentalStrategyLive(id: string): boolean {
   const row = experimentalStrategyRow(id);
   if (!row) return false;
-  return process.env[row.enabledEnvVar] === 'true';
+  return isRuntimeFlagEnabled(row.enabledEnvVar);
 }

@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
-import { Brain, LayoutDashboard, Shield, Terminal, Wallet } from 'lucide-react';
+import { Brain, LayoutDashboard, Settings, Shield, Terminal, Wallet } from 'lucide-react';
 
-export type MobileTabId = 'cockpit' | 'positions' | 'brain' | 'risk' | 'terminal';
+export type MobileTabId = 'cockpit' | 'positions' | 'brain' | 'risk' | 'terminal' | 'settings';
 
 export interface MobileTabDef {
   id: MobileTabId;
@@ -16,6 +16,7 @@ export const MOBILE_TABS: MobileTabDef[] = [
   { id: 'brain', label: 'AI Brain', shortLabel: 'AI', icon: Brain },
   { id: 'risk', label: 'Risk', shortLabel: 'Risk', icon: Shield },
   { id: 'terminal', label: 'Terminal', shortLabel: 'Ops', icon: Terminal },
+  { id: 'settings', label: 'Settings', shortLabel: 'Set', icon: Settings },
 ];
 
 export function mobileTabIndex(id: MobileTabId): number {

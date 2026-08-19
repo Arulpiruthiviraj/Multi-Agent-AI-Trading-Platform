@@ -30,6 +30,25 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     expect(result.maxQuantity).toBe(5); // 500/100
   });
 
+  it('real bug found and fixed: order_notional_cap reports FAIL, not PASS, when the risk-per-share cap alone zeroes out sizing', async () => {
+    // maxRiskAmount = 1000 * 0.001 = 1; riskPerShare = 100 * 0.05 (STOP_LOSS_ASSUMPTION_PCT) = 5.
+    // maxSharesByRisk = floor(1/5) = 0, while maxSharesByCapital=30 and maxSharesByBuyingPower=1000
+    // are both healthy - the risk cap alone is what zeroes out maxQuantity, but before this fix
+    // order_notional_cap's passed/status only ever looked at maxSharesByCapital and reported
+    // PASS, hiding the real reason from the risk_gate_results audit trail (sufficient_size still
+    // correctly failed and rejected the trade either way - this is an honesty/observability gap).
+    const result = await calculatePositionSizing(baseCtx({
+      currentPrice: 100, accountEquity: 1000, maxPortfolioRiskPct: 0.001,
+      maxTradeSizeDollar: 3000, buyingPower: 100000,
+    }));
+    expect(result.maxQuantity).toBe(0);
+    const gate = result.gates.find(g => g.gate === 'order_notional_cap');
+    expect(gate?.detail.maxSharesByRisk).toBe(0);
+    expect(gate?.detail.maxSharesByCapital).toBeGreaterThan(0);
+    expect(gate?.passed).toBe(false);
+    expect(gate?.detail.status).toBe('FAIL');
+  });
+
   it('caps a BUY by single-symbol concentration (20% of equity) when an existing position already uses most of the room', async () => {
     const result = await calculatePositionSizing(baseCtx({
       accountEquity: 100000, currentPrice: 100, maxTradeSizeDollar: 100000, buyingPower: 100000,

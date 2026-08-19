@@ -67,14 +67,21 @@ export default function LiveBotTelemetryPanel({ autoBotConfig }: { autoBotConfig
   const [upl, setUpl] = useState<number | null>(null);
   
   useEffect(() => {
+    // Real bug found and fixed this pass: this fetch had no unmount/supersession guard, unlike
+    // the sibling SYSTEM_METRICS subscription effect right above it. A tab-switch-away before the
+    // request resolved, or autoBotConfig.enabled toggling twice in quick succession, could call
+    // setWinRate/setUpl on an unmounted component or let an earlier request overwrite a later one.
+    let cancelled = false;
     fetch('/api/v1/pnl/analytics').then(r => r.json()).then(d => {
+      if (cancelled) return;
       if (d.summary) {
         const wr = d.summary.winRate;
         setWinRate(typeof wr === 'number' && Number.isFinite(wr) && d.summary.sampleSize > 0 ? wr : null);
         const pnl = d.summary.totalProfitLoss;
         setUpl(typeof pnl === 'number' && Number.isFinite(pnl) ? pnl : null);
       }
-    }).catch(console.error);
+    }).catch((e) => { if (!cancelled) console.error(e); });
+    return () => { cancelled = true; };
   }, [autoBotConfig.enabled]);
   
   return (

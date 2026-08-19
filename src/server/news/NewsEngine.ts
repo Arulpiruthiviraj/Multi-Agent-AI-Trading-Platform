@@ -22,6 +22,7 @@ import { deskIntelligence } from '../config/deskIntelligence';
 import { recordNewsCatalyst } from '../services/NewsCatalystStore';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
+import { notePipelineAgentFailure, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 
 // A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
 // entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.
@@ -76,6 +77,8 @@ export class NewsEngine {
   }
 
   private async runPipeline() {
+    notePipelineAgentTick('NewsAgent');
+    try {
     const rawArticles = await this.providerManager.fetchAllLatest();
     let llmCallsThisCycle = 0;
     
@@ -287,6 +290,10 @@ export class NewsEngine {
       } catch (err) {
         console.error('[NewsEngine] Pipeline error for article:', raw.title, err);
       }
+    }
+    } catch (e) {
+      notePipelineAgentFailure('NewsAgent', e);
+      console.error('[NewsEngine] Pipeline tick failed (interval continues):', e);
     }
   }
 }

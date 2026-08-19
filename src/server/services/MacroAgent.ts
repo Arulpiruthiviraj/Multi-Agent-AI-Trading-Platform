@@ -17,6 +17,13 @@ import { runtimeIntervals } from '../config/runtimeIntervals';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
+import { resolveIdeaUniverse } from '../core/ideaUniverse';
+import {
+  notePipelineAgentFailure,
+  notePipelineAgentGated,
+  notePipelineAgentSuccess,
+  notePipelineAgentTick,
+} from '../core/pipelineAgentHealth';
 
 const UNKNOWN_MACRO = { inflation: 'UNKNOWN', fedFundsRate: 'UNKNOWN', unemployment: 'UNKNOWN' };
 const RATE_LIMITED_MACRO = { inflation: 'RATE_LIMITED', fedFundsRate: 'RATE_LIMITED', unemployment: 'RATE_LIMITED' };
@@ -39,14 +46,32 @@ interface CachedAnalysis { recommendation: string; confidence: number; reasoning
 
 export class MacroEconomyAgent {
   private intervalId: NodeJS.Timeout | null = null;
-  private watchedSymbols = ['NVDA', 'AAPL', 'TSLA'];
+  private inFlight = false;
   /** See FundamentalAgent.ts's identical field - set before any gate check so a stale value with
    * the interval supposedly running reveals a silently wedged tick rather than a gated-off one. */
   public lastTickAt: number | null = null;
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.analyzeMacro(), runtimeIntervals.macroAgentMs);
+    this.intervalId = setInterval(() => { void this.tickSafely(); }, runtimeIntervals.macroAgentMs);
+    void this.tickSafely();
+  }
+
+  private async tickSafely(): Promise<void> {
+    if (this.inFlight) {
+      this.lastTickAt = Date.now();
+      notePipelineAgentTick('MacroAgent');
+      return;
+    }
+    this.inFlight = true;
+    try {
+      await this.analyzeMacro();
+    } catch (e) {
+      notePipelineAgentFailure('MacroAgent', e);
+      logErrorSafely('[MacroAgent] Tick failed (interval continues):', e);
+    } finally {
+      this.inFlight = false;
+    }
   }
 
   stop() {
@@ -119,35 +144,46 @@ export class MacroEconomyAgent {
      return UNKNOWN_MACRO;
   }
 
-  private async analyzeMacro() {
+  private emitHold(traceId: string, symbol: string, reasoning: string): void {
+    eventBus.emitTradeIdea({
+      traceId,
+      symbol,
+      side: 'HOLD',
+      confidence: 0,
+      reasoning,
+      agent: 'MacroAgent',
+    });
+  }
+
+  async analyzeMacro() {
     this.lastTickAt = Date.now();
-    if (!isLiveIdeaGenerationEnabled()) return;
-    if (!isPipelineAgentEnabled('MacroAgent')) return;
-    const symbol = this.watchedSymbols[Math.floor(Date.now() / 75000) % this.watchedSymbols.length];
+    notePipelineAgentTick('MacroAgent');
+    if (!isLiveIdeaGenerationEnabled()) {
+      notePipelineAgentGated('MacroAgent');
+      return;
+    }
+    if (!isPipelineAgentEnabled('MacroAgent')) {
+      notePipelineAgentGated('MacroAgent');
+      return;
+    }
+    const universe = resolveIdeaUniverse();
+    if (universe.length === 0) {
+      notePipelineAgentGated('MacroAgent');
+      return;
+    }
+    const symbol = universe[Math.floor(Date.now() / 75000) % universe.length];
     const traceId = generateTraceId(symbol);
-    
+
     try {
        const data = await this.fetchMacro();
        if (data.inflation === "RATE_LIMITED") {
-          eventBus.emitTradeIdea({
-             traceId,
-             symbol,
-             side: "HOLD",
-             confidence: 0,
-             reasoning: "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.",
-             agent: "MacroAgent"
-          });
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.");
+          notePipelineAgentSuccess('MacroAgent');
           return;
        }
        if (data.inflation === "UNKNOWN") {
-          eventBus.emitTradeIdea({
-             traceId,
-             symbol,
-             side: "HOLD",
-             confidence: 0,
-             reasoning: "DATA_UNAVAILABLE: Macro data providers not configured.",
-             agent: "MacroAgent"
-          });
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: Macro data providers not configured.");
+          notePipelineAgentSuccess('MacroAgent');
           return;
        }
 
@@ -164,12 +200,13 @@ export class MacroEconomyAgent {
              analysis = cached;
           } else {
              const res = await AIRouter.getInstance().routeTask('MacroAgent', `Analyze these macroeconomic indicators for their impact on ${symbol}: CPI ${data.inflation}%, Fed Funds Rate ${data.fedFundsRate}%, Unemployment ${data.unemployment}%. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
-             if (!res.content) return;
+             if (!res.content) {
+                this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Macro LLM returned an empty response.');
+                notePipelineAgentFailure('MacroAgent', 'empty LLM content');
+                return;
+             }
 
              const raw = JSON.parse(res.content);
-             // Hardening pass, Phase 5: see FundamentalAgent.ts's identical comment - validated
-             // once here, immediately after parsing, BEFORE caching, so a cache hit always
-             // replays an already-validated result.
              analysis = {
                 recommendation: coerceEnum(raw.recommendation, TRADE_SIDE_VALUES, 'HOLD'),
                 confidence: normalizeConfidence01(raw.confidence),
@@ -181,22 +218,27 @@ export class MacroEconomyAgent {
              await ExternalDataCache.set('ai-cache', cacheDataType, symbol, analysis);
           }
 
-          if (analysis.recommendation !== "HOLD") {
-             eventBus.emitTradeIdea({
-                traceId,
-                symbol,
-                side: analysis.recommendation,
-                confidence: analysis.confidence,
-                reasoning: `[Macro AI] ${analysis.reasoning}`,
-                agent: "MacroAgent",
-                aiCallId,
-                provider,
-                latencyMs,
-             });
-          }
+          eventBus.emitTradeIdea({
+             traceId,
+             symbol,
+             side: analysis.recommendation,
+             confidence: analysis.confidence,
+             reasoning: `[Macro AI] ${analysis.reasoning}`,
+             agent: "MacroAgent",
+             aiCallId,
+             provider,
+             latencyMs,
+          });
+          notePipelineAgentSuccess('MacroAgent');
+          return;
        }
+
+       this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Macro data ingested but no LLM is configured for a directional idea.');
+       notePipelineAgentSuccess('MacroAgent');
     } catch (e) {
        logErrorSafely('[MacroAgent] Failed:', e);
+       notePipelineAgentFailure('MacroAgent', e);
+       this.emitHold(generateTraceId(symbol), symbol, 'DATA_UNAVAILABLE: Macro analysis failed this tick; the next scheduled tick will still run.');
     }
   }
 }

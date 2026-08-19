@@ -42,10 +42,10 @@ describe('mobileUtils', () => {
     expect(riskGateOrder.gates.length).toBe(24);
   });
 
-  it('mobile tabs define 5 core views', () => {
-    expect(MOBILE_TABS).toHaveLength(5);
-    expect(MOBILE_TABS.map((t) => t.id)).toEqual(['cockpit', 'positions', 'brain', 'risk', 'terminal']);
+  it('mobile tabs define 6 core views including settings', () => {
+    expect(MOBILE_TABS).toHaveLength(6);
+    expect(MOBILE_TABS.map((t) => t.id)).toEqual(['cockpit', 'positions', 'brain', 'risk', 'terminal', 'settings']);
     expect(mobileTabIndex('brain')).toBe(2);
-    expect(clampTabIndex(99)).toBe(4);
+    expect(clampTabIndex(99)).toBe(5);
   });
 });

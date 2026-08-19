@@ -41,6 +41,7 @@ import { rsiEngine } from '../engines/RSIEngine';
 import { macdEngine } from '../engines/MACDEngine';
 import { quantThresholds } from '../config/quantThresholds';
 import { generateTraceId } from '../core/traceId';
+import { notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 
 export class TechnicalProposerAgent {
   // Tick-driven via MARKET_DATA (MarketDataWorker WebSocket), not a standalone 60s timer.
@@ -72,8 +73,15 @@ export class TechnicalProposerAgent {
   }
 
   analyzeTick(data: { symbol: string, price: number, volume: number, timestamp: string }) {
-    if (!isLiveIdeaGenerationEnabled()) return;
-    if (!isPipelineAgentEnabled('TechnicalAgent')) return;
+    notePipelineAgentTick('TechnicalAgent');
+    if (!isLiveIdeaGenerationEnabled()) {
+      notePipelineAgentGated('TechnicalAgent');
+      return;
+    }
+    if (!isPipelineAgentEnabled('TechnicalAgent')) {
+      notePipelineAgentGated('TechnicalAgent');
+      return;
+    }
 
     if (!this.priceHistory[data.symbol]) {
       this.priceHistory[data.symbol] = [];
@@ -159,6 +167,12 @@ export class TechnicalProposerAgent {
         latencyMs: Date.now() - startedAt,
         indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, macdSignal: macd.signal, bbUpper: bb.upper, bbLower: bb.lower },
       });
+      // Real bug found and fixed this pass: notePipelineAgentSuccess was only called after this
+      // Momentum Breakout branch, not the Mean Reversion / Overbought branches below - a real,
+      // successful SELL (overbought) or BUY (mean-reversion) signal still left the pipeline health
+      // heartbeat's lastSuccessfulTickAt/currentState stale, misleading anything reading
+      // getPipelineAgentSnapshot()/pipelineAgentHealth about whether this agent was actually alive.
+      notePipelineAgentSuccess('TechnicalAgent');
     }
 
     // Mean Reversion
@@ -178,6 +192,7 @@ export class TechnicalProposerAgent {
         latencyMs: Date.now() - startedAt,
         indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower },
       });
+      notePipelineAgentSuccess('TechnicalAgent');
     }
 
     // Overbought condition
@@ -197,6 +212,7 @@ export class TechnicalProposerAgent {
         latencyMs: Date.now() - startedAt,
         indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower },
       });
+      notePipelineAgentSuccess('TechnicalAgent');
     }
   }
 }

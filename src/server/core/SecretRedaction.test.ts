@@ -105,4 +105,36 @@ describe('redactSecrets - JWT / Bearer / query / objects', () => {
     expect(out.nested.authorization).toBe('[REDACTED]');
     expect(out.nested.price).toBe(10);
   });
+
+  it('real bug found and fixed: redacts camelCase compound key names actually used for broker credentials (secretKey, apiSecret), not just exact "secret"/"token"', () => {
+    // BrokerManager.ts's authenticate() call passes {apiKey, secretKey}; CoinbaseBroker.ts reads
+    // credentials?.apiSecret - neither matched the old exact-match-only SENSITIVE_KEY regex, and
+    // decrypted DB-stored broker credentials never populate process.env, so the value-matching
+    // fallback in redactSecrets() didn't catch them either.
+    const out = redactSecretsDeep({
+      apiKey: 'pub-key-value',
+      secretKey: 'should-not-leak-secret-key',
+      apiSecret: 'should-not-leak-api-secret',
+      clientSecret: 'should-not-leak-client-secret',
+      refreshToken: 'should-not-leak-refresh-token',
+      symbol: 'AAPL',
+    }) as any;
+    expect(out.secretKey).toBe('[REDACTED]');
+    expect(out.apiSecret).toBe('[REDACTED]');
+    expect(out.clientSecret).toBe('[REDACTED]');
+    expect(out.refreshToken).toBe('[REDACTED]');
+    expect(out.symbol).toBe('AAPL');
+  });
+
+  it('real bug found and fixed: redacts Basic auth credentials, not just Bearer', () => {
+    const out = redactSecrets('Authorization: Basic dXNlcjpwYXNzd29yZA==');
+    expect(out).toContain('Basic [REDACTED]');
+    expect(out).not.toContain('dXNlcjpwYXNzd29yZA==');
+  });
+
+  it('real bug found and fixed: redacts client_secret query parameters (a common OAuth param name), not just secret', () => {
+    const out = redactSecrets('https://x.test/oauth/token?client_secret=supersecretvalue&grant_type=refresh_token');
+    expect(out).toContain('client_secret=[REDACTED]');
+    expect(out).not.toContain('supersecretvalue');
+  });
 });

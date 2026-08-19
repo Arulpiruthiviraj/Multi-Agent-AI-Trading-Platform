@@ -1167,3 +1167,25 @@ export const observabilityEvents = sqliteTable('observability_events', {
   categoryIdx: index('idx_observability_events_category').on(table.category, table.ts),
   eventTypeIdx: index('idx_observability_events_type').on(table.eventType, table.ts),
 }));
+
+/** Explicit operator overlays for catalogued .env keys. Absence of a row means ENV/default wins. */
+export const configOverrides = sqliteTable('config_overrides', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: text('updated_at').notNull(),
+  updatedBy: text('updated_by').notNull().default('operator'),
+});
+
+/** Audit trail for Settings overlay changes. Never stores secret values. */
+export const configChangeEvents = sqliteTable('config_change_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  setting: text('setting').notNull(),
+  oldEffective: text('old_effective'),
+  newValue: text('new_value'),
+  source: text('source').notNull(),
+  operator: text('operator').notNull(),
+  restartRequired: integer('restart_required', { mode: 'boolean' }).notNull().default(true),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  settingIdx: index('idx_config_change_events_setting').on(table.setting, table.createdAt),
+}));

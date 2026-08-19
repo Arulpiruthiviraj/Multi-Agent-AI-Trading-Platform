@@ -28,6 +28,8 @@ import { kronosEngine } from '../engines/kronos/KronosEngine';
 import { ForecastPrediction } from '../engines/forecasting/IForecastEngine';
 import { quantThresholds } from '../config/quantThresholds';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
+import { generateTraceId } from '../core/traceId';
 
 // Chronos needs a real window of history to say anything meaningful about the next few steps -
 // this is a real minimum, not an arbitrary one: too short a context is indistinguishable from
@@ -57,8 +59,15 @@ export class KronosForecastAgent {
   }
 
   private async onTick(data: { symbol?: string; price?: number }) {
-    if (!isLiveIdeaGenerationEnabled()) return;
-    if (!isPipelineAgentEnabled('KronosEngine')) return;
+    notePipelineAgentTick('KronosEngine');
+    if (!isLiveIdeaGenerationEnabled()) {
+      notePipelineAgentGated('KronosEngine');
+      return;
+    }
+    if (!isPipelineAgentEnabled('KronosEngine')) {
+      notePipelineAgentGated('KronosEngine');
+      return;
+    }
     if (!data?.symbol || typeof data.price !== 'number' || !Number.isFinite(data.price)) return;
 
     const history = this.priceHistory[data.symbol] || (this.priceHistory[data.symbol] = []);
@@ -76,6 +85,7 @@ export class KronosForecastAgent {
       const prediction = await kronosEngine.predict(data.symbol, HORIZON, TIMEFRAME, history.slice());
       this.broadcastForecast(prediction);
     } catch (e: any) {
+      notePipelineAgentFailure('KronosEngine', e);
       // Local inference service unreachable/erroring - already logged inside KronosEngine.
       // Never let this take down the tick-handling path for other agents.
     }
@@ -101,7 +111,12 @@ export class KronosForecastAgent {
       }
 
       eventBus.emitTradeIdea({
-        traceId: `kronos-${Date.now()}`,
+        // Real bug found and fixed this pass: `kronos-${Date.now()}` collides across symbols at
+        // 1ms resolution (plausible under a burst of ticks across several subscribed symbols),
+        // silently merging two unrelated decisions into one trace for RiskEngine/OMS/fill
+        // observability. generateTraceId(symbol) is the standard helper every other idea agent
+        // uses, mixing in the symbol plus random bytes specifically to avoid this.
+        traceId: generateTraceId(prediction.symbol),
         symbol: prediction.symbol,
         side: prediction.prediction,
         confidence: prediction.confidence,
@@ -109,6 +124,7 @@ export class KronosForecastAgent {
         reasoning: `Chronos forecasts ${prediction.prediction} (expected move ${prediction.expectedMove} over ${prediction.forecastHorizon} steps, support ${prediction.support}, resistance ${prediction.resistance}).`,
         agent: 'KronosEngine',
       });
+      notePipelineAgentSuccess('KronosEngine');
     }
   }
 }

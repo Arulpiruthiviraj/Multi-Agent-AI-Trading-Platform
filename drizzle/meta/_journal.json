@@ -281,6 +281,13 @@
       "when": 1786990000000,
       "tag": "0039_global_auto_liquidation",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1787000000000,
+      "tag": "0040_config_overrides",
+      "breakpoints": true
     }
   ]
 }

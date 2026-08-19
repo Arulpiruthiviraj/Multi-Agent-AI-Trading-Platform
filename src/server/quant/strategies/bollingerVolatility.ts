@@ -51,7 +51,11 @@ export const bollingerVolatility: StrategyDefinition = {
     );
     check(
       `ADX trend strength (>= ${t.adxTrendMin})`,
-      trend.dmi.adx !== null && trend.dmi.adx >= t.adxTrendMin,
+      // Real bug found and fixed this pass: trend.dmi itself is typed DMIResult | null (calculateDMI
+      // returns null below its minimum bar requirement) - this only checked .adx !== null, which
+      // throws a TypeError if trend.dmi is null. trendFollowing.ts's own equivalent check guards
+      // trend.dmi first; matching that pattern here.
+      trend.dmi !== null && trend.dmi.adx !== null && trend.dmi.adx >= t.adxTrendMin,
     );
 
     if (priceAction.consolidating && volatility.regime === 'EXPANDING') {

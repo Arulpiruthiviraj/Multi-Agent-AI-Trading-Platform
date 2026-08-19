@@ -3,6 +3,7 @@
  * Flags default off. Does not enable LIVE or Quant.
  */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
+import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
 
 export interface ContinuousIntelligenceConfig {
   opportunityLoopEnabledEnvVar: string;
@@ -57,9 +58,9 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
 export const continuousIntelligence: ContinuousIntelligenceConfig = loadContinuousIntelligence();
 
 export function isOpportunityLoopEnabled(): boolean {
-  return process.env[continuousIntelligence.opportunityLoopEnabledEnvVar] === 'true';
+  return isRuntimeFlagEnabled(continuousIntelligence.opportunityLoopEnabledEnvVar);
 }
 
 export function isPortfolioIntelEnabled(): boolean {
-  return process.env[continuousIntelligence.portfolioIntelEnabledEnvVar] === 'true';
+  return isRuntimeFlagEnabled(continuousIntelligence.portfolioIntelEnabledEnvVar);
 }

@@ -59,7 +59,8 @@ export const statisticalMeanReversion: StrategyDefinition = {
     );
     check(
       `ADX below range ceiling (< ${t.adxRangeMax})`,
-      ctx.trend.dmi.adx !== null && ctx.trend.dmi.adx < t.adxRangeMax,
+      // Real bug found and fixed this pass: trend.dmi is DMIResult | null - guard it before .adx.
+      ctx.trend.dmi !== null && ctx.trend.dmi.adx !== null && ctx.trend.dmi.adx < t.adxRangeMax,
     );
 
     if (bullish && regime.regime === 'BEARISH_TREND') {

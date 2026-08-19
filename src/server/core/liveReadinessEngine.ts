@@ -16,6 +16,7 @@ import {
   type StrategyBoardRow,
 } from '../research/liveRequirementMatrix';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+import { isRuntimeFlagEnabled } from '../config/effectiveRuntimeConfig';
 import { db } from '../db';
 import { trades } from '../db/schema';
 
@@ -84,7 +85,7 @@ export function evaluateLiveReadiness(): LiveReadinessReport {
   const promo = liveGoNoGo(e);
   const edge = tradingEdgeScore(e);
   const ca = canadianMarketReadiness();
-  const quantOn = process.env.QUANT_ENGINE_ENABLED === 'true';
+  const quantOn = isRuntimeFlagEnabled('QUANT_ENGINE_ENABLED');
   const paper = organicPaperSnapshot();
   const paperCountFloorsMet =
     paper.closedTradeCount >= researchSafety.minPaperTrades

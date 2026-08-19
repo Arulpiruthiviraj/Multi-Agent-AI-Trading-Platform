@@ -41,6 +41,7 @@ import { BrokerPlugin, BrokerCapabilities, Order, Position, Portfolio } from './
 import { networkEndpoints } from '../server/config/networkEndpoints';
 import { assertLiveOrdersArmed } from '../server/core/LiveTradingConfirmation';
 import { isPaperTradingOnlyEnforced } from '../server/core/tradingModeEnv';
+import { logErrorSafely } from '../server/core/SecretRedaction';
 
 const API_HOST = networkEndpoints.broker.coinbase.apiHost;
 const API_BASE = `https://${API_HOST}`;
@@ -100,7 +101,7 @@ export class CoinbaseBroker implements BrokerPlugin {
       await this.fetchCoinbase('GET', '/api/v3/brokerage/accounts');
       return true;
     } catch (e) {
-      console.error(`[${this.name}] Authentication failed`, e);
+      logErrorSafely(`[${this.name}] Authentication failed`, e);
       return false;
     }
   }

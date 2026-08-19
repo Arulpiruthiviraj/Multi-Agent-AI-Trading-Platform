@@ -344,10 +344,25 @@ export class RiskEngine {
                 }
                 approved = false;
                 maxQuantity = 0;
-                reasoning = 'INVALID_ACCOUNT_EQUITY: broker equity is missing or not positive. No placeholder balance is used.';
+                // Real bug found and fixed this pass: this branch used to always report
+                // INVALID_ACCOUNT_EQUITY as the rejection reason, even when an earlier gate
+                // (emergency_stop, autobot_enabled, same_symbol_cooldown, post_loss_cooldown,
+                // daily_trade_limit, duplicate_signal - all already recorded above) had already
+                // failed first. That contradicted this module's own "first gate to fail in this
+                // order" contract and misdirected incident triage (e.g. reporting a bad equity
+                // read during a broker outage instead of the real cause: trading already paused).
+                const earlyFirstFailure = gateResults.find(g => !g.passed);
+                const rejectionGate = earlyFirstFailure?.gate ?? INVALID_ACCOUNT_EQUITY;
+                reasoning = rejectionGate === 'emergency_stop' ? emergencyStopReason
+                    : rejectionGate === 'autobot_enabled' ? autobotReason
+                    : rejectionGate === 'same_symbol_cooldown' ? sameSymbol.reason
+                    : rejectionGate === 'post_loss_cooldown' ? postLoss.reason
+                    : rejectionGate === 'daily_trade_limit' ? dailyTrades.reason
+                    : rejectionGate === 'duplicate_signal' ? duplicate.reason
+                    : 'INVALID_ACCOUNT_EQUITY: broker equity is missing or not positive. No placeholder balance is used.';
                 await this.persistThenPublishAssessment(proposal, {
                     approved: false, maxQuantity: 0, reasoning,
-                    rejectionGate: INVALID_ACCOUNT_EQUITY,
+                    rejectionGate,
                     accountEquity: undefined, buyingPower: portfolio.buyingPower,
                     gateResults,
                 });

@@ -12,6 +12,7 @@ import {
 import { deriveLifecycleStatus, emptyEvidence, liveGoNoGo, assertPromotionQuarantine } from './promotionEngine';
 import { freezeStrategyVersion } from './strategySpecs';
 import { findStrategy, resolveStrategiesForLiveEvaluation } from '../quant/strategies/StrategyEngine';
+import { quantExperimentalStrategies } from '../config/quantExperimentalStrategies';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { tradingEngine } from '../engines/TradingEngine';
 import { researchComparisonMatrix } from './strategyEvidence';
@@ -205,11 +206,20 @@ describe('Phase 21 evidence-path invariants', () => {
   });
 
   it('experimental strategies stay out of live evaluateAll unless their env flag is true', () => {
-    expect(process.env.QUANT_SMC_STRATEGY_ENABLED).not.toBe('true');
-    expect(findStrategy('SMC_LIQUIDITY_SWEEP')?.id).toBe('SMC_LIQUIDITY_SWEEP');
-    const liveIds = resolveStrategiesForLiveEvaluation().map((s) => s.id);
-    expect(liveIds).not.toContain('SMC_LIQUIDITY_SWEEP');
-    expect(liveIds).toEqual(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'MEAN_REVERSION', 'TREND_FOLLOWING', 'RANGE_REVERSION']);
+    const experimentalVars = quantExperimentalStrategies.strategies.map((s) => s.enabledEnvVar);
+    const prev = Object.fromEntries(experimentalVars.map((k) => [k, process.env[k]]));
+    for (const k of experimentalVars) delete process.env[k];
+    try {
+      expect(findStrategy('SMC_LIQUIDITY_SWEEP')?.id).toBe('SMC_LIQUIDITY_SWEEP');
+      const liveIds = resolveStrategiesForLiveEvaluation().map((s) => s.id);
+      expect(liveIds).not.toContain('SMC_LIQUIDITY_SWEEP');
+      expect(liveIds).toEqual(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'MEAN_REVERSION', 'TREND_FOLLOWING', 'RANGE_REVERSION']);
+    } finally {
+      for (const k of experimentalVars) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k];
+      }
+    }
   });
 
   it('Autobot OFF disables live idea generation', () => {

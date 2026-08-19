@@ -49,11 +49,12 @@ export const oscillatorMomentum: StrategyDefinition = {
     );
     check(
       `ADX not dead (< ${t.adxTrendMin} still allowed as confirmation only if DI aligned)`,
-      trend.dmi.adx !== null,
+      // Real bug found and fixed this pass: trend.dmi is DMIResult | null - guard it before .adx.
+      trend.dmi !== null && trend.dmi.adx !== null,
     );
     check(
       bullish ? '+DI > -DI' : '-DI > +DI',
-      bullish ? trend.dmi.plusDI > trend.dmi.minusDI : trend.dmi.minusDI > trend.dmi.plusDI,
+      trend.dmi !== null && (bullish ? trend.dmi.plusDI > trend.dmi.minusDI : trend.dmi.minusDI > trend.dmi.plusDI),
     );
     check(
       'Favorable market regime',

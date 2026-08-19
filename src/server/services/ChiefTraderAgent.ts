@@ -40,7 +40,7 @@ import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { db } from '../db';
 import { agentPerformanceStats, agentConfidenceCalibration } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
-import { EvidenceAggregator, Evidence } from './EvidenceAggregator';
+import { EvidenceAggregator, Evidence, coalesceEvidenceByAgent } from './EvidenceAggregator';
 import { bucketFor } from './ConfidenceCalibration';
 import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
@@ -55,6 +55,7 @@ import { parseResearchNote, isBullBearResearchEnabled } from '../ai/research/par
 import { bullBearResearchConfig } from '../config/bullBearResearch';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { type LastConsensusOutcome } from '../core/consensusExplanation';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
@@ -87,11 +88,14 @@ function parseLlmJson(content: string | undefined): unknown {
 }
 
 export class ChiefTraderAgent {
-  private recentIdeas: any[] = [];
-  /** Per-symbol count of in-flight adversarial debates. evaluateConsensus must not run for a
-   *  symbol while this is > 0 - otherwise a later low-confidence idea (or a second agent)
-   *  would approve the trade before the debate that was supposed to challenge it finished. */
-  private pendingDebates: Map<string, number> = new Map();
+    private recentIdeas: any[] = [];
+    private lastDebateStartedAt: Map<string, number> = new Map();
+    private lastConsensusEvalAt: Map<string, number> = new Map();
+    private lastConsensusOutcome: LastConsensusOutcome | null = null;
+    /** Per-symbol count of in-flight adversarial debates. evaluateConsensus must not run for a
+     *  symbol while this is > 0 - otherwise a later low-confidence idea (or a second agent)
+     *  would approve the trade before the debate that was supposed to challenge it finished. */
+    private pendingDebates: Map<string, number> = new Map();
   
   // Dynamic weights based on historic performance
   private agentWeights: Record<string, number> = { ...defaultAgentWeights };
@@ -157,8 +161,45 @@ export class ChiefTraderAgent {
     return (this.pendingDebates.get(symbol) || 0) > 0;
   }
 
-  private pushDebateFailClosed(idea: { traceId: string, symbol: string, currentPrice?: number }, why: string): void {
-    this.recentIdeas.push({
+  getLastConsensusOutcome(): LastConsensusOutcome | null {
+    return this.lastConsensusOutcome;
+  }
+
+  /** Last idea per (agent, symbol) wins. Returns true when this replaced an existing vote. */
+  private upsertIdea(idea: any): boolean {
+    const idx = this.recentIdeas.findIndex(i => i.symbol === idea.symbol && i.agent === idea.agent);
+    if (idx >= 0) {
+      this.recentIdeas[idx] = idea;
+      return true;
+    }
+    this.recentIdeas.push(idea);
+    return false;
+  }
+
+  private debateSuccessCount(debateResult: any): number {
+    if (typeof debateResult?.successCount === 'number' && Number.isFinite(debateResult.successCount)) {
+      return Math.max(0, Math.floor(debateResult.successCount));
+    }
+    const results = Array.isArray(debateResult?.results) ? debateResult.results : [];
+    return results.filter((r: any) => r?.status === 'success').length;
+  }
+
+  private debateTelemetry(debateResult: any, successCount: number, verdict: string, confidence: number) {
+    const results = Array.isArray(debateResult?.results) ? debateResult.results : [];
+    const failed = results.filter((r: any) => r?.status && r.status !== 'success');
+    return {
+      providers_attempted: results.length || successCount,
+      providers_succeeded: successCount,
+      providers_failed: failed.length,
+      provider_errors: failed.map((r: any) => `${r.provider || 'unknown'}: ${r.error || r.status}`),
+      final_verdict: verdict,
+      confidence,
+    };
+  }
+
+  private pushDebateFailClosed(idea: { traceId: string, symbol: string, currentPrice?: number }, why: string, debateResult?: any): void {
+    const telemetry = this.debateTelemetry(debateResult, 0, 'HOLD', tradingSafety.debateResultConfidence);
+    this.upsertIdea({
       traceId: idea.traceId,
       symbol: idea.symbol,
       side: 'HOLD',
@@ -166,6 +207,7 @@ export class ChiefTraderAgent {
       currentPrice: idea.currentPrice,
       reasoning: `Multi-Model Debate fail-closed HOLD (${why}). Adversarial debate did not produce a usable verdict.`,
       agent: 'ConsensusDebate',
+      debateTelemetry: telemetry,
     });
   }
 
@@ -177,7 +219,7 @@ export class ChiefTraderAgent {
       return;
     }
     console.log(`[ChiefTrader] Reviewing ${idea.side} on ${idea.symbol} proposed by ${idea.agent}`);
-    this.recentIdeas.push(idea);
+    const replacedSameAgent = this.upsertIdea(idea);
 
     // PortfolioMonitor stop/target/invalidation exits must not wait for a multi-model debate or
     // for a second independent entry agent - capital preservation is not a consensus question.
@@ -188,10 +230,20 @@ export class ChiefTraderAgent {
 
     const settings = await db.select().from(schema.settings).limit(1);
     const adversarialMode = settings.length > 0 ? settings[0].adversarialDebateMode : true;
+    const wantsDebate = adversarialMode && idea.confidence > tradingSafety.debateTriggerConfidence && !idea.agent.includes("Consensus");
+    const debateCooling = Date.now() - (this.lastDebateStartedAt.get(idea.symbol) ?? 0) < tradingSafety.consensusDebateCooldownMs;
 
-    if (adversarialMode && idea.confidence > tradingSafety.debateTriggerConfidence && !idea.agent.includes("Consensus")) {
+    if (wantsDebate && this.debatePending(idea.symbol)) {
+       console.log(`[ChiefTrader] Debate still in flight for ${idea.symbol} - storing ${idea.agent}'s idea and waiting before evaluating consensus.`);
+       return;
+    }
+
+    if (wantsDebate && debateCooling) {
+       console.log(`[ChiefTrader] Debate cooldown active for ${idea.symbol} - not starting another provider fan-out.`);
+    } else if (wantsDebate) {
         console.log(`[ChiefTrader] Triggering multi-model debate for ${idea.symbol}`);
         this.beginDebate(idea.symbol);
+        this.lastDebateStartedAt.set(idea.symbol, Date.now());
 
         const learnedRulesText = await loadDebateLearnedRulesText();
         let researchBlock = '';
@@ -208,7 +260,7 @@ export class ChiefTraderAgent {
             const bearNote = parseResearchNote(parseLlmJson(bearRes?.content), 'BEAR');
             researchBlock = `\n${bullBearResearchConfig.bullAgentName}: ${bullNote.thesisSummary}\n${bullBearResearchConfig.bearAgentName}: ${bearNote.thesisSummary}`;
             if (bearNote.confidence >= bullBearResearchConfig.bearHoldMinConfidence) {
-              this.recentIdeas.push({
+              this.upsertIdea({
                 traceId: idea.traceId,
                 symbol: idea.symbol,
                 side: 'HOLD',
@@ -226,35 +278,33 @@ export class ChiefTraderAgent {
         const debatePrompt = `Analyze this trading idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}.${learnedRulesText}${researchBlock} Actively search for reasons NOT to trade. If the setup is poor, verdict must be HOLD.`;
 
         AIRouter.getInstance().routeConsensus("ConsensusDebate", debatePrompt, idea.traceId).then(debateResult => {
-           const successCount: number = typeof debateResult?.successCount === 'number' ? debateResult.successCount : debateResult?.results?.length ?? 0;
+           const attempted = Array.isArray(debateResult?.results) ? debateResult.results.length : 0;
+           const successCount = this.debateSuccessCount(debateResult);
            if (successCount === 0) {
-              // Every provider errored/timed out - debateResult.consensus_verdict still defaults to
-              // a truthy "HOLD" string in that case, which used to slip past the `else` branch below
-              // and get reported as a real (0-model) debate result. Zero real models is not a debate.
-              console.warn(`[ChiefTrader] Debate for ${idea.symbol}: 0 of ${debateResult?.results?.length ?? 0} providers returned a usable verdict - fail-closed HOLD.`);
-              this.pushDebateFailClosed(idea, `0 of ${debateResult?.results?.length ?? 0} providers returned a usable verdict`);
+              console.warn(`[ChiefTrader] Debate for ${idea.symbol}: 0 of ${attempted} providers returned a usable verdict - fail-closed HOLD.`);
+              this.pushDebateFailClosed(idea, `0 of ${attempted} providers returned a usable verdict`, debateResult);
            } else if (debateResult && debateResult.consensus_verdict) {
               const consensusSide = debateResult.consensus_verdict;
-              // A single responding provider is not a multi-model consensus - do not weight it the
-              // same as a genuine 2+ model agreement.
               const consensusConfidence = successCount >= 2
                  ? tradingSafety.debateResultConfidence
                  : tradingSafety.debateResultConfidence * tradingSafety.debateSingleModelConfidencePenalty;
+              const telemetry = this.debateTelemetry(debateResult, successCount, consensusSide, consensusConfidence);
 
-              this.recentIdeas.push({
+              this.upsertIdea({
                  traceId: idea.traceId,
                  symbol: idea.symbol,
                  side: consensusSide,
                  confidence: consensusConfidence,
                  currentPrice: idea.currentPrice,
                  reasoning: successCount >= 2
-                    ? `Multi-Model Debate Concluded: ${consensusSide} (Based on ${successCount} models)`
+                    ? `Multi-Model Debate Concluded: ${consensusSide} (Based on ${successCount} successful models; ${telemetry.providers_failed} failed)`
                     : `Single-Model Debate Concluded: ${consensusSide} (Based on 1 model - confidence discounted, not treated as multi-model consensus)`,
-                 agent: 'ConsensusDebate'
+                 agent: 'ConsensusDebate',
+                 debateTelemetry: telemetry,
               });
            } else {
               console.warn(`[ChiefTrader] Debate for ${idea.symbol} returned no verdict - fail-closed HOLD (do not approve without a debate vote).`);
-              this.pushDebateFailClosed(idea, 'no verdict');
+              this.pushDebateFailClosed(idea, 'no verdict', debateResult);
            }
         }).catch(err => {
            console.error("[ChiefTrader] Debate failed", err);
@@ -262,14 +312,22 @@ export class ChiefTraderAgent {
         }).finally(() => {
            this.endDebate(idea.symbol);
            if (!this.debatePending(idea.symbol)) {
+             this.lastConsensusEvalAt.delete(idea.symbol);
              this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
            }
         });
-    } else if (this.debatePending(idea.symbol)) {
-       console.log(`[ChiefTrader] Debate still in flight for ${idea.symbol} - storing ${idea.agent}'s idea and waiting before evaluating consensus.`);
-    } else {
-       this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
+        return;
     }
+
+    if (this.debatePending(idea.symbol)) {
+       console.log(`[ChiefTrader] Debate still in flight for ${idea.symbol} - storing ${idea.agent}'s idea and waiting before evaluating consensus.`);
+       return;
+    }
+    const lastEval = this.lastConsensusEvalAt.get(idea.symbol) ?? 0;
+    if (replacedSameAgent && Date.now() - lastEval < tradingSafety.consensusEvalMinIntervalMs) {
+       return;
+    }
+    this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
   }
 
   private resolveWeight(agentName: string): number {
@@ -374,15 +432,16 @@ export class ChiefTraderAgent {
       return;
     }
 
+    this.lastConsensusEvalAt.set(symbol, Date.now());
     eventBus.emit(EVENTS.CHIEF_CONSENSUS_STARTED, { traceId, symbol, ideaCount: this.recentIdeas.filter(i => i.symbol === symbol).length });
 
     const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
     const riskExitIdeas = relevantIdeas.filter(i => this.isRiskExit(i));
-    const evidence: Evidence[] = await Promise.all(relevantIdeas.map(async i => ({
+    const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
       ...i,
       confidence: await this.calibrateConfidence(i.agent, i.confidence),
       weight: this.resolveWeight(i.agent),
-    })));
+    }))));
 
     const result = EvidenceAggregator.aggregate(evidence);
     const agentsAgreed = result.agreements.map(e => `${e.agent}(wt:${e.weight.toFixed(2)})`).join(", ");
@@ -445,6 +504,22 @@ export class ChiefTraderAgent {
       }
     }
 
+    const independentAgreeing = new Set(
+      result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
+    );
+    this.lastConsensusOutcome = {
+      at: new Date().toISOString(),
+      symbol,
+      approved,
+      side: approvedSide,
+      independentAgreeingAgents: independentAgreeing.size,
+      requiredAgents: MIN_INDEPENDENT_AGREEING_AGENTS,
+      confidence: approvedConfidence,
+      threshold: CONSENSUS_APPROVAL_THRESHOLD,
+      reason: reason || `Consensus ${(approvedConfidence * 100).toFixed(1)}% vs threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%`,
+      agentVotes: evidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence })),
+    };
+
     // Unconditional COMPLETED signal (unlike CHIEF_APPROVED_IDEA, which only fires on approval) -
     // lets live animation show the Chief Trader node finishing its evaluation even when the
     // result is "not yet, waiting for more evidence," not just on a successful approval.
@@ -490,7 +565,17 @@ export class ChiefTraderAgent {
     });
 
     if (approved) {
-       this.recentIdeas = this.recentIdeas.filter(i => i.symbol !== symbol);
+       // Real bug found and fixed this pass: this used to wipe every recentIdeas entry matching
+       // `symbol`, not just the ones this evaluation actually snapshotted into `relevantIdeas` at
+       // the top of this function. Between that snapshot and here, this function awaited
+       // calibrateConfidence() per idea - a genuinely independent agent's TRADE_IDEA_GENERATED for
+       // the same symbol could arrive and be pushed via upsertIdea() during that window (queued
+       // behind this evaluation by consensusQueues, but its *idea* still landed in recentIdeas
+       // immediately via reviewIdea()). A blanket symbol-wipe here silently discarded that vote
+       // before the queued follow-up evaluation ever got to see it. relevantIdeas holds the exact
+       // object references snapshotted at evaluation start, so filtering on membership in it
+       // removes only what this evaluation actually considered.
+       this.recentIdeas = this.recentIdeas.filter(i => !relevantIdeas.includes(i));
 
        const transactionId = await recordConsensusTransaction({
          symbol,
@@ -562,11 +647,11 @@ export class ChiefTraderAgent {
       if (this.debatePending(symbol)) continue;
       const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
       if (relevantIdeas.length === 0) continue;
-      const evidence: Evidence[] = await Promise.all(relevantIdeas.map(async i => ({
+      const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
         ...i,
         confidence: await this.calibrateConfidence(i.agent, i.confidence),
         weight: this.resolveWeight(i.agent),
-      })));
+      }))));
       const result = EvidenceAggregator.aggregate(evidence);
 
       await recordConsensusTransaction({

@@ -99,4 +99,21 @@ describe('EvidenceAggregator.aggregate', () => {
     ]);
     expect(result.confidence).toBeGreaterThanOrEqual(0);
   });
+
+  it('coalesces 50 TechnicalAgent BUY rows into a single independent vote', () => {
+    const flood = Array.from({ length: 50 }, (_, i) => evidence({
+      traceId: `t${i}`,
+      confidence: 0.9,
+      agent: 'TechnicalAgent',
+      weight: 0.25,
+    }));
+    const kronos = evidence({ side: 'SELL', confidence: 0.85, agent: 'KronosEngine', weight: 0.2 });
+    const coalesced = EvidenceAggregator.aggregate([...flood, kronos]);
+    const oneEach = EvidenceAggregator.aggregate([
+      evidence({ confidence: 0.9, agent: 'TechnicalAgent', weight: 0.25 }),
+      kronos,
+    ]);
+    expect(coalesced.agreements).toHaveLength(1);
+    expect(coalesced.confidence).toBeCloseTo(oneEach.confidence, 5);
+  });
 });

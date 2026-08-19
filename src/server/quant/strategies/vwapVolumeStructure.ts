@@ -55,7 +55,8 @@ export const vwapVolumeStructure: StrategyDefinition = {
     );
     check(
       `ADX trend strength (>= ${t.adxTrendMin})`,
-      trend.dmi.adx !== null && trend.dmi.adx >= t.adxTrendMin,
+      // Real bug found and fixed this pass: trend.dmi is DMIResult | null - guard it before .adx.
+      trend.dmi !== null && trend.dmi.adx !== null && trend.dmi.adx >= t.adxTrendMin,
     );
     check(
       bullish ? 'Bullish rejection candle (hammer / engulfing)' : 'Bearish rejection candle (shooting star / engulfing)',

@@ -56,6 +56,7 @@ import * as schema from '../server/db/schema';
 import { eq } from 'drizzle-orm';
 import { EncryptionService } from '../server/core/EncryptionService';
 import { networkEndpoints } from '../server/config/networkEndpoints';
+import { logErrorSafely } from '../server/core/SecretRedaction';
 
 // Alpaca-style timeframe strings (the format HistoricalDataGateway already uses) mapped to
 // Questrade's own interval enum + approximate bar duration in ms. Unrecognized timeframes fall
@@ -153,7 +154,13 @@ export class QuestradeBroker implements BrokerPlugin {
 
       return true;
     } catch (e) {
-      console.error(`[${this.name}] Authentication failed`, e);
+      // Real bug found and fixed this pass: the refresh-token request URL embeds the live,
+      // single-use Questrade refresh token as a query parameter (Questrade's OAuth endpoint has
+      // no header alternative). A caught fetch error (network/DNS failure) can carry that URL in
+      // its message/cause (Node's undici fetch does this on connection failures - see
+      // SecretRedaction.ts's own header comment) - console.error(prefix, e) logged it in
+      // cleartext instead of going through the same redaction path AlphaVantage/FMP already use.
+      logErrorSafely(`[${this.name}] Authentication failed`, e);
       return false;
     }
   }
@@ -168,7 +175,7 @@ export class QuestradeBroker implements BrokerPlugin {
         await db.insert(schema.brokerConnections).values({ brokerName: this.name, apiKeyEncrypted: encrypted, paperMode: true });
       }
     } catch (e) {
-      console.error(`[${this.name}] Failed to persist rotated refresh token - the next authentication attempt may fail with an already-used token`, e);
+      logErrorSafely(`[${this.name}] Failed to persist rotated refresh token - the next authentication attempt may fail with an already-used token`, e);
     }
   }
 

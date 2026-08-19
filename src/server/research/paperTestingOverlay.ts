@@ -5,6 +5,7 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { resolveDbDir } from '../db/resolveDbDir';
+import { isRuntimeFlagEnabled } from '../config/effectiveRuntimeConfig';
 
 export interface PaperTestingOverlay {
   applied: boolean;
@@ -15,10 +16,10 @@ export interface PaperTestingOverlay {
 
 export function resolvePaperTestingOverlay(regime: string): PaperTestingOverlay {
   const empty = (reason: string): PaperTestingOverlay => ({ applied: false, reason, regime, rows: [] });
-  if (process.env.QUANT_ENGINE_ENABLED !== 'true') {
+  if (!isRuntimeFlagEnabled('QUANT_ENGINE_ENABLED')) {
     return empty('QUANT_ENGINE_ENABLED is not true — overlay idle');
   }
-  if (process.env.QUANT_PAPER_TESTING_PARAMS !== 'true') {
+  if (!isRuntimeFlagEnabled('QUANT_PAPER_TESTING_PARAMS')) {
     return empty('QUANT_PAPER_TESTING_PARAMS is not true — JSON thresholds remain source of truth');
   }
   const dbPath = process.env.ARGUS_DB_PATH || path.join(resolveDbDir(process.platform, existsSync, process.cwd(), path.resolve), 'argus.db');

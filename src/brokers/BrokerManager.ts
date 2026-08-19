@@ -48,6 +48,7 @@ import { LIVE_TRADING_CONFIRMATION_PHRASE, armLiveTrading, disarmLiveTrading } f
 import { eventBus } from '../server/core/EventBus';
 import { EVENTS } from '../server/core/eventNames';
 import { getActiveReplaySession } from '../server/replay/ReplayContext';
+import { logErrorSafely } from '../server/core/SecretRedaction';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
@@ -161,24 +162,43 @@ export class BrokerManager {
              // authenticated using Alpaca's credentials instead of failing.
              let key: string | undefined;
              let secret: string | undefined;
+             let decryptionFailed = false;
              try {
                key = connection.apiKeyEncrypted ? EncryptionService.decrypt(connection.apiKeyEncrypted) : undefined;
                secret = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted) : undefined;
              } catch {
+               decryptionFailed = true;
                console.error('[BrokerManager] DECRYPTION_FAILED for stored broker credentials — refusing to use plaintext fallback.');
              }
 
-             if (connection.paperMode) {
-                 this.activeBroker.paperTrading();
+             if (decryptionFailed) {
+                 // Real bug found and fixed this pass: logging "refusing to use plaintext
+                 // fallback" but then still calling authenticate({apiKey: undefined, secretKey:
+                 // undefined, ...}) did NOT actually refuse anything - each adapter's own
+                 // authenticate() falls back to its process.env.* credentials when no key is
+                 // passed (the exact pattern the comment above this block documents as intentional
+                 // for the *normal*, no-stored-connection case). So a corrupted/rotated
+                 // encryption key silently authenticated this broker against whatever unrelated
+                 // credentials happened to be in env vars instead of refusing to activate it.
+                 // Fail closed the same way an unavailable/non-functional saved selection already
+                 // does a few lines above: fall back to the safe Internal Paper Simulator instead
+                 // of authenticating with unknown credentials.
+                 console.error(`[BrokerManager] Refusing to activate '${this.activeBroker.name}' with undecryptable credentials — falling back to Internal Paper Simulator.`);
+                 this.activeBroker = internalPaper;
+                 await this.activeBroker.authenticate({ initialCash: 100000 });
              } else {
-                 this.activeBroker.liveTrading();
-             }
+                 if (connection.paperMode) {
+                     this.activeBroker.paperTrading();
+                 } else {
+                     this.activeBroker.liveTrading();
+                 }
 
-             await this.activeBroker.authenticate({
-               apiKey: key,
-               secretKey: secret,
-               isLive: connection.paperMode === false,
-             });
+                 await this.activeBroker.authenticate({
+                   apiKey: key,
+                   secretKey: secret,
+                   isLive: connection.paperMode === false,
+                 });
+             }
          } else if (this.activeBroker.id === 'alpaca') {
              const mode = String(settings[0]?.tradingMode || '').toUpperCase();
              await this.activeBroker.authenticate({ isLive: mode === 'LIVE' });
@@ -191,7 +211,7 @@ export class BrokerManager {
          console.log(`[BrokerManager] Initialized with Active Broker: ${this.activeBroker.name}`);
          this.syncState = 'READY';
      } catch (e) {
-         console.error('[BrokerManager] Init Failed', e);
+         logErrorSafely('[BrokerManager] Init Failed', e);
          this.wireInternalPaperTicksFromMarketData();
          this.syncState = 'FAILED';
      }
@@ -214,7 +234,7 @@ export class BrokerManager {
       try {
         await this.activeBroker.disconnect();
       } catch (e) {
-        console.error("Failed to disconnect previous broker safely", e);
+        logErrorSafely("[BrokerManager] Failed to disconnect previous broker safely", e);
       }
     }
 

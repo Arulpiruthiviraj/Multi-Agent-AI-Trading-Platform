@@ -75,6 +75,12 @@ export interface TradingSafety {
   debateResultConfidence: number;
   /** Multiplier on debateResultConfidence when exactly 1 provider returned a usable verdict (not a genuine multi-model consensus). */
   debateSingleModelConfidencePenalty: number;
+  /** Min gap between adversarial debate starts for the same symbol. Reliability, not a safety bypass. */
+  consensusDebateCooldownMs: number;
+  /** Min gap between non-forced consensus evaluations for the same symbol. */
+  consensusEvalMinIntervalMs: number;
+  /** Idea-agent lastTickAt older than this is reported as enabled+dead. */
+  pipelineAgentDeadAfterMs: number;
   debateLearnedRulesCount: number;
   debateLearnedRuleMaxChars: number;
   quantExitIdeaConfidence: number;
@@ -210,6 +216,9 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'debateTriggerConfidence',
   'debateResultConfidence',
   'debateSingleModelConfidencePenalty',
+  'consensusDebateCooldownMs',
+  'consensusEvalMinIntervalMs',
+  'pipelineAgentDeadAfterMs',
   'debateLearnedRulesCount',
   'debateLearnedRuleMaxChars',
   'quantExitIdeaConfidence',

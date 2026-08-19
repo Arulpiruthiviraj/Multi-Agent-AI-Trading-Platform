@@ -63,17 +63,25 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
   const [errorStatus, setErrorStatus] = useState<string | null>(null);
   const tickerRef = useRef<HTMLDivElement>(null);
 
-  const fetchAlpacaNews = async () => {
+  // Real bug found and fixed this pass: fetchAlpacaNews() used to set state unconditionally, with
+  // no guard against a superseded request. If targetSymbol changed while a fetch for the OLD
+  // symbol was still in flight, that stale response could still arrive and overwrite the ticker
+  // with the wrong symbol's headlines after the new symbol's effect had already started - the
+  // effect's own `cancelled` flag only ever gated whether the *next* poll got scheduled, not the
+  // state updates from the in-flight call. Now takes an AbortSignal so a superseded request's
+  // state updates are skipped entirely instead of racing the current one.
+  const fetchAlpacaNews = async (symbol: string, signal: AbortSignal) => {
     setIsLoading(true);
     try {
-      const response = await fetch(`/api/v1/alpaca/news?symbol=${targetSymbol}`);
+      const response = await fetch(`/api/v1/alpaca/news?symbol=${symbol}`, { signal });
       const data = await response.json().catch(() => ({}));
+      if (signal.aborted) return;
 
       if (response.ok && data.available !== false && Array.isArray(data.news) && data.news.length > 0) {
         const formatted = data.news.map((item: any, idx: number) => ({
           id: item.id?.toString() || `live-${idx}`,
           headline: item.headline,
-          symbols: item.symbols || [targetSymbol],
+          symbols: item.symbols || [symbol],
           created_at: item.created_at || new Date().toISOString(),
           source: item.source || (data.source === "NewsEngine" ? "NewsEngine" : "Alpaca"),
           url: item.url
@@ -89,9 +97,10 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
         || (response.ok ? "No current news items found" : `News endpoint HTTP ${response.status}`),
       );
     } catch (err: any) {
+      if (err?.name === 'AbortError' || signal.aborted) return;
       handleFallback(err.message || "Network error querying news endpoint");
     } finally {
-      setIsLoading(false);
+      if (!signal.aborted) setIsLoading(false);
     }
   };
 
@@ -105,9 +114,11 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
     let cancelled = false;
     let delayMs = 30000;
     let timer: ReturnType<typeof setTimeout>;
+    let controller: AbortController;
 
     const tick = async () => {
-      await fetchAlpacaNews();
+      controller = new AbortController();
+      await fetchAlpacaNews(targetSymbol, controller.signal);
       if (cancelled) return;
       timer = setTimeout(tick, delayMs);
     };
@@ -115,6 +126,7 @@ export default function AlpacaNewsTicker({ targetSymbol }: AlpacaNewsTickerProps
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      controller?.abort();
     };
   }, [targetSymbol]);
 

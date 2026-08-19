@@ -17,8 +17,15 @@ import { StrategyContext, StrategyDefinition, StrategyEvaluation, scoreFromCondi
 import { quantExperimentalStrategies } from '../../config/quantExperimentalStrategies';
 
 const t = quantExperimentalStrategies.thresholds;
-const BULLISH_CANDLES = new Set(['HAMMER', 'BULLISH_ENGULFING', 'DOJI']);
-const BEARISH_CANDLES = new Set(['SHOOTING_STAR', 'BEARISH_ENGULFING', 'DOJI']);
+// DOJI is deliberately NOT in either set: it's a directionally-neutral (indecisive) candle, not
+// inherently bullish or bearish. Handled explicitly below via support/resistance proximity
+// instead - real bug found and fixed this pass: DOJI used to be in BOTH sets unconditionally, so
+// bullishCandle/bearishCandle were both true for a DOJI regardless of context, and a DOJI near
+// resistance (a bearish setup) could still silently resolve to BUY whenever it also happened to
+// sit near support (the SELL branch's `!nearSupport` guard failed), while still scoring
+// "Bullish reversal candle present" as a passed condition - an internally inconsistent signal.
+const BULLISH_CANDLES = new Set(['HAMMER', 'BULLISH_ENGULFING']);
+const BEARISH_CANDLES = new Set(['SHOOTING_STAR', 'BEARISH_ENGULFING']);
 
 export const candlestickReversal: StrategyDefinition = {
   id: 'CANDLESTICK_REVERSAL',
@@ -32,8 +39,14 @@ export const candlestickReversal: StrategyDefinition = {
     const resistance = supportResistance.nearest.nearestResistance;
     const nearSupport = support !== null && Math.abs(support.pct) <= t.nearLevelPct;
     const nearResistance = resistance !== null && Math.abs(resistance.pct) <= t.nearLevelPct;
-    const bullishCandle = candle !== null && BULLISH_CANDLES.has(candle) && candle !== 'SHOOTING_STAR';
-    const bearishCandle = candle !== null && BEARISH_CANDLES.has(candle) && candle !== 'HAMMER';
+    const isDoji = candle === 'DOJI';
+    // A DOJI's direction is resolved purely by which level it sits nearest to: bearish at
+    // resistance, bullish at support. If it's near both (or neither), it has no directional edge
+    // from location alone and falls through to the default BUY branch below, same as before.
+    const dojiBearish = isDoji && nearResistance && !nearSupport;
+    const dojiBullish = isDoji && nearSupport && !nearResistance;
+    const bullishCandle = (candle !== null && BULLISH_CANDLES.has(candle)) || dojiBullish;
+    const bearishCandle = (candle !== null && BEARISH_CANDLES.has(candle)) || dojiBearish;
     const side: 'BUY' | 'SELL' = (bearishCandle && nearResistance && !nearSupport) || (bearishCandle && !bullishCandle)
       ? 'SELL'
       : 'BUY';

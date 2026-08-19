@@ -140,6 +140,17 @@ describe('Failure Injection Suite', () => {
       // under test - real fail-closed behavior must hold regardless of *why* equity is invalid.
       const { BrokerManager } = await import('../../brokers/BrokerManager');
       await BrokerManager.getInstance().initialize();
+
+      // Isolate the equity gate: Autobot is off and tradingState isn't TRADING_ENABLED by default
+      // on a fresh module load, which would fail emergency_stop/autobot_enabled FIRST and mask
+      // what this block actually tests. Real bug found and fixed this pass: RiskEngine's
+      // invalid-equity branch used to always report INVALID_ACCOUNT_EQUITY regardless of which
+      // gate genuinely failed first - these tests only ever isolated the equity gate by accident,
+      // because the bug happened to always report equity. Explicit setup here matches the fixed,
+      // honest "first gate to fail" behavior.
+      const { tradingEngine } = await import('../engines/TradingEngine');
+      tradingEngine.state.enabled = true;
+      tradingEngine.state.tradingState = 'TRADING_ENABLED';
     });
 
     afterAll(() => {
@@ -172,6 +183,33 @@ describe('Failure Injection Suite', () => {
     it('negative equity refuses outright', async () => { await testInvalidEquity(-500); });
     it('zero equity refuses outright', async () => { await testInvalidEquity(0); });
     it('NaN equity refuses outright', async () => { await testInvalidEquity(NaN); });
+
+    it('real bug found and fixed: when an earlier gate (emergency_stop) ALSO fails, the reported reason is the real first failure, not always INVALID_ACCOUNT_EQUITY', async () => {
+      const { BrokerManager } = await import('../../brokers/BrokerManager');
+      const broker = BrokerManager.getInstance().getActiveBroker();
+      const spy = vi.spyOn(broker, 'portfolio').mockResolvedValue({
+        cash: 10000, buyingPower: 10000, equity: null as any, positions: [],
+      } as any);
+      const { tradingEngine } = await import('../engines/TradingEngine');
+      const prevState = tradingEngine.state.tradingState;
+      tradingEngine.state.tradingState = 'TRADING_PAUSED';
+      try {
+        const traceId = `fi-equity-and-pause-${Date.now()}`;
+        await riskEngine.evaluateRisk({ traceId, symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+        const [assessment] = await db.select().from(schema.riskAssessments).where(eq(schema.riskAssessments.traceId, traceId));
+        expect(assessment.approved).toBe(false);
+        // emergency_stop fails first (tradingState !== TRADING_ENABLED) - that must be the
+        // reported reason, even though equity is also invalid and gets recorded too.
+        expect(assessment.reasoning).toContain('Trading is paused');
+        expect(assessment.reasoning).not.toContain('INVALID_ACCOUNT_EQUITY');
+        const gates = await db.select().from(schema.riskGateResults).where(eq(schema.riskGateResults.traceId, traceId));
+        const equityGate = gates.find((g: any) => g.gateName === 'invalid_account_equity');
+        expect(equityGate?.passed).toBe(false); // still recorded, just not the reported reason
+      } finally {
+        tradingEngine.state.tradingState = prevState;
+        spy.mockRestore();
+      }
+    });
   });
 
   // ------------------------------------------------------------------

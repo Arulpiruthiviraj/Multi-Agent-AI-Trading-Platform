@@ -68,6 +68,7 @@ import { traceRouter } from './traceRoutes';
 import { observabilityRouter } from './observabilityRoutes';
 import { multiAssetRouter } from './multiAssetRoutes';
 import { continuousIntelRouter } from './continuousIntelRoutes';
+import { settingsEffectiveRouter } from './settingsEffectiveRoutes';
 
 export const v2Router = Router();
 
@@ -77,6 +78,7 @@ mountResearchRoutes(v2Router);
 mountRemoteOpsRoutes(v2Router);
 v2Router.use('/multi-asset', multiAssetRouter);
 v2Router.use('/continuous-intelligence', continuousIntelRouter);
+v2Router.use('/settings', settingsEffectiveRouter);
 
 v2Router.get('/live-readiness', (_req, res) => {
   try {

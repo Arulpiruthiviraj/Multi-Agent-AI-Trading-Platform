@@ -45,9 +45,11 @@ import { riskRewardRatio, expectedValue } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety } from '../config/tradingSafety';
+import { isRuntimeFlagEnabled, resolveRuntimeNumber } from '../config/effectiveRuntimeConfig';
 import { deskIntelligence, rankEvaluationsForRegime } from '../config/deskIntelligence';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
+import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { assessDataQuality } from '../core/dataQuality';
 import { getNewsCatalysts } from './NewsCatalystStore';
 import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
@@ -90,26 +92,27 @@ export function deriveIdeaFromRegime(regime: RegimeResult): DerivedIdea | null {
 
 export class QuantSignalAgent {
   private intervalId: NodeJS.Timeout | null = null;
-  private readonly enabled: boolean;
-  private readonly cycleIntervalMs: number;
 
-  constructor() {
-    this.enabled = process.env.QUANT_ENGINE_ENABLED === 'true';
-    const configuredInterval = Number(process.env.QUANT_ENGINE_INTERVAL_MS);
-    this.cycleIntervalMs = Number.isFinite(configuredInterval) && configuredInterval > 0 ? configuredInterval : DEFAULT_CYCLE_INTERVAL_MS;
+  private isEnabled(): boolean {
+    return isRuntimeFlagEnabled('QUANT_ENGINE_ENABLED');
+  }
+
+  private cycleIntervalMs(): number {
+    return resolveRuntimeNumber('QUANT_ENGINE_INTERVAL_MS', DEFAULT_CYCLE_INTERVAL_MS);
   }
 
   start(): void {
-    if (!this.enabled) {
-      console.log('[QuantSignalAgent] QUANT_ENGINE_ENABLED is not "true" - not starting. Set it in .env to enable the additive quant decision layer.');
+    if (!this.isEnabled()) {
+      console.log('[QuantSignalAgent] QUANT_ENGINE_ENABLED is not "true" - not starting. Set it in .env or Settings (restart required) to enable the additive quant decision layer.');
       return;
     }
     if (this.intervalId) return;
-    console.log(`[QuantSignalAgent] Starting - real regime/market-context evaluation every ${this.cycleIntervalMs / 1000}s for actively-tracked symbols.`);
+    const cycleMs = this.cycleIntervalMs();
+    console.log(`[QuantSignalAgent] Starting - real regime/market-context evaluation every ${cycleMs / 1000}s for actively-tracked symbols.`);
     this.runCycle().catch(e => console.error('[QuantSignalAgent] Initial cycle failed', e));
     this.intervalId = setInterval(() => {
       this.runCycle().catch(e => console.error('[QuantSignalAgent] Cycle failed', e));
-    }, this.cycleIntervalMs);
+    }, cycleMs);
   }
 
   stop(): void {
@@ -129,12 +132,14 @@ export class QuantSignalAgent {
       try {
         await this.evaluateSymbol(symbol);
       } catch (e: any) {
+        notePipelineAgentFailure('QuantEngine', e);
         console.error(`[QuantSignalAgent] Failed to evaluate ${symbol}`, e.message);
       }
     }
   }
 
   async evaluateSymbol(symbol: string): Promise<{ regime: RegimeResult; marketContext: MarketContextResult; strategyEvaluations: StrategyEvaluation[]; groupedScores: { BUY: GroupedScores; SELL: GroupedScores }; aiContradictionAnalysis: ContradictionAnalysisResult | null } | null> {
+    notePipelineAgentTick('QuantEngine');
     const endMs = Date.now();
     const startMs = endMs - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
 
@@ -313,6 +318,7 @@ export class QuantSignalAgent {
         },
       });
       emittedTradeIdea = true;
+      notePipelineAgentSuccess('QuantEngine');
       }
     }
 
@@ -333,6 +339,10 @@ export class QuantSignalAgent {
       });
     } catch (e: any) {
       console.error(`[QuantSignalAgent] Failed to persist assessment for ${symbol}`, e.message);
+    }
+
+    if (!emittedTradeIdea) {
+      notePipelineAgentGated('QuantEngine');
     }
 
     return { regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis };

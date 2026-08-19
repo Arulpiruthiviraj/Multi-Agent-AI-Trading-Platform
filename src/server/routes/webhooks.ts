@@ -77,8 +77,15 @@ export async function triggerWebhooks(event: WebhookEvent): Promise<void> {
       } else {
         payload = { ...event, timestamp };
       }
+      // Real bug found and fixed this pass: fetch() is deliberately not awaited (dispatch must
+      // not block the real-time event path on a slow/unreliable external webhook endpoint), but
+      // that also means the surrounding try/catch could only ever catch a synchronous throw from
+      // calling fetch() itself - never the rejected promise a real DNS failure, connection
+      // refusal, or TLS error produces. That was a genuine unhandled promise rejection on every
+      // enabled webhook for every real safety-relevant event (veto, daily_loss_breach, ...).
       try {
-        fetch(wh.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        fetch(wh.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) })
+          .catch((e) => console.error(`[Webhook] Dispatch to ${wh.name} failed:`, e?.message || e));
       } catch (e) {}
     }
   }

@@ -38,6 +38,18 @@ export interface AggregationResult {
 
 export const DISAGREEMENT_PENALTY = tradingSafety.disagreementPenalty;
 
+/**
+ * One vote per independent agent (last observation wins). Repeated ticks from the same
+ * agent+symbol are not additional confirmation. ConsensusDebate stays a single row too.
+ */
+export function coalesceEvidenceByAgent(evidence: Evidence[]): Evidence[] {
+  const byAgent = new Map<string, Evidence>();
+  for (const e of evidence) {
+    byAgent.set(e.agent, e);
+  }
+  return Array.from(byAgent.values());
+}
+
 export function netConfidenceFromVotes(
   agreeing: Array<{ confidence: number; weight: number }>,
   disagreeing: Array<{ confidence: number; weight: number }>,
@@ -65,6 +77,7 @@ export class EvidenceAggregator {
    * DATA_UNAVAILABLE shape and is excluded from the denominator.
    */
   static aggregate(evidence: Evidence[]): AggregationResult {
+    evidence = coalesceEvidenceByAgent(evidence);
     let bestSide: 'BUY' | 'SELL' | 'HOLD' = 'HOLD';
     let bestConfidence = 0;
     let bestReasoning = '';

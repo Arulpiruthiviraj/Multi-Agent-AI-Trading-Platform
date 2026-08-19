@@ -6,6 +6,10 @@ Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite). Package n
 
 **Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects).
 
+**FOR OPERATORS** (why idle / why a fill / daily health): [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) → `ARGUS_WHY_NOT_TRADING.md`, `ARGUS_DAILY_FORENSIC_CHECKLIST.md`.
+
+**FOR DEVELOPERS** (IDs, schema, EventBus, pipeline forensics): same index → `ARGUS_FORENSIC_DEBUGGING_GUIDE.md`, `ARGUS_DATABASE_ARCHITECTURE.md`. Do not treat new markdown as LIVE evidence.
+
 ---
 
 ## Trust boundary (non-negotiable)
@@ -165,7 +169,7 @@ npm run start               # node dist/server.cjs
 | `npm run ai:serve` | Chronos on `:8008` |
 | `npm run clean` | Remove `dist/` |
 
-Migrations run when `src/server/db/index.ts` is first imported. **Do not run `npm run db:migrate`** — `database/migrate.ts` does not exist.
+Migrations run when `src/server/db/index.ts` is first imported. `npm run db:migrate` (`database/migrate.ts`) imports that same module.
 
 ### Local AI (`npm run setup:ai`)
 
@@ -185,4 +189,4 @@ npx tsx scripts/organic_paper_soak_status.ts
 
 ## Docs
 
-Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Dated `ARGUS_*.md` / `FINAL_ANALYSIS.md` phase reports were consolidated into that file and removed.
+Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Operator/developer forensic map: [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) (includes [mobile Settings](docs/ARGUS_MOBILE_SETTINGS.md)). Dated `ARGUS_*.md` / `FINAL_ANALYSIS.md` phase reports were consolidated into `CLAUDE.md` and removed.

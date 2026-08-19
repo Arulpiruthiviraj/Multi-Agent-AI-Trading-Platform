@@ -17,6 +17,13 @@ import { runtimeIntervals } from '../config/runtimeIntervals';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
+import { resolveIdeaUniverse } from '../core/ideaUniverse';
+import {
+  notePipelineAgentFailure,
+  notePipelineAgentGated,
+  notePipelineAgentSuccess,
+  notePipelineAgentTick,
+} from '../core/pipelineAgentHealth';
 
 const UNKNOWN_FUNDAMENTALS = { peRatio: 'UNKNOWN', epsGrowth: 'UNKNOWN', debtToEquity: 'UNKNOWN' };
 // Fundamentals (P/E, EPS growth, debt/equity) are quarterly-cadence data in reality - refetching
@@ -40,7 +47,7 @@ interface CachedAnalysis { recommendation: string; confidence: number; reasoning
 
 export class FundamentalAnalysisAgent {
   private intervalId: NodeJS.Timeout | null = null;
-  private watchedSymbols = ['NVDA', 'AAPL', 'TSLA'];
+  private inFlight = false;
   /** Set at the top of every analyzeFundamentals() tick, before any gate check - proves the
    * setInterval callback itself is still firing, independent of whether Autobot/the pipeline
    * toggle currently allows it to emit an idea. A stale value with the interval supposedly
@@ -50,7 +57,25 @@ export class FundamentalAnalysisAgent {
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.analyzeFundamentals(), runtimeIntervals.fundamentalAgentMs);
+    this.intervalId = setInterval(() => { void this.tickSafely(); }, runtimeIntervals.fundamentalAgentMs);
+    void this.tickSafely();
+  }
+
+  private async tickSafely(): Promise<void> {
+    if (this.inFlight) {
+      this.lastTickAt = Date.now();
+      notePipelineAgentTick('FundamentalAgent');
+      return;
+    }
+    this.inFlight = true;
+    try {
+      await this.analyzeFundamentals();
+    } catch (e) {
+      notePipelineAgentFailure('FundamentalAgent', e);
+      logErrorSafely('[FundamentalAgent] Tick failed (interval continues):', e);
+    } finally {
+      this.inFlight = false;
+    }
   }
 
   stop() {
@@ -128,41 +153,48 @@ export class FundamentalAnalysisAgent {
     return UNKNOWN_FUNDAMENTALS;
   }
 
-  private async analyzeFundamentals() {
+  private emitHold(traceId: string, symbol: string, reasoning: string): void {
+    eventBus.emitTradeIdea({
+      traceId,
+      symbol,
+      side: 'HOLD',
+      confidence: 0,
+      reasoning,
+      agent: 'FundamentalAgent',
+    });
+  }
+
+  async analyzeFundamentals() {
     this.lastTickAt = Date.now();
-    if (!isLiveIdeaGenerationEnabled()) return;
-    if (!isPipelineAgentEnabled('FundamentalAgent')) return;
-    // We just pick a symbol round-robin or randomly from our list
-    const symbol = this.watchedSymbols[Math.floor(Date.now() / 60000) % this.watchedSymbols.length];
+    notePipelineAgentTick('FundamentalAgent');
+    if (!isLiveIdeaGenerationEnabled()) {
+      notePipelineAgentGated('FundamentalAgent');
+      return;
+    }
+    if (!isPipelineAgentEnabled('FundamentalAgent')) {
+      notePipelineAgentGated('FundamentalAgent');
+      return;
+    }
+    const universe = resolveIdeaUniverse();
+    if (universe.length === 0) {
+      notePipelineAgentGated('FundamentalAgent');
+      return;
+    }
+    const symbol = universe[Math.floor(Date.now() / 60000) % universe.length];
     const traceId = generateTraceId(symbol);
-    
+
     try {
        const data = await this.fetchFundamentals(symbol);
 
        if (data.peRatio === "RATE_LIMITED") {
-          // Distinct, honest reason from "not configured" - the key is real and working, it's
-          // just out of AlphaVantage's real daily quota. Mission Control's health view should be
-          // able to tell these apart instead of collapsing both into the same generic message.
-          eventBus.emitTradeIdea({
-             traceId,
-             symbol,
-             side: "HOLD",
-             confidence: 0,
-             reasoning: "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.",
-             agent: "FundamentalAgent"
-          });
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.");
+          notePipelineAgentSuccess('FundamentalAgent');
           return;
        }
 
        if (data.peRatio === "UNKNOWN") {
-          eventBus.emitTradeIdea({
-             traceId,
-             symbol,
-             side: "HOLD",
-             confidence: 0,
-             reasoning: "DATA_UNAVAILABLE: Fundamental data providers not configured.",
-             agent: "FundamentalAgent"
-          });
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: Fundamental data providers not configured.");
+          notePipelineAgentSuccess('FundamentalAgent');
           return;
        }
 
@@ -179,15 +211,13 @@ export class FundamentalAnalysisAgent {
              analysis = cached;
           } else {
              const res = await AIRouter.getInstance().routeTask('FundamentalAgent', `Analyze these fundamentals for ${symbol}: P/E Ratio: ${data.peRatio}, EPS Growth: ${data.epsGrowth}%, Debt/Equity: ${data.debtToEquity}. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
-             if (!res.content) return;
+             if (!res.content) {
+                this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamental LLM returned an empty response.');
+                notePipelineAgentFailure('FundamentalAgent', 'empty LLM content');
+                return;
+             }
 
              const raw = JSON.parse(res.content);
-             // Hardening pass, Phase 5: raw.recommendation/confidence previously flowed straight
-             // into a real TRADE_IDEA_GENERATED event with no schema validation - an off-schema
-             // recommendation (wrong case, an invented value) or a confidence answered on a
-             // 0-100 scale (this prompt doesn't specify one) would corrupt ChiefTraderAgent's
-             // 0-1-scale consensus math. Validated once here, immediately after parsing, BEFORE
-             // caching, so a cache hit always replays an already-validated result.
              analysis = {
                 recommendation: coerceEnum(raw.recommendation, TRADE_SIDE_VALUES, 'HOLD'),
                 confidence: normalizeConfidence01(raw.confidence),
@@ -199,22 +229,27 @@ export class FundamentalAnalysisAgent {
              await ExternalDataCache.set('ai-cache', cacheDataType, symbol, analysis);
           }
 
-          if (analysis.recommendation !== "HOLD") {
-             eventBus.emitTradeIdea({
-                traceId,
-                symbol,
-                side: analysis.recommendation,
-                confidence: analysis.confidence,
-                reasoning: `[Fundamental AI] ${analysis.reasoning}`,
-                agent: "FundamentalAgent",
-                aiCallId,
-                provider,
-                latencyMs,
-             });
-          }
+          eventBus.emitTradeIdea({
+             traceId,
+             symbol,
+             side: analysis.recommendation,
+             confidence: analysis.confidence,
+             reasoning: `[Fundamental AI] ${analysis.reasoning}`,
+             agent: "FundamentalAgent",
+             aiCallId,
+             provider,
+             latencyMs,
+          });
+          notePipelineAgentSuccess('FundamentalAgent');
+          return;
        }
+
+       this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamentals ingested but no LLM is configured for a directional idea.');
+       notePipelineAgentSuccess('FundamentalAgent');
     } catch (e) {
        logErrorSafely('[FundamentalAgent] Failed:', e);
+       notePipelineAgentFailure('FundamentalAgent', e);
+       this.emitHold(generateTraceId(symbol), symbol, 'DATA_UNAVAILABLE: Fundamental analysis failed this tick; the next scheduled tick will still run.');
     }
   }
 }

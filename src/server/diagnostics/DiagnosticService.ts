@@ -16,6 +16,8 @@ import { buildDiagnostic } from './buildDiagnostic';
 import { GATE_FIX } from './catalog';
 import { tradingSafety } from '../config/tradingSafety';
 import type { DiagnosticMessage } from './types';
+import { chiefTrader } from '../services/ChiefTraderAgent';
+import { formatWhyNoTrade, type LastConsensusOutcome } from '../core/consensusExplanation';
 
 const STALE_MS = tradingSafety.stalePriceThresholdMs;
 const lastFingerprint = new Map<string, string>();
@@ -39,6 +41,8 @@ export async function collectDiagnostics(): Promise<{
     primary: DiagnosticMessage | null;
     blocking: DiagnosticMessage[];
     passing: { component: string; ok: boolean; note: string }[];
+    explanation: string | null;
+    lastConsensus: LastConsensusOutcome | null;
   };
   capital: any;
 }> {
@@ -219,6 +223,8 @@ export async function collectDiagnostics(): Promise<{
       primary,
       blocking,
       passing,
+      explanation: formatWhyNoTrade(chiefTrader.getLastConsensusOutcome()),
+      lastConsensus: chiefTrader.getLastConsensusOutcome(),
     },
     capital,
   };

@@ -351,6 +351,12 @@ export class AlpacaBroker implements BrokerPlugin {
       status: res.status.toUpperCase(),
       quantity: parseFloat(res.qty),
       filledQuantity: parseFloat(res.filled_qty),
+      // Real bug found and fixed this pass: a MARKET order (especially on paper) commonly fills
+      // synchronously within this same POST response (status "filled", filled_avg_price set) -
+      // OMS only re-polls for a fresh price when status is PENDING, so an instant fill's price was
+      // silently dropped (fillPrice stayed 0) and persisted into trades.price/fills.price, breaking
+      // downstream SELL P&L math. orders()/getOrderByClientOrderId() already mapped this field.
+      averageFillPrice: res.filled_avg_price ? parseFloat(res.filled_avg_price) : undefined,
       createdAt: new Date(res.created_at),
       updatedAt: new Date(res.updated_at)
     };

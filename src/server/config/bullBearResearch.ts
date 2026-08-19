@@ -12,6 +12,7 @@
  * ==========================================================
  */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
+import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
 
 export interface BullBearResearchConfig {
   enabledEnvVar: string;
@@ -48,6 +49,5 @@ function loadBullBearResearch(): BullBearResearchConfig {
 export const bullBearResearchConfig: BullBearResearchConfig = loadBullBearResearch();
 
 export function isBullBearResearchEnabled(): boolean {
-  const envName = bullBearResearchConfig.enabledEnvVar;
-  return process.env[envName] === 'true';
+  return isRuntimeFlagEnabled(bullBearResearchConfig.enabledEnvVar);
 }

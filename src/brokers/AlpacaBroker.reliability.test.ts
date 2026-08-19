@@ -126,6 +126,29 @@ describe('AlpacaBroker reliability (Phase 1)', () => {
     expect(result.clientOrderId).toBe('my-idempotency-key');
   });
 
+  it('real bug found and fixed: placeOrder() carries the fill price through for a MARKET order that fills synchronously in the POST response', async () => {
+    // Alpaca (especially paper) commonly fills a MARKET order within the same POST /v2/orders
+    // response - status "filled" with filled_avg_price already set. OMS only re-polls for a fresh
+    // price when status is PENDING (OrderManagement.ts), so if placeOrder()'s return object drops
+    // this field, an instant fill's price silently becomes 0 and corrupts trades.price/fills.price
+    // and any downstream SELL P&L. orders()/getOrderByClientOrderId() already mapped this field -
+    // placeOrder() did not, until this fix.
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true, status: 200, headers: new Headers(),
+      json: async () => ({
+        id: 'order-instant-fill', client_order_id: 'instant-1', symbol: 'AAPL', side: 'buy',
+        order_type: 'market', status: 'filled', qty: '1', filled_qty: '1', filled_avg_price: '188.42',
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+      }),
+    })));
+
+    const result = await runAndAdvance(
+      broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 1, clientOrderId: 'instant-1' })
+    );
+    expect(result.status).toBe('FILLED');
+    expect(result.averageFillPrice).toBe(188.42);
+  });
+
   it('circuit breaker opens after consecutive failed attempts matching the configured threshold and fails fast without calling fetch again', async () => {
     const fetchMock = vi.fn(async () => { throw new Error('down'); });
     vi.stubGlobal('fetch', fetchMock);

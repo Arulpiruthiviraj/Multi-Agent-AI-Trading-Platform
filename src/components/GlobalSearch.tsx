@@ -33,7 +33,7 @@
  * ==========================================================
  */
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   Search, 
@@ -74,7 +74,16 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ isOpen, onClose, setActiveT
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const searchItems: SearchItem[] = [
+  // Real bug found and fixed this pass: onClose is a fresh inline function from App.tsx on every
+  // one of its renders (App.tsx re-renders very frequently - WS-driven state updates every few
+  // seconds), and this component is mounted unconditionally at the top of the tree. Reading
+  // onClose through a ref instead of the keydown effect's dependency array means the effect (and
+  // the global window keydown listener it adds/removes) no longer has to tear down and re-add on
+  // every unrelated App render - only when isOpen/filteredItems/selectedIndex genuinely change.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
+  const searchItems: SearchItem[] = useMemo(() => [
     // Navigation
     { id: "nav-command", title: "Autonomous Trading", description: "Master control center for AI trading bot", category: "Navigation", icon: <Cpu size={16} />, action: () => setActiveTab("command") },
     { id: "nav-arena", title: "Trading Arena", description: "On-demand deep analysis of specific symbols", category: "Navigation", icon: <Layers size={16} />, action: () => setActiveTab("arena") },
@@ -105,15 +114,17 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ isOpen, onClose, setActiveT
     { id: "sym-aapl", title: "AAPL", description: "Apple Inc. - Common Stock", category: "Symbol", icon: <TrendingUp size={16} className="text-emerald-400" />, action: () => { setActiveTab("arena"); } },
     { id: "sym-nvda", title: "NVDA", description: "NVIDIA Corporation - Common Stock", category: "Symbol", icon: <TrendingUp size={16} className="text-emerald-400" />, action: () => { setActiveTab("arena"); } },
     { id: "sym-btc", title: "BTC/USD", description: "Bitcoin USD - Crypto", category: "Symbol", icon: <TrendingUp size={16} className="text-amber-400" />, action: () => { setActiveTab("arena"); } },
-  ];
+  ], [setActiveTab]);
 
-  const filteredItems = query.trim() === "" 
-    ? searchItems.slice(0, 5) 
-    : searchItems.filter(item => 
-        item.title.toLowerCase().includes(query.toLowerCase()) || 
-        item.description.toLowerCase().includes(query.toLowerCase()) ||
-        item.category.toLowerCase().includes(query.toLowerCase())
-      );
+  const filteredItems = useMemo(() => (
+    query.trim() === ""
+      ? searchItems.slice(0, 5)
+      : searchItems.filter(item =>
+          item.title.toLowerCase().includes(query.toLowerCase()) ||
+          item.description.toLowerCase().includes(query.toLowerCase()) ||
+          item.category.toLowerCase().includes(query.toLowerCase())
+        )
+  ), [query, searchItems]);
 
   useEffect(() => {
     if (isOpen) {
@@ -136,16 +147,16 @@ const GlobalSearch: React.FC<GlobalSearchProps> = ({ isOpen, onClose, setActiveT
       } else if (e.key === "Enter") {
         if (filteredItems[selectedIndex]) {
           filteredItems[selectedIndex].action();
-          onClose();
+          onCloseRef.current();
         }
       } else if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen, filteredItems, selectedIndex, onClose]);
+  }, [isOpen, filteredItems, selectedIndex]);
 
   return (
     <AnimatePresence>

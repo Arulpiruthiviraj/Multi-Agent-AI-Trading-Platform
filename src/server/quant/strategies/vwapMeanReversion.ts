@@ -48,7 +48,8 @@ export const vwapMeanReversion: StrategyDefinition = {
     );
     check(
       `ADX below range ceiling (< ${t.adxRangeMax})`,
-      trend.dmi.adx !== null && trend.dmi.adx < t.adxRangeMax,
+      // Real bug found and fixed this pass: trend.dmi is DMIResult | null - guard it before .adx.
+      trend.dmi !== null && trend.dmi.adx !== null && trend.dmi.adx < t.adxRangeMax,
     );
     check(
       `Volume not a trend-day expansion (RVOL < ${t.rvolContinuation})`,

@@ -17,6 +17,8 @@ export function useMobileSwipeTabs(activeTab: MobileTabId) {
 
   const onTouchStart = useCallback((e: React.TouchEvent) => {
     if (e.touches.length !== 1) return;
+    const el = e.target as HTMLElement | null;
+    if (el?.closest('input, textarea, select, [contenteditable="true"]')) return;
     startX.current = e.touches[0].clientX;
     startY.current = e.touches[0].clientY;
     tracking.current = true;

@@ -15,6 +15,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { PERSISTED_EVENTS, EVENTS } from './eventNames';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { redactSecretsDeep } from './SecretRedaction';
 
 export interface EventEnvelope {
   eventId: string;
@@ -54,6 +55,16 @@ const trackEvent = (type: string) => (payload: any) => {
     || String(payload?.traceId || '').startsWith('telemetry-pulse-'));
   const correlationId: string | null = payload?.traceId || payload?.trace_id || payload?.correlationId || null;
   const transactionId: string | null = payload?.transactionId ?? null;
+  // Real bug found and fixed this pass: this envelope's payload used to be stored/persisted
+  // completely raw. queryTraces.ts's getDecisionTrace() redacts on its own read path, but three
+  // other live routes (GET /api/v1/system/event-traces, GET /api/v2/system/events,
+  // GET /api/v2/system/trace/:traceId) and their in-memory fallbacks (recentEvents, tradeTraces)
+  // read this same data and served it verbatim - any secret that ever landed in an EventBus
+  // payload (e.g. an upstream fetch error string embedding a query-string API key) was persisted
+  // in cleartext and served to any caller of those endpoints. Redacting once here, at write time,
+  // protects every current and future read path uniformly instead of relying on each one to
+  // remember to redact independently.
+  const redactedPayload = redactSecretsDeep(payload);
   const envelope: EventEnvelope = {
     eventId: uuidv4(),
     schemaVersion: SCHEMA_VERSION,
@@ -61,7 +72,7 @@ const trackEvent = (type: string) => (payload: any) => {
     source: payload?.agent || payload?.source || type,
     type,
     timestamp: Date.now(),
-    payload,
+    payload: redactedPayload,
   };
 
   recentEvents.unshift(envelope);
@@ -84,7 +95,7 @@ const trackEvent = (type: string) => (payload: any) => {
       timestamp: envelope.timestamp,
       source: envelope.source,
       eventType: type,
-      payload: JSON.stringify(payload),
+      payload: JSON.stringify(redactedPayload),
     }).catch((e) => console.error('[EventStore] Failed to persist event trace', e));
   }
 
@@ -98,7 +109,7 @@ const trackEvent = (type: string) => (payload: any) => {
         state: String(state),
         reason: payload?.reason ?? payload?.code ?? null,
         source: envelope.source,
-        evidence: { type, payload },
+        evidence: { type, payload: redactedPayload },
       });
     }).catch((e) => console.error('[EventStore] lifecycle persist failed', e));
   }

@@ -28,6 +28,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { Key, DollarSign, Route, Network, BrainCircuit, CheckCircle2, XCircle } from 'lucide-react';
 import { UnavailableHint } from './UnavailableHint';
+import { useWebSocket } from '../context/WebSocketContext';
 
 type ProviderFilter = 'all' | 'active' | 'inactive';
 
@@ -92,6 +93,7 @@ function healthDotClass(health: string | null | undefined): string {
 }
 
 export default function AIProviderManagement() {
+  const { subscribe } = useWebSocket();
   const [activeSubTab, setActiveSubTab] = useState<'providers' | 'routing' | 'agents' | 'benchmarks' | 'costs' | 'playground'>('providers');
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [usage, setUsage] = useState<any[]>([]);
@@ -166,21 +168,20 @@ export default function AIProviderManagement() {
 
     fetchRoutingOverrides();
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws`);
-    ws.onmessage = (event) => {
-        try {
-            // server.ts wraps every EventBus event as {type: eventName, data: payload}.
-            // AIRouter publishes ai_metrics_update via eventBus.publish('UI_UPDATE', {type, payload}),
-            // so the real shape here is {type: 'UI_UPDATE', data: {type: 'ai_metrics_update', payload}}.
-            const data = JSON.parse(event.data);
-            if (data.type === 'UI_UPDATE' && data.data?.type === 'ai_metrics_update') {
-                setUsage(prev => [data.data.payload, ...prev].slice(0, 100));
-            }
-        } catch(e) {}
-    };
-    return () => ws.close();
-  }, []);
+    // Real bug found and fixed this pass: this used to open its own raw `new WebSocket(...)`
+    // instead of the shared WebSocketContext every other WS-consuming component uses - no
+    // reconnect on drop (unlike the shared context's exponential-backoff reconnect), no visible
+    // status, and a second live /ws connection per browser tab for no reason. AIRouter publishes
+    // ai_metrics_update via eventBus.publish('UI_UPDATE', {type, payload}), so the real shape is
+    // {type: 'UI_UPDATE', data: {type: 'ai_metrics_update', payload}} - subscribe() already
+    // unwraps the outer envelope, matching the shape every other subscriber receives.
+    const unsubscribe = subscribe('UI_UPDATE', (payload: any) => {
+      if (payload?.type === 'ai_metrics_update') {
+        setUsage(prev => [payload.payload, ...prev].slice(0, 100));
+      }
+    });
+    return () => unsubscribe();
+  }, [subscribe]);
 
   const totalTokens = usage.reduce((acc, curr) => acc + (curr.completionTokens || curr.tokens || 0), 0);
   const totalCost = usage.reduce((acc, curr) => acc + (curr.cost || 0), 0);

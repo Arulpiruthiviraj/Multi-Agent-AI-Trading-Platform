@@ -44,6 +44,7 @@ import { srBounce } from './srBounce';
 import { relativeStrengthRotation } from './relativeStrengthRotation';
 import { statisticalMeanReversion } from './statisticalMeanReversion';
 import { tradingSafety } from '../../config/tradingSafety';
+import { isRuntimeFlagEnabled } from '../../config/effectiveRuntimeConfig';
 import { isExperimentalStrategyLive } from '../../config/quantExperimentalStrategies';
 import type { RegimeLabel } from '../RegimeEngine';
 import { resolvePaperTestingOverlay } from '../../research/paperTestingOverlay';
@@ -77,7 +78,7 @@ export const EXPERIMENTAL_STRATEGIES: StrategyDefinition[] = [
 
 /** Live Quant may include SMC only when QUANT_SMC_STRATEGY_ENABLED is the string 'true'. */
 export function isSmcLiveQuantEnabled(): boolean {
-  return process.env.QUANT_SMC_STRATEGY_ENABLED === 'true';
+  return isRuntimeFlagEnabled('QUANT_SMC_STRATEGY_ENABLED');
 }
 
 export { isExperimentalStrategyLive };

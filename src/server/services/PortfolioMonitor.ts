@@ -52,6 +52,8 @@ import {
   ensureHoldingSubscribed,
   recordPortfolioDecision,
 } from '../continuous/portfolioIntel';
+import { evaluateExit } from './ExitIntelligenceEngine';
+import { isExitIntelligenceEnabled } from '../config/exitIntelligence';
 
 // E2A (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - these were previously hardcoded literals
 // (+5%/-3%) unrelated to settings.takeProfitPct/trailingStopPct, which already existed in the
@@ -231,6 +233,8 @@ export class PortfolioMonitorWorker {
              confidence: tradingSafety.quantStopExitConfidence,
              reasoning: `EXIT_CODE=HARD_STOP Hard stop hit (${PnL.toFixed(2)}%, threshold -${trailingStopPct}%). Preserving capital.`,
            });
+        } else if (isExitIntelligenceEnabled() && await this.consultExitIntelligence(holding, currentLivePrice, PnL, openingTrade?.filledAt ?? null)) {
+          // Handled inside consultExitIntelligence() (either emitted a risk exit or recorded HOLD).
         } else {
           recordPortfolioDecision({
             symbol: holding.symbol,
@@ -312,6 +316,75 @@ export class PortfolioMonitorWorker {
     } catch (e) {
       console.warn(`[PortfolioWorker] Could not re-evaluate thesis for ${symbol} (no honest bar history):`, (e as Error).message);
       return null;
+    }
+  }
+
+  /**
+   * ARGUS_EXIT_INTELLIGENCE_PLAN.md - only ever consulted after every existing exit check
+   * (quant stop/target, thesis invalidation, generic take-profit/trailing-stop) has already found
+   * nothing this cycle. Off by default (ARGUS_EXIT_INTELLIGENCE_ENABLED). Returns true once it has
+   * fully handled the decision (recorded telemetry, and emitted a risk-exit idea if warranted) so
+   * the caller does not also record a duplicate generic HOLD.
+   *
+   * Real constraint discovered while wiring this in (documented in the plan's own §7, now
+   * empirically confirmed): RiskEngine's SELL sizing always clamps to the FULL held quantity today
+   * - there is no quantity-aware SELL idea path anywhere in the current spine. Emitting a risk-exit
+   * idea for a PARTIAL_TAKE_PROFIT decision would therefore incorrectly sell the entire position,
+   * not a partial one. Until a deliberate, reviewed quantity-aware SELL idea shape exists,
+   * PARTIAL_TAKE_PROFIT and TRAIL are recorded as telemetry only, never auto-executed - only
+   * TAKE_PROFIT/EXIT/EMERGENCY_EXIT (genuinely full-position-appropriate decisions) act.
+   */
+  private async consultExitIntelligence(
+    holding: { symbol: string; averagePrice: number; quantity: number },
+    currentLivePrice: number,
+    pnlPct: number,
+    openedAtIso: string | null,
+  ): Promise<boolean> {
+    try {
+      const endMs = Date.now();
+      const startMs = endMs - 400 * 24 * 60 * 60 * 1000;
+      const bars = await historicalDataGateway.getBars(holding.symbol, '1Day', startMs, endMs);
+      if (bars.length < 5) return false; // let evaluateExit's own richer INSUFFICIENT_DATA path decide, but don't bother calling it on almost nothing
+
+      const openedAtMs = openedAtIso ? new Date(openedAtIso).getTime() : null;
+      const barsSinceEntry = openedAtMs && Number.isFinite(openedAtMs)
+        ? bars.filter((b) => b.timestamp >= openedAtMs)
+        : bars;
+      const peakPriceSinceEntry = barsSinceEntry.length > 0
+        ? Math.max(currentLivePrice, holding.averagePrice, ...barsSinceEntry.map((b) => b.high))
+        : Math.max(currentLivePrice, holding.averagePrice);
+
+      const evaluation = evaluateExit({
+        symbol: holding.symbol,
+        entryPrice: holding.averagePrice,
+        currentPrice: currentLivePrice,
+        peakPriceSinceEntry,
+        quantity: holding.quantity,
+        bars,
+      });
+
+      recordPortfolioDecision({
+        symbol: holding.symbol,
+        state: evaluation.decision === 'HOLD' ? 'HEALTHY' : 'WATCH',
+        pnlPct,
+        currentPrice: currentLivePrice,
+        reason: `[ExitIntelligence] ${evaluation.reasoning}`,
+      });
+
+      if (evaluation.decision === 'TAKE_PROFIT' || evaluation.decision === 'EXIT' || evaluation.decision === 'EMERGENCY_EXIT') {
+        console.log(`[PortfolioWorker] ExitIntelligence recommends ${evaluation.decision} on ${holding.symbol} (score ${evaluation.exitScore.toFixed(0)}/100)`);
+        this.emitRiskExit({
+          symbol: holding.symbol,
+          currentPrice: currentLivePrice,
+          pnlPct,
+          confidence: evaluation.confidence,
+          reasoning: `EXIT_CODE=EXIT_INTELLIGENCE_${evaluation.decision} ${evaluation.reasoning}`,
+        });
+      }
+      return true;
+    } catch (e) {
+      console.warn(`[PortfolioWorker] ExitIntelligence evaluation failed for ${holding.symbol} (deferring to generic checks):`, (e as Error).message);
+      return false;
     }
   }
 }

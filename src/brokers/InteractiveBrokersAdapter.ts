@@ -307,9 +307,21 @@ export class InteractiveBrokersAdapter implements BrokerPlugin {
     // CP Web API frequently returns a confirmation-required message (e.g. price-cap or missing
     // stop-loss warnings) instead of an order id on the first call - must reply to each in turn
     // before the order is actually accepted. This loop is the real documented flow, not a retry hack.
+    //
+    // Real bug found and fixed this pass: this used to auto-confirm EVERY warning identically,
+    // including IBKR's duplicate-order confirmation prompt (the same mechanism it also uses for
+    // benign warnings like outside-regular-trading-hours). A retried order submission after a
+    // timeout would have its duplicate-order warning silently accepted, risking an unintended
+    // double fill. Refuse (rather than guess at IBKR's full message-code taxonomy) specifically
+    // when the warning text mentions a duplicate order - every other confirmation type keeps the
+    // existing auto-confirm behavior unchanged.
     let guard = 0;
     while (Array.isArray(response) && response[0]?.id && response[0]?.message && guard < 5) {
       const replyId = response[0].id;
+      const messageText = Array.isArray(response[0].message) ? response[0].message.join(' ') : String(response[0].message);
+      if (/duplicate/i.test(messageText)) {
+        throw new Error(`IBKR flagged this as a possible duplicate order and requires manual confirmation - refusing to auto-confirm: ${messageText.slice(0, 300)}`);
+      }
       response = await this.request(`/iserver/reply/${replyId}`, { method: 'POST', body: { confirmed: true } });
       guard++;
     }

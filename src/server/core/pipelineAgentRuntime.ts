@@ -34,6 +34,10 @@ function assertRuntimesCoverCatalog(): void {
 }
 assertRuntimesCoverCatalog();
 
+export function areIdeaWorkersArmed(): boolean {
+  return ideaWorkersArmed;
+}
+
 export function setIdeaWorkersArmed(armed: boolean): void {
   ideaWorkersArmed = armed;
 }

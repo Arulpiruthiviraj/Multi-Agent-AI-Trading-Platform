@@ -85,6 +85,7 @@ import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
 import DocumentationTab from "./components/DocumentationTab";
 import { ExplainerToggle } from "./components/ExplainerToggle";
+import { EnvRuntimeSettingsPanel } from "./components/EnvRuntimeSettingsPanel";
 import { Explainer } from "./components/ContextualTooltip";
 import { UnavailableHint } from "./components/UnavailableHint";
 import {
@@ -1661,6 +1662,13 @@ export default function App() {
       available: boolean;
       unavailableReason: string | null;
       keepsBackgroundPipeline?: boolean;
+      healthy?: boolean;
+      alive?: boolean;
+      healthLabel?: string;
+      lastTickAt?: number | null;
+      lastTickAgeMs?: number | null;
+      lastError?: string | null;
+      consecutiveFailures?: number;
     }>;
     alwaysOn: Array<{ id: string; label: string; reason: string; enabled: boolean }>;
     autobotEnabled: boolean;
@@ -1978,6 +1986,58 @@ export default function App() {
   const [showAlertHistoryModal, setShowAlertHistoryModal] = useState(false);
 
   const [alertNotifications, setAlertNotifications] = useState<VisualNotification[]>([]);
+
+  // Opportunity Feed manual BUY/SELL execution. Routes through the existing, already-safety-gated
+  // POST /api/v2/trading/execute-override endpoint (Advanced Trade Sandbox's real "Execute
+  // Override" path) - it never calls the broker directly; it emits CHIEF_APPROVED_IDEA the same
+  // way ChiefTraderAgent does after AI consensus, so the real RiskEngine (all 24 gates) and
+  // OrderManagementService/BrokerManager still run. Only ChiefTrader's AI-consensus step is
+  // skipped, which is the entire point of a manual override. Whichever broker is currently active
+  // in BrokerManager handles it - nothing here hardcodes Alpaca.
+  const [manualExecuteConfirming, setManualExecuteConfirming] = useState<string | null>(null);
+  const [manualExecuteBusy, setManualExecuteBusy] = useState<string | null>(null);
+  const [manualExecuteToasts, setManualExecuteToasts] = useState<Array<{
+    id: string; symbol: string; side: 'BUY' | 'SELL'; status: 'success' | 'error'; message: string;
+  }>>([]);
+
+  const dismissManualExecuteToast = React.useCallback((id: string) => {
+    setManualExecuteToasts(prev => prev.filter(t => t.id !== id));
+  }, []);
+
+  const handleManualExecute = React.useCallback(async (symbol: string, side: 'BUY' | 'SELL') => {
+    const key = `${symbol}-${side}`;
+    setManualExecuteConfirming(null);
+    setManualExecuteBusy(key);
+    try {
+      const res = await fetch('/api/v2/trading/execute-override', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ symbol, side }),
+      });
+      const data = await res.json().catch(() => ({}));
+      const toastId = `${key}-${Date.now()}`;
+      if (res.ok && data.ok) {
+        setManualExecuteToasts(prev => [{
+          id: toastId, symbol, side, status: 'success',
+          message: `Sent to RiskEngine (traceId ${String(data.traceId || '').slice(0, 24)}...). Actual fill/quantity determined by RiskEngine sizing, not guaranteed.`,
+        }, ...prev]);
+      } else {
+        setManualExecuteToasts(prev => [{
+          id: toastId, symbol, side, status: 'error',
+          message: data.error || `Override request failed (HTTP ${res.status}).`,
+        }, ...prev]);
+      }
+      setTimeout(() => dismissManualExecuteToast(toastId), 12000);
+    } catch (e: any) {
+      const toastId = `${key}-${Date.now()}`;
+      setManualExecuteToasts(prev => [{ id: toastId, symbol, side, status: 'error', message: e?.message || 'Network error submitting override.' }, ...prev]);
+      setTimeout(() => dismissManualExecuteToast(toastId), 12000);
+    } finally {
+      setManualExecuteBusy(null);
+    }
+  }, [dismissManualExecuteToast]);
+
   const [selectedAlertSymbol, setSelectedAlertSymbol] = useState("AAPL");
   const [showMovingAverageTrend, setShowMovingAverageTrend] = useState(true);
   const [showRsiOverlay, setShowRsiOverlay] = useState(false);
@@ -3603,6 +3663,37 @@ export default function App() {
               </div>
               <button
                 onClick={() => setAlertNotifications(prev => prev.filter(n => n.id !== notif.id))}
+                className="absolute top-3 right-3 p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded-md transition-colors"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Opportunity Feed manual execute result toasts */}
+      {manualExecuteToasts.length > 0 && (
+        <div className="fixed top-24 right-6 z-[100] flex flex-col gap-3 max-w-sm w-full pointer-events-none">
+          {manualExecuteToasts.slice(0, 5).map((t) => (
+            <div
+              key={t.id}
+              className={`pointer-events-auto bg-[#1A1F2B]/95 border shadow-2xl rounded-lg p-4 flex gap-3 animate-fade-in relative overflow-hidden backdrop-blur-md ${t.status === 'success' ? 'border-emerald-500/30' : 'border-rose-500/30'}`}
+            >
+              <div className={`absolute top-0 left-0 w-1 h-full ${t.status === 'success' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+              <div className={`p-2 h-9 w-9 rounded-lg border shrink-0 flex items-center justify-center ${t.status === 'success' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-rose-500/10 border-rose-500/20 text-rose-400'}`}>
+                {t.status === 'success' ? <CheckCircle size={18} /> : <AlertCircle size={18} />}
+              </div>
+              <div className="flex-1 pr-6">
+                <div className="flex items-center gap-1.5 mb-1">
+                  <span className="font-extrabold text-sm text-white tracking-wider">{t.symbol}</span>
+                  <span className={`text-[10px] font-mono uppercase font-bold ${t.side === 'BUY' ? 'text-emerald-400' : 'text-rose-400'}`}>{t.side}</span>
+                  <span className="text-[10px] text-slate-500 font-mono">{t.status === 'success' ? 'Submitted' : 'Failed'}</span>
+                </div>
+                <p className="text-xs text-slate-300 leading-snug">{t.message}</p>
+              </div>
+              <button
+                onClick={() => dismissManualExecuteToast(t.id)}
                 className="absolute top-3 right-3 p-1 hover:bg-slate-800 text-slate-400 hover:text-white rounded-md transition-colors"
               >
                 <X size={14} />
@@ -6589,11 +6680,47 @@ export default function App() {
                                  {opp.reasoning}
                                </p>
                             </div>
-                            <div className="flex gap-4 md:justify-end text-center font-mono">
-                               <div className={`bg-[#111822] border px-3 py-1.5 rounded ${opp.prediction === 'BUY' ? 'border-emerald-900/50 text-emerald-400' : 'border-rose-900/50 text-rose-400'}`}>
-                                 <span className={`text-[9px] uppercase block mb-0.5 ${opp.prediction === 'BUY' ? 'text-emerald-600' : 'text-rose-600'}`}>Direction</span>
-                                 <span className="font-bold text-sm">{opp.prediction}</span>
-                               </div>
+                            <div className="flex gap-4 md:justify-end text-center font-mono items-stretch">
+                               {(() => {
+                                 const side = opp.prediction === 'BUY' ? 'BUY' : 'SELL';
+                                 const execKey = `${opp.symbol}-${side}`;
+                                 const isConfirming = manualExecuteConfirming === execKey;
+                                 const isBusy = manualExecuteBusy === execKey;
+                                 const bullish = side === 'BUY';
+                                 if (isConfirming) {
+                                   return (
+                                     <div className="flex items-center gap-1.5 bg-[#111822] border border-amber-500/40 px-2 py-1.5 rounded">
+                                       <span className="text-[10px] text-amber-400 font-bold uppercase pr-1">Confirm {side}?</span>
+                                       <button
+                                         onClick={() => handleManualExecute(opp.symbol, side)}
+                                         className="text-[10px] font-bold uppercase px-2 py-1 rounded bg-amber-500/20 text-amber-300 hover:bg-amber-500/30 transition-colors"
+                                       >
+                                         Yes
+                                       </button>
+                                       <button
+                                         onClick={() => setManualExecuteConfirming(null)}
+                                         className="text-[10px] font-bold uppercase px-2 py-1 rounded bg-slate-800 text-slate-400 hover:bg-slate-700 transition-colors"
+                                       >
+                                         Cancel
+                                       </button>
+                                     </div>
+                                   );
+                                 }
+                                 return (
+                                   <button
+                                     onClick={() => setManualExecuteConfirming(execKey)}
+                                     disabled={isBusy}
+                                     title={`Manually submit ${side} ${opp.symbol} @ current price through RiskEngine (${bullish ? 'active broker paper account' : 'active broker'}). Still subject to all 24 risk gates.`}
+                                     className={`bg-[#111822] border px-3 py-1.5 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed ${bullish ? 'border-emerald-900/50 text-emerald-400 hover:bg-emerald-900/20 hover:border-emerald-700' : 'border-rose-900/50 text-rose-400 hover:bg-rose-900/20 hover:border-rose-700'}`}
+                                   >
+                                     <span className={`text-[9px] uppercase block mb-0.5 ${bullish ? 'text-emerald-600' : 'text-rose-600'}`}>{isBusy ? 'Submitting…' : 'Direction (tap to trade)'}</span>
+                                     <span className="font-bold text-sm flex items-center justify-center gap-1.5">
+                                       {isBusy && <RefreshCw size={12} className="animate-spin" />}
+                                       {side}
+                                     </span>
+                                   </button>
+                                 );
+                               })()}
                                <div className="bg-[#111822] border border-slate-800 px-3 py-1.5 rounded">
                                  <span className="text-[9px] uppercase block text-slate-500 mb-0.5">Confidence</span>
                                  <span className="font-bold text-sm text-white">{opp.confidence}%</span>
@@ -7325,22 +7452,35 @@ export default function App() {
                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
                      {pipelineAgents.togglable.map((agent) => {
                        const on = agent.available && agent.enabled;
+                       const dead = on && agent.healthLabel === 'DEAD';
+                       const healthy = on && (agent.healthLabel === 'HEALTHY' || agent.healthLabel === 'GATED');
+                       const statusText = !agent.available
+                         ? 'ENV OFF'
+                         : !on
+                           ? 'OFFLINE'
+                           : dead
+                             ? 'ENABLED + DEAD'
+                             : agent.healthLabel === 'NOT_ARMED'
+                               ? 'ENABLED + IDLE'
+                               : healthy
+                                 ? 'ENABLED + HEALTHY'
+                                 : 'ONLINE';
                        return (
                          <div
                            key={agent.id}
-                           title={agent.available ? agent.description : (agent.unavailableReason || agent.description)}
-                           className={"bg-[#111822] border border-slate-800 rounded p-3 flex flex-col justify-between min-h-[88px] " + (agent.available ? "cursor-pointer" : "opacity-60 cursor-not-allowed")}
+                           title={agent.available ? `${agent.description}${agent.lastError ? ` Last error: ${agent.lastError}` : ''}` : (agent.unavailableReason || agent.description)}
+                           className={"bg-[#111822] border rounded p-3 flex flex-col justify-between min-h-[88px] " + (dead ? "border-rose-700 " : "border-slate-800 ") + (agent.available ? "cursor-pointer" : "opacity-60 cursor-not-allowed")}
                            onClick={() => void handlePipelineAgentToggle(agent.id, agent.enabled, agent.available)}
                          >
                            <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest">
-                             <Activity size={12} className="text-slate-400"/> {agent.label}
+                             <Activity size={12} className={dead ? "text-rose-400" : "text-slate-400"}/> {agent.label}
                            </div>
                            <div className="flex justify-between items-center mt-2">
-                             <span className={"font-bold text-[10px] uppercase tracking-wider " + (!agent.available ? "text-amber-500" : on ? "text-emerald-400" : "text-slate-500")}>
-                               {!agent.available ? "ENV OFF" : on ? "ONLINE" : "OFFLINE"}
+                             <span className={"font-bold text-[10px] uppercase tracking-wider " + (!agent.available ? "text-amber-500" : dead ? "text-rose-400" : healthy ? "text-emerald-400" : on ? "text-emerald-400" : "text-slate-500")}>
+                               {statusText}
                              </span>
-                             <div className={"w-8 h-4 rounded-full border flex items-center px-0.5 " + (on ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}>
-                               <div className={"w-3 h-3 rounded-full " + (on ? "bg-emerald-400" : "bg-slate-600")}></div>
+                             <div className={"w-8 h-4 rounded-full border flex items-center px-0.5 " + (healthy ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : dead ? "bg-rose-500/20 border-rose-500/50 justify-end" : on ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}>
+                               <div className={"w-3 h-3 rounded-full " + (dead ? "bg-rose-400" : on ? "bg-emerald-400" : "bg-slate-600")}></div>
                              </div>
                            </div>
                          </div>
@@ -8333,6 +8473,7 @@ export default function App() {
                       <ExplainerToggle variant="settings" />
                       <WealthAffirmationToggle />
                     </div>
+                    <EnvRuntimeSettingsPanel />
                     <div className="bg-[#0F141C] border border-slate-800 rounded-lg p-5 flex items-center justify-between gap-4">
                       <div>
                         <h3 className="text-xs font-mono font-bold text-slate-100 uppercase tracking-widest mb-1">System</h3>

@@ -1,0 +1,21 @@
+{
+  "$comment": "ExitIntelligenceEngine.evaluateExit() weights/thresholds. Read-only advisory input to PortfolioMonitor's existing exit checks - never a second execution path. Do not treat these weights as validated/optimal; they are a documented, reviewed starting point, not backtested. Changing this file is a reviewed config change, not a UI knob. Default OFF (ARGUS_EXIT_INTELLIGENCE_ENABLED) - existing PortfolioMonitor behavior (quant stop/target, thesis invalidation, generic trailing/take-profit) is completely unchanged unless explicitly enabled; this only ever adds an additional, lower-priority exit check consulted after every existing one already found nothing.",
+  "enabledEnvVar": "ARGUS_EXIT_INTELLIGENCE_ENABLED",
+  "minBarsRequired": 30,
+  "componentWeights": {
+    "momentumDeterioration": 30,
+    "trendWeakening": 20,
+    "profitProtectionPressure": 30,
+    "volatilityRisk": 20
+  },
+  "rsiOverboughtForDeterioration": 70,
+  "rsiDivergenceDropPts": 8,
+  "adxWeakeningThreshold": 20,
+  "peakDrawbackForPressurePct": 15,
+  "elevatedAtrPercentileForRisk": 80,
+  "exitScoreHold": 40,
+  "exitScorePartialTakeProfit": 60,
+  "exitScoreFullTakeProfit": 80,
+  "exitScoreLossExit": 55,
+  "partialTakeProfitSellFraction": 0.25
+}
