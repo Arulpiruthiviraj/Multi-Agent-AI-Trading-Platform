@@ -344,8 +344,8 @@ export function MobileSettingsView() {
   return (
     <div className="w-full max-w-full overflow-hidden px-3 py-3 space-y-3 bg-[#0b0f17] min-h-full">
       <div className="sticky top-0 z-20 -mx-3 px-3 py-2 bg-[#0b0f17]/95 backdrop-blur-md border-b border-slate-800/80 space-y-2">
-        <div className="flex items-center gap-2">
-          <div className="relative flex-1 min-w-0">
+        <div className="flex flex-col gap-2 w-full max-w-full overflow-hidden">
+          <div className="relative w-full min-w-0">
             <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
             <input
               type="search"
@@ -358,7 +358,7 @@ export function MobileSettingsView() {
           <button
             type="button"
             onClick={() => setConfirmReset(true)}
-            className="shrink-0 min-h-[44px] px-2 rounded-lg border border-rose-500/40 text-[9px] font-mono uppercase text-rose-300"
+            className="w-full max-w-full min-h-[44px] px-3 rounded-lg border border-rose-500/40 text-[10px] font-mono uppercase tracking-wider text-rose-300"
           >
             Reset all to .env
           </button>
