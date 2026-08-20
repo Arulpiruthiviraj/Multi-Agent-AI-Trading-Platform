@@ -16,7 +16,7 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { desc, isNotNull, and, eq, gte } from 'drizzle-orm';
+import { desc, isNotNull, and, eq, gte, like, or } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -137,6 +137,16 @@ export async function readMarketClock(): Promise<MarketClockStatus> {
 }
 
 /** Test-only: RiskEngine.test.ts must not inherit a 60s clock cache across cases. */
+// Alpaca daily-bar timestamps mark the start of the trading day in exchange-local time (midnight
+// ET), not market open (9:30am ET). classifyMarketSession() is an intraday minute-of-day
+// classifier and would read every 1Day bar as CLOSED regardless of the simulated historical date
+// (ARGUS_2024_ZERO_TRADE_FORENSIC_AUDIT.md finding #2: 198/198 real risk_assessments rows from a
+// real 1Day 2024 replay run failed only this gate). A daily bar existing at all already proves the
+// exchange was open that day, so there is no intraday time-of-day left to classify against.
+export function isDailyReplayFrequency(frequency: string | undefined | null): boolean {
+    return /^1?d(ay)?$/i.test(frequency ?? '');
+}
+
 export function resetMarketClockCacheForTests(): void {
     cachedMarketClock = null;
 }
@@ -267,10 +277,17 @@ export class RiskEngine {
             const autobotReason = 'AUTOBOT_DISABLED: Autobot is off. New BUY risk is blocked. SELL/exits still require TRADING_ENABLED.';
 
             const nowMs = replay ? replay.clock.now() : Date.now();
-            const allTradeRows = await db.select().from(schema.trades);
+            // Replay knows its own replayId, so it can push the filter into the query itself
+            // instead of pulling every trade ever recorded (across all history, not just this run)
+            // into JS on every single risk evaluation - a real, measured contributor to a replay
+            // slowing down over a long run (grows with total accumulated trades table size, not
+            // just this run's length). The live (non-replay) branch is untouched - same full fetch,
+            // same JS filter - to avoid any live-path behavior change.
             const tradeRows = replay
-                ? allTradeRows.filter((t: any) => String(t.traceId || '').includes(replay.replayId) || String(t.reasoning || '').includes(replay.replayId))
-                : allTradeRows.filter((t: any) => t.executionEnvironment !== 'REPLAY' && t.executionEnvironment !== 'BACKTEST' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix));
+                ? await db.select().from(schema.trades).where(
+                    or(like(schema.trades.traceId, `%${replay.replayId}%`), like(schema.trades.reasoning, `%${replay.replayId}%`)),
+                  )
+                : (await db.select().from(schema.trades)).filter((t: any) => t.executionEnvironment !== 'REPLAY' && t.executionEnvironment !== 'BACKTEST' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix));
             const sameSymbol = evaluateSameSymbolCooldown({ side: proposal.side, symbol: proposal.symbol, nowMs, trades: tradeRows });
             recordGate(sameSymbol.gate, sameSymbol.passed, sameSymbol.detail);
             const postLoss = evaluatePostLossCooldown({ side: proposal.side, nowMs, trades: tradeRows });
@@ -437,11 +454,17 @@ export class RiskEngine {
 
             // 2b. Alpaca /v2/clock. Unconfigured → skip. Closed or clock outage → block.
             // Previously `null !== false` passed the gate on REST failure (outage treated as open).
+            // Daily (1Day) replay bars get a separate, narrower path - see isDailyReplayFrequency's
+            // own comment. This is not a blanket bypass: intraday frequencies (1m/5m/15m/1h) still
+            // go through the real minute-of-day classifier below.
+            const isDailyFrequency = replay ? isDailyReplayFrequency(replay.config.frequency) : false;
             const marketClock = replay
-                ? (sessionAllowsFills(classifyMarketSession(nowMs, replay.config.timezone, replay.config.extendedHours), replay.config.extendedHours) ? 'open' : 'closed')
+                ? (isDailyFrequency
+                    ? 'open'
+                    : (sessionAllowsFills(classifyMarketSession(nowMs, replay.config.timezone, replay.config.extendedHours), replay.config.extendedHours) ? 'open' : 'closed'))
                 : await readMarketClock();
             const marketHoursPassed = marketClock === 'open' || marketClock === 'unconfigured';
-            recordGate('market_hours', marketHoursPassed, { marketClock, skipped: marketClock === 'unconfigured', replay: !!replay });
+            recordGate('market_hours', marketHoursPassed, { marketClock, skipped: marketClock === 'unconfigured', replay: !!replay, dailyBarSessionAssumed: isDailyFrequency });
             const marketHoursReason = marketClock === 'unavailable'
                 ? 'Alpaca market clock unavailable (HTTP/network failure). Fail-closed: new trades blocked until the clock can be read.'
                 : 'Market is currently closed (Alpaca clock).';
@@ -570,11 +593,13 @@ export class RiskEngine {
                     ? replay.config.allocationBudget
                     : (settings[0]?.budget ?? tradingEngine.state.budget);
                 const allocated = isPositiveFiniteMoney(rawBudget) ? rawBudget : Number.NaN;
-                const allTrades = (await db.select().from(schema.trades)).filter((t: any) =>
-                    replay
-                        ? String(t.traceId || '').includes(replay.replayId)
-                        : t.executionEnvironment !== 'REPLAY' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix)
-                );
+                // Same replay-scoped-query fix as the same_symbol_cooldown fetch above - avoids a
+                // second unscoped full-table fetch per risk evaluation for replay runs.
+                const allTrades = replay
+                    ? await db.select().from(schema.trades).where(like(schema.trades.traceId, `%${replay.replayId}%`))
+                    : (await db.select().from(schema.trades)).filter((t: any) =>
+                        t.executionEnvironment !== 'REPLAY' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix)
+                      );
                 const pendingBuys = (allTrades || []).filter((t: any) =>
                     t.side === 'BUY' && t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(t.status)
                 );

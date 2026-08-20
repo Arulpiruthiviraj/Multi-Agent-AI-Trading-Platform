@@ -2,6 +2,8 @@
 
 **Status:** Binding. Code + tests beat this file. Adding markdown does not raise LIVE readiness or prove edge.
 
+**Name:** Why "ARGUS"? — [`README.md`](README.md) (Argus Panoptes: many eyes, one disciplined decision process). This contract is the execution spine, not the etymology.
+
 **Companion files:** `CLAUDE.md`, `ARGUS_ARCHITECTURE_PROTECTION.md`, `ARGUS_ARCHITECTURE_INVARIANTS.md`, `ARGUS_AI_CHANGE_RULES.md`, `src/server/architecture.protection.test.ts`, `src/server/research/phase21.invariants.test.ts`.
 
 If a requested change conflicts with this contract: **stop**, document the conflict, and do not implement a bypass.
@@ -159,7 +161,7 @@ The authoritative trading spine lives in **Argus Core** (`ArgusCoreBoot`, existi
 
 **Invariant:** `POST /api/v2/system/toggle` and all Autobot lifecycle controls must route through `TradingEngine.toggle()`, not direct `SystemBootstrap.start/stop`. Browser, CLI, or WebSocket disconnect must not stop the engine.
 
-See `ARGUS_HEADLESS_ARCHITECTURE.md`, `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`.
+See `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md` (canonical headless/engine doc). `ARGUS_HEADLESS_ARCHITECTURE.md` is a stub.
 
 ---
 

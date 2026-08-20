@@ -824,6 +824,10 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
           strategyId,
           bars: visible.map((b) => ({ ...b })),
           provenance: session.datasets[0].provenance ?? 'UNIT_FIXTURE',
+          // Only the last signal is ever read below - see onlyLatestBar's own comment
+          // (argusStrategyReplay.ts) for why this is required to keep a multi-year replay
+          // practical (O(N^3) total -> O(N^2) without it).
+          onlyLatestBar: true,
         });
         const lastSignal = replayed.signals[replayed.signals.length - 1];
         side = lastSignal && lastSignal.timestamp === last.timestamp ? lastSignal.side : 'HOLD';

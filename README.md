@@ -4,7 +4,29 @@ Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite). Package n
 
 **LIVE real-money: NO-GO.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is not established by documentation.
 
-**Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects). Architecture checklist: [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md).
+### Why "ARGUS"?
+
+> **ARGUS** is named after **Argus Panoptes**, the many-eyed and ever-watchful guardian of Greek mythology.
+>
+> The name represents the philosophy behind the system: **many eyes, multiple perspectives, disciplined validation, and constant vigilance before action.**
+>
+> Argus brings together specialized analytical components to observe the market from different perspectives, evaluates those signals through consensus and risk controls, and only then allows an approved decision to reach execution.
+>
+> Its Historical Evaluation capability extends the same philosophy backward in time: Argus can examine what it predicted, compare those predictions with what actually happened, identify where and why its reasoning failed, and use that evidence to guide future improvements.
+>
+> **ARGUS: Many eyes. One disciplined decision process.**
+
+That metaphor maps to the protected spine — it does **not** mean unlimited visibility or a second trading brain:
+
+| Philosophy | In Argus |
+|---|---|
+| Many eyes | Specialized agents/engines (Technical, Quant, News/Catalyst, Fundamental, Macro **where those actually vote**; unused UI names are not live voters) |
+| Continuous vigilance | Market data, 24-gate RiskEngine, reconciliation, process/health monitoring |
+| Observe before acting | Discovery → ChiefTrader consensus → RiskEngine → PositionSizing → OMS → broker |
+| Guarded execution | Consensus bar + min independent agents, OMS sole production `placeOrder`, kill switch, recon |
+| Learning through observation | Historical Evaluation is evidence/diagnosis — **not** LIVE proof, **not** organic paper, **not** autonomous RiskEngine rewrite. `ReflectionEngine` updates weights/debate prompt only |
+
+**Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects). Architecture checklist: [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md). Name philosophy lives here; do not copy the full block into every other markdown file.
 
 Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_ENABLED`). Optional cheap screener ideas (`ARGUS_OPPORTUNITY_IDEAS_ENABLED`) are **one vote**, still require ChiefTrader min-2 + RiskEngine + OMS. Neither flag arms LIVE. Do not enable flags merely to produce trades.
 
@@ -163,8 +185,11 @@ npm run start               # node dist/server.cjs
 | `npm run dev` | `scripts/ecosystem-dev.ts`: optional Vibe / AutoHedge / OpenAlice / Fincept, then Chronos/Ollama/IBKR + Express/Vite |
 | `npm run dev:core` | `devWithOpenAlice.ts` — Argus + Chronos/Ollama/OpenAlice/IBKR |
 | `npm run dev:server-only` | `tsx server.ts` alone |
-| `npm run dev:headless` / `start:headless:prod` | `ARGUS_HEADLESS=true` — trading core + REST API only; skips Vite/static Web UI (`src/server/app/runtimeConfig.ts`) |
-| `npm run argus-cli -- <command>` | Thin HTTP client (`scripts/argus-cli.ts`) against the running Argus API — never imports RiskEngine/OMS/BrokerManager directly |
+| `npm run start:engine` | Dedicated daemon (`scripts/argus-engine.ts`) — same Argus Core, no Vite/React. PID: `data/.argus_engine.pid` |
+| `npm run start:engine:prod` | Same after `npm run build` (`scripts/argus-engine-prod.mjs` → `dist/server.cjs`) |
+| `npm run dev:headless` / `start:headless` | Aliases that **delegate** to `argus-engine` (`scripts/start-headless.ts`) |
+| `npm run start:headless:prod` | Alias → `argus-engine-prod.mjs` |
+| `npm run argus-cli -- <command>` | HTTP client against the running API (`start`/`stop` spawn/SIGTERM the engine). Never imports RiskEngine/OMS/BrokerManager — not a second brain |
 | `npm run lint` | `tsc --noEmit` |
 | `npm test` | `vitest run` |
 | `npm run test:e2e` | Playwright (`e2e/moduleToggleParity.spec.ts`) — seed **both** onboarding wizard and tour |
@@ -193,4 +218,6 @@ npx tsx scripts/organic_paper_soak_status.ts
 
 ## Docs
 
-Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Operator/developer forensic map: [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) (includes [mobile Settings](docs/ARGUS_MOBILE_SETTINGS.md)). CLAUDE.md is the living source of truth; root-level dated `ARGUS_*.md` phase/audit reports are point-in-time snapshots, not living docs — prefer CLAUDE.md and current code where they disagree.
+Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Operator/developer forensic map: [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) (includes [mobile Settings](docs/ARGUS_MOBILE_SETTINGS.md)).
+
+Living product docs: this README (name + setup), [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md) (engine daemon), [`ARGUS_CLI.md`](ARGUS_CLI.md), [`ARGUS_HISTORICAL_EVALUATION.md`](ARGUS_HISTORICAL_EVALUATION.md). Binding contracts: `CLAUDE.md`, `ARGUS_ARCHITECTURE_CONTRACT.md`, protection / invariants / AI change rules. Dated phase audits that remain are stubs or snapshots — code + `evaluateLiveReadiness()` beat markdown.

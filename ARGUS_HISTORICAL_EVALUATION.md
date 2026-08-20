@@ -1,14 +1,17 @@
 # Argus Historical Evaluation
 
-**Product name:** Argus Historical Evaluation (formerly "Historical Replay Lab" in UI)  
+**Product name:** Argus Historical Evaluation (UI title; component file may still be named `HistoricalReplayLab.tsx`)  
 **Engine:** `FullArgusReplayEngine` (MODE B — the only replay engine)  
-**LIVE:** NO-GO · **Not organic paper**
+**LIVE:** NO-GO · **Not organic paper**  
+**Name philosophy:** [`README.md`](README.md) § Why "ARGUS"? — learning through observation, not proof of edge.
 
 ## Purpose
 
 Historical Evaluation runs Argus decision, risk, and execution logic against **point-in-time historical bars** to measure behavior under data that actually exists — without fabricating historical news, fundamentals, macro, or LLM debate.
 
 This is **not** a claim that Argus would have traded identically live. Reports label fidelity **LIMITED** when appropriate.
+
+Learning through observation (see README § Why "ARGUS"?): a completed run is **evidence and diagnosis** — compare predicted vs realized path, locate funnel failures — not proof of LIVE profitability and not an autonomous rewrite of RiskEngine. `ReflectionEngine` may update agent weights / debate prompt text; it does not bypass consensus, gates, or OMS.
 
 ## Architecture
 

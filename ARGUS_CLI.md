@@ -1,6 +1,8 @@
 # ARGUS CLI
 
-HTTP-only control interface. **Does not import RiskEngine, OMS, or BrokerManager.**
+HTTP-only control interface for a **running** Argus API, plus optional process spawn for the engine daemon. **Does not import RiskEngine, OMS, or BrokerManager** — not a second trading brain.
+
+Name philosophy: [`README.md`](README.md) § Why "ARGUS"? Headless/engine: [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md).
 
 Requires a running Argus API (default `http://127.0.0.1:3000`).
 

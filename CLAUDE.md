@@ -4,7 +4,7 @@ Argus operational master specification. This file is the live-path contract for 
 
 **ARCHITECTURE MUST NOT BE BYPASSED.** Extend ARGUS around the protected architecture. Never replace the architecture with a shortcut implementation. Checklist: `ARGUS_ARCHITECTURE_CONTRACT.md`, `ARGUS_ARCHITECTURE_INVARIANTS.md`, `ARGUS_AI_CHANGE_RULES.md`.
 
-Argus is a Node.js multi-agent trading terminal (Express + Vite SPA + `ws` + SQLite). Package name `my-money-miner`. The **live decision path** is EventBus → idea agents → ChiefTrader → RiskEngine → OMS → BrokerManager. Do not rewrite that path. New work is additive, modular, feature-flagged, tested, and backward compatible.
+Argus is a Node.js multi-agent trading terminal (Express + Vite SPA + `ws` + SQLite). Package name `my-money-miner`. **Name philosophy** (Argus Panoptes — many eyes, one disciplined decision process): [`README.md`](README.md) § Why "ARGUS"? The **live decision path** is EventBus → idea agents → ChiefTrader → RiskEngine → OMS → BrokerManager. Do not rewrite that path. New work is additive, modular, feature-flagged, tested, and backward compatible.
 
 ## ARGUS CORE ARCHITECTURE — EXTEND, DO NOT REPLACE OR BYPASS
 
@@ -14,7 +14,7 @@ AI coding agents **must not** alter the protected trading architecture unless th
 
 Protected (extend through the documented interface only — never replace, bypass, weaken, or duplicate): `ChiefTraderAgent`, `RiskEngine`, `OrderManagementService`, `BrokerManager` + broker adapters, reconciliation, the kill-switch system, the trading-state machine, portfolio accounting, order lifecycle, fill processing, position reconciliation, the 24 risk gates, paper/live safety controls (5-layer LIVE arming).
 
-If a requested feature appears to require modifying anything in that list: **stop**, explain the architectural conflict to the user, and do not implement a bypass. Prefer adding an adapter, service, event, strategy, or integration point around the existing architecture — see the extension-zone examples (`src/server/multiAsset/`, `src/server/continuous/`, `src/server/replay/` — Historical Replay Lab, MODE B) in `ARGUS_ARCHITECTURE_PROTECTION.md`. Replay reuses real ChiefTrader vote-math/RiskEngine/OMS against `HistoricalReplayBroker` (isolated from the live broker); it is structurally incapable of LIVE trading and never counts as organic paper.
+If a requested feature appears to require modifying anything in that list: **stop**, explain the architectural conflict to the user, and do not implement a bypass. Prefer adding an adapter, service, event, strategy, or integration point around the existing architecture — see the extension-zone examples (`src/server/multiAsset/`, `src/server/continuous/`, `src/server/replay/` — Argus Historical Evaluation, MODE B) in `ARGUS_ARCHITECTURE_PROTECTION.md`. Replay reuses real ChiefTrader vote-math/RiskEngine/OMS against `HistoricalReplayBroker` (isolated from the live broker); it is structurally incapable of LIVE trading and never counts as organic paper.
 
 **LIVE real-money: `LIVE_NO_GO`.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is **not established**.
 
@@ -27,13 +27,13 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 | Source | Use for |
 |---|---|
 | This file | Live path, 24 gates, AI routing, traces, soak, defects, working rules |
-| `README.md` | Setup, commands, `.env`, local AI, ecosystem spawn |
+| `README.md` | Setup, commands, `.env`, local AI, ecosystem spawn; **Why "ARGUS"?** name philosophy |
 | `docs/ARGUS_DOCUMENTATION_INDEX.md` | Operator vs developer forensic debugging / DB / EventBus (does **not** replace this contract) |
 | `config/*.json` | Numbers, strategy IDs, event names — not TypeScript literals |
 | `src/server/db/schema.ts` | Table count (drifts; count `sqliteTable(`) |
 | `evaluateLiveReadiness()` / `ARGUS_LIVE_READINESS.json` | Machine LIVE gates (6/28 PASS as of 2026-08-18) |
 
-NewsAgent last scored pass: **44.6% on 242 predictions**. Walk-forward OOS for checked quant combos **failed**. Organic closed paper FILLED SELL P&L: **0**. Historical AI replay of past years using the *live* AI models/prompts of that era is **UNAVAILABLE** without point-in-time news/LLM logs — do not fabricate a 2022 debate. This is distinct from the real **Historical Replay Lab** (`src/server/replay/`, MODE B) added since, which runs real historical bars through the real ChiefTrader vote-math, RiskEngine, and OMS (AI mode defaults `DISABLED`; no fabricated historical LLM votes) — see below and `docs/ARGUS_REPLAY_USER_GUIDE.md`.
+NewsAgent last scored pass: **44.6% on 242 predictions**. Walk-forward OOS for checked quant combos **failed**. Organic closed paper FILLED SELL P&L: **0**. Historical AI replay of past years using the *live* AI models/prompts of that era is **UNAVAILABLE** without point-in-time news/LLM logs — do not fabricate a 2022 debate. This is distinct from **Argus Historical Evaluation** (`src/server/replay/`, MODE B) added since, which runs real historical bars through the real ChiefTrader vote-math, RiskEngine, and OMS (AI mode defaults `DISABLED`; no fabricated historical LLM votes) — see `ARGUS_HISTORICAL_EVALUATION.md` and `docs/ARGUS_REPLAY_USER_GUIDE.md`.
 
 Forensic snapshot (2026-08-18 hostile pass, not a certificate): engineering ~89.3%, capital/validation ~12%, blended ~50.7%. Trading-edge score **8/100**. Dual scores are not LIVE eligibility.
 
@@ -457,14 +457,15 @@ npm run dev              # ecosystem-dev.ts → optional vibe/autohedge/OpenAlic
                          # ARGUS_SKIP_OPENALICE / ENABLE_*=false
 npm run dev:core         # Chronos/Ollama/OpenAlice/IBKR + server (no vibe/autohedge/Fincept)
 npm run dev:server-only  # tsx server.ts only
-npm run dev:headless     # ARGUS_HEADLESS=true — trading core + REST API only, no Vite/static Web UI
-                         # (src/server/app/runtimeConfig.ts isWebUiEnabled/isArgusHeadless).
-                         # Express + the REST API layer still run — headless skips the browser
-                         # frontend, not the API the CLI itself depends on.
-npm run start:headless:prod  # Same, against a built dist/
-npm run argus-cli -- <cmd>    # scripts/argus-cli.ts — thin HTTP client against the running API
-                              # (fetch to ARGUS_API_URL / 127.0.0.1:3000). Never imports
-                              # RiskEngine/OMS/BrokerManager directly — no second trading engine.
+npm run start:engine     # dedicated daemon scripts/argus-engine.ts (ARGUS_ENGINE + HEADLESS)
+                         # same Argus Core; Vite dynamically imported only if web UI enabled
+npm run start:engine:prod # dist/server.cjs via scripts/argus-engine-prod.mjs
+npm run dev:headless     # alias → argus-engine.ts (scripts/start-headless.ts delegates)
+                         # Express HTTP adapter typically still in the same Node process
+npm run start:headless:prod  # alias → argus-engine-prod.mjs
+npm run argus-cli -- <cmd>    # scripts/argus-cli.ts — HTTP client (+ start/stop spawn/SIGTERM)
+                              # never imports RiskEngine/OMS/BrokerManager — no second brain
+                              # See ARGUS_CLI.md / ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md
 npm run build            # Vite SPA + esbuild → dist/server.cjs
 npm run start            # node dist/server.cjs
 npm run clean

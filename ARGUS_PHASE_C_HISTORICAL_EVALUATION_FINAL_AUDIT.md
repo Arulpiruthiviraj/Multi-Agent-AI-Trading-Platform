@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20  
 **Phase:** C — Historical Evaluation Hardening  
-**Baseline:** `ARGUS_PHASE_C_HISTORICAL_EVALUATION_AUDIT.md`
+**Baseline:** superseded interim `ARGUS_PHASE_C_HISTORICAL_EVALUATION_AUDIT.md` (now a stub). Lookahead/fill honesty is included here (former `ARGUS_PHASE_C_LOOKAHEAD_AUDIT.md` stub).
 
 ## 1. Executive summary
 
@@ -88,7 +88,7 @@ Live modules are **not** invoked inside the replay clock (by design).
 
 ## 10. Look-ahead audit
 
-See `ARGUS_PHASE_C_LOOKAHEAD_AUDIT.md`.
+See §8 (fill model `NEXT_BAR_OPEN`) and `ARGUS_HISTORICAL_EVALUATION.md`. Former standalone lookahead file is a stub.
 
 ## 11. Isolation/concurrency audit
 

@@ -80,7 +80,8 @@ vi.mock('./TradingEngine', () => ({ tradingEngine: mockTradingEngine }));
 vi.mock('../services/MarketDataWorker', () => ({ marketDataWorker: mockMarketDataWorker }));
 vi.mock('./backtest/HistoricalDataGateway', () => ({ historicalDataGateway: mockHistoricalDataGateway }));
 
-import { riskEngine, resetMarketClockCacheForTests } from './RiskEngine';
+import { riskEngine, resetMarketClockCacheForTests, isDailyReplayFrequency } from './RiskEngine';
+import { setActiveReplaySession, type ActiveReplaySession } from '../replay/ReplayContext';
 
 function makeBroker(portfolio: any) {
   return { portfolio: vi.fn(async () => portfolio) };
@@ -537,6 +538,81 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.approved).toBe(false);
     expect(assessment.reasoning).toMatch(/Market is currently closed/);
+  });
+
+  describe('market_hours in replay mode (1Day midnight-timestamp fix)', () => {
+    async function buildFakeReplaySession(frequency: string, atMs: number): Promise<ActiveReplaySession> {
+      const { ReplayClock } = await import('../engines/backtest/ReplayClock');
+      const { InformationCutoff } = await import('../replay/InformationCutoff');
+      const { unavailableHistoricalNewsProvider } = await import('../replay/HistoricalNewsProvider');
+      const clock = new ReplayClock(atMs);
+      return {
+        replayId: 'test-replay-id',
+        clock,
+        cutoff: new InformationCutoff(clock),
+        news: unavailableHistoricalNewsProvider(),
+        config: { frequency, timezone: 'America/New_York', extendedHours: false, symbols: ['AAPL'] },
+        barsBySymbol: new Map(),
+        openStops: new Map(),
+      } as unknown as ActiveReplaySession;
+    }
+
+    afterEach(() => {
+      setActiveReplaySession(null);
+    });
+
+    it('isDailyReplayFrequency recognizes every real 1Day alias and rejects intraday frequencies', () => {
+      expect(isDailyReplayFrequency('1Day')).toBe(true);
+      expect(isDailyReplayFrequency('1day')).toBe(true);
+      expect(isDailyReplayFrequency('1d')).toBe(true);
+      expect(isDailyReplayFrequency('day')).toBe(true);
+      expect(isDailyReplayFrequency('1h')).toBe(false);
+      expect(isDailyReplayFrequency('5m')).toBe(false);
+      expect(isDailyReplayFrequency('15m')).toBe(false);
+      expect(isDailyReplayFrequency('1min')).toBe(false);
+      expect(isDailyReplayFrequency(undefined)).toBe(false);
+      expect(isDailyReplayFrequency(null)).toBe(false);
+      expect(isDailyReplayFrequency('')).toBe(false);
+    });
+
+    it('no longer fails market_hours for a real Alpaca 1Day bar timestamp (midnight ET)', async () => {
+      // Real value from ARGUS_2024_ZERO_TRADE_FORENSIC_AUDIT.md - 1712116800000 = 2024-04-03,
+      // 12:00:00 AM America/New_York. Before this fix, every one of these failed market_hours.
+      const session = await buildFakeReplaySession('1Day', 1712116800000);
+      setActiveReplaySession(session);
+
+      await riskEngine.evaluateRisk({ traceId: 'replay-daily-1', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+      const assessment = lastAssessment();
+      expect(assessment.rejectionGate).not.toBe('market_hours');
+      expect(assessment.reasoning).not.toMatch(/Market is currently closed/);
+    });
+
+    it('still correctly fails market_hours for an intraday replay frequency at a real midnight timestamp', async () => {
+      // Regression guard: the fix must not silently pass EVERY replay frequency through the
+      // shortcut - only genuine 1Day bars. An intraday-frequency bar sitting at midnight really
+      // is outside the 09:30-16:00 ET regular session and should still fail.
+      const session = await buildFakeReplaySession('15m', 1712116800000);
+      setActiveReplaySession(session);
+
+      await riskEngine.evaluateRisk({ traceId: 'replay-intraday-1', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+      const assessment = lastAssessment();
+      expect(assessment.rejectionGate).toBe('market_hours');
+      expect(assessment.reasoning).toMatch(/Market is currently closed/);
+    });
+
+    it('still correctly passes market_hours for an intraday replay frequency during regular session hours', async () => {
+      // 2024-04-03T14:30:00Z = 10:30am America/New_York - inside the regular 09:30-16:00 session.
+      const tenThirtyAmEt = Date.parse('2024-04-03T14:30:00Z');
+      const session = await buildFakeReplaySession('15m', tenThirtyAmEt);
+      setActiveReplaySession(session);
+
+      await riskEngine.evaluateRisk({ traceId: 'replay-intraday-2', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+      const assessment = lastAssessment();
+      expect(assessment.rejectionGate).not.toBe('market_hours');
+    });
   });
 
   it('passes market_hours when Alpaca clock reports is_open during regular session', async () => {
