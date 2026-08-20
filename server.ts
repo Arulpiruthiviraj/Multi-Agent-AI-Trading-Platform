@@ -1719,6 +1719,7 @@ let portfolioState = loadPortfolio();
   });
 
   if (!isProd && isWebUiEnabled()) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
