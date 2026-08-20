@@ -90,10 +90,6 @@ scripts/argus-engine.ts
 
 ## 6. Docs consolidated into this audit
 
-Superseded snapshots (stubs):
-
-- `ARGUS_HEADLESS_ARCHITECTURE.md`
-- `ARGUS_HEADLESS_ARCHITECTURE_AUDIT.md`
-- `ARGUS_HEADLESS_RUNTIME_FINAL_AUDIT.md`
+Interim Phase B headless architecture/audit stubs were deleted after consolidation into this file and [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md).
 
 Phase C historical-evaluation evidence: `ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md` (replay, not daemon).

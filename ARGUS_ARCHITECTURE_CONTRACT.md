@@ -161,7 +161,7 @@ The authoritative trading spine lives in **Argus Core** (`ArgusCoreBoot`, existi
 
 **Invariant:** `POST /api/v2/system/toggle` and all Autobot lifecycle controls must route through `TradingEngine.toggle()`, not direct `SystemBootstrap.start/stop`. Browser, CLI, or WebSocket disconnect must not stop the engine.
 
-See `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md` (canonical headless/engine doc). `ARGUS_HEADLESS_ARCHITECTURE.md` is a stub.
+See `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md` (canonical headless/engine doc).
 
 ---
 

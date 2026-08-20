@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20  
 **Phase:** C — Historical Evaluation Hardening  
-**Baseline:** superseded interim `ARGUS_PHASE_C_HISTORICAL_EVALUATION_AUDIT.md` (now a stub). Lookahead/fill honesty is included here (former `ARGUS_PHASE_C_LOOKAHEAD_AUDIT.md` stub).
+**Baseline:** Phase C interim/lookahead audits were removed after consolidation. Lookahead/fill honesty is included in this final audit.
 
 ## 1. Executive summary
 
