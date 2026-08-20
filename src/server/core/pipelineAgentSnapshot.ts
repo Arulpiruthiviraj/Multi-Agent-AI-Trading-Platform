@@ -7,13 +7,15 @@ import {
 } from '../config/pipelineAgents';
 import { getPipelineAgentEnabledMap, isPipelineAgentEnabled } from './pipelineAgentGate';
 import { isLiveIdeaGenerationEnabled } from './ideaGenerationGate';
+import { allowsNewEntryIdeas } from './sessionRecovery';
 import { tradingEngine } from '../engines/TradingEngine';
 import { system } from './SystemBootstrap';
 import { tradingSafety } from '../config/tradingSafety';
 import { getPipelineAgentHeartbeat, isPipelineAgentAlive } from './pipelineAgentHealth';
 import { areIdeaWorkersArmed } from './pipelineAgentRuntime';
 import { getLastOpportunityScan } from '../continuous/OpportunityDiscovery';
-import { isOpportunityLoopEnabled } from '../config/continuousIntelligence';
+import { isOpportunityIdeasEnabled, isOpportunityLoopEnabled } from '../config/continuousIntelligence';
+import { getPipelineRateSnapshot } from './pipelineRateLimit';
 import { fundamentalAgent } from '../services/FundamentalAgent';
 import { macroAgent } from '../services/MacroAgent';
 import { chiefTrader } from '../services/ChiefTraderAgent';
@@ -78,6 +80,7 @@ export function getPipelineAgentSnapshot() {
     enabledMap: getPipelineAgentEnabledMap(),
     autobotEnabled: tradingEngine.state.enabled === true,
     liveIdeaGenerationEnabled: isLiveIdeaGenerationEnabled(),
+    interruptedSessionHold: !allowsNewEntryIdeas(),
     tradingState: tradingEngine.state.tradingState,
     emergencyStopActive: tradingEngine.state.emergencyStopActive === true,
     workersRunning,
@@ -85,7 +88,9 @@ export function getPipelineAgentSnapshot() {
     pipelineAgentDeadAfterMs: deadAfterMs,
     discovery: {
       enabled: isOpportunityLoopEnabled(),
+      ideasEnabled: isOpportunityIdeasEnabled(),
       ...getLastOpportunityScan(),
+      pipelineRate: getPipelineRateSnapshot(),
     },
     lastConsensus: chiefTrader.getLastConsensusOutcome(),
     whyNoTrade: formatWhyNoTrade(chiefTrader.getLastConsensusOutcome()),

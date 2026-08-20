@@ -41,6 +41,7 @@ import { db } from '../db';
 import { agentPerformanceStats, agentConfidenceCalibration } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
 import { EvidenceAggregator, Evidence, coalesceEvidenceByAgent } from './EvidenceAggregator';
+import { isConsensusIdeaFresh } from '../core/consensusIdeaFreshness';
 import { bucketFor } from './ConfidenceCalibration';
 import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
@@ -169,10 +170,10 @@ export class ChiefTraderAgent {
   private upsertIdea(idea: any): boolean {
     const idx = this.recentIdeas.findIndex(i => i.symbol === idea.symbol && i.agent === idea.agent);
     if (idx >= 0) {
-      this.recentIdeas[idx] = idea;
+      this.recentIdeas[idx] = { ...idea, receivedAt: Date.now() };
       return true;
     }
-    this.recentIdeas.push(idea);
+    this.recentIdeas.push({ ...idea, receivedAt: Date.now() });
     return false;
   }
 
@@ -433,9 +434,8 @@ export class ChiefTraderAgent {
     }
 
     this.lastConsensusEvalAt.set(symbol, Date.now());
-    eventBus.emit(EVENTS.CHIEF_CONSENSUS_STARTED, { traceId, symbol, ideaCount: this.recentIdeas.filter(i => i.symbol === symbol).length });
-
-    const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
+    const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
+    eventBus.emit(EVENTS.CHIEF_CONSENSUS_STARTED, { traceId, symbol, ideaCount: relevantIdeas.length });
     const riskExitIdeas = relevantIdeas.filter(i => this.isRiskExit(i));
     const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
       ...i,
@@ -645,7 +645,7 @@ export class ChiefTraderAgent {
     const symbols = Array.from(new Set(this.recentIdeas.map(i => i.symbol)));
     for (const symbol of symbols) {
       if (this.debatePending(symbol)) continue;
-      const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol);
+      const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
       if (relevantIdeas.length === 0) continue;
       const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
         ...i,

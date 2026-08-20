@@ -6,6 +6,7 @@ import { tradingEngine } from '../engines/TradingEngine';
 import { technicalAgent } from './TechnicalAgent';
 import { eventBus } from '../core/EventBus';
 import { quantThresholds } from '../config/quantThresholds';
+import { forceHoldNewEntryIdeasForTests, resetSessionRecoveryForTests } from '../core/sessionRecovery';
 
 const technicalId = pipelineAgentsConfig.togglableIdeaAgents.find((a) => a.label === 'Technical')!.id;
 
@@ -19,6 +20,7 @@ describe('idea generation start gate', () => {
     setPipelineAgentEnabled(technicalId, true);
     delete (technicalAgent as any).priceHistory['GATE_TEST_XYZ'];
     delete (technicalAgent as any).lastEvaluatedAt['GATE_TEST_XYZ'];
+    resetSessionRecoveryForTests();
   });
 
   it('is closed when Autobot is off even if tradingState is TRADING_ENABLED', () => {
@@ -27,9 +29,10 @@ describe('idea generation start gate', () => {
     expect(isLiveIdeaGenerationEnabled()).toBe(false);
   });
 
-  it('is closed when tradingState is TRADING_PAUSED even if Autobot is on', () => {
+  it('holds new entry ideas after an interrupted session even when Autobot is on', () => {
     tradingEngine.state.enabled = true;
-    tradingEngine.state.tradingState = 'TRADING_PAUSED';
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    forceHoldNewEntryIdeasForTests(true);
     expect(isLiveIdeaGenerationEnabled()).toBe(false);
   });
 

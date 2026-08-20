@@ -4,6 +4,7 @@
 import { existsSync, mkdirSync, appendFileSync, writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import type { ReplayEvent } from './ReplayContext';
+import { buildZipArchive } from './zipArchive';
 
 export function replayRootDir(): string {
   if (process.env.ARGUS_REPLAY_DIR) return process.env.ARGUS_REPLAY_DIR;
@@ -90,4 +91,113 @@ export function exportEquityCsv(replayId: string): string {
   const header = 't,equity,cash,drawdownPct';
   const rows = equity.map((e) => [e.t, e.equity, e.cash, e.drawdownPct].join(','));
   return [header, ...rows].join('\n');
+}
+
+function csvField(v: unknown): string {
+  const s = v == null ? '' : String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+export function exportRejectionsCsv(replayId: string): string {
+  const rejections = readReplayJson<Array<Record<string, unknown>>>(replayId, 'rejected_orders.json') || [];
+  const header = 'timestamp,symbol,side,reason,traceId';
+  const rows = rejections.map((r) => [r.timestamp, r.symbol, r.side, r.reason, r.traceId ?? ''].map(csvField).join(','));
+  return [header, ...rows].join('\n');
+}
+
+/** AFTER-THE-FACT ANALYSIS export - see MissedOpportunityAnalysis.ts. */
+export function exportMissedOpportunitiesCsv(replayId: string): string {
+  const rows = readReplayJson<Array<Record<string, unknown>>>(replayId, 'missed_opportunities.json') || [];
+  const header = 'symbol,timestamp,reason,referencePrice,horizonBars,barsAvailableAfterRejection,maxFavorableExcursionPct,maxAdverseExcursionPct,returnAtHorizonPct,classification';
+  const lines = rows.map((r) => [
+    r.symbol, r.timestamp, r.reason, r.referencePrice, r.horizonBars, r.barsAvailableAfterRejection,
+    r.maxFavorableExcursionPct, r.maxAdverseExcursionPct, r.returnAtHorizonPct ?? '', r.classification,
+  ].map(csvField).join(','));
+  return [header, ...lines].join('\n');
+}
+
+/**
+ * Bundles every generated artifact for a replay into one ZIP, using buildZipArchive (real,
+ * STORE-method, independently verified against PowerShell's Expand-Archive). Only includes files
+ * that actually exist for this run - a replay with zero trades still exports a valid archive with
+ * whatever artifacts were actually written, not fabricated placeholders.
+ */
+export function exportZipArchive(replayId: string): Buffer {
+  const candidateFiles = [
+    'summary.json', 'configuration.json', 'dataset.json', 'trades.json', 'rejected_orders.json',
+    'missed_opportunities.json', 'portfolio_final.json', 'equity_curve.json', 'events.jsonl', 'README.json',
+  ];
+  const entries: Array<{ name: string; content: string }> = [];
+  for (const name of candidateFiles) {
+    const art = readReplayArtifact(replayId, name);
+    if (art) entries.push({ name, content: art.content });
+  }
+  entries.push({ name: 'trades.csv', content: exportTradesCsv(replayId) });
+  entries.push({ name: 'equity_curve.csv', content: exportEquityCsv(replayId) });
+  entries.push({ name: 'rejections.csv', content: exportRejectionsCsv(replayId) });
+  entries.push({ name: 'missed_opportunities.csv', content: exportMissedOpportunitiesCsv(replayId) });
+  entries.push({ name: 'report.md', content: exportMarkdownReport(replayId) });
+  return buildZipArchive(entries);
+}
+
+/** Human-readable summary. Not a substitute for the JSON export - a reviewer-facing overview. */
+export function exportMarkdownReport(replayId: string): string {
+  const summary = readReplayJson<Record<string, any>>(replayId, 'summary.json');
+  if (!summary) return `# Replay ${replayId}\n\nNo summary.json found for this replay id.\n`;
+  const r = summary.report || {};
+  const funnel = summary.decisionFunnel || {};
+  const agentEval = summary.agentEvaluation || {};
+  const missed = summary.missedOpportunities || [];
+  const discovered = summary.discoveredSymbols || [];
+
+  const lines: string[] = [];
+  lines.push(`# Argus Historical Replay Report — ${replayId}`);
+  lines.push('');
+  lines.push('**HISTORICAL_SIMULATION · NOT LIVE · NOT PAPER · NOT ORGANIC_PAPER**');
+  lines.push('');
+  lines.push('## Configuration');
+  lines.push(`- Universe source: ${summary.universeSource}`);
+  lines.push(`- Methodology: ${summary.historicalUniverseMethodology}`);
+  lines.push(`- Data availability: ${summary.dataAvailabilityWarning}`);
+  lines.push(`- Partial-fill model: ${summary.partialFillModel}`);
+  lines.push(`- Dataset hash: ${summary.hashes?.datasetHash}`);
+  lines.push(`- Configuration hash: ${summary.hashes?.configurationHash}`);
+  lines.push(`- Replay hash: ${summary.hashes?.replayHash}`);
+  lines.push('');
+  lines.push('## Portfolio performance');
+  lines.push(`- Starting capital: ${r.startingCapital}`);
+  lines.push(`- Ending equity: ${r.endingCapital}`);
+  lines.push(`- Net P&L: ${r.netPnl} (${r.netReturnPct?.toFixed?.(2)}%)`);
+  lines.push(`- Max drawdown: ${r.maxDrawdown} (${r.maxDrawdownPct?.toFixed?.(2)}%)`);
+  lines.push(`- Trades: ${r.totalTrades} (BUY ${r.buyTrades} / SELL ${r.sellTrades})`);
+  lines.push(`- Win rate: ${r.winRate != null ? (r.winRate * 100).toFixed(1) + '%' : 'N/A'}`);
+  lines.push(`- Profit factor: ${r.profitFactor ?? 'N/A'}`);
+  lines.push(`- Sharpe: ${r.sharpe?.status === 'OK' ? r.sharpe.value?.toFixed(3) : r.sharpe?.status}`);
+  lines.push('');
+  lines.push('## Decision funnel');
+  lines.push(`- Evaluations attempted: ${funnel.evaluationsAttempted}`);
+  lines.push(`- Analyzed: ${funnel.analyzed}`);
+  lines.push(`- Ideas generated: ${funnel.ideasGenerated}`);
+  lines.push(`- Consensus approved: ${funnel.consensusApproved} / rejected: ${funnel.consensusRejected}`);
+  lines.push(`- Orders submitted: ${funnel.ordersSubmitted}, filled: ${funnel.ordersFilled}, rejected: ${funnel.ordersRejected}`);
+  lines.push('');
+  if (discovered.length) {
+    lines.push('## Discovered symbols');
+    lines.push(discovered.map((d: any) => `${d.symbol} (t=${d.discoveredAt})`).join(', '));
+    lines.push('');
+  }
+  lines.push('## Agent evaluation');
+  for (const [agent, stat] of Object.entries<any>(agentEval)) {
+    lines.push(`- ${agent}: ${stat.ideas} ideas (${stat.buyIdeas} BUY / ${stat.sellIdeas} SELL), avg confidence ${stat.averageConfidence ?? 'N/A'}`);
+  }
+  lines.push('');
+  lines.push(`## Missed opportunities (${summary.missedOpportunityLabel || 'AFTER-THE-FACT ANALYSIS'})`);
+  lines.push(`${missed.length} consensus rejections analyzed retrospectively.`);
+  const flagged = missed.filter((m: any) => m.classification === 'MISSED_OPPORTUNITY');
+  lines.push(`${flagged.length} classified MISSED_OPPORTUNITY (favorable move exceeded threshold after rejection).`);
+  lines.push('');
+  lines.push('## Honesty');
+  for (const h of r.honesty || []) lines.push(`- ${h}`);
+  lines.push('');
+  return lines.join('\n');
 }

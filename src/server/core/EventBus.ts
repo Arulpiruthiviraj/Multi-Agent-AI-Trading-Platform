@@ -5,6 +5,7 @@ import { eventName } from './eventNames';
 import { contextFromEventPayload, getObservabilityContext, runWithObservabilityContext } from '../observability/ObservabilityContext';
 import { gateTradeIdea } from './tradeIdeaContract';
 import { applyAssetIdeaGate } from '../multiAsset/ideaEligibility';
+import { allowTradeIdea, getPipelineRateSnapshot } from './pipelineRateLimit';
 
 const CORE_EVENTS_REQUIRING_TRACE_ID = new Set(
   tracingConfig.coreEventsRequiringTraceId.map(k => eventName(k)),
@@ -96,6 +97,16 @@ class EventBus extends EventEmitter {
           });
         }
         args[0] = eligible.idea;
+        if (!allowTradeIdea()) {
+          this.emit(EVENTS.IDEA_RATE_LIMITED, {
+            reason: 'MAX_TRADE_IDEAS_PER_MINUTE',
+            symbol: eligible.idea.symbol,
+            agent: eligible.idea.agent,
+            traceId: eligible.idea.traceId,
+            ...getPipelineRateSnapshot(),
+          });
+          return false;
+        }
       }
     }
     // Phase 16A follow-up: Node's default EventEmitter.emit() aborts remaining listeners when

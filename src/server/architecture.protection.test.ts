@@ -43,6 +43,7 @@ describe('Architecture protection: BrokerManager access is allowlisted', () => {
   // not just to make this test pass.
   const ALLOWED_BROKER_MANAGER_IMPORTERS = new Set([
     'src/server/core/IntegrityValidator.ts',
+    'src/server/core/ArgusCoreBoot.ts',
     'src/server/core/wsInitialSnapshot.ts',
     'src/server/diagnostics/DiagnosticService.ts',
     'src/server/engines/RiskEngine.ts',
@@ -113,6 +114,35 @@ describe('Architecture protection: extension-zone modules cannot reach the spine
     expect(text).not.toMatch(/\.emit\(\s*(EVENTS\.TRADE_IDEA_GENERATED|['"]TRADE_IDEA_GENERATED['"])/);
   });
 
+  it('only OpportunityScreener in continuous/ may emitTradeIdea (still one vote; never CHIEF_APPROVED_IDEA)', () => {
+    const hits: string[] = [];
+    for (const f of SERVER_TS_FILES) {
+      const path = rel(f);
+      if (!path.startsWith('src/server/continuous/')) continue;
+      const text = readFileSync(f, 'utf8');
+      if (!/emitTradeIdea\(/.test(text)) continue;
+      if (path !== 'src/server/continuous/OpportunityScreener.ts') hits.push(path);
+    }
+    expect(hits).toEqual([]);
+    const screener = readFileSync(join(ROOT, 'src/server/continuous/OpportunityScreener.ts'), 'utf8');
+    expect(screener).toMatch(/emitTradeIdea\(/);
+    expect(screener).not.toMatch(/\.placeOrder\(/);
+  });
+
+  it('continuous/ never emits CHIEF_APPROVED_IDEA or imports ChiefTrader (ideas enter via emitTradeIdea only)', () => {
+    const hits: string[] = [];
+    for (const f of SERVER_TS_FILES) {
+      const path = rel(f);
+      if (!path.startsWith('src/server/continuous/')) continue;
+      const text = readFileSync(f, 'utf8');
+      if (/\.emit\(\s*(EVENTS\.CHIEF_APPROVED_IDEA|['"]CHIEF_APPROVED_IDEA['"])/.test(text)) {
+        hits.push(`${path}: emits CHIEF_APPROVED_IDEA`);
+      }
+      if (/from ['"][^'"]*ChiefTraderAgent['"]/.test(text)) hits.push(`${path}: imports ChiefTraderAgent`);
+    }
+    expect(hits).toEqual([]);
+  });
+
   it('ExitIntelligenceEngine.ts (ARGUS_EXIT_INTELLIGENCE_PLAN.md) never imports EventBus, RiskEngine, OrderManagement, or BrokerManager, and never emits or places anything itself - it is a pure evaluation function PortfolioMonitor consults and acts on', () => {
     const text = readFileSync(join(ROOT, 'src/server/services/ExitIntelligenceEngine.ts'), 'utf8');
     expect(text).not.toMatch(/from ['"][^'"]*EventBus['"]/);
@@ -166,5 +196,43 @@ describe('Architecture protection: trading_state is written from exactly one pla
       if (/\.set\(\s*\{\s*tradingState:/.test(text)) hits.push(path);
     }
     expect(hits).toEqual([]);
+  });
+});
+
+describe('Architecture protection: incident-remediation contracts', () => {
+  it('consensus bars remain 0.75 and minIndependentAgreeingAgents 2 in reviewed JSON', () => {
+    const safety = readFileSync(join(ROOT, 'config/tradingSafety.json'), 'utf8');
+    expect(safety).toMatch(/"consensusApprovalThreshold":\s*0\.75/);
+    expect(safety).toMatch(/"minIndependentAgreeingAgents":\s*2/);
+  });
+
+  it('session recovery never places orders, never emits CHIEF_APPROVED_IDEA, and never auto-unpauses', () => {
+    const text = readFileSync(join(ROOT, 'src/server/core/sessionRecovery.ts'), 'utf8');
+    expect(text).not.toMatch(/placeOrder\(/);
+    expect(text).not.toMatch(/CHIEF_APPROVED_IDEA/);
+    expect(text).not.toMatch(/setTradingState/);
+    expect(text).toMatch(/RECONCILIATION_MATCH/);
+  });
+
+  it('MarketDataWorker tick emission is not gated on the interrupted-session entry hold', () => {
+    const text = readFileSync(join(ROOT, 'src/server/services/MarketDataWorker.ts'), 'utf8');
+    expect(text).toMatch(/isAutobotTradingEnabled/);
+    expect(text).not.toMatch(/allowsNewEntryIdeas/);
+    expect(text).not.toMatch(/isLiveIdeaGenerationEnabled/);
+  });
+
+  it('PortfolioMonitor SELL path does not import the entry-idea gate', () => {
+    const text = readFileSync(join(ROOT, 'src/server/services/PortfolioMonitor.ts'), 'utf8');
+    expect(text).not.toMatch(/ideaGenerationGate/);
+    expect(text).not.toMatch(/sessionRecovery/);
+    expect(text).toMatch(/emitTradeIdea/);
+  });
+
+  it('architecture contract and AI change-rule files exist', () => {
+    const contract = readFileSync(join(ROOT, 'ARGUS_ARCHITECTURE_CONTRACT.md'), 'utf8');
+    const rules = readFileSync(join(ROOT, 'ARGUS_AI_CHANGE_RULES.md'), 'utf8');
+    expect(contract).toMatch(/Protected execution spine/);
+    expect(contract).toMatch(/PAPER_TRADING_ONLY/);
+    expect(rules).toMatch(/never bypass/);
   });
 });

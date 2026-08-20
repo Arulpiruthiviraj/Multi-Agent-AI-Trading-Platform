@@ -1,6 +1,103 @@
 import { replaySafety } from './replaySafety';
 import type { ReplayTradeRecord } from './ReplayContext';
 
+export interface ReplayDecisionFunnel {
+  evaluationsAttempted: number;
+  strategyPassesAttempted: number;
+  dataUnavailable: number;
+  insufficientSample: number;
+  analyzed: number;
+  noValidIdea: number;
+  ideasGenerated: number;
+  consensusRejected: number;
+  consensusApproved: number;
+  ordersSubmitted: number;
+  ordersFilled: number;
+  ordersRejected: number;
+  rejectionReasons: Record<string, number>;
+  methodology: string;
+}
+
+/**
+ * Built entirely from counters the engine already tracks (session.noTrade, tradeLedger,
+ * rejectedOrders) - not new fabricated data. This is an evaluation-instance funnel (one count per
+ * symbol-timestamp-strategy pass), not a unique-candidate funnel - stated explicitly in
+ * `methodology` rather than implied, since a symbol evaluated on 60 different historical days
+ * counts 60 times here, not once.
+ *
+ * Two counting levels coexist here on purpose: evaluationsAttempted/analyzed are symbol-timestamp
+ * level (one increment per symbol per tick, before any strategy runs), but NO_VALID_STRATEGY is
+ * bumped once per strategyId per symbol-tick inside FullArgusReplayEngine.ts's
+ * `for (const strategyId of session.config.strategyIds)` loop. With a single strategyId those two
+ * levels are numerically identical, but with ALL_CORE (multiple strategyIds) NO_VALID_STRATEGY can
+ * legitimately exceed evaluationsAttempted - comparing it against evaluationsAttempted clamps
+ * ideasGenerated to 0 and hides real ideas. strategyPassesAttempted is the real per-strategy-pass
+ * denominator ideasGenerated is computed against instead.
+ */
+export function buildDecisionFunnel(opts: {
+  evaluationsAttempted: number;
+  strategyPassesAttempted?: number;
+  noTrade: Record<string, number>;
+  tradeLedger: ReplayTradeRecord[];
+  rejectedOrders: Array<{ reason: string }>;
+}): ReplayDecisionFunnel {
+  const dataUnavailable = opts.noTrade.DATA_UNAVAILABLE || 0;
+  const insufficientSample = opts.noTrade.INSUFFICIENT_SAMPLE || 0;
+  const analyzed = Math.max(0, opts.evaluationsAttempted - dataUnavailable - insufficientSample);
+  // Fallback to `analyzed` when the caller doesn't pass strategyPassesAttempted (older callers /
+  // single-strategy assumption) - numerically identical to the old behavior in that case.
+  const strategyPassesAttempted = opts.strategyPassesAttempted ?? analyzed;
+  const noValidIdea = opts.noTrade.NO_VALID_STRATEGY || 0;
+  const ideasGenerated = Math.max(0, strategyPassesAttempted - noValidIdea);
+  const consensusRejected = opts.noTrade.NO_CHIEF_APPROVAL || 0;
+  const consensusApproved = Math.max(0, ideasGenerated - consensusRejected);
+  const ordersFilled = opts.tradeLedger.length;
+  const ordersRejected = opts.rejectedOrders.length;
+  const ordersSubmitted = ordersFilled + ordersRejected;
+  const rejectionReasons: Record<string, number> = {};
+  for (const r of opts.rejectedOrders) rejectionReasons[r.reason] = (rejectionReasons[r.reason] || 0) + 1;
+
+  return {
+    evaluationsAttempted: opts.evaluationsAttempted,
+    strategyPassesAttempted,
+    dataUnavailable,
+    insufficientSample,
+    analyzed,
+    noValidIdea,
+    ideasGenerated,
+    consensusRejected,
+    consensusApproved,
+    ordersSubmitted,
+    ordersFilled,
+    ordersRejected,
+    rejectionReasons,
+    methodology: 'Evaluation-instance funnel: evaluationsAttempted/analyzed are symbol-timestamp level (one per symbol per tick); noValidIdea/ideasGenerated are symbol-timestamp-strategy level (one per strategyId per symbol per tick - matters for ALL_CORE multi-strategy runs, compared against strategyPassesAttempted, not evaluationsAttempted). Not per unique candidate - a symbol evaluated on 60 different historical days counts 60 times here, not once. consensusApproved/ordersSubmitted include both new-entry BUY evaluations and exit SELL submissions (stop/target/generic/ExitIntelligenceEngine), since both flow through the same RiskEngine/OMS path.',
+  };
+}
+
+export interface ReplayAgentEvaluation {
+  ideas: number;
+  buyIdeas: number;
+  sellIdeas: number;
+  averageConfidence: number | null;
+}
+
+/** Built from session.agentIdeaStats, accumulated inline as ideas are generated - not a separate pass. */
+export function buildAgentEvaluation(
+  agentIdeaStats: Record<string, { ideas: number; buyIdeas: number; sellIdeas: number; confidenceSum: number }>,
+): Record<string, ReplayAgentEvaluation> {
+  const out: Record<string, ReplayAgentEvaluation> = {};
+  for (const [agent, s] of Object.entries(agentIdeaStats)) {
+    out[agent] = {
+      ideas: s.ideas,
+      buyIdeas: s.buyIdeas,
+      sellIdeas: s.sellIdeas,
+      averageConfidence: s.ideas > 0 ? Number((s.confidenceSum / s.ideas).toFixed(4)) : null,
+    };
+  }
+  return out;
+}
+
 export interface MetricSample {
   status: 'INSUFFICIENT_SAMPLE' | 'OK' | 'NOT_COMPUTED' | 'UNAVAILABLE';
   value: number | null;

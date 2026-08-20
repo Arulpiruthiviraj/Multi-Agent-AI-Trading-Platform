@@ -279,6 +279,18 @@
       "description": "Subscribe-only. Never emits TRADE_IDEA_GENERATED."
     },
     {
+      "key": "ARGUS_OPPORTUNITY_IDEAS_ENABLED",
+      "category": "OPPORTUNITY DISCOVERY",
+      "label": "Opportunity screener ideas",
+      "type": "boolean",
+      "default": "false",
+      "overridable": true,
+      "secret": false,
+      "safetyLocked": false,
+      "applyMode": "HOT_RELOAD",
+      "description": "Default off. When true, OpportunityScreener may emitTradeIdea (one vote). Still requires ChiefTrader min-2 + RiskEngine + OMS. Does not scan thousands of names or call LLMs."
+    },
+    {
       "key": "ARGUS_PORTFOLIO_INTEL_ENABLED",
       "category": "PORTFOLIO INTELLIGENCE",
       "label": "Portfolio intelligence overlay",

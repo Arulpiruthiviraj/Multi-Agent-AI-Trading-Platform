@@ -126,6 +126,12 @@ export interface TradingSafety {
   /** 0 = unlimited FILLED trades per NY session. */
   maxDailyTrades: number;
   duplicateSignalWindowMs: number;
+  /** Drop ChiefTrader votes older than this so mismatched timestamps cannot masquerade as a live council. */
+  consensusIdeaMaxAgeMs: number;
+  /** Sliding-window cap on TRADE_IDEA_GENERATED after gates (defense vs idea storms). */
+  maxTradeIdeasPerMinute: number;
+  /** Sliding-window cap on AIRouter.routeTask (defense vs AI storms). Fail-closed HOLD. */
+  maxAiCallsPerMinute: number;
   /** Value bounds for the safety-relevant numeric fields client-writable via POST /settings.
    * Real bug fixed: SETTINGS_ALLOWED_FIELDS only ever allowlisted field *names*, never validated
    * *values* - posting e.g. {"maxPortfolioDrawdownPct": 999} silently disabled the portfolio-
@@ -259,6 +265,9 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'postLossCooldownMs',
   'maxDailyTrades',
   'duplicateSignalWindowMs',
+  'consensusIdeaMaxAgeMs',
+  'maxTradeIdeasPerMinute',
+  'maxAiCallsPerMinute',
   'settingsBoundMaxPortfolioDrawdownPctMin',
   'settingsBoundMaxPortfolioDrawdownPctMax',
   'settingsBoundMaxOrdersPerMinuteMin',

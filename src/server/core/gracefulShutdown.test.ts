@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { unlinkSync } from 'node:fs';
 
 vi.mock('../engines/TradingEngine', () => ({
   tradingEngine: { setTradingState: vi.fn(async () => {}) },
@@ -14,9 +17,20 @@ vi.mock('../db', () => ({
 }));
 
 describe('gracefulShutdown drain', () => {
+  const sessionPath = join(tmpdir(), `argus_shutdown_session_${process.pid}.json`);
+
   beforeEach(async () => {
     const { resetGracefulShutdownForTests } = await import('./gracefulShutdown');
+    const { resetSessionRecoveryForTests, setSessionRecoveryPathForTests } = await import('./sessionRecovery');
     resetGracefulShutdownForTests();
+    resetSessionRecoveryForTests();
+    setSessionRecoveryPathForTests(sessionPath);
+  });
+
+  afterEach(async () => {
+    const { resetSessionRecoveryForTests } = await import('./sessionRecovery');
+    resetSessionRecoveryForTests();
+    try { unlinkSync(sessionPath); } catch { /* ignore */ }
   });
 
   it('pauses trading, stops workers, checkpoints SQLite, and closes HTTP/WS handles', async () => {
@@ -40,6 +54,9 @@ describe('gracefulShutdown drain', () => {
     expect(sqliteDb.close).toHaveBeenCalled();
     expect(httpClose).toHaveBeenCalled();
     expect(wsClose).toHaveBeenCalled();
+    const { readFileSync } = await import('node:fs');
+    const marker = JSON.parse(readFileSync(sessionPath, 'utf8'));
+    expect(marker.cleanShutdown).toBe(true);
   });
 
   it('installProcessShutdown registers SIGTERM and SIGINT once', async () => {

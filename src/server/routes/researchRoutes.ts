@@ -35,7 +35,7 @@ import { tradingEdgeScore } from '../research/edgeScore';
 import { db } from '../db';
 import { trades } from '../db/schema';
 import { pauseReplay, resumeReplay, stopReplay, stepReplay, getReplayRun, getReplayTrades, getReplayEquity } from '../replay/FullArgusReplayEngine';
-import { exportReplayManifest, readReplayArtifact, exportTradesCsv, exportEquityCsv, isValidReplayId } from '../replay/replayStore';
+import { exportReplayManifest, readReplayArtifact, exportTradesCsv, exportEquityCsv, exportRejectionsCsv, exportMissedOpportunitiesCsv, exportMarkdownReport, exportZipArchive, isValidReplayId } from '../replay/replayStore';
 
 export function mountResearchRoutes(v2Router: Router): void {
   v2Router.get('/research/vectorbt/status', async (_req, res) => {
@@ -587,9 +587,12 @@ export function mountResearchRoutes(v2Router: Router): void {
       assertNoArbitraryCode(req.body ?? {});
       const { createReplayRun } = await import('../replay/FullArgusReplayEngine');
       const row = await createReplayRun(req.body || {});
-      res.json({ ok: true, ...row, canPlaceOrders: false });
+      // server.ts's 15s /api request-timeout watchdog can already have sent a 504 for a slow real-
+      // provider dataset load by the time this resolves - guard instead of throwing
+      // ERR_HTTP_HEADERS_SENT (the same crash pattern already seen from other slow routes).
+      if (!res.headersSent) res.json({ ok: true, ...row, canPlaceOrders: false });
     } catch (e: any) {
-      res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false, live: 'NO-GO' });
+      if (!res.headersSent) res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false, live: 'NO-GO' });
     }
   });
 
@@ -597,6 +600,7 @@ export function mountResearchRoutes(v2Router: Router): void {
     const { startReplay } = await import('../replay/FullArgusReplayEngine');
     const asyncMode = req.query.async === '1' || req.body?.async === true;
     const row = await startReplay(String(req.params.id), { async: asyncMode });
+    if (res.headersSent) return;
     if (row && (row as any).ok === false) return res.status(404).json(row);
     res.json({ ok: true, ...(row || {}), canPlaceOrders: false, live: 'NO-GO' });
   });
@@ -626,6 +630,9 @@ export function mountResearchRoutes(v2Router: Router): void {
       ...rest,
       status: session?.status || rest.status,
       eventCount: rest.events?.length || session?.events?.length || 0,
+      totalBars: session?.totalBars ?? null,
+      currentBarIndex: session?.currentBarIndex ?? null,
+      currentTimestamp: session?.currentTimestamp ?? null,
       live: 'NO-GO',
       executionEnvironment: 'REPLAY',
       organicPaper: false,
@@ -702,11 +709,79 @@ export function mountResearchRoutes(v2Router: Router): void {
     }
     if (format === 'csv') {
       const kind = String(req.query.kind || 'trades');
-      const csv = kind === 'equity' ? exportEquityCsv(id) : exportTradesCsv(id);
+      const csv = kind === 'equity' ? exportEquityCsv(id)
+        : kind === 'rejections' ? exportRejectionsCsv(id)
+        : kind === 'missed_opportunities' ? exportMissedOpportunitiesCsv(id)
+        : exportTradesCsv(id);
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="replay-${id}-${kind}.csv"`);
       return res.send(csv);
     }
-    return res.status(400).json({ ok: false, error: 'Unsupported format. Use manifest|json|jsonl|csv' });
+    if (format === 'markdown') {
+      const md = exportMarkdownReport(id);
+      res.setHeader('Content-Type', 'text/markdown');
+      res.setHeader('Content-Disposition', `attachment; filename="replay-${id}-report.md"`);
+      return res.send(md);
+    }
+    if (format === 'zip') {
+      const zip = exportZipArchive(id);
+      res.setHeader('Content-Type', 'application/zip');
+      res.setHeader('Content-Disposition', `attachment; filename="replay-${id}-export.zip"`);
+      return res.send(zip);
+    }
+    return res.status(400).json({ ok: false, error: 'Unsupported format. Use manifest|json|jsonl|csv|markdown|zip' });
+  });
+
+  // Argus Historical Evaluation — aliases over FullArgusReplayEngine (no duplicated trading logic).
+  v2Router.post('/historical-evaluations', replayLabLimiter, async (req, res) => {
+    try {
+      assertNoArbitraryCode(req.body ?? {});
+      const { createHistoricalEvaluation } = await import('../replay/HistoricalEvaluationService');
+      const row = await createHistoricalEvaluation(req.body || {});
+      if (!res.headersSent) res.json({ ok: true, ...row, canPlaceOrders: false });
+    } catch (e: any) {
+      if (!res.headersSent) res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false, live: 'NO-GO' });
+    }
+  });
+
+  v2Router.get('/historical-evaluations', async (_req, res) => {
+    const { listReplayPackages } = await import('../replay/replayStore');
+    const ids = listReplayPackages();
+    res.json({ ok: true, evaluations: ids.map((id) => ({ replayId: id })), live: 'NO-GO' });
+  });
+
+  v2Router.get('/historical-evaluations/:id', (req, res) => {
+    const { getHistoricalEvaluation } = require('../replay/HistoricalEvaluationService') as typeof import('../replay/HistoricalEvaluationService');
+    const row = getHistoricalEvaluation(String(req.params.id));
+    if (!row) return res.status(404).json({ ok: false, error: 'EVALUATION_NOT_FOUND' });
+    res.json({ ok: true, ...row, live: 'NO-GO' });
+  });
+
+  v2Router.get('/historical-evaluations/:id/report', (req, res) => {
+    const { getHistoricalEvaluationReport } = require('../replay/HistoricalEvaluationService') as typeof import('../replay/HistoricalEvaluationService');
+    const report = getHistoricalEvaluationReport(String(req.params.id));
+    if (!report) return res.status(404).json({ ok: false, error: 'EVALUATION_NOT_FOUND' });
+    res.json({ ok: true, ...report, live: 'NO-GO' });
+  });
+
+  v2Router.get('/historical-evaluations/:id/export', (req, res) => {
+    const format = String(req.query.format || 'zip').toLowerCase();
+    const id = String(req.params.id);
+    if (!isValidReplayId(id)) {
+      return res.status(400).json({ ok: false, error: 'Invalid evaluation id (must be a UUID).' });
+    }
+    if (format === 'markdown') {
+      const md = exportMarkdownReport(id);
+      res.setHeader('Content-Type', 'text/markdown');
+      res.setHeader('Content-Disposition', `attachment; filename="historical-evaluation-${id}-report.md"`);
+      return res.send(md);
+    }
+    if (format === 'manifest') {
+      return res.json({ ok: true, ...exportReplayManifest(id), live: 'NO-GO', format: 'manifest' });
+    }
+    const zip = exportZipArchive(id);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="historical-evaluation-${id}-export.zip"`);
+    return res.send(zip);
   });
 }

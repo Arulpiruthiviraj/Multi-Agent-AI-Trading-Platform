@@ -21,7 +21,7 @@ Do not enable Autobot or LIVE from documentation.
 
 ## FOR DEVELOPERS
 
-Extend around the protected spine. Do not rewrite ChiefTrader / RiskEngine / OMS / BrokerManager.
+Extend around the protected spine. Do not rewrite ChiefTrader / RiskEngine / OMS / BrokerManager. Discovery and position intelligence must **feed** that spine (`emitTradeIdea`), never bypass it.
 
 1. [`CLAUDE.md`](../CLAUDE.md) — architecture protection, 24 gates, EventBus path  
 2. [`ARGUS_ARCHITECTURE_PROTECTION.md`](../ARGUS_ARCHITECTURE_PROTECTION.md)  
@@ -39,7 +39,16 @@ Extend around the protected spine. Do not rewrite ChiefTrader / RiskEngine / OMS
 |---|---|
 | `CLAUDE.md` | Live path contract |
 | `ARGUS_ARCHITECTURE_PROTECTION.md` | What must not be modified |
+| `ARGUS_ARCHITECTURE_CONTRACT.md` | Binding 14-point architecture contract |
+| `ARGUS_ARCHITECTURE_INVARIANTS.md` | Spine, safety, paper/live, required architecture tests |
+| `ARGUS_AI_CHANGE_RULES.md` | Required read/test/preserve rules for AI-authored changes |
+| `docs/ARGUS_OPPORTUNITY_DISCOVERY.md` | Seed watchlist vs optional screener ideas |
+| `docs/ARGUS_PORTFOLIO_INTELLIGENCE.md` | Position SELL still uses the spine |
+| `docs/ARGUS_READINESS.md` | Levels 1–6; LIVE stays NO-GO |
+| `docs/ARGUS_INCIDENTS.md` | Idea-storm, recon, and market-open incident notes (root-level incident forensic/remediation reports were consolidated here and removed) |
 | `ARGUS_CURRENT_ARCHITECTURE.md` | Prior architecture write-up (cross-check; prefer code) |
+| `ARGUS_HEADLESS_ARCHITECTURE.md` | Headless mode (`ARGUS_HEADLESS=true`) + `argus-cli` — trading engine independent of Vite/browser |
+| `docs/ARGUS_TRADING_FLOW.md` | End-to-end BUY/SELL walkthrough |
 | `docs/ARGUS_FORENSIC_DEBUGGING_GUIDE.md` | Pipeline stages |
 
 ## Debugging
@@ -95,7 +104,15 @@ Extend around the protected spine. Do not rewrite ChiefTrader / RiskEngine / OMS
 | Doc |
 |---|
 | `docs/ARGUS_LOGGING_AND_OBSERVABILITY.md` |
+| `docs/ARGUS_OBSERVABILITY.md` |
 | `docs/ARGUS_EVENTBUS_REFERENCE.md` |
+
+## Historical Replay Lab (MODE B)
+
+| Doc |
+|---|
+| `docs/ARGUS_REPLAY_USER_GUIDE.md` — operator guide: capital + date range, Argus Discovery vs fixed universe, reading a report |
+| `ARGUS_PHASE_C_HISTORICAL_EVALUATION_AUDIT.md` — latest replay-engine forensic audit |
 
 ## Configuration / security
 

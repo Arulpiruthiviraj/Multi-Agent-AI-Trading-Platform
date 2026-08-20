@@ -95,7 +95,13 @@ export interface ActiveReplaySession {
   partial: boolean;
   waiters: Map<string, () => void>;
   barsBySymbol: Map<string, ResearchBar[]>;
-  openStops: Map<string, { stop: number | null; target: number | null; entryTraceId: string }>;
+  openStops: Map<string, { stop: number | null; target: number | null; entryTraceId: string; entryPrice: number; peakPrice: number; thesis: import('../quant/analysis/ThesisInvalidation').StoredThesis | null }>;
+  /** ARGUS_DISCOVERY mode only - currently "active" symbols per the point-in-time liquidity screen. */
+  activeDiscoveredSymbols: Set<string>;
+  /** ARGUS_DISCOVERY mode only - historical timestamp each symbol first became active. */
+  discoveredAt: Map<string, number>;
+  /** ARGUS_DISCOVERY mode only - counts processTimestamp calls to pace the rescan cadence. */
+  discoveryTickCounter: number;
   tradePnls: number[];
   /** Auditable fill ledger for report / export — not organic paper. */
   tradeLedger: ReplayTradeRecord[];
@@ -107,6 +113,28 @@ export interface ActiveReplaySession {
     traceId?: string;
   }>;
   agentAvailability: Record<string, { status: string; reason: string }>;
+  /** Total symbol-timestamp evaluation instances entering the main loop body (funnel denominator). */
+  evaluationsAttempted: number;
+  /**
+   * Total symbol-timestamp-STRATEGY passes (one increment per iteration of the per-symbol
+   * `for (const strategyId of session.config.strategyIds)` loop). With a single strategyId this
+   * equals evaluationsAttempted minus DATA_UNAVAILABLE/INSUFFICIENT_SAMPLE/exit-continues, but with
+   * ALL_CORE (multiple strategyIds) NO_VALID_STRATEGY is bumped once per strategy per symbol-tick,
+   * so it must be compared against this counter, not evaluationsAttempted, or ideasGenerated
+   * silently clamps to 0 once NO_VALID_STRATEGY exceeds the symbol-tick count.
+   */
+  strategyPassesAttempted: number;
+  /** Real tick-loop progress (set in runReplayLoop) - not derived/approximated client-side. Used by the UI progress bar. */
+  totalBars: number;
+  currentBarIndex: number;
+  currentTimestamp: number | null;
+  /** Post-run-only retrospective candidate pool: consensus rejections with a reference price. Never read during the live decision loop. */
+  rejectionsForRetrospective: Array<{ symbol: string; timestamp: number; reason: string; referencePrice: number }>;
+  /** Per-agent idea tally for the run (agent name -> counts), built up as ideas are generated. */
+  agentIdeaStats: Record<string, { ideas: number; buyIdeas: number; sellIdeas: number; confidenceSum: number }>;
+  /** Coarse per-stage wall-clock timing (replay processing time, not simulated market latency). */
+  stageDurations: Record<string, { totalMs: number; count: number }>;
+  replayStartedAtMs: number;
 }
 
 export interface ReplayTradeRecord {
@@ -173,14 +201,18 @@ export function replayVisibleBars(symbol: string): ResearchBar[] {
 }
 
 export function defaultReplayConfig(partial?: Partial<ReplayConfig>): ReplayConfig {
+  const explicitSymbols = partial?.symbols;
+  const hasExplicitSymbols = Array.isArray(explicitSymbols) && explicitSymbols.length > 0;
+  const universeSource = partial?.universeSource
+    ?? (hasExplicitSymbols ? 'OPERATOR_SELECTED' : replaySafety.universeSourceDefault);
   return {
     startDate: '2024-01-02',
     endDate: '2024-12-31',
     market: 'US',
     exchange: 'NYSE',
     timezone: replaySafety.defaultTimezone,
-    symbols: ['AAPL'],
-    universeSource: replaySafety.universeSourceDefault,
+    symbols: hasExplicitSymbols ? explicitSymbols! : [],
+    universeSource,
     universeAsOf: null,
     frequency: replaySafety.defaultFrequency,
     initialCapital: replaySafety.defaultInitialCapital,

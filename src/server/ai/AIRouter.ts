@@ -1,4 +1,6 @@
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
+import { allowAiCall, getPipelineRateSnapshot } from '../core/pipelineRateLimit';
 /**
  * ==========================================================
  * Module:
@@ -234,6 +236,7 @@ export class AIRouter {
   private authDisabledUntil: Map<string, number> = new Map();
   /** 404 / timeout / fetch-failed skip (in-memory only — not a DB enabled:false). */
   private skipUntil: Map<string, number> = new Map();
+  private lastExhaustionEmitAt = 0;
 
   private constructor() {}
 
@@ -254,6 +257,7 @@ export class AIRouter {
     this.providers.clear();
     this.authDisabledUntil.clear();
     this.skipUntil.clear();
+    this.lastExhaustionEmitAt = 0;
   }
 
   /** Test-only — inspect auth circuit state without reaching into private fields elsewhere. */
@@ -316,6 +320,13 @@ export class AIRouter {
       const stat = dbStats.find(s => s.id === id);
       return !stat || stat.enabled;
     });
+  }
+
+  private emitProvidersExhausted(payload: Record<string, unknown>): void {
+    const now = Date.now();
+    if (now - this.lastExhaustionEmitAt < AI_UNREACHABLE_COOLDOWN_MS) return;
+    this.lastExhaustionEmitAt = now;
+    eventBus.publish('AI_PROVIDERS_EXHAUSTED', payload);
   }
 
   private async probeProviderAtStartup(providerId: string, provider: AIProvider): Promise<void> {
@@ -494,6 +505,7 @@ export class AIRouter {
     availableProviders = selectConsensusProviders(availableProviders, tradingSafety.consensusMaxProviders);
 
     if (availableProviders.length === 0) {
+       this.emitProvidersExhausted({ agentType, providersAttempted: [], lastError: 'no_routable_providers', shortCircuit: true });
        throw new Error("No AI Providers available for consensus");
     }
 
@@ -626,7 +638,19 @@ export class AIRouter {
   }
 
   public async routeTask(agentType: string, prompt: string, traceId: string, jsonMode: boolean = false): Promise<{content: string, provider: string, latency: number, aiCallId?: string, model?: string, tokensIn?: number, tokensOut?: number}> {
-    
+    if (!allowAiCall()) {
+      eventBus.emit(EVENTS.AI_RATE_LIMITED, {
+        reason: 'MAX_AI_CALLS_PER_MINUTE',
+        agentType,
+        traceId,
+        ...getPipelineRateSnapshot(),
+      });
+      const content = jsonMode
+        ? '{"side":"HOLD","confidence":0,"reasoning":"AI_RATE_LIMITED"}'
+        : 'AI_RATE_LIMITED';
+      return { content, provider: 'throttled', latency: 0 };
+    }
+
     let preferredConfig = this.agentRouting.get(agentType);
     
     // Sort providers by priority (lowest number is highest priority), then success rate, then latency
@@ -673,7 +697,11 @@ export class AIRouter {
     }
     
     if (availableProviders.length === 0) {
-       return { content: `{"error": "No AI Providers available"}`, provider: 'mock', latency: 10 };
+       this.emitProvidersExhausted({ agentType, providersAttempted: [], lastError: 'no_routable_providers', shortCircuit: true });
+       const content = jsonMode
+         ? '{"side":"HOLD","confidence":0,"reasoning":"NO_ROUTABLE_AI_PROVIDERS"}'
+         : '{"error": "No AI Providers available"}';
+       return { content, provider: 'throttled', latency: 0 };
     }
 
     let lastError: Error | null = null;
@@ -847,7 +875,7 @@ export class AIRouter {
     // here at all. AlertingService.ts is the first real consumer - a real "every AI provider is
     // down" signal an operator should know about, not just a per-agent log line each agent's own
     // try/catch already swallows independently.
-    eventBus.publish('AI_PROVIDERS_EXHAUSTED', { agentType, providersAttempted: availableProviders.map(([id]) => id), lastError: lastError?.message ?? null });
+    this.emitProvidersExhausted({ agentType, providersAttempted: availableProviders.map(([id]) => id), lastError: lastError?.message ?? null });
     throw new Error(`All AI providers failed for task ${agentType}. Last error: ${lastError?.message}`);
   }
 }

@@ -15,6 +15,12 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
   draining = true;
   console.log('[gracefulShutdown] Stopping new trades and draining workers...');
   try {
+    const { markCleanShutdown } = await import('./sessionRecovery');
+    markCleanShutdown();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to persist clean-shutdown marker', e);
+  }
+  try {
     const { tradingEngine } = await import('../engines/TradingEngine');
     await tradingEngine.setTradingState('TRADING_PAUSED', {
       reason: 'Process shutdown drain — no new orders until restart recovery.',

@@ -35,10 +35,25 @@ export interface ReplaySafetyConfig {
   preMarketStartMinutes: number;
   afterHoursEndMinutes: number;
   universeSourceDefault: string;
+  consensusModeDefault: string;
+  consensusModeDescription: string;
+  historicalFidelityLabel: string;
+  historicalEvaluationDisclaimer: string;
   survivorshipBiasWarning: string;
   delistedWarning: string;
   replayTracePrefix: string;
   jsonlEventCap: number;
+  historicalDiscoveryUniverse: string[];
+  historicalDiscoveryFidelityWarning: string;
+  historicalDiscoveryMinDollarVolume: number;
+  historicalDiscoveryLookbackBars: number;
+  historicalDiscoveryRescanEveryBars: number;
+  historicalDiscoveryMaxActiveCandidates: number;
+  missedOpportunityHorizonBars: number;
+  missedOpportunityFavorableMovePct: number;
+  missedOpportunityLabel: string;
+  maxVolumeParticipationPct: number;
+  partialFillModelDescription: string;
 }
 
 export const replaySafety = loadRepoConfigJson<ReplaySafetyConfig>('replaySafety.json');

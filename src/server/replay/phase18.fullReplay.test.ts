@@ -79,6 +79,97 @@ describe('Phase 18 look-ahead, providers, broker, honesty', () => {
     expect(() => broker.liveTrading()).toThrow(/LIVE/);
   });
 
+  it('volume-participation cap: full fill when requested quantity is within the cap', async () => {
+    const broker = new HistoricalReplayBroker({
+      initialCash: 1_000_000,
+      costs: replaySafety.costProfiles.Base,
+      timezone: 'America/New_York',
+      extendedHours: false,
+      shortSelling: false,
+      fractional: false,
+      maxVolumeParticipationPct: 0.1,
+    });
+    broker.clockNowMs = Date.UTC(2024, 0, 2, 14, 30, 0);
+    broker.nextFillPrice.set('AAPL', 100);
+    broker.nextFillVolume.set('AAPL', 1000); // cap = 100 shares
+    const order = await broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 50 });
+    expect(order.status).toBe('FILLED');
+    expect(order.filledQuantity).toBe(50);
+  });
+
+  it('volume-participation cap: PARTIALLY_FILLED when requested quantity exceeds the cap', async () => {
+    const broker = new HistoricalReplayBroker({
+      initialCash: 1_000_000,
+      costs: replaySafety.costProfiles.Base,
+      timezone: 'America/New_York',
+      extendedHours: false,
+      shortSelling: false,
+      fractional: false,
+      maxVolumeParticipationPct: 0.1,
+    });
+    broker.clockNowMs = Date.UTC(2024, 0, 2, 14, 30, 0);
+    broker.nextFillPrice.set('AAPL', 100);
+    broker.nextFillVolume.set('AAPL', 1000); // cap = 100 shares
+    const order = await broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 500 });
+    expect(order.status).toBe('PARTIALLY_FILLED');
+    expect(order.quantity).toBe(500); // originally requested
+    expect(order.filledQuantity).toBe(100); // capped fill
+  });
+
+  it('volume-participation cap: REJECTED for insufficient liquidity when the cap rounds to zero shares', async () => {
+    const broker = new HistoricalReplayBroker({
+      initialCash: 1_000_000,
+      costs: replaySafety.costProfiles.Base,
+      timezone: 'America/New_York',
+      extendedHours: false,
+      shortSelling: false,
+      fractional: false,
+      maxVolumeParticipationPct: 0.1,
+    });
+    broker.clockNowMs = Date.UTC(2024, 0, 2, 14, 30, 0);
+    broker.nextFillPrice.set('AAPL', 100);
+    broker.nextFillVolume.set('AAPL', 5); // cap = floor(5*0.1) = 0 shares
+    const order = await broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 10 });
+    expect(order.status).toBe('REJECTED');
+    expect(order.filledQuantity).toBe(0);
+  });
+
+  it('volume-participation cap does not apply when no cap is configured (backward compatible, unbounded)', async () => {
+    const broker = new HistoricalReplayBroker({
+      initialCash: 1_000_000,
+      costs: replaySafety.costProfiles.Base,
+      timezone: 'America/New_York',
+      extendedHours: false,
+      shortSelling: false,
+      fractional: false,
+      // maxVolumeParticipationPct omitted entirely
+    });
+    broker.clockNowMs = Date.UTC(2024, 0, 2, 14, 30, 0);
+    broker.nextFillPrice.set('AAPL', 100);
+    broker.nextFillVolume.set('AAPL', 1); // would cap to 0 if a cap were active
+    const order = await broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 500 });
+    expect(order.status).toBe('FILLED');
+    expect(order.filledQuantity).toBe(500);
+  });
+
+  it('volume-participation cap does not apply when no volume figure is known for the symbol', async () => {
+    const broker = new HistoricalReplayBroker({
+      initialCash: 1_000_000,
+      costs: replaySafety.costProfiles.Base,
+      timezone: 'America/New_York',
+      extendedHours: false,
+      shortSelling: false,
+      fractional: false,
+      maxVolumeParticipationPct: 0.1,
+    });
+    broker.clockNowMs = Date.UTC(2024, 0, 2, 14, 30, 0);
+    broker.nextFillPrice.set('AAPL', 100);
+    // nextFillVolume deliberately not set for AAPL
+    const order = await broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 500 });
+    expect(order.status).toBe('FILLED');
+    expect(order.filledQuantity).toBe(500);
+  });
+
   it('cash constraint rejects oversized BUY', async () => {
     const broker = new HistoricalReplayBroker({
       initialCash: 50,
@@ -200,6 +291,10 @@ describe('Phase 18 full Argus replay on golden fixture', () => {
     expect((created as any).live).toBe('NO-GO');
     expect((created as any).organicPaper).toBe(false);
     expect((created as any).executionEnvironment).toBe('REPLAY');
+    // Honesty fix: the UI must never let "AAPL appears in this run" be mistaken for "Argus
+    // historically discovered AAPL" - the replay universe is a fixed, operator-typed symbol list.
+    expect((created as any).universeSource).toBe('OPERATOR_SELECTED');
+    expect((created as any).discoveryActiveInReplay).toBe(false);
     if ((created as any).status === 'DATA_UNAVAILABLE' || (created as any).status === 'FAILED') {
       expect((created as any).error).toBeTruthy();
       return;
@@ -213,6 +308,10 @@ describe('Phase 18 full Argus replay on golden fixture', () => {
     expect((started as any).report?.environment).toBe('HISTORICAL_REPLAY');
     expect((started as any).promotion?.status).toBe('UNTESTED');
     expect((started as any).ai?.mode).toMatch(/DISABLED|MODEL_REPLAY|RECORDED/);
+    expect((started as any).agentAvailability?.Discovery?.status).toBe('NOT_ACTIVE_IN_REPLAY');
+    expect((started as any).historicalUniverseMethodology).toContain('OPERATOR_SELECTED');
+    expect((started as any).dataAvailabilityWarning).toBeTruthy();
+    expect((started as any).partialFillModel).toBe('VOLUME_PARTICIPATION_CAPPED');
     // Golden schedule must exercise BUY through RiskEngine+OMS (path correctness, not edge).
     expect((started as any).report?.buyTrades).toBeGreaterThanOrEqual(1);
     expect((started as any).report?.sellTrades).toBeGreaterThanOrEqual(1);
@@ -225,5 +324,83 @@ describe('Phase 18 full Argus replay on golden fixture', () => {
     const b = await createReplayRun({ dataProvider: 'golden_replay', symbols: ['AAPL'], randomSeed: 1, speed: 'MAX' });
     if ((a as any).datasetHash && (b as any).datasetHash) expect((a as any).datasetHash).toBe((b as any).datasetHash);
     if ((a as any).configurationHash && (b as any).configurationHash) expect((a as any).configurationHash).toBe((b as any).configurationHash);
+  });
+
+  it('ARGUS_DISCOVERY mode requires no operator-provided symbols and discovers its own universe', async () => {
+    const { createReplayRun, startReplay } = await import('./FullArgusReplayEngine');
+    const { replaySafety } = await import('./replaySafety');
+    const created = await createReplayRun({
+      dataProvider: 'golden_replay',
+      newsProvider: 'golden_replay_news',
+      universeSource: 'ARGUS_DISCOVERY',
+      // Deliberately NOT providing `symbols` - this is the whole point of the mode.
+      strategyIds: ['MOMENTUM_BREAKOUT'],
+      aiMode: 'DISABLED',
+      speed: 'MAX',
+      costProfile: 'Base',
+      randomSeed: 1,
+    });
+    if ((created as any).status === 'DATA_UNAVAILABLE' || (created as any).status === 'FAILED') {
+      expect((created as any).error).toBeTruthy();
+      return;
+    }
+    // config.symbols was overridden to the full static candidate pool, not an empty/user list.
+    expect((created as any).config.symbols).toEqual(replaySafety.historicalDiscoveryUniverse);
+    expect((created as any).universeSource).toBe('ARGUS_DISCOVERY');
+    const started = await startReplay(String(created.replayId));
+    expect(['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED']).toContain((started as any).status);
+    expect((started as any).agentAvailability?.Discovery?.status).toBe('ACTIVE_POINT_IN_TIME_SCREEN');
+    // discoveredSymbols is populated (not null, since this is discovery mode) and every entry has
+    // a real discoveredAt historical timestamp - never undefined/NaN.
+    expect(Array.isArray((started as any).discoveredSymbols)).toBe(true);
+    expect((started as any).discoveredSymbols.length).toBeGreaterThan(0);
+    for (const d of (started as any).discoveredSymbols) {
+      expect(typeof d.symbol).toBe('string');
+      expect(typeof d.discoveredAt).toBe('number');
+    }
+    // ExitIntelligenceEngine and ThesisInvalidation are the real production functions called
+    // directly, not duplicated.
+    expect((started as any).agentAvailability?.ExitIntelligenceEngine?.status).toBe('ENABLED');
+    expect((started as any).agentAvailability?.ThesisInvalidation?.status).toBe('ENABLED');
+    expect((started as any).historicalUniverseMethodology).toContain('ARGUS_DISCOVERY');
+    expect((started as any).partialFillModel).toBe('VOLUME_PARTICIPATION_CAPPED');
+    // Decision funnel, per-agent evaluation, and missed-opportunity analysis all populate on a
+    // real completed run - not just in isolated unit tests.
+    const funnel = (started as any).decisionFunnel;
+    expect(funnel).toBeTruthy();
+    expect(funnel.evaluationsAttempted).toBeGreaterThan(0);
+    expect(funnel.ordersFilled).toBe((started as any).report.buyTrades + (started as any).report.sellTrades);
+    expect(typeof (started as any).agentEvaluation).toBe('object');
+    expect(Array.isArray((started as any).missedOpportunities)).toBe(true);
+    for (const mo of (started as any).missedOpportunities) {
+      expect(mo.label).toBe('AFTER-THE-FACT ANALYSIS');
+      expect(['MISSED_OPPORTUNITY', 'CORRECTLY_AVOIDED', 'INCONCLUSIVE']).toContain(mo.classification);
+    }
+    expect((started as any).missedOpportunityLabel).toContain('AFTER-THE-FACT ANALYSIS');
+    const perf = (started as any).performanceDiagnostics;
+    expect(perf.totalReplayDurationMs).toBeGreaterThanOrEqual(0);
+    expect(perf.stages.PROCESS_TIMESTAMP.count).toBeGreaterThan(0);
+    expect(perf.stages.RISK_AND_OMS.count).toBeGreaterThan(0);
+  }, 120000);
+
+  it('OPERATOR_SELECTED mode requires explicit symbols and does not populate discoveredSymbols', async () => {
+    const { createReplayRun } = await import('./FullArgusReplayEngine');
+    const created = await createReplayRun({ dataProvider: 'golden_replay', symbols: ['AAPL'], randomSeed: 1, speed: 'MAX' });
+    expect((created as any).universeSource).toBe('OPERATOR_SELECTED');
+    expect((created as any).discoveredSymbols).toBeUndefined();
+  });
+
+  it('capital + dates only defaults to ARGUS_DISCOVERY without operator symbols', async () => {
+    const { createReplayRun } = await import('./FullArgusReplayEngine');
+    const created = await createReplayRun({
+      dataProvider: 'golden_replay',
+      initialCapital: 2000,
+      startDate: '2024-01-02',
+      endDate: '2024-03-31',
+      randomSeed: 1,
+      speed: 'MAX',
+    });
+    expect((created as any).universeSource).toBe('ARGUS_DISCOVERY');
+    expect((created as any).config?.universeSource).toBe('ARGUS_DISCOVERY');
   });
 });

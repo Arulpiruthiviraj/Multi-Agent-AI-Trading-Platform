@@ -16,7 +16,19 @@ export default defineConfig(() => {
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
       hmr: process.env.DISABLE_HMR !== 'true',
       // Disable file watching when DISABLE_HMR is true to save CPU during agent edits.
-      watch: process.env.DISABLE_HMR === 'true' ? null : {},
+      // Always ignore runtime artifacts: sessionRecovery heartbeats write
+      // data/.argus_runtime_session.json every 15s; Vite treated that as a full page reload.
+      watch: process.env.DISABLE_HMR === 'true'
+        ? null
+        : {
+            ignored: [
+              '**/data/**',
+              '**/logs/**',
+              '**/.argus_dev.pid',
+              '**/node_modules/**',
+              '**/.git/**',
+            ],
+          },
       // Remote mobile (Tailscale / LAN): accept connections on all interfaces.
       host: true,
       allowedHosts: true,

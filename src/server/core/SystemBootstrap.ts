@@ -34,6 +34,7 @@
  */
 
 import { portfolioReconciliationWorker } from '../services/PortfolioReconciliation';
+import { opportunityDiscoveryWorker } from '../continuous/OpportunityDiscovery';
 import { advancedQuantEngines } from '../engines/AdvancedQuantEngines';
 import { db } from '../db';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -86,6 +87,11 @@ export class SystemBootstrap {
     marketDataWorker.start();
     portfolioMonitor.start();
     portfolioReconciliationWorker.start();
+    // No-ops unless ARGUS_OPPORTUNITY_LOOP_ENABLED=true (default false) - was previously never
+    // constructed/started by any boot path at all (real defect: the flag existed but nothing ever
+    // reached the code that checks it). Starting it here unconditionally is safe because the
+    // worker's own start() re-checks the flag and returns immediately when it's off.
+    opportunityDiscoveryWorker.start();
     newsEngine.start(); // clustering for news_veto; NewsAgent ideas gated separately
     reflectionEngine.start();
     predictionOutcomeEvaluator.start();
@@ -113,6 +119,7 @@ export class SystemBootstrap {
     oms.stop();
     portfolioMonitor.stop();
     portfolioReconciliationWorker.stop();
+    opportunityDiscoveryWorker.stop();
     newsEngine.stop();
     stopAllIdeaAgents();
     reflectionEngine.stop();

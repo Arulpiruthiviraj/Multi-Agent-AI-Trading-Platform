@@ -1,0 +1,196 @@
+/**
+ * Engine-only boot path extracted from server.ts.
+ * Does not require Express, Vite, React, or WebSocket clients.
+ *
+ * Boot order invariant (DEF-01): BrokerManager.initialize() before tradingEngine.initialize().
+ */
+import { AIRouter } from '../ai/AIRouter';
+import { armReconciliationBootWarmup } from './startup';
+import { installServerLogBuffer } from '../services/ServerLogBuffer';
+import { BrokerManager } from '../../brokers/BrokerManager';
+import { tradingEngine } from '../engines/TradingEngine';
+import { alertingService } from '../services/AlertingService';
+import { marketDataWorker } from '../services/MarketDataWorker';
+import { db, sqliteDb } from '../db';
+import * as schema from '../db/schema';
+
+export interface ArgusCoreBootResult {
+  settingsRow: typeof schema.settings.$inferSelect | null;
+}
+
+function ensureSessionsTableExists(): void {
+  try {
+    sqliteDb.exec(`CREATE TABLE IF NOT EXISTS sessions (
+      session_token TEXT PRIMARY KEY,
+      username TEXT NOT NULL,
+      expires_at INTEGER NOT NULL,
+      last_seen INTEGER NOT NULL,
+      created_at INTEGER NOT NULL
+    )`);
+  } catch (e) {
+    console.warn('Could not ensure sessions table exists:', e);
+  }
+}
+
+function ensureDailyTradingSummaryTableExists(): void {
+  try {
+    sqliteDb.exec(`CREATE TABLE IF NOT EXISTS daily_trading_summary (
+      date TEXT PRIMARY KEY,
+      total_trades INTEGER DEFAULT 0,
+      total_volume REAL DEFAULT 0,
+      realized_pnl REAL DEFAULT 0,
+      unrealized_pnl REAL DEFAULT 0,
+      allocated_amount REAL DEFAULT 0,
+      updated_at INTEGER NOT NULL
+    )`);
+  } catch (e) {
+    console.warn('Could not create daily trading summary table:', e);
+  }
+}
+
+let coreBooted = false;
+
+export function isArgusCoreBooted(): boolean {
+  return coreBooted;
+}
+
+/** Test-only reset — does not tear down singletons. */
+export function resetArgusCoreBootedForTests(): void {
+  coreBooted = false;
+}
+
+/**
+ * Initialize the authoritative trading spine and boot workers.
+ * Safe to call once per process; subsequent calls are no-ops.
+ */
+export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
+  if (coreBooted) {
+    const existing = await db.select().from(schema.settings).limit(1);
+    return { settingsRow: existing[0] ?? null };
+  }
+
+  armReconciliationBootWarmup();
+  installServerLogBuffer();
+
+  const { loadInterruptedSessionMarker, beginRuntimeSession, startSessionRecoveryListeners } =
+    await import('./sessionRecovery');
+  loadInterruptedSessionMarker();
+  startSessionRecoveryListeners();
+
+  await AIRouter.getInstance().initialize();
+
+  // DEF-01: real broker before TradingEngine (Autobot restore may start reconciliation).
+  await BrokerManager.getInstance().initialize();
+  await tradingEngine.initialize();
+  beginRuntimeSession();
+
+  alertingService.start();
+
+  let settings = await db.select().from(schema.settings).limit(1);
+  if (settings.length === 0) {
+    await db.insert(schema.settings).values({
+      tradingMode: 'PAPER',
+      riskLevel: 'Medium',
+      budget: 50000,
+      strategy: 'Momentum Focus',
+      maxTradeSize: 3000,
+      dailyLossLimit: 5000,
+      takeProfitPct: 15,
+      trailingStopPct: 5,
+      minAiConfidence: 75,
+      adversarialDebateMode: true,
+    });
+    settings = await db.select().from(schema.settings).limit(1);
+  }
+
+  try {
+    const { hydrateRuntimeConfigFromDb } = await import('../config/effectiveRuntimeConfig');
+    const n = await hydrateRuntimeConfigFromDb();
+    console.log(
+      `[EffectiveRuntimeConfig] Hydrated ${n} Settings overlay(s) from config_overrides (.env remains bootstrap; overlays win).`,
+    );
+  } catch (e: any) {
+    console.warn(`[EffectiveRuntimeConfig] Hydrate failed (env/defaults still apply): ${e.message}`);
+  }
+
+  try {
+    marketDataWorker.start();
+    console.log(
+      '[MarketDataWorker] Started at boot (independent of Autobot). RiskEngine data_freshness still requires a fresh tick.',
+    );
+  } catch (e: any) {
+    console.warn(`[MarketDataWorker] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { opportunityDiscoveryWorker } = await import('../continuous/OpportunityDiscovery');
+    opportunityDiscoveryWorker.start();
+  } catch (e: any) {
+    console.warn(`[OpportunityDiscovery] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { opportunityScreenerWorker } = await import('../continuous/OpportunityScreener');
+    opportunityScreenerWorker.start();
+  } catch (e: any) {
+    console.warn(`[OpportunityScreener] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { autoTradeScheduler } = await import('../services/AutoTradeScheduler');
+    autoTradeScheduler.start();
+    console.log(
+      '[AutoTradeScheduler] Started at boot (independent of Autobot state; no-op unless settings.autoTradeScheduleEnabled is true).',
+    );
+  } catch (e: any) {
+    console.warn(`[AutoTradeScheduler] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { strategyEngineShadowRunner } = await import('../services/StrategyEngineShadowRunner');
+    strategyEngineShadowRunner.start();
+    console.log(
+      '[StrategyEngineShadowRunner] Started at boot (isolated, optional; no-op unless settings.strategyEngineEnabled is true and mode is SHADOW/ANALYSIS_ONLY. Never places or influences a real order.)',
+    );
+  } catch (e: any) {
+    console.warn(`[StrategyEngineShadowRunner] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
+    const models = await modelRuntimeManager.startAndProbe();
+    for (const m of models) {
+      const line =
+        m.health === 'READY'
+          ? `[ModelRuntime] ${m.modelId.padEnd(16)} READY  ${m.detail || ''}`
+          : `[ModelRuntime] ${m.modelId.padEnd(16)} ${m.health}  Reason: ${m.detail || 'unknown'}  Action: ${m.action || 'none'}`;
+      if (m.health === 'READY' || m.health === 'DISABLED') console.log(line);
+      else console.warn(line);
+    }
+  } catch (e: any) {
+    console.warn(`[ModelRuntime] Probe failed (Argus remains usable): ${e.message}`);
+  }
+
+  const row = settings[0];
+  if (row) {
+    Object.assign(tradingEngine.state, {
+      tradingMode: row.tradingMode,
+      riskLevel: row.riskLevel,
+      budget: row.budget,
+      strategy: row.strategy,
+      maxTradeSize: row.maxTradeSize,
+      dailyLossLimit: row.dailyLossLimit,
+      takeProfitPct: row.takeProfitPct,
+      trailingStopPct: row.trailingStopPct,
+      minAiConfidence: row.minAiConfidence,
+      adversarialDebateMode: row.adversarialDebateMode,
+    });
+  }
+
+  ensureSessionsTableExists();
+  ensureDailyTradingSummaryTableExists();
+
+  console.log('Argus Core boot complete — DB initialized and state loaded.');
+  coreBooted = true;
+  return { settingsRow: row ?? null };
+}

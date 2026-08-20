@@ -78,6 +78,13 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     expect(result).toMatch(/All AI providers failed/);
   }, 15_000);
 
+  it('routeTask() returns fail-closed HOLD without retrying when no providers are registered', async () => {
+    const result = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-empty', true);
+    expect(result.provider).toBe('throttled');
+    expect(result.content).toContain('HOLD');
+    expect(result.content).toContain('NO_ROUTABLE_AI_PROVIDERS');
+  });
+
   it('routeTask() fails over to a healthy second provider after the first one times out - never blocks on the hung one', async () => {
     aiRouter.registerProvider('hung-first', hungProvider());
     aiRouter.registerProvider('fast-second', fastProvider('{"decision":"BUY"}'));

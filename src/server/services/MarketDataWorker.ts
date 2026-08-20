@@ -19,7 +19,7 @@ import WebSocket from 'ws';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
-import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isAutobotTradingEnabled } from '../core/ideaGenerationGate';
 import { ReconnectBackoff } from '../core/reconnectBackoff';
 import { alpacaWebSocketTlsOptions } from '../core/alpacaTls';
 import { tradingSafety } from '../config/tradingSafety';
@@ -121,10 +121,13 @@ export class MarketDataWorker {
   }
 
   private maybeEmitMarketData(symbol: string, price: number, volume: number, timestamp: string) {
-    // Always cache the last quote for RiskEngine/UI freshness. Emit MARKET_DATA onto EventBus
-    // only while Autobot is on and tradingState is TRADING_ENABLED — otherwise tick-driven
-    // idea agents would keep warming from Autobot-off quotes.
-    if (!isLiveIdeaGenerationEnabled()) return;
+    // Always cache the last quote for RiskEngine/UI freshness (callers write latestPrices
+    // before this). Emit MARKET_DATA only while Autobot is on and tradingState is
+    // TRADING_ENABLED — otherwise tick-driven idea agents would keep warming from Autobot-off
+    // quotes. Do not use the interrupted-session *entry* hold here: inventory SELL still
+    // needs live prices, and idea agents apply their own separate entry-idea gate downstream
+    // (see src/server/core/ideaGenerationGate.ts) rather than relying on this tick emission.
+    if (!isAutobotTradingEnabled()) return;
     eventBus.emitMarketData(symbol, price, volume, timestamp);
   }
 

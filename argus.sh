@@ -123,30 +123,182 @@ wait_port_free() {
 }
 
 # ---------------------------------------------------------------------------
-# Health checks (real endpoints only — no fabricated probes)
+# Environment + curl (Windows Git Bash prefers curl.exe)
 # ---------------------------------------------------------------------------
+
+curl_cmd() {
+  if is_windows && command -v curl.exe >/dev/null 2>&1; then
+    curl.exe "$@"
+  else
+    curl "$@"
+  fi
+}
+
+env_from_dotenv() {
+  local key="$1" default="${2:-}"
+  if [ -f "$ROOT_DIR/.env" ]; then
+    local val
+    val="$(grep -E "^${key}=" "$ROOT_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' | sed 's/^["'\''"]//; s/["'\''"]$//')"
+    if [ -n "$val" ]; then
+      echo "$val"
+      return
+    fi
+  fi
+  echo "$default"
+}
+
+env_flag_true() {
+  case "$(echo "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+ollama_port() {
+  local host="${1:-$(env_from_dotenv OLLAMA_HOST 'http://127.0.0.1:11434')}"
+  local port=11434
+  if [[ "$host" =~ :([0-9]+)(/|$) ]]; then
+    port="${BASH_REMATCH[1]}"
+  fi
+  echo "$port"
+}
+
+command_works() {
+  local cmd="$1"
+  shift
+  if is_windows; then
+    "$cmd" "$@" </dev/null >/dev/null 2>&1
+  else
+    command -v "$cmd" >/dev/null 2>&1 && "$cmd" "$@" >/dev/null 2>&1
+  fi
+}
+
+run_ecosystem_status() {
+  local status_mode="${1:-live}"
+  local after_start="${2:-false}"
+  echo ""
+  echo "============================================================"
+  echo "  ECOSYSTEM SERVICE STATUS"
+  echo "============================================================"
+  if command -v node >/dev/null 2>&1 && [ -f "$ROOT_DIR/scripts/argus-ecosystem-status.ts" ]; then
+    local status_extra=()
+    if [ "$after_start" = "true" ]; then
+      status_extra+=(--after-start)
+    fi
+    if ! (cd "$ROOT_DIR" && NPM_CONFIG_LOGLEVEL=error npx --yes tsx scripts/argus-ecosystem-status.ts --mode "$status_mode" "${status_extra[@]}"); then
+      echo "  (status script failed — showing port summary below)"
+      print_port_summary
+    fi
+  else
+    echo "  node or scripts/argus-ecosystem-status.ts unavailable — port summary:"
+    print_port_summary
+  fi
+  if [ -f "$PID_FILE" ]; then
+    local tracked_pid
+    tracked_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$tracked_pid" ] && kill -0 "$tracked_pid" 2>/dev/null; then
+      echo "  Tracked launcher pid: $tracked_pid (started via this script)"
+    elif [ "$status_mode" = "live" ]; then
+      echo "  Tracked launcher pid file is stale (process not running) — clearing."
+      rm -f "$PID_FILE"
+    fi
+  fi
+  echo "  Log: $DEV_LOG"
+  echo ""
+}
+
+print_port_summary() {
+  local port label port_state
+  for port in "${PORTS[@]}"; do
+    label="$(label_for_port "$port")"
+    if port_in_use "$port"; then port_state="BOUND"; else port_state="FREE"; fi
+    printf "  port %-5s %-34s %s\n" "$port" "$label" "$port_state"
+  done
+}
+
+try_fix_ollama() {
+  if env_flag_true "$(env_from_dotenv ARGUS_SKIP_OLLAMA 'false')"; then
+    return 0
+  fi
+  local host port code
+  host="$(env_from_dotenv OLLAMA_HOST 'http://127.0.0.1:11434')"
+  host="${host//localhost/127.0.0.1}"
+  port="$(ollama_port "$host")"
+  if port_in_use "$port"; then
+    code="$(curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 3 "${host}/api/tags" 2>/dev/null || true)"
+    if [ "$code" = "200" ]; then
+      return 0
+    fi
+    echo "  [fix] Port $port is open but Ollama /api/tags is not healthy yet."
+    return 1
+  fi
+  if ! command_works ollama --version; then
+    echo "  [fix] ollama is not on PATH — install from https://ollama.com/download then re-run start."
+    return 1
+  fi
+  echo "  [fix] Ollama not reachable — starting ollama serve (logging to $LOG_DIR/ollama-serve.log)..."
+  : > "$LOG_DIR/ollama-serve.log"
+  nohup ollama serve >> "$LOG_DIR/ollama-serve.log" 2>&1 &
+  disown "$!" 2>/dev/null || true
+  local waited=0
+  while [ "$waited" -lt 20 ]; do
+    code="$(curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 3 "${host}/api/tags" 2>/dev/null || true)"
+    if [ "$code" = "200" ]; then
+      echo "  [fix] Ollama is now responding on ${host}."
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  echo "  [fix] Ollama still not healthy after 20s — see $LOG_DIR/ollama-serve.log"
+  return 1
+}
+
+wait_for_ecosystem() {
+  local timeout="${1:-90}" waited=0
+  echo "  Waiting for Argus + companions (up to ${timeout}s)..."
+  while [ "$waited" -lt "$timeout" ]; do
+    if port_in_use 3000; then
+      local health
+      health="$(check_node_health)"
+      if [ "$health" = "200" ]; then
+        echo "  Argus GET /health returned 200."
+        break
+      fi
+    fi
+    sleep 2
+    waited=$((waited + 2))
+  done
+  if ! port_in_use 3000; then
+    echo "  Argus (port 3000) is not listening yet — check $DEV_LOG"
+  fi
+  try_fix_ollama || true
+  # Chronos first model load can exceed 90s; give companions a short settle window.
+  sleep 5
+}
+
 
 check_node_health() {
   # server.ts:672 GET /health
-  curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://localhost:3000/health" 2>/dev/null
+  curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:3000/health" 2>/dev/null
 }
 
 check_chronos_health() {
   # scripts/local_ai_service.py GET /health
-  curl -s -o /dev/null -w '%{http_code}' --max-time 3 "http://localhost:8008/health" 2>/dev/null
+  curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 3 "http://127.0.0.1:8008/health" 2>/dev/null
 }
 
 check_ibkr_gateway() {
   # InteractiveBrokersAdapter.ts GET /iserver/auth/status (self-signed cert; 401 pending
   # manual 2FA is expected and still counts as "up" per CLAUDE.md, not a failure)
-  curl -sk -o /dev/null -w '%{http_code}' --max-time 3 "https://localhost:5000/v1/api/iserver/auth/status" 2>/dev/null
+  curl_cmd -sk -o /dev/null -w '%{http_code}' --max-time 3 "https://localhost:5000/v1/api/iserver/auth/status" 2>/dev/null
 }
 
 check_openalice_guardian() {
   # Same capability check as OpenAliceAdapter.healthCheck() / mcpEndpointHasGuardianTools():
   # a bare handshake success is not proof this is Guardian and not OpenAlice's UTA trading MCP.
   local body
-  body="$(curl -s --max-time 3 -X POST "http://127.0.0.1:47332/mcp" \
+  body="$(curl_cmd -s --max-time 3 -X POST "http://127.0.0.1:47332/mcp" \
     -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' 2>/dev/null)"
   if [ -z "$body" ]; then
@@ -171,70 +323,10 @@ print_header() {
 
 action_status() {
   print_header
-  printf "  %-8s %-34s %-10s %s\n" "PORT" "SERVICE" "PORT" "HEALTH"
-  echo "  ------------------------------------------------------------"
-  local port label port_state health
-  for port in "${PORTS[@]}"; do
-    label="$(label_for_port "$port")"
-    if port_in_use "$port"; then port_state="BOUND"; else port_state="FREE"; fi
-
-    case "$port" in
-      3000)
-        if [ "$port_state" = "BOUND" ]; then
-          health="$(check_node_health)"
-          [ "$health" = "200" ] && health="UP (200)" || health="NO RESPONSE"
-        else
-          health="OFFLINE"
-        fi
-        ;;
-      8008)
-        if [ "$port_state" = "BOUND" ]; then
-          health="$(check_chronos_health)"
-          [ "$health" = "200" ] && health="UP (200)" || health="NO RESPONSE"
-        else
-          health="OFFLINE (optional)"
-        fi
-        ;;
-      5000)
-        if [ "$port_state" = "BOUND" ]; then
-          health="$(check_ibkr_gateway)"
-          if [ -n "$health" ] && [ "$health" != "000" ]; then health="UP ($health, 2FA may be pending)"; else health="NO RESPONSE"; fi
-        else
-          health="OFFLINE (optional)"
-        fi
-        ;;
-      47332)
-        if [ "$port_state" = "BOUND" ]; then
-          health="$(check_openalice_guardian)"
-          case "$health" in
-            GUARDIAN) health="UP (Guardian tools confirmed)" ;;
-            WRONG_MCP) health="WRONG MCP (not Guardian — see CLAUDE.md OpenAlice section)" ;;
-            *) health="NO RESPONSE" ;;
-          esac
-        else
-          health="OFFLINE (optional)"
-        fi
-        ;;
-    esac
-    printf "  %-8s %-34s %-10s %s\n" "$port" "$label" "$port_state" "$health"
-  done
-  echo ""
-  if [ -f "$PID_FILE" ]; then
-    local tracked_pid
-    tracked_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
-    if [ -n "$tracked_pid" ] && kill -0 "$tracked_pid" 2>/dev/null; then
-      echo "  Tracked launcher pid: $tracked_pid (started via this script)"
-    else
-      echo "  Tracked launcher pid file is stale (process not running) — clearing."
-      rm -f "$PID_FILE"
-    fi
-  fi
-  echo "  Log: $DEV_LOG"
-  echo ""
+  run_ecosystem_status "live"
 }
 
-action_start() {
-  print_header
+action_start_impl() {
   echo "  Starting ecosystem — clean-slate port check first."
   local conflict=0 port
   for port in "${PORTS[@]}"; do
@@ -250,7 +342,7 @@ action_start() {
       ans="y"
     fi
     if [[ "$ans" =~ ^[Yy]$ ]]; then
-      action_stop
+      action_stop_impl
     else
       echo "  Aborting start — resolve port conflicts first."
       return 1
@@ -269,27 +361,21 @@ action_start() {
   disown "$pid" 2>/dev/null || true
   echo "  Launcher pid: $pid"
 
-  echo "  Waiting for Argus to bind port 3000 (up to 45s)..."
-  local waited=0
-  while [ "$waited" -lt 45 ]; do
-    if port_in_use 3000; then
-      echo "  Argus is listening on port 3000."
-      break
-    fi
-    sleep 1
-    waited=$((waited + 1))
-  done
-  if ! port_in_use 3000; then
-    echo "  Still starting — this can take longer if Chronos/Ollama/OpenAlice are also booting."
-  fi
+  wait_for_ecosystem 90
   echo ""
   echo "  --- last 20 lines of $DEV_LOG ---"
   tail -n 20 "$DEV_LOG" 2>/dev/null || true
   echo "  ---------------------------------"
+  return 0
 }
 
-action_stop() {
+action_start() {
   print_header
+  action_start_impl || return 1
+  run_ecosystem_status "live" "true"
+}
+
+action_stop_impl() {
   echo "  Stopping ecosystem — freeing ports: ${PORTS[*]}"
   local port
   for port in "${PORTS[@]}"; do
@@ -324,10 +410,16 @@ action_stop() {
   fi
 }
 
+action_stop() {
+  print_header
+  action_stop_impl
+  run_ecosystem_status "stopped"
+}
+
 action_restart() {
   print_header
   echo "  Restarting ecosystem."
-  action_stop
+  action_stop_impl
   echo "  Confirming ports released before restart..."
   local port ok=1
   for port in "${PORTS[@]}"; do
@@ -337,15 +429,16 @@ action_restart() {
     fi
   done
   if [ "$ok" -eq 0 ]; then
-    echo "  Proceeding anyway — start will re-check and offer to stop again."
+    echo "  Proceeding anyway — start will re-check ports."
   fi
-  action_start
+  action_start_impl || return 1
+  run_ecosystem_status "live" "true"
 }
 
 action_nuke() {
   print_header
   echo "  Nuking stale/zombie Argus processes (no services will be started)."
-  action_stop
+  action_stop_impl
 
   echo "  Sweeping for orphaned Node/Python/Gateway processes by command line..."
   if is_windows; then
@@ -376,6 +469,7 @@ action_nuke() {
     fi
   fi
   echo "  Nuke complete."
+  run_ecosystem_status "stopped"
 }
 
 # ---------------------------------------------------------------------------

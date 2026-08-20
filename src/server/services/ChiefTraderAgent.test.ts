@@ -30,6 +30,7 @@ import { DISAGREEMENT_PENALTY, netConfidenceFromVotes } from './EvidenceAggregat
 import { defaultAgentWeights, agentWeightConfig } from '../config/agentWeights';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { bullBearResearchConfig } from '../config/bullBearResearch';
+import { tradingSafety } from '../config/tradingSafety';
 
 const fixtures = loadRepoConfigJson<{
   strongAgreementConfidence: number;
@@ -205,6 +206,40 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     const approval = emitChiefApproval.mock.calls[0][0];
     expect(approval.side).toBe('SELL');
     expect(approval.reasoning).toContain('Risk Exit');
+  });
+
+  it('still reviews a PortfolioManager SELL when entry idea generation is held after an interrupted session', async () => {
+    ideaGenEnabled.value = false;
+    await agent.reviewIdea({
+      traceId: 'exit-hold',
+      symbol: 'NVDA',
+      side: 'SELL',
+      confidence: 0.9,
+      agent: agentWeightConfig.riskExitAgent,
+      reasoning: 'Hard stop hit.',
+      currentPrice: 90,
+    });
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (emitChiefApproval.mock.calls.length > 0) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].side).toBe('SELL');
+  });
+
+  it('ignores a Technical BUY when entry idea generation is held', async () => {
+    ideaGenEnabled.value = false;
+    await agent.reviewIdea({
+      traceId: 'entry-hold',
+      symbol: 'NVDA',
+      side: 'BUY',
+      confidence: 0.95,
+      agent: 'TechnicalAgent',
+      reasoning: 'momentum',
+      currentPrice: 100,
+    });
+    expect(emitChiefApproval).not.toHaveBeenCalled();
   });
 
   it('reviewIdea does not evaluate consensus while a debate is in flight, even if a later low-confidence idea arrives', async () => {
@@ -452,6 +487,17 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     await agent.evaluateConsensus('SPY', 't-multi');
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
     expect(emitChiefApproval.mock.calls[0][0].side).toBe('BUY');
+  });
+
+  it('does not count a stale second-agent vote as independent confirmation', async () => {
+    const stale = Date.now() - tradingSafety.consensusIdeaMaxAgeMs - 5_000;
+    agent.recentIdeas = [
+      { traceId: 'stale', symbol: 'DIA', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'old', receivedAt: stale },
+      { traceId: 'fresh', symbol: 'DIA', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'now', receivedAt: Date.now() },
+    ];
+    await agent.evaluateConsensus('DIA', 'fresh');
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(agent.getLastConsensusOutcome()?.independentAgreeingAgents).toBeLessThan(MIN_INDEPENDENT_AGREEING_AGENTS);
   });
 
   it('a 0-successCount debate is fail-closed HOLD even if consensus_verdict is a truthy HOLD string', async () => {

@@ -10,9 +10,18 @@ import {
   isOpportunityLoopEnabled,
 } from '../config/continuousIntelligence';
 import { isPennyStockEnabled } from '../config/multiAsset';
-import { classifyAsset, type AssetSnapshot } from '../multiAsset/AssetClassifier';
+import { classifyAsset, isPennyOrMicro, type AssetSnapshot } from '../multiAsset/AssetClassifier';
 import { evaluateAssetSafety } from '../multiAsset/SafetyFilter';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { upsertCandidate } from './candidateLifecycle';
+import { getCachedBroadUniverseSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+
+/** Reasons that require a live quote. Watchlist subscribe is allowed; BUY still hits applyAssetIdeaGate. */
+const WATCH_ALLOW_UNKNOWN_REASONS = new Set([
+  'ASSET_SPREAD_UNKNOWN',
+  'ASSET_DOLLAR_VOLUME_UNKNOWN',
+  'ASSET_MARKET_ORDER_UNFIT',
+]);
 
 export interface OpportunityScanStats {
   ran: boolean;
@@ -64,30 +73,50 @@ export function setOpportunityScanInFlightForTests(value: boolean): void {
   inFlight = value;
 }
 
+export function getOpportunityScanUniverse(): string[] {
+  const names = [
+    ...continuousIntelligence.seedSymbols,
+    ...continuousIntelligence.watchUniverseSymbols,
+    // Additive only - empty unless ARGUS_BROAD_UNIVERSE_ENABLED and a refresh has already run.
+    // Every name still passes through evaluateOpportunityCandidate() below like any other entry.
+    ...getCachedBroadUniverseSymbols(),
+  ];
+  if (isPennyStockEnabled()) {
+    names.push(...continuousIntelligence.pennyWatchSymbols);
+  }
+  return [...new Set(names.map((s) => s.trim().toUpperCase()).filter(Boolean))];
+}
+
 export function evaluateOpportunityCandidate(
   raw: string,
   snapshot: Partial<AssetSnapshot> = {},
+  purpose: 'watch' | 'trade' = 'watch',
 ): { action: 'reject' | 'shortlist'; symbol: string | null; reason: string; assetClass?: string } {
   const symbol = looksLikeListedTicker(raw);
   if (!symbol) {
     return { action: 'reject', symbol: null, reason: 'INVALID_SYMBOL' };
   }
   const classification = classifyAsset({ symbol, ...snapshot });
-  if (isPennyStockEnabled() && (classification.assetClass === 'PENNY_STOCK' || classification.assetClass === 'MICRO_CAP')) {
+  if (isPennyStockEnabled() && isPennyOrMicro(classification.assetClass)) {
     const safety = evaluateAssetSafety({ symbol, ...snapshot }, classification);
     if (safety.verdict === 'BLOCK') {
-      return {
-        action: 'reject',
-        symbol,
-        reason: safety.reasons[0] || 'ASSET_CLASS_BLOCKED',
-        assetClass: classification.assetClass,
-      };
+      const hard = purpose === 'watch'
+        ? safety.reasons.filter((r) => !WATCH_ALLOW_UNKNOWN_REASONS.has(r))
+        : safety.reasons;
+      if (hard.length > 0) {
+        return {
+          action: 'reject',
+          symbol,
+          reason: hard[0] || 'ASSET_CLASS_BLOCKED',
+          assetClass: classification.assetClass,
+        };
+      }
     }
   }
   return {
     action: 'shortlist',
     symbol,
-    reason: 'seed_candidate',
+    reason: purpose === 'watch' ? 'watch_candidate' : 'trade_candidate',
     assetClass: classification.assetClass,
   };
 }
@@ -106,10 +135,10 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
   const shortlist: OpportunityScanStats['shortlist'] = [];
   try {
     const active = new Set(marketDataWorker.getActiveSymbols().map((s) => s.toUpperCase()));
-    const seed = [...new Set(continuousIntelligence.seedSymbols)];
+    const universe = getOpportunityScanUniverse();
     let rejected = 0;
-    for (const raw of seed) {
-      const verdict = evaluateOpportunityCandidate(raw);
+    for (const raw of universe) {
+      const verdict = evaluateOpportunityCandidate(raw, {}, 'watch');
       if (verdict.action === 'reject' || !verdict.symbol) {
         rejected += 1;
         bump(rejectedReasons, verdict.reason);
@@ -127,7 +156,22 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
       continuousIntelligence.maxNewSubscriptionsPerCycle,
       cap - active.size,
     ));
-    const toRequest = shortlist
+    const ranked = [...shortlist].sort((a, b) => {
+      const pa = marketDataWorker.getLatestPrice(a.symbol);
+      const pb = marketDataWorker.getLatestPrice(b.symbol);
+      const sa = pa && pa > 0 ? 1 : 0;
+      const sb = pb && pb > 0 ? 1 : 0;
+      return sb - sa;
+    });
+    for (const row of ranked) {
+      upsertCandidate({
+        symbol: row.symbol,
+        state: active.has(row.symbol) ? 'WATCHING' : 'DISCOVERED',
+        assetClass: row.assetClass,
+        reason: row.reason,
+      });
+    }
+    const toRequest = ranked
       .filter((row) => !active.has(row.symbol))
       .slice(0, budget);
 
@@ -144,7 +188,7 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
       ran: true,
       skippedOverlap: false,
       enabled: true,
-      scanned: seed.length,
+      scanned: universe.length,
       rejected,
       shortlisted: shortlist.length,
       subscribeRequested: toRequest.length,
@@ -166,10 +210,11 @@ export class OpportunityDiscoveryWorker {
 
   start() {
     if (!isOpportunityLoopEnabled()) {
-      console.log('[OpportunityDiscovery] ARGUS_OPPORTUNITY_LOOP_ENABLED is not true — idle. Existing 4-ETF IEX universe unchanged.');
+      console.log('[OpportunityDiscovery] ARGUS_OPPORTUNITY_LOOP_ENABLED is not true — idle. Watch universe unchanged.');
       return;
     }
     if (this.intervalId) return;
+    marketUniverseScannerWorker.start();
     void runOpportunityScan();
     this.intervalId = setInterval(() => {
       void runOpportunityScan();
@@ -182,6 +227,7 @@ export class OpportunityDiscoveryWorker {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    marketUniverseScannerWorker.stop();
   }
 }
 

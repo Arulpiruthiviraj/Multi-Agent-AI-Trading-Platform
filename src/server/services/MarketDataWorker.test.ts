@@ -55,7 +55,10 @@ const { emitMarketData, emitSpy, subscribeSpy, ideaGenEnabled } = vi.hoisted(() 
   ideaGenEnabled: { value: true },
 }));
 vi.mock('../core/EventBus', () => ({ eventBus: { emitMarketData, emit: emitSpy, subscribe: subscribeSpy } }));
-vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
+vi.mock('../core/ideaGenerationGate', () => ({
+  isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value,
+  isAutobotTradingEnabled: () => ideaGenEnabled.value,
+}));
 
 import { MarketDataWorker } from './MarketDataWorker';
 

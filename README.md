@@ -4,7 +4,9 @@ Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite). Package n
 
 **LIVE real-money: NO-GO.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is not established by documentation.
 
-**Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects).
+**Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects). Architecture checklist: [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md).
+
+Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_ENABLED`). Optional cheap screener ideas (`ARGUS_OPPORTUNITY_IDEAS_ENABLED`) are **one vote**, still require ChiefTrader min-2 + RiskEngine + OMS. Neither flag arms LIVE. Do not enable flags merely to produce trades.
 
 **FOR OPERATORS** (why idle / why a fill / daily health): [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) → `ARGUS_WHY_NOT_TRADING.md`, `ARGUS_DAILY_FORENSIC_CHECKLIST.md`.
 
@@ -161,6 +163,8 @@ npm run start               # node dist/server.cjs
 | `npm run dev` | `scripts/ecosystem-dev.ts`: optional Vibe / AutoHedge / OpenAlice / Fincept, then Chronos/Ollama/IBKR + Express/Vite |
 | `npm run dev:core` | `devWithOpenAlice.ts` — Argus + Chronos/Ollama/OpenAlice/IBKR |
 | `npm run dev:server-only` | `tsx server.ts` alone |
+| `npm run dev:headless` / `start:headless:prod` | `ARGUS_HEADLESS=true` — trading core + REST API only; skips Vite/static Web UI (`src/server/app/runtimeConfig.ts`) |
+| `npm run argus-cli -- <command>` | Thin HTTP client (`scripts/argus-cli.ts`) against the running Argus API — never imports RiskEngine/OMS/BrokerManager directly |
 | `npm run lint` | `tsc --noEmit` |
 | `npm test` | `vitest run` |
 | `npm run test:e2e` | Playwright (`e2e/moduleToggleParity.spec.ts`) — seed **both** onboarding wizard and tour |
@@ -189,4 +193,4 @@ npx tsx scripts/organic_paper_soak_status.ts
 
 ## Docs
 
-Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Operator/developer forensic map: [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) (includes [mobile Settings](docs/ARGUS_MOBILE_SETTINGS.md)). Dated `ARGUS_*.md` / `FINAL_ANALYSIS.md` phase reports were consolidated into `CLAUDE.md` and removed.
+Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Operator/developer forensic map: [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) (includes [mobile Settings](docs/ARGUS_MOBILE_SETTINGS.md)). CLAUDE.md is the living source of truth; root-level dated `ARGUS_*.md` phase/audit reports are point-in-time snapshots, not living docs — prefer CLAUDE.md and current code where they disagree.

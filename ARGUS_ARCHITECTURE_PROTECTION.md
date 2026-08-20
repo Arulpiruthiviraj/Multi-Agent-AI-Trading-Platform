@@ -1,6 +1,28 @@
 # Argus Architecture Protection
 
-This document defines what in Argus is **protected** (extend only through documented interfaces, never bypass/replace/weaken) and what is the **extension zone** (safe to build in). It is the reference `CLAUDE.md`'s "ARGUS CORE ARCHITECTURE — DO NOT MODIFY" section points to. Written 2026-08-18 against the live repository; this codebase is under active, fast-moving development (multiple concurrent work streams observed while writing this document — see the note at the bottom), so treat this as the current contract, not a historical snapshot.
+This document defines what in Argus is **protected** (extend only through documented interfaces, never bypass/replace/weaken) and what is the **extension zone** (safe to build in). It is the reference `CLAUDE.md`'s "ARGUS CORE ARCHITECTURE — EXTEND, DO NOT REPLACE OR BYPASS" section points to.
+
+**Instruction to AI coding agents:** extend the existing execution spine. Do not replace it, duplicate it, or add a shortcut around ChiefTrader, RiskEngine, position sizing, OMS, or BrokerManager in order to increase trade frequency. Full checklist: `ARGUS_ARCHITECTURE_INVARIANTS.md`.
+
+## Dual-loop product target (same spine)
+
+Intended behavior — **not all of this is implemented**. Today, `OpportunityDiscovery` only expands a **seed watchlist** (`WATCHLIST_SUBSCRIBE_REQUESTED`) and **does not** emit `TRADE_IDEA_GENERATED`. Optional `OpportunityScreener` may emit **one vote** when `ARGUS_OPPORTUNITY_IDEAS_ENABLED=true` (default **off**); that still requires ChiefTrader min-2 independent agents. PortfolioMonitor **does** emit risk-exit SELL ideas into the spine. Penny/micro MARKET is **blocked** (`marketOrdersFitPennyAndMicro: false`). Organic closed PAPER FILLED SELL P&L is **0**.
+
+```
+Continuous opportunity engine (stocks / ETFs / future asset classes)
+        → candidate discovery
+        → existing idea agents (Technical, Quant, Kronos, Fundamental, Macro, News-as-catalyst)
+        → ChiefTrader debate/consensus
+        → RiskEngine → PositionSizing → OMS → Broker
+        → BUY (then fills / portfolio / reconciliation)
+
+Existing portfolio (parallel, not an afterthought)
+        → position intelligence (thesis, technical, news veto, stops/targets)
+        → HOLD / REDUCE / SELL ideas
+        → same ChiefTrader → RiskEngine → sizing → OMS → Broker
+```
+
+REDUCE/ADD are **not** live OMS behaviors today (full-qty SELL only on the exit path). Do not fake them.
 
 ## The immutable execution spine
 
@@ -50,10 +72,10 @@ No new component may skip a stage this spine requires. Concretely:
 Everything upstream of `TRADE_IDEA_GENERATED`: idea agents, discovery/scanning, asset classification, strategy research, ranking, candidate lifecycle, observability. The existing, live examples of this pattern (all additive, all flag-gated OFF by default, all fail back to unchanged behavior when their flag is off):
 
 - `src/server/multiAsset/` — asset classification, penny/micro safety filter, strategy eligibility. Hooks into the spine at exactly two points: `EventBus.emit()` (gates a `TRADE_IDEA_GENERATED` payload before ChiefTrader ever sees it) and `RiskEngine`'s position-sizing call (can only *lower* a notional cap, never raise one). Both are no-ops when `ARGUS_MULTI_ASSET_ENABLED`/`ARGUS_PENNY_STOCK_ENABLED` are false.
-- `src/server/continuous/` — `OpportunityDiscovery.ts` (watchlist-expansion loop; never emits `TRADE_IDEA_GENERATED`, only `WATCHLIST_SUBSCRIBE_REQUESTED`) and `portfolioIntel.ts` (already wired into `PortfolioMonitor.ts` for auto-subscribing held positions and exit-idea telemetry/cooldown; still emits SELL through the same `emitTradeIdea` → ChiefTrader → RiskEngine → OMS path PortfolioMonitor always used).
+- `src/server/continuous/` — `OpportunityDiscovery.ts` is **started from `server.ts`** when `ARGUS_OPPORTUNITY_LOOP_ENABLED==='true'` (idle otherwise). It expands IEX subscriptions from `config/continuousIntelligence.json` seed symbols; it never emits `TRADE_IDEA_GENERATED`. `portfolioIntel.ts` is consulted by `PortfolioMonitor.ts` (subscribe held names, exit cooldown). SELLs still use `emitTradeIdea` → ChiefTrader → RiskEngine → OMS.
 - `src/server/core/pipelineAgentHealth.ts`, `ideaUniverse.ts`, `consensusExplanation.ts` — observability/heartbeat and plain-language "why no trade" helpers. Pure read/report layers; they do not touch order flow.
 
-New autonomous-engine work (discovery ranking, candidate lifecycle, broader universe support) belongs in this zone, following the same shape: additive module → emits `TRADE_IDEA_GENERATED` or a watchlist-subscribe request → flag-gated OFF by default → existing spine does the rest.
+New autonomous-engine work (broader universe, candidate ranking, penny LIMIT-readiness, REDUCE) belongs in this zone, following the same shape: additive module → `emitTradeIdea` and/or `WATCHLIST_SUBSCRIBE_REQUESTED` → flag-gated OFF by default → **existing spine does the rest**. Do not add a second ChiefTrader, a scanner `placeOrder`, or a recon auto-resume.
 
 ## If a request seems to require touching the protected zone
 

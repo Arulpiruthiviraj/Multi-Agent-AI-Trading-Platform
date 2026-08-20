@@ -12,19 +12,37 @@ import {
 import { canEmitPortfolioExitIdea, recordPortfolioDecision, resetPortfolioIntelForTests } from './portfolioIntel';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
+import { resetCandidatesForTests } from './candidateLifecycle';
+import {
+  considerScreenerTick,
+  resetOpportunityScreenerForTests,
+} from './OpportunityScreener';
+import { resetPipelineRateLimitForTests } from '../core/pipelineRateLimit';
+import { tradingSafety } from '../config/tradingSafety';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { tradingEngine } from '../engines/TradingEngine';
+import { marketDataWorker } from '../services/MarketDataWorker';
 
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
 const FLAG_P = continuousIntelligence.portfolioIntelEnabledEnvVar;
+const FLAG_I = continuousIntelligence.opportunityIdeasEnabledEnvVar;
+const originalEnabled = tradingEngine.state.enabled;
+const originalTradingState = tradingEngine.state.tradingState;
 
 afterEach(() => {
   delete process.env[FLAG_O];
   delete process.env[FLAG_P];
+  delete process.env[FLAG_I];
   delete process.env.ARGUS_MULTI_ASSET_ENABLED;
   delete process.env.ARGUS_PENNY_STOCK_ENABLED;
+  tradingEngine.state.enabled = originalEnabled;
+  tradingEngine.state.tradingState = originalTradingState;
   resetPortfolioIntelForTests();
   resetOpportunityScanForTests();
   setOpportunityScanInFlightForTests(false);
+  resetCandidatesForTests();
+  resetOpportunityScreenerForTests();
+  resetPipelineRateLimitForTests();
 });
 
 describe('opportunity loop', () => {
@@ -53,11 +71,16 @@ describe('opportunity loop', () => {
     expect(stats.ideasEmitted).toBe(0);
     expect(stats.subscribeRequested).toBeLessThanOrEqual(continuousIntelligence.maxNewSubscriptionsPerCycle);
     expect(ideas).toHaveLength(0);
-    expect(stats.scanned).toBe(continuousIntelligence.seedSymbols.length);
+    const expectedUniverse = new Set([
+      ...continuousIntelligence.seedSymbols,
+      ...continuousIntelligence.watchUniverseSymbols,
+    ]).size;
+    expect(stats.scanned).toBe(expectedUniverse);
     expect(stats.shortlisted).toBeGreaterThan(0);
     for (const row of stats.shortlist) {
       expect(looksLikeListedTicker(row.symbol)).toBe(row.symbol);
     }
+    expect(stats.shortlist.some((r) => r.symbol === 'AMD')).toBe(true);
   });
 
   it('skips overlapping scans', async () => {
@@ -73,18 +96,18 @@ describe('opportunity loop', () => {
     expect(evaluateOpportunityCandidate('!!!!!!').reason).toBe('INVALID_SYMBOL');
   });
 
-  it('blocks penny names on unknown spread and poor liquidity when penny overlay is on', () => {
+  it('allows penny names onto the watch shortlist when spread is unknown, but still rejects known-wide spread and poor liquidity', () => {
     process.env.ARGUS_MULTI_ASSET_ENABLED = 'true';
     process.env.ARGUS_PENNY_STOCK_ENABLED = 'true';
-    const spreadUnknown = evaluateOpportunityCandidate('ABCD', { price: 1.25 });
-    expect(spreadUnknown.action).toBe('reject');
-    expect(spreadUnknown.reason).toBe('ASSET_SPREAD_UNKNOWN');
+    const spreadUnknown = evaluateOpportunityCandidate('ABCD', { price: 1.25 }, 'watch');
+    expect(spreadUnknown.action).toBe('shortlist');
+    expect(spreadUnknown.assetClass).toMatch(/PENNY|MICRO/);
     const wideSpread = evaluateOpportunityCandidate('ABCE', {
       price: 1.25,
       bid: 1.0,
       ask: 1.5,
       averageDollarVolume: 1_000_000,
-    });
+    }, 'watch');
     expect(wideSpread.action).toBe('reject');
     expect(wideSpread.reason).toMatch(/SPREAD/);
     const illiquid = evaluateOpportunityCandidate('ABCF', {
@@ -92,11 +115,75 @@ describe('opportunity loop', () => {
       bid: 1.24,
       ask: 1.25,
       averageDollarVolume: 100,
-    });
+    }, 'watch');
     expect(illiquid.action).toBe('reject');
     expect(illiquid.reason).toBe('POOR_LIQUIDITY');
   });
 
+  it('still blocks penny BUY ideas at applyAssetIdeaGate even if discovery would watch them', async () => {
+    process.env.ARGUS_MULTI_ASSET_ENABLED = 'true';
+    process.env.ARGUS_PENNY_STOCK_ENABLED = 'true';
+    const { applyAssetIdeaGate } = await import('../multiAsset/ideaEligibility');
+    const gated = applyAssetIdeaGate({ symbol: 'ABCD', side: 'BUY', currentPrice: 1.25 });
+    expect(gated.ok).toBe(false);
+    expect(gated.ok === false && gated.reasons.some((r) => r === 'ASSET_SPREAD_UNKNOWN' || r === 'ASSET_MARKET_ORDER_UNFIT')).toBe(true);
+  });
+
+  it('OpportunityScreener stays silent when the ideas flag is off', () => {
+    delete process.env[FLAG_I];
+    const r = considerScreenerTick({ symbol: 'AAPL', price: 200 });
+    expect(r.emitted).toBe(false);
+    expect(r.reason).toBe('FLAG_OFF');
+  });
+
+  it('OpportunityScreener emits at most one idea per cooldown after a qualifying return (one vote)', () => {
+    process.env[FLAG_I] = 'true';
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    marketDataWorker.cacheObservedQuote('AAPL', 110);
+    const bars = continuousIntelligence.screenerMinHistoryBars;
+    let last: { emitted: boolean; reason: string } = { emitted: false, reason: '' };
+    for (let i = 0; i < bars; i++) {
+      last = considerScreenerTick({ symbol: 'AAPL', price: 100 + i * 2 }, 1_000_000 + i);
+    }
+    expect(last.emitted).toBe(true);
+    expect(last.reason).toBe('EMITTED');
+    const again = considerScreenerTick({ symbol: 'AAPL', price: 130 }, 1_000_000 + bars);
+    expect(again.emitted).toBe(false);
+    expect(again.reason).toBe('COOLDOWN');
+  });
+});
+
+describe('pipeline idea storm cap', () => {
+  it('drops TRADE_IDEA_GENERATED after maxTradeIdeasPerMinute in a sliding window', () => {
+    marketDataWorker.cacheObservedQuote('MSFT', 400);
+    const ideas: unknown[] = [];
+    const limited: unknown[] = [];
+    const onIdea = (p: unknown) => ideas.push(p);
+    const onLim = (p: unknown) => limited.push(p);
+    eventBus.subscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+    eventBus.subscribe(EVENTS.IDEA_RATE_LIMITED, onLim);
+    const cap = tradingSafety.maxTradeIdeasPerMinute;
+    for (let i = 0; i < cap + 25; i++) {
+      eventBus.emitTradeIdea({
+        traceId: `storm-msft-${i}`,
+        symbol: 'MSFT',
+        side: 'BUY',
+        confidence: 0.5,
+        currentPrice: 400,
+        reasoning: 'storm fixture',
+        agent: 'TechnicalAgent',
+      });
+    }
+    eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+    eventBus.unsubscribe(EVENTS.IDEA_RATE_LIMITED, onLim);
+    expect(ideas.length).toBe(cap);
+    expect(limited.length).toBe(25);
+    expect(tradingSafety.consensusApprovalThreshold).toBe(0.75);
+  });
+});
+
+describe('opportunity loop (continued)', () => {
   it('does not treat DATA_UNAVAILABLE as a BUY and does not call AI/news/fundamentals', () => {
     const discovery = readFileSync(join(process.cwd(), 'src', 'server', 'continuous', 'OpportunityDiscovery.ts'), 'utf8');
     expect(discovery).not.toMatch(/emitTradeIdea/);
@@ -171,5 +258,17 @@ describe('adversarial isolation', () => {
     const safety = readFileSync(join(process.cwd(), 'config', 'tradingSafety.json'), 'utf8');
     expect(safety).toMatch(/"consensusApprovalThreshold":\s*0\.75/);
     expect(safety).toMatch(/"minIndependentAgreeingAgents":\s*2/);
+  });
+
+  it('BUY discovery and SELL inventory loops do not share the interrupted-session entry hold', () => {
+    const discovery = readFileSync(join(process.cwd(), 'src', 'server', 'continuous', 'OpportunityDiscovery.ts'), 'utf8');
+    const monitor = readFileSync(join(process.cwd(), 'src', 'server', 'services', 'PortfolioMonitor.ts'), 'utf8');
+    const mdw = readFileSync(join(process.cwd(), 'src', 'server', 'services', 'MarketDataWorker.ts'), 'utf8');
+    expect(discovery).not.toMatch(/emitTradeIdea/);
+    expect(monitor).not.toMatch(/isLiveIdeaGenerationEnabled/);
+    expect(monitor).not.toMatch(/allowsNewEntryIdeas/);
+    expect(monitor).toMatch(/emitTradeIdea/);
+    expect(mdw).toMatch(/isAutobotTradingEnabled/);
+    expect(mdw).not.toMatch(/allowsNewEntryIdeas/);
   });
 });

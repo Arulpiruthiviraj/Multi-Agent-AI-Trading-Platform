@@ -103,8 +103,6 @@ import { autobotRouter } from "./src/server/routes/autobotRoutes";
 import { shadowPortfolioState, saveShadowPortfolio } from "./src/server/state/shadowPortfolio";
 import { integrationRouter } from "./src/server/routes/integrationRoutes";
 import { tradingEngine } from "./src/server/engines/TradingEngine";
-import { armReconciliationBootWarmup } from "./src/server/core/startup";
-import { system } from "./src/server/core/SystemBootstrap";
 import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
 import { validateTargetAllocations, executeRebalance } from "./src/server/services/PortfolioRebalance";
@@ -121,13 +119,12 @@ import dotenv from "dotenv";
 import { installGlobalErrorHandlers } from "./src/server/core/globalErrorHandlers.js";
 import { installProcessShutdown } from "./src/server/core/gracefulShutdown.js";
 import { alertingService } from "./src/server/services/AlertingService.js";
-import { installServerLogBuffer } from "./src/server/services/ServerLogBuffer.js";
 import { setGlobalWss, getGlobalWss } from "./src/server/core/wsRegistry.js";
 import { resolveListenHost, isAllowedCorsOrigin } from "./src/server/core/serverBind.js";
 import { buildInitialStateSnapshot } from "./src/server/core/wsInitialSnapshot.js";
 import WebSocket from "ws";
 
-import { createServer as createViteServer } from "vite";
+// Vite is dynamically imported only when web UI is enabled — headless must not load Vite at boot.
 
 dotenv.config();
 installGlobalErrorHandlers();
@@ -309,126 +306,11 @@ const LLM_PROVIDER_REGISTRY: Record<LLMProviderId, { label: string; envKey: stri
 let activeLLMProvider: string = (process.env.ACTIVE_LLM || "gemini").toLowerCase();
 
 async function startServer() {
-  armReconciliationBootWarmup();
-  installServerLogBuffer();
-  await AIRouter.getInstance().initialize();
-
-  // Real bug fixed: this used to run after tradingEngine.initialize() below. If Autobot was
-  // already enabled from a prior session (settings.autoBotEnabled=true persists across restarts
-  // by design), tradingEngine.initialize() calls system.start() synchronously as part of
-  // restoring that state - which starts PortfolioMonitor/PortfolioReconciliation immediately.
-  // Those call BrokerManager.getActiveBroker(), whose constructor defaults to a bare
-  // `new InternalPaperBroker()` ("Argus Internal Simulator") until .initialize() below has run
-  // and swapped in the real configured broker (Alpaca). The very first reconciliation cycle on a
-  // boot with Autobot already on could therefore compare real local records against the
-  // simulator's empty position list instead of the real broker - a guaranteed false-positive
-  // "position missing remotely" mismatch that clears real local portfolio rows and auto-pauses
-  // trading over nothing. Moved before tradingEngine.initialize() so the real broker is always
-  // active before anything that might start reconciling against it.
-  await BrokerManager.getInstance().initialize();
-
-  await tradingEngine.initialize();
-
-  alertingService.start();
+  const { argusApplication } = await import('./src/server/app/ArgusApplication');
+  const { isWebUiEnabled } = await import('./src/server/app/runtimeConfig');
+  await argusApplication.bootCore();
 
   // -- SQLite Initialization --
-
-  // autoBotState initialization removed
-
-
-  // Ensure default settings exist
-  let settings = await db.select().from(schema.settings).limit(1);
-  if (settings.length === 0) {
-    await db.insert(schema.settings).values({
-
-
-
-      tradingMode: 'PAPER',
-      riskLevel: 'Medium',
-      budget: 50000,
-      strategy: 'Momentum Focus',
-      maxTradeSize: 3000,
-      dailyLossLimit: 5000,
-      takeProfitPct: 15,
-      trailingStopPct: 5,
-      minAiConfidence: 75,
-      adversarialDebateMode: true
-    });
-    settings = await db.select().from(schema.settings).limit(1);
-  }
-
-  try {
-    const { hydrateRuntimeConfigFromDb } = await import('./src/server/config/effectiveRuntimeConfig');
-    const n = await hydrateRuntimeConfigFromDb();
-    console.log(`[EffectiveRuntimeConfig] Hydrated ${n} Settings overlay(s) from config_overrides (.env remains bootstrap; overlays win).`);
-  } catch (e: any) {
-    console.warn(`[EffectiveRuntimeConfig] Hydrate failed (env/defaults still apply): ${e.message}`);
-  }
-
-  try {
-    marketDataWorker.start();
-    console.log('[MarketDataWorker] Started at boot (independent of Autobot). RiskEngine data_freshness still requires a fresh tick.');
-  } catch (e: any) {
-    console.warn(`[MarketDataWorker] Boot start failed: ${e.message}`);
-  }
-
-  try {
-    const { opportunityDiscoveryWorker } = await import('./src/server/continuous/OpportunityDiscovery');
-    opportunityDiscoveryWorker.start();
-  } catch (e: any) {
-    console.warn(`[OpportunityDiscovery] Boot start failed: ${e.message}`);
-  }
-
-  try {
-    const { autoTradeScheduler } = await import('./src/server/services/AutoTradeScheduler');
-    autoTradeScheduler.start();
-    console.log('[AutoTradeScheduler] Started at boot (independent of Autobot state; no-op unless settings.autoTradeScheduleEnabled is true).');
-  } catch (e: any) {
-    console.warn(`[AutoTradeScheduler] Boot start failed: ${e.message}`);
-  }
-
-  try {
-    const { strategyEngineShadowRunner } = await import('./src/server/services/StrategyEngineShadowRunner');
-    strategyEngineShadowRunner.start();
-    console.log('[StrategyEngineShadowRunner] Started at boot (isolated, optional; no-op unless settings.strategyEngineEnabled is true and mode is SHADOW/ANALYSIS_ONLY. Never places or influences a real order.)');
-  } catch (e: any) {
-    console.warn(`[StrategyEngineShadowRunner] Boot start failed: ${e.message}`);
-  }
-
-  try {
-    const { modelRuntimeManager } = await import("./src/server/ai/ModelRuntimeManager");
-    const models = await modelRuntimeManager.startAndProbe();
-    for (const m of models) {
-      const line = m.health === "READY"
-        ? `[ModelRuntime] ${m.modelId.padEnd(16)} READY  ${m.detail || ""}`
-        : `[ModelRuntime] ${m.modelId.padEnd(16)} ${m.health}  Reason: ${m.detail || "unknown"}  Action: ${m.action || "none"}`;
-      if (m.health === "READY" || m.health === "DISABLED") console.log(line);
-      else console.warn(line);
-    }
-  } catch (e: any) {
-    console.warn(`[ModelRuntime] Probe failed (Argus remains usable): ${e.message}`);
-  }
-  
-  // Update in-memory autobot state to match DB
-  Object.assign(tradingEngine.state, {
-    tradingMode: settings[0].tradingMode,
-    riskLevel: settings[0].riskLevel,
-    budget: settings[0].budget,
-    strategy: settings[0].strategy,
-    maxTradeSize: settings[0].maxTradeSize,
-    dailyLossLimit: settings[0].dailyLossLimit,
-    takeProfitPct: settings[0].takeProfitPct,
-    trailingStopPct: settings[0].trailingStopPct,
-    minAiConfidence: settings[0].minAiConfidence,
-    adversarialDebateMode: settings[0].adversarialDebateMode,
-  });
-
-  await ensureSessionsTableExists();
-  await ensureDailyTradingSummaryTableExists();
-  
-  console.log('Argus DB initialized and state loaded.');
-
-  
 // AUTH & SECRETS
 //
 // Real authentication bypass fixed here (FINAL_ANALYSIS.md Section 15.12): the old
@@ -1799,8 +1681,8 @@ let portfolioState = loadPortfolio();
     }
   });
 
-  // Serves Static build directory of React SPA client in production
-  if (isProd) {
+  // Serves Static build directory of React SPA client in production (optional when headless)
+  if (isProd && isWebUiEnabled()) {
     app.use(express.static(path.join(dirName, "dist")));
     app.get("*", (req: Request, res: Response, next) => {
       if (req.path.startsWith('/ws') || req.path.startsWith('/api')) {
@@ -1836,9 +1718,22 @@ let portfolioState = loadPortfolio();
     res.status(404).json({ error: 'API route not found: ' + shown });
   });
 
-  if (!isProd) {
+  if (!isProd && isWebUiEnabled()) {
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: { server: httpServer } },
+      server: {
+        middlewareMode: true,
+        hmr: { server: httpServer },
+        // Same ignore list as vite.config.ts — sessionRecovery heartbeat must not full-reload the SPA.
+        watch: {
+          ignored: [
+            '**/data/**',
+            '**/logs/**',
+            '**/.argus_dev.pid',
+            '**/node_modules/**',
+            '**/.git/**',
+          ],
+        },
+      },
       appType: "spa",
     });
     app.use(vite.middlewares);
@@ -1962,7 +1857,11 @@ let portfolioState = loadPortfolio();
   });
   // Fail-closed without AUTH_PASSWORD unless ARGUS_BIND_HOST explicitly opens the interface.
   const bindHost = resolveListenHost(AUTH_ENABLED);
+  const headless = process.env.ARGUS_HEADLESS === 'true';
   httpServer.listen(PORT, bindHost, () => {
+    if (headless) {
+      console.log(`[Argus] Headless runtime — API on ${bindHost}:${PORT} (no Vite/static Web UI).`);
+    }
     if (!AUTH_ENABLED && bindHost === '127.0.0.1') {
       console.warn('WARNING: AUTH_PASSWORD NOT SET. API BOUND TO LOCALHOST ONLY. Remote mobile requires AUTH_PASSWORD or ARGUS_BIND_HOST=0.0.0.0.');
     } else if (!AUTH_ENABLED && bindHost !== '127.0.0.1') {

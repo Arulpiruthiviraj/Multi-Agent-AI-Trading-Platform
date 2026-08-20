@@ -35,7 +35,6 @@
 
 import "../core/EventStore";
 import { Router } from 'express';
-import { system } from '../core/SystemBootstrap';
 import { db } from '../db';
 import { trades, portfolio, learnedRules, agentPerformanceStats, newsArticles, settings, quantAssessments, quantStrategyBacktests, quantBacktestDecisionLog } from '../db/schema';
 import { computeFailureBreakdown } from '../quant/analysis/FailureClassification';
@@ -69,8 +68,12 @@ import { observabilityRouter } from './observabilityRoutes';
 import { multiAssetRouter } from './multiAssetRoutes';
 import { continuousIntelRouter } from './continuousIntelRoutes';
 import { settingsEffectiveRouter } from './settingsEffectiveRoutes';
+import { argusApplication } from '../app/ArgusApplication';
+import { runtimeRouter } from './v2Runtime';
 
 export const v2Router = Router();
+
+v2Router.use('/runtime', runtimeRouter);
 
 v2Router.use('/traces', traceRouter);
 v2Router.use('/observability', observabilityRouter);
@@ -142,30 +145,38 @@ v2Router.get('/agents/performance', async (req, res) => {
   }
 });
 
-v2Router.post('/system/toggle', tradingLimiter, (req, res) => {
+v2Router.post('/system/toggle', tradingLimiter, async (req, res) => {
   const { enabled, mode } = req.body;
-  
-  if (enabled) {
-    system.start(mode || 'SIMULATION');
-  } else {
-    system.stop();
+  try {
+    const result = await argusApplication.setAutobotEnabled(enabled === true, {
+      tradingMode: mode,
+    });
+    if (!result.ok) {
+      return res.status(400).json({ ok: false, error: result.error, status: argusApplication.status() });
+    }
+    res.json({ ok: true, status: argusApplication.status() });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
   }
-  
-  res.json({ ok: true, status: system.getStatus() });
 });
 
 v2Router.get('/system/status', (req, res) => {
-  res.json({ 
-    ok: true, 
-    status: system.getStatus(),
+  const appStatus = argusApplication.status();
+  res.json({
+    ok: true,
+    status: appStatus.system,
+    runtime: appStatus.runtime,
+    autobot: appStatus.autobot,
+    consistent: appStatus.consistent,
+    liveReadiness: appStatus.liveReadiness,
     workers: [
-      { id: "market-data-worker", name: "Market Data Worker", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Consuming WebSocket streams from Alpaca/Polygon" },
-      { id: "news-agent", name: "News Intelligence Agent", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Scraping headlines, computing sentiment scores" },
-      { id: "technical-engine", name: "Technical Quant Engine", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Computing RSI, MACD, SMA across feature store" },
-      { id: "portfolio-monitor", name: "Portfolio Manager", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Scanning current positions for exit criteria" },
-      { id: "chief-trader", name: "Chief Trader Node", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Gathering consensus, routing to Risk layer" },
-      { id: "risk-manager", name: "Risk Management Node", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Validating budget and PositionSizing / RiskEngine caps" },
-      { id: "order-management", name: "Order Management System", status: system.getStatus().running ? "ACTIVE" : "STOPPED", description: "Executing trades against live/paper Broker API" }
+      { id: "market-data-worker", name: "Market Data Worker", status: appStatus.system.running ? "ACTIVE" : "STOPPED", description: "Consuming WebSocket streams from Alpaca/Polygon" },
+      { id: "news-agent", name: "News Intelligence Agent", status: appStatus.system.running ? "ACTIVE" : "STOPPED", description: "Scraping headlines, computing sentiment scores" },
+      { id: "technical-engine", name: "Technical Quant Engine", status: appStatus.system.running ? "ACTIVE" : "STOPPED", description: "Computing RSI, MACD, SMA across feature store" },
+      { id: "portfolio-monitor", name: "Portfolio Manager", status: appStatus.system.running ? "ACTIVE" : "STOPPED", description: "Scanning current positions for exit criteria" },
+      { id: "chief-trader", name: "Chief Trader Node", status: appStatus.system.running ? "ACTIVE" : "STOPPED", description: "Gathering consensus, routing to Risk layer" },
+      { id: "risk-manager", name: "Risk Management Node", status: appStatus.system.running ? "ACTIVE" : "STOPPED", description: "Validating budget and PositionSizing / RiskEngine caps" },
+      { id: "order-management", name: "Order Management System", status: appStatus.system.running ? "ACTIVE" : "STOPPED", description: "Executing trades against live/paper Broker API" }
     ]
   });
 });

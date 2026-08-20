@@ -45,6 +45,10 @@ export interface ArgusReplaySignal {
   confidence: number;
   stop: number | null;
   target: number | null;
+  /** Same fields RiskAgent.ts uses to build a real StoredThesis for live trades (not invented for replay). */
+  invalidationConditions: string[];
+  applicableRegimes: string[];
+  entryRegime: string | null;
 }
 
 export interface ArgusReplayResult {
@@ -128,6 +132,9 @@ export function replayArgusStrategy(opts: {
         confidence: evaluation.confidence,
         stop: evaluation.stop.price,
         target: evaluation.target.price,
+        invalidationConditions: evaluation.invalidationConditions ?? [],
+        applicableRegimes: evaluation.applicableRegimes ?? [],
+        entryRegime: regime.insufficientData ? null : regime.regime,
       });
     }
   }

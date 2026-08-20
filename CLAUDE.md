@@ -2,15 +2,19 @@
 
 Argus operational master specification. This file is the live-path contract for agents and operators. Dated phase reports were synthesized here (2026-08-18). **Adding markdown does not raise readiness scores.** Code + `evaluateLiveReadiness()` + organic `trades`/`fills` beat this document.
 
+**ARCHITECTURE MUST NOT BE BYPASSED.** Extend ARGUS around the protected architecture. Never replace the architecture with a shortcut implementation. Checklist: `ARGUS_ARCHITECTURE_CONTRACT.md`, `ARGUS_ARCHITECTURE_INVARIANTS.md`, `ARGUS_AI_CHANGE_RULES.md`.
+
 Argus is a Node.js multi-agent trading terminal (Express + Vite SPA + `ws` + SQLite). Package name `my-money-miner`. The **live decision path** is EventBus → idea agents → ChiefTrader → RiskEngine → OMS → BrokerManager. Do not rewrite that path. New work is additive, modular, feature-flagged, tested, and backward compatible.
 
-## ARGUS CORE ARCHITECTURE — DO NOT MODIFY
+## ARGUS CORE ARCHITECTURE — EXTEND, DO NOT REPLACE OR BYPASS
 
 AI coding agents **must not** alter the protected trading architecture unless the repository owner explicitly authorizes an architectural change. Full contract: `ARGUS_ARCHITECTURE_PROTECTION.md`.
 
+**Invariant (discovery + ownership):** Opportunity Discovery and Existing Position Intelligence **feed the same protected spine**. They never become a second order path. New candidates and open-position HOLD/REDUCE/SELL recommendations enter only as `TRADE_IDEA_GENERATED` via `eventBus.emitTradeIdea` (or watchlist subscribe, which is **not** a trade). Then: ChiefTrader → RiskEngine (24 gates) → PositionSizing → OMS → BrokerManager. Do not shortcut ChiefTrader, RiskEngine, sizing, OMS, or `placeOrder` to “make it trade more.” Do not lower consensus (`tradingSafety.consensusApprovalThreshold` / `minIndependentAgreeingAgents`) or risk numbers for frequency.
+
 Protected (extend through the documented interface only — never replace, bypass, weaken, or duplicate): `ChiefTraderAgent`, `RiskEngine`, `OrderManagementService`, `BrokerManager` + broker adapters, reconciliation, the kill-switch system, the trading-state machine, portfolio accounting, order lifecycle, fill processing, position reconciliation, the 24 risk gates, paper/live safety controls (5-layer LIVE arming).
 
-If a requested feature appears to require modifying anything in that list: **stop**, explain the architectural conflict to the user, and do not implement a bypass. Prefer adding an adapter, service, event, strategy, or integration point around the existing architecture — see the extension-zone examples (`src/server/multiAsset/`, `src/server/continuous/`) in `ARGUS_ARCHITECTURE_PROTECTION.md`.
+If a requested feature appears to require modifying anything in that list: **stop**, explain the architectural conflict to the user, and do not implement a bypass. Prefer adding an adapter, service, event, strategy, or integration point around the existing architecture — see the extension-zone examples (`src/server/multiAsset/`, `src/server/continuous/`, `src/server/replay/` — Historical Replay Lab, MODE B) in `ARGUS_ARCHITECTURE_PROTECTION.md`. Replay reuses real ChiefTrader vote-math/RiskEngine/OMS against `HistoricalReplayBroker` (isolated from the live broker); it is structurally incapable of LIVE trading and never counts as organic paper.
 
 **LIVE real-money: `LIVE_NO_GO`.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is **not established**.
 
@@ -29,7 +33,7 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 | `src/server/db/schema.ts` | Table count (drifts; count `sqliteTable(`) |
 | `evaluateLiveReadiness()` / `ARGUS_LIVE_READINESS.json` | Machine LIVE gates (6/28 PASS as of 2026-08-18) |
 
-NewsAgent last scored pass: **44.6% on 242 predictions**. Walk-forward OOS for checked quant combos **failed**. Organic closed paper FILLED SELL P&L: **0**. Historical AI replay of past years is **UNAVAILABLE** without point-in-time news/LLM logs — do not fabricate a 2022 debate.
+NewsAgent last scored pass: **44.6% on 242 predictions**. Walk-forward OOS for checked quant combos **failed**. Organic closed paper FILLED SELL P&L: **0**. Historical AI replay of past years using the *live* AI models/prompts of that era is **UNAVAILABLE** without point-in-time news/LLM logs — do not fabricate a 2022 debate. This is distinct from the real **Historical Replay Lab** (`src/server/replay/`, MODE B) added since, which runs real historical bars through the real ChiefTrader vote-math, RiskEngine, and OMS (AI mode defaults `DISABLED`; no fabricated historical LLM votes) — see below and `docs/ARGUS_REPLAY_USER_GUIDE.md`.
 
 Forensic snapshot (2026-08-18 hostile pass, not a certificate): engineering ~89.3%, capital/validation ~12%, blended ~50.7%. Trading-edge score **8/100**. Dual scores are not LIVE eligibility.
 
@@ -46,6 +50,7 @@ Forensic snapshot (2026-08-18 hostile pass, not a certificate): engineering ~89.
 - Sibling engines (`vibe-trading`, `autohedge`, `OpenAlice`, `FinceptTerminal`) are **untrusted, read-only**. They never receive Argus broker credentials, never call `placeOrder`, and AutoHedge `WALLET_PRIVATE_KEY` / `SOLANA_PRIVATE_KEY` are forcibly emptied by the orchestrator.
 - `PAPER_TRADING_ONLY=true` refuses LIVE arm (`BrokerManager.setLiveMode(true)` and Alpaca LIVE authenticate throw).
 - AGENTS.md-era ATR-based sizing is **not** live RiskEngine. Stop assumption is `tradingSafety.stopLossAssumptionPct` (0.05), not ATR.
+- Supervised PAPER can be a **controlled validation session**. That is **not** unattended paper, **not** LIVE, and **not** proof of organic edge (organic closed PAPER FILLED SELL P&L remains **0** until soak counts it). Continuous market-wide discovery and penny MARKET execution are **not** current product behavior.
 
 ---
 
@@ -79,6 +84,12 @@ Idea agents (timer or MARKET_DATA):
                          (exits are SELL *ideas*, not raw broker flattens)
   QuantSignalAgent     → off unless QUANT_ENGINE_ENABLED=true
   KronosForecastAgent  → optional local Chronos; honest warning if /health is down
+  OpportunityDiscovery → `server.ts` starts `opportunityDiscoveryWorker` when
+                         ARGUS_OPPORTUNITY_LOOP_ENABLED is `'true'`; seed-list
+                         watchlist subscribe **only**; never TRADE_IDEA_GENERATED
+                         (current product: not market-wide discovery)
+  OpportunityScreener  → off unless ARGUS_OPPORTUNITY_IDEAS_ENABLED=true;
+                         cheap tick-return rank; `emitTradeIdea` as one vote
  ↓ TRADE_IDEA_GENERATED {traceId, symbol, side, confidence, reasoning, agent, currentPrice?}
     (gated by gateTradeIdea / looksLikeListedTicker — DEF-24)
 ChiefTraderAgent
@@ -446,6 +457,14 @@ npm run dev              # ecosystem-dev.ts → optional vibe/autohedge/OpenAlic
                          # ARGUS_SKIP_OPENALICE / ENABLE_*=false
 npm run dev:core         # Chronos/Ollama/OpenAlice/IBKR + server (no vibe/autohedge/Fincept)
 npm run dev:server-only  # tsx server.ts only
+npm run dev:headless     # ARGUS_HEADLESS=true — trading core + REST API only, no Vite/static Web UI
+                         # (src/server/app/runtimeConfig.ts isWebUiEnabled/isArgusHeadless).
+                         # Express + the REST API layer still run — headless skips the browser
+                         # frontend, not the API the CLI itself depends on.
+npm run start:headless:prod  # Same, against a built dist/
+npm run argus-cli -- <cmd>    # scripts/argus-cli.ts — thin HTTP client against the running API
+                              # (fetch to ARGUS_API_URL / 127.0.0.1:3000). Never imports
+                              # RiskEngine/OMS/BrokerManager directly — no second trading engine.
 npm run build            # Vite SPA + esbuild → dist/server.cjs
 npm run start            # node dist/server.cjs
 npm run clean
@@ -473,6 +492,16 @@ Do not duplicate this file. Pointers only:
 3. Add `agent_performance_stats` (and `config/agentWeights.json` default if it should bootstrap).
 4. LLM: `AIRouter.getInstance().routeTask(...)` only.
 5. New EventBus types: add to `config/eventNames.json` first.
+
+## Adding discovery or position intelligence
+
+**Extend, do not replace or bypass the protected core.** Target shape (not all of this exists yet):
+
+- **New names:** ranking/subscribe (`OpportunityDiscovery`) and/or `OpportunityScreener` `emitTradeIdea` into ChiefTrader. Never `placeOrder`, never `CHIEF_APPROVED_IDEA`, never a private Alpaca client.
+- **Open positions:** PortfolioMonitor (and future intel) emits SELL (or a future REDUCE) as `TRADE_IDEA_GENERATED`. Risk-exit may skip debate/min-agents; it **must not** skip RiskEngine/OMS. ADD is not a live spine action today.
+- Flag-gated OFF by default. Do not enable QUANT / penny / opportunity flags “to see if it works.”
+- Penny/micro MARKET remains unfit until a **reviewed OMS LIMIT** change (`marketOrdersFitPennyAndMicro`). Do not route around OMS.
+- `architecture.protection.test.ts` must stay green: `src/server/continuous/` and `src/server/multiAsset/` do not import OMS/RiskEngine/BrokerManager or call `.placeOrder(`.
 
 ## Adding a quant strategy
 

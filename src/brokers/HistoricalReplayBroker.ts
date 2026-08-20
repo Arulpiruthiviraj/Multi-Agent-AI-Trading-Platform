@@ -19,6 +19,8 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   private feesPaid = 0;
   private slippagePaid = 0;
   nextFillPrice = new Map<string, number>();
+  /** Fill bar's own reported volume - used only for the volume-participation cap, never for pricing. */
+  nextFillVolume = new Map<string, number>();
   clockNowMs = 0;
   timezone = 'America/New_York';
   extendedHours = false;
@@ -26,6 +28,8 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   fractional = false;
   costs: ReplayCostProfile;
   liveRefused = false;
+  /** Fraction of the fill bar's volume a single order may consume. null/undefined disables the cap entirely (unbounded, matching pre-existing behavior). */
+  maxVolumeParticipationPct: number | null;
 
   constructor(opts: {
     initialCash: number;
@@ -34,6 +38,7 @@ export class HistoricalReplayBroker implements BrokerPlugin {
     extendedHours: boolean;
     shortSelling: boolean;
     fractional: boolean;
+    maxVolumeParticipationPct?: number | null;
   }) {
     this.cash = opts.initialCash;
     this.costs = opts.costs;
@@ -41,6 +46,21 @@ export class HistoricalReplayBroker implements BrokerPlugin {
     this.extendedHours = opts.extendedHours;
     this.shortSelling = opts.shortSelling;
     this.fractional = opts.fractional;
+    this.maxVolumeParticipationPct = opts.maxVolumeParticipationPct ?? null;
+  }
+
+  /**
+   * Caps a requested quantity at maxVolumeParticipationPct of the fill bar's own reported volume.
+   * Returns the requested quantity unchanged if no volume figure or no cap is configured for this
+   * symbol/order (matches pre-existing unbounded behavior exactly - additive, not a behavior
+   * change for any caller that doesn't opt in).
+   */
+  private applyVolumeParticipationCap(symbol: string, requestedQty: number): number {
+    if (this.maxVolumeParticipationPct == null) return requestedQty;
+    const barVolume = this.nextFillVolume.get(symbol);
+    if (typeof barVolume !== 'number' || !(barVolume > 0)) return requestedQty;
+    const cap = Math.floor(barVolume * this.maxVolumeParticipationPct);
+    return Math.min(requestedQty, cap);
   }
 
   async initialize() {}
@@ -128,8 +148,8 @@ export class HistoricalReplayBroker implements BrokerPlugin {
       return rejected;
     }
     const qtyReq = orderData.quantity || 0;
-    const qty = this.fractional ? qtyReq : Math.floor(qtyReq);
-    if (!(qty > 0)) {
+    const requestedQty = this.fractional ? qtyReq : Math.floor(qtyReq);
+    if (!(requestedQty > 0)) {
       return {
         id: crypto.randomUUID(),
         symbol: orderData.symbol!,
@@ -142,6 +162,21 @@ export class HistoricalReplayBroker implements BrokerPlugin {
         updatedAt: new Date(this.clockNowMs),
       };
     }
+    const qty = this.applyVolumeParticipationCap(orderData.symbol!, requestedQty);
+    if (!(qty > 0)) {
+      return {
+        id: crypto.randomUUID(),
+        symbol: orderData.symbol!,
+        side: orderData.side!,
+        type: 'MARKET',
+        status: 'REJECTED',
+        quantity: requestedQty,
+        filledQuantity: 0,
+        createdAt: new Date(this.clockNowMs),
+        updatedAt: new Date(this.clockNowMs),
+      };
+    }
+    const isPartial = qty < requestedQty;
     if (orderData.side === 'SELL' && qtyReq < 0 && !this.shortSelling) {
       throw new Error('SHORT_DISABLED');
     }
@@ -225,8 +260,8 @@ export class HistoricalReplayBroker implements BrokerPlugin {
       symbol: orderData.symbol!,
       side: orderData.side!,
       type: orderData.type || 'MARKET',
-      status: 'FILLED',
-      quantity: qty,
+      status: isPartial ? 'PARTIALLY_FILLED' : 'FILLED',
+      quantity: requestedQty,
       filledQuantity: qty,
       averageFillPrice: priced.fill,
       price: priced.fill,

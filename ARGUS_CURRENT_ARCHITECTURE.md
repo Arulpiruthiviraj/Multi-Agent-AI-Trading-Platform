@@ -1,9 +1,6 @@
 # ARGUS — CURRENT ARCHITECTURE (FORENSIC AUDIT)
 
-**Audit date:** 2026-08-18  
-**Scope:** Read-only inspection of the repository as it exists today.  
-**Method:** Source, config JSON, schema, and invariant tests.  
-**Not done:** Process start, Autobot enable, LIVE arm, broker orders, DB writes, code/config edits.
+**Contract (do not bypass):** [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md). This file is a 2026-08-18 forensic snapshot; prefer current code if they disagree.
 
 **Evidence grades used in this document**
 
