@@ -42,12 +42,18 @@ function evictOldTraces() {
   }
 }
 
-// MARKET_DATA and CALCULATION_COMPLETED fire on every price tick per watched symbol -
-// many times per second under live market data. Kept in the in-memory buffers below
-// (bounded, same as before) but never written to SQLite, or the event_traces table
-// would grow unbounded and add write load to every tick. Only the actual decision-
-// lifecycle events (one per trade idea, not per tick) are durably persisted.
-const NO_PERSIST_TYPES = new Set([EVENTS.MARKET_DATA, EVENTS.CALCULATION_COMPLETED]);
+// High-frequency / noisy types stay on the in-memory ring (bounded) but skip SQLite.
+// MARKET_DATA / CALCULATION_COMPLETED: every tick. TRACE_SPAN / MODEL_HEALTH: flood
+// event_traces without adding decision-spine forensics (prefer agent_reasoning_logs /
+// transaction_traces / risk_* tables for those). Decision lifecycle names in
+// config/eventNames.json persist[] (TRADE_IDEA_*, CHIEF_*, RISK_ASSESSMENT_*,
+// RISK_GATE_EVALUATED, …) still write durable rows.
+const NO_PERSIST_TYPES = new Set([
+  EVENTS.MARKET_DATA,
+  EVENTS.CALCULATION_COMPLETED,
+  EVENTS.TRACE_SPAN,
+  EVENTS.MODEL_HEALTH,
+]);
 
 const trackEvent = (type: string) => (payload: any) => {
   // Digital Twin telemetry pulse — keep in-memory ring for live UI, skip SQLite pollution.

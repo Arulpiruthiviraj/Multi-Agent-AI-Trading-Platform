@@ -66,6 +66,9 @@ export class KronosModelManager {
       this.gpuUsage = hw.gpuUsage;
       if (typeof body.lastInferenceMs === 'number' && Number.isFinite(body.lastInferenceMs) && body.lastInferenceMs > 0) {
         this.inferenceTime = body.lastInferenceMs;
+      } else if (typeof body.latencyMs === 'number' && Number.isFinite(body.latencyMs) && body.latencyMs > 0) {
+        // Python /health may expose latencyMs as an alias of lastInferenceMs.
+        this.inferenceTime = body.latencyMs;
       }
       this.updateStatus('Ready');
       console.log(`[KronosModelManager] Local Chronos inference service reachable at ${SERVICE_URL} (${this.modelVersion}).`);
@@ -107,12 +110,17 @@ export class KronosModelManager {
 
   public getStatusReport() {
     this.maybeRefresh();
+    const latencyMs = this.inferenceTime > 0 ? this.inferenceTime : null;
     return {
       status: this.status,
       version: this.modelVersion,
       memoryUsage: this.memoryUsage,
       gpuUsage: this.gpuUsage,
-      inferenceTime: this.inferenceTime > 0 ? this.inferenceTime : null,
+      inferenceTime: latencyMs,
+      // Aliases so dashboard/API consumers that only look for latencyMs / lastInferenceMs
+      // (Python /health field name) do not render a blank when inferenceTime alone is set.
+      latencyMs,
+      lastInferenceMs: latencyMs,
       device: this.device,
       isAvailable: this.isAvailable,
       serviceUrl: SERVICE_URL,

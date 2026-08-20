@@ -586,7 +586,18 @@ argus_cmd_doctor() {
     echo "! Production build artifact missing (optional for --dev)"; warn=1
   fi
 
+  local health_rc=0
+  argus_http_probe "/api/v2/runtime/health" 2000 || health_rc=$?
+  if [[ "$health_rc" -eq 0 ]]; then
+    echo "✔ API reachable / runtime health OK"
+  elif [[ "$health_rc" -eq 5 ]]; then
+    echo "! API requires auth at ${ARGUS_API_URL} (run: argus login)"; warn=1
+  else
+    echo "! API not reachable at ${ARGUS_API_URL}"; warn=1
+  fi
+
   local pidfile="$ARGUS_ROOT/data/.argus_engine.pid"
+  local runtime_session="$ARGUS_ROOT/data/.argus_runtime_session.json"
   if [[ -f "$pidfile" ]]; then
     local pid
     pid="$(tr -d '[:space:]' < "$pidfile" || true)"
@@ -596,17 +607,43 @@ argus_cmd_doctor() {
       echo "! Engine PID file stale or process not visible to this shell"; warn=1
     fi
   else
-    echo "! No engine PID file (engine may be stopped)"; warn=1
+    # Missing daemon PID is not critical when Argus is clearly up (runtime session PID
+    # alive, or API reachable). server.ts / npm run dev also write .argus_engine.pid on
+    # listen — do not elevate to WARNINGS solely for the missing file.
+    local runtime_alive=0
+    if [[ -f "$runtime_session" ]]; then
+      local sess_pid
+      sess_pid="$(
+        node -e '
+          try {
+            const j = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const p = Number(j && j.pid);
+            if (Number.isFinite(p) && p > 0) process.stdout.write(String(p));
+          } catch (_) {}
+        ' "$runtime_session" 2>/dev/null || true
+      )"
+      if [[ -n "$sess_pid" ]] && kill -0 "$sess_pid" 2>/dev/null; then
+        runtime_alive=1
+      fi
+    fi
+    if [[ "$runtime_alive" -eq 1 ]]; then
+      echo "ℹ No .argus_engine.pid — runtime session PID alive (Argus likely via server.ts/dev; not critical)"
+    elif [[ "$health_rc" -eq 0 ]] || [[ "$health_rc" -eq 5 ]]; then
+      echo "ℹ No .argus_engine.pid but API reachable — not critical (daemon file optional when process is clearly up)"
+    else
+      echo "! No engine PID file (engine may be stopped)"; warn=1
+    fi
   fi
 
-  local health_rc=0
-  argus_http_probe "/api/v2/runtime/health" 2000 || health_rc=$?
-  if [[ "$health_rc" -eq 0 ]]; then
-    echo "✔ API reachable / runtime health OK"
-  elif [[ "$health_rc" -eq 5 ]]; then
-    echo "! API requires auth at ${ARGUS_API_URL} (run: argus login)"; warn=1
-  else
-    echo "! API not reachable at ${ARGUS_API_URL}"; warn=1
+  local dev_pidfile="$ARGUS_ROOT/.argus_dev.pid"
+  if [[ -f "$dev_pidfile" ]]; then
+    local dev_pid
+    dev_pid="$(tr -d '[:space:]' < "$dev_pidfile" || true)"
+    if [[ -n "$dev_pid" ]] && kill -0 "$dev_pid" 2>/dev/null; then
+      echo "ℹ .argus_dev.pid present (pid $dev_pid alive) — ecosystem/dev helper; not the trading engine PID"
+    else
+      echo "ℹ .argus_dev.pid present but process dead — ignore (stale file)"
+    fi
   fi
 
   local ready_rc=0

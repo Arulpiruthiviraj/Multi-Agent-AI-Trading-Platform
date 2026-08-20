@@ -105,6 +105,35 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     expect(result.consensus_verdict).toBe('HOLD');
   }, 15_000);
 
+  it('routeConsensus / BullResearcher fail closed within researchTimeoutMs (not the 20s provider default)', async () => {
+    const { aiModels } = await import('../config/aiModels');
+    expect(aiModels.researchTimeoutMs).toBe(8000);
+    aiRouter.registerProvider('hung-research', hungProvider());
+
+    const consensus = await runAndAdvance(
+      aiRouter.routeConsensus('ConsensusDebate', 'test prompt', 'trace-research-ms'),
+      aiModels.researchTimeoutMs + 1_000,
+    );
+    expect(consensus.consensus_verdict).toBe('HOLD');
+    expect(consensus.results[0].error).toMatch(new RegExp(String(aiModels.researchTimeoutMs)));
+
+    // Fresh hung provider — prior consensus call may have put hung-research in skip cooldown.
+    aiRouter.clearProviders();
+    aiRouter.registerProvider('hung-bull', hungProvider());
+    const bullOutcome = await runAndAdvance(
+      aiRouter.routeTask('BullResearcher', 'test prompt', 'trace-bull-ms', true)
+        .then((r: any) => r)
+        .catch((e: any) => ({ threw: true, message: e.message })),
+      aiModels.researchTimeoutMs + 1_000,
+    );
+    if (bullOutcome?.threw) {
+      expect(bullOutcome.message).toMatch(/All AI providers failed|did not respond within/);
+    } else {
+      // Fail-closed HOLD / confidence 0 — never a fabricated BUY/SELL from a hung research call.
+      expect(String(bullOutcome.content)).toMatch(/HOLD|All AI providers failed|NO_ROUTABLE|AI_RATE_LIMITED/i);
+    }
+  }, 15_000);
+
   it('routeConsensus() still aggregates a real successful provider alongside a timed-out one', async () => {
     aiRouter.registerProvider('hung-consensus-2', hungProvider());
     aiRouter.registerProvider('fast-consensus', fastProvider('{"decision":"SELL","confidence":80,"reasoning":"test","supportingFactors":[],"risks":[]}'));
@@ -201,15 +230,56 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     await vi.advanceTimersByTimeAsync(tradingSafety.aiProviderTimeoutSkipCooldownMs + 1);
     expect(aiRouter.isProviderTemporarilySkipped('hung-ollama')).toBe(false);
   }, 15_000);
+
+  it('routeConsensus throws an honest unroutable message when providers are registered but all in auth cooldown', async () => {
+    const authFailProvider = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => { throw new Error('HTTP 401 Unauthorized'); }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('only-auth-dead', authFailProvider);
+    // Drive auth cooldown via the real routeTask path (same as production).
+    await expect(aiRouter.routeTask('TestAgent', 'prompt', 'trace-auth-only')).rejects.toThrow(/All AI providers failed/);
+    expect(aiRouter.isProviderAuthDisabled('only-auth-dead')).toBe(true);
+    await expect(aiRouter.routeConsensus('ConsensusDebate', 'prompt', 'trace-honest')).rejects.toThrow(/misconfigured|unroutable|registered/);
+  });
 });
 
 describe('AIRouter provider selection helpers (DEF-14/15)', () => {
   it('skips remote providers with no API key and keeps local ones', async () => {
     const { shouldSkipUnconfiguredProvider, selectConsensusProviders } = await import('./AIRouter');
     expect(shouldSkipUnconfiguredProvider({ apiKey: undefined, isLocal: false })).toBe(true);
-    expect(shouldSkipUnconfiguredProvider({ apiKey: 'sk-test', isLocal: false })).toBe(false);
+    expect(shouldSkipUnconfiguredProvider({ apiKey: 'sk-test-realish-key', isLocal: false })).toBe(false);
     expect(shouldSkipUnconfiguredProvider({ apiKey: undefined, isLocal: true })).toBe(false);
     expect(selectConsensusProviders([['a', 1], ['b', 2], ['c', 3]] as [string, number][], 2).map(([id]) => id)).toEqual(['a', 'b']);
+  });
+
+  it('skips empty and placeholder API keys for remote providers (not local Ollama)', async () => {
+    const { shouldSkipUnconfiguredProvider, isPlaceholderApiKey, describeConsensusProvidersUnavailable } = await import('./AIRouter');
+    expect(isPlaceholderApiKey('')).toBe(true);
+    expect(isPlaceholderApiKey('   ')).toBe(true);
+    expect(isPlaceholderApiKey('CHANGE_ME')).toBe(true);
+    expect(isPlaceholderApiKey('your_openai_api_key_here')).toBe(true);
+    expect(isPlaceholderApiKey('sk-xxxxxxxx')).toBe(true);
+    expect(isPlaceholderApiKey('placeholder')).toBe(true);
+    expect(isPlaceholderApiKey('short')).toBe(true);
+    expect(isPlaceholderApiKey('AIzaSyRealLookingGeminiKey123456')).toBe(false);
+
+    expect(shouldSkipUnconfiguredProvider({ apiKey: '', isLocal: false })).toBe(true);
+    expect(shouldSkipUnconfiguredProvider({ apiKey: 'your_deepseek_key_here', isLocal: false })).toBe(true);
+    expect(shouldSkipUnconfiguredProvider({ apiKey: 'CHANGE_ME_generate', isLocal: false })).toBe(true);
+    expect(shouldSkipUnconfiguredProvider({ apiKey: undefined, isLocal: true })).toBe(false);
+    expect(shouldSkipUnconfiguredProvider({ apiKey: '', isLocal: true })).toBe(false);
+
+    const zero = describeConsensusProvidersUnavailable({
+      registeredCount: 0, skippedAuthCooldown: 0, skippedTemporary: 0, skippedDisabledInDb: 0,
+    });
+    expect(zero).toMatch(/No AI providers registered/);
+    const misconfigured = describeConsensusProvidersUnavailable({
+      registeredCount: 3, skippedAuthCooldown: 2, skippedTemporary: 1, skippedDisabledInDb: 0,
+    });
+    expect(misconfigured).toMatch(/misconfigured/);
+    expect(misconfigured).not.toMatch(/^No AI Providers available for consensus$/);
   });
 });
 

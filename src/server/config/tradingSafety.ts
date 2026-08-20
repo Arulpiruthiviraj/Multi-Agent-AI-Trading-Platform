@@ -63,6 +63,12 @@ export interface TradingSafety {
   regimeMinBars: number;
   quantLookbackDays: number;
   quantCycleIntervalMs: number;
+  /**
+   * Max parallel symbol evaluations inside QuantSignalAgent.runCycle.
+   * Default 1 (sequential) to reduce Alpaca 429 pressure; raise only after measuring
+   * rate-limit headroom. Fail-closed on 429 still aborts the remainder of the cycle.
+   */
+  quantMaxConcurrentSymbols: number;
   predictionOutcomeIntervalMs: number;
   alertingCooldownMs: number;
   trainingExampleIntervalMs: number;
@@ -218,6 +224,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'regimeMinBars',
   'quantLookbackDays',
   'quantCycleIntervalMs',
+  'quantMaxConcurrentSymbols',
   'predictionOutcomeIntervalMs',
   'alertingCooldownMs',
   'trainingExampleIntervalMs',

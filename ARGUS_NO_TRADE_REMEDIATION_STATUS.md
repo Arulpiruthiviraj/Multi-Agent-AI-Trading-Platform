@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20  
 **Source audit:** `ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md`  
-**Scope:** Safe remediations only â€” no consensus floor changes, no RiskEngine/OMS bypass, no LIVE arming.
+**Scope:** Safe remediations only — no consensus floor changes, no RiskEngine/OMS bypass, no LIVE arming.
 
 ## Explicit safety floors (unchanged)
 
@@ -40,35 +40,20 @@
 - Latch fix (2026-08-20): CPU multi-symbol fan-out timeouts no longer permanently kill all Kronos via global `markUnavailable`; fail-closed for that forecast only.
 - Tests: `KronosForecastAgent.test.ts`, `KronosDashboardData.test.ts`, `kronosFailureKind.test.ts`
 
-**Runtime verification (2026-08-20 ~13:39–13:45 ET, PAPER / LIVE_NO_GO):**
+### 1c. Chronos concurrency + latency alias (2026-08-20 secondary)
 
-- Chronos :8008/health — **RUN-VERIFIED**. status=ok, model=amazon/chronos-t5-mini, device=cpu, memoryUsage present, gpuUsage=N/A (CPU/MPS), lastInferenceMs observed after inference (e.g. ~263–718 ms). Chronos PID **16268** (python `local_ai_service`).
-- Argus headless — **RUN-VERIFIED**. `./argus start --headless` with `PAPER_TRADING_ONLY=true`. Engine PID **11880** (listener on :3000); spawn wrapper observed as **18740**. `GET /api/v2/runtime/health` ok; tradingMode PAPER; liveReadiness **LIVE_NO_GO**.
-- KronosForecastAgent boot start — **RUN-VERIFIED** earlier same day in logs (independent of Autobot).
-- Live forecast path — **RUN-VERIFIED** earlier same day (pre-exit): KRONOS_FORECAST_* for multiple symbols; timeouts fail-closed per symbol (post-fix: no global latch on TimeoutError).
-- Consensus unchanged — still NO_TRADE under 0.75 / min-2.
-- GET `/api/v1/kronos/status|metrics|forecast` (session cookie after `./argus login`) — **RUN-VERIFIED** (all HTTP 200):
-  - status: Ready, isAvailable=true, version=amazon/chronos-t5-mini, device=cpu, serviceUrl=http://127.0.0.1:8008, forecastHorizon=5, timeframe=tick
-  - metrics: source=prediction_outcomes, sampleSize=2690, directionalAccuracy≈0.48, unavailableReason=null
-  - forecast: available=true, symbol=META, prediction=SELL, confidence=0.85, model=amazon/chronos-t5-mini (local), series length=5, unavailableReason=null
-- Note: Autobot was **ENABLED** on the Kronos API-verify headless restart (PID ~11880); operator preference is OFF unless intending supervised ideas. **2026-08-20 follow-up:** ./argus disable exit **0** — Autobot left **OFF** (PAPER, LIVE_NO_GO; KronosEngine still available/HEALTHY). Engine not stopped; no kill-switch. Forecasts do not require Autobot after boot-start fix; ideas still gated.
-- Wealth vortex settings smoke — **RUN-VERIFIED** earlier: vitest `wealthVortexStore.test.ts` → 4/4 passed.
-- Latch unit tests — **RUN-VERIFIED**: `kronosFailureKind.test.ts` + `KronosForecastAgent.test.ts` → 10/10 passed.
+- **Concurrency:** `KronosInference` serializes Chronos `/forecast` via `ChronosForecastGate` (`runtimeIntervals.kronosForecastMaxConcurrent`, default **1**) to reduce multi-symbol timeout storms. Per-symbol fail-closed unchanged.
+- **Latency alias:** `KronosModelManager.getStatusReport()` exposes `latencyMs` + `lastInferenceMs` alongside `inferenceTime` (Python `/health` field). Kronos dashboard reads `latencyMs ?? lastInferenceMs ?? inferenceTime`.
+- Tests: `KronosInference.concurrency.test.ts`, `KronosModelManager.latencyAlias.test.ts`
 
-**Remaining blockers (operator / ops, not consensus/RiskEngine bypasses):**
+### 2. NVDA `quant_target_price` ~$121.90 (forensic → code bug)
 
-1. Chronos CPU latency under multi-symbol fan-out can still timeout **individual** forecasts (expected; now per-symbol fail-closed, not global latch).
-2. HuggingFace SSL noise on FinBERT warm load (cert verify) — Chronos still came up; watch cold starts.
-3. Autobot left **OFF** after Kronos API verify (./argus disable exit 0 on PID 11880) — leave OFF unless intending supervised paper ideas.
-
-### 2. NVDA `quant_target_price` ~$121.90 (forensic â†’ code bug)
-
-**Root cause (DATA + CODE):** PortfolioMonitor selected the newest `FILLED BUY` by `filled_at` **without excluding `REPLAY`**. Live NVDA holding was `EXTERNAL_SYNC` @ ~$206.85 (null quant target). Overnight REPLAY fills @ ~$114.22 with `quant_target_price=121.9` won the lookup â†’ perpetual `TARGET_REACHED` at live ~$216.
+**Root cause (DATA + CODE):** PortfolioMonitor selected the newest `FILLED BUY` by `filled_at` **without excluding `REPLAY`**. Live NVDA holding was `EXTERNAL_SYNC` @ ~$206.85 (null quant target). Overnight REPLAY fills @ ~$114.22 with `quant_target_price=121.9` won the lookup → perpetual `TARGET_REACHED` at live ~$216.
 
 **Fix:**
 
 - `resolveOpeningTradeForLiveExit()` excludes `REPLAY` / `BACKTEST` / `SIMULATION` / historical / telemetry envs (and replay trace prefix).
-- Long targets at/below average entry are ignored (warn only) â€” no silent rewrite that forces sells.
+- Long targets at/below average entry are ignored (warn only) — no silent rewrite that forces sells.
 - Regressions in `PortfolioMonitor.test.ts`
 
 ### 3. Quant Alpaca 429
@@ -77,22 +62,73 @@
 - `QuantSignalAgent.runCycle` aborts the rest of the symbol fan-out on 429 / rate-limit errors (no idea storm).
 - Regression in `HistoricalDataGateway.test.ts`
 
+### 4. AI consensus debate — "No AI Providers available for consensus" (2026-08-20)
+
+**Root causes:**
+
+1. Empty / placeholder env keys (e.g. DEEPSEEK `your_*` / `CHANGE_ME`) were treated as configured → register → auth-fail.
+2. Auth failure **permanently** set `ai_providers.enabled=false` and deleted the provider from the in-memory map, so real GEMINI/OPENAI keys still looked like “no providers” after one bad probe.
+3. Error string did not distinguish zero registered vs keys present but unroutable (cooldown / skip / misconfigured).
+
+**Fixes (consensus 0.75 / min-2 unchanged; fail-closed HOLD when debate cannot run):**
+
+- `isPlaceholderApiKey` + `shouldSkipUnconfiguredProvider` skip empty/placeholder cloud keys; local Ollama still needs no key.
+- Auth failure → temporary cooldown + `health=Offline` only (no permanent DB disable); heal prior `enabled=false` rows when a usable env key / local endpoint exists.
+- Honest `describeConsensusProvidersUnavailable` messages for `routeConsensus` / empty `routeTask`.
+- `aiModels.json` Ollama routes applied when local provider is registered; clearer warn if Ollama configured but not registered.
+- Tests extended in `AIRouter.test.ts` (placeholder filtering + honest consensus error).
+
+### 5. NewsAgent telemetry honesty (2026-08-20)
+
+**Root cause:** Forensic `lastSuccessfulTickAt=null` / “no ideas” looked like a dead NewsAgent while `newsAgentMode=CATALYST_ONLY` correctly suppresses `TRADE_IDEA_GENERATED`. Pipeline success was already recorded after Phase-2 fix; telemetry was still sparse and easy to misread.
+
+**Fixes (did not flip ideas ON):**
+
+- Kept default `CATALYST_ONLY` (ideas OFF). Documented optional `ACTIVE_VOTE*` as enhancement in `deskIntelligence.json` `$comment`.
+- `NEWS_PIPELINE_TICK` now includes `newsAgentMode`, `ideasEmitting`, `liveIdeaGenerationEnabled`.
+- Pipeline snapshot for NewsAgent surfaces `newsAgentMode` / `ideasEmitting` / `catalystOnly`.
+- Clustering/analysis still runs with Autobot off; `notePipelineAgentSuccess('NewsAgent')` still on every completed cycle.
+- Tests: `NewsEngine.test.ts` (success with ideas disabled).
+
 ## Remains operator-only
 
 | Item | Action |
 |---|---|
-| **`news_veto` on NVDA exits** | Wait for `newsVetoWindowMs` expiry or archive/resolve high-impact clusters â€” **do not** bypass RiskEngine |
-| **Chronos `:8008`** | Keep `npm run ai:serve` / Chronos up for honest forecasts. Ideas still fail-closed if `/health` is down. Single-symbol CPU timeouts no longer global-latch Kronos (code fix 2026-08-20). |
+| **`news_veto` on NVDA exits** | Wait for `newsVetoWindowMs` expiry or archive/resolve high-impact clusters — **do not** bypass RiskEngine |
+| **Chronos `:8008`** | Keep `npm run ai:serve` / Chronos up for honest forecasts. Ideas still fail-closed if `/health` is down. Single-symbol CPU timeouts no longer global-latch Kronos; forecasts are now serialized (`kronosForecastMaxConcurrent=1`). |
 | **Alpaca bars budget** | Reduce concurrent Quant/universe pressure if 429s persist; backoff is fail-closed, not a free pass |
-| **AI debate providers** | Restore at least one consensus provider if debate should contribute (still must clear 0.75 / min-2) |
+| **AI debate providers** | Ensure at least one **real** (non-placeholder) cloud key **or** healthy local Ollama for debate contribution. Code no longer falsely claims “no providers” when keys exist but are misconfigured — still must clear **0.75 / min-2** after a usable debate. |
+| **News TRADE_IDEA votes** | Optional: set `deskIntelligence.newsAgentMode` to `ACTIVE_VOTE` only if intentionally wanting News as a voter (default remains catalyst-only for safety). |
 | **Autobot / RTH** | Operator-supervised paper only; Autobot off when not intending ideas |
 | **Runtime hygiene** | Single Argus writer; clean SIGTERM; ignore stale `.argus_dev.pid` |
-| **Soak / edge** | Organic PAPER FILLED SELL P&L still **0** â€” remediations do not claim edge |
+| **Soak / edge** | Organic PAPER FILLED SELL P&L still **0** — remediations do not claim edge |
+
+## 6. Performance-audit critical fixes (2026-08-20)
+
+Source: `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md`. Consensus **0.75 / min 2** unchanged; no RiskEngine/OMS/BrokerManager bypass; PAPER-safe.
+
+### 6a. Silent NULL `trades.profit_loss` (OMS)
+
+- **Root cause:** `preTradeEntryPrice` from `activeBroker.positions()` was wrapped in an empty `catch (e) {}` — broker miss/throw left `profit_loss` NULL (soak counter skipped the only closed PAPER SELL).
+- **Fix:** `resolvePreTradeEntryPrice()` — broker positions → local `portfolio.averagePrice` → live FILLED BUY cost basis (excludes REPLAY/BACKTEST). Empty catch removed; P&L still persisted on full SELL fills.
+- **Tests:** `omsEntryPrice.test.ts`, `OrderManagement.test.ts` (positions throw → local averagePrice P&L).
+
+### 6b. Post-fill local portfolio lag → false `MISSING_REMOTELY`
+
+- **Root cause:** Local `portfolio` only cleared on the next recon cycle after a full SELL fill → transient localQty > 0 with broker flat.
+- **Fix:** `syncLocalPortfolioAfterFullSellFill()` from `recordFillProgress` when the SELL order is fully filled (zeros or reduces qty; mirrors recon’s quantity=0 clear).
+- **Tests:** `localPortfolioSync.test.ts`, OMS sell-fallback asserts qty → 0 before recon.
+
+### 6c. Bull/Bear leave HeavyModelMutex + research timeout
+
+- `config/aiModels.json`: BullResearcher / BearResearcher → `0xroyce/plutus:latest` + `llama3.2:latest` (FundamentalAgent style). ReflectionEngine keeps `deepseek-r1:14b`.
+- `researchTimeoutMs: 8000` — `routeConsensus` and Bull/Bear `routeTask` fail closed (HOLD / confidence 0 path) without 60–90s heavy-model hangs.
+- **Tests:** `aiModels.test.ts`, `AIRouter.test.ts` (researchTimeoutMs fail-closed).
 
 ## Not done (by design)
 
-- Did **not** lower consensus thresholds to â€œget tradesâ€
+- Did **not** lower consensus thresholds to “get trades”
 - Did **not** weaken `news_veto`, RiskEngine, or OMS
 - Did **not** enable LIVE or disable `PAPER_TRADING_ONLY`
+- Did **not** flip `newsAgentMode` to ACTIVE_VOTE (ideas stay default-OFF)
 - Did **not** rewrite stored REPLAY `quant_target_price` rows (research ledger stays intact)
-

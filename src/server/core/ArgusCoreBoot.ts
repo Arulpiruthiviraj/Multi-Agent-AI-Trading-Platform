@@ -72,6 +72,9 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   armReconciliationBootWarmup();
   installServerLogBuffer();
 
+  // Durable EventStore listeners must attach before idea agents emit (decision lifecycle → event_traces).
+  await import('./EventStore');
+
   const { loadInterruptedSessionMarker, beginRuntimeSession, startSessionRecoveryListeners } =
     await import('./sessionRecovery');
   loadInterruptedSessionMarker();

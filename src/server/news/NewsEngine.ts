@@ -18,7 +18,7 @@ import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { generateTraceId } from '../core/traceId';
 import { randomUUID } from 'node:crypto';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
-import { newsAgentEmitsTradeIdeas, newsAgentPipelineEnabled, newsAgentObservesPredictions } from '../config/deskIntelligence';
+import { deskIntelligence, newsAgentEmitsTradeIdeas, newsAgentPipelineEnabled, newsAgentObservesPredictions } from '../config/deskIntelligence';
 import { recordNewsCatalyst } from '../services/NewsCatalystStore';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
@@ -350,10 +350,16 @@ export class NewsEngine {
     }
     // Heartbeat even when every article was a duplicate — Digital Twin otherwise stays IDLE
     // between rare new headlines while MarketData pulses continuously on ticks.
+    // Telemetry honesty: successful cluster/analysis cycles mark lastSuccessfulTickAt even when
+    // newsAgentMode is CATALYST_ONLY (ideas intentionally disabled). Ideas-off ≠ pipeline-dead.
     eventBus.publish(EVENTS.NEWS_PIPELINE_TICK, {
       telemetryPulse: true,
       fetched: fetchedCount,
       analyzed: analyzedCount,
+      newsAgentMode: deskIntelligence.newsAgentMode,
+      ideasEmitting: newsAgentEmitsTradeIdeas(),
+      liveIdeaGenerationEnabled: isLiveIdeaGenerationEnabled(),
+      newsAgentPipelineEnabled: isPipelineAgentEnabled('NewsAgent'),
       at: new Date().toISOString(),
     });
     // A cycle that ran to completion (even zero new/qualifying articles) is a real success -

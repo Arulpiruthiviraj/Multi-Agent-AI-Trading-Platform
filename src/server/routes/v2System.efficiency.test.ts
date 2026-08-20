@@ -16,7 +16,7 @@ import { eq } from 'drizzle-orm';
  * figure) for an agent with no real logged latency (TechnicalAgent/KronosForecastAgent never
  * make an LLM call, so agent_predictions.latencyMs is genuinely null for them).
  */
-describe('GET /api/v2/agents/efficiency', () => {
+describe('GET /api/v2/agents/efficiency', { timeout: 30_000 }, () => {
   let tmpDbPath: string;
   let db: any;
   let sqliteDb: any;

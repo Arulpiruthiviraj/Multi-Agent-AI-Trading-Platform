@@ -131,6 +131,13 @@ describe('Shell CLI help / usage (RUN when bash available)', () => {
     expect(r.stdout).toMatch(/argus/);
   });
 
+  it('doctor PID hygiene: missing engine pid not always warn; stale .argus_dev.pid ignored', () => {
+    const common = readFileSync(join(ROOT, 'scripts', 'cli', 'common.sh'), 'utf8');
+    expect(common).toMatch(/No \.argus_engine\.pid — runtime session PID alive/);
+    expect(common).toMatch(/\.argus_dev\.pid present but process dead — ignore/);
+    expect(common).toMatch(/not critical/);
+  });
+
   it('doctor does not print common secret env patterns', () => {
     const r = runArgus(['doctor']);
     if (r.error && (r.error as NodeJS.ErrnoException).code === 'ENOENT') {

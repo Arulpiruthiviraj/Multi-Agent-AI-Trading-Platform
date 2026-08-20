@@ -29,28 +29,63 @@ export interface ChronosForecastResponse {
   device?: string;
 }
 
+/**
+ * Serialize / limit concurrent Chronos /forecast HTTP calls. CPU Chronos under multi-symbol
+ * MARKET_DATA fan-out otherwise timeout-storms. Fail-closed per caller; queue waits its turn.
+ */
+export class ChronosForecastGate {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(private readonly maxConcurrent: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    const limit = Math.max(1, this.maxConcurrent);
+    if (this.active >= limit) {
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
+    }
+    this.active += 1;
+    try {
+      return await fn();
+    } finally {
+      this.active -= 1;
+      const next = this.waiters.shift();
+      if (next) next();
+    }
+  }
+
+  /** Test helper — in-flight + queued depth. */
+  snapshot(): { active: number; waiting: number } {
+    return { active: this.active, waiting: this.waiters.length };
+  }
+}
+
+export const chronosForecastGate = new ChronosForecastGate(runtimeIntervals.kronosForecastMaxConcurrent);
+
 async function callForecastService(prices: number[], horizon: number): Promise<ChronosForecastResponse> {
-  const started = Date.now();
-  let res: Response;
-  try {
-    res = await fetch(`${SERVICE_URL}/forecast`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prices, horizon }),
-      signal: AbortSignal.timeout(runtimeIntervals.kronosHttpTimeoutMs),
-    });
-  } catch (e: any) {
-    throw new Error(`KRONOS_UNAVAILABLE: local inference service not reachable at ${SERVICE_URL} (${e.message}). Run 'npm run ai:serve'.`);
-  }
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`KRONOS_UNAVAILABLE: local inference service returned ${res.status}: ${body.slice(0, 200)}`);
-  }
-  const json = await res.json() as ChronosForecastResponse;
-  if (typeof json.latencyMs !== 'number' || !Number.isFinite(json.latencyMs)) {
-    json.latencyMs = Date.now() - started;
-  }
-  return json;
+  return chronosForecastGate.run(async () => {
+    const started = Date.now();
+    let res: Response;
+    try {
+      res = await fetch(`${SERVICE_URL}/forecast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prices, horizon }),
+        signal: AbortSignal.timeout(runtimeIntervals.kronosHttpTimeoutMs),
+      });
+    } catch (e: any) {
+      throw new Error(`KRONOS_UNAVAILABLE: local inference service not reachable at ${SERVICE_URL} (${e.message}). Run 'npm run ai:serve'.`);
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`KRONOS_UNAVAILABLE: local inference service returned ${res.status}: ${body.slice(0, 200)}`);
+    }
+    const json = await res.json() as ChronosForecastResponse;
+    if (typeof json.latencyMs !== 'number' || !Number.isFinite(json.latencyMs)) {
+      json.latencyMs = Date.now() - started;
+    }
+    return json;
+  });
 }
 
 // Accepts either plain closing prices or candle-like objects (close/price field) - keeps this

@@ -9,6 +9,9 @@ type KronosStatusPayload = {
   memoryUsage?: string | null;
   gpuUsage?: string | null;
   inferenceTime?: number | string | null;
+  /** Alias of inferenceTime / Python lastInferenceMs — prefer when present. */
+  latencyMs?: number | string | null;
+  lastInferenceMs?: number | string | null;
   device?: string | null;
   isAvailable?: boolean;
   serviceUrl?: string;
@@ -167,7 +170,8 @@ export const KronosDashboard = () => {
   const hwFallback = "N/A (CPU/MPS)";
   const gpuDisplay = hardwareDisplay(kronosStatus?.gpuUsage, hwFallback);
   const memDisplay = hardwareDisplay(kronosStatus?.memoryUsage, hwFallback);
-  const inferenceRaw = kronosStatus?.inferenceTime;
+  const inferenceRaw =
+    kronosStatus?.latencyMs ?? kronosStatus?.lastInferenceMs ?? kronosStatus?.inferenceTime;
   const inferenceDisplay =
     inferenceRaw == null || inferenceRaw === 0 || inferenceRaw === "0"
       ? isUnavailable

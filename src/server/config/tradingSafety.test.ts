@@ -24,6 +24,8 @@ describe('tradingSafety.json', () => {
     expect(tradingSafety.newsLlmMaxCallsPerCycle).toBeGreaterThan(0);
     expect(tradingSafety.aiProviderUnreachableCooldownMs).toBeGreaterThan(0);
     expect(tradingSafety.aiProviderTimeoutSkipCooldownMs).toBeGreaterThan(0);
+    expect(tradingSafety.quantMaxConcurrentSymbols).toBeGreaterThanOrEqual(1);
+    expect(tradingSafety.quantMaxConcurrentSymbols).toBeLessThanOrEqual(32);
   });
 
   it('netConfidenceFromVotes uses the configured disagreement penalty, not a test-local 0.5', () => {

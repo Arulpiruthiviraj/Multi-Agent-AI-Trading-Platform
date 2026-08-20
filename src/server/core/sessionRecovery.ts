@@ -99,6 +99,10 @@ export function beginRuntimeSession(): void {
 }
 
 export function markCleanShutdown(): void {
+  if (heartbeat) {
+    clearInterval(heartbeat);
+    heartbeat = null;
+  }
   if (!current) {
     current = {
       pid: process.pid,

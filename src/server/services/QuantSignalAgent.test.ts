@@ -133,6 +133,26 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     await expect((agent as any).runCycle()).resolves.not.toThrow();
   });
 
+  it('quantMaxConcurrentSymbols defaults to 1 (config-backed; reduces Alpaca 429 fan-out)', async () => {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    expect(tradingSafety.quantMaxConcurrentSymbols).toBe(1);
+    const agent = new QuantSignalAgent();
+    expect((agent as any).symbolConcurrency()).toBe(1);
+  });
+
+  it('runCycle aborts remaining symbols on 429 (fail-closed; no idea storm)', async () => {
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['AAA', 'BBB', 'CCC']);
+    const agent = new QuantSignalAgent();
+    const evaluated: string[] = [];
+    vi.spyOn(agent, 'evaluateSymbol').mockImplementation(async (symbol: string) => {
+      evaluated.push(symbol);
+      if (symbol === 'AAA') throw new Error('Alpaca bars 429 Too Many Requests');
+      return null;
+    });
+    await (agent as any).runCycle();
+    expect(evaluated).toEqual(['AAA']);
+  });
+
   it('start() is a real no-op unless QUANT_ENGINE_ENABLED=true - verified by checking no interval was armed', async () => {
     delete process.env.QUANT_ENGINE_ENABLED;
     const agent = new QuantSignalAgent();

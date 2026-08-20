@@ -54,6 +54,8 @@ import { resolveOmsExecutionEnvironment, stampExecutionEnvironment } from '../re
 import { authorizeProductionOrder } from '../core/liveOrderAuthorization';
 import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
 import { insertIncrementalFill } from './fillLedger';
+import { resolvePreTradeEntryPrice } from './omsEntryPrice';
+import { isOrderFullyFilled, syncLocalPortfolioAfterFullSellFill } from './localPortfolioSync';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 function getActiveReplaySessionSafe(): { replayId: string } | null {
@@ -198,6 +200,14 @@ export class OrderManagementService {
       if (result.newQty <= 0) return 0;
       const fillPrice = averageFillPrice || 0;
       eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
+      // Immediate local portfolio sync on full SELL fill — do not wait for the next recon tick
+      // (stale localQty > 0 with broker flat → false MISSING_REMOTELY / operator pause).
+      if (
+        side === 'SELL'
+        && isOrderFullyFilled(status, result.cumulativeQuantity, requestedQuantity)
+      ) {
+        await syncLocalPortfolioAfterFullSellFill(symbol, requestedQuantity);
+      }
       return result.newQty;
     } catch (e) {
       console.error(`[OMS] Failed to persist fill for order ${orderId}`, e);
@@ -332,12 +342,10 @@ export class OrderManagementService {
       }
 
       // Capture the pre-trade entry price so a SELL's realized P&L can be computed once it fills.
+      // Broker positions first; on throw / missing symbol → local portfolio.averagePrice → opening BUY.
       let preTradeEntryPrice: number | null = null;
       if (side === 'SELL') {
-        try {
-          const positions = await activeBroker.positions();
-          preTradeEntryPrice = positions.find(p => p.symbol === symbol)?.entryPrice ?? null;
-        } catch (e) {}
+        preTradeEntryPrice = await resolvePreTradeEntryPrice(symbol, () => activeBroker.positions());
       }
 
       // Phase 1 (ARGUS_SAFETY_HARDENING_REPORT.md) - orderId (this row's own local UUID, already

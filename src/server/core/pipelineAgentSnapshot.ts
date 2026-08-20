@@ -20,6 +20,7 @@ import { fundamentalAgent } from '../services/FundamentalAgent';
 import { macroAgent } from '../services/MacroAgent';
 import { chiefTrader } from '../services/ChiefTraderAgent';
 import { formatWhyNoTrade } from './consensusExplanation';
+import { deskIntelligence, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 
 export function getPipelineAgentSnapshot() {
   const workersRunning = system.getStatus().running;
@@ -51,7 +52,7 @@ export function getPipelineAgentSnapshot() {
       // on the same response object - an internally inconsistent API contract. Deriving healthy
       // from healthLabel makes them structurally unable to disagree.
       const healthy = healthLabel === 'HEALTHY';
-      return {
+      const base = {
         id: spec.id,
         label: spec.label,
         description: spec.description,
@@ -70,6 +71,16 @@ export function getPipelineAgentSnapshot() {
         healthy,
         healthLabel,
       };
+      // News: surface catalyst-only vs vote mode so operators do not read "no ideas" as "pipeline dead".
+      if (spec.id === 'NewsAgent') {
+        return {
+          ...base,
+          newsAgentMode: deskIntelligence.newsAgentMode,
+          ideasEmitting: newsAgentEmitsTradeIdeas(),
+          catalystOnly: !newsAgentEmitsTradeIdeas(),
+        };
+      }
+      return base;
     }),
     alwaysOn: pipelineAgentsConfig.alwaysOn.map((spec) => ({
       id: spec.id,

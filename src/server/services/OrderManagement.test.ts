@@ -1,34 +1,40 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { trades, fills } from '../db/schema';
+import { trades, fills, portfolio } from '../db/schema';
 
 // Phase 3 changed OMS from a single insert to insert-then-update as the order progresses
 // (PENDING at submission -> broker acceptance -> terminal fill/reject), so the mock now tracks
 // a mutable "current row" that both insert and update write into, plus separate insert logs for
 // `trades` vs `fills` so assertions can tell real order-lifecycle inserts apart from fill records.
-const { mockDb, setExistingTrades, setThrowOnIdempotency, setEnvRow, tradesInserts, fillsInserts, getFinalTradeRow } = vi.hoisted(() => {
+const {
+  mockDb, setExistingTrades, setThrowOnIdempotency, setEnvRow, setPortfolioRows,
+  tradesInserts, fillsInserts, getFinalTradeRow, getPortfolioRows,
+} = vi.hoisted(() => {
   const tradesInserts: any[] = [];
   const fillsInserts: any[] = [];
   let existingTrades: any[] = [];
+  let portfolioRows: any[] = [];
   let currentRow: any = null;
   let throwOnIdempotency = false;
   let envRow: any = { tradingMode: 'Paper', paperMode: true };
 
   const selectBuilder: any = {
-    from() { return selectBuilder; },
+    _table: null as any,
+    from(table: any) { selectBuilder._table = table; return selectBuilder; },
     where() { return selectBuilder; },
+    orderBy() { return selectBuilder; },
     limit() { return selectBuilder; },
     get() { return envRow; },
     then(resolve: any, reject: any) {
       if (throwOnIdempotency) return Promise.reject(new Error('idempotency lookup failed')).then(resolve, reject);
+      if (selectBuilder._table === portfolio) return Promise.resolve(portfolioRows).then(resolve, reject);
       return Promise.resolve(existingTrades).then(resolve, reject);
     },
   };
-  const updateBuilder: any = {
-    set(patch: any) { if (currentRow) Object.assign(currentRow, patch); return updateBuilder; },
-    where() { return Promise.resolve({}); },
-  };
   const mockDb = {
-    select: () => selectBuilder,
+    select: () => {
+      selectBuilder._table = null;
+      return selectBuilder;
+    },
     insert: (table: any) => ({
       values: (v: any) => {
         if (table === trades) { tradesInserts.push(v); currentRow = { ...v }; }
@@ -36,11 +42,23 @@ const { mockDb, setExistingTrades, setThrowOnIdempotency, setEnvRow, tradesInser
         return Promise.resolve({});
       },
     }),
-    update: () => updateBuilder,
+    update: (table?: any) => ({
+      set(patch: any) {
+        if (table === portfolio) {
+          if (portfolioRows[0]) Object.assign(portfolioRows[0], patch);
+        } else if (currentRow) {
+          Object.assign(currentRow, patch);
+        }
+        return this;
+      },
+      where() { return Promise.resolve({}); },
+    }),
   };
   return {
     mockDb, tradesInserts, fillsInserts,
     setExistingTrades: (rows: any[]) => { existingTrades = rows; },
+    setPortfolioRows: (rows: any[]) => { portfolioRows = rows; },
+    getPortfolioRows: () => portfolioRows,
     setThrowOnIdempotency: (v: boolean) => { throwOnIdempotency = v; },
     setEnvRow: (row: any) => { envRow = row; },
     getFinalTradeRow: () => currentRow,
@@ -72,6 +90,7 @@ describe('OrderManagementService.executeOrder', () => {
     emitOrderExecution.mockClear();
     setTradingState.mockClear();
     setExistingTrades([]);
+    setPortfolioRows([]);
     setThrowOnIdempotency(false);
     setEnvRow({ tradingMode: 'Paper', paperMode: true });
   });
@@ -192,6 +211,20 @@ describe('OrderManagementService.executeOrder', () => {
     await oms.executeOrder('AAPL', 'SELL', 10, 'reasoning', 'sell-trace');
 
     expect(getFinalTradeRow().profitLoss).toBe(200); // (120 - 100) * 10
+  });
+
+  it('computes profit_loss via local portfolio fallback when broker positions() throws', async () => {
+    setPortfolioRows([{ symbol: 'AAPL', quantity: 5, averagePrice: 100 }]);
+    const placeOrder = vi.fn(async () => ({ id: 'order-fallback', status: 'FILLED', averageFillPrice: 110 }));
+    const positions = vi.fn(async () => { throw new Error('positions unavailable'); });
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions };
+
+    await oms.executeOrder('AAPL', 'SELL', 5, 'reasoning', 'sell-fallback-trace');
+
+    expect(positions).toHaveBeenCalled();
+    expect(getFinalTradeRow().profitLoss).toBe(50); // (110 - 100) * 5 from local averagePrice
+    // Full SELL fill must zero local portfolio before the next recon tick.
+    expect(getPortfolioRows()[0]?.quantity).toBe(0);
   });
 
   it('keeps PENDING and pauses trading when placeOrder throws (unknown submit is not REJECTED)', async () => {

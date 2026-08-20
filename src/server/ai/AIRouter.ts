@@ -55,13 +55,15 @@ import { EncryptionService } from '../core/EncryptionService';
 import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADE_SIDE_VALUES } from './AIOutputValidator';
 import { tradingSafety } from '../config/tradingSafety';
 import { networkEndpoints } from '../config/networkEndpoints';
-import { aiModels } from '../config/aiModels';
+import { aiModels, isResearchAgentType } from '../config/aiModels';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { hashSensitive } from '../observability/hashSensitive';
 
 // Router timeout (tradingSafety.aiProviderTimeoutMs) plus AbortController so fetch-based
 // providers cancel in-flight HTTP instead of hanging after the caller has already failed over.
 const AI_PROVIDER_TIMEOUT_MS = tradingSafety.aiProviderTimeoutMs;
+/** Bull/Bear + ConsensusDebate — config/aiModels.json researchTimeoutMs (fail-closed HOLD). */
+const RESEARCH_TIMEOUT_MS = aiModels.researchTimeoutMs;
 const AI_AUTH_FAILURE_COOLDOWN_MS = tradingSafety.aiProviderAuthFailureCooldownMs;
 const AI_UNREACHABLE_COOLDOWN_MS = tradingSafety.aiProviderUnreachableCooldownMs;
 const AI_TIMEOUT_SKIP_COOLDOWN_MS = tradingSafety.aiProviderTimeoutSkipCooldownMs;
@@ -73,8 +75,40 @@ const AI_TIMEOUT_SKIP_COOLDOWN_MS = tradingSafety.aiProviderTimeoutSkipCooldownM
 // lives in one place.
 const AI_DECISION_TEMPERATURE = tradingSafety.aiDecisionTemperature;
 
+/**
+ * True for empty / whitespace / common .env wizard placeholders that must never be treated as
+ * real cloud credentials. Local Ollama does not need a key — callers pass isLocal separately.
+ */
+export function isPlaceholderApiKey(apiKey?: string | null): boolean {
+  if (apiKey == null) return true;
+  const trimmed = String(apiKey).trim();
+  if (!trimmed) return true;
+  const lower = trimmed.toLowerCase();
+  if (lower.length < 8) return true;
+  if (
+    /^(change[_-]?me|your[_-].*|xxx+|x{8,}|placeholder|example|todo|fixme|insert|replace|dummy|test[_-]?key|sk-x+|none|null|undefined|n\/a|na)$/i.test(lower)
+  ) {
+    return true;
+  }
+  if (
+    lower.includes('changeme')
+    || lower.includes('change_me')
+    || lower.includes('your_')
+    || lower.includes('your-')
+    || lower.includes('placeholder')
+    || lower.includes('example')
+    || lower.includes('insert_')
+    || lower.includes('replace_')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export function shouldSkipUnconfiguredProvider(opts: { apiKey?: string | null; isLocal: boolean }): boolean {
-  return !opts.isLocal && !opts.apiKey;
+  // Local OpenAI-compatible (Ollama) is usable without a cloud key.
+  if (opts.isLocal) return false;
+  return isPlaceholderApiKey(opts.apiKey);
 }
 
 export function selectConsensusProviders<T>(providers: [string, T][], maxProviders: number): [string, T][] {
@@ -96,9 +130,30 @@ function envKeyForProviderName(providerName: string): string | undefined {
   if (providerName.toLowerCase().includes('grok') || providerName.toLowerCase().includes('x.ai')) candidates.unshift('XAI_API_KEY', 'GROK_API_KEY');
   for (const name of candidates) {
     const v = process.env[name];
-    if (v) return v;
+    if (v == null) continue;
+    const trimmed = String(v).trim();
+    if (!trimmed || isPlaceholderApiKey(trimmed)) continue;
+    return trimmed;
   }
   return undefined;
+}
+
+/** Honest consensus short-circuit copy — distinguish zero registered vs keys present but unroutable. */
+export function describeConsensusProvidersUnavailable(opts: {
+  registeredCount: number;
+  skippedAuthCooldown: number;
+  skippedTemporary: number;
+  skippedDisabledInDb: number;
+}): string {
+  if (opts.registeredCount <= 0) {
+    return 'No AI providers registered for consensus (no usable API keys and no local Ollama). Fail-closed HOLD.';
+  }
+  const parts: string[] = [];
+  if (opts.skippedAuthCooldown > 0) parts.push(`${opts.skippedAuthCooldown} in auth cooldown`);
+  if (opts.skippedTemporary > 0) parts.push(`${opts.skippedTemporary} temporarily skipped (timeout/unreachable)`);
+  if (opts.skippedDisabledInDb > 0) parts.push(`${opts.skippedDisabledInDb} DB-disabled`);
+  const detail = parts.length > 0 ? parts.join(', ') : 'filtered out';
+  return `No routable AI providers for consensus (${opts.registeredCount} registered but unroutable: ${detail}). API keys may exist but be misconfigured, Offline, or placeholder — not the same as zero providers. Fail-closed HOLD.`;
 }
 
 class AITimeoutError extends Error {
@@ -275,17 +330,18 @@ export class AIRouter {
   private async disableProviderForAuthFailure(providerId: string, reason: string): Promise<void> {
     const until = Date.now() + AI_AUTH_FAILURE_COOLDOWN_MS;
     this.authDisabledUntil.set(providerId, until);
-    this.providers.delete(providerId);
+    // Keep the provider registered: filterRoutableProviders excludes it until cooldown expires.
+    // Permanently setting enabled=false + deleting from the map made real GEMINI/OPENAI env keys
+    // look like "No AI Providers available for consensus" until manual DB surgery / full re-init.
     try {
       await db.update(schema.aiProviders).set({
-        enabled: false,
         health: 'Offline',
         lastFailure: new Date().toISOString(),
       }).where(eq(schema.aiProviders.id, providerId));
     } catch (e) {
-      console.error(`[AIRouter] Failed to disable provider ${providerId} after auth failure`, e);
+      console.error(`[AIRouter] Failed to mark provider ${providerId} Offline after auth failure`, e);
     }
-    console.warn(`[AIRouter] Provider ${providerId} disabled for auth failure (${reason}) — removed from routing pool for ${AI_AUTH_FAILURE_COOLDOWN_MS / 1000}s.`);
+    console.warn(`[AIRouter] Provider ${providerId} auth-failed (${reason}) — skipped for ${AI_AUTH_FAILURE_COOLDOWN_MS / 1000}s (not permanently DB-disabled).`);
   }
 
   private skipProviderTemporarily(providerId: string, cooldownMs: number, reason: string): void {
@@ -318,8 +374,34 @@ export class AIRouter {
       const skipUntil = this.skipUntil.get(id);
       if (typeof skipUntil === 'number' && skipUntil > now) return false;
       const stat = dbStats.find(s => s.id === id);
-      return !stat || stat.enabled;
+      return !stat || stat.enabled !== false;
     });
+  }
+
+  /** Diagnostic counts for honest "no routable providers" errors (consensus / routeTask). */
+  private countUnroutableReasons(
+    entries: [string, AIProvider][],
+    dbStats: typeof schema.aiProviders.$inferSelect[],
+  ): { skippedAuthCooldown: number; skippedTemporary: number; skippedDisabledInDb: number } {
+    const now = Date.now();
+    let skippedAuthCooldown = 0;
+    let skippedTemporary = 0;
+    let skippedDisabledInDb = 0;
+    for (const [id] of entries) {
+      const until = this.authDisabledUntil.get(id);
+      if (typeof until === 'number' && until > now) {
+        skippedAuthCooldown += 1;
+        continue;
+      }
+      const skipUntil = this.skipUntil.get(id);
+      if (typeof skipUntil === 'number' && skipUntil > now) {
+        skippedTemporary += 1;
+        continue;
+      }
+      const stat = dbStats.find(s => s.id === id);
+      if (stat && stat.enabled === false) skippedDisabledInDb += 1;
+    }
+    return { skippedAuthCooldown, skippedTemporary, skippedDisabledInDb };
   }
 
   private emitProvidersExhausted(payload: Record<string, unknown>): void {
@@ -356,6 +438,8 @@ export class AIRouter {
 
   public async initialize() {
      this.providers.clear();
+     this.authDisabledUntil.clear();
+     this.skipUntil.clear();
      
      // Load DB providers
      let dbProviders;
@@ -382,6 +466,29 @@ export class AIRouter {
             dbProviders = await db.select().from(schema.aiProviders);
         } catch (e) {}
      }
+
+     // Heal providers previously stuck enabled=false after a single auth failure (legacy behavior).
+     // If a usable env key (or local endpoint) is present, re-enable so debate can try again.
+     for (const p of dbProviders) {
+       if (p.enabled !== false) continue;
+       const endpointHint = p.apiEndpoint || '';
+       const isLocalEndpoint = endpointHint.includes('localhost') || endpointHint.includes('127.0.0.1');
+       let apiKey: string | undefined;
+       try {
+         apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : envKeyForProviderName(p.providerName);
+       } catch {
+         continue;
+       }
+       if (isLocalEndpoint || !isPlaceholderApiKey(apiKey)) {
+         try {
+           await db.update(schema.aiProviders).set({ enabled: true, health: 'Degraded' }).where(eq(schema.aiProviders.id, p.id));
+           p.enabled = true;
+           console.warn(`[AIRouter] Re-enabled previously DB-disabled provider ${p.providerName} (usable local endpoint or env key present).`);
+         } catch (e) {
+           console.error(`[AIRouter] Failed to re-enable provider ${p.providerName}`, e);
+         }
+       }
+     }
      
      for (const p of dbProviders) {
          if (!p.enabled) continue;
@@ -393,13 +500,17 @@ export class AIRouter {
            console.error(`[AIRouter] DECRYPTION_FAILED for provider ${p.providerName} — skipping that provider.`);
            continue;
          }
+         // Encrypted DB keys can still be placeholders from Setup Wizard — normalize.
+         if (apiKey && isPlaceholderApiKey(apiKey)) {
+           apiKey = undefined;
+         }
          let providerInstance: AIProvider | null = null;
          
          const nameLower = p.providerName.toLowerCase();
          const endpointHint = p.apiEndpoint || '';
          const isLocalEndpoint = endpointHint.includes('localhost') || endpointHint.includes('127.0.0.1');
          if (shouldSkipUnconfiguredProvider({ apiKey, isLocal: isLocalEndpoint })) {
-           console.warn(`[AIRouter] Skipping ${p.providerName} — no API key configured (DEF-14).`);
+           console.warn(`[AIRouter] Skipping ${p.providerName} — missing or placeholder API key (DEF-14).`);
            continue;
          }
          if (nameLower.includes('gemini') && !p.apiEndpoint) {
@@ -439,11 +550,18 @@ export class AIRouter {
      // choice always wins over this file, exactly like every other config-vs-DB-override
      // precedence in this codebase.
      try {
-         const ollamaRow = dbProviders.find(p => p.providerName === 'Ollama (Local)');
-         if (ollamaRow && this.providers.has(ollamaRow.id)) {
+         const ollamaRow = dbProviders.find(p =>
+           p.providerName === 'Ollama (Local)'
+           || (typeof p.apiEndpoint === 'string' && (p.apiEndpoint.includes('11434') || /ollama/i.test(p.providerName)))
+         );
+         const ollamaEnabledInConfig = aiModels.ollama?.enabled !== false;
+         if (ollamaEnabledInConfig && ollamaRow && this.providers.has(ollamaRow.id)) {
              for (const [agentType, route] of Object.entries(aiModels.routes)) {
                  this.setAgentRoute(agentType, ollamaRow.id, route.model);
              }
+             console.log(`[AIRouter] Applied config/aiModels.json local Ollama routes via ${ollamaRow.providerName}.`);
+         } else if (ollamaEnabledInConfig && ollamaRow && !this.providers.has(ollamaRow.id)) {
+             console.warn('[AIRouter] Ollama (Local) is configured in aiModels.json / DB but was not registered (health probe skip or disabled). Consensus may lack a local fallback.');
          }
      } catch (e) {
          console.error('[AIRouter] Failed to apply config/aiModels.json default routes', e);
@@ -475,11 +593,14 @@ export class AIRouter {
   
   public async routeConsensus(agentType: string, prompt: string, traceId: string): Promise<any> {
     let availableProviders = Array.from(this.providers.entries());
+    const registeredCount = availableProviders.length;
 
     // Fetch latest stats from DB to prioritize
     let dbStats: (typeof schema.aiProviders.$inferSelect)[] = [];
+    let unroutable = { skippedAuthCooldown: 0, skippedTemporary: 0, skippedDisabledInDb: 0 };
     try {
         dbStats = await db.select().from(schema.aiProviders);
+        unroutable = this.countUnroutableReasons(availableProviders, dbStats);
         availableProviders = this.filterRoutableProviders(availableProviders, dbStats);
 
         // Same known-dead exclusion as routeTask() - a multi-provider debate shouldn't spend real
@@ -505,8 +626,9 @@ export class AIRouter {
     availableProviders = selectConsensusProviders(availableProviders, tradingSafety.consensusMaxProviders);
 
     if (availableProviders.length === 0) {
-       this.emitProvidersExhausted({ agentType, providersAttempted: [], lastError: 'no_routable_providers', shortCircuit: true });
-       throw new Error("No AI Providers available for consensus");
+       const message = describeConsensusProvidersUnavailable({ registeredCount, ...unroutable });
+       this.emitProvidersExhausted({ agentType, providersAttempted: [], lastError: message, shortCircuit: true, registeredCount, ...unroutable });
+       throw new Error(message);
     }
 
     const start = Date.now();
@@ -520,7 +642,8 @@ export class AIRouter {
             // Format prompt for consensus format
             const fullPrompt = prompt + "\n\nIMPORTANT: You must return a strict JSON object with this format (no markdown code blocks):\n{\n  \"decision\": \"BUY\" | \"SELL\" | \"HOLD\",\n  \"confidence\": 0-100,\n  \"reasoning\": \"Detailed explanation...\",\n  \"supportingFactors\": [\"fact1\"],\n  \"risks\": [\"risk1\"]\n}";
             
-            const res = await withTimeout((signal) => provider.chat(fullPrompt, { model: undefined, temperature: AI_DECISION_TEMPERATURE, signal }), AI_PROVIDER_TIMEOUT_MS, providerId);
+            // Consensus/debate uses researchTimeoutMs so slow inference fails closed without blocking.
+            const res = await withTimeout((signal) => provider.chat(fullPrompt, { model: undefined, temperature: AI_DECISION_TEMPERATURE, signal }), RESEARCH_TIMEOUT_MS, providerId);
             const latency = Date.now() - pStart;
             
             // Log usage
@@ -697,10 +820,15 @@ export class AIRouter {
     }
     
     if (availableProviders.length === 0) {
-       this.emitProvidersExhausted({ agentType, providersAttempted: [], lastError: 'no_routable_providers', shortCircuit: true });
+       const unroutable = this.countUnroutableReasons(Array.from(this.providers.entries()), dbStats);
+       const message = describeConsensusProvidersUnavailable({
+         registeredCount: this.providers.size,
+         ...unroutable,
+       });
+       this.emitProvidersExhausted({ agentType, providersAttempted: [], lastError: message, shortCircuit: true });
        const content = jsonMode
          ? '{"side":"HOLD","confidence":0,"reasoning":"NO_ROUTABLE_AI_PROVIDERS"}'
-         : '{"error": "No AI Providers available"}';
+         : '{"error": "No routable AI Providers"}';
        return { content, provider: 'throttled', latency: 0 };
     }
 
@@ -730,10 +858,16 @@ export class AIRouter {
             // Ollama model-name fallbacks (fingpt → plutus → llama3.2) must not run on NVIDIA
             // or other remotes — each 404 was billed against NewsAgent's 12s×3 = 36s outer budget.
             const fallbackModels = (reqModel && isLocalProviderRow(providerRow)) ? route?.fallback : undefined;
-            const perModelTimeoutMs = route?.timeoutMs ?? AI_PROVIDER_TIMEOUT_MS;
+            const researchBound = isResearchAgentType(agentType);
+            const perModelTimeoutMs = researchBound
+              ? Math.min(route?.timeoutMs ?? RESEARCH_TIMEOUT_MS, RESEARCH_TIMEOUT_MS)
+              : (route?.timeoutMs ?? AI_PROVIDER_TIMEOUT_MS);
             const effectiveTemperature = route?.temperature ?? AI_DECISION_TEMPERATURE;
             const fallbackCount = fallbackModels?.length ?? 0;
-            const totalTimeoutMs = perModelTimeoutMs * (1 + fallbackCount);
+            // Research agents: hard outer cap at researchTimeoutMs (no fallback multiplier stretch).
+            const totalTimeoutMs = researchBound
+              ? RESEARCH_TIMEOUT_MS
+              : perModelTimeoutMs * (1 + fallbackCount);
             res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: effectiveTemperature, signal, fallbackModels, timeoutMs: route ? perModelTimeoutMs : undefined }), totalTimeoutMs, providerId);
             
             latency = Date.now() - startTime;

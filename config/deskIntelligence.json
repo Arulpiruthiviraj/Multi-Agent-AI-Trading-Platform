@@ -1,5 +1,5 @@
 {
-  "$comment": "Desk-intelligence overlay. Does not place orders, bypass RiskEngine, or enable QUANT/LIVE. Family relevance is used for ranking/explanation only; it is not fitted on future data. Strategy ids must match StrategyEngine modules.",
+  "$comment": "Desk-intelligence overlay. Does not place orders, bypass RiskEngine, or enable QUANT/LIVE. Family relevance is used for ranking/explanation only; it is not fitted on future data. Strategy ids must match StrategyEngine modules. newsAgentMode default CATALYST_ONLY keeps News clustering + news_veto feed on without emitting TRADE_IDEA_GENERATED (safer). Optional enhancement: set ACTIVE_VOTE / ACTIVE_VOTE_AND_VETO only when you intentionally want NewsAgent as a ChiefTrader voter — still subject to 0.75/min-2 consensus and full RiskEngine; leave OFF (CATALYST_ONLY) preferred for safety.",
   "minRiskRewardRatio": 1.5,
   "highVolatilityConfidenceMultiplier": 0.85,
   "newsAgentMode": "CATALYST_ONLY",

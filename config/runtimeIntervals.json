@@ -18,6 +18,7 @@
   "kronosRecheckMs": 30000,
   "kronosPredictionCooldownMs": 60000,
   "kronosHttpTimeoutMs": 10000,
+  "kronosForecastMaxConcurrent": 1,
   "openAlicePollMs": 30000,
   "openAliceRequestTimeoutMs": 86400000,
   "openAliceMcpDefaultTimeoutMs": 10000,

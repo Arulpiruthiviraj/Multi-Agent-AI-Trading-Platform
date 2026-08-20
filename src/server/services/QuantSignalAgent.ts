@@ -122,26 +122,42 @@ export class QuantSignalAgent {
     }
   }
 
+  private symbolConcurrency(): number {
+    const n = tradingSafety.quantMaxConcurrentSymbols;
+    if (!Number.isFinite(n) || n < 1) return 1;
+    return Math.min(32, Math.floor(n));
+  }
+
   private async runCycle(): Promise<void> {
     const symbols = marketDataWorker.getActiveSymbols();
     if (symbols.length === 0) {
       console.log('[QuantSignalAgent] No actively-tracked symbols yet (MarketDataWorker has no subscriptions) - nothing to evaluate this cycle.');
       return;
     }
-    for (const symbol of symbols) {
-      try {
-        await this.evaluateSymbol(symbol);
-      } catch (e: any) {
-        notePipelineAgentFailure('QuantEngine', e);
-        console.error(`[QuantSignalAgent] Failed to evaluate ${symbol}`, e.message);
-        // Shared Alpaca 429 backoff is armed inside HistoricalDataGateway — stop fan-out so
-        // remaining symbols do not storm the API. Fail closed: no fabricated bars/ideas.
-        if (/429|rate-limited|Too Many Requests/i.test(String(e?.message || ''))) {
-          console.warn(`[QuantSignalAgent] Alpaca rate limit — aborting remainder of quant cycle (${symbols.length} symbols).`);
-          break;
+    const concurrency = Math.min(this.symbolConcurrency(), symbols.length);
+    let nextIndex = 0;
+    let abortRateLimit = false;
+    const workers = Array.from({ length: concurrency }, async () => {
+      while (!abortRateLimit) {
+        const i = nextIndex++;
+        if (i >= symbols.length) return;
+        const symbol = symbols[i];
+        try {
+          await this.evaluateSymbol(symbol);
+        } catch (e: any) {
+          notePipelineAgentFailure('QuantEngine', e);
+          console.error(`[QuantSignalAgent] Failed to evaluate ${symbol}`, e.message);
+          // Shared Alpaca 429 backoff is armed inside HistoricalDataGateway — stop fan-out so
+          // remaining symbols do not storm the API. Fail closed: no fabricated bars/ideas.
+          if (/429|rate-limited|Too Many Requests/i.test(String(e?.message || ''))) {
+            abortRateLimit = true;
+            console.warn(`[QuantSignalAgent] Alpaca rate limit — aborting remainder of quant cycle (${symbols.length} symbols, concurrency=${concurrency}).`);
+            return;
+          }
         }
       }
-    }
+    });
+    await Promise.all(workers);
   }
 
   async evaluateSymbol(symbol: string): Promise<{ regime: RegimeResult; marketContext: MarketContextResult; strategyEvaluations: StrategyEvaluation[]; groupedScores: { BUY: GroupedScores; SELL: GroupedScores }; aiContradictionAnalysis: ContradictionAnalysisResult | null } | null> {

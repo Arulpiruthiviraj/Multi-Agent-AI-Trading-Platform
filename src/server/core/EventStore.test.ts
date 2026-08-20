@@ -81,4 +81,38 @@ describe('EventStore redacts secrets at write time', () => {
     expect(payload.secretKey).toBe('[REDACTED]');
     expect(payload.symbol).toBe('NVDA');
   });
+
+  it('persists TRADE_IDEA_REJECTED and RISK_GATE_EVALUATED (decision lifecycle)', async () => {
+    const rejectTrace = `evtstore-reject-${Date.now()}`;
+    const gateTrace = `evtstore-gate-${Date.now()}`;
+    eventBus.emit(EVENTS.TRADE_IDEA_REJECTED, {
+      traceId: rejectTrace,
+      symbol: 'ZZZZ',
+      reason: 'INVALID_SYMBOL',
+      agent: 'TechnicalAgent',
+    });
+    eventBus.emit(EVENTS.RISK_GATE_EVALUATED, {
+      traceId: gateTrace,
+      symbol: 'AAPL',
+      gate: 'news_veto',
+      passed: false,
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const rows = await db.select().from(schema.eventTraces);
+    expect(rows.find((r: any) => r.correlationId === rejectTrace && r.eventType === 'TRADE_IDEA_REJECTED')).toBeDefined();
+    expect(rows.find((r: any) => r.correlationId === gateTrace && r.eventType === 'RISK_GATE_EVALUATED')).toBeDefined();
+  });
+
+  it('keeps TRACE_SPAN and MODEL_HEALTH in-memory but does not durable-persist them', async () => {
+    const spanTrace = `evtstore-span-${Date.now()}`;
+    const healthTrace = `evtstore-health-${Date.now()}`;
+    eventBus.emit(EVENTS.TRACE_SPAN, { traceId: spanTrace, name: 'test-span' });
+    eventBus.emit(EVENTS.MODEL_HEALTH, { traceId: healthTrace, model: 'test', status: 'ok' });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(recentEvents.find((e) => e.correlationId === spanTrace)).toBeDefined();
+    expect(recentEvents.find((e) => e.correlationId === healthTrace)).toBeDefined();
+    const rows = await db.select().from(schema.eventTraces);
+    expect(rows.find((r: any) => r.correlationId === spanTrace)).toBeUndefined();
+    expect(rows.find((r: any) => r.correlationId === healthTrace)).toBeUndefined();
+  });
 });

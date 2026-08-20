@@ -46,6 +46,7 @@
   "regimeMinBars": 60,
   "quantLookbackDays": 400,
   "quantCycleIntervalMs": 300000,
+  "quantMaxConcurrentSymbols": 1,
   "predictionOutcomeIntervalMs": 300000,
   "alertingCooldownMs": 900000,
   "trainingExampleIntervalMs": 900000,

@@ -15,6 +15,15 @@ describe('NewsEngine - pipeline health telemetry (ARGUS_PHASE2_FORENSIC_AUDIT.md
     expect(heartbeat.currentState).toBe('SUCCESS');
   });
 
+  it('still records lastSuccessfulTickAt when news ideas are disabled (CATALYST_ONLY / Autobot off)', async () => {
+    // Ideas-off must not look like a dead NewsAgent: clustering/analysis success is real success.
+    vi.spyOn(newsEngine.providerManager, 'fetchAllLatest').mockResolvedValue([]);
+    await (newsEngine as unknown as { runPipeline(): Promise<void> }).runPipeline();
+    const heartbeat = getPipelineAgentHeartbeat('NewsAgent');
+    expect(heartbeat.lastSuccessfulTickAt).not.toBeNull();
+    expect(heartbeat.currentState).toBe('SUCCESS');
+  });
+
   it('does not record success when the provider fetch throws', async () => {
     vi.spyOn(newsEngine.providerManager, 'fetchAllLatest').mockRejectedValue(new Error('providers down'));
     await (newsEngine as unknown as { runPipeline(): Promise<void> }).runPipeline();

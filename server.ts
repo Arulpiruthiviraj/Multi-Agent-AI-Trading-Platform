@@ -1893,6 +1893,9 @@ let portfolioState = loadPortfolio();
     }
   });
   const bindHost = resolveListenHost(AUTH_ENABLED);
+  // Write PID before listen so doctor / stop see it even if bind is slow; gracefulShutdown clears it.
+  // argus-engine already claimEnginePid()'s earlier; this keeps server.ts / npm run dev aligned.
+  void import('./src/server/app/enginePid').then((m) => m.writeEnginePid(process.pid)).catch(() => undefined);
   httpServer.listen(PORT, bindHost, () => {
     if (isArgusEngineDaemon()) {
       console.log(`[Argus Engine] daemon API on ${bindHost}:${PORT} (Vite/React optional and disabled).`);
@@ -1904,7 +1907,6 @@ let portfolioState = loadPortfolio();
     }
     console.log(`Enterprise scale multi-agent backend running on ${bindHost}:${PORT}`);
     alertingService.alertProcessBoot({ port: PORT, bindHost });
-    void import('./src/server/app/enginePid').then((m) => m.writeEnginePid(process.pid)).catch(() => undefined);
   });
   installProcessShutdown({ httpServer, wss });
 }

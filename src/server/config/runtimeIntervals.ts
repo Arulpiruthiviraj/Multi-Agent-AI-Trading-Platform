@@ -23,6 +23,8 @@ export interface RuntimeIntervals {
   kronosRecheckMs: number;
   kronosPredictionCooldownMs: number;
   kronosHttpTimeoutMs: number;
+  /** Max in-flight Chronos /forecast HTTP calls (serialize CPU timeout storms). */
+  kronosForecastMaxConcurrent: number;
   openAlicePollMs: number;
   openAliceRequestTimeoutMs: number;
   openAliceMcpDefaultTimeoutMs: number;
@@ -50,7 +52,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'rssFeedErrorBackoffMs', 'rssFeedFetchTimeoutMs',
   'chiefTraderWeightSyncMs', 'chiefTraderIdeaTtlMs', 'systemMetricsMs', 'portfolioReconciliationMs',
   'reconciliationBootWarmupMs', 'marketDataReconnectMs', 'networkReconnectBackoffMs', 'marketDataCrossCheckMs', 'kronosRecheckMs', 'kronosPredictionCooldownMs',
-  'kronosHttpTimeoutMs', 'openAlicePollMs', 'openAliceRequestTimeoutMs', 'openAliceMcpDefaultTimeoutMs',
+  'kronosHttpTimeoutMs', 'kronosForecastMaxConcurrent', 'openAlicePollMs', 'openAliceRequestTimeoutMs', 'openAliceMcpDefaultTimeoutMs',
   'modelRuntimeProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
   'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',

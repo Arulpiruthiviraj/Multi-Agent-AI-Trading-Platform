@@ -44,6 +44,11 @@ describe('NewsClusterEngine (Phase F2 real clustering, real DB)', () => {
     delete process.env.ARGUS_DB_PATH;
   });
 
+  /** Cluster time-proximity uses cluster.updatedAt (wall-clock) as a proxy for last article time. */
+  function nearNowIso(offsetMs = 0): string {
+    return new Date(Date.now() + offsetMs).toISOString();
+  }
+
   function article(overrides: Partial<NormalizedArticle>): NormalizedArticle {
     return {
       id: `art_${Math.random().toString(36).slice(2)}`,
@@ -52,7 +57,7 @@ describe('NewsClusterEngine (Phase F2 real clustering, real DB)', () => {
       url: 'https://example.com/a',
       source: 'Yahoo Finance',
       author: 'Staff',
-      publishedAt: '2026-08-20T12:00:00.000Z',
+      publishedAt: nearNowIso(),
       symbols: ['AAPL'],
       fingerprint: 'fp',
       ...overrides,
@@ -72,11 +77,20 @@ describe('NewsClusterEngine (Phase F2 real clustering, real DB)', () => {
   });
 
   it('merges a corroborating article from a different outlet into the SAME cluster', async () => {
-    const first = article({ title: 'Apple announces new AI partnership', source: 'Yahoo Finance', publishedAt: '2026-08-20T13:00:00.000Z' });
+    // publishedAt must stay inside newsClusterTimeWindowMs of cluster.updatedAt (processing time).
+    const first = article({
+      title: 'Apple announces new AI partnership',
+      source: 'Yahoo Finance',
+      publishedAt: nearNowIso(-60_000),
+    });
     const firstOutcome = await engine.createOrUpdateCluster(first, 'Product', impact, 0.9, ['AAPL']);
     expect(firstOutcome).toBeTruthy();
 
-    const second = article({ title: 'Apple enters major AI partnership', source: 'CNBC', publishedAt: '2026-08-20T13:05:00.000Z' });
+    const second = article({
+      title: 'Apple enters major AI partnership',
+      source: 'CNBC',
+      publishedAt: nearNowIso(-30_000),
+    });
     const secondOutcome = await engine.createOrUpdateCluster(second, 'Product', impact, 0.85, ['AAPL']);
 
     expect(secondOutcome!.clusterId).toBe(firstOutcome!.clusterId);
@@ -95,10 +109,18 @@ describe('NewsClusterEngine (Phase F2 real clustering, real DB)', () => {
   });
 
   it('does NOT merge a genuinely different event about a different symbol', async () => {
-    const first = article({ title: 'Apple announces new AI partnership', symbols: ['AAPL'], publishedAt: '2026-08-20T14:00:00.000Z' });
+    const first = article({
+      title: 'Apple announces new AI partnership',
+      symbols: ['AAPL'],
+      publishedAt: nearNowIso(-120_000),
+    });
     const firstOutcome = await engine.createOrUpdateCluster(first, 'Product', impact, 0.9, ['AAPL']);
 
-    const second = article({ title: 'Microsoft announces new AI partnership', symbols: ['MSFT'], publishedAt: '2026-08-20T14:05:00.000Z' });
+    const second = article({
+      title: 'Microsoft announces new AI partnership',
+      symbols: ['MSFT'],
+      publishedAt: nearNowIso(-90_000),
+    });
     const secondOutcome = await engine.createOrUpdateCluster(second, 'Product', impact, 0.9, ['MSFT']);
 
     expect(secondOutcome!.clusterId).not.toBe(firstOutcome!.clusterId);
@@ -108,7 +130,7 @@ describe('NewsClusterEngine (Phase F2 real clustering, real DB)', () => {
   });
 
   it('preserves the existing onConflictDoNothing behavior for a re-processed article id', async () => {
-    const a = article({ id: 'stable-id-1', publishedAt: '2026-08-20T15:00:00.000Z' });
+    const a = article({ id: 'stable-id-1', publishedAt: nearNowIso() });
     const firstResult = await engine.createOrUpdateCluster(a, 'Product', impact, 0.9, ['AAPL']);
     expect(firstResult).toBeTruthy();
 
