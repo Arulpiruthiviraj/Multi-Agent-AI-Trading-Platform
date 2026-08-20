@@ -1,10 +1,5 @@
 /**
- * Headless / API-only startup — sets ARGUS_HEADLESS before loading server.ts.
- * Trading core + REST API run; Vite and static SPA are skipped.
+ * Headless / API-only startup — canonical engine daemon (no Vite/SPA).
+ * Preserved npm script; delegates to scripts/argus-engine.ts.
  */
-process.env.ARGUS_HEADLESS = 'true';
-if (!process.env.NODE_ENV) {
-  process.env.NODE_ENV = 'production';
-}
-
-await import('../server.ts');
+await import('./argus-engine.ts');

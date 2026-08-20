@@ -21,6 +21,12 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     console.error('[gracefulShutdown] Failed to persist clean-shutdown marker', e);
   }
   try {
+    const { clearEnginePid } = await import('../app/enginePid');
+    clearEnginePid();
+  } catch {
+    /* pid file optional */
+  }
+  try {
     const { tradingEngine } = await import('../engines/TradingEngine');
     await tradingEngine.setTradingState('TRADING_PAUSED', {
       reason: 'Process shutdown drain — no new orders until restart recovery.',

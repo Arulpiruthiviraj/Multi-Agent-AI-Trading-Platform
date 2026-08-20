@@ -44,6 +44,7 @@ describe('Architecture protection: BrokerManager access is allowlisted', () => {
   const ALLOWED_BROKER_MANAGER_IMPORTERS = new Set([
     'src/server/core/IntegrityValidator.ts',
     'src/server/core/ArgusCoreBoot.ts',
+    'src/server/core/ArgusRuntime.ts',
     'src/server/core/wsInitialSnapshot.ts',
     'src/server/diagnostics/DiagnosticService.ts',
     'src/server/engines/RiskEngine.ts',
@@ -234,5 +235,16 @@ describe('Architecture protection: incident-remediation contracts', () => {
     expect(contract).toMatch(/Protected execution spine/);
     expect(contract).toMatch(/PAPER_TRADING_ONLY/);
     expect(rules).toMatch(/never bypass/);
+  });
+
+  it('engine daemon entry and CLI cannot become a second trading brain', () => {
+    const engine = readFileSync(join(ROOT, 'scripts/argus-engine.ts'), 'utf8');
+    const cli = readFileSync(join(ROOT, 'scripts/argus-cli.ts'), 'utf8');
+    expect(engine).not.toMatch(/from ['"]vite['"]/);
+    expect(cli).not.toMatch(/from ['"].*OrderManagement/);
+    expect(cli).not.toMatch(/from ['"].*RiskEngine/);
+    expect(cli).not.toMatch(/from ['"].*BrokerManager/);
+    const core = readFileSync(join(ROOT, 'src/server/core/ArgusCoreBoot.ts'), 'utf8');
+    expect(core).not.toMatch(/from ['"]vite['"]/);
   });
 });

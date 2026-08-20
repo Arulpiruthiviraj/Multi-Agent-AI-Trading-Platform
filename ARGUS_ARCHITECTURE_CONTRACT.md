@@ -145,20 +145,21 @@ Do not blindly restore Autobot into unreconciled BUY flow. Do not skip OMS `clie
 
 ---
 
-## 15. Application layer and headless runtime (Phase B+)
+## 15. Application layer, headless runtime, and engine daemon (Phase B–D)
 
-The authoritative trading spine lives in **Argus Core** (`ArgusCoreBoot`, existing singletons). **ArgusApplication** is the sole control facade for Autobot enable/disable and kill-switch transitions from adapters.
+The authoritative trading spine lives in **Argus Core** (`ArgusCoreBoot`, existing singletons). **ArgusApplication** / **ArgusRuntime** are the control facade for Autobot enable/disable and kill-switch transitions from adapters. **ArgusEngineRuntime** is a daemon wrapper around that facade — not a second engine.
 
 | Adapter | Role |
 |---|---|
-| Express `/api/*` | HTTP control + read APIs |
-| WebSocket `/ws` | EventBus fan-out (optional clients) |
-| Vite/static SPA | Presentation (optional when `ARGUS_HEADLESS=true`) |
+| Express `/api/*` | HTTP control + read APIs (engine process) |
+| WebSocket `/ws` | EventBus fan-out (optional; `WS_ENABLED=false` skips it) |
+| Vite/static SPA | Presentation (optional when `ARGUS_HEADLESS=true` / `ARGUS_ENGINE=true`) |
+| `scripts/argus-engine.ts` | Dedicated daemon entry — same core, no React/Vite |
 | `scripts/argus-cli.ts` | Thin HTTP client — never imports OMS/RiskEngine/BrokerManager |
 
-**Invariant:** `POST /api/v2/system/toggle` and all Autobot lifecycle controls must route through `TradingEngine.toggle()`, not direct `SystemBootstrap.start/stop`. Browser or CLI disconnect must not stop the engine.
+**Invariant:** `POST /api/v2/system/toggle` and all Autobot lifecycle controls must route through `TradingEngine.toggle()`, not direct `SystemBootstrap.start/stop`. Browser, CLI, or WebSocket disconnect must not stop the engine.
 
-See `ARGUS_HEADLESS_ARCHITECTURE.md`.
+See `ARGUS_HEADLESS_ARCHITECTURE.md`, `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`.
 
 ---
 

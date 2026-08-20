@@ -3,7 +3,7 @@
  * RiskEngine, OMS, BrokerManager, or trading logic.
  */
 import { bootArgusCore, isArgusCoreBooted } from './ArgusCoreBoot';
-import { isApiEnabled, isArgusHeadless, isWebUiEnabled } from '../app/runtimeConfig';
+import { isApiEnabled, isArgusEngineDaemon, isArgusHeadless, isWebUiEnabled } from '../app/runtimeConfig';
 import { tradingEngine } from '../engines/TradingEngine';
 import { system } from './SystemBootstrap';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -23,9 +23,12 @@ export interface ArgusRuntimeSnapshot {
   phase: ArgusRuntimePhase;
   coreBootedAt: string | null;
   headless: boolean;
+  engineDaemon: boolean;
   webUiEnabled: boolean;
   apiEnabled: boolean;
   bootError: string | null;
+  pid: number;
+  uptimeMs: number;
 }
 
 export interface ArgusRuntimeHealth {
@@ -40,6 +43,9 @@ export interface ArgusRuntimeHealth {
   pipelineRunning: boolean;
   liveReadiness: string;
   safeMode: boolean;
+  pid: number;
+  uptimeMs: number;
+  engineDaemon: boolean;
 }
 
 export class ArgusRuntime {
@@ -67,9 +73,12 @@ export class ArgusRuntime {
       phase: this.derivePhase(),
       coreBootedAt: this.coreBootedAt,
       headless: isArgusHeadless(),
+      engineDaemon: isArgusEngineDaemon(),
       webUiEnabled: isWebUiEnabled(),
       apiEnabled: isApiEnabled(),
       bootError: this.bootError,
+      pid: process.pid,
+      uptimeMs: Math.round(process.uptime() * 1000),
     };
   }
 
@@ -180,6 +189,9 @@ export class ArgusRuntime {
       pipelineRunning: system.getStatus().running,
       liveReadiness: evaluateLiveReadiness().result,
       safeMode,
+      pid: process.pid,
+      uptimeMs: Math.round(process.uptime() * 1000),
+      engineDaemon: isArgusEngineDaemon(),
     };
   }
 }

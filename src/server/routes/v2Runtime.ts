@@ -89,3 +89,27 @@ runtimeRouter.post('/trading/disable', tradingLimiter, async (_req, res) => {
   }
   res.json({ ok: true, status: argusApplication.status() });
 });
+
+runtimeRouter.get('/portfolio', async (_req, res) => {
+  const holdings = await argusApplication.positions();
+  res.json({ ok: true, portfolio: holdings, live: 'NO-GO' });
+});
+
+runtimeRouter.get('/trades', async (_req, res) => {
+  const rows = await argusApplication.recentTrades(100);
+  res.json({ ok: true, trades: rows, live: 'NO-GO' });
+});
+
+runtimeRouter.get('/orders', async (_req, res) => {
+  const rows = await argusApplication.recentTrades(100);
+  res.json({
+    ok: true,
+    orders: rows,
+    note: 'Recent trade ledger rows; full OMS order book not yet exposed on this alias.',
+    live: 'NO-GO',
+  });
+});
+
+runtimeRouter.get('/config', (_req, res) => {
+  res.json({ ok: true, runtime: argusRuntime.getSnapshot(), live: 'NO-GO' });
+});

@@ -34,15 +34,47 @@ export function clearEnginePid(): void {
   }
 }
 
-/** Returns true if pid file points to a live process (best-effort, cross-platform). */
-export function isEngineProcessRunning(): boolean {
-  const pid = readEnginePid();
-  if (!pid) return false;
+export function isPidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
   } catch {
+    return false;
+  }
+}
+
+/** Returns true if pid file points to a live process (best-effort, cross-platform). */
+export function isEngineProcessRunning(): boolean {
+  const pid = readEnginePid();
+  if (!pid) return false;
+  if (!isPidAlive(pid)) {
     clearEnginePid();
     return false;
   }
+  return true;
+}
+
+/**
+ * If a live engine exists, return its pid. If the PID file is stale, clear it.
+ * Does not write a new pid.
+ */
+export function reconcileEnginePidFile(): { running: boolean; pid: number | null; staleCleared: boolean } {
+  const pid = readEnginePid();
+  if (!pid) return { running: false, pid: null, staleCleared: false };
+  if (isPidAlive(pid)) return { running: true, pid, staleCleared: false };
+  clearEnginePid();
+  return { running: false, pid: null, staleCleared: true };
+}
+
+/** Record this process as the engine. Throws if another live engine holds the pid file. */
+export function claimEnginePid(pid: number = process.pid): void {
+  const existing = reconcileEnginePidFile();
+  if (
+    existing.running
+    && existing.pid !== pid
+    && existing.pid !== process.ppid
+  ) {
+    throw new Error(`Argus engine already running (pid ${existing.pid})`);
+  }
+  writeEnginePid(pid);
 }

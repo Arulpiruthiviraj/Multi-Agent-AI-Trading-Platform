@@ -75,6 +75,20 @@ export const v2Router = Router();
 
 v2Router.use('/runtime', runtimeRouter);
 
+/** Stable API aliases (backward compatible with /data/* routes). */
+v2Router.get('/portfolio', async (_req, res) => {
+  const holdings = await argusApplication.positions();
+  res.json({ ok: true, portfolio: holdings, live: 'NO-GO' });
+});
+v2Router.get('/trades', async (_req, res) => {
+  const rows = await argusApplication.recentTrades(100);
+  res.json({ ok: true, trades: rows, live: 'NO-GO' });
+});
+v2Router.get('/orders', async (_req, res) => {
+  const rows = await argusApplication.recentTrades(100);
+  res.json({ ok: true, orders: rows, note: 'Trade ledger alias; not full OMS book.', live: 'NO-GO' });
+});
+
 v2Router.use('/traces', traceRouter);
 v2Router.use('/observability', observabilityRouter);
 mountResearchRoutes(v2Router);

@@ -307,7 +307,7 @@ let activeLLMProvider: string = (process.env.ACTIVE_LLM || "gemini").toLowerCase
 
 async function startServer() {
   const { argusApplication } = await import('./src/server/app/ArgusApplication');
-  const { isWebUiEnabled } = await import('./src/server/app/runtimeConfig');
+  const { isWebUiEnabled, isWebSocketAdapterEnabled, isArgusEngineDaemon } = await import('./src/server/app/runtimeConfig');
   await argusApplication.bootCore();
 
   // -- SQLite Initialization --
@@ -1741,114 +1741,106 @@ let portfolioState = loadPortfolio();
   }
 
   
-  const wss = new WebSocketServer({ noServer: true });
+  let wss: WebSocketServer | undefined;
+  if (isWebSocketAdapterEnabled()) {
+    const wssLocal = new WebSocketServer({ noServer: true });
+    wss = wssLocal;
 
-  // WebSocket connections previously bypassed auth entirely - the HTTP auth middleware only
-  // gates paths starting with /api/, and 'upgrade' events never reach Express's request pipeline
-  // at all. The /ws stream carries every EventBus event (trade ideas, risk decisions, order
-  // fills), so when AUTH_PASSWORD is configured, require the same session cookie the HTTP API
-  // requires. Matches the HTTP middleware's own behavior when auth is unconfigured: allow through.
-  async function isWsAuthed(request: import('http').IncomingMessage): Promise<boolean> {
-    if (!AUTH_ENABLED) return true;
-    const cookies = request.headers.cookie || "";
-    const match = cookies.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
-    const token = match ? match[1] : null;
-    if (!token) return false;
-    const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
-    return isSessionValid(rows[0] ?? null);
-  }
+    // WebSocket is an EventBus fan-out adapter. Client disconnect must not stop the engine.
+    async function isWsAuthed(request: import('http').IncomingMessage): Promise<boolean> {
+      if (!AUTH_ENABLED) return true;
+      const cookies = request.headers.cookie || "";
+      const match = cookies.match(new RegExp(SESSION_COOKIE + "=([^;]+)"));
+      const token = match ? match[1] : null;
+      if (!token) return false;
+      const rows = await db.select().from(schema.sessions).where(eq(schema.sessions.sessionToken, token)).limit(1);
+      return isSessionValid(rows[0] ?? null);
+    }
 
-  httpServer.on('upgrade', (request, socket, head) => {
-    (async () => {
-      try {
-        const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
-        if (pathname !== '/ws') return;
-        // Rate-limit connection *creation* (not messages on an already-open socket) - the
-        // Express rate limiter below only ever sees HTTP requests, never the raw 'upgrade' event,
-        // so WS needs its own counter to stop a connection-flood from this same class of abuse.
-        const remoteIp = request.socket.remoteAddress || 'unknown';
-        if (!wsUpgradeLimiter.allow(remoteIp)) {
-          socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n');
+    httpServer.on('upgrade', (request, socket, head) => {
+      void (async () => {
+        try {
+          const pathname = new URL(request.url || '', `http://${request.headers.host}`).pathname;
+          if (pathname !== '/ws') return;
+          const remoteIp = request.socket.remoteAddress || 'unknown';
+          if (!wsUpgradeLimiter.allow(remoteIp)) {
+            socket.write('HTTP/1.1 429 Too Many Requests\r\n\r\n');
+            socket.destroy();
+            return;
+          }
+          if (!(await isWsAuthed(request))) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
+          }
+          wssLocal.handleUpgrade(request, socket, head, (ws) => {
+            wssLocal.emit('connection', ws, request);
+          });
+        } catch {
           socket.destroy();
-          return;
         }
-        if (!(await isWsAuthed(request))) {
-          socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-          socket.destroy();
-          return;
-        }
-        wss.handleUpgrade(request, socket, head, (ws) => {
-          wss.emit('connection', ws, request);
-        });
-      } catch (e) {
-        socket.destroy();
-      }
-    })();
-  });
-  setGlobalWss(wss);
-  wss.on('connection', (ws) => {
-    console.log('[WS] Client connected');
+      })();
+    });
+    setGlobalWss(wssLocal);
+    wssLocal.on('connection', (ws) => {
+      console.log('[WS] Client connected');
 
-    void (async () => {
-      try {
-        const data = await buildInitialStateSnapshot();
+      void (async () => {
+        try {
+          const data = await buildInitialStateSnapshot();
+          if (ws.readyState === 1) {
+            ws.send(JSON.stringify({ type: 'INITIAL_STATE_SNAPSHOT', data }));
+          }
+        } catch (e) {
+          console.warn('[WS] INITIAL_STATE_SNAPSHOT failed:', e);
+        }
+      })();
+
+      ws.on('message', (message) => {
+        try {
+          const msg = JSON.parse(message.toString());
+          const kind = String(msg.type || '').toLowerCase();
+          if (kind === 'ping') {
+            const ts = typeof msg.timestamp === 'number' ? msg.timestamp : Date.now();
+            ws.send(JSON.stringify({ type: 'PONG', timestamp: ts }));
+          }
+        } catch { /* ignore malformed client frames */ }
+      });
+
+      const wildcardHandler = (eventName: string, payload: any) => {
         if (ws.readyState === 1) {
-          ws.send(JSON.stringify({ type: 'INITIAL_STATE_SNAPSHOT', data }));
+          ws.send(JSON.stringify({ type: eventName, data: payload }));
         }
-      } catch (e) {
-        console.warn('[WS] INITIAL_STATE_SNAPSHOT failed:', e);
-      }
-    })();
-    
-    ws.on('message', (message) => {
-      try {
-        const msg = JSON.parse(message.toString());
-        const kind = String(msg.type || '').toLowerCase();
-        if (kind === 'ping') {
-          const ts = typeof msg.timestamp === 'number' ? msg.timestamp : Date.now();
-          ws.send(JSON.stringify({ type: 'PONG', timestamp: ts }));
-        }
-      } catch (e) {}
+      };
+      eventBus.on('*', wildcardHandler);
+
+      ws.on('close', () => {
+        console.log('[WS] Client disconnected');
+        eventBus.off('*', wildcardHandler);
+      });
     });
 
-    
-    // Forward all events via wildcard. EventBus's wildcard emit calls listeners
-    // as (eventName, ...args) - not as a single object - so the handler must
-    // destructure it that way or it silently drops the real payload.
-    const wildcardHandler = (eventName: string, payload: any) => {
-      if (ws.readyState === 1) { // WebSocket.OPEN
-        ws.send(JSON.stringify({ type: eventName, data: payload }));
-      }
-    };
-    eventBus.on('*', wildcardHandler);
-
-    ws.on('close', () => {
-      console.log('[WS] Client disconnected');
-      eventBus.off('*', wildcardHandler);
-    });
-  });
+    setInterval(() => {
+      wssLocal.clients.forEach((client) => {
+        if (client.readyState === 1) {
+          client.send(JSON.stringify({
+            type: 'AUTOBOT_STATE_UPDATED',
+            data: {
+              ...tradingEngine.state,
+              enabled: tradingEngine.state.enabled,
+              autoBotEnabled: tradingEngine.state.enabled,
+              remaining: tradingEngine.state.budget - tradingEngine.state.spent,
+              scheduleWindow: tradingEngine.getScheduleWindowStatus(),
+            },
+          }));
+        }
+      });
+    }, 2000);
+  }
 
   setInterval(() => {
     BrokerManager.getInstance().tick(marketDataWorker.getLatestPrices());
   }, 1000);
-  
-  // Broadcast AutoBot state to all connected clients
-  setInterval(() => {
-    wss.clients.forEach((client) => {
-      if (client.readyState === 1) { // WebSocket.OPEN
-        client.send(JSON.stringify({
-          type: 'AUTOBOT_STATE_UPDATED',
-          data: {
-            ...tradingEngine.state,
-            enabled: tradingEngine.state.enabled,
-            autoBotEnabled: tradingEngine.state.enabled,
-            remaining: tradingEngine.state.budget - tradingEngine.state.spent,
-            scheduleWindow: tradingEngine.getScheduleWindowStatus(),
-          },
-        }));
-      }
-    });
-  }, 2000);
 
   httpServer.on('error', (e: any) => {
     if (e.code === 'EADDRINUSE') {
@@ -1856,12 +1848,10 @@ let portfolioState = loadPortfolio();
       process.exit(1);
     }
   });
-  // Fail-closed without AUTH_PASSWORD unless ARGUS_BIND_HOST explicitly opens the interface.
   const bindHost = resolveListenHost(AUTH_ENABLED);
-  const headless = process.env.ARGUS_HEADLESS === 'true';
   httpServer.listen(PORT, bindHost, () => {
-    if (headless) {
-      console.log(`[Argus] Headless runtime — API on ${bindHost}:${PORT} (no Vite/static Web UI).`);
+    if (isArgusEngineDaemon()) {
+      console.log(`[Argus Engine] daemon API on ${bindHost}:${PORT} (Vite/React optional and disabled).`);
     }
     if (!AUTH_ENABLED && bindHost === '127.0.0.1') {
       console.warn('WARNING: AUTH_PASSWORD NOT SET. API BOUND TO LOCALHOST ONLY. Remote mobile requires AUTH_PASSWORD or ARGUS_BIND_HOST=0.0.0.0.');
@@ -1870,6 +1860,7 @@ let portfolioState = loadPortfolio();
     }
     console.log(`Enterprise scale multi-agent backend running on ${bindHost}:${PORT}`);
     alertingService.alertProcessBoot({ port: PORT, bindHost });
+    void import('./src/server/app/enginePid').then((m) => m.writeEnginePid(process.pid)).catch(() => undefined);
   });
   installProcessShutdown({ httpServer, wss });
 }
