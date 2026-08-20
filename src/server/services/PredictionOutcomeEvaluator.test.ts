@@ -18,6 +18,7 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
   let evaluatePrediction: any;
   let predictionOutcomeEvaluator: any;
   let EVALUATION_HORIZON_MS: number;
+  let KRONOS_EVALUATION_HORIZON_MS: number;
 
   const PRED_TIME = new Date('2026-01-05T14:30:00.000Z').getTime(); // arbitrary fixed epoch, well aligned to 1-min bars
 
@@ -27,7 +28,7 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
 
     ({ db, sqliteDb } = await import('../db'));
     schema = await import('../db/schema');
-    ({ evaluatePrediction, predictionOutcomeEvaluator, EVALUATION_HORIZON_MS } = await import('./PredictionOutcomeEvaluator'));
+    ({ evaluatePrediction, predictionOutcomeEvaluator, EVALUATION_HORIZON_MS, KRONOS_EVALUATION_HORIZON_MS } = await import('./PredictionOutcomeEvaluator'));
 
     // Real bars: price rises steadily from 100 to 110 over the evaluation window, with one dip
     // to 98 partway through (so MAE should reflect the dip, not just the endpoints).
@@ -115,6 +116,69 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
     await predictionOutcomeEvaluator.evaluatePending();
     const outcomesAfter = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'ap-old'));
     expect(outcomesAfter).toHaveLength(1);
+  });
+
+  it('returns N_A (never LOSS) for a FLAT outcome on a directional BUY/SELL prediction (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M2)', async () => {
+    const flatTime = PRED_TIME + 100 * 60000;
+    await db.insert(schema.ohlcvBars).values([
+      { id: `FLATTEST:1Min:${flatTime}`, symbol: 'FLATTEST', timeframe: '1Min', timestamp: flatTime, open: 50, high: 50, low: 50, close: 50, volume: 1000, source: 'test' },
+      { id: `FLATTEST:1Min:${flatTime + 60000}`, symbol: 'FLATTEST', timeframe: '1Min', timestamp: flatTime + 60000, open: 50, high: 50, low: 50, close: 50, volume: 1000, source: 'test' },
+    ]);
+    const buyResult = await evaluatePrediction('pred-flat-buy', 'agent_predictions', 'FLATTEST', 'BUY', flatTime);
+    const sellResult = await evaluatePrediction('pred-flat-sell', 'agent_predictions', 'FLATTEST', 'SELL', flatTime);
+    expect(buyResult!.actualDirection).toBe('FLAT');
+    expect(buyResult!.outcome).toBe('N_A');
+    expect(sellResult!.outcome).toBe('N_A');
+  });
+
+  it('evaluates a kronos_predictions row once it clears the shorter Kronos-specific horizon, without waiting for the generic 60-minute one (finding M5)', async () => {
+    expect(KRONOS_EVALUATION_HORIZON_MS).toBeLessThan(EVALUATION_HORIZON_MS);
+
+    // Real-time-relative bars (not the fixed PRED_TIME fixture) so the age check itself
+    // (Date.now() - predTime) is genuinely exercised: prediction is older than
+    // KRONOS_EVALUATION_HORIZON_MS but younger than EVALUATION_HORIZON_MS - if the evaluator
+    // mistakenly used the generic 60-minute horizon for Kronos, it would (correctly) skip this
+    // row as still too young, and the assertion below would fail.
+    const kronosTime = Date.now() - KRONOS_EVALUATION_HORIZON_MS - 30000;
+    const closes = [100, 101, 102, 103, 104, 105];
+    await db.insert(schema.ohlcvBars).values(closes.map((close, i) => ({
+      id: `HORIZONTEST:1Min:${kronosTime + i * 60000}`,
+      symbol: 'HORIZONTEST', timeframe: '1Min', timestamp: kronosTime + i * 60000,
+      open: close, high: close, low: close, close, volume: 1000, source: 'test',
+    })));
+    await db.insert(schema.kronosPredictions).values({
+      symbol: 'HORIZONTEST', timeframe: '1Min', prediction: 'BUY', confidence: 0.85,
+      forecastHorizon: 5, expectedMove: 0.01, volatility: 'NORMAL', support: 95, resistance: 115,
+      model: 'test-model', predictedOhlc: '[]', marketStructure: 'Unknown', momentum: 'Unknown',
+      timestamp: new Date(kronosTime).toISOString(),
+    });
+    const [row] = await db.select().from(schema.kronosPredictions).where(eq(schema.kronosPredictions.symbol, 'HORIZONTEST'));
+
+    await predictionOutcomeEvaluator.evaluatePending();
+
+    const outcome = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, String(row.id)));
+    expect(outcome.length).toBe(1);
+  });
+
+  it('evaluatePending skips KronosEngine rows in agent_predictions - kronos_predictions is the sole evaluated source (finding M1)', async () => {
+    await db.insert(schema.agentPredictions).values({
+      id: 'ap-kronos-dup', agentName: 'KronosEngine', symbol: 'UPTEST', prediction: 'BUY',
+      confidence: 0.85, reasoning: 'test', timestamp: new Date(PRED_TIME).toISOString(),
+    });
+    await db.insert(schema.kronosPredictions).values({
+      symbol: 'UPTEST', timeframe: '1Min', prediction: 'BUY', confidence: 0.85,
+      forecastHorizon: 5, expectedMove: 0.01, volatility: 'NORMAL', support: 95, resistance: 115,
+      model: 'test-model', predictedOhlc: '[]', marketStructure: 'Unknown', momentum: 'Unknown',
+      timestamp: new Date(PRED_TIME).toISOString(),
+    });
+
+    await predictionOutcomeEvaluator.evaluatePending();
+
+    const outcomes = await db.select().from(schema.predictionOutcomes);
+    const kronosDupOutcome = outcomes.find((o: any) => o.predictionId === 'ap-kronos-dup');
+    const kronosCanonicalOutcome = outcomes.find((o: any) => o.sourceTable === 'kronos_predictions' && o.symbol === 'UPTEST');
+    expect(kronosDupOutcome).toBeUndefined(); // never evaluated from agent_predictions for Kronos
+    expect(kronosCanonicalOutcome).toBeTruthy(); // still evaluated once, cleanly, from kronos_predictions
   });
 
   describe('Phase F6: news_predictions integration', () => {

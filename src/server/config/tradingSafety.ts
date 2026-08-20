@@ -129,6 +129,14 @@ export interface TradingSafety {
   maxKellyFractionOfCapital: number;
   kellyFractionDefault: number;
   evaluationHorizonMs: number;
+  /**
+   * Kronos's own forecast horizon (config/quantThresholds.json kronosHorizon/kronosTimeframe) is
+   * tick-based, not a wall-clock duration - there's no clean tick-to-ms conversion. This is a
+   * separate, deliberate wall-clock window PredictionOutcomeEvaluator uses to grade Kronos
+   * forecasts specifically, short enough to be closer to its real short-horizon forecast question
+   * than the generic 60-minute evaluationHorizonMs (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md M5).
+   */
+  kronosEvaluationHorizonMs: number;
   tradingDaysPerYear: number;
   newsDecisiveSentimentThreshold: number;
   aiDecisionTemperature: number;
@@ -277,6 +285,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'maxKellyFractionOfCapital',
   'kellyFractionDefault',
   'evaluationHorizonMs',
+  'kronosEvaluationHorizonMs',
   'tradingDaysPerYear',
   'newsDecisiveSentimentThreshold',
   'aiDecisionTemperature',

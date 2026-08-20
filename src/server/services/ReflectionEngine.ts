@@ -8,7 +8,7 @@
  * ==========================================================
  */
 import { db } from '../db';
-import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes } from '../db/schema';
+import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes, kronosPredictions } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
@@ -25,6 +25,13 @@ export class ReflectionEngine {
   }
 
   async logPrediction(idea: any) {
+    // KronosEngine already logs every forecast via KronosMetrics.recordPrediction() into
+    // kronos_predictions (the canonical source evaluateAgents() below reads for this agent) - a
+    // second row here, for only the subset that clears the bar to become a real idea, was
+    // producing a 2nd/3rd near-duplicate prediction_outcomes grade for the same decision
+    // (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M1). Skip it; the dashboard trajectory
+    // chart (KronosDashboardData.ts) reads KronosMetrics' own write, not this one.
+    if (idea.agent === 'KronosEngine') return;
     try {
       await db.insert(agentPredictions).values({
         id: crypto.randomUUID(),
@@ -101,32 +108,49 @@ export class ReflectionEngine {
       // NewsAgent's real overall win rate can look unremarkable while it's still systematically
       // overconfident specifically in its high-confidence bucket, which a flat weight can't see.
       const calibrationMap: Record<string, Record<string, { wins: number; losses: number }>> = {};
+
+      const accumulate = (agentName: string, confidence: number, outcome: string, actualReturn: number | null) => {
+        if (!statsMap[agentName]) statsMap[agentName] = { total: 0, correct: 0, sumReturn: 0 };
+        if (outcome === 'N_A') return; // HOLD-style predictions made no directional call to score
+        statsMap[agentName].total += 1;
+        const absReturn = Math.abs(actualReturn ?? 0);
+        if (outcome === 'WIN') {
+          statsMap[agentName].correct += 1;
+          statsMap[agentName].sumReturn += absReturn;
+        } else {
+          statsMap[agentName].sumReturn -= absReturn;
+        }
+
+        const bucket = bucketFor(confidence);
+        const bucketKey = `${bucket.low}-${bucket.high}`;
+        if (!calibrationMap[agentName]) calibrationMap[agentName] = {};
+        if (!calibrationMap[agentName][bucketKey]) calibrationMap[agentName][bucketKey] = { wins: 0, losses: 0 };
+        if (outcome === 'WIN') calibrationMap[agentName][bucketKey].wins += 1;
+        else calibrationMap[agentName][bucketKey].losses += 1;
+      };
+
+      // Every agent except KronosEngine logs its own idea via logPrediction() above (one row per
+      // real TRADE_IDEA_GENERATED), so agent_predictions + this outcome join is the correct,
+      // non-duplicated source for them.
       const predictions = await db.select().from(agentPredictions).all();
       const predictionById = new Map(predictions.map(p => [p.id, p]));
       const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
-
       for (const o of outcomes) {
         const p = predictionById.get(o.predictionId);
-        if (!p) continue;
-        if (!statsMap[p.agentName]) {
-          statsMap[p.agentName] = { total: 0, correct: 0, sumReturn: 0 };
-        }
-        if (o.outcome === 'N_A') continue; // HOLD-style predictions made no directional call to score
-        statsMap[p.agentName].total += 1;
-        const absReturn = Math.abs(o.actualReturn ?? 0);
-        if (o.outcome === 'WIN') {
-          statsMap[p.agentName].correct += 1;
-          statsMap[p.agentName].sumReturn += absReturn;
-        } else {
-          statsMap[p.agentName].sumReturn -= absReturn;
-        }
+        if (!p || p.agentName === 'KronosEngine') continue; // Kronos sourced from kronos_predictions below - see M1
+        accumulate(p.agentName, p.confidence, o.outcome, o.actualReturn);
+      }
 
-        const bucket = bucketFor(p.confidence);
-        const bucketKey = `${bucket.low}-${bucket.high}`;
-        if (!calibrationMap[p.agentName]) calibrationMap[p.agentName] = {};
-        if (!calibrationMap[p.agentName][bucketKey]) calibrationMap[p.agentName][bucketKey] = { wins: 0, losses: 0 };
-        if (o.outcome === 'WIN') calibrationMap[p.agentName][bucketKey].wins += 1;
-        else calibrationMap[p.agentName][bucketKey].losses += 1;
+      // KronosEngine: kronos_predictions is its one real forecast ledger (every tick, no
+      // duplication) - source its stats/calibration from there directly instead of the
+      // agent_predictions copies (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M1).
+      const kronosRows = await db.select().from(kronosPredictions).all();
+      const kronosById = new Map(kronosRows.map(k => [String(k.id), k]));
+      const kronosOutcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'kronos_predictions'));
+      for (const o of kronosOutcomes) {
+        const k = kronosById.get(o.predictionId);
+        if (!k) continue;
+        accumulate('KronosEngine', k.confidence, o.outcome, o.actualReturn);
       }
 
       for (const [agentName, buckets] of Object.entries(calibrationMap)) {

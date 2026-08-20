@@ -27,6 +27,9 @@ import { resolveEvaluationDueMs } from '../news/NewsPredictionEvaluation';
 import type { ExpectedHorizon } from '../news/NewsIntelligence';
 
 export const EVALUATION_HORIZON_MS = tradingSafety.evaluationHorizonMs;
+// Kronos-specific horizon (M5, ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md) - see tradingSafety.ts's
+// own doc comment on kronosEvaluationHorizonMs for why this differs from EVALUATION_HORIZON_MS.
+export const KRONOS_EVALUATION_HORIZON_MS = tradingSafety.kronosEvaluationHorizonMs;
 
 function newsHorizonDurations() {
   return {
@@ -108,7 +111,7 @@ export async function evaluatePrediction(
   }
 
   let outcome: 'WIN' | 'LOSS' | 'N_A' = 'N_A';
-  if (isDirectional) {
+  if (isDirectional && actualDirection !== 'FLAT') {
     const correct = isLong ? finalPrice > entryPrice : finalPrice < entryPrice;
     outcome = correct ? 'WIN' : 'LOSS';
   }
@@ -150,6 +153,13 @@ export class PredictionOutcomeEvaluator {
 
     const predictions = await db.select().from(agentPredictions).all();
     for (const p of predictions) {
+      // KronosEngine's own forecasts are already evaluated once, cleanly, from kronos_predictions
+      // below - this table also carries a KronosMetrics dual-write (kept for KronosDashboardData's
+      // trajectory chart) and, for ideas that clear the bar, a second ReflectionEngine-authored row.
+      // Evaluating those too would grade the same underlying forecast 2-3x (ARGUS_PREDICTIVE_EDGE_
+      // FORENSIC_AUDIT.md finding M1) - skip them here rather than fix it downstream in every
+      // consumer.
+      if (p.agentName === 'KronosEngine') continue;
       const key = `agent_predictions:${p.id}`;
       if (evaluatedKeys.has(key)) continue;
       const predTime = new Date(p.timestamp).getTime();
@@ -171,9 +181,11 @@ export class PredictionOutcomeEvaluator {
       const key = `kronos_predictions:${idStr}`;
       if (evaluatedKeys.has(key)) continue;
       const predTime = new Date(k.timestamp).getTime();
-      if (now - predTime < EVALUATION_HORIZON_MS) continue;
+      // Kronos's own forecast horizon is tick-based, not wall-clock - grade it over a shorter,
+      // deliberate window instead of the generic 60-minute EVALUATION_HORIZON_MS (M5).
+      if (now - predTime < KRONOS_EVALUATION_HORIZON_MS) continue;
 
-      const result = await evaluatePrediction(idStr, 'kronos_predictions', k.symbol, k.prediction, predTime);
+      const result = await evaluatePrediction(idStr, 'kronos_predictions', k.symbol, k.prediction, predTime, KRONOS_EVALUATION_HORIZON_MS);
       if (result) {
         try {
           await db.insert(predictionOutcomes).values(result).onConflictDoNothing();

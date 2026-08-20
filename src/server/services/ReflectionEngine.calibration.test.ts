@@ -84,6 +84,44 @@ describe('ReflectionEngine - real confidence calibration computation', () => {
     expect(midBucket.calibratedConfidence).toBeGreaterThan(highBucket.calibratedConfidence);
   });
 
+  it('logPrediction skips KronosEngine ideas (already logged via KronosMetrics; ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M1)', async () => {
+    const before = await db.select().from(schema.agentPredictions).where(eq(schema.agentPredictions.agentName, 'KronosEngine'));
+    await reflectionEngine.logPrediction({ agent: 'KronosEngine', symbol: 'NVDA', side: 'BUY', confidence: 0.9, reasoning: 'test', timestamp: new Date().toISOString() });
+    const after = await db.select().from(schema.agentPredictions).where(eq(schema.agentPredictions.agentName, 'KronosEngine'));
+    expect(after.length).toBe(before.length); // no new row written
+  });
+
+  it('evaluateAgents sources KronosEngine calibration from kronos_predictions, not agent_predictions (finding M1)', async () => {
+    for (let i = 0; i < 4; i++) {
+      const id = crypto.randomUUID();
+      await db.insert(schema.kronosPredictions).values({
+        symbol: 'NVDA', timeframe: '1Min', prediction: 'BUY', confidence: 0.85,
+        forecastHorizon: 5, expectedMove: 0.01, volatility: 'NORMAL', support: 95, resistance: 115,
+        model: 'test-model', predictedOhlc: '[]', marketStructure: 'Unknown', momentum: 'Unknown',
+        timestamp: new Date().toISOString(),
+      });
+    }
+    const rows = await db.select().from(schema.kronosPredictions).where(eq(schema.kronosPredictions.symbol, 'NVDA'));
+    for (const [i, row] of rows.entries()) {
+      await db.insert(schema.predictionOutcomes).values({
+        predictionId: String(row.id), sourceTable: 'kronos_predictions', symbol: 'NVDA',
+        outcome: i < 3 ? 'WIN' : 'LOSS', evaluatedAt: new Date().toISOString(),
+      });
+    }
+
+    await reflectionEngine.evaluateAgents();
+
+    const [calRow] = await db.select().from(schema.agentConfidenceCalibration).where(
+      and(eq(schema.agentConfidenceCalibration.agentName, 'KronosEngine'), eq(schema.agentConfidenceCalibration.bucketLow, 0.8))
+    );
+    expect(calRow.wins).toBe(3);
+    expect(calRow.losses).toBe(1);
+
+    const [statsRow] = await db.select().from(schema.agentPerformanceStats).where(eq(schema.agentPerformanceStats.agentName, 'KronosEngine'));
+    expect(statsRow.totalPredictions).toBe(4);
+    expect(statsRow.correctPredictions).toBe(3);
+  });
+
   it('N_A outcomes (HOLD-style predictions) are excluded from calibration, same as they already are from win-rate stats', async () => {
     const id = crypto.randomUUID();
     await db.insert(schema.agentPredictions).values({
