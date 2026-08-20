@@ -97,6 +97,13 @@ export interface TradingSafety {
   permutationSignificanceAlpha: number;
   newsVetoMinImpactScore: number;
   newsVetoWindowMs: number;
+  newsClusterTimeWindowMs: number;
+  newsClusterTitleSimilarityThreshold: number;
+  newsRiskVetoThreshold: number;
+  newsPredictionEvalIntradayMs: number;
+  newsPredictionEvalShortTermMs: number;
+  newsPredictionEvalMediumTermMs: number;
+  newsPredictionEvalLongerTermMs: number;
   usEquityRthOpenMinute: number;
   usEquityRthCloseMinute: number;
   reconSignificantMismatchDollars: number;
@@ -240,6 +247,13 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'permutationSignificanceAlpha',
   'newsVetoMinImpactScore',
   'newsVetoWindowMs',
+  'newsClusterTimeWindowMs',
+  'newsClusterTitleSimilarityThreshold',
+  'newsRiskVetoThreshold',
+  'newsPredictionEvalIntradayMs',
+  'newsPredictionEvalShortTermMs',
+  'newsPredictionEvalMediumTermMs',
+  'newsPredictionEvalLongerTermMs',
   'usEquityRthOpenMinute',
   'usEquityRthCloseMinute',
   'reconSignificantMismatchDollars',

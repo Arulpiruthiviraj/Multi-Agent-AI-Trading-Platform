@@ -2,7 +2,7 @@
  * Start/stop EventBus listeners and timers for togglable idea agents.
  * Does not touch RiskEngine, OMS, ChiefTrader, PortfolioMonitor, market data, or the kill switch.
  *
- * NewsAgent keeps NewsEngine clustering running (news_veto); only TRADE_IDEA_GENERATED is gated.
+ * NewsAgent keeps NewsEngine clustering running from process boot (news_veto); only TRADE_IDEA_GENERATED is gated.
  */
 import { findTogglableIdeaAgent, togglableIdeaAgentIds } from '../config/pipelineAgents';
 import { isPipelineAgentEnabled } from './pipelineAgentGate';
@@ -44,10 +44,18 @@ export function setIdeaWorkersArmed(armed: boolean): void {
 
 export function applyPipelineAgentRuntime(agentId: string, enabled: boolean): void {
   const spec = findTogglableIdeaAgent(agentId);
-  if (!spec || spec.keepsBackgroundPipeline) return;
-  if (!ideaWorkersArmed) return;
+  if (!spec) return;
   const rt = runtimes[agentId];
   if (!rt) return;
+  // Background-pipeline agents (News clustering / Kronos research forecasts) honor the Mission
+  // Control enable toggle even when Autobot idea workers are disarmed. News start/stop are no-ops
+  // (clustering is owned by ArgusCoreBoot); Kronos start/stop arm the MARKET_DATA listener.
+  if (spec.keepsBackgroundPipeline) {
+    if (enabled) rt.start();
+    else rt.stop();
+    return;
+  }
+  if (!ideaWorkersArmed) return;
   if (enabled) rt.start();
   else rt.stop();
 }

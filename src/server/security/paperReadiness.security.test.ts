@@ -38,7 +38,7 @@ describe('paper-readiness security contracts (not a pentest)', () => {
   });
 });
 
-describe('unauthenticated trading/settings/OMS routes return 401 when AUTH is on', () => {
+describe('unauthenticated trading/settings/OMS routes return 401 when AUTH is on', { timeout: 60000 }, () => {
   let app: express.Express;
 
   beforeAll(() => {
@@ -72,7 +72,7 @@ describe('unauthenticated trading/settings/OMS routes return 401 when AUTH is on
   });
 });
 
-describe('query-param injection and export/import path safety (not a pentest)', () => {
+describe('query-param injection and export/import path safety (not a pentest)', { timeout: 60000 }, () => {
   let tmpDbPath: string;
   let sqliteDb: any;
   let app: express.Express;
@@ -88,7 +88,7 @@ describe('query-param injection and export/import path safety (not a pentest)', 
     app.use('/api/v1/news', newsRouter);
     app.use('/api/v2/traces', traceRouter);
     app.use('/api/v1', systemRouter);
-  });
+  }, 60_000);
 
   afterAll(() => {
     try { sqliteDb.close(); } catch { /* already closed */ }

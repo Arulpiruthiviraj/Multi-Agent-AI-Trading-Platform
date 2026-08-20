@@ -20,18 +20,32 @@
  * ==========================================================
  */
 import { db } from '../db';
-import { agentPredictions, kronosPredictions, predictionOutcomes } from '../db/schema';
+import { agentPredictions, kronosPredictions, predictionOutcomes, newsPredictions } from '../db/schema';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { tradingSafety } from '../config/tradingSafety';
+import { resolveEvaluationDueMs } from '../news/NewsPredictionEvaluation';
+import type { ExpectedHorizon } from '../news/NewsIntelligence';
 
 export const EVALUATION_HORIZON_MS = tradingSafety.evaluationHorizonMs;
+
+function newsHorizonDurations() {
+  return {
+    intradayMs: tradingSafety.newsPredictionEvalIntradayMs,
+    shortTermMs: tradingSafety.newsPredictionEvalShortTermMs,
+    mediumTermMs: tradingSafety.newsPredictionEvalMediumTermMs,
+    longerTermMs: tradingSafety.newsPredictionEvalLongerTermMs,
+  };
+}
 
 export interface EvaluatedOutcome {
   predictionId: string;
   // 'transactions' is used by Phase 7's TrainingExampleBuilder to label a whole consensus
   // decision (not persisted to prediction_outcomes, which is prediction-level only) - reusing
-  // this same real bars-based evaluation logic rather than a second mechanism.
-  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions';
+  // this same real bars-based evaluation logic rather than a second mechanism. 'news_predictions'
+  // (Phase F6) is News's own ACTIVE_OBSERVE-mode prediction ledger (src/server/news/) - it never
+  // emits TRADE_IDEA_GENERATED, so it is never captured by ReflectionEngine's agent_predictions
+  // listener; this evaluator reads it directly instead.
+  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions';
   symbol: string;
   actualPrice: number;
   actualReturn: number;
@@ -49,12 +63,16 @@ export interface EvaluatedOutcome {
  */
 export async function evaluatePrediction(
   predictionId: string,
-  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions',
+  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions',
   symbol: string,
   side: string,
   predictionTimeMs: number,
+  // News predictions carry their own expectedHorizon (Phase F3), unlike the other prediction
+  // types - so News evaluation uses a per-prediction window instead of the one fixed
+  // EVALUATION_HORIZON_MS every other caller uses.
+  horizonMs: number = EVALUATION_HORIZON_MS,
 ): Promise<EvaluatedOutcome | null> {
-  const horizonEnd = predictionTimeMs + EVALUATION_HORIZON_MS;
+  const horizonEnd = predictionTimeMs + horizonMs;
   let bars;
   try {
     bars = await historicalDataGateway.getBars(symbol, '1Min', predictionTimeMs, horizonEnd);
@@ -156,6 +174,29 @@ export class PredictionOutcomeEvaluator {
       if (now - predTime < EVALUATION_HORIZON_MS) continue;
 
       const result = await evaluatePrediction(idStr, 'kronos_predictions', k.symbol, k.prediction, predTime);
+      if (result) {
+        try {
+          await db.insert(predictionOutcomes).values(result).onConflictDoNothing();
+        } catch (e) {
+          console.error('[PredictionOutcomeEvaluator] Failed to persist outcome', e);
+        }
+      }
+    }
+
+    // Phase F6: News's own ACTIVE_OBSERVE-mode predictions (never TRADE_IDEA_GENERATED, so never
+    // seen by ReflectionEngine's agent_predictions listener). Direction is BULLISH/BEARISH, not
+    // BUY/SELL - mapped here so evaluatePrediction's existing BUY/SELL contract stays untouched
+    // for its other two callers.
+    const newsRows = await db.select().from(newsPredictions).all();
+    for (const n of newsRows) {
+      const key = `news_predictions:${n.id}`;
+      if (evaluatedKeys.has(key)) continue;
+      const predTime = new Date(n.createdAt).getTime();
+      const horizonMs = resolveEvaluationDueMs(n.expectedHorizon as ExpectedHorizon, newsHorizonDurations());
+      if (now - predTime < horizonMs) continue;
+
+      const side = n.direction === 'BULLISH' ? 'BUY' : n.direction === 'BEARISH' ? 'SELL' : 'HOLD';
+      const result = await evaluatePrediction(n.id, 'news_predictions', n.symbol, side, predTime, horizonMs);
       if (result) {
         try {
           await db.insert(predictionOutcomes).values(result).onConflictDoNothing();

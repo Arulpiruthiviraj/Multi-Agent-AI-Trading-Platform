@@ -11,11 +11,18 @@ import { alpacaFetch } from '../core/alpacaTls';
 import {
   fetchTradableAssets,
   screenAssets,
+  fetchAvgDailyVolumeShares,
   refreshBroadUniverseCache,
   getCachedBroadUniverseSymbols,
   getLastBroadUniverseStats,
   resetMarketUniverseScannerForTests,
 } from './MarketUniverseScanner';
+
+function barsResponse(bars: Record<string, number[]>) {
+  return jsonResponse({
+    bars: Object.fromEntries(Object.entries(bars).map(([symbol, volumes]) => [symbol, volumes.map((v) => ({ v }))])),
+  });
+}
 
 const mockFetch = alpacaFetch as unknown as ReturnType<typeof vi.fn>;
 
@@ -46,6 +53,7 @@ describe('MarketUniverseScanner - flag gating', () => {
     mockFetch.mockResolvedValueOnce(jsonResponse({
       ABCD: { latestTrade: { p: 50 }, dailyBar: { v: 1_000_000, c: 50 }, latestQuote: { bp: 49.95, ap: 50.05 } },
     }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ ABCD: [600_000, 600_000] }));
     await refreshBroadUniverseCache();
     expect(getCachedBroadUniverseSymbols().length).toBeGreaterThan(0);
     delete process.env[FLAG];
@@ -98,6 +106,27 @@ describe('MarketUniverseScanner - screenAssets', () => {
   });
 });
 
+describe('MarketUniverseScanner - fetchAvgDailyVolumeShares', () => {
+  it('computes a real average across the returned daily bars', async () => {
+    mockFetch.mockResolvedValueOnce(barsResponse({ AAA: [400_000, 600_000] }));
+    const advMap = await fetchAvgDailyVolumeShares(['AAA']);
+    expect(advMap.get('AAA')).toBe(500_000);
+  });
+
+  it('excludes a symbol with no bars in the response rather than assuming it passes', async () => {
+    mockFetch.mockResolvedValueOnce(barsResponse({ AAA: [500_000] }));
+    const advMap = await fetchAvgDailyVolumeShares(['AAA', 'MISSING']);
+    expect(advMap.has('AAA')).toBe(true);
+    expect(advMap.has('MISSING')).toBe(false);
+  });
+
+  it('one failed batch does not throw and excludes that batch entirely', async () => {
+    mockFetch.mockRejectedValueOnce(new Error('bars endpoint down'));
+    const advMap = await fetchAvgDailyVolumeShares(['AAA']);
+    expect(advMap.size).toBe(0);
+  });
+});
+
 describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
   it('produces a candidate list capped at broadUniverseMaxCandidates, ranked by dollar volume', async () => {
     process.env[FLAG] = 'true';
@@ -111,6 +140,8 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
       HIGH: { latestTrade: { p: 50 }, dailyBar: { v: 5_000_000, c: 50 }, latestQuote: { bp: 49.95, ap: 50.05 } },
       TOOTHIN: { latestTrade: { p: 50 }, dailyBar: { v: 1, c: 50 }, latestQuote: { bp: 49.95, ap: 50.05 } },
     }));
+    // Only LOW/HIGH clear passesScreen's dollar-volume floor - TOOTHIN never reaches the ADV batch.
+    mockFetch.mockResolvedValueOnce(barsResponse({ LOW: [600_000, 600_000], HIGH: [5_000_000, 5_000_000] }));
     const stats = await refreshBroadUniverseCache();
     expect(stats.ran).toBe(true);
     expect(stats.error).toBeNull();
@@ -118,6 +149,21 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
     expect(cached).toContain('HIGH');
     expect(cached).not.toContain('TOOTHIN'); // dollar volume 50 < broadUniverseMinDollarVolume
     expect(cached.indexOf('HIGH')).toBeLessThan(cached.indexOf('LOW')); // ranked by dollar volume desc
+  });
+
+  it('excludes a symbol that clears the dollar-volume floor but fails the real 20-day ADV-shares floor', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'THINADV', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    // Single day's dollar volume ($10M) clears the $ floor, but the real 20-day ADV is only 100k shares.
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      THINADV: { latestTrade: { p: 100 }, dailyBar: { v: 100_000, c: 100 }, latestQuote: { bp: 99.9, ap: 100.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ THINADV: [100_000, 100_000] }));
+    const stats = await refreshBroadUniverseCache();
+    expect(stats.error).toBeNull();
+    expect(getCachedBroadUniverseSymbols()).not.toContain('THINADV');
   });
 
   it('records the error and does not crash when the assets fetch itself fails', async () => {

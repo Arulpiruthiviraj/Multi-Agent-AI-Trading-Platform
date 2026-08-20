@@ -215,6 +215,28 @@ describe('Architecture protection: incident-remediation contracts', () => {
     expect(text).toMatch(/RECONCILIATION_MATCH/);
   });
 
+  it('PortfolioReconciliation starts at core boot and is not stopped when Autobot turns off', () => {
+    // CODE contract (interrupted-session hold clear without Autobot):
+    // - ArgusCoreBoot starts recon independent of Autobot (like MarketDataWorker).
+    // - SystemBootstrap.start may re-start (idempotent); SystemBootstrap.stop must NOT stop recon.
+    // - Only gracefulShutdown drain stops recon (process exit).
+    const boot = readFileSync(join(ROOT, 'src/server/core/ArgusCoreBoot.ts'), 'utf8');
+    expect(boot).toMatch(/portfolioReconciliationWorker\.start\(/);
+    expect(boot).toMatch(/independent of Autobot/);
+    expect(boot).toMatch(/RECONCILIATION_MATCH releases interrupted-session entry hold/);
+
+    const bootstrap = readFileSync(join(ROOT, 'src/server/core/SystemBootstrap.ts'), 'utf8');
+    expect(bootstrap).toMatch(/portfolioReconciliationWorker\.start\(/);
+    expect(bootstrap).toMatch(/Recon stays up when Autobot is off/);
+    const stopMethod = bootstrap.match(/stop\(\)\s*\{[\s\S]*?\n\s*\}/);
+    expect(stopMethod?.[0]).toBeTruthy();
+    // Executable Autobot-off path must not stop recon (comments may mention drain stop).
+    expect(stopMethod![0]).not.toMatch(/^\s*portfolioReconciliationWorker\.stop\(\);/m);
+
+    const drain = readFileSync(join(ROOT, 'src/server/core/gracefulShutdown.ts'), 'utf8');
+    expect(drain).toMatch(/portfolioReconciliationWorker\.stop\(/);
+  });
+
   it('MarketDataWorker tick emission is not gated on the interrupted-session entry hold', () => {
     const text = readFileSync(join(ROOT, 'src/server/services/MarketDataWorker.ts'), 'utf8');
     expect(text).toMatch(/isAutobotTradingEnabled/);
@@ -246,5 +268,21 @@ describe('Architecture protection: incident-remediation contracts', () => {
     expect(cli).not.toMatch(/from ['"].*BrokerManager/);
     const core = readFileSync(join(ROOT, 'src/server/core/ArgusCoreBoot.ts'), 'utf8');
     expect(core).not.toMatch(/from ['"]vite['"]/);
+  });
+
+  it("a browser WebSocket client disconnecting cannot reach TradingEngine/RiskEngine/OMS/BrokerManager", () => {
+    // Extracts the exact ws.on('close', ...) handler body from server.ts and proves it only ever
+    // does listener cleanup (eventBus.off) - never anything that could pause/resume trading,
+    // touch risk, or place/cancel an order. A WS client disconnecting must be a pure one-way
+    // observer leaving, not an input the trading spine reacts to.
+    const text = readFileSync(join(ROOT, 'server.ts'), 'utf8');
+    const closeHandlerMatch = text.match(/ws\.on\('close',\s*\(\)\s*=>\s*\{([\s\S]*?)\}\);/);
+    expect(closeHandlerMatch, "expected to find server.ts's ws.on('close', ...) handler").toBeTruthy();
+    const closeHandlerBody = closeHandlerMatch![1];
+    expect(closeHandlerBody).not.toMatch(/tradingEngine\.(toggle|setTradingState)/);
+    expect(closeHandlerBody).not.toMatch(/riskEngine|RiskEngine/);
+    expect(closeHandlerBody).not.toMatch(/placeOrder|BrokerManager/);
+    expect(closeHandlerBody).not.toMatch(/eventBus\.emit/);
+    expect(closeHandlerBody).toMatch(/eventBus\.off/);
   });
 });

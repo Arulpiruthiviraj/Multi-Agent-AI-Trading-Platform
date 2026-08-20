@@ -10,6 +10,7 @@ __pycache__/
 !.env.example
 data/secrets.json
 data/.encryption_key
+data/.argus_cli_session
 data/*.db
 data/*.db-shm
 data/*.db-wal

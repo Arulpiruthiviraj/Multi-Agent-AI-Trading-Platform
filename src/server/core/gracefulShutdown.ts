@@ -48,6 +48,18 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     console.error('[gracefulShutdown] Failed to stop market data', e);
   }
   try {
+    const { newsEngine } = await import('../news/NewsEngine');
+    newsEngine.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop NewsEngine', e);
+  }
+  try {
+    const { portfolioReconciliationWorker } = await import('../services/PortfolioReconciliation');
+    portfolioReconciliationWorker.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop PortfolioReconciliation', e);
+  }
+  try {
     const { sqliteDb } = await import('../db');
     sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
     sqliteDb.close();

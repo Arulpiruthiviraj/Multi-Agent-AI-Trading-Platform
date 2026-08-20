@@ -54,6 +54,7 @@ import {
 } from '../continuous/portfolioIntel';
 import { evaluateExit } from './ExitIntelligenceEngine';
 import { isExitIntelligenceEnabled } from '../config/exitIntelligence';
+import { replaySafety } from '../replay/replaySafety';
 
 // E2A (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - these were previously hardcoded literals
 // (+5%/-3%) unrelated to settings.takeProfitPct/trailingStopPct, which already existed in the
@@ -63,6 +64,68 @@ import { isExitIntelligenceEnabled } from '../config/exitIntelligence';
 // column defaults rather than the old, unrelated hardcoded values.
 const FALLBACK_TAKE_PROFIT_PCT = tradingSafety.fallbackTakeProfitPct;
 const FALLBACK_TRAILING_STOP_PCT = tradingSafety.fallbackTrailingStopPct;
+
+/** Research/sim fills must never supply stop/target metadata for live portfolio exits. */
+const NON_LIVE_OPENING_TRADE_ENVS = new Set([
+  'REPLAY',
+  'BACKTEST',
+  'SIMULATION',
+  'HISTORICAL_REPLAY',
+  'HISTORICAL_SIMULATION',
+  'TELEMETRY_PULSE',
+]);
+
+/**
+ * Most recent FILLED BUY that may own live exit metadata for an open holding.
+ * Excludes REPLAY/BACKTEST/etc. — forensic 2026-08-20: PortfolioMonitor bound a REPLAY
+ * MOMENTUM_BREAKOUT NVDA fill ($114 / target $121.90) onto a live EXTERNAL_SYNC position
+ * (~$206), producing perpetual TARGET_REACHED noise.
+ */
+export async function resolveOpeningTradeForLiveExit(symbol: string) {
+  const candidates = await db.select().from(trades)
+    .where(and(eq(trades.symbol, symbol), eq(trades.side, 'BUY'), eq(trades.status, 'FILLED')))
+    .orderBy(desc(trades.filledAt))
+    .limit(40);
+  return candidates.find((t) => {
+    const env = String(t.executionEnvironment || '').toUpperCase();
+    if (NON_LIVE_OPENING_TRADE_ENVS.has(env)) return false;
+    if (t.traceId && String(t.traceId).startsWith(replaySafety.replayTracePrefix)) return false;
+    return true;
+  }) ?? null;
+}
+
+/**
+ * Long take-profit is only valid above cost basis. Targets at/below entry (or mismatched REPLAY
+ * leftovers) must not force TARGET_REACHED sells.
+ */
+export function isValidLongQuantTarget(quantTarget: number, averagePrice: number): boolean {
+  return Number.isFinite(quantTarget) && Number.isFinite(averagePrice) && quantTarget > averagePrice;
+}
+
+/**
+ * Real stop-loss/take-profit price for one position, for display (e.g. the positions ledger).
+ * Mirrors reviewPortfolio()'s own precedence exactly, so the number shown is the number that will
+ * actually trigger an exit - not a separately-invented approximation: a QuantEngine-originated
+ * position's own quantStopPrice/quantTargetPrice (captured on its opening trade) takes precedence
+ * when present; every other position falls back to the same settings.takeProfitPct/trailingStopPct
+ * percentages the live exit logic above already uses.
+ */
+export async function resolvePositionStopTarget(
+  symbol: string,
+  averagePrice: number,
+): Promise<{ stopLossPrice: number; takeProfitPrice: number }> {
+  const openingTrade = await resolveOpeningTradeForLiveExit(symbol);
+  const settingsRow = (await db.select().from(settings).limit(1))[0];
+  const takeProfitPct = settingsRow?.takeProfitPct ?? FALLBACK_TAKE_PROFIT_PCT;
+  const trailingStopPct = settingsRow?.trailingStopPct ?? FALLBACK_TRAILING_STOP_PCT;
+
+  const stopLossPrice = openingTrade?.quantStopPrice ?? averagePrice * (1 - trailingStopPct / 100);
+  const takeProfitPrice = openingTrade?.quantTargetPrice ?? averagePrice * (1 + takeProfitPct / 100);
+  return {
+    stopLossPrice: Number(stopLossPrice.toFixed(2)),
+    takeProfitPrice: Number(takeProfitPrice.toFixed(2)),
+  };
+}
 
 export class PortfolioMonitorWorker {
   private intervalId: NodeJS.Timeout | null = null;
@@ -132,12 +195,20 @@ export class PortfolioMonitorWorker {
         // make live exits strategy-aware, not make the backtest less informative). Every other
         // position (technical/news/fundamental-sourced, or a QuantEngine trade whose strategy
         // didn't propose a stop/target) falls through to the unchanged generic exit below.
-        const [openingTrade] = await db.select().from(trades)
-          .where(and(eq(trades.symbol, holding.symbol), eq(trades.side, 'BUY'), eq(trades.status, 'FILLED')))
-          .orderBy(desc(trades.filledAt))
-          .limit(1);
+        // Must exclude REPLAY/BACKTEST FILLED BUYs — they share the trades table and would
+        // otherwise attach research stop/target metadata to live/EXTERNAL_SYNC holdings.
+        const openingTrade = await resolveOpeningTradeForLiveExit(holding.symbol);
         const quantStop = openingTrade?.quantStopPrice ?? null;
-        const quantTarget = openingTrade?.quantTargetPrice ?? null;
+        const quantTargetRaw = openingTrade?.quantTargetPrice ?? null;
+        const quantTarget = quantTargetRaw !== null && isValidLongQuantTarget(quantTargetRaw, holding.averagePrice)
+          ? quantTargetRaw
+          : null;
+        if (quantTargetRaw !== null && quantTarget === null) {
+          console.warn(
+            `[PortfolioWorker] Ignoring invalid long quant_target_price $${quantTargetRaw} for ${holding.symbol} ` +
+            `(avg entry $${holding.averagePrice}) — not forcing TARGET_REACHED.`,
+          );
+        }
         const storedThesis = parseStoredThesis((openingTrade as any)?.quantInvalidationJson);
 
         const PnL = ((currentLivePrice - holding.averagePrice) / holding.averagePrice) * 100;

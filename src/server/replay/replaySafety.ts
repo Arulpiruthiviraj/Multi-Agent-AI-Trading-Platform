@@ -26,6 +26,8 @@ export interface ReplaySafetyConfig {
   aiTimeoutMs: number;
   defaultAiMode: string;
   aiModes: string[];
+  /** Honest label: aiMode does not invent LLM votes or change consensus floors. */
+  aiModeHonestyDescription: string;
   allowBuysInReplay: boolean;
   shortSellingDefault: boolean;
   fractionalSharesDefault: boolean;

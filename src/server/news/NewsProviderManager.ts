@@ -8,6 +8,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { networkEndpoints } from '../config/networkEndpoints';
 
 export interface ProviderStats {
@@ -64,7 +65,7 @@ export class NewsProviderManager {
         stat.errorCount += 1;
         stat.lastError = String(err);
         console.error(`[NewsProviderManager] Error fetching from ${provider.name}:`, err);
-        eventBus.publish('NEWS_PROVIDER_FAILED', { providerId: provider.id, error: String(err) });
+        eventBus.publish(EVENTS.NEWS_PROVIDER_FAILED, { providerId: provider.id, error: String(err) });
       }
     }
     return allArticles;

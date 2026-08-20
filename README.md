@@ -189,6 +189,8 @@ npm run start               # node dist/server.cjs
 | `npm run start:engine:prod` | Same after `npm run build` (`scripts/argus-engine-prod.mjs` → `dist/server.cjs`) |
 | `npm run dev:headless` / `start:headless` | Aliases that **delegate** to `argus-engine` (`scripts/start-headless.ts`) |
 | `npm run start:headless:prod` | Alias → `argus-engine-prod.mjs` |
+| `./argus` / `npm run argus` | Thin Bash operator UX (`scripts/cli/common.sh` → `argus-cli`). Polished help/status only — not a second trading brain. See `ARGUS_SHELL_CLI.md` |
+| `bash ./argus <command>` / `npm run argus -- <command>` | Shell operator control plane (Git Bash on Windows). Thin router over `argus-cli` / npm scripts. See [`ARGUS_SHELL_CLI.md`](ARGUS_SHELL_CLI.md) |
 | `npm run argus-cli -- <command>` | HTTP client against the running API (`start`/`stop` spawn/SIGTERM the engine). Never imports RiskEngine/OMS/BrokerManager — not a second brain |
 | `npm run lint` | `tsc --noEmit` |
 | `npm test` | `vitest run` |

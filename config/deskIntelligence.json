@@ -2,7 +2,7 @@
   "$comment": "Desk-intelligence overlay. Does not place orders, bypass RiskEngine, or enable QUANT/LIVE. Family relevance is used for ranking/explanation only; it is not fitted on future data. Strategy ids must match StrategyEngine modules.",
   "minRiskRewardRatio": 1.5,
   "highVolatilityConfidenceMultiplier": 0.85,
-  "newsEmitsTradeIdeas": false,
+  "newsAgentMode": "CATALYST_ONLY",
   "probabilityQuality": {
     "empiricallyValidated": "EMPIRICALLY_VALIDATED",
     "modelEstimate": "MODEL_ESTIMATE",

@@ -4,24 +4,54 @@
  * MUST NOT import RiskEngine, OMS, BrokerManager, or TradingEngine.
  */
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   clearEnginePid,
   isEngineProcessRunning,
+  isPidLikelyArgusProcess,
   readEnginePid,
   writeEnginePid,
 } from '../src/server/app/enginePid';
+import {
+  buildCliAuthHeaders,
+  clearSessionFile,
+  collectSetCookieHeaders,
+  defaultSessionFilePath,
+  EXIT_AUTH,
+  parseSessionCookieFromSetCookie,
+  resolveCliCredentials,
+  unauthorizedMessage,
+  writeSessionCookie,
+} from './cli/cliSession';
 
 const BASE = process.env.ARGUS_API_URL || 'http://127.0.0.1:3000';
-const ROOT = process.cwd();
+/** Repo root even when cwd is elsewhere (./argus from another directory). */
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+const SESSION_PATH = process.env.ARGUS_CLI_SESSION_FILE || defaultSessionFilePath(ROOT);
+
+class AuthRequiredError extends Error {
+  readonly exitCode = EXIT_AUTH;
+  constructor() {
+    super(unauthorizedMessage());
+    this.name = 'AuthRequiredError';
+  }
+}
+
+function cliAuthHeaders(): Record<string, string> {
+  return buildCliAuthHeaders({ sessionPath: SESSION_PATH });
+}
 
 async function fetchJson(path: string, init?: RequestInit) {
+  const timeoutMs = Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000);
+  const signal = init?.signal ?? AbortSignal.timeout(timeoutMs);
   const res = await fetch(`${BASE}${path}`, {
     ...init,
+    signal,
     headers: {
       'Content-Type': 'application/json',
-      ...(process.env.ARGUS_DEV_TOKEN ? { 'x-argus-dev-token': process.env.ARGUS_DEV_TOKEN } : {}),
+      ...cliAuthHeaders(),
       ...(init?.headers || {}),
     },
   });
@@ -31,6 +61,9 @@ async function fetchJson(path: string, init?: RequestInit) {
     body = JSON.parse(text);
   } catch {
     body = text;
+  }
+  if (res.status === 401 || res.status === 403) {
+    throw new AuthRequiredError();
   }
   if (!res.ok) {
     throw new Error(typeof body === 'object' && body && 'error' in (body as object)
@@ -46,7 +79,8 @@ async function waitForHealth(timeoutMs = 60_000): Promise<boolean> {
     try {
       const h = await fetchJson('/api/v2/runtime/health') as { ok?: boolean };
       if (h.ok) return true;
-    } catch {
+    } catch (e) {
+      if (e instanceof AuthRequiredError) throw e;
       /* retry */
     }
     await new Promise((r) => setTimeout(r, 500));
@@ -58,6 +92,7 @@ function parseFlags(argv: string[]) {
   return {
     headless: argv.includes('--headless') || argv.includes('-H'),
     prod: argv.includes('--prod'),
+    dev: argv.includes('--dev'),
   };
 }
 
@@ -83,10 +118,14 @@ async function startEngine() {
     return;
   }
   const distServer = join(ROOT, 'dist', 'server.cjs');
-  const useProd = flags.prod || existsSync(distServer);
+  // Explicit --prod only; --dev (or default) uses tsx engine entry. Never auto-pick prod just because dist exists.
+  const useProd = flags.prod && !flags.dev;
+  if (useProd && !existsSync(distServer)) {
+    throw new Error('Production start requested but dist/server.cjs is missing. Run: npm run build');
+  }
   const env = { ...process.env, ARGUS_HEADLESS: 'true', ARGUS_ENGINE: 'true' };
   let child;
-  if (useProd && existsSync(distServer)) {
+  if (useProd) {
     child = spawn(process.execPath, [join(ROOT, 'scripts', 'argus-engine-prod.mjs')], { cwd: ROOT, env, detached: true, stdio: 'ignore' });
   } else {
     const tsx = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
@@ -117,6 +156,20 @@ async function stopEngine() {
     console.log(JSON.stringify({ ok: true, message: 'No engine PID file' }, null, 2));
     return;
   }
+  // PID-reuse guard: if the original engine crashed without clearing the pid file and the OS
+  // later reassigned this exact PID to an unrelated process, sending SIGTERM would kill a
+  // stranger, not Argus. isPidLikelyArgusProcess fails open (returns true) when it can't verify,
+  // so this only ever blocks a stop when it has positive evidence the PID is NOT Argus.
+  const looksLikeArgus = await isPidLikelyArgusProcess(pid);
+  if (!looksLikeArgus) {
+    clearEnginePid();
+    console.log(JSON.stringify({
+      ok: false,
+      message: `Refusing to signal pid ${pid} - it is alive but its command line does not look like an Argus engine process (likely PID reuse after an unclean prior exit). Cleared the stale pid file instead of sending SIGTERM.`,
+      pid,
+    }, null, 2));
+    return;
+  }
   try {
     process.kill(pid, 'SIGTERM');
   } catch (e: unknown) {
@@ -125,6 +178,74 @@ async function stopEngine() {
   }
   clearEnginePid();
   console.log(JSON.stringify({ ok: true, message: 'SIGTERM sent', pid }, null, 2));
+}
+
+async function cliLogin() {
+  const creds = resolveCliCredentials();
+  if (!creds) {
+    console.error(
+      'Missing credentials. Set ARGUS_CLI_USER + ARGUS_CLI_PASSWORD, or AUTH_USERNAME + AUTH_PASSWORD ' +
+        '(password is never printed). Server must have AUTH_PASSWORD configured for login to succeed.',
+    );
+    process.exit(EXIT_AUTH);
+  }
+  const timeoutMs = Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000);
+  const res = await fetch(`${BASE}/api/v1/auth/login`, {
+    method: 'POST',
+    signal: AbortSignal.timeout(timeoutMs),
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: creds.username, password: creds.password }),
+  });
+  const text = await res.text();
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text;
+  }
+  if (!res.ok) {
+    const err =
+      typeof body === 'object' && body && 'error' in (body as object)
+        ? String((body as { error: string }).error)
+        : `HTTP ${res.status}`;
+    console.error(`Login failed: ${err}`);
+    // Never echo password or cookie
+    process.exit(EXIT_AUTH);
+  }
+  const cookiePair = parseSessionCookieFromSetCookie(collectSetCookieHeaders(res.headers));
+  if (!cookiePair) {
+    console.error('Login succeeded but no argus_session cookie was returned.');
+    process.exit(1);
+  }
+  writeSessionCookie(SESSION_PATH, cookiePair);
+  console.log(JSON.stringify({
+    ok: true,
+    message: 'CLI session saved',
+    sessionFile: SESSION_PATH,
+    credentialSource: creds.source,
+    // Do not print cookie or password
+  }, null, 2));
+}
+
+async function cliLogout() {
+  const headers = cliAuthHeaders();
+  try {
+    if (headers.Cookie) {
+      await fetch(`${BASE}/api/v1/auth/logout`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+        headers: {
+          'Content-Type': 'application/json',
+          ...headers,
+        },
+        body: '{}',
+      });
+    }
+  } catch {
+    /* still clear local file */
+  }
+  clearSessionFile(SESSION_PATH);
+  console.log(JSON.stringify({ ok: true, message: 'CLI session cleared', sessionFile: SESSION_PATH }, null, 2));
 }
 
 const replayCommands: Record<string, () => Promise<void>> = {
@@ -166,14 +287,65 @@ const replayCommands: Record<string, () => Promise<void>> = {
     const id = parseReplayArgs(process.argv.slice(4)).runId;
     if (!id) throw new Error('Usage: argus replay export <runId>');
     const res = await fetch(`${BASE}/api/v2/historical-evaluations/${id}/export?format=zip`, {
-      headers: process.env.ARGUS_DEV_TOKEN ? { 'x-argus-dev-token': process.env.ARGUS_DEV_TOKEN } : {},
+      headers: cliAuthHeaders(),
     });
+    if (res.status === 401 || res.status === 403) throw new AuthRequiredError();
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     process.stdout.write(Buffer.from(await res.arrayBuffer()));
+  },
+  /** Forensic view of existing report evidence — does not invent analysis or change risk/consensus. */
+  async analyze() {
+    const id = parseReplayArgs(process.argv.slice(4)).runId;
+    if (!id) throw new Error('Usage: argus replay analyze <runId>');
+    const report = await fetchJson(`/api/v2/historical-evaluations/${id}/report`);
+    console.log(JSON.stringify({
+      mode: 'historical_evaluation_analyze',
+      note: 'Exposes existing report evidence only. Does not auto-tune risk, consensus, or weights.',
+      report,
+    }, null, 2));
+  },
+  async diagnostics() {
+    const id = parseReplayArgs(process.argv.slice(4)).runId;
+    if (!id) throw new Error('Usage: argus replay diagnostics <runId>');
+    const meta = await fetchJson(`/api/v2/historical-evaluations/${id}`);
+    let report: unknown = null;
+    try {
+      report = await fetchJson(`/api/v2/historical-evaluations/${id}/report`);
+    } catch (e) {
+      if (e instanceof AuthRequiredError) throw e;
+      report = { unavailable: true };
+    }
+    console.log(JSON.stringify({
+      mode: 'historical_evaluation_diagnostics',
+      note: 'Run metadata + report when available. Not organic paper. Not LIVE.',
+      meta,
+      report,
+    }, null, 2));
   },
 };
 
 const commands: Record<string, () => Promise<void>> = {
+  async version() {
+    let version = '0.0.0';
+    try {
+      version = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version ?? version;
+    } catch {
+      /* ignore */
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      name: 'argus-cli',
+      version,
+      api: BASE,
+      role: 'HTTP client for Argus Engine (not a trading brain)',
+    }, null, 2));
+  },
+  async login() {
+    return cliLogin();
+  },
+  async logout() {
+    return cliLogout();
+  },
   async start() {
     return startEngine();
   },
@@ -190,6 +362,9 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async health() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/health'), null, 2));
+  },
+  async ready() {
+    console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));
   },
   async config() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/config'), null, 2));
@@ -248,5 +423,8 @@ if (!commands[cmd]) {
 
 commands[cmd]().catch((e) => {
   console.error(e.message || e);
+  if (e instanceof AuthRequiredError || (e && typeof e === 'object' && 'exitCode' in e && (e as { exitCode: number }).exitCode === EXIT_AUTH)) {
+    process.exit(EXIT_AUTH);
+  }
   process.exit(1);
 });

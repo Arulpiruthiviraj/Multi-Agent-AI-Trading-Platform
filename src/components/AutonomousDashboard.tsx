@@ -250,7 +250,11 @@ export function AutonomousDashboard({
     if (performanceData.length > 0) return;
     if (!Array.isArray(liveTrades) || liveTrades.length === 0) return;
     let runningVal = Number(livePortfolio?.cash || autoBotConfig?.budget || 50000);
+    // Same filter as executedTrades below (kept inline here since this effect is defined before
+    // that const in the component body): a REJECTED/REPLAY row otherwise occupies one of the last
+    // 20 slots with a fabricated-looking zero-P&L "Trade" point, distorting the equity curve.
     const tradeCurve = liveTrades
+      .filter((t: any) => t.status === "FILLED" && !["REPLAY", "BACKTEST", "DIAGNOSTIC"].includes(String(t.executionEnvironment || "").toUpperCase()))
       .slice(-20)
       .reverse()
       .map((t: any) => {
@@ -345,7 +349,21 @@ export function AutonomousDashboard({
 
   // Active positions and recent trades
   const activePositions = Array.isArray(livePortfolio?.positions) ? livePortfolio.positions : [];
-  const recentTrades = liveTrades.slice(0, 3);
+  // Real bug fix: GET /api/v1/trades (liveTrades' source) returns every row in the trades table
+  // unfiltered - REJECTED orders (which correctly have price=0, since they never filled) and
+  // REPLAY/BACKTEST-environment rows were showing up in "Recent Executed Trades" as if they were
+  // genuine live fills, displaying as "@ $0.00". A REJECTED order having price=0 is correct; it
+  // simply should never be labeled an executed trade. Filtered here (not at the API route, which
+  // other consumers of the same /api/v1/trades payload legitimately use for a full audit trail
+  // including rejections) so only genuinely FILLED, non-replay fills count as "executed."
+  const executedTrades = liveTrades.filter(
+    (t: any) => t.status === "FILLED" && !["REPLAY", "BACKTEST", "DIAGNOSTIC"].includes(String(t.executionEnvironment || "").toUpperCase()),
+  );
+  const recentTrades = executedTrades.slice(0, 3);
+  // Win rate denominator is genuinely *closed* trades only (profitLoss is only ever computed on
+  // a SELL fill that closes a position - see OrderManagement.ts - so a still-open BUY fill has no
+  // realized P&L to score and must not dilute the win rate).
+  const closedTrades = executedTrades.filter((t: any) => t.profitLoss !== null && t.profitLoss !== undefined);
   // Canonical flag is TradingEngine.state.enabled (GET /api/v1/autobot `enabled`).
   // `autoBotEnabled` is the DB column name — accept either so this badge cannot show
   // ACTIVE while Observatory AutoBot is STOPPED, or STANDBY while the engine is on.
@@ -660,14 +678,14 @@ export function AutonomousDashboard({
             <div className="bg-[#0A0F16] border border-slate-800 rounded-lg p-4">
               <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1"><Explainer id="agentWinRateMetric">Agent Win Rate</Explainer></div>
               <div className="text-xl font-bold text-white">
-                {learningStats?.avgWinRate !== undefined 
-                  ? `${learningStats.avgWinRate.toFixed(1)}%` 
-                  : (liveTrades.length > 0 
-                      ? `${((liveTrades.filter((t: any) => (t.profitLoss || 0) > 0).length / liveTrades.length) * 100).toFixed(1)}%`
+                {learningStats?.avgWinRate !== undefined
+                  ? `${learningStats.avgWinRate.toFixed(1)}%`
+                  : (closedTrades.length > 0
+                      ? `${((closedTrades.filter((t: any) => (t.profitLoss || 0) > 0).length / closedTrades.length) * 100).toFixed(1)}%`
                       : "Awaiting Trades")}
               </div>
               <div className="text-xs text-slate-400">
-                {liveTrades.length} recorded closed trades
+                {closedTrades.length} recorded closed trades
               </div>
             </div>
             

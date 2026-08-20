@@ -9,15 +9,16 @@
  * Responsibilities:
  * - Maintains a real rolling per-symbol price history from live market ticks.
  * - Triggers a forecast once enough history exists and the local inference
- *   service is reachable.
- * - Emits specific EventBus notifications (e.g., KRONOS_REVERSAL).
- * - Submits formalized trade ideas to the ChiefTraderAgent for consensus.
+ *   service is reachable (research/UI path — independent of Autobot).
+ * - Emits TRADE_IDEA_GENERATED only when live idea generation is enabled AND
+ *   Chronos is healthy (fail-closed for ideas when /health is down).
  *
  * Inputs:
  * - Real-time price ticks via EventBus's 'MARKET_DATA' event.
  *
  * Outputs:
- * - Broadcasts TRADE_IDEA_GENERATED, KRONOS_HIGH_CONFIDENCE, etc.
+ * - Persisted forecasts (kronos_predictions + agent_predictions via KronosEngine).
+ * - Optional TRADE_IDEA_GENERATED when Autobot/idea gate allows.
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
@@ -43,6 +44,7 @@ const TIMEFRAME = quantThresholds.kronosTimeframe;
 export class KronosForecastAgent {
   private priceHistory: Record<string, number[]> = {};
   private lastPredictionAt: Record<string, number> = {};
+  private lastUnavailableTelemetryAt = 0;
   private listening = false;
   private readonly onMarketData = (data: any) => { void this.onTick(data); };
 
@@ -58,24 +60,45 @@ export class KronosForecastAgent {
     this.listening = false;
   }
 
+  /** Test / diagnostics: whether the MARKET_DATA listener is armed. */
+  isListening(): boolean {
+    return this.listening;
+  }
+
+  private emitUnavailableTelemetry(symbol: string, detail: string) {
+    const now = Date.now();
+    if (now - this.lastUnavailableTelemetryAt < PREDICTION_COOLDOWN_MS) return;
+    this.lastUnavailableTelemetryAt = now;
+    eventBus.publish(EVENTS.KRONOS_UNAVAILABLE, {
+      symbol,
+      detail,
+      agent: 'KronosEngine',
+      side: 'HOLD',
+      confidence: 0,
+      timestamp: new Date().toISOString(),
+    });
+    console.warn(`[KronosForecastAgent] Chronos unavailable for ${symbol} — no TRADE_IDEA_GENERATED (${detail}).`);
+  }
+
   private async onTick(data: { symbol?: string; price?: number }) {
     notePipelineAgentTick('KronosEngine');
-    if (!isLiveIdeaGenerationEnabled()) {
-      notePipelineAgentGated('KronosEngine');
-      return;
-    }
+    // Operator can disable Kronos from Mission Control; research + ideas both stop.
     if (!isPipelineAgentEnabled('KronosEngine')) {
       notePipelineAgentGated('KronosEngine');
       return;
     }
     if (!data?.symbol || typeof data.price !== 'number' || !Number.isFinite(data.price)) return;
 
+    // Buffer ticks even when Autobot is off so Chronos can still produce UI/research forecasts.
     const history = this.priceHistory[data.symbol] || (this.priceHistory[data.symbol] = []);
     history.push(data.price);
     if (history.length > MAX_HISTORY) history.shift();
 
     if (history.length < MIN_HISTORY) return;
-    if (!kronosEngine.getStatus().isAvailable) return;
+    if (!kronosEngine.getStatus().isAvailable) {
+      this.emitUnavailableTelemetry(data.symbol, 'LOCAL_AI_SERVICE_URL /health not ready');
+      return;
+    }
 
     const last = this.lastPredictionAt[data.symbol] || 0;
     if (Date.now() - last < PREDICTION_COOLDOWN_MS) return;
@@ -83,49 +106,64 @@ export class KronosForecastAgent {
 
     try {
       const prediction = await kronosEngine.predict(data.symbol, HORIZON, TIMEFRAME, history.slice());
+      // Fail-closed for ideas: never emit BUY/SELL if availability flipped while the call was in flight.
+      if (!kronosEngine.getStatus().isAvailable) {
+        this.emitUnavailableTelemetry(data.symbol, 'Chronos became unavailable during forecast');
+        return;
+      }
       this.broadcastForecast(prediction);
+      notePipelineAgentSuccess('KronosEngine');
     } catch (e: any) {
       notePipelineAgentFailure('KronosEngine', e);
+      this.emitUnavailableTelemetry(data.symbol, e?.message || 'forecast call failed');
       // Local inference service unreachable/erroring - already logged inside KronosEngine.
-      // Never let this take down the tick-handling path for other agents.
+      // Never fabricate confidence or emitTradeIdea on this path.
     }
   }
 
   /**
    * Analyzes the generated forecast and publishes relevant system events.
-   * If a clear BUY/SELL signal is present, forwards it to the Chief Trader.
+   * BUY/SELL trade ideas require live idea generation (Autobot + TRADING_ENABLED + session hold).
+   * Forecasts are already persisted by KronosEngine.metrics regardless of Autobot.
    */
   private broadcastForecast(prediction: ForecastPrediction) {
-    if (prediction.prediction === 'BUY' || prediction.prediction === 'SELL') {
-      if (prediction.confidence > 0.8) {
-        eventBus.publish(EVENTS.KRONOS_HIGH_CONFIDENCE, prediction);
-      } else if (prediction.confidence < 0.4) {
-        eventBus.publish(EVENTS.KRONOS_LOW_CONFIDENCE, prediction);
-      }
-
-      if (prediction.marketStructure?.includes('reversal')) {
-        eventBus.publish(EVENTS.KRONOS_REVERSAL, prediction);
-      }
-      if (prediction.marketStructure?.includes('breakout')) {
-        eventBus.publish(EVENTS.KRONOS_BREAKOUT, prediction);
-      }
-
-      eventBus.emitTradeIdea({
-        // Real bug found and fixed this pass: `kronos-${Date.now()}` collides across symbols at
-        // 1ms resolution (plausible under a burst of ticks across several subscribed symbols),
-        // silently merging two unrelated decisions into one trace for RiskEngine/OMS/fill
-        // observability. generateTraceId(symbol) is the standard helper every other idea agent
-        // uses, mixing in the symbol plus random bytes specifically to avoid this.
-        traceId: generateTraceId(prediction.symbol),
-        symbol: prediction.symbol,
-        side: prediction.prediction,
-        confidence: prediction.confidence,
-        currentPrice: this.priceHistory[prediction.symbol]?.slice(-1)[0],
-        reasoning: `Chronos forecasts ${prediction.prediction} (expected move ${prediction.expectedMove} over ${prediction.forecastHorizon} steps, support ${prediction.support}, resistance ${prediction.resistance}).`,
-        agent: 'KronosEngine',
-      });
-      notePipelineAgentSuccess('KronosEngine');
+    if (prediction.prediction !== 'BUY' && prediction.prediction !== 'SELL') {
+      return;
     }
+
+    if (prediction.confidence > 0.8) {
+      eventBus.publish(EVENTS.KRONOS_HIGH_CONFIDENCE, prediction);
+    } else if (prediction.confidence < 0.4) {
+      eventBus.publish(EVENTS.KRONOS_LOW_CONFIDENCE, prediction);
+    }
+
+    if (prediction.marketStructure?.includes('reversal')) {
+      eventBus.publish(EVENTS.KRONOS_REVERSAL, prediction);
+    }
+    if (prediction.marketStructure?.includes('breakout')) {
+      eventBus.publish(EVENTS.KRONOS_BREAKOUT, prediction);
+    }
+
+    // Ideas stay Autobot/session-gated. Research persistence already happened in KronosEngine.
+    if (!isLiveIdeaGenerationEnabled()) {
+      notePipelineAgentGated('KronosEngine');
+      return;
+    }
+
+    eventBus.emitTradeIdea({
+      // Real bug found and fixed this pass: `kronos-${Date.now()}` collides across symbols at
+      // 1ms resolution (plausible under a burst of ticks across several subscribed symbols),
+      // silently merging two unrelated decisions into one trace for RiskEngine/OMS/fill
+      // observability. generateTraceId(symbol) is the standard helper every other idea agent
+      // uses, mixing in the symbol plus random bytes specifically to avoid this.
+      traceId: generateTraceId(prediction.symbol),
+      symbol: prediction.symbol,
+      side: prediction.prediction,
+      confidence: prediction.confidence,
+      currentPrice: this.priceHistory[prediction.symbol]?.slice(-1)[0],
+      reasoning: `Chronos forecasts ${prediction.prediction} (expected move ${prediction.expectedMove} over ${prediction.forecastHorizon} steps, support ${prediction.support}, resistance ${prediction.resistance}).`,
+      agent: 'KronosEngine',
+    });
   }
 }
 

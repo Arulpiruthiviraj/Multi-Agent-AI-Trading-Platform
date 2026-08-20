@@ -42,6 +42,14 @@ import { hashReplayConfiguration, hashReplayIdentity } from './replayHash';
 import { appendReplayEvent, writeReplayJson } from './replayStore';
 import { buildReplayPerformance, buildDecisionFunnel, buildAgentEvaluation } from './replayReport';
 import { analyzeMissedOpportunities } from './MissedOpportunityAnalysis';
+import {
+  buildAiModeHonesty,
+  buildDecisionEvidenceRecord,
+  enrichDecisionEvidenceWithOutcomes,
+  summarizeDecisionEvidence,
+  type DecisionAgentVote,
+  type DecisionRiskGateSnapshot,
+} from './decisionEvidence';
 import { classifyMarketSession } from './marketSession';
 import { getHistoricalDiscoveryUniverse, screenHistoricalCandidates } from './HistoricalUniverseProvider';
 import { evaluateExit } from '../services/ExitIntelligenceEngine';
@@ -52,8 +60,9 @@ import type { CanonicalDataset, ResearchBar } from '../research/ohlcvTypes';
 import type { Evidence } from '../services/EvidenceAggregator';
 import { oms } from '../services/OrderManagement';
 import { db } from '../db';
-import { replayRuns, riskAssessments } from '../db/schema';
-import { desc, eq } from 'drizzle-orm';
+import { replayRuns, riskAssessments, riskGateResults } from '../db/schema';
+import { asc, desc, eq } from 'drizzle-orm';
+import { aiHistoricalReplayAvailability } from './aiReplayAvailability';
 
 void oms; // ensure OMS constructor registers RISK_ASSESSMENT_COMPLETED → executeOrder
 
@@ -102,6 +111,14 @@ async function submitThroughRiskAndOms(session: ActiveReplaySession, opts: {
   reasoning: string;
   exitReason?: string;
   thesisData?: { invalidationConditions: string[]; applicableRegimes: string[]; entryRegime: string | null } | null;
+  /** When set, persist additive decision evidence (votes/consensus/gates) for paper-learning analysis. */
+  decisionContext?: {
+    agentVotes: DecisionAgentVote[];
+    independentAgreeingAgents: number;
+    weightedConfidence: number;
+    consensusApproved: boolean;
+    consensusReason: string;
+  };
 }) {
   const riskAndOmsStart = Date.now();
   try {
@@ -122,6 +139,13 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
   reasoning: string;
   exitReason?: string;
   thesisData?: { invalidationConditions: string[]; applicableRegimes: string[]; entryRegime: string | null } | null;
+  decisionContext?: {
+    agentVotes: DecisionAgentVote[];
+    independentAgreeingAgents: number;
+    weightedConfidence: number;
+    consensusApproved: boolean;
+    consensusReason: string;
+  };
 }) {
   const traceId = `${replaySafety.replayTracePrefix}${session.replayId}-${session.clock.now()}-${opts.symbol}-${opts.side}-${crypto.randomUUID().slice(0, 8)}`;
   const realizedBefore = session.broker.snapshotCosts().realizedPnl;
@@ -148,9 +172,26 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
   emit(session, 'RISK_GATE', { traceId, side: opts.side, exitReason: opts.exitReason }, opts.symbol);
   const realizedAfter = session.broker.snapshotCosts().realizedPnl;
   const costsSnap = session.broker.snapshotCosts();
-  if (opts.side === 'SELL' && realizedAfter !== realizedBefore) {
-    session.tradePnls.push(Number((realizedAfter - realizedBefore).toFixed(4)));
-  }
+  const gateSnap = loadRiskGateSnapshots(traceId);
+  const pushDecisionEvidence = (stageOutcome: 'RISK_REJECTED' | 'ORDER_FILLED' | 'ORDER_REJECTED_OTHER') => {
+    if (!opts.decisionContext) return;
+    session.decisionEvidence.push(buildDecisionEvidenceRecord({
+      symbol: opts.symbol,
+      timestamp: session.clock.now(),
+      strategyId: opts.strategyId,
+      predictedSide: opts.side,
+      referencePrice: opts.price,
+      agentVotes: opts.decisionContext.agentVotes,
+      independentAgreeingAgents: opts.decisionContext.independentAgreeingAgents,
+      weightedConfidence: opts.decisionContext.weightedConfidence,
+      consensusApproved: opts.decisionContext.consensusApproved,
+      consensusReason: opts.decisionContext.consensusReason,
+      stageOutcome,
+      rejectionGate: gateSnap.rejectionGate,
+      riskGates: gateSnap.riskGates,
+      traceId,
+    }));
+  };
   if (opts.side === 'BUY') {
     const pos = (await session.broker.positions()).find((p) => p.symbol === opts.symbol);
     if (pos && pos.quantity > 0) {
@@ -182,6 +223,7 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
         executionModel: 'NEXT_BAR_OPEN',
         executionEnvironment: 'HISTORICAL_REPLAY',
       });
+      pushDecisionEvidence('ORDER_FILLED');
       emit(session, 'ORDER_FILLED', { side: 'BUY', qty: pos.quantity, price: pos.entryPrice, executionModel: 'NEXT_BAR_OPEN' }, opts.symbol);
     } else {
       bumpNoTrade(session, 'RISK_REJECTED');
@@ -191,8 +233,10 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
         side: 'BUY',
         reason: 'INSUFFICIENT_BUYING_POWER_OR_RISK',
         traceId,
+        rejectionGate: gateSnap.rejectionGate,
       });
-      emit(session, 'ORDER_REJECTED', { traceId, reason: 'INSUFFICIENT_BUYING_POWER_OR_RISK' }, opts.symbol);
+      pushDecisionEvidence(gateSnap.approved ? 'ORDER_REJECTED_OTHER' : 'RISK_REJECTED');
+      emit(session, 'ORDER_REJECTED', { traceId, reason: 'INSUFFICIENT_BUYING_POWER_OR_RISK', rejectionGate: gateSnap.rejectionGate }, opts.symbol);
     }
   } else {
     const stillOpen = (await session.broker.positions()).find((p) => p.symbol === opts.symbol && p.quantity > 0);
@@ -214,6 +258,10 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
         executionEnvironment: 'HISTORICAL_REPLAY',
       });
       session.openStops.delete(opts.symbol);
+      if (opts.side === 'SELL' && realizedAfter !== realizedBefore) {
+        session.tradePnls.push(Number((realizedAfter - realizedBefore).toFixed(4)));
+      }
+      pushDecisionEvidence('ORDER_FILLED');
       emit(session, 'ORDER_FILLED', { side: 'SELL', exitReason: opts.exitReason || 'SELL', pnl: pnlDelta, executionModel: 'NEXT_BAR_OPEN' }, opts.symbol);
     } else {
       bumpNoTrade(session, 'RISK_REJECTED');
@@ -223,8 +271,10 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
         side: 'SELL',
         reason: 'RISK_REJECTED',
         traceId,
+        rejectionGate: gateSnap.rejectionGate,
       });
-      emit(session, 'ORDER_REJECTED', { traceId, exitReason: opts.exitReason }, opts.symbol);
+      pushDecisionEvidence(gateSnap.approved ? 'ORDER_REJECTED_OTHER' : 'RISK_REJECTED');
+      emit(session, 'ORDER_REJECTED', { traceId, exitReason: opts.exitReason, rejectionGate: gateSnap.rejectionGate }, opts.symbol);
     }
   }
   void costsSnap;
@@ -233,6 +283,40 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
 
 function bumpNoTrade(session: ActiveReplaySession, reason: string) {
   session.noTrade[reason] = (session.noTrade[reason] || 0) + 1;
+}
+
+function votesFromEvidence(evidence: Evidence[]): DecisionAgentVote[] {
+  return evidence.map((e) => ({
+    agent: e.agent,
+    side: e.side,
+    confidence: e.confidence,
+    weight: typeof e.weight === 'number' ? e.weight : null,
+  }));
+}
+
+function loadRiskGateSnapshots(traceId: string): {
+  rejectionGate: string | null;
+  riskGates: DecisionRiskGateSnapshot[];
+  approved: boolean;
+} {
+  try {
+    const assessed = db.select().from(riskAssessments).where(eq(riskAssessments.traceId, traceId)).limit(1).get();
+    const gates = db.select().from(riskGateResults)
+      .where(eq(riskGateResults.traceId, traceId))
+      .orderBy(asc(riskGateResults.sequence))
+      .all();
+    return {
+      rejectionGate: assessed?.rejectionGate ?? null,
+      approved: !!assessed?.approved,
+      riskGates: gates.map((g) => ({
+        gateName: g.gateName,
+        sequence: g.sequence,
+        passed: !!g.passed,
+      })),
+    };
+  } catch {
+    return { rejectionGate: null, riskGates: [], approved: false };
+  }
 }
 
 /** Real replay-processing wall-clock time per stage - not simulated market latency. */
@@ -519,6 +603,7 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
     currentBarIndex: 0,
     currentTimestamp: null,
     rejectionsForRetrospective: [],
+    decisionEvidence: [],
     agentIdeaStats: {},
     stageDurations: {},
     replayStartedAtMs: Date.now(),
@@ -529,7 +614,7 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
       QuantEngine: { status: 'ENABLED', reason: 'PIT bars + strategy evaluate / golden schedule' },
       TechnicalAgent: {
         status: 'PARTIAL',
-        reason: 'RSI/MACD/SMA/Bollinger on PIT bars via production engines; not full live tick-driven TechnicalAgent loop or EventBus',
+        reason: 'Live technicalSignal.ts rule math on PIT bars (confidence [0.55,0.95] when a rule fires); not the full live tick-driven TechnicalAgent loop or EventBus. Votes only when Technical independently fires BUY/SELL — never mirrors QuantEngine side.',
       },
       NewsAgent: {
         status: config.newsProvider === 'golden_replay_news' ? 'CATALYST_ONLY' : 'UNAVAILABLE',
@@ -561,8 +646,8 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
       AI: {
         status: aiLabel(config.aiMode),
         reason: config.aiMode === 'DISABLED'
-          ? 'AI_DISABLED — no fabricated LLM votes'
-          : 'Historical LLM consensus weights UNAVAILABLE; mode is labeled honestly',
+          ? `${replaySafety.aiModeHonestyDescription} (${aiHistoricalReplayAvailability().status})`
+          : `${replaySafety.aiModeHonestyDescription} Mode=${config.aiMode} is labeled but unwired; ${aiHistoricalReplayAvailability().why}`,
       },
     },
   };
@@ -854,11 +939,19 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
         }
         ideas = [
           { kind: 'AGENT_REASONING', agent: 'QuantEngine', side, confidence, publishedAtMs: t, payloadJson: strategyId },
+          // TechnicalAgent only contributes a vote when its own rules independently fired a
+          // BUY/SELL (technical.side !== 'HOLD') - matching live TechnicalAgent.checkStrategies,
+          // which simply does not call emitTradeIdea when none of its three strategies trigger.
+          // A prior version of this file mirrored QuantEngine's side with a crude rsi>50?0.55:0.45
+          // confidence whenever TechnicalAgent itself said HOLD, fabricating a second "independent"
+          // vote that was not actually independent (it copied QuantEngine's side rather than
+          // reflecting TechnicalAgent's real - negative - assessment). That inflated
+          // minIndependentAgreeingAgents/consensus math with a non-real agreement, which every
+          // pass of this investigation has been explicit is not an acceptable way to make replay
+          // consensus reachable. Removed rather than re-tuned.
           ...(technical && technical.side !== 'HOLD'
             ? [{ kind: 'AGENT_REASONING', agent: 'TechnicalAgent', side: technical.side, confidence: technical.confidence, publishedAtMs: t, payloadJson: `rsi=${technical.rsi}` }]
-            : technical
-              ? [{ kind: 'AGENT_REASONING', agent: 'TechnicalAgent', side, confidence: technical.rsi > 50 ? 0.55 : 0.45, publishedAtMs: t, payloadJson: `rsi=${technical.rsi}` }]
-              : []),
+            : []),
         ];
       }
 
@@ -875,6 +968,7 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
 
       const evidence: Evidence[] = evidenceFromPitIdeas(ideas, symbol, last.close);
       const chief = replayChiefTraderFromEvidence(evidence, false);
+      const agentVotes = votesFromEvidence(evidence);
       emit(session, 'CHIEF_DECISION', { ...chief, debateUsed: false, aiLabel: session.aiLabel }, symbol);
       if (!chief.approved) {
         bumpNoTrade(session, 'NO_CHIEF_APPROVAL');
@@ -882,7 +976,28 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
         // Post-run-only retrospective candidate (§12) - recorded here, never read until after the
         // replay reaches a terminal status. Consensus rejections only (not risk rejections) - a
         // deliberately narrower scope than the full spec, stated honestly rather than implied.
-        session.rejectionsForRetrospective.push({ symbol, timestamp: t, reason: chief.reason || 'NO_CHIEF_APPROVAL', referencePrice: last.close });
+        session.rejectionsForRetrospective.push({
+          symbol,
+          timestamp: t,
+          reason: chief.reason || 'NO_CHIEF_APPROVAL',
+          referencePrice: last.close,
+          agentVotes,
+          weightedConfidence: chief.confidence,
+          independentAgreeingAgents: chief.independentAgreeingAgents,
+        });
+        session.decisionEvidence.push(buildDecisionEvidenceRecord({
+          symbol,
+          timestamp: t,
+          strategyId,
+          predictedSide: side,
+          referencePrice: last.close,
+          agentVotes,
+          independentAgreeingAgents: chief.independentAgreeingAgents,
+          weightedConfidence: chief.confidence,
+          consensusApproved: false,
+          consensusReason: chief.reason,
+          stageOutcome: 'CONSENSUS_REJECTED',
+        }));
         continue;
       }
 
@@ -908,6 +1023,13 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
         reasoning: `HISTORICAL_REPLAY executionEnvironment=REPLAY replayId=${session.replayId}`,
         exitReason: side === 'SELL' ? 'SCHEDULE_SELL' : undefined,
         thesisData: side === 'BUY' ? thesisData : null,
+        decisionContext: {
+          agentVotes,
+          independentAgreeingAgents: chief.independentAgreeingAgents,
+          weightedConfidence: chief.confidence,
+          consensusApproved: true,
+          consensusReason: chief.reason,
+        },
       });
     }
   }
@@ -1078,9 +1200,13 @@ async function runReplayLoop(id: string) {
     const promo = { status: deriveLifecycleStatus(evidence), live: liveGoNoGo(evidence) };
     const vbt = await getVectorBTStatus();
     const missedOpportunities = analyzeMissedOpportunities(session.rejectionsForRetrospective, session.barsBySymbol);
+    const decisionEvidence = enrichDecisionEvidenceWithOutcomes(session.decisionEvidence, session.barsBySymbol);
+    const decisionEvidenceSummary = summarizeDecisionEvidence(decisionEvidence);
+    const aiModeHonesty = buildAiModeHonesty(session.config.aiMode);
     writeReplayJson(session.replayId, 'trades.json', session.tradeLedger);
     writeReplayJson(session.replayId, 'rejected_orders.json', session.rejectedOrders);
     writeReplayJson(session.replayId, 'missed_opportunities.json', missedOpportunities);
+    writeReplayJson(session.replayId, 'decision_evidence.json', decisionEvidence);
     writeReplayJson(session.replayId, 'portfolio_final.json', port);
     emit(session, 'REPLAY_COMPLETED', { status: session.status, netPnl: report.netPnl });
     const summary = {
@@ -1094,7 +1220,7 @@ async function runReplayLoop(id: string) {
       agentAvailability: session.agentAvailability,
       promotion: promo,
       vectorbt: { ...vbt, comparisonNote: 'VectorBT is MODE A research. Not equivalent to full Argus replay.' },
-      ai: { mode: session.aiLabel, calls: session.aiCalls, costUsd: session.aiCostUsd, limit: replaySafety.aiCallLimit },
+      ai: { mode: session.aiLabel, calls: session.aiCalls, costUsd: session.aiCostUsd, limit: replaySafety.aiCallLimit, honesty: aiModeHonesty },
       hashes: { datasetHash: session.datasetHash, configurationHash: session.configurationHash, replayHash: session.replayHash },
       live: 'NO-GO',
       executionEnvironment: 'REPLAY',
@@ -1132,6 +1258,12 @@ async function runReplayLoop(id: string) {
         historicalDiscoveryFidelity: replaySafety.historicalDiscoveryFidelityWarning,
         agentAvailability: session.agentAvailability,
         consensusMode: replaySafety.consensusModeDefault,
+        consensusFloors: {
+          consensusApprovalThreshold: tradingSafety.consensusApprovalThreshold,
+          minIndependentAgreeingAgents: tradingSafety.minIndependentAgreeingAgents,
+          notLowered: true,
+        },
+        aiModeHonesty,
         riskEngineVersion: 'production RiskEngine.evaluateRisk (replay session scoped)',
         riskGateConfiguration: 'config/tradingSafety.json + config/riskGateOrder.json',
         omsMode: 'production OrderManagementService → HistoricalReplayBroker',
@@ -1143,6 +1275,7 @@ async function runReplayLoop(id: string) {
           'InformationCutoff on all decision bars (timestamp < T)',
           'Discovery uses bars strictly before each historical timestamp',
           'Missed-opportunity analysis post-run only',
+          'Decision-evidence forward MFE/MAE post-run only',
           'Isolated replay quote cache (no live MarketDataWorker mutation)',
           'No live EventBus trade ideas from replay',
         ],
@@ -1154,11 +1287,14 @@ async function runReplayLoop(id: string) {
           replaySafety.survivorshipBiasWarning,
           replaySafety.historicalDiscoveryFidelityWarning,
           replaySafety.zeroCostWarning,
+          replaySafety.aiModeHonestyDescription,
         ].filter(Boolean),
         limitations: [
           'Does not reconstruct complete historical market universe',
           'Fundamental/Macro/News/Kronos historical inputs unavailable or partial',
           'Consensus is CONSENSUS_MATH_REPLAY — not live ChiefTrader + LLM debate',
+          'aiMode LIVE_MODEL_REPLAY / RECORDED_DECISION_REPLAY are labeled but unwired (identical consensus math to DISABLED)',
+          'AI_DISABLED cannot approve with QuantEngine alone — needs ≥2 independent agreeing agents at threshold 0.75',
         ],
       },
       decisionFunnel: buildDecisionFunnel({
@@ -1173,6 +1309,9 @@ async function runReplayLoop(id: string) {
       // (non-point-in-time-filtered) bars. Never called from processTimestamp().
       missedOpportunities,
       missedOpportunityLabel: replaySafety.missedOpportunityLabel,
+      decisionEvidence,
+      decisionEvidenceSummary,
+      predictionOutcomeEvidence: decisionEvidenceSummary,
       performanceDiagnostics: {
         totalReplayDurationMs: Date.now() - session.replayStartedAtMs,
         stages: Object.fromEntries(

@@ -18,6 +18,7 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 | [`ARGUS_AI_CHANGE_RULES.md`](../ARGUS_AI_CHANGE_RULES.md) | Rules for AI-authored changes |
 | [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](../ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md) | Engine daemon + headless (one core; Vite optional) |
 | [`ARGUS_CLI.md`](../ARGUS_CLI.md) | HTTP CLI + process start/stop |
+| [`ARGUS_SHELL_CLI.md`](../ARGUS_SHELL_CLI.md) | `./argus` Bash operator control plane |
 | [`ARGUS_HISTORICAL_EVALUATION.md`](../ARGUS_HISTORICAL_EVALUATION.md) | MODE B replay product (not organic paper) |
 
 ---
@@ -32,7 +33,7 @@ Daily “is the desk working?” and “why no trades?”
 4. [ARGUS_FORENSIC_DEBUGGING_GUIDE.md](ARGUS_FORENSIC_DEBUGGING_GUIDE.md) — master map of the pipeline  
 5. Paper soak / LIVE_NO_GO: `CLAUDE.md` §5 and `GET /api/v2/live-readiness`  
 6. [ARGUS_MOBILE_SETTINGS.md](ARGUS_MOBILE_SETTINGS.md) — phone Settings tab (writable vs read-only; overlay APIs; does not arm LIVE)
-7. Engine without a browser: `npm run start:engine` then `npm run argus-cli -- status` — see `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`
+7. Engine without a browser: `./argus start` then `./argus status` (or `npm run start:engine` / `npm run argus-cli -- status`) — see `ARGUS_SHELL_CLI.md` and `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`
 
 Do not enable Autobot or LIVE from documentation.
 

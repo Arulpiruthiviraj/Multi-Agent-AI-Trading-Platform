@@ -37,11 +37,10 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
-import { rsiEngine } from '../engines/RSIEngine';
-import { macdEngine } from '../engines/MACDEngine';
 import { quantThresholds } from '../config/quantThresholds';
 import { generateTraceId } from '../core/traceId';
 import { notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
+import { evaluateTechnicalSignals } from './technicalSignal';
 
 export class TechnicalProposerAgent {
   // Tick-driven via MARKET_DATA (MarketDataWorker WebSocket), not a standalone 60s timer.
@@ -102,35 +101,6 @@ export class TechnicalProposerAgent {
     }
   }
 
-  private calcSMA(prices: number[], period: number) {
-    if (prices.length < period) return prices[prices.length - 1];
-    const slice = prices.slice(prices.length - period);
-    return slice.reduce((a, b) => a + b, 0) / period;
-  }
-  
-  private calcBollingerBands(prices: number[], period: number = quantThresholds.bollingerPeriod) {
-     const sma = this.calcSMA(prices, period);
-     const slice = prices.slice(prices.length - period);
-     let sumSq = 0;
-     for(let p of slice) {
-         sumSq += Math.pow(p - sma, 2);
-     }
-     const stdDev = Math.sqrt(sumSq / period);
-     return { upper: sma + (stdDev * 2), lower: sma - (stdDev * 2) };
-  }
-
-  private clamp01(v: number): number {
-    return Math.max(0, Math.min(1, v));
-  }
-
-  // Maps a 0-1 signal-strength score to a confidence in [0.55, 0.95] - a fired rule always has
-  // some baseline validity (it wouldn't have fired otherwise), and the strength score scales how
-  // far into "textbook" territory the actual indicator values are, rather than a fixed constant
-  // that doesn't distinguish a barely-triggered signal from an extreme one.
-  private strengthToConfidence(strength01: number): number {
-    return Number((0.55 + 0.40 * this.clamp01(strength01)).toFixed(3));
-  }
-
   private checkStrategies(symbol: string, prices: number[]) {
     const currentPrice = prices[prices.length - 1];
     const traceId = generateTraceId(symbol);
@@ -141,31 +111,27 @@ export class TechnicalProposerAgent {
     // exactly when this node began working versus when it produced a real result.
     eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_STARTED, { traceId, symbol, timestamp: new Date(startedAt).toISOString() });
 
-    const sma20 = this.calcSMA(prices, quantThresholds.bollingerPeriod);
-    const sma50 = this.calcSMA(prices, 50);
-    const rsi = rsiEngine.calculate(prices);
-    const macd = macdEngine.calculate(prices);
-    const bb = this.calcBollingerBands(prices, 20);
+    // Indicator math + the three strategy rules live in technicalSignal.ts - a pure extraction
+    // (behavior-preserving, see TechnicalAgent.checkStrategies-vs-technicalSignal.test.ts) so
+    // Historical Evaluation replay can reuse the exact same deterministic logic instead of a
+    // simplified proxy, with zero drift between live and replay.
+    const { indicators, momentumBreakout, meanReversion, overbought } = evaluateTechnicalSignals(prices);
+    const { rsi, sma20, sma50, macd, macdSignal, bbUpper, bbLower } = indicators;
 
-    eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
-    eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_COMPLETED, { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower });
+    eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd, bbUpper, bbLower });
+    eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_COMPLETED, { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd, bbUpper, bbLower });
 
-    // Momentum Breakout
-    if (currentPrice > sma20 && sma20 > sma50 && rsi > 50 && rsi < 70 && macd.macd > macd.signal) {
-      const rsiStrength = this.clamp01((rsi - 50) / 20);
-      const macdStrength = this.clamp01((macd.macd - macd.signal) / (currentPrice * 0.005));
-      const trendStrength = this.clamp01((sma20 - sma50) / (currentPrice * 0.02));
-      const confidence = this.strengthToConfidence((rsiStrength + macdStrength + trendStrength) / 3);
+    if (momentumBreakout) {
       eventBus.emitTradeIdea({
         traceId,
         symbol,
-        side: "BUY",
-        confidence,
+        side: momentumBreakout.side,
+        confidence: momentumBreakout.confidence,
         currentPrice,
-        reasoning: `Strong upward trend detected. MACD bullish crossover. RSI at ${rsi.toFixed(2)}.`,
+        reasoning: momentumBreakout.reasoning,
         agent: "TechnicalAgent",
         latencyMs: Date.now() - startedAt,
-        indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, macdSignal: macd.signal, bbUpper: bb.upper, bbLower: bb.lower },
+        indicatorsSnapshot: { rsi, sma20, sma50, macd, macdSignal, bbUpper, bbLower },
       });
       // Real bug found and fixed this pass: notePipelineAgentSuccess was only called after this
       // Momentum Breakout branch, not the Mean Reversion / Overbought branches below - a real,
@@ -175,42 +141,32 @@ export class TechnicalProposerAgent {
       notePipelineAgentSuccess('TechnicalAgent');
     }
 
-    // Mean Reversion
-    if (rsi < 30 && currentPrice < bb.lower) {
-      const rsiStrength = this.clamp01((30 - rsi) / 30);
-      const bandWidth = bb.upper - bb.lower;
-      const bbStrength = bandWidth > 0 ? this.clamp01((bb.lower - currentPrice) / bandWidth) : 0;
-      const confidence = this.strengthToConfidence((rsiStrength + bbStrength) / 2);
+    if (meanReversion) {
       eventBus.emitTradeIdea({
         traceId,
         symbol,
-        side: "BUY",
-        confidence,
+        side: meanReversion.side,
+        confidence: meanReversion.confidence,
         currentPrice,
-        reasoning: `Oversold condition. Price breached lower Bollinger Band with RSI at ${rsi.toFixed(2)}.`,
+        reasoning: meanReversion.reasoning,
         agent: "TechnicalAgent",
         latencyMs: Date.now() - startedAt,
-        indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower },
+        indicatorsSnapshot: { rsi, sma20, sma50, macd, bbUpper, bbLower },
       });
       notePipelineAgentSuccess('TechnicalAgent');
     }
 
-    // Overbought condition
-    if (rsi > 75 && currentPrice > bb.upper) {
-      const rsiStrength = this.clamp01((rsi - 75) / 25);
-      const bandWidth = bb.upper - bb.lower;
-      const bbStrength = bandWidth > 0 ? this.clamp01((currentPrice - bb.upper) / bandWidth) : 0;
-      const confidence = this.strengthToConfidence((rsiStrength + bbStrength) / 2);
+    if (overbought) {
       eventBus.emitTradeIdea({
         traceId,
         symbol,
-        side: "SELL",
-        confidence,
+        side: overbought.side,
+        confidence: overbought.confidence,
         currentPrice,
-        reasoning: `Overbought condition. Price exceeded upper Bollinger Band. RSI at ${rsi.toFixed(2)}.`,
+        reasoning: overbought.reasoning,
         agent: "TechnicalAgent",
         latencyMs: Date.now() - startedAt,
-        indicatorsSnapshot: { rsi, sma20, sma50, macd: macd.macd, bbUpper: bb.upper, bbLower: bb.lower },
+        indicatorsSnapshot: { rsi, sma20, sma50, macd, bbUpper, bbLower },
       });
       notePipelineAgentSuccess('TechnicalAgent');
     }

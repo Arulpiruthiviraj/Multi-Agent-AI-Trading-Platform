@@ -46,7 +46,7 @@ import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformanc
 import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety } from '../config/tradingSafety';
 import { isRuntimeFlagEnabled, resolveRuntimeNumber } from '../config/effectiveRuntimeConfig';
-import { deskIntelligence, rankEvaluationsForRegime } from '../config/deskIntelligence';
+import { deskIntelligence, rankEvaluationsForRegime, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
@@ -134,6 +134,12 @@ export class QuantSignalAgent {
       } catch (e: any) {
         notePipelineAgentFailure('QuantEngine', e);
         console.error(`[QuantSignalAgent] Failed to evaluate ${symbol}`, e.message);
+        // Shared Alpaca 429 backoff is armed inside HistoricalDataGateway — stop fan-out so
+        // remaining symbols do not storm the API. Fail closed: no fabricated bars/ideas.
+        if (/429|rate-limited|Too Many Requests/i.test(String(e?.message || ''))) {
+          console.warn(`[QuantSignalAgent] Alpaca rate limit — aborting remainder of quant cycle (${symbols.length} symbols).`);
+          break;
+        }
       }
     }
   }
@@ -313,7 +319,7 @@ export class QuantSignalAgent {
             relativeStrengthVsSpy: strategyContext.marketContext.relativeStrengthVsSPY?.relativeStrengthPct ?? null,
             vwapDistancePct: strategyContext.volume.vwap.distancePct,
             contradictions: matchedStrategyEvaluation?.contradictions,
-            newsEmitsTradeIdeas: deskIntelligence.newsEmitsTradeIdeas,
+            newsEmitsTradeIdeas: newsAgentEmitsTradeIdeas(),
           }),
         },
       });

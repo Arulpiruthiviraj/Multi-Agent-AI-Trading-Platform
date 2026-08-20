@@ -40,7 +40,10 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
     if (originalAlpacaSecret === undefined) delete process.env.ALPACA_SECRET_KEY; else process.env.ALPACA_SECRET_KEY = originalAlpacaSecret;
   });
 
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    historicalDataGateway.clearBarsRateLimitBackoff();
+  });
 
   async function seedRawBar(symbol: string, timeframe: string, timestamp: number, close: number) {
     await db.insert(schema.ohlcvBars).values({
@@ -188,5 +191,30 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
     expect(visible).toHaveLength(1);
     expect(visible[0].agent).toBe('TechnicalAgent');
     expect(visible[0].publishedAtMs).toBeLessThanOrEqual(nowMs);
+  });
+
+  it('arms a shared 429 backoff and fail-closes without fabricating bars', async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: false,
+      status: 429,
+      statusText: 'Too Many Requests',
+      headers: { get: (k: string) => (k.toLowerCase() === 'retry-after' ? '2' : null) },
+      text: async () => 'rate limited',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const now = Date.now();
+    await expect(
+      historicalDataGateway.ensureBars('RATE429', '1Day', now - 86_400_000, now),
+    ).rejects.toThrow(/429 Too Many Requests/);
+
+    expect(historicalDataGateway.getBarsRateLimitedUntilMs()).toBeGreaterThan(Date.now());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Subsequent ensureBars for any symbol must fail closed without another Alpaca call.
+    await expect(
+      historicalDataGateway.ensureBars('OTHER', '1Day', now - 86_400_000, now),
+    ).rejects.toThrow(/rate-limited until/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

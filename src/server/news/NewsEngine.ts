@@ -18,11 +18,13 @@ import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { generateTraceId } from '../core/traceId';
 import { randomUUID } from 'node:crypto';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
-import { deskIntelligence } from '../config/deskIntelligence';
+import { newsAgentEmitsTradeIdeas, newsAgentPipelineEnabled, newsAgentObservesPredictions } from '../config/deskIntelligence';
 import { recordNewsCatalyst } from '../services/NewsCatalystStore';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
-import { notePipelineAgentFailure, notePipelineAgentTick } from '../core/pipelineAgentHealth';
+import { notePipelineAgentFailure, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
+import { marketDataWorker } from '../services/MarketDataWorker';
+import { recordNewsPrediction } from './NewsPredictionLedger';
 
 // A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
 // entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.
@@ -41,6 +43,8 @@ export class NewsEngine {
   private scoringEngine: NewsScoringEngine;
   
   private intervalId: NodeJS.Timeout | null = null;
+  /** Prevent overlapping runPipeline ticks when LLM/RSS latency exceeds newsEngineMs. */
+  private pipelineInFlight = false;
 
   private constructor() {
     this.providerManager = new NewsProviderManager();
@@ -63,6 +67,14 @@ export class NewsEngine {
 
   public start() {
     if (this.intervalId) return;
+    // Phase F Step 2: newsAgentMode === 'DISABLED' is a new, additive capability - no prior
+    // config value could stop ingestion/clustering/news_veto feed entirely. Default mode
+    // (CATALYST_ONLY) never triggers this, so this is not a behavior change for any existing
+    // deployment's config.
+    if (!newsAgentPipelineEnabled()) {
+      console.log('[NewsEngine] newsAgentMode=DISABLED - not starting News Intelligence Pipeline.');
+      return;
+    }
     console.log('[NewsEngine] Starting News Intelligence Pipeline...');
     this.intervalId = setInterval(() => this.runPipeline(), runtimeIntervals.newsEngineMs);
     this.runPipeline();
@@ -77,9 +89,14 @@ export class NewsEngine {
   }
 
   private async runPipeline() {
+    if (this.pipelineInFlight) return;
+    this.pipelineInFlight = true;
     notePipelineAgentTick('NewsAgent');
+    let fetchedCount = 0;
+    let analyzedCount = 0;
     try {
     const rawArticles = await this.providerManager.fetchAllLatest();
+    fetchedCount = rawArticles.length;
     let llmCallsThisCycle = 0;
     
     for (const raw of rawArticles) {
@@ -100,18 +117,20 @@ export class NewsEngine {
           .filter((s): s is string => !!s);
         const impact = await this.impactEngine.assess(normalized, category);
         
-        const clusterId = await this.clusterEngine.createOrUpdateCluster(
+        const clusterOutcome = await this.clusterEngine.createOrUpdateCluster(
           normalized,
           category,
           impact,
           credibility,
           finalSymbols
         );
-        if (!clusterId) {
+        if (!clusterOutcome) {
           // Either a DB error, or (onConflictDoNothing) this article was already persisted in a
           // prior process lifetime - either way, don't burn an AI call re-analyzing it.
           continue;
         }
+        const { isNewCluster, priorArticleCount } = clusterOutcome;
+        analyzedCount += 1;
 
         const traceId = generateTraceId(finalSymbols[0] ?? 'NEWS');
 
@@ -128,7 +147,14 @@ export class NewsEngine {
         if (escalationDecision.escalate && llmCallsThisCycle < tradingSafety.newsLlmMaxCallsPerCycle) {
           llmCallsThisCycle += 1;
           try {
-            aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId);
+            aiAnalysis = await this.scoringEngine.analyzeWithAI(normalized, traceId, {
+              category,
+              impactScore01: impact.impactScore,
+              timeHorizon: impact.timeHorizon,
+              isNewCluster,
+              priorArticleCount,
+              credibility,
+            });
           } catch (llmErr) {
             console.warn(`[NewsEngine] LLM analysis threw; using ${impact.sentimentSource} so the NewsAgent cycle is not blocked.`, llmErr);
             aiAnalysis = null;
@@ -140,6 +166,10 @@ export class NewsEngine {
               category,
               sentiment: impact.sentiment,
               impactScore01: impact.impactScore,
+              timeHorizon: impact.timeHorizon,
+              isNewCluster,
+              priorArticleCount,
+              credibility,
               reasoning: `[Local-First] Remote LLM failed; using ${impact.sentimentSource} sentiment ${impact.sentiment.toFixed(2)}.`,
             });
           }
@@ -152,6 +182,10 @@ export class NewsEngine {
             category,
             sentiment: impact.sentiment,
             impactScore01: impact.impactScore,
+            timeHorizon: impact.timeHorizon,
+            isNewCluster,
+            priorArticleCount,
+            credibility,
             reasoning: escalationDecision.escalate
               ? `[Local-First] LLM cycle cap reached; using FinBERT sentiment ${impact.sentiment.toFixed(2)}.`
               : `[Local-First] FinBERT sentiment ${impact.sentiment > 0 ? 'positive' : 'negative'} (${impact.sentiment.toFixed(2)}) was decisive enough to skip the LLM call.`,
@@ -231,10 +265,33 @@ export class NewsEngine {
               };
               recordNewsCatalyst(catalyst);
               eventBus.emit(EVENTS.NEWS_CATALYST, catalyst);
+
+              // Phase F5: persist a prediction for later evaluation (Phase F6, not yet built)
+              // only in ACTIVE_OBSERVE and above - dormant at the CATALYST_ONLY default. Fire-
+              // and-forget like the rest of this loop's side effects; recordNewsPrediction
+              // catches its own errors and never throws.
+              if (newsAgentObservesPredictions()) {
+                void recordNewsPrediction({
+                  clusterId: clusterOutcome.clusterId,
+                  traceId,
+                  symbol,
+                  direction: aiAnalysis.tradingBias,
+                  confidence: aiAnalysis.confidence,
+                  expectedHorizon: aiAnalysis.expectedHorizon,
+                  referencePrice: marketDataWorker.getLatestPrice(symbol),
+                  reasoning: aiAnalysis.reasoning,
+                  materiality: aiAnalysis.materiality,
+                  catalystType: aiAnalysis.catalystType,
+                  riskLevel: aiAnalysis.riskLevel,
+                  riskVeto: aiAnalysis.riskVeto,
+                  sourceCount: clusterOutcome.sourceCount,
+                  modelSource: aiAnalysis._provider ?? 'local-first',
+                });
+              }
               // Default desk policy: news is a catalyst, not an independent BUY/SELL vote.
               // Mission Control NewsAgent switch gates ideas only; clustering above still runs
               // so RiskEngine news_veto is not starved.
-              if (deskIntelligence.newsEmitsTradeIdeas && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('NewsAgent')) {
+              if (newsAgentEmitsTradeIdeas() && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('NewsAgent')) {
                 const ticker = looksLikeListedTicker(symbol);
                 if (!ticker) return;
                 eventBus.emitTradeIdea({
@@ -279,7 +336,7 @@ export class NewsEngine {
 
         eventBus.publish(EVENTS.NEWS_ANALYZED, {
           id: normalized.id,
-          clusterId,
+          clusterId: clusterOutcome.clusterId,
           symbols: finalSymbols,
           impact: impact,
           credibility,
@@ -291,9 +348,23 @@ export class NewsEngine {
         console.error('[NewsEngine] Pipeline error for article:', raw.title, err);
       }
     }
+    // Heartbeat even when every article was a duplicate — Digital Twin otherwise stays IDLE
+    // between rare new headlines while MarketData pulses continuously on ticks.
+    eventBus.publish(EVENTS.NEWS_PIPELINE_TICK, {
+      telemetryPulse: true,
+      fetched: fetchedCount,
+      analyzed: analyzedCount,
+      at: new Date().toISOString(),
+    });
+    // A cycle that ran to completion (even zero new/qualifying articles) is a real success -
+    // was never recorded before, so lastSuccessfulTickAt stayed permanently null even on
+    // healthy cycles (see ARGUS_PHASE2_FORENSIC_AUDIT.md #3).
+    notePipelineAgentSuccess('NewsAgent');
     } catch (e) {
       notePipelineAgentFailure('NewsAgent', e);
       console.error('[NewsEngine] Pipeline tick failed (interval continues):', e);
+    } finally {
+      this.pipelineInFlight = false;
     }
   }
 }

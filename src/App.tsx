@@ -64,6 +64,7 @@ import WealthAffirmationOverlay from "./components/WealthAffirmationOverlay";
 import HyperAbundanceVortex from "./components/HyperAbundanceVortex";
 import DivineWealthOverlay from "./components/DivineWealthOverlay";
 import { WealthAffirmationToggle } from "./components/WealthAffirmationToggle";
+import { WealthVortexSoundBridge } from "./components/WealthVortexSoundBridge";
 import { useWealthAffirmationSettings } from "./context/WealthAffirmationSettingsContext";
 import GuardrailsPanel from "./components/GuardrailsPanel";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
@@ -964,7 +965,7 @@ function withCanonicalAutobotFlag(snapshot: any): any {
  */
 export default function App() {
   const { subscribe, setEnabled: setWsEnabled } = useWebSocket();
-  const { enableWealthAffirmations, enableHyperAbundanceMode, enableDivineWealthMode } = useWealthAffirmationSettings();
+  const { activeMode } = useWealthAffirmationSettings();
   // Hoisted from further down in this component: several fetch-on-mount effects earlier in the
   // function body need to depend on this (see the /api/v1/autobot effect below) - a useEffect's
   // dependency array is evaluated synchronously during render, so referencing a const declared
@@ -3537,13 +3538,14 @@ export default function App() {
       )}
       <AppWalkthrough />
       {showCoach && <AICoachPanel onClose={() => setShowCoach(false)} />}
-      {enableDivineWealthMode ? (
+      {activeMode === 'divine_omnipresent' ? (
         <DivineWealthOverlay />
-      ) : enableHyperAbundanceMode ? (
+      ) : activeMode === 'hyper_abundance_777' ? (
         <HyperAbundanceVortex />
-      ) : (
-        enableWealthAffirmations && <WealthAffirmationOverlay />
-      )}
+      ) : activeMode === 'sacred_gold_flow' ? (
+        <WealthAffirmationOverlay />
+      ) : null}
+      <WealthVortexSoundBridge />
       <LiveMarketNewsTicker />
       {enginesHalted && (
         <div className="bg-rose-600 px-4 py-2 flex flex-col gap-2 text-white w-full">

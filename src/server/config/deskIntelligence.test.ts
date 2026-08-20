@@ -4,11 +4,17 @@ import {
   familyForStrategy,
   regimeRelevanceForStrategy,
   rankEvaluationsForRegime,
+  newsAgentEmitsTradeIdeas,
+  newsAgentPipelineEnabled,
 } from './deskIntelligence';
 
 describe('deskIntelligence config', () => {
   it('loads reviewed JSON and never emits news as a default BUY/SELL idea', () => {
-    expect(deskIntelligence.newsEmitsTradeIdeas).toBe(false);
+    // CATALYST_ONLY is the functional-equivalence successor to the old `newsEmitsTradeIdeas: false`
+    // default (Phase F Step 2) - same real-world behavior, now expressed as an explicit mode.
+    expect(deskIntelligence.newsAgentMode).toBe('CATALYST_ONLY');
+    expect(newsAgentEmitsTradeIdeas()).toBe(false);
+    expect(newsAgentPipelineEnabled()).toBe(true);
     expect(deskIntelligence.minRiskRewardRatio).toBeGreaterThan(0);
     expect(familyForStrategy('MOMENTUM_BREAKOUT')).toBe('momentum');
     expect(familyForStrategy('MEAN_REVERSION')).toBe('mean_reversion');

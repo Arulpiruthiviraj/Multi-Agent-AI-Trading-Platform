@@ -78,8 +78,11 @@ export function getOpportunityScanUniverse(): string[] {
     ...continuousIntelligence.seedSymbols,
     ...continuousIntelligence.watchUniverseSymbols,
     // Additive only - empty unless ARGUS_BROAD_UNIVERSE_ENABLED and a refresh has already run.
-    // Every name still passes through evaluateOpportunityCandidate() below like any other entry.
-    ...getCachedBroadUniverseSymbols(),
+    // getCachedBroadUniverseSymbols() is already ranked by real dollar volume descending; take only
+    // the real top-N per scan rather than folding in the whole (up to broadUniverseMaxCandidates)
+    // cached list. Every name still passes through evaluateOpportunityCandidate() below like any
+    // other entry.
+    ...getCachedBroadUniverseSymbols().slice(0, continuousIntelligence.broadUniverseTopNPerScan),
   ];
   if (isPennyStockEnabled()) {
     names.push(...continuousIntelligence.pennyWatchSymbols);

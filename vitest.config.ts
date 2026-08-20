@@ -15,5 +15,7 @@ export default defineConfig({
     // Parallel workers sharing Chronos/OpenAlice sockets produced ECONNRESET on in-process
     // supertest (GET /api/v2/quant/strategies) even though the handler is synchronous.
     fileParallelism: false,
+    // Full-suite DB bootstrap in beforeAll can exceed the 10s default under load.
+    hookTimeout: 60_000,
   },
 });

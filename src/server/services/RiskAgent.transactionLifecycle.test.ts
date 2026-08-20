@@ -35,8 +35,6 @@ describe('CHIEF_APPROVED_IDEA -> RiskEngine -> transactions.status (Phase 16A re
   beforeAll(async () => {
     tmpDbPath = path.join(os.tmpdir(), `argus_txlifecycle_e2e_${Date.now()}_${process.pid}.db`);
     process.env.ARGUS_DB_PATH = tmpDbPath;
-    delete process.env.ALPACA_API_KEY;
-    delete process.env.ALPACA_SECRET_KEY;
 
     ({ db, sqliteDb } = await import('../db'));
     schema = await import('../db/schema');
@@ -54,6 +52,16 @@ describe('CHIEF_APPROVED_IDEA -> RiskEngine -> transactions.status (Phase 16A re
     const { tradingEngine } = await import('../engines/TradingEngine');
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+    // Deleting Alpaca keys BEFORE the imports above does not stick: EncryptionService.ts calls
+    // dotenv.config() on import, and default dotenv re-populates any currently-absent key from
+    // .env. That restored real credentials mid-setup (see vitest "injected env from .env"), so
+    // readMarketClock() hit the live Alpaca /v2/clock instead of short-circuiting to
+    // 'unconfigured'. A slow/hung clock call left evaluateRisk unfinished past this test's poll
+    // window → transactions.status stayed OPEN (Expected RISK_REJECTED). Same hazard/fix as
+    // RiskEngine.gates.test.ts — delete AFTER the import chain has finished any dotenv reload.
+    delete process.env.ALPACA_API_KEY;
+    delete process.env.ALPACA_SECRET_KEY;
   });
 
   afterAll(() => {

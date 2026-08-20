@@ -63,14 +63,14 @@ describe('CSV/Markdown export - additional kinds', () => {
       { timestamp: 100, symbol: 'ABC', side: 'BUY', reason: 'RISK_REJECTED', traceId: 'trace-1' },
     ]);
     const csv = exportRejectionsCsv(id);
-    expect(csv).toContain('timestamp,symbol,side,reason,traceId');
+    expect(csv).toContain('timestamp,symbol,side,reason,traceId,rejectionGate');
     expect(csv).toContain('100,ABC,BUY,RISK_REJECTED,trace-1');
   });
 
   it('exportRejectionsCsv returns just the header for a replay with zero rejections', () => {
     const emptyId = crypto.randomUUID();
     writeReplayJson(emptyId, 'rejected_orders.json', []);
-    expect(exportRejectionsCsv(emptyId)).toBe('timestamp,symbol,side,reason,traceId');
+    expect(exportRejectionsCsv(emptyId)).toBe('timestamp,symbol,side,reason,traceId,rejectionGate');
   });
 
   it('exportMissedOpportunitiesCsv renders the AFTER-THE-FACT ANALYSIS fields', () => {

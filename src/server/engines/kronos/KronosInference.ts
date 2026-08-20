@@ -20,14 +20,17 @@ const SERVICE_URL = resolveLocalAiServiceUrl();
 // call - avoids flooding ChiefTraderAgent with BUY/SELL ideas on sub-tenth-of-a-percent wobble.
 const NEUTRAL_BAND_PCT = quantThresholds.kronosNeutralBandPct;
 
-interface ChronosForecastResponse {
+export interface ChronosForecastResponse {
   model: string;
   low: number[];
   median: number[];
   high: number[];
+  latencyMs?: number;
+  device?: string;
 }
 
 async function callForecastService(prices: number[], horizon: number): Promise<ChronosForecastResponse> {
+  const started = Date.now();
   let res: Response;
   try {
     res = await fetch(`${SERVICE_URL}/forecast`, {
@@ -43,7 +46,11 @@ async function callForecastService(prices: number[], horizon: number): Promise<C
     const body = await res.text().catch(() => '');
     throw new Error(`KRONOS_UNAVAILABLE: local inference service returned ${res.status}: ${body.slice(0, 200)}`);
   }
-  return res.json();
+  const json = await res.json() as ChronosForecastResponse;
+  if (typeof json.latencyMs !== 'number' || !Number.isFinite(json.latencyMs)) {
+    json.latencyMs = Date.now() - started;
+  }
+  return json;
 }
 
 // Accepts either plain closing prices or candle-like objects (close/price field) - keeps this
@@ -81,7 +88,11 @@ function buildPrediction(symbol: string, timeframe: string, horizon: number, las
     resistance: Number(highEnd.toFixed(4)),
     model: `${forecast.model} (local)`,
     timestamp: new Date().toISOString(),
-    predictedOHLC: forecast.median.map((close) => ({ close })),
+    predictedOHLC: forecast.median.map((close, i) => ({
+      close,
+      low: forecast.low[i],
+      high: forecast.high[i],
+    })),
     momentum: direction === 'BUY' ? 'bullish' : direction === 'SELL' ? 'bearish' : 'neutral',
   };
 }
@@ -96,13 +107,15 @@ export class KronosInference {
     };
   }
 
-  public async predict(symbol: string, horizon: number, timeframe: string, ohlcvData: any[]): Promise<ForecastPrediction> {
+  public async predict(symbol: string, horizon: number, timeframe: string, ohlcvData: any[]): Promise<ForecastPrediction & { latencyMs?: number }> {
     const closes = toCloses(ohlcvData);
     if (closes.length < 5) {
       throw new Error(`KRONOS_UNAVAILABLE: need at least 5 price points, got ${closes.length}.`);
     }
     const forecast = await callForecastService(closes, horizon);
-    return buildPrediction(symbol, timeframe, horizon, closes[closes.length - 1], forecast);
+    const prediction = buildPrediction(symbol, timeframe, horizon, closes[closes.length - 1], forecast) as ForecastPrediction & { latencyMs?: number };
+    prediction.latencyMs = forecast.latencyMs;
+    return prediction;
   }
 
   public async batchPredict(symbols: string[], horizon: number, timeframe: string, dataMap: Record<string, any[]>): Promise<ForecastPrediction[]> {

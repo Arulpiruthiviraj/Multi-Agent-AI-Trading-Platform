@@ -6,11 +6,16 @@
  * list that OpportunityDiscovery.getOpportunityScanUniverse() merges in and runs through the
  * exact same evaluateOpportunityCandidate() gate the fixed seed/watch lists already go through.
  *
- * Two-stage funnel, both cheap relative to a full market scan:
+ * Three-stage funnel, each stage cheaper than the last relative to a full market scan:
  *  1) fetchTradableAssets() - Alpaca's real tradable-assets list (thousands of rows), cached for
  *     broadUniverseAssetsCacheTtlMs since exchange listings change rarely intraday.
- *  2) screenAssets() - batched market-data snapshots (price/volume/spread), cached for the much
- *     shorter broadUniverseSnapshotCacheTtlMs, filtered down to broadUniverseMaxCandidates.
+ *  2) screenAssets() - batched market-data snapshots (price/1-day volume/spread) against every
+ *     tradable asset, filtered by passesScreen() down to a much smaller shortlist.
+ *  3) fetchAvgDailyVolumeShares() - only for stage-2 survivors (not all thousands of assets): a
+ *     real broadUniverseAdvLookbackDays-day average volume in shares via Alpaca's batched
+ *     multi-symbol bars endpoint - a genuine ADV, not a fabricated one from a single day's bar.
+ *     Symbols a batch fails to return bars for are excluded (fail-closed), not assumed liquid.
+ * Final candidate list is ranked by dollar volume descending and capped at broadUniverseMaxCandidates.
  */
 import { continuousIntelligence, isBroadUniverseEnabled } from '../config/continuousIntelligence';
 import { networkEndpoints } from '../config/networkEndpoints';
@@ -135,6 +140,47 @@ function passesScreen(snap: AlpacaSnapshot): boolean {
   return true;
 }
 
+interface AlpacaBarsResponse {
+  bars: Record<string, Array<{ v?: number }>> | null;
+}
+
+/**
+ * Real broadUniverseAdvLookbackDays-day average daily volume (shares) per symbol, via Alpaca's
+ * batched multi-symbol bars endpoint. Only call this on an already-narrowed shortlist (stage-2
+ * survivors), not the full tradable-assets list - same batching shape as screenAssets(). A batch
+ * that fails, or a symbol with no bars in the response, is simply excluded from the returned map -
+ * never assumed to pass, never a fabricated average.
+ */
+export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<string, number>> {
+  const batchSize = continuousIntelligence.broadUniverseSnapshotBatchSize;
+  const days = continuousIntelligence.broadUniverseAdvLookbackDays;
+  const out = new Map<string, number>();
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize);
+    const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/bars?symbols=${batch.join(',')}&timeframe=1Day&limit=${days}&adjustment=raw&feed=iex`;
+    try {
+      const raw = await fetchJson<AlpacaBarsResponse>(url, 15000);
+      for (const symbol of batch) {
+        const bars = raw.bars?.[symbol];
+        if (!Array.isArray(bars) || bars.length === 0) continue;
+        const volumes = bars
+          .map((b) => b.v)
+          .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+        if (volumes.length === 0) continue;
+        out.set(symbol, volumes.reduce((a, b) => a + b, 0) / volumes.length);
+      }
+    } catch (e) {
+      logErrorSafely('[MarketUniverseScanner] ADV batch failed', e);
+    }
+  }
+  return out;
+}
+
+function passesAdvScreen(symbol: string, advMap: Map<string, number>): boolean {
+  const adv = advMap.get(symbol);
+  return adv != null && adv >= continuousIntelligence.broadUniverseMinAvgDailyVolumeShares;
+}
+
 /** Full refresh: fetch tradable assets, screen them, cache the resulting candidate symbol list. */
 export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
   if (!isBroadUniverseEnabled()) {
@@ -146,8 +192,10 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
   try {
     const assets = await fetchTradableAssets();
     const screened = await screenAssets(assets);
-    const passing = screened
-      .filter(passesScreen)
+    const stage2 = screened.filter(passesScreen);
+    const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
+    const passing = stage2
+      .filter((s) => passesAdvScreen(s.symbol, advMap))
       .sort((a, b) => b.dollarVolume - a.dollarVolume)
       .slice(0, continuousIntelligence.broadUniverseMaxCandidates)
       .map((s) => s.symbol);

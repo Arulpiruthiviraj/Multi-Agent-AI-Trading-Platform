@@ -51,12 +51,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { eventBus } from '../core/EventBus';
 import { recordConsensusTransaction } from '../core/TransactionRegistry';
 import { oms } from '../services/OrderManagement';
+import { withTimeout } from '../services/brokerPortfolioResponse';
 import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } from '../quant/strategies/StrategyEngine';
 import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
 import { experimentalStrategyRow } from '../config/quantExperimentalStrategies';
 import { quantStrategyTaxonomySummary } from '../config/quantStrategyTaxonomy';
 import { quantForumStrategies } from '../config/quantForumStrategies';
-import { deskIntelligence } from '../config/deskIntelligence';
+import { deskIntelligence, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
 import { noTradeReasonsConfig } from '../config/noTradeReasons';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
@@ -1313,7 +1314,8 @@ v2Router.get('/desk/intelligence', (_req, res) => {
     ok: true,
     defaultDecision: 'NO_TRADE',
     liveIdeaGenerationEnabled: isLiveIdeaGenerationEnabled(),
-    newsEmitsTradeIdeas: deskIntelligence.newsEmitsTradeIdeas,
+    newsAgentMode: deskIntelligence.newsAgentMode,
+    newsEmitsTradeIdeas: newsAgentEmitsTradeIdeas(),
     minRiskRewardRatio: deskIntelligence.minRiskRewardRatio,
     noTradeReasons: noTradeReasonsConfig.reasons,
     recentCatalysts: listRecentNewsCatalysts(15),
@@ -1602,17 +1604,27 @@ v2Router.get('/orchestration/capital', async (_req, res) => {
     const broker = BrokerManager.getInstance().getActiveBroker();
     let pf: any;
     try {
-      pf = await broker.portfolio();
+      // Real bug found and fixed (2026-08-20, confirmed live in data/logs/crash.log): this call
+      // had no timeout of its own, unlike GET /api/v1/portfolio's broker.portfolio() a few lines
+      // over. A slow/hanging broker call here could keep this handler pending past server.ts's
+      // global 15s per-request backstop, which then sends its own 504 - this handler's eventual
+      // res.json() below threw ERR_HTTP_HEADERS_SENT on the second write. Bounded to 5s (well
+      // under the 15s backstop) plus headersSent guards on every write in this handler as
+      // defense in depth.
+      pf = await withTimeout(broker.portfolio(), 5000, 'broker.portfolio (orchestration/capital)');
     } catch (e: any) {
-      return res.json({
-        ok: true,
-        available: false,
-        what: 'BROKER DATA UNAVAILABLE',
-        why: e?.message ?? String(e),
-        impact: 'Argus will not substitute fake equity, cash, or P&L. RiskEngine still refuses invalid equity.',
-        howToFix: 'Restore broker API connectivity (keys, network, 2FA, permissions, rate limits).',
-        argus: snapshotCapital({ allocated: Number.isFinite(allocated) ? allocated : 0, positions: [], pendingBuys: [] }),
-      });
+      if (!res.headersSent) {
+        return res.json({
+          ok: true,
+          available: false,
+          what: 'BROKER DATA UNAVAILABLE',
+          why: e?.message ?? String(e),
+          impact: 'Argus will not substitute fake equity, cash, or P&L. RiskEngine still refuses invalid equity.',
+          howToFix: 'Restore broker API connectivity (keys, network, 2FA, permissions, rate limits).',
+          argus: snapshotCapital({ allocated: Number.isFinite(allocated) ? allocated : 0, positions: [], pendingBuys: [] }),
+        });
+      }
+      return;
     }
     const allTrades = await db.select().from(trades);
     const pendingBuys = (allTrades || []).filter((t: any) =>
@@ -1625,7 +1637,7 @@ v2Router.get('/orchestration/capital', async (_req, res) => {
     });
     let openOrders = 0;
     try {
-      const orders = await broker.orders();
+      const orders = await withTimeout(broker.orders(), 5000, 'broker.orders (orchestration/capital)');
       openOrders = (orders || []).filter((o: any) => o.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(String(o.status).toUpperCase())).length;
     } catch {
       openOrders = pendingBuys.length;
@@ -1635,24 +1647,26 @@ v2Router.get('/orchestration/capital', async (_req, res) => {
       const px = Number(p.averagePrice ?? p.avgPrice ?? 0) || 0;
       return s + qty * px;
     }, 0);
-    res.json({
-      ok: true,
-      available: true,
-      broker: {
-        equity: pf.equity,
-        cash: pf.cash,
-        buyingPower: pf.buyingPower,
-        investedCapital: invested,
-        unrealizedPnl: pf.unrealizedPnl ?? null,
-        realizedPnl: pf.realizedPnl ?? null,
-        dailyPnl: pf.dailyPnl ?? null,
-        openPositions: (pf.positions || []).length,
-        openOrders,
-      },
-      argus,
-    });
+    if (!res.headersSent) {
+      res.json({
+        ok: true,
+        available: true,
+        broker: {
+          equity: pf.equity,
+          cash: pf.cash,
+          buyingPower: pf.buyingPower,
+          investedCapital: invested,
+          unrealizedPnl: pf.unrealizedPnl ?? null,
+          realizedPnl: pf.realizedPnl ?? null,
+          dailyPnl: pf.dailyPnl ?? null,
+          openPositions: (pf.positions || []).length,
+          openOrders,
+        },
+        argus,
+      });
+    }
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 

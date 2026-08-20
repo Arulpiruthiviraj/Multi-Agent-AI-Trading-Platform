@@ -26,6 +26,7 @@
   "aiTimeoutMs": 15000,
   "defaultAiMode": "DISABLED",
   "aiModes": ["LIVE_MODEL_REPLAY", "RECORDED_DECISION_REPLAY", "DISABLED"],
+  "aiModeHonestyDescription": "aiMode does not invoke AIRouter or fabricate historical LLM debate. DISABLED is honest. LIVE_MODEL_REPLAY and RECORDED_DECISION_REPLAY are labeled but unwired (no point-in-time LLM corpus); they do not change consensus math. TechnicalAgent replay uses live technicalSignal.ts confidence range [0.55,0.95] when a rule independently fires — not the old rsi>50?0.55:0.45 proxy. Consensus floors remain tradingSafety consensusApprovalThreshold=0.75 and minIndependentAgreeingAgents=2.",
   "allowBuysInReplay": true,
   "shortSellingDefault": false,
   "fractionalSharesDefault": false,

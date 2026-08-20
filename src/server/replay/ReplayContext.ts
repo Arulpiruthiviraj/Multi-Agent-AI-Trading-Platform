@@ -111,8 +111,14 @@ export interface ActiveReplaySession {
     side: string;
     reason: string;
     traceId?: string;
+    rejectionGate?: string | null;
   }>;
   agentAvailability: Record<string, { status: string; reason: string }>;
+  /**
+   * Additive decision evidence for machine analysis (votes, consensus, risk gates).
+   * Forward MFE/MAE attached only after terminal status — see decisionEvidence.ts.
+   */
+  decisionEvidence: import('./decisionEvidence').DecisionEvidenceRecord[];
   /** Total symbol-timestamp evaluation instances entering the main loop body (funnel denominator). */
   evaluationsAttempted: number;
   /**
@@ -129,7 +135,15 @@ export interface ActiveReplaySession {
   currentBarIndex: number;
   currentTimestamp: number | null;
   /** Post-run-only retrospective candidate pool: consensus rejections with a reference price. Never read during the live decision loop. */
-  rejectionsForRetrospective: Array<{ symbol: string; timestamp: number; reason: string; referencePrice: number }>;
+  rejectionsForRetrospective: Array<{
+    symbol: string;
+    timestamp: number;
+    reason: string;
+    referencePrice: number;
+    agentVotes?: Array<{ agent: string; side: string; confidence: number; weight: number | null }>;
+    weightedConfidence?: number;
+    independentAgreeingAgents?: number;
+  }>;
   /** Per-agent idea tally for the run (agent name -> counts), built up as ideas are generated. */
   agentIdeaStats: Record<string, { ideas: number; buyIdeas: number; sellIdeas: number; confidenceSum: number }>;
   /** Coarse per-stage wall-clock timing (replay processing time, not simulated market latency). */

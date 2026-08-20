@@ -1,12 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { recordNewsCatalyst, getNewsCatalysts, clearNewsCatalystsForTests } from './NewsCatalystStore';
-import { deskIntelligence } from '../config/deskIntelligence';
+import { newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 
 describe('NewsCatalystStore', () => {
   beforeEach(() => clearNewsCatalystsForTests());
 
   it('stores catalysts without implying an order', () => {
-    expect(deskIntelligence.newsEmitsTradeIdeas).toBe(false);
+    expect(newsAgentEmitsTradeIdeas()).toBe(false);
     recordNewsCatalyst({
       traceId: 't1',
       symbol: 'aapl',

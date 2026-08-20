@@ -316,6 +316,12 @@ describe('Phase 18 full Argus replay on golden fixture', () => {
     expect((started as any).report?.buyTrades).toBeGreaterThanOrEqual(1);
     expect((started as any).report?.sellTrades).toBeGreaterThanOrEqual(1);
     expect(fs.existsSync(path.join(tmpReplay, String(created.replayId), 'summary.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpReplay, String(created.replayId), 'decision_evidence.json'))).toBe(true);
+    expect((started as any).decisionEvidenceSummary?.schema).toBe('argus.historical_decision_evidence.v1');
+    expect((started as any).ai?.honesty?.llmVotesInvoked).toBe(false);
+    expect((started as any).historicalEvaluation?.consensusFloors?.consensusApprovalThreshold).toBe(0.75);
+    expect((started as any).historicalEvaluation?.consensusFloors?.minIndependentAgreeingAgents).toBe(2);
+    expect((started as any).historicalEvaluation?.consensusFloors?.notLowered).toBe(true);
   }, 120000);
 
   it('second identical create+start is deterministic on hashes', async () => {

@@ -168,4 +168,19 @@ describe('AuthConfig - mutating API lockdown when AUTH_PASSWORD is unset', () =>
       env: { ...noAuth, ARGUS_DEV_TOKEN: 'unit-test-dev-token-ok' },
     })).toBe(true);
   });
+
+  it('does NOT allow ARGUS_DEV_TOKEN (or loopback) as a bypass when AUTH_PASSWORD is set', () => {
+    expect(allowUnauthenticatedRequest({
+      method: 'GET',
+      path: '/api/v2/runtime/status',
+      ip: '127.0.0.1',
+      devTokenHeader: 'unit-test-dev-token-ok',
+      env: {
+        AUTH_USERNAME: 'admin',
+        AUTH_PASSWORD: 'correct-horse-battery-staple',
+        ARGUS_DEV_TOKEN: 'unit-test-dev-token-ok',
+        NODE_ENV: 'development',
+      },
+    })).toBe(false);
+  });
 });

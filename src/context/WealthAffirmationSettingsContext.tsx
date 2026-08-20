@@ -2,85 +2,85 @@
  * ==========================================================
  * COMPONENT: WealthAffirmationSettingsContext
  *
- * Browser-only mindset preferences (default all false):
- * - enableWealthAffirmations
- * - enableHyperAbundanceMode
- * - enableDivineWealthMode
+ * Browser-only mindset preference for the Divine Wealth &
+ * Hyper-Abundance Vortex (master toggle + intensity mode + sound).
  * Never sent to backend; never touches EventBus / RiskEngine / P&L.
  * ==========================================================
  */
-import React, { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from 'react';
-
-const KEY_AFFIRM = 'argus_enable_wealth_affirmations';
-const KEY_HYPER = 'argus_enable_hyper_abundance_mode';
-const KEY_DIVINE = 'argus_enable_divine_wealth_mode';
-
-function readBool(key: string, fallback = false): boolean {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw === null) return fallback;
-    return raw === 'true';
-  } catch {
-    return fallback;
-  }
-}
-
-function writeBool(key: string, value: boolean) {
-  try {
-    localStorage.setItem(key, String(value));
-  } catch {
-    /* private mode / quota */
-  }
-}
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+import {
+  DEFAULT_WEALTH_VORTEX,
+  loadWealthVortexSettings,
+  saveWealthVortexSettings,
+  type WealthVortexMode,
+  type WealthVortexSettings,
+} from './wealthVortexStore';
+import { playWealthChime } from './wealthVortexSound';
 
 interface WealthAffirmationSettings {
-  enableWealthAffirmations: boolean;
-  setEnableWealthAffirmations: (enabled: boolean) => void;
-  enableHyperAbundanceMode: boolean;
-  setEnableHyperAbundanceMode: (enabled: boolean) => void;
-  enableDivineWealthMode: boolean;
-  setEnableDivineWealthMode: (enabled: boolean) => void;
+  enabled: boolean;
+  mode: WealthVortexMode;
+  sound: boolean;
+  setEnabled: (enabled: boolean) => void;
+  setMode: (mode: WealthVortexMode) => void;
+  setSound: (sound: boolean) => void;
+  /** Convenience: active intensity when master is on. */
+  activeMode: WealthVortexMode | null;
 }
 
 const WealthAffirmationSettingsContext = createContext<WealthAffirmationSettings | null>(null);
 
+function persist(next: WealthVortexSettings) {
+  saveWealthVortexSettings(next);
+}
+
 export function WealthAffirmationSettingsProvider({ children }: { children: ReactNode }) {
-  const [enableWealthAffirmations, setAffirm] = useState(() => readBool(KEY_AFFIRM, false));
-  const [enableHyperAbundanceMode, setHyper] = useState(() => readBool(KEY_HYPER, false));
-  const [enableDivineWealthMode, setDivine] = useState(() => readBool(KEY_DIVINE, false));
+  const [settings, setSettings] = useState<WealthVortexSettings>(() => loadWealthVortexSettings());
 
-  const setEnableWealthAffirmations = useCallback((enabled: boolean) => {
-    setAffirm(enabled);
-    writeBool(KEY_AFFIRM, enabled);
+  const setEnabled = useCallback((enabled: boolean) => {
+    setSettings((prev) => {
+      const next = { ...prev, enabled };
+      persist(next);
+      if (enabled && next.sound) playWealthChime();
+      return next;
+    });
   }, []);
 
-  const setEnableHyperAbundanceMode = useCallback((enabled: boolean) => {
-    setHyper(enabled);
-    writeBool(KEY_HYPER, enabled);
+  const setMode = useCallback((mode: WealthVortexMode) => {
+    setSettings((prev) => {
+      const next = { ...prev, mode };
+      persist(next);
+      return next;
+    });
   }, []);
 
-  const setEnableDivineWealthMode = useCallback((enabled: boolean) => {
-    setDivine(enabled);
-    writeBool(KEY_DIVINE, enabled);
+  const setSound = useCallback((sound: boolean) => {
+    setSettings((prev) => {
+      const next = { ...prev, sound };
+      persist(next);
+      if (sound) playWealthChime();
+      return next;
+    });
   }, []);
 
   const value = useMemo(
     () => ({
-      enableWealthAffirmations,
-      setEnableWealthAffirmations,
-      enableHyperAbundanceMode,
-      setEnableHyperAbundanceMode,
-      enableDivineWealthMode,
-      setEnableDivineWealthMode,
+      enabled: settings.enabled,
+      mode: settings.mode,
+      sound: settings.sound,
+      setEnabled,
+      setMode,
+      setSound,
+      activeMode: settings.enabled ? settings.mode : null,
     }),
-    [
-      enableWealthAffirmations,
-      setEnableWealthAffirmations,
-      enableHyperAbundanceMode,
-      setEnableHyperAbundanceMode,
-      enableDivineWealthMode,
-      setEnableDivineWealthMode,
-    ],
+    [settings.enabled, settings.mode, settings.sound, setEnabled, setMode, setSound],
   );
 
   return (
@@ -90,17 +90,17 @@ export function WealthAffirmationSettingsProvider({ children }: { children: Reac
   );
 }
 
+const FALLBACK: WealthAffirmationSettings = {
+  enabled: false,
+  mode: DEFAULT_WEALTH_VORTEX.mode,
+  sound: false,
+  setEnabled: () => {},
+  setMode: () => {},
+  setSound: () => {},
+  activeMode: null,
+};
+
 export function useWealthAffirmationSettings(): WealthAffirmationSettings {
   const ctx = useContext(WealthAffirmationSettingsContext);
-  if (!ctx) {
-    return {
-      enableWealthAffirmations: false,
-      setEnableWealthAffirmations: () => {},
-      enableHyperAbundanceMode: false,
-      setEnableHyperAbundanceMode: () => {},
-      enableDivineWealthMode: false,
-      setEnableDivineWealthMode: () => {},
-    };
-  }
-  return ctx;
+  return ctx ?? FALLBACK;
 }

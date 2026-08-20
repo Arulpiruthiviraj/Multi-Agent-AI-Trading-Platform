@@ -77,8 +77,22 @@ Advanced/debug: `OPERATOR_SELECTED` + explicit symbols.
 ## Consensus
 
 - Mode: `CONSENSUS_MATH_REPLAY`
-- Thresholds from `tradingSafety.json`: `consensusApprovalThreshold` (0.75), `minIndependentAgreeingAgents` (2)
+- Thresholds from `tradingSafety.json`: `consensusApprovalThreshold` (0.75), `minIndependentAgreeingAgents` (2) — **not lowered for replay**
 - Implementation: `replayChiefTraderFromEvidence()` in `PitReplay.ts`
+- TechnicalAgent replay uses live `technicalSignal.ts` confidence range **[0.55, 0.95]** when a rule independently fires (never mirrors QuantEngine side)
+- **AI_DISABLED fidelity:** QuantEngine alone cannot approve (needs ≥2 independent agreeing agents). Approval is reachable when Quant + Technical independently agree with sufficient confidence — not by inventing LLM votes
+- **`aiMode` honesty:** `DISABLED` is the real default. `LIVE_MODEL_REPLAY` / `RECORDED_DECISION_REPLAY` are **labeled but unwired** (no PIT LLM corpus; see `aiReplayAvailability.ts` / `replaySafety.aiModeHonestyDescription`). They do not change consensus math today
+
+## Prediction vs outcome evidence (additive)
+
+Each completed run writes `decision_evidence.json` (`argus.historical_decision_evidence.v1`) with:
+
+- Agent votes (side, confidence, weight)
+- Consensus math (weighted confidence, independent agents, floors)
+- Risk gate snapshots + `rejectionGate` when RiskEngine ran
+- Forward return / MFE / MAE — **AFTER-THE-FACT only** (same contract as missed opportunities)
+
+Also mirrored in `summary.json` as `decisionEvidence` / `predictionOutcomeEvidence`. Does **not** auto-tune live weights or thresholds.
 
 ## Fill model
 

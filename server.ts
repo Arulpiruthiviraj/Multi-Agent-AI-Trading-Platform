@@ -107,6 +107,7 @@ import { marketDataWorker } from "./src/server/services/MarketDataWorker";
 import { submitPipelineSells } from "./src/server/services/PipelineFlatten";
 import { validateTargetAllocations, executeRebalance } from "./src/server/services/PortfolioRebalance";
 import { brokerPortfolioError, withTimeout } from "./src/server/services/brokerPortfolioResponse";
+import { resolvePositionStopTarget } from "./src/server/services/PortfolioMonitor";
 import { loadInternalNewsForTicker } from "./src/server/services/internalNewsForTicker";
 import { tradingSafety } from "./src/server/config/tradingSafety";
 import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest } from "./src/server/core/AuthConfig";
@@ -1137,19 +1138,43 @@ let portfolioState = loadPortfolio();
       }
       const drawdown = (portfolioState.peakValuation - portfolio.equity) / portfolioState.peakValuation;
 
-      res.json({
-         available: true,
-         cash: portfolio.cash,
-         buying_power: portfolio.buyingPower,
-         equity: portfolio.equity,
-         positions: portfolio.positions,
-         peakValuation: portfolioState.peakValuation,
-         drawdown: Number(drawdown.toFixed(4))
-      });
+      // Real stop-loss/take-profit price per position (not "--"), matching whatever will
+      // actually trigger PortfolioMonitor's own exit for that exact position - see
+      // resolvePositionStopTarget's doc comment. Best-effort per position: a DB lookup failing
+      // for one symbol must not take down the whole portfolio response.
+      const positionsWithStopTarget = await Promise.all(
+        (portfolio.positions || []).map(async (p: any) => {
+          try {
+            const { stopLossPrice, takeProfitPrice } = await resolvePositionStopTarget(p.symbol, p.averagePrice);
+            return { ...p, stopLossPrice, takeProfitPrice };
+          } catch {
+            return p;
+          }
+        }),
+      );
+
+      // Real bug found and fixed (2026-08-20, confirmed live in data/logs/crash.log): this
+      // route's own broker.portfolio() timeout (tradingSafety.alpacaRequestTimeoutMs, 15000ms)
+      // is the exact same duration as server.ts's global per-request 15s backstop, so under a
+      // slow/degraded broker call the two can race - the backstop sends its 504 first, then this
+      // handler's await finally resolves/rejects and tries to write a second response, throwing
+      // ERR_HTTP_HEADERS_SENT. Guarding with headersSent (rather than re-tuning either timeout)
+      // makes the second, now-pointless write a no-op instead of a thrown, logged error.
+      if (!res.headersSent) {
+        res.json({
+           available: true,
+           cash: portfolio.cash,
+           buying_power: portfolio.buyingPower,
+           equity: portfolio.equity,
+           positions: positionsWithStopTarget,
+           peakValuation: portfolioState.peakValuation,
+           drawdown: Number(drawdown.toFixed(4))
+        });
+      }
     } catch(e: any) {
       const mapped = brokerPortfolioError(e);
       console.error("Broker Portfolio Error:", mapped.body.reason);
-      res.status(mapped.status).json(mapped.body);
+      if (!res.headersSent) res.status(mapped.status).json(mapped.body);
     }
   });
 
@@ -1676,6 +1701,25 @@ let portfolioState = loadPortfolio();
   app.get("/api/v1/kronos/status", async (_req, res) => {
     try {
       res.json(await kronosEngine.getStatusFresh());
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/v1/kronos/metrics", async (_req, res) => {
+    try {
+      const { getKronosHistoricalMetrics } = await import("./src/server/engines/kronos/KronosDashboardData");
+      res.json(await getKronosHistoricalMetrics());
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.get("/api/v1/kronos/forecast", async (req, res) => {
+    try {
+      const { getKronosLatestForecast } = await import("./src/server/engines/kronos/KronosDashboardData");
+      const symbol = typeof req.query.symbol === "string" ? req.query.symbol : null;
+      res.json(await getKronosLatestForecast(symbol));
     } catch (e: any) {
       res.status(500).json({ error: e.message });
     }

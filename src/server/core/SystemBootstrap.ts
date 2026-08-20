@@ -86,6 +86,9 @@ export class SystemBootstrap {
     
     marketDataWorker.start();
     portfolioMonitor.start();
+    // Portfolio reconciliation is started at ArgusCoreBoot (independent of Autobot) so an
+    // interrupted-session entry hold can clear on in-process RECONCILIATION_MATCH without
+    // requiring Autobot on. Idempotent if already started.
     portfolioReconciliationWorker.start();
     // No-ops unless ARGUS_OPPORTUNITY_LOOP_ENABLED=true (default false) - was previously never
     // constructed/started by any boot path at all (real defect: the flag existed but nothing ever
@@ -118,9 +121,13 @@ export class SystemBootstrap {
     // were set. marketDataWorker.stop() remains available for process shutdown.
     oms.stop();
     portfolioMonitor.stop();
-    portfolioReconciliationWorker.stop();
+    // Recon stays up when Autobot is off (same pattern as MarketDataWorker / NewsEngine) so
+    // RECONCILIATION_MATCH can release the interrupted-session *entry* hold without enabling
+    // Autobot. portfolioReconciliationWorker.stop() remains for process shutdown drain.
     opportunityDiscoveryWorker.stop();
-    newsEngine.stop();
+    // NewsEngine stays up when Autobot is toggled off (same pattern as MarketDataWorker) so
+    // news_veto clusters and Digital Twin NEWS_* telemetry keep refreshing. newsEngine.stop()
+    // remains available for process shutdown via gracefulShutdown.
     stopAllIdeaAgents();
     reflectionEngine.stop();
     predictionOutcomeEvaluator.stop();

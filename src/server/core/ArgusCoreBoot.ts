@@ -123,6 +123,43 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    const { portfolioReconciliationWorker } = await import('../services/PortfolioReconciliation');
+    portfolioReconciliationWorker.start();
+    console.log(
+      '[PortfolioReconciliation] Started at boot (independent of Autobot). In-process RECONCILIATION_MATCH releases interrupted-session entry hold; does not auto-resume TRADING_PAUSED or enable Autobot.',
+    );
+  } catch (e: any) {
+    console.warn(`[PortfolioReconciliation] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { newsEngine } = await import('../news/NewsEngine');
+    newsEngine.start();
+    console.log(
+      '[NewsEngine] Started at boot (independent of Autobot). Clustering feeds RiskEngine news_veto; TRADE_IDEA_GENERATED stays desk/Autobot-gated.',
+    );
+  } catch (e: any) {
+    console.warn(`[NewsEngine] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { kronosEngine } = await import('../engines/kronos/KronosEngine');
+    const { kronosForecastAgent } = await import('../services/KronosForecastAgent');
+    const { isPipelineAgentEnabled } = await import('./pipelineAgentGate');
+    await kronosEngine.initialize();
+    if (isPipelineAgentEnabled('KronosEngine')) {
+      kronosForecastAgent.start();
+      console.log(
+        '[KronosForecastAgent] Started at boot (independent of Autobot). Research/UI forecasts call Chronos :8008 when healthy; TRADE_IDEA_GENERATED stays Autobot/session-gated and fail-closed when /health is down.',
+      );
+    } else {
+      console.log('[KronosForecastAgent] Pipeline agent disabled — not listening for MARKET_DATA.');
+    }
+  } catch (e: any) {
+    console.warn(`[KronosForecastAgent] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { opportunityDiscoveryWorker } = await import('../continuous/OpportunityDiscovery');
     opportunityDiscoveryWorker.start();
   } catch (e: any) {

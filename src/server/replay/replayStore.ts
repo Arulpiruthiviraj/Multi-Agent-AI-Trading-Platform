@@ -100,8 +100,8 @@ function csvField(v: unknown): string {
 
 export function exportRejectionsCsv(replayId: string): string {
   const rejections = readReplayJson<Array<Record<string, unknown>>>(replayId, 'rejected_orders.json') || [];
-  const header = 'timestamp,symbol,side,reason,traceId';
-  const rows = rejections.map((r) => [r.timestamp, r.symbol, r.side, r.reason, r.traceId ?? ''].map(csvField).join(','));
+  const header = 'timestamp,symbol,side,reason,traceId,rejectionGate';
+  const rows = rejections.map((r) => [r.timestamp, r.symbol, r.side, r.reason, r.traceId ?? '', r.rejectionGate ?? ''].map(csvField).join(','));
   return [header, ...rows].join('\n');
 }
 
@@ -116,6 +116,19 @@ export function exportMissedOpportunitiesCsv(replayId: string): string {
   return [header, ...lines].join('\n');
 }
 
+/** Machine-analysis export — agent votes, risk gates, forward MFE/MAE (AFTER-THE-FACT). */
+export function exportDecisionEvidenceCsv(replayId: string): string {
+  const rows = readReplayJson<Array<Record<string, unknown>>>(replayId, 'decision_evidence.json') || [];
+  const header = 'symbol,timestamp,strategyId,predictedSide,referencePrice,stageOutcome,consensusApproved,weightedConfidence,independentAgreeingAgents,rejectionGate,forwardReturnPct,mfePct,maePct,agentVotesJson';
+  const lines = rows.map((r) => [
+    r.symbol, r.timestamp, r.strategyId, r.predictedSide, r.referencePrice, r.stageOutcome,
+    r.consensusApproved, r.weightedConfidence, r.independentAgreeingAgents, r.rejectionGate ?? '',
+    r.forwardReturnPct ?? '', r.mfePct ?? '', r.maePct ?? '',
+    JSON.stringify(r.agentVotes ?? []),
+  ].map(csvField).join(','));
+  return [header, ...lines].join('\n');
+}
+
 /**
  * Bundles every generated artifact for a replay into one ZIP, using buildZipArchive (real,
  * STORE-method, independently verified against PowerShell's Expand-Archive). Only includes files
@@ -125,7 +138,7 @@ export function exportMissedOpportunitiesCsv(replayId: string): string {
 export function exportZipArchive(replayId: string): Buffer {
   const candidateFiles = [
     'summary.json', 'configuration.json', 'dataset.json', 'trades.json', 'rejected_orders.json',
-    'missed_opportunities.json', 'portfolio_final.json', 'equity_curve.json', 'events.jsonl', 'README.json',
+    'missed_opportunities.json', 'decision_evidence.json', 'portfolio_final.json', 'equity_curve.json', 'events.jsonl', 'README.json',
   ];
   const entries: Array<{ name: string; content: string }> = [];
   for (const name of candidateFiles) {
@@ -136,6 +149,7 @@ export function exportZipArchive(replayId: string): Buffer {
   entries.push({ name: 'equity_curve.csv', content: exportEquityCsv(replayId) });
   entries.push({ name: 'rejections.csv', content: exportRejectionsCsv(replayId) });
   entries.push({ name: 'missed_opportunities.csv', content: exportMissedOpportunitiesCsv(replayId) });
+  entries.push({ name: 'decision_evidence.csv', content: exportDecisionEvidenceCsv(replayId) });
   entries.push({ name: 'report.md', content: exportMarkdownReport(replayId) });
   return buildZipArchive(entries);
 }
@@ -195,6 +209,16 @@ export function exportMarkdownReport(replayId: string): string {
   lines.push(`${missed.length} consensus rejections analyzed retrospectively.`);
   const flagged = missed.filter((m: any) => m.classification === 'MISSED_OPPORTUNITY');
   lines.push(`${flagged.length} classified MISSED_OPPORTUNITY (favorable move exceeded threshold after rejection).`);
+  lines.push('');
+  const decSummary = summary.decisionEvidenceSummary || summary.predictionOutcomeEvidence || {};
+  lines.push('## Decision evidence (prediction vs outcome)');
+  lines.push(`- Schema: ${decSummary.schema || 'argus.historical_decision_evidence.v1'}`);
+  lines.push(`- Records: ${decSummary.count ?? (summary.decisionEvidence || []).length}`);
+  lines.push(`- With forward outcome: ${decSummary.withForwardOutcome ?? 'N/A'}`);
+  if (decSummary.byStageOutcome) {
+    lines.push(`- By stage: ${JSON.stringify(decSummary.byStageOutcome)}`);
+  }
+  lines.push(`- AI mode honesty: ${summary.ai?.honesty?.reason || summary.historicalEvaluation?.aiModeHonesty?.reason || 'see replaySafety.aiModeHonestyDescription'}`);
   lines.push('');
   lines.push('## Honesty');
   for (const h of r.honesty || []) lines.push(`- ${h}`);

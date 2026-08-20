@@ -519,6 +519,14 @@ export default function DigitalTwinVisualizer({ learningSummary }: DigitalTwinVi
           packets: throttled ? [] : [{ edgeId: 'e-market-tech', color: '#22d3ee' }],
         });
       }),
+      subscribe('NEWS_PIPELINE_TICK', (data: any) => enqueueEvent('NEWS_PIPELINE_TICK', data, {
+        skipLog: true,
+        nodes: [
+          { id: 'news-providers', status: 'PULSE' },
+          ...(data?.analyzed > 0 ? [{ id: 'news-agent', status: 'PULSE' as VisualStatus }] : []),
+        ],
+        packets: [{ edgeId: 'e-news-src-agent', color: '#a78bfa' }],
+      })),
       subscribe('NEWS_ANALYSIS_STARTED', (data: any) => enqueueEvent('NEWS_ANALYSIS_STARTED', data, {
         nodes: [{ id: 'news-providers', status: 'PROCESSING' }, { id: 'news-agent', status: 'PROCESSING' }],
         packets: [{ edgeId: 'e-news-src-agent', color: '#a78bfa' }],

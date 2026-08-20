@@ -31,6 +31,9 @@ export interface ContinuousIntelligenceConfig {
   broadUniverseAllowedExchanges: string[];
   broadUniverseMaxCandidates: number;
   broadUniverseSnapshotBatchSize: number;
+  broadUniverseAdvLookbackDays: number;
+  broadUniverseMinAvgDailyVolumeShares: number;
+  broadUniverseTopNPerScan: number;
   honesty: string;
 }
 
@@ -94,6 +97,9 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     broadUniverseAllowedExchanges: requireSymbolList(raw.broadUniverseAllowedExchanges, 'broadUniverseAllowedExchanges', false),
     broadUniverseMaxCandidates: requireNumber(raw.broadUniverseMaxCandidates, 'broadUniverseMaxCandidates'),
     broadUniverseSnapshotBatchSize: requireNumber(raw.broadUniverseSnapshotBatchSize, 'broadUniverseSnapshotBatchSize'),
+    broadUniverseAdvLookbackDays: requireNumber(raw.broadUniverseAdvLookbackDays, 'broadUniverseAdvLookbackDays'),
+    broadUniverseMinAvgDailyVolumeShares: requireNumber(raw.broadUniverseMinAvgDailyVolumeShares, 'broadUniverseMinAvgDailyVolumeShares'),
+    broadUniverseTopNPerScan: requireNumber(raw.broadUniverseTopNPerScan, 'broadUniverseTopNPerScan'),
     honesty: raw.honesty,
   };
 }

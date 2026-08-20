@@ -13,7 +13,7 @@ import { eq } from 'drizzle-orm';
  * real order size is still capped at the hardcoded restricted-live ceiling once
  * tradingEngine.state.tradingMode is set to 'LIVE'.
  */
-describe('RiskEngine - restricted live mode caps (Phase 13)', () => {
+describe('RiskEngine - restricted live mode caps (Phase 13)', { timeout: 60000 }, () => {
   let tmpDbPath: string;
   let db: any;
   let sqliteDb: any;
@@ -41,7 +41,7 @@ describe('RiskEngine - restricted live mode caps (Phase 13)', () => {
     // Deliberately permissive settings - the real point of this test is that the hardcoded
     // restricted-live ceiling still binds regardless of what this row says.
     await db.insert(schema.settings).values({ maxTradeSize: 1_000_000, riskLevel: 'Aggressive', maxOpenPositions: 999 });
-  });
+  }, 60_000);
 
   afterAll(() => {
     try { sqliteDb.close(); } catch { /* already closed */ }

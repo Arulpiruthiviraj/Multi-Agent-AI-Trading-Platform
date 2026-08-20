@@ -34,19 +34,45 @@ const ALPACA_DATA_HOST = networkEndpoints.broker.alpaca.dataBaseUrl;
 
 export class HistoricalDataGateway {
   private static instance: HistoricalDataGateway;
+  /** Shared across symbols so one 429 stops an idea-storm of ensureBars fan-out. */
+  private rateLimitedUntilMs = 0;
+
   public static getInstance(): HistoricalDataGateway {
     if (!HistoricalDataGateway.instance) HistoricalDataGateway.instance = new HistoricalDataGateway();
     return HistoricalDataGateway.instance;
   }
 
+  /** Test/ops helper — clear the in-process Alpaca bars 429 backoff. */
+  clearBarsRateLimitBackoff(): void {
+    this.rateLimitedUntilMs = 0;
+  }
+
+  getBarsRateLimitedUntilMs(): number {
+    return this.rateLimitedUntilMs;
+  }
+
+  private armBarsRateLimitBackoff(retryAfterHeader: string | null): void {
+    const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+    const retryAfterMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
+      ? retryAfterSec * 1000
+      : tradingSafety.alpacaCircuitBreakerCooldownMs;
+    this.rateLimitedUntilMs = Math.max(this.rateLimitedUntilMs, Date.now() + retryAfterMs);
+  }
+
   /**
    * Ensures real bars for [startMs, endMs] are cached locally, fetching from Alpaca if the
    * cached count looks incomplete. Throws if no Alpaca credentials are configured - never
-   * fabricates a bar.
+   * fabricates a bar. On HTTP 429, arms a shared backoff and fail-closes (no fabricated ideas).
    */
   async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       throw new Error('Historical backfill requires ALPACA_API_KEY/ALPACA_SECRET_KEY - no other real historical data source is wired into Argus.');
+    }
+
+    if (Date.now() < this.rateLimitedUntilMs) {
+      throw new Error(
+        `Alpaca bars request rate-limited until ${new Date(this.rateLimitedUntilMs).toISOString()} - failing closed, no fabricated bars.`,
+      );
     }
 
     let pageToken: string | undefined;
@@ -72,6 +98,10 @@ export class HistoricalDataGateway {
       });
       if (!res.ok) {
         const body = await res.text().catch(() => '');
+        if (res.status === 429) {
+          this.armBarsRateLimitBackoff(res.headers.get('Retry-After'));
+          throw new Error(`Alpaca bars request failed: 429 Too Many Requests ${body}`);
+        }
         throw new Error(`Alpaca bars request failed: ${res.status} ${res.statusText} ${body}`);
       }
       const data = await res.json();

@@ -116,4 +116,63 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
     const outcomesAfter = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'ap-old'));
     expect(outcomesAfter).toHaveLength(1);
   });
+
+  describe('Phase F6: news_predictions integration', () => {
+    it('evaluates a due News prediction via the same real-bars mechanism, mapping BULLISH/BEARISH to BUY/SELL', async () => {
+      await db.insert(schema.newsPredictions).values({
+        id: 'np-1', clusterId: 'c1', traceId: 't1', symbol: 'UPTEST', direction: 'BULLISH',
+        confidence: 80, expectedHorizon: 'INTRADAY', referencePrice: 100, reasoning: 'test',
+        materiality: 'HIGH', catalystType: 'PRODUCT', riskLevel: 'LOW', riskVeto: false,
+        sourceCount: 1, newsAgentMode: 'ACTIVE_OBSERVE', modelSource: 'test',
+        createdAt: new Date(PRED_TIME).toISOString(),
+      });
+
+      await predictionOutcomeEvaluator.evaluatePending();
+
+      const outcomes = await db.select().from(schema.predictionOutcomes)
+        .where(eq(schema.predictionOutcomes.predictionId, 'np-1'));
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].sourceTable).toBe('news_predictions');
+      expect(outcomes[0].outcome).toBe('WIN'); // BULLISH, price rose 100 -> 110
+      expect(outcomes[0].mfe).toBeCloseTo(0.10, 4);
+      expect(outcomes[0].mae).toBeCloseTo(-0.02, 4);
+    });
+
+    it('uses News\'s own per-horizon window (4h for INTRADAY), not the generic 1h EVALUATION_HORIZON_MS', async () => {
+      // 2 hours old: already past the generic 1h EVALUATION_HORIZON_MS, but still inside News's
+      // real 4h INTRADAY window - if this evaluates, the integration is wrongly using the
+      // generic horizon instead of the News-specific one.
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      await db.insert(schema.newsPredictions).values({
+        id: 'np-2', clusterId: 'c2', traceId: 't2', symbol: 'UPTEST', direction: 'BULLISH',
+        confidence: 80, expectedHorizon: 'INTRADAY', referencePrice: 100, reasoning: 'test',
+        materiality: 'HIGH', catalystType: 'PRODUCT', riskLevel: 'LOW', riskVeto: false,
+        sourceCount: 1, newsAgentMode: 'ACTIVE_OBSERVE', modelSource: 'test',
+        createdAt: twoHoursAgo,
+      });
+
+      await predictionOutcomeEvaluator.evaluatePending();
+
+      const outcomes = await db.select().from(schema.predictionOutcomes)
+        .where(eq(schema.predictionOutcomes.predictionId, 'np-2'));
+      expect(outcomes).toHaveLength(0); // correctly not-yet-due under the real 4h window
+    });
+
+    it('BEARISH prediction maps to SELL for MFE/MAE sign flipping', async () => {
+      await db.insert(schema.newsPredictions).values({
+        id: 'np-3', clusterId: 'c3', traceId: 't3', symbol: 'UPTEST', direction: 'BEARISH',
+        confidence: 80, expectedHorizon: 'INTRADAY', referencePrice: 100, reasoning: 'test',
+        materiality: 'HIGH', catalystType: 'PRODUCT', riskLevel: 'LOW', riskVeto: false,
+        sourceCount: 1, newsAgentMode: 'ACTIVE_OBSERVE', modelSource: 'test',
+        createdAt: new Date(PRED_TIME).toISOString(),
+      });
+
+      await predictionOutcomeEvaluator.evaluatePending();
+
+      const outcomes = await db.select().from(schema.predictionOutcomes)
+        .where(eq(schema.predictionOutcomes.predictionId, 'np-3'));
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].outcome).toBe('LOSS'); // BEARISH but price rose - wrong direction
+    });
+  });
 });

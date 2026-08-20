@@ -117,11 +117,16 @@ export async function readMarketClock(): Promise<MarketClockStatus> {
     try {
         const isPaper = tradingEngine.state.tradingMode !== 'LIVE';
         const base = isPaper ? 'paper-api.alpaca.markets' : 'api.alpaca.markets';
+        // Bound the clock call: native fetch without a signal can hang indefinitely, which
+        // stalls RiskEngine.evaluationQueue (serialized) and leaves transactions stuck OPEN
+        // until the socket dies. Timeout → catch → 'unavailable' (fail-closed), same as HTTP
+        // errors. Uses tradingSafety.alpacaRequestTimeoutMs (config JSON, not a TS literal).
         const res = await alpacaFetch(`https://${base}/v2/clock`, {
             headers: {
                 'APCA-API-KEY-ID': process.env.ALPACA_API_KEY,
                 'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY
-            }
+            },
+            signal: AbortSignal.timeout(tradingSafety.alpacaRequestTimeoutMs),
         });
         if (!res.ok) {
             console.error(`[Risk Engine] Alpaca market clock HTTP ${res.status} — fail-closed`);

@@ -531,7 +531,38 @@ export const newsClusters = sqliteTable('news_clusters', {
   impactScore: real('impact_score'),
   timeHorizon: text('time_horizon'),
   isArchived: integer('is_archived', { mode: 'boolean' }).default(false),
-  symbols: text('symbols')
+  symbols: text('symbols'),
+  // Phase F2 (real event clustering): a cluster can now represent >1 article. articleCount is the
+  // total articles merged into this cluster; sourceCount is the count of distinct `source` values
+  // among them (multiple outlets independently reporting the same event corroborates it).
+  articleCount: integer('article_count').default(1).notNull(),
+  sourceCount: integer('source_count').default(1).notNull(),
+});
+
+// Phase F5 (news prediction ledger). Populated only when newsAgentMode is ACTIVE_OBSERVE or
+// above (see newsAgentObservesPredictions() in deskIntelligence.ts) - dormant at the CATALYST_ONLY
+// default. Records the prediction as made, at the time it was made; evaluating it against actual
+// subsequent price movement is Phase F6, not yet built, and will extend this table rather than
+// duplicate it. referencePrice is the real last-known market price (MarketDataWorker.getLatestPrice)
+// at prediction time, or null if none was available - never a fabricated number.
+export const newsPredictions = sqliteTable('news_predictions', {
+  id: text('id').primaryKey(),
+  clusterId: text('cluster_id').notNull(),
+  traceId: text('trace_id').notNull(),
+  symbol: text('symbol').notNull(),
+  createdAt: text('created_at').notNull(),
+  direction: text('direction').notNull(),
+  confidence: real('confidence').notNull(),
+  expectedHorizon: text('expected_horizon').notNull(),
+  referencePrice: real('reference_price'),
+  reasoning: text('reasoning'),
+  materiality: text('materiality'),
+  catalystType: text('catalyst_type'),
+  riskLevel: text('risk_level'),
+  riskVeto: integer('risk_veto', { mode: 'boolean' }).default(false),
+  sourceCount: integer('source_count').default(1),
+  newsAgentMode: text('news_agent_mode').notNull(),
+  modelSource: text('model_source').notNull(),
 });
 
 export const newsProviders = sqliteTable('news_providers', {

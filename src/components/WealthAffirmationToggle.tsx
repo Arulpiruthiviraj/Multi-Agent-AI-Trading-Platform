@@ -2,134 +2,184 @@
  * ==========================================================
  * COMPONENT: WealthAffirmationToggle
  *
- * Settings → Mindset switches for wealth affirmation overlays.
+ * Settings → Preferences · Mindset — single master card for the
+ * Divine Wealth & Hyper-Abundance Vortex theater experience.
  * Aesthetic preference only — does not change trading gates.
  * ==========================================================
  */
-import React from 'react';
-import { Sparkles, Gem, Flower2 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Sparkles, Volume2, VolumeX } from 'lucide-react';
 import { useWealthAffirmationSettings } from '../context/WealthAffirmationSettingsContext';
+import type { WealthVortexMode } from '../context/wealthVortexStore';
+
+const AFFIRMATIONS = [
+  'Capital flows effortlessly to high-probability setups',
+  'Argus operates in harmonic alignment with market liquidity',
+  'Maximum risk discipline yields limitless abundance',
+  'Patience compounds faster than leverage',
+  'Clarity precedes conviction; conviction precedes capital',
+  'Every gated decision protects tomorrow’s abundance',
+  'Stillness of mind, precision of execution',
+  'Wealth follows process — process follows discipline',
+] as const;
+
+const AFFIRMATION_MS = 10_000;
+
+const MODE_OPTIONS: { value: WealthVortexMode; label: string; hint: string }[] = [
+  {
+    value: 'sacred_gold_flow',
+    label: 'Sacred Gold Flow',
+    hint: 'Subtle golden card glows + ambient particles',
+  },
+  {
+    value: 'hyper_abundance_777',
+    label: 'Hyper-Abundance 777Hz',
+    hint: 'God rays, canvas money vortex, animated particle flow',
+  },
+  {
+    value: 'divine_omnipresent',
+    label: 'Divine Omnipresent Vortex',
+    hint: 'Full-screen ambient aura, glowing equity cards, pulsing neon borders',
+  },
+];
 
 export function WealthAffirmationToggle() {
-  const {
-    enableWealthAffirmations,
-    setEnableWealthAffirmations,
-    enableHyperAbundanceMode,
-    setEnableHyperAbundanceMode,
-    enableDivineWealthMode,
-    setEnableDivineWealthMode,
-  } = useWealthAffirmationSettings();
+  const { enabled, mode, sound, setEnabled, setMode, setSound } = useWealthAffirmationSettings();
+  const [affirmationIndex, setAffirmationIndex] = useState(0);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const id = window.setInterval(() => {
+      setAffirmationIndex((i) => (i + 1) % AFFIRMATIONS.length);
+    }, AFFIRMATION_MS);
+    return () => window.clearInterval(id);
+  }, [enabled]);
 
   return (
-    <div className="space-y-3">
-      <div className="bg-[#0F141C] border border-amber-500/20 rounded-lg p-5 flex items-center justify-between gap-4 shadow-[0_0_24px_-12px_rgba(245,158,11,0.35)]">
-        <div>
-          <h3 className="text-xs font-mono font-bold text-amber-100 uppercase tracking-widest mb-1 flex items-center gap-2">
-            <Sparkles size={14} className="text-amber-400" />
-            Enable Wealth Manifestation Mode
-          </h3>
-          <p className="text-xs text-slate-500 max-w-xl leading-relaxed">
-            Displays motivational animations and wealth affirmations to maintain a positive trading mindset.
-            Browser-only. Not P&amp;L, not live readiness, not a trading signal.
-          </p>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enableWealthAffirmations}
-          onClick={() => setEnableWealthAffirmations(!enableWealthAffirmations)}
-          className={`shrink-0 w-12 h-6 rounded-full border p-0.5 transition-all ${
-            enableWealthAffirmations
-              ? 'bg-amber-500/25 border-amber-400/60 shadow-[0_0_12px_rgba(251,191,36,0.45)]'
-              : 'bg-slate-800 border-slate-700'
-          }`}
-        >
-          <div
-            className={`w-4 h-4 rounded-full transition-transform ${
-              enableWealthAffirmations ? 'translate-x-6 bg-amber-300' : 'translate-x-0 bg-white'
-            }`}
-          />
-        </button>
-      </div>
+    <div
+      className="bg-[#0F141C] border border-amber-500/40 hover:border-amber-400/80 rounded-lg p-5 shadow-[0_0_20px_rgba(245,158,11,0.15)] relative overflow-hidden transition-colors"
+      data-testid="wealth-vortex-master-card"
+    >
+      <div
+        className="pointer-events-none absolute inset-0 opacity-40"
+        style={{
+          background:
+            'radial-gradient(ellipse at 15% 40%, rgba(245,158,11,0.18), transparent 55%), radial-gradient(ellipse at 90% 60%, rgba(34,211,238,0.12), transparent 50%)',
+        }}
+      />
 
-      <div className="bg-[#0F141C] border border-amber-400/40 rounded-lg p-5 flex items-center justify-between gap-4 shadow-[0_0_36px_-8px_rgba(255,215,0,0.55)] relative overflow-hidden">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-40"
-          style={{
-            background:
-              'radial-gradient(ellipse at 20% 50%, rgba(255,215,0,0.2), transparent 55%), radial-gradient(ellipse at 90% 50%, rgba(0,255,135,0.12), transparent 50%)',
-          }}
-        />
-        <div className="relative">
-          <h3 className="text-xs font-mono font-bold text-amber-50 uppercase tracking-widest mb-1 flex items-center gap-2 flex-wrap">
-            <Gem size={14} className="text-emerald-300" />
-            💎 Hyper-Abundance Hypnosis Mode
-            <span className="ml-1 px-2 py-0.5 rounded text-[8px] font-black tracking-[0.2em] bg-gradient-to-r from-amber-400 via-yellow-200 to-emerald-400 text-slate-950 shadow-[0_0_12px_rgba(255,215,0,0.6)]">
-              ULTRA ENERGY
-            </span>
-          </h3>
-          <p className="text-xs text-slate-400 max-w-xl leading-relaxed">
-            Canvas money vortex, god rays, and powerhouse affirmations. Pure mindset theater —
-            <span className="text-amber-200/80"> does not affect orders, risk, or P&amp;L</span>.
-          </p>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enableHyperAbundanceMode}
-          onClick={() => setEnableHyperAbundanceMode(!enableHyperAbundanceMode)}
-          className={`relative shrink-0 w-12 h-6 rounded-full border p-0.5 transition-all ${
-            enableHyperAbundanceMode
-              ? 'bg-emerald-400/25 border-amber-300 shadow-[0_0_18px_rgba(255,215,0,0.7)]'
-              : 'bg-slate-800 border-slate-700'
-          }`}
-        >
-          <div
-            className={`w-4 h-4 rounded-full transition-transform ${
-              enableHyperAbundanceMode ? 'translate-x-6 bg-gradient-to-br from-amber-200 to-emerald-300' : 'translate-x-0 bg-white'
+      <div className="relative space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <h3 className="text-xs font-mono font-bold text-amber-50 uppercase tracking-widest mb-1.5 flex items-center gap-2 flex-wrap">
+              <Sparkles size={14} className="text-amber-300 shrink-0" />
+              <span>💎🕉️ DIVINE WEALTH &amp; HYPER-ABUNDANCE VORTEX</span>
+              <span className="px-2 py-0.5 rounded text-[8px] font-black tracking-[0.18em] bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 text-slate-950 shadow-[0_0_12px_rgba(245,158,11,0.55)]">
+                QUANTUM ABUNDANCE
+              </span>
+            </h3>
+            <p className="text-xs text-slate-500 max-w-xl leading-relaxed">
+              Mindset theater &amp; browser visual effects only — strictly isolated from RiskEngine, OMS,
+              and broker execution.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-label="Enable Divine Wealth & Hyper-Abundance Vortex"
+            aria-checked={enabled}
+            onClick={() => setEnabled(!enabled)}
+            className={`relative shrink-0 w-12 h-6 rounded-full border p-0.5 transition-all ${
+              enabled
+                ? 'bg-amber-500/25 border-amber-400/70 shadow-[0_0_16px_rgba(245,158,11,0.55)]'
+                : 'bg-slate-800 border-slate-700'
             }`}
-          />
-        </button>
-      </div>
+          >
+            <div
+              className={`w-4 h-4 rounded-full transition-transform ${
+                enabled
+                  ? 'translate-x-6 bg-gradient-to-br from-amber-200 to-cyan-300'
+                  : 'translate-x-0 bg-white'
+              }`}
+            />
+          </button>
+        </div>
 
-      <div className="bg-[#120c06] border border-amber-300/50 rounded-lg p-5 flex items-center justify-between gap-4 shadow-[0_0_40px_-6px_rgba(255,215,0,0.65)] relative overflow-hidden">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-50"
-          style={{
-            background:
-              'radial-gradient(ellipse at 15% 40%, rgba(255,215,0,0.25), transparent 50%), radial-gradient(ellipse at 85% 60%, rgba(0,230,118,0.15), transparent 48%), radial-gradient(ellipse at 50% 100%, rgba(255,165,0,0.18), transparent 45%)',
-          }}
-        />
-        <div className="relative">
-          <h3 className="text-xs font-mono font-bold text-amber-50 uppercase tracking-widest mb-1 flex items-center gap-2 flex-wrap">
-            <Flower2 size={14} className="text-amber-300" />
-            🕉️ Sacred Wealth &amp; Divine Abundance Vortex
-            <span className="ml-1 px-2 py-0.5 rounded text-[8px] font-black tracking-[0.2em] bg-gradient-to-r from-[#FFD700] via-[#FFA500] to-[#00E676] text-slate-950 shadow-[0_0_14px_rgba(255,215,0,0.75)]">
-              DIVINE ENERGY
-            </span>
-          </h3>
-          <p className="text-xs text-slate-400 max-w-xl leading-relaxed">
-            Activate sacred gold visuals and high-frequency wealth affirmations for peak mindset alignment.
-            Spiritual theater only — never touches RiskEngine, OMS, or real P&amp;L.
-          </p>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={enableDivineWealthMode}
-          onClick={() => setEnableDivineWealthMode(!enableDivineWealthMode)}
-          className={`relative shrink-0 w-12 h-6 rounded-full border p-0.5 transition-all ${
-            enableDivineWealthMode
-              ? 'bg-amber-400/30 border-[#FFD700] shadow-[0_0_20px_rgba(255,215,0,0.85)]'
-              : 'bg-slate-800 border-slate-700'
-          }`}
-        >
-          <div
-            className={`w-4 h-4 rounded-full transition-transform ${
-              enableDivineWealthMode ? 'translate-x-6 bg-gradient-to-br from-[#FFD700] to-[#00E676]' : 'translate-x-0 bg-white'
-            }`}
-          />
-        </button>
+        {enabled && (
+          <>
+            <div className="space-y-1.5">
+              <label
+                htmlFor="wealth-vortex-mode"
+                className="text-[10px] font-mono font-bold text-amber-200/80 uppercase tracking-[0.15em]"
+              >
+                Mode / Intensity
+              </label>
+              <select
+                id="wealth-vortex-mode"
+                value={mode}
+                onChange={(e) => setMode(e.target.value as WealthVortexMode)}
+                className="w-full bg-[#0A0E14] border border-amber-500/30 hover:border-amber-400/50 text-amber-50 text-xs font-mono rounded-md px-3 py-2.5 outline-none focus:border-amber-400/70 transition-colors"
+              >
+                {MODE_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                {MODE_OPTIONS.find((o) => o.value === mode)?.hint}
+              </p>
+            </div>
+
+            <div
+              className="rounded-md border border-amber-500/25 bg-gradient-to-r from-amber-500/10 via-transparent to-cyan-500/10 px-3 py-2.5 overflow-hidden"
+              aria-live="polite"
+            >
+              <div className="text-[9px] font-mono font-bold text-amber-400/70 uppercase tracking-[0.2em] mb-1">
+                Dynamic Affirmation
+              </div>
+              <p key={affirmationIndex} className="text-xs text-amber-100/90 font-medium tracking-wide">
+                {AFFIRMATIONS[affirmationIndex]}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between gap-3 pt-1">
+              <div className="flex items-center gap-2 min-w-0">
+                {sound ? (
+                  <Volume2 size={14} className="text-amber-300 shrink-0" />
+                ) : (
+                  <VolumeX size={14} className="text-slate-500 shrink-0" />
+                )}
+                <div className="min-w-0">
+                  <div className="text-[10px] font-mono font-bold text-slate-200 uppercase tracking-widest">
+                    Sound / Chime
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-snug">
+                    Soft harmonic on master toggle or order fill
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-label="Wealth vortex sound chime"
+                aria-checked={sound}
+                onClick={() => setSound(!sound)}
+                className={`shrink-0 w-12 h-6 rounded-full border p-0.5 transition-all ${
+                  sound
+                    ? 'bg-cyan-500/20 border-cyan-400/50 shadow-[0_0_12px_rgba(34,211,238,0.35)]'
+                    : 'bg-slate-800 border-slate-700'
+                }`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full transition-transform ${
+                    sound ? 'translate-x-6 bg-cyan-300' : 'translate-x-0 bg-white'
+                  }`}
+                />
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

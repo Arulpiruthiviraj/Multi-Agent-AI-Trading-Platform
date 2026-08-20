@@ -26,6 +26,7 @@ import { runIntegrityCheck } from "../core/IntegrityValidator";
 import { tradingLimiter } from "../core/RateLimiters";
 import { BrokerManager } from "../../brokers/BrokerManager";
 import { tradingSafety } from "../config/tradingSafety";
+import { withTimeout } from "../services/brokerPortfolioResponse";
 
 export const systemRouter = Router();
 
@@ -511,21 +512,32 @@ systemRouter.get("/pnl/analytics", async (req: Request, res: Response) => {
         
         const totalProfitLoss = history.profit_loss && history.profit_loss.length > 0 ? history.profit_loss[history.profit_loss.length - 1] : 0;
 
-        return res.json({ history: mapped, summary: { winRate: 0, totalProfitLoss } });
+        if (!res.headersSent) return res.json({ history: mapped, summary: { winRate: 0, totalProfitLoss } });
+        return;
       }
     } catch (e) {
       console.error("Failed to fetch Alpaca portfolio history:", e);
     }
   }
 
-  // Fallback for Paper Simulator mode
+  // Real bug found and fixed (2026-08-20): this fallback path (Paper Simulator mode, or the
+  // primary Alpaca fetch above having failed/timed out) called broker.portfolio() with no
+  // timeout of its own. The primary fetch above already bounds itself to
+  // tradingSafety.alpacaRequestTimeoutMs (15000ms) - the same duration as server.ts's global
+  // per-request 15s backstop (server.ts ~line 547) - so a slow/degraded Alpaca primary fetch can
+  // exhaust the backstop's timer before this fallback even starts, then this fallback's
+  // unbounded broker.portfolio() resolves even later and calls res.json() a second time on an
+  // already-responded request. Confirmed live in data/logs/crash.log (repeated
+  // ERR_HTTP_HEADERS_SENT unhandledRejections at this exact call site through 2026-08-20). Fixed
+  // with a short bound (broker.portfolio() reads a local/cached snapshot for the paper brokers
+  // and should never legitimately take seconds) plus a headersSent guard as defense in depth.
   const broker = BrokerManager.getInstance().getActiveBroker();
   try {
-    const portfolio = await broker.portfolio();
+    const portfolio = await withTimeout(broker.portfolio(), 5000, 'broker.portfolio (pnl/analytics fallback)');
     const totalProfitLoss = portfolio.equity - portfolio.cash;
-    res.json({ history: [], summary: { winRate: 0, totalProfitLoss } });
+    if (!res.headersSent) res.json({ history: [], summary: { winRate: 0, totalProfitLoss } });
   } catch (e) {
-    res.json({ history: [], summary: { winRate: 0, totalProfitLoss: 0 } });
+    if (!res.headersSent) res.json({ history: [], summary: { winRate: 0, totalProfitLoss: 0 } });
   }
 });
 

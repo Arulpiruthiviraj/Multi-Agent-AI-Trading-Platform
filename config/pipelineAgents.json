@@ -9,7 +9,7 @@
     {
       "id": "NewsAgent",
       "label": "News",
-      "description": "News TRADE_IDEA_GENERATED when desk policy allows. Cluster ingest for RiskEngine news_veto stays on with Autobot.",
+      "description": "News TRADE_IDEA_GENERATED when desk policy allows. Cluster ingest for RiskEngine news_veto runs from process boot (independent of Autobot); ideas stay gated.",
       "keepsBackgroundPipeline": true
     },
     {
@@ -25,7 +25,8 @@
     {
       "id": "KronosEngine",
       "label": "Kronos",
-      "description": "Local Chronos forecast ideas on MARKET_DATA."
+      "description": "Local Chronos forecasts on MARKET_DATA for research/UI; TRADE_IDEA_GENERATED only when Autobot/idea gate allows. Starts at process boot (independent of Autobot); ideas stay fail-closed when Chronos /health is down.",
+      "keepsBackgroundPipeline": true
     },
     {
       "id": "QuantEngine",

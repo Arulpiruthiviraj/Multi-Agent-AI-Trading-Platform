@@ -9,7 +9,7 @@ import os from 'os';
  * rows (no mocking of the query layer) - proves the real BUY-to-SELL matching heuristic (most
  * recent prior FILLED BUY for the same symbol) against a real, hand-constructed trade history.
  */
-describe('computeLiveStrategyWinRate', () => {
+describe('computeLiveStrategyWinRate', { timeout: 60000 }, () => {
   let tmpDbPath: string;
   let db: any;
   let sqliteDb: any;
@@ -22,7 +22,7 @@ describe('computeLiveStrategyWinRate', () => {
     ({ db, sqliteDb } = await import('../../db'));
     schema = await import('../../db/schema');
     ({ computeLiveStrategyWinRate } = await import('./LiveStrategyPerformance'));
-  });
+  }, 60_000);
 
   afterAll(() => {
     try { sqliteDb.close(); } catch { /* already closed */ }

@@ -18,6 +18,12 @@ export type PositionRow = {
   unrealizedPnl: number | null;
   unrealizedPnlPercent: number | null;
   isPositive: boolean;
+  // Real stop-loss/take-profit price for this position (server: resolvePositionStopTarget) -
+  // a QuantEngine position's own stored quantStopPrice/quantTargetPrice when present, else
+  // averagePrice adjusted by settings.trailingStopPct/takeProfitPct. Null only if the server
+  // could not resolve one (e.g. a transient DB error) - never a fabricated number.
+  stopLossPrice: number | null;
+  takeProfitPrice: number | null;
 };
 
 type PositionsDataViewProps = {
@@ -61,12 +67,16 @@ const columns: DataColumn<PositionRow>[] = [
   {
     key: 'stop',
     header: 'Stop-Loss',
-    render: () => <UnavailableHint reason="No resting broker stop is stored on positions. PortfolioMonitor emits SELL ideas from settings.takeProfitPct / trailingStopPct through RiskEngine — this column is not a live stop price.">--</UnavailableHint>,
+    render: (p) => p.stopLossPrice != null
+      ? `$${p.stopLossPrice.toFixed(2)}`
+      : <UnavailableHint reason="Server could not resolve a stop-loss price for this position (resolvePositionStopTarget) - not a fabricated $0.">--</UnavailableHint>,
   },
   {
     key: 'tp',
     header: 'Take-Profit',
-    render: () => <UnavailableHint reason="No resting take-profit order is stored on positions. Monitor targets come from settings.takeProfitPct when Autobot is started.">--</UnavailableHint>,
+    render: (p) => p.takeProfitPrice != null
+      ? `$${p.takeProfitPrice.toFixed(2)}`
+      : <UnavailableHint reason="Server could not resolve a take-profit price for this position (resolvePositionStopTarget) - not a fabricated $0.">--</UnavailableHint>,
   },
   { key: 'mv', header: 'Market Value', render: (p) => p.marketValue !== null ? `$${p.marketValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : <UnavailableHint reason="No live price to compute market value yet.">--</UnavailableHint> },
 ];

@@ -68,7 +68,7 @@ async function probeWithRetry(
   url: string,
   opts: { timeoutMs: number; attempts: number; delayMs: number },
 ): Promise<{ ok: boolean; body?: any; error?: string }> {
-  let last = { ok: false, error: 'unreachable' as string | undefined };
+  let last: { ok: boolean; body?: any; error?: string } = { ok: false, error: 'unreachable' };
   for (let i = 0; i < opts.attempts; i++) {
     last = await probe(url, opts.timeoutMs);
     if (last.ok) return last;

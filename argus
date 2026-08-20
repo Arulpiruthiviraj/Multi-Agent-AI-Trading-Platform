@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# ARGUS shell operator control plane — thin router over npm run argus-cli / npm scripts.
+# Does NOT contain RiskEngine, OMS, BrokerManager, or trading logic.
+# See ARGUS_SHELL_CLI.md and ARGUS_CLI.md.
+
+set -uo pipefail
+
+ARGUS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export ARGUS_ROOT
+export ARGUS_API_URL="${ARGUS_API_URL:-http://127.0.0.1:3000}"
+
+# shellcheck source=scripts/cli/common.sh
+. "$ARGUS_ROOT/scripts/cli/common.sh"
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  -h|--help|help)
+    argus_help_main
+    exit 0
+    ;;
+  -v|--version|version)
+    argus_version
+    exit 0
+    ;;
+  start)
+    if argus_wants_help "$@"; then argus_help_start; exit 0; fi
+    argus_cmd_start "$@"
+    ;;
+  stop)
+    if argus_wants_help "$@"; then argus_help_stop; exit 0; fi
+    argus_npm_cli stop
+    ;;
+  restart)
+    if argus_wants_help "$@"; then argus_help_restart; exit 0; fi
+    argus_npm_cli restart
+    ;;
+  status)
+    if argus_wants_help "$@"; then argus_help_status; exit 0; fi
+    argus_cmd_status "$@"
+    ;;
+  health)
+    if argus_wants_help "$@"; then argus_help_health; exit 0; fi
+    argus_cmd_health "$@"
+    ;;
+  ready)
+    if argus_wants_help "$@"; then argus_help_ready; exit 0; fi
+    argus_cmd_ready "$@"
+    ;;
+  enable|disable|kill-switch)
+    if argus_wants_help "$@"; then argus_help_trading; exit 0; fi
+    argus_npm_cli "$cmd" "$@"
+    ;;
+  positions|trades|orders|config|risk|agents)
+    if argus_wants_help "$@"; then argus_help_obs; exit 0; fi
+    argus_npm_cli "$cmd" "$@"
+    ;;
+  events|logs)
+    if argus_wants_help "$@"; then argus_help_obs; exit 0; fi
+    argus_cmd_obs_follow_guard "$cmd" "$@"
+    ;;
+  replay)
+    # Empty / top-level help → replay help. Subcommands (incl. run --help) handled in argus_cmd_replay.
+    if [[ "${1:-}" == "" || "${1:-}" == "--help" || "${1:-}" == "-h" || "${1:-}" == "help" ]]; then
+      argus_help_replay
+      exit 0
+    fi
+    argus_cmd_replay "$@"
+    ;;
+  login|logout)
+    if argus_wants_help "$@"; then argus_help_auth; exit 0; fi
+    argus_npm_cli "$cmd" "$@"
+    ;;
+  doctor)
+    if argus_wants_help "$@"; then argus_help_doctor; exit 0; fi
+    argus_cmd_doctor "$@"
+    ;;
+  check)
+    if argus_wants_help "$@"; then argus_help_check; exit 0; fi
+    argus_cmd_check "$@"
+    ;;
+  test)
+    if argus_wants_help "$@"; then echo "Usage: argus test"; exit 0; fi
+    (cd "$ARGUS_ROOT" && npm test)
+    ;;
+  build)
+    if argus_wants_help "$@"; then echo "Usage: argus build"; exit 0; fi
+    (cd "$ARGUS_ROOT" && npm run build)
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    echo "Run: argus help" >&2
+    exit "$ARGUS_EXIT_USAGE"
+    ;;
+esac

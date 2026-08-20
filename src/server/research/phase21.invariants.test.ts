@@ -238,6 +238,12 @@ describe('Phase 21 evidence-path invariants', () => {
     expect(catalog.gates).toHaveLength(24);
   });
 
+  it('never auto-flattens on reconciliation mismatch; consensus floors stay 0.75 / min 2', () => {
+    expect(tradingSafety.autoFlattenOnReconciliationMismatch).toBe(false);
+    expect(tradingSafety.consensusApprovalThreshold).toBe(0.75);
+    expect(tradingSafety.minIndependentAgreeingAgents).toBe(2);
+  });
+
   it('restricted-live caps are ceilings, not profitability evidence', () => {
     expect(tradingSafety.restrictedLiveMaxOrderNotionalDollars).toBeGreaterThan(0);
     expect(tradingSafety.restrictedLiveMaxOpenPositions).toBeGreaterThan(0);

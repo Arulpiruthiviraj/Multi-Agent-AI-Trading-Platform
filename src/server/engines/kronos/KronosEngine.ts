@@ -27,6 +27,8 @@ import { KronosPredictionCache } from './KronosPredictionCache';
 import { KronosMetrics } from './KronosMetrics';
 import { IForecastEngine, ForecastPrediction } from '../forecasting/IForecastEngine';
 import { eventBus } from '../../core/EventBus';
+import { quantThresholds } from '../../config/quantThresholds';
+import { classifyKronosForecastFailure } from './kronosFailureKind';
 
 export class KronosEngine implements IForecastEngine {
   public name: string = 'Kronos';
@@ -69,17 +71,28 @@ export class KronosEngine implements IForecastEngine {
     try {
       // Execute inference via Python bridge or API
       const prediction = await this.inference.predict(symbol, horizon, timeframe, ohlcvData);
+      const latencyMs = (prediction as any).latencyMs;
+      if (typeof latencyMs === 'number') {
+        this.manager.recordInferenceLatency(latencyMs);
+      }
       
       // Cache the result for subsequent rapid lookups
       this.cache.set(symbol, timeframe, prediction);
       
       // Record to SQLite for Reflection Agent's performance analysis
-      await this.metrics.recordPrediction(prediction, ohlcvData);
+      await this.metrics.recordPrediction(prediction, ohlcvData, latencyMs);
       
       eventBus.publish('KRONOS_FORECAST_COMPLETED', { symbol, timeframe, prediction });
       return prediction;
     } catch (e: any) {
       console.warn(`[KronosEngine] Prediction failed for ${symbol}: ${e.message}`);
+      // CPU multi-symbol fan-out often times out one ticker while Chronos /health is still ok.
+      // Fail-closed for THIS forecast only; do not latch global KRONOS_UNAVAILABLE forever.
+      if (classifyKronosForecastFailure(e) === 'hard') {
+        this.manager.markUnavailable(e?.message || 'prediction failed');
+      } else {
+        console.warn(`[KronosEngine] Transient forecast failure for ${symbol} — keeping Chronos available for other symbols.`);
+      }
       throw e;
     }
   }
@@ -102,6 +115,11 @@ export class KronosEngine implements IForecastEngine {
       return predictions;
     } catch (e: any) {
        console.warn(`[KronosEngine] Batch prediction failed: ${e.message}`);
+       if (classifyKronosForecastFailure(e) === 'hard') {
+         this.manager.markUnavailable(e?.message || 'batch prediction failed');
+       } else {
+         console.warn('[KronosEngine] Transient batch forecast failure — keeping Chronos available.');
+       }
        throw e;
     }
   }
@@ -110,11 +128,25 @@ export class KronosEngine implements IForecastEngine {
    * Returns the current health, memory usage, and initialization status of the Kronos model.
    */
   public getStatus() {
-    return this.manager.getStatusReport();
+    const base = this.manager.getStatusReport();
+    return {
+      ...base,
+      forecastHorizon: quantThresholds.kronosHorizon,
+      timeframe: quantThresholds.kronosTimeframe,
+      confidenceThreshold: quantThresholds.kronosNeutralBandPct,
+      multiAssetBatchMode: false,
+    };
   }
 
   public async getStatusFresh() {
-    return this.manager.getStatusReportFresh();
+    const base = await this.manager.getStatusReportFresh();
+    return {
+      ...base,
+      forecastHorizon: quantThresholds.kronosHorizon,
+      timeframe: quantThresholds.kronosTimeframe,
+      confidenceThreshold: quantThresholds.kronosNeutralBandPct,
+      multiAssetBatchMode: false,
+    };
   }
 }
 

@@ -67,6 +67,9 @@ export function toPositionLedgerRow(
     }
   }
 
+  const stopLossPrice = finiteNumber(raw.stopLossPrice);
+  const takeProfitPrice = finiteNumber(raw.takeProfitPrice);
+
   return {
     symbol,
     sector,
@@ -77,5 +80,7 @@ export function toPositionLedgerRow(
     unrealizedPnl,
     unrealizedPnlPercent,
     isPositive: unrealizedPnl == null ? true : unrealizedPnl >= 0,
+    stopLossPrice,
+    takeProfitPrice,
   };
 }

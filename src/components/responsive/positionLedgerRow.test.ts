@@ -58,4 +58,19 @@ describe('toPositionLedgerRow', () => {
     expect(row.livePrice).toBeNull();
     expect(row.marketValue).toBeNull();
   });
+
+  it('maps real stopLossPrice/takeProfitPrice from the server (resolvePositionStopTarget) rather than showing "--"', () => {
+    const row = toPositionLedgerRow({
+      symbol: 'AAPL', quantity: 10, entryPrice: 200, currentPrice: 210,
+      stopLossPrice: 190, takeProfitPrice: 230,
+    });
+    expect(row.stopLossPrice).toBe(190);
+    expect(row.takeProfitPrice).toBe(230);
+  });
+
+  it('returns null (not 0 or NaN) stop/target when the server could not resolve one', () => {
+    const row = toPositionLedgerRow({ symbol: 'AAPL', quantity: 10, entryPrice: 200 });
+    expect(row.stopLossPrice).toBeNull();
+    expect(row.takeProfitPrice).toBeNull();
+  });
 });
