@@ -5,6 +5,7 @@
  * Not exposed as a writable API. Restricted-live ceilings stay file-reviewed, never UI-tunable.
  */
 import { loadRepoConfigJson } from './loadRepoConfigJson';
+import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
 
 export interface TradingSafety {
   stalePriceThresholdMs: number;
@@ -141,6 +142,39 @@ export interface TradingSafety {
   newsDecisiveSentimentThreshold: number;
   aiDecisionTemperature: number;
   minRegimeConfidenceToTrade: number;
+  /**
+   * Additive, default-off (env var must be exactly 'true'). When enabled, a strategy-sourced idea
+   * refused solely for lack of live win-rate history (cold start - zero real closed trades yet for
+   * that strategy) falls back to the regime-only mapping (deriveIdeaFromRegime) instead of no idea
+   * at all. Still flows through the full ChiefTrader -> RiskEngine (24 gates) -> OMS pipeline
+   * unchanged - never bypasses consensus or risk. See ARGUS_PREDICTION_EDGE_AND_LEARNING_
+   * IMPLEMENTATION_AUDIT.md for the cold-start deadlock this addresses.
+   */
+  quantColdStartBootstrapEnabledEnvVar: string;
+  /**
+   * Phase 11 (ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md) - scaffold-only flag
+   * for a future TradingAgents shadow/research adapter. No caller reads this yet; there is no
+   * TradingAgents integration code in this repository at all. Exists so the config contract is
+   * ready without implying the capability itself exists.
+   */
+  tradingAgentsShadowEnabledEnvVar: string;
+  /**
+   * ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md Phase 8 - maximum |delta| applied
+   * to agent_performance_stats.currentWeight in a single evaluateAgents() cycle, in either
+   * direction (toward a computed target when evidence is LEARNING_ELIGIBLE, or toward the agent's
+   * static default weight when evidence drops to INSUFFICIENT_EVIDENCE). Prevents one noisy
+   * effective-sample cycle from swinging live ChiefTrader weighting immediately to an extreme -
+   * the same protective intent as a position-sizing cap, applied to learned weight instead of
+   * capital.
+   */
+  maxWeightAdjustmentPerCycle: number;
+  /**
+   * Daily Goal Campaign, TRAIL_STOPS_ONLY action only: the tightened trailing-stop percentage
+   * applied to open positions once today's target is reached under this action
+   * (PortfolioMonitor.ts's resolveEffectiveTrailingStopPct). Only ever tightens the effective stop
+   * (Math.min against the operator's own settings.trailingStopPct) - never loosens it.
+   */
+  campaignTrailStopsOnlyPct: number;
   monteCarloDefaultSeed: number;
   sameSymbolCooldownMs: number;
   postLossCooldownMs: number;
@@ -286,6 +320,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'kellyFractionDefault',
   'evaluationHorizonMs',
   'kronosEvaluationHorizonMs',
+  'maxWeightAdjustmentPerCycle',
+  'campaignTrailStopsOnlyPct',
   'tradingDaysPerYear',
   'newsDecisiveSentimentThreshold',
   'aiDecisionTemperature',
@@ -331,10 +367,26 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.autoFlattenOnReconciliationMismatch !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: autoFlattenOnReconciliationMismatch');
   }
+  if (typeof raw.quantColdStartBootstrapEnabledEnvVar !== 'string' || !raw.quantColdStartBootstrapEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantColdStartBootstrapEnabledEnvVar');
+  }
+  if (typeof raw.tradingAgentsShadowEnabledEnvVar !== 'string' || !raw.tradingAgentsShadowEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: tradingAgentsShadowEnabledEnvVar');
+  }
   return raw as unknown as TradingSafety;
 }
 
 export const tradingSafety: TradingSafety = loadTradingSafety();
+
+/** Scaffold-only - no caller uses this yet. See tradingAgentsShadowEnabledEnvVar's doc comment above. */
+export function isTradingAgentsShadowEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.tradingAgentsShadowEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See quantColdStartBootstrapEnabledEnvVar's doc comment above. */
+export function isQuantColdStartBootstrapEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantColdStartBootstrapEnabledEnvVar);
+}
 
 export function portfolioRiskPctForLevel(riskLevel: string | undefined | null): number {
   if (riskLevel === 'Aggressive') return tradingSafety.riskPctAggressive;

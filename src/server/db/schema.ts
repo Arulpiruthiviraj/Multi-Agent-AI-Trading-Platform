@@ -132,6 +132,16 @@ export const settings = sqliteTable('settings', {
   strategyEngineActiveIdsJson: text('strategy_engine_active_ids_json').default('[]'), // JSON string[] of specific strategy ids to evaluate; empty = none active
   strategyEngineMaxActive: integer('strategy_engine_max_active').default(25),
   strategyEngineMinConfidence: real('strategy_engine_min_confidence').default(0.6),
+
+  // Goal-oriented daily campaign (CampaignTracker.ts). Off by default — zero behavior change until
+  // an operator enables it. Targets are settings knobs (not tradingSafety hardcodes). When the
+  // daily target is reached under LOCK_AND_IDLE / TRAIL_STOPS_ONLY, only NEW BUY idea generation
+  // is soft-blocked via ideaGenerationGate (SELL/exits still flow when TRADING_ENABLED). Budget
+  // remains settings.budget → CapitalAllocation → argus_capital_allocation; no parallel sizing.
+  campaignEnabled: integer('campaign_enabled', { mode: 'boolean' }).default(false),
+  dailyTargetAmount: real('daily_target_amount').default(0),
+  dailyTargetType: text('daily_target_type').notNull().default('DOLLAR'), // DOLLAR | PERCENT
+  targetAchievedAction: text('target_achieved_action').notNull().default('CONTINUE'), // LOCK_AND_IDLE | TRAIL_STOPS_ONLY | CONTINUE
 });
 
 // Immutable audit trail for every kill-switch state transition (Phase 1.4: "every
@@ -333,6 +343,21 @@ export const dailyTradingSummary = sqliteTable('daily_trading_summary', {
   updatedAt: integer('updated_at').notNull(),
 });
 
+/** Per NY-session / quant-strategy attribution for the optional daily campaign tracker. */
+export const dailyStrategyPerformance = sqliteTable('daily_strategy_performance', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  tradingDate: text('trading_date').notNull(), // America/New_York YYYY-MM-DD
+  quantStrategyId: text('quant_strategy_id').notNull(), // strategy id or UNATTRIBUTED
+  realizedPnl: real('realized_pnl').notNull().default(0),
+  unrealizedPnl: real('unrealized_pnl').notNull().default(0),
+  tradesCount: integer('trades_count').notNull().default(0),
+  winsCount: integer('wins_count').notNull().default(0),
+  lossesCount: integer('losses_count').notNull().default(0),
+  updatedAt: integer('updated_at').notNull(),
+}, (table) => ({
+  dateStrategyUniqueIdx: uniqueIndex('idx_daily_strategy_performance_date_strategy').on(table.tradingDate, table.quantStrategyId),
+}));
+
 // Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - RECONCILIATION_MISMATCH/MATCH were
 // previously emitted live over EventBus/WS and never persisted anywhere - there was no way to
 // ask "how many reconciliation mismatches happened last month." One row per reconciliation cycle
@@ -422,16 +447,35 @@ export const agentPredictions = sqliteTable('agent_predictions', {
   aiCallId: text('ai_call_id'),
   provider: text('provider'),
   latencyMs: real('latency_ms'),
+  // ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md - deterministic regime label
+  // ("BULLISH_TREND/NORMAL" etc, RegimeEngine.classifyRegime output) captured AT GENERATION TIME
+  // from price history available up to and including this exact tick - never backfilled from
+  // later data, so there is no look-ahead. Null for historical rows written before this column
+  // existed, and for agents this pass didn't wire regime capture into.
+  regime: text('regime'),
 });
 
 export const agentPerformanceStats = sqliteTable('agent_performance_stats', {
   agentName: text('agent_name').primaryKey(),
+  // RAW counts - every evaluated prediction_outcomes row, including correlated/duplicate reads of
+  // an unchanged signal state. Never deleted or hidden (observability/debugging still need them).
   totalPredictions: integer('total_predictions').notNull().default(0),
   correctPredictions: integer('correct_predictions').notNull().default(0),
-  winRate: real('win_rate').notNull().default(0),  
+  winRate: real('win_rate').notNull().default(0),
   averageReturn: real('average_return').notNull().default(0),
   profitFactor: real('profit_factor').notNull().default(0),
   sharpeRatio: real('sharpe_ratio').notNull().default(0),
+  // EFFECTIVE counts - after clusterByTimeGap-based independence grouping (effectiveSampleSize.ts).
+  // currentWeight below is now gated on THESE, not the raw counts above - closes the confirmed gap
+  // where autocorrelated predictions disproportionately moved live ChiefTrader consensus weight.
+  effectivePredictions: integer('effective_predictions').notNull().default(0),
+  effectiveCorrect: integer('effective_correct').notNull().default(0),
+  wilsonLower: real('wilson_lower'),
+  wilsonUpper: real('wilson_upper'),
+  // INSUFFICIENT_EVIDENCE | LEARNING_ELIGIBLE - never claims an agent is good/bad below the
+  // configured effective-sample floor (tradingSafety.minSampleSizeForTrust, applied to effective
+  // N here, not raw N).
+  evidenceStatus: text('evidence_status').notNull().default('INSUFFICIENT_EVIDENCE'),
   currentWeight: real('current_weight').notNull().default(1.0),
   lastEvaluated: text('last_evaluated').notNull(),
 });

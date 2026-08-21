@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clusterByTimeGap, wilsonInterval, rawVsEffectiveDirectional, type ClusterableRow } from './effectiveSampleSize';
+import { clusterByTimeGap, wilsonInterval, rawVsEffectiveDirectional, tagRowIndependence, classifyEvidenceStatus, type ClusterableRow } from './effectiveSampleSize';
 
 function row(symbol: string, agent: string, side: string, timestampMs: number, outcome: ClusterableRow['outcome']): ClusterableRow {
   return { symbol, agent, side, timestampMs, outcome };
@@ -112,5 +112,50 @@ describe('rawVsEffectiveDirectional', () => {
     expect(result.rawN).toBe(3);
     expect(result.effectiveN).toBe(3);
     expect(result.inflationFactor).toBe(1);
+  });
+
+  it('keeps two agent-specific secondaryKey series (e.g. different Quant strategies) from being pooled together', () => {
+    const rows: ClusterableRow[] = [
+      row('AAPL', 'QuantEngine', 'BUY', 0, 'WIN'),
+      row('AAPL', 'QuantEngine', 'BUY', 1000, 'WIN'),
+    ];
+    rows[0].secondaryKey = 'TREND_FOLLOWING';
+    rows[1].secondaryKey = 'COLD_START_BOOTSTRAP';
+    const result = rawVsEffectiveDirectional(rows, 60000);
+    expect(result.rawN).toBe(2);
+    expect(result.effectiveN).toBe(2); // two different secondaryKeys -> two separate series, not one cluster
+  });
+});
+
+describe('tagRowIndependence', () => {
+  it('tags only the last row in each cluster as INDEPENDENT, the rest CORRELATED', () => {
+    const rows: ClusterableRow[] = [
+      row('SPY', 'TechnicalAgent', 'BUY', 0, 'WIN'),
+      row('SPY', 'TechnicalAgent', 'BUY', 1000, 'WIN'),
+      row('SPY', 'TechnicalAgent', 'BUY', 2000, 'LOSS'),
+    ];
+    const tags = tagRowIndependence(rows, 60000);
+    expect(tags.get(rows[0])).toBe('CORRELATED');
+    expect(tags.get(rows[1])).toBe('CORRELATED');
+    expect(tags.get(rows[2])).toBe('INDEPENDENT');
+  });
+
+  it('never deletes or hides a row - every row still gets a tag', () => {
+    const rows: ClusterableRow[] = [
+      row('SPY', 'TechnicalAgent', 'BUY', 0, 'WIN'),
+      row('SPY', 'TechnicalAgent', 'BUY', 3600_000, 'LOSS'),
+    ];
+    const tags = tagRowIndependence(rows, 60000);
+    expect(tags.size).toBe(2);
+    expect(tags.get(rows[0])).toBe('INDEPENDENT');
+    expect(tags.get(rows[1])).toBe('INDEPENDENT');
+  });
+});
+
+describe('classifyEvidenceStatus', () => {
+  it('is more conservative than a raw-N gate would be - effective N below the floor stays insufficient even if raw N is huge', () => {
+    expect(classifyEvidenceStatus(19, 20)).toBe('INSUFFICIENT_EVIDENCE');
+    expect(classifyEvidenceStatus(20, 20)).toBe('LEARNING_ELIGIBLE');
+    expect(classifyEvidenceStatus(0, 20)).toBe('INSUFFICIENT_EVIDENCE');
   });
 });

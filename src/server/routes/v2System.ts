@@ -1751,3 +1751,97 @@ v2Router.post('/replay/historical', backtestLimiter, async (req, res) => {
     res.status(400).json({ ok: false, error: e.message, diagnostic: diagnosticFromBacktestError(e.message) });
   }
 });
+
+// ==========================================================================================
+// Daily campaign tracker (CampaignTracker.ts) — status + settings. Flag-gated; does not
+// bypass RiskEngine/OMS/consensus. Budget still flows through settings.budget.
+// ==========================================================================================
+v2Router.get('/campaign/status', async (_req, res) => {
+  try {
+    const { getCampaignStatus, refreshCampaignProgress } = await import('../services/CampaignTracker');
+    await refreshCampaignProgress('api_status');
+    const status = await getCampaignStatus();
+    res.json({
+      ok: true,
+      ...status,
+      disclaimer:
+        'Campaign tracker does not bypass RiskEngine, OMS, ChiefTrader consensus, or PositionSizing. LOCK_AND_IDLE / TRAIL_STOPS_ONLY only soft-block NEW BUY idea generation; SELL/exits remain allowed when TRADING_ENABLED.',
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+async function handleCampaignSettingsUpdate(req: any, res: any) {
+  const body = req.body || {};
+  const patch: Record<string, unknown> = {};
+
+  if (Object.prototype.hasOwnProperty.call(body, 'campaignEnabled')) {
+    patch.campaignEnabled = !!body.campaignEnabled;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'dailyTargetAmount')) {
+    const n = Number(body.dailyTargetAmount);
+    if (!Number.isFinite(n) || n < 0) {
+      return res.status(400).json({ ok: false, error: 'dailyTargetAmount must be a finite number >= 0' });
+    }
+    patch.dailyTargetAmount = n;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'dailyTargetType')) {
+    const t = String(body.dailyTargetType).toUpperCase();
+    if (t !== 'DOLLAR' && t !== 'PERCENT') {
+      return res.status(400).json({ ok: false, error: 'dailyTargetType must be DOLLAR or PERCENT' });
+    }
+    patch.dailyTargetType = t;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'targetAchievedAction')) {
+    const a = String(body.targetAchievedAction).toUpperCase();
+    if (a !== 'LOCK_AND_IDLE' && a !== 'TRAIL_STOPS_ONLY' && a !== 'CONTINUE') {
+      return res.status(400).json({ ok: false, error: 'targetAchievedAction must be LOCK_AND_IDLE, TRAIL_STOPS_ONLY, or CONTINUE' });
+    }
+    patch.targetAchievedAction = a;
+  }
+  // Optional budget via existing settings.budget / CapitalAllocation path — not a parallel knob.
+  if (Object.prototype.hasOwnProperty.call(body, 'budget')) {
+    const { validateSettingsBounds } = await import('../core/settingsValidation');
+    const boundsCheck = validateSettingsBounds({ budget: body.budget });
+    if (boundsCheck.ok === false) {
+      return res.status(400).json({ ok: false, error: boundsCheck.error });
+    }
+    patch.budget = Number(body.budget);
+  }
+
+  if (Object.keys(patch).length === 0) {
+    return res.status(400).json({ ok: false, error: 'No campaign settings fields provided' });
+  }
+
+  const existing = await db.select().from(settings).limit(1);
+  if (existing.length === 0) {
+    return res.status(404).json({ ok: false, error: 'settings row missing' });
+  }
+  await db.update(settings).set(patch as any).where(eq(settings.id, existing[0].id));
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'budget')) {
+    tradingEngine.state.budget = patch.budget as number;
+  }
+
+  const { refreshCampaignProgress, getCampaignStatus } = await import('../services/CampaignTracker');
+  await refreshCampaignProgress('settings_patch');
+  const status = await getCampaignStatus();
+  return res.json({ ok: true, ...status });
+}
+
+v2Router.patch('/campaign/settings', async (req, res) => {
+  try {
+    await handleCampaignSettingsUpdate(req, res);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+v2Router.post('/campaign/settings', async (req, res) => {
+  try {
+    await handleCampaignSettingsUpdate(req, res);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});

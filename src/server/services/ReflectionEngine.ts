@@ -15,7 +15,11 @@ import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
 import crypto from 'crypto';
 import { runtimeIntervals } from '../config/runtimeIntervals';
-import { agentWeightUpdate } from '../research/agentWeightPolicy';
+import { tradingSafety } from '../config/tradingSafety';
+import { defaultAgentWeights } from '../config/agentWeights';
+import { agentWeightUpdate, boundedStep } from '../research/agentWeightPolicy';
+import { rawVsEffectiveDirectional, classifyEvidenceStatus, type ClusterableRow } from '../research/effectiveSampleSize';
+import { independenceClusterGapMs, isExcludedFromWeightLearning, secondaryGroupKey } from '../research/predictionIndependencePolicy';
 
 export class ReflectionEngine {
   private intervalId: NodeJS.Timeout | null = null;
@@ -48,6 +52,10 @@ export class ReflectionEngine {
         aiCallId: idea.aiCallId,
         provider: idea.provider,
         latencyMs: idea.latencyMs,
+        // Phase 6/7 - regime at generation time (TechnicalAgent's lightweightRegimeClassifier, or
+        // any future agent that starts carrying one); null/absent for agents that don't compute
+        // one - never fabricated, never backfilled after the fact.
+        regime: idea.regime ?? null,
       });
     } catch (e) {
       console.error("[ReflectionEngine] Error logging prediction:", e);
@@ -108,9 +116,19 @@ export class ReflectionEngine {
       // NewsAgent's real overall win rate can look unremarkable while it's still systematically
       // overconfident specifically in its high-confidence bucket, which a flat weight can't see.
       const calibrationMap: Record<string, Record<string, { wins: number; losses: number }>> = {};
+      // ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md Phase 1/4 - the same
+      // outcomes also collected here, per-row, so effective (autocorrelation-clustered) sample
+      // size can gate live weight learning below. statsMap/calibrationMap above stay RAW and are
+      // never deleted or hidden - only which numbers drive currentWeight changes.
+      const rowsByAgent: Record<string, ClusterableRow[]> = {};
 
-      const accumulate = (agentName: string, confidence: number, outcome: string, actualReturn: number | null) => {
+      const accumulate = (
+        agentName: string, confidence: number, outcome: string, actualReturn: number | null,
+        symbol: string, side: string, timestampMs: number, secondaryKey: string | null,
+      ) => {
         if (!statsMap[agentName]) statsMap[agentName] = { total: 0, correct: 0, sumReturn: 0 };
+        if (!rowsByAgent[agentName]) rowsByAgent[agentName] = [];
+        rowsByAgent[agentName].push({ symbol, agent: agentName, side, timestampMs, outcome: outcome as 'WIN' | 'LOSS' | 'N_A', secondaryKey: secondaryKey ?? undefined });
         if (outcome === 'N_A') return; // HOLD-style predictions made no directional call to score
         statsMap[agentName].total += 1;
         const absReturn = Math.abs(actualReturn ?? 0);
@@ -138,7 +156,11 @@ export class ReflectionEngine {
       for (const o of outcomes) {
         const p = predictionById.get(o.predictionId);
         if (!p || p.agentName === 'KronosEngine') continue; // Kronos sourced from kronos_predictions below - see M1
-        accumulate(p.agentName, p.confidence, o.outcome, o.actualReturn);
+        accumulate(
+          p.agentName, p.confidence, o.outcome, o.actualReturn,
+          p.symbol, p.prediction, new Date(p.timestamp).getTime(),
+          secondaryGroupKey(p.agentName, p.reasoning),
+        );
       }
 
       // KronosEngine: kronos_predictions is its one real forecast ledger (every tick, no
@@ -150,7 +172,7 @@ export class ReflectionEngine {
       for (const o of kronosOutcomes) {
         const k = kronosById.get(o.predictionId);
         if (!k) continue;
-        accumulate('KronosEngine', k.confidence, o.outcome, o.actualReturn);
+        accumulate('KronosEngine', k.confidence, o.outcome, o.actualReturn, k.symbol, k.prediction, new Date(k.timestamp).getTime(), null);
       }
 
       for (const [agentName, buckets] of Object.entries(calibrationMap)) {
@@ -167,27 +189,58 @@ export class ReflectionEngine {
         }
       }
 
-      let totalWeight = 0;
       for (const [agentName, data] of Object.entries(statsMap)) {
         if (data.total === 0) continue;
-        const winRate = data.correct / (data.total || 1);
+        const rawWinRate = data.correct / (data.total || 1);
         const avgReturn = data.sumReturn / (data.total || 1);
-        const weight = agentWeightUpdate({ totalEvaluated: data.total, winRate });
-        const newWeight = weight.currentWeight;
-        totalWeight += newWeight;
-        const profitFactor = weight.statisticallyMeaningful && winRate > 0 && winRate < 1
-          ? winRate / (1 - winRate)
-          : 0;
-        const sharpeRatio = weight.sharpeRatio;
-        
+
+        // Phase 4/5/8 - effective (de-duplicated + autocorrelation-clustered) sample, using this
+        // agent's own independence policy (Kronos's shorter horizon, Quant's strategy-id secondary
+        // key), gates whether there is enough INDEPENDENT evidence to trust a learned weight at
+        // all - closes the confirmed gap where raw, correlated counts alone cleared
+        // minSampleSizeForTrust by orders of magnitude.
+        const rows = rowsByAgent[agentName] ?? [];
+        const eff = rawVsEffectiveDirectional(rows, independenceClusterGapMs(agentName));
+        const evidenceStatus = classifyEvidenceStatus(eff.effectiveN, tradingSafety.minSampleSizeForTrust);
+        const effectiveWinRate = eff.effectiveN > 0 ? eff.effectiveWins / eff.effectiveN : 0;
+
+        const [existingStats] = await db.select().from(agentPerformanceStats).where(eq(agentPerformanceStats.agentName, agentName));
+        const previousWeight = existingStats?.currentWeight ?? defaultAgentWeights[agentName] ?? 1.0;
+
+        let newWeight: number;
+        let profitFactor = 0;
+        let sharpeRatio = 0;
+        if (isExcludedFromWeightLearning(agentName)) {
+          // Phase 9 - risk-exit agent (e.g. PortfolioManager): stats are still computed and
+          // persisted for observability, but a learned "directional call quality" weight is not a
+          // meaningful concept for exits, so its live weight never moves from here.
+          newWeight = previousWeight;
+        } else if (evidenceStatus === 'LEARNING_ELIGIBLE') {
+          const weight = agentWeightUpdate({ totalEvaluated: eff.effectiveN, winRate: effectiveWinRate });
+          newWeight = boundedStep(previousWeight, weight.currentWeight, tradingSafety.maxWeightAdjustmentPerCycle);
+          profitFactor = effectiveWinRate > 0 && effectiveWinRate < 1 ? effectiveWinRate / (1 - effectiveWinRate) : 0;
+          sharpeRatio = weight.sharpeRatio;
+        } else {
+          // Phase 8 - evidence dropped back to insufficient (or never cleared it): gradually roll
+          // the live weight back toward this agent's static default rather than leave it frozen at
+          // a stale value computed under a since-corrected (or since-noisier) sufficiency read.
+          const neutralTarget = defaultAgentWeights[agentName] ?? 1.0;
+          newWeight = boundedStep(previousWeight, neutralTarget, tradingSafety.maxWeightAdjustmentPerCycle);
+        }
+
         await db.insert(agentPerformanceStats).values({
           agentName,
           totalPredictions: data.total,
           correctPredictions: data.correct,
-          winRate,
+          winRate: rawWinRate,
           averageReturn: avgReturn,
           profitFactor,
-          sharpeRatio: sharpeRatio,
+          sharpeRatio,
+          effectivePredictions: eff.effectiveN,
+          effectiveCorrect: eff.effectiveWins,
+          wilsonLower: eff.effectiveInterval.lower,
+          wilsonUpper: eff.effectiveInterval.upper,
+          evidenceStatus,
           currentWeight: newWeight,
           lastEvaluated: new Date().toISOString()
         }).onConflictDoUpdate({
@@ -195,10 +248,15 @@ export class ReflectionEngine {
           set: {
             totalPredictions: data.total,
             correctPredictions: data.correct,
-            winRate,
+            winRate: rawWinRate,
             averageReturn: avgReturn,
             profitFactor,
-            sharpeRatio: sharpeRatio,
+            sharpeRatio,
+            effectivePredictions: eff.effectiveN,
+            effectiveCorrect: eff.effectiveWins,
+            wilsonLower: eff.effectiveInterval.lower,
+            wilsonUpper: eff.effectiveInterval.upper,
+            evidenceStatus,
             currentWeight: newWeight,
             lastEvaluated: new Date().toISOString()
           }

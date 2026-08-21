@@ -197,6 +197,13 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    const { campaignTracker } = await import('../services/CampaignTracker');
+    campaignTracker.start();
+  } catch (e: any) {
+    console.warn(`[CampaignTracker] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
     const models = await modelRuntimeManager.startAndProbe();
     for (const m of models) {

@@ -35,6 +35,7 @@ import { XAxis, YAxis, Tooltip, AreaChart, Area } from "recharts";
 import { SafeResponsiveContainer } from "./shared/SafeResponsiveContainer";
 import { Explainer } from "./ContextualTooltip";
 import { UnavailableHint } from "./UnavailableHint";
+import { GoalCampaignCard } from "./dashboard/GoalCampaignCard";
 
 /** Ledger fill/submit time for Recent Executed Trades. Prefers filledAt; never fabricates a clock. */
 const formatTradeTimestamp = (ts: string | number | null | undefined): string => {
@@ -417,6 +418,8 @@ export function AutonomousDashboard({
           </div>
         </div>
       </div>
+
+      <GoalCampaignCard />
 
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         

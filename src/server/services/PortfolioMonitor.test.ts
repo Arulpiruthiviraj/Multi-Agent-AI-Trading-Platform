@@ -354,6 +354,7 @@ describe('resolvePositionStopTarget (positions ledger stop/take-profit)', () => 
   let sqliteDb: any;
   let schema: any;
   let resolvePositionStopTarget: typeof import('./PortfolioMonitor').resolvePositionStopTarget;
+  let campaignBuyLock: typeof import('../core/campaignBuyLock');
 
   beforeAll(async () => {
     tmpDbPath = path.join(os.tmpdir(), `argus_stoptarget_${Date.now()}_${process.pid}.db`);
@@ -365,6 +366,9 @@ describe('resolvePositionStopTarget (positions ledger stop/take-profit)', () => 
     ({ db, sqliteDb } = await import('../db'));
     schema = await import('../db/schema');
     ({ resolvePositionStopTarget } = await import('./PortfolioMonitor'));
+    // Same module instance PortfolioMonitor.ts itself resolved after the reset above - a
+    // separately-cached import would not affect what resolvePositionStopTarget actually reads.
+    campaignBuyLock = await import('../core/campaignBuyLock');
     await db.insert(schema.settings).values({ takeProfitPct: 15, trailingStopPct: 5 });
   });
 
@@ -374,6 +378,10 @@ describe('resolvePositionStopTarget (positions ledger stop/take-profit)', () => 
       try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }
     }
     delete process.env.ARGUS_DB_PATH;
+  });
+
+  afterEach(() => {
+    campaignBuyLock.resetCampaignBuyLockForTests();
   });
 
   it('falls back to settings.trailingStopPct/takeProfitPct when no QuantEngine opening trade exists', async () => {
@@ -404,5 +412,39 @@ describe('resolvePositionStopTarget (positions ledger stop/take-profit)', () => 
     const result = await resolvePositionStopTarget('REPLAYSYM', 200);
     expect(result.stopLossPrice).toBeCloseTo(200 * 0.95, 2);
     expect(result.takeProfitPrice).toBeCloseTo(200 * 1.15, 2);
+  });
+
+  it('is unaffected by TRAIL_STOPS_ONLY when the settings trailing stop is already tighter than campaignTrailStopsOnlyPct', async () => {
+    // settings.trailingStopPct = 5 (seeded above) is already tighter than
+    // tradingSafety.campaignTrailStopsOnlyPct (1.5 is tighter, not looser - so 5% stays 5%
+    // only if 5 <= 1.5, which is false; Math.min(5, 1.5) = 1.5). Use a distinct symbol with no
+    // opening trade so this exercises the generic-settings fallback path only.
+    campaignBuyLock.setCampaignBuyLockedForTests(true, undefined, 'TRAIL_STOPS_ONLY');
+    const result = await resolvePositionStopTarget('TRAILSYM', 200);
+    // tradingSafety.campaignTrailStopsOnlyPct (1.5) is tighter than settings.trailingStopPct (5),
+    // so the effective stop tightens to 1.5%, not the base 5%.
+    expect(result.stopLossPrice).toBeCloseTo(200 * (1 - 1.5 / 100), 2);
+  });
+
+  it('does NOT tighten the trailing stop when no campaign lock is active', async () => {
+    expect(campaignBuyLock.getCampaignBuyLockAction()).toBeNull();
+    const result = await resolvePositionStopTarget('NOLOCKSYM', 200);
+    expect(result.stopLossPrice).toBeCloseTo(200 * 0.95, 2); // base 5%, untouched
+  });
+
+  it('does NOT tighten the trailing stop under a plain LOCK_AND_IDLE lock (only TRAIL_STOPS_ONLY tightens)', async () => {
+    campaignBuyLock.setCampaignBuyLockedForTests(true, undefined, 'LOCK_AND_IDLE');
+    const result = await resolvePositionStopTarget('IDLESYM', 200);
+    expect(result.stopLossPrice).toBeCloseTo(200 * 0.95, 2); // base 5%, untouched
+  });
+
+  it('never loosens a stop that is already tighter than campaignTrailStopsOnlyPct', async () => {
+    await db.update(schema.settings).set({ trailingStopPct: 1 });
+    campaignBuyLock.setCampaignBuyLockedForTests(true, undefined, 'TRAIL_STOPS_ONLY');
+    const result = await resolvePositionStopTarget('TIGHTALREADYSYM', 200);
+    // Math.min(1, 1.5) = 1 - the operator's own tighter setting is preserved, never loosened
+    // toward the campaign's 1.5% ceiling.
+    expect(result.stopLossPrice).toBeCloseTo(200 * (1 - 1 / 100), 2);
+    await db.update(schema.settings).set({ trailingStopPct: 5 });
   });
 });

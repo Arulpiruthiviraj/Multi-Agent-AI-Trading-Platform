@@ -132,3 +132,7 @@ Source: `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md`. Consensus **0.75 / 
 - Did **not** enable LIVE or disable `PAPER_TRADING_ONLY`
 - Did **not** flip `newsAgentMode` to ACTIVE_VOTE (ideas stay default-OFF)
 - Did **not** rewrite stored REPLAY `quant_target_price` rows (research ledger stays intact)
+
+## 7. Daily campaign tracker (additive, 2026-08-20)
+
+See `ARGUS_CAMPAIGN_TRACKER.md`. Flag-gated (`campaign_enabled` default false). BUY soft-lock via `ideaGenerationGate` / `isCampaignBuyLocked` only — not EMERGENCY_STOP. Budget remains `settings.budget`. Consensus floors unchanged.

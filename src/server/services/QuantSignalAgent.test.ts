@@ -116,6 +116,37 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     expect(result.groupedScores.BUY.trendScore).toBeGreaterThan(50);
   });
 
+  it('emits a cold-start regime-only bootstrap idea only when QUANT_COLD_START_BOOTSTRAP_ENABLED=true, still via the normal TRADE_IDEA_GENERATED path (ARGUS_PREDICTION_EDGE_AND_LEARNING_IMPLEMENTATION_AUDIT.md)', async () => {
+    stubUptrendingFetch();
+    // <=5 letters - looksLikeListedTicker/gateTradeIdea (DEF-24) silently routes anything longer
+    // to TRADE_IDEA_REJECTED instead of TRADE_IDEA_GENERATED.
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSABT']);
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    marketDataWorker.cacheObservedQuote('QSABT', 125); // real fresh tick - assessDataQuality's market_data gate needs this, unrelated to the bootstrap logic itself
+
+    const receivedIdeas: any[] = [];
+    const listener = (idea: any) => receivedIdeas.push(idea);
+    eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
+    try {
+      process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED = 'true';
+      const agent = new QuantSignalAgent();
+      await agent.evaluateSymbol('QSABT');
+    } finally {
+      delete process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED;
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
+    }
+
+    const mine = receivedIdeas.find(i => i.symbol === 'QSABT');
+    expect(mine).toBeDefined();
+    expect(mine.agent).toBe('QuantEngine');
+    expect(mine.side).toBe('BUY'); // stubUptrendingFetch produces a real BULLISH_TREND regime
+    expect(mine.reasoning).toContain('Cold-start bootstrap');
+    // No real strategy evaluation backs this - stop/target/EV all honestly absent, not fabricated.
+    expect(mine.quantDetail.strategyEvaluation).toBeNull();
+  });
+
   it('skips a symbol honestly (no crash, no fabricated data) when Alpaca returns too few real bars', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,

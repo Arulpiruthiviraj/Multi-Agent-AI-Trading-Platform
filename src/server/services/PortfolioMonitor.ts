@@ -55,6 +55,7 @@ import {
 import { evaluateExit } from './ExitIntelligenceEngine';
 import { isExitIntelligenceEnabled } from '../config/exitIntelligence';
 import { replaySafety } from '../replay/replaySafety';
+import { getCampaignBuyLockAction } from '../core/campaignBuyLock';
 
 // E2A (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - these were previously hardcoded literals
 // (+5%/-3%) unrelated to settings.takeProfitPct/trailingStopPct, which already existed in the
@@ -64,6 +65,22 @@ import { replaySafety } from '../replay/replaySafety';
 // column defaults rather than the old, unrelated hardcoded values.
 const FALLBACK_TAKE_PROFIT_PCT = tradingSafety.fallbackTakeProfitPct;
 const FALLBACK_TRAILING_STOP_PCT = tradingSafety.fallbackTrailingStopPct;
+
+/**
+ * Daily Goal Campaign, TRAIL_STOPS_ONLY action only (ARGUS_CAMPAIGN_TRACKER.md /
+ * ARGUS_INDEPENDENT_LEARNING... campaign audit): once today's target is reached under this
+ * specific action, open positions' trailing stop tightens toward capital preservation - CampaignTracker
+ * itself does not invent trail math (see its own header comment); this is that real math, living
+ * where every other trailing-stop number already lives. Math.min so this can only ever TIGHTEN the
+ * effective stop, never loosen it below whatever the operator's own settings.trailingStopPct
+ * already was.
+ */
+function resolveEffectiveTrailingStopPct(baseTrailingStopPct: number): number {
+  if (getCampaignBuyLockAction() === 'TRAIL_STOPS_ONLY') {
+    return Math.min(baseTrailingStopPct, tradingSafety.campaignTrailStopsOnlyPct);
+  }
+  return baseTrailingStopPct;
+}
 
 /** Research/sim fills must never supply stop/target metadata for live portfolio exits. */
 const NON_LIVE_OPENING_TRADE_ENVS = new Set([
@@ -117,7 +134,7 @@ export async function resolvePositionStopTarget(
   const openingTrade = await resolveOpeningTradeForLiveExit(symbol);
   const settingsRow = (await db.select().from(settings).limit(1))[0];
   const takeProfitPct = settingsRow?.takeProfitPct ?? FALLBACK_TAKE_PROFIT_PCT;
-  const trailingStopPct = settingsRow?.trailingStopPct ?? FALLBACK_TRAILING_STOP_PCT;
+  const trailingStopPct = resolveEffectiveTrailingStopPct(settingsRow?.trailingStopPct ?? FALLBACK_TRAILING_STOP_PCT);
 
   const stopLossPrice = openingTrade?.quantStopPrice ?? averagePrice * (1 - trailingStopPct / 100);
   const takeProfitPrice = openingTrade?.quantTargetPrice ?? averagePrice * (1 + takeProfitPct / 100);
@@ -169,7 +186,7 @@ export class PortfolioMonitorWorker {
       // for this exact mismatch).
       const settingsRow = (await db.select().from(settings).limit(1))[0];
       const takeProfitPct = settingsRow?.takeProfitPct ?? FALLBACK_TAKE_PROFIT_PCT;
-      const trailingStopPct = settingsRow?.trailingStopPct ?? FALLBACK_TRAILING_STOP_PCT;
+      const trailingStopPct = resolveEffectiveTrailingStopPct(settingsRow?.trailingStopPct ?? FALLBACK_TRAILING_STOP_PCT);
 
       for (const holding of holdings) {
         if (holding.quantity <= 0) continue;

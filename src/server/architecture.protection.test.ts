@@ -153,6 +153,18 @@ describe('Architecture protection: extension-zone modules cannot reach the spine
     expect(text).not.toMatch(/\.placeOrder\(/);
     expect(text).not.toMatch(/emitTradeIdea\(/);
   });
+
+  it('CampaignTracker.ts never imports RiskEngine/OMS/BrokerManager or calls placeOrder (BUY soft-lock only via ideaGenerationGate)', () => {
+    const text = readFileSync(join(ROOT, 'src/server/services/CampaignTracker.ts'), 'utf8');
+    expect(text).not.toMatch(/from ['"][^'"]*\/RiskEngine['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*OrderManagement['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*BrokerManager['"]/);
+    expect(text).not.toMatch(/\.placeOrder\(/);
+    expect(text).not.toMatch(/CHIEF_APPROVED_IDEA/);
+    // Soft-lock is in-memory only — must never write tradingState / kill-switch transitions.
+    expect(text).not.toMatch(/tradingState\s*=/);
+    expect(text).not.toMatch(/setTradingState/);
+  });
 });
 
 describe('Architecture protection: CHIEF_APPROVED_IDEA has exactly one authorized emitter set', () => {

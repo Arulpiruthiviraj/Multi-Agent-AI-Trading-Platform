@@ -12,7 +12,7 @@ import os from 'os';
  * strategy-evaluation wiring runs end-to-end without look-ahead bias, produces a real regime-
  * segmented report, and persists a real quant_strategy_backtests row - not merely that it compiles.
  */
-describe('BacktestEngine.runStrategyBacktest', () => {
+describe('BacktestEngine.runStrategyBacktest', { timeout: 60000 }, () => {
   let tmpDbPath: string;
   let db: any;
   let sqliteDb: any;

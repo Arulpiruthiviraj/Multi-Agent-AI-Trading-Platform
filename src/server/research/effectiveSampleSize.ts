@@ -20,6 +20,13 @@ export interface ClusterableRow {
   side: string;
   timestampMs: number;
   outcome: 'WIN' | 'LOSS' | 'N_A';
+  /**
+   * Optional agent-specific sub-identity (predictionIndependencePolicy.ts's secondaryGroupKey) -
+   * e.g. QuantEngine's strategy id, or 'COLD_START_BOOTSTRAP' - so two structurally different
+   * signal sources for the same (symbol, agent, side) are never pooled into one cluster series.
+   * Rows without one (the default (symbol, agent, side) grouping) pass undefined.
+   */
+  secondaryKey?: string;
 }
 
 export interface ClusteredGroup {
@@ -32,15 +39,16 @@ export interface ClusteredGroup {
 }
 
 /**
- * Groups rows by (symbol, agent, side), then splits each group into clusters wherever the gap
- * between consecutive (time-sorted) rows exceeds gapMs. Each cluster counts as exactly one
- * effectively-independent observation, graded by its last row's outcome (the most information a
- * single cluster can contribute without double-counting the repeated observations inside it).
+ * Groups rows by (symbol, agent, side[, secondaryKey]), then splits each group into clusters
+ * wherever the gap between consecutive (time-sorted) rows exceeds gapMs. Each cluster counts as
+ * exactly one effectively-independent observation, graded by its last row's outcome (the most
+ * information a single cluster can contribute without double-counting the repeated observations
+ * inside it).
  */
 export function clusterByTimeGap(rows: ClusterableRow[], gapMs: number): ClusteredGroup[] {
   const bySeries = new Map<string, ClusterableRow[]>();
   for (const row of rows) {
-    const key = `${row.symbol}|${row.agent}|${row.side}`;
+    const key = `${row.symbol}|${row.agent}|${row.side}|${row.secondaryKey ?? ''}`;
     const list = bySeries.get(key) ?? [];
     list.push(row);
     bySeries.set(key, list);
@@ -63,6 +71,36 @@ export function clusterByTimeGap(rows: ClusterableRow[], gapMs: number): Cluster
     }
   }
   return clusters;
+}
+
+/**
+ * Per-row independence tag (Phase 3's RAW/EVALUATED/CORRELATED/INDEPENDENT taxonomy): the last
+ * (most recent) row in each time-gap cluster is the one INDEPENDENT observation counted toward
+ * effective N; every earlier row in the same cluster is CORRELATED - a real evaluated outcome,
+ * never hidden or deleted, just not double-counted as separate evidence.
+ */
+export function tagRowIndependence(rows: ClusterableRow[], gapMs: number): Map<ClusterableRow, 'INDEPENDENT' | 'CORRELATED'> {
+  const tags = new Map<ClusterableRow, 'INDEPENDENT' | 'CORRELATED'>();
+  for (const cluster of clusterByTimeGap(rows, gapMs)) {
+    const last = cluster.rows[cluster.rows.length - 1];
+    for (const row of cluster.rows) {
+      tags.set(row, row === last ? 'INDEPENDENT' : 'CORRELATED');
+    }
+  }
+  return tags;
+}
+
+export type EvidenceStatus = 'INSUFFICIENT_EVIDENCE' | 'LEARNING_ELIGIBLE';
+
+/**
+ * Whether an agent's EFFECTIVE (not raw) sample size clears the configured trust floor. Applying
+ * the same floor to effective rather than raw N is strictly more conservative (effectiveN <=
+ * rawN always) - fewer agents will read LEARNING_ELIGIBLE than under the old raw-N gate, never
+ * more. Never returns anything claiming edge; this only gates whether there is enough independent
+ * evidence to trust a computed statistic at all.
+ */
+export function classifyEvidenceStatus(effectiveN: number, minEffectiveSampleSize: number): EvidenceStatus {
+  return effectiveN >= minEffectiveSampleSize ? 'LEARNING_ELIGIBLE' : 'INSUFFICIENT_EVIDENCE';
 }
 
 export interface WilsonInterval {

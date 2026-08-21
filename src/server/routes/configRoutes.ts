@@ -343,6 +343,7 @@ const SETTINGS_ALLOWED_FIELDS: (keyof typeof schema.settings.$inferInsert)[] = [
   'autoTradeScheduleTimezone',
   'strategyEngineEnabled', 'strategyEngineMode', 'strategyEngineActiveIdsJson',
   'strategyEngineMaxActive', 'strategyEngineMinConfidence',
+  'campaignEnabled', 'dailyTargetAmount', 'dailyTargetType', 'targetAchievedAction',
 ];
 
 // Only these mode strings are real in this pass (StrategyEngineShadowRunner.ts only acts on
@@ -399,6 +400,27 @@ configRouter.post('/settings', async (req, res) => {
       } catch {
         return res.status(400).json({ ok: false, error: 'strategyEngineActiveIdsJson must be a JSON array of strings.' });
       }
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'dailyTargetType')) {
+      const t = String(req.body.dailyTargetType).toUpperCase();
+      if (t !== 'DOLLAR' && t !== 'PERCENT') {
+        return res.status(400).json({ ok: false, error: 'dailyTargetType must be DOLLAR or PERCENT' });
+      }
+      req.body.dailyTargetType = t;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'targetAchievedAction')) {
+      const a = String(req.body.targetAchievedAction).toUpperCase();
+      if (a !== 'LOCK_AND_IDLE' && a !== 'TRAIL_STOPS_ONLY' && a !== 'CONTINUE') {
+        return res.status(400).json({ ok: false, error: 'targetAchievedAction must be LOCK_AND_IDLE, TRAIL_STOPS_ONLY, or CONTINUE' });
+      }
+      req.body.targetAchievedAction = a;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'dailyTargetAmount')) {
+      const n = Number(req.body.dailyTargetAmount);
+      if (!Number.isFinite(n) || n < 0) {
+        return res.status(400).json({ ok: false, error: 'dailyTargetAmount must be a finite number >= 0' });
+      }
+      req.body.dailyTargetAmount = n;
     }
 
     // Real bug fixed: SETTINGS_ALLOWED_FIELDS only ever allowlisted field *names*; a client could

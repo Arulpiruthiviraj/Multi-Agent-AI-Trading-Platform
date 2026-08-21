@@ -74,7 +74,9 @@ Autobot off: ticks can still drive Technical/Kronos → pipeline if `TRADING_ENA
 Alpaca WebSocket → emitMarketData() → MARKET_DATA + MARKET_DATA_UPDATED
  ↓
 Idea agents (timer or MARKET_DATA):
-  TechnicalAgent       → real RSI/MACD/Bollinger; TRADE_IDEA_GENERATED
+  TechnicalAgent       → real RSI/MACD/Bollinger; state-transition or
+                         `technicalSignalCooldownMs` debounced (avoids
+                         autocorrelated repeat signals); TRADE_IDEA_GENERATED
   NewsEngine           → real RSS + paid news APIs (+ optional LLM)
   FundamentalAgent     → AlphaVantage + AIRouter (~60s, tracked symbols)
   MacroAgent           → AlphaVantage + AIRouter (~75s)
@@ -184,6 +186,7 @@ Loaded via `src/server/config/loadRepoConfigJson.ts`. Missing required keys **fa
 | `researchSafety.json` | Soak / OOS / WFO floors (research, not live knobs) |
 | `runtimeIntervals.json` | Worker intervals |
 | `consensusFixtures.json` | Test fixtures |
+| `quantThresholds.json` | Core strategy/regime/scoring numbers; TechnicalAgent debounce cooldown; lightweight-regime-classifier bands |
 
 ## EventBus
 

@@ -38,6 +38,26 @@ export interface QuantThresholds {
   groupedScoreNeutral: number;
   technicalHistoryBars: number;
   technicalEvaluationCooldownMs: number;
+  /**
+   * Minimum re-emission gap for the SAME fired signal (momentumBreakout/meanReversion/overbought)
+   * on the SAME symbol, when no genuine indicator state-transition (RSI crossing its threshold,
+   * MACD histogram sign flip) has occurred since the last emission. Separate from
+   * technicalEvaluationCooldownMs, which only throttles how often checkStrategies() re-runs at
+   * all - a still-true, unchanged signal state used to re-emit TRADE_IDEA_GENERATED every single
+   * cooldown period regardless (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M3).
+   */
+  technicalSignalCooldownMs: number;
+  /**
+   * lightweightRegimeClassifier.ts's own minimum bars - deliberately smaller than
+   * tradingSafety.regimeMinBars (RegimeEngine.ts's real OHLC-bar minimum, 60), since tick-driven
+   * agents like TechnicalAgent only ever hold up to technicalHistoryBars (50) closing prices, not
+   * daily bars.
+   */
+  lightweightRegimeMinBars: number;
+  /** Bollinger-band-width-as-fraction-of-price threshold for HIGH volatility (lightweightRegimeClassifier.ts). Not the same unit as volatilityPercentileHigh (a percentile rank) - see that file's own comment. */
+  lightweightVolatilityHighBandWidthPct: number;
+  /** Same, for LOW volatility. */
+  lightweightVolatilityLowBandWidthPct: number;
   bollingerPeriod: number;
   rsiMinBars: number;
   kronosMinHistory: number;
@@ -59,7 +79,9 @@ const NUMERIC_KEYS: (keyof QuantThresholds)[] = [
   'minTrendStrength', 'minAdxTrending', 'minAdxRanging', 'minMeaningfulAdx',
   'minMeaningfulPriceVsMaPct', 'minMeaningfulSlopePct', 'volatilityPercentileHigh',
   'volatilityPercentileLow', 'rvolThreshold', 'pullbackTolerancePct', 'nearBoundaryPct',
-  'groupedScoreNeutral', 'technicalHistoryBars', 'technicalEvaluationCooldownMs', 'bollingerPeriod', 'rsiMinBars',
+  'groupedScoreNeutral', 'technicalHistoryBars', 'technicalEvaluationCooldownMs', 'technicalSignalCooldownMs',
+  'lightweightRegimeMinBars', 'lightweightVolatilityHighBandWidthPct', 'lightweightVolatilityLowBandWidthPct',
+  'bollingerPeriod', 'rsiMinBars',
   'kronosMinHistory', 'kronosMaxHistory', 'kronosHorizon', 'kronosNeutralBandPct',
   'baseSlippagePct', 'atrSlippageMultiplier', 'sizeImpactMultiplier', 'maxSlippagePct',
   'priceSourceDivergencePct',
