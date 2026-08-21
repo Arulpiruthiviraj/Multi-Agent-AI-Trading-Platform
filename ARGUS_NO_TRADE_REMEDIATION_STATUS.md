@@ -136,3 +136,33 @@ Source: `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md`. Consensus **0.75 / 
 ## 7. Daily campaign tracker (additive, 2026-08-20)
 
 See `ARGUS_CAMPAIGN_TRACKER.md`. Flag-gated (`campaign_enabled` default false). BUY soft-lock via `ideaGenerationGate` / `isCampaignBuyLocked` only — not EMERGENCY_STOP. Budget remains `settings.budget`. Consensus floors unchanged.
+
+## 8. P0 prep RUN-VERIFIED (2026-08-21 ~07:42 ET) — SAFE PAPER operator prep
+
+Evidence: `argus-cli` health/status/agents/ready/positions + `reconciliation_events` readonly + Chronos `:8008/health`. No commit. No kill -9. No orders. No threshold changes. Consensus **0.75 / min 2** untouched. LIVE not armed.
+
+### Cleared
+| Item | Result |
+|---|---|
+| PAPER headless engine | **UP** pid **26000** on `:3000` (`phase=RUNNING`, `marketDataConnected=true`, broker Alpaca) |
+| Chronos | **UP** `:8008/health` → `status=ok` (chronos-t5-mini + finbert; slow FinBERT HF SSL retries then served) |
+| Dirty-session hold | **`interruptedSessionHold=false`** (agents/status) |
+| Recon | Latest `reconciliation_events` id **733** @ boot: **matches=1**, mismatches null (GLD) — MATCH |
+| Autobot | **OFF** (`disable` + DB `auto_bot_enabled=0`; `ideaWorkersArmed=false`) |
+| LIVE | **`LIVE_NO_GO`** (`health` / `ready`) |
+| Mode | **PAPER**; `PAPER_TRADING_ONLY=true` in env |
+| Single writer | One LISTENING `:3000` (26000); stale prior PID **35572** dead; no duplicate engine |
+
+### Still blocked / not proven
+| Item | Status |
+|---|---|
+| Session `cleanShutdown` | Runtime session heartbeat active; prior unclean marker cleared by new process — **do not** claim EOD clean until supervised `./argus stop` |
+| Post-fill OMS P&L + portfolio sync | Code/tests present; **no live SELL proof** this prep (no orders) |
+| Autobot ON for RTH ideas | Intentionally left OFF for supervised tomorrow start |
+| CLI login | Not required for these reads; disable/health/status succeeded without printing secrets |
+
+### Kronos IDLE/DEAD pre-RTH — EXPECTED (not a start failure)
+At ~07:44 ET on 2026-08-21 (pre-RTH; RTH 09:30 ET), Chronos `:8008` was healthy and Argus headless pid 26000 reported `marketDataConnected=true`, Autobot OFF, `tradingState=TRADING_ENABLED`. Pipeline snapshot: `KronosEngine` `enabled=true`, `available=true`, `keepsBackgroundPipeline=true`, `currentState=IDLE`, `healthLabel=DEAD`, `lastTickAt=null`. Boot path `ArgusCoreBoot` calls `kronosForecastAgent.start()` when the agent is pipeline-enabled; heartbeat/`lastTickAt` only move on `MARKET_DATA`, and `MarketDataWorker.maybeEmitMarketData` is gated by Autobot+`TRADING_ENABLED` (so Autobot-off caches quotes but does not emit ticks to idea agents — by design). Therefore IDLE/DEAD here means waiting for tick bus emission after Autobot ON (around supervised RTH), not Chronos down and not a failed agent start. No code fix; Autobot left OFF.
+
+### Operator note for open
+Prefer Autobot OFF until supervise; expect consensus scarcity; do not lower floors; prove next organic SELL → non-NULL `profit_loss` + no false MISSING_REMOTELY. Kronos lamp may stay IDLE/DEAD until Autobot ON emits `MARKET_DATA`.
