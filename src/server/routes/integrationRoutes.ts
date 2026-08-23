@@ -75,18 +75,29 @@ integrationRouter.post("/brokers/:id/live-mode", tradingLimiter, async (req: Req
 integrationRouter.post("/brokers/active", tradingLimiter, async (req: Request, res: Response) => {
   const { id, credentials } = req.body;
   try {
+    // Runtime switch only — OMS + RiskEngine remain the sole order gatekeepers.
+    // IBKR preflight / PAPER_TRADING_ONLY enforcement live inside setActiveBroker().
     const success = await BrokerManager.getInstance().setActiveBroker(id, credentials);
     if (success) {
       // Persist so this survives a restart - previously the runtime switch was in-memory only
       // and BrokerManager.initialize() would silently revert to the last-saved settings row on
       // next boot, undoing whatever the user had just selected here.
-      const activeName = BrokerManager.getInstance().getActiveBroker().name;
+      const active = BrokerManager.getInstance().getActiveBroker();
       const existing = await db.select().from(schema.settings).limit(1);
       if (existing.length > 0) {
-        await db.update(schema.settings).set({ selectedBroker: activeName }).where(eq(schema.settings.id, existing[0].id));
+        await db.update(schema.settings).set({ selectedBroker: active.name }).where(eq(schema.settings.id, existing[0].id));
       }
+      return res.json({
+        success: true,
+        activeBrokerId: active.id,
+        activeBrokerName: active.name,
+        paperTradingOnly: process.env.PAPER_TRADING_ONLY === 'true',
+      });
     }
-    res.json({ success });
+    res.status(400).json({
+      success: false,
+      error: `Failed to activate broker '${id}' — authenticate() returned false.`,
+    });
   } catch (e: any) {
     res.status(400).json({ success: false, error: e.message });
   }

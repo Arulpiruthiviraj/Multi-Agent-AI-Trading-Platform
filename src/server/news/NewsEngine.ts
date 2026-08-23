@@ -10,7 +10,6 @@ import { NewsScoringEngine, AIAnalysisResult, buildLocalFirstNewsAnalysis } from
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { tradingSafety } from '../config/tradingSafety';
-import { runtimeIntervals } from '../config/runtimeIntervals';
 import { decideEscalation } from '../ai/EscalationPolicy';
 import { db } from '../db';
 import * as schema from '../db/schema';
@@ -25,6 +24,8 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { recordNewsPrediction } from './NewsPredictionLedger';
+import { resolveNewsEnginePollMs, isUsEquityRegularSession } from './newsSessionCadence';
+import { marketOpenNewsConfluence } from './MarketOpenNewsConfluence';
 
 // A FinBERT sentiment magnitude at/above this is treated as decisive enough to skip the LLM call
 // entirely - see EscalationPolicy.ts. Below it, the signal is too weak/ambiguous to trust alone.
@@ -45,6 +46,7 @@ export class NewsEngine {
   private intervalId: NodeJS.Timeout | null = null;
   /** Prevent overlapping runPipeline ticks when LLM/RSS latency exceeds newsEngineMs. */
   private pipelineInFlight = false;
+  private currentPollMs: number | null = null;
 
   private constructor() {
     this.providerManager = new NewsProviderManager();
@@ -75,9 +77,28 @@ export class NewsEngine {
       console.log('[NewsEngine] newsAgentMode=DISABLED - not starting News Intelligence Pipeline.');
       return;
     }
-    console.log('[NewsEngine] Starting News Intelligence Pipeline...');
-    this.intervalId = setInterval(() => this.runPipeline(), runtimeIntervals.newsEngineMs);
+    console.log('[NewsEngine] Starting News Intelligence Pipeline (24/7; adaptive RTH/off-hours cadence)...');
+    this.scheduleAdaptiveInterval();
+    marketOpenNewsConfluence.start();
     this.runPipeline();
+  }
+
+  /** RTH uses newsEngineMs; overnight/weekend uses newsEngineOffHoursMs. Re-arms on cadence change. */
+  private scheduleAdaptiveInterval(): void {
+    const nextMs = resolveNewsEnginePollMs();
+    if (this.intervalId && this.currentPollMs === nextMs) return;
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    this.currentPollMs = nextMs;
+    this.intervalId = setInterval(() => {
+      this.scheduleAdaptiveInterval();
+      void this.runPipeline();
+    }, nextMs);
+    console.log(
+      `[NewsEngine] Poll cadence ${nextMs}ms (${isUsEquityRegularSession() ? 'RTH' : 'off-hours'})`,
+    );
   }
 
   public stop() {
@@ -85,6 +106,8 @@ export class NewsEngine {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    this.currentPollMs = null;
+    marketOpenNewsConfluence.stop();
     console.log('[NewsEngine] Stopped.');
   }
 
@@ -262,9 +285,15 @@ export class NewsEngine {
                 contribution,
                 reasoning: aiAnalysis.reasoning,
                 recordedAt: new Date().toISOString(),
+                expectedHorizon: aiAnalysis.expectedHorizon,
+                referencePrice: marketDataWorker.getLatestPrice(symbol),
+                clusterId: clusterOutcome.clusterId,
               };
-              recordNewsCatalyst(catalyst);
-              eventBus.emit(EVENTS.NEWS_CATALYST, catalyst);
+              const recorded = recordNewsCatalyst(catalyst);
+              eventBus.emit(EVENTS.NEWS_CATALYST, recorded);
+              if (recorded.status === 'STAGED_FOR_OPEN') {
+                eventBus.publish(EVENTS.NEWS_CATALYST_STAGED, recorded);
+              }
 
               // Phase F5: persist a prediction for later evaluation (Phase F6, not yet built)
               // only in ACTIVE_OBSERVE and above - dormant at the CATALYST_ONLY default. Fire-
@@ -286,6 +315,8 @@ export class NewsEngine {
                   riskVeto: aiAnalysis.riskVeto,
                   sourceCount: clusterOutcome.sourceCount,
                   modelSource: aiAnalysis._provider ?? 'local-first',
+                  stagingStatus: recorded.status === 'STAGED_FOR_OPEN' ? 'STAGED_FOR_OPEN' : 'ACTIVE',
+                  expiresAt: recorded.expiresAtMs != null ? new Date(recorded.expiresAtMs).toISOString() : null,
                 });
               }
               // Default desk policy: news is a catalyst, not an independent BUY/SELL vote.

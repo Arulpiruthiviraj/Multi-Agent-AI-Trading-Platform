@@ -441,8 +441,104 @@ systemRouter.get("/performance", async (req: Request, res: Response) => {
 
 systemRouter.get("/trades", async (req: Request, res: Response) => {
   try {
-    const allTrades = await db.select().from(schema.trades).orderBy(schema.trades.id);
-    res.json(allTrades.reverse()); // Latest first
+    const { parseBrokerScopeQuery, resolveActiveBrokerId, listTradesForBrokerScope } = await import("../services/brokerScopedLedger");
+    const parsed = parseBrokerScopeQuery(req.query.brokerId);
+    if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+    let liveId: string | null = null;
+    try {
+      liveId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+    } catch { /* no active broker */ }
+    const activeBrokerId = resolveActiveBrokerId(liveId);
+    const scope = parsed.mode === 'broker' && !parsed.brokerId
+      ? { mode: 'broker' as const, brokerId: activeBrokerId }
+      : parsed;
+    const rows = await listTradesForBrokerScope({ scope, activeBrokerId, limit: Number(req.query.limit) || 500 });
+    res.json(rows);
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Same ledger as /trades (OMS has no separate orders table). */
+systemRouter.get("/orders", async (req: Request, res: Response) => {
+  try {
+    const { parseBrokerScopeQuery, resolveActiveBrokerId, listTradesForBrokerScope } = await import("../services/brokerScopedLedger");
+    const parsed = parseBrokerScopeQuery(req.query.brokerId);
+    if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+    let liveId: string | null = null;
+    try {
+      liveId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+    } catch { /* */ }
+    const activeBrokerId = resolveActiveBrokerId(liveId);
+    const scope = parsed.mode === 'broker' && !parsed.brokerId
+      ? { mode: 'broker' as const, brokerId: activeBrokerId }
+      : parsed;
+    const rows = await listTradesForBrokerScope({ scope, activeBrokerId, limit: Number(req.query.limit) || 500 });
+    res.json({ orders: rows, note: 'Trade ledger alias; OMS has no separate orders table.' });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+/** Broker-scoped viewing context for Holdings / Live Execution UI. */
+systemRouter.get("/portfolio/history", async (req: Request, res: Response) => {
+  try {
+    const { parseBrokerScopeQuery, resolveActiveBrokerId, listTradesForBrokerScope, brokerViewingLabel } = await import("../services/brokerScopedLedger");
+    const parsed = parseBrokerScopeQuery(req.query.brokerId);
+    if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+    let liveId: string | null = null;
+    let accountId: string | null = null;
+    let brokerName: string | null = null;
+    try {
+      const b = BrokerManager.getInstance().getActiveBroker();
+      liveId = b?.id ?? null;
+      brokerName = b?.name ?? null;
+      const snap = typeof (b as any)?.getConnectionSnapshot === 'function' ? (b as any).getConnectionSnapshot() : null;
+      accountId = snap?.accountId ?? null;
+    } catch { /* */ }
+    const activeBrokerId = resolveActiveBrokerId(liveId);
+    const scope = parsed.mode === 'broker' && !parsed.brokerId
+      ? { mode: 'broker' as const, brokerId: activeBrokerId }
+      : parsed;
+    const scopedId = scope.mode === 'all' ? 'all' : (scope.brokerId || activeBrokerId);
+    const tradesRows = await listTradesForBrokerScope({ scope, activeBrokerId, limit: Number(req.query.limit) || 200 });
+    // Live holdings always from active broker API — never fabricate from another broker's ledger.
+    let cash: number | null = null;
+    let equity: number | null = null;
+    let positions: unknown[] = [];
+    if (scopedId === 'all' || scopedId === activeBrokerId) {
+      try {
+        const portfolio = await withTimeout(
+          BrokerManager.getInstance().getActiveBroker().portfolio(),
+          tradingSafety.alpacaRequestTimeoutMs,
+          'broker.portfolio (portfolio/history)',
+        );
+        cash = portfolio.cash;
+        equity = portfolio.equity;
+        positions = portfolio.positions || [];
+      } catch (e: any) {
+        return res.status(503).json({
+          available: false,
+          error: e?.message || String(e),
+          viewing: brokerViewingLabel(activeBrokerId, accountId),
+          activeBrokerId,
+        });
+      }
+    }
+    res.json({
+      available: true,
+      viewing: scopedId === 'all' ? 'All Brokers' : brokerViewingLabel(scopedId, scopedId === activeBrokerId ? accountId : null),
+      activeBrokerId,
+      activeBrokerName: brokerName,
+      brokerId: scopedId,
+      cash,
+      equity,
+      positions,
+      trades: tradesRows,
+      note: scopedId !== 'all' && scopedId !== activeBrokerId
+        ? 'Positions omitted: live holdings only available for the active broker (fail-closed). Trade history is broker-scoped.'
+        : undefined,
+    });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
@@ -474,7 +570,13 @@ systemRouter.get("/event-traces", async (req: Request, res: Response) => {
 });
 
 systemRouter.get("/pnl/analytics", async (req: Request, res: Response) => {
-  if (tradingEngine.state.tradingMode !== "SIMULATOR" && process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
+  let activeId = 'alpaca';
+  try {
+    activeId = BrokerManager.getInstance().getActiveBroker()?.id || 'alpaca';
+  } catch { /* */ }
+
+  // Alpaca portfolio history only when Alpaca is the active order-placing broker.
+  if (activeId === 'alpaca' && tradingEngine.state.tradingMode !== "SIMULATOR" && process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY) {
     try {
       const isPaper = tradingEngine.state.tradingMode === "PAPER";
       const alpacaBaseUrl = isPaper ? "paper-api.alpaca.markets" : "api.alpaca.markets";

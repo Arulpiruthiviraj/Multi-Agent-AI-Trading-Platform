@@ -1,7 +1,7 @@
 # ARGUS Configuration Architecture
 
-**Date:** 2026-08-18  
-**Rule:** `.env` is always supported. Settings is an **override** layer. Database settings do **not** replace `.env`. Safety wins.
+**Date:** 2026-08-18 (living; re-verify catalog against `config/runtimeEnvCatalog.json` when adding flags)  
+**Rule:** `.env` is always supported. Settings is an **override** layer. Database settings do **not** replace `.env`. Safety wins. **LIVE_NO_GO** is unchanged by overlays.
 
 ## Roles
 
@@ -10,8 +10,11 @@
 | `.env` | Bootstrap / deployment / recovery / fresh install. Always read. Never silently rewritten by the UI. |
 | `config_overrides` SQLite table | Explicit operator overlays for catalogued, non-secret, non-safety-locked keys |
 | `config/runtimeEnvCatalog.json` | Classification matrix (type, default, overridable, secret, applyMode) |
-| Existing `settings` row | Unrelated operator knobs already in DB (take-profit %, Autobot, budget, pipeline agent map, …). Unchanged. |
+| Existing `settings` row | Unrelated operator knobs already in DB (take-profit %, Autobot, budget, pipeline agent map, **campaign** fields, …). Unchanged layering: campaign targets are settings, not `tradingSafety` literals. |
 | Encrypted `brokerConnections` | Broker secrets entered in the Setup Wizard. Unchanged. |
+| `config/*.json` | Reviewed numbers (e.g. `tradingSafety.json`, `continuousIntelligence.json` `maxActiveSubscriptions=30`). Missing required keys fail boot. |
+| `config/runtimeEnvCatalog.json` | Includes flags such as `QUANT_ENGINE_ENABLED`, `ARGUS_OPPORTUNITY_LOOP_ENABLED`, `ARGUS_OPPORTUNITY_IDEAS_ENABLED` — check catalog for exact defaults / `applyMode`. |
+| `config/tradingSafety.json` | Hard safety numbers (consensus, cooldowns, `kronosEvaluationHorizonMs`, campaign velocity / trail / ATR multiples). Env *names* for some flags live here as `*EnabledEnvVar` strings (e.g. `QUANT_COLD_START_BOOTSTRAP_ENABLED`) even when not duplicated in the runtime catalog. |
 
 ## Precedence (overridable flags)
 

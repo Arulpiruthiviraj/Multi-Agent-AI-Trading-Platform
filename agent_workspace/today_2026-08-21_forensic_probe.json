@@ -1,0 +1,1171 @@
+{
+  "probedAt": "2026-08-21T20:14:15.130Z",
+  "dayStart": "2026-08-21T00:00:00.000Z",
+  "dayEnd": "2026-08-22T00:00:00.000Z",
+  "rthStart": "2026-08-21T13:30:00.000Z",
+  "rthEnd": "2026-08-21T20:00:00.000Z",
+  "settings": {
+    "id": 1,
+    "trading_mode": "PAPER",
+    "risk_level": "Balanced",
+    "selected_broker": "IBKR Gateway (Socket)",
+    "selected_ai_provider": "Claude",
+    "budget": 2000,
+    "strategy": "ADAPTIVE_MULTI_STRATEGY",
+    "max_trade_size": 3000,
+    "daily_loss_limit": 5000,
+    "take_profit_pct": 15,
+    "trailing_stop_pct": 5,
+    "min_ai_confidence": 75,
+    "auto_bot_enabled": 1,
+    "adversarial_debate_mode": 1,
+    "onboarding_complete": 1,
+    "created_at": 1786206529802,
+    "trading_state": "TRADING_ENABLED",
+    "max_portfolio_drawdown_pct": 0.15,
+    "peak_equity": 1000000,
+    "max_open_positions": 10,
+    "max_orders_per_minute": 5,
+    "position_sizing_mode": "FIXED_DOLLAR",
+    "percent_of_equity_pct": 2,
+    "auto_trade_schedule_enabled": 0,
+    "auto_trade_schedule_start_time": "09:30",
+    "auto_trade_schedule_end_time": "16:00",
+    "auto_trade_schedule_timezone": "America/New_York",
+    "pipeline_agent_enabled_json": "{\"TechnicalAgent\":true,\"NewsAgent\":true,\"FundamentalAgent\":true,\"MacroAgent\":true,\"KronosEngine\":true,\"QuantEngine\":true}",
+    "strategy_engine_enabled": 0,
+    "strategy_engine_mode": "OFF",
+    "strategy_engine_active_ids_json": "[]",
+    "strategy_engine_max_active": 25,
+    "strategy_engine_min_confidence": 0.6,
+    "global_auto_liquidation_enabled": 0,
+    "campaign_enabled": 1,
+    "daily_target_amount": 100,
+    "daily_target_type": "DOLLAR",
+    "target_achieved_action": "CONTINUE",
+    "close_positions_before_market_close": 1
+  },
+  "trades_cols": [
+    "id",
+    "symbol",
+    "side",
+    "quantity",
+    "price",
+    "status",
+    "timestamp",
+    "reasoning",
+    "trace_id",
+    "profit_loss",
+    "news_used",
+    "news_sentiment",
+    "news_confidence",
+    "news_sources",
+    "news_reasoning",
+    "transaction_id",
+    "broker_order_id",
+    "request_id",
+    "submitted_at",
+    "accepted_at",
+    "filled_at",
+    "quant_strategy_id",
+    "quant_stop_price",
+    "quant_target_price",
+    "quant_invalidation_json",
+    "execution_environment",
+    "broker_id"
+  ],
+  "fills_cols": [
+    "id",
+    "order_id",
+    "broker_fill_id",
+    "quantity",
+    "price",
+    "filled_at",
+    "cumulative_quantity"
+  ],
+  "risk_assessments_cols": [
+    "transaction_id",
+    "trace_id",
+    "symbol",
+    "side",
+    "approved",
+    "max_quantity",
+    "rejection_gate",
+    "account_equity",
+    "buying_power",
+    "reasoning",
+    "created_at"
+  ],
+  "risk_gate_results_cols": [
+    "id",
+    "trace_id",
+    "gate_name",
+    "sequence",
+    "passed",
+    "detail"
+  ],
+  "consensus_decisions_cols": [
+    "transaction_id",
+    "symbol",
+    "side",
+    "weighted_confidence",
+    "threshold",
+    "approved",
+    "agreements_count",
+    "disagreements_count",
+    "debate_used",
+    "debate_provider_count",
+    "reasoning",
+    "created_at"
+  ],
+  "agent_predictions_cols": [
+    "id",
+    "agent_name",
+    "symbol",
+    "prediction",
+    "confidence",
+    "reasoning",
+    "timestamp",
+    "trace_id",
+    "ai_call_id",
+    "provider",
+    "latency_ms",
+    "regime"
+  ],
+  "event_traces_cols": [
+    "id",
+    "correlation_id",
+    "trade_id",
+    "timestamp",
+    "source",
+    "destination",
+    "event_type",
+    "payload",
+    "duration_ms",
+    "success",
+    "error_info",
+    "transaction_id"
+  ],
+  "observability_events_cols": [
+    "id",
+    "ts",
+    "level",
+    "category",
+    "event_type",
+    "logger_name",
+    "message",
+    "session_id",
+    "correlation_id",
+    "decision_id",
+    "trace_id",
+    "order_id",
+    "symbol",
+    "component",
+    "payload"
+  ],
+  "quant_assessments_cols": [
+    "id",
+    "symbol",
+    "timeframe",
+    "regime",
+    "market_context",
+    "strategy_evaluations",
+    "grouped_scores",
+    "emitted_trade_idea",
+    "created_at",
+    "ai_contradiction_analysis"
+  ],
+  "reconciliation_events_cols": [
+    "id",
+    "checked_at",
+    "broker",
+    "matches",
+    "mismatches",
+    "worst_impact_dollars",
+    "action_taken"
+  ],
+  "kill_switch_events_cols": [
+    "id",
+    "from_state",
+    "to_state",
+    "reason",
+    "actor",
+    "cancelled_order_ids",
+    "created_at"
+  ],
+  "transaction_traces_cols": [
+    "trace_id",
+    "symbol",
+    "created_at",
+    "lifecycle_status",
+    "contributing_agents",
+    "consensus_score",
+    "consensus_threshold",
+    "risk_summary",
+    "terminal_reason",
+    "order_id"
+  ],
+  "transactions_cols": [
+    "id",
+    "symbol",
+    "opened_at",
+    "closed_at",
+    "status",
+    "final_decision",
+    "outcome"
+  ],
+  "trades_ts": "submitted_at",
+  "trades_day": {
+    "c": 4
+  },
+  "trades_rth": {
+    "c": 4
+  },
+  "fills_ts": "filled_at",
+  "fills_day": {
+    "c": 2
+  },
+  "fills_rth": {
+    "c": 2
+  },
+  "risk_assessments_ts": "created_at",
+  "risk_assessments_day": {
+    "c": 7
+  },
+  "risk_assessments_rth": {
+    "c": 7
+  },
+  "consensus_decisions_ts": "created_at",
+  "consensus_decisions_day": {
+    "c": 256
+  },
+  "consensus_decisions_rth": {
+    "c": 242
+  },
+  "agent_predictions_ts": "timestamp",
+  "agent_predictions_day": {
+    "c": 4550
+  },
+  "agent_predictions_rth": {
+    "c": 4457
+  },
+  "event_traces_ts": "timestamp",
+  "event_traces_day": {
+    "c": 0
+  },
+  "event_traces_rth": {
+    "c": 0
+  },
+  "quant_assessments_ts": "created_at",
+  "quant_assessments_day": {
+    "c": 634
+  },
+  "quant_assessments_rth": {
+    "c": 511
+  },
+  "reconciliation_events_ts": "checked_at",
+  "reconciliation_events_day": {
+    "c": 128
+  },
+  "reconciliation_events_rth": {
+    "c": 58
+  },
+  "kill_switch_events_ts": "created_at",
+  "kill_switch_events_day": {
+    "c": 4
+  },
+  "kill_switch_events_rth": {
+    "c": 4
+  },
+  "transaction_traces_ts": "created_at",
+  "transaction_traces_day": {
+    "c": 4245
+  },
+  "transaction_traces_rth": {
+    "c": 4154
+  },
+  "observability_events_ts": "ts",
+  "observability_events_day": {
+    "c": 0
+  },
+  "observability_events_rth": {
+    "c": 0
+  },
+  "trades_day_detail": [
+    {
+      "status": "FILLED",
+      "side": "BUY",
+      "execution_environment": "PAPER",
+      "broker_id": "alpaca",
+      "c": 1
+    },
+    {
+      "status": "FILLED",
+      "side": "SELL",
+      "execution_environment": "PAPER",
+      "broker_id": "alpaca",
+      "c": 1
+    },
+    {
+      "status": "REJECTED",
+      "side": "BUY",
+      "execution_environment": "UNKNOWN",
+      "broker_id": "alpaca",
+      "c": 2
+    }
+  ],
+  "agent_pred_day": [
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "SELL",
+      "c": 2073
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "BUY",
+      "c": 798
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "BUY",
+      "c": 647
+    },
+    {
+      "agent_name": "FundamentalAgent",
+      "prediction": "HOLD",
+      "c": 240
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "HOLD",
+      "c": 238
+    },
+    {
+      "agent_name": "MacroAgent",
+      "prediction": "HOLD",
+      "c": 197
+    },
+    {
+      "agent_name": "QuantEngine",
+      "prediction": "BUY",
+      "c": 189
+    },
+    {
+      "agent_name": "OpportunityScreener",
+      "prediction": "BUY",
+      "c": 107
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "SELL",
+      "c": 36
+    },
+    {
+      "agent_name": "QuantEngine",
+      "prediction": "SELL",
+      "c": 24
+    },
+    {
+      "agent_name": "PortfolioManager",
+      "prediction": "SELL",
+      "c": 1
+    }
+  ],
+  "agent_pred_rth": [
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "SELL",
+      "c": 2034
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "BUY",
+      "c": 787
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "BUY",
+      "c": 646
+    },
+    {
+      "agent_name": "KronosEngine",
+      "prediction": "HOLD",
+      "c": 236
+    },
+    {
+      "agent_name": "FundamentalAgent",
+      "prediction": "HOLD",
+      "c": 226
+    },
+    {
+      "agent_name": "MacroAgent",
+      "prediction": "HOLD",
+      "c": 185
+    },
+    {
+      "agent_name": "QuantEngine",
+      "prediction": "BUY",
+      "c": 182
+    },
+    {
+      "agent_name": "OpportunityScreener",
+      "prediction": "BUY",
+      "c": 100
+    },
+    {
+      "agent_name": "TechnicalAgent",
+      "prediction": "SELL",
+      "c": 36
+    },
+    {
+      "agent_name": "QuantEngine",
+      "prediction": "SELL",
+      "c": 24
+    },
+    {
+      "agent_name": "PortfolioManager",
+      "prediction": "SELL",
+      "c": 1
+    }
+  ],
+  "consensus_day": [
+    {
+      "approved": 0,
+      "c": 250
+    },
+    {
+      "approved": 1,
+      "c": 7
+    }
+  ],
+  "consensus_rejects_sample": [
+    {
+      "symbol": "QQQ",
+      "approved": 0,
+      "weighted_confidence": 0.25960528273543737,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 26.0% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T20:14:16.067Z"
+    },
+    {
+      "symbol": "COIN",
+      "approved": 0,
+      "weighted_confidence": 0.2981806434200141,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 29.8% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T20:13:16.064Z"
+    },
+    {
+      "symbol": "MSFT",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:12:16.059Z"
+    },
+    {
+      "symbol": "META",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:11:16.060Z"
+    },
+    {
+      "symbol": "IWM",
+      "approved": 0,
+      "weighted_confidence": 0.04310648465816924,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 4.3% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T20:10:16.056Z"
+    },
+    {
+      "symbol": "TSLA",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:09:16.053Z"
+    },
+    {
+      "symbol": "SOFI",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:08:16.049Z"
+    },
+    {
+      "symbol": "MRVL",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:07:16.035Z"
+    },
+    {
+      "symbol": "SPY",
+      "approved": 0,
+      "weighted_confidence": 0.04538205594976063,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 4.5% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T20:06:16.031Z"
+    },
+    {
+      "symbol": "RIVN",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 2,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:05:16.026Z"
+    },
+    {
+      "symbol": "HOOD",
+      "approved": 0,
+      "weighted_confidence": 0.23404255319148937,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 23.4% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T20:04:16.016Z"
+    },
+    {
+      "symbol": "GLD",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 2,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:03:16.004Z"
+    },
+    {
+      "symbol": "QQQ",
+      "approved": 0,
+      "weighted_confidence": 0.044029606572996066,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 4.4% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T20:02:15.994Z"
+    },
+    {
+      "symbol": "TSLA",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T20:01:15.984Z"
+    },
+    {
+      "symbol": "SOFI",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T20:00:15.976Z"
+    },
+    {
+      "symbol": "COIN",
+      "approved": 0,
+      "weighted_confidence": 0.23106207883307242,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 23.1% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:59:15.970Z"
+    },
+    {
+      "symbol": "MRVL",
+      "approved": 0,
+      "weighted_confidence": 0.28811487258908075,
+      "agreements_count": 2,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 28.8% (threshold 75%). Independent agreeing agents: 2.",
+      "created_at": "2026-08-21T19:58:15.960Z"
+    },
+    {
+      "symbol": "SOFI",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:57:15.966Z"
+    },
+    {
+      "symbol": "HOOD",
+      "approved": 0,
+      "weighted_confidence": 0.04689841737113848,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 4.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:56:15.960Z"
+    },
+    {
+      "symbol": "HOOD",
+      "approved": 0,
+      "weighted_confidence": 0.04689841737113848,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 4.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:55:15.961Z"
+    },
+    {
+      "symbol": "SOFI",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:54:15.961Z"
+    },
+    {
+      "symbol": "NVDA",
+      "approved": 0,
+      "weighted_confidence": 0.8,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 80.0% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:53:15.959Z"
+    },
+    {
+      "symbol": "HOOD",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:52:15.958Z"
+    },
+    {
+      "symbol": "COIN",
+      "approved": 0,
+      "weighted_confidence": 0.07013842352394516,
+      "agreements_count": 2,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 7.0% (threshold 75%). Independent agreeing agents: 2.",
+      "created_at": "2026-08-21T19:51:15.959Z"
+    },
+    {
+      "symbol": "RIOT",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:50:15.952Z"
+    },
+    {
+      "symbol": "SPY",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:49:15.947Z"
+    },
+    {
+      "symbol": "RIOT",
+      "approved": 0,
+      "weighted_confidence": 0.3373119764655623,
+      "agreements_count": 2,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 33.7% (threshold 75%). Independent agreeing agents: 2.",
+      "created_at": "2026-08-21T19:48:15.936Z"
+    },
+    {
+      "symbol": "MRVL",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T19:47:15.927Z"
+    },
+    {
+      "symbol": "COIN",
+      "approved": 0,
+      "weighted_confidence": 0.35666252673189563,
+      "agreements_count": 2,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 35.7% (threshold 75%). Independent agreeing agents: 2.",
+      "created_at": "2026-08-21T19:46:15.926Z"
+    },
+    {
+      "symbol": "AMD",
+      "approved": 0,
+      "weighted_confidence": 0.4881469774792572,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 48.8% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:45:15.902Z"
+    },
+    {
+      "symbol": "GLD",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T19:44:15.909Z"
+    },
+    {
+      "symbol": "RIVN",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T18:52:09.776Z"
+    },
+    {
+      "symbol": "COIN",
+      "approved": 0,
+      "weighted_confidence": 0,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: HOLD at 0.0% (threshold 75%). Independent agreeing agents: 0.",
+      "created_at": "2026-08-21T18:51:09.775Z"
+    },
+    {
+      "symbol": "TSLA",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T18:49:09.768Z"
+    },
+    {
+      "symbol": "SPY",
+      "approved": 0,
+      "weighted_confidence": 0.19101553894414924,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 19.1% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T18:48:08.851Z"
+    },
+    {
+      "symbol": "IWM",
+      "approved": 0,
+      "weighted_confidence": 0.12022924805537276,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 12.0% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T18:47:08.850Z"
+    },
+    {
+      "symbol": "MRVL",
+      "approved": 0,
+      "weighted_confidence": 0.43847628514626524,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 43.8% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T18:46:08.847Z"
+    },
+    {
+      "symbol": "SOFI",
+      "approved": 0,
+      "weighted_confidence": 0.04689841737113848,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 4.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T18:45:08.833Z"
+    },
+    {
+      "symbol": "IWM",
+      "approved": 0,
+      "weighted_confidence": 0.044029606572996066,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: BUY at 4.4% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T18:44:08.833Z"
+    },
+    {
+      "symbol": "QQQ",
+      "approved": 0,
+      "weighted_confidence": 0.2569508226020111,
+      "agreements_count": 1,
+      "reason": "No consensus reached before the evaluation window closed. Best side: SELL at 25.7% (threshold 75%). Independent agreeing agents: 1.",
+      "created_at": "2026-08-21T18:43:08.832Z"
+    }
+  ],
+  "consensus_approved_rows": [
+    {
+      "transaction_id": "ARG-2026-08-21-000090",
+      "symbol": "IWM",
+      "side": "BUY",
+      "weighted_confidence": 1,
+      "threshold": 0,
+      "approved": 1,
+      "agreements_count": 1,
+      "disagreements_count": 0,
+      "debate_used": 0,
+      "debate_provider_count": null,
+      "reasoning": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.",
+      "created_at": "2026-08-21T15:35:04.921Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000091",
+      "symbol": "IWM",
+      "side": "BUY",
+      "weighted_confidence": 1,
+      "threshold": 0,
+      "approved": 1,
+      "agreements_count": 1,
+      "disagreements_count": 0,
+      "debate_used": 0,
+      "debate_provider_count": null,
+      "reasoning": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.",
+      "created_at": "2026-08-21T15:35:07.330Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000092",
+      "symbol": "ORCL",
+      "side": "BUY",
+      "weighted_confidence": 1,
+      "threshold": 0,
+      "approved": 1,
+      "agreements_count": 1,
+      "disagreements_count": 0,
+      "debate_used": 0,
+      "debate_provider_count": null,
+      "reasoning": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.",
+      "created_at": "2026-08-21T15:35:09.882Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000153",
+      "symbol": "IWM",
+      "side": "SELL",
+      "weighted_confidence": 0.85,
+      "threshold": 0.75,
+      "approved": 1,
+      "agreements_count": 1,
+      "disagreements_count": 0,
+      "debate_used": 0,
+      "debate_provider_count": null,
+      "reasoning": "[Risk Exit] EXIT_CODE=TARGET_REACHED Campaign intraday ATR Target-1 ($299.80, 1.25x ATR) — bank scalp toward daily goal.",
+      "created_at": "2026-08-21T16:42:52.847Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000203",
+      "symbol": "SOFI",
+      "side": "SELL",
+      "weighted_confidence": 1,
+      "threshold": 0,
+      "approved": 1,
+      "agreements_count": 1,
+      "disagreements_count": 0,
+      "debate_used": 0,
+      "debate_provider_count": null,
+      "reasoning": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.",
+      "created_at": "2026-08-21T18:31:08.102Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000205",
+      "symbol": "TSLA",
+      "side": "BUY",
+      "weighted_confidence": 1,
+      "threshold": 0,
+      "approved": 1,
+      "agreements_count": 1,
+      "disagreements_count": 0,
+      "debate_used": 0,
+      "debate_provider_count": null,
+      "reasoning": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.",
+      "created_at": "2026-08-21T18:31:14.257Z"
+    },
+    {
+      "transaction_id": "ARG-2026-08-21-000206",
+      "symbol": "RIOT",
+      "side": "BUY",
+      "weighted_confidence": 1,
+      "threshold": 0,
+      "approved": 1,
+      "agreements_count": 1,
+      "disagreements_count": 0,
+      "debate_used": 0,
+      "debate_provider_count": null,
+      "reasoning": "SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.",
+      "created_at": "2026-08-21T18:31:15.993Z"
+    }
+  ],
+  "risk_day": [
+    {
+      "approved": 0,
+      "rejection_gate": "data_freshness",
+      "c": 1
+    },
+    {
+      "approved": 0,
+      "rejection_gate": "duplicate_signal",
+      "c": 1
+    },
+    {
+      "approved": 0,
+      "rejection_gate": "sell_position_exists",
+      "c": 1
+    },
+    {
+      "approved": 1,
+      "rejection_gate": null,
+      "c": 4
+    }
+  ],
+  "quant_day": [
+    {
+      "emitted_trade_idea": 0,
+      "c": 421
+    },
+    {
+      "emitted_trade_idea": 1,
+      "c": 213
+    }
+  ],
+  "settings_campaign_keys": [
+    "trading_mode",
+    "selected_broker",
+    "budget",
+    "trading_state",
+    "campaign_enabled",
+    "daily_target_amount",
+    "daily_target_type",
+    "target_achieved_action"
+  ],
+  "campaign_values": {
+    "trading_mode": "PAPER",
+    "selected_broker": "IBKR Gateway (Socket)",
+    "budget": 2000,
+    "auto_bot_enabled": 1,
+    "trading_state": "TRADING_ENABLED",
+    "campaign_enabled": 1,
+    "daily_target_amount": 100,
+    "daily_target_type": "DOLLAR",
+    "target_achieved_action": "CONTINUE"
+  },
+  "pred_span": [
+    {
+      "first_ts": "2026-08-21T13:33:20.148Z",
+      "last_ts": "2026-08-21T20:14:08.769Z",
+      "c": 4550
+    }
+  ],
+  "consensus_span": [
+    {
+      "first_ts": "2026-08-21T13:33:32.608Z",
+      "last_ts": "2026-08-21T20:14:16.067Z",
+      "c": 257
+    }
+  ],
+  "reject_pattern_buckets": {
+    "agents=1_conf≈26.0": 1,
+    "agents=1_conf≈29.8": 1,
+    "agents=0_conf≈0.0": 11,
+    "agents=1_conf≈4.3": 1,
+    "agents=1_conf≈4.5": 1,
+    "agents=1_conf≈23.4": 1,
+    "agents=1_conf≈4.4": 2,
+    "agents=1_conf≈25.7": 9,
+    "agents=1_conf≈23.1": 1,
+    "agents=2_conf≈28.8": 1,
+    "agents=1_conf≈4.7": 3,
+    "agents=1_conf≈80.0": 1,
+    "agents=2_conf≈7.0": 1,
+    "agents=2_conf≈33.7": 1,
+    "agents=2_conf≈35.7": 1,
+    "agents=1_conf≈48.8": 1,
+    "agents=1_conf≈19.1": 1,
+    "agents=1_conf≈12.0": 1,
+    "agents=1_conf≈43.8": 1
+  },
+  "recon_day": [
+    {
+      "id": 816,
+      "checked_at": "2026-08-21T20:12:23.323Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 815,
+      "checked_at": "2026-08-21T20:07:23.320Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 814,
+      "checked_at": "2026-08-21T20:02:23.315Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 813,
+      "checked_at": "2026-08-21T19:57:23.310Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 812,
+      "checked_at": "2026-08-21T19:52:23.307Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 811,
+      "checked_at": "2026-08-21T19:47:23.302Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 810,
+      "checked_at": "2026-08-21T19:43:00.774Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 809,
+      "checked_at": "2026-08-21T18:47:17.496Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 808,
+      "checked_at": "2026-08-21T18:42:17.479Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 807,
+      "checked_at": "2026-08-21T18:37:17.477Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 806,
+      "checked_at": "2026-08-21T18:32:17.477Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 805,
+      "checked_at": "2026-08-21T18:27:17.483Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 804,
+      "checked_at": "2026-08-21T18:22:17.474Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 803,
+      "checked_at": "2026-08-21T18:17:17.477Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 802,
+      "checked_at": "2026-08-21T18:12:17.466Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 801,
+      "checked_at": "2026-08-21T18:07:50.091Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 800,
+      "checked_at": "2026-08-21T17:46:17.167Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 0,
+      "mismatches": "[{\"symbol\":\"GLD\",\"type\":\"MISSING_REMOTELY\",\"localQty\":1,\"remoteQty\":0,\"approxDollarImpact\":424.08}]",
+      "worst_impact_dollars": 424.08,
+      "action_taken": "TRADING_PAUSED"
+    },
+    {
+      "id": 799,
+      "checked_at": "2026-08-21T17:41:17.159Z",
+      "broker": "IBKR Gateway (Socket)",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 798,
+      "checked_at": "2026-08-21T17:36:17.731Z",
+      "broker": "Alpaca",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    },
+    {
+      "id": 797,
+      "checked_at": "2026-08-21T17:31:17.674Z",
+      "broker": "Alpaca",
+      "matches": 1,
+      "mismatches": null,
+      "worst_impact_dollars": null,
+      "action_taken": null
+    }
+  ],
+  "kill_day": [
+    {
+      "id": 72,
+      "from_state": "TRADING_PAUSED",
+      "to_state": "TRADING_ENABLED",
+      "reason": "Operator reviewed current reconciliation evidence and resumed via POST /api/v1/system/resume.",
+      "actor": "admin",
+      "cancelled_order_ids": "[]",
+      "created_at": "2026-08-21T18:10:06.870Z"
+    },
+    {
+      "id": 71,
+      "from_state": "TRADING_ENABLED",
+      "to_state": "TRADING_PAUSED",
+      "reason": "Portfolio reconciliation found a ~$424.08 mismatch vs IBKR Gateway (Socket) - trading paused pending manual review.",
+      "actor": "system:PortfolioReconciliation",
+      "cancelled_order_ids": "[]",
+      "created_at": "2026-08-21T17:46:17.177Z"
+    },
+    {
+      "id": 70,
+      "from_state": "EMERGENCY_STOP",
+      "to_state": "TRADING_ENABLED",
+      "reason": "Operator reviewed current reconciliation evidence and resumed via POST /api/v1/system/resume.",
+      "actor": "admin",
+      "cancelled_order_ids": "[]",
+      "created_at": "2026-08-21T14:06:20.387Z"
+    },
+    {
+      "id": 69,
+      "from_state": "TRADING_ENABLED",
+      "to_state": "EMERGENCY_STOP",
+      "reason": "Manually triggered emergency stop.",
+      "actor": "admin",
+      "cancelled_order_ids": "[]",
+      "created_at": "2026-08-21T14:06:14.241Z"
+    }
+  ]
+}

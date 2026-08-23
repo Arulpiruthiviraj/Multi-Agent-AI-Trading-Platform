@@ -681,18 +681,21 @@ export default function DigitalTwinVisualizer({ learningSummary }: DigitalTwinVi
         const ok = data?.ok !== false && data?.reachable !== false;
         const id = data?.modelId === 'ollama' ? 'ollama-llm' : data?.modelId === 'chronos-kronos' || data?.modelId === 'chronos' ? 'kronos-forecast' : null;
         if (!id) return;
-        enqueueEvent('MODEL_HEALTH', data, { nodes: [{ id, status: ok ? 'SUCCESS' : 'FAIL' }] });
+        enqueueEvent('MODEL_HEALTH', data, { nodes: [{ id, status: ok ? 'SUCCESS' : 'UNAVAILABLE' }] });
       }),
       subscribe('MODEL_STARTED', (data: any) => {
         const id = data?.modelId === 'ollama' ? 'ollama-llm' : data?.modelId === 'chronos' ? 'kronos-forecast' : null;
         if (!id) return;
-        enqueueEvent('MODEL_STARTED', data, { nodes: [{ id, status: 'PROCESSING' }] });
+        enqueueEvent('MODEL_STARTED', data, { nodes: [{ id, status: 'STARTING' }] });
       }),
       subscribe('MODEL_UNAVAILABLE', (data: any) => enqueueEvent('MODEL_UNAVAILABLE', data, {
         nodes: [{ id: 'paid-llm-pool', status: 'FAIL' }, { id: 'ollama-llm', status: 'FAIL' }],
       })),
       subscribe('MODEL_FALLBACK', (data: any) => enqueueEvent('MODEL_FALLBACK', data, {
         nodes: [{ id: 'paid-llm-pool', status: 'FAIL' }, { id: 'ollama-llm', status: 'PROCESSING' }],
+      })),
+      subscribe('KRONOS_UNAVAILABLE', (data: any) => enqueueEvent('KRONOS_UNAVAILABLE', data, {
+        nodes: [{ id: 'kronos-forecast', status: 'UNAVAILABLE' }],
       })),
     ];
 

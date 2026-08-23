@@ -4,16 +4,21 @@
  * and the probe failed. Chronos/Kronos Python is additionally gated by ARGUS_START_CHRONOS=true.
  * `npm run dev` (scripts/devWithOpenAlice.ts) sets those flags and starts companions first.
  *
- * OpenAlice Guardian and IBKR Gateway are spawned by the parent `npm run dev` script, not here.
- * This module only probes. IBKR 2FA cannot be completed by Node.
+ * OpenAlice Guardian is spawned by the parent `npm run dev` script, not here.
+ * This module only probes. IBKR health adapts to the active broker (socket :4002 vs
+ * Client Portal :5000 vs STANDBY when Alpaca/Internal Paper is active).
  */
 import { spawn, type ChildProcess } from 'child_process';
-import https from 'https';
 import { eventBus } from '../core/EventBus';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 import { preferIpv4Loopback, resolveLocalAiServiceUrl } from './preferIpv4Loopback';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { networkEndpoints } from '../config/networkEndpoints';
+import {
+  probeIbkrEcosystemHealth,
+  resolveActiveBrokerIdForHealth,
+  resolveIbkrSessionAccountId,
+} from '../services/ibkrEcosystemHealth';
 
 export type ModelHealthStatus = 'READY' | 'FAILED' | 'DISABLED' | 'STARTING';
 
@@ -36,7 +41,6 @@ export interface ModelRegistryEntry {
 
 const OLLAMA_HOST = preferIpv4Loopback(process.env.OLLAMA_HOST || networkEndpoints.aiLocal.ollamaDefault);
 const CHRONOS_URL = resolveLocalAiServiceUrl();
-const IBKR_URL = process.env.IBKR_GATEWAY_URL || networkEndpoints.broker.ibkr.gatewayUrlDefault;
 
 const children: ChildProcess[] = [];
 
@@ -87,68 +91,6 @@ function trySpawnChronos(): void {
     console.warn(`[ModelRuntime] Failed to spawn Chronos via python; falling back to npm run ai:serve: ${e.message}`);
     trySpawn('npm', ['run', 'ai:serve'], 'Chronos/Kronos local_ai_service');
   }
-}
-
-function isLocalHostname(hostname: string): boolean {
-  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1';
-}
-
-/** IBKR Client Portal Gateway uses a self-signed cert on localhost. Node fetch refuses it (`fetch failed`). */
-function probeIbkrAuthStatus(baseUrl: string, timeoutMs: number): Promise<{
-  reachable: boolean;
-  latencyMs: number;
-  authenticated?: boolean;
-  connected?: boolean;
-  error?: string;
-}> {
-  return new Promise((resolve) => {
-    const t0 = Date.now();
-    let url: URL;
-    try {
-      url = new URL(`${baseUrl.replace(/\/$/, '')}/iserver/auth/status`);
-    } catch (e: any) {
-      resolve({ reachable: false, latencyMs: 0, error: e.message });
-      return;
-    }
-    const req = https.request({
-      hostname: url.hostname,
-      port: url.port || (url.protocol === 'https:' ? 443 : 80),
-      path: url.pathname + url.search,
-      method: 'GET',
-      rejectUnauthorized: !isLocalHostname(url.hostname),
-      timeout: timeoutMs,
-      headers: { 'User-Agent': 'ArgusTradingPlatform/1.0' },
-    }, (res) => {
-      let data = '';
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => {
-        const latencyMs = Date.now() - t0;
-        if (res.statusCode && res.statusCode >= 400) {
-          resolve({ reachable: false, latencyMs, error: `HTTP ${res.statusCode}` });
-          return;
-        }
-        try {
-          const body = JSON.parse(data || '{}');
-          resolve({
-            reachable: true,
-            latencyMs,
-            authenticated: !!body.authenticated,
-            connected: body.connected !== false,
-          });
-        } catch {
-          resolve({ reachable: true, latencyMs, authenticated: false });
-        }
-      });
-    });
-    req.on('timeout', () => {
-      req.destroy();
-      resolve({ reachable: false, latencyMs: Date.now() - t0, error: 'timeout' });
-    });
-    req.on('error', (e) => {
-      resolve({ reachable: false, latencyMs: Date.now() - t0, error: e.message });
-    });
-    req.end();
-  });
 }
 
 export class ModelRuntimeManager {
@@ -297,62 +239,29 @@ export class ModelRuntimeManager {
   }
 
   private async probeIbkr(): Promise<ModelRegistryEntry> {
-    const configured = !!process.env.IBKR_GATEWAY_URL || process.env.ARGUS_PROBE_IBKR === 'true';
-    if (!configured) {
-      return {
-        modelId: 'ibkr-gateway',
-        provider: 'Interactive Brokers Client Portal',
-        type: 'broker-proxy',
-        localOrRemote: 'local',
-        endpoint: IBKR_URL,
-        capabilities: [],
-        health: 'DISABLED',
-        latencyMs: null,
-        version: null,
-        loaded: false,
-        lastCheckedAt: new Date().toISOString(),
-        failureCount: 0,
-        detail: 'Not probed unless IBKR_GATEWAY_URL or ARGUS_PROBE_IBKR=true.',
-        action: null,
-      };
-    }
-    const p = await probeIbkrAuthStatus(IBKR_URL, 4000);
-    if (!p.reachable) {
-      return {
-        modelId: 'ibkr-gateway',
-        provider: 'Interactive Brokers Client Portal',
-        type: 'broker-proxy',
-        localOrRemote: 'local',
-        endpoint: IBKR_URL,
-        capabilities: [],
-        health: 'FAILED',
-        latencyMs: p.latencyMs,
-        version: null,
-        loaded: false,
-        lastCheckedAt: new Date().toISOString(),
-        failureCount: 1,
-        detail: p.error || 'unreachable',
-        action: 'Set IBKR_GATEWAY_PATH to the Client Portal Gateway folder (contains bin/run.bat). npm run dev starts it and opens the login page. 2FA is manual (~24h).',
-      };
-    }
-    const authenticated = !!p.authenticated;
+    const activeBrokerId = await resolveActiveBrokerIdForHealth();
+    const sessionAccountId = await resolveIbkrSessionAccountId();
+    const r = await probeIbkrEcosystemHealth({
+      activeBrokerIdOrName: activeBrokerId,
+      sessionAccountId,
+    });
+    const health: ModelHealthStatus =
+      r.health === 'STOPPED' ? 'DISABLED' : (r.health as ModelHealthStatus);
     return {
       modelId: 'ibkr-gateway',
-      provider: 'Interactive Brokers Client Portal',
+      provider: r.provider,
       type: 'broker-proxy',
       localOrRemote: 'local',
-      endpoint: IBKR_URL,
+      endpoint: r.endpoint,
       capabilities: [],
-      health: authenticated ? 'READY' : 'STARTING',
-      latencyMs: p.latencyMs,
+      health,
+      latencyMs: r.latencyMs,
       version: null,
-      loaded: authenticated,
+      loaded: r.loaded,
       lastCheckedAt: new Date().toISOString(),
-      failureCount: 0,
-      detail: authenticated
-        ? 'Gateway reachable and brokerage session authenticated'
-        : 'Gateway reachable. Complete browser 2FA at the Gateway URL (opened by npm run dev). This cannot be automated.',
-      action: authenticated ? null : `Open ${IBKR_URL.replace(/\/v1\/api\/?$/, '')} and complete IBKR login + 2FA`,
+      failureCount: health === 'FAILED' ? 1 : 0,
+      detail: r.detail,
+      action: r.action,
     };
   }
 }

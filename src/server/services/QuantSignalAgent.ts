@@ -28,6 +28,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { marketDataWorker } from './MarketDataWorker';
 import { historicalDataGateway, Bar } from '../engines/backtest/HistoricalDataGateway';
+import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
 import { classifyRegime, RegimeResult } from '../quant/RegimeEngine';
 import { getMarketContext, MarketContextResult } from '../quant/MarketContext';
 import { computeMomentumFeatures } from '../quant/indicators/momentum';
@@ -47,6 +48,7 @@ import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety, isQuantColdStartBootstrapEnabled } from '../config/tradingSafety';
 import { isRuntimeFlagEnabled, resolveRuntimeNumber } from '../config/effectiveRuntimeConfig';
 import { deskIntelligence, rankEvaluationsForRegime, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
+import { filterEvaluationsForStrategyFocus, normalizeStrategyFocus, selectEvaluationsForAdaptiveRegime } from '../config/strategyFocus';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
@@ -97,6 +99,11 @@ export class QuantSignalAgent {
     return isRuntimeFlagEnabled('QUANT_ENGINE_ENABLED');
   }
 
+  /** Public read for manual co-eval / health — does not start the cycle. */
+  isEnabledPublic(): boolean {
+    return this.isEnabled();
+  }
+
   private cycleIntervalMs(): number {
     return resolveRuntimeNumber('QUANT_ENGINE_INTERVAL_MS', DEFAULT_CYCLE_INTERVAL_MS);
   }
@@ -129,35 +136,55 @@ export class QuantSignalAgent {
   }
 
   private async runCycle(): Promise<void> {
-    const symbols = marketDataWorker.getActiveSymbols();
+    const active = marketDataWorker.getActiveSymbols();
+    // Prefer liquid names that Quant needs most often — still only evaluates subscribed symbols.
+    const priority = ['SPY', 'QQQ', 'NVDA', 'HOOD', 'COIN', 'AMD', 'RIOT', 'AAPL', 'MSFT', 'META'];
+    const symbols = [
+      ...priority.filter((s) => active.includes(s) || active.includes(s.toUpperCase())),
+      ...active.filter((s) => !priority.includes(s.toUpperCase()) && !priority.includes(s)),
+    ].map((s) => s.toUpperCase()).filter((s, i, arr) => arr.indexOf(s) === i);
+
     if (symbols.length === 0) {
       console.log('[QuantSignalAgent] No actively-tracked symbols yet (MarketDataWorker has no subscriptions) - nothing to evaluate this cycle.');
+      notePipelineAgentGated('QuantEngine');
       return;
     }
     const concurrency = Math.min(this.symbolConcurrency(), symbols.length);
     let nextIndex = 0;
     let abortRateLimit = false;
+    let anySuccess = false;
     const workers = Array.from({ length: concurrency }, async () => {
       while (!abortRateLimit) {
         const i = nextIndex++;
         if (i >= symbols.length) return;
         const symbol = symbols[i];
         try {
-          await this.evaluateSymbol(symbol);
+          const result = await this.evaluateSymbol(symbol);
+          if (result) anySuccess = true;
         } catch (e: any) {
           notePipelineAgentFailure('QuantEngine', e);
           console.error(`[QuantSignalAgent] Failed to evaluate ${symbol}`, e.message);
           // Shared Alpaca 429 backoff is armed inside HistoricalDataGateway — stop fan-out so
           // remaining symbols do not storm the API. Fail closed: no fabricated bars/ideas.
           if (/429|rate-limited|Too Many Requests/i.test(String(e?.message || ''))) {
+            // IBKR hist path does not use Alpaca REST — do not abort the whole cycle on Alpaca 429 wording.
+            if (getRegisteredHistoricalBarProvider()?.id === 'ibkr_gateway') {
+              console.warn(`[QuantSignalAgent] Rate-limit-like error with IBKR hist provider — continuing other symbols (cache/IBKR).`);
+              continue;
+            }
             abortRateLimit = true;
-            console.warn(`[QuantSignalAgent] Alpaca rate limit — aborting remainder of quant cycle (${symbols.length} symbols, concurrency=${concurrency}).`);
+            console.warn(`[QuantSignalAgent] Alpaca rate limit — aborting remainder of quant cycle (${symbols.length} symbols, concurrency=${concurrency}). Remaining symbols may still use SQLite cache next cycle.`);
             return;
           }
         }
       }
     });
     await Promise.all(workers);
+    if (anySuccess) {
+      notePipelineAgentSuccess('QuantEngine');
+    } else if (abortRateLimit) {
+      notePipelineAgentGated('QuantEngine');
+    }
   }
 
   async evaluateSymbol(symbol: string): Promise<{ regime: RegimeResult; marketContext: MarketContextResult; strategyEvaluations: StrategyEvaluation[]; groupedScores: { BUY: GroupedScores; SELL: GroupedScores }; aiContradictionAnalysis: ContradictionAnalysisResult | null } | null> {
@@ -165,7 +192,15 @@ export class QuantSignalAgent {
     const endMs = Date.now();
     const startMs = endMs - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
 
-    await historicalDataGateway.ensureBars(symbol, TIMEFRAME, startMs, endMs);
+    try {
+      await historicalDataGateway.ensureBars(symbol, TIMEFRAME, startMs, endMs);
+    } catch (e: any) {
+      // Cache-only path: ensureBars may throw when rate-limited with empty cache; if SQLite
+      // already has enough bars from a prior session, continue. Never invent bars.
+      const msg = String(e?.message || e);
+      if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
+      console.warn(`[QuantSignalAgent] ${symbol}: ensureBars rate-limited — attempting SQLite cache only`);
+    }
     const bars: Bar[] = await historicalDataGateway.getBars(symbol, TIMEFRAME, startMs, endMs);
 
     if (bars.length < MIN_BARS_TO_EVALUATE) {
@@ -196,6 +231,24 @@ export class QuantSignalAgent {
       ...(isMultiAssetEnabled() ? { assetClass: classifyAsset({ symbol, price: currentPrice }).assetClass } : {}),
     };
     const strategyEvaluations = evaluateAll(strategyContext);
+    // Adaptive (default): all CORE evaluations stay in play; RegimeEngine + desk ranking pick the
+    // highest-conviction setup. Manual Strategy Focus is a discretionary filter only.
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    const focusId = normalizeStrategyFocus(tradingEngine.state.strategy);
+    const focusedEvaluations = filterEvaluationsForStrategyFocus(strategyEvaluations, focusId);
+    // Option B: per-ticker RegimeEngine → CORE subset (no capital sleeves).
+    const adaptedEvaluations = selectEvaluationsForAdaptiveRegime(
+      focusedEvaluations,
+      focusId,
+      regime.regime,
+      regime.volatility,
+    );
+    const { recordCampaignScan, recordCampaignStrategyEval } = await import('./campaignEffortTelemetry');
+    recordCampaignScan(1);
+    recordCampaignStrategyEval({
+      evaluated: adaptedEvaluations.length,
+      rejected: adaptedEvaluations.filter((e) => !(e.confidence > 0)).length,
+    });
     const paperOverlay = resolvePaperTestingOverlay(regime.regime);
     if (!paperOverlay.applied) {
       console.log(`[QuantSignalAgent] paper-testing overlay idle: ${paperOverlay.reason}`);
@@ -214,7 +267,7 @@ export class QuantSignalAgent {
     const traceId = generateTraceId(symbol);
     // Phase 4: the real Strategy Engine is the primary idea source; the Phase-3 regime-only mapping
     // is an honest fallback for when no individual strategy's own conditions clear its confidence bar.
-    const ranked = rankEvaluationsForRegime(strategyEvaluations, regime.regime);
+    const ranked = rankEvaluationsForRegime(adaptedEvaluations, regime.regime);
     const forPick = regime.volatility === 'HIGH'
       ? ranked.map(e => ({
           ...e,

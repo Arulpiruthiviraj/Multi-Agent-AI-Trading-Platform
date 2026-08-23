@@ -432,10 +432,10 @@ describe('resolvePositionStopTarget (positions ledger stop/take-profit)', () => 
     expect(result.stopLossPrice).toBeCloseTo(200 * 0.95, 2); // base 5%, untouched
   });
 
-  it('does NOT tighten the trailing stop under a plain LOCK_AND_IDLE lock (only TRAIL_STOPS_ONLY tightens)', async () => {
+  it('tightens the trailing stop under LOCK_AND_IDLE (same capital-preservation trail as TRAIL_STOPS_ONLY)', async () => {
     campaignBuyLock.setCampaignBuyLockedForTests(true, undefined, 'LOCK_AND_IDLE');
     const result = await resolvePositionStopTarget('IDLESYM', 200);
-    expect(result.stopLossPrice).toBeCloseTo(200 * 0.95, 2); // base 5%, untouched
+    expect(result.stopLossPrice).toBeCloseTo(200 * (1 - 1.5 / 100), 2);
   });
 
   it('never loosens a stop that is already tighter than campaignTrailStopsOnlyPct', async () => {

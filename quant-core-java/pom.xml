@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Argus Quant Core (Java 26) — Phase 0 scaffolding.
+
+  ISOLATION CONTRACT (see docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md):
+  This subproject builds and tests completely independently of the root npm/TypeScript app.
+  It has zero broker dependencies, zero network listeners in Phase 0, and is never invoked by
+  server.ts, RiskEngine.ts, ChiefTraderAgent, or OrderManagementService. It is inert scaffolding
+  only — nothing in the live Node process imports or depends on this module.
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>io.argus</groupId>
+  <artifactId>quant-core-java</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <name>Argus Quant Core</name>
+  <description>
+    Advisory-only, standalone quantitative calculation engine (Phase 0: indicator math + ring
+    buffers, byte-parity tested against the live TypeScript implementations). No broker access,
+    no order placement, no live wiring. See docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md.
+  </description>
+
+  <properties>
+    <maven.compiler.release>26</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <junit.version>5.11.4</junit.version>
+    <assertj.version>3.26.3</assertj.version>
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>${assertj.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.5.2</version>
+      </plugin>
+    </plugins>
+  </build>
+</project>

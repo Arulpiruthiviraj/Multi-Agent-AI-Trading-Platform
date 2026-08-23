@@ -44,11 +44,14 @@ describe('ModelRuntimeManager', () => {
   });
 
   it('does not spawn processes when ARGUS_START_LOCAL_MODELS is not true', async () => {
+    process.env.ARGUS_SKIP_IBKR = 'true';
     globalThis.fetch = vi.fn(async () => { throw new Error('ECONNREFUSED'); }) as any;
     const { modelRuntimeManager } = await import('./ModelRuntimeManager');
     const models = await modelRuntimeManager.startAndProbe();
     expect(models.every((m: any) => m.health !== 'STARTING')).toBe(true);
+    // Explicit skip — inactive IBKR must not flip the registry to STARTING via spawn.
     expect(models.find((m: any) => m.modelId === 'ibkr-gateway').health).toBe('DISABLED');
+    delete process.env.ARGUS_SKIP_IBKR;
   });
 });
 

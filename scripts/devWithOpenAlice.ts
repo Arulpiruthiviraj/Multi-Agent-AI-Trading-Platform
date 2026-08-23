@@ -495,25 +495,53 @@ function readIbkrListenPort(confFile: string): number {
   return 5000;
 }
 
-async function startIbkrGateway(): Promise<void> {
+async function probeIbkrDesktopGateway(): Promise<void> {
+  const { loadIbkrConnection, ibkrSocketPortCandidates } = await import('../src/server/config/ibkrConnection');
+  const { findFirstOpenTcpPort } = await import('../src/brokers/ibkrTcpProbe');
+  const cfg = loadIbkrConnection();
+
+  // Default: IB Gateway Desktop TCP socket. Never open a browser; never spawn Client Portal.
+  if (cfg.mode !== 'web_api') {
+    const port = await findFirstOpenTcpPort(cfg.host, ibkrSocketPortCandidates(cfg, false), 1500);
+    if (port != null) {
+      console.log(`[dev] IB Gateway / TWS socket already listening on ${cfg.host}:${port} — Argus will use TCP (no browser).`);
+    } else {
+      console.log(
+        `[dev] IB Gateway not detected on ${cfg.host}:${cfg.paperGatewayPort}/${cfg.paperTwsPort}. ` +
+          'Launch IB Gateway Desktop in Paper mode (Enable ActiveX and Socket Clients; uncheck Read-Only API). ' +
+          'Argus will not open a browser for IBKR.',
+      );
+    }
+    return;
+  }
+
+  // Opt-in Client Portal Web API only (IBKR_CONNECTION_MODE=web_api).
+  await startIbkrClientPortalGateway(cfg);
+}
+
+async function startIbkrClientPortalGateway(cfg: { webApiGatewayUrlDefault: string; openBrowserOnWebApiStartup: boolean }): Promise<void> {
   const ibkrPath = findIbkrGatewayPath();
   const defaultPort = (() => {
     try {
-      const u = new URL(process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api');
+      const u = new URL(process.env.IBKR_GATEWAY_URL || cfg.webApiGatewayUrlDefault);
       return Number(u.port) || 5000;
     } catch {
       return 5000;
     }
   })();
 
+  const openBrowser =
+    cfg.openBrowserOnWebApiStartup === true || process.env.IBKR_OPEN_BROWSER === 'true';
+
   if (!ibkrPath) {
     if (await isPortOpen(defaultPort)) {
-      console.log(`[dev] IBKR Gateway already reachable on port ${defaultPort}. Opening the login page (2FA is manual).`);
-      openUrlInBrowser(`https://localhost:${defaultPort}`);
+      console.log(`[dev] IBKR Client Portal Gateway already reachable on port ${defaultPort} (web_api mode).`);
+      if (openBrowser) openUrlInBrowser(`https://localhost:${defaultPort}`);
+      else console.log('[dev] Not opening browser (set IBKR_OPEN_BROWSER=true to open login page).');
       return;
     }
     console.log(
-      '[dev] IBKR Client Portal Gateway not found. Download it from Interactive Brokers, extract it, set IBKR_GATEWAY_PATH to that folder (must contain bin/run.bat), then re-run npm run dev. 2FA cannot be automated.'
+      '[dev] web_api mode: Client Portal Gateway not found. Set IBKR_GATEWAY_PATH, or switch ibkrConnection.mode to socket and use IB Gateway Desktop on :4002.',
     );
     return;
   }
@@ -530,7 +558,7 @@ async function startIbkrGateway(): Promise<void> {
 
   if (await isPortOpen(gatewayPort)) {
     console.log(`[dev] IBKR Client Portal Gateway already reachable on port ${gatewayPort} - not starting a second instance.`);
-    openUrlInBrowser(loginUrl);
+    if (openBrowser) openUrlInBrowser(loginUrl);
     return;
   }
 
@@ -539,10 +567,10 @@ async function startIbkrGateway(): Promise<void> {
   if (javaBin) {
     spawnEnv.PATH = `${javaBin};${process.env.PATH || ''}`;
   } else {
-    console.warn('[dev] Could not find a real java.exe (checked JAVA_HOME, C:\\Program Files\\Java, C:\\Program Files\\Eclipse Adoptium) - attempting to start the IBKR Gateway anyway via whatever "java" resolves to on PATH, which may fail.');
+    console.warn('[dev] Could not find a real java.exe - attempting to start Client Portal Gateway anyway.');
   }
 
-  console.log(`[dev] Starting IBKR Client Portal Gateway from ${ibkrPath} (port ${gatewayPort})`);
+  console.log(`[dev] Starting IBKR Client Portal Gateway from ${ibkrPath} (port ${gatewayPort}) [web_api only]`);
   const ibkr = spawn(`bin\\run.bat root\\conf.yaml`, {
     cwd: ibkrPath,
     shell: true,
@@ -559,12 +587,17 @@ async function startIbkrGateway(): Promise<void> {
 
   const up = await waitForPort(gatewayPort, 45_000, 'IBKR Client Portal Gateway');
   if (up) {
-    openUrlInBrowser(loginUrl);
-    console.log(`[dev] Complete IBKR login + 2FA in the browser (~24h session). This cannot be automated.`);
+    if (openBrowser) {
+      openUrlInBrowser(loginUrl);
+      console.log(`[dev] Complete IBKR login + 2FA in the browser (~24h session).`);
+    } else {
+      console.log(`[dev] Client Portal up at ${loginUrl} — browser NOT opened (IBKR_OPEN_BROWSER=true to open).`);
+    }
   } else {
-    console.warn(`[dev] Gateway port ${gatewayPort} did not open. When it does, open ${loginUrl} and complete 2FA.`);
+    console.warn(`[dev] Gateway port ${gatewayPort} did not open.`);
   }
 }
+
 
 function startTradingPlatform(childEnv: NodeJS.ProcessEnv): void {
   const server = spawn('node --use-system-ca ./node_modules/tsx/dist/cli.mjs server.ts', {
@@ -604,9 +637,9 @@ async function main() {
   ]);
 
   if (process.env.ARGUS_SKIP_IBKR === 'true') {
-    console.log('[dev] ARGUS_SKIP_IBKR=true - not starting IBKR Gateway.');
+    console.log('[dev] ARGUS_SKIP_IBKR=true - not probing/starting IBKR.');
   } else {
-    await startIbkrGateway();
+    await probeIbkrDesktopGateway();
   }
 
   const childEnv: NodeJS.ProcessEnv = {

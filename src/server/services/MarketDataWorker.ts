@@ -9,6 +9,8 @@
  *   so a failed handshake never recovered except via a 5s close timer.
  * - POST /diagnostics/retry/market_data was status-only.
  * - Nobody called subscribe(), so even an OPEN socket requested zero quotes.
+ * - Oversized subscribe sets + "symbol limit exceeded" caused a reconnect storm;
+ *   recovery now shrinks to coreStreamingSymbols and resubscribes in place.
  *
  * TechnicalAgent listens to MARKET_DATA ticks (event-driven, not a fixed 60s interval).
  * Fund/Macro poll on runtimeIntervals.fundamentalAgentMs / macroAgentMs (60s / 75s).
@@ -18,13 +20,14 @@
 import WebSocket from 'ws';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
-import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
 import { isAutobotTradingEnabled } from '../core/ideaGenerationGate';
 import { ReconnectBackoff } from '../core/reconnectBackoff';
 import { alpacaWebSocketTlsOptions } from '../core/alpacaTls';
 import { tradingSafety } from '../config/tradingSafety';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { continuousIntelligence } from '../config/continuousIntelligence';
+import { isMarketDataWebSocketAuthorized } from '../core/marketDataWsOwnership';
+import { notePipelineAgentTick } from '../core/pipelineAgentHealth';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
@@ -32,14 +35,41 @@ function quoteKey(symbol: string): string {
   return String(symbol || '').trim().toUpperCase();
 }
 
-function defaultSubscribeSymbols(): string[] {
-  try {
-    const cfg = loadRepoConfigJson<{ markets?: { US?: { benchmarks?: string[] } } }>('markets.json');
-    const benches = cfg.markets?.US?.benchmarks;
-    return Array.isArray(benches) ? benches.filter(s => typeof s === 'string' && s.length > 0) : [];
-  } catch {
-    return [];
+function defaultStreamingCap(): number {
+  return continuousIntelligence.maxActiveSubscriptions;
+}
+
+export type MarketDataQuoteBackend = 'alpaca' | 'ibkr_gateway';
+
+type IbkrQuoteBridge = {
+  subscribe(symbol: string): void;
+  unsubscribe(symbol: string): void;
+  clear(): void;
+};
+
+function coreStreamingSet(): Set<string> {
+  return new Set(continuousIntelligence.coreStreamingSymbols.map((s) => quoteKey(s)).filter(Boolean));
+}
+
+function protectedStreamingSet(): Set<string> {
+  return new Set(continuousIntelligence.protectedSymbols.map((s) => quoteKey(s)).filter(Boolean));
+}
+
+/** Prefer reviewed core + seed lists (under cap) over markets.json DIA/etc. overflow. */
+function defaultSubscribeSymbols(cap: number): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [
+    ...continuousIntelligence.coreStreamingSymbols,
+    ...continuousIntelligence.seedSymbols,
+  ]) {
+    const ticker = looksLikeListedTicker(raw) || quoteKey(raw);
+    if (!ticker || seen.has(ticker)) continue;
+    seen.add(ticker);
+    out.push(ticker);
+    if (out.length >= cap) break;
   }
+  return out;
 }
 
 export class MarketDataWorker {
@@ -49,6 +79,18 @@ export class MarketDataWorker {
   private latestPrices: Map<string, number> = new Map();
   private latestPriceTimestamps: Map<string, number> = new Map();
   private lastTick: Map<string, { timestampMs: number; price: number }> = new Map();
+  /** Tick counts for dynamic-slot eviction (least-ticked non-core first). */
+  private tickCounts: Map<string, number> = new Map();
+  /** Last REST momentum score attached at subscribe time (optional). */
+  private dynamicMomentumScores: Map<string, number> = new Map();
+  /** Wall-clock ms when each dynamic symbol was (re)subscribed. */
+  private subscribedAtMs: Map<string, number> = new Map();
+  /** When set (ibkr_gateway active), overrides Alpaca-safe cap from continuousIntelligence. */
+  private hardCapOverride: number | null = null;
+  private quoteBackend: MarketDataQuoteBackend = 'alpaca';
+  private ibkrBridge: IbkrQuoteBridge | null = null;
+  /** Optional frozen clock for dwell-unit tests. */
+  private testNowMs: number | null = null;
   private lastRejectLogMs: Map<string, number> = new Map();
   private disconnectedAt: number | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -56,6 +98,51 @@ export class MarketDataWorker {
   private lastError: string | null = null;
   private authenticated = false;
   private watchlistListening = false;
+  /** In-place recovery after Alpaca "symbol limit exceeded" — skip reconnect storm. */
+  private symbolLimitRecoveryInFlight = false;
+  private suppressReconnectUntilMs = 0;
+
+  /** Effective hard cap — IB Gateway may raise this above Alpaca IEX limits. */
+  private effectiveStreamingCap(): number {
+    if (this.hardCapOverride != null && this.hardCapOverride > 0) return this.hardCapOverride;
+    return defaultStreamingCap();
+  }
+
+  /**
+   * Public planner cap for OpportunityDiscovery (and status).
+   * IBKR Gateway: hardCapOverride from BrokerManager (typically 90).
+   * Alpaca / default: continuousIntelligence.maxActiveSubscriptions (12).
+   */
+  getEffectiveStreamingCap(): number {
+    return this.effectiveStreamingCap();
+  }
+
+  /**
+   * Called by BrokerManager on active-broker switch.
+   * ibkr_gateway: expand cap + route new subscriptions through reqMktData (no browser).
+   * alpaca / ibkr_web: restore Alpaca IEX-safe cap.
+   */
+  setBrokerQuoteContext(opts: {
+    backend: MarketDataQuoteBackend;
+    hardCapOverride?: number | null;
+    ibkrBridge?: IbkrQuoteBridge | null;
+  }): void {
+    const prevBackend = this.quoteBackend;
+    if (prevBackend === 'ibkr_gateway' && opts.backend !== 'ibkr_gateway') {
+      try { this.ibkrBridge?.clear(); } catch { /* ignore */ }
+    }
+    this.quoteBackend = opts.backend;
+    this.hardCapOverride = opts.hardCapOverride ?? null;
+    this.ibkrBridge = opts.ibkrBridge ?? null;
+    console.log(
+      `[MarketDataWorker] Quote backend=${this.quoteBackend} hardCap=${this.effectiveStreamingCap()}` +
+        (this.ibkrBridge ? ' (IB Gateway reqMktData bridge on)' : ''),
+    );
+  }
+
+  getQuoteBackend(): MarketDataQuoteBackend {
+    return this.quoteBackend;
+  }
 
   getLatestPrice(symbol: string): number | null {
     const key = quoteKey(symbol);
@@ -74,6 +161,82 @@ export class MarketDataWorker {
 
   getActiveSymbols(): string[] {
     return Array.from(this.activeStreams);
+  }
+
+  /** Permanently locked anchors (SPY/QQQ/GLD from config). */
+  getCoreSymbols(): string[] {
+    return Array.from(this.activeStreams).filter((s) => coreStreamingSet().has(s));
+  }
+
+  /** Non-anchor streaming slots (up to cap − core). */
+  getDynamicSymbols(): string[] {
+    const core = coreStreamingSet();
+    return Array.from(this.activeStreams).filter((s) => !core.has(s));
+  }
+
+  getDynamicMomentumScore(symbol: string): number | null {
+    const key = quoteKey(symbol);
+    const v = this.dynamicMomentumScores.get(key);
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  }
+
+  getTickCount(symbol: string): number {
+    return this.tickCounts.get(quoteKey(symbol)) ?? 0;
+  }
+
+  /** Test-only: freeze/advance wall clock for dwell checks. */
+  setNowForTests(ms: number | null): void {
+    this.testNowMs = ms;
+  }
+
+  private wallMs(): number {
+    return this.testNowMs ?? Date.now();
+  }
+
+  getSubscribedAtMs(symbol: string): number | null {
+    const v = this.subscribedAtMs.get(quoteKey(symbol));
+    return typeof v === 'number' ? v : null;
+  }
+
+  /**
+   * Operator/forensic view of the 12-slot stream (anchors first, then dynamics).
+   * Does not emit events or mutate subscriptions.
+   */
+  getActiveSlots(): Array<{
+    slot: number;
+    symbol: string;
+    type: 'ANCHOR' | 'DYNAMIC';
+    score: number;
+    dwellAgeMs: number;
+    tickCount: number;
+  }> {
+    const core = coreStreamingSet();
+    const now = this.wallMs();
+    const ordered = [
+      ...Array.from(this.activeStreams).filter((s) => core.has(s)).sort(),
+      ...Array.from(this.activeStreams).filter((s) => !core.has(s)).sort(),
+    ];
+    return ordered.map((symbol, idx) => {
+      const subscribedAt = this.subscribedAtMs.get(symbol) ?? now;
+      return {
+        slot: idx + 1,
+        symbol,
+        type: core.has(symbol) ? 'ANCHOR' as const : 'DYNAMIC' as const,
+        score: this.dynamicMomentumScores.get(symbol) ?? 0,
+        dwellAgeMs: Math.max(0, now - subscribedAt),
+        tickCount: this.tickCounts.get(symbol) ?? 0,
+      };
+    });
+  }
+
+  private isWithinDynamicDwell(symbol: string): boolean {
+    const dwellMs = continuousIntelligence.minDynamicDwellMs;
+    const dwellTicks = continuousIntelligence.minDynamicDwellTicks;
+    const ticks = this.tickCounts.get(symbol) ?? 0;
+    if (ticks >= dwellTicks) return false;
+    const subscribedAt = this.subscribedAtMs.get(symbol);
+    if (subscribedAt == null) return false;
+    return this.wallMs() - subscribedAt < dwellMs;
   }
 
   getLatestPriceAgeMs(symbol: string): number | null {
@@ -100,7 +263,22 @@ export class MarketDataWorker {
     this.latestPriceTimestamps.set(sym, observedAtMs);
   }
 
+  /** IB Gateway Level-1 tick → same cache + EventBus path as Alpaca IEX (OMS/RiskEngine unchanged). */
+  ingestIbkrQuote(symbol: string, price: number): void {
+    const sym = quoteKey(symbol);
+    if (!sym || !Number.isFinite(price) || price <= 0) return;
+    const now = Date.now();
+    if (!this.acceptTickTimestamp(sym, now, price)) return;
+    this.tickCounts.set(sym, (this.tickCounts.get(sym) || 0) + 1);
+    this.latestPrices.set(sym, price);
+    this.latestPriceTimestamps.set(sym, now);
+    this.maybeEmitMarketData(sym, price, 0, new Date(now).toISOString());
+  }
+
   isConnected(): boolean {
+    if (this.quoteBackend === 'ibkr_gateway' && this.ibkrBridge) {
+      return this.activeStreams.size > 0 || this.authenticated;
+    }
     return !!this.ws && this.ws.readyState === WebSocket.OPEN;
   }
 
@@ -110,6 +288,7 @@ export class MarketDataWorker {
     authenticated: boolean;
     lastError: string | null;
     symbols: string[];
+    streamingCap: number;
   } {
     return {
       connected: this.isConnected(),
@@ -117,6 +296,7 @@ export class MarketDataWorker {
       authenticated: this.authenticated,
       lastError: this.lastError,
       symbols: this.getActiveSymbols(),
+      streamingCap: this.effectiveStreamingCap(),
     };
   }
 
@@ -129,6 +309,10 @@ export class MarketDataWorker {
     // (see src/server/core/ideaGenerationGate.ts) rather than relying on this tick emission.
     if (!isAutobotTradingEnabled()) return;
     eventBus.emitMarketData(symbol, price, volume, timestamp);
+    // Tick-driven agents stay IDLE until MARKET_DATA resumes; nudge heartbeats so CLI/UI
+    // show RUNNING as soon as the feed is healthy again (agents still process the event).
+    notePipelineAgentTick('TechnicalAgent');
+    notePipelineAgentTick('KronosEngine');
   }
 
   private isDuplicateTick(symbol: string, timestampMs: number, price: number): boolean {
@@ -168,6 +352,14 @@ export class MarketDataWorker {
 
   start() {
     this.ensureWatchlistListener();
+    if (!isMarketDataWebSocketAuthorized()) {
+      console.warn(
+        '[MarketDataWorker] Refusing Alpaca IEX WebSocket — not authorized for this process '
+        + '(CLI/soak/orphan imports must not open a parallel stream). Primary server/engine only.',
+      );
+      this.lastError = 'MARKET_DATA_WS_NOT_AUTHORIZED';
+      return;
+    }
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       console.log("[MarketDataWorker] No Alpaca keys provided. MarketDataWorker will idle in disconnected state without fabricating data.");
       eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: "Missing API keys" });
@@ -183,6 +375,10 @@ export class MarketDataWorker {
     this.clearReconnectTimer();
     this.reconnectBackoff.reset();
     this.tearDownSocket();
+    if (!isMarketDataWebSocketAuthorized()) {
+      this.lastError = 'MARKET_DATA_WS_NOT_AUTHORIZED';
+      return this.getFeedStatus();
+    }
     if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
       this.lastError = 'ALPACA_API_KEY or ALPACA_SECRET_KEY unset';
       eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: "Missing API keys" });
@@ -202,37 +398,162 @@ export class MarketDataWorker {
     console.log("[MarketDataWorker] Disconnected.");
   }
 
-  subscribe(symbol: string) {
+  subscribe(symbol: string, opts: { momentumScore?: number } = {}) {
     const ticker = looksLikeListedTicker(symbol);
     if (!ticker) return;
-    if (this.activeStreams.has(ticker)) return;
-    const protectedSet = new Set(continuousIntelligence.protectedSymbols);
-    if (!protectedSet.has(ticker) && this.activeStreams.size >= continuousIntelligence.maxActiveSubscriptions) {
-      console.warn(`[MarketDataWorker] Refusing subscribe ${ticker} — at cap ${continuousIntelligence.maxActiveSubscriptions}`);
+    if (this.activeStreams.has(ticker)) {
+      if (typeof opts.momentumScore === 'number' && Number.isFinite(opts.momentumScore)) {
+        this.dynamicMomentumScores.set(ticker, opts.momentumScore);
+      }
       return;
     }
+
+    const cap = this.effectiveStreamingCap();
+    if (this.activeStreams.size >= cap) {
+      this.pruneLeastActiveWatchSymbols(1);
+    }
+    if (this.activeStreams.size >= cap) {
+      console.warn(
+        `[MarketDataWorker] Refusing subscribe ${ticker} — at hard cap ${cap} (protected/core symbols retained)`,
+      );
+      return;
+    }
+
     this.activeStreams.add(ticker);
+    this.subscribedAtMs.set(ticker, this.wallMs());
+    this.tickCounts.set(ticker, 0);
+    if (typeof opts.momentumScore === 'number' && Number.isFinite(opts.momentumScore)) {
+      this.dynamicMomentumScores.set(ticker, opts.momentumScore);
+    }
+    if (this.quoteBackend === 'ibkr_gateway' && this.ibkrBridge) {
+      try {
+        this.ibkrBridge.subscribe(ticker);
+      } catch (e: any) {
+        console.warn(`[MarketDataWorker] IB Gateway subscribe ${ticker} failed: ${e?.message || e}`);
+        this.activeStreams.delete(ticker);
+        this.subscribedAtMs.delete(ticker);
+        return;
+      }
+      console.log(`[MarketDataWorker] IB Gateway subscribed ${ticker} (${this.activeStreams.size}/${cap})`);
+      return;
+    }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      // Wire unsubscribe for any just-pruned names happens inside prune/unsubscribe before this send.
       this.ws.send(JSON.stringify({ action: "subscribe", quotes: [ticker], trades: [ticker] }));
     }
-    console.log(`[MarketDataWorker] Subscribed to ${ticker}`);
+    console.log(`[MarketDataWorker] Subscribed to ${ticker} (${this.activeStreams.size}/${cap})`);
   }
 
-  unsubscribe(symbol: string) {
+  /**
+   * Drop least-scored / least-ticked non-protected watch symbols so new candidates can join
+   * without exceeding Alpaca IEX subscription limits (symbol limit exceeded).
+   * Always sends Alpaca unsubscribe on the open socket before the caller may subscribe.
+   * Core anchors (protectedSymbols / coreStreamingSymbols) are never evicted here.
+   * Unscored dynamics rank as score 0 (not +Infinity). Fresh dwell-protected symbols are skipped.
+   */
+  private pruneLeastActiveWatchSymbols(needed: number = 1): void {
+    if (needed <= 0) return;
+    const protectedSet = protectedStreamingSet();
+    const ranked = Array.from(this.activeStreams)
+      .filter((s) => !protectedSet.has(s))
+      .filter((s) => !this.isWithinDynamicDwell(s))
+      .map((s) => ({
+        symbol: s,
+        momentumScore: this.dynamicMomentumScores.get(s) ?? 0,
+        ticks: this.tickCounts.get(s) ?? 0,
+        lastMs:
+          this.latestPriceTimestamps.get(s)
+          ?? this.lastTick.get(s)?.timestampMs
+          ?? 0,
+      }))
+      .sort((a, b) => {
+        if (a.momentumScore !== b.momentumScore) return a.momentumScore - b.momentumScore;
+        if (a.ticks !== b.ticks) return a.ticks - b.ticks;
+        return a.lastMs - b.lastMs;
+      });
+
+    let removed = 0;
+    for (const row of ranked) {
+      if (removed >= needed) break;
+      this.unsubscribe(row.symbol, { force: false });
+      removed += 1;
+      console.warn(
+        `[MarketDataWorker] Pruned dynamic watch symbol ${row.symbol} `
+        + `(score=${row.momentumScore.toFixed(3)}, ticks=${row.ticks}) `
+        + `to stay within cap ${this.effectiveStreamingCap()}`,
+      );
+    }
+  }
+
+  /**
+   * @param force — allow removing protected symbols (symbol-limit recovery only).
+   */
+  unsubscribe(symbol: string, opts: { force?: boolean } = {}) {
     const ticker = looksLikeListedTicker(symbol) || String(symbol || '').trim().toUpperCase();
     if (!ticker) return;
-    if (continuousIntelligence.protectedSymbols.includes(ticker)) return;
+    if (!opts.force && protectedStreamingSet().has(ticker)) return;
+    if (!this.activeStreams.has(ticker)) return;
     this.activeStreams.delete(ticker);
+    this.dynamicMomentumScores.delete(ticker);
+    this.tickCounts.delete(ticker);
+    this.subscribedAtMs.delete(ticker);
+    if (this.quoteBackend === 'ibkr_gateway' && this.ibkrBridge) {
+      try { this.ibkrBridge.unsubscribe(ticker); } catch { /* ignore */ }
+      return;
+    }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify({ action: "unsubscribe", quotes: [ticker], trades: [ticker] }));
+    }
+  }
+
+  /**
+   * Alpaca IEX "symbol limit exceeded": shrink to coreStreamingSymbols, unsubscribe extras
+   * on the wire, resubscribe core — do not enter a rapid reconnect loop with the oversized set.
+   */
+  private recoverFromSymbolLimitExceeded(socket: WebSocket | null): void {
+    if (this.symbolLimitRecoveryInFlight) return;
+    this.symbolLimitRecoveryInFlight = true;
+    this.suppressReconnectUntilMs = Date.now() + 15_000;
+    try {
+      const core = Array.from(coreStreamingSet()).slice(0, this.effectiveStreamingCap());
+      const coreSet = new Set(core);
+      const toDrop = Array.from(this.activeStreams).filter((s) => !coreSet.has(s));
+      console.warn(
+        `[MarketDataWorker] Symbol limit exceeded — purging ${toDrop.length} non-core subscription(s); `
+        + `retaining core [${core.join(', ')}]`,
+      );
+      for (const sym of toDrop) {
+        this.unsubscribe(sym, { force: true });
+      }
+      this.activeStreams = new Set(core);
+      const live = socket && socket.readyState === WebSocket.OPEN ? socket : this.ws;
+      if (live && live.readyState === WebSocket.OPEN && core.length > 0) {
+        live.send(JSON.stringify({ action: 'subscribe', quotes: core, trades: core }));
+      }
+      this.lastError = 'symbol limit exceeded (recovered to coreStreamingSymbols)';
+      eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, {
+        reason: 'symbol_limit_exceeded_recovered',
+        retained: core,
+        purged: toDrop,
+      });
+      // Avoid reconnect storm: clear pending reconnect while we recover in place.
+      this.clearReconnectTimer();
+      this.reconnectBackoff.reset();
+    } finally {
+      this.symbolLimitRecoveryInFlight = false;
     }
   }
 
   private ensureWatchlistListener() {
     if (this.watchlistListening) return;
     this.watchlistListening = true;
-    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, (payload: { symbol?: string }) => {
-      this.subscribe(payload?.symbol || '');
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, (payload: {
+      symbol?: string;
+      momentumScore?: number;
+    }) => {
+      this.subscribe(payload?.symbol || '', {
+        momentumScore: typeof payload?.momentumScore === 'number' ? payload.momentumScore : undefined,
+      });
     });
   }
 
@@ -259,23 +580,38 @@ export class MarketDataWorker {
   }
 
   private ensureDefaultSubscriptions() {
-    for (const s of defaultSubscribeSymbols()) {
-      const ticker = looksLikeListedTicker(s);
+    for (const s of defaultSubscribeSymbols(this.effectiveStreamingCap())) {
+      const ticker = looksLikeListedTicker(s) || quoteKey(s);
       if (ticker) this.activeStreams.add(ticker);
+    }
+    while (this.activeStreams.size > this.effectiveStreamingCap()) {
+      this.pruneLeastActiveWatchSymbols(1);
     }
   }
 
   private sendSubscribe(socket: WebSocket) {
     this.ensureDefaultSubscriptions();
+    // Hard ceiling — never push more quotes than the configured Alpaca-safe cap.
+    while (this.activeStreams.size > this.effectiveStreamingCap()) {
+      this.pruneLeastActiveWatchSymbols(1);
+    }
+    // If still over (all protected), fall back to core only.
+    if (this.activeStreams.size > this.effectiveStreamingCap()) {
+      this.activeStreams = new Set(Array.from(coreStreamingSet()).slice(0, this.effectiveStreamingCap()));
+    }
     const symbols = Array.from(this.activeStreams);
     if (symbols.length === 0) {
-      console.warn('[MarketDataWorker] Authenticated but no symbols to subscribe (config/markets.json US.benchmarks empty).');
+      console.warn('[MarketDataWorker] Authenticated but no symbols to subscribe (coreStreamingSymbols empty).');
       return;
     }
     socket.send(JSON.stringify({ action: 'subscribe', quotes: symbols, trades: symbols }));
   }
 
   private scheduleReconnect(reason: string) {
+    if (Date.now() < this.suppressReconnectUntilMs) {
+      console.log(`[MarketDataWorker] Suppressing reconnect (${reason}) during symbol-limit recovery window`);
+      return;
+    }
     if (this.reconnectTimer) return;
     const delayMs = this.reconnectBackoff.nextDelayMs();
     console.log(`[MarketDataWorker] Scheduling reconnect in ${delayMs}ms (${reason})`);
@@ -286,6 +622,10 @@ export class MarketDataWorker {
   }
 
   private connectAlpaca() {
+    if (!isMarketDataWebSocketAuthorized()) {
+      this.lastError = 'MARKET_DATA_WS_NOT_AUTHORIZED';
+      return;
+    }
     this.clearReconnectTimer();
     const url = process.env.ALPACA_DATA_STREAM_URL || DEFAULT_STREAM_URL;
     console.log(`[MarketDataWorker] Connecting to Alpaca market-data WebSocket (${url})...`);
@@ -328,6 +668,10 @@ export class MarketDataWorker {
         } else if (msg.T === "error") {
           this.lastError = String(msg.msg || msg.code || 'Alpaca feed error');
           console.error(`[MarketDataWorker] Feed error: ${this.lastError}`);
+          if (/symbol limit exceeded/i.test(this.lastError)) {
+            this.recoverFromSymbolLimitExceeded(socket);
+            continue;
+          }
           eventBus.emit(EVENTS.MARKET_DATA_DISCONNECTED, { reason: this.lastError });
         } else if (msg.T === "q") {
           const sym = quoteKey(msg.S);
@@ -338,6 +682,10 @@ export class MarketDataWorker {
           this.lastTick.set(sym, { timestampMs, price: msg.bp });
           this.latestPrices.set(sym, msg.bp);
           this.latestPriceTimestamps.set(sym, Date.now());
+          this.tickCounts.set(sym, (this.tickCounts.get(sym) ?? 0) + 1);
+          if (this.lastError && /symbol limit exceeded/i.test(this.lastError)) {
+            this.lastError = null;
+          }
           this.maybeEmitMarketData(sym, msg.bp, msg.bs, new Date(msg.t).toISOString());
         } else if (msg.T === "t") {
           const sym = quoteKey(msg.S);
@@ -348,6 +696,10 @@ export class MarketDataWorker {
           this.lastTick.set(sym, { timestampMs, price: msg.p });
           this.latestPrices.set(sym, msg.p);
           this.latestPriceTimestamps.set(sym, Date.now());
+          this.tickCounts.set(sym, (this.tickCounts.get(sym) ?? 0) + 1);
+          if (this.lastError && /symbol limit exceeded/i.test(this.lastError)) {
+            this.lastError = null;
+          }
           this.maybeEmitMarketData(sym, msg.p, msg.s, new Date(msg.t).toISOString());
         }
       }

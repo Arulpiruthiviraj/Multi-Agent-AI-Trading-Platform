@@ -1,5 +1,7 @@
 import { NormalizedArticle } from './NewsNormalizer';
 import { getFinBertSentiment } from '../ai/LocalSentiment';
+import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 
 export interface ImpactAssessment {
   sentiment: number; // -1 to 1
@@ -24,6 +26,19 @@ export class NewsImpactEngine {
     const finbert = await getFinBertSentiment(text);
     const sentiment = finbert ? finbert.signedScore : keywordSentiment(text.toLowerCase());
     const sentimentSource: ImpactAssessment['sentimentSource'] = finbert ? 'finbert' : 'keyword-heuristic';
+
+    if (finbert) {
+      eventBus.publish(EVENTS.NEWS_SENTIMENT_SCORED, {
+        textPreview: text.slice(0, 160),
+        symbol: Array.isArray((article as any).symbols) ? (article as any).symbols[0] : null,
+        label: finbert.label,
+        score: finbert.score,
+        signedScore: finbert.signedScore,
+        model: finbert.model,
+        source: 'NewsImpactEngine',
+        at: new Date().toISOString(),
+      });
+    }
 
     let impactScore = 0.5;
     if (category === 'Earnings' || category === 'M&A') impactScore = 0.9;

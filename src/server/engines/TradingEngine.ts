@@ -53,6 +53,7 @@ import { and, eq, isNotNull, notInArray } from 'drizzle-orm';
 import { system } from '../core/SystemBootstrap';
 import { LIVE_TRADING_CONFIRMATION_PHRASE, armLiveTrading, disarmLiveTrading } from '../core/LiveTradingConfirmation';
 import { tradingSafety } from '../config/tradingSafety';
+import { normalizeStrategyFocus, strategyFocusConfig } from '../config/strategyFocus';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { TERMINAL_ORDER_STATUSES } from '../services/OrderManagement';
 import {
@@ -133,7 +134,7 @@ class TradingEngine {
             tradingMode: "PAPER",
             budget: 50000,
             spent: 0,
-            strategy: "Momentum Focus",
+            strategy: strategyFocusConfig.defaultFocus || tradingSafety.defaultStrategyFocus,
             riskLevel: "Medium",
             maxTradeSize: 3000,
             dailyLossLimit: 5000,
@@ -330,7 +331,10 @@ class TradingEngine {
                 this.state.tradingMode = resolvedMode;
                 this.state.riskLevel = s.riskLevel || "Balanced";
                 this.state.budget = s.budget || 50000;
-                this.state.strategy = s.strategy || "Momentum Focus";
+                this.state.strategy = normalizeStrategyFocus(s.strategy || strategyFocusConfig.defaultFocus);
+                if (s.strategy !== this.state.strategy) {
+                  await db.update(schema.settings).set({ strategy: this.state.strategy }).where(eq(schema.settings.id, s.id)).run();
+                }
                 this.state.maxTradeSize = s.maxTradeSize || tradingSafety.defaultMaxTradeSizeDollars;
                 this.state.dailyLossLimit = s.dailyLossLimit || 5000;
                 this.state.takeProfitPct = s.takeProfitPct || 15;
@@ -506,6 +510,9 @@ class TradingEngine {
             if (Object.prototype.hasOwnProperty.call(config, field)) {
                 (this.state as any)[field] = (config as any)[field];
             }
+        }
+        if (Object.prototype.hasOwnProperty.call(config, 'strategy')) {
+            this.state.strategy = normalizeStrategyFocus(this.state.strategy);
         }
 
         try {

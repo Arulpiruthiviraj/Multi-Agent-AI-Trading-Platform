@@ -9,11 +9,10 @@ import {
 } from './deskIntelligence';
 
 describe('deskIntelligence config', () => {
-  it('loads reviewed JSON and never emits news as a default BUY/SELL idea', () => {
-    // CATALYST_ONLY is the functional-equivalence successor to the old `newsEmitsTradeIdeas: false`
-    // default (Phase F Step 2) - same real-world behavior, now expressed as an explicit mode.
-    expect(deskIntelligence.newsAgentMode).toBe('CATALYST_ONLY');
-    expect(newsAgentEmitsTradeIdeas()).toBe(false);
+  it('loads reviewed JSON with News ACTIVE_VOTE (DEF-TODAY-05) without lowering consensus floors', () => {
+    // ACTIVE_VOTE emits TRADE_IDEA_GENERATED as one ChiefTrader voter; 0.75 / min-2 unchanged.
+    expect(deskIntelligence.newsAgentMode).toBe('ACTIVE_VOTE');
+    expect(newsAgentEmitsTradeIdeas()).toBe(true);
     expect(newsAgentPipelineEnabled()).toBe(true);
     expect(deskIntelligence.minRiskRewardRatio).toBeGreaterThan(0);
     expect(familyForStrategy('MOMENTUM_BREAKOUT')).toBe('momentum');

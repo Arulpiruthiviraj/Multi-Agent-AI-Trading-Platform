@@ -1094,10 +1094,10 @@ export default function App() {
     }
   };
 
-  const [autoBotConfig, setAutoBotConfig] = useState<any>({ enabled: false, budget: 50000, spent: 0, remaining: 50000, strategy: "Momentum & Breakout", riskLevel: "Medium", maxTradeSize: 3000, dailyLossLimit: 5000, currentDailyLoss: 0, logs: [] });
+  const [autoBotConfig, setAutoBotConfig] = useState<any>({ enabled: false, budget: 50000, spent: 0, remaining: 50000, strategy: "ADAPTIVE_MULTI_STRATEGY", riskLevel: "Medium", maxTradeSize: 3000, dailyLossLimit: 5000, currentDailyLoss: 0, logs: [] });
   const [autoBotTargetBudget, setAutoBotTargetBudget] = useState(50000);
   const [autoBotTradingMode, setAutoBotTradingMode] = useState("PAPER");
-  const [autoBotStrategy, setAutoBotStrategy] = useState("Momentum & Breakout");
+  const [autoBotStrategy, setAutoBotStrategy] = useState("ADAPTIVE_MULTI_STRATEGY");
   const [autoBotRiskLevel, setAutoBotRiskLevel] = useState("Medium");
   const [autoBotMaxTradeSize, setAutoBotMaxTradeSize] = useState(3000);
   // Real values for the "Active Risk Rules" ribbon below - previously a hardcoded, stale string
@@ -1294,6 +1294,12 @@ export default function App() {
         if (typeof data?.budget === 'number' && Number.isFinite(data.budget) && data.budget > 0) {
           setAutoBotTargetBudget(data.budget);
         }
+        if (typeof data?.strategy === 'string' && data.strategy.trim()) {
+          setAutoBotStrategy(data.strategy);
+        }
+        if (typeof data?.dailyLossLimit === 'number' && Number.isFinite(data.dailyLossLimit) && data.dailyLossLimit > 0) {
+          setAutoBotDailyLossLimit(data.dailyLossLimit);
+        }
       })
       .catch(e => console.error("Initial fetch failed:", e));
 
@@ -1427,21 +1433,25 @@ export default function App() {
          const resumed = await resumeTrading();
          if (!resumed) return;
        }
-       // AutonomousLaunchDialog's tradingMode/riskProfile use display strings; translate them to
-       // the values TradingEngine/SystemBootstrap actually understand. executionBroker, marketData,
-       // account, and agents are collected by the dialog but have no real backend support yet
-       // (per-session broker/data-provider switching and per-agent enable flags don't exist) -
-       // they are intentionally NOT sent so this doesn't imply they take effect.
+       // Launch sheet is verification-only: strategy/risk inherit from dashboard controls.
+       // executionBroker / marketData / per-agent checkboxes were never wired — do not send them.
        const tradingModeMap: Record<string, string> = {
          'Broker Paper Trading': 'PAPER',
          'Argus Internal Paper Simulator': 'SIMULATION',
-         'LIVE TRADING': 'LIVE'
+         'LIVE TRADING': 'LIVE',
+         PAPER: 'PAPER',
+         SIMULATION: 'SIMULATION',
+         LIVE: 'LIVE',
        };
        const riskProfileMap: Record<string, string> = {
          'Conservative': 'Conservative',
          'Aggressive': 'Aggressive',
          'Moderate': 'Balanced',
-         'Institutional': 'Balanced'
+         'Institutional': 'Balanced',
+         'Low (Max -1%)': 'Conservative',
+         'Medium (Max -3%)': 'Balanced',
+         'High (Max -7%)': 'Aggressive',
+         'Maximum Return (Unrestricted)': 'Aggressive',
        };
 
        const res = await fetch("/api/v1/autobot/toggle", {
@@ -1507,6 +1517,49 @@ export default function App() {
         budget,
         remaining: budget - (Number(prev.spent) || 0),
       }));
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || "Failed to reach the server." };
+    }
+  };
+
+  /** Persist Strategy Focus without flipping Autobot — config only. */
+  const saveStrategyFocus = async (strategy: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const res = await fetch("/api/v1/config/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ strategy }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        return { ok: false, error: data.error || "Failed to save strategy focus." };
+      }
+      setAutoBotStrategy(strategy);
+      setAutoBotConfig((prev: any) => ({ ...prev, strategy }));
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || "Failed to reach the server." };
+    }
+  };
+
+  /** Persist max daily loss without flipping Autobot. */
+  const saveDailyLossLimit = async (dailyLossLimit: number): Promise<{ ok: boolean; error?: string }> => {
+    if (!Number.isFinite(dailyLossLimit) || dailyLossLimit <= 0) {
+      return { ok: false, error: "Daily loss limit must be a positive dollar amount." };
+    }
+    try {
+      const res = await fetch("/api/v1/config/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyLossLimit }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        return { ok: false, error: data.error || "Failed to save daily loss limit." };
+      }
+      setAutoBotDailyLossLimit(dailyLossLimit);
+      setAutoBotConfig((prev: any) => ({ ...prev, dailyLossLimit }));
       return { ok: true };
     } catch (e: any) {
       return { ok: false, error: e?.message || "Failed to reach the server." };
@@ -1988,13 +2041,8 @@ export default function App() {
 
   const [alertNotifications, setAlertNotifications] = useState<VisualNotification[]>([]);
 
-  // Opportunity Feed manual BUY/SELL execution. Routes through the existing, already-safety-gated
-  // POST /api/v2/trading/execute-override endpoint (Advanced Trade Sandbox's real "Execute
-  // Override" path) - it never calls the broker directly; it emits CHIEF_APPROVED_IDEA the same
-  // way ChiefTraderAgent does after AI consensus, so the real RiskEngine (all 24 gates) and
-  // OrderManagementService/BrokerManager still run. Only ChiefTrader's AI-consensus step is
-  // skipped, which is the entire point of a manual override. Whichever broker is currently active
-  // in BrokerManager handles it - nothing here hardcodes Alpaca.
+  // Opportunity Feed CONFIRM BUY/SELL: full ChiefTrader consensus (≥0.75 / ≥2 agents) then
+  // RiskEngine → OMS. Never skips consensus; never placeOrder-direct.
   const [manualExecuteConfirming, setManualExecuteConfirming] = useState<string | null>(null);
   const [manualExecuteBusy, setManualExecuteBusy] = useState<string | null>(null);
   const [manualExecuteToasts, setManualExecuteToasts] = useState<Array<{
@@ -2021,12 +2069,17 @@ export default function App() {
       if (res.ok && data.ok) {
         setManualExecuteToasts(prev => [{
           id: toastId, symbol, side, status: 'success',
-          message: `Sent to RiskEngine (traceId ${String(data.traceId || '').slice(0, 24)}...). Actual fill/quantity determined by RiskEngine sizing, not guaranteed.`,
+          message: `Consensus approved (${((Number(data.confidence) || 0) * 100).toFixed(0)}%) → RiskEngine (trace ${String(data.traceId || '').slice(0, 24)}…). Fill not guaranteed.`,
         }, ...prev]);
       } else {
+        const breakdown = Array.isArray(data.agentBreakdown)
+          ? data.agentBreakdown.map((a: any) => `${a.agent}:${a.side}@${((Number(a.confidence) || 0) * 100).toFixed(0)}%`).join(', ')
+          : '';
         setManualExecuteToasts(prev => [{
           id: toastId, symbol, side, status: 'error',
-          message: data.error || `Override request failed (HTTP ${res.status}).`,
+          message: data.code === 'TRADE_REJECTED_CONSENSUS'
+            ? `${data.error || 'Consensus rejected.'}${breakdown ? ` Votes: ${breakdown}` : ''}`
+            : (data.error || `Request failed (HTTP ${res.status}).`),
         }, ...prev]);
       }
       setTimeout(() => dismissManualExecuteToast(toastId), 12000);
@@ -3852,6 +3905,17 @@ export default function App() {
              setShowLaunchDialog={setShowLaunchDialog}
              onSaveAllocatedBudget={saveAllocatedBudget}
              onOpenMissionControl={() => setActiveTab("command")}
+             activeBrokerId={
+               selectedBroker.toLowerCase().includes('gateway') || selectedBroker.toLowerCase().includes('socket')
+                 ? 'ibkr_gateway'
+                 : selectedBroker.toLowerCase().includes('web')
+                   ? 'ibkr_web'
+                   : selectedBroker.toLowerCase().includes('alpaca')
+                     ? 'alpaca'
+                     : selectedBroker.toLowerCase().includes('internal') || selectedBroker.toLowerCase().includes('simulator')
+                       ? 'internal_paper'
+                       : undefined
+             }
           />
         )}
         {/* ========================================================= */}
@@ -7454,35 +7518,47 @@ export default function App() {
                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3 mb-4">
                      {pipelineAgents.togglable.map((agent) => {
                        const on = agent.available && agent.enabled;
-                       const dead = on && agent.healthLabel === 'DEAD';
-                       const healthy = on && (agent.healthLabel === 'HEALTHY' || agent.healthLabel === 'GATED');
+                       const failed = on && (agent.healthLabel === 'FAILED' || agent.healthLabel === 'DEAD');
+                       const waiting = on && agent.healthLabel === 'IDLE_WAITING_FOR_MARKET_DATA';
+                       const unavailable = on && agent.healthLabel === 'UNAVAILABLE';
+                       const healthy = on && (
+                         agent.healthLabel === 'RUNNING'
+                         || agent.healthLabel === 'HEALTHY'
+                         || agent.healthLabel === 'GATED'
+                         || agent.healthLabel === 'DEGRADED'
+                         || agent.healthLabel === 'STARTING'
+                       );
                        const statusText = !agent.available
                          ? 'ENV OFF'
                          : !on
                            ? 'OFFLINE'
-                           : dead
-                             ? 'ENABLED + DEAD'
-                             : agent.healthLabel === 'NOT_ARMED'
-                               ? 'ENABLED + IDLE'
-                               : healthy
-                                 ? 'ENABLED + HEALTHY'
-                                 : 'ONLINE';
+                           : failed
+                             ? 'ENABLED + FAILED'
+                             : unavailable
+                               ? 'ENABLED + UNAVAILABLE'
+                               : waiting
+                                 ? 'ENABLED + WAITING DATA'
+                                 : agent.healthLabel === 'NOT_ARMED'
+                                   ? 'ENABLED + IDLE'
+                                   : healthy
+                                     ? `ENABLED + ${agent.healthLabel === 'RUNNING' || agent.healthLabel === 'HEALTHY' ? 'RUNNING' : agent.healthLabel}`
+                                     : 'ONLINE';
                        return (
                          <div
                            key={agent.id}
                            title={agent.available ? `${agent.description}${agent.lastError ? ` Last error: ${agent.lastError}` : ''}` : (agent.unavailableReason || agent.description)}
-                           className={"bg-[#111822] border rounded p-3 flex flex-col justify-between min-h-[88px] " + (dead ? "border-rose-700 " : "border-slate-800 ") + (agent.available ? "cursor-pointer" : "opacity-60 cursor-not-allowed")}
+                           className={"bg-[#111822] border rounded p-3 flex flex-col justify-between min-h-[88px] " + (failed ? "border-rose-700 " : waiting || unavailable ? "border-amber-700/60 " : "border-slate-800 ") + (agent.available ? "cursor-pointer" : "opacity-60 cursor-not-allowed")}
                            onClick={() => void handlePipelineAgentToggle(agent.id, agent.enabled, agent.available)}
                          >
                            <div className="flex items-center gap-2 text-slate-300 text-[10px] uppercase font-bold tracking-widest">
-                             <Activity size={12} className={dead ? "text-rose-400" : "text-slate-400"}/> {agent.label}
+                             <Activity size={12} className={failed ? "text-rose-400" : waiting || unavailable ? "text-amber-400" : "text-slate-400"}/> {agent.label}
                            </div>
                            <div className="flex justify-between items-center mt-2">
-                             <span className={"font-bold text-[10px] uppercase tracking-wider " + (!agent.available ? "text-amber-500" : dead ? "text-rose-400" : healthy ? "text-emerald-400" : on ? "text-emerald-400" : "text-slate-500")}>
+                             <span className={"font-bold text-[10px] uppercase tracking-wider " + (!agent.available ? "text-amber-500" : failed ? "text-rose-400" : waiting || unavailable ? "text-amber-400" : healthy ? "text-emerald-400" : on ? "text-emerald-400" : "text-slate-500")}>
                                {statusText}
                              </span>
-                             <div className={"w-8 h-4 rounded-full border flex items-center px-0.5 " + (healthy ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : dead ? "bg-rose-500/20 border-rose-500/50 justify-end" : on ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}>
-                               <div className={"w-3 h-3 rounded-full " + (dead ? "bg-rose-400" : on ? "bg-emerald-400" : "bg-slate-600")}></div>
+                             <div className={"w-8 h-4 rounded-full border flex items-center px-0.5 " + (healthy ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : failed ? "bg-rose-500/20 border-rose-500/50 justify-end" : waiting || unavailable ? "bg-amber-500/20 border-amber-500/50 justify-end" : on ? "bg-emerald-500/20 border-emerald-500/50 justify-end" : "bg-[#1A1F2B] border-slate-700 justify-start")}>
+                               <div className={"w-3 h-3 rounded-full " + (failed ? "bg-rose-400" : waiting || unavailable ? "bg-amber-400" : on ? "bg-emerald-400" : "bg-slate-600")}></div>
                              </div>
                            </div>
                          </div>
@@ -7547,11 +7623,13 @@ export default function App() {
           onStart={(config) => {
             setActiveSessionConfig(config);
             setShowLaunchDialog(false);
-            toggleAutoBot(config);
+            void toggleAutoBot(config);
             setShowMissionControl(true);
           }}
           initialBudget={autoBotTargetBudget}
           initialRisk={autoBotDailyLossLimit}
+          strategyFocus={autoBotStrategy}
+          tradingMode={autoBotTradingMode}
         />
       )}
 
@@ -7605,7 +7683,7 @@ export default function App() {
                      onClick={autoBotConfig.enabled ? toggleAutoBot : () => setShowLaunchDialog(true)}
                      className={"px-6 py-3 rounded-lg font-bold font-mono tracking-widest text-xs transition-all " + (autoBotConfig.enabled ? "bg-rose-500/20 text-rose-400 hover:bg-rose-500/30 border border-rose-500/50 shadow-[0_0_15px_rgba(244,63,94,0.4)]" : enginesHalted ? "bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 border border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.3)]" : "bg-indigo-500 hover:bg-indigo-400 text-white shadow-[0_0_15px_rgba(99,102,241,0.3)]")}
                    >
-                     {autoBotConfig.enabled ? "HALT ALL BLACK-BOX SYSTEMS" : enginesHalted ? "RESUME & START" : "INITIALIZE AUTONOMOUS TRADING"}
+                     {autoBotConfig.enabled ? "HALT ALL BLACK-BOX SYSTEMS" : enginesHalted ? "RESUME & START" : "ARM AUTOBOT"}
                    </button>
                  </div>
                </div>
@@ -7696,20 +7774,33 @@ export default function App() {
                       <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block text-rose-400">Daily Loss Stop</span>
                       <div className="flex items-center gap-2 border-b border-rose-900/50 pb-1">
                          <span className="text-sm font-bold text-rose-500">$</span>
-                         <input type="number" className="w-full bg-transparent text-sm font-bold text-rose-400 outline-none" value={autoBotDailyLossLimit} onChange={e => setAutoBotDailyLossLimit(Number(e.target.value))} disabled={autoBotConfig.enabled} />
+                         <input
+                           type="number"
+                           className="w-full bg-transparent text-sm font-bold text-rose-400 outline-none"
+                           value={autoBotDailyLossLimit}
+                           onChange={e => setAutoBotDailyLossLimit(Number(e.target.value))}
+                           onBlur={() => { void saveDailyLossLimit(autoBotDailyLossLimit); }}
+                           disabled={autoBotConfig.enabled}
+                         />
                       </div>
                     </div>
                  </div>
                  <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex gap-4">
                     <div className="flex-1">
-                      <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block">Strategy Focus</span>
-                      <select className="w-full bg-transparent text-xs font-bold text-indigo-400 outline-none border-b border-slate-700 pb-1 h-6 cursor-pointer" value={autoBotStrategy} onChange={e => setAutoBotStrategy(e.target.value)} disabled={autoBotConfig.enabled}>
-                         <option value="Momentum & Breakout">Momentum & Breakout</option>
-                         <option value="Mean Reversion">Mean Reversion</option>
-                         <option value="Scalping">Scalping</option>
-                         <option value="Gap & Go">Gap & Go</option>
-                         <option value="Trend-Following">Trend-Following</option>
+                      <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block">Strategy Mode</span>
+                      <select className="w-full bg-transparent text-xs font-bold text-indigo-400 outline-none border-b border-slate-700 pb-1 h-6 cursor-pointer" value={autoBotStrategy} onChange={e => { const next = e.target.value; setAutoBotStrategy(next); void saveStrategyFocus(next); }} disabled={autoBotConfig.enabled}>
+                         <option value="ADAPTIVE_MULTI_STRATEGY">Adaptive Multi-Strategy (Auto-Regime)</option>
+                         <optgroup label="Advanced / Manual Bias">
+                           <option value="MOMENTUM_BREAKOUT">Momentum &amp; Breakout</option>
+                           <option value="MEAN_REVERSION">Mean Reversion</option>
+                           <option value="TREND_FOLLOWING">Trend-Following</option>
+                           <option value="SCALPING">Scalping</option>
+                           <option value="GAP_AND_GO">Gap &amp; Go</option>
+                         </optgroup>
                       </select>
+                      <p className="text-[9px] text-slate-500 mt-2 leading-relaxed">
+                        Adaptive evaluates all CORE quant strategies and emits the highest-conviction regime-ranked setup. Manual bias is optional.
+                      </p>
                     </div>
                     <div className="flex-1">
                       <span className="text-[10px] text-slate-500 uppercase tracking-widest font-mono mb-2 block">System Risk Level</span>

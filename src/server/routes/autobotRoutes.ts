@@ -51,6 +51,7 @@ autobotRouter.get("/", async (req: Request, res: Response) => {
     spent: tradingEngine.state.spent,
     remaining: tradingEngine.state.budget - tradingEngine.state.spent,
     strategy: tradingEngine.state.strategy,
+    strategyFocus: tradingEngine.state.strategy,
     riskLevel: tradingEngine.state.riskLevel,
     maxTradeSize: tradingEngine.state.maxTradeSize,
     dailyLossLimit: tradingEngine.state.dailyLossLimit,

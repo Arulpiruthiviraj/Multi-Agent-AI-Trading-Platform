@@ -52,10 +52,15 @@ describe('Architecture protection: BrokerManager access is allowlisted', () => {
     'src/server/routes/integrationRoutes.ts',
     'src/server/routes/systemRoutes.ts',
     'src/server/routes/v2System.ts',
+    // Operator broker switch + runtime health reporting (read/switch only — OMS remains sole placeOrder).
+    'src/server/routes/configRoutes.ts',
+    'src/server/routes/v2Runtime.ts',
     'src/server/services/MarketDataCrossChecker.ts',
     'src/server/services/OrderManagement.ts',
     'src/server/services/PortfolioRebalance.ts',
     'src/server/services/PortfolioReconciliation.ts',
+    // Read-only local↔broker portfolio compare after first organic PAPER fill (no placeOrder).
+    'src/server/services/FirstFillForensicCheckpoint.ts',
   ]);
 
   it('no file outside the reviewed allowlist imports BrokerManager', () => {
@@ -164,6 +169,42 @@ describe('Architecture protection: extension-zone modules cannot reach the spine
     // Soft-lock is in-memory only — must never write tradingState / kill-switch transitions.
     expect(text).not.toMatch(/tradingState\s*=/);
     expect(text).not.toMatch(/setTradingState/);
+    expect(text).toMatch(/campaignWatchlistBoostWorker/);
+  });
+
+  it('CampaignWatchlistBoost never placeOrder / RiskEngine / OMS / emitTradeIdea', () => {
+    const text = readFileSync(join(ROOT, 'src/server/services/CampaignWatchlistBoost.ts'), 'utf8');
+    expect(text).not.toMatch(/from ['"][^'"]*\/RiskEngine['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*OrderManagement['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*BrokerManager['"]/);
+    expect(text).not.toMatch(/\.placeOrder\(/);
+    expect(text).not.toMatch(/emitTradeIdea\s*\(/);
+  });
+
+  it('CampaignOpeningSurge never placeOrder / RiskEngine / OMS / emitTradeIdea', () => {
+    const text = readFileSync(join(ROOT, 'src/server/services/CampaignOpeningSurge.ts'), 'utf8');
+    expect(text).not.toMatch(/from ['"][^'"]*\/RiskEngine['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*OrderManagement['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*BrokerManager['"]/);
+    expect(text).not.toMatch(/\.placeOrder\(/);
+    expect(text).not.toMatch(/emitTradeIdea\s*\(/);
+  });
+
+  it('FirstFillForensicCheckpoint.ts never calls placeOrder or invents a second kill switch (Autobot toggle + BUY soft-lock only)', () => {
+    const text = readFileSync(join(ROOT, 'src/server/services/FirstFillForensicCheckpoint.ts'), 'utf8');
+    expect(text).not.toMatch(/\.placeOrder\(/);
+    expect(text).not.toMatch(/from ['"][^'"]*\/RiskEngine['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*OrderManagement['"]/);
+    expect(text).not.toMatch(/CHIEF_APPROVED_IDEA/);
+    expect(text).not.toMatch(/setTradingState/);
+    expect(text).not.toMatch(/EMERGENCY_STOP/);
+    // Fail path must use existing Autobot toggle + forensic buy lock, not a parallel order path.
+    expect(text).toMatch(/toggle\(\{\s*enabled:\s*false\s*\}\)/);
+    expect(text).toMatch(/setForensicCheckpointBuyLock/);
+    // BrokerManager is allowlisted for read-only portfolio(); must not place orders.
+    expect(text).toMatch(/BrokerManager/);
+    const boot = readFileSync(join(ROOT, 'src/server/core/ArgusCoreBoot.ts'), 'utf8');
+    expect(boot).toMatch(/firstFillForensicCheckpoint\.start\(/);
   });
 });
 

@@ -96,6 +96,21 @@ Trading readiness (LIVE readiness is currently **NO-GO** — that is expected):
 
 The CLI communicates with the running Argus Engine over HTTP.
 
+Daily Goal Campaign (optional; does not lower consensus — see `ARGUS_CAMPAIGN_TRACKER.md`):
+
+```bash
+# Via HTTP (same host the CLI uses)
+curl -s http://127.0.0.1:3000/api/v2/campaign/status
+# PATCH /api/v2/campaign/settings  { campaignEnabled, budget, dailyTargetAmount, … }
+```
+
+Recent EventBus ring (observability; not a second brain):
+
+```bash
+./argus events
+npm run argus-cli -- events
+```
+
 ---
 
 ## 3. Portfolio and trading information

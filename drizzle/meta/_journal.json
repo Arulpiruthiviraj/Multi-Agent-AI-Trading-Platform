@@ -316,6 +316,27 @@
       "when": 1787040000000,
       "tag": "0044_independent_learning",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "6",
+      "when": 1787050000000,
+      "tag": "0045_news_prediction_staging",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "6",
+      "when": 1787060000000,
+      "tag": "0046_campaign_eod_flatten",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "6",
+      "when": 1787070000000,
+      "tag": "0047_trades_broker_id",
+      "breakpoints": true
     }
   ]
 }

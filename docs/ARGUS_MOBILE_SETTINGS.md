@@ -59,7 +59,7 @@ Precedence for catalog flags: DB `config_overrides` **&gt;** `.env` **&gt;** cat
 |---|---|---|
 | `PAPER_TRADING_ONLY` | env safety lock | Padlock. Settings POST overlay is 403. LIVE remains **NO-GO**. |
 | Scan interval | `config/continuousIntelligence.json` `opportunityScanMs` | **120000 ms = 120s**. Not a 15/30/60s stepper. |
-| Max watchlist | `maxActiveSubscriptions` | **32**. Alpaca IEX bounded feed. |
+| Max watchlist | `maxActiveSubscriptions` | **30**. Alpaca IEX bounded feed; worker prunes least-active non-protected symbols at the cap. |
 | Penny spread | `config/multiAsset.json` `safety.pennyMaxSpreadBps` | **150**, **UNCALIBRATED**. |
 | Consensus quorum | `config/tradingSafety.json` | **0.75** / **2** independent agents. |
 

@@ -21,6 +21,8 @@ export interface TradingSafety {
   disagreementPenalty: number;
   consensusApprovalThreshold: number;
   minIndependentAgreeingAgents: number;
+  /** Must match config/strategyFocus.json defaultFocus. Catalog/modes stay in strategyFocus.json. */
+  defaultStrategyFocus: string;
   openAliceUncertainBandLow: number;
   openAliceUncertainBandHigh: number;
   maxSingleSymbolConcentrationPct: number;
@@ -86,6 +88,17 @@ export interface TradingSafety {
   consensusDebateCooldownMs: number;
   /** Min gap between non-forced consensus evaluations for the same symbol. */
   consensusEvalMinIntervalMs: number;
+  /**
+   * Debounce before evaluateConsensus after an entry idea lands, so Technical/Kronos/Quant
+   * votes arriving within this window co-evaluate. Does not lower 0.75 / min-2 floors.
+   */
+  consensusAggregationWindowMs: number;
+  /** Wall-clock budget for Opportunity Feed CONFIRM → agent co-eval → ChiefTrader consensus. */
+  manualTradeCoEvalTimeoutMs: number;
+  /** Skip Alpaca fetch when cached bars cover at least this fraction of expected trading days. */
+  quantBarsCacheMinCoverageRatio: number;
+  quantBarsRateLimitBaseBackoffMs: number;
+  quantBarsRateLimitMaxBackoffMs: number;
   /** Idea-agent lastTickAt older than this is reported as enabled+dead. */
   pipelineAgentDeadAfterMs: number;
   debateLearnedRulesCount: number;
@@ -175,6 +188,15 @@ export interface TradingSafety {
    * (Math.min against the operator's own settings.trailingStopPct) - never loosens it.
    */
   campaignTrailStopsOnlyPct: number;
+  /** Max concurrent open names while Daily Goal Campaign is enabled (tightens open_positions_cap). */
+  campaignMaxConcurrentPositions: number;
+  /** Per-trade notional ≤ budget * this fraction when campaign_enabled (velocity sizing). */
+  campaignPositionBudgetFraction: number;
+  campaignOpeningRvolMin: number;
+  campaignOpeningRangeMinutes: number;
+  campaignIntradayAtrTargetMultiple: number;
+  campaignIntradayBreakevenPadPct: number;
+  campaignEodFlattenEtMinutesBeforeClose: number;
   monteCarloDefaultSeed: number;
   sameSymbolCooldownMs: number;
   postLossCooldownMs: number;
@@ -280,6 +302,11 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'debateSingleModelConfidencePenalty',
   'consensusDebateCooldownMs',
   'consensusEvalMinIntervalMs',
+  'consensusAggregationWindowMs',
+  'manualTradeCoEvalTimeoutMs',
+  'quantBarsCacheMinCoverageRatio',
+  'quantBarsRateLimitBaseBackoffMs',
+  'quantBarsRateLimitMaxBackoffMs',
   'pipelineAgentDeadAfterMs',
   'debateLearnedRulesCount',
   'debateLearnedRuleMaxChars',
@@ -322,6 +349,13 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'kronosEvaluationHorizonMs',
   'maxWeightAdjustmentPerCycle',
   'campaignTrailStopsOnlyPct',
+  'campaignMaxConcurrentPositions',
+  'campaignPositionBudgetFraction',
+  'campaignOpeningRvolMin',
+  'campaignOpeningRangeMinutes',
+  'campaignIntradayAtrTargetMultiple',
+  'campaignIntradayBreakevenPadPct',
+  'campaignEodFlattenEtMinutesBeforeClose',
   'tradingDaysPerYear',
   'newsDecisiveSentimentThreshold',
   'aiDecisionTemperature',
@@ -363,6 +397,9 @@ function loadTradingSafety(): TradingSafety {
     if (typeof raw[key] !== 'number' || !Number.isFinite(raw[key] as number)) {
       throw new Error(`config/tradingSafety.json missing numeric field: ${key}`);
     }
+  }
+  if (typeof raw.defaultStrategyFocus !== 'string' || !raw.defaultStrategyFocus) {
+    throw new Error('config/tradingSafety.json missing string field: defaultStrategyFocus');
   }
   if (typeof raw.autoFlattenOnReconciliationMismatch !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: autoFlattenOnReconciliationMismatch');

@@ -28,6 +28,7 @@ import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { applySubordinateAssetNotionalCap } from '../multiAsset/ideaEligibility';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
+import { campaignVelocityMaxTradeDollars } from '../services/campaignIntraday';
 import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
 import { alpacaFetch } from '../core/alpacaTls';
 import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
@@ -357,6 +358,33 @@ export class RiskEngine {
                 dailyLossLimitDollars = Number(replay.config.maxDailyLoss) > 0
                     ? replay.config.maxDailyLoss
                     : dailyLossLimitDollars;
+            }
+
+            // Campaign capital velocity: size against remaining Argus allocation and slot budget
+            // (2–3 concurrent names). Still cannot exceed Gate 23; never loosens maxTradeSize.
+            const campaignBudget = Number(settings[0]?.budget ?? 0);
+            if (settings[0]?.campaignEnabled && Number.isFinite(campaignBudget) && campaignBudget > 0) {
+                const holdingsForAlloc = await db.select().from(schema.portfolio);
+                const pendingBuyRows = await db.select().from(schema.trades).where(eq(schema.trades.side, 'BUY'));
+                const pendingBuys = pendingBuyRows.filter(
+                    (t) => t.status && !['FILLED', 'REJECTED', 'CANCELED', 'CANCELLED'].includes(String(t.status)),
+                );
+                const snap = snapshotCapital({
+                    allocated: campaignBudget,
+                    positions: holdingsForAlloc.map((h) => ({ quantity: h.quantity, averagePrice: h.averagePrice })),
+                    pendingBuys: pendingBuys.map((t) => ({
+                        quantity: t.quantity, price: t.price, side: t.side, status: t.status ?? undefined,
+                    })),
+                });
+                maxTradeSizeDollar = campaignVelocityMaxTradeDollars({
+                    maxTradeSizeDollar,
+                    budget: campaignBudget,
+                    remainingAllocation: snap.remaining,
+                });
+                maxOpenPositions = Math.min(
+                    maxOpenPositions,
+                    tradingSafety.campaignMaxConcurrentPositions,
+                );
             }
 
             if (!isPositiveFiniteMoney(portfolio.equity)) {

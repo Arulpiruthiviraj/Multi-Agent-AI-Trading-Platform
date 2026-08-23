@@ -97,15 +97,72 @@ export class ChiefTraderAgent {
      *  symbol while this is > 0 - otherwise a later low-confidence idea (or a second agent)
      *  would approve the trade before the debate that was supposed to challenge it finished. */
     private pendingDebates: Map<string, number> = new Map();
+    /** Active Opportunity Feed CONFIRM requests: consensus side must match operator side. */
+    private manualSideExpectations: Map<string, { side: 'BUY' | 'SELL'; expiresAt: number }> = new Map();
+
+    /** Debounced evaluateConsensus handles per symbol — co-eval window for multi-agent sync. */
+    private consensusAggregationTimers: Map<string, NodeJS.Timeout> = new Map();
   
   // Dynamic weights based on historic performance
   private agentWeights: Record<string, number> = { ...defaultAgentWeights };
+
+  /**
+   * Register operator CONFIRM BUY/SELL side for this symbol.
+   * If agents later consensus on the opposite side, approval is withheld (fail-closed).
+   */
+  registerManualSideExpectation(symbol: string, side: 'BUY' | 'SELL', ttlMs: number): void {
+    const sym = String(symbol || '').toUpperCase();
+    if (!sym) return;
+    this.manualSideExpectations.set(sym, { side, expiresAt: Date.now() + Math.max(1000, ttlMs) });
+  }
+
+  private consumeManualSideMismatch(symbol: string, approvedSide: string): string | null {
+    const lock = this.manualSideExpectations.get(symbol);
+    if (!lock) return null;
+    if (Date.now() > lock.expiresAt) {
+      this.manualSideExpectations.delete(symbol);
+      return null;
+    }
+    if (approvedSide === lock.side) {
+      this.manualSideExpectations.delete(symbol);
+      return null;
+    }
+    this.manualSideExpectations.delete(symbol);
+    return `TRADE_REJECTED_CONSENSUS: agents agreed ${approvedSide} but operator requested ${lock.side}`;
+  }
 
   constructor() {
     eventBus.on('TRADE_IDEA_GENERATED', (idea) => {
       // Digital Twin telemetry pulse — UI only; do not start consensus/LLM.
       if (isTelemetryPulsePayload(idea)) return;
       this.reviewIdea(idea);
+    });
+
+    // Market-open staged news: confluence ideas already arrive as TRADE_IDEA_GENERATED.
+    // Contradiction is observation-only — never placeOrder; flags sell-the-news dumps.
+    eventBus.on(EVENTS.NEWS_OPEN_CONTRADICTORY_PRICE_ACTION, (payload: any) => {
+      console.log(
+        `[ChiefTrader] CONTRADICTORY_PRICE_ACTION for ${payload?.symbol}: staged news bias rejected by opening ticks`,
+      );
+      this.lastConsensusOutcome = {
+        at: new Date().toISOString(),
+        symbol: String(payload?.symbol || ''),
+        approved: false,
+        side: 'HOLD',
+        independentAgreeingAgents: 0,
+        requiredAgents: MIN_INDEPENDENT_AGREEING_AGENTS,
+        confidence: 0,
+        threshold: CONSENSUS_APPROVAL_THRESHOLD,
+        reason: 'CONTRADICTORY_PRICE_ACTION',
+        agentVotes: [],
+      };
+    });
+
+    eventBus.on(EVENTS.NEWS_OPEN_CONFLUENCE, (payload: any) => {
+      // Soft signal that open confluence fired; consensus still requires quorum via emitTradeIdea path.
+      console.log(
+        `[ChiefTrader] NEWS_OPEN_CONFLUENCE ${payload?.symbol} ${payload?.side} — awaiting independent agent quorum (≥2, ≥0.75)`,
+      );
     });
 
     setInterval(() => {
@@ -160,6 +217,46 @@ export class ChiefTraderAgent {
 
   private debatePending(symbol: string): boolean {
     return (this.pendingDebates.get(symbol) || 0) > 0;
+  }
+
+  /**
+   * Schedule (or run immediately) consensus evaluation.
+   * If fewer than minIndependentAgreeingAgents independent votes are present yet, wait
+   * consensusAggregationWindowMs so Technical/Kronos/Quant can land in the same window.
+   * Never lowers 0.75 / min-2 — only delays evaluation.
+   */
+  private scheduleConsensusEvaluation(symbol: string, traceId: string, forceImmediate = false): void {
+    const existing = this.consensusAggregationTimers.get(symbol);
+    if (existing) {
+      clearTimeout(existing);
+      this.consensusAggregationTimers.delete(symbol);
+    }
+
+    const independent = this.recentIdeas.filter(
+      (i) => i.symbol === symbol
+        && isConsensusIdeaFresh(i.receivedAt)
+        && i.agent !== 'ConsensusDebate'
+        && i.agent !== bullBearResearchConfig.bearAgentName,
+    );
+    const windowMs = tradingSafety.consensusAggregationWindowMs;
+    const enoughVotes = independent.length >= MIN_INDEPENDENT_AGREEING_AGENTS;
+
+    if (forceImmediate || enoughVotes || windowMs <= 0) {
+      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.evaluateConsensus(symbol, traceId).catch((e) =>
+        console.error('[ChiefTrader] evaluateConsensus failed', e),
+      );
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.consensusAggregationTimers.delete(symbol);
+      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.evaluateConsensus(symbol, traceId).catch((e) =>
+        console.error('[ChiefTrader] evaluateConsensus failed', e),
+      );
+    }, windowMs);
+    this.consensusAggregationTimers.set(symbol, timer);
   }
 
   getLastConsensusOutcome(): LastConsensusOutcome | null {
@@ -225,7 +322,7 @@ export class ChiefTraderAgent {
     // PortfolioMonitor stop/target/invalidation exits must not wait for a multi-model debate or
     // for a second independent entry agent - capital preservation is not a consensus question.
     if (this.isRiskExit(idea)) {
-      this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
+      this.scheduleConsensusEvaluation(idea.symbol, idea.traceId, true);
       return;
     }
 
@@ -314,7 +411,7 @@ export class ChiefTraderAgent {
            this.endDebate(idea.symbol);
            if (!this.debatePending(idea.symbol)) {
              this.lastConsensusEvalAt.delete(idea.symbol);
-             this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
+             this.scheduleConsensusEvaluation(idea.symbol, idea.traceId, true);
            }
         });
         return;
@@ -328,7 +425,7 @@ export class ChiefTraderAgent {
     if (replacedSameAgent && Date.now() - lastEval < tradingSafety.consensusEvalMinIntervalMs) {
        return;
     }
-    this.evaluateConsensus(idea.symbol, idea.traceId).catch(e => console.error('[ChiefTrader] evaluateConsensus failed', e));
+    this.scheduleConsensusEvaluation(idea.symbol, idea.traceId, false);
   }
 
   private resolveWeight(agentName: string): number {
@@ -504,6 +601,19 @@ export class ChiefTraderAgent {
       }
     }
 
+    const sideMismatch = this.consumeManualSideMismatch(symbol, approvedSide);
+    if (approved && sideMismatch) {
+      approved = false;
+      reason = sideMismatch;
+      eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
+        traceId,
+        symbol,
+        side: approvedSide,
+        confidence: approvedConfidence,
+        reason: sideMismatch,
+      });
+    }
+
     const independentAgreeing = new Set(
       result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
     );
@@ -523,7 +633,15 @@ export class ChiefTraderAgent {
     // Unconditional COMPLETED signal (unlike CHIEF_APPROVED_IDEA, which only fires on approval) -
     // lets live animation show the Chief Trader node finishing its evaluation even when the
     // result is "not yet, waiting for more evidence," not just on a successful approval.
-    eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, { traceId, symbol, approved, confidence: approvedConfidence, side: approvedSide, threshold: CONSENSUS_APPROVAL_THRESHOLD });
+    eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, {
+      traceId,
+      symbol,
+      approved,
+      confidence: approvedConfidence,
+      side: approvedSide,
+      threshold: CONSENSUS_APPROVAL_THRESHOLD,
+      reason: reason || undefined,
+    });
 
     tracingService.logChiefConsensus({
       traceId,
@@ -630,6 +748,10 @@ export class ChiefTraderAgent {
        }
     } else {
        console.log(`[ChiefTrader] NO TRADE on ${symbol}. ${reason || `Current confidence: ${(result.confidence*100).toFixed(1)}%`}`);
+       try {
+         const { recordCampaignNearMissConsensus } = await import('./campaignEffortTelemetry');
+         recordCampaignNearMissConsensus(approvedConfidence);
+       } catch { /* fail-open */ }
        eventBus.emit(EVENTS.DESK_NO_TRADE, { traceId, symbol, side: approvedSide, confidence: approvedConfidence, reason });
        eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'NO_TRADE', reason });
     }

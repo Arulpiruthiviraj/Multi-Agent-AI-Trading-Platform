@@ -52,10 +52,12 @@ import { runtimeIntervals } from '../config/runtimeIntervals';
 import { triggerWebhooks } from '../routes/webhooks';
 import { resolveOmsExecutionEnvironment, stampExecutionEnvironment } from '../research/organicPaper';
 import { authorizeProductionOrder } from '../core/liveOrderAuthorization';
+import { resolveOmsPaperMode } from '../core/brokerEnvironment';
+import { isPaperTradingOnlyEnforced } from '../core/tradingModeEnv';
 import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
 import { insertIncrementalFill } from './fillLedger';
 import { resolvePreTradeEntryPrice } from './omsEntryPrice';
-import { isOrderFullyFilled, syncLocalPortfolioAfterFullSellFill } from './localPortfolioSync';
+import { syncLocalPortfolioAfterSellFill, syncLocalPortfolioAfterBuyFill } from './localPortfolioSync';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 function getActiveReplaySessionSafe(): { replayId: string } | null {
@@ -128,6 +130,15 @@ export class OrderManagementService {
     return resolveOmsExecutionEnvironment({ brokerId, tradingMode: readTradingMode() });
   }
 
+  /** Adapter id stamped onto trades.broker_id at submit (fail-closed empty → omit / unknown). */
+  private resolveActiveBrokerId(): string {
+    try {
+      return BrokerManager.getInstance().getActiveBroker().id || '';
+    } catch {
+      return '';
+    }
+  }
+
   start() {
     if (this.intervalId) return;
     this.intervalId = setInterval(() => {
@@ -168,7 +179,9 @@ export class OrderManagementService {
         const orders = await broker.orders();
         const match = orders.find(o => o.id === orderId);
         if (match && match.status !== 'PENDING') return match;
-      } catch (e) {}
+      } catch (e) {
+        console.warn(`[OMS] pollForFill broker.orders() failed for ${orderId}`, e);
+      }
     }
     return null;
   }
@@ -200,13 +213,17 @@ export class OrderManagementService {
       if (result.newQty <= 0) return 0;
       const fillPrice = averageFillPrice || 0;
       eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
-      // Immediate local portfolio sync on full SELL fill — do not wait for the next recon tick
+      // Immediate local portfolio sync on every SELL fill increment — do not wait for the next recon tick
       // (stale localQty > 0 with broker flat → false MISSING_REMOTELY / operator pause).
-      if (
-        side === 'SELL'
-        && isOrderFullyFilled(status, result.cumulativeQuantity, requestedQuantity)
-      ) {
-        await syncLocalPortfolioAfterFullSellFill(symbol, requestedQuantity);
+      if (side === 'SELL' && result.newQty > 0) {
+        await syncLocalPortfolioAfterSellFill(symbol, result.newQty);
+      }
+      if (side === 'BUY' && result.newQty > 0 && fillPrice > 0) {
+        let brokerId: string | null = null;
+        try {
+          brokerId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+        } catch { /* */ }
+        await syncLocalPortfolioAfterBuyFill(symbol, result.newQty, fillPrice, brokerId);
       }
       return result.newQty;
     } catch (e) {
@@ -267,6 +284,7 @@ export class OrderManagementService {
         quantTargetPrice: quantTargetPrice ?? null,
         quantInvalidationJson: quantInvalidationJson ?? null,
         executionEnvironment: this.resolveFillEnvironment(),
+        brokerId: this.resolveActiveBrokerId() || null,
       } as any);
     } catch (e: any) {
       const isDuplicate = e?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(String(e?.message || ''));
@@ -297,18 +315,21 @@ export class OrderManagementService {
       if (replayActive) {
         paperMode = true;
       } else {
+        let storedPaperMode: boolean | number | null = null;
         try {
           const conn = db.select().from(brokerConnections).where(eq(brokerConnections.brokerName, activeBroker.name)).limit(1).get();
-          if (conn) {
-            paperMode = conn.paperMode as boolean;
-          } else {
-            const caps = activeBroker.getCapabilities?.();
-            if (caps?.paperTrading === true && caps?.liveTrading === false) paperMode = true;
-            else paperMode = null;
-          }
+          if (conn) storedPaperMode = conn.paperMode as boolean;
         } catch {
-          paperMode = null;
+          storedPaperMode = null;
         }
+        const tradingMode = readTradingMode();
+        paperMode = resolveOmsPaperMode({
+          paperTradingOnly: isPaperTradingOnlyEnforced(),
+          tradingMode,
+          storedPaperMode,
+          capabilities: activeBroker.getCapabilities?.() ?? null,
+          brokerId: activeBroker.id,
+        });
       }
       const envGate = authorizeProductionOrder({
         tradingMode: replayActive ? 'Paper' : readTradingMode(),
@@ -616,6 +637,7 @@ export class OrderManagementService {
           requestId: o.clientOrderId || id,
           submittedAt: o.createdAt instanceof Date ? o.createdAt.toISOString() : nowIso,
           filledAt: null,
+          brokerId: this.resolveActiveBrokerId() || null,
         });
         console.error(`[OMS] CRITICAL SOURCE: EXTERNAL_MANUAL broker order ${o.id} (${o.side} ${filledQty} ${o.symbol}) — not ingested as an Argus fill.`);
         await triggerWebhooks({

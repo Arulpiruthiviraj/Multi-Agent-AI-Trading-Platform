@@ -31,7 +31,12 @@ import { replayArgusStrategy } from '../research/argusStrategyReplay';
 import { MIN_BARS } from '../quant/RegimeEngine';
 import { evaluateReplayTechnical } from './replayTechnicalEvaluation';
 import { cacheReplayQuote, clearReplayQuotes } from './HistoricalReplayMarketDataContext';
-import { evidenceFromPitIdeas, replayChiefTraderFromEvidence } from '../engines/backtest/PitReplay';
+import { replayChiefTraderFromEvidence } from '../engines/backtest/PitReplay';
+import {
+  resolveReplayAiModeConsensus,
+  mergeLiveConsensusDebateVote,
+} from '../engines/backtest/replayAiModeConsensus';
+import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { riskEngine } from '../engines/RiskEngine';
 import { tradingSafety } from '../config/tradingSafety';
 import { tradingEngine } from '../engines/TradingEngine';
@@ -647,7 +652,9 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
         status: aiLabel(config.aiMode),
         reason: config.aiMode === 'DISABLED'
           ? `${replaySafety.aiModeHonestyDescription} (${aiHistoricalReplayAvailability().status})`
-          : `${replaySafety.aiModeHonestyDescription} Mode=${config.aiMode} is labeled but unwired; ${aiHistoricalReplayAvailability().why}`,
+          : config.aiMode === 'RECORDED_DECISION_REPLAY'
+            ? `RECORDED_DECISION_REPLAY wired to pit_decision_ledger (empty → DISABLED Quant+Technical). ${aiHistoricalReplayAvailability().why}`
+            : `LIVE_MODEL_REPLAY may invoke live routeConsensus (fail-closed). ${aiHistoricalReplayAvailability().why}`,
       },
     },
   };
@@ -868,9 +875,9 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
     }, symbol);
 
     if (session.config.aiMode === 'LIVE_MODEL_REPLAY') {
-      emit(session, 'AI', { mode: session.aiLabel, executed: false, reason: 'LLM not invoked in default replay (cost + not historical weights)' }, symbol);
+      emit(session, 'AI', { mode: session.aiLabel, executed: 'pending_per_bar', reason: 'LIVE_MODEL_REPLAY: optional routeConsensus per bar with fail-closed HOLD' }, symbol);
     } else if (session.config.aiMode === 'RECORDED_DECISION_REPLAY') {
-      emit(session, 'AI', { mode: 'RECORDED_DECISION_REPLAY', ledger: 'empty_or_unused' }, symbol);
+      emit(session, 'AI', { mode: 'RECORDED_DECISION_REPLAY', ledger: 'pit_decision_ledger_when_present' }, symbol);
     } else {
       emit(session, 'AI', { mode: 'DISABLED' }, symbol);
     }
@@ -966,10 +973,81 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
         session.agentIdeaStats[idea.agent] = stat;
       }
 
-      const evidence: Evidence[] = evidenceFromPitIdeas(ideas, symbol, last.close);
-      const chief = replayChiefTraderFromEvidence(evidence, false);
+      let recordedIdeas: typeof ideas = [];
+      if (session.config.aiMode === 'RECORDED_DECISION_REPLAY') {
+        try {
+          const pitRows = await historicalDataGateway.getPitAiRowsAsOf(
+            symbol,
+            t,
+            t - tradingSafety.newsVetoWindowMs,
+          );
+          recordedIdeas = pitRows.map((r) => ({
+            kind: r.kind,
+            agent: r.agent,
+            side: r.side,
+            confidence: r.confidence,
+            publishedAtMs: r.publishedAtMs,
+            payloadJson: r.payloadJson ?? undefined,
+          }));
+        } catch (e) {
+          console.warn('[Replay] PIT ledger read failed; RECORDED falls back to DISABLED path', e);
+        }
+      }
+
+      let aiResolved = resolveReplayAiModeConsensus({
+        aiMode: session.config.aiMode,
+        symbol,
+        currentPrice: last.close,
+        asOfMs: t,
+        baseIdeas: ideas,
+        recordedIdeas,
+      });
+
+      if (session.config.aiMode === 'LIVE_MODEL_REPLAY' && session.aiCalls < replaySafety.aiCallLimit) {
+        try {
+          const { AIRouter } = await import('../ai/AIRouter');
+          const router = AIRouter.getInstance();
+          const debate = await Promise.race([
+            router.routeConsensus(
+              'ConsensusDebate',
+              `Historical replay bar ${symbol} @ ${new Date(t).toISOString()}. Quant side=${side} conf=${confidence}. Technical=${technical?.side ?? 'HOLD'}. Return JSON decision.`,
+              `replay-${session.replayId}-${symbol}-${t}`,
+            ),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 8000)),
+          ]);
+          session.aiCalls += 1;
+          const first = (debate as any)?.results?.[0];
+          const parsed = first?.parsed ?? first;
+          const liveSide = parsed?.decision ?? parsed?.side;
+          const liveConf = typeof parsed?.confidence === 'number'
+            ? (parsed.confidence > 1 ? parsed.confidence / 100 : parsed.confidence)
+            : 0;
+          if (liveSide === 'BUY' || liveSide === 'SELL' || liveSide === 'HOLD') {
+            aiResolved = mergeLiveConsensusDebateVote(
+              aiResolved,
+              { side: liveSide, confidence: liveConf, reasoning: parsed?.reasoning },
+              symbol,
+              last.close,
+            );
+          } else {
+            aiResolved = mergeLiveConsensusDebateVote(aiResolved, null, symbol, last.close);
+          }
+        } catch {
+          aiResolved = mergeLiveConsensusDebateVote(aiResolved, null, symbol, last.close);
+        }
+      }
+
+      emit(session, 'AI_MODE_RESOLVED', {
+        mode: aiResolved.mode,
+        ledgerUsed: aiResolved.ledgerUsed,
+        liveModelInvoked: aiResolved.liveModelInvoked,
+        reason: aiResolved.reason,
+      }, symbol);
+
+      const evidence: Evidence[] = aiResolved.evidence;
+      const chief = aiResolved.consensus ?? replayChiefTraderFromEvidence(evidence, false);
       const agentVotes = votesFromEvidence(evidence);
-      emit(session, 'CHIEF_DECISION', { ...chief, debateUsed: false, aiLabel: session.aiLabel }, symbol);
+      emit(session, 'CHIEF_DECISION', { ...chief, debateUsed: aiResolved.liveModelInvoked, aiLabel: session.aiLabel }, symbol);
       if (!chief.approved) {
         bumpNoTrade(session, 'NO_CHIEF_APPROVAL');
         emit(session, 'NO_TRADE', { reason: 'NO_CHIEF_APPROVAL', detail: chief.reason }, symbol);
@@ -1293,7 +1371,7 @@ async function runReplayLoop(id: string) {
           'Does not reconstruct complete historical market universe',
           'Fundamental/Macro/News/Kronos historical inputs unavailable or partial',
           'Consensus is CONSENSUS_MATH_REPLAY — not live ChiefTrader + LLM debate',
-          'aiMode LIVE_MODEL_REPLAY / RECORDED_DECISION_REPLAY are labeled but unwired (identical consensus math to DISABLED)',
+          'aiMode RECORDED_DECISION_REPLAY reads pit_decision_ledger when present; LIVE_MODEL_REPLAY may invoke routeConsensus with fail-closed HOLD',
           'AI_DISABLED cannot approve with QuantEngine alone — needs ≥2 independent agreeing agents at threshold 0.75',
         ],
       },

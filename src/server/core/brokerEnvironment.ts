@@ -37,3 +37,43 @@ export function assertBrokerEnvironmentAllowsOrder(opts: {
   }
   return { ok: true, environment, reason: `environment=${environment}` };
 }
+
+/**
+ * Resolve broker paperMode for OMS authorizeProductionOrder.
+ * IBKR Gateway reports both paperTrading and liveTrading capabilities — missing
+ * brokerConnections rows must not yield null (BROKER_ENVIRONMENT_UNKNOWN).
+ * PAPER_TRADING_ONLY always forces paper. Never infers LIVE from ambiguity.
+ */
+export function resolveOmsPaperMode(opts: {
+  paperTradingOnly?: boolean;
+  tradingMode?: string | null;
+  storedPaperMode?: boolean | number | null;
+  capabilities?: { paperTrading?: boolean; liveTrading?: boolean } | null;
+  brokerId?: string | null;
+}): boolean | null {
+  if (opts.paperTradingOnly === true) return true;
+
+  const stored = normalizePaperMode(opts.storedPaperMode);
+  if (stored !== null) return stored;
+
+  const mode = String(opts.tradingMode || '').toUpperCase();
+  const caps = opts.capabilities;
+  const paperCapable = caps?.paperTrading === true;
+  const liveOnly = caps?.paperTrading === false && caps?.liveTrading === true;
+
+  if (mode === 'PAPER' && paperCapable) return true;
+  if (paperCapable && caps?.liveTrading === false) return true;
+
+  // Dual-capable adapters (IBKR) with Paper settings and no stored row → PAPER.
+  if (mode === 'PAPER' && paperCapable && caps?.liveTrading === true) return true;
+
+  // Known paper-first ids when settings say Paper.
+  const id = String(opts.brokerId || '');
+  if (mode === 'PAPER' && (id === 'ibkr_gateway' || id === 'ibkr_web' || id === 'internal_paper')) {
+    return true;
+  }
+
+  if (liveOnly && mode === 'LIVE') return false;
+  return null;
+}
+

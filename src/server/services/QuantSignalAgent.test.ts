@@ -116,6 +116,27 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     expect(result.groupedScores.BUY.trendScore).toBeGreaterThan(50);
   });
 
+  it('ADAPTIVE_MULTI_STRATEGY Option B routes BULLISH_TREND away from pure mean-reversion', async () => {
+    stubUptrendingFetch();
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSARB']);
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.strategy = 'ADAPTIVE_MULTI_STRATEGY';
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+    const agent = new QuantSignalAgent();
+    const result = await agent.evaluateSymbol('QSARB');
+    expect(result).not.toBeNull();
+    expect(result!.regime.regime).toBe('BULLISH_TREND');
+    // Full CORE list is still computed for persistence/audit; emit path uses regime-routed subset.
+    const ids = result!.strategyEvaluations.map((e: any) => e.strategy);
+    expect(ids).toEqual(expect.arrayContaining([
+      'MOMENTUM_BREAKOUT',
+      'MEAN_REVERSION',
+      'TREND_FOLLOWING',
+    ]));
+  });
+
   it('emits a cold-start regime-only bootstrap idea only when QUANT_COLD_START_BOOTSTRAP_ENABLED=true, still via the normal TRADE_IDEA_GENERATED path (ARGUS_PREDICTION_EDGE_AND_LEARNING_IMPLEMENTATION_AUDIT.md)', async () => {
     stubUptrendingFetch();
     // <=5 letters - looksLikeListedTicker/gateTradeIdea (DEF-24) silently routes anything longer

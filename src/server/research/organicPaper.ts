@@ -70,6 +70,29 @@ export function isOrganicClosedPaper(row: {
   return true;
 }
 
+/**
+ * Any FILLED PAPER trade that counts toward organic soak *entry* evidence
+ * (BUY or SELL). Unlike isOrganicClosedPaper, does not require numeric P&L —
+ * used by FirstFillForensicCheckpoint to trigger on the first organic fill.
+ */
+export function isOrganicPaperFill(row: {
+  status: string;
+  side?: string | null;
+  profitLoss?: number | null;
+  traceId?: string | null;
+  reasoning?: string | null;
+  executionEnvironment?: string | null;
+  symbol?: string | null;
+}): boolean {
+  if (row.status !== 'FILLED') return false;
+  if (row.symbol && /^DIAG/i.test(row.symbol)) return false;
+  const reason = (row.reasoning ?? '').toUpperCase();
+  if (reason.includes('SOURCE: MANUAL_OVERRIDE') || reason.includes('SOURCE: EXTERNAL_MANUAL')) return false;
+  if (row.traceId && /^manual-override-/i.test(row.traceId)) return false;
+  if (row.traceId && TEST_TRACE.test(row.traceId)) return false;
+  return classifyTradeEnvironment(row) === 'PAPER';
+}
+
 /** OMS-only. Unknown adapters stay UNKNOWN so they cannot inflate organic paper. */
 export function resolveOmsExecutionEnvironment(opts: {
   brokerId?: string | null;

@@ -111,8 +111,18 @@ export class KronosModelManager {
   public getStatusReport() {
     this.maybeRefresh();
     const latencyMs = this.inferenceTime > 0 ? this.inferenceTime : null;
+    // Operator-facing health: Chronos down is UNAVAILABLE, not a generic FAILED boot lamp.
+    const operationalHealth: 'STARTING' | 'RUNNING' | 'UNAVAILABLE' | 'FAILED' =
+      this.status === 'Loading...' || this.status === 'Downloading...' || this.status === 'Initializing...'
+        ? 'STARTING'
+        : this.isAvailable
+          ? 'RUNNING'
+          : this.status === 'Warning: Kronos unavailable'
+            ? 'UNAVAILABLE'
+            : 'FAILED';
     return {
       status: this.status,
+      operationalHealth,
       version: this.modelVersion,
       memoryUsage: this.memoryUsage,
       gpuUsage: this.gpuUsage,

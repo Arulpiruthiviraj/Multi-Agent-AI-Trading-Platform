@@ -27,6 +27,7 @@ interface CampaignStatus {
   dailyTargetAmount: number;
   dailyTargetType: 'DOLLAR' | 'PERCENT';
   targetAchievedAction: 'LOCK_AND_IDLE' | 'TRAIL_STOPS_ONLY' | 'CONTINUE';
+  closePositionsBeforeMarketClose?: boolean;
   targetDollars: number;
   dailyRealized: number;
   dailyUnrealized: number;
@@ -38,6 +39,14 @@ interface CampaignStatus {
   deployedCapital: number;
   idleCapital: number;
   capitalUtilizationPct: number;
+  effort?: {
+    scansPerformed: number;
+    strategiesEvaluated: number;
+    strategiesRejected: number;
+    nearMissConsensus: number;
+    confluenceNudges: number;
+    watchlistSubscribes: number;
+  };
   disclaimer?: string;
 }
 
@@ -62,6 +71,7 @@ export function GoalCampaignCard() {
   const [typeDraft, setTypeDraft] = useState<'DOLLAR' | 'PERCENT'>('DOLLAR');
   const [actionDraft, setActionDraft] = useState<'LOCK_AND_IDLE' | 'TRAIL_STOPS_ONLY' | 'CONTINUE'>('CONTINUE');
   const [enabledDraft, setEnabledDraft] = useState(false);
+  const [eodFlattenDraft, setEodFlattenDraft] = useState(false);
 
   const applyStatus = useCallback((s: CampaignStatus) => {
     setStatus(s);
@@ -70,6 +80,7 @@ export function GoalCampaignCard() {
     setTypeDraft(s.dailyTargetType === 'PERCENT' ? 'PERCENT' : 'DOLLAR');
     setActionDraft(s.targetAchievedAction || 'CONTINUE');
     setEnabledDraft(!!s.enabled);
+    setEodFlattenDraft(!!s.closePositionsBeforeMarketClose);
   }, []);
 
   const load = useCallback(async () => {
@@ -90,7 +101,19 @@ export function GoalCampaignCard() {
   useEffect(() => {
     load();
     const id = setInterval(load, 15000);
-    return () => clearInterval(id);
+    const onVis = () => {
+      if (document.visibilityState === 'visible') void load();
+    };
+    const onOnline = () => { void load(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('focus', onOnline);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', onVis);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('focus', onOnline);
+    };
   }, [load]);
 
   const save = async () => {
@@ -106,6 +129,7 @@ export function GoalCampaignCard() {
           dailyTargetAmount: Number(targetDraft),
           dailyTargetType: typeDraft,
           targetAchievedAction: actionDraft,
+          closePositionsBeforeMarketClose: eodFlattenDraft,
         }),
       });
       const data = await res.json();
@@ -185,6 +209,25 @@ export function GoalCampaignCard() {
         </div>
       </div>
 
+      <div className="mb-4 relative z-10">
+        <div className="flex justify-between text-[10px] text-slate-500 font-bold uppercase tracking-widest mb-1.5">
+          <UnavailableHint
+            reason="Observability only: scans / strategy evals / near-miss consensus (0.65–threshold). Never forces trades or lowers 0.75 quorum."
+            className="border-slate-700"
+          >
+            <span>Campaign effort</span>
+          </UnavailableHint>
+        </div>
+        <div className="grid grid-cols-3 gap-2 text-[10px] font-mono text-slate-400">
+          <span>Scans {status?.effort?.scansPerformed ?? 0}</span>
+          <span>Strat eval {status?.effort?.strategiesEvaluated ?? 0}</span>
+          <span>Rejected {status?.effort?.strategiesRejected ?? 0}</span>
+          <span>Near-miss {status?.effort?.nearMissConsensus ?? 0}</span>
+          <span>Nudges {status?.effort?.confluenceNudges ?? 0}</span>
+          <span>Watch {status?.effort?.watchlistSubscribes ?? 0}</span>
+        </div>
+      </div>
+
       <div className="grid grid-cols-2 gap-3 mb-4 relative z-10">
         <label className="flex flex-col gap-1">
           <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">Allocated fund</span>
@@ -237,6 +280,15 @@ export function GoalCampaignCard() {
             className="rounded border-slate-600"
           />
           Campaign enabled
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={eodFlattenDraft}
+            onChange={(e) => setEodFlattenDraft(e.target.checked)}
+            className="rounded border-slate-600"
+          />
+          EOD flatten ~15:55 ET
         </label>
         <button
           type="button"

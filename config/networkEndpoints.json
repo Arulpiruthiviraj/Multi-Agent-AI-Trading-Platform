@@ -9,6 +9,7 @@
       "dataStreamUrl": "wss://stream.data.alpaca.markets/v2/iex"
     },
     "ibkr": {
+      "$comment": "webApi URL kept for opt-in mode=web_api. Default IBKR path is TCP socket — see config/ibkrConnection.json (paper 4002 / 7497).",
       "gatewayUrlDefault": "https://localhost:5000/v1/api",
       "gatewayPortDefault": 5000
     },

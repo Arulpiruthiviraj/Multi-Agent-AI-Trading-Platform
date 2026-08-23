@@ -47,7 +47,6 @@ export class TechnicalProposerAgent {
   // Tick-driven via MARKET_DATA (MarketDataWorker WebSocket), not a standalone 60s timer.
   // Requires quantThresholds.technicalHistoryBars ticks before checkStrategies fires.
   private priceHistory: Record<string, number[]> = {};
-  private listening = false;
   // Real bug found and fixed (2026-08-18): priceHistory is capped at technicalHistoryBars via
   // shift(), so `history.length === technicalHistoryBars` is true on every tick forever once
   // warmup completes - checkStrategies() (and everything downstream: TRADE_IDEA_GENERATED,
@@ -67,17 +66,76 @@ export class TechnicalProposerAgent {
   private previousIndicators: Record<string, { rsi: number; macdHistogram: number }> = {};
   private lastEmittedAt: Record<string, Partial<Record<'momentumBreakout' | 'meanReversion' | 'overbought', number>>> = {};
   private readonly onMarketData = (data: { symbol: string, price: number, volume: number, timestamp: string }) => this.analyzeTick(data);
+  private listening = false;
+  private onConfluenceNudge = (payload: any) => {
+    const symbol = typeof payload?.symbol === 'string' ? payload.symbol.toUpperCase() : '';
+    if (!symbol || !this.priceHistory[symbol]) return;
+    const history = this.priceHistory[symbol];
+    if (history.length < quantThresholds.technicalHistoryBars) return;
+    if (!isLiveIdeaGenerationEnabled() || !isPipelineAgentEnabled('TechnicalAgent')) return;
+    this.lastEvaluatedAt[symbol] = 0;
+    this.checkStrategies(symbol, history);
+  };
 
   start() {
     if (this.listening) return;
     eventBus.subscribe('MARKET_DATA', this.onMarketData);
+    eventBus.on(EVENTS.CAMPAIGN_CONFLUENCE_NUDGE, this.onConfluenceNudge);
     this.listening = true;
   }
 
   stop() {
     if (!this.listening) return;
     eventBus.unsubscribe('MARKET_DATA', this.onMarketData);
+    eventBus.off(EVENTS.CAMPAIGN_CONFLUENCE_NUDGE, this.onConfluenceNudge);
     this.listening = false;
+  }
+
+  /**
+   * Opportunity Feed / manual co-eval: seed rolling prices from live tick + historical closes
+   * when needed, bypass emission debounce once, then run the same checkStrategies path.
+   * Never fabricates indicator values — if history is too thin, returns honestly.
+   */
+  async evaluateOnDemand(symbol: string): Promise<{ status: string; emitted: boolean }> {
+    const sym = symbol.toUpperCase();
+    if (!isLiveIdeaGenerationEnabled() || !isPipelineAgentEnabled('TechnicalAgent')) {
+      return { status: 'gated', emitted: false };
+    }
+    notePipelineAgentTick('TechnicalAgent');
+
+    let history = this.priceHistory[sym] || [];
+    const live = (await import('./MarketDataWorker')).marketDataWorker.getLatestPrice(sym);
+    if (typeof live === 'number' && Number.isFinite(live) && live > 0) {
+      history = [...history, live];
+    }
+
+    if (history.length < quantThresholds.technicalHistoryBars) {
+      try {
+        const { historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway');
+        const endMs = Date.now();
+        const startMs = endMs - 120 * 24 * 60 * 60 * 1000;
+        await historicalDataGateway.ensureBars(sym, '1Day', startMs, endMs);
+        const bars = await historicalDataGateway.getBars(sym, '1Day', startMs, endMs);
+        const closes = bars.map((b) => b.close).filter((c) => typeof c === 'number' && c > 0);
+        history = [...closes, ...(typeof live === 'number' && live > 0 ? [live] : [])];
+      } catch (e: any) {
+        return { status: `insufficient_history:${e?.message || e}`, emitted: false };
+      }
+    }
+
+    if (history.length < quantThresholds.technicalHistoryBars) {
+      return { status: `insufficient_history:${history.length}`, emitted: false };
+    }
+
+    // Keep the most recent window and clear debounce so this operator trigger can emit once.
+    this.priceHistory[sym] = history.slice(-quantThresholds.technicalHistoryBars);
+    this.lastEvaluatedAt[sym] = 0;
+    delete this.previousIndicators[sym];
+    delete this.lastEmittedAt[sym];
+
+    this.checkStrategies(sym, this.priceHistory[sym]);
+    const emitted = !!this.lastEmittedAt[sym] && Object.keys(this.lastEmittedAt[sym] || {}).length > 0;
+    return { status: emitted ? 'emitted' : 'no_signal', emitted };
   }
 
   analyzeTick(data: { symbol: string, price: number, volume: number, timestamp: string }) {

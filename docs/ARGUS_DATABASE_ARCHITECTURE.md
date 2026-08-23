@@ -1,10 +1,10 @@
 # Argus database architecture
 
-**CODE-VERIFIED** against `src/server/db/schema.ts` (count `sqliteTable(` = **58**) and `drizzle/*.sql` (0000–0040). Inspected 2026-08-18.
+**CODE-VERIFIED** against `src/server/db/schema.ts` (count `sqliteTable(` = **60**) and `drizzle/*.sql` (**0000–0046**, 47 SQL files as of 2026-08-21). Re-count with `rg -c "sqliteTable\(" src/server/db/schema.ts`.
 
 **SQL foreign keys:** none. `schema.ts` does not call `references()`. Drizzle comments that say “FK” are **APPLICATION-LEVEL RELATIONSHIP** only.
 
-**Engine:** SQLite via `better-sqlite3` + Drizzle. WAL. Single writer. Import `db` from `src/server/db/index.ts` only (DEF-18).
+**Engine:** SQLite via `better-sqlite3` + Drizzle. WAL. Single writer. Import `db` from `src/server/db/index.ts` only (DEF-18). CLI scripts that open this file (e.g. `organic_paper_soak_status.ts`) must `sqliteDb.close()` + `process.exit` so they never linger as ghost writers.
 
 **File:** `data/argus.db` (gitignored). Migrations: `drizzle/*.sql` applied on first import of `src/server/db/index.ts`. `npm run db:migrate` (`database/migrate.ts`) imports that same module.
 
@@ -76,6 +76,7 @@ JSON is stored as **TEXT** (no JSON1 requirement in schema).
 | diagnostic_trade_archive | Archived diagnostic trades | id | snapshot_json | none | diagnostic paths | forensics | audit |
 | fills | Fill ledger | id | order_id, cumulative_quantity | none (logical→trades.id) | fillLedger / OMS | P&L, traces | **authoritative local fills** |
 | daily_trading_summary | Per-day rollup | date | realized_pnl | none | summary writer | UI | derived (**PARTIAL** sync) |
+| daily_strategy_performance | Campaign strategy attribution | id | trading_date, quant_strategy_id, realized/unrealized pnl | unique (trading_date, quant_strategy_id) | CampaignTracker | GoalCampaignCard | derived (organic fills + MTM) |
 | reconciliation_events | Recon cycle | id | matches, mismatches JSON | none | PortfolioReconciliation | ops | recon state + audit |
 | reconciliation_acknowledgements | Operator ack of orphans | id | fingerprint, status | none | ReconciliationAcknowledgements | recon | operational ack |
 | portfolio_snapshots | Point-in-time positions | id | source ARGUS\|BROKER, reconciliation_id | none (logical→recon) | recon | history | audit snapshot |
@@ -90,6 +91,7 @@ JSON is stored as **TEXT** (no JSON1 requirement in schema).
 | memory_rules | Autobot memory rules | id | rule_text | none | autobot routes | debate? | operational |
 | news_articles | Ingested articles | id | cluster_id, sentiment | none | NewsEngine | news UI | operational ingest |
 | news_clusters | Clustered news | id | impact_score, symbols | none | NewsEngine | news_veto gate | operational |
+| news_predictions | NewsAgent prediction ledger (+ staging) | id | staging_status, expires_at, … | none | NewsEngine / NewsPredictionLedger | open confluence | operational / research |
 | news_providers | News API config | id | api_key_encrypted | none | config | NewsEngine | operational |
 | kronos_predictions | Chronos forecasts | id | prediction, confidence INTEGER | none | KronosForecastAgent | UI / outcomes | operational / research |
 | agent_routing_overrides | Per-agent LLM route | agent_name | provider_id | none | config routing | AIRouter | operational (wins over json) |
@@ -165,7 +167,7 @@ Status comment: OPEN | NO_CONSENSUS | RISK_REJECTED | EXECUTED | ORDER_REJECTED 
 
 ### settings (operator)
 
-Includes: `trading_mode` default Paper, `budget` default 50000, `max_trade_size` default 3000, `take_profit_pct` default 15, `trailing_stop_pct` default 5, `auto_bot_enabled` default false, `trading_state` default TRADING_ENABLED, `max_portfolio_drawdown_pct` default 0.15, `position_sizing_mode` default FIXED_DOLLAR, schedule fields, `pipeline_agent_enabled_json`, strategy engine fields. Full list: `schema.ts` `settings`.
+Includes: `trading_mode` default Paper, `budget` default 50000, `max_trade_size` default 3000, `take_profit_pct` default 15, `trailing_stop_pct` default 5, `auto_bot_enabled` default false, `trading_state` default TRADING_ENABLED, `max_portfolio_drawdown_pct` default 0.15, `position_sizing_mode` default FIXED_DOLLAR, schedule fields, `pipeline_agent_enabled_json`, strategy engine fields, **campaign** fields (`campaign_enabled`, `daily_target_amount`, `daily_target_type`, `target_achieved_action`, `close_positions_before_market_close`). Full list: `schema.ts` `settings`.
 
 ### Remaining tables
 
@@ -312,4 +314,4 @@ WAL checkpoint: graceful shutdown (`gracefulShutdown.ts`). Backup: `GET /api/v1/
 
 ## Migrations
 
-41 SQL files `drizzle/0000_eager_hobgoblin.sql` … `drizzle/0040_config_overrides.sql`. Multi-statement files require `--> statement-breakpoint` (0040 lesson). Schema drift: **CODE-VERIFIED** table count is `schema.ts`, not a remembered number.
+47 SQL files `drizzle/0000_*.sql` … `drizzle/0046_campaign_eod_flatten.sql` (journal in `drizzle/meta/_journal.json`). Multi-statement files require `--> statement-breakpoint` (0040 lesson). Schema drift: **CODE-VERIFIED** table count is `schema.ts` (**60** `sqliteTable(`), not a remembered number.

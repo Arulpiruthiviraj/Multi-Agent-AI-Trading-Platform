@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { continuousIntelligence } from '../config/continuousIntelligence';
@@ -22,6 +22,7 @@ import { tradingSafety } from '../config/tradingSafety';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { tradingEngine } from '../engines/TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import * as SnapshotScanner from './SnapshotScanner';
 
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
 const FLAG_P = continuousIntelligence.portfolioIntelEnabledEnvVar;
@@ -43,6 +44,8 @@ afterEach(() => {
   resetCandidatesForTests();
   resetOpportunityScreenerForTests();
   resetPipelineRateLimitForTests();
+  SnapshotScanner.resetSnapshotScannerForTests();
+  vi.restoreAllMocks();
 });
 
 describe('opportunity loop', () => {
@@ -61,19 +64,22 @@ describe('opportunity loop', () => {
 
   it('when enabled, requests a bounded subscribe set and still emits zero trade ideas', async () => {
     process.env[FLAG_O] = 'true';
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
     const ideas: unknown[] = [];
     const onIdea = (p: unknown) => ideas.push(p);
     eventBus.subscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
-    const stats = await runOpportunityScan();
+    const stats = await runOpportunityScan(new Date('2026-08-21T18:00:00.000Z'));
     eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
     expect(stats.enabled).toBe(true);
     expect(stats.ran).toBe(true);
     expect(stats.ideasEmitted).toBe(0);
-    expect(stats.subscribeRequested).toBeLessThanOrEqual(continuousIntelligence.maxNewSubscriptionsPerCycle);
+    expect(stats.momentumHotSwap).toBe(false);
+    expect(stats.subscribeRequested).toBeLessThanOrEqual(continuousIntelligence.momentumHotSwapSlotsPerCycle);
     expect(ideas).toHaveLength(0);
     const expectedUniverse = new Set([
       ...continuousIntelligence.seedSymbols,
       ...continuousIntelligence.watchUniverseSymbols,
+      ...continuousIntelligence.momentumScanUniverseSymbols,
     ]).size;
     expect(stats.scanned).toBe(expectedUniverse);
     expect(stats.shortlisted).toBeGreaterThan(0);

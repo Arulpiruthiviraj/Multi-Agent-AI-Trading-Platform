@@ -2,7 +2,9 @@
 
 Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite). Package name `my-money-miner`.
 
-**LIVE real-money: NO-GO.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is not established by documentation.
+**LIVE real-money: NO-GO.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is not established by documentation. Organic closed PAPER FILLED SELL P&L soak baseline remains **0** until soak counts real closes.
+
+**Harness (CODE-VERIFIED 2026-08-21):** `npm run lint` exit 0 · `npm test` **330** files / **2111** tests · Node **≥24.18** (package `engines.node`) · schema **60** SQLite tables.
 
 ### Why "ARGUS"?
 
@@ -28,7 +30,7 @@ That metaphor maps to the protected spine — it does **not** mean unlimited vis
 
 **Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects). Architecture checklist: [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md). Name philosophy lives here; do not copy the full block into every other markdown file.
 
-Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_ENABLED`). Optional cheap screener ideas (`ARGUS_OPPORTUNITY_IDEAS_ENABLED`) are **one vote**, still require ChiefTrader min-2 + RiskEngine + OMS. Neither flag arms LIVE. Do not enable flags merely to produce trades.
+Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_ENABLED`). Optional cheap screener ideas (`ARGUS_OPPORTUNITY_IDEAS_ENABLED`) are **one vote**, still require ChiefTrader min-2 + RiskEngine + OMS. Neither flag arms LIVE. Do not enable flags merely to produce trades. Optional Daily Goal Campaign: [`ARGUS_CAMPAIGN_TRACKER.md`](ARGUS_CAMPAIGN_TRACKER.md) (flag-gated; does not lower consensus).
 
 **FOR OPERATORS** (why idle / why a fill / daily health): [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) → `ARGUS_WHY_NOT_TRADING.md`, `ARGUS_DAILY_FORENSIC_CHECKLIST.md`.
 
@@ -214,7 +216,11 @@ Organic floor: **30** closed PAPER FILLED SELL P&L trades, **10** NY sessions, *
 
 ```bash
 npx tsx scripts/organic_paper_soak_status.ts
+# Must print JSON and return to the shell prompt (closes SQLite + process.exit).
+# A hung soak script is a second DB writer — kill it; do not treat hang as soak evidence.
 ```
+
+Historical Evaluation / replay fills are **HISTORICAL_SIMULATION** / **NOT_PROMOTION_EVIDENCE** — never organic paper.
 
 ---
 
@@ -222,4 +228,4 @@ npx tsx scripts/organic_paper_soak_status.ts
 
 Operational detail lives in [`CLAUDE.md`](CLAUDE.md). Operator/developer forensic map: [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) (includes [mobile Settings](docs/ARGUS_MOBILE_SETTINGS.md)).
 
-Living product docs: this README (name + setup), [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md) (engine daemon), [`ARGUS_CLI.md`](ARGUS_CLI.md), [`ARGUS_HISTORICAL_EVALUATION.md`](ARGUS_HISTORICAL_EVALUATION.md). Binding contracts: `CLAUDE.md`, `ARGUS_ARCHITECTURE_CONTRACT.md`, protection / invariants / AI change rules. Dated phase audits that remain are stubs or snapshots — code + `evaluateLiveReadiness()` beat markdown.
+Living product docs: this README (name + setup), [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md) (engine daemon), [`ARGUS_CLI.md`](ARGUS_CLI.md), [`ARGUS_SHELL_CLI.md`](ARGUS_SHELL_CLI.md), [`ARGUS_HISTORICAL_EVALUATION.md`](ARGUS_HISTORICAL_EVALUATION.md), [`ARGUS_CAMPAIGN_TRACKER.md`](ARGUS_CAMPAIGN_TRACKER.md). Binding contracts: `CLAUDE.md`, `ARGUS_ARCHITECTURE_CONTRACT.md`, protection / invariants / AI change rules. Dated phase audits are **historical snapshots** — code + `evaluateLiveReadiness()` beat markdown.

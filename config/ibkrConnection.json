@@ -1,0 +1,15 @@
+{
+  "$comment": "IBKR connection policy. Default is IB Gateway Desktop / TWS TCP socket (paper 4002 / 7497). Client Portal Web API (HTTPS :5000) is opt-in only via mode=web_api. Reviewed config — not a UI knob. Do not lower RiskEngine/OMS gates to compensate for broker transport.",
+  "mode": "socket",
+  "host": "127.0.0.1",
+  "paperGatewayPort": 4002,
+  "paperTwsPort": 7497,
+  "liveGatewayPort": 4001,
+  "liveTwsPort": 7496,
+  "clientId": 1,
+  "connectTimeoutMs": 10000,
+  "maxMarketDataLines": 90,
+  "preferredAccountId": "DUR959160",
+  "webApiGatewayUrlDefault": "https://localhost:5000/v1/api",
+  "openBrowserOnWebApiStartup": false
+}

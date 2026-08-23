@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { tradingSafety } from '../../config/tradingSafety';
 
 /**
  * Real integration test (isolated temp SQLite DB) for Phase 2C's corporate-actions safety check.
@@ -211,10 +212,73 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
     expect(historicalDataGateway.getBarsRateLimitedUntilMs()).toBeGreaterThan(Date.now());
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    // Subsequent ensureBars for any symbol must fail closed without another Alpaca call.
+    // Subsequent ensureBars for any symbol must fail closed without another Alpaca call
+    // when the local cache is empty.
     await expect(
       historicalDataGateway.ensureBars('OTHER', '1Day', now - 86_400_000, now),
     ).rejects.toThrow(/rate-limited until/);
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips Alpaca when SQLite already has regimeMinBars coverage (cache-first)', async () => {
+    historicalDataGateway.clearBarsRateLimitBackoff();
+    const fetchMock = vi.fn(async () => {
+      throw new Error('fetch should not be called');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const now = Date.now();
+    const start = now - tradingSafety.regimeMinBars * 86_400_000;
+    for (let i = 0; i < tradingSafety.regimeMinBars; i++) {
+      const ts = start + i * 86_400_000;
+      await db.insert(schema.ohlcvBars).values({
+        id: `CACHE1:1Day:${ts}`,
+        symbol: 'CACHE1',
+        timeframe: '1Day',
+        timestamp: ts,
+        open: 10,
+        high: 11,
+        low: 9,
+        close: 10.5,
+        volume: 1000,
+        source: 'alpaca',
+      }).onConflictDoNothing();
+    }
+
+    await historicalDataGateway.ensureBars('CACHE1', '1Day', start, now);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('uses registered ibkr_gateway provider and never calls Alpaca fetch', async () => {
+    const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+    historicalDataGateway.clearBarsRateLimitBackoff();
+    const fetchMock = vi.fn(async () => {
+      throw new Error('Alpaca must not be called when IBKR provider is registered');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const now = Date.now();
+    const start = now - 90 * 86_400_000;
+    const ibkrBars = Array.from({ length: 70 }, (_, i) => ({
+      timestamp: start + i * 86_400_000,
+      open: 10,
+      high: 11,
+      low: 9,
+      close: 10.5,
+      volume: 1000,
+    }));
+    registerHistoricalBarProvider({
+      id: 'ibkr_gateway',
+      fetchBars: async () => ibkrBars,
+    });
+
+    try {
+      await historicalDataGateway.ensureBars('IBKRHIST', '1Day', start, now);
+      expect(fetchMock).not.toHaveBeenCalled();
+      const cached = await historicalDataGateway.getBars('IBKRHIST', '1Day', start, now);
+      expect(cached.length).toBeGreaterThanOrEqual(60);
+    } finally {
+      registerHistoricalBarProvider(null);
+    }
   });
 });

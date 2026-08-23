@@ -1,6 +1,11 @@
 /**
  * Opportunity discovery loop. Research/ranking + IEX subscribe requests only.
  * Never emits TRADE_IDEA_GENERATED. Never imports OMS / BrokerManager / RiskEngine.
+ *
+ * During RTH, SnapshotScanner REST-ranks 100+ liquid names every ~30s and hot-swaps
+ * non-anchor WebSocket slots via WATCHLIST_SUBSCRIBE_REQUESTED. MarketDataWorker
+ * prunes least-scored / least-ticked unprotected symbols so the stream never exceeds
+ * MarketDataWorker.getEffectiveStreamingCap() (Alpaca ~12 / IBKR Gateway ~90; anchors locked).
  */
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
@@ -15,6 +20,12 @@ import { evaluateAssetSafety } from '../multiAsset/SafetyFilter';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { upsertCandidate } from './candidateLifecycle';
 import { getCachedBroadUniverseSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+import {
+  getLastSnapshotScore,
+  getTopMomentumCandidates,
+  isSnapshotScannerRth,
+  type SnapshotCandidate,
+} from './SnapshotScanner';
 
 /** Reasons that require a live quote. Watchlist subscribe is allowed; BUY still hits applyAssetIdeaGate. */
 const WATCH_ALLOW_UNKNOWN_REASONS = new Set([
@@ -34,6 +45,9 @@ export interface OpportunityScanStats {
   ideasEmitted: 0;
   rejectedReasons: Record<string, number>;
   shortlist: Array<{ symbol: string; assetClass: string; reason: string }>;
+  momentumHotSwap: boolean;
+  momentumRanked: number;
+  rth: boolean;
   at: string;
   honesty: string;
 }
@@ -49,6 +63,9 @@ const EMPTY: OpportunityScanStats = {
   ideasEmitted: 0,
   rejectedReasons: {},
   shortlist: [],
+  momentumHotSwap: false,
+  momentumRanked: 0,
+  rth: false,
   at: new Date(0).toISOString(),
   honesty: continuousIntelligence.honesty,
 };
@@ -77,11 +94,7 @@ export function getOpportunityScanUniverse(): string[] {
   const names = [
     ...continuousIntelligence.seedSymbols,
     ...continuousIntelligence.watchUniverseSymbols,
-    // Additive only - empty unless ARGUS_BROAD_UNIVERSE_ENABLED and a refresh has already run.
-    // getCachedBroadUniverseSymbols() is already ranked by real dollar volume descending; take only
-    // the real top-N per scan rather than folding in the whole (up to broadUniverseMaxCandidates)
-    // cached list. Every name still passes through evaluateOpportunityCandidate() below like any
-    // other entry.
+    ...continuousIntelligence.momentumScanUniverseSymbols,
     ...getCachedBroadUniverseSymbols().slice(0, continuousIntelligence.broadUniverseTopNPerScan),
   ];
   if (isPennyStockEnabled()) {
@@ -124,7 +137,72 @@ export function evaluateOpportunityCandidate(
   };
 }
 
-export async function runOpportunityScan(): Promise<OpportunityScanStats> {
+function weakestDynamicScore(
+  activeDynamic: string[],
+  scoreOf: (symbol: string) => number,
+): { symbol: string; score: number } | null {
+  if (activeDynamic.length === 0) return null;
+  let worst: { symbol: string; score: number } | null = null;
+  for (const sym of activeDynamic) {
+    const score = scoreOf(sym);
+    if (!worst || score < worst.score) worst = { symbol: sym, score };
+  }
+  return worst;
+}
+
+/**
+ * Rebalance dynamic slots toward SnapshotScanner top movers.
+ * Returns symbols to subscribe (MDW prunes when at cap).
+ * When the stream is full (emptySlots === 0), at most **1** replacement is planned
+ * regardless of a higher maxSwaps — prevents intra-cycle thrash.
+ */
+export function planSnapshotHotSwap(opts: {
+  top: SnapshotCandidate[];
+  active: Set<string>;
+  activeDynamic: string[];
+  emptySlots: number;
+  maxSwaps: number;
+  scoreEdge: number;
+  scoreOf: (symbol: string) => number;
+}): string[] {
+  const toRequest: string[] = [];
+  const occupied = new Set(opts.active);
+  let empties = opts.emptySlots;
+  const dynamicLeft = new Set(opts.activeDynamic);
+  const swapCap = opts.emptySlots > 0
+    ? Math.max(0, opts.maxSwaps)
+    : Math.min(1, Math.max(0, opts.maxSwaps));
+
+  for (const cand of opts.top) {
+    if (toRequest.length >= swapCap) break;
+    if (occupied.has(cand.symbol)) continue;
+
+    if (empties > 0) {
+      toRequest.push(cand.symbol);
+      occupied.add(cand.symbol);
+      empties -= 1;
+      continue;
+    }
+
+    const weakest = weakestDynamicScore([...dynamicLeft], opts.scoreOf);
+    if (!weakest) break;
+    if (cand.momentumScore < weakest.score + opts.scoreEdge) continue;
+
+    toRequest.push(cand.symbol);
+    occupied.add(cand.symbol);
+    dynamicLeft.delete(weakest.symbol);
+    occupied.delete(weakest.symbol);
+  }
+  return toRequest;
+}
+
+export async function runOpportunityScan(now: Date = new Date()): Promise<OpportunityScanStats> {
+  try {
+    const { runCampaignOpeningSurge } = await import('../services/CampaignOpeningSurge');
+    void runCampaignOpeningSurge(now);
+  } catch {
+    /* optional */
+  }
   if (!isOpportunityLoopEnabled()) {
     lastScan = { ...EMPTY, enabled: false, at: new Date().toISOString(), ran: false };
     return lastScan;
@@ -136,6 +214,9 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
   inFlight = true;
   const rejectedReasons: Record<string, number> = {};
   const shortlist: OpportunityScanStats['shortlist'] = [];
+  const rth = isSnapshotScannerRth(now);
+  let momentumHotSwap = false;
+  let momentumRanked = 0;
   try {
     const active = new Set(marketDataWorker.getActiveSymbols().map((s) => s.toUpperCase()));
     const universe = getOpportunityScanUniverse();
@@ -154,19 +235,41 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
       });
     }
 
-    const cap = continuousIntelligence.maxActiveSubscriptions;
-    const budget = Math.max(0, Math.min(
-      continuousIntelligence.maxNewSubscriptionsPerCycle,
-      cap - active.size,
-    ));
-    const ranked = [...shortlist].sort((a, b) => {
-      const pa = marketDataWorker.getLatestPrice(a.symbol);
-      const pb = marketDataWorker.getLatestPrice(b.symbol);
-      const sa = pa && pa > 0 ? 1 : 0;
-      const sb = pb && pb > 0 ? 1 : 0;
-      return sb - sa;
-    });
-    for (const row of ranked) {
+    // Planner cap follows MarketDataWorker (IBKR hardCap ~90; Alpaca default ~12).
+    const cap = marketDataWorker.getEffectiveStreamingCap();
+    const emptySlots = Math.max(0, cap - active.size);
+    let toRequest: string[] = [];
+
+    if (continuousIntelligence.momentumRotationEnabled) {
+      const top = await getTopMomentumCandidates(continuousIntelligence.snapshotTopCandidates, { now });
+      momentumRanked = top.length;
+      const activeDynamic = marketDataWorker.getDynamicSymbols();
+      // Fill empty slots up to maxNewSubscriptionsPerCycle; when full, hot-swap at most 1.
+      const maxSwaps = emptySlots > 0
+        ? Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots)
+        : Math.min(continuousIntelligence.momentumHotSwapSlotsPerCycle, 1);
+      const planned = planSnapshotHotSwap({
+        top,
+        active,
+        activeDynamic,
+        emptySlots,
+        maxSwaps,
+        scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
+        scoreOf: (sym) =>
+          getLastSnapshotScore(sym)
+          ?? marketDataWorker.getDynamicMomentumScore(sym)
+          ?? 0,
+      });
+      toRequest = planned;
+      momentumHotSwap = planned.length > 0 && (emptySlots === 0 || rth);
+    } else if (emptySlots > 0) {
+      toRequest = shortlist
+        .filter((row) => !active.has(row.symbol))
+        .slice(0, Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots))
+        .map((r) => r.symbol);
+    }
+
+    for (const row of shortlist) {
       upsertCandidate({
         symbol: row.symbol,
         state: active.has(row.symbol) ? 'WATCHING' : 'DISCOVERED',
@@ -174,15 +277,14 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
         reason: row.reason,
       });
     }
-    const toRequest = ranked
-      .filter((row) => !active.has(row.symbol))
-      .slice(0, budget);
 
-    for (const row of toRequest) {
+    for (const symbol of toRequest) {
+      const score = getLastSnapshotScore(symbol) ?? undefined;
       eventBus.emit(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, {
-        symbol: row.symbol,
+        symbol,
         source: 'OpportunityDiscovery',
-        reason: 'SEED_UNIVERSE_EXPANSION',
+        reason: momentumHotSwap ? 'SNAPSHOT_HOT_SWAP' : 'SEED_UNIVERSE_EXPANSION',
+        momentumScore: score,
         honesty: 'Subscribe request only — not a trade idea and not an order.',
       });
     }
@@ -198,6 +300,9 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
       ideasEmitted: 0,
       rejectedReasons,
       shortlist,
+      momentumHotSwap,
+      momentumRanked,
+      rth,
       at: new Date().toISOString(),
       honesty: continuousIntelligence.honesty,
     };
@@ -209,28 +314,59 @@ export async function runOpportunityScan(): Promise<OpportunityScanStats> {
 }
 
 export class OpportunityDiscoveryWorker {
-  private intervalId: NodeJS.Timeout | null = null;
+  private timeoutId: NodeJS.Timeout | null = null;
+  private stopped = true;
+  /** Idempotent guard — ArgusCoreBoot and SystemBootstrap both call start(). */
+  private running = false;
 
   start() {
     if (!isOpportunityLoopEnabled()) {
       console.log('[OpportunityDiscovery] ARGUS_OPPORTUNITY_LOOP_ENABLED is not true — idle. Watch universe unchanged.');
       return;
     }
-    if (this.intervalId) return;
+    if (this.running) {
+      console.log('[OpportunityDiscovery] Already running — ignoring duplicate start().');
+      return;
+    }
+    this.running = true;
+    this.stopped = false;
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
+    }
     marketUniverseScannerWorker.start();
-    void runOpportunityScan();
-    this.intervalId = setInterval(() => {
-      void runOpportunityScan();
-    }, continuousIntelligence.opportunityScanMs);
-    console.log(`[OpportunityDiscovery] Scan every ${continuousIntelligence.opportunityScanMs}ms. Does not emit trade ideas.`);
+    console.log(
+      `[OpportunityDiscovery] Adaptive snapshot scan `
+      + `(RTH ${continuousIntelligence.snapshotScanRthMs}ms / off ${continuousIntelligence.snapshotScanOffHoursMs}ms). `
+      + 'Does not emit trade ideas.',
+    );
+    void this.tick();
   }
 
   stop() {
-    if (this.intervalId) {
-      clearInterval(this.intervalId);
-      this.intervalId = null;
+    this.stopped = true;
+    this.running = false;
+    if (this.timeoutId) {
+      clearTimeout(this.timeoutId);
+      this.timeoutId = null;
     }
     marketUniverseScannerWorker.stop();
+  }
+
+  private async tick() {
+    if (this.stopped) return;
+    try {
+      await runOpportunityScan();
+    } catch (e) {
+      console.warn('[OpportunityDiscovery] scan tick failed', e);
+    }
+    if (this.stopped) return;
+    const delay = isSnapshotScannerRth()
+      ? continuousIntelligence.snapshotScanRthMs
+      : continuousIntelligence.snapshotScanOffHoursMs;
+    this.timeoutId = setTimeout(() => {
+      void this.tick();
+    }, delay);
   }
 }
 

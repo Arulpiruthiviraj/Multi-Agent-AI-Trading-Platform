@@ -82,11 +82,18 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
   });
 
   afterEach(() => {
+    worker.setNowForTests(null);
     worker.stop();
   });
 
   function authenticate(ws: any) {
     sendMessage(ws, { T: 'success', msg: 'authenticated' });
+  }
+
+  /** Advance past minDynamicDwellMs so prune can evict freshly subscribed dynamics. */
+  async function expireDynamicDwell() {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    worker.setNowForTests(Date.now() + continuousIntelligence.minDynamicDwellMs + 1000);
   }
 
   it('processes a real tick and emits MARKET_DATA exactly once', () => {
@@ -232,24 +239,27 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     expect(emitMarketData).toHaveBeenCalledTimes(1);
   });
 
-  it('after authenticate, subscribes to config/markets.json US benchmarks when nothing else was subscribed', () => {
+  it('after authenticate, subscribes to coreStreamingSymbols / seedSymbols under the hard cap', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
     const ws = instances[0];
     authenticate(ws);
     const sub = ws.sentMessages.find((m: any) => m.action === 'subscribe');
     expect(sub).toBeTruthy();
-    expect(sub.quotes).toEqual(expect.arrayContaining(['SPY', 'QQQ']));
+    expect(sub.quotes.length).toBeLessThanOrEqual(continuousIntelligence.maxActiveSubscriptions);
+    expect(sub.quotes).toEqual(expect.arrayContaining(continuousIntelligence.coreStreamingSymbols));
   });
 
-  it('unions US benchmarks even if a pre-auth subscribe already added another name', () => {
-    worker.subscribe('AAPL');
+  it('unions seed names even if a pre-auth subscribe already added another name', () => {
+    worker.subscribe('MSFT');
     const ws = instances[0];
     authenticate(ws);
     const subs = ws.sentMessages.filter((m: any) => m.action === 'subscribe');
     const afterAuth = subs[subs.length - 1];
-    expect(afterAuth.quotes).toEqual(expect.arrayContaining(['AAPL', 'SPY', 'QQQ', 'IWM', 'DIA']));
+    expect(afterAuth.quotes).toEqual(expect.arrayContaining(['MSFT', 'SPY', 'QQQ']));
+    expect(afterAuth.quotes.length).toBeLessThanOrEqual(12);
   });
 
-  it('rejects garbage tickers and never evicts protected benchmarks', () => {
+  it('rejects garbage tickers and never evicts protected core symbols', () => {
     authenticate(instances[0]);
     worker.subscribe('NOT A TICKER');
     worker.subscribe('!!!!!!');
@@ -258,9 +268,13 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     expect(worker.getActiveSymbols()).toContain('SPY');
   });
 
-  it('refuses non-protected subscribes once the configured cap is reached', async () => {
+  it('prunes least-active non-protected symbols at the configured cap instead of overflowing Alpaca', async () => {
     const { continuousIntelligence } = await import('../config/continuousIntelligence');
     const cap = continuousIntelligence.maxActiveSubscriptions;
+    authenticate(instances[0]);
+    for (const core of continuousIntelligence.coreStreamingSymbols) {
+      worker.subscribe(core);
+    }
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
     let requested = 0;
     outer: for (let i = 0; i < 26; i++) {
@@ -271,6 +285,136 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       }
     }
     expect(worker.getActiveSymbols().length).toBe(cap);
+    expect(worker.getCoreSymbols().sort()).toEqual([...continuousIntelligence.coreStreamingSymbols].sort());
+    await expireDynamicDwell();
+    // New candidate at cap should prune an older watch symbol and still fit under the hard ceiling.
+    worker.subscribe('AMZN', { momentumScore: 9 });
+    expect(worker.getActiveSymbols().length).toBe(cap);
+    expect(worker.getActiveSymbols()).toContain('AMZN');
+    for (const core of continuousIntelligence.coreStreamingSymbols) {
+      expect(worker.getActiveSymbols()).toContain(core);
+    }
+  });
+
+  it('never evicts SPY/QQQ/GLD anchors when rotating dynamic slots', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    authenticate(instances[0]);
+    for (const core of continuousIntelligence.coreStreamingSymbols) {
+      worker.subscribe(core);
+    }
+    const extras = ['MSFT', 'TSLA', 'AMD', 'META', 'NVDA', 'AAPL', 'IWM', 'AMZN', 'NFLX'];
+    for (const s of extras) worker.subscribe(s, { momentumScore: 1 });
+    expect(worker.getActiveSymbols().length).toBe(continuousIntelligence.maxActiveSubscriptions);
+    await expireDynamicDwell();
+    worker.subscribe('COIN', { momentumScore: 50 });
+    expect(worker.getActiveSymbols()).toContain('COIN');
+    expect(worker.getActiveSymbols()).toEqual(
+      expect.arrayContaining(continuousIntelligence.coreStreamingSymbols),
+    );
+    expect(worker.getDynamicSymbols().length).toBeLessThanOrEqual(
+      continuousIntelligence.maxActiveSubscriptions - continuousIntelligence.coreStreamingSymbols.length,
+    );
+  });
+
+  it('evicts unscored (score 0) dynamics before high-momentum leaders', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    authenticate(instances[0]);
+    // Start from anchors only — drop seed holdovers so eviction ranking is deterministic.
+    for (const s of [...worker.getDynamicSymbols()]) {
+      worker.unsubscribe(s);
+    }
+    for (const core of continuousIntelligence.coreStreamingSymbols) {
+      worker.subscribe(core);
+    }
+    worker.subscribe('ZZAA'); // score defaults to 0
+    worker.subscribe('COIN', { momentumScore: 5.4 });
+    worker.subscribe('MRVL', { momentumScore: 3.6 });
+    const fillers = ['ZZAB', 'ZZAC', 'ZZAD', 'ZZAE', 'ZZAF', 'ZZAG'];
+    for (const s of fillers) {
+      if (worker.getActiveSymbols().length >= continuousIntelligence.maxActiveSubscriptions) break;
+      worker.subscribe(s, { momentumScore: 2.0 });
+    }
+    expect(worker.getActiveSymbols().length).toBe(continuousIntelligence.maxActiveSubscriptions);
+    expect(worker.getActiveSymbols()).toContain('ZZAA');
+    await expireDynamicDwell();
+    worker.subscribe('SOFI', { momentumScore: 4.0 });
+    expect(worker.getActiveSymbols()).toContain('SOFI');
+    expect(worker.getActiveSymbols()).toContain('COIN');
+    expect(worker.getActiveSymbols()).not.toContain('ZZAA');
+  });
+
+  it('protects newly hot-swapped dynamics from immediate eviction during dwell', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    authenticate(instances[0]);
+    for (const core of continuousIntelligence.coreStreamingSymbols) {
+      worker.subscribe(core);
+    }
+    const fillers = ['ZZAB', 'ZZAC', 'ZZAD', 'ZZAE', 'ZZAF', 'ZZAG', 'ZZAH', 'ZZAI'];
+    for (const s of fillers) {
+      if (worker.getActiveSymbols().length >= continuousIntelligence.maxActiveSubscriptions - 1) break;
+      worker.subscribe(s);
+    }
+    await expireDynamicDwell();
+    worker.subscribe('COIN', { momentumScore: 9 });
+    expect(worker.getActiveSymbols()).toContain('COIN');
+    // Still inside dwell — next subscribe must not prune COIN (prefer expired ZZ seeds).
+    worker.subscribe('MRVL', { momentumScore: 8 });
+    expect(worker.getActiveSymbols()).toContain('COIN');
+    expect(worker.getActiveSymbols().length).toBe(continuousIntelligence.maxActiveSubscriptions);
+  });
+
+  it('sends Alpaca unsubscribe on the wire before accepting a replacement at the cap', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    const cap = continuousIntelligence.maxActiveSubscriptions;
+    authenticate(instances[0]);
+    const ws = instances[0];
+    ws.sentMessages.length = 0;
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (let i = 0; i < cap + 3; i++) {
+      worker.subscribe(`ZZ${alphabet[i % 26]}${alphabet[(i + 3) % 26]}`);
+    }
+    await expireDynamicDwell();
+    worker.subscribe('AMZN');
+    const unsubs = ws.sentMessages.filter((m: any) => m.action === 'unsubscribe');
+    const subs = ws.sentMessages.filter((m: any) => m.action === 'subscribe');
+    expect(unsubs.length).toBeGreaterThan(0);
+    expect(subs.some((m: any) => m.quotes?.includes('AMZN'))).toBe(true);
+    expect(worker.getActiveSymbols().length).toBe(cap);
+  });
+
+  it('refuses to open a WebSocket when ARGUS_DISABLE_MARKET_DATA_WS is set', () => {
+    worker.stop();
+    process.env.ARGUS_DISABLE_MARKET_DATA_WS = 'true';
+    const before = instances.length;
+    worker.start();
+    expect(instances.length).toBe(before);
+    expect(worker.getFeedStatus().lastError).toBe('MARKET_DATA_WS_NOT_AUTHORIZED');
+    delete process.env.ARGUS_DISABLE_MARKET_DATA_WS;
+  });
+
+  it('on symbol limit exceeded, purges non-core symbols and resubscribes core without reconnect storm', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    const ws = instances[0];
+    authenticate(ws);
+    worker.subscribe('GOOGL');
+    worker.subscribe('XOM');
+    worker.subscribe('SMH');
+    ws.sentMessages.length = 0;
+    sendMessage(ws, { T: 'error', msg: 'symbol limit exceeded' });
+    expect(worker.getActiveSymbols().sort()).toEqual(
+      [...continuousIntelligence.coreStreamingSymbols].sort(),
+    );
+    const sub = ws.sentMessages.find((m: any) => m.action === 'subscribe');
+    expect(sub?.quotes).toEqual(expect.arrayContaining(continuousIntelligence.coreStreamingSymbols));
+    expect(instances.length).toBe(1); // no reconnect socket spawned
+  });
+
+  it('getEffectiveStreamingCap follows IBKR hardCapOverride (DEF-TODAY-01)', () => {
+    expect(worker.getEffectiveStreamingCap()).toBeLessThanOrEqual(20);
+    worker.setBrokerQuoteContext({ backend: 'ibkr_gateway', hardCapOverride: 90 });
+    expect(worker.getEffectiveStreamingCap()).toBe(90);
+    worker.setBrokerQuoteContext({ backend: 'alpaca', hardCapOverride: null });
+    expect(worker.getEffectiveStreamingCap()).toBeLessThanOrEqual(20);
   });
 
   it('WATCHLIST_SUBSCRIBE_REQUESTED expands the IEX set without placing an order', () => {

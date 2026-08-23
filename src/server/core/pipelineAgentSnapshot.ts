@@ -6,12 +6,17 @@ import {
   pipelineAgentsConfig,
 } from '../config/pipelineAgents';
 import { getPipelineAgentEnabledMap, isPipelineAgentEnabled } from './pipelineAgentGate';
-import { isLiveIdeaGenerationEnabled } from './ideaGenerationGate';
+import { isAutobotTradingEnabled, isLiveIdeaGenerationEnabled } from './ideaGenerationGate';
 import { allowsNewEntryIdeas } from './sessionRecovery';
 import { tradingEngine } from '../engines/TradingEngine';
 import { system } from './SystemBootstrap';
 import { tradingSafety } from '../config/tradingSafety';
 import { getPipelineAgentHeartbeat, isPipelineAgentAlive } from './pipelineAgentHealth';
+import {
+  isPipelineAgentHealthLabelHealthy,
+  resolvePipelineAgentHealthLabel,
+  type PipelineAgentHealthLabel,
+} from './pipelineAgentHealthLabel';
 import { areIdeaWorkersArmed } from './pipelineAgentRuntime';
 import { getLastOpportunityScan } from '../continuous/OpportunityDiscovery';
 import { isOpportunityIdeasEnabled, isOpportunityLoopEnabled } from '../config/continuousIntelligence';
@@ -21,11 +26,23 @@ import { macroAgent } from '../services/MacroAgent';
 import { chiefTrader } from '../services/ChiefTraderAgent';
 import { formatWhyNoTrade } from './consensusExplanation';
 import { deskIntelligence, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
+import { kronosEngine } from '../engines/kronos/KronosEngine';
+import { getForensicCheckpointBuyLockInfo } from './forensicCheckpointBuyLock';
+
+function resolveChronosAvailableForAgent(agentId: string): boolean | null {
+  if (agentId !== 'KronosEngine') return null;
+  try {
+    return kronosEngine.getStatus().isAvailable === true;
+  } catch {
+    return false;
+  }
+}
 
 export function getPipelineAgentSnapshot() {
   const workersRunning = system.getStatus().running;
   const ideaWorkersArmed = areIdeaWorkersArmed();
   const deadAfterMs = tradingSafety.pipelineAgentDeadAfterMs;
+  const autobotTickBusArmed = isAutobotTradingEnabled();
 
   return {
     togglable: pipelineAgentsConfig.togglableIdeaAgents.map((spec) => {
@@ -39,19 +56,27 @@ export function getPipelineAgentSnapshot() {
           : heartbeat.lastTickAt;
       const lastTickAgeMs = lastTickAt !== null ? Date.now() - lastTickAt : null;
       const alive = isPipelineAgentAlive(spec.id) || (lastTickAgeMs !== null && lastTickAgeMs <= deadAfterMs);
-      let healthLabel: 'ENV_OFF' | 'OFFLINE' | 'NOT_ARMED' | 'DEAD' | 'HEALTHY' | 'GATED' = 'OFFLINE';
-      if (!available) healthLabel = 'ENV_OFF';
-      else if (!enabled) healthLabel = 'OFFLINE';
-      else if (!ideaWorkersArmed && spec.keepsBackgroundPipeline !== true) healthLabel = 'NOT_ARMED';
-      else if (!alive) healthLabel = 'DEAD';
-      else if (heartbeat.currentState === 'GATED') healthLabel = 'GATED';
-      else healthLabel = 'HEALTHY';
+      const chronosAvailable = resolveChronosAvailableForAgent(spec.id);
+      const healthLabel: PipelineAgentHealthLabel = resolvePipelineAgentHealthLabel({
+        available,
+        enabled,
+        ideaWorkersArmed,
+        keepsBackgroundPipeline: spec.keepsBackgroundPipeline === true,
+        lastTickAt,
+        alive,
+        currentState: heartbeat.currentState,
+        consecutiveFailures: heartbeat.consecutiveFailures,
+        autobotTickBusArmed,
+        chronosAvailable,
+      });
       // Real bug found and fixed this pass: `healthy` used to be computed independently of
       // healthLabel (enabled && available && alive, ignoring ideaWorkersArmed entirely), so right
       // after stopAllIdeaAgents() a stopped agent reported healthy:true and healthLabel:'NOT_ARMED'
       // on the same response object - an internally inconsistent API contract. Deriving healthy
       // from healthLabel makes them structurally unable to disagree.
-      const healthy = healthLabel === 'HEALTHY';
+      // RUNNING (formerly HEALTHY) is the primary green path; STARTING/GATED/DEGRADED also count
+      // as non-failed for the Mission Control toggle lamp.
+      const healthy = isPipelineAgentHealthLabelHealthy(healthLabel);
       const base = {
         id: spec.id,
         label: spec.label,
@@ -70,6 +95,7 @@ export function getPipelineAgentSnapshot() {
         alive,
         healthy,
         healthLabel,
+        chronosAvailable,
       };
       // News: surface catalyst-only vs vote mode so operators do not read "no ideas" as "pipeline dead".
       if (spec.id === 'NewsAgent') {
@@ -92,6 +118,7 @@ export function getPipelineAgentSnapshot() {
     autobotEnabled: tradingEngine.state.enabled === true,
     liveIdeaGenerationEnabled: isLiveIdeaGenerationEnabled(),
     interruptedSessionHold: !allowsNewEntryIdeas(),
+    forensicCheckpointBuyLock: getForensicCheckpointBuyLockInfo(),
     tradingState: tradingEngine.state.tradingState,
     emergencyStopActive: tradingEngine.state.emergencyStopActive === true,
     workersRunning,

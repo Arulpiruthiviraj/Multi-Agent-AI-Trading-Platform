@@ -276,6 +276,11 @@ export const KronosDashboard = () => {
             <CheckCircle2 className="shrink-0 mt-0.5" size={16} />
             <div>
               <p className="font-medium text-sm">Status: {kronosStatus?.status || "Ready"}</p>
+              {kronosStatus?.operationalHealth ? (
+                <p className="text-xs text-emerald-400/80 mt-0.5 font-mono">
+                  operationalHealth={kronosStatus.operationalHealth}
+                </p>
+              ) : null}
               <p className="text-xs text-emerald-400/70 mt-1 font-mono">
                 Health ok at {serviceUrl} · model {versionDisplay}
               </p>

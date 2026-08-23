@@ -31,6 +31,8 @@ export interface NewsPredictionInput {
   riskVeto: boolean;
   sourceCount: number;
   modelSource: string;
+  stagingStatus?: 'ACTIVE' | 'STAGED_FOR_OPEN' | 'EXPIRED' | 'CONSUMED';
+  expiresAt?: string | null;
 }
 
 export async function recordNewsPrediction(input: NewsPredictionInput): Promise<string | null> {
@@ -54,6 +56,8 @@ export async function recordNewsPrediction(input: NewsPredictionInput): Promise<
       sourceCount: input.sourceCount,
       newsAgentMode: deskIntelligence.newsAgentMode,
       modelSource: input.modelSource,
+      stagingStatus: input.stagingStatus ?? 'ACTIVE',
+      expiresAt: input.expiresAt ?? null,
     });
     return id;
   } catch (e) {

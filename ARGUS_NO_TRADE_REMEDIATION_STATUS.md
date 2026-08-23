@@ -162,7 +162,37 @@ Evidence: `argus-cli` health/status/agents/ready/positions + `reconciliation_eve
 | CLI login | Not required for these reads; disable/health/status succeeded without printing secrets |
 
 ### Kronos IDLE/DEAD pre-RTH — EXPECTED (not a start failure)
-At ~07:44 ET on 2026-08-21 (pre-RTH; RTH 09:30 ET), Chronos `:8008` was healthy and Argus headless pid 26000 reported `marketDataConnected=true`, Autobot OFF, `tradingState=TRADING_ENABLED`. Pipeline snapshot: `KronosEngine` `enabled=true`, `available=true`, `keepsBackgroundPipeline=true`, `currentState=IDLE`, `healthLabel=DEAD`, `lastTickAt=null`. Boot path `ArgusCoreBoot` calls `kronosForecastAgent.start()` when the agent is pipeline-enabled; heartbeat/`lastTickAt` only move on `MARKET_DATA`, and `MarketDataWorker.maybeEmitMarketData` is gated by Autobot+`TRADING_ENABLED` (so Autobot-off caches quotes but does not emit ticks to idea agents — by design). Therefore IDLE/DEAD here means waiting for tick bus emission after Autobot ON (around supervised RTH), not Chronos down and not a failed agent start. No code fix; Autobot left OFF.
+At ~07:44 ET on 2026-08-21 (pre-RTH; RTH 09:30 ET), Chronos `:8008` was healthy and Argus headless pid 26000 reported `marketDataConnected=true`, Autobot OFF, `tradingState=TRADING_ENABLED`. Pipeline snapshot: `KronosEngine` `enabled=true`, `available=true`, `keepsBackgroundPipeline=true`, `currentState=IDLE`, then-label `healthLabel=DEAD`, `lastTickAt=null`. Boot path `ArgusCoreBoot` calls `kronosForecastAgent.start()` when the agent is pipeline-enabled; heartbeat/`lastTickAt` only move on `MARKET_DATA`, and `MarketDataWorker.maybeEmitMarketData` is gated by Autobot+`TRADING_ENABLED` (so Autobot-off caches quotes but does not emit ticks to idea agents — by design). That IDLE/`lastTickAt=null` case was waiting for tick bus emission, not Chronos down. **Engineering follow-up:** labels now map this to **`IDLE_WAITING_FOR_MARKET_DATA`** (not FAILED/DEAD). Autobot left OFF.
 
 ### Operator note for open
-Prefer Autobot OFF until supervise; expect consensus scarcity; do not lower floors; prove next organic SELL → non-NULL `profit_loss` + no false MISSING_REMOTELY. Kronos lamp may stay IDLE/DEAD until Autobot ON emits `MARKET_DATA`.
+Prefer Autobot OFF until supervise; expect consensus scarcity; do not lower floors; prove next organic SELL → non-NULL `profit_loss` + no false MISSING_REMOTELY. Kronos lamp may stay **`IDLE_WAITING_FOR_MARKET_DATA`** until Autobot ON emits `MARKET_DATA`.
+
+## 9. Health-label honesty + first-fill forensic (2026-08-21 engineering)
+
+**Verdict:** NOT unsupervised; **READY WITH CONDITIONS** / `SUPERVISED_PAPER_OPERATION_READY` mechanical GO only. Consensus **0.75 / min 2** unchanged. No RiskEngine/`news_veto`/OMS bypass. PAPER only. Autobot **not** auto-enabled. Protocol: `ARGUS_CONTROLLED_PAPER_SOAK.md`.
+
+### 9a. Pipeline health semantics (P1)
+
+Misleading `DEAD` when enabled/available but waiting for `MARKET_DATA` (Autobot off) is fixed:
+
+- Labels: `STARTING` | `IDLE_WAITING_FOR_MARKET_DATA` | `RUNNING` | `DEGRADED` | `UNAVAILABLE` | `FAILED` (+ `ENV_OFF` / `OFFLINE` / `NOT_ARMED` / `GATED`).
+- Map: enabled+available+no ticks + Autobot off → **`IDLE_WAITING_FOR_MARKET_DATA`** (not FAILED/DEAD).
+- Chronos `/health` down → Kronos **`UNAVAILABLE`**.
+- Mission Control, Digital Twin, Kronos `operationalHealth` aligned.
+- Code: `pipelineAgentHealthLabel.ts`, `pipelineAgentSnapshot.ts`; tests in `pipelineAgentHealthLabel.test.ts` / `pipelineAgentSnapshot.test.ts`.
+
+### 9b. First organic PAPER fill forensic checkpoint (P0 soak)
+
+- Service: `FirstFillForensicCheckpoint.ts` (boot via `ArgusCoreBoot`; listens `ORDER_EXECUTED`).
+- Trigger: first FILLED organic PAPER fill (`isOrganicPaperFill` — excludes REPLAY/BACKTEST/DIAG/EXTERNAL_SYNC/manual).
+- Checks: `order_persisted`, `fill_ledger`, `portfolio_broker_match`, `recon_clean` (MATCH + no `MISSING_REMOTELY`), `sell_pnl_non_null`, `trace_completeness`.
+- On FAIL: `TradingEngine.toggle({enabled:false})` + forensic BUY soft-lock (`ideaGenerationGate`) + `FORENSIC_CHECKPOINT_FAILED`.
+- On PASS: `FORENSIC_CHECKPOINT_PASSED`; supervised continue.
+- Artifacts: `data/logs/first_fill_forensic_YYYY-MM-DD.json` + `ARGUS_CONTROLLED_PAPER_SOAK_AUDIT_YYYY-MM-DD.md` + `data/.first_fill_forensic_checkpoint.json`.
+- Protocol doc: **`ARGUS_CONTROLLED_PAPER_SOAK.md`**.
+
+### Explicit non-goals (this pass)
+
+- Did **not** lower 0.75 / min 2
+- Did **not** bypass news_veto / RiskEngine / OMS
+- Did **not** enable Autobot or arm LIVE

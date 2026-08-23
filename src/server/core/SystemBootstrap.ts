@@ -38,6 +38,7 @@ import { opportunityDiscoveryWorker } from '../continuous/OpportunityDiscovery';
 import { advancedQuantEngines } from '../engines/AdvancedQuantEngines';
 import { db } from '../db';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { authorizeMarketDataWebSocket } from './marketDataWsOwnership';
 import { portfolioMonitor } from '../services/PortfolioMonitor';
 import { oms } from '../services/OrderManagement'; 
 import { riskAgent } from '../services/RiskAgent'; 
@@ -84,6 +85,7 @@ export class SystemBootstrap {
     startProcessTelemetry();
     advancedQuantEngines.start();
     
+    authorizeMarketDataWebSocket('SystemBootstrap');
     marketDataWorker.start();
     portfolioMonitor.start();
     // Portfolio reconciliation is started at ArgusCoreBoot (independent of Autobot) so an

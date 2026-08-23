@@ -9,7 +9,8 @@ Honesty: discovery is **not** automatic buying. Organic PAPER FILLED SELL P&L is
 | `OpportunityDiscovery` | Bounded scan of `seedSymbols` + `watchUniverseSymbols` (+ `pennyWatchSymbols` only if penny overlay on). Emits `WATCHLIST_SUBSCRIBE_REQUESTED` only. `ideasEmitted` always 0. | `ARGUS_OPPORTUNITY_LOOP_ENABLED=false` |
 | `candidateLifecycle` | In-memory DISCOVERED / WATCHING / STALE / FILTERED_OUT / PROMOTED. Capped by `maxCandidateRecords`. | n/a |
 | `OpportunityScreener` | Cheap N-tick return rank. May `emitTradeIdea` as agent `OpportunityScreener` (**one vote**). No LLM. No `placeOrder`. | `ARGUS_OPPORTUNITY_IDEAS_ENABLED=false` |
-| IEX subscriptions | `maxActiveSubscriptions` 32, `maxNewSubscriptionsPerCycle` 4, scan 120s | reviewed JSON |
+| IEX subscriptions | `maxActiveSubscriptions` **30**, `maxNewSubscriptionsPerCycle` 4, scan 120s. `MarketDataWorker` **prunes** least-active non-protected symbols before accepting new `WATCHLIST_SUBSCRIBE_REQUESTED` entries (Alpaca symbol-limit hygiene). | reviewed JSON (`config/continuousIntelligence.json`) |
+| Campaign opening surge | When `settings.campaign_enabled`, liquid-universe RVOL/ORB scan in 09:30–09:40 ET emits confluence nudges / watchlist only — see `ARGUS_CAMPAIGN_TRACKER.md`. Does **not** enable QUANT or lower consensus. | campaign off by default |
 
 Not implemented: market-wide tape scan, news/fundamental Level-4 funnel as a dedicated scanner, penny MARKET execution (`marketOrdersFitPennyAndMicro: false`).
 

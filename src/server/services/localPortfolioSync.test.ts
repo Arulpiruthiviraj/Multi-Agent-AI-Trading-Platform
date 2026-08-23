@@ -32,7 +32,7 @@ describe('syncLocalPortfolioAfterFullSellFill', () => {
     await db.delete(schema.portfolio);
   });
 
-  it('zeros local portfolio qty after a full SELL fill covering the holding', async () => {
+  it('deletes local portfolio row after a full SELL fill covering the holding', async () => {
     await db.insert(schema.portfolio).values({
       symbol: 'NVDA',
       quantity: 1,
@@ -48,7 +48,7 @@ describe('syncLocalPortfolioAfterFullSellFill', () => {
     expect(result.remainingQty).toBe(0);
 
     const rows = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, 'NVDA'));
-    expect(rows[0]?.quantity).toBe(0);
+    expect(rows).toHaveLength(0);
   });
 
   it('reduces local qty when SELL fills less than the full holding', async () => {

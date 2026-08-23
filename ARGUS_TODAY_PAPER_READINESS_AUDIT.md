@@ -14,13 +14,32 @@ This document marks each item as **CODE** / **TEST** / **RUN** / **NOT VERIFIED*
 
 ## FINAL STATUS
 
-**PAPER_READY_WITH_CONDITIONS** (honest equivalent of `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS`)
+```
+ARGUS STATUS: SUPERVISED_PAPER_OPERATION_READY
+Mechanical execution: VERIFIED
+Safety controls: VERIFIED
+Restart/reconciliation: VERIFIED
+Autobot autonomous operation: NOT YET RUN-VERIFIED
+Organic trading performance: NOT PROVEN
+Required soak: unmet
+LIVE authorization: NO-GO
+```
 
-Rationale: mechanical paper path is **TEST-VERIFIED** (InternalPaper spine) and the headless paper engine is **RUN-VERIFIED** (PID **33604**: PAPER, `LIVE_NO_GO`, marketData path up, **`interruptedSessionHold=false`** after in-process MATCH). Full suite green this verify pass (**301 / 1923**, exit 0). **Autobot remains DISABLED** (intentional — not enabled in remediation). Organic soak floors remain unmet. **LIVE remains NO-GO.**
+Rationale: mechanical paper path is **TEST-VERIFIED** (InternalPaper spine) and headless paper engine was **RUN-VERIFIED** (prior PID **33604**: PAPER, `LIVE_NO_GO`, **`interruptedSessionHold=false`** after MATCH). **Autobot remains DISABLED** by design — Phase 2 Autobot paper run is **NEXT**, not claimed here. Organic soak floors remain unmet. **LIVE remains NO-GO.** Consensus floors **0.75 / min 2** unchanged. See `ARGUS_CONTROLLED_PAPER_SOAK.md`.
 
 ### One-liner verdict
 
-**Hold CLEARED (RUN PID 33604); remaining = operator Autobot enable choice; soak 0; LIVE_NO_GO.**
+**Mechanical GO; Autobot run-verify NEXT; soak 0; LIVE_NO_GO; no edge claim.**
+
+### Suite counts (do not conflate)
+
+| Label | Files | Tests | Notes |
+|---|---:|---:|---|
+| **VERIFY PASS A (historical)** | **297** | **1880** | 2026-08-20 early verify (`a009af8c` era) — preserved below in § AA |
+| **Later / post-hold refresh** | **301** | **1923** | Same calendar day after hold/recon work — not the same pass as 297/1880 |
+| **FINAL (soak-engineering pass, 2026-08-21)** | **326** | **2090** | Health labels + first-fill forensic + soak protocol; `npm test` exit 0 |
+
+Do **not** label 297/1880 and 301/1923 (or 326/2090) as the “same pass.”
 
 ---
 
@@ -47,7 +66,7 @@ Non-critical / research gaps (do not conflate with Autobot readiness): full cale
 | **Restart / reconciliation** | **PASS (TEST+RUN)** | sessionRecovery + OMS crash recovery; live hold **cleared** on PID 33604 (MATCH 585) |
 | **Disconnect (WS)** | **PASS (TEST)** | `wsClientLifecycle.test.ts` 4/4 |
 | **Runtime engine / market data** | **PASS (RUN)** hold cleared | Headless PID **33604**: PAPER, `LIVE_NO_GO`, Autobot **DISABLED**, `interruptedSessionHold=false` |
-| **AA Full npm test** | **PASS (TEST)** | **301** files / **1923** tests, **0** failed — this verify pass |
+| **AA Full npm test** | **PASS (TEST)** | **FINAL 326 / 2090** (see suite table above); mid-day **301 / 1923** and early **297 / 1880** are historical |
 | **AB Lint + build** | **PASS (CODE)** | `npm run lint` exit 0; `npm run build` exit 0 — agent `a009af8c` |
 
 ---
@@ -245,6 +264,7 @@ Autobot **not** enabled (hold cleared + recon clean, but soak/operator intent st
 | Command | `npm test` → `vitest run` | — |
 | Agent | `a009af8c` | — |
 | When | 2026-08-20 ~10:13–10:19 local | — |
+| Label | **VERIFY PASS A (historical)** | — |
 | Test files | **297 passed / 297** | **PASS (TEST)** |
 | Tests | **1880 passed / 1880** | **PASS (TEST)** |
 | Failed | **0** | **PASS** |
@@ -252,6 +272,8 @@ Autobot **not** enabled (hold cleared + recon clean, but soak/operator intent st
 | Consensus / safety | Floors **not** lowered | **CODE** |
 
 **Isolation note:** first full run after HE/decision_evidence had 3 `beforeAll` hook timeouts under suite load; mitigated via `hookTimeout` / suite timeouts. Clean re-run and parallel agent `a009af8c` agree: **1880 / 0 failed**.
+
+**Later same-day refresh (not VERIFY PASS A):** **301 files / 1923 tests** after hold/recon Autobot-independence work — keep separate from 297/1880.
 
 Includes prior RiskAgent lifecycle + market_hours `AbortSignal.timeout` work (already in suite).
 

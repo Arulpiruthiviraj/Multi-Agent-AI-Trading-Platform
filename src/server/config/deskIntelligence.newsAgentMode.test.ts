@@ -69,13 +69,13 @@ describe('deskIntelligence.newsAgentMode loader validation', () => {
 });
 
 describe('newsAgentEmitsTradeIdeas / newsAgentPipelineEnabled (real config)', () => {
-  it('derives false/true correctly from the real repo config default (CATALYST_ONLY)', async () => {
+  it('derives true/true correctly from the real repo config default (ACTIVE_VOTE)', async () => {
     const { deskIntelligence, newsAgentEmitsTradeIdeas, newsAgentPipelineEnabled, newsAgentObservesPredictions } = await import('./deskIntelligence');
-    expect(deskIntelligence.newsAgentMode).toBe('CATALYST_ONLY');
-    expect(newsAgentEmitsTradeIdeas()).toBe(false);
+    expect(deskIntelligence.newsAgentMode).toBe('ACTIVE_VOTE');
+    expect(newsAgentEmitsTradeIdeas()).toBe(true);
     expect(newsAgentPipelineEnabled()).toBe(true);
-    // Phase F5: the prediction ledger stays dormant at the real repo default.
-    expect(newsAgentObservesPredictions()).toBe(false);
+    // ACTIVE_VOTE also enables prediction ledger observe path (Phase F5).
+    expect(newsAgentObservesPredictions()).toBe(true);
   });
 });
 

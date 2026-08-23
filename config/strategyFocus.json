@@ -1,0 +1,64 @@
+{
+  "$comment": "Operator strategy-focus policy for QuantSignalAgent. ADAPTIVE_MULTI_STRATEGY (Option B) hard-routes each symbol to RegimeEngine-preferred CORE strategies, scales confidence, then desk-ranks and emits the winning setup via TRADE_IDEA_GENERATED. Manual modes are discretionary overrides only. No capital sleeves — RiskEngine Gate 23 / settings.budget remain capital authority. Does not lower ChiefTrader consensus or bypass OMS.",
+  "defaultFocus": "ADAPTIVE_MULTI_STRATEGY",
+  "adaptivePreferredBoost": 1.18,
+  "adaptiveNonPreferredScale": 0.92,
+  "adaptiveRegimePreferredStrategies": {
+    "BULLISH_TREND": ["MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION", "TREND_FOLLOWING"],
+    "BEARISH_TREND": ["TREND_FOLLOWING", "MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION"],
+    "SIDEWAYS_RANGE": ["MEAN_REVERSION", "RANGE_REVERSION"]
+  },
+  "adaptiveHighVolatilityPreferredStrategies": ["MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION", "TREND_FOLLOWING"],
+  "modes": [
+    {
+      "id": "ADAPTIVE_MULTI_STRATEGY",
+      "label": "Adaptive Multi-Strategy (Auto-Regime)",
+      "kind": "adaptive",
+      "strategyIds": []
+    },
+    {
+      "id": "MOMENTUM_BREAKOUT",
+      "label": "Momentum & Breakout",
+      "kind": "manual",
+      "strategyIds": ["MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION"]
+    },
+    {
+      "id": "MEAN_REVERSION",
+      "label": "Mean Reversion",
+      "kind": "manual",
+      "strategyIds": ["MEAN_REVERSION", "RANGE_REVERSION"]
+    },
+    {
+      "id": "TREND_FOLLOWING",
+      "label": "Trend-Following",
+      "kind": "manual",
+      "strategyIds": ["TREND_FOLLOWING"]
+    },
+    {
+      "id": "SCALPING",
+      "label": "Scalping",
+      "kind": "manual",
+      "strategyIds": ["RANGE_REVERSION", "MEAN_REVERSION"]
+    },
+    {
+      "id": "GAP_AND_GO",
+      "label": "Gap & Go",
+      "kind": "manual",
+      "strategyIds": ["MOMENTUM_BREAKOUT", "PULLBACK_CONTINUATION"]
+    }
+  ],
+  "legacyAliases": {
+    "Momentum Focus": "ADAPTIVE_MULTI_STRATEGY",
+    "Momentum & Breakout": "MOMENTUM_BREAKOUT",
+    "Mean Reversion": "MEAN_REVERSION",
+    "Trend-Following": "TREND_FOLLOWING",
+    "Scalping": "SCALPING",
+    "Gap & Go": "GAP_AND_GO",
+    "Hybrid AI": "ADAPTIVE_MULTI_STRATEGY",
+    "AI Strategy": "ADAPTIVE_MULTI_STRATEGY",
+    "Quant Strategy": "ADAPTIVE_MULTI_STRATEGY",
+    "Hybrid Strategy": "ADAPTIVE_MULTI_STRATEGY",
+    "Custom Strategy": "ADAPTIVE_MULTI_STRATEGY",
+    "ALL_CORE": "ADAPTIVE_MULTI_STRATEGY"
+  }
+}

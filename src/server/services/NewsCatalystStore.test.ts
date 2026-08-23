@@ -22,6 +22,6 @@ describe('NewsCatalystStore', () => {
       recordedAt: new Date().toISOString(),
     });
     expect(getNewsCatalysts('AAPL')[0].contribution).toBe(0.18);
-    expect(getNewsCatalysts('AAPL')[0].symbol).toBe('aapl');
+    expect(getNewsCatalysts('AAPL')[0].symbol).toBe('AAPL');
   });
 });

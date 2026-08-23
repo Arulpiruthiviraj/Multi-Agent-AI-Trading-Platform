@@ -4,7 +4,6 @@
  * Probes real endpoints only — never fabricates READY.
  */
 import 'dotenv/config';
-import https from 'https';
 import net from 'net';
 import {
   GUARDIAN_MCP_URL,
@@ -81,54 +80,6 @@ async function probeWithRetry(
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
-}
-
-function probeIbkrAuthStatus(baseUrl: string, timeoutMs: number): Promise<{
-  reachable: boolean;
-  authenticated?: boolean;
-  error?: string;
-}> {
-  return new Promise((resolve) => {
-    let url: URL;
-    try {
-      url = new URL(`${baseUrl.replace(/\/$/, '')}/iserver/auth/status`);
-    } catch (e: any) {
-      resolve({ reachable: false, error: e.message });
-      return;
-    }
-    const req = https.request({
-      hostname: url.hostname,
-      port: url.port || (url.protocol === 'https:' ? 443 : 80),
-      path: url.pathname + url.search,
-      method: 'GET',
-      rejectUnauthorized: url.hostname !== '127.0.0.1' && url.hostname !== 'localhost',
-      timeout: timeoutMs,
-      headers: { 'User-Agent': 'ArgusTradingPlatform/1.0' },
-    }, (res) => {
-      let data = '';
-      res.on('data', (c) => { data += c; });
-      res.on('end', () => {
-        // 401 = Gateway listening, brokerage session not authenticated yet (manual 2FA).
-        if (res.statusCode === 401) {
-          resolve({ reachable: true, authenticated: false });
-          return;
-        }
-        if (res.statusCode && res.statusCode >= 400) {
-          resolve({ reachable: false, error: `HTTP ${res.statusCode}` });
-          return;
-        }
-        try {
-          const body = JSON.parse(data || '{}');
-          resolve({ reachable: true, authenticated: !!body.authenticated });
-        } catch {
-          resolve({ reachable: true, authenticated: false });
-        }
-      });
-    });
-    req.on('timeout', () => { req.destroy(); resolve({ reachable: false, error: 'timeout' }); });
-    req.on('error', (e) => resolve({ reachable: false, error: e.message }));
-    req.end();
-  });
 }
 
 async function maybeStopped(port: number, id: string, label: string): Promise<ServiceStatus | null> {
@@ -237,53 +188,25 @@ async function probeOpenAlice(): Promise<ServiceStatus> {
 }
 
 async function probeIbkr(): Promise<ServiceStatus> {
-  if (process.env.ARGUS_SKIP_IBKR === 'true') {
-    return {
-      id: 'ibkr-gateway',
-      detail: 'Skipped (ARGUS_SKIP_IBKR=true)',
-      health: 'DISABLED',
-      action: null,
-    };
-  }
-  const baseUrl = process.env.IBKR_GATEWAY_URL || 'https://localhost:5000/v1/api';
-  let port = 5000;
-  try { port = Number(new URL(baseUrl).port) || 5000; } catch { /* keep */ }
+  const {
+    probeIbkrEcosystemHealth,
+    resolveActiveBrokerIdForHealth,
+    resolveIbkrSessionAccountId,
+  } = await import('../src/server/services/ibkrEcosystemHealth');
 
-  const stopped = await maybeStopped(port, 'ibkr-gateway', 'IBKR Client Portal Gateway');
-  if (stopped) return stopped;
+  const activeBrokerId = await resolveActiveBrokerIdForHealth();
+  const sessionAccountId = await resolveIbkrSessionAccountId();
+  const r = await probeIbkrEcosystemHealth({
+    activeBrokerIdOrName: activeBrokerId,
+    sessionAccountId,
+    expectStopped: mode === 'stopped',
+  });
 
-  const configured = !!process.env.IBKR_GATEWAY_URL?.trim() || process.env.ARGUS_PROBE_IBKR === 'true';
-  if (!configured && !(await isPortOpen(port))) {
-    return {
-      id: 'ibkr-gateway',
-      detail: 'Not probed (port free; set IBKR_GATEWAY_PATH or ARGUS_PROBE_IBKR=true to spawn)',
-      health: 'DISABLED',
-      action: null,
-    };
-  }
-
-  const p = await probeIbkrAuthStatus(baseUrl, 4000);
-  if (!p.reachable) {
-    return {
-      id: 'ibkr-gateway',
-      health: 'FAILED',
-      detail: p.error || 'unreachable',
-      action: 'Set IBKR_GATEWAY_PATH to the Client Portal Gateway folder (contains bin/run.bat). npm run dev starts it and opens the login page. 2FA is manual (~24h).',
-    };
-  }
-  if (p.authenticated) {
-    return {
-      id: 'ibkr-gateway',
-      health: 'READY',
-      detail: 'Gateway reachable and brokerage session authenticated',
-      action: null,
-    };
-  }
   return {
     id: 'ibkr-gateway',
-    health: 'STARTING',
-    detail: 'Gateway reachable (HTTP 401 — login pending). Complete browser 2FA at the Gateway URL.',
-    action: `Open ${baseUrl.replace(/\/v1\/api\/?$/, '')} and complete IBKR login + 2FA`,
+    health: r.health === 'DISABLED' ? 'DISABLED' : r.health,
+    detail: r.detail,
+    action: r.action,
   };
 }
 

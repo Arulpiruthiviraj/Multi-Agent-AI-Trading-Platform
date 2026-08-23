@@ -15,7 +15,7 @@
  *
  * CONTINUE: attribution only; no BUY lock.
  */
-import { and, desc, eq, isNotNull, lte } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { getTradingDateStr } from '../core/TradingCalendar';
@@ -31,10 +31,21 @@ import { runtimeIntervals } from '../config/runtimeIntervals';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { snapshotCapital } from '../engines/CapitalAllocation';
+import {
+  resolveOpeningStrategyId,
+  UNATTRIBUTED_STRATEGY_ID as ATTR_UNATTRIBUTED,
+} from './campaignStrategyAttribution';
+import {
+  emitCampaignEffortTelemetry,
+  getCampaignEffortSnapshot,
+  type CampaignEffortSnapshot,
+} from './campaignEffortTelemetry';
+import { campaignWatchlistBoostWorker } from './CampaignWatchlistBoost';
+import { campaignOpeningSurgeWorker } from './CampaignOpeningSurge';
 
 export { isCampaignBuyLocked } from '../core/campaignBuyLock';
 
-export const UNATTRIBUTED_STRATEGY_ID = 'UNATTRIBUTED';
+export const UNATTRIBUTED_STRATEGY_ID = ATTR_UNATTRIBUTED;
 
 export type DailyTargetType = 'DOLLAR' | 'PERCENT';
 export type TargetAchievedAction = 'LOCK_AND_IDLE' | 'TRAIL_STOPS_ONLY' | 'CONTINUE';
@@ -57,6 +68,7 @@ export interface CampaignStatus {
   dailyTargetAmount: number;
   dailyTargetType: DailyTargetType;
   targetAchievedAction: TargetAchievedAction;
+  closePositionsBeforeMarketClose: boolean;
   targetDollars: number;
   dailyRealized: number;
   dailyUnrealized: number;
@@ -74,6 +86,7 @@ export interface CampaignStatus {
   deployedCapital: number;
   idleCapital: number;
   capitalUtilizationPct: number;
+  effort: CampaignEffortSnapshot;
 }
 
 interface StrategyAgg {
@@ -138,19 +151,6 @@ function isOrganicFillEnv(env: string | null | undefined): boolean {
   return !NON_ORGANIC_ENV.has(String(env).toUpperCase());
 }
 
-async function resolveOpeningStrategyId(symbol: string, sellCutoff: string): Promise<string> {
-  const [openingBuy] = await db.select().from(schema.trades).where(
-    and(
-      eq(schema.trades.symbol, symbol),
-      eq(schema.trades.side, 'BUY'),
-      eq(schema.trades.status, 'FILLED'),
-      lte(schema.trades.filledAt, sellCutoff),
-    ),
-  ).orderBy(desc(schema.trades.filledAt)).limit(1);
-
-  return normalizeStrategyId(openingBuy?.quantStrategyId);
-}
-
 function ensureAgg(map: Map<string, StrategyAgg>, strategyId: string): StrategyAgg {
   let row = map.get(strategyId);
   if (!row) {
@@ -204,15 +204,8 @@ export async function computeDayStrategyAttribution(tradingDate: string = getTra
     }
     if (mark == null || !Number.isFinite(mark)) continue;
     const unrealized = (mark - h.averagePrice) * h.quantity;
-    const [openingBuy] = await db.select().from(schema.trades).where(
-      and(
-        eq(schema.trades.symbol, h.symbol),
-        eq(schema.trades.side, 'BUY'),
-        eq(schema.trades.status, 'FILLED'),
-        isNotNull(schema.trades.filledAt),
-      ),
-    ).orderBy(desc(schema.trades.filledAt)).limit(1);
-    const strategyId = normalizeStrategyId(openingBuy?.quantStrategyId);
+    const cutoff = h.lastUpdated ?? new Date().toISOString();
+    const strategyId = await resolveOpeningStrategyId(h.symbol, cutoff);
     ensureAgg(strategies, strategyId).unrealizedPnl += unrealized;
   }
 
@@ -305,6 +298,7 @@ export async function getCampaignStatus(now: Date = new Date()): Promise<Campaig
     ? 'PERCENT'
     : 'DOLLAR') as DailyTargetType;
   const targetAchievedAction = normalizeAction(settings?.targetAchievedAction);
+  const closePositionsBeforeMarketClose = !!settings?.closePositionsBeforeMarketClose;
   const targetDollars = resolveCampaignTargetDollars(budget, dailyTargetAmount, dailyTargetType);
 
   const { strategies, dailyRealized, dailyUnrealized } = await computeDayStrategyAttribution(tradingDate);
@@ -331,6 +325,7 @@ export async function getCampaignStatus(now: Date = new Date()): Promise<Campaig
     dailyTargetAmount,
     dailyTargetType,
     targetAchievedAction,
+    closePositionsBeforeMarketClose,
     targetDollars,
     dailyRealized: Number(dailyRealized.toFixed(4)),
     dailyUnrealized: Number(dailyUnrealized.toFixed(4)),
@@ -342,6 +337,7 @@ export async function getCampaignStatus(now: Date = new Date()): Promise<Campaig
     deployedCapital,
     idleCapital,
     capitalUtilizationPct,
+    effort: getCampaignEffortSnapshot(now),
   };
 }
 
@@ -410,14 +406,31 @@ export async function refreshCampaignProgress(reason: string = 'manual'): Promis
           dailyRealized: status.dailyRealized,
           dailyUnrealized: status.dailyUnrealized,
           targetDollars: status.targetDollars,
-          // TRAIL_STOPS_ONLY: PortfolioMonitor settings.trailingStopPct already manages exits —
-          // CampaignTracker does not invent trail math. BUY soft-lock only.
           trailOwnedBy: action === 'TRAIL_STOPS_ONLY' ? 'PortfolioMonitor.trailingStopPct' : undefined,
           at: now.toISOString(),
         });
       }
+    } else if (action === 'CONTINUE' && targetReachedEmittedForDate !== today) {
+      targetReachedEmittedForDate = today;
+      eventBus.emit(EVENTS.CAMPAIGN_TARGET_REACHED, {
+        tradingDate: today,
+        action: 'CONTINUE',
+        progress: status.progress,
+        dailyRealized: status.dailyRealized,
+        dailyUnrealized: status.dailyUnrealized,
+        targetDollars: status.targetDollars,
+        note: 'Target logged; continuous evaluation continues (no BUY soft-lock)',
+        at: now.toISOString(),
+      });
     }
   }
+
+  emitCampaignEffortTelemetry({
+    phase: 'refresh',
+    reason,
+    capitalUtilizationPct: status.capitalUtilizationPct,
+    progress: status.progress,
+  });
 
   return getCampaignStatus(now);
 }
@@ -450,8 +463,11 @@ export class CampaignTrackerWorker {
       console.error('[CampaignTracker] boot refresh failed', e),
     );
 
+    campaignWatchlistBoostWorker.start();
+    campaignOpeningSurgeWorker.start();
+
     console.log(
-      '[CampaignTracker] Started at boot (Autobot-independent for tracking). BUY soft-lock only when campaign target reached under LOCK_AND_IDLE/TRAIL_STOPS_ONLY; SELL/exits still use PortfolioMonitor when TRADING_ENABLED.',
+      '[CampaignTracker] Started at boot (Autobot-independent for tracking). BUY soft-lock only when campaign target reached under LOCK_AND_IDLE/TRAIL_STOPS_ONLY; SELL/exits still use PortfolioMonitor when TRADING_ENABLED. Watchlist boost + opening-surge scan run only while campaign_enabled.',
     );
   }
 
@@ -464,6 +480,8 @@ export class CampaignTrackerWorker {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
+    campaignWatchlistBoostWorker.stop();
+    campaignOpeningSurgeWorker.stop();
     this.started = false;
   }
 }

@@ -344,6 +344,7 @@ const SETTINGS_ALLOWED_FIELDS: (keyof typeof schema.settings.$inferInsert)[] = [
   'strategyEngineEnabled', 'strategyEngineMode', 'strategyEngineActiveIdsJson',
   'strategyEngineMaxActive', 'strategyEngineMinConfidence',
   'campaignEnabled', 'dailyTargetAmount', 'dailyTargetType', 'targetAchievedAction',
+  'closePositionsBeforeMarketClose',
 ];
 
 // Only these mode strings are real in this pass (StrategyEngineShadowRunner.ts only acts on
@@ -442,6 +443,34 @@ configRouter.post('/settings', async (req, res) => {
     if (!result.ok) {
       return res.status(400).json(result);
     }
+
+    let activeBrokerName: string | undefined;
+    // selectedBroker used to persist display name only — BrokerManager stayed on the previous
+    // adapter until POST /api/v1/brokers/active. When the operator posts selectedBroker here,
+    // also perform the real mid-session switch (with IBKR Gateway preflight / paper enforcement).
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'selectedBroker')) {
+      const { BrokerManager } = await import('../../brokers/BrokerManager');
+      const mgr = BrokerManager.getInstance();
+      const brokerId = mgr.resolveBrokerIdFromSelectedName(String(req.body.selectedBroker));
+      if (!brokerId) {
+        return res.status(400).json({
+          ok: false,
+          error: `Unknown selectedBroker ${JSON.stringify(req.body.selectedBroker)}. Use Alpaca, IBKR Gateway (Socket), IBKR Web API, Interactive Brokers (auto), or Argus Internal Simulator (ids: alpaca / ibkr_gateway / ibkr_web / ibkr / internal_paper).`,
+        });
+      }
+      try {
+        const switched = await mgr.setActiveBroker(brokerId);
+        if (!switched) {
+          return res.status(400).json({ ok: false, error: `Failed to activate broker '${brokerId}'.` });
+        }
+        // Canonicalize to the adapter's display name for initialize()-time restore.
+        req.body.selectedBroker = mgr.getActiveBroker().name;
+        activeBrokerName = req.body.selectedBroker;
+      } catch (switchErr: any) {
+        return res.status(400).json({ ok: false, error: switchErr?.message || String(switchErr) });
+      }
+    }
+
     const patch: Record<string, unknown> = {};
     for (const field of SETTINGS_ALLOWED_FIELDS) {
       if (Object.prototype.hasOwnProperty.call(req.body || {}, field)) {
@@ -451,7 +480,7 @@ configRouter.post('/settings', async (req, res) => {
     if (Object.keys(patch).length > 0) {
       await db.update(schema.settings).set(patch).run();
     }
-    res.json({ ok: true });
+    res.json({ ok: true, ...(activeBrokerName ? { activeBroker: activeBrokerName } : {}) });
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }

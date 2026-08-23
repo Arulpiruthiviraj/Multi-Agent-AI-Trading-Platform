@@ -1,8 +1,7 @@
 /**
- * Immediate local `portfolio` sync after OMS fill progress.
- * Clears / reduces rows on full SELL fills so PortfolioReconciliation does not see
- * stale localQty > 0 → false MISSING_REMOTELY between recon ticks.
- * Mirrors PortfolioReconciliation's quantity=0 clear path (does not invent fills).
+ * Immediate local `portfolio` sync after OMS SELL fill progress.
+ * Decrements on partial closes; deletes the row on full close so PortfolioReconciliation
+ * does not see stale localQty > 0 → false MISSING_REMOTELY between recon ticks.
  */
 import { db } from '../db';
 import { portfolio } from '../db/schema';
@@ -13,32 +12,53 @@ import { observeSafe, structuredLogger } from '../observability/StructuredLogger
 const QTY_TOLERANCE = tradingSafety.reconQtyTolerance;
 
 /**
- * After a SELL order reaches full fill (cumulativeQuantity >= order quantity),
- * subtract sold qty from the local portfolio row. Remaining ≤ tolerance → quantity 0
- * (same as recon clear), else leave the reduced remainder.
+ * Apply a SELL fill quantity to the local portfolio row.
+ * remaining ≤ tolerance → DELETE row (full close).
+ * else → decrement quantity + update lastUpdated.
  */
-export async function syncLocalPortfolioAfterFullSellFill(
+export async function syncLocalPortfolioAfterSellFill(
   symbol: string,
   soldQuantity: number,
-): Promise<{ updated: boolean; remainingQty: number | null }> {
+): Promise<{ updated: boolean; remainingQty: number | null; deleted: boolean }> {
   if (!(soldQuantity > 0) || !symbol) {
-    return { updated: false, remainingQty: null };
+    return { updated: false, remainingQty: null, deleted: false };
   }
 
   try {
     const rows = await db.select().from(portfolio).where(eq(portfolio.symbol, symbol)).limit(1);
     const local = rows[0];
     if (!local) {
-      return { updated: false, remainingQty: null };
+      return { updated: false, remainingQty: null, deleted: false };
     }
 
     const prior = Number(local.quantity) || 0;
     const remaining = prior - soldQuantity;
-    const nextQty = remaining <= QTY_TOLERANCE ? 0 : remaining;
     const now = new Date().toISOString();
 
+    if (remaining <= QTY_TOLERANCE) {
+      // Prefer DELETE so recon does not see a zero-qty ghost row; fall back to qty=0 if delete unavailable.
+      try {
+        await db.delete(portfolio).where(eq(portfolio.symbol, symbol));
+      } catch {
+        await db.update(portfolio).set({
+          quantity: 0,
+          lastUpdated: now,
+        }).where(eq(portfolio.symbol, symbol));
+      }
+      observeSafe(() => {
+        structuredLogger.info('local_portfolio_sell_fill_sync', {
+          category: 'PORTFOLIO',
+          component: 'localPortfolioSync',
+          eventType: 'LOCAL_PORTFOLIO_SELL_FILL_SYNC',
+          symbol,
+          metadata: { priorQty: prior, soldQuantity, remainingQty: 0, deleted: true },
+        });
+      });
+      return { updated: true, remainingQty: 0, deleted: true };
+    }
+
     await db.update(portfolio).set({
-      quantity: nextQty,
+      quantity: remaining,
       lastUpdated: now,
     }).where(eq(portfolio.symbol, symbol));
 
@@ -48,15 +68,80 @@ export async function syncLocalPortfolioAfterFullSellFill(
         component: 'localPortfolioSync',
         eventType: 'LOCAL_PORTFOLIO_SELL_FILL_SYNC',
         symbol,
-        metadata: { priorQty: prior, soldQuantity, remainingQty: nextQty },
+        metadata: { priorQty: prior, soldQuantity, remainingQty: remaining, deleted: false },
       });
     });
 
-    return { updated: true, remainingQty: nextQty };
+    return { updated: true, remainingQty: remaining, deleted: false };
   } catch (e) {
     console.error(`[OMS] Failed to sync local portfolio after SELL fill for ${symbol}`, e);
-    return { updated: false, remainingQty: null };
+    return { updated: false, remainingQty: null, deleted: false };
   }
+}
+
+/**
+ * Immediate local portfolio upsert after OMS BUY fill — so Holdings reflect IB fills
+ * before the next PortfolioReconciliation tick (fail-closed: never invents price).
+ */
+export async function syncLocalPortfolioAfterBuyFill(
+  symbol: string,
+  boughtQuantity: number,
+  fillPrice: number,
+  brokerSource?: string | null,
+): Promise<{ updated: boolean }> {
+  if (!(boughtQuantity > 0) || !symbol || !(fillPrice > 0)) {
+    return { updated: false };
+  }
+  try {
+    const rows = await db.select().from(portfolio).where(eq(portfolio.symbol, symbol)).limit(1);
+    const now = new Date().toISOString();
+    const local = rows[0];
+    if (!local) {
+      await db.insert(portfolio).values({
+        symbol,
+        quantity: boughtQuantity,
+        averagePrice: fillPrice,
+        currentPrice: fillPrice,
+        lastUpdated: now,
+        unrealizedPnL: 0,
+        brokerSource: brokerSource || null,
+      });
+    } else {
+      const priorQty = Number(local.quantity) || 0;
+      const priorAvg = Number(local.averagePrice) || fillPrice;
+      const newQty = priorQty + boughtQuantity;
+      const newAvg = newQty > 0 ? ((priorAvg * priorQty) + fillPrice * boughtQuantity) / newQty : fillPrice;
+      await db.update(portfolio).set({
+        quantity: newQty,
+        averagePrice: newAvg,
+        currentPrice: fillPrice,
+        lastUpdated: now,
+        brokerSource: brokerSource || local.brokerSource,
+      }).where(eq(portfolio.symbol, symbol));
+    }
+    observeSafe(() => {
+      structuredLogger.info('local_portfolio_buy_fill_sync', {
+        category: 'PORTFOLIO',
+        component: 'localPortfolioSync',
+        eventType: 'LOCAL_PORTFOLIO_BUY_FILL_SYNC',
+        symbol,
+        metadata: { boughtQuantity, fillPrice },
+      });
+    });
+    return { updated: true };
+  } catch (e) {
+    console.error(`[OMS] Failed to sync local portfolio after BUY fill for ${symbol}`, e);
+    return { updated: false };
+  }
+}
+
+/** @deprecated Prefer syncLocalPortfolioAfterSellFill — alias kept for existing call sites/tests. */
+export async function syncLocalPortfolioAfterFullSellFill(
+  symbol: string,
+  soldQuantity: number,
+): Promise<{ updated: boolean; remainingQty: number | null }> {
+  const r = await syncLocalPortfolioAfterSellFill(symbol, soldQuantity);
+  return { updated: r.updated, remainingQty: r.remainingQty };
 }
 
 /** True when broker-reported cumulative fill covers the full order quantity. */

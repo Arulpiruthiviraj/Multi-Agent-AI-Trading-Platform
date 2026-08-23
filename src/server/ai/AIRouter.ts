@@ -859,15 +859,18 @@ export class AIRouter {
             // or other remotes — each 404 was billed against NewsAgent's 12s×3 = 36s outer budget.
             const fallbackModels = (reqModel && isLocalProviderRow(providerRow)) ? route?.fallback : undefined;
             const researchBound = isResearchAgentType(agentType);
-            const perModelTimeoutMs = researchBound
-              ? Math.min(route?.timeoutMs ?? RESEARCH_TIMEOUT_MS, RESEARCH_TIMEOUT_MS)
-              : (route?.timeoutMs ?? AI_PROVIDER_TIMEOUT_MS);
+            // Hard outer cap: researchTimeoutMs (8s) for every agent inference — fail-closed HOLD,
+            // never stall the event loop on hung Ollama/heavy-mutex queues.
+            const hardCapMs = RESEARCH_TIMEOUT_MS;
+            const perModelTimeoutMs = Math.min(
+              researchBound
+                ? (route?.timeoutMs ?? RESEARCH_TIMEOUT_MS)
+                : (route?.timeoutMs ?? AI_PROVIDER_TIMEOUT_MS),
+              hardCapMs,
+            );
             const effectiveTemperature = route?.temperature ?? AI_DECISION_TEMPERATURE;
-            const fallbackCount = fallbackModels?.length ?? 0;
-            // Research agents: hard outer cap at researchTimeoutMs (no fallback multiplier stretch).
-            const totalTimeoutMs = researchBound
-              ? RESEARCH_TIMEOUT_MS
-              : perModelTimeoutMs * (1 + fallbackCount);
+            // No fallback multiplier stretch past hardCap — one attempt budget only.
+            const totalTimeoutMs = hardCapMs;
             res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: effectiveTemperature, signal, fallbackModels, timeoutMs: route ? perModelTimeoutMs : undefined }), totalTimeoutMs, providerId);
             
             latency = Date.now() - startTime;

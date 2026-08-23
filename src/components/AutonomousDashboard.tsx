@@ -77,7 +77,11 @@ interface AutonomousDashboardProps {
   /** Persist settings.budget (Argus allocation, not broker equity). */
   onSaveAllocatedBudget?: (budget: number) => Promise<{ ok: boolean; error?: string }>;
   onOpenMissionControl?: () => void;
+  /** Active adapter id from settings / runtime (alpaca | ibkr_gateway | …). */
+  activeBrokerId?: string;
 }
+
+type TradeBrokerTab = 'active' | 'all' | 'alpaca' | 'ibkr_gateway';
 
 export function AutonomousDashboard({ 
   autoBotConfig = {}, 
@@ -90,6 +94,7 @@ export function AutonomousDashboard({
   setShowLaunchDialog,
   onSaveAllocatedBudget,
   onOpenMissionControl,
+  activeBrokerId: activeBrokerIdProp,
 }: AutonomousDashboardProps) {
   const [currentTime, setCurrentTime] = useState(new Date());
   // Allocation editor is config, not an order. Hands-Off Mode and ENGINE PAUSED must not
@@ -107,6 +112,8 @@ export function AutonomousDashboard({
   const [systemIntegrity, setSystemIntegrity] = useState<any>(null);
   const [learningStats, setLearningStats] = useState<any>(null);
   const [isLoadingChart, setIsLoadingChart] = useState(true);
+  const [tradeBrokerTab, setTradeBrokerTab] = useState<TradeBrokerTab>('active');
+  const [viewingLabel, setViewingLabel] = useState<string | null>(null);
 
   // Sync props to state if provided (including fail-closed null — do not keep stale equity).
   useEffect(() => {
@@ -178,15 +185,17 @@ export function AutonomousDashboard({
     };
   }, [initialPortfolioData]);
 
-  // Fetch real trades if not provided via props. Parent App.tsx already polls
-  // GET /api/v1/trades; a second 12s loop here doubled that traffic even when
-  // trades={[]} was passed (empty array is still "provided").
+  // Broker-scoped trades: default = active adapter. Parent App.tsx may pass trades for
+  // the active broker; tab changes always re-fetch with ?brokerId=.
   useEffect(() => {
-    if (initialTrades !== undefined) return;
     let isMounted = true;
+    const brokerQ =
+      tradeBrokerTab === 'active'
+        ? ''
+        : `?brokerId=${encodeURIComponent(tradeBrokerTab)}`;
     const fetchTrades = async () => {
       try {
-        const res = await fetch("/api/v1/trades");
+        const res = await fetch(`/api/v1/trades${brokerQ}`);
         if (res.ok) {
           const data = await res.json();
           if (isMounted && Array.isArray(data)) setLiveTrades(data);
@@ -196,13 +205,31 @@ export function AutonomousDashboard({
       }
     };
 
+    // When tab is active and parent already supplies trades, use them until next poll.
+    if (tradeBrokerTab === 'active' && initialTrades !== undefined) {
+      setLiveTrades(initialTrades || []);
+    }
     fetchTrades();
     const interval = setInterval(fetchTrades, 12000);
     return () => {
       isMounted = false;
       clearInterval(interval);
     };
-  }, [initialTrades]);
+  }, [initialTrades, tradeBrokerTab]);
+
+  useEffect(() => {
+    const fromPortfolio = typeof livePortfolio?.viewing === 'string' ? livePortfolio.viewing : null;
+    if (fromPortfolio) {
+      setViewingLabel(fromPortfolio);
+      return;
+    }
+    const id = livePortfolio?.activeBrokerId || activeBrokerIdProp || 'alpaca';
+    if (id === 'ibkr_gateway') setViewingLabel('Interactive Brokers Paper (Gateway)');
+    else if (id === 'ibkr_web') setViewingLabel('Interactive Brokers Paper (Web API)');
+    else if (id === 'alpaca') setViewingLabel('Alpaca Paper');
+    else if (id === 'internal_paper') setViewingLabel('Argus Internal Simulator');
+    else setViewingLabel(String(id));
+  }, [livePortfolio, activeBrokerIdProp]);
 
   // Analytics is already polled by App.tsx into pnlHistory. A second fetch here,
   // especially one that re-ran whenever portfolio/trades props changed, stacked
@@ -669,11 +696,42 @@ export function AutonomousDashboard({
 
       {/* Daily Report */}
       <div className="bg-[#1A1F2B] border border-slate-800 rounded-xl p-6 shadow-sm">
-        <div className="flex justify-between items-center mb-6">
+        <div className="flex justify-between items-center mb-2">
            <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
              <FileText size={16} className="text-indigo-400" /> Live Execution & Holdings Report
            </h3>
            <span className="text-xs font-mono text-slate-500">{new Date().toLocaleDateString()}</span>
+        </div>
+        <div className="mb-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+          <div className="text-xs font-mono text-cyan-300/90">
+            Viewing: {viewingLabel || livePortfolio?.activeBrokerName || '—'}
+            {typeof livePortfolio?.cash === 'number' && (
+              <span className="text-slate-500 ml-2">
+                cash ${Number(livePortfolio.cash).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {([
+              ['active', 'Active'],
+              ['all', 'All Brokers'],
+              ['ibkr_gateway', 'IBKR Paper'],
+              ['alpaca', 'Alpaca Paper'],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setTradeBrokerTab(id)}
+                className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider rounded border ${
+                  tradeBrokerTab === id
+                    ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40'
+                    : 'bg-transparent text-slate-500 border-slate-700 hover:text-slate-300'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
         
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
@@ -750,7 +808,11 @@ export function AutonomousDashboard({
                </div>
              ) : (
                <div className="bg-[#0A0F16] border border-slate-800 rounded-lg p-4 text-xs font-mono text-slate-500 text-center">
-                 No recent trades recorded on the ledger. {isEngineActive ? "Autobot is on — fills appear after consensus and RiskEngine pass." : "Autobot is paused. Start it from Mission Control; this panel does not invent fills."}
+                 No trades for this broker scope
+                 {tradeBrokerTab === 'ibkr_gateway' || (tradeBrokerTab === 'active' && (livePortfolio?.activeBrokerId || activeBrokerIdProp) === 'ibkr_gateway')
+                   ? ' (IBKR Gateway ledger is empty until OMS fills stamp brokerId=ibkr_gateway).'
+                   : '.'}{' '}
+                 {isEngineActive ? 'Autobot is on — fills appear after consensus and RiskEngine pass.' : 'Autobot is paused.'}
                </div>
              )}
              

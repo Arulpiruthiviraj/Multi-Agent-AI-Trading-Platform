@@ -53,6 +53,12 @@ const {
       },
       where() { return Promise.resolve({}); },
     }),
+    delete: (table?: any) => ({
+      where() {
+        if (table === portfolio) portfolioRows.length = 0;
+        return Promise.resolve({});
+      },
+    }),
   };
   return {
     mockDb, tradesInserts, fillsInserts,
@@ -223,8 +229,8 @@ describe('OrderManagementService.executeOrder', () => {
 
     expect(positions).toHaveBeenCalled();
     expect(getFinalTradeRow().profitLoss).toBe(50); // (110 - 100) * 5 from local averagePrice
-    // Full SELL fill must zero local portfolio before the next recon tick.
-    expect(getPortfolioRows()[0]?.quantity).toBe(0);
+    // Full SELL fill must clear local portfolio before the next recon tick.
+    expect(getPortfolioRows().length === 0 || getPortfolioRows()[0]?.quantity === 0).toBe(true);
   });
 
   it('keeps PENDING and pauses trading when placeOrder throws (unknown submit is not REJECTED)', async () => {

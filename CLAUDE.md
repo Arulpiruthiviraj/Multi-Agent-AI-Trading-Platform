@@ -374,7 +374,7 @@ Levels TRACE→FATAL. Safety categories never DEBUG (`safetyMinLevel` INFO). Fai
 
 ## Database (notable)
 
-Count `sqliteTable(` in `schema.ts` (drifts). Include: `settings`, `trades`, `fills`, `portfolio`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `news_clusters`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, …
+Count `sqliteTable(` in `schema.ts` (drifts; **60** as of 2026-08-21). Include: `settings` (incl. campaign columns), `trades`, `fills`, `portfolio`, `daily_strategy_performance`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `agent_predictions`, `prediction_outcomes`, `news_clusters`, `news_predictions`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, `config_overrides`, …
 
 Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db` (`application/octet-stream`; restart required).
 
@@ -388,16 +388,21 @@ Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db`
 |---|---|
 | Paper (supervised) | **`PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS`** — mechanically possible; operator must watch recon, Autobot, and RTH |
 | LIVE | **`LIVE_NO_GO`** — `evaluateLiveReadiness().result`; live eligibility FAIL |
-| Organic PAPER FILLED SELL P&L | **0 / 30 trades · 0 / 10 sessions · 0 / 30 calendar days** |
+| Organic PAPER FILLED SELL P&L | **0 / 30 trades · 0 / 10 sessions · 0 / 30 calendar days** (re-check with `npx tsx scripts/organic_paper_soak_status.ts` — script must exit; do not treat hang as evidence) |
 | Profit factor / expectancy | null (need PF ≥ 1.2, expectancy &gt; 0 from `researchSafety.json`) |
 | Canadian live routing | **BLOCKED** (IIROC 3200A.1(b)(i)). `markets.json` metadata ≠ execution |
-| Quant default | OFF |
+| Quant default | OFF (`QUANT_ENGINE_ENABLED`) |
 | CORE strategies | UNTESTED on REAL_MARKET_DATA NEXT_BAR_OPEN |
-| Mandatory LIVE gates | **6 / 28 PASS**: `SOFTWARE_ORDER_PATH`, `EXECUTION_OMS`, `RISK_GATES`, `RESEARCH_WAREHOUSE`, `ZERO_COST_RESEARCH`, `QUANT_DEFAULT` |
+| Mandatory LIVE gates | Re-check `evaluateLiveReadiness()` — historically **6 / 28 PASS** family (`SOFTWARE_ORDER_PATH`, `EXECUTION_OMS`, `RISK_GATES`, `RESEARCH_WAREHOUSE`, `ZERO_COST_RESEARCH`, `QUANT_DEFAULT`); result remains **`LIVE_NO_GO`** while paper floors fail |
+| Harness (2026-08-21) | `npm test` **330** files / **2111** tests; `npm run lint` exit 0; Node **24.18.0** |
 
-Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessions` 10, `minPaperCalendarDays` 30, `minPaperProfitFactor` 1.2, `minPaperExpectancy` 0, `minOosTrades` 30. REPLAY / EXTERNAL_SYNC / DIAGNOSTIC / shadow / telemetry pulse **do not count**. Script: `npx tsx scripts/organic_paper_soak_status.ts`.
+Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessions` 10, `minPaperCalendarDays` 30, `minPaperProfitFactor` 1.2, `minPaperExpectancy` 0, `minOosTrades` 30. REPLAY / EXTERNAL_SYNC / DIAGNOSTIC / shadow / telemetry pulse **do not count**. Script: `npx tsx scripts/organic_paper_soak_status.ts` (closes SQLite + `process.exit` — must not linger as a second DB writer).
 
 `TRADING_ENABLED` + Autobot on **does not** equal soak completion.
+
+**Daily Goal Campaign** (optional, `settings.campaign_enabled` default off): attribution + BUY soft-lock + effort telemetry + opening-surge nudges. Full contract: [`ARGUS_CAMPAIGN_TRACKER.md`](ARGUS_CAMPAIGN_TRACKER.md). Does **not** lower consensus, enable QUANT, or bypass OMS.
+
+**News (24/7 intel):** `NewsEngine` uses RTH vs off-hours poll intervals (`config/runtimeIntervals.json`). High-impact off-hours items may stage as `STAGED_FOR_OPEN`; `MarketOpenNewsConfluence` confirms/contradicts at open via gated `emitTradeIdea`. Gate 14 `news_veto` still reads `news_clusters` (direction-blind). Historical design snapshot: `ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md` (immutable).
 
 ## Required operator actions (paper)
 

@@ -165,9 +165,11 @@ Normal stop never uses `kill -9`. No second PID mechanism.
 
 ## Historical Evaluation (`replay`)
 
-Runs **inside** the Argus Engine. CLI is HTTP only.
+Runs **inside** the Argus Engine. CLI is HTTP only. Results are **HISTORICAL_SIMULATION** / **NOT_PROMOTION_EVIDENCE** — never organic paper, never LIVE.
 
 `replay analyze` / `replay diagnostics` expose **existing** report/meta evidence. They do **not** auto-change risk thresholds, consensus, agent weights, or live behavior.
+
+See also [`ARGUS_HISTORICAL_EVALUATION.md`](ARGUS_HISTORICAL_EVALUATION.md) and [`docs/ARGUS_REPLAY_USER_GUIDE.md`](docs/ARGUS_REPLAY_USER_GUIDE.md).
 
 ---
 

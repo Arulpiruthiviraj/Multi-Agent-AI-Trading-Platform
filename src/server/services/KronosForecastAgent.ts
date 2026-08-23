@@ -65,6 +65,54 @@ export class KronosForecastAgent {
     return this.listening;
   }
 
+  /**
+   * Manual co-eval: one Chronos forecast if history + local service allow.
+   * Never fabricates a BUY/SELL when Chronos is down.
+   */
+  async evaluateOnDemand(symbol: string): Promise<{ status: string }> {
+    const sym = symbol.toUpperCase();
+    if (!isPipelineAgentEnabled('KronosEngine')) return { status: 'gated' };
+    notePipelineAgentTick('KronosEngine');
+
+    let history = this.priceHistory[sym] || [];
+    const { marketDataWorker } = await import('./MarketDataWorker');
+    const live = marketDataWorker.getLatestPrice(sym);
+    if (typeof live === 'number' && Number.isFinite(live) && live > 0) {
+      history = [...history, live];
+    }
+    if (history.length < MIN_HISTORY) {
+      try {
+        const { historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway');
+        const endMs = Date.now();
+        const startMs = endMs - 90 * 24 * 60 * 60 * 1000;
+        await historicalDataGateway.ensureBars(sym, '1Day', startMs, endMs);
+        const bars = await historicalDataGateway.getBars(sym, '1Day', startMs, endMs);
+        history = bars.map((b) => b.close).filter((c) => c > 0);
+        if (typeof live === 'number' && live > 0) history.push(live);
+      } catch {
+        return { status: 'insufficient_history' };
+      }
+    }
+    if (history.length < MIN_HISTORY) return { status: 'insufficient_history' };
+    if (!kronosEngine.getStatus().isAvailable) {
+      this.emitUnavailableTelemetry(sym, 'LOCAL_AI_SERVICE_URL /health not ready');
+      return { status: 'chronos_unavailable' };
+    }
+
+    this.priceHistory[sym] = history.slice(-MAX_HISTORY);
+    this.lastPredictionAt[sym] = 0;
+    try {
+      const prediction = await kronosEngine.predict(sym, HORIZON, TIMEFRAME, this.priceHistory[sym].slice());
+      if (!kronosEngine.getStatus().isAvailable) return { status: 'chronos_unavailable' };
+      this.broadcastForecast(prediction);
+      notePipelineAgentSuccess('KronosEngine');
+      return { status: 'forecasted' };
+    } catch (e: any) {
+      notePipelineAgentFailure('KronosEngine', e);
+      return { status: `error:${e?.message || e}` };
+    }
+  }
+
   private emitUnavailableTelemetry(symbol: string, detail: string) {
     const now = Date.now();
     if (now - this.lastUnavailableTelemetryAt < PREDICTION_COOLDOWN_MS) return;

@@ -59,7 +59,7 @@ export const settings = sqliteTable('settings', {
   selectedBroker: text('selected_broker'),
   selectedAiProvider: text('selected_ai_provider'),
   budget: real('budget').default(50000),
-  strategy: text('strategy').default('Momentum Focus'),
+  strategy: text('strategy').default('ADAPTIVE_MULTI_STRATEGY'),
   maxTradeSize: real('max_trade_size').default(3000),
   dailyLossLimit: real('daily_loss_limit').default(5000),
   takeProfitPct: real('take_profit_pct').default(15),
@@ -142,6 +142,9 @@ export const settings = sqliteTable('settings', {
   dailyTargetAmount: real('daily_target_amount').default(0),
   dailyTargetType: text('daily_target_type').notNull().default('DOLLAR'), // DOLLAR | PERCENT
   targetAchievedAction: text('target_achieved_action').notNull().default('CONTINUE'), // LOCK_AND_IDLE | TRAIL_STOPS_ONLY | CONTINUE
+  // Optional day-trader EOD flatten: PortfolioMonitor emits risk-exit SELL ideas near 15:55 ET
+  // when campaign_enabled — still through ChiefTrader/RiskEngine/OMS, never placeOrder direct.
+  closePositionsBeforeMarketClose: integer('close_positions_before_market_close', { mode: 'boolean' }).default(false),
 });
 
 // Immutable audit trail for every kill-switch state transition (Phase 1.4: "every
@@ -297,6 +300,9 @@ export const trades = sqliteTable('trades', {
   // PAPER | LIVE | UNKNOWN | BACKTEST | REPLAY | SIMULATION — OMS writes this at insert.
   // Reasoning stamp remains for older rows. Organic paper prefers this column.
   executionEnvironment: text('execution_environment'),
+  // Order-placing adapter id at submit time (alpaca | ibkr_gateway | ibkr_web | internal_paper | …).
+  // OMS stamps from BrokerManager.getActiveBroker().id. Legacy rows backfilled to alpaca.
+  brokerId: text('broker_id'),
 }, (table) => ({
   // Hardening pass, Phase 2: real duplicate-order idempotency at the DB level, closing the
   // check-then-act race in OrderManagement.ts's own pre-insert lookup (two concurrent
@@ -607,6 +613,9 @@ export const newsPredictions = sqliteTable('news_predictions', {
   sourceCount: integer('source_count').default(1),
   newsAgentMode: text('news_agent_mode').notNull(),
   modelSource: text('model_source').notNull(),
+  /** ACTIVE | STAGED_FOR_OPEN | EXPIRED | CONSUMED — overnight priming for next RTH open. */
+  stagingStatus: text('staging_status').default('ACTIVE'),
+  expiresAt: text('expires_at'),
 });
 
 export const newsProviders = sqliteTable('news_providers', {

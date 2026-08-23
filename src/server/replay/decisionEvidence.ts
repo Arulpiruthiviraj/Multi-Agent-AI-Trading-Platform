@@ -171,7 +171,7 @@ export function summarizeDecisionEvidence(records: DecisionEvidenceRecord[]): {
   };
 }
 
-/** Honesty block for summary / report — aiMode does not invent LLM votes. */
+/** Honesty block for summary / report — aiMode handlers are wired; LLM votes are never invented. */
 export function buildAiModeHonesty(aiMode: string): {
   configuredAiMode: string;
   llmVotesInvoked: false;
@@ -185,7 +185,9 @@ export function buildAiModeHonesty(aiMode: string): {
     reason: base,
     consensusImplication:
       aiMode === 'DISABLED' || aiMode === 'AI_DISABLED'
-        ? 'AI_DISABLED / DISABLED: approval requires ≥2 independent non-LLM voters (typically QuantEngine + TechnicalAgent when Technical independently fires) at consensusApprovalThreshold; Quant alone cannot approve.'
-        : 'LIVE_MODEL_REPLAY / RECORDED_DECISION_REPLAY are labeled but not wired to AIRouter/routeConsensus (no PIT LLM corpus). Consensus math is identical to DISABLED until a real recorded-decision ledger exists.',
+        ? 'DISABLED: approval requires ≥2 independent non-LLM voters (typically QuantEngine + TechnicalAgent when Technical independently fires) at consensusApprovalThreshold; Quant alone cannot approve.'
+        : aiMode === 'RECORDED_DECISION_REPLAY'
+          ? 'RECORDED_DECISION_REPLAY: uses pit_decision_ledger rows when present; otherwise identical to DISABLED Quant+Technical path. Never fabricates historical LLM votes.'
+          : 'LIVE_MODEL_REPLAY: optional live routeConsensus with hard timeout; fail-closed HOLD on error. Consensus floors remain 0.75 / min 2 independent agents.',
   };
 }

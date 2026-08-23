@@ -1,5 +1,5 @@
 {
-  "$comment": "Per-agent local Ollama model specialization. Reviewed config change, not a UI knob. Every key under 'routes' is a REAL, confirmed agentType string from an actual AIRouter.routeTask('<agentType>', ...) call site (grepped across src/server before this file was written) - not an abstract domain label with no real code behind it. Applied at AIRouter.initialize() via setAgentRoute() as a DEFAULT, BEFORE persisted agent_routing_overrides load - a user's own routing choice from Settings still wins over this file. 'fallback' is a same-provider model retry (OpenAICompatibleProvider.ts), tried in order before AIRouter's own cross-provider failover takes over. researchTimeoutMs bounds Bull/Bear routeTask and ConsensusDebate routeConsensus so slow local inference fails closed to HOLD without blocking the event loop.",
+  "$comment": "Per-agent local Ollama model specialization. Reviewed config change, not a UI knob. Every key under 'routes' is a REAL, confirmed agentType string from an actual AIRouter.routeTask('<agentType>', ...) call site (grepped across src/server before this file was written) - not an abstract domain label with no real code behind it. Applied at AIRouter.initialize() via setAgentRoute() as a DEFAULT, BEFORE persisted agent_routing_overrides load - a user's own routing choice from Settings still wins over this file. 'fallback' is a same-provider model retry (OpenAICompatibleProvider.ts), tried in order before AIRouter's own cross-provider failover takes over. researchTimeoutMs is the hard outer Abort/timeout cap for ALL agent inference (8s) so hung local models fail closed to HOLD without blocking the event loop.",
   "notes": [
     "TechnicalAgent has no AI call to bind - it is deterministic real RSI/MACD/Bollinger math (CLAUDE.md), never calls AIRouter. Not listed here; do not fabricate a routing entry for it. There is no RULE_BASED fallback token to wire up here for the same reason - it is already 100% rule-based, always.",
     "ChiefTraderAgent's consensus debate uses AIRouter.routeConsensus('ConsensusDebate', ...), which calls MULTIPLE providers in parallel to build a real weighted vote - it has no per-call model-override parameter the way routeTask() does, so a single model cannot be 'the' Chief Trader model without a deeper routeConsensus change not made in this pass. Not listed here. Consensus calls use researchTimeoutMs (not the generic tradingSafety.aiProviderTimeoutMs).",
@@ -22,30 +22,30 @@
     "NewsAgent": {
       "model": "fingpt:latest",
       "temperature": 0.2,
-      "timeoutMs": 12000,
+      "timeoutMs": 8000,
       "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
       "rationale": "Fine-tuned on financial news/headlines/sentiment - real specialization match for NewsScoringEngine's sentiment+catalyst scoring."
     },
     "FundamentalAgent": {
       "model": "0xroyce/plutus:latest",
       "temperature": 0.2,
-      "timeoutMs": 15000,
+      "timeoutMs": 8000,
       "fallback": ["llama3.2:latest"],
       "rationale": "Fine-tuned on financial/economic/valuation texts - balance-sheet-style analysis matches FundamentalAgent's P/E, EPS growth, debt/equity prompt."
     },
     "MacroAgent": {
       "model": "0xroyce/plutus:latest",
       "temperature": 0.2,
-      "timeoutMs": 15000,
+      "timeoutMs": 8000,
       "fallback": ["llama3.2:latest"],
       "rationale": "Same model as FundamentalAgent - Plutus's training explicitly covers macroeconomic regime evaluation (yield curves, rate shifts), matching MacroAgent's CPI/Fed Funds/unemployment prompt."
     },
     "ReflectionEngine": {
       "model": "deepseek-r1:14b",
       "temperature": 0.3,
-      "timeoutMs": 30000,
+      "timeoutMs": 8000,
       "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
-      "rationale": "Deep chain-of-thought model for real post-trade post-mortem analysis on actual outcomes (ReflectionEngine.ts)."
+      "rationale": "Deep chain-of-thought model for real post-trade post-mortem analysis on actual outcomes (ReflectionEngine.ts). Hard-capped at researchTimeoutMs so it cannot monopolize HeavyModelMutex."
     },
     "BullResearcher": {
       "model": "0xroyce/plutus:latest",

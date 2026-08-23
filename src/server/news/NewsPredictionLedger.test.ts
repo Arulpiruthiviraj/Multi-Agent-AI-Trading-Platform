@@ -96,6 +96,6 @@ describe('NewsPredictionLedger (Phase F5, real DB)', () => {
   it('records the currently-configured newsAgentMode with every prediction', async () => {
     await recordNewsPrediction(prediction());
     const rows = await db.select().from(schema.newsPredictions);
-    expect(rows[0].newsAgentMode).toBe('CATALYST_ONLY'); // real repo config default
+    expect(rows[0].newsAgentMode).toBe('ACTIVE_VOTE'); // real repo config default (DEF-TODAY-05)
   });
 });

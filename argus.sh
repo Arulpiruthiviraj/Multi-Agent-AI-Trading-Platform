@@ -19,8 +19,10 @@ PID_FILE="$ROOT_DIR/.argus_dev.pid"
 mkdir -p "$LOG_DIR"
 
 # port:label — kept as parallel arrays for portability (no assoc arrays on bash 3.2/macOS)
-PORTS=(3000 5000 8008 47332)
-PORT_LABELS=("Argus Node/Vite server" "IBKR Client Portal Gateway" "Chronos/Kronos local AI service" "OpenAlice Guardian MCP")
+# IB Gateway Desktop TCP :4002 is probed in status via argus-ecosystem-status.ts but is NOT
+# in this kill/start conflict list (external app; do not SIGKILL the operator's Gateway).
+PORTS=(3000 8008 47332)
+PORT_LABELS=("Argus Node/Vite server" "Chronos/Kronos local AI service" "OpenAlice Guardian MCP")
 
 label_for_port() {
   local port="$1" i
@@ -289,9 +291,22 @@ check_chronos_health() {
 }
 
 check_ibkr_gateway() {
-  # InteractiveBrokersAdapter.ts GET /iserver/auth/status (self-signed cert; 401 pending
-  # manual 2FA is expected and still counts as "up" per CLAUDE.md, not a failure)
-  curl_cmd -sk -o /dev/null -w '%{http_code}' --max-time 3 "https://localhost:5000/v1/api/iserver/auth/status" 2>/dev/null
+  # IB Gateway Desktop / TWS paper TCP socket (primary Argus path). Not Client Portal :5000.
+  local port="${IBKR_SOCKET_PORT:-4002}"
+  if command -v node >/dev/null 2>&1; then
+    if node -e "const n=require('net');const s=n.connect({host:'127.0.0.1',port:Number(process.env.IBKR_SOCKET_PORT||4002),timeout:1500},()=>{s.destroy();process.exit(0)});s.on('error',()=>process.exit(1));s.on('timeout',()=>{s.destroy();process.exit(1)})" 2>/dev/null; then
+      echo "UP"
+    else
+      echo "DOWN"
+    fi
+    return
+  fi
+  # Fallback without node: bash /dev/tcp (may be unavailable on some shells)
+  if (echo >/dev/tcp/127.0.0.1/"$port") >/dev/null 2>&1; then
+    echo "UP"
+  else
+    echo "DOWN"
+  fi
 }
 
 check_openalice_guardian() {

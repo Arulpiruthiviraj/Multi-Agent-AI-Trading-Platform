@@ -47,9 +47,7 @@ import { rsiEngine } from '../engines/RSIEngine';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { computeAgentSynergyMatrix, REAL_AGENT_NAMES } from '../services/AgentSynergy';
 import { getSector } from '../engines/PositionSizing';
-import { v4 as uuidv4 } from 'uuid';
 import { eventBus } from '../core/EventBus';
-import { recordConsensusTransaction } from '../core/TransactionRegistry';
 import { oms } from '../services/OrderManagement';
 import { withTimeout } from '../services/brokerPortfolioResponse';
 import { ALL_STRATEGIES, EXPERIMENTAL_STRATEGIES, isExperimentalStrategyLive } from '../quant/strategies/StrategyEngine';
@@ -81,13 +79,37 @@ v2Router.get('/portfolio', async (_req, res) => {
   const holdings = await argusApplication.positions();
   res.json({ ok: true, portfolio: holdings, live: 'NO-GO' });
 });
-v2Router.get('/trades', async (_req, res) => {
-  const rows = await argusApplication.recentTrades(100);
-  res.json({ ok: true, trades: rows, live: 'NO-GO' });
+v2Router.get('/trades', async (req, res) => {
+  let liveId: string | null = null;
+  try {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    liveId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+  } catch { /* */ }
+  const { parseBrokerScopeQuery, resolveActiveBrokerId, listTradesForBrokerScope } = await import('../services/brokerScopedLedger');
+  const parsed = parseBrokerScopeQuery(req.query.brokerId);
+  if ('error' in parsed) return res.status(400).json({ ok: false, error: parsed.error });
+  const activeBrokerId = resolveActiveBrokerId(liveId);
+  const scope = parsed.mode === 'broker' && !parsed.brokerId
+    ? { mode: 'broker' as const, brokerId: activeBrokerId }
+    : parsed;
+  const rows = await listTradesForBrokerScope({ scope, activeBrokerId, limit: 100 });
+  res.json({ ok: true, trades: rows, brokerId: scope.mode === 'all' ? 'all' : (scope.brokerId || activeBrokerId), live: 'NO-GO' });
 });
-v2Router.get('/orders', async (_req, res) => {
-  const rows = await argusApplication.recentTrades(100);
-  res.json({ ok: true, orders: rows, note: 'Trade ledger alias; not full OMS book.', live: 'NO-GO' });
+v2Router.get('/orders', async (req, res) => {
+  let liveId: string | null = null;
+  try {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    liveId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+  } catch { /* */ }
+  const { parseBrokerScopeQuery, resolveActiveBrokerId, listTradesForBrokerScope } = await import('../services/brokerScopedLedger');
+  const parsed = parseBrokerScopeQuery(req.query.brokerId);
+  if ('error' in parsed) return res.status(400).json({ ok: false, error: parsed.error });
+  const activeBrokerId = resolveActiveBrokerId(liveId);
+  const scope = parsed.mode === 'broker' && !parsed.brokerId
+    ? { mode: 'broker' as const, brokerId: activeBrokerId }
+    : parsed;
+  const rows = await listTradesForBrokerScope({ scope, activeBrokerId, limit: 100 });
+  res.json({ ok: true, orders: rows, note: 'Trade ledger alias; not full OMS book.', brokerId: scope.mode === 'all' ? 'all' : (scope.brokerId || activeBrokerId), live: 'NO-GO' });
 });
 
 v2Router.use('/traces', traceRouter);
@@ -138,11 +160,28 @@ v2Router.post('/system/telemetry-pulse', tradingLimiter, async (req, res) => {
     const symbol = typeof req.body?.symbol === 'string' && req.body.symbol ? req.body.symbol : 'AAPL';
     const { startDigitalTwinTelemetryPulse } = await import('../core/telemetryPulse');
     const result = startDigitalTwinTelemetryPulse({ mode: pulseMode, symbol });
+    let newsPulse: Awaited<ReturnType<typeof import('../core/newsFinBertPulse').runNewsFinBertPulse>> | null = null;
+    try {
+      const { runNewsFinBertPulse } = await import('../core/newsFinBertPulse');
+      newsPulse = await runNewsFinBertPulse({
+        symbol: typeof req.body?.newsSymbol === 'string' ? req.body.newsSymbol : 'NVDA',
+      });
+    } catch (e: any) {
+      newsPulse = {
+        ok: false,
+        finbert: false,
+        ideaEmitted: false,
+        signedScore: null,
+        detail: e?.message || String(e),
+        canPlaceOrders: false,
+      };
+    }
     res.json({
       ok: true,
       ...result,
       started: true,
-      note: 'Synthetic UI pulse only. Not organic paper. Not LIVE. OMS/Risk ignore telemetryPulse payloads.',
+      newsFinBert: newsPulse,
+      note: 'Synthetic UI pulse only for twin animation. FinBERT side-channel may emit NEWS_SENTIMENT_SCORED / optional NewsAgent idea — never OMS-direct. Not LIVE.',
       live: 'NO-GO',
       canPlaceOrders: false,
     });
@@ -756,55 +795,67 @@ v2Router.get('/strategy/agent-synergy', async (req, res) => {
 // emits a real CHIEF_APPROVED_IDEA event - the same event RiskAgent already listens for after
 // ChiefTraderAgent's own AI-consensus approval - carrying a real live price from
 // marketDataWorker. That means a manual override still passes through every real RiskEngine gate
-// (emergency stop, circuit breakers, PositionSizing caps, sector/correlation caps) and the real
-// OrderManagementService/broker call; only ChiefTraderAgent's AI-consensus step is skipped, which
-// is the entire point of an operator override. recordConsensusTransaction() mints a real
-// transactions/consensus_decisions row so this stays visible in the Transaction Observatory,
-// honestly tagged with agent 'ManualOverride' and debateUsed:false rather than pretending an AI
-// agent produced it. The actual approved quantity is whatever RiskEngine's real sizing computes -
-// never a client-supplied number - reported back asynchronously via the existing
-// RISK_ASSESSMENT_COMPLETED / ORDER_EXECUTED WebSocket broadcasts every other real trade uses.
+// ==========================================================================================
+// Opportunity Feed / Advanced Trade Sandbox CONFIRM BUY|SELL.
+// FULL CONSENSUS RETENTION: operator intent triggers on-demand agent co-eval → ChiefTrader
+// (≥0.75 weighted confidence, ≥2 independent agents) → RiskEngine (24 gates) → OMS → broker.
+// Does NOT emit CHIEF_APPROVED_IDEA directly. Does NOT skip consensus. PAPER_TRADING_ONLY unchanged.
 // ==========================================================================================
 v2Router.post('/trading/execute-override', tradingLimiter, async (req, res) => {
-  // Operator override: skips ChiefTrader consensus only. Still RiskEngine → OMS → BrokerManager.
-  // Never placeOrder-direct. BUY refused while Autobot off. Stamps SOURCE: MANUAL_OVERRIDE.
   try {
+    if (process.env.PAPER_TRADING_ONLY !== 'true' && process.env.PAPER_TRADING_ONLY !== '1') {
+      // Soft check: still refuse to advertise live-manual path; LIVE arm remains separate.
+      console.warn('[ManualConsensus] PAPER_TRADING_ONLY is not true — manual consensus still requires RiskEngine; LIVE arm unchanged.');
+    }
+
     const { symbol, side } = req.body || {};
     if (typeof symbol !== 'string' || !symbol || (side !== 'BUY' && side !== 'SELL')) {
       return res.status(400).json({ ok: false, error: 'symbol (string) and side ("BUY" | "SELL") are required' });
     }
 
-    // BUY still cannot skip Autobot-off. SELL/flatten remains available while TRADING_ENABLED
-    // so operators can reduce risk; RiskEngine still evaluates every emit.
     if (side === 'BUY' && !isLiveIdeaGenerationEnabled()) {
-      console.warn(`[Override] BUY refused — Autobot off or tradingState not TRADING_ENABLED (symbol=${symbol})`);
+      console.warn(`[ManualConsensus] BUY refused — Autobot off or tradingState not TRADING_ENABLED (symbol=${symbol})`);
       return res.status(409).json({
         ok: false,
-        error: 'BUY override refused while Autobot is off or tradingState is not TRADING_ENABLED. SELL/flatten still goes through RiskEngine.',
+        error: 'BUY refused while Autobot is off or tradingState is not TRADING_ENABLED. SELL/flatten still requires consensus + RiskEngine.',
       });
     }
 
     const currentPrice = marketDataWorker.getLatestPrice(symbol);
     if (currentPrice === null) {
-      return res.status(422).json({ ok: false, error: `No real live price available for ${symbol} yet - cannot size or risk-evaluate an override without one. Wait for a market data tick or confirm the symbol is correct.` });
+      return res.status(422).json({
+        ok: false,
+        error: `No real live price available for ${symbol} yet - cannot risk-evaluate without one. Wait for a market data tick.`,
+      });
     }
 
-    const traceId = `manual-override-${uuidv4()}`;
-    // SOURCE: MANUAL_OVERRIDE permanently excludes this from autonomous organic paper stats.
-    const reasoning = 'SOURCE: MANUAL_OVERRIDE — Manual consensus override via Advanced Trade Sandbox; human bypassed ChiefTrader AI consensus; RiskEngine+OMS still apply.';
-    console.warn(`[Override] ${side} ${symbol} @ ${currentPrice} traceId=${traceId} (skips ChiefTrader only; RiskEngine+OMS required)`);
-    const transactionId = await recordConsensusTransaction({
-      symbol, side, weightedConfidence: 1.0, threshold: 0, approved: true,
-      reasoning, debateUsed: false,
-      evidence: [{ agent: 'ManualOverride', side, confidence: 1.0, weight: 1.0, reasoning: 'SOURCE: MANUAL_OVERRIDE — Human-submitted override - not an AI agent signal.', currentPrice }],
-    });
+    const { runManualTradeCoEvaluation } = await import('../services/manualTradeCoEvaluation');
+    const result = await runManualTradeCoEvaluation({ symbol, side });
 
-    eventBus.emit('CHIEF_APPROVED_IDEA', {
-      traceId, transactionId, symbol, side, confidence: 1.0, reasoning,
-      agentsContext: 'ManualOverride', currentPrice,
-    });
+    if (!result.approved) {
+      return res.status(409).json({
+        ok: false,
+        error: result.reason,
+        code: 'TRADE_REJECTED_CONSENSUS',
+        traceId: result.traceId,
+        agentBreakdown: result.agentBreakdown,
+        consensusSide: result.consensusSide,
+        confidence: result.confidence,
+        source: result.source,
+      });
+    }
 
-    res.json({ ok: true, traceId, transactionId, currentPrice, source: 'MANUAL_OVERRIDE' });
+    res.json({
+      ok: true,
+      approved: true,
+      traceId: result.traceId,
+      currentPrice,
+      confidence: result.confidence,
+      agentBreakdown: result.agentBreakdown,
+      reason: result.reason,
+      source: result.source,
+      note: 'Consensus approved — RiskEngine 24 gates and OMS still apply asynchronously.',
+    });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -1799,6 +1850,9 @@ async function handleCampaignSettingsUpdate(req: any, res: any) {
       return res.status(400).json({ ok: false, error: 'targetAchievedAction must be LOCK_AND_IDLE, TRAIL_STOPS_ONLY, or CONTINUE' });
     }
     patch.targetAchievedAction = a;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'closePositionsBeforeMarketClose')) {
+    patch.closePositionsBeforeMarketClose = !!body.closePositionsBeforeMarketClose;
   }
   // Optional budget via existing settings.budget / CapitalAllocation path — not a parallel knob.
   if (Object.prototype.hasOwnProperty.call(body, 'budget')) {

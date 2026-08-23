@@ -11,6 +11,7 @@ import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from '../engines/TradingEngine';
 import { alertingService } from '../services/AlertingService';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { authorizeMarketDataWebSocket } from './marketDataWsOwnership';
 import { db, sqliteDb } from '../db';
 import * as schema from '../db/schema';
 
@@ -95,7 +96,7 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
       tradingMode: 'PAPER',
       riskLevel: 'Medium',
       budget: 50000,
-      strategy: 'Momentum Focus',
+      strategy: 'ADAPTIVE_MULTI_STRATEGY',
       maxTradeSize: 3000,
       dailyLossLimit: 5000,
       takeProfitPct: 15,
@@ -117,6 +118,7 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    authorizeMarketDataWebSocket('ArgusCoreBoot');
     marketDataWorker.start();
     console.log(
       '[MarketDataWorker] Started at boot (independent of Autobot). RiskEngine data_freshness still requires a fresh tick.',
@@ -139,7 +141,7 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
     const { newsEngine } = await import('../news/NewsEngine');
     newsEngine.start();
     console.log(
-      '[NewsEngine] Started at boot (independent of Autobot). Clustering feeds RiskEngine news_veto; TRADE_IDEA_GENERATED stays desk/Autobot-gated.',
+      '[NewsEngine] Started at boot (independent of Autobot / market clock). 24/7 ingest + adaptive cadence; TRADE_IDEA_GENERATED stays desk/Autobot-gated; orders still RiskEngine market_hours gated.',
     );
   } catch (e: any) {
     console.warn(`[NewsEngine] Boot start failed: ${e.message}`);
@@ -201,6 +203,13 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
     campaignTracker.start();
   } catch (e: any) {
     console.warn(`[CampaignTracker] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { firstFillForensicCheckpoint } = await import('../services/FirstFillForensicCheckpoint');
+    firstFillForensicCheckpoint.start();
+  } catch (e: any) {
+    console.warn(`[FirstFillForensicCheckpoint] Boot start failed: ${e.message}`);
   }
 
   try {

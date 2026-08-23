@@ -22,5 +22,11 @@ describe('v2Runtime routes', () => {
     const res = await request(app).get('/api/v2/runtime/health');
     expect([200, 503]).toContain(res.status);
     expect(res.body).toHaveProperty('health');
+    expect(res.body).toHaveProperty('activeBroker');
+    expect(res.body.activeBroker).toMatchObject({
+      id: expect.any(String),
+      name: expect.any(String),
+      paperTradingOnly: expect.any(Boolean),
+    });
   });
 });

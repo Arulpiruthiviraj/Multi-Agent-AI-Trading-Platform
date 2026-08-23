@@ -7,8 +7,9 @@
  * API into the ohlcv_bars table, and provides point-in-time-safe read
  * access for the backtest engine.
  *
- * There is no other real historical data source wired into Argus - this
- * throws rather than fabricating bars if ALPACA_API_KEY/SECRET are absent.
+ * Cache-first: when SQLite already has sufficient coverage for the window,
+ * Alpaca is not contacted (avoids 429 storms). On HTTP 429, exponential
+ * backoff is armed; callers may still evaluate from cache — never fabricate bars.
  * ==========================================================
  */
 import { db } from '../../db';
@@ -17,6 +18,7 @@ import { and, eq, gte, lte, asc, ne, sql } from 'drizzle-orm';
 import { tradingSafety } from '../../config/tradingSafety';
 import { networkEndpoints } from '../../config/networkEndpoints';
 import crypto from 'crypto';
+import { getRegisteredHistoricalBarProvider } from './historicalBarProvider';
 
 export interface Bar {
   timestamp: number; // epoch ms, bar open time
@@ -32,10 +34,32 @@ export interface Bar {
 // (also used by ingestAlpacaWarehouse.ts, which independently hardcoded the same host before).
 const ALPACA_DATA_HOST = networkEndpoints.broker.alpaca.dataBaseUrl;
 
+/** Approximate expected bar count for coverage checks (weekends/holidays reduce real count). */
+export function expectedBarCountForWindow(timeframe: string, startMs: number, endMs: number): number {
+  const spanMs = Math.max(0, endMs - startMs);
+  const dayMs = 86_400_000;
+  if (timeframe === '1Day' || timeframe === '1D') {
+    return Math.max(1, Math.floor(spanMs / dayMs));
+  }
+  if (timeframe === '1Min' || timeframe === '1T') {
+    return Math.max(1, Math.floor(spanMs / 60_000));
+  }
+  if (timeframe === '5Min') {
+    return Math.max(1, Math.floor(spanMs / (5 * 60_000)));
+  }
+  return Math.max(1, Math.floor(spanMs / dayMs));
+}
+
 export class HistoricalDataGateway {
   private static instance: HistoricalDataGateway;
   /** Shared across symbols so one 429 stops an idea-storm of ensureBars fan-out. */
   private rateLimitedUntilMs = 0;
+  private consecutiveRateLimits = 0;
+  /** Short-lived in-process cache keyed by symbol|timeframe|bucketed window. */
+  private memoryBars = new Map<string, { bars: Bar[]; expiresAt: number }>();
+  /** Alpaca pacing: ≥400ms between REST bar requests (~150/min ceiling). */
+  private lastAlpacaFetchAtMs = 0;
+  private alpacaPaceChain: Promise<void> = Promise.resolve();
 
   public static getInstance(): HistoricalDataGateway {
     if (!HistoricalDataGateway.instance) HistoricalDataGateway.instance = new HistoricalDataGateway();
@@ -45,35 +69,127 @@ export class HistoricalDataGateway {
   /** Test/ops helper — clear the in-process Alpaca bars 429 backoff. */
   clearBarsRateLimitBackoff(): void {
     this.rateLimitedUntilMs = 0;
+    this.consecutiveRateLimits = 0;
   }
 
   getBarsRateLimitedUntilMs(): number {
     return this.rateLimitedUntilMs;
   }
 
+  private memoryKey(symbol: string, timeframe: string, startMs: number, endMs: number): string {
+    const startBucket = Math.floor(startMs / 3_600_000);
+    const endBucket = Math.floor(endMs / 3_600_000);
+    return `${symbol}|${timeframe}|${startBucket}|${endBucket}`;
+  }
+
   private armBarsRateLimitBackoff(retryAfterHeader: string | null): void {
+    this.consecutiveRateLimits += 1;
     const retryAfterSec = retryAfterHeader ? Number(retryAfterHeader) : NaN;
+    const exp =
+      tradingSafety.quantBarsRateLimitBaseBackoffMs *
+      Math.pow(2, Math.min(6, this.consecutiveRateLimits - 1));
+    const capped = Math.min(exp, tradingSafety.quantBarsRateLimitMaxBackoffMs);
     const retryAfterMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0
       ? retryAfterSec * 1000
-      : tradingSafety.alpacaCircuitBreakerCooldownMs;
+      : capped;
     this.rateLimitedUntilMs = Math.max(this.rateLimitedUntilMs, Date.now() + retryAfterMs);
   }
 
+  private async persistBars(
+    symbol: string,
+    timeframe: string,
+    bars: Bar[],
+    source: string,
+    startMs?: number,
+    endMs?: number,
+  ): Promise<void> {
+    for (const b of bars) {
+      if (!(b.close > 0) || !Number.isFinite(b.timestamp)) continue;
+      await db.insert(schema.ohlcvBars).values({
+        id: `${symbol}:${timeframe}:${b.timestamp}`,
+        symbol,
+        timeframe,
+        timestamp: b.timestamp,
+        open: b.open,
+        high: b.high,
+        low: b.low,
+        close: b.close,
+        volume: b.volume,
+        source,
+      }).onConflictDoNothing();
+    }
+    if (startMs != null && endMs != null) {
+      this.memoryBars.delete(this.memoryKey(symbol, timeframe, startMs, endMs));
+    }
+  }
+
+  private async paceAlpacaFetch(): Promise<void> {
+    const minGapMs = 400; // ≤150 req/min
+    const run = async () => {
+      const wait = Math.max(0, minGapMs - (Date.now() - this.lastAlpacaFetchAtMs));
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      this.lastAlpacaFetchAtMs = Date.now();
+    };
+    const next = this.alpacaPaceChain.then(run, run);
+    this.alpacaPaceChain = next.then(() => undefined, () => undefined);
+    await next;
+  }
+
   /**
-   * Ensures real bars for [startMs, endMs] are cached locally, fetching from Alpaca if the
-   * cached count looks incomplete. Throws if no Alpaca credentials are configured - never
-   * fabricates a bar. On HTTP 429, arms a shared backoff and fail-closes (no fabricated ideas).
+   * Ensures real bars for [startMs, endMs] are cached locally.
+   * When IBKR Gateway is active (registered provider), uses reqHistoricalData — never Alpaca.
+   * When Alpaca is the provider path, paces REST (≤150/min) and uses SQLite cache-first.
+   * Never fabricates bars.
    */
   async ensureBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<void> {
-    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
-      throw new Error('Historical backfill requires ALPACA_API_KEY/ALPACA_SECRET_KEY - no other real historical data source is wired into Argus.');
+    const existing = await this.getBars(symbol, timeframe, startMs, endMs);
+    const expected = expectedBarCountForWindow(timeframe, startMs, endMs);
+    const coverage = existing.length / expected;
+    const minBars = tradingSafety.regimeMinBars;
+    const sufficient =
+      existing.length >= minBars
+      || coverage >= tradingSafety.quantBarsCacheMinCoverageRatio;
+
+    if (sufficient) {
+      this.consecutiveRateLimits = 0;
+      return;
+    }
+
+    const provider = getRegisteredHistoricalBarProvider();
+    if (provider?.id === 'ibkr_gateway') {
+      try {
+        const fetched = await provider.fetchBars(symbol, timeframe, startMs, endMs);
+        if (fetched.length > 0) {
+          await this.persistBars(symbol, timeframe, fetched, 'ibkr', startMs, endMs);
+          this.consecutiveRateLimits = 0;
+          return;
+        }
+        if (existing.length > 0) return;
+        throw new Error(`IBKR historical bars returned empty for ${symbol} (${timeframe})`);
+      } catch (e: any) {
+        if (existing.length > 0) {
+          console.warn(
+            `[HistoricalDataGateway] IBKR hist failed for ${symbol} — using ${existing.length} cached bars: ${e?.message || e}`,
+          );
+          return;
+        }
+        throw e instanceof Error ? e : new Error(String(e));
+      }
     }
 
     if (Date.now() < this.rateLimitedUntilMs) {
+      if (existing.length > 0) return;
       throw new Error(
         `Alpaca bars request rate-limited until ${new Date(this.rateLimitedUntilMs).toISOString()} - failing closed, no fabricated bars.`,
       );
     }
+
+    if (!process.env.ALPACA_API_KEY || !process.env.ALPACA_SECRET_KEY) {
+      if (existing.length > 0) return;
+      throw new Error('Historical backfill requires ALPACA_API_KEY/ALPACA_SECRET_KEY - no other real historical data source is wired into Argus.');
+    }
+
+    await this.paceAlpacaFetch();
 
     let pageToken: string | undefined;
     let fetchedAny = false;
@@ -100,39 +216,43 @@ export class HistoricalDataGateway {
         const body = await res.text().catch(() => '');
         if (res.status === 429) {
           this.armBarsRateLimitBackoff(res.headers.get('Retry-After'));
+          if (existing.length > 0) {
+            console.warn(
+              `[HistoricalDataGateway] 429 for ${symbol} — using ${existing.length} cached bars; backoff until ${new Date(this.rateLimitedUntilMs).toISOString()}`,
+            );
+            return;
+          }
           throw new Error(`Alpaca bars request failed: 429 Too Many Requests ${body}`);
         }
         throw new Error(`Alpaca bars request failed: ${res.status} ${res.statusText} ${body}`);
       }
+      this.consecutiveRateLimits = 0;
       const data = await res.json();
       const bars: any[] = data.bars || [];
       if (bars.length > 0) {
         fetchedAny = true;
-        const rows = bars.map(b => {
+        const mapped: Bar[] = bars.map((b: any) => {
           const ts = new Date(b.t).getTime();
           return {
-            id: `${symbol}:${timeframe}:${ts}`,
-            symbol,
-            timeframe,
             timestamp: ts,
             open: b.o,
             high: b.h,
             low: b.l,
             close: b.c,
             volume: b.v,
-            source: 'alpaca',
           };
         });
-        for (const row of rows) {
-          await db.insert(schema.ohlcvBars).values(row).onConflictDoNothing();
-        }
+        await this.persistBars(symbol, timeframe, mapped, 'alpaca', startMs, endMs);
       }
       pageToken = data.next_page_token || undefined;
+      if (pageToken) await this.paceAlpacaFetch();
     } while (pageToken);
 
+    this.memoryBars.delete(this.memoryKey(symbol, timeframe, startMs, endMs));
+
     if (!fetchedAny) {
-      const existing = await this.getBars(symbol, timeframe, startMs, endMs);
-      if (existing.length === 0) {
+      const after = await this.getBars(symbol, timeframe, startMs, endMs);
+      if (after.length === 0) {
         throw new Error(`No historical bars available for ${symbol} (${timeframe}) between ${new Date(startMs).toISOString()} and ${new Date(endMs).toISOString()}.`);
       }
     }
@@ -302,6 +422,11 @@ export class HistoricalDataGateway {
 
   /** Real, ordered, point-in-time bars for a symbol/timeframe/range. No fabrication. */
   async getBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
+    const key = this.memoryKey(symbol, timeframe, startMs, endMs);
+    const hit = this.memoryBars.get(key);
+    if (hit && hit.expiresAt > Date.now()) {
+      return hit.bars;
+    }
     const rows = await db.select().from(schema.ohlcvBars)
       .where(and(
         eq(schema.ohlcvBars.symbol, symbol),
@@ -310,7 +435,9 @@ export class HistoricalDataGateway {
         lte(schema.ohlcvBars.timestamp, endMs)
       ))
       .orderBy(asc(schema.ohlcvBars.timestamp));
-    return rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));
+    const bars = rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));
+    this.memoryBars.set(key, { bars, expiresAt: Date.now() + 60_000 });
+    return bars;
   }
 }
 

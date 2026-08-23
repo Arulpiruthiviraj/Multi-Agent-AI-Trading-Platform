@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
+import { InteractiveBrokersWebApiAdapter } from './InteractiveBrokersWebApiAdapter';
 import { InteractiveBrokersAdapter } from './InteractiveBrokersAdapter';
+import { IBGatewaySocketAdapter } from './IBGatewaySocketAdapter';
 import { loadRepoConfigJson } from '../server/config/loadRepoConfigJson';
 
 const catalog = loadRepoConfigJson<{ paperAccountIdPrefixes: string[]; liveAccountIdPrefixes: string[] }>('ibkrAccountClassification.json');
 
 function adapterWithSession(accountId: string, mode: 'paper' | 'live' | 'unset') {
-  const adapter = new InteractiveBrokersAdapter('https://localhost:5000/v1/api');
+  const adapter = new InteractiveBrokersWebApiAdapter('https://localhost:5000/v1/api');
   (adapter as any).isAuthenticated = true;
   (adapter as any).accountId = accountId;
   if (mode === 'paper') adapter.paperTrading();
@@ -13,7 +15,7 @@ function adapterWithSession(accountId: string, mode: 'paper' | 'live' | 'unset')
   return adapter;
 }
 
-describe('InteractiveBrokersAdapter session isolation', () => {
+describe('InteractiveBrokersWebApiAdapter session isolation', () => {
   const order = { symbol: 'AAPL', side: 'BUY' as const, type: 'MARKET' as const, quantity: 1 };
 
   it('paperTrading + live Gateway account refuses placeOrder before HTTP', async () => {
@@ -32,16 +34,9 @@ describe('InteractiveBrokersAdapter session isolation', () => {
   });
 });
 
-describe('InteractiveBrokersAdapter order-confirmation loop', () => {
+describe('InteractiveBrokersWebApiAdapter order-confirmation loop', () => {
   const order = { symbol: 'AAPL', side: 'BUY' as const, type: 'MARKET' as const, quantity: 1 };
 
-  /**
-   * Real bug found and fixed this pass: the confirmation loop used to reply {confirmed: true}
-   * to every IBKR warning identically, including a duplicate-order warning - the same mechanism
-   * IBKR uses for benign prompts (e.g. outside regular trading hours). A retried order
-   * submission after a timeout would have had its duplicate-order warning silently
-   * auto-accepted, risking an unintended double fill.
-   */
   it('refuses to auto-confirm a duplicate-order warning instead of blindly accepting it', async () => {
     const adapter = adapterWithSession(`${catalog.paperAccountIdPrefixes[0]}999`, 'paper');
     vi.spyOn(adapter as any, 'resolveConid').mockResolvedValue(265598);
@@ -50,7 +45,6 @@ describe('InteractiveBrokersAdapter order-confirmation loop', () => {
     ]);
 
     await expect(adapter.placeOrder(order)).rejects.toThrow(/duplicate order/i);
-    // Must never have replied to the duplicate-order confirmation prompt.
     expect(requestSpy).not.toHaveBeenCalledWith(expect.stringContaining('/iserver/reply/'), expect.anything());
   });
 
@@ -64,5 +58,32 @@ describe('InteractiveBrokersAdapter order-confirmation loop', () => {
     const result = await adapter.placeOrder(order);
     expect(result.id).toBe('real-order-1');
     expect(requestSpy).toHaveBeenCalledWith('/iserver/reply/confirm-2', expect.objectContaining({ body: { confirmed: true } }));
+  });
+});
+
+describe('dual IBKR adapter ids', () => {
+  it('IBGatewaySocketAdapter registers as ibkr_gateway without manual reauth', () => {
+    const a = new IBGatewaySocketAdapter();
+    expect(a.id).toBe('ibkr_gateway');
+    expect(a.getCapabilities().requiresManualReauth).toBe(false);
+    expect(a.getCapabilities().streamingMarketData).toBe(true);
+  });
+
+  it('InteractiveBrokersWebApiAdapter registers as ibkr_web with manual reauth', () => {
+    const a = new InteractiveBrokersWebApiAdapter();
+    expect(a.id).toBe('ibkr_web');
+    expect(a.getCapabilities().requiresManualReauth).toBe(true);
+  });
+
+  it('InteractiveBrokersAdapter default facade wraps gateway id', () => {
+    const prev = process.env.IBKR_CONNECTION_MODE;
+    delete process.env.IBKR_CONNECTION_MODE;
+    try {
+      const a = new InteractiveBrokersAdapter();
+      expect(a.id).toBe('ibkr_gateway');
+    } finally {
+      if (prev === undefined) delete process.env.IBKR_CONNECTION_MODE;
+      else process.env.IBKR_CONNECTION_MODE = prev;
+    }
   });
 });

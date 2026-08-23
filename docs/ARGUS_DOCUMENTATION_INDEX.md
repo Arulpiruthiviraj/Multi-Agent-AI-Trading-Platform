@@ -4,6 +4,8 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 
 **Why the name ARGUS?** [`README.md`](../README.md) § Why "ARGUS"? (Argus Panoptes — many eyes, one disciplined decision process). Do not treat the metaphor as unlimited visibility or a second trading brain.
 
+**Verified harness (2026-08-21):** `npm run lint` exit 0 · `npm test` **330** files / **2111** tests · Node **24.18.0** / npm **12** · schema **60** tables · **LIVE_NO_GO** · organic closed PAPER FILLED SELL P&L soak baseline still **0** until soak counts real closes.
+
 ---
 
 ## Living documents (prefer these)
@@ -20,6 +22,9 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 | [`ARGUS_CLI.md`](../ARGUS_CLI.md) | HTTP CLI + process start/stop |
 | [`ARGUS_SHELL_CLI.md`](../ARGUS_SHELL_CLI.md) | `./argus` Bash operator control plane |
 | [`ARGUS_HISTORICAL_EVALUATION.md`](../ARGUS_HISTORICAL_EVALUATION.md) | MODE B replay product (not organic paper) |
+| [`ARGUS_CAMPAIGN_TRACKER.md`](../ARGUS_CAMPAIGN_TRACKER.md) | Daily Goal Campaign (flag-gated; attribution + soft-lock) |
+| [`ARGUS_CONFIGURATION_ARCHITECTURE.md`](../ARGUS_CONFIGURATION_ARCHITECTURE.md) | Config layers / overlays |
+| [`ARGUS_CONFIGURATION_SECURITY.md`](../ARGUS_CONFIGURATION_SECURITY.md) | Secrets / auth / overlays |
 
 ---
 
@@ -34,6 +39,7 @@ Daily “is the desk working?” and “why no trades?”
 5. Paper soak / LIVE_NO_GO: `CLAUDE.md` §5 and `GET /api/v2/live-readiness`  
 6. [ARGUS_MOBILE_SETTINGS.md](ARGUS_MOBILE_SETTINGS.md) — phone Settings tab (writable vs read-only; overlay APIs; does not arm LIVE)
 7. Engine without a browser: `./argus start` then `./argus status` (or `npm run start:engine` / `npm run argus-cli -- status`) — see `ARGUS_SHELL_CLI.md` and `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`
+8. Daily Goal Campaign (optional): [`ARGUS_CAMPAIGN_TRACKER.md`](../ARGUS_CAMPAIGN_TRACKER.md) — does **not** force trades or lower consensus
 
 Do not enable Autobot or LIVE from documentation.
 
@@ -58,12 +64,13 @@ Extend around the protected spine. Do not rewrite ChiefTrader / RiskEngine / OMS
 | Doc | Contents |
 |---|---|
 | Binding five | `CLAUDE.md`, contract, protection, invariants, AI change rules |
-| `docs/ARGUS_OPPORTUNITY_DISCOVERY.md` | Seed watchlist vs optional screener ideas |
+| `docs/ARGUS_OPPORTUNITY_DISCOVERY.md` | Seed watchlist vs optional screener ideas (`maxActiveSubscriptions` **30**) |
 | `docs/ARGUS_PORTFOLIO_INTELLIGENCE.md` | Position SELL still uses the spine |
 | `docs/ARGUS_READINESS.md` | Levels 1–6; LIVE stays NO-GO |
 | `docs/ARGUS_INCIDENTS.md` | Incident notes (root incident reports were folded here) |
 | `ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md` | Headless + engine daemon |
 | `docs/ARGUS_TRADING_FLOW.md` | End-to-end BUY/SELL walkthrough |
+| `ARGUS_CAMPAIGN_TRACKER.md` | Campaign soft-lock + attribution (additive) |
 
 ---
 
@@ -75,13 +82,14 @@ Unchanged forensic set under `docs/`: `ARGUS_FORENSIC_DEBUGGING_GUIDE.md`, `ARGU
 
 ## Argus Historical Evaluation (MODE B)
 
-Not organic paper. Not LIVE. Default universe **ARGUS_DISCOVERY**.
+Not organic paper. Not LIVE. Default universe **ARGUS_DISCOVERY**. Labels: **HISTORICAL_SIMULATION** / **NOT_PROMOTION_EVIDENCE**.
 
 | Doc |
 |---|
 | [`ARGUS_HISTORICAL_EVALUATION.md`](../ARGUS_HISTORICAL_EVALUATION.md) — product / honesty |
 | [`docs/ARGUS_REPLAY_USER_GUIDE.md`](ARGUS_REPLAY_USER_GUIDE.md) — operator UI/API |
-| [`ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md`](../ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md) — Phase C evidence snapshot |
+| [`ARGUS_CLI.md`](../ARGUS_CLI.md) / [`ARGUS_SHELL_CLI.md`](../ARGUS_SHELL_CLI.md) — `./argus replay …` thin router |
+| [`ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md`](../ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md) — Phase C evidence snapshot (**historical**) |
 
 ---
 
@@ -90,10 +98,9 @@ Not organic paper. Not LIVE. Default universe **ARGUS_DISCOVERY**.
 | Doc |
 |---|
 | [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](../ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md) |
-| [`ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md`](../ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md) — 1814 tests PASS · build PASS · still **LIVE_NO_GO** |
+| [`ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md`](../ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md) — Phase D snapshot (**historical** test counts; prefer `npm test` for current totals). Still **LIVE_NO_GO**. |
 
 ---
-
 
 ## Configuration / security
 
@@ -105,13 +112,18 @@ Not organic paper. Not LIVE. Default universe **ARGUS_DISCOVERY**.
 | `ARGUS_CONFIGURATION_SECURITY.md` |
 | `docs/ARGUS_MOBILE_SETTINGS.md` |
 
+Canonical env catalog: `config/runtimeEnvCatalog.json`. Reviewed safety numbers: `config/tradingSafety.json`.
+
 ---
 
-## Retained forensic snapshots (linked from code or capital rules)
+## Historical forensic audits (immutable)
 
-| Doc | Why kept (not living contract) |
+Dated phase / market / remediation reports at repo root (e.g. `ARGUS_POST_FIX_FORENSIC_AUDIT_*.md`, `ARGUS_PHASE_*_FINAL_AUDIT.md`, `ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md`, `ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md`). **Do not rewrite** their facts. Living docs may **cite conclusions** but must not present old PIDs / old test totals as current.
+
+| Doc | Why kept |
 |---|---|
 | `ARGUS_CAPITAL_AUDIT_REPORT.md` | Budget vs broker equity / `argus_capital_allocation` forensics |
 | `ARGUS_2024_ZERO_TRADE_FORENSIC_AUDIT.md` | Referenced from RiskEngine comments; session idle forensics |
+| `ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md` | News 24/7 / staging design snapshot (living behavior: `NewsEngine` + `MarketOpenNewsConfluence`) |
 
 Prefer `CLAUDE.md` + current code where any snapshot disagrees.

@@ -1168,7 +1168,24 @@ let portfolioState = loadPortfolio();
            equity: portfolio.equity,
            positions: positionsWithStopTarget,
            peakValuation: portfolioState.peakValuation,
-           drawdown: Number(drawdown.toFixed(4))
+           drawdown: Number(drawdown.toFixed(4)),
+           activeBrokerId: broker.id,
+           activeBrokerName: broker.name,
+           viewing: (() => {
+             try {
+               const snap = typeof (broker as any).getConnectionSnapshot === 'function'
+                 ? (broker as any).getConnectionSnapshot()
+                 : null;
+               const acct = snap?.accountId ? String(snap.accountId) : '';
+               if (broker.id === 'ibkr_gateway') return `Interactive Brokers Paper (Gateway)${acct ? ` (${acct})` : ''}`;
+               if (broker.id === 'ibkr_web') return `Interactive Brokers Paper (Web API)${acct ? ` (${acct})` : ''}`;
+               if (broker.id === 'alpaca') return 'Alpaca Paper';
+               if (broker.id === 'internal_paper') return 'Argus Internal Simulator';
+               return broker.name;
+             } catch {
+               return broker.name;
+             }
+           })(),
         });
       }
     } catch(e: any) {

@@ -67,7 +67,14 @@ function loadDeskIntelligence(): DeskIntelligenceConfig {
   if (!raw.strategyFamilies || !raw.regimeFamilyRelevance) {
     throw new Error('config/deskIntelligence.json missing strategyFamilies or regimeFamilyRelevance');
   }
-  return raw;
+  // NEWS_AGENT_MODE env overrides config/deskIntelligence.json (ACTIVE_VOTE default for DEF-TODAY-05).
+  // Still subject to consensus 0.75 / min-2 — never lowers floors.
+  const envMode = process.env.NEWS_AGENT_MODE?.trim();
+  let newsAgentMode = raw.newsAgentMode;
+  if (envMode && NEWS_AGENT_MODES.includes(envMode as NewsAgentMode)) {
+    newsAgentMode = envMode as NewsAgentMode;
+  }
+  return { ...raw, newsAgentMode };
 }
 
 export const deskIntelligence: DeskIntelligenceConfig = loadDeskIntelligence();

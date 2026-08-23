@@ -7,6 +7,7 @@ import { argusApplication } from '../app/ArgusApplication';
 import { tradingLimiter } from '../core/RateLimiters';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
+import { BrokerManager } from '../../brokers/BrokerManager';
 
 export const runtimeRouter = Router();
 
@@ -24,11 +25,37 @@ runtimeRouter.get('/status', (_req, res) => {
   });
 });
 
-runtimeRouter.get('/health', (_req, res) => {
+runtimeRouter.get('/health', async (_req, res) => {
   const health = argusRuntime.health();
+  let activeBroker: {
+    id: string;
+    name: string;
+    paperTradingOnly: boolean;
+    connection?: Record<string, unknown>;
+  } | undefined;
+  let ibkrPaths: Awaited<ReturnType<BrokerManager['getIbkrPathStatus']>> | undefined;
+  try {
+    // Reporting only — does not place orders. OMS + RiskEngine remain sole execution gatekeepers.
+    const mgr = BrokerManager.getInstance();
+    const b = mgr.getActiveBroker();
+    activeBroker = {
+      id: b.id,
+      name: b.name,
+      paperTradingOnly: process.env.PAPER_TRADING_ONLY === 'true',
+    };
+    if (typeof (b as any).getConnectionSnapshot === 'function') {
+      activeBroker.connection = (b as any).getConnectionSnapshot();
+    }
+    ibkrPaths = await mgr.getIbkrPathStatus();
+  } catch {
+    activeBroker = undefined;
+    ibkrPaths = undefined;
+  }
   res.status(health.ok ? 200 : 503).json({
     ok: health.ok,
     health,
+    activeBroker,
+    ibkrPaths,
     live: evaluateLiveReadiness().result,
   });
 });
@@ -95,13 +122,25 @@ runtimeRouter.get('/portfolio', async (_req, res) => {
   res.json({ ok: true, portfolio: holdings, live: 'NO-GO' });
 });
 
-runtimeRouter.get('/trades', async (_req, res) => {
-  const rows = await argusApplication.recentTrades(100);
+runtimeRouter.get('/trades', async (req, res) => {
+  let liveId: string | null = null;
+  try {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    liveId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+  } catch { /* */ }
+  const brokerId = typeof req.query.brokerId === 'string' ? req.query.brokerId : liveId;
+  const rows = await argusApplication.recentTrades(100, brokerId);
   res.json({ ok: true, trades: rows, live: 'NO-GO' });
 });
 
-runtimeRouter.get('/orders', async (_req, res) => {
-  const rows = await argusApplication.recentTrades(100);
+runtimeRouter.get('/orders', async (req, res) => {
+  let liveId: string | null = null;
+  try {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    liveId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+  } catch { /* */ }
+  const brokerId = typeof req.query.brokerId === 'string' ? req.query.brokerId : liveId;
+  const rows = await argusApplication.recentTrades(100, brokerId);
   res.json({
     ok: true,
     orders: rows,

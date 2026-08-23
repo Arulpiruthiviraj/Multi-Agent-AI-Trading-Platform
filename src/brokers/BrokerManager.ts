@@ -35,7 +35,8 @@
 
 
 import { QuestradeBroker } from './QuestradeBroker';
-import { InteractiveBrokersAdapter } from './InteractiveBrokersAdapter';
+import { InteractiveBrokersWebApiAdapter } from './InteractiveBrokersWebApiAdapter';
+import { IBGatewaySocketAdapter } from './IBGatewaySocketAdapter';
 import { CoinbaseBroker } from './CoinbaseBroker';
 import { BrokerPlugin } from './BrokerAdapter';
 import { InternalPaperBroker } from './InternalPaperBroker';
@@ -52,14 +53,8 @@ import { logErrorSafely } from '../server/core/SecretRedaction';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
-// ibkr was moved off this list once InteractiveBrokersAdapter got a real Client Portal Web API
-// implementation - it can still legitimately fail authenticate() (requiresManualReauth: true,
-// no Gateway running), which is a real runtime state, not a stub. coinbase was moved off this
-// list once CoinbaseBroker got a real Advanced Trade API implementation (order placement gated
-// behind live-mode confirmation, since Coinbase has no paper/sandbox environment to fall back to
-// - see CoinbaseBroker.ts's header comment). questrade remains here permanently, not because it's
-// unimplemented but because Questrade's own API restricts order execution to approved partner
-// developers - no implementation here can change that.
+// ibkr_gateway / ibkr_web are real order paths (OMS sole placeOrder). coinbase was moved off
+// NON_FUNCTIONAL once Advanced Trade API landed. questrade remains permanently non-functional for orders.
 const NON_FUNCTIONAL_BROKER_IDS = new Set(['questrade']);
 
 export type BrokerSyncState = 'INITIALIZING' | 'READY' | 'SYNCING' | 'FAILED';
@@ -113,13 +108,15 @@ export class BrokerManager {
          const internalPaper = new InternalPaperBroker();
          const alpaca = new AlpacaBroker();
          const questrade = new QuestradeBroker();
-         const ibkr = new InteractiveBrokersAdapter();
+         const ibkrGateway = new IBGatewaySocketAdapter();
+         const ibkrWeb = new InteractiveBrokersWebApiAdapter();
          const coinbase = new CoinbaseBroker();
          
          this.brokers.set(internalPaper.id, internalPaper);
          this.brokers.set(alpaca.id, alpaca);
          this.brokers.set(questrade.id, questrade);
-         this.brokers.set(ibkr.id, ibkr);
+         this.brokers.set(ibkrGateway.id, ibkrGateway);
+         this.brokers.set(ibkrWeb.id, ibkrWeb);
          this.brokers.set(coinbase.id, coinbase);
          
          // Initialize plugins
@@ -221,29 +218,297 @@ export class BrokerManager {
     this.brokers.set(broker.id, broker);
   }
 
+  /**
+   * Resolve a settings.selectedBroker display name (or id alias) to a registered broker id.
+   * Returns null when nothing matches — callers must not invent a second execution path.
+   */
+  public resolveBrokerIdFromSelectedName(selectedName: string): string | null {
+    const raw = String(selectedName || '').trim();
+    if (!raw) return null;
+    const lower = raw.toLowerCase();
+    if (lower === 'simulation mode' || lower === 'internal_paper') return 'internal_paper';
+    if (lower === 'alpaca') return 'alpaca';
+    if (lower === 'ibkr_gateway' || lower === 'ibkr gateway (socket)' || lower === 'ib gateway') return 'ibkr_gateway';
+    if (lower === 'ibkr_web' || lower === 'ibkr web api (client portal)' || lower === 'ibkr web') return 'ibkr_web';
+    // Alias — resolved to gateway or web at setActiveBroker time via resolveIbkrAlias().
+    if (lower === 'ibkr' || lower === 'interactive brokers') return 'ibkr';
+    if (lower === 'coinbase') return 'coinbase';
+    for (const [id, broker] of this.brokers.entries()) {
+      if (broker.name === raw || broker.name.toLowerCase() === lower || id === lower) return id;
+    }
+    return null;
+  }
+
+  /** Prefer IB Gateway socket when :4002/:7497 is open; else Client Portal web. Never opens a browser. */
+  public async resolveIbkrAlias(): Promise<'ibkr_gateway' | 'ibkr_web'> {
+    const { loadIbkrConnection, ibkrSocketPortCandidates } = await import('../server/config/ibkrConnection');
+    const { findFirstOpenTcpPort, probeTcpPort } = await import('./ibkrTcpProbe');
+    const cfg = loadIbkrConnection();
+    const socketPort = await findFirstOpenTcpPort(cfg.host, ibkrSocketPortCandidates(cfg, false), 1500);
+    if (socketPort != null) return 'ibkr_gateway';
+    const webOpen = await probeTcpPort('127.0.0.1', 5000, 1200);
+    if (webOpen) return 'ibkr_web';
+    // Default primary — fail later with a clear socket diagnostic.
+    return 'ibkr_gateway';
+  }
+
+  /**
+   * Load decrypted credentials + paperMode from brokerConnections for a registered broker.
+   * Never falls back to another broker's keys. Env-var fallback remains inside each adapter.
+   */
+  private async loadStoredCredentialsForBroker(broker: BrokerPlugin): Promise<{
+    apiKey?: string;
+    secretKey?: string;
+    paperMode: boolean;
+    decryptionFailed: boolean;
+  }> {
+    const rows = await db.select().from(schema.brokerConnections);
+    const connection = rows.find((b) => b.brokerName === broker.name);
+    if (!connection) {
+      return { paperMode: true, decryptionFailed: false };
+    }
+    let apiKey: string | undefined;
+    let secretKey: string | undefined;
+    let decryptionFailed = false;
+    try {
+      apiKey = connection.apiKeyEncrypted ? EncryptionService.decrypt(connection.apiKeyEncrypted) : undefined;
+      secretKey = connection.secretEncrypted ? EncryptionService.decrypt(connection.secretEncrypted) : undefined;
+    } catch {
+      decryptionFailed = true;
+    }
+    return {
+      apiKey,
+      secretKey,
+      paperMode: connection.paperMode !== false,
+      decryptionFailed,
+    };
+  }
+
+  /**
+   * Mid-session switch of the order-placing broker. OMS remains the sole placeOrder caller.
+   * IDs: alpaca | ibkr_gateway | ibkr_web | ibkr (auto) | internal_paper | coinbase.
+   */
   public async setActiveBroker(id: string, credentials?: any): Promise<boolean> {
-    const broker = this.brokers.get(id);
-    if (!broker) throw new Error(`Broker ${id} not found`);
-    if (NON_FUNCTIONAL_BROKER_IDS.has(id)) {
+    let resolvedId = id;
+    if (id === 'ibkr') {
+      resolvedId = await this.resolveIbkrAlias();
+      console.log(`[BrokerManager] Alias ibkr → ${resolvedId}`);
+    }
+
+    const broker = this.brokers.get(resolvedId);
+    if (!broker) throw new Error(`Broker ${resolvedId} not found`);
+    if (NON_FUNCTIONAL_BROKER_IDS.has(resolvedId)) {
       throw new Error(`Broker '${broker.name}' is not a functional adapter (placeOrder is unimplemented). Refusing to select it as active.`);
     }
 
-    // Safe transition
-    if (this.activeBroker && this.activeBroker.id !== id) {
+    const paperOnly = process.env.PAPER_TRADING_ONLY === 'true';
+    let authPayload: Record<string, unknown> =
+      credentials && typeof credentials === 'object' ? { ...credentials } : {};
+
+    if (!credentials || (typeof credentials === 'object' && !credentials.apiKey && !credentials.secretKey && credentials.initialCash === undefined)) {
+      const stored = await this.loadStoredCredentialsForBroker(broker);
+      if (stored.decryptionFailed) {
+        throw new Error(
+          `Stored credentials for '${broker.name}' could not be decrypted — refusing to activate. Re-enter keys in Broker settings or fall back to Internal Paper.`,
+        );
+      }
+      if (stored.apiKey !== undefined) authPayload.apiKey = stored.apiKey;
+      if (stored.secretKey !== undefined) authPayload.secretKey = stored.secretKey;
+      if (authPayload.isLive === undefined) authPayload.isLive = stored.paperMode === false;
+      if (resolvedId === 'internal_paper' && authPayload.initialCash === undefined) {
+        authPayload.initialCash = 100000;
+      }
+      if (paperOnly || stored.paperMode) {
+        broker.paperTrading();
+        authPayload.isLive = false;
+      } else {
+        broker.liveTrading();
+        authPayload.isLive = true;
+      }
+    } else if (authPayload.isLive === true && !paperOnly) {
+      broker.liveTrading();
+    } else {
+      broker.paperTrading();
+      authPayload.isLive = false;
+    }
+
+    if (paperOnly && authPayload.isLive === true) {
+      throw new Error(
+        'PAPER_TRADING_ONLY=true — refusing to activate a LIVE broker session. Keep paper mode for Alpaca/IBKR.',
+      );
+    }
+    if (paperOnly) {
+      broker.paperTrading();
+      authPayload.isLive = false;
+    }
+
+    if (resolvedId === 'ibkr_gateway') {
+      const { loadIbkrConnection, ibkrSocketPortCandidates } = await import('../server/config/ibkrConnection');
+      const { findFirstOpenTcpPort } = await import('./ibkrTcpProbe');
+      const cfg = loadIbkrConnection();
+      const preferLive = process.env.PAPER_TRADING_ONLY !== 'true' && authPayload.isLive === true;
+      const openPort = await findFirstOpenTcpPort(cfg.host, ibkrSocketPortCandidates(cfg, preferLive), 1500);
+      if (openPort == null) {
+        throw new Error(
+          'IB Gateway not reachable on port 4002/7497. Launch IB Gateway Desktop in Paper mode ' +
+            '(Enable ActiveX and Socket Clients; uncheck Read-Only API). No browser will be opened.',
+        );
+      }
+    } else if (resolvedId === 'ibkr_web') {
+      let health: string;
+      try {
+        health = await broker.health();
+      } catch (e: any) {
+        throw new Error(
+          `IBKR Client Portal Web API not reachable on port 5000. Start Client Portal Gateway and complete browser login only for ibkr_web. (${e?.message || e})`,
+        );
+      }
+      if (health === 'Offline') {
+        throw new Error(
+          'IBKR Client Portal Web API offline (port 5000). Start the Gateway and log in via browser, or use ibkr_gateway (socket :4002) instead.',
+        );
+      }
+    }
+
+    if (this.activeBroker && this.activeBroker.id !== resolvedId) {
       console.log(`[BrokerManager] Switching from ${this.activeBroker.name} to ${broker.name}`);
       try {
         await this.activeBroker.disconnect();
       } catch (e) {
-        logErrorSafely("[BrokerManager] Failed to disconnect previous broker safely", e);
+        logErrorSafely('[BrokerManager] Failed to disconnect previous broker safely', e);
       }
     }
 
-    const connected = await broker.authenticate(credentials);
+    const connected = await broker.authenticate(authPayload);
     if (connected) {
       this.activeBroker = broker;
+      const stampPaper = paperOnly || authPayload.isLive !== true;
+      await this.ensureBrokerConnectionPaperStamp(broker, stampPaper);
+      await this.applyMarketDataBinding(broker);
+      console.log(`[BrokerManager] Active broker is now ${broker.name} (id=${resolvedId}, paperOnly=${paperOnly}, paperMode=${stampPaper})`);
+      // Fail-closed cutover: drop prior adapter's local holdings, then live-reconcile.
+      try {
+        const { portfolioReconciliationWorker } = await import('../server/services/PortfolioReconciliation');
+        await portfolioReconciliationWorker.flushLocalHoldingsAndReconcile(`setActiveBroker→${resolvedId}`);
+      } catch (e) {
+        logErrorSafely('[BrokerManager] Post-switch portfolio flush/reconcile failed (non-fatal)', e);
+      }
       return true;
     }
-    return false;
+
+    if (resolvedId === 'ibkr_gateway') {
+      throw new Error(
+        'IB Gateway socket authenticate() failed — ensure Desktop Gateway is running on 4002 with API clients enabled.',
+      );
+    }
+    if (resolvedId === 'ibkr_web') {
+      throw new Error(
+        'IBKR Web API authenticate() failed — Client Portal may need browser login (HTTP 401). Argus will not auto-open a browser.',
+      );
+    }
+    if (resolvedId === 'alpaca') {
+      throw new Error(
+        'Alpaca authenticate() failed — check paper API keys (ALPACA_* or Broker settings) and paper host.',
+      );
+    }
+    throw new Error(`Failed to authenticate broker '${broker.name}' (${resolvedId}).`);
+  }
+
+  /**
+   * Stamp brokerConnections.paperMode so OMS classifyBrokerEnvironment stays PAPER
+   * after ibkr_gateway cutover (dual paper+live capabilities must not leave paperMode null).
+   */
+  private async ensureBrokerConnectionPaperStamp(broker: BrokerPlugin, paper: boolean): Promise<void> {
+    try {
+      const existing = await db.select().from(schema.brokerConnections).where(eq(schema.brokerConnections.brokerName, broker.name));
+      if (existing.length > 0) {
+        await db.update(schema.brokerConnections).set({ paperMode: paper }).where(eq(schema.brokerConnections.brokerName, broker.name));
+      } else {
+        await db.insert(schema.brokerConnections).values({ brokerName: broker.name, paperMode: paper });
+      }
+    } catch (e) {
+      logErrorSafely('[BrokerManager] Failed to stamp brokerConnections.paperMode', e);
+    }
+  }
+
+    /** Rebind MarketDataWorker quote backend after a successful active-broker switch. */
+  private async applyMarketDataBinding(broker: BrokerPlugin): Promise<void> {
+    try {
+      const { marketDataWorker } = await import('../server/services/MarketDataWorker');
+      const { loadIbkrConnection } = await import('../server/config/ibkrConnection');
+      const { registerHistoricalBarProvider } = await import('../server/engines/backtest/historicalBarProvider');
+      if (broker.id === 'ibkr_gateway' && broker instanceof IBGatewaySocketAdapter) {
+        const cfg = loadIbkrConnection();
+        broker.setQuoteSink((symbol, price) => marketDataWorker.ingestIbkrQuote(symbol, price));
+        marketDataWorker.setBrokerQuoteContext({
+          backend: 'ibkr_gateway',
+          hardCapOverride: cfg.maxMarketDataLines,
+          ibkrBridge: {
+            subscribe: (sym) => broker.subscribeMarketData(sym),
+            unsubscribe: (sym) => broker.cancelMarketDataBySymbol(sym),
+            clear: () => {
+              broker.setQuoteSink(null);
+            },
+          },
+        });
+        // Quant / HistoricalDataGateway: IB reqHistoricalData — no Alpaca REST while gateway is active.
+        registerHistoricalBarProvider({
+          id: 'ibkr_gateway',
+          fetchBars: (symbol, timeframe, startMs, endMs) =>
+            broker.getHistoricalBars(symbol, timeframe, startMs, endMs),
+        });
+      } else {
+        marketDataWorker.setBrokerQuoteContext({
+          backend: 'alpaca',
+          hardCapOverride: null,
+          ibkrBridge: null,
+        });
+        registerHistoricalBarProvider(null);
+      }
+    } catch (e) {
+      logErrorSafely('[BrokerManager] MarketDataWorker rebind failed (non-fatal)', e);
+    }
+  }
+
+  /** Dual IBKR path status for ./argus health — never opens a browser. */
+  public async getIbkrPathStatus(): Promise<{
+    gatewaySocket: { port: number; status: string; accountId?: string | null };
+    webApi: { port: number; status: string };
+  }> {
+    const { loadIbkrConnection, ibkrSocketPortCandidates } = await import('../server/config/ibkrConnection');
+    const { findFirstOpenTcpPort, probeTcpPort } = await import('./ibkrTcpProbe');
+    const cfg = loadIbkrConnection();
+    const socketPort = await findFirstOpenTcpPort(cfg.host, ibkrSocketPortCandidates(cfg, false), 1200);
+    const gateway = this.brokers.get('ibkr_gateway') as IBGatewaySocketAdapter | undefined;
+    let gatewayStatus = socketPort == null ? 'OFFLINE' : 'CONNECTED';
+    let accountId: string | null | undefined;
+    if (gateway && typeof gateway.getConnectionSnapshot === 'function') {
+      const snap = gateway.getConnectionSnapshot();
+      if (snap.authenticated) {
+        gatewayStatus = 'CONNECTED';
+        accountId = snap.accountId as string | null;
+      } else if (socketPort != null) {
+        gatewayStatus = 'CONNECTED';
+      }
+    }
+    const webOpen = await probeTcpPort('127.0.0.1', 5000, 1200);
+    let webStatus = webOpen ? 'CONNECTED' : 'OFFLINE';
+    const web = this.brokers.get('ibkr_web');
+    if (web) {
+      try {
+        const h = await web.health();
+        if (h === 'Healthy') webStatus = 'CONNECTED';
+        else if (h === 'Degraded') webStatus = '401_AUTH_REQUIRED';
+        else if (!webOpen) webStatus = 'OFFLINE';
+        else webStatus = '401_AUTH_REQUIRED';
+      } catch {
+        webStatus = webOpen ? '401_AUTH_REQUIRED' : 'OFFLINE';
+      }
+    }
+    return {
+      gatewaySocket: { port: socketPort ?? cfg.paperGatewayPort, status: gatewayStatus, accountId },
+      webApi: { port: 5000, status: webStatus },
+    };
   }
 
   public getActiveBroker(): BrokerPlugin {

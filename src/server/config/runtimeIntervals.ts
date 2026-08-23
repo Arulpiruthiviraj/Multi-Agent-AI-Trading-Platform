@@ -10,6 +10,12 @@ export interface RuntimeIntervals {
   portfolioMonitorMs: number;
   reflectionEngineMs: number;
   newsEngineMs: number;
+  /** Off-hours / weekend NewsEngine poll cadence (conservation). */
+  newsEngineOffHoursMs: number;
+  /** After 09:30 ET, how long staged catalysts may be matched to opening ticks. */
+  newsOpenConfluenceWindowMs: number;
+  /** ET minutes since midnight when INTRADAY staged catalysts expire (e.g. 630 = 10:30). */
+  newsIntradayStageUntilEtMinutes: number;
   rssFeedErrorBackoffMs: number;
   rssFeedFetchTimeoutMs: number;
   chiefTraderWeightSyncMs: number;
@@ -49,6 +55,7 @@ export interface RuntimeIntervals {
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'fundamentalAgentMs', 'macroAgentMs', 'portfolioMonitorMs', 'reflectionEngineMs', 'newsEngineMs',
+  'newsEngineOffHoursMs', 'newsOpenConfluenceWindowMs', 'newsIntradayStageUntilEtMinutes',
   'rssFeedErrorBackoffMs', 'rssFeedFetchTimeoutMs',
   'chiefTraderWeightSyncMs', 'chiefTraderIdeaTtlMs', 'systemMetricsMs', 'portfolioReconciliationMs',
   'reconciliationBootWarmupMs', 'marketDataReconnectMs', 'networkReconnectBackoffMs', 'marketDataCrossCheckMs', 'kronosRecheckMs', 'kronosPredictionCooldownMs',

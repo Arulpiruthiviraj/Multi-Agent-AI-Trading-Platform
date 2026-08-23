@@ -13,7 +13,19 @@ import {
 } from 'reactflow';
 
 export type NodeCategory = 'source' | 'agent' | 'local-model' | 'paid-model' | 'decision' | 'risk' | 'execution';
-export type VisualStatus = 'IDLE' | 'PULSE' | 'PROCESSING' | 'SUCCESS' | 'FAIL';
+/** Event animation statuses plus honest operational health (waiting ≠ FAIL). */
+export type VisualStatus =
+  | 'IDLE'
+  | 'PULSE'
+  | 'PROCESSING'
+  | 'SUCCESS'
+  | 'FAIL'
+  | 'STARTING'
+  | 'IDLE_WAITING_FOR_MARKET_DATA'
+  | 'RUNNING'
+  | 'DEGRADED'
+  | 'UNAVAILABLE'
+  | 'FAILED';
 
 export interface Packet {
   id: string;
@@ -34,15 +46,19 @@ const CATEGORY_STYLE: Record<NodeCategory, { border: string; glow: string; iconB
 function TelemetryNode({ id, data }: { id: string; data: any }) {
   const style = CATEGORY_STYLE[data.category as NodeCategory] || CATEGORY_STYLE.agent;
   const status: VisualStatus = data.status || 'IDLE';
-  const active = status !== 'IDLE';
+  const active = status !== 'IDLE' && status !== 'IDLE_WAITING_FOR_MARKET_DATA';
   const border =
-    status === 'FAIL' ? 'border-rose-400' :
-    status === 'SUCCESS' ? 'border-emerald-400' :
-    status === 'PROCESSING' ? style.border :
-    status === 'PULSE' ? style.border : 'border-slate-800';
+    status === 'FAIL' || status === 'FAILED' ? 'border-rose-400' :
+    status === 'UNAVAILABLE' ? 'border-amber-500' :
+    status === 'DEGRADED' ? 'border-amber-400' :
+    status === 'SUCCESS' || status === 'RUNNING' ? 'border-emerald-400' :
+    status === 'PROCESSING' || status === 'STARTING' ? style.border :
+    status === 'PULSE' ? style.border :
+    status === 'IDLE_WAITING_FOR_MARKET_DATA' ? 'border-amber-700/50' : 'border-slate-800';
   const glow =
-    status === 'FAIL' ? 'rgba(244,63,94,0.7)' :
-    status === 'SUCCESS' ? 'rgba(16,185,129,0.7)' :
+    status === 'FAIL' || status === 'FAILED' ? 'rgba(244,63,94,0.7)' :
+    status === 'SUCCESS' || status === 'RUNNING' ? 'rgba(16,185,129,0.7)' :
+    status === 'IDLE_WAITING_FOR_MARKET_DATA' || status === 'UNAVAILABLE' ? 'rgba(245,158,11,0.35)' :
     active ? style.glow : undefined;
 
   return (
@@ -52,6 +68,13 @@ function TelemetryNode({ id, data }: { id: string; data: any }) {
           className="absolute inset-0 rounded-xl pointer-events-none border border-slate-800/80"
           animate={{ opacity: [0.35, 0.65, 0.35] }}
           transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+        />
+      )}
+      {status === 'IDLE_WAITING_FOR_MARKET_DATA' && (
+        <motion.div
+          className="absolute inset-0 rounded-xl pointer-events-none border border-amber-700/40"
+          animate={{ opacity: [0.3, 0.55, 0.3] }}
+          transition={{ duration: 2.8, repeat: Infinity, ease: 'easeInOut' }}
         />
       )}
       {status === 'PULSE' && (
@@ -64,7 +87,7 @@ function TelemetryNode({ id, data }: { id: string; data: any }) {
           style={{ boxShadow: `0 0 0 2px ${style.glow}`, background: style.glow }}
         />
       )}
-      {status === 'FAIL' && (
+      {(status === 'FAIL' || status === 'FAILED') && (
         <motion.div
           key={`fail-${data.pulseKey ?? id}`}
           className="absolute inset-0 rounded-xl pointer-events-none"
@@ -74,7 +97,7 @@ function TelemetryNode({ id, data }: { id: string; data: any }) {
           style={{ boxShadow: '0 0 0 2px rgba(251,113,133,0.95)', background: 'rgba(244,63,94,0.28)' }}
         />
       )}
-      {status === 'PROCESSING' && (
+      {(status === 'PROCESSING' || status === 'STARTING') && (
         <motion.div
           className="absolute -inset-1 rounded-xl pointer-events-none border border-cyan-400/40"
           animate={{ opacity: [0.35, 0.85, 0.35], scale: [1, 1.04, 1] }}
@@ -95,8 +118,16 @@ function TelemetryNode({ id, data }: { id: string; data: any }) {
           <div className="min-w-0">
             <div className="text-[10px] font-bold text-white uppercase tracking-widest leading-tight truncate">{data.label}</div>
             <div className="text-[8px] text-slate-400 mt-0.5">{data.description}</div>
-            <div className={`text-[8px] mt-1 font-mono ${status === 'FAIL' ? 'text-rose-400' : status === 'SUCCESS' ? 'text-emerald-400' : status === 'PROCESSING' ? 'text-amber-300' : active ? style.iconText : 'text-slate-600'}`}>
-              {status === 'IDLE' ? 'IDLE' : status}
+            <div className={`text-[8px] mt-1 font-mono ${
+              status === 'FAIL' || status === 'FAILED' ? 'text-rose-400'
+                : status === 'SUCCESS' || status === 'RUNNING' ? 'text-emerald-400'
+                  : status === 'PROCESSING' || status === 'STARTING' ? 'text-amber-300'
+                    : status === 'IDLE_WAITING_FOR_MARKET_DATA' || status === 'UNAVAILABLE' || status === 'DEGRADED' ? 'text-amber-400'
+                      : active ? style.iconText : 'text-slate-600'
+            }`}>
+              {status === 'IDLE' ? 'IDLE'
+                : status === 'IDLE_WAITING_FOR_MARKET_DATA' ? 'WAITING DATA'
+                  : status}
               {typeof data.throughput === 'number' && data.throughput > 0 && (
                 <span className="ml-1 text-cyan-500/80">×{data.throughput}</span>
               )}

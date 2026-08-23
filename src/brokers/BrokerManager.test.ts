@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -141,5 +141,117 @@ describe('BrokerManager.setLiveMode capability gate', () => {
       if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
       else process.env.PAPER_TRADING_ONLY = prev;
     }
+  });
+});
+
+describe('BrokerManager.setActiveBroker paper + IBKR preflight', () => {
+  let tmpDbPath: string;
+  let BrokerManager: any;
+  let sqliteDb: any;
+  let prevPaperTradingOnly: string | undefined;
+
+  function fakeBroker(id: string, opts: Partial<BrokerCapabilities> & { healthResult?: string } = {}): BrokerPlugin {
+    const { healthResult = 'Healthy', ...caps } = opts;
+    return {
+      id,
+      name: id === 'ibkr' ? 'Interactive Brokers' : id === 'alpaca' ? 'Alpaca' : `Fake ${id}`,
+      initialize: async () => {},
+      authenticate: async () => true,
+      validateCredentials: async () => true,
+      paperTrading: () => {},
+      liveTrading: () => {},
+      getCapabilities: () => ({
+        canPlaceOrders: true, canCancelOrders: true, paperTrading: true, liveTrading: true,
+        usEquities: true, canadianEquities: false, crypto: false, options: false,
+        shortSelling: false, streamingMarketData: false, requiresManualReauth: id === 'ibkr',
+        ...caps,
+      }),
+      portfolio: async () => ({ cash: 0, buyingPower: 0, equity: 0, positions: [] }),
+      orders: async () => [],
+      positions: async () => [],
+      account: async () => ({}),
+      disconnect: async () => {},
+      health: async () => healthResult,
+      placeOrder: async () => { throw new Error('not used'); },
+      cancelOrder: async () => false,
+      closePosition: async () => false,
+    };
+  }
+
+  beforeAll(async () => {
+    tmpDbPath = path.join(os.tmpdir(), `argus_brokermgr_switch_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+    prevPaperTradingOnly = process.env.PAPER_TRADING_ONLY;
+    ({ sqliteDb } = await import('../server/db'));
+    ({ BrokerManager } = await import('./BrokerManager'));
+    delete process.env.PAPER_TRADING_ONLY;
+  });
+
+  afterAll(() => {
+    try { sqliteDb.close(); } catch { /* already closed */ }
+    for (const suffix of ['', '-shm', '-wal']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort */ }
+    }
+    delete process.env.ARGUS_DB_PATH;
+    if (prevPaperTradingOnly === undefined) delete process.env.PAPER_TRADING_ONLY;
+    else process.env.PAPER_TRADING_ONLY = prevPaperTradingOnly;
+  });
+
+  it('resolveBrokerIdFromSelectedName maps UI names and id aliases', () => {
+    const manager = BrokerManager.getInstance();
+    manager.registerBroker(fakeBroker('alpaca', {}));
+    manager.registerBroker(fakeBroker('ibkr_gateway', {}));
+    manager.registerBroker(fakeBroker('ibkr_web', {}));
+    expect(manager.resolveBrokerIdFromSelectedName('Alpaca')).toBe('alpaca');
+    expect(manager.resolveBrokerIdFromSelectedName('ibkr_gateway')).toBe('ibkr_gateway');
+    expect(manager.resolveBrokerIdFromSelectedName('ibkr_web')).toBe('ibkr_web');
+    expect(manager.resolveBrokerIdFromSelectedName('ibkr')).toBe('ibkr');
+    expect(manager.resolveBrokerIdFromSelectedName('Interactive Brokers')).toBe('ibkr');
+    expect(manager.resolveBrokerIdFromSelectedName('Simulation Mode')).toBe('internal_paper');
+  });
+
+  it('refuses IBKR Gateway switch when socket ports are closed', async () => {
+    const probe = await import('./ibkrTcpProbe');
+    const spy = vi.spyOn(probe, 'findFirstOpenTcpPort').mockResolvedValue(null);
+    try {
+      const manager = BrokerManager.getInstance();
+      manager.registerBroker(fakeBroker('ibkr_gateway', { healthResult: 'Offline' }));
+      await expect(manager.setActiveBroker('ibkr_gateway', { apiKey: 'x' }))
+        .rejects.toThrow(/not reachable on port 4002\/7497|IB Gateway not reachable/i);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('activates ibkr_gateway when socket preflight passes (paper under PAPER_TRADING_ONLY)', async () => {
+    const probe = await import('./ibkrTcpProbe');
+    const spy = vi.spyOn(probe, 'findFirstOpenTcpPort').mockResolvedValue(4002);
+    const prev = process.env.PAPER_TRADING_ONLY;
+    process.env.PAPER_TRADING_ONLY = 'true';
+    try {
+      const manager = BrokerManager.getInstance();
+      let sawLive = false;
+      const broker = fakeBroker('ibkr_gateway', { healthResult: 'Healthy' });
+      (broker as any).name = 'IBKR Gateway (Socket)';
+      const origLive = broker.liveTrading;
+      broker.liveTrading = () => { sawLive = true; origLive(); };
+      manager.registerBroker(broker);
+      const ok = await manager.setActiveBroker('ibkr_gateway', { apiKey: 'x', isLive: true });
+      expect(ok).toBe(true);
+      expect(manager.getActiveBroker().id).toBe('ibkr_gateway');
+      expect(sawLive).toBe(false);
+    } finally {
+      spy.mockRestore();
+      if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
+      else process.env.PAPER_TRADING_ONLY = prev;
+    }
+  });
+
+  it('switches to alpaca without inventing a second order path (OMS still sole placeOrder)', async () => {
+    const manager = BrokerManager.getInstance();
+    manager.registerBroker(fakeBroker('alpaca', {}));
+    const ok = await manager.setActiveBroker('alpaca', { apiKey: 'k', secretKey: 's' });
+    expect(ok).toBe(true);
+    expect(manager.getActiveBroker().id).toBe('alpaca');
   });
 });

@@ -56,6 +56,13 @@ import { evaluateExit } from './ExitIntelligenceEngine';
 import { isExitIntelligenceEnabled } from '../config/exitIntelligence';
 import { replaySafety } from '../replay/replaySafety';
 import { getCampaignBuyLockAction } from '../core/campaignBuyLock';
+import { getTradingDateStr, getTradingTimeHHMM } from '../core/TradingCalendar';
+import { TechnicalIndicators } from '../engines/TechnicalIndicators';
+import {
+  campaignBreakevenStopPrice,
+  campaignIntradayTargetPrice,
+  isCampaignEodFlattenWindow,
+} from './campaignIntraday';
 
 // E2A (BACKTEST_QUANT_HARDENING_ANALYSIS.md) - these were previously hardcoded literals
 // (+5%/-3%) unrelated to settings.takeProfitPct/trailingStopPct, which already existed in the
@@ -67,16 +74,12 @@ const FALLBACK_TAKE_PROFIT_PCT = tradingSafety.fallbackTakeProfitPct;
 const FALLBACK_TRAILING_STOP_PCT = tradingSafety.fallbackTrailingStopPct;
 
 /**
- * Daily Goal Campaign, TRAIL_STOPS_ONLY action only (ARGUS_CAMPAIGN_TRACKER.md /
- * ARGUS_INDEPENDENT_LEARNING... campaign audit): once today's target is reached under this
- * specific action, open positions' trailing stop tightens toward capital preservation - CampaignTracker
- * itself does not invent trail math (see its own header comment); this is that real math, living
- * where every other trailing-stop number already lives. Math.min so this can only ever TIGHTEN the
- * effective stop, never loosen it below whatever the operator's own settings.trailingStopPct
- * already was.
+ * Daily Goal Campaign: LOCK_AND_IDLE and TRAIL_STOPS_ONLY both tighten trailing stops once
+ * the target is locked (capital preservation). CONTINUE never changes trail math.
  */
 function resolveEffectiveTrailingStopPct(baseTrailingStopPct: number): number {
-  if (getCampaignBuyLockAction() === 'TRAIL_STOPS_ONLY') {
+  const action = getCampaignBuyLockAction();
+  if (action === 'TRAIL_STOPS_ONLY' || action === 'LOCK_AND_IDLE') {
     return Math.min(baseTrailingStopPct, tradingSafety.campaignTrailStopsOnlyPct);
   }
   return baseTrailingStopPct;
@@ -146,13 +149,9 @@ export async function resolvePositionStopTarget(
 
 export class PortfolioMonitorWorker {
   private intervalId: NodeJS.Timeout | null = null;
-  // Real bug fixed: setInterval had no in-flight guard. reviewPortfolio() awaits a real bars
-  // fetch (evaluateLiveThesis, up to 400 days) plus a DB lookup per holding - with several open
-  // positions this can plausibly exceed the 60s tick, letting a second invocation start while the
-  // first is still running. Each independently able to emit a SELL TRADE_IDEA_GENERATED for the
-  // same holding - a real duplicate/over-sell risk (see also ChiefTraderAgent's own per-symbol
-  // serialization fix for risk-exit ideas, same class of bug at the next stage).
   private isReviewing = false;
+  /** Symbols that already reached campaign intraday Target-1 this session (BE stop armed). */
+  private campaignScalpTarget1Hit = new Set<string>();
 
   start() {
     if (this.intervalId) return;
@@ -187,6 +186,11 @@ export class PortfolioMonitorWorker {
       const settingsRow = (await db.select().from(settings).limit(1))[0];
       const takeProfitPct = settingsRow?.takeProfitPct ?? FALLBACK_TAKE_PROFIT_PCT;
       const trailingStopPct = resolveEffectiveTrailingStopPct(settingsRow?.trailingStopPct ?? FALLBACK_TRAILING_STOP_PCT);
+      const campaignEnabled = !!settingsRow?.campaignEnabled;
+      const eodFlatten = !!settingsRow?.closePositionsBeforeMarketClose
+        && campaignEnabled
+        && isCampaignEodFlattenWindow(getTradingTimeHHMM());
+      const todayNy = getTradingDateStr();
 
       for (const holding of holdings) {
         if (holding.quantity <= 0) continue;
@@ -215,6 +219,54 @@ export class PortfolioMonitorWorker {
         // Must exclude REPLAY/BACKTEST FILLED BUYs — they share the trades table and would
         // otherwise attach research stop/target metadata to live/EXTERNAL_SYNC holdings.
         const openingTrade = await resolveOpeningTradeForLiveExit(holding.symbol);
+        const openedToday = !!(
+          openingTrade?.filledAt
+          && getTradingDateStr(new Date(openingTrade.filledAt)) === todayNy
+        );
+
+        if (eodFlatten) {
+          console.log(`[PortfolioWorker] Campaign EOD flatten window — risk-exit SELL idea for ${holding.symbol}`);
+          this.emitRiskExit({
+            symbol: holding.symbol,
+            currentPrice: currentLivePrice,
+            pnlPct: ((currentLivePrice - holding.averagePrice) / holding.averagePrice) * 100,
+            confidence: tradingSafety.quantStopExitConfidence,
+            reasoning: `EXIT_CODE=EOD_FLATTEN Campaign closePositionsBeforeMarketClose — flatten before NY close to avoid overnight gap (still RiskEngine/OMS).`,
+          });
+          continue;
+        }
+
+        // Campaign intraday micro-scalp: ATR Target-1 bank, then BE+pad stop for any residual.
+        if (campaignEnabled && openedToday) {
+          const atr = await this.computeCampaignAtr(holding.symbol);
+          if (atr != null && atr > 0) {
+            const t1 = campaignIntradayTargetPrice(holding.averagePrice, atr);
+            const beStop = campaignBreakevenStopPrice(holding.averagePrice);
+            const pnlNow = ((currentLivePrice - holding.averagePrice) / holding.averagePrice) * 100;
+            if (currentLivePrice >= t1) {
+              this.campaignScalpTarget1Hit.add(holding.symbol);
+              this.emitRiskExit({
+                symbol: holding.symbol,
+                currentPrice: currentLivePrice,
+                pnlPct: pnlNow,
+                confidence: tradingSafety.quantExitIdeaConfidence,
+                reasoning: `EXIT_CODE=TARGET_REACHED Campaign intraday ATR Target-1 ($${t1.toFixed(2)}, ${tradingSafety.campaignIntradayAtrTargetMultiple}x ATR) — bank scalp toward daily goal.`,
+              });
+              continue;
+            }
+            if (this.campaignScalpTarget1Hit.has(holding.symbol) && currentLivePrice <= beStop) {
+              this.emitRiskExit({
+                symbol: holding.symbol,
+                currentPrice: currentLivePrice,
+                pnlPct: pnlNow,
+                confidence: tradingSafety.quantStopExitConfidence,
+                reasoning: `EXIT_CODE=HARD_STOP Campaign Target-2 breakeven+${tradingSafety.campaignIntradayBreakevenPadPct}% stop after Target-1.`,
+              });
+              continue;
+            }
+          }
+        }
+
         const quantStop = openingTrade?.quantStopPrice ?? null;
         const quantTargetRaw = openingTrade?.quantTargetPrice ?? null;
         const quantTarget = quantTargetRaw !== null && isValidLongQuantTarget(quantTargetRaw, holding.averagePrice)
@@ -403,6 +455,27 @@ export class PortfolioMonitorWorker {
       return result.invalidated ? result.reasons.join(' ') : null;
     } catch (e) {
       console.warn(`[PortfolioWorker] Could not re-evaluate thesis for ${symbol} (no honest bar history):`, (e as Error).message);
+      return null;
+    }
+  }
+
+  private async computeCampaignAtr(symbol: string): Promise<number | null> {
+    try {
+      const endMs = Date.now();
+      const startMs = endMs - 2 * 24 * 60 * 60 * 1000;
+      await historicalDataGateway.ensureBars(symbol, '5Min', startMs, endMs);
+      let bars = await historicalDataGateway.getBars(symbol, '5Min', startMs, endMs);
+      if (bars.length < 20) {
+        await historicalDataGateway.ensureBars(symbol, '1Min', startMs, endMs);
+        bars = await historicalDataGateway.getBars(symbol, '1Min', startMs, endMs);
+      }
+      if (bars.length < 15) return null;
+      const highs = bars.map((b) => b.high);
+      const lows = bars.map((b) => b.low);
+      const closes = bars.map((b) => b.close);
+      const atr = TechnicalIndicators.calculateATR(highs, lows, closes, 14);
+      return Number.isFinite(atr) && atr > 0 ? atr : null;
+    } catch {
       return null;
     }
   }

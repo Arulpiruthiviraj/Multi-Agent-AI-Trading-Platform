@@ -73,6 +73,21 @@ export class PortfolioReconciliationWorker {
     }
   }
 
+  /**
+   * Broker cutover: clear local portfolio cache (never invent positions for the new adapter),
+   * then reconcile against getActiveBroker().portfolio(). Does not place orders.
+   */
+  async flushLocalHoldingsAndReconcile(reason: string): Promise<void> {
+    console.warn(`[PortfolioReconciliation] Flushing local portfolio cache (${reason})`);
+    this.consecutiveFaults.clear();
+    try {
+      sqliteDb.prepare('DELETE FROM portfolio').run();
+    } catch (e) {
+      console.error('[PortfolioReconciliation] Failed to flush portfolio table', e);
+    }
+    await this.reconcile();
+  }
+
   async reconcile() {
     if (this.isReconciling) {
       console.warn('[PortfolioReconciliation] A reconciliation cycle is already in progress - skipping this overlapping call.');
@@ -174,7 +189,7 @@ export class PortfolioReconciliationWorker {
               currentPrice: pos.currentPrice,
               unrealizedPnL: pos.unrealizedPnl,
               lastUpdated: new Date().toISOString(),
-              brokerSource: broker.name,
+              brokerSource: broker.id,
             }).where(eq(portfolio.symbol, local.symbol));
           }
           continue;
@@ -203,7 +218,7 @@ export class PortfolioReconciliationWorker {
             currentPrice: pos.currentPrice,
             unrealizedPnL: pos.unrealizedPnl,
             lastUpdated: new Date().toISOString(),
-            brokerSource: broker.name,
+            brokerSource: broker.id,
           }).where(eq(portfolio.symbol, local?.symbol ?? symbol));
           continue;
         }
@@ -221,7 +236,7 @@ export class PortfolioReconciliationWorker {
             currentPrice: pos.currentPrice,
             unrealizedPnL: pos.unrealizedPnl,
             lastUpdated: new Date().toISOString(),
-            brokerSource: broker.name,
+            brokerSource: broker.id,
           });
           const verify = findHolding(loadLocalHoldings(), symbol);
           if (!verify || Math.abs((verify.quantity ?? 0) - qty) > QTY_TOLERANCE) {

@@ -7,8 +7,7 @@ import { tradingEngine } from '../engines/TradingEngine';
 import { argusRuntime } from '../core/ArgusRuntime';
 import type { ArgusRuntimeSnapshot } from '../core/ArgusRuntime';
 import { db } from '../db';
-import { portfolio, trades } from '../db/schema';
-import { desc } from 'drizzle-orm';
+import { portfolio } from '../db/schema';
 import { recentEvents as eventStoreRecent } from '../core/EventStore';
 
 export class ArgusApplication {
@@ -79,8 +78,15 @@ export class ArgusApplication {
     return db.select().from(portfolio).all();
   }
 
-  async recentTrades(limit = 50) {
-    return db.select().from(trades).orderBy(desc(trades.timestamp)).limit(limit).all();
+  async recentTrades(limit = 50, brokerId?: string | null) {
+    const { parseBrokerScopeQuery, resolveActiveBrokerId, listTradesForBrokerScope } = await import('../services/brokerScopedLedger');
+    const parsed = parseBrokerScopeQuery(brokerId == null || brokerId === '' ? undefined : brokerId);
+    if ('error' in parsed) throw new Error(parsed.error);
+    const activeBrokerId = resolveActiveBrokerId(null);
+    const scope = parsed.mode === 'broker' && !parsed.brokerId
+      ? { mode: 'broker' as const, brokerId: activeBrokerId }
+      : parsed;
+    return listTradesForBrokerScope({ scope, activeBrokerId, limit });
   }
 
   /** Recent in-memory EventStore ring (not durable trace). */
