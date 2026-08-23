@@ -1,0 +1,14 @@
+-------------------------------------------------------------------------------
+Test set: io.argus.quantcore.server.json.JsonTest
+-------------------------------------------------------------------------------
+Tests run: 6, Failures: 0, Errors: 1, Skipped: 0, Time elapsed: 0.027 s <<< FAILURE! -- in io.argus.quantcore.server.json.JsonTest
+io.argus.quantcore.server.json.JsonTest.roundTripsNestedObjectsAndArrays -- Time elapsed: 0.008 s <<< ERROR!
+java.lang.NullPointerException
+	at java.base/java.util.Objects.requireNonNull(Objects.java:220)
+	at java.base/java.util.ImmutableCollections$MapN.<init>(ImmutableCollections.java:1255)
+	at java.base/java.util.Map.of(Map.java:1410)
+	at io.argus.quantcore.server.json.JsonTest.roundTripsNestedObjectsAndArrays(JsonTest.java:24)
+	at java.base/java.lang.reflect.Method.invoke(Method.java:565)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+	at java.base/java.util.ArrayList.forEach(ArrayList.java:1612)
+
