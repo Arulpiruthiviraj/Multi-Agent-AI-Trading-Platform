@@ -791,15 +791,14 @@ v2Router.get('/strategy/agent-synergy', async (req, res) => {
 // entirely client-side and push it into local React state - it never reached the backend, so
 // nothing about it was real. This endpoint deliberately does NOT call OrderManagementService (or
 // BrokerManager) directly - that would recreate the exact "raw path around the safety gate" bug
-// class already found and fixed multiple times in this codebase (Sections 16, 22.3). Instead it
-// emits a real CHIEF_APPROVED_IDEA event - the same event RiskAgent already listens for after
-// ChiefTraderAgent's own AI-consensus approval - carrying a real live price from
-// marketDataWorker. That means a manual override still passes through every real RiskEngine gate
-// ==========================================================================================
+// class already found and fixed multiple times in this codebase (Sections 16, 22.3).
+//
 // Opportunity Feed / Advanced Trade Sandbox CONFIRM BUY|SELL.
-// FULL CONSENSUS RETENTION: operator intent triggers on-demand agent co-eval → ChiefTrader
-// (≥0.75 weighted confidence, ≥2 independent agents) → RiskEngine (24 gates) → OMS → broker.
-// Does NOT emit CHIEF_APPROVED_IDEA directly. Does NOT skip consensus. PAPER_TRADING_ONLY unchanged.
+// FULL CONSENSUS RETENTION: operator intent triggers on-demand agent co-eval (runManualTradeCoEvaluation)
+// → real ChiefTrader consensus (≥0.75 weighted confidence, ≥2 independent agents) → RiskEngine
+// (24 gates) → OMS → broker. This route itself does NOT emit CHIEF_APPROVED_IDEA - that event is
+// ChiefTraderAgent's own, emitted only after real consensus math, same as the autonomous path.
+// Does NOT skip consensus. PAPER_TRADING_ONLY unchanged.
 // ==========================================================================================
 v2Router.post('/trading/execute-override', tradingLimiter, async (req, res) => {
   try {
@@ -1800,6 +1799,22 @@ v2Router.post('/replay/historical', backtestLimiter, async (req, res) => {
   } catch (e: any) {
     const { diagnosticFromBacktestError } = await import('../diagnostics/buildDiagnostic');
     res.status(400).json({ ok: false, error: e.message, diagnostic: diagnosticFromBacktestError(e.message) });
+  }
+});
+
+// ==========================================================================================
+// Java Quant Core advisory bridge (QuantCoreBridge.ts) — read-only connectivity check.
+// docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 2. Never places orders; this
+// route only surfaces whether the local, loopback-only Java process answered a health probe.
+// ==========================================================================================
+v2Router.get('/quant-core/health', async (_req, res) => {
+  try {
+    const { quantCoreBridge } = await import('../services/QuantCoreBridge');
+    const { isQuantJavaCoreEnabled } = await import('../config/tradingSafety');
+    const health = await quantCoreBridge.health();
+    res.json({ ok: true, enabled: isQuantJavaCoreEnabled(), ...health });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

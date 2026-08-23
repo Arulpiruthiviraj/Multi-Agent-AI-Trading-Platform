@@ -362,6 +362,9 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async health() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/health'), null, 2));
+    const qc = await fetchJson('/api/v2/quant-core/health') as { enabled: boolean; connected: boolean; detail?: string };
+    const label = !qc.enabled ? 'DISABLED' : qc.connected ? 'CONNECTED' : 'DISCONNECTED';
+    console.log(`QuantCoreBridge: ${label}${qc.detail ? ` (${qc.detail})` : ''}`);
   },
   async ready() {
     console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));

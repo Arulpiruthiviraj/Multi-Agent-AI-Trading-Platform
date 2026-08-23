@@ -215,7 +215,6 @@ describe('Architecture protection: CHIEF_APPROVED_IDEA has exactly one authorize
     'src/server/services/ChiefTraderAgent.ts': 'the real consensus engine',
     'src/server/services/PipelineFlatten.ts': 'documented liquidate override, still requires RiskEngine/OMS',
     'src/server/core/telemetryPulse.ts': 'synthetic UI-only demo pulse, explicitly RiskAgent-ignored',
-    'src/server/routes/v2System.ts': 'documented human manual-override route, still requires RiskEngine/OMS',
     'src/server/core/EventBus.ts': 'EventBus internal replay/rebroadcast plumbing',
   };
 
@@ -230,13 +229,26 @@ describe('Architecture protection: CHIEF_APPROVED_IDEA has exactly one authorize
     expect(hits).toEqual([]);
   });
 
-  it('the manual-override route requires RiskEngine/OMS afterward (never places an order itself)', () => {
+  it('the manual-override route delegates to real ChiefTrader consensus and never emits CHIEF_APPROVED_IDEA or places an order itself', () => {
+    // Real refactor (post 2026-08-18): the route no longer emits CHIEF_APPROVED_IDEA directly -
+    // it triggers on-demand agent co-eval (runManualTradeCoEvaluation) and waits for
+    // ChiefTraderAgent's own real consensus outcome, same floors as the autonomous path. See
+    // manualTradeCoEvaluation.ts and v2System.ts's own comment on this route.
     const text = readFileSync(join(ROOT, 'src/server/routes/v2System.ts'), 'utf8');
-    const idx = text.indexOf("eventBus.emit('CHIEF_APPROVED_IDEA'");
+    const idx = text.indexOf("v2Router.post('/trading/execute-override'");
     expect(idx).toBeGreaterThan(0);
-    const before = text.slice(Math.max(0, idx - 1200), idx);
-    expect(before).not.toMatch(/\.placeOrder\(/);
-    expect(before).not.toMatch(/BrokerManager\.getInstance/);
+    const routeSlice = text.slice(idx, idx + 2000);
+    expect(routeSlice).toMatch(/runManualTradeCoEvaluation/);
+    expect(routeSlice).not.toMatch(/eventBus\.emit\(\s*(EVENTS\.CHIEF_APPROVED_IDEA|['"]CHIEF_APPROVED_IDEA['"])/);
+    expect(routeSlice).not.toMatch(/\.placeOrder\(/);
+    expect(routeSlice).not.toMatch(/BrokerManager\.getInstance/);
+
+    const coEvalText = readFileSync(join(ROOT, 'src/server/services/manualTradeCoEvaluation.ts'), 'utf8');
+    expect(coEvalText).not.toMatch(/\.placeOrder\(/);
+    expect(coEvalText).not.toMatch(/BrokerManager\.getInstance/);
+    // Real consensus floors, not a manual-path shortcut - same config keys the autonomous path uses.
+    expect(coEvalText).toMatch(/tradingSafety\.consensusApprovalThreshold/);
+    expect(coEvalText).toMatch(/tradingSafety\.minIndependentAgreeingAgents/);
   });
 });
 

@@ -22,3 +22,5 @@ data/research/
 data/replays/
 models/
 sqlite.db
+quant-core-java/target/
+quant-core-java/.mvn/cacerts-with-norton-ca

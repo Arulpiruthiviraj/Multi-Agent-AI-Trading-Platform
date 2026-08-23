@@ -1,0 +1,5 @@
+target/
+# Machine-local trust-store copy created to work around this environment's Norton AV TLS
+# interception breaking the JDK's default cacerts (see .mvn/jvm.config) - not portable, not secret,
+# just a local Maven-Central-connectivity workaround. Do not commit.
+.mvn/cacerts-with-norton-ca

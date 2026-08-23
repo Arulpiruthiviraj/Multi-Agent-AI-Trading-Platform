@@ -21,7 +21,12 @@ class JsonTest {
     @Test
     void roundTripsNestedObjectsAndArrays() {
         Map<String, Object> nested = Map.of("a", 1.0, "b", List.of(1.0, 2.0, 3.0));
-        Map<String, Object> outer = Map.of("nested", nested, "flag", true, "missing", (Object) null);
+        // Map.of() rejects null values by design - built with a mutable map instead so this test
+        // can also cover a real null field round-tripping through the JSON writer/parser.
+        Map<String, Object> outer = new java.util.LinkedHashMap<>();
+        outer.put("nested", nested);
+        outer.put("flag", true);
+        outer.put("missing", null);
         Object parsed = Json.parse(Json.write(outer));
         Map<String, Object> obj = Json.asObject(parsed);
         assertThat(obj.get("flag")).isEqualTo(true);

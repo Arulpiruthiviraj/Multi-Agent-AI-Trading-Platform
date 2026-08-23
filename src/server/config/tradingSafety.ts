@@ -172,6 +172,27 @@ export interface TradingSafety {
    */
   tradingAgentsShadowEnabledEnvVar: string;
   /**
+   * docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 2 - gates QuantCoreBridge.ts's
+   * entire subscription to MARKET_DATA. Default off. Even when on, Phase 2 only forwards ticks
+   * and logs shadow-parity divergence (ParityComparator.ts) - it does not call emitTradeIdea.
+   * That is Phase 3, gated by this SAME flag plus its own additional checks in QuantCoreBridge.
+   */
+  quantJavaCoreEnabledEnvVar: string;
+  /** Loopback-only base URL for the local Java advisory process. Never reachable off this host. */
+  quantJavaCoreBaseUrl: string;
+  /** Hard timeout for any single call to the Java process - must never add material latency to
+   *  the live tick pipeline if Java is slow or down. */
+  quantJavaCoreRequestTimeoutMs: number;
+  /** Consecutive failures before QuantCoreBridge's circuit breaker opens (same shape as Alpaca's
+   *  own circuitBreaker fields above - not reused directly since this breaker guards a distinct,
+   *  purely-advisory dependency with no order-path consequence when open). */
+  quantJavaCoreCircuitBreakerFailureThreshold: number;
+  /** Cooldown before the circuit breaker allows another attempt after opening. */
+  quantJavaCoreCircuitBreakerCooldownMs: number;
+  /** ParityComparator.ts flags a shadow divergence when |ts - java| / |ts| exceeds this fraction
+   *  (0.0001 = 0.01%, matching the migration blueprint's own stated threshold). */
+  quantJavaCoreDivergenceThresholdPct: number;
+  /**
    * ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md Phase 8 - maximum |delta| applied
    * to agent_performance_stats.currentWeight in a single evaluateAgents() cycle, in either
    * direction (toward a computed target when evidence is LEARNING_ELIGIBLE, or toward the agent's
@@ -410,6 +431,24 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.tradingAgentsShadowEnabledEnvVar !== 'string' || !raw.tradingAgentsShadowEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: tradingAgentsShadowEnabledEnvVar');
   }
+  if (typeof raw.quantJavaCoreEnabledEnvVar !== 'string' || !raw.quantJavaCoreEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantJavaCoreEnabledEnvVar');
+  }
+  if (typeof raw.quantJavaCoreBaseUrl !== 'string' || !raw.quantJavaCoreBaseUrl) {
+    throw new Error('config/tradingSafety.json missing string field: quantJavaCoreBaseUrl');
+  }
+  if (typeof raw.quantJavaCoreRequestTimeoutMs !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreRequestTimeoutMs');
+  }
+  if (typeof raw.quantJavaCoreCircuitBreakerFailureThreshold !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreCircuitBreakerFailureThreshold');
+  }
+  if (typeof raw.quantJavaCoreCircuitBreakerCooldownMs !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreCircuitBreakerCooldownMs');
+  }
+  if (typeof raw.quantJavaCoreDivergenceThresholdPct !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreDivergenceThresholdPct');
+  }
   return raw as unknown as TradingSafety;
 }
 
@@ -423,6 +462,11 @@ export function isTradingAgentsShadowEnabled(): boolean {
 /** Off unless the operator has explicitly set this env var to 'true'. See quantColdStartBootstrapEnabledEnvVar's doc comment above. */
 export function isQuantColdStartBootstrapEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantColdStartBootstrapEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See quantJavaCoreEnabledEnvVar's doc comment above. */
+export function isQuantJavaCoreEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantJavaCoreEnabledEnvVar);
 }
 
 export function portfolioRiskPctForLevel(riskLevel: string | undefined | null): number {

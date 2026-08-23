@@ -118,6 +118,10 @@ describe('WalkForwardValidator.run', () => {
   });
 
   it('E5: splits into rolling windows via runStrategyBacktest()-backed mode when strategyId+symbol are given', async () => {
+    // Genuinely CPU-heavy real integration test - measured ~13-14s (500 days of bars, multiple
+    // rolling train/test windows, each running a real runStrategyBacktest() evaluation), not a
+    // hang. The default 5000ms vitest testTimeout was too tight for this specific real workload;
+    // this override does not touch the sibling run()-backed test, which comfortably fits under 5s.
     const dayMs = 24 * 60 * 60 * 1000;
     const startTs = new Date('2022-01-01').getTime();
     const rows = buildBars('WFQUANT', 500, 100, 0.005, startTs, dayMs);
@@ -142,5 +146,5 @@ describe('WalkForwardValidator.run', () => {
     }
     expect(result.promotable).toBe(false);
     expect(result.walkForwardPass).toBe(false);
-  });
+  }, 20000);
 });

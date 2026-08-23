@@ -213,6 +213,13 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    const { quantCoreBridge } = await import('../services/QuantCoreBridge');
+    quantCoreBridge.start(); // no-op unless QUANT_JAVA_CORE_ENABLED=true; advisory shadow-only until a separate live-ideas flag is also set
+  } catch (e: any) {
+    console.warn(`[QuantCoreBridge] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
     const models = await modelRuntimeManager.startAndProbe();
     for (const m of models) {
