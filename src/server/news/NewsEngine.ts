@@ -325,11 +325,15 @@ export class NewsEngine {
               if (newsAgentEmitsTradeIdeas() && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('NewsAgent')) {
                 const ticker = looksLikeListedTicker(symbol);
                 if (!ticker) return;
+                // Same authoritative live-price source `referencePrice` above already reads
+                // (MarketDataWorker) - attached explicitly so gateTradeIdea's price_validity gate
+                // doesn't depend solely on its own separate lookupLivePrice fallback registration.
                 eventBus.emitTradeIdea({
                    traceId,
                    symbol: ticker,
                    side: newsSide,
                    confidence: newsConfidence,
+                   currentPrice: marketDataWorker.getLatestPrice(ticker) ?? undefined,
                    reasoning: `[News Intelligence] ${aiAnalysis.reasoning}`,
                    agent: "NewsAgent",
                    newsDetails: {

@@ -18,6 +18,7 @@ import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
+import { marketDataWorker } from './MarketDataWorker';
 import {
   notePipelineAgentFailure,
   notePipelineAgentGated,
@@ -144,7 +145,9 @@ export class MacroEconomyAgent {
      return UNKNOWN_MACRO;
   }
 
-  private emitHold(traceId: string, symbol: string, reasoning: string): void {
+  // See FundamentalAgent.ts's identical comment - attaching currentPrice explicitly rather than
+  // relying solely on gateTradeIdea's separate lookupLivePrice fallback registration.
+  private emitHold(traceId: string, symbol: string, reasoning: string, currentPrice?: number | null): void {
     eventBus.emitTradeIdea({
       traceId,
       symbol,
@@ -152,6 +155,7 @@ export class MacroEconomyAgent {
       confidence: 0,
       reasoning,
       agent: 'MacroAgent',
+      currentPrice: currentPrice ?? undefined,
     });
   }
 
@@ -173,16 +177,18 @@ export class MacroEconomyAgent {
     }
     const symbol = universe[Math.floor(Date.now() / 75000) % universe.length];
     const traceId = generateTraceId(symbol);
+    // See FundamentalAgent.ts's identical comment.
+    const currentPrice = marketDataWorker.getLatestPrice(symbol);
 
     try {
        const data = await this.fetchMacro();
        if (data.inflation === "RATE_LIMITED") {
-          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.");
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.", currentPrice);
           notePipelineAgentSuccess('MacroAgent');
           return;
        }
        if (data.inflation === "UNKNOWN") {
-          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: Macro data providers not configured.");
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: Macro data providers not configured.", currentPrice);
           notePipelineAgentSuccess('MacroAgent');
           return;
        }
@@ -201,7 +207,7 @@ export class MacroEconomyAgent {
           } else {
              const res = await AIRouter.getInstance().routeTask('MacroAgent', `Analyze these macroeconomic indicators for their impact on ${symbol}: CPI ${data.inflation}%, Fed Funds Rate ${data.fedFundsRate}%, Unemployment ${data.unemployment}%. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
              if (!res.content) {
-                this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Macro LLM returned an empty response.');
+                this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Macro LLM returned an empty response.', currentPrice);
                 notePipelineAgentFailure('MacroAgent', 'empty LLM content');
                 return;
              }
@@ -223,6 +229,7 @@ export class MacroEconomyAgent {
              symbol,
              side: analysis.recommendation,
              confidence: analysis.confidence,
+             currentPrice: currentPrice ?? undefined,
              reasoning: `[Macro AI] ${analysis.reasoning}`,
              agent: "MacroAgent",
              aiCallId,
@@ -233,12 +240,12 @@ export class MacroEconomyAgent {
           return;
        }
 
-       this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Macro data ingested but no LLM is configured for a directional idea.');
+       this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Macro data ingested but no LLM is configured for a directional idea.', currentPrice);
        notePipelineAgentSuccess('MacroAgent');
     } catch (e) {
        logErrorSafely('[MacroAgent] Failed:', e);
        notePipelineAgentFailure('MacroAgent', e);
-       this.emitHold(generateTraceId(symbol), symbol, 'DATA_UNAVAILABLE: Macro analysis failed this tick; the next scheduled tick will still run.');
+       this.emitHold(generateTraceId(symbol), symbol, 'DATA_UNAVAILABLE: Macro analysis failed this tick; the next scheduled tick will still run.', currentPrice);
     }
   }
 }

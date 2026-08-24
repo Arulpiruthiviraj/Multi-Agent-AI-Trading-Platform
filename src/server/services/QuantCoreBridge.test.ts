@@ -151,6 +151,168 @@ describe('QuantCoreBridgeService.fetchInstitutionalVolatility/fetchInstitutional
   });
 });
 
+describe('QuantCoreBridgeService.fetchInstitutionalFeatures/fetchInstitutionalCorrelation - advisory-only, never wired to a vote', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  const bars = Array.from({ length: 40 }, (_, i) => ({
+    timestamp: i, open: 100 + i, high: 101 + i, low: 99 + i, close: 100.5 + i, volume: 1000,
+  }));
+
+  beforeEach(() => {
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('returns null and never calls fetch when QUANT_JAVA_CORE_ENABLED is off (default)', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch');
+    const bridge = new QuantCoreBridgeService();
+
+    expect(await bridge.fetchInstitutionalFeatures('AAPL', bars)).toBeNull();
+    expect(await bridge.fetchInstitutionalCorrelation(['A', 'B'], [[0.01, 0.02], [0.01, 0.02]])).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('POSTs bars to the features endpoint and returns the parsed snapshot when enabled', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', asOfMs: 39, close: 139.5, rsi: 55, macd: 0.1, macdSignal: 0.05, bbUpper: 145, bbLower: 130, atr: 1.2, realizedVolatility: 0.01, barsUsed: 40, qualityReport: { status: 'GREEN', stale: false, sufficientHistory: true, anomalyDetected: false, gapDetected: false, issues: [] } };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalFeatures('AAPL', bars);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/institutional/features/AAPL'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result).toEqual(fakeResult);
+  });
+
+  it('POSTs symbols + returnsByAsset to the correlation endpoint and returns the parsed matrix when enabled', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    const fakeResult = { schemaVersion: 1, symbols: ['SPY', 'IVV'], lambda: 0.94, correlationMatrix: [[1, 0.98], [0.98, 1]] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalCorrelation(['SPY', 'IVV'], [[0.01, 0.02], [0.011, 0.019]]);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/institutional/correlation'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result).toEqual(fakeResult);
+  });
+
+  it('fails closed (returns null, never throws) when the Java process is unreachable', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const bridge = new QuantCoreBridgeService();
+    await expect(bridge.fetchInstitutionalFeatures('AAPL', bars)).resolves.toBeNull();
+    await expect(bridge.fetchInstitutionalCorrelation(['A', 'B'], [[0.01], [0.02]])).resolves.toBeNull();
+  });
+
+  it('fails closed (returns null) on a non-2xx response, e.g. 422 insufficient/ragged input', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response('{"ok":false}', { status: 422 }));
+
+    const bridge = new QuantCoreBridgeService();
+    expect(await bridge.fetchInstitutionalFeatures('AAPL', bars)).toBeNull();
+    expect(await bridge.fetchInstitutionalCorrelation(['A', 'B'], [[0.01], [0.02]])).toBeNull();
+  });
+});
+
+describe('QuantCoreBridgeService.fetchInstitutionalEnsemble - advisory-only, never wired to a vote', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  const votes = [
+    { modelId: 'momentum', family: 'momentum', side: 'BUY' as const, confidence: 0.8 },
+    { modelId: 'factor', family: 'factor', side: 'BUY' as const, confidence: 0.6 },
+  ];
+
+  beforeEach(() => {
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('returns null and never calls fetch when QUANT_JAVA_CORE_ENABLED is off (default)', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch');
+    const bridge = new QuantCoreBridgeService();
+    expect(await bridge.fetchInstitutionalEnsemble(votes)).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('POSTs votes to the ensemble endpoint and returns the parsed result when enabled', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    const fakeResult = { schemaVersion: 1, rawSide: 'BUY', totalVotes: 2, agreeingCount: 2, avgConfidenceOfAgreeing: 0.7, effectiveIndependentCount: 1.6, agreeingModelIds: ['momentum', 'factor'], dissentingModelIds: [] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalEnsemble(votes);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/institutional/ensemble'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result).toEqual(fakeResult);
+  });
+
+  it('fails closed (returns null, never throws) when the Java process is unreachable', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const bridge = new QuantCoreBridgeService();
+    await expect(bridge.fetchInstitutionalEnsemble(votes)).resolves.toBeNull();
+  });
+});
+
+describe('QuantCoreBridgeService.fetchInstitutionalAdvisory - Dynamic Regime & Volatility Multiplier Layer, advisory-only', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  const votes = [{ modelId: 'factor', family: 'factor', side: 'BUY' as const, confidence: 0.8 }];
+
+  beforeEach(() => {
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('returns null and never calls fetch when QUANT_JAVA_CORE_ENABLED is off (default)', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch');
+    const bridge = new QuantCoreBridgeService();
+    expect(await bridge.fetchInstitutionalAdvisory(votes, 'BULL_TRENDING', 0.015)).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('POSTs votes/regime/currentVolatility to the advisory endpoint and returns the parsed result when enabled', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    const fakeResult = { schemaVersion: 1, rawSide: 'BUY', rawAvgConfidence: 0.8, rawEffectiveIndependentCount: 1, regime: 'BULL_TRENDING', regimeMultiplier: 1, currentVolatility: 0.015, volatilityMultiplier: 1, adjustedConfidence: 0.8, gated: false, reasoning: 'x', agreeingModelIds: ['factor'], dissentingModelIds: [] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalAdvisory(votes, 'BULL_TRENDING', 0.015);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/institutional/advisory'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result).toEqual(fakeResult);
+  });
+
+  it('fails closed (returns null, never throws) when the Java process is unreachable', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const bridge = new QuantCoreBridgeService();
+    await expect(bridge.fetchInstitutionalAdvisory(votes, 'BULL_TRENDING', 0.015)).resolves.toBeNull();
+  });
+});
+
 describe('QuantCoreBridgeService.health()', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 

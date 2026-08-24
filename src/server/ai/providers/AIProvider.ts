@@ -34,7 +34,10 @@
  */
 
 export interface AIProvider {
-  initialize(apiKey?: string): Promise<void>;
+  /** defaultModel is ignored by providers that don't take one (Gemini/OpenAI/DeepSeek); kept on the
+   *  interface because AIRouter's OPS-1 env-credential-fallback path calls this generically across
+   *  every provider type and must be able to pass the originally configured model through. */
+  initialize(apiKey?: string, defaultModel?: string): Promise<void>;
   authenticate(): Promise<boolean>;
   // inputTokens/outputTokens are the real split from the provider's own usage field when
   // available. tokens is kept as inputTokens+outputTokens for backward compatibility with
@@ -57,7 +60,7 @@ export interface AIProvider {
 export abstract class BaseAIProvider implements AIProvider {
   protected providerName: string = 'Base';
 
-  async initialize(apiKey?: string): Promise<void> {}
+  async initialize(apiKey?: string, defaultModel?: string): Promise<void> {}
   async authenticate(): Promise<boolean> { return true; }
   async chat(prompt: string, options?: any): Promise<{ content: string, tokens: number, inputTokens?: number, outputTokens?: number }> { return { content: '', tokens: 0, inputTokens: 0, outputTokens: 0 }; }
   async *stream(prompt: string, options?: any): AsyncGenerator<string, void, unknown> { yield ''; }

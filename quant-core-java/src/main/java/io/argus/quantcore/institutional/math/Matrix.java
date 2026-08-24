@@ -106,4 +106,47 @@ public final class Matrix {
         }
         return inv;
     }
+
+    /**
+     * Determinant via Gaussian elimination with partial pivoting (product of the pivots, sign-
+     * flipped once per row swap) - standard method, real for any n, not limited to 2x2/3x3
+     * cofactor shortcuts. Needed by DccGarchEngine's correlation-matrix log-likelihood.
+     */
+    public static double determinant(double[][] a) {
+        int n = a.length;
+        double[][] work = new double[n][n];
+        for (int i = 0; i < n; i++) {
+            System.arraycopy(a[i], 0, work[i], 0, n);
+        }
+        double det = 1.0;
+        for (int col = 0; col < n; col++) {
+            int pivot = col;
+            double best = Math.abs(work[col][col]);
+            for (int row = col + 1; row < n; row++) {
+                double v = Math.abs(work[row][col]);
+                if (v > best) {
+                    best = v;
+                    pivot = row;
+                }
+            }
+            if (best < 1e-14) {
+                return 0.0;
+            }
+            if (pivot != col) {
+                double[] tmp = work[col];
+                work[col] = work[pivot];
+                work[pivot] = tmp;
+                det = -det;
+            }
+            det *= work[col][col];
+            for (int row = col + 1; row < n; row++) {
+                double factor = work[row][col] / work[col][col];
+                if (factor == 0) continue;
+                for (int j = col; j < n; j++) {
+                    work[row][j] -= factor * work[col][j];
+                }
+            }
+        }
+        return det;
+    }
 }

@@ -57,6 +57,12 @@ export interface InstitutionalVolatilityResult {
   forecastVariance: number;
   forecastVolatility: number;
   returnsUsed: number;
+  // Additive fields from VolatilityEngine.java (real percentile-rank against the symbol's own
+  // trailing realized-vol history - see garchResultToJson's own comment in QuantCoreServer.java).
+  realizedVolatility: number;
+  realizedVolPercentile: number;
+  volatilityCompressed: boolean;
+  volatilityExpanded: boolean;
 }
 
 export interface InstitutionalRegimeResult {
@@ -68,6 +74,78 @@ export interface InstitutionalRegimeResult {
   stateLabels: string[];
   stateMeans: [number, number][];
   stateVariances: [number, number][];
+  // Additive fields from VolatilityEngine.java (see hmmFittedToJson's own comment in QuantCoreServer.java).
+  volatilityCompressed: boolean;
+  volatilityExpanded: boolean;
+  volatilityPercentile: number;
+}
+
+export interface InstitutionalFeaturesResult {
+  schemaVersion: number;
+  symbol: string;
+  asOfMs: number;
+  close: number;
+  rsi: number;
+  macd: number;
+  macdSignal: number;
+  bbUpper: number;
+  bbLower: number;
+  atr: number;
+  realizedVolatility: number;
+  barsUsed: number;
+  qualityReport: {
+    status: 'GREEN' | 'YELLOW' | 'RED';
+    stale: boolean;
+    sufficientHistory: boolean;
+    anomalyDetected: boolean;
+    gapDetected: boolean;
+    issues: string[];
+  };
+}
+
+export type EnsembleSide = 'BUY' | 'SELL' | 'NEUTRAL';
+
+export interface EnsembleModelVote {
+  modelId: string;
+  family: string;
+  side: EnsembleSide;
+  confidence: number;
+}
+
+export interface InstitutionalEnsembleResult {
+  schemaVersion: number;
+  rawSide: EnsembleSide;
+  totalVotes: number;
+  agreeingCount: number;
+  avgConfidenceOfAgreeing: number;
+  effectiveIndependentCount: number;
+  agreeingModelIds: string[];
+  dissentingModelIds: string[];
+}
+
+export type HmmRegimeLabel = 'BULL_TRENDING' | 'BEAR_TRENDING' | 'MEAN_REVERTING' | 'HIGH_VOL_CHAOS';
+
+export interface InstitutionalAdvisoryResult {
+  schemaVersion: number;
+  rawSide: EnsembleSide;
+  rawAvgConfidence: number;
+  rawEffectiveIndependentCount: number;
+  regime: HmmRegimeLabel;
+  regimeMultiplier: number;
+  currentVolatility: number;
+  volatilityMultiplier: number;
+  adjustedConfidence: number;
+  gated: boolean;
+  reasoning: string;
+  agreeingModelIds: string[];
+  dissentingModelIds: string[];
+}
+
+export interface InstitutionalCorrelationResult {
+  schemaVersion: number;
+  symbols: string[];
+  lambda: number;
+  correlationMatrix: number[][];
 }
 
 export interface InstitutionalFactorsResult {
@@ -325,6 +403,110 @@ export class QuantCoreBridgeService {
       }
       this.breaker.recordSuccess();
       return (await res.json()) as InstitutionalFactorsResult;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  /**
+   * FeaturePipeline's real MarketDataQualityEngine gate (docs/audits/ARGUS_JAVA_QUANT_ENGINE_BOUNDARY_AND_BENCHMARK_AUDIT.md's
+   * institutional activation Phase 1 foundation) - a caller should check qualityReport.status
+   * before trusting the indicator fields, same discipline the Java side itself enforces (RED
+   * quality never even builds a snapshot server-side; this returns null in that case too).
+   */
+  async fetchInstitutionalFeatures(symbol: string, bars: ResearchBar[], asOfMs?: number): Promise<InstitutionalFeaturesResult | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/features/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ bars: barsToJavaPayload(bars), ...(asOfMs !== undefined ? { asOfMs } : {}) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as InstitutionalFeaturesResult;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  /** CorrelationEngine (EwmaCovariance) - needs pre-computed simple returns per symbol, not raw bars (a correlation is inherently cross-symbol, unlike the single-symbol callers above). */
+  async fetchInstitutionalCorrelation(symbols: string[], returnsByAsset: number[][], lambda?: number): Promise<InstitutionalCorrelationResult | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/correlation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbols[0] ?? 'CORR') },
+        body: JSON.stringify({ symbols, returnsByAsset, ...(lambda !== undefined ? { lambda } : {}) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as InstitutionalCorrelationResult;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  /**
+   * QuantEnsembleEngine (correlation-adjusted ensemble) - a caller supplies already-derived
+   * directional votes (this function does not itself decide what counts as a "directional vote";
+   * never force a non-directional signal like a raw volatility forecast into a fabricated
+   * BUY/SELL here). Same fail-closed contract as every other institutional caller.
+   */
+  async fetchInstitutionalEnsemble(votes: EnsembleModelVote[], correlationMatrix?: number[][]): Promise<InstitutionalEnsembleResult | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/ensemble`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(votes[0]?.modelId ?? 'ENSEMBLE') },
+        body: JSON.stringify({ votes, ...(correlationMatrix !== undefined ? { correlationMatrix } : {}) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as InstitutionalEnsembleResult;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  /**
+   * The Dynamic Regime & Volatility Multiplier Layer - computes the correlation-adjusted ensemble
+   * and applies RegimeVolatilityOverlay's regime-suitability + inverse-volatility-targeting scale
+   * in one call. currentVolatility should come from a real number the caller already has (e.g.
+   * an InstitutionalVolatilityResult's or InstitutionalRegimeResult's own realizedVolatility field) -
+   * never fabricate one. Same fail-closed contract as every other institutional caller.
+   */
+  async fetchInstitutionalAdvisory(votes: EnsembleModelVote[], regime: HmmRegimeLabel, currentVolatility: number, correlationMatrix?: number[][]): Promise<InstitutionalAdvisoryResult | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/advisory`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(votes[0]?.modelId ?? 'ADVISORY') },
+        body: JSON.stringify({ votes, regime, currentVolatility, ...(correlationMatrix !== undefined ? { correlationMatrix } : {}) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as InstitutionalAdvisoryResult;
     } catch {
       this.breaker.recordFailure();
       return null;

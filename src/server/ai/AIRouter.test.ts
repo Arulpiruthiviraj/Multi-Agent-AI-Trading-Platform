@@ -308,3 +308,199 @@ describe('isAuthFailureError - real bug fix: Gemini real-key-rejection phrasing 
     expect(isTimeoutSkipError(new Error('NVIDIA API error: 404 Not Found'))).toBe(false);
   });
 });
+
+// Real bug fix, found live: the "Claude" DB/UI display name had no env-var candidate at all -
+// CLAUDE_API_KEY was never a real variable (Anthropic's own convention, and this repo's
+// .env.example, is ANTHROPIC_API_KEY), so a provider row with no DB-stored key and a real
+// ANTHROPIC_API_KEY set would still resolve to "not configured" rather than falling back to it.
+describe('envKeyForProviderName - provider display name to env var mapping', () => {
+  const savedEnv = { ...process.env };
+
+  afterEach(() => {
+    process.env = { ...savedEnv };
+  });
+
+  it('resolves "Claude" to ANTHROPIC_API_KEY, not the non-existent CLAUDE_API_KEY', async () => {
+    const { envKeyForProviderName } = await import('./AIRouter');
+    delete process.env.CLAUDE_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-real-looking-key-1234567890';
+
+    expect(envKeyForProviderName('Claude')).toBe('sk-ant-real-looking-key-1234567890');
+  });
+
+  it('resolves "Kimi" to MOONSHOT_API_KEY when set', async () => {
+    const { envKeyForProviderName } = await import('./AIRouter');
+    delete process.env.KIMI_API_KEY;
+    process.env.MOONSHOT_API_KEY = 'sk-moonshot-real-looking-key-1234567890';
+
+    expect(envKeyForProviderName('Kimi')).toBe('sk-moonshot-real-looking-key-1234567890');
+  });
+
+  it('still resolves via the direct KIMI_API_KEY match when MOONSHOT_API_KEY is not set', async () => {
+    const { envKeyForProviderName } = await import('./AIRouter');
+    delete process.env.MOONSHOT_API_KEY;
+    process.env.KIMI_API_KEY = 'sk-kimi-direct-1234567890';
+
+    expect(envKeyForProviderName('Kimi')).toBe('sk-kimi-direct-1234567890');
+  });
+
+  it('returns undefined for "Claude" when neither ANTHROPIC_API_KEY nor CLAUDE_API_KEY is set', async () => {
+    const { envKeyForProviderName } = await import('./AIRouter');
+    delete process.env.CLAUDE_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+
+    expect(envKeyForProviderName('Claude')).toBeUndefined();
+  });
+});
+
+/**
+ * OPS-1 (post-remediation audit) - real-DB, real-AIRouter coverage of the credential-precedence
+ * fix: a stale/invalid DB-stored key must never be silently kept in place when a distinct, usable
+ * .env credential exists. Real isolated temp SQLite DB + real AIRouter.initialize(), following the
+ * same pattern as the timeout suite above; only the concrete provider class's authenticate()/chat()
+ * are mocked (per-key behavior), never AIRouter's own credential-resolution logic.
+ */
+describe('AIRouter OPS-1: DB-vs-.env credential precedence and stale-DB fallback', () => {
+  let tmpDbPath: string;
+  let sqliteDb: any;
+  let db: any;
+  let schema: any;
+  let EncryptionService: any;
+  let uuidv4: any;
+  let aiRouter: any;
+  const savedEnv = { ...process.env };
+
+  beforeAll(async () => {
+    tmpDbPath = path.join(os.tmpdir(), `argus_airouter_ops1_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+    // The Phase-1 describe block above already imported and closed a `../db` connection in this
+    // same test file's module registry - dynamic import() would otherwise return that same,
+    // now-closed, cached instance instead of opening a fresh one against our new tmpDbPath.
+    vi.resetModules();
+    ({ sqliteDb, db } = await import('../db'));
+    schema = await import('../db/schema');
+    ({ EncryptionService } = await import('../core/EncryptionService'));
+    ({ v4: uuidv4 } = await import('uuid'));
+  });
+
+  afterAll(() => {
+    try { sqliteDb.close(); } catch { /* already closed */ }
+    for (const suffix of ['', '-shm', '-wal']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }
+    }
+    process.env = { ...savedEnv };
+  });
+
+  beforeEach(async () => {
+    const { AIRouter } = await import('./AIRouter');
+    aiRouter = AIRouter.getInstance();
+    aiRouter.clearProviders();
+  });
+
+  afterEach(async () => {
+    process.env = { ...savedEnv, ARGUS_DB_PATH: tmpDbPath };
+    vi.restoreAllMocks();
+    try { await db.delete(schema.aiProviders); } catch { /* table may already be empty */ }
+  });
+
+  it('resolves credentialSource ENV when only .env is configured (no DB row credential)', async () => {
+    process.env.OPENAI_API_KEY = 'sk-good-env-key-1234567890';
+    const id = uuidv4();
+    await db.insert(schema.aiProviders).values({ id, providerName: 'OpenAI', apiEndpoint: null, priority: 0, enabled: true });
+
+    const { OpenAIProvider } = await import('./providers/OpenAIProvider');
+    vi.spyOn(OpenAIProvider.prototype, 'authenticate').mockResolvedValue(true);
+    vi.spyOn(OpenAIProvider.prototype, 'chat').mockResolvedValue({ content: 'OK', tokens: 1 } as any);
+
+    await aiRouter.initialize();
+
+    expect(aiRouter.getCredentialSource(id)).toBe('ENV');
+    expect(aiRouter.listProviders().some(([pid]: [string, any]) => pid === id)).toBe(true);
+  });
+
+  it('prefers a working DB-stored credential over .env (does not fall back needlessly when DB auth succeeds)', async () => {
+    process.env.OPENAI_API_KEY = 'sk-good-env-key-should-not-be-needed';
+    const id = uuidv4();
+    await db.insert(schema.aiProviders).values({
+      id, providerName: 'OpenAI', apiEndpoint: null, priority: 0, enabled: true,
+      apiKeyEncrypted: EncryptionService.encrypt('sk-good-db-key-1234567890'),
+    });
+
+    const { OpenAIProvider } = await import('./providers/OpenAIProvider');
+    vi.spyOn(OpenAIProvider.prototype, 'authenticate').mockResolvedValue(true);
+    vi.spyOn(OpenAIProvider.prototype, 'chat').mockResolvedValue({ content: 'OK', tokens: 1 } as any);
+
+    await aiRouter.initialize();
+
+    expect(aiRouter.getCredentialSource(id)).toBe('DB');
+  });
+
+  it('OPS-1 core fix: falls back to a distinct .env credential when the DB-stored credential fails auth, and records the source as ENV rather than silently staying on the stale DB key', async () => {
+    process.env.OPENAI_API_KEY = 'sk-good-env-key-1234567890';
+    const id = uuidv4();
+    await db.insert(schema.aiProviders).values({
+      id, providerName: 'OpenAI', apiEndpoint: null, priority: 0, enabled: true,
+      apiKeyEncrypted: EncryptionService.encrypt('sk-stale-db-key-0000000000'),
+    });
+
+    const { OpenAIProvider } = await import('./providers/OpenAIProvider');
+    vi.spyOn(OpenAIProvider.prototype, 'authenticate').mockImplementation(async function (this: any) {
+      return this.apiKey === 'sk-good-env-key-1234567890';
+    });
+    vi.spyOn(OpenAIProvider.prototype, 'chat').mockResolvedValue({ content: 'OK', tokens: 1 } as any);
+
+    await aiRouter.initialize();
+
+    expect(aiRouter.getCredentialSource(id)).toBe('ENV');
+    expect(aiRouter.listProviders().some(([pid]: [string, any]) => pid === id)).toBe(true);
+    expect(aiRouter.isProviderAuthDisabled(id)).toBe(false);
+  });
+
+  it('disables the provider (fail-closed, never a fabricated success) when the DB credential fails auth and no distinct .env credential exists', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const id = uuidv4();
+    await db.insert(schema.aiProviders).values({
+      id, providerName: 'OpenAI', apiEndpoint: null, priority: 0, enabled: true,
+      apiKeyEncrypted: EncryptionService.encrypt('sk-stale-db-key-only-0000'),
+    });
+
+    const { OpenAIProvider } = await import('./providers/OpenAIProvider');
+    vi.spyOn(OpenAIProvider.prototype, 'authenticate').mockResolvedValue(false);
+    vi.spyOn(OpenAIProvider.prototype, 'chat').mockResolvedValue({ content: '', tokens: 0 } as any);
+
+    await aiRouter.initialize();
+
+    expect(aiRouter.getCredentialSource(id)).toBe('DB');
+    expect(aiRouter.isProviderAuthDisabled(id)).toBe(true);
+  });
+
+  it('records NONE and never registers the provider when neither a DB credential nor a distinct .env credential exists', async () => {
+    delete process.env.OPENAI_API_KEY;
+    const id = uuidv4();
+    await db.insert(schema.aiProviders).values({ id, providerName: 'OpenAI', apiEndpoint: null, priority: 0, enabled: true });
+
+    await aiRouter.initialize();
+
+    expect(aiRouter.getCredentialSource(id)).toBe('NONE');
+    expect(aiRouter.listProviders().some(([pid]: [string, any]) => pid === id)).toBe(false);
+  });
+
+  it('never retries the .env fallback more than once per boot, even when the fallback itself also fails (no retry loop)', async () => {
+    process.env.OPENAI_API_KEY = 'sk-also-bad-env-key-000000';
+    const id = uuidv4();
+    await db.insert(schema.aiProviders).values({
+      id, providerName: 'OpenAI', apiEndpoint: null, priority: 0, enabled: true,
+      apiKeyEncrypted: EncryptionService.encrypt('sk-stale-db-key-111111'),
+    });
+
+    const { OpenAIProvider } = await import('./providers/OpenAIProvider');
+    const authenticateSpy = vi.spyOn(OpenAIProvider.prototype, 'authenticate').mockResolvedValue(false);
+    vi.spyOn(OpenAIProvider.prototype, 'chat').mockResolvedValue({ content: '', tokens: 0 } as any);
+
+    await aiRouter.initialize();
+
+    // Exactly 2 authenticate() attempts this boot: one for the DB key, one for the .env fallback - never a loop.
+    expect(authenticateSpy).toHaveBeenCalledTimes(2);
+    expect(aiRouter.isProviderAuthDisabled(id)).toBe(true);
+  });
+});

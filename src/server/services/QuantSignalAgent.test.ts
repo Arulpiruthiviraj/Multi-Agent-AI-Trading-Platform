@@ -14,6 +14,7 @@ vi.mock('../ai/AIRouter', () => ({
   AIRouter: { getInstance: () => ({
     routeTask: async () => { throw new Error('No AI provider configured in this test.'); },
     routeConsensus: async () => null,
+    hasAnyRoutableProvider: async () => true,
   }) },
 }));
 

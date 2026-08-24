@@ -9,6 +9,13 @@ import io.argus.quantcore.institutional.models.FactorAlphaEngine;
 import io.argus.quantcore.institutional.models.GarchEngine;
 import io.argus.quantcore.institutional.models.HmmRegimeEngine;
 import io.argus.quantcore.institutional.models.StatArbEngine;
+import io.argus.quantcore.institutional.models.VolatilityEngine;
+import io.argus.quantcore.institutional.models.CorrelationEngine;
+import io.argus.quantcore.institutional.models.QuantEnsembleEngine;
+import io.argus.quantcore.institutional.models.RegimeVolatilityOverlay;
+import io.argus.quantcore.institutional.data.MarketDataQualityEngine;
+import io.argus.quantcore.institutional.features.FeaturePipeline;
+import io.argus.quantcore.institutional.features.FeatureSnapshot;
 import io.argus.quantcore.logging.StructuredLogger;
 import io.argus.quantcore.logging.TraceContext;
 import io.argus.quantcore.server.json.Json;
@@ -50,6 +57,10 @@ public final class QuantCoreServer {
         server.createContext("/api/v1/institutional/pairs", this::handleInstitutionalPairs);
         server.createContext("/api/v1/institutional/volatility/", this::handleInstitutionalVolatility);
         server.createContext("/api/v1/institutional/regime/", this::handleInstitutionalRegime);
+        server.createContext("/api/v1/institutional/features/", this::handleInstitutionalFeatures);
+        server.createContext("/api/v1/institutional/correlation", this::handleInstitutionalCorrelation);
+        server.createContext("/api/v1/institutional/ensemble", this::handleInstitutionalEnsemble);
+        server.createContext("/api/v1/institutional/advisory", this::handleInstitutionalAdvisory);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
     }
 
@@ -291,10 +302,19 @@ public final class QuantCoreServer {
             double lastVariance = variancePath[variancePath.length - 1];
             double forecastVariance = GarchEngine.forecastVariance(params, lastReturn, lastVariance, stepsAhead);
 
+            // VolatilityEngine reuses GarchEngine internally too, but computing it separately here
+            // (rather than refactoring this handler to call VolatilityEngine.assess() outright) is
+            // the additive, backward-compatible choice - existing fields/behavior above are
+            // untouched; realizedVolPercentile/compressed/expanded are new, real fields, not a
+            // second GARCH fit (VolatilityEngine.assess's own GARCH fit is independent of this
+            // one, both operate on the identical `returns` derivation, so both agree by construction).
+            int realizedVolWindow = (int) Json.asDoublePrimitive(body.get("realizedVolWindow"), 20);
+            VolatilityEngine.VolatilityAssessment volAssessment = VolatilityEngine.assess(symbol, closesOf(bars), realizedVolWindow);
+
             StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_VOLATILITY_COMPUTED",
                 "Fit GARCH(1,1) for " + symbol, traceId, symbol,
                 Map.of("alpha", params.alpha(), "beta", params.beta()));
-            sendJson(exchange, 200, garchResultToJson(symbol, params, lastVariance, forecastVariance, stepsAhead, returns.length));
+            sendJson(exchange, 200, garchResultToJson(symbol, params, lastVariance, forecastVariance, stepsAhead, returns.length, volAssessment));
         } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
             sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
         } finally {
@@ -338,16 +358,342 @@ public final class QuantCoreServer {
                 return;
             }
             HmmRegimeEngine.Regime currentRegime = HmmRegimeEngine.currentRegime(fitted, observations);
+            // Additive: real volatility-compression/expansion context alongside the HMM label,
+            // reusing VolatilityEngine (see handleInstitutionalVolatility's own comment on why this
+            // is a second, independent GARCH fit rather than a refactor of either handler).
+            VolatilityEngine.VolatilityAssessment volAssessment = VolatilityEngine.assess(symbol, closesOf(bars), realizedVolWindow);
 
             StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_REGIME_COMPUTED",
                 "Fit 4-state HMM regime for " + symbol, traceId, symbol,
                 Map.of("currentRegime", currentRegime.name()));
-            sendJson(exchange, 200, hmmFittedToJson(symbol, fitted, currentRegime, observations.length));
+            sendJson(exchange, 200, hmmFittedToJson(symbol, fitted, currentRegime, observations.length, volAssessment));
         } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
             sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
         } finally {
             TraceContext.clear();
         }
+    }
+
+    /**
+     * FeaturePipeline.build() was real but had zero HTTP endpoint before this pass - the
+     * institutional activation plan's "models should consume a FeatureSnapshot, not each
+     * independently parse Bar[]" foundation. asOfMs defaults to the last bar's own timestamp (not
+     * wall-clock time) so a historical/replay batch call is never spuriously flagged stale against
+     * whatever time it happens to be called at - callers analyzing genuinely live data should pass
+     * asOfMs explicitly.
+     */
+    private void handleInstitutionalFeatures(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String traceId = resolveTraceId(exchange);
+        TraceContext.bind(traceId, symbol);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Bar[] bars = decodeBars(body.get("bars"));
+            if (bars == null || bars.length == 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "bars array is required"));
+                return;
+            }
+            long asOfMs = (long) Json.asDoublePrimitive(body.get("asOfMs"), bars[bars.length - 1].timestampMs());
+
+            FeatureSnapshot snapshot = FeaturePipeline.build(symbol, bars, asOfMs);
+            if (snapshot == null) {
+                MarketDataQualityEngine.QualityReport quality = MarketDataQualityEngine.assess(bars, asOfMs, 30, 5L * 24 * 60 * 60 * 1000, 8.0);
+                sendJson(exchange, 422, Map.of("ok", false, "error", "data quality is RED - refusing to build a feature snapshot",
+                    "qualityIssues", java.util.Arrays.asList(quality.issues())));
+                return;
+            }
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_FEATURES_COMPUTED",
+                "Built feature snapshot for " + symbol, traceId, symbol,
+                Map.of("qualityStatus", snapshot.qualityReport().status().name()));
+            sendJson(exchange, 200, featureSnapshotToJson(snapshot));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    /**
+     * CorrelationEngine (wrapping the previously-uncalled-anywhere EwmaCovariance) had zero HTTP
+     * endpoint before this pass. Body: {"symbols":[...], "returnsByAsset":[[...],[...]], "lambda":0.94}.
+     */
+    private void handleInstitutionalCorrelation(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST symbols + returnsByAsset"));
+            return;
+        }
+        String traceId = resolveTraceId(exchange);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Object rawSymbols = body.get("symbols");
+            Object rawReturns = body.get("returnsByAsset");
+            if (!(rawSymbols instanceof java.util.List<?> symbolList) || !(rawReturns instanceof java.util.List<?> returnsList)) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "symbols and returnsByAsset arrays are both required"));
+                return;
+            }
+            String[] symbols = new String[symbolList.size()];
+            for (int i = 0; i < symbolList.size(); i++) symbols[i] = String.valueOf(symbolList.get(i));
+            double[][] returnsByAsset = new double[returnsList.size()][];
+            for (int i = 0; i < returnsList.size(); i++) {
+                java.util.List<?> row = (java.util.List<?>) returnsList.get(i);
+                double[] arr = new double[row.size()];
+                for (int j = 0; j < row.size(); j++) arr[j] = Json.asDoublePrimitive(row.get(j), Double.NaN);
+                returnsByAsset[i] = arr;
+            }
+            double lambda = Json.asDoublePrimitive(body.get("lambda"), io.argus.quantcore.institutional.math.EwmaCovariance.DEFAULT_LAMBDA);
+
+            CorrelationEngine.CorrelationResult result = CorrelationEngine.compute(symbols, returnsByAsset, lambda);
+            if (result == null) {
+                sendJson(exchange, 422, Map.of("ok", false, "error", "ragged or insufficient returnsByAsset input (all assets must share the same length, at least 2)"));
+                return;
+            }
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_CORRELATION_COMPUTED",
+                "Computed EWMA correlation for " + symbols.length + " symbols", traceId, symbols.length > 0 ? symbols[0] : null,
+                Map.of("symbolCount", (double) symbols.length));
+            sendJson(exchange, 200, correlationResultToJson(result));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    private static Map<String, Object> featureSnapshotToJson(FeatureSnapshot s) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("symbol", s.symbol());
+        m.put("asOfMs", (double) s.asOfMs());
+        m.put("close", s.close());
+        m.put("rsi", s.rsi());
+        m.put("macd", s.macd());
+        m.put("macdSignal", s.macdSignal());
+        m.put("bbUpper", s.bbUpper());
+        m.put("bbLower", s.bbLower());
+        m.put("atr", s.atr());
+        m.put("realizedVolatility", s.realizedVolatility());
+        m.put("barsUsed", (double) s.barsUsed());
+        Map<String, Object> quality = new java.util.LinkedHashMap<>();
+        quality.put("status", s.qualityReport().status().name());
+        quality.put("stale", s.qualityReport().stale());
+        quality.put("sufficientHistory", s.qualityReport().sufficientHistory());
+        quality.put("anomalyDetected", s.qualityReport().anomalyDetected());
+        quality.put("gapDetected", s.qualityReport().gapDetected());
+        quality.put("issues", java.util.Arrays.asList(s.qualityReport().issues()));
+        m.put("qualityReport", quality);
+        return m;
+    }
+
+    /**
+     * QuantEnsembleEngine had zero HTTP endpoint before this pass. Body:
+     * {"votes":[{"modelId":"...","family":"...","side":"BUY|SELL|NEUTRAL","confidence":0.7}, ...],
+     *  "correlationMatrix": [[...]] (optional - defaults to the declared family-based assumption,
+     *  see QuantEnsembleEngine's own header for why real measured correlation isn't available yet)}.
+     * Generic and source-agnostic by design: this endpoint does not presume which upstream models
+     * (GARCH/regime/factor/a future model) supplied the votes, and does not itself decide what
+     * counts as a "directional vote" - a caller must not force a non-directional signal (e.g. a
+     * volatility forecast) into a fabricated BUY/SELL here.
+     */
+    private void handleInstitutionalEnsemble(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of votes"));
+            return;
+        }
+        String traceId = resolveTraceId(exchange);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Object rawVotes = body.get("votes");
+            if (!(rawVotes instanceof java.util.List<?> voteList) || voteList.isEmpty()) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "a non-empty votes array is required"));
+                return;
+            }
+            QuantEnsembleEngine.ModelVote[] votes = new QuantEnsembleEngine.ModelVote[voteList.size()];
+            for (int i = 0; i < voteList.size(); i++) {
+                Map<String, Object> v = Json.asObject(voteList.get(i));
+                String modelId = Json.asString(v.get("modelId"));
+                String family = Json.asString(v.get("family"));
+                String sideRaw = Json.asString(v.get("side"));
+                double confidence = Json.asDoublePrimitive(v.get("confidence"), Double.NaN);
+                if (modelId == null || sideRaw == null || !Double.isFinite(confidence)) {
+                    sendJson(exchange, 400, Map.of("ok", false, "error", "each vote requires modelId, side, and a finite confidence"));
+                    return;
+                }
+                QuantEnsembleEngine.Side side;
+                try {
+                    side = QuantEnsembleEngine.Side.valueOf(sideRaw);
+                } catch (IllegalArgumentException e) {
+                    sendJson(exchange, 400, Map.of("ok", false, "error", "invalid side \"" + sideRaw + "\" - must be BUY, SELL, or NEUTRAL"));
+                    return;
+                }
+                votes[i] = new QuantEnsembleEngine.ModelVote(modelId, family, side, confidence);
+            }
+
+            Object rawMatrix = body.get("correlationMatrix");
+            double[][] correlationMatrix;
+            if (rawMatrix instanceof java.util.List<?> matrixList) {
+                correlationMatrix = new double[matrixList.size()][];
+                for (int i = 0; i < matrixList.size(); i++) {
+                    java.util.List<?> row = (java.util.List<?>) matrixList.get(i);
+                    double[] arr = new double[row.size()];
+                    for (int j = 0; j < row.size(); j++) arr[j] = Json.asDoublePrimitive(row.get(j), Double.NaN);
+                    correlationMatrix[i] = arr;
+                }
+                if (correlationMatrix.length != votes.length) {
+                    sendJson(exchange, 400, Map.of("ok", false, "error", "correlationMatrix must be the same size as votes"));
+                    return;
+                }
+            } else {
+                correlationMatrix = QuantEnsembleEngine.defaultFamilyCorrelationMatrix(votes);
+            }
+
+            QuantEnsembleEngine.EnsembleResult result = QuantEnsembleEngine.combine(votes, correlationMatrix);
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_ENSEMBLE_COMPUTED",
+                "Combined " + votes.length + " model votes", traceId, votes.length > 0 ? votes[0].modelId() : null,
+                Map.of("rawSide", result.rawSide().name(), "effectiveIndependentCount", result.effectiveIndependentCount()));
+            sendJson(exchange, 200, ensembleResultToJson(result));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    private static Map<String, Object> ensembleResultToJson(QuantEnsembleEngine.EnsembleResult r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("rawSide", r.rawSide().name());
+        m.put("totalVotes", (double) r.totalVotes());
+        m.put("agreeingCount", (double) r.agreeingCount());
+        m.put("avgConfidenceOfAgreeing", r.avgConfidenceOfAgreeing());
+        m.put("effectiveIndependentCount", r.effectiveIndependentCount());
+        m.put("agreeingModelIds", java.util.Arrays.asList(r.agreeingModelIds()));
+        m.put("dissentingModelIds", java.util.Arrays.asList(r.dissentingModelIds()));
+        return m;
+    }
+
+    /**
+     * The Dynamic Regime & Volatility Multiplier Layer's HTTP entry point: computes the
+     * correlation-adjusted ensemble (same math as handleInstitutionalEnsemble) and then applies
+     * RegimeVolatilityOverlay over it in one call. Body adds "regime" (one of HmmRegimeEngine's 4
+     * labels) and "currentVolatility" (a real realized-volatility number the caller already has,
+     * e.g. from /institutional/volatility's or /institutional/regime's own realizedVolatility
+     * field) on top of handleInstitutionalEnsemble's existing votes/correlationMatrix body shape.
+     */
+    private void handleInstitutionalAdvisory(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST votes, regime, and currentVolatility"));
+            return;
+        }
+        String traceId = resolveTraceId(exchange);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Object rawVotes = body.get("votes");
+            if (!(rawVotes instanceof java.util.List<?> voteList) || voteList.isEmpty()) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "a non-empty votes array is required"));
+                return;
+            }
+            String regimeRaw = Json.asString(body.get("regime"));
+            double currentVolatility = Json.asDoublePrimitive(body.get("currentVolatility"), Double.NaN);
+            if (regimeRaw == null || !Double.isFinite(currentVolatility) || currentVolatility < 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "regime (a valid HmmRegimeEngine.Regime name) and a non-negative currentVolatility are both required"));
+                return;
+            }
+            io.argus.quantcore.institutional.models.HmmRegimeEngine.Regime regime;
+            try {
+                regime = io.argus.quantcore.institutional.models.HmmRegimeEngine.Regime.valueOf(regimeRaw);
+            } catch (IllegalArgumentException e) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "invalid regime \"" + regimeRaw + "\" - must be BULL_TRENDING, BEAR_TRENDING, MEAN_REVERTING, or HIGH_VOL_CHAOS"));
+                return;
+            }
+
+            QuantEnsembleEngine.ModelVote[] votes = new QuantEnsembleEngine.ModelVote[voteList.size()];
+            for (int i = 0; i < voteList.size(); i++) {
+                Map<String, Object> v = Json.asObject(voteList.get(i));
+                String modelId = Json.asString(v.get("modelId"));
+                String family = Json.asString(v.get("family"));
+                String sideRaw = Json.asString(v.get("side"));
+                double confidence = Json.asDoublePrimitive(v.get("confidence"), Double.NaN);
+                if (modelId == null || sideRaw == null || !Double.isFinite(confidence)) {
+                    sendJson(exchange, 400, Map.of("ok", false, "error", "each vote requires modelId, side, and a finite confidence"));
+                    return;
+                }
+                QuantEnsembleEngine.Side side;
+                try {
+                    side = QuantEnsembleEngine.Side.valueOf(sideRaw);
+                } catch (IllegalArgumentException e) {
+                    sendJson(exchange, 400, Map.of("ok", false, "error", "invalid side \"" + sideRaw + "\" - must be BUY, SELL, or NEUTRAL"));
+                    return;
+                }
+                votes[i] = new QuantEnsembleEngine.ModelVote(modelId, family, side, confidence);
+            }
+
+            Object rawMatrix = body.get("correlationMatrix");
+            double[][] correlationMatrix;
+            if (rawMatrix instanceof java.util.List<?> matrixList) {
+                correlationMatrix = new double[matrixList.size()][];
+                for (int i = 0; i < matrixList.size(); i++) {
+                    java.util.List<?> row = (java.util.List<?>) matrixList.get(i);
+                    double[] arr = new double[row.size()];
+                    for (int j = 0; j < row.size(); j++) arr[j] = Json.asDoublePrimitive(row.get(j), Double.NaN);
+                    correlationMatrix[i] = arr;
+                }
+                if (correlationMatrix.length != votes.length) {
+                    sendJson(exchange, 400, Map.of("ok", false, "error", "correlationMatrix must be the same size as votes"));
+                    return;
+                }
+            } else {
+                correlationMatrix = QuantEnsembleEngine.defaultFamilyCorrelationMatrix(votes);
+            }
+
+            QuantEnsembleEngine.EnsembleResult ensemble = QuantEnsembleEngine.combine(votes, correlationMatrix);
+            RegimeVolatilityOverlay.AdjustedAdvisory advisory = RegimeVolatilityOverlay.apply(ensemble, regime, currentVolatility);
+
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_ADVISORY_COMPUTED",
+                "Computed regime/volatility-adjusted advisory from " + votes.length + " votes", traceId, votes.length > 0 ? votes[0].modelId() : null,
+                Map.of("adjustedConfidence", advisory.adjustedConfidence(), "gated", advisory.gated()));
+            sendJson(exchange, 200, advisoryToJson(ensemble, advisory));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    private static Map<String, Object> advisoryToJson(QuantEnsembleEngine.EnsembleResult ensemble, RegimeVolatilityOverlay.AdjustedAdvisory a) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("rawSide", a.rawSide().name());
+        m.put("rawAvgConfidence", a.rawAvgConfidence());
+        m.put("rawEffectiveIndependentCount", a.rawEffectiveIndependentCount());
+        m.put("regime", a.regime().name());
+        m.put("regimeMultiplier", a.regimeMultiplier());
+        m.put("currentVolatility", a.currentVolatility());
+        m.put("volatilityMultiplier", a.volatilityMultiplier());
+        m.put("adjustedConfidence", a.adjustedConfidence());
+        m.put("gated", a.gated());
+        m.put("reasoning", a.reasoning());
+        m.put("agreeingModelIds", java.util.Arrays.asList(ensemble.agreeingModelIds()));
+        m.put("dissentingModelIds", java.util.Arrays.asList(ensemble.dissentingModelIds()));
+        return m;
+    }
+
+    private static Map<String, Object> correlationResultToJson(CorrelationEngine.CorrelationResult r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("symbols", java.util.Arrays.asList(r.symbols()));
+        m.put("lambda", r.lambda());
+        java.util.List<Object> matrix = new java.util.ArrayList<>();
+        for (double[] row : r.correlationMatrix()) {
+            java.util.List<Double> rowList = new java.util.ArrayList<>();
+            for (double v : row) rowList.add(v);
+            matrix.add(rowList);
+        }
+        m.put("correlationMatrix", matrix);
+        return m;
     }
 
     /** Simple (non-log) daily returns from closes, same convention FactorAlphaEngine.simpleReturns uses. */
@@ -390,7 +736,7 @@ public final class QuantCoreServer {
         return out;
     }
 
-    private static Map<String, Object> garchResultToJson(String symbol, GarchEngine.Params p, double lastConditionalVariance, double forecastVariance, int stepsAhead, int returnsUsed) {
+    private static Map<String, Object> garchResultToJson(String symbol, GarchEngine.Params p, double lastConditionalVariance, double forecastVariance, int stepsAhead, int returnsUsed, VolatilityEngine.VolatilityAssessment volAssessment) {
         Map<String, Object> m = new java.util.LinkedHashMap<>();
         m.put("schemaVersion", 1.0);
         m.put("symbol", symbol);
@@ -405,16 +751,26 @@ public final class QuantCoreServer {
         m.put("forecastVariance", forecastVariance);
         m.put("forecastVolatility", Math.sqrt(Math.max(forecastVariance, 0)));
         m.put("returnsUsed", (double) returnsUsed);
+        // Additive fields from VolatilityEngine (institutional activation plan Phase 1) - a real
+        // percentile-rank of current realized vol against its own trailing window, never fabricated.
+        m.put("realizedVolatility", volAssessment.realizedVolatility());
+        m.put("realizedVolPercentile", volAssessment.realizedVolPercentile());
+        m.put("volatilityCompressed", volAssessment.compressed());
+        m.put("volatilityExpanded", volAssessment.expanded());
         return m;
     }
 
-    private static Map<String, Object> hmmFittedToJson(String symbol, HmmRegimeEngine.Fitted fitted, HmmRegimeEngine.Regime currentRegime, int observationCount) {
+    private static Map<String, Object> hmmFittedToJson(String symbol, HmmRegimeEngine.Fitted fitted, HmmRegimeEngine.Regime currentRegime, int observationCount, VolatilityEngine.VolatilityAssessment volAssessment) {
         Map<String, Object> m = new java.util.LinkedHashMap<>();
         m.put("schemaVersion", 1.0);
         m.put("symbol", symbol);
         m.put("currentRegime", currentRegime.name());
         m.put("logLikelihood", fitted.logLikelihood());
         m.put("observationCount", (double) observationCount);
+        // Additive: real volatility-compression/expansion context alongside the HMM label.
+        m.put("volatilityCompressed", volAssessment.compressed());
+        m.put("volatilityExpanded", volAssessment.expanded());
+        m.put("volatilityPercentile", volAssessment.realizedVolPercentile());
         java.util.List<String> stateLabels = new java.util.ArrayList<>();
         for (HmmRegimeEngine.Regime r : fitted.stateLabels()) stateLabels.add(r.name());
         m.put("stateLabels", stateLabels);

@@ -36,6 +36,16 @@ case "$cmd" in
     if argus_wants_help "$@"; then argus_help_restart; exit 0; fi
     argus_npm_cli restart
     ;;
+  nuke)
+    if argus_wants_help "$@"; then
+      echo "Usage: argus nuke"
+      echo "  Force-kills stale/zombie Argus processes (engine, ecosystem launcher, Chronos, Java Quant Core)."
+      echo "  No services are started afterward. Delegates to argus.sh's own nuke action - same behavior"
+      echo "  whether invoked as './argus nuke' or './argus.sh nuke'."
+      exit 0
+    fi
+    exec "$ARGUS_ROOT/argus.sh" nuke
+    ;;
   status)
     if argus_wants_help "$@"; then argus_help_status; exit 0; fi
     argus_cmd_status "$@"
@@ -47,6 +57,17 @@ case "$cmd" in
   ready)
     if argus_wants_help "$@"; then argus_help_ready; exit 0; fi
     argus_cmd_ready "$@"
+    ;;
+  pipeline-ready)
+    if argus_wants_help "$@"; then
+      echo "Usage: argus pipeline-ready"
+      echo "  Distinguishes process-alive from trading-pipeline-ready: Process, Database, Market"
+      echo "  Data, Broker, Technical Engine, Quant Engine, and AI Provider Layer (per-provider),"
+      echo "  each reported independently. Not LIVE readiness (see 'argus ready') - read-only"
+      echo "  PAPER/operational diagnostic; never arms LIVE, never toggles Autobot."
+      exit 0
+    fi
+    argus_npm_cli pipeline-ready
     ;;
   enable|disable|kill-switch)
     if argus_wants_help "$@"; then argus_help_trading; exit 0; fi

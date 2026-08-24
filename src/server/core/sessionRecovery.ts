@@ -7,6 +7,7 @@ import { writeFileSync, readFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { eventBus } from './EventBus';
 import { EVENTS } from './eventNames';
+import { structuredLogger } from '../observability/StructuredLogger';
 
 export interface RuntimeSessionFile {
   pid: number;
@@ -63,8 +64,28 @@ export function loadInterruptedSessionMarker(): boolean {
   const prev = read();
   const interrupted = !!(prev && prev.cleanShutdown === false);
   holdNewEntryIdeas = interrupted;
-  if (interrupted) {
+  if (interrupted && prev) {
     console.warn('[sessionRecovery] Previous Argus session did not clean-shutdown. Holding new BUY ideas until RECONCILIATION_MATCH. Risk-exit SELL and recon still run. Not an auto-resume of a pause.');
+    // Post-remediation-audit addition (Phase 5, crash forensics): the 2026-08-24 16:20:51Z death
+    // left zero trace in crash.log, Windows Application/System event logs, or a graceful-shutdown
+    // log line - the only evidence available at the NEXT boot was this same heartbeat file, read
+    // by eye. Making that a real, queryable observability_events row (not just a console line) so
+    // a future forensic pass can query "was the prior session's death ever cleanly explained"
+    // without needing a human to have been watching the console at the time.
+    const lastHeartbeatMs = Date.parse(prev.lastHeartbeatAt);
+    structuredLogger.warn(
+      `Previous Argus session (pid ${prev.pid}) did not shut down cleanly - last heartbeat ${prev.lastHeartbeatAt}, started ${prev.startedAt}. New BUY ideas held until reconciliation match.`,
+      {
+        category: 'TRADING_SAFETY',
+        eventType: 'UNCLEAN_SHUTDOWN_DETECTED',
+        component: 'sessionRecovery',
+        previousPid: prev.pid,
+        previousStartedAt: prev.startedAt,
+        previousLastHeartbeatAt: prev.lastHeartbeatAt,
+        msSincePreviousHeartbeat: Number.isFinite(lastHeartbeatMs) ? Date.now() - lastHeartbeatMs : null,
+        currentPid: process.pid,
+      },
+    );
   }
   return interrupted;
 }

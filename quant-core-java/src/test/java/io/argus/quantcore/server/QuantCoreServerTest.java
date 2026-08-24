@@ -305,4 +305,211 @@ class QuantCoreServerTest {
         var res = post("/api/v1/institutional/regime/AAPL", Map.of());
         assertThat(res.statusCode()).isEqualTo(400);
     }
+
+    @Test
+    void institutionalVolatilityResponseIncludesTheNewVolatilityEngineFields() throws Exception {
+        Random rnd = new Random(1357);
+        double price = 100;
+        List<Object> bars = new ArrayList<>();
+        double vol = 0.01;
+        for (int i = 0; i < 250; i++) {
+            vol = 0.4 * vol + 0.6 * (0.005 + Math.abs(rnd.nextGaussian()) * 0.01);
+            double ret = rnd.nextGaussian() * vol;
+            double close = price * (1 + ret);
+            bars.add(barJson(i, close));
+            price = close;
+        }
+        var res = post("/api/v1/institutional/volatility/AAPL", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(Json.asDouble(body.get("realizedVolPercentile"))).isBetween(0.0, 1.0);
+        assertThat(body.get("volatilityCompressed")).isIn(true, false);
+        assertThat(body.get("volatilityExpanded")).isIn(true, false);
+    }
+
+    @Test
+    void institutionalRegimeResponseIncludesTheNewVolatilityContextFields() throws Exception {
+        Random rnd = new Random(9182);
+        double price = 100;
+        List<Object> bars = new ArrayList<>();
+        for (int i = 0; i < 260; i++) {
+            boolean choppy = (i / 50) % 2 == 1;
+            double ret = rnd.nextGaussian() * (choppy ? 0.03 : 0.006) + (choppy ? 0 : 0.0015);
+            double close = price * (1 + ret);
+            bars.add(barJson(i, close));
+            price = close;
+        }
+        var res = post("/api/v1/institutional/regime/AAPL", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(Json.asDouble(body.get("volatilityPercentile"))).isBetween(0.0, 1.0);
+        assertThat(body.get("volatilityCompressed")).isIn(true, false);
+    }
+
+    // FeaturePipeline/MarketDataQualityEngine were real, unit-tested, but had zero HTTP endpoint -
+    // proves the new /institutional/features/ wiring, not the underlying indicator math (already
+    // covered by FeaturePipelineTest/MarketDataQualityEngineTest at the unit level).
+
+    @Test
+    void institutionalFeaturesBuildsARealSnapshotForCleanSufficientBars() throws Exception {
+        Random rnd = new Random(321);
+        double price = 100;
+        List<Object> bars = new ArrayList<>();
+        for (int i = 0; i < 60; i++) {
+            price *= 1 + rnd.nextGaussian() * 0.01;
+            bars.add(barJson(i, price));
+        }
+        var res = post("/api/v1/institutional/features/AAPL", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("symbol")).isEqualTo("AAPL");
+        assertThat(Json.asDouble(body.get("rsi"))).isBetween(0.0, 100.0);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> quality = (Map<String, Object>) body.get("qualityReport");
+        assertThat(quality.get("status")).isEqualTo("GREEN");
+    }
+
+    @Test
+    void institutionalFeaturesReturns422WhenQualityIsRed() throws Exception {
+        List<Object> bars = List.of(barJson(0, 100.0), barJson(1, 101.0)); // far below the 30-bar floor
+        var res = post("/api/v1/institutional/features/THIN", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(422);
+    }
+
+    @Test
+    void institutionalFeaturesRejectsMissingBarsField() throws Exception {
+        var res = post("/api/v1/institutional/features/AAPL", Map.of());
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    // CorrelationEngine (wrapping the previously-uncalled EwmaCovariance) had zero HTTP endpoint -
+    // proves the new /institutional/correlation wiring, not the underlying math (already covered
+    // by CorrelationEngineTest at the unit level).
+
+    @Test
+    void institutionalCorrelationComputesAHighCorrelationForNearIdenticalSeries() throws Exception {
+        Random rnd = new Random(654);
+        int n = 200;
+        List<Double> a = new ArrayList<>();
+        List<Double> b = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            double common = rnd.nextGaussian() * 0.01;
+            a.add(common);
+            b.add(common + rnd.nextGaussian() * 0.0005);
+        }
+        var res = post("/api/v1/institutional/correlation", Map.of(
+            "symbols", List.of("SPY", "IVV"), "returnsByAsset", List.of(a, b)));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        @SuppressWarnings("unchecked")
+        List<List<Double>> matrix = (List<List<Double>>) body.get("correlationMatrix");
+        assertThat(matrix.get(0).get(1)).isGreaterThan(0.9);
+    }
+
+    @Test
+    void institutionalCorrelationReturns422OnRaggedInput() throws Exception {
+        var res = post("/api/v1/institutional/correlation", Map.of(
+            "symbols", List.of("A", "B"),
+            "returnsByAsset", List.of(List.of(0.01, 0.02, 0.03), List.of(0.01, 0.02))));
+        assertThat(res.statusCode()).isEqualTo(422);
+    }
+
+    @Test
+    void institutionalCorrelationRejectsMissingFields() throws Exception {
+        var res = post("/api/v1/institutional/correlation", Map.of("symbols", List.of("A", "B")));
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    // QuantEnsembleEngine (correlation-adjusted ensemble) had zero HTTP endpoint - proves the new
+    // wiring, not the underlying math (already covered by QuantEnsembleEngineTest).
+
+    @Test
+    void institutionalEnsembleUsesTheDefaultFamilyCorrelationWhenNoMatrixIsSupplied() throws Exception {
+        var votes = List.of(
+            Map.of("modelId", "momentum_a", "family", "momentum", "side", "BUY", "confidence", 0.8),
+            Map.of("modelId", "momentum_b", "family", "momentum", "side", "BUY", "confidence", 0.75),
+            Map.of("modelId", "factor", "family", "factor", "side", "BUY", "confidence", 0.6),
+            Map.of("modelId", "mean_reversion", "family", "mean_reversion", "side", "SELL", "confidence", 0.6));
+        var res = post("/api/v1/institutional/ensemble", Map.of("votes", votes));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("rawSide")).isEqualTo("BUY");
+        assertThat(Json.asDouble(body.get("agreeingCount"))).isEqualTo(3.0);
+        assertThat(Json.asDouble(body.get("effectiveIndependentCount"))).isLessThan(3.0);
+        @SuppressWarnings("unchecked")
+        List<String> dissenting = (List<String>) body.get("dissentingModelIds");
+        assertThat(dissenting).containsExactly("mean_reversion");
+    }
+
+    @Test
+    void institutionalEnsembleAcceptsAnExplicitCorrelationMatrix() throws Exception {
+        var votes = List.of(
+            Map.of("modelId", "a", "family", "x", "side", "BUY", "confidence", 0.8),
+            Map.of("modelId", "b", "family", "y", "side", "BUY", "confidence", 0.8));
+        var matrix = List.of(List.of(1.0, 0.0), List.of(0.0, 1.0));
+        var res = post("/api/v1/institutional/ensemble", Map.of("votes", votes, "correlationMatrix", matrix));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(Json.asDouble(body.get("effectiveIndependentCount"))).isCloseTo(2.0, org.assertj.core.data.Offset.offset(1e-9));
+    }
+
+    @Test
+    void institutionalEnsembleRejectsAnInvalidSide() throws Exception {
+        var votes = List.of(Map.of("modelId", "a", "family", "x", "side", "UP", "confidence", 0.8));
+        var res = post("/api/v1/institutional/ensemble", Map.of("votes", votes));
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void institutionalEnsembleRejectsEmptyVotes() throws Exception {
+        var res = post("/api/v1/institutional/ensemble", Map.of("votes", List.of()));
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void institutionalEnsembleRejectsMissingVotesField() throws Exception {
+        var res = post("/api/v1/institutional/ensemble", Map.of());
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    // RegimeVolatilityOverlay (the Dynamic Regime & Volatility Multiplier Layer) had zero HTTP
+    // endpoint - proves the new /institutional/advisory wiring, not the underlying math (already
+    // covered by RegimeVolatilityOverlayTest at the unit level).
+
+    @Test
+    void institutionalAdvisoryFullyTrustsAnEnsembleInATrendAlignedNormalVolatilityRegime() throws Exception {
+        var votes = List.of(Map.of("modelId", "factor", "family", "factor", "side", "BUY", "confidence", 0.8));
+        var res = post("/api/v1/institutional/advisory", Map.of(
+            "votes", votes, "regime", "BULL_TRENDING", "currentVolatility", 0.015));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("rawSide")).isEqualTo("BUY");
+        assertThat(Json.asDouble(body.get("regimeMultiplier"))).isCloseTo(1.0, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(Json.asDouble(body.get("adjustedConfidence"))).isCloseTo(0.8, org.assertj.core.data.Offset.offset(1e-6));
+        assertThat(body.get("gated")).isEqualTo(false);
+    }
+
+    @Test
+    void institutionalAdvisoryDiscountsACounterTrendRegime() throws Exception {
+        var votes = List.of(Map.of("modelId", "factor", "family", "factor", "side", "BUY", "confidence", 0.8));
+        var res = post("/api/v1/institutional/advisory", Map.of(
+            "votes", votes, "regime", "BEAR_TRENDING", "currentVolatility", 0.015));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(Json.asDouble(body.get("adjustedConfidence"))).isLessThan(0.8);
+    }
+
+    @Test
+    void institutionalAdvisoryRejectsAnInvalidRegime() throws Exception {
+        var votes = List.of(Map.of("modelId", "factor", "family", "factor", "side", "BUY", "confidence", 0.8));
+        var res = post("/api/v1/institutional/advisory", Map.of("votes", votes, "regime", "SIDEWAYS", "currentVolatility", 0.015));
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void institutionalAdvisoryRejectsMissingCurrentVolatility() throws Exception {
+        var votes = List.of(Map.of("modelId", "factor", "family", "factor", "side", "BUY", "confidence", 0.8));
+        var res = post("/api/v1/institutional/advisory", Map.of("votes", votes, "regime", "BULL_TRENDING"));
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
 }

@@ -24,9 +24,29 @@ import { isQuantJavaCoreEnabled } from '../config/tradingSafety';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
-import { quantCoreBridge } from './QuantCoreBridge';
+import { quantCoreBridge, type EnsembleModelVote, type EnsembleSide } from './QuantCoreBridge';
+import { buildQuantAdvisoryPayload } from './QuantAdvisoryPayload';
+import { recordPrediction } from './ModelPerformanceTracker';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import type { ResearchBar } from '../research/ohlcvTypes';
+
+// Reasoned (not fabricated) mapping from FactorAlphaEngine's composite Z-score-like output into an
+// ensemble vote: sign gives direction, magnitude (clamped) gives confidence. composite is already
+// a real Java-computed value (5-factor Z-score average) - this just puts it in the {side,
+// confidence} shape QuantEnsembleEngine needs, the same kind of transformation TechnicalAgent
+// already does turning RSI/MACD into a confidence. 2.0 is a reasoned scale (most composite values
+// observed in practice fall within +-2), not a backtested constant - same honesty discipline as
+// RegimeVolatilityOverlay's own declared assumptions.
+const FACTOR_CONFIDENCE_SCALE = 2.0;
+const MIN_FACTOR_CONFIDENCE = 0.05;
+const MAX_FACTOR_CONFIDENCE = 0.95;
+
+function factorCompositeToVote(composite: number): EnsembleModelVote | null {
+  if (!Number.isFinite(composite) || composite === 0) return null;
+  const side: EnsembleSide = composite > 0 ? 'BUY' : 'SELL';
+  const confidence = Math.max(MIN_FACTOR_CONFIDENCE, Math.min(MAX_FACTOR_CONFIDENCE, Math.abs(composite) / FACTOR_CONFIDENCE_SCALE));
+  return { modelId: 'factor_composite', family: 'factor', side, confidence };
+}
 
 // Real floor GarchEngine/HmmRegimeEngine themselves enforce (30 returns / 40 observations) plus
 // margin - matches this codebase's convention of deriving gate values from the same math the
@@ -86,11 +106,16 @@ class JavaQuantAdvisoryService {
     }
     if (bars.length < MIN_BARS_FOR_ANALYSIS) return;
 
-    const [garch, regime, factor] = await Promise.all([
+    const [garch, regime, factor, features] = await Promise.all([
       quantCoreBridge.fetchInstitutionalVolatility(symbol, bars),
       quantCoreBridge.fetchInstitutionalRegime(symbol, bars),
       quantCoreBridge.fetchInstitutionalFactors(symbol, bars),
+      quantCoreBridge.fetchInstitutionalFeatures(symbol, bars),
     ]);
+    // Correlation deliberately NOT fetched here, same reasoning as statArb/pairs below - it's
+    // inherently cross-symbol (needs 2+ aligned return series), not a fit for this single-symbol
+    // per-tick loop. A future cross-sectional consumer would call
+    // quantCoreBridge.fetchInstitutionalCorrelation() directly across a chosen symbol set.
 
     const latencyMs = Date.now() - startedAt;
     // Plain EventBus.emit (observability only) - not emitTradeIdea. No agent name, no side, no
@@ -98,12 +123,54 @@ class JavaQuantAdvisoryService {
     eventBus.emit(EVENTS.QUANT_ADVISORY_ANALYSIS_COMPLETED, {
       symbol,
       timestamp: new Date().toISOString(),
-      models: { garch, regime, factor, statArb: null },
+      models: { garch, regime, factor, features, statArb: null, correlation: null },
       health: {
-        javaAvailable: garch !== null || regime !== null || factor !== null,
+        javaAvailable: garch !== null || regime !== null || factor !== null || features !== null,
         latencyMs,
       },
     });
+
+    // Dynamic Regime & Volatility Multiplier Layer: only attempted when we have a real directional
+    // vote (factor_composite - the one DIRECTIONAL_ALPHA_PROVIDER this loop computes, per
+    // config/engineOwnership.json's outputType tagging) AND real conditioning inputs (regime,
+    // realized volatility). garch/regime being CONDITIONING_* (not directional) is exactly why
+    // they never become ensemble votes themselves - see QuantEnsembleEngine.java's own header.
+    if (factor !== null && regime !== null && garch !== null) {
+      const vote = factorCompositeToVote(factor.composite);
+      if (vote !== null) {
+        const advisory = await quantCoreBridge.fetchInstitutionalAdvisory([vote], regime.currentRegime, garch.realizedVolatility);
+        if (advisory !== null) {
+          const payload = buildQuantAdvisoryPayload(symbol, advisory);
+          // Non-blocking telemetry: fire-and-forget emit, never awaited by anything upstream of
+          // this periodic tick. QUANT_ADVISORY_PAYLOAD_STREAMED is a distinct event type nothing
+          // in the live decision spine subscribes to - see QuantAdvisoryPayload.ts's own header.
+          eventBus.emit(EVENTS.QUANT_ADVISORY_PAYLOAD_STREAMED, payload);
+          observeSafe(() => {
+            structuredLogger.info('quant_advisory_payload_streamed', {
+              category: 'OBSERVABILITY',
+              eventType: 'QUANT_ADVISORY_PAYLOAD_STREAMED',
+              symbol,
+              rawSide: advisory.rawSide,
+              adjustedConfidence: advisory.adjustedConfidence,
+              gated: advisory.gated,
+              regime: advisory.regime,
+            });
+          });
+          // ModelPerformanceTracker foundations: records this call for later predicted-vs-realized
+          // grading via the EXISTING PredictionOutcomeEvaluator/ReflectionEngine pipeline - a
+          // direct DB write, never eventBus.emitTradeIdea (see ModelPerformanceTracker.ts's own
+          // safety note for why that distinction is load-bearing).
+          void recordPrediction({
+            agentName: 'JavaFactorComposite',
+            symbol,
+            side: advisory.rawSide === 'NEUTRAL' ? 'HOLD' : advisory.rawSide,
+            confidence: advisory.adjustedConfidence,
+            reasoning: advisory.reasoning,
+            regime: advisory.regime,
+          });
+        }
+      }
+    }
   }
 }
 

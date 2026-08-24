@@ -18,6 +18,7 @@ import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
+import { marketDataWorker } from './MarketDataWorker';
 import {
   notePipelineAgentFailure,
   notePipelineAgentGated,
@@ -153,7 +154,10 @@ export class FundamentalAnalysisAgent {
     return UNKNOWN_FUNDAMENTALS;
   }
 
-  private emitHold(traceId: string, symbol: string, reasoning: string): void {
+  // currentPrice is optional here (a HOLD's price_validity relevance is moot either way), but
+  // attaching it whenever known keeps every emitted idea self-describing rather than depending on
+  // gateTradeIdea's separate lookupLivePrice fallback registration.
+  private emitHold(traceId: string, symbol: string, reasoning: string, currentPrice?: number | null): void {
     eventBus.emitTradeIdea({
       traceId,
       symbol,
@@ -161,6 +165,7 @@ export class FundamentalAnalysisAgent {
       confidence: 0,
       reasoning,
       agent: 'FundamentalAgent',
+      currentPrice: currentPrice ?? undefined,
     });
   }
 
@@ -182,18 +187,23 @@ export class FundamentalAnalysisAgent {
     }
     const symbol = universe[Math.floor(Date.now() / 60000) % universe.length];
     const traceId = generateTraceId(symbol);
+    // Same authoritative live-price source gateTradeIdea's own lookupLivePrice fallback already
+    // reads (MarketDataWorker's WS tick cache, registered via setTradeIdeaLivePriceLookup) -
+    // attached explicitly here rather than relying solely on that global fallback. Never invented,
+    // never stale: null when this symbol has no live tick yet, exactly like the fallback would see.
+    const currentPrice = marketDataWorker.getLatestPrice(symbol);
 
     try {
        const data = await this.fetchFundamentals(symbol);
 
        if (data.peRatio === "RATE_LIMITED") {
-          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.");
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: AlphaVantage daily rate limit exhausted - real data resumes after a 24h cooldown.", currentPrice);
           notePipelineAgentSuccess('FundamentalAgent');
           return;
        }
 
        if (data.peRatio === "UNKNOWN") {
-          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: Fundamental data providers not configured.");
+          this.emitHold(traceId, symbol, "DATA_UNAVAILABLE: Fundamental data providers not configured.", currentPrice);
           notePipelineAgentSuccess('FundamentalAgent');
           return;
        }
@@ -212,7 +222,7 @@ export class FundamentalAnalysisAgent {
           } else {
              const res = await AIRouter.getInstance().routeTask('FundamentalAgent', `Analyze these fundamentals for ${symbol}: P/E Ratio: ${data.peRatio}, EPS Growth: ${data.epsGrowth}%, Debt/Equity: ${data.debtToEquity}. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
              if (!res.content) {
-                this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamental LLM returned an empty response.');
+                this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamental LLM returned an empty response.', currentPrice);
                 notePipelineAgentFailure('FundamentalAgent', 'empty LLM content');
                 return;
              }
@@ -234,6 +244,7 @@ export class FundamentalAnalysisAgent {
              symbol,
              side: analysis.recommendation,
              confidence: analysis.confidence,
+             currentPrice: currentPrice ?? undefined,
              reasoning: `[Fundamental AI] ${analysis.reasoning}`,
              agent: "FundamentalAgent",
              aiCallId,
@@ -244,12 +255,12 @@ export class FundamentalAnalysisAgent {
           return;
        }
 
-       this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamentals ingested but no LLM is configured for a directional idea.');
+       this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamentals ingested but no LLM is configured for a directional idea.', currentPrice);
        notePipelineAgentSuccess('FundamentalAgent');
     } catch (e) {
        logErrorSafely('[FundamentalAgent] Failed:', e);
        notePipelineAgentFailure('FundamentalAgent', e);
-       this.emitHold(generateTraceId(symbol), symbol, 'DATA_UNAVAILABLE: Fundamental analysis failed this tick; the next scheduled tick will still run.');
+       this.emitHold(generateTraceId(symbol), symbol, 'DATA_UNAVAILABLE: Fundamental analysis failed this tick; the next scheduled tick will still run.', currentPrice);
     }
   }
 }

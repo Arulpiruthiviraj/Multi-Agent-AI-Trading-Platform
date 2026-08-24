@@ -428,6 +428,19 @@ const commands: Record<string, () => Promise<void>> = {
   async ready() {
     console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));
   },
+  async 'pipeline-ready'() {
+    // Zero-Trade Forensic Audit follow-up: distinguishes "process alive" from "trading pipeline
+    // ready" (Process/Database/MarketData/Broker/Technical/Quant/AI Provider Layer, each
+    // reported independently). Not evaluateLiveReadiness()/live-readiness - that stays the sole
+    // LIVE-arming authority; this is a read-only PAPER/operational diagnostic.
+    const res = await fetch(`${BASE}/api/v2/runtime/trading-readiness?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+    console.log(text);
+  },
   async config() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/config'), null, 2));
   },

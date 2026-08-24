@@ -116,7 +116,7 @@ export function selectConsensusProviders<T>(providers: [string, T][], maxProvide
   return providers.slice(0, maxProviders);
 }
 
-function envKeyForProviderName(providerName: string): string | undefined {
+export function envKeyForProviderName(providerName: string): string | undefined {
   const compact = providerName.toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
   const candidates = [
     `${compact}_API_KEY`,
@@ -128,6 +128,12 @@ function envKeyForProviderName(providerName: string): string | undefined {
   if (providerName.toLowerCase().includes('nvidia')) candidates.unshift('NVIDIA_API_KEY');
   if (providerName.toLowerCase().includes('deepseek')) candidates.unshift('DEEPSEEK_API_KEY');
   if (providerName.toLowerCase().includes('grok') || providerName.toLowerCase().includes('x.ai')) candidates.unshift('XAI_API_KEY', 'GROK_API_KEY');
+  // "Claude" is the DB/UI display name; Anthropic's own convention (and this repo's .env.example)
+  // is ANTHROPIC_API_KEY - CLAUDE_API_KEY was never a real var, so this provider silently had no
+  // env fallback at all before this candidate existed (DB-stored key or nothing).
+  if (providerName.toLowerCase().includes('claude') || providerName.toLowerCase().includes('anthropic')) candidates.unshift('ANTHROPIC_API_KEY');
+  // "Kimi" (Moonshot AI's model line) - some operators set the vendor's own env var name.
+  if (providerName.toLowerCase().includes('kimi') || providerName.toLowerCase().includes('moonshot')) candidates.unshift('MOONSHOT_API_KEY');
   for (const name of candidates) {
     const v = process.env[name];
     if (v == null) continue;
@@ -292,6 +298,17 @@ export class AIRouter {
   /** 404 / timeout / fetch-failed skip (in-memory only — not a DB enabled:false). */
   private skipUntil: Map<string, number> = new Map();
   private lastExhaustionEmitAt = 0;
+  /**
+   * OPS-1 fix (post-remediation-audit): which credential a provider is actually using right now,
+   * and — only for providers currently on DB source — the distinct env candidate kept in memory so
+   * probeProviderAtStartup() can retry with it once, automatically, if the DB-stored key turns out
+   * to be stale (401/403). Never the DB key itself; never logged or exposed as a value anywhere.
+   */
+  private credentialSource: Map<string, 'DB' | 'ENV' | 'NONE'> = new Map();
+  private envFallbackCandidate: Map<string, { apiKey: string; defaultModel?: string }> = new Map();
+  /** Set once probeProviderAtStartup() has already tried the env fallback for this provider id -
+   *  never retry more than once per boot, so a genuinely-down env credential can't loop retries. */
+  private envFallbackAttempted: Set<string> = new Set();
 
   private constructor() {}
 
@@ -306,6 +323,40 @@ export class AIRouter {
     this.providers.set(id, provider);
   }
 
+  /** Read-only enumeration for diagnostics (AIProviderHealthCheck.ts) - never mutated by callers. */
+  public listProviders(): [string, AIProvider][] {
+    return Array.from(this.providers.entries());
+  }
+
+  /**
+   * Which credential source a provider is actually running on right now (OPS-1). 'ENV' includes
+   * both "no DB key was ever set" and "DB key was stale and probeProviderAtStartup() fell back to
+   * .env" - callers that need to distinguish those two should also check consecutiveFailures/
+   * lastErrorSummary from AIProviderHealthCheck, not this map alone. Never exposes a key value.
+   */
+  public getCredentialSource(providerId: string): 'DB' | 'ENV' | 'NONE' {
+    return this.credentialSource.get(providerId) ?? 'NONE';
+  }
+
+  /**
+   * True iff routeConsensus()/routeTask() currently has at least one provider that isn't in
+   * auth-cooldown, temporarily skipped, or DB-disabled. Reuses the exact same filter routeConsensus
+   * applies, so this answers "would a debate call right now have anything to try" without actually
+   * making a network request. Best-effort: a DB read failure is treated as "cannot prove healthy",
+   * matching this router's existing fail-closed-to-HOLD posture rather than assuming providers are fine.
+   */
+  public async hasAnyRoutableProvider(): Promise<boolean> {
+    const entries = this.listProviders();
+    if (entries.length === 0) return false;
+    try {
+      const dbStats = await db.select().from(schema.aiProviders);
+      const routable = this.filterRoutableProviders(entries, dbStats);
+      return routable.length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   /** Test-only helper (also real, additive API surface - not gated behind NODE_ENV) - clears
    *  registered providers without initialize()'s DB reads/seeding side effects. */
   public clearProviders() {
@@ -313,6 +364,9 @@ export class AIRouter {
     this.authDisabledUntil.clear();
     this.skipUntil.clear();
     this.lastExhaustionEmitAt = 0;
+    this.credentialSource.clear();
+    this.envFallbackCandidate.clear();
+    this.envFallbackAttempted.clear();
   }
 
   /** Test-only — inspect auth circuit state without reaching into private fields elsewhere. */
@@ -414,6 +468,7 @@ export class AIRouter {
   private async probeProviderAtStartup(providerId: string, provider: AIProvider): Promise<void> {
     try {
       if (!(await provider.authenticate())) {
+        if (await this.tryEnvFallbackAfterAuthFailure(providerId, provider, 'authenticate() returned false')) return;
         await this.disableProviderForAuthFailure(providerId, 'startup authenticate() returned false');
         return;
       }
@@ -428,11 +483,44 @@ export class AIRouter {
     } catch (e: any) {
       const status = extractHttpStatus(e);
       if (status === 401 || status === 403 || isAuthFailureError(e)) {
+        if (await this.tryEnvFallbackAfterAuthFailure(providerId, provider, e.message)) return;
         await this.disableProviderForAuthFailure(providerId, e.message);
       } else {
         this.noteProviderSkipFromError(providerId, e);
         console.warn(`[AIRouter] Startup health probe for ${providerId} failed (non-auth): ${e.message}`);
       }
+    }
+  }
+
+  /**
+   * OPS-1 fix: a DB-stored credential that fails auth is never silently kept in place when a
+   * distinct, usable .env credential exists for the same provider. Tries the env credential exactly
+   * once per boot (envFallbackAttempted guards against retry loops on a genuinely-dead env key too).
+   * Returns true iff the fallback was attempted AND succeeded (provider is now live on 'ENV'); the
+   * caller's normal auth-failure disable path still runs on any other outcome — this only ever adds
+   * a chance to recover, it never suppresses the existing fail-closed behavior.
+   */
+  private async tryEnvFallbackAfterAuthFailure(providerId: string, provider: AIProvider, dbFailureReason: string): Promise<boolean> {
+    if (this.envFallbackAttempted.has(providerId)) return false;
+    const candidate = this.envFallbackCandidate.get(providerId);
+    if (!candidate) return false;
+    this.envFallbackAttempted.add(providerId);
+    try {
+      await provider.initialize(candidate.apiKey, candidate.defaultModel);
+      const authed = await provider.authenticate();
+      if (!authed) return false;
+      const res = await withTimeout(
+        (signal) => provider.chat('Reply with exactly: OK', { temperature: 0, signal }),
+        Math.min(AI_PROVIDER_TIMEOUT_MS, 8000),
+        providerId,
+      );
+      if (!res.content) return false;
+      this.credentialSource.set(providerId, 'ENV');
+      console.warn(`[AIRouter] Provider ${providerId}: DB-stored credential failed auth (${dbFailureReason}) — fell back to a distinct .env credential, which authenticated successfully. The stored DB credential should be updated or cleared via Settings.`);
+      return true;
+    } catch (e: any) {
+      console.warn(`[AIRouter] Provider ${providerId}: .env fallback after DB auth failure also failed (${e?.message ?? e}). Provider will be disabled.`);
+      return false;
     }
   }
 
@@ -492,10 +580,17 @@ export class AIRouter {
      
      for (const p of dbProviders) {
          if (!p.enabled) continue;
-         
+
          let apiKey: string | undefined;
+         let credentialSource: 'DB' | 'ENV' | 'NONE' = 'NONE';
          try {
-           apiKey = p.apiKeyEncrypted ? EncryptionService.decrypt(p.apiKeyEncrypted) : envKeyForProviderName(p.providerName);
+           if (p.apiKeyEncrypted) {
+             apiKey = EncryptionService.decrypt(p.apiKeyEncrypted);
+             credentialSource = 'DB';
+           } else {
+             apiKey = envKeyForProviderName(p.providerName);
+             credentialSource = apiKey ? 'ENV' : 'NONE';
+           }
          } catch {
            console.error(`[AIRouter] DECRYPTION_FAILED for provider ${p.providerName} — skipping that provider.`);
            continue;
@@ -503,7 +598,27 @@ export class AIRouter {
          // Encrypted DB keys can still be placeholders from Setup Wizard — normalize.
          if (apiKey && isPlaceholderApiKey(apiKey)) {
            apiKey = undefined;
+           credentialSource = 'NONE';
          }
+         // OPS-1: remember a distinct, usable .env candidate for this provider even when the DB key
+         // is what's actually in use — probeProviderAtStartup() can then fall back to it, once,
+         // instead of silently staying on a DB credential that turns out to be stale/invalid.
+         if (credentialSource === 'DB') {
+           try {
+             const envCandidate = envKeyForProviderName(p.providerName);
+             if (envCandidate && envCandidate !== apiKey && !isPlaceholderApiKey(envCandidate)) {
+               this.envFallbackCandidate.set(p.id, { apiKey: envCandidate, defaultModel: p.defaultModel || undefined });
+             } else {
+               this.envFallbackCandidate.delete(p.id);
+             }
+           } catch {
+             this.envFallbackCandidate.delete(p.id);
+           }
+         } else {
+           this.envFallbackCandidate.delete(p.id);
+         }
+         this.credentialSource.set(p.id, credentialSource);
+         this.envFallbackAttempted.delete(p.id);
          let providerInstance: AIProvider | null = null;
          
          const nameLower = p.providerName.toLowerCase();

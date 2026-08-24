@@ -56,6 +56,8 @@ Engine:
   status            Show runtime status
   health            Check process health
   ready             Check trading readiness (LIVE readiness API)
+  pipeline-ready    Process-alive vs trading-pipeline-ready (DB/market data/broker/AI providers)
+  nuke              Force-kill stale/zombie Argus processes (no services started after)
 
 Trading:
   enable            Enable Autobot

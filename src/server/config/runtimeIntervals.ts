@@ -52,6 +52,7 @@ export interface RuntimeIntervals {
   autoTradeSchedulerMs: number;
   strategyEngineShadowMs: number;
   javaQuantAdvisoryMs: number;
+  aiProviderHealthCheckMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -66,7 +67,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
-  'javaQuantAdvisoryMs',
+  'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

@@ -8,6 +8,8 @@ import { tradingLimiter } from '../core/RateLimiters';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
 import { BrokerManager } from '../../brokers/BrokerManager';
+import { getAIProviderHealthSnapshot, runAIProviderHealthCheckNow } from '../ai/AIProviderHealthCheck';
+import { getTradingReadinessSnapshot, renderTradingReadinessTree } from '../core/TradingReadinessGate';
 
 export const runtimeRouter = Router();
 
@@ -51,13 +53,66 @@ runtimeRouter.get('/health', async (_req, res) => {
     activeBroker = undefined;
     ibkrPaths = undefined;
   }
+  // Zero-Trade Forensic Audit follow-up: process-alive != decision-quality-healthy. This summary
+  // deliberately sits next to (not folded into) `health` so "CLI is active" can never read as
+  // "AI/decision layer is fine" - full per-provider detail lives at GET /api/v2/ai/providers/health.
+  let aiProviderHealth: { healthy: number; total: number; statuses: Record<string, number> } | undefined;
+  try {
+    const snapshot = await getAIProviderHealthSnapshot();
+    const statuses: Record<string, number> = {};
+    for (const p of snapshot) statuses[p.status] = (statuses[p.status] ?? 0) + 1;
+    aiProviderHealth = { healthy: snapshot.filter(p => p.status === 'HEALTHY').length, total: snapshot.length, statuses };
+  } catch {
+    aiProviderHealth = undefined;
+  }
   res.status(health.ok ? 200 : 503).json({
     ok: health.ok,
     health,
     activeBroker,
     ibkrPaths,
+    aiProviderHealth,
     live: evaluateLiveReadiness().result,
   });
+});
+
+/** Full per-provider AI health detail (CONFIG + AUTH + RUNTIME tiers). Never returns a raw key. */
+runtimeRouter.get('/ai/providers/health', async (_req, res) => {
+  try {
+    const providers = await getAIProviderHealthSnapshot();
+    res.json({ ok: true, providers, live: 'NO-GO' });
+  } catch (e: unknown) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Trading Readiness Gate - distinguishes "process alive" from "trading pipeline ready"
+ * (Zero-Trade Forensic Audit follow-up). Read-only diagnostic; never arms LIVE, never toggles
+ * Autobot, never places/blocks an order itself - see TradingReadinessGate.ts's own header.
+ */
+runtimeRouter.get('/trading-readiness', async (req, res) => {
+  try {
+    const snapshot = await getTradingReadinessSnapshot();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(renderTradingReadinessTree(snapshot));
+      return;
+    }
+    res.json({ ok: true, ...snapshot, live: 'NO-GO' });
+  } catch (e: unknown) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/** On-demand "Test Provider" trigger - runs a real, minimal auth+chat probe now (optionally for
+ *  one provider via ?providerId=) rather than waiting for the periodic monitor's next tick. */
+runtimeRouter.post('/ai/providers/health/check', tradingLimiter, async (req, res) => {
+  try {
+    const providerId = typeof req.body?.providerId === 'string' ? req.body.providerId : undefined;
+    const providers = await runAIProviderHealthCheckNow(providerId);
+    res.json({ ok: true, providers, live: 'NO-GO' });
+  } catch (e: unknown) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
 });
 
 /** Idempotent core boot — safe if server already called bootCore at startup. */

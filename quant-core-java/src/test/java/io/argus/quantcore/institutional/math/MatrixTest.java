@@ -53,4 +53,22 @@ class MatrixTest {
         assertThat(t[0].length).isEqualTo(2);
         assertThat(t[2][1]).isEqualTo(6.0);
     }
+
+    @Test
+    void determinantMatchesTheHandComputedValue() {
+        double[][] a = {{4, 7}, {2, 6}}; // det = 4*6 - 7*2 = 10
+        assertThat(Matrix.determinant(a)).isCloseTo(10.0, org.assertj.core.data.Offset.offset(1e-9));
+    }
+
+    @Test
+    void determinantOfIdentityIsOne() {
+        double[][] identity = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
+        assertThat(Matrix.determinant(identity)).isCloseTo(1.0, org.assertj.core.data.Offset.offset(1e-9));
+    }
+
+    @Test
+    void determinantOfASingularMatrixIsZero() {
+        double[][] singular = {{1, 2}, {2, 4}};
+        assertThat(Matrix.determinant(singular)).isCloseTo(0.0, org.assertj.core.data.Offset.offset(1e-9));
+    }
 }

@@ -17,11 +17,11 @@ const { mockDb } = vi.hoisted(() => {
 });
 
 const { emitChiefApproval } = vi.hoisted(() => ({ emitChiefApproval: vi.fn() }));
-const { routeConsensus, routeTask } = vi.hoisted(() => ({ routeConsensus: vi.fn(), routeTask: vi.fn() }));
+const { routeConsensus, routeTask, hasAnyRoutableProvider } = vi.hoisted(() => ({ routeConsensus: vi.fn(), routeTask: vi.fn(), hasAnyRoutableProvider: vi.fn() }));
 
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), publish: vi.fn(), emitChiefApproval } }));
-vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus, routeTask }) } }));
+vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus, routeTask, hasAnyRoutableProvider }) } }));
 const { ideaGenEnabled } = vi.hoisted(() => ({ ideaGenEnabled: { value: true } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
 
@@ -56,6 +56,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     emitChiefApproval.mockClear();
     routeConsensus.mockReset();
     routeTask.mockReset();
+    hasAnyRoutableProvider.mockReset().mockResolvedValue(true);
     ideaGenEnabled.value = true;
     agent = new ChiefTraderAgent();
     agent.agentWeights = { ...defaultAgentWeights };
@@ -336,6 +337,48 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     }
 
     expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  // Zero-Trade Forensic Audit follow-up: a debate call that has no routable AI provider always
+  // resolves to a fabricated fail-closed HOLD vote (pushDebateFailClosed). Skipping the call when
+  // AIRouter already knows it cannot succeed removes that artifact - it must never add a fake
+  // approval, and the existing independent-agent/threshold math must still apply unchanged.
+  it('skips the multi-model debate (no routeConsensus call, no fabricated ConsensusDebate HOLD vote) when no AI providers are routable', async () => {
+    hasAnyRoutableProvider.mockResolvedValue(false);
+
+    await agent.reviewIdea({ traceId: 'nr1', symbol: 'IWM', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'nr1', symbol: 'IWM', side: 'BUY', confidence: 0.9, agent: 'NewsAgent', reasoning: 'confirm' });
+
+    const deadline = Date.now() + 2000;
+    while (emitChiefApproval.mock.calls.length === 0 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    expect(routeConsensus).not.toHaveBeenCalled();
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
+    // Two real independent agents agreeing at high confidence still clear consensus on their own
+    // merits - the skip removes the fabricated HOLD, it does not itself add a fake approval.
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].side).toBe('BUY');
+  });
+
+  it('still requires the real independent-agent minimum even when the debate is skipped for no routable providers - a single voice does not approve', async () => {
+    hasAnyRoutableProvider.mockResolvedValue(false);
+
+    await agent.reviewIdea({ traceId: 'nr2', symbol: 'GLD', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(routeConsensus).not.toHaveBeenCalled();
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('does not even check provider routability when adversarialDebateMode/confidence would not have triggered a debate anyway (no added AIRouter round-trip on the common path)', async () => {
+    hasAnyRoutableProvider.mockClear();
+
+    // Below debateTriggerConfidence (0.6) - wantsDebate is false regardless of provider health.
+    await agent.reviewIdea({ traceId: 'nr3', symbol: 'AMD', side: 'BUY', confidence: 0.5, agent: 'TechnicalAgent', reasoning: 'weak' });
+
+    expect(hasAnyRoutableProvider).not.toHaveBeenCalled();
   });
 
   it('Phase 8: attaches real structured supportingQuantDetail when QuantEngine contributed evidence, without ever changing the deterministic side/confidence', async () => {

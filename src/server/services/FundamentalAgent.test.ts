@@ -5,11 +5,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const { emitTradeIdea } = vi.hoisted(() => ({ emitTradeIdea: vi.fn() }));
 const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
+const { getLatestPrice } = vi.hoisted(() => ({ getLatestPrice: vi.fn() }));
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
+vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
   looksLikeRateLimitResponse: () => false,
@@ -235,5 +237,80 @@ describe('FundamentalAnalysisAgent - all AI providers unavailable (Phase 11 chao
     await agent.analyzeFundamentals();
     expect(emitTradeIdea).toHaveBeenCalled();
     expect(emitTradeIdea.mock.calls[0][0].side).toBe('BUY');
+  });
+});
+
+// Zero-Trade Forensic Audit fix: FundamentalAgent never attached currentPrice, so gateTradeIdea
+// (tradeIdeaContract.ts, its own MISSING_PRICE coverage lives in tradeIdeaContract.test.ts) had to
+// rely entirely on its separate lookupLivePrice fallback - which frequently missed for symbols
+// outside the actively-streamed core set (219 real MISSING_PRICE rejections observed live).
+describe('FundamentalAnalysisAgent - currentPrice attachment (zero-trade audit fix)', () => {
+  let agent: any;
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getLatestPrice.mockReset();
+    getFresh.mockReset();
+    getFresh.mockImplementation(async (_provider: string, dataType: string) => {
+      if (dataType === 'fundamentals') return { peRatio: '25.4', epsGrowth: '12', debtToEquity: '0.8' };
+      return null;
+    });
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    process.env.GEMINI_API_KEY = 'test-key';
+    agent = new FundamentalAnalysisAgent();
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('a BUY idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
+    getLatestPrice.mockReturnValue(187.42);
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.8, reasoning: 'strong growth' }), aiCallId: 'c1', provider: 'gemini', latency: 100 });
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+    expect(idea.currentPrice).toBe(187.42);
+  });
+
+  it('a SELL idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
+    getLatestPrice.mockReturnValue(412.9);
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'SELL', confidence: 0.65, reasoning: 'weak margins' }), aiCallId: 'c2', provider: 'gemini', latency: 100 });
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('SELL');
+    expect(idea.currentPrice).toBe(412.9);
+  });
+
+  it('never invents a price - when MarketDataWorker has no live tick for this symbol, currentPrice is left undefined rather than fabricated', async () => {
+    getLatestPrice.mockReturnValue(null);
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.8, reasoning: 'strong growth' }), aiCallId: 'c3', provider: 'gemini', latency: 100 });
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.currentPrice).toBeUndefined();
+    // The real, unmocked gateTradeIdea (src/server/core/tradeIdeaContract.ts) is what actually
+    // fails this closed as MISSING_PRICE - covered directly (not re-mocked here) in
+    // tradeIdeaContract.test.ts's "rejects a listed ticker with no live price" cases. This test
+    // only proves FundamentalAgent's own contribution: it must not paper over a missing price.
+  });
+
+  it('attaches currentPrice on every emit path, including the DATA_UNAVAILABLE HOLD when fundamentals providers are not configured', async () => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    getLatestPrice.mockReturnValue(99.5);
+    agent = new FundamentalAnalysisAgent();
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.currentPrice).toBe(99.5);
   });
 });

@@ -351,8 +351,25 @@ export class ChiefTraderAgent {
        return;
     }
 
+    // Zero-Trade Forensic Audit follow-up: a debate call that has no routable AI provider right
+    // now (every provider auth-failed/quota-exhausted/timed-out) always resolves to
+    // pushDebateFailClosed() - a HOLD vote from 'ConsensusDebate' at debateResultConfidence (0.8).
+    // That vote is real evidence to evaluateConsensus (it can trigger debateSaidHold and drags
+    // down weighted confidence), but it was never actually informed by any model - it is a
+    // guaranteed artifact of an external outage, not a real adversarial review. Skipping the call
+    // entirely when we already know it cannot succeed means consensus is evaluated on the
+    // independent agents' own evidence only - it does NOT add a vote, weaken
+    // CONSENSUS_APPROVAL_THRESHOLD/MIN_INDEPENDENT_AGREEING_AGENTS, or change RiskEngine in any
+    // way; it only removes a fabricated-looking HOLD that a healthy debate would never have cast.
+    // Only checked when a debate would otherwise actually be attempted (wantsDebate && not
+    // cooling) so this never adds an AIRouter round-trip to the common no-debate path.
+    const noRoutableProviders = wantsDebate && !debateCooling
+      && !(await AIRouter.getInstance().hasAnyRoutableProvider());
+
     if (wantsDebate && debateCooling) {
        console.log(`[ChiefTrader] Debate cooldown active for ${idea.symbol} - not starting another provider fan-out.`);
+    } else if (noRoutableProviders) {
+       console.log(`[ChiefTrader] Skipping multi-model debate for ${idea.symbol} - no routable AI providers right now. Evaluating consensus on independent-agent evidence only (not injecting a fabricated fail-closed HOLD).`);
     } else if (wantsDebate) {
         console.log(`[ChiefTrader] Triggering multi-model debate for ${idea.symbol}`);
         this.beginDebate(idea.symbol);

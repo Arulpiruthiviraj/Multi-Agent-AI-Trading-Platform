@@ -245,6 +245,17 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
     console.warn(`[ModelRuntime] Probe failed (Argus remains usable): ${e.message}`);
   }
 
+  try {
+    // Zero-Trade Forensic Audit follow-up: pure observability - startup + periodic real
+    // authenticate()+chat() probes per registered AI provider, classified into a named status
+    // (HEALTHY/AUTH_FAILED/CONFIG_MISSING/.../TIMEOUT). Never places or blocks a trade itself; see
+    // AIProviderHealthCheck.ts's own header for why it stays isolated from AIRouter's hot paths.
+    const { startAIProviderHealthMonitor } = await import('../ai/AIProviderHealthCheck');
+    startAIProviderHealthMonitor();
+  } catch (e: any) {
+    console.warn(`[AIProviderHealthCheck] Boot start failed: ${e.message}`);
+  }
+
   const row = settings[0];
   if (row) {
     Object.assign(tradingEngine.state, {

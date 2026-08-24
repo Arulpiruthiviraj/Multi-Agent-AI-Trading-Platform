@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { writeFileSync, unlinkSync, readFileSync } from 'node:fs';
@@ -16,6 +16,7 @@ import { eventBus } from './EventBus';
 import { EVENTS } from './eventNames';
 import { isAutobotTradingEnabled, isLiveIdeaGenerationEnabled } from './ideaGenerationGate';
 import { tradingEngine } from '../engines/TradingEngine';
+import { structuredLogger } from '../observability/StructuredLogger';
 
 describe('sessionRecovery interrupted session', () => {
   const markerPath = join(tmpdir(), `argus_session_recovery_${process.pid}.json`);
@@ -74,5 +75,43 @@ describe('sessionRecovery interrupted session', () => {
     expect(row.cleanShutdown).toBe(true);
     expect(loadInterruptedSessionMarker()).toBe(false);
     expect(allowsNewEntryIdeas()).toBe(true);
+  });
+
+  it('Phase 5 crash-forensics fix: an unclean-shutdown marker is persisted as a queryable, structured TRADING_SAFETY event - not just a console line - so a future forensic audit does not depend on someone having watched the console', () => {
+    const warnSpy = vi.spyOn(structuredLogger, 'warn').mockImplementation(() => {});
+    writeFileSync(markerPath, JSON.stringify({
+      pid: 4242,
+      startedAt: '2026-08-24T11:00:52.715Z',
+      lastHeartbeatAt: '2026-08-24T16:20:51.940Z',
+      cleanShutdown: false,
+    }));
+
+    expect(loadInterruptedSessionMarker()).toBe(true);
+
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('pid 4242'),
+      expect.objectContaining({
+        category: 'TRADING_SAFETY',
+        eventType: 'UNCLEAN_SHUTDOWN_DETECTED',
+        previousPid: 4242,
+        previousStartedAt: '2026-08-24T11:00:52.715Z',
+        previousLastHeartbeatAt: '2026-08-24T16:20:51.940Z',
+      }),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('does not log an UNCLEAN_SHUTDOWN_DETECTED event when the prior session shut down cleanly', () => {
+    const warnSpy = vi.spyOn(structuredLogger, 'warn').mockImplementation(() => {});
+    writeFileSync(markerPath, JSON.stringify({
+      pid: 1,
+      startedAt: new Date().toISOString(),
+      lastHeartbeatAt: new Date().toISOString(),
+      cleanShutdown: true,
+    }));
+
+    expect(loadInterruptedSessionMarker()).toBe(false);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
   });
 });

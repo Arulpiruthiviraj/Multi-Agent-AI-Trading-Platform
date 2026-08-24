@@ -5,11 +5,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const { emitTradeIdea } = vi.hoisted(() => ({ emitTradeIdea: vi.fn() }));
 const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
+const { getLatestPrice } = vi.hoisted(() => ({ getLatestPrice: vi.fn() }));
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
+vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
   looksLikeRateLimitResponse: () => false,
@@ -168,5 +170,62 @@ describe('MacroEconomyAgent - AI response caching (Phase 7 hardening)', () => {
     // macro data is symbol-independent - a real cache hit must not reuse an analysis written for
     // a different symbol's impact framing.
     expect(symbolArg).toBeTruthy();
+  });
+});
+
+// Zero-Trade Forensic Audit fix: MacroAgent had the identical missing-currentPrice defect as
+// FundamentalAgent (same code shape, same shared universe) - see FundamentalAgent.test.ts's
+// identical describe block and tradeIdeaContract.test.ts for the contract-level MISSING_PRICE
+// fail-closed coverage this reuses rather than duplicates.
+describe('MacroEconomyAgent - currentPrice attachment (zero-trade audit fix)', () => {
+  let agent: any;
+  const macro = { inflation: '3.1', fedFundsRate: '5.25', unemployment: '4.0' };
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getLatestPrice.mockReset();
+    getFresh.mockReset();
+    getFresh.mockImplementation(async (_p: string, dataType: string) => (dataType === 'macro' ? macro : null));
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    process.env.GEMINI_API_KEY = 'test-key';
+    agent = new MacroEconomyAgent();
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('a BUY idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
+    getLatestPrice.mockReturnValue(452.11);
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'dovish pivot' }), aiCallId: 'c1', provider: 'gemini', latency: 100 });
+
+    await agent.analyzeMacro();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+    expect(idea.currentPrice).toBe(452.11);
+  });
+
+  it('a SELL idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
+    getLatestPrice.mockReturnValue(88.3);
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'SELL', confidence: 0.6, reasoning: 'hawkish surprise' }), aiCallId: 'c2', provider: 'gemini', latency: 100 });
+
+    await agent.analyzeMacro();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('SELL');
+    expect(idea.currentPrice).toBe(88.3);
+  });
+
+  it('never invents a price - when MarketDataWorker has no live tick for this symbol, currentPrice is left undefined rather than fabricated', async () => {
+    getLatestPrice.mockReturnValue(null);
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'dovish pivot' }), aiCallId: 'c3', provider: 'gemini', latency: 100 });
+
+    await agent.analyzeMacro();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.currentPrice).toBeUndefined();
   });
 });
