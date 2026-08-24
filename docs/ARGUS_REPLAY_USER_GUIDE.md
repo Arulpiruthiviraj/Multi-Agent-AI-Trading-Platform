@@ -4,7 +4,7 @@ Product name: **Argus Historical Evaluation** (UI title in `HistoricalReplayLab.
 
 Runs real ChiefTrader **vote-math** → RiskEngine → OMS against historical bars through isolated `HistoricalReplayBroker`. Never LIVE, never organic paper, never your live/paper portfolio.
 
-Canonical honesty: [`ARGUS_HISTORICAL_EVALUATION.md`](../ARGUS_HISTORICAL_EVALUATION.md). Phase C snapshot: `ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md`.
+Canonical honesty: [`ARGUS_HISTORICAL_EVALUATION.md`](../ARGUS_HISTORICAL_EVALUATION.md). Phase C snapshot: `docs/audits/archive/ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md`.
 
 ## Where it is
 
@@ -65,6 +65,11 @@ Other controls (legacy paths): `POST /:id/pause`, `/:id/resume`, `/:id/stop`, `/
 
 ## Reading results honestly
 
+- Replay evaluates against an explicitly-scoped **QuantEngine + TechnicalAgent** quorum only.
+  FundamentalAgent, MacroAgent, NewsAgent (outside the golden_replay fixture), and Kronos do not vote —
+  no point-in-time fundamentals/macro/news/forecast ledger exists yet to replay them against honestly
+  (see `ARGUS_HISTORICAL_EVALUATION.md`'s agent-availability table). Replay's 2-independent-agent
+  consensus bar therefore draws from a smaller voter pool than a live session.
 - Rows tagged `execution_environment='REPLAY'` do **not** count toward organic soak.
 - Hashes (`datasetHash` / `configurationHash` / `replayHash`) identify a run; they are not LIVE proof.
 - Exits in replay are not a full live PortfolioMonitor chain — treat SELL/win-rate as limited fidelity.

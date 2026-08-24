@@ -26,6 +26,7 @@ const { ideaGenEnabled } = vi.hoisted(() => ({ ideaGenEnabled: { value: true } }
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
 
 import { ChiefTraderAgent, CONSENSUS_APPROVAL_THRESHOLD, MIN_INDEPENDENT_AGREEING_AGENTS } from './ChiefTraderAgent';
+import { structuredLogger } from '../observability/StructuredLogger';
 import { DISAGREEMENT_PENALTY, netConfidenceFromVotes } from './EvidenceAggregator';
 import { defaultAgentWeights, agentWeightConfig } from '../config/agentWeights';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
@@ -80,6 +81,47 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     const approval = emitChiefApproval.mock.calls[0][0];
     expect(approval.side).toBe('BUY');
     expect(approval.confidence).toBeCloseTo(0.95, 5);
+  });
+
+  it('logs the collapsed interim-evaluation count the moment a symbol finally persists (telemetry-reconciliation fix, ARGUS_CURRENT_STATE_AND_FRIDAY_SESSION_FORENSIC_AUDIT.md §5/§18)', async () => {
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
+
+    // Two non-approving cycles for the same symbol - neither persists its own consensus_decisions
+    // row (recordConsensusTransaction is only called on approval or the ~60s no-consensus sweep).
+    agent.recentIdeas = [
+      { traceId: 't2a', symbol: 'AAPL', side: 'BUY', confidence: fixtures.belowThresholdConfidence, agent: 'TechnicalAgent', reasoning: 'weak signal' },
+    ];
+    await agent.evaluateConsensus('AAPL', 't2a');
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+
+    agent.recentIdeas = [
+      { traceId: 't2b', symbol: 'AAPL', side: 'BUY', confidence: fixtures.belowThresholdConfidence, agent: 'TechnicalAgent', reasoning: 'still weak' },
+    ];
+    await agent.evaluateConsensus('AAPL', 't2b');
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(infoSpy).not.toHaveBeenCalledWith('consensus_interim_evaluations_collapsed', expect.anything());
+
+    // Third cycle finally approves - this is where a real consensus_decisions row persists, and
+    // the two prior interim (never individually persisted) cycles should be logged then reset.
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+    await agent.evaluateConsensus('AAPL', 't2c');
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+
+    expect(infoSpy).toHaveBeenCalledWith('consensus_interim_evaluations_collapsed', expect.objectContaining({
+      category: 'CONSENSUS',
+      eventType: 'CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED',
+      symbol: 'AAPL',
+      outcome: 'APPROVED',
+      interimEvaluationCount: 2,
+    }));
+
+    // Counter resets after logging - a subsequent approval with no new interim cycles logs nothing.
+    infoSpy.mockClear();
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+    await agent.evaluateConsensus('AAPL', 't2d');
+    expect(infoSpy).not.toHaveBeenCalledWith('consensus_interim_evaluations_collapsed', expect.anything());
+
+    infoSpy.mockRestore();
   });
 
   it('does not approve when weighted confidence stays at or below the configured approval threshold', async () => {

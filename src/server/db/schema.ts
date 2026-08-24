@@ -1070,6 +1070,69 @@ export const tradeLifecycleTransitions = sqliteTable('trade_lifecycle_transition
   createdIdx: index('idx_trade_lifecycle_created').on(table.createdAt),
 }));
 
+/**
+ * Historical PIT (point-in-time) agent ledger - real historical Macro releases, Fundamental
+ * filing snapshots, and News archive, so FullArgusReplayEngine.ts can let MacroAgent/
+ * FundamentalAgent/NewsAgent cast weighted votes in replay when real historical records exist for
+ * that window, instead of the always-UNAVAILABLE honesty stub. Date/timestamp columns are epoch-ms
+ * INTEGER (matching pitDecisionLedger's own asOfMs/publishedAtMs convention right above), not TEXT
+ * - a deliberate choice, not an oversight: CLAUDE.md documents this codebase's real, recurring
+ * trap of mixing TEXT ISO-string and INTEGER epoch-ms timestamp columns across tables and silently
+ * matching zero rows in a BETWEEN clause; keeping every PIT-comparable column INTEGER, consistent
+ * with its sibling table, avoids reintroducing that exact class of bug here.
+ *
+ * These tables start empty - no historical macro/fundamental/news data is fabricated or seeded.
+ * Real bulk historical ingestion (AlphaVantage's real, but current-snapshot-oriented, fundamentals
+ * endpoints; a real macro-calendar historical source; a real historical news archive) is a
+ * separate, substantial data-sourcing project of its own, disclosed as not done here - the same
+ * "the infrastructure is real, the historical fill is not fabricated" pattern already used for
+ * SqliteBarLoader/HistoricalDataGateway elsewhere in this codebase.
+ */
+export const historicalMacroReleases = sqliteTable('historical_macro_releases', {
+  id: text('id').primaryKey(),
+  eventId: text('event_id').notNull(),
+  releaseDateMs: integer('release_date_ms').notNull(),
+  metric: text('metric').notNull(),
+  actual: real('actual'),
+  forecast: real('forecast'),
+  previous: real('previous'),
+  impact: text('impact'), // HIGH | MEDIUM | LOW - matches newsVetoMinImpactScore's qualitative sibling concept
+  source: text('source'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  releaseDateIdx: index('idx_historical_macro_release_date').on(table.releaseDateMs),
+  eventIdIdx: index('idx_historical_macro_event_id').on(table.eventId),
+}));
+
+export const historicalFundamentalSnapshots = sqliteTable('historical_fundamental_snapshots', {
+  id: text('id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  filingDateMs: integer('filing_date_ms').notNull(),
+  peRatio: real('pe_ratio'),
+  pbRatio: real('pb_ratio'),
+  roe: real('roe'),
+  debtToEquity: real('debt_to_equity'),
+  source: text('source'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  symbolIdx: index('idx_historical_fundamental_symbol').on(table.symbol),
+  filingDateIdx: index('idx_historical_fundamental_filing_date').on(table.filingDateMs),
+}));
+
+export const historicalNewsArchive = sqliteTable('historical_news_archive', {
+  id: text('id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  publishedAtMs: integer('published_at_ms').notNull(),
+  headline: text('headline').notNull(),
+  summary: text('summary'),
+  sentimentScore: real('sentiment_score'),
+  source: text('source'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  symbolIdx: index('idx_historical_news_archive_symbol').on(table.symbol),
+  publishedIdx: index('idx_historical_news_archive_published').on(table.publishedAtMs),
+}));
+
 export const pitDecisionLedger = sqliteTable('pit_decision_ledger', {
   id: text('id').primaryKey(),
   asOfMs: integer('as_of_ms').notNull(),

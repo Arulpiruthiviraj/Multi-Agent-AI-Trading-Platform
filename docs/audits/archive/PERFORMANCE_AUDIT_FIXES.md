@@ -1,6 +1,6 @@
 # Performance audit fixes (2026-08-20)
 
-Short note for `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md` items. Full write-up: `ARGUS_NO_TRADE_REMEDIATION_STATUS.md` §6.
+Short note for `docs/audits/archive/ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md` items. Full write-up: `docs/audits/archive/ARGUS_NO_TRADE_REMEDIATION_STATUS.md` §6.
 
 | Fix | What changed |
 |---|---|

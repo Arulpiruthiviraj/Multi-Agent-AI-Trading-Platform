@@ -21,8 +21,8 @@ mkdir -p "$LOG_DIR"
 # port:label — kept as parallel arrays for portability (no assoc arrays on bash 3.2/macOS)
 # IB Gateway Desktop TCP :4002 is probed in status via argus-ecosystem-status.ts but is NOT
 # in this kill/start conflict list (external app; do not SIGKILL the operator's Gateway).
-PORTS=(3000 8008 47332)
-PORT_LABELS=("Argus Node/Vite server" "Chronos/Kronos local AI service" "OpenAlice Guardian MCP")
+PORTS=(3000 8008 47332 8085)
+PORT_LABELS=("Argus Node/Vite server" "Chronos/Kronos local AI service" "OpenAlice Guardian MCP" "Java Quant Core (optional, QUANT_JAVA_CORE_ENABLED)")
 
 label_for_port() {
   local port="$1" i

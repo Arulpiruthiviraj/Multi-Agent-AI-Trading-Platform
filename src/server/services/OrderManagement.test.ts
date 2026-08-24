@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { trades, fills, portfolio } from '../db/schema';
+import { structuredLogger } from '../observability/StructuredLogger';
 
 // Phase 3 changed OMS from a single insert to insert-then-update as the order progresses
 // (PENDING at submission -> broker acceptance -> terminal fill/reject), so the mock now tracks
@@ -233,6 +234,31 @@ describe('OrderManagementService.executeOrder', () => {
     expect(getPortfolioRows().length === 0 || getPortfolioRows()[0]?.quantity === 0).toBe(true);
   });
 
+  it('makes an unattributable P&L failure observable instead of silently leaving profit_loss null with only a console log', async () => {
+    // Every entry-price fallback fails: broker positions() throws, no local portfolio row, and
+    // (implicitly, via the mocked trades select returning []) no prior opening BUY is found either.
+    const warnSpy = vi.spyOn(structuredLogger, 'warn');
+    setPortfolioRows([]);
+    const placeOrder = vi.fn(async () => ({ id: 'order-unattributable', status: 'FILLED', averageFillPrice: 110 }));
+    const positions = vi.fn(async () => { throw new Error('positions unavailable'); });
+    mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions };
+
+    await oms.executeOrder('AAPL', 'SELL', 5, 'reasoning', 'sell-unattributable-trace');
+
+    // Never invent a P&L figure when no entry price could be resolved.
+    expect(getFinalTradeRow().profitLoss).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      'pnl_attribution_failed',
+      expect.objectContaining({
+        category: 'SYSTEM',
+        eventType: 'PNL_ATTRIBUTION_FAILED',
+        reason: 'NO_ENTRY_PRICE_RESOLVED',
+        symbol: 'AAPL',
+      }),
+    );
+    warnSpy.mockRestore();
+  });
+
   it('keeps PENDING and pauses trading when placeOrder throws (unknown submit is not REJECTED)', async () => {
     const placeOrder = vi.fn(async () => { throw new Error('broker down'); });
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
@@ -288,5 +314,39 @@ describe('OrderManagementService.executeOrder', () => {
     await oms.executeOrder('AAPL', 'BUY', 2, 'reasoning', 'paper-nogo-unaffected');
     expect(placeOrder).toHaveBeenCalled();
     expect(getFinalTradeRow().status).toBe('FILLED');
+  });
+
+  // Reproduces the real 2026-08-21T18:31 TSLA/RIOT BROKER_ENVIRONMENT_UNKNOWN rejections
+  // (data/argus.db trades rows 1b8f549f.../60697e63...): an unseeded/malformed settings.tradingMode
+  // (null, not the schema's 'Paper' default) with no PAPER_TRADING_ONLY enforcement and no
+  // brokerConnections row for the active broker. Before the fix, OrderManagement.ts's
+  // readTradingMode() returned this raw null straight through to authorizeProductionOrder(), which
+  // classifyBrokerEnvironment() cannot classify as PAPER or LIVE -> UNKNOWN -> rejected, even though
+  // Alpaca's own getCapabilities() says it is fully paper-capable. readTradingMode() now normalizes
+  // through normalizeTradingMode() (fails closed to 'PAPER', never 'LIVE'), so this same ambiguous
+  // state now correctly resolves to PAPER and the order reaches the broker.
+  it('does not reject with BROKER_ENVIRONMENT_UNKNOWN when settings.tradingMode is unseeded/null (TSLA/RIOT regression)', async () => {
+    const prev = process.env.PAPER_TRADING_ONLY;
+    delete process.env.PAPER_TRADING_ONLY;
+    setEnvRow({ tradingMode: null, paperMode: null });
+    const placeOrder = vi.fn(async () => ({ id: 'tsla-1', status: 'FILLED', averageFillPrice: 250 }));
+    mockBrokerHolder.broker = {
+      id: 'alpaca',
+      name: 'Alpaca',
+      placeOrder,
+      orders: vi.fn(async () => []),
+      positions: vi.fn(async () => []),
+      getCapabilities: () => ({ paperTrading: true, liveTrading: true }),
+    };
+    try {
+      await oms.executeOrder('TSLA', 'BUY', 1, 'reasoning', 'tsla-regression-trace');
+      expect(placeOrder).toHaveBeenCalled();
+      const finalRow = getFinalTradeRow();
+      expect(finalRow.status).toBe('FILLED');
+      expect(String(finalRow.reasoning || '')).not.toMatch(/BROKER_ENVIRONMENT_UNKNOWN/);
+    } finally {
+      if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
+      else process.env.PAPER_TRADING_ONLY = prev;
+    }
   });
 });

@@ -2,9 +2,9 @@
 
 **Mode:** Read-only verification of the prior audit's remediation claims, against current source. No code changed during this audit pass (one small, separately-verified fix — item #3 — was applied afterward and is called out explicitly below, not folded into the audit itself).
 **Written:** 2026-08-20
-**Scope:** Verifies every claim in `ARGUS_NO_TRADE_REMEDIATION_STATUS.md` (an **uncommitted** working-tree file — `git log` shows no commit for it) against the actual current source. Prior document trusted nothing on its word; every finding below cites exact file/function evidence.
+**Scope:** Verifies every claim in `docs/audits/archive/ARGUS_NO_TRADE_REMEDIATION_STATUS.md` (an **uncommitted** working-tree file — `git log` shows no commit for it) against the actual current source. Prior document trusted nothing on its word; every finding below cites exact file/function evidence.
 
-**Taxonomy** (per `ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md` §9): A Process/runtime · B Autobot · C Trading pause · D Market data · E Stale data · F Idea generation · G Pre-Chief rejection · H Consensus · I RiskEngine · J OMS · K Broker · L Capital/sizing · M Reconciliation/session · N News veto · O Other/infrastructure.
+**Taxonomy** (per `docs/audits/archive/ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md` §9): A Process/runtime · B Autobot · C Trading pause · D Market data · E Stale data · F Idea generation · G Pre-Chief rejection · H Consensus · I RiskEngine · J OMS · K Broker · L Capital/sizing · M Reconciliation/session · N News veto · O Other/infrastructure.
 
 ---
 
@@ -44,7 +44,7 @@
 ## 3. News tick success telemetry — WAS NOT FIXED, fixed in this pass
 
 - **Bug (before this pass):** `NewsEngine.ts runPipeline()` called `notePipelineAgentTick('NewsAgent')` at cycle start and `notePipelineAgentFailure('NewsAgent', e)` on the catch path, but **never called `notePipelineAgentSuccess('NewsAgent')` anywhere in the file** (confirmed by grep: the import list didn't even include it). `pipelineAgentSnapshot.ts` surfaces `heartbeat.lastSuccessfulTickAt` straight from this heartbeat map to `GET /api/v1/system/pipeline-agents` — the exact route the original no-trade audit read and reported `lastSuccessfulTickAt=null`. This made that null **permanent by construction**, even on cycles that fetched and analyzed articles successfully — a false-negative health signal, not a real provider failure.
-- **This was not mentioned or addressed in `ARGUS_NO_TRADE_REMEDIATION_STATUS.md` at all**, despite being one of the four "contributing infrastructure problems" the original audit named.
+- **This was not mentioned or addressed in `docs/audits/archive/ARGUS_NO_TRADE_REMEDIATION_STATUS.md` at all**, despite being one of the four "contributing infrastructure problems" the original audit named.
 - **Fix applied:** `src/server/news/NewsEngine.ts` — imports `notePipelineAgentSuccess`; calls it once the pipeline body completes without throwing (right after publishing `NEWS_PIPELINE_TICK`), regardless of whether any catalyst was found that cycle (a cycle finding zero new/qualifying articles is still a real success, not a gate — matches the per-cycle semantics this function already has elsewhere in the codebase).
 - **Tests added:** `src/server/news/NewsEngine.test.ts` — 2 tests: (a) a cycle with zero fetched articles records `lastSuccessfulTickAt` and `currentState:'SUCCESS'`; (b) a thrown provider error still records `FAILED`, not success. Both pass. `tsc --noEmit` clean.
 - **Real-trading impact:** none — this is purely an observability signal; it never fed into ChiefTrader consensus, RiskEngine, or the news_veto gate (those consume `news_clusters`/`news_articles` directly, not this heartbeat).

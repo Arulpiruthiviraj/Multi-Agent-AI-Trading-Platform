@@ -379,7 +379,7 @@ SQLite readonly queries occasionally hit `SQLITE_IOERR_READ` while PID 14036 hel
 
 # REMEDIATION STATUS (2026-08-20 follow-up)
 
-Safe code remediations were implemented after this audit. See **`ARGUS_NO_TRADE_REMEDIATION_STATUS.md`**.
+Safe code remediations were implemented after this audit. See **`docs/audits/archive/ARGUS_NO_TRADE_REMEDIATION_STATUS.md`**.
 
 Summary: Kronos no longer emits BUY/SELL when Chronos is unavailable; PortfolioMonitor no longer binds REPLAY `quant_target_price` ($121.90) onto live EXTERNAL_SYNC holdings; Quant `ensureBars` backs off on Alpaca 429. Consensus floors **unchanged** (0.75 / min-2). Operator still owns news_veto wait, Chronos serve, AI providers, Autobot.
 

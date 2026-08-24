@@ -42,7 +42,7 @@ import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
 import { computeGroupedScores, GroupedScores } from '../quant/scoring/GroupedScores';
 import { analyzeContradictions, ContradictionAnalysisResult } from '../quant/ai/QuantContradictionAnalyzer';
-import { riskRewardRatio, expectedValue } from '../quant/risk/ExpectedValue';
+import { riskRewardRatio, expectedValue, MIN_SAMPLE_SIZE_FOR_KELLY } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety, isQuantColdStartBootstrapEnabled } from '../config/tradingSafety';
@@ -291,9 +291,16 @@ export class QuantSignalAgent {
       const targetPrice = matchedStrategyEvaluation.target.price;
       const rr = stopPrice !== null && targetPrice !== null ? riskRewardRatio(currentPrice, stopPrice, targetPrice) : null;
       const liveWinRate = await computeLiveStrategyWinRate(matchedStrategyEvaluation.strategy);
-      const ev = rr && liveWinRate ? expectedValue(liveWinRate.winProbability, rr.ratio!) : null;
+      // Real defect fixed this pass: a strategy with e.g. 1 closed trade (100% or 0% win rate) used
+      // to be treated as a fully-trusted EV estimate here - the exact same MIN_SAMPLE_SIZE_FOR_KELLY
+      // bar that fractionalKelly() already refuses under (this file's own prior comment claimed this
+      // check existed; it did not). WARMING_UP (some samples, not yet statistically trustworthy) is
+      // now treated the same as COLD_START (zero samples) for this gate - both fall through to the
+      // same operator-gated bootstrap-or-refuse path below, never a fabricated "real edge" from noise.
+      const isWarmingUp = !!liveWinRate && liveWinRate.sampleSize < MIN_SAMPLE_SIZE_FOR_KELLY;
+      const ev = rr && liveWinRate && !isWarmingUp ? expectedValue(liveWinRate.winProbability, rr.ratio!) : null;
 
-      if (!liveWinRate) {
+      if (!liveWinRate || isWarmingUp) {
         // Cold-start deadlock (ARGUS_PREDICTION_EDGE_AND_LEARNING_IMPLEMENTATION_AUDIT.md): this
         // strategy can never accumulate its own live win-rate history if it's never allowed to
         // emit a first idea. Off by default - only an operator who has explicitly set
@@ -301,18 +308,19 @@ export class QuantSignalAgent {
         // stop/target) bootstrap idea in its place. Still goes through the full ChiefTrader ->
         // RiskEngine (24 gates, including its own stopLossAssumptionPct-based sizing since this
         // idea carries no stop) -> OMS pipeline unchanged.
+        const stateLabel = !liveWinRate ? 'COLD_START (zero real closed trades)' : `WARMING_UP (${liveWinRate.sampleSize} real closed trades, below the ${MIN_SAMPLE_SIZE_FOR_KELLY}-trade trust threshold)`;
         const bootstrapIdea = isQuantColdStartBootstrapEnabled() ? deriveIdeaFromRegime(regime) : null;
         if (bootstrapIdea) {
-          console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} setup found but zero real closed live trades exist yet - emitting a cold-start regime-only bootstrap idea instead (QUANT_COLD_START_BOOTSTRAP_ENABLED=true).`);
+          console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} setup found but is ${stateLabel} - emitting a cold-start regime-only bootstrap idea instead (QUANT_COLD_START_BOOTSTRAP_ENABLED=true).`);
           strategyIdea = {
             side: bootstrapIdea.side,
             confidence: bootstrapIdea.confidence,
             strategy: 'COLD_START_BOOTSTRAP',
-            reasoning: `${bootstrapIdea.reasoning} Cold-start bootstrap: ${matchedStrategyEvaluation.strategy} has zero real closed live trades yet, so no EV/stop/target backs this idea - operator-enabled via QUANT_COLD_START_BOOTSTRAP_ENABLED.`,
+            reasoning: `${bootstrapIdea.reasoning} Cold-start bootstrap: ${matchedStrategyEvaluation.strategy} is ${stateLabel}, so no EV/stop/target backs this idea - operator-enabled via QUANT_COLD_START_BOOTSTRAP_ENABLED.`,
           };
           matchedStrategyEvaluation = null; // no real strategy evaluation backs this - stop/target/EV all stay null downstream, exactly like the pre-existing regime-only fallback
         } else {
-          console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} setup found but zero real closed live trades exist yet for this strategy - no EV estimate possible, not emitting a live trade idea from it.`);
+          console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} setup found but is ${stateLabel} for this strategy - no trustworthy EV estimate possible, not emitting a live trade idea from it.`);
           strategyIdea = null;
           matchedStrategyEvaluation = null;
         }

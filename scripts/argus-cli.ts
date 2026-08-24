@@ -106,9 +106,65 @@ function parseReplayArgs(argv: string[]) {
     else if (a === '--universe' && argv[i + 1]) out.universe = argv[++i];
     else if (a === '--symbols' && argv[i + 1]) out.symbols = argv[++i];
     else if (a === '--provider' && argv[i + 1]) out.provider = argv[++i];
+    else if (a === '--engine' && argv[i + 1]) out.engine = argv[++i];
+    else if (a === '--target' && argv[i + 1]) out.target = argv[++i];
     else if (!a.startsWith('--') && !out.runId) out.runId = a;
   }
   return out;
+}
+
+/**
+ * `--engine java` does NOT submit to the real Historical Evaluation API
+ * (/api/v2/historical-evaluations, FullArgusReplayEngine — ChiefTrader/RiskEngine/PositionSizing/
+ * OMS/HistoricalReplayBroker). It spawns the standalone quant-core-java backtest CLI as a local
+ * subprocess instead — a genuinely DIFFERENT, simpler demonstration backtest (RsiThresholdStrategy
+ * on raw historical bars from data/argus.db, see quant-core-java's own RsiThresholdStrategy.java
+ * header comment) with no ChiefTrader/RiskEngine/OMS involvement at all. This banner exists so
+ * that difference is never missed. Auto-builds the jar via `mvn -B package -DskipTests` on first
+ * use if it is not already present.
+ */
+async function runJavaReplay(args: Record<string, string>): Promise<void> {
+  console.log(
+    '=====================================================================\n' +
+    'NOTE: --engine java does NOT run real Argus Historical Evaluation.\n' +
+    'It runs quant-core-java\'s standalone demonstration backtest engine\n' +
+    '(RsiThresholdStrategy over real historical bars) with ZERO ChiefTrader\n' +
+    '/ RiskEngine / OMS / HistoricalReplayBroker involvement. Use the\n' +
+    'default (node) engine for anything that needs to reflect the real,\n' +
+    'protected Argus decision spine.\n' +
+    '=====================================================================',
+  );
+  const moduleDir = join(ROOT, 'quant-core-java');
+  const jarPath = join(moduleDir, 'target', 'quant-core-java-0.0.1-SNAPSHOT.jar');
+  if (!existsSync(jarPath)) {
+    console.log('[replay --engine java] Jar not found — building via `mvn -B package -DskipTests` (first use only)...');
+    const build = await new Promise<number>((resolve) => {
+      const child = spawn('mvn', ['-B', 'package', '-DskipTests'], { cwd: moduleDir, stdio: 'inherit', shell: true });
+      child.on('exit', (code) => resolve(code ?? 1));
+      child.on('error', () => resolve(1));
+    });
+    if (build !== 0 || !existsSync(jarPath)) {
+      throw new Error(`quant-core-java build failed or jar still missing at ${jarPath}. Run "mvn -B package -DskipTests" in quant-core-java/ manually to see the error.`);
+    }
+  }
+
+  const cliArgs = ['-jar', jarPath];
+  if (args.start) cliArgs.push('--start', args.start);
+  if (args.end) cliArgs.push('--end', args.end);
+  if (args.symbols) cliArgs.push('--symbols', args.symbols);
+  if (args.target) cliArgs.push('--target', args.target);
+  if (args.capital) cliArgs.push('--cash', args.capital);
+  cliArgs.push('--db', join(ROOT, 'data', 'argus.db'));
+
+  const exitCode = await new Promise<number>((resolve) => {
+    const child = spawn('java', cliArgs, { cwd: moduleDir, stdio: 'inherit' });
+    child.on('exit', (code) => resolve(code ?? 1));
+    child.on('error', (e) => {
+      console.error(`Failed to launch java: ${e.message}`);
+      resolve(1);
+    });
+  });
+  if (exitCode !== 0) process.exit(exitCode);
 }
 
 async function startEngine() {
@@ -254,6 +310,9 @@ const replayCommands: Record<string, () => Promise<void>> = {
   },
   async run() {
     const args = parseReplayArgs(process.argv.slice(4));
+    if ((args.engine || 'node').toLowerCase() === 'java') {
+      return runJavaReplay(args);
+    }
     const universe = (args.universe || 'discovery').toLowerCase();
     const body: Record<string, unknown> = {
       initialCapital: Number(args.capital || 100000),
@@ -407,6 +466,71 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async risk() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/risk/status'), null, 2));
+  },
+  async 'quant-core'() {
+    const health = await fetchJson('/api/v2/quant-core/health') as {
+      enabled: boolean; connected: boolean; checkedAt: string; detail?: string;
+    };
+    const label = !health.enabled ? 'DISABLED (QUANT_JAVA_CORE_ENABLED=false)' : health.connected ? 'CONNECTED' : 'DISCONNECTED';
+    console.log(`Java Quant Core: ${label}`);
+    console.log(`Checked at: ${health.checkedAt}`);
+    if (health.detail) console.log(`Detail: ${health.detail}`);
+    console.log('');
+    console.log(JSON.stringify(health, null, 2));
+  },
+  async parity() {
+    const result = await fetchJson('/api/v2/quant-core/parity?limit=25') as {
+      count: number;
+      divergences: Array<{ ts: string; symbol: string | null; divergences: Array<{ field: string; tsValue: number; javaValue: number; diffPct: number }> }>;
+    };
+    console.log(`Recent shadow-parity divergences: ${result.count}`);
+    if (result.count === 0) {
+      console.log('(none recorded — either QUANT_JAVA_CORE_ENABLED is off, or no divergence >0.01% has occurred yet)');
+      return;
+    }
+    console.log('');
+    console.log('TIMESTAMP                SYMBOL   FIELD        TS_VALUE      JAVA_VALUE    DIFF%');
+    for (const row of result.divergences) {
+      for (const d of row.divergences) {
+        console.log(
+          `${row.ts.padEnd(25)} ${String(row.symbol ?? '-').padEnd(8)} ${d.field.padEnd(12)} ` +
+          `${d.tsValue.toFixed(4).padEnd(13)} ${d.javaValue.toFixed(4).padEnd(13)} ${(d.diffPct * 100).toFixed(3)}%`,
+        );
+      }
+    }
+  },
+  async discovery() {
+    const status = await fetchJson('/api/v2/continuous-intelligence/status') as {
+      opportunityLoopEnabled: boolean;
+      opportunityIdeasEnabled: boolean;
+      activeSymbols: string[];
+      activeSlots: { used: number; max: number } | number;
+      lastScan: { scannedCount: number; topMovers: string[]; timestamp: string | null };
+      candidates: unknown[];
+      maxActiveSubscriptions: number;
+    };
+    console.log(`Opportunity loop enabled: ${status.opportunityLoopEnabled} · ideas (voting) enabled: ${status.opportunityIdeasEnabled}`);
+    console.log(`Last scan: ${status.lastScan.scannedCount} scanned, top movers: ${status.lastScan.topMovers.join(', ') || '(none)'} (${status.lastScan.timestamp ?? 'never'})`);
+    console.log(`Shortlisted candidates (watchlist-subscribe only — never a second order path): ${status.candidates.length}`);
+    console.log(`Active MarketDataWorker subscriptions: ${status.activeSymbols.length} (cap: ${status.maxActiveSubscriptions})`);
+    console.log('');
+    console.log(JSON.stringify(status, null, 2));
+  },
+  async campaign() {
+    const status = await fetchJson('/api/v2/campaign/status') as {
+      enabled: boolean; badge: string; progress: number; targetDollars: number;
+      dailyRealized: number; dailyUnrealized: number; dailyTotal: number; buyLocked: boolean;
+      targetAchievedAction: string;
+    };
+    if (!status.enabled) {
+      console.log('Daily Goal Campaign: DISABLED (settings.campaignEnabled is false)');
+      return;
+    }
+    console.log(`Daily Goal Campaign: ${status.badge} (${(status.progress * 100).toFixed(1)}% of $${status.targetDollars})`);
+    console.log(`Realized: $${status.dailyRealized.toFixed(2)} · Unrealized: $${status.dailyUnrealized.toFixed(2)} · Total: $${status.dailyTotal.toFixed(2)}`);
+    console.log(`BUY soft-lock: ${status.buyLocked} · policy: ${status.targetAchievedAction}`);
+    console.log('');
+    console.log(JSON.stringify(status, null, 2));
   },
   async replay() {
     const sub = process.argv[3];

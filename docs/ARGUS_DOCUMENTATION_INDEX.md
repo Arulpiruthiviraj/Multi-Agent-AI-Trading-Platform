@@ -4,7 +4,7 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 
 **Why the name ARGUS?** [`README.md`](../README.md) § Why "ARGUS"? (Argus Panoptes — many eyes, one disciplined decision process). Do not treat the metaphor as unlimited visibility or a second trading brain.
 
-**Verified harness (2026-08-21):** `npm run lint` exit 0 · `npm test` **330** files / **2111** tests · Node **24.18.0** / npm **12** · schema **60** tables · **LIVE_NO_GO** · organic closed PAPER FILLED SELL P&L soak baseline still **0** until soak counts real closes.
+**Verified harness (2026-08-23):** `npm run lint` exit 0 · `npm test` **348** files / **2207** tests (re-check with `npm test` — trust the runner, not a remembered count) · Node **24.18.0** / npm **12** · schema **60** tables · **LIVE_NO_GO** · organic closed PAPER FILLED SELL P&L soak baseline still **0** until soak counts real closes.
 
 ---
 
@@ -25,6 +25,13 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 | [`ARGUS_CAMPAIGN_TRACKER.md`](../ARGUS_CAMPAIGN_TRACKER.md) | Daily Goal Campaign (flag-gated; attribution + soft-lock) |
 | [`ARGUS_CONFIGURATION_ARCHITECTURE.md`](../ARGUS_CONFIGURATION_ARCHITECTURE.md) | Config layers / overlays |
 | [`ARGUS_CONFIGURATION_SECURITY.md`](../ARGUS_CONFIGURATION_SECURITY.md) | Secrets / auth / overlays |
+| [`docs/architecture/SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md) | Navigational architecture summary (points back to `CLAUDE.md`) |
+| [`docs/architecture/RISK_ENGINE_24_GATES.md`](architecture/RISK_ENGINE_24_GATES.md) | 24-gate name list + how to verify current thresholds |
+| [`docs/architecture/MULTI_AGENT_CONSENSUS.md`](architecture/MULTI_AGENT_CONSENSUS.md) | ChiefTrader weighting/debate/quorum mechanics |
+| [`docs/architecture/JAVA_QUANT_CORE.md`](architecture/JAVA_QUANT_CORE.md) | Java Quant Core entry point (→ blueprint + status audit) |
+| [`docs/operations/DEVOPS_LIFECYCLE.md`](operations/DEVOPS_LIFECYCLE.md) | `argus.sh` / `npm run dev` process lifecycle |
+| [`docs/operations/IBKR_GATEWAY_SETUP.md`](operations/IBKR_GATEWAY_SETUP.md) | IB Gateway socket/web_api setup + troubleshooting |
+| [`docs/operations/CAMPAIGN_MANAGEMENT.md`](operations/CAMPAIGN_MANAGEMENT.md) | Daily Goal Campaign operations summary |
 
 ---
 
@@ -89,7 +96,7 @@ Not organic paper. Not LIVE. Default universe **ARGUS_DISCOVERY**. Labels: **HIS
 | [`ARGUS_HISTORICAL_EVALUATION.md`](../ARGUS_HISTORICAL_EVALUATION.md) — product / honesty |
 | [`docs/ARGUS_REPLAY_USER_GUIDE.md`](ARGUS_REPLAY_USER_GUIDE.md) — operator UI/API |
 | [`ARGUS_CLI.md`](../ARGUS_CLI.md) / [`ARGUS_SHELL_CLI.md`](../ARGUS_SHELL_CLI.md) — `./argus replay …` thin router |
-| [`ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md`](../ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md) — Phase C evidence snapshot (**historical**) |
+| [`docs/audits/archive/ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md`](audits/archive/ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md) — Phase C evidence snapshot (**historical**) |
 
 ---
 
@@ -98,7 +105,7 @@ Not organic paper. Not LIVE. Default universe **ARGUS_DISCOVERY**. Labels: **HIS
 | Doc |
 |---|
 | [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](../ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md) |
-| [`ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md`](../ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md) — Phase D snapshot (**historical** test counts; prefer `npm test` for current totals). Still **LIVE_NO_GO**. |
+| [`docs/audits/archive/ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md`](audits/archive/ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md) — Phase D snapshot (**historical** test counts; prefer `npm test` for current totals). Still **LIVE_NO_GO**. |
 
 ---
 
@@ -118,12 +125,21 @@ Canonical env catalog: `config/runtimeEnvCatalog.json`. Reviewed safety numbers:
 
 ## Historical forensic audits (immutable)
 
-Dated phase / market / remediation reports at repo root (e.g. `ARGUS_POST_FIX_FORENSIC_AUDIT_*.md`, `ARGUS_PHASE_*_FINAL_AUDIT.md`, `ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md`, `ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md`). **Do not rewrite** their facts. Living docs may **cite conclusions** but must not present old PIDs / old test totals as current.
+Dated phase / market / remediation reports, relocated (2026-08-23, `git mv` — history preserved)
+from repo root into `docs/audits/archive/` to keep the root down to living canonical docs (e.g.
+`docs/audits/archive/ARGUS_POST_FIX_FORENSIC_AUDIT_2026-08-21.md`,
+`docs/audits/archive/ARGUS_PHASE_D_ENGINE_DAEMON_FINAL_AUDIT.md`,
+`docs/audits/archive/ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md`,
+`docs/audits/archive/ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md`). **Do not rewrite** their facts —
+only their location changed. Living docs may **cite conclusions** but must not present old PIDs /
+old test totals as current. More-recent, still-active audits (e.g. IBKR/discovery forensics, the
+Java Quant Core status audit) stay directly under `docs/audits/` — only superseded/dated snapshots
+move to `docs/audits/archive/`.
 
 | Doc | Why kept |
 |---|---|
-| `ARGUS_CAPITAL_AUDIT_REPORT.md` | Budget vs broker equity / `argus_capital_allocation` forensics |
-| `ARGUS_2024_ZERO_TRADE_FORENSIC_AUDIT.md` | Referenced from RiskEngine comments; session idle forensics |
-| `ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md` | News 24/7 / staging design snapshot (living behavior: `NewsEngine` + `MarketOpenNewsConfluence`) |
+| `docs/audits/archive/ARGUS_CAPITAL_AUDIT_REPORT.md` | Budget vs broker equity / `argus_capital_allocation` forensics |
+| `docs/audits/archive/ARGUS_2024_ZERO_TRADE_FORENSIC_AUDIT.md` | Referenced from RiskEngine comments; session idle forensics |
+| `docs/audits/archive/ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md` | News 24/7 / staging design snapshot (living behavior: `NewsEngine` + `MarketOpenNewsConfluence`) |
 
 Prefer `CLAUDE.md` + current code where any snapshot disagrees.

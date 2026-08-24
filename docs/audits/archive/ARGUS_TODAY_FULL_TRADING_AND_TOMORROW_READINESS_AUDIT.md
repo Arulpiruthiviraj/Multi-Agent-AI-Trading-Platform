@@ -6,7 +6,7 @@
 **Next RTH session:** **2026-08-21 09:30 ET** (today’s open is ~2h after this audit)  
 **Evidence grades:** CODE / DATA / RUN / NOT VERIFIED  
 
-**Cross-checked:** `ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md`, `ARGUS_NO_TRADE_REMEDIATION_STATUS.md`, `ARGUS_TODAY_PAPER_READINESS_AUDIT.md`, `ARGUS_CAMPAIGN_TRACKER.md`, `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md`, `data/argus.db` (readonly), `data/.argus_runtime_session.json`, ports, `data/logs/crash.log`, `logs/argus-dev.log`.
+**Cross-checked:** `docs/audits/archive/ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md`, `docs/audits/archive/ARGUS_NO_TRADE_REMEDIATION_STATUS.md`, `docs/audits/archive/ARGUS_TODAY_PAPER_READINESS_AUDIT.md`, `ARGUS_CAMPAIGN_TRACKER.md`, `docs/audits/archive/ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md`, `data/argus.db` (readonly), `data/.argus_runtime_session.json`, ports, `data/logs/crash.log`, `logs/argus-dev.log`.
 
 ---
 
@@ -36,7 +36,7 @@ Core paper spine **did** execute one organic Alpaca PAPER SELL (NVDA) through Ch
 |---|---|---|
 | ~09:30–11:24 | Earlier PIDs / remediations; multi-restart day | Prior audits; DEF-18 class |
 | **09:42** | Operator resume: PAUSED → ENABLED | `kill_switch_events` id 64 |
-| **11:24–12:02** | Prior no-trade forensic window (PID 14036) | `ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md` |
+| **11:24–12:02** | Prior no-trade forensic window (PID 14036) | `docs/audits/archive/ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md` |
 | ~12:02+ | PID 14036 unclean exit; PID 15912 later | Prior audit |
 | **11:25–12:20** | Many NVDA PortfolioManager SELL ideas → Risk `news_veto` | `risk_assessments` / traces |
 | **12:25–12:26** | **Organic PAPER NVDA SELL qty=1 @ 216.85 FILLED**; `profit_loss=NULL` | `trades` trace `8192bd82-…` |
@@ -504,7 +504,7 @@ Safety changes required: **NONE** (no genuine safety-floor defect requiring thre
 
 ## P0 prep RUN-VERIFIED (2026-08-21 ~07:42 ET)
 
-SAFE PAPER operator prep executed (no threshold/LIVE/order changes). See `ARGUS_NO_TRADE_REMEDIATION_STATUS.md` §8 for full table.
+SAFE PAPER operator prep executed (no threshold/LIVE/order changes). See `docs/audits/archive/ARGUS_NO_TRADE_REMEDIATION_STATUS.md` §8 for full table.
 
 **Cleared:** engine pid 26000 PAPER headless + Chronos :8008 ok; `interruptedSessionHold=false`; recon id 733 MATCH (GLD); Autobot OFF; `LIVE_NO_GO`; single :3000 writer.
 
@@ -512,4 +512,4 @@ SAFE PAPER operator prep executed (no threshold/LIVE/order changes). See `ARGUS_
 
 **Kronos pre-RTH (2026-08-21 ~07:44 ET) — EXPECTED waiting, not a FAILED boot:** Spot-check at ~07:44 America/New_York (pre-RTH; open 09:30 ET) with Autobot OFF showed `KronosEngine` `currentState=IDLE`, then-label `healthLabel=DEAD`, `lastTickAt=null` while Chronos `:8008/health` was `ok` and engine pid 26000 had `marketDataConnected=true`. `ArgusCoreBoot` starts `kronosForecastAgent` when the pipeline agent is enabled (`keepsBackgroundPipeline: true`); heartbeat only advances on `MARKET_DATA`, and `MarketDataWorker.maybeEmitMarketData` returns without emit unless `isAutobotTradingEnabled()` (Autobot on + `TRADING_ENABLED`) — unit-tested. With Autobot intentionally OFF, no ticks reach Kronos, so IDLE/`lastTickAt=null` was waiting-for-ticks, not a failed start.
 
-**Engineering follow-up (same day):** health labels now map that case to **`IDLE_WAITING_FOR_MARKET_DATA`** (Chronos down → `UNAVAILABLE`). First organic PAPER fill runs fail-closed forensic checkpoint (`FirstFillForensicCheckpoint`). Protocol: `ARGUS_CONTROLLED_PAPER_SOAK.md`. Consensus **0.75 / min 2** unchanged; Autobot still not auto-enabled.
+**Engineering follow-up (same day):** health labels now map that case to **`IDLE_WAITING_FOR_MARKET_DATA`** (Chronos down → `UNAVAILABLE`). First organic PAPER fill runs fail-closed forensic checkpoint (`FirstFillForensicCheckpoint`). Protocol: `docs/audits/archive/ARGUS_CONTROLLED_PAPER_SOAK.md`. Consensus **0.75 / min 2** unchanged; Autobot still not auto-enabled.

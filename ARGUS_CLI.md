@@ -17,7 +17,8 @@ Argus Engine :3000
     ├── OMS
     ├── BrokerManager
     ├── SQLite
-    └── Historical Evaluation
+    ├── Historical Evaluation
+    └── QuantCoreBridge ──HTTP──► Java Quant Core :8085 (optional, advisory-only)
 ```
 
 The CLI does **not** contain or run its own:
@@ -29,6 +30,14 @@ The CLI does **not** contain or run its own:
 * broker execution logic
 
 **One engine. One trading brain. The CLI is a remote control and observability client.**
+
+The optional Java Quant Core (`quant-core-java/`, port 8085, default **off** —
+`QUANT_JAVA_CORE_ENABLED=false`) is **not** a second trading brain and is **not** part of the
+decision spine above: it is a loopback-only, advisory calculation service (indicator math + CORE
+strategy decision logic + a research backtester) that Argus Engine's own `QuantCoreBridge.ts`
+talks to. It has no broker access, no credentials, and cannot place an order. See
+`docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md` and
+`docs/audits/JAVA_QUANT_CORE_MIGRATION_STATUS_AUDIT.md`.
 
 Shell operator entry: [`./argus`](argus) — see [`ARGUS_SHELL_CLI.md`](ARGUS_SHELL_CLI.md).  
 Name philosophy: [`README.md`](README.md) § Why "ARGUS"?  
@@ -99,7 +108,7 @@ The CLI communicates with the running Argus Engine over HTTP.
 Daily Goal Campaign (optional; does not lower consensus — see `ARGUS_CAMPAIGN_TRACKER.md`):
 
 ```bash
-# Via HTTP (same host the CLI uses)
+./argus campaign   # formatted - see §4. Or via HTTP directly:
 curl -s http://127.0.0.1:3000/api/v2/campaign/status
 # PATCH /api/v2/campaign/settings  { campaignEnabled, budget, dailyTargetAmount, … }
 ```
@@ -136,6 +145,39 @@ These commands read information from the running engine and its persistence laye
 ```
 
 These help inspect active configuration, RiskEngine state, agent availability, EventBus activity, and diagnostics.
+
+### Java Quant Core (optional, advisory-only bridge)
+
+```bash
+./argus quant-core   # GET /api/v2/quant-core/health - connectivity + enabled state
+./argus parity       # GET /api/v2/quant-core/parity  - recent shadow-parity divergences (>0.01%)
+```
+
+`quant-core` reports `DISABLED` unless `QUANT_JAVA_CORE_ENABLED=true`. `parity` reads real,
+already-persisted divergence records from `observability_events` (written by
+`QuantCoreBridge.ts`/`ParityComparator.ts`) — an empty list honestly means either the bridge is
+disabled or no divergence has been recorded yet, never a fabricated row.
+
+### Opportunity discovery
+
+```bash
+./argus discovery    # GET /api/v2/continuous-intelligence/status
+```
+
+Reports the real scan/shortlist/subscription state: last scan's scanned count and top movers,
+shortlisted candidates (watchlist-subscribe only — **never** a second order path per
+`CLAUDE.md`), and `MarketDataWorker`'s active subscription count against its configured cap.
+
+### Daily Goal Campaign
+
+```bash
+./argus campaign     # GET /api/v2/campaign/status
+```
+
+Reports daily target progress, realized/unrealized P&L, the BUY soft-lock state, and the active
+target-achieved policy (`CONTINUE` / `LOCK_AND_IDLE` / `TRAIL_STOPS_ONLY`). See
+`ARGUS_CAMPAIGN_TRACKER.md`. Superseded the raw `curl` example from an earlier revision of this
+file — same endpoint, now with a formatted CLI command.
 
 ---
 
@@ -229,6 +271,24 @@ Historical Evaluation must not shortcut:
 Agents → Consensus → RiskEngine → PositionSizing → OMS → HistoricalReplayBroker
 ```
 
+### `--engine java` (a genuinely different tool, not an alternate replay backend)
+
+```bash
+./argus replay run --engine java --symbols SPY,QQQ,NVDA --start 2022-01-01 --end 2026-08-21 --target 100
+```
+
+This does **not** submit to the Historical Evaluation API above. It spawns
+`quant-core-java`'s standalone demonstration backtest CLI as a local subprocess (building the jar
+via `mvn -B package -DskipTests` on first use if missing) and streams its output — a genuinely
+**different, simpler** backtest (`RsiThresholdStrategy` over real historical bars from
+`data/argus.db`, read-only) with **zero** ChiefTrader / RiskEngine / PositionSizing / OMS /
+HistoricalReplayBroker involvement. The CLI prints an explicit banner every time this flag is
+used so the difference is never missed. Default (no `--engine` flag, or `--engine node`) is the
+real Historical Evaluation path described above. See
+`docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md` §4 (Phase 4) for why the 5 CORE
+strategies aren't wired into this backtester yet (they need a feature-computation pipeline —
+RegimeEngine/trend/volume/priceAction/supportResistance/MarketContext — not ported to Java).
+
 ---
 
 ## 9. Prediction-versus-reality analysis
@@ -250,6 +310,7 @@ See [`ARGUS_HISTORICAL_EVALUATION.md`](ARGUS_HISTORICAL_EVALUATION.md).
 | `AUTH_USERNAME` / `AUTH_PASSWORD` | — | Fallback credentials for `argus login` (same as server) |
 | `ARGUS_CLI_SESSION_FILE` | `data/.argus_cli_session` | Persisted `argus_session` cookie for CLI requests |
 | `ARGUS_DEV_TOKEN` | Optional | Dev-only mutating token when **AUTH_PASSWORD is unset**. Ignored by the server when AUTH_PASSWORD is set — use `argus login` instead. |
+| `QUANT_JAVA_CORE_ENABLED` | `false` | Gates `QuantCoreBridge.ts`'s connection to the optional Java Quant Core (fixed at loopback port 8085 — see `config/tradingSafety.json`'s `quantJavaCoreBaseUrl`, not yet independently configurable via env). Shadow-only even when true (a second, separate flag gates any live idea emission — see the migration blueprint). |
 
 ### Session auth (`AUTH_PASSWORD` set)
 
@@ -278,7 +339,7 @@ On HTTP 401 the CLI exits with code **5** and tells you to run `argus login` (or
                     └────────┬─────────┘
                              │ HTTP / WS
 ┌───────────────┐            ▼
-│  ./argus CLI  │ ───HTTP──► ARGUS ENGINE
+│  ./argus CLI  │ ───HTTP──► ARGUS ENGINE :3000
 │  (Bash shell) │            │
 └───────┬───────┘            ├── Argus Core
         │                    ├── TradingEngine
@@ -286,7 +347,11 @@ On HTTP 401 the CLI exits with code **5** and tells you to run `argus login` (or
   npm run argus-cli          ├── RiskEngine / OMS
   (TypeScript HTTP)          ├── BrokerManager
                              ├── Historical Evaluation
-                             └── SQLite
+                             ├── SQLite (sole writer)
+                             └── QuantCoreBridge ──HTTP──► Java Quant Core :8085
+                                                            (optional, advisory-only,
+                                                             no broker access, reads
+                                                             SQLite read-only if at all)
 ```
 
 ## Core principle

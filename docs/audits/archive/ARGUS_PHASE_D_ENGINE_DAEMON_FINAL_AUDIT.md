@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20  
 **Scope:** Dedicated engine daemon wrapping the existing Argus Core.  
-**Living architecture:** [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md)  
+**Living architecture:** [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](../../../ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md)  
 **Binding:** `ARGUS_ARCHITECTURE_CONTRACT.md` §15  
 
 Evidence grades: **CODE-VERIFIED** · **TEST-VERIFIED** · **RUN-VERIFIED** · **NOT VERIFIED**.
@@ -90,6 +90,6 @@ scripts/argus-engine.ts
 
 ## 6. Docs consolidated into this audit
 
-Interim Phase B headless architecture/audit stubs were deleted after consolidation into this file and [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md).
+Interim Phase B headless architecture/audit stubs were deleted after consolidation into this file and [`ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md`](../../../ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md).
 
-Phase C historical-evaluation evidence: `ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md` (replay, not daemon).
+Phase C historical-evaluation evidence: `docs/audits/archive/ARGUS_PHASE_C_HISTORICAL_EVALUATION_FINAL_AUDIT.md` (replay, not daemon).

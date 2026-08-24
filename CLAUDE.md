@@ -52,6 +52,35 @@ Forensic snapshot (2026-08-18 hostile pass, not a certificate): engineering ~89.
 - AGENTS.md-era ATR-based sizing is **not** live RiskEngine. Stop assumption is `tradingSafety.stopLossAssumptionPct` (0.05), not ATR.
 - Supervised PAPER can be a **controlled validation session**. That is **not** unattended paper, **not** LIVE, and **not** proof of organic edge (organic closed PAPER FILLED SELL P&L remains **0** until soak counts it). Continuous market-wide discovery and penny MARKET execution are **not** current product behavior.
 
+## Java 26 Engine Authority
+
+Forward-looking **policy for new work**, not a claim about current runtime authority: `quant-core-java/` today is advisory-only and isolated (see `docs/architecture/JAVA_QUANT_CORE.md` / `docs/audits/JAVA_QUANT_CORE_MIGRATION_STATUS_AUDIT.md`) — it does not currently decide, size, or place any live or paper trade. This section governs where *new* calculation code goes, not a retroactive claim that Java already runs the live path.
+
+1. **Java 26 is the preferred, authoritative implementation target for new performance-critical trading/quant engine work** — technical indicators, quantitative calculations, strategy calculations, strategy evaluation, signal computation, numerical portfolio analytics, high-throughput market computation, parallelizable symbol analysis. Implement these in `quant-core-java/`, not as a new TypeScript calculation engine.
+2. TypeScript must **not** receive new duplicate implementations of a calculation that already exists authoritatively in Java. Check `quant-core-java/` first.
+3. TypeScript may call the Java engine only through the established integration boundary (`historicalBarProvider.ts`'s decoupled registry pattern, the `QuantCoreBridge.ts` HTTP bridge, or an equivalent reviewed interface) — never a new ad hoc process/IPC channel.
+4. Before adding a new engine feature, determine: (a) does this belong in the Java 26 engine; (b) does an equivalent Java implementation already exist; (c) would a TypeScript implementation duplicate logic that already lives in Java.
+5. **Java must not independently bypass** Consensus, ChiefTraderAgent, RiskAgent, RiskEngine, OMS, or BrokerManager, unless the architecture is explicitly redesigned and protected by tests — this is the same protected spine `ARGUS_ARCHITECTURE_PROTECTION.md` already governs, not a new rule Java gets to sidestep.
+6. Java is a **computational engine, not an unrestricted broker client**. No Java component may directly place broker orders unless explicitly authorized by a future architecture decision and protected by invariants and integration tests (today: zero broker credentials, zero `.placeOrder(`-equivalent calls anywhere in `quant-core-java/`).
+7. Migration work must preserve a **single authoritative path** per calculation — never a silent TS/Java fork computing the same thing two different ways.
+8. During any migration, mark the legacy TypeScript calculation `ACTIVE`, `LEGACY`, `COMPATIBILITY_ONLY`, or `DEPRECATED` in a code comment at the call site — never let TS and Java quietly diverge with no marker of which one is real.
+9. Any TS↔Java calculation migration requires parity tests against deterministic inputs (the existing `StrategyParityTest.java` / TS-side parity suites are the pattern to extend, not a one-off).
+10. Performance claims require measurement, not assertion. **Do not migrate a component to Java simply because Java is generally faster** — profile the actual bottleneck first.
+11. All existing safety invariants apply unchanged to Java exactly as to TypeScript: `PAPER_TRADING_ONLY=true`, `LIVE_NO_GO` unless `evaluateLiveReadiness()` says otherwise, `consensusApprovalThreshold >= 0.75`, `minIndependentAgreeingAgents >= 2`, no bypass of `news_veto`, RiskEngine, OMS, BrokerManager, reconciliation, or the kill switch.
+12. Before creating any new quant/indicator/strategy calculation in TypeScript, check `quant-core-java/` for an existing implementation first.
+
+**AI development checklist (new engine feature):**
+- [ ] Search `quant-core-java/` for an existing implementation
+- [ ] Search TypeScript for a legacy/duplicate implementation
+- [ ] Identify the authoritative owner (TS or Java) for this calculation
+- [ ] Confirm no split-brain path (both TS and Java independently computing the same signal)
+- [ ] Add parity tests if migrating an existing TS calculation to Java
+- [ ] Confirm the safety boundary holds (no direct broker/OMS/RiskEngine access from Java)
+- [ ] Measure performance if a performance claim motivates the change
+- [ ] Update `docs/architecture/JAVA_QUANT_CORE.md` (or the relevant architecture doc)
+
+**What this does *not* require:** the React UI, Express/API layer, CLI, persistence, and safety controls stay TypeScript/Node — this policy governs new quant/indicator/strategy compute only, not an automatic migration of the application shell.
+
 ---
 
 # 1. System Core Architecture & Execution Spine
@@ -402,7 +431,7 @@ Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessio
 
 **Daily Goal Campaign** (optional, `settings.campaign_enabled` default off): attribution + BUY soft-lock + effort telemetry + opening-surge nudges. Full contract: [`ARGUS_CAMPAIGN_TRACKER.md`](ARGUS_CAMPAIGN_TRACKER.md). Does **not** lower consensus, enable QUANT, or bypass OMS.
 
-**News (24/7 intel):** `NewsEngine` uses RTH vs off-hours poll intervals (`config/runtimeIntervals.json`). High-impact off-hours items may stage as `STAGED_FOR_OPEN`; `MarketOpenNewsConfluence` confirms/contradicts at open via gated `emitTradeIdea`. Gate 14 `news_veto` still reads `news_clusters` (direction-blind). Historical design snapshot: `ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md` (immutable).
+**News (24/7 intel):** `NewsEngine` uses RTH vs off-hours poll intervals (`config/runtimeIntervals.json`). High-impact off-hours items may stage as `STAGED_FOR_OPEN`; `MarketOpenNewsConfluence` confirms/contradicts at open via gated `emitTradeIdea`. Gate 14 `news_veto` still reads `news_clusters` (direction-blind). Historical design snapshot: `docs/audits/archive/ARGUS_PHASE_F_NEWS_ARCHITECTURE_AUDIT.md` (immutable).
 
 ## Required operator actions (paper)
 

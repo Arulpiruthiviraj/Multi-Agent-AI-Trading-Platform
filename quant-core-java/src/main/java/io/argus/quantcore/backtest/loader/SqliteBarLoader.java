@@ -34,6 +34,14 @@ public final class SqliteBarLoader implements AutoCloseable {
         String absolutePath = java.nio.file.Path.of(sqliteDbPath).toAbsolutePath().normalize().toString();
         org.sqlite.SQLiteConfig config = new org.sqlite.SQLiteConfig();
         config.setReadOnly(true);
+        // Node.js is the sole writer of data/argus.db (CLAUDE.md: "One writer... second process on
+        // the same file has been seen to report false SQLITE_CORRUPT"). This connection stays
+        // read-only (never a write path) - busyTimeout only makes a reader wait gracefully for a
+        // few hundred ms if it catches Node mid-write, instead of immediately throwing SQLITE_BUSY.
+        // journal_mode itself is not set here: WAL is a property of the database file, already
+        // whatever Node's own connection configured - a read-only connection cannot and should not
+        // try to change it.
+        config.setBusyTimeout(5000);
         this.connection = DriverManager.getConnection("jdbc:sqlite:" + absolutePath, config.toProperties());
     }
 

@@ -86,6 +86,40 @@ Port **3000** is hardcoded. `PORT` is unused. Without `AUTH_PASSWORD`, the API b
 
 ---
 
+## Architecture Direction
+
+Argus uses a hybrid architecture, growing incrementally rather than in one rewrite:
+
+**TypeScript/Node** owns the application/API layer, browser/UI communication (WebSocket + React),
+CLI (`argus-cli.ts`), orchestration (`ecosystem-dev.ts`, `argus.sh`), configuration, and the
+non-performance-critical workflows — this includes the entire protected trading spine below.
+
+**Java 26 engine** (`quant-core-java/`) owns quantitative calculations, indicators, strategy
+calculations, strategy evaluation, and high-throughput/parallelizable market computation, as an
+additive, advisory-only, isolated module — see `docs/architecture/JAVA_QUANT_CORE.md`. It is not
+currently authoritative for anything in the live/paper trading path (see "Engine Authority Rule"
+below for the *forward-looking* policy on new work, not a claim about today's runtime).
+
+### Engine Authority Rule
+
+For **new** performance-critical trading computation, the Java 26 engine is the preferred
+authoritative implementation target — do not create a new TypeScript implementation when an
+authoritative Java implementation already exists for that calculation. This avoids duplicate
+calculations, split-brain decisions (two engines computing competing signals), and multiple order
+paths. Full policy: `CLAUDE.md`'s "Java 26 Engine Authority" section.
+
+All trading continues through the one protected decision path, unchanged by this policy:
+
+```
+Market Data → Idea agents (incl. Java-backed Quant signals where wired) → ChiefTraderAgent
+  → RiskAgent → RiskEngine (24 gates) → OrderManagementService → BrokerManager → Broker
+```
+
+This policy does **not** require migrating the React UI, Express/API layer, CLI, persistence, or
+safety controls to Java — those stay TypeScript/Node.
+
+---
+
 ## Prerequisites
 
 | Requirement | Notes |

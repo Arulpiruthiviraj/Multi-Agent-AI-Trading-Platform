@@ -1818,6 +1818,33 @@ v2Router.get('/quant-core/health', async (_req, res) => {
   }
 });
 
+// Recent shadow-parity divergences (ParityComparator.ts, logged by QuantCoreBridge to the durable
+// observability_events table via structuredLogger.warn - never a separate in-memory store, so a
+// restart doesn't lose them). Read-only, real data only - an empty result honestly means either
+// the bridge is disabled or no divergence has actually been recorded yet, never fabricated rows.
+v2Router.get('/quant-core/parity', async (req, res) => {
+  try {
+    const { observabilityEvents } = await import('../db/schema');
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '50'), 10) || 50));
+    const rows = await db.select().from(observabilityEvents)
+      .where(eq(observabilityEvents.eventType, 'QUANT_CORE_PARITY_DIVERGENCE'))
+      .orderBy(desc(observabilityEvents.ts))
+      .limit(limit);
+    const divergences = rows.map((r) => {
+      let payload: any = null;
+      try { payload = r.payload ? JSON.parse(r.payload) : null; } catch { payload = null; }
+      return {
+        ts: new Date(r.ts).toISOString(),
+        symbol: r.symbol,
+        divergences: payload?.divergences ?? [],
+      };
+    });
+    res.json({ ok: true, count: divergences.length, divergences });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ==========================================================================================
 // Daily campaign tracker (CampaignTracker.ts) — status + settings. Flag-gated; does not
 // bypass RiskEngine/OMS/consensus. Budget still flows through settings.budget.

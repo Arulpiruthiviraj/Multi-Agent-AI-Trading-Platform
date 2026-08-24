@@ -74,6 +74,14 @@ Advanced/debug: `OPERATOR_SELECTED` + explicit symbols.
 | Kronos | UNAVAILABLE | No historical forecast store |
 | ChiefTrader | CONSENSUS_MATH_REPLAY | Not live EventBus + LLM debate |
 
+**Read this table as a scope boundary, not a partial degradation:** every real historical replay run
+evaluates against an explicitly-scoped **QuantEngine + TechnicalAgent** quorum only. FundamentalAgent,
+MacroAgent, NewsAgent (outside the golden_replay fixture), and Kronos do not vote — not because they
+failed, but because no point-in-time fundamentals/macro/news/forecast ledger exists yet to replay them
+against honestly. This means replay's 2-independent-agent consensus bar draws from a structurally
+smaller voter pool than a live session, which can legitimately be reached or missed for reasons a live
+session wouldn't share. See `docs/audits/BACKTEST_FEATURE_PARITY_AUDIT.md` for the full analysis.
+
 ## Consensus
 
 - Mode: `CONSENSUS_MATH_REPLAY`

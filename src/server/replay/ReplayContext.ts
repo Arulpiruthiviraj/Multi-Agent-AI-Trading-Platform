@@ -54,6 +54,18 @@ export interface ReplayConfig {
   maxPortfolioExposure: number;
   randomSeed: number;
   speed: ReplaySpeed;
+  /**
+   * Daily Goal Campaign simulation (additive, off by default - matches settings.campaign_enabled's
+   * own default-off). Advisory/soft-lock only, same as live: never lowers consensus, never invents
+   * parallel sizing, never calls placeOrder/OMS directly - it only skips a BUY idea before
+   * submitThroughRiskAndOms is called for it. See CampaignTracker.ts for the live equivalent this
+   * mirrors (a separate, isolated simulation - live's in-memory campaignBuyLock/ideaGenerationGate
+   * singletons are never touched from replay).
+   */
+  campaignEnabled: boolean;
+  dailyTargetAmount: number;
+  dailyTargetType: 'DOLLAR' | 'PERCENT';
+  targetAchievedAction: 'LOCK_AND_IDLE' | 'TRAIL_STOPS_ONLY' | 'CONTINUE';
 }
 
 export interface ReplayEvent {
@@ -149,6 +161,22 @@ export interface ActiveReplaySession {
   /** Coarse per-stage wall-clock timing (replay processing time, not simulated market latency). */
   stageDurations: Record<string, { totalMs: number; count: number }>;
   replayStartedAtMs: number;
+  /** Daily Goal Campaign simulation state - see ReplayConfig.campaignEnabled's header comment. */
+  campaign: {
+    /** NY trading-date string the BUY soft-lock currently applies to, or null if unlocked. Compared
+     *  directly against the current trading date on every check - a stale prior-day lock therefore
+     *  never needs an explicit day-boundary reset step, it just naturally stops matching. */
+    lockedForDate: string | null;
+    lockAction: 'LOCK_AND_IDLE' | 'TRAIL_STOPS_ONLY' | null;
+    /** Realized P&L accumulated so far for each NY trading date seen in this replay. */
+    dailyRealizedByDate: Map<string, number>;
+    /** Every NY trading date on which the target was reached (locked or CONTINUE alike). */
+    daysTargetMet: Set<string>;
+    /** Equity peak observed after each date's target-reached moment, for post-target drawdown. */
+    postTargetEquityPeakByDate: Map<string, number>;
+    /** Worst post-target-reached drawdown fraction across the whole replay (0-1). */
+    postTargetMaxDrawdownPct: number;
+  };
 }
 
 export interface ReplayTradeRecord {
@@ -248,6 +276,10 @@ export function defaultReplayConfig(partial?: Partial<ReplayConfig>): ReplayConf
     maxPortfolioExposure: 1,
     randomSeed: 1,
     speed: 'MAX',
+    campaignEnabled: false,
+    dailyTargetAmount: 0,
+    dailyTargetType: 'DOLLAR',
+    targetAchievedAction: 'CONTINUE',
     ...partial,
   };
 }

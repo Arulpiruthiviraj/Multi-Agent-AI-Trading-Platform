@@ -4,9 +4,16 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { WAREHOUSE_TIMEFRAMES, ingestWarehouseDataset } from '../research/ingestAlpacaWarehouse';
-import type { CanonicalDataset } from '../research/ohlcvTypes';
+import type { CanonicalDataset, ResearchBar } from '../research/ohlcvTypes';
 import { loadGoldenReplayDataset } from './loadGoldenReplayDataset';
 import { replaySafety } from './replaySafety';
+// Decoupled registry, not a direct BrokerManager import - HistoricalDataProviderRegistry.ts is not
+// on architecture.protection.test.ts's ALLOWED_BROKER_MANAGER_IMPORTERS allowlist, same reason
+// HistoricalDataGateway.ts itself doesn't import BrokerManager directly (see historicalBarProvider.ts's
+// own header). BrokerManager.applyMarketDataBinding() registers the real IBKR reqHistoricalData
+// bridge here whenever ibkr_gateway becomes the active broker; this file only ever reads it.
+import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
+import { expectedBarCountForWindow, historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 
 function mapFrequencyToAlpaca(frequency: string): string | null {
   const f = frequency.toLowerCase();
@@ -28,6 +35,21 @@ function mapFrequencyToAlpaca(frequency: string): string | null {
   const tf = map[f] ?? (WAREHOUSE_TIMEFRAMES as readonly string[]).find((x) => x.toLowerCase() === f) ?? null;
   if (f === '30m' || f === '30min') return null; // honest: Alpaca warehouse list has no 30Min
   return tf;
+}
+
+/**
+ * IbkrSocketSession.requestHistoricalBars only maps '1Day'/'1D'/'day', '1Min'/'1T', '5Min' to a
+ * real BarSizeSetting (see mapTimeframeToIbBarSize in IbkrSocketSession.ts) - honestly scoped to
+ * what that bridge actually supports today, not claiming 15m/1h/30m the way the Alpaca path can.
+ */
+function mapFrequencyToIbkr(frequency: string): string | null {
+  const f = frequency.toLowerCase();
+  const map: Record<string, string> = {
+    '1d': '1Day', '1day': '1Day', day: '1Day',
+    '1m': '1Min', '1min': '1Min',
+    '5m': '5Min', '5min': '5Min',
+  };
+  return map[f] ?? null;
 }
 
 export type ProviderAvailability = 'AVAILABLE' | 'DATA_PROVIDER_UNAVAILABLE' | 'UNAUTHENTICATED';
@@ -102,6 +124,84 @@ const alpacaProvider: HistoricalDataProvider = {
   },
 };
 
+/**
+ * Real IBKR Gateway historical bars, reusing the exact same reqHistoricalData bridge
+ * (IBGatewaySocketAdapter.getHistoricalBars -> IbkrSocketSession.requestHistoricalBars) that
+ * HistoricalDataGateway already uses for the live Quant/backtest path - not a second IBKR client.
+ * Only available while ibkr_gateway is the actively connected broker (BrokerManager registers the
+ * bridge on broker switch); otherwise this stays DATA_PROVIDER_UNAVAILABLE, never a fake connection.
+ */
+const ibkrProvider: HistoricalDataProvider = {
+  id: 'ibkr',
+  describe() {
+    const active = getRegisteredHistoricalBarProvider()?.id === 'ibkr_gateway';
+    return {
+      id: 'ibkr',
+      name: 'Interactive Brokers historical (IB Gateway)',
+      availability: active ? 'AVAILABLE' : 'DATA_PROVIDER_UNAVAILABLE',
+      supportedMarkets: ['US'],
+      supportedFrequencies: ['1Day', '1Min', '5Min'],
+      historicalDepth: 'reqHistoricalData duration string: up to 365D per request, 2Y beyond that.',
+      dataQuality: 'Assessed after download against expected bar count for the window. Incomplete fetch is not GREEN.',
+      rateLimits: 'IB Gateway historical-data pacing (serialized per session via IbkrSocketSession.histChain).',
+      authenticationStatus: active ? 'ibkr_gateway_connected' : 'ibkr_gateway_not_active — connect via BrokerManager (Settings > Brokers) to enable',
+      note: active
+        ? 'Real IB reqHistoricalData bars (WhatToShow=TRADES, unadjusted). Not a live broker call from replay itself — reads via the already-registered bridge.'
+        : 'IB Gateway is not the currently active/connected broker. Bars are not invented — connect IBKR Gateway first.',
+    };
+  },
+  async fetch(opts) {
+    const provider = getRegisteredHistoricalBarProvider();
+    if (!provider || provider.id !== 'ibkr_gateway') {
+      return { error: 'DATA_PROVIDER_UNAVAILABLE: IB Gateway is not the active broker.', code: 'DATA_PROVIDER_UNAVAILABLE' };
+    }
+    const timeframe = mapFrequencyToIbkr(opts.frequency);
+    if (!timeframe) {
+      return {
+        error: `DATA_UNAVAILABLE: IBKR historical bridge supports 1Day/1Min/5Min only. Requested ${opts.frequency}.`,
+        code: 'DATA_UNAVAILABLE',
+      };
+    }
+    // Routes through HistoricalDataGateway's own SQLite (ohlcv_bars) cache-first ensureBars(), the
+    // same path the live Quant/backtest engine uses — a replay re-run over the same window never
+    // re-hits IB Gateway's historical-data pacing limit, it's satisfied entirely from cache.
+    let fetched: Awaited<ReturnType<typeof historicalDataGateway.getBars>>;
+    try {
+      await historicalDataGateway.ensureBars(opts.symbol, timeframe, opts.startMs, opts.endMs);
+      fetched = await historicalDataGateway.getBars(opts.symbol, timeframe, opts.startMs, opts.endMs);
+    } catch (e: any) {
+      return { error: `DATA_UNAVAILABLE: IBKR historical fetch failed - ${e?.message || e}`, code: 'DATA_UNAVAILABLE' };
+    }
+    if (!fetched.length) {
+      return { error: `DATA_UNAVAILABLE: IBKR returned 0 bars for ${opts.symbol} (${timeframe}).`, code: 'DATA_UNAVAILABLE' };
+    }
+    const bars: ResearchBar[] = fetched
+      .filter((b) => b.timestamp >= opts.startMs && b.timestamp <= opts.endMs)
+      .map((b) => ({ timestamp: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
+    const expected = expectedBarCountForWindow(timeframe, opts.startMs, opts.endMs);
+    const coverage = expected > 0 ? bars.length / expected : 1;
+    const dataset: CanonicalDataset = {
+      schemaVersion: 1,
+      datasetId: `ibkr_${opts.symbol}_${timeframe}`,
+      symbol: opts.symbol,
+      timezone: 'America/New_York',
+      frequency: opts.frequency,
+      adjustmentPolicy: 'RAW',
+      missingBarPolicy: 'count_not_fill',
+      duplicatePolicy: 'reject',
+      source: 'ibkr_gateway',
+      sourceVersion: 'v1',
+      market: 'US',
+      startTimestamp: bars[0].timestamp,
+      endTimestamp: bars[bars.length - 1].timestamp,
+      qualityStatus: coverage >= 0.95 ? 'GREEN' : coverage >= 0.5 ? 'YELLOW' : 'RED',
+      provenance: 'REAL_MARKET_DATA',
+      bars,
+    };
+    return dataset;
+  },
+};
+
 function unavailable(id: string, name: string): HistoricalDataProvider {
   return {
     id,
@@ -147,10 +247,10 @@ const fixtureProvider: HistoricalDataProvider = {
 const registry: HistoricalDataProvider[] = [
   alpacaProvider,
   fixtureProvider,
+  ibkrProvider,
   unavailable('polygon', 'Polygon/Massive'),
   unavailable('twelvedata', 'Twelve Data'),
   unavailable('alphavantage', 'Alpha Vantage'),
-  unavailable('ibkr', 'Interactive Brokers historical'),
 ];
 
 export function listHistoricalProviders(): HistoricalProviderDescriptor[] {

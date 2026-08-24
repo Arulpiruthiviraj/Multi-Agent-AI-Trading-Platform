@@ -1,7 +1,7 @@
 ﻿# ARGUS NO-TRADE REMEDIATION STATUS
 
 **Date:** 2026-08-20  
-**Source audit:** `ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md`  
+**Source audit:** `docs/audits/archive/ARGUS_LIVE_NO_TRADE_FORENSIC_AUDIT.md`  
 **Scope:** Safe remediations only — no consensus floor changes, no RiskEngine/OMS bypass, no LIVE arming.
 
 ## Explicit safety floors (unchanged)
@@ -105,7 +105,7 @@
 
 ## 6. Performance-audit critical fixes (2026-08-20)
 
-Source: `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md`. Consensus **0.75 / min 2** unchanged; no RiskEngine/OMS/BrokerManager bypass; PAPER-safe.
+Source: `docs/audits/archive/ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md`. Consensus **0.75 / min 2** unchanged; no RiskEngine/OMS/BrokerManager bypass; PAPER-safe.
 
 ### 6a. Silent NULL `trades.profit_loss` (OMS)
 
@@ -169,7 +169,7 @@ Prefer Autobot OFF until supervise; expect consensus scarcity; do not lower floo
 
 ## 9. Health-label honesty + first-fill forensic (2026-08-21 engineering)
 
-**Verdict:** NOT unsupervised; **READY WITH CONDITIONS** / `SUPERVISED_PAPER_OPERATION_READY` mechanical GO only. Consensus **0.75 / min 2** unchanged. No RiskEngine/`news_veto`/OMS bypass. PAPER only. Autobot **not** auto-enabled. Protocol: `ARGUS_CONTROLLED_PAPER_SOAK.md`.
+**Verdict:** NOT unsupervised; **READY WITH CONDITIONS** / `SUPERVISED_PAPER_OPERATION_READY` mechanical GO only. Consensus **0.75 / min 2** unchanged. No RiskEngine/`news_veto`/OMS bypass. PAPER only. Autobot **not** auto-enabled. Protocol: `docs/audits/archive/ARGUS_CONTROLLED_PAPER_SOAK.md`.
 
 ### 9a. Pipeline health semantics (P1)
 
@@ -189,7 +189,7 @@ Misleading `DEAD` when enabled/available but waiting for `MARKET_DATA` (Autobot 
 - On FAIL: `TradingEngine.toggle({enabled:false})` + forensic BUY soft-lock (`ideaGenerationGate`) + `FORENSIC_CHECKPOINT_FAILED`.
 - On PASS: `FORENSIC_CHECKPOINT_PASSED`; supervised continue.
 - Artifacts: `data/logs/first_fill_forensic_YYYY-MM-DD.json` + `ARGUS_CONTROLLED_PAPER_SOAK_AUDIT_YYYY-MM-DD.md` + `data/.first_fill_forensic_checkpoint.json`.
-- Protocol doc: **`ARGUS_CONTROLLED_PAPER_SOAK.md`**.
+- Protocol doc: **`docs/audits/archive/ARGUS_CONTROLLED_PAPER_SOAK.md`**.
 
 ### Explicit non-goals (this pass)
 

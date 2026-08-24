@@ -27,6 +27,7 @@ import { getTradingDateStr } from '../core/TradingCalendar';
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { applySubordinateAssetNotionalCap } from '../multiAsset/ideaEligibility';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
+import { reservePendingCapital, snapshotReservedNotional } from './PendingCapitalReservations';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { campaignVelocityMaxTradeDollars } from '../services/campaignIntraday';
 import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
@@ -642,8 +643,20 @@ export class RiskEngine {
                     pendingBuys,
                 });
                 const requestedNotional = proposal.side === 'BUY' ? maxQuantity * currentPrice : 0;
-                const capitalGuard = evaluateAllocationGuard(capitalSnap, proposal.side, requestedNotional);
+                // Real concurrency gap closed (docs/audits/archive/ARGUS_CAPITAL_AUDIT_REPORT.md):
+                // the DB-backed pendingBuys above cannot see a same-instant sibling BUY approval
+                // still awaiting OMS's async trades-row insert - fold in the in-memory reservation
+                // for exactly that window (excludes this evaluation's own traceId so a retried
+                // evaluation for the same idea never double-counts itself).
+                const reservedInFlight = snapshotReservedNotional(proposal.traceId);
+                const capitalSnapWithInFlight = reservedInFlight > 0
+                    ? { ...capitalSnap, reservedPendingBuys: capitalSnap.reservedPendingBuys + reservedInFlight, used: capitalSnap.used + reservedInFlight, remaining: Math.max(0, capitalSnap.remaining - reservedInFlight) }
+                    : capitalSnap;
+                const capitalGuard = evaluateAllocationGuard(capitalSnapWithInFlight, proposal.side, requestedNotional);
                 recordGate('argus_capital_allocation', capitalGuard.passed, capitalGuard);
+                if (proposal.side === 'BUY' && capitalGuard.passed) {
+                    reservePendingCapital(proposal.traceId, requestedNotional);
+                }
                 eventBus.emit(EVENTS.CAPITAL_CHECK, {
                     traceId: proposal.traceId,
                     transactionId: proposal.transactionId,

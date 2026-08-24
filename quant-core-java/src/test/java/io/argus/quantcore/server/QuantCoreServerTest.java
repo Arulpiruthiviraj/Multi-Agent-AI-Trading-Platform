@@ -10,7 +10,10 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -143,5 +146,81 @@ class QuantCoreServerTest {
         assertThat(body.get("side")).isEqualTo("BUY");
         assertThat(Json.asDouble(body.get("confidence"))).isEqualTo(1.0);
         assertThat(body.get("strategyId")).isEqualTo("MOMENTUM_BREAKOUT");
+    }
+
+    @Test
+    void institutionalFactorsComputesACompositeForARecentBreakoutAfterAFlatPeriod() throws Exception {
+        // See FactorAlphaEngineTest's header for why a "flat then breakout" construction, not a
+        // steady uptrend, deterministically produces a positive momentum Z-score.
+        Random rnd = new Random(4242);
+        double price = 100;
+        List<Object> bars = new ArrayList<>();
+        for (int i = 0; i < 200; i++) {
+            double dailyReturn = i < 150 ? rnd.nextGaussian() * 0.001 : 0.01 + rnd.nextGaussian() * 0.001;
+            double open = price;
+            double close = price * (1 + dailyReturn);
+            double high = Math.max(open, close) * (1.0005 + Math.abs(rnd.nextGaussian()) * 0.0003);
+            double low = Math.min(open, close) * (1 - 0.0005 - Math.abs(rnd.nextGaussian()) * 0.0003);
+            bars.add(Map.of("timestampMs", (double) i, "open", open, "high", high, "low", low,
+                "close", close, "volume", 1_000_000.0 + Math.max(0, i - 150) * 5000));
+            price = close;
+        }
+        var res = post("/api/v1/institutional/factors/AAPL", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("symbol")).isEqualTo("AAPL");
+        assertThat(Json.asDouble(body.get("momentum"))).isGreaterThan(0);
+        assertThat(body.get("composite")).isNotNull();
+        assertThat(body.get("orderFlowProxyIsRealOrderFlow")).isEqualTo(false);
+    }
+
+    @Test
+    void institutionalFactorsReturns422WithTooFewBars() throws Exception {
+        var res = post("/api/v1/institutional/factors/AAPL", Map.of("bars", List.of(
+            Map.of("timestampMs", 0.0, "open", 100.0, "high", 101.0, "low", 99.0, "close", 100.5, "volume", 1000.0))));
+        assertThat(res.statusCode()).isEqualTo(422);
+    }
+
+    @Test
+    void institutionalFactorsRejectsMissingBarsField() throws Exception {
+        var res = post("/api/v1/institutional/factors/AAPL", Map.of());
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void institutionalPairsDetectsCointegrationForAConstructedCointegratedPair() throws Exception {
+        Random rnd = new Random(2468);
+        int n = 400;
+        List<Object> primaryBars = new ArrayList<>();
+        List<Object> pairBars = new ArrayList<>();
+        double bPrice = 100, noise = 0;
+        for (int t = 0; t < n; t++) {
+            bPrice += rnd.nextGaussian() * 0.4;
+            noise = 0.35 * noise + rnd.nextGaussian() * 0.25;
+            double aPrice = 1.5 * bPrice + noise;
+            pairBars.add(barJson(t, bPrice));
+            primaryBars.add(barJson(t, aPrice));
+        }
+
+        var res = post("/api/v1/institutional/pairs", Map.of(
+            "primarySymbol", "A", "pairSymbol", "B",
+            "primaryBars", primaryBars, "pairBars", pairBars, "zScoreWindow", 60.0));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("primarySymbol")).isEqualTo("A");
+        assertThat(body.get("pairSymbol")).isEqualTo("B");
+        assertThat(body.get("cointegrated")).isEqualTo(true);
+        assertThat(Json.asDouble(body.get("hedgeRatio"))).isCloseTo(1.5, org.assertj.core.data.Offset.offset(0.2));
+        assertThat(body.get("adf")).isNotNull();
+    }
+
+    @Test
+    void institutionalPairsRejectsMissingFields() throws Exception {
+        var res = post("/api/v1/institutional/pairs", Map.of("primarySymbol", "A"));
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    private static Map<String, Object> barJson(int t, double close) {
+        return Map.of("timestampMs", (double) t, "open", close, "high", close, "low", close, "close", close, "volume", 1000.0);
     }
 }

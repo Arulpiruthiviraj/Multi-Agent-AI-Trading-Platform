@@ -42,7 +42,7 @@ Price appreciation cannot push you over the limit **for what "used" tracks** (co
 **Never exceeded.** Direct query against `data/argus.db`:
 
 - Current open positions: GLD (1 share, cost basis $387.97) + NVDA (1 share, cost basis $206.85) = **$594.82 total cost basis**, well under the $2,000 budget.
-- Every historical `argus_capital_allocation` gate evaluation in `risk_gate_results` has **passed** (6 of 6, 0 failures) — there is no recorded instance of this gate ever blocking a trade for budget reasons, and no evidence total exposure ever approached the ceiling. (Small sample — consistent with consensus-starvation notes in [`docs/ARGUS_CONSENSUS_FORENSICS.md`](docs/ARGUS_CONSENSUS_FORENSICS.md): very few BUYs have ever been approved at all.)
+- Every historical `argus_capital_allocation` gate evaluation in `risk_gate_results` has **passed** (6 of 6, 0 failures) — there is no recorded instance of this gate ever blocking a trade for budget reasons, and no evidence total exposure ever approached the ceiling. (Small sample — consistent with consensus-starvation notes in [`docs/ARGUS_CONSENSUS_FORENSICS.md`](../../ARGUS_CONSENSUS_FORENSICS.md): very few BUYs have ever been approved at all.)
 
 ## 4. Identified vulnerabilities / edge cases
 

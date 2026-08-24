@@ -35,7 +35,10 @@ const EXCHANGE_OPTIONS = ['NYSE', 'NASDAQ', 'AMEX', 'ALL'];
 const TIMEZONE_OPTIONS = ['America/New_York', 'UTC', 'America/Chicago', 'America/Los_Angeles'];
 // Real registered ids only (HistoricalDataProviderRegistry.ts) - 'alpaca_historical' and
 // 'local_parquet' are not registered providers and would resolve to DATA_PROVIDER_UNAVAILABLE.
-const DATA_PROVIDER_OPTIONS = ['golden_replay', 'alpaca'];
+// 'ibkr' is only AVAILABLE while IB Gateway is the actively connected broker (BrokerManager
+// registers the reqHistoricalData bridge on broker switch); otherwise it also resolves to
+// DATA_PROVIDER_UNAVAILABLE, same as any other listed-but-not-connected provider.
+const DATA_PROVIDER_OPTIONS = ['golden_replay', 'alpaca', 'ibkr'];
 // value must match FullArgusReplayEngine.ts's freqOk check (replaySafety.supportedFrequencies,
 // case-insensitive, plus a literal '1Day' fallback) - label is just the readable form.
 const FREQUENCY_OPTIONS = [
@@ -76,7 +79,7 @@ const FIELD_TIPS: Record<string, string> = {
   exchange: 'Not yet enforced by the replay engine - stored with the run but does not currently apply venue-specific holiday/session calendars.',
   timezone: "Reference timezone used to classify each bar's market session (regular / pre-market / after-hours) and weekday. Default America/New_York matches Argus's live session logic.",
   frequency: 'Bar resolution. golden_replay only ever returns 1Day fixture bars regardless of this setting; intraday resolutions (1Hour/15Min/5Min/1Min) require the alpaca provider with real ALPACA_API_KEY/ALPACA_SECRET_KEY configured.',
-  dataProvider: 'Historical data source. golden_replay = deterministic fixture bars for accounting/look-ahead tests, not real market data. alpaca = real IEX bars via Alpaca (requires API keys). Polygon/Twelve Data/Alpha Vantage/IBKR are listed in Data Providers below but are not implemented and return DATA_PROVIDER_UNAVAILABLE.',
+  dataProvider: 'Historical data source. golden_replay = deterministic fixture bars for accounting/look-ahead tests, not real market data. alpaca = real IEX bars via Alpaca (requires API keys). ibkr = real IB Gateway reqHistoricalData bars, cached in ohlcv_bars — only AVAILABLE while IB Gateway is the currently connected/active broker, otherwise DATA_PROVIDER_UNAVAILABLE. Polygon/Twelve Data/Alpha Vantage are listed in Data Providers below but are not implemented and return DATA_PROVIDER_UNAVAILABLE.',
   allocationBudget: "Ceiling Argus's own capital-allocation risk gate enforces on top of Initial Capital (budget minus open positions minus pending BUYs). It does not add real buying power - fills still need enough actual cash in Initial Capital.",
   costProfile: 'Slippage/commission/spread model from config/replaySafety.json. Base & REALISTIC_COST: $0.005/share, 2bps spread, 5bps slippage. Conservative: $0.01/share, 5bps/10bps. Optimistic: near-zero (1bps/1bps). ZERO_COST_RESEARCH: 0/0/0 - theoretical only, flagged as not live-readiness evidence. CUSTOM_COST currently mirrors Base.',
   aiMode: 'DISABLED (default) runs deterministic quant rules only - no LLM calls, no fabricated votes. RECORDED_DECISION_REPLAY and LIVE_MODEL_REPLAY route through the real AIRouter, subject to replaySafety.json aiCallLimit/aiCostLimitUsd/aiTimeoutMs.',
@@ -324,26 +327,40 @@ export default function HistoricalReplayLab() {
       .catch((e) => setError(e.message));
     return () => {
       if (pollRef.current) clearInterval(pollRef.current);
-      pollAbortRef.current?.abort();
+      pollAbortRef.current?.abort('component-unmounted');
     };
   }, []);
 
+  // Real bug fixed: refreshRun can be called again (by the 750ms poll tick) before a prior call's
+  // own fetches have resolved - e.g. when the server-side status/trades/events/equity requests
+  // take longer than 750ms. The prior call's Promise.all then rejects with AbortError once this
+  // newer call aborts its signal, and that rejection used to propagate all the way out to
+  // createAndStart's try/catch, which displayed it as a real error via setError(e.message) - the
+  // browser's default AbortError message, literally "signal is aborted without reason". Being
+  // superseded by a newer poll is expected, benign concurrency, not a failure: swallow exactly
+  // that case (this call's own signal aborting) and return null so callers skip processing this
+  // stale response instead of surfacing it as an error. Any other thrown error still propagates.
   const refreshRun = useCallback(async (replayId: string) => {
-    pollAbortRef.current?.abort();
+    pollAbortRef.current?.abort('superseded-by-newer-replay-status-request');
     const controller = new AbortController();
     pollAbortRef.current = controller;
     const { signal } = controller;
-    const [status, tradesRes, eventsRes, equityRes] = await Promise.all([
-      fetch(`/api/v2/research/replay/${replayId}`, { signal }).then((r) => r.json()),
-      fetch(`/api/v2/research/replay/${replayId}/trades`, { signal }).then((r) => r.json()).catch(() => ({ trades: [] })),
-      fetch(`/api/v2/research/replay/${replayId}/events`, { signal }).then((r) => r.json()).catch(() => ({ events: [] })),
-      fetch(`/api/v2/research/replay/${replayId}/equity`, { signal }).then((r) => r.json()).catch(() => ({ equity: [] })),
-    ]);
-    setRun(status);
-    setTrades(tradesRes.trades || status.trades || []);
-    setEvents((eventsRes.events || status.events || []).slice(-80));
-    setEquity(equityRes.equity || status.equity || []);
-    return status;
+    try {
+      const [status, tradesRes, eventsRes, equityRes] = await Promise.all([
+        fetch(`/api/v2/research/replay/${replayId}`, { signal }).then((r) => r.json()),
+        fetch(`/api/v2/research/replay/${replayId}/trades`, { signal }).then((r) => r.json()).catch(() => ({ trades: [] })),
+        fetch(`/api/v2/research/replay/${replayId}/events`, { signal }).then((r) => r.json()).catch(() => ({ events: [] })),
+        fetch(`/api/v2/research/replay/${replayId}/equity`, { signal }).then((r) => r.json()).catch(() => ({ equity: [] })),
+      ]);
+      setRun(status);
+      setTrades(tradesRes.trades || status.trades || []);
+      setEvents((eventsRes.events || status.events || []).slice(-80));
+      setEquity(equityRes.equity || status.equity || []);
+      return status;
+    } catch (e: any) {
+      if (e?.name === 'AbortError' || signal.aborted) return null;
+      throw e;
+    }
   }, []);
 
   function stopPolling() {
@@ -358,6 +375,7 @@ export default function HistoricalReplayLab() {
     pollRef.current = setInterval(async () => {
       try {
         const status = await refreshRun(replayId);
+        if (!status) return; // superseded by a newer tick's request; that one will update state instead
         const terminal = ['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED', 'DATA_UNAVAILABLE'].includes(status.status);
         // Wait until performance report is attached (COMPLETED used to race ahead of report build).
         if (terminal && (status.report || status.status !== 'COMPLETED' && status.status !== 'PARTIAL')) {

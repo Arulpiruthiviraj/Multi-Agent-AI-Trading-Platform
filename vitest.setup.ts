@@ -1,7 +1,8 @@
-import { afterAll } from 'vitest';
+import { afterAll, afterEach } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { resetPendingCapitalReservationsForTests } from './src/server/engines/PendingCapitalReservations';
 
 /**
  * Real bug this closes: BrokerAdapter.test.ts (and, as of this same investigation,
@@ -58,4 +59,14 @@ afterAll(() => {
   for (const suffix of ['', '-shm', '-wal']) {
     try { fs.unlinkSync(defaultDbPath + suffix); } catch { /* best-effort cleanup - may never have been created */ }
   }
+});
+
+// Real bug found this pass: RiskEngine.test.ts (and other files that call riskEngine.evaluateRisk()
+// directly, bypassing the real OMS release call) accumulate stale in-memory capital reservations
+// across tests within the same file - PendingCapitalReservations' module state only naturally
+// clears once OrderManagement.ts's executeOrder() releases it, which these unit tests never invoke.
+// One global reset here (not six individual test-file edits) keeps every test's capital-gate
+// assertions independent of what earlier tests in the same file approved.
+afterEach(() => {
+  resetPendingCapitalReservationsForTests();
 });

@@ -64,6 +64,8 @@ import { computeVolumeFeatures } from '../quant/indicators/volume';
 import type { CanonicalDataset, ResearchBar } from '../research/ohlcvTypes';
 import type { Evidence } from '../services/EvidenceAggregator';
 import { oms } from '../services/OrderManagement';
+import { getTradingDateStr } from '../core/TradingCalendar';
+import { resolveCampaignTargetDollars } from '../services/CampaignTracker';
 import { db } from '../db';
 import { replayRuns, riskAssessments, riskGateResults } from '../db/schema';
 import { asc, desc, eq } from 'drizzle-orm';
@@ -153,7 +155,8 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
   };
 }) {
   const traceId = `${replaySafety.replayTracePrefix}${session.replayId}-${session.clock.now()}-${opts.symbol}-${opts.side}-${crypto.randomUUID().slice(0, 8)}`;
-  const realizedBefore = session.broker.snapshotCosts().realizedPnl;
+  const costsBefore = session.broker.snapshotCosts();
+  const realizedBefore = costsBefore.realizedPnl;
   const waitP = waitReplayOrder(traceId, 8000);
   await riskEngine.evaluateRisk({
     traceId,
@@ -175,8 +178,12 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
   }
   await waitP;
   emit(session, 'RISK_GATE', { traceId, side: opts.side, exitReason: opts.exitReason }, opts.symbol);
-  const realizedAfter = session.broker.snapshotCosts().realizedPnl;
   const costsSnap = session.broker.snapshotCosts();
+  const realizedAfter = costsSnap.realizedPnl;
+  // Real per-order commission/slippage, not the broker's running total - matches how pnlDelta below
+  // already isolates this one order's realizedPnl contribution the same way.
+  const feesDelta = Number((costsSnap.feesPaid - costsBefore.feesPaid).toFixed(4));
+  const slippageDelta = Number((costsSnap.slippagePaid - costsBefore.slippagePaid).toFixed(4));
   const gateSnap = loadRiskGateSnapshots(traceId);
   const pushDecisionEvidence = (stageOutcome: 'RISK_REJECTED' | 'ORDER_FILLED' | 'ORDER_REJECTED_OTHER') => {
     if (!opts.decisionContext) return;
@@ -222,8 +229,8 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
         price: lastBuy?.averageFillPrice ?? pos.entryPrice,
         strategyId: opts.strategyId,
         traceId,
-        fees: 0,
-        slippage: 0,
+        fees: feesDelta,
+        slippage: slippageDelta,
         realizedPnl: null,
         executionModel: 'NEXT_BAR_OPEN',
         executionEnvironment: 'HISTORICAL_REPLAY',
@@ -256,8 +263,8 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
         price: lastSell?.averageFillPrice ?? 0,
         strategyId: opts.strategyId,
         traceId,
-        fees: 0,
-        slippage: 0,
+        fees: feesDelta,
+        slippage: slippageDelta,
         realizedPnl: pnlDelta,
         executionModel: 'NEXT_BAR_OPEN',
         executionEnvironment: 'HISTORICAL_REPLAY',
@@ -265,6 +272,7 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
       session.openStops.delete(opts.symbol);
       if (opts.side === 'SELL' && realizedAfter !== realizedBefore) {
         session.tradePnls.push(Number((realizedAfter - realizedBefore).toFixed(4)));
+        updateCampaignStateAfterRealizedFill(session, pnlDelta);
       }
       pushDecisionEvidence('ORDER_FILLED');
       emit(session, 'ORDER_FILLED', { side: 'SELL', exitReason: opts.exitReason || 'SELL', pnl: pnlDelta, executionModel: 'NEXT_BAR_OPEN' }, opts.symbol);
@@ -282,12 +290,77 @@ async function submitThroughRiskAndOmsTimed(session: ActiveReplaySession, opts: 
       emit(session, 'ORDER_REJECTED', { traceId, exitReason: opts.exitReason, rejectionGate: gateSnap.rejectionGate }, opts.symbol);
     }
   }
-  void costsSnap;
   return traceId;
 }
 
 function bumpNoTrade(session: ActiveReplaySession, reason: string) {
   session.noTrade[reason] = (session.noTrade[reason] || 0) + 1;
+}
+
+/**
+ * Daily Goal Campaign simulation (BACKTEST_FEATURE_PARITY_AUDIT.md's P4 gap). Entirely isolated from
+ * live CampaignTracker.ts's in-memory campaignBuyLock/ideaGenerationGate singletons - this only ever
+ * reads/writes session.campaign, computed from the replay's OWN tradeLedger and clock, never touching
+ * live state. Off by default (config.campaignEnabled=false), matching settings.campaign_enabled's own
+ * default-off. Disclosed simplification, same one already disclosed for the separate Java
+ * CampaignPolicySimulator built earlier: TRAIL_STOPS_ONLY applies the same BUY soft-lock as
+ * LOCK_AND_IDLE but does not additionally tighten trailing stops on open positions (that would mean
+ * reimplementing PortfolioMonitor.trailingStopPct math a second time inside replay - out of scope
+ * here; TRAIL_STOPS_ONLY's own live docs already separate "soft-lock" from "PortfolioMonitor already
+ * owns trailingStopPct exits" as two different concerns).
+ */
+function isCampaignBuyLockedToday(session: ActiveReplaySession): boolean {
+  if (!session.config.campaignEnabled) return false;
+  const today = getTradingDateStr(new Date(session.clock.now()));
+  return session.campaign.lockedForDate === today;
+}
+
+/** Called once per realized SELL fill (BUY fills never realize P&L, so never move progress). */
+function updateCampaignStateAfterRealizedFill(session: ActiveReplaySession, pnlDelta: number): void {
+  if (!session.config.campaignEnabled || !Number.isFinite(pnlDelta) || pnlDelta === 0) return;
+  const today = getTradingDateStr(new Date(session.clock.now()));
+  const c = session.campaign;
+  const priorRealized = c.dailyRealizedByDate.get(today) ?? 0;
+  const dailyRealized = priorRealized + pnlDelta;
+  c.dailyRealizedByDate.set(today, dailyRealized);
+
+  if (c.daysTargetMet.has(today)) return; // already handled today - avoid re-emitting/re-locking
+  const targetDollars = resolveCampaignTargetDollars(
+    session.config.allocationBudget,
+    session.config.dailyTargetAmount,
+    session.config.dailyTargetType,
+  );
+  if (targetDollars <= 0) return;
+  const progress = dailyRealized / targetDollars;
+  if (progress < 1.0) return;
+
+  c.daysTargetMet.add(today);
+  const action = session.config.targetAchievedAction;
+  if (action === 'LOCK_AND_IDLE' || action === 'TRAIL_STOPS_ONLY') {
+    c.lockedForDate = today;
+    c.lockAction = action;
+  }
+  emit(session, 'CAMPAIGN_TARGET_REACHED', {
+    tradingDate: today,
+    action,
+    dailyRealized: Number(dailyRealized.toFixed(4)),
+    targetDollars: Number(targetDollars.toFixed(4)),
+  });
+}
+
+/** Called once per tick alongside the real equity/drawdown update - tracks drawdown only for dates already past their target. */
+function updatePostTargetDrawdown(session: ActiveReplaySession, equity: number): void {
+  if (!session.config.campaignEnabled) return;
+  const today = getTradingDateStr(new Date(session.clock.now()));
+  if (!session.campaign.daysTargetMet.has(today)) return;
+  const c = session.campaign;
+  const priorPeak = c.postTargetEquityPeakByDate.get(today) ?? equity;
+  const peak = Math.max(priorPeak, equity);
+  c.postTargetEquityPeakByDate.set(today, peak);
+  if (peak > 0) {
+    const dd = (peak - equity) / peak;
+    if (dd > c.postTargetMaxDrawdownPct) c.postTargetMaxDrawdownPct = dd;
+  }
 }
 
 function votesFromEvidence(evidence: Evidence[]): DecisionAgentVote[] {
@@ -612,6 +685,14 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
     agentIdeaStats: {},
     stageDurations: {},
     replayStartedAtMs: Date.now(),
+    campaign: {
+      lockedForDate: null,
+      lockAction: null,
+      dailyRealizedByDate: new Map(),
+      daysTargetMet: new Set(),
+      postTargetEquityPeakByDate: new Map(),
+      postTargetMaxDrawdownPct: 0,
+    },
     tradePnls: [],
     tradeLedger: [],
     rejectedOrders: [],
@@ -629,6 +710,7 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
       },
       FundamentalAgent: { status: 'UNAVAILABLE', reason: 'Point-in-time fundamentals not loaded' },
       MacroAgent: { status: 'UNAVAILABLE', reason: 'Point-in-time macro releases not loaded' },
+      KronosForecastAgent: { status: 'UNAVAILABLE', reason: 'Point-in-time AI time-series forecasts not loaded in replay' },
       ChiefTrader: { status: 'ENABLED', reason: 'replayChiefTraderFromEvidence vote math (no live EventBus)' },
       RiskAgent: { status: 'ENABLED', reason: 'RiskEngine.evaluateRisk on replay path' },
       ExitIntelligenceEngine: {
@@ -1079,6 +1161,11 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
         continue;
       }
 
+      if (side === 'BUY' && isCampaignBuyLockedToday(session)) {
+        bumpNoTrade(session, 'CAMPAIGN_BUY_LOCKED');
+        emit(session, 'NO_TRADE', { reason: 'CAMPAIGN_BUY_LOCKED', lockAction: session.campaign.lockAction }, symbol);
+        continue;
+      }
       if (side === 'BUY' && session.openStops.has(symbol)) {
         bumpNoTrade(session, 'DUPLICATE_SIGNAL');
         emit(session, 'NO_TRADE', { reason: 'DUPLICATE_SIGNAL' }, symbol);
@@ -1116,6 +1203,7 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
   if (port.equity > session.peakEquity) session.peakEquity = port.equity;
   const dd = session.peakEquity > 0 ? (session.peakEquity - port.equity) / session.peakEquity : 0;
   session.equity.push({ t, equity: port.equity, cash: port.cash, drawdownPct: dd });
+  updatePostTargetDrawdown(session, port.equity);
   emit(session, 'PORTFOLIO_UPDATE', { equity: port.equity, cash: port.cash, drawdownPct: dd });
 }
 
@@ -1390,6 +1478,21 @@ async function runReplayLoop(id: string) {
       decisionEvidence,
       decisionEvidenceSummary,
       predictionOutcomeEvidence: decisionEvidenceSummary,
+      // Daily Goal Campaign simulation (BACKTEST_FEATURE_PARITY_AUDIT.md P4) - advisory-only, never
+      // fed back into sizing/consensus. daysTargetMet/postTargetMaxDrawdownPct are empty/0 whenever
+      // config.campaignEnabled is false (the default), never fabricated.
+      campaign: {
+        enabled: session.config.campaignEnabled,
+        dailyTargetType: session.config.dailyTargetType,
+        dailyTargetAmount: session.config.dailyTargetAmount,
+        targetAchievedAction: session.config.targetAchievedAction,
+        daysTargetMet: [...session.campaign.daysTargetMet].sort(),
+        dailyRealizedByDate: Object.fromEntries(
+          [...session.campaign.dailyRealizedByDate.entries()].map(([d, v]) => [d, Number(v.toFixed(4))]),
+        ),
+        postTargetMaxDrawdownPct: Number(session.campaign.postTargetMaxDrawdownPct.toFixed(4)),
+        note: 'TRAIL_STOPS_ONLY applies the same BUY soft-lock as LOCK_AND_IDLE in this simulation - it does not additionally tighten open positions\' trailing stops (that math stays PortfolioMonitor.trailingStopPct\'s alone, not reimplemented here).',
+      },
       performanceDiagnostics: {
         totalReplayDurationMs: Date.now() - session.replayStartedAtMs,
         stages: Object.fromEntries(

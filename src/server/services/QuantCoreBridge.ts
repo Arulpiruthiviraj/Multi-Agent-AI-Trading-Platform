@@ -178,6 +178,7 @@ export class QuantCoreBridgeService {
 
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/indicators/${encodeURIComponent(symbol)}`, {
+        headers: { 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) return;

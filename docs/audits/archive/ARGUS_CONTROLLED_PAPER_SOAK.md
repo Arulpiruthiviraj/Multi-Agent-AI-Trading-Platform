@@ -8,7 +8,7 @@
 **Do not** bypass `news_veto`, RiskEngine, OMS, or BrokerManager. Do not lower consensus to “get trades.”  
 **Do not** auto-enable Autobot from engineering or this protocol.
 
-Cross-links: `ARGUS_NO_TRADE_REMEDIATION_STATUS.md`, `ARGUS_TODAY_PAPER_READINESS_AUDIT.md`, `ARGUS_TODAY_FULL_TRADING_AND_TOMORROW_READINESS_AUDIT.md`, soak floors in `config/researchSafety.json`.
+Cross-links: `docs/audits/archive/ARGUS_NO_TRADE_REMEDIATION_STATUS.md`, `docs/audits/archive/ARGUS_TODAY_PAPER_READINESS_AUDIT.md`, `docs/audits/archive/ARGUS_TODAY_FULL_TRADING_AND_TOMORROW_READINESS_AUDIT.md`, soak floors in `config/researchSafety.json`.
 
 ---
 

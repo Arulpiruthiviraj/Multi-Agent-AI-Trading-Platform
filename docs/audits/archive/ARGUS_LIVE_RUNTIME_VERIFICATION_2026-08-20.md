@@ -1,6 +1,6 @@
 # ARGUS LIVE RUNTIME VERIFICATION — 2026-08-20
 
-Companion to `ARGUS_TODAY_PAPER_READINESS_AUDIT.md` (which a concurrent session is actively editing — this document is kept separate to avoid overwriting their work). This covers only what THIS pass actually ran against the real, live `npm run dev:server-only` process (PID 25984), started ~13:39:03Z, with real Alpaca paper credentials and `PAPER_TRADING_ONLY=true`.
+Companion to `docs/audits/archive/ARGUS_TODAY_PAPER_READINESS_AUDIT.md` (which a concurrent session is actively editing — this document is kept separate to avoid overwriting their work). This covers only what THIS pass actually ran against the real, live `npm run dev:server-only` process (PID 25984), started ~13:39:03Z, with real Alpaca paper credentials and `PAPER_TRADING_ONLY=true`.
 
 ## Why this engine is running
 

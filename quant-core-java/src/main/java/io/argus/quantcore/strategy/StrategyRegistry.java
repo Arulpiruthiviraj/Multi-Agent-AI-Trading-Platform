@@ -1,6 +1,9 @@
 package io.argus.quantcore.strategy;
 
 import io.argus.quantcore.strategy.core.*;
+import io.argus.quantcore.strategy.institutional.InstitutionalStatArbStrategy;
+import io.argus.quantcore.strategy.institutional.InstitutionalStrategyContext;
+import io.argus.quantcore.strategy.institutional.MultiFactorMomentumStrategy;
 import io.argus.quantcore.strategy.types.StrategyContext;
 import io.argus.quantcore.strategy.types.StrategyEvaluation;
 
@@ -13,6 +16,13 @@ import java.util.function.Function;
  * CORE only in this Phase 1 pass (the 15 experimental strategies are explicitly out of scope
  * here per the migration blueprint's P2 priority; adding them later means adding entries to this
  * map, not restructuring it).
+ *
+ * INSTITUTIONAL is a separate map with a separate context type (pairs / multi-factor strategies
+ * are functions of raw bar history, not the single-symbol precomputed-feature StrategyContext the
+ * 5 CORE strategies use — see InstitutionalStrategyContext's header). Kept structurally apart
+ * rather than forced into evaluate(String, StrategyContext) — evaluateInstitutional(...) is the
+ * dedicated entry point, and isInstitutionalStrategy(...) mirrors isCoreStrategy(...) for callers
+ * that need to route by id without evaluating yet.
  */
 public final class StrategyRegistry {
 
@@ -22,6 +32,11 @@ public final class StrategyRegistry {
         MeanReversion.ID, ctx -> new MeanReversion().evaluate(ctx),
         TrendFollowing.ID, ctx -> new TrendFollowing().evaluate(ctx),
         RangeReversion.ID, ctx -> new RangeReversion().evaluate(ctx)
+    );
+
+    private static final Map<String, Function<InstitutionalStrategyContext, StrategyEvaluation>> INSTITUTIONAL = Map.of(
+        InstitutionalStatArbStrategy.ID, ctx -> new InstitutionalStatArbStrategy().evaluate(ctx),
+        MultiFactorMomentumStrategy.ID, ctx -> new MultiFactorMomentumStrategy().evaluate(ctx)
     );
 
     private StrategyRegistry() {
@@ -34,5 +49,14 @@ public final class StrategyRegistry {
 
     public static boolean isCoreStrategy(String strategyId) {
         return CORE.containsKey(strategyId);
+    }
+
+    public static Optional<StrategyEvaluation> evaluateInstitutional(String strategyId, InstitutionalStrategyContext ctx) {
+        var fn = INSTITUTIONAL.get(strategyId);
+        return fn == null ? Optional.empty() : Optional.of(fn.apply(ctx));
+    }
+
+    public static boolean isInstitutionalStrategy(String strategyId) {
+        return INSTITUTIONAL.containsKey(strategyId);
     }
 }

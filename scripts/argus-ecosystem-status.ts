@@ -187,6 +187,33 @@ async function probeOpenAlice(): Promise<ServiceStatus> {
   };
 }
 
+async function probeJavaQuantCore(): Promise<ServiceStatus> {
+  if (process.env.QUANT_JAVA_CORE_ENABLED !== 'true') {
+    return {
+      id: 'quant-core-java',
+      detail: 'Disabled (QUANT_JAVA_CORE_ENABLED is not true - default off, opt-in shadow bridge)',
+      health: 'DISABLED',
+      action: null,
+    };
+  }
+  // Fixed at 8085 - matches config/tradingSafety.json's quantJavaCoreBaseUrl, which is what
+  // QuantCoreBridge.ts (the TS side actually calling this process) uses. Not independently
+  // configurable via env yet - an env override here without a matching one in tradingSafety.json
+  // would silently point this status probe at the wrong port.
+  const port = 8085;
+
+  const stopped = await maybeStopped(port, 'quant-core-java', 'Java Quant Core');
+  if (stopped) return stopped;
+
+  const p = await probe(`http://127.0.0.1:${port}/health`);
+  return {
+    id: 'quant-core-java',
+    health: p.ok ? 'READY' : 'FAILED',
+    detail: p.ok ? `health ok (${p.body?.activeSymbols ?? 0} active symbol(s))` : (p.error || 'unreachable'),
+    action: p.ok ? null : 'npm run dev starts Java Quant Core when QUANT_JAVA_CORE_ENABLED=true. See logs/quant-core-java.log, or build manually: cd quant-core-java && mvn -B package -DskipTests',
+  };
+}
+
 async function probeIbkr(): Promise<ServiceStatus> {
   const {
     probeIbkrEcosystemHealth,
@@ -267,6 +294,7 @@ async function main(): Promise<void> {
     probeChronos(),
     probeOpenAlice(),
     probeIbkr(),
+    probeJavaQuantCore(),
   ]);
   if (afterStart) await sleep(1_000);
   const argus = await probeArgus();

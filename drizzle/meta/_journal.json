@@ -337,6 +337,14 @@
       "when": 1787070000000,
       "tag": "0047_trades_broker_id",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "6",
+      "when": 1787538656582,
+      "tag": "0048_historical_pit_tables",
+      "breakpoints": true
     }
   ]
 }
+

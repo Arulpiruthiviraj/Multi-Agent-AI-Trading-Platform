@@ -57,6 +57,7 @@ import { bullBearResearchConfig } from '../config/bullBearResearch';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { type LastConsensusOutcome } from '../core/consensusExplanation';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
@@ -93,6 +94,20 @@ export class ChiefTraderAgent {
     private lastDebateStartedAt: Map<string, number> = new Map();
     private lastConsensusEvalAt: Map<string, number> = new Map();
     private lastConsensusOutcome: LastConsensusOutcome | null = null;
+    /**
+     * Real telemetry-reconciliation finding (ARGUS_CURRENT_STATE_AND_FRIDAY_SESSION_FORENSIC_AUDIT.md
+     * §5/§18): observability_events shows far more CHIEF_CONSENSUS_COMPLETED events than
+     * consensus_decisions rows. Root cause traced this pass: recordConsensusTransaction() (which
+     * persists consensus_decisions) is only ever called on (a) an APPROVED evaluation, or (b)
+     * recordUnresolvedAsNoConsensus()'s own ~60s window-close sweep, which persists AT MOST ONE
+     * NO_CONSENSUS row per symbol per sweep - not one row per intermediate evaluateConsensusSerialized()
+     * cycle. A symbol re-evaluated many times as new ideas trickle in within the same window
+     * correctly collapses to a single persisted row - this is intentional, not a bug or a silent
+     * drop - but the collapsed count itself was previously invisible. Tracked here and logged the
+     * instant a row is finally persisted, then reset, so this ratio is directly observable going
+     * forward instead of needing a forensic audit to reconstruct.
+     */
+    private interimEvaluationsSinceLastPersist: Map<string, number> = new Map();
     /** Per-symbol count of in-flight adversarial debates. evaluateConsensus must not run for a
      *  symbol while this is > 0 - otherwise a later low-confidence idea (or a second agent)
      *  would approve the trade before the debate that was supposed to challenge it finished. */
@@ -694,6 +709,7 @@ export class ChiefTraderAgent {
        // object references snapshotted at evaluation start, so filtering on membership in it
        // removes only what this evaluation actually considered.
        this.recentIdeas = this.recentIdeas.filter(i => !relevantIdeas.includes(i));
+       this.logAndResetInterimConsensusTally(symbol, 'APPROVED');
 
        const transactionId = await recordConsensusTransaction({
          symbol,
@@ -748,6 +764,10 @@ export class ChiefTraderAgent {
        }
     } else {
        console.log(`[ChiefTrader] NO TRADE on ${symbol}. ${reason || `Current confidence: ${(result.confidence*100).toFixed(1)}%`}`);
+       // See interimEvaluationsSinceLastPersist's own doc comment - this cycle will NOT get its own
+       // consensus_decisions row (only recordUnresolvedAsNoConsensus's ~60s sweep persists one, at
+       // most, per symbol) - tallied here so that collapse ratio is observable, not reconstructed.
+       this.interimEvaluationsSinceLastPersist.set(symbol, (this.interimEvaluationsSinceLastPersist.get(symbol) ?? 0) + 1);
        try {
          const { recordCampaignNearMissConsensus } = await import('./campaignEffortTelemetry');
          recordCampaignNearMissConsensus(approvedConfidence);
@@ -755,6 +775,24 @@ export class ChiefTraderAgent {
        eventBus.emit(EVENTS.DESK_NO_TRADE, { traceId, symbol, side: approvedSide, confidence: approvedConfidence, reason });
        eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'NO_TRADE', reason });
     }
+  }
+
+  /** See interimEvaluationsSinceLastPersist's own doc comment. Called at every point this class
+   *  actually persists a consensus_decisions row for a symbol - logs how many intermediate,
+   *  never-individually-persisted evaluateConsensusSerialized() cycles preceded it, then resets. */
+  private logAndResetInterimConsensusTally(symbol: string, outcome: 'APPROVED' | 'NO_CONSENSUS'): void {
+    const interimCount = this.interimEvaluationsSinceLastPersist.get(symbol) ?? 0;
+    this.interimEvaluationsSinceLastPersist.delete(symbol);
+    if (interimCount === 0) return;
+    observeSafe(() => {
+      structuredLogger.info('consensus_interim_evaluations_collapsed', {
+        category: 'CONSENSUS',
+        eventType: 'CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED',
+        symbol,
+        outcome,
+        interimEvaluationCount: interimCount,
+      });
+    });
   }
 
   /**
@@ -775,6 +813,7 @@ export class ChiefTraderAgent {
         weight: this.resolveWeight(i.agent),
       }))));
       const result = EvidenceAggregator.aggregate(evidence);
+      this.logAndResetInterimConsensusTally(symbol, 'NO_CONSENSUS');
 
       await recordConsensusTransaction({
         symbol,

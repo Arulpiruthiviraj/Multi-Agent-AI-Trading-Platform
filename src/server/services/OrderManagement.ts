@@ -53,8 +53,9 @@ import { triggerWebhooks } from '../routes/webhooks';
 import { resolveOmsExecutionEnvironment, stampExecutionEnvironment } from '../research/organicPaper';
 import { authorizeProductionOrder } from '../core/liveOrderAuthorization';
 import { resolveOmsPaperMode } from '../core/brokerEnvironment';
-import { isPaperTradingOnlyEnforced } from '../core/tradingModeEnv';
+import { isPaperTradingOnlyEnforced, normalizeTradingMode } from '../core/tradingModeEnv';
 import { getActiveReplaySession, notifyReplayOrder } from '../replay/ReplayContext';
+import { releasePendingCapitalReservation } from '../engines/PendingCapitalReservations';
 import { insertIncrementalFill } from './fillLedger';
 import { resolvePreTradeEntryPrice } from './omsEntryPrice';
 import { syncLocalPortfolioAfterSellFill, syncLocalPortfolioAfterBuyFill } from './localPortfolioSync';
@@ -76,12 +77,17 @@ export function isTerminalOrderStatus(status: string | null | undefined): boolea
   return !!status && TERMINAL_ORDER_STATUSES.includes(status);
 }
 
+// Missing/legacy-cased/malformed settings.tradingMode (no row seeded yet, stale value, etc.) must
+// never surface as an un-classifiable string that cascades into BROKER_ENVIRONMENT_UNKNOWN downstream
+// (classifyBrokerEnvironment only accepts exactly 'LIVE' or 'PAPER' after uppercasing) - route the raw
+// DB read through the same normalizeTradingMode() fail-safe (defaults to 'PAPER', never 'LIVE') already
+// used elsewhere for this exact ambiguity (tradingModeEnv.ts).
 function readTradingMode(): string | null {
   try {
     const row = db.select({ tradingMode: settings.tradingMode }).from(settings).limit(1).get();
-    return row?.tradingMode ?? null;
+    return normalizeTradingMode(row?.tradingMode ?? null);
   } catch {
-    return null;
+    return normalizeTradingMode(null);
   }
 }
 
@@ -240,11 +246,13 @@ export class OrderManagementService {
       const existing = await db.select().from(trades).where(eq(trades.traceId, traceId)).limit(1);
       if (existing.length > 0) {
         console.warn(`[OMS] Duplicate execution attempt for traceId ${traceId} - an order was already placed (${existing[0].id}). Skipping.`);
+        releasePendingCapitalReservation(traceId);
         try { notifyReplayOrder(traceId); } catch { /* optional */ }
         return;
       }
     } catch (e) {
       console.error('[OMS] Idempotency check failed — aborting before broker. Unique index is backup, not a license to place a second untracked order.', e);
+      releasePendingCapitalReservation(traceId);
       return;
     }
 
@@ -293,9 +301,13 @@ export class OrderManagementService {
       } else {
         console.error('[OMS] Failed to insert initial order row - aborting before any broker call', e);
       }
+      releasePendingCapitalReservation(traceId);
       return;
     }
 
+    // The real trades row now exists - RiskEngine's own DB-backed pendingBuys query covers this
+    // order from here on, so the temporary in-flight capital reservation has done its job.
+    releasePendingCapitalReservation(traceId);
     eventBus.emit(EVENTS.ORDER_SUBMITTED, { traceId, transactionId, id: orderId, symbol, side, quantity, submittedAt });
 
     let fillPrice = 0;
@@ -407,8 +419,27 @@ export class OrderManagementService {
         await this.recordFillProgress(orderId, brokerOrderId, traceId, transactionId, symbol, side, quantity, status, filledQuantity, fillPrice);
       }
 
-      if (side === 'SELL' && status === 'FILLED' && preTradeEntryPrice !== null && fillPrice > 0) {
-        profitLoss = Number(((fillPrice - preTradeEntryPrice) * quantity).toFixed(2));
+      if (side === 'SELL' && status === 'FILLED') {
+        if (preTradeEntryPrice !== null && fillPrice > 0) {
+          profitLoss = Number(((fillPrice - preTradeEntryPrice) * quantity).toFixed(2));
+        } else {
+          // Real gap this pass: a genuine FILLED SELL with no attributable P&L used to stay silently
+          // null with only a console.warn (not queryable via observability_events/the dashboard).
+          // Never invent a P&L figure here - just make the failure to attribute one observable.
+          observeSafe(() => {
+            structuredLogger.warn('pnl_attribution_failed', {
+              category: 'SYSTEM',
+              eventType: 'PNL_ATTRIBUTION_FAILED',
+              traceId,
+              decisionId: traceId,
+              orderId,
+              symbol,
+              reason: preTradeEntryPrice === null ? 'NO_ENTRY_PRICE_RESOLVED' : 'NON_POSITIVE_FILL_PRICE',
+              fillPrice,
+              quantity,
+            });
+          });
+        }
       }
       if (status === 'FILLED') {
         filledAt = new Date().toISOString();

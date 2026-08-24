@@ -305,6 +305,110 @@ async function startChronosAndWait(): Promise<void> {
 }
 
 /**
+ * Java 26 Quant Core (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md) - advisory-only,
+ * loopback-only, no broker access. Off by default: only starts when QUANT_JAVA_CORE_ENABLED=true,
+ * the OPPOSITE polarity of Chronos/Ollama/OpenAlice (which are on unless explicitly skipped) -
+ * this one is explicitly opt-in since it's still a shadow-mode research bridge, not a required
+ * companion. Mirrors startChronosAndWait()'s own already-healthy / build-if-missing / wait-for-
+ * health shape. Logs to logs/quant-core-java.log (its own dedicated file - every other companion
+ * here uses stdio:'inherit' into the combined npm-run-dev log, but this one is deliberately
+ * separated since a Maven build's console output is voluminous on first run).
+ */
+async function startJavaQuantCoreAndWait(): Promise<void> {
+  // Real bug fixed (2026-08-23): this function's own risky calls (spawn with a not-yet-open
+  // fs.createWriteStream, a build subprocess, etc.) were not fully guarded, and one uncaught
+  // exception here propagated out of the Promise.all() in main() and killed the ENTIRE Argus boot
+  // - not just left Java Quant Core unavailable, which was always the intended failure mode for
+  // this optional companion. Everything below is now wrapped so this function can never again
+  // take down Argus itself, matching startChronosAndWait()/startOpenAliceGuardian()'s own
+  // established "warn and return, never throw" discipline.
+  try {
+    await startJavaQuantCoreAndWaitUnsafe();
+  } catch (e: any) {
+    console.warn(`[dev] Java Quant Core startup failed unexpectedly (${e?.message || e}). Argus itself is unaffected - continuing without it.`);
+  }
+}
+
+async function startJavaQuantCoreAndWaitUnsafe(): Promise<void> {
+  // Fixed at 8085 - matches config/tradingSafety.json's quantJavaCoreBaseUrl, which is what
+  // QuantCoreBridge.ts actually connects to. Not independently configurable via env yet - see
+  // argus-ecosystem-status.ts's probeJavaQuantCore() for the same constraint.
+  const port = 8085;
+  const healthUrl = `http://127.0.0.1:${port}/health`;
+
+  try {
+    const res = await fetch(healthUrl, { signal: AbortSignal.timeout(2500) });
+    if (res.ok) {
+      console.log(`[dev] Java Quant Core already healthy at ${healthUrl} - not starting a second copy.`);
+      return;
+    }
+  } catch {
+    // need start or wait
+  }
+
+  if (await isPortOpen(port)) {
+    console.log(`[dev] Port ${port} is open but ${healthUrl} is not healthy yet - waiting (up to 60s)...`);
+    await waitForHttpOk(healthUrl, 60_000, 'Java Quant Core GET /health');
+    return;
+  }
+
+  const moduleDir = path.join(repoRoot, 'quant-core-java');
+  const jarPath = path.join(moduleDir, 'target', 'quant-core-java-0.0.1-SNAPSHOT.jar');
+  if (!fs.existsSync(moduleDir)) {
+    console.warn(`[dev] QUANT_JAVA_CORE_ENABLED=true but ${moduleDir} does not exist - skipping.`);
+    return;
+  }
+
+  if (!fs.existsSync(jarPath)) {
+    if (!commandWorks('mvn', ['-v'])) {
+      console.warn('[dev] QUANT_JAVA_CORE_ENABLED=true but the jar is missing and Maven is not on PATH. Build manually: cd quant-core-java && mvn -B package -DskipTests');
+      return;
+    }
+    console.log('[dev] quant-core-java jar not found - building (mvn -B package -DskipTests, first run only)...');
+    const build = spawnSync('mvn', ['-B', 'package', '-DskipTests'], {
+      cwd: moduleDir,
+      encoding: 'utf8',
+      timeout: 300_000,
+      windowsHide: true,
+      shell: process.platform === 'win32',
+      stdio: 'inherit',
+    });
+    if (build.status !== 0 || !fs.existsSync(jarPath)) {
+      console.warn(`[dev] quant-core-java build failed (code=${build.status}) - Java Quant Core will stay unavailable this session.`);
+      return;
+    }
+  }
+
+  fs.mkdirSync(path.join(repoRoot, 'logs'), { recursive: true });
+  // Real bug fixed: fs.createWriteStream() opens its fd asynchronously, so passing the stream
+  // object straight into spawn()'s stdio array raced ahead of that open and threw
+  // ERR_INVALID_ARG_VALUE inside Node's getValidStdio - every single time, not intermittently.
+  // fs.openSync() returns an already-open, synchronously-valid fd, which is what spawn()'s stdio
+  // array actually needs.
+  const logFd = fs.openSync(path.join(repoRoot, 'logs', 'quant-core-java.log'), 'a');
+  console.log(`[dev] Starting Java Quant Core on :${port} (logging to logs/quant-core-java.log)`);
+  const child = spawn('java', ['-jar', jarPath, String(port)], {
+    cwd: moduleDir,
+    stdio: ['ignore', logFd, logFd],
+    windowsHide: true,
+  });
+  fs.closeSync(logFd); // the child's own dup'd fd stays open; our copy is no longer needed
+  children.push(child);
+  child.on('exit', (code, signal) => {
+    if (!shuttingDown) {
+      console.warn(`[dev] Java Quant Core exited (code=${code}, signal=${signal}). See logs/quant-core-java.log.`);
+    }
+  });
+
+  const ok = await waitForHttpOk(healthUrl, 60_000, 'Java Quant Core GET /health');
+  if (ok) {
+    console.log(`[dev] Java Quant Core is healthy at ${healthUrl}`);
+  } else {
+    console.warn('[dev] Java Quant Core did not become healthy within 60s. See logs/quant-core-java.log.');
+  }
+}
+
+/**
  * Argus verification talks to OpenAlice's MCP server on :47332. This launcher's only job is
  * confirming that's genuinely OpenAlice (serverInfo.name === 'open-alice'), not an unrelated
  * process squatting the port. `issue_create`/`inbox_read` reachability is a separate, later
@@ -631,9 +735,15 @@ async function main() {
     console.log(`[dev] ${openAliceSkipReason()}`);
   }
 
+  const javaQuantCoreEnabled = process.env.QUANT_JAVA_CORE_ENABLED === 'true';
+  if (!javaQuantCoreEnabled) {
+    console.log('[dev] QUANT_JAVA_CORE_ENABLED is not true - not starting Java Quant Core (default off, opt-in shadow bridge).');
+  }
+
   const [, guardianMcpUrl] = await Promise.all([
     skipChronos ? Promise.resolve() : startChronosAndWait(),
     skipOpenAlice ? Promise.resolve(null) : startOpenAliceGuardian(),
+    javaQuantCoreEnabled ? startJavaQuantCoreAndWait() : Promise.resolve(),
   ]);
 
   if (process.env.ARGUS_SKIP_IBKR === 'true') {

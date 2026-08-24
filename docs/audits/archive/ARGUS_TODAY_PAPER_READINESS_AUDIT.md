@@ -25,7 +25,7 @@ Required soak: unmet
 LIVE authorization: NO-GO
 ```
 
-Rationale: mechanical paper path is **TEST-VERIFIED** (InternalPaper spine) and headless paper engine was **RUN-VERIFIED** (prior PID **33604**: PAPER, `LIVE_NO_GO`, **`interruptedSessionHold=false`** after MATCH). **Autobot remains DISABLED** by design — Phase 2 Autobot paper run is **NEXT**, not claimed here. Organic soak floors remain unmet. **LIVE remains NO-GO.** Consensus floors **0.75 / min 2** unchanged. See `ARGUS_CONTROLLED_PAPER_SOAK.md`.
+Rationale: mechanical paper path is **TEST-VERIFIED** (InternalPaper spine) and headless paper engine was **RUN-VERIFIED** (prior PID **33604**: PAPER, `LIVE_NO_GO`, **`interruptedSessionHold=false`** after MATCH). **Autobot remains DISABLED** by design — Phase 2 Autobot paper run is **NEXT**, not claimed here. Organic soak floors remain unmet. **LIVE remains NO-GO.** Consensus floors **0.75 / min 2** unchanged. See `docs/audits/archive/ARGUS_CONTROLLED_PAPER_SOAK.md`.
 
 ### One-liner verdict
 

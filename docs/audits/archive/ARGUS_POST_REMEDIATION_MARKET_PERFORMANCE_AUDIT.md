@@ -1,6 +1,6 @@
 # ARGUS — POST-REMEDIATION MARKET PERFORMANCE AUDIT
 
-**Mode:** READ-ONLY forensic. No source, config, `.env`, or database writes were made. Two small, targeted read-only queries were run this pass (via throwaway Node scripts opening `data/argus.db` with `readonly: true`, deleted immediately after use) to answer this spec's genuinely new questions (per-remediation status, prediction-accuracy-by-confidence). Everything else in this report is **restructured from, and cites**, `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md` (compiled ~30 minutes earlier, same day, same DB) rather than re-derived from scratch — that report's core claims (the one real NVDA fill, the `profit_loss` bug, agent health stats) were independently re-verified against source/DB before being reused here, not taken on faith.
+**Mode:** READ-ONLY forensic. No source, config, `.env`, or database writes were made. Two small, targeted read-only queries were run this pass (via throwaway Node scripts opening `data/argus.db` with `readonly: true`, deleted immediately after use) to answer this spec's genuinely new questions (per-remediation status, prediction-accuracy-by-confidence). Everything else in this report is **restructured from, and cites**, `docs/audits/archive/ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md` (compiled ~30 minutes earlier, same day, same DB) rather than re-derived from scratch — that report's core claims (the one real NVDA fill, the `profit_loss` bug, agent health stats) were independently re-verified against source/DB before being reused here, not taken on faith.
 
 **Evidence grades:** `CODE` (verified in source), `DATA` (SQLite query, this pass or the cited prior one), `RUN` (live/runtime observation), `CALCULATED` (arithmetic from DATA), `NOT VERIFIED` (could not confirm).
 
@@ -317,4 +317,4 @@ All findings above are labeled inline (CODE/DATA/RUN/CALCULATED/NOT VERIFIED) at
 
 ---
 
-*End of audit. This report intentionally reuses and cites `ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md` rather than re-deriving already-verified findings, per explicit user direction to remap rather than fully rerun. The two genuinely new analyses (remediation-status classification, prediction-accuracy-by-confidence-bucket) were computed fresh, read-only, this pass.*
+*End of audit. This report intentionally reuses and cites `docs/audits/archive/ARGUS_POST_MARKET_PERFORMANCE_AUDIT_2026-08-20.md` rather than re-deriving already-verified findings, per explicit user direction to remap rather than fully rerun. The two genuinely new analyses (remediation-status classification, prediction-accuracy-by-confidence-bucket) were computed fresh, read-only, this pass.*
