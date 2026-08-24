@@ -601,7 +601,16 @@ export function mountResearchRoutes(v2Router: Router): void {
     const asyncMode = req.query.async === '1' || req.body?.async === true;
     const row = await startReplay(String(req.params.id), { async: asyncMode });
     if (res.headersSent) return;
-    if (row && (row as any).ok === false) return res.status(404).json(row);
+    if (row && (row as any).ok === false) {
+      // REPLAY_NOT_FOUND (the id was never created / expired from the in-memory runs Map) stays a
+      // real 404. Any other failure means the run DOES exist - it just never produced a runnable
+      // session (e.g. its data provider returned no dataset at creation time) or is blocked by a
+      // real state conflict (LIVE mode, another active session) - a distinct 409 so the UI/caller
+      // can tell "this id is unknown" apart from "this id exists, here's the real reason it can't
+      // start" instead of both surfacing as the same generic REPLAY_NOT_FOUND.
+      const status = (row as any).error === 'REPLAY_NOT_FOUND' ? 404 : 409;
+      return res.status(status).json(row);
+    }
     res.json({ ok: true, ...(row || {}), canPlaceOrders: false, live: 'NO-GO' });
   });
 

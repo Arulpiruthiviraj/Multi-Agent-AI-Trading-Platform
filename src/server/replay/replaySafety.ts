@@ -56,6 +56,11 @@ export interface ReplaySafetyConfig {
   missedOpportunityLabel: string;
   maxVolumeParticipationPct: number;
   partialFillModelDescription: string;
+  historicalNewsVoteMinAbsSentiment: number;
+  historicalNewsVoteMinConfidence: number;
+  historicalNewsVoteMaxConfidence: number;
+  historicalNewsVoteConfidenceScale: number;
+  historicalPitAgentDisclosure: string;
 }
 
 export const replaySafety = loadRepoConfigJson<ReplaySafetyConfig>('replaySafety.json');

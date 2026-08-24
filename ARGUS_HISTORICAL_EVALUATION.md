@@ -68,19 +68,27 @@ Advanced/debug: `OPERATOR_SELECTED` + explicit symbols.
 |-------|--------|-------|
 | QuantEngine | PARTIAL | PIT bars + `replayArgusStrategy` |
 | TechnicalAgent | PARTIAL | RSI/MACD/SMA/BB via production engines on PIT bars |
-| NewsAgent | CATALYST_ONLY or UNAVAILABLE | Fixture news only when configured |
-| FundamentalAgent | UNAVAILABLE | No PIT fundamentals |
-| MacroAgent | UNAVAILABLE | No PIT macro |
+| NewsAgent | CATALYST_ONLY, AVAILABLE, or UNAVAILABLE | Fixture news (`golden_replay_news`, non-voting) when configured; a real independent voter once `historical_news_archive` (PIT Agent Ledger System) has rows for the symbol/window; otherwise UNAVAILABLE |
+| FundamentalAgent | DATA_LOADED_CONTEXT_ONLY or UNAVAILABLE | Real `historical_fundamental_snapshots` PIT data surfaces as context once loaded, but never casts a vote — see below |
+| MacroAgent | DATA_LOADED_CONTEXT_ONLY or UNAVAILABLE | Real `historical_macro_releases` PIT data surfaces as context once loaded, but never casts a vote — see below |
 | Kronos | UNAVAILABLE | No historical forecast store |
 | ChiefTrader | CONSENSUS_MATH_REPLAY | Not live EventBus + LLM debate |
 
-**Read this table as a scope boundary, not a partial degradation:** every real historical replay run
-evaluates against an explicitly-scoped **QuantEngine + TechnicalAgent** quorum only. FundamentalAgent,
-MacroAgent, NewsAgent (outside the golden_replay fixture), and Kronos do not vote — not because they
-failed, but because no point-in-time fundamentals/macro/news/forecast ledger exists yet to replay them
-against honestly. This means replay's 2-independent-agent consensus bar draws from a structurally
-smaller voter pool than a live session, which can legitimately be reached or missed for reasons a live
-session wouldn't share. See `docs/audits/BACKTEST_FEATURE_PARITY_AUDIT.md` for the full analysis.
+**Read this table as a scope boundary, not a partial degradation.** Historically (before the PIT Agent
+Ledger System), every real historical replay run evaluated against an explicitly-scoped
+**QuantEngine + TechnicalAgent** quorum only, with FundamentalAgent/MacroAgent/NewsAgent/Kronos never
+voting — not because they failed, but because no point-in-time ledger existed to replay them honestly.
+That boundary still holds for FundamentalAgent, MacroAgent, and Kronos today (no fabricated
+macro/fundamental/forecast interpretation — see `config/replaySafety.json`'s
+`historicalPitAgentDisclosure` for why raw macro/fundamental numbers stay context-only rather than a
+hardcoded directional formula). NewsAgent is the one exception: once `historical_news_archive` has
+real rows for the requested symbols/window, it casts a real independent vote from the archive's own
+stored `sentimentScore` (a real numeric field, not an invented threshold or LLM interpretation) — the
+same real-data-or-nothing discipline, just with a real ledger now backing it for news specifically.
+Until that archive is backfilled for a given run, replay's 2-independent-agent consensus bar still
+draws from a structurally smaller voter pool than a live session, which can legitimately be reached or
+missed for reasons a live session wouldn't share. See `docs/audits/BACKTEST_FEATURE_PARITY_AUDIT.md` for
+the pre-PIT-ledger analysis.
 
 ## Consensus
 

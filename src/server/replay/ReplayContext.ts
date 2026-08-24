@@ -8,9 +8,12 @@ import { HistoricalReplayBroker } from '../../brokers/HistoricalReplayBroker';
 import type { CanonicalDataset, ResearchBar } from '../research/ohlcvTypes';
 import type { DataQualityReport } from '../research/dataQuality';
 import type { HistoricalNewsProvider } from './HistoricalNewsProvider';
+import type { HistoricalMacroProvider } from './HistoricalMacroProvider';
+import type { HistoricalFundamentalProvider } from './HistoricalFundamentalProvider';
 import { replaySafety } from './replaySafety';
 
 export type ReplayRunStatus =
+  | 'CREATING'
   | 'READY'
   | 'RUNNING'
   | 'PAUSED'
@@ -94,6 +97,11 @@ export interface ActiveReplaySession {
   configurationHash: string;
   replayHash: string;
   news: HistoricalNewsProvider;
+  /** PIT Agent Ledger System (real historical_macro_releases/historical_fundamental_snapshots reads) -
+   *  context-only, see config/replaySafety.json's historicalPitAgentDisclosure for why these do not
+   *  cast a ChiefTrader vote the way the real historical_news_archive-backed news vote does. */
+  macro: HistoricalMacroProvider;
+  fundamentals: HistoricalFundamentalProvider;
   events: ReplayEvent[];
   noTrade: Record<string, number>;
   equity: Array<{ t: number; equity: number; cash: number; drawdownPct: number }>;

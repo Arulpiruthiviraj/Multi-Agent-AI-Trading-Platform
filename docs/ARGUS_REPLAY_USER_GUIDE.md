@@ -65,11 +65,16 @@ Other controls (legacy paths): `POST /:id/pause`, `/:id/resume`, `/:id/stop`, `/
 
 ## Reading results honestly
 
-- Replay evaluates against an explicitly-scoped **QuantEngine + TechnicalAgent** quorum only.
-  FundamentalAgent, MacroAgent, NewsAgent (outside the golden_replay fixture), and Kronos do not vote —
-  no point-in-time fundamentals/macro/news/forecast ledger exists yet to replay them against honestly
-  (see `ARGUS_HISTORICAL_EVALUATION.md`'s agent-availability table). Replay's 2-independent-agent
-  consensus bar therefore draws from a smaller voter pool than a live session.
+- Replay's baseline quorum is **QuantEngine + TechnicalAgent** only. FundamentalAgent, MacroAgent, and
+  Kronos never vote (no fabricated macro/fundamental/forecast interpretation — they surface as
+  `DATA_LOADED_CONTEXT_ONLY` once real PIT data exists, see `config/replaySafety.json`'s
+  `historicalPitAgentDisclosure`). NewsAgent is the one PIT-ledger exception: once
+  `historical_news_archive` has real rows for the run's symbols/window, it casts a real independent
+  vote from the archive's own stored `sentimentScore` — check the run's `agentAvailability.NewsAgent`
+  status (`AVAILABLE` vs `CATALYST_ONLY` vs `UNAVAILABLE`) rather than assuming it never votes (see
+  `ARGUS_HISTORICAL_EVALUATION.md`'s agent-availability table). Whenever the News archive is empty for
+  a run, replay's 2-independent-agent consensus bar still draws from a smaller voter pool than a live
+  session.
 - Rows tagged `execution_environment='REPLAY'` do **not** count toward organic soak.
 - Hashes (`datasetHash` / `configurationHash` / `replayHash`) identify a run; they are not LIVE proof.
 - Exits in replay are not a full live PortfolioMonitor chain — treat SELL/win-rate as limited fidelity.

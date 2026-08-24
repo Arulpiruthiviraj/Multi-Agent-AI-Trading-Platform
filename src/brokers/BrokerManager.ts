@@ -204,7 +204,20 @@ export class BrokerManager {
          }
 
          this.wireInternalPaperTicksFromMarketData();
-         
+
+         // Real bug found and fixed this pass: setActiveBroker() (the mid-session broker switch)
+         // already calls applyMarketDataBinding() to rebind MarketDataWorker's quote backend and
+         // register the IBKR reqHistoricalData bridge (registerHistoricalBarProvider) - but
+         // initialize() (the boot path, which restores the previously-selected broker from
+         // settings.selectedBroker above) never did. So after any server restart with IBKR Gateway
+         // saved as the active broker, Settings > Brokers correctly showed it as active/connected,
+         // yet HistoricalDataProviderRegistry.ts's ibkrProvider stayed DATA_PROVIDER_UNAVAILABLE
+         // (getRegisteredHistoricalBarProvider() was still null) and a replay with
+         // dataProvider: 'ibkr' failed DATA_UNAVAILABLE - not because IB Gateway wasn't really
+         // connected, but because this rebind step had only ever run on an explicit broker switch,
+         // never on boot.
+         await this.applyMarketDataBinding(this.activeBroker);
+
          console.log(`[BrokerManager] Initialized with Active Broker: ${this.activeBroker.name}`);
          this.syncState = 'READY';
      } catch (e) {

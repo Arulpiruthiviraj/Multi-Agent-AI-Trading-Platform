@@ -62,5 +62,10 @@
   "maxVolumeParticipationPct": 0.1,
   "partialFillModelDescription": "VOLUME_PARTICIPATION_CAPPED: a fill is capped at maxVolumeParticipationPct of the fill bar's own reported volume. If the requested quantity exceeds that cap, the order PARTIALLY_FILLS at the capped quantity rather than filling in full or failing outright; if the cap itself rounds to zero shares, the order is REJECTED for insufficient liquidity. This is still a simplified model (no order-book depth, no intra-bar timing), stated honestly rather than implied as full institutional execution realism.",
   "replayTracePrefix": "replay-",
-  "jsonlEventCap": 20000
+  "jsonlEventCap": 20000,
+  "historicalNewsVoteMinAbsSentiment": 0.15,
+  "historicalNewsVoteMinConfidence": 0.55,
+  "historicalNewsVoteMaxConfidence": 0.95,
+  "historicalNewsVoteConfidenceScale": 0.4,
+  "historicalPitAgentDisclosure": "PIT Agent Ledger System: historical_macro_releases/historical_fundamental_snapshots feed real point-in-time data into replay's MacroAgent/FundamentalAgent context, but do not cast a ChiefTrader vote - turning raw macro/fundamental numbers into a trade direction is exactly the interpretive step live Argus delegates to AIRouter's LLM (MacroAgent/FundamentalAgent AlphaVantage+AIRouter routes), and hardcoding that interpretation as a TS formula would be inventing agent decision logic, not replaying it. historical_news_archive's stored sentimentScore is a real numeric field (a FinBERT-like local numeric helper, not an invented threshold) and IS used for a real NewsAgent PIT vote once loaded for the replay window."
 }

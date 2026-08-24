@@ -24,7 +24,9 @@ import { replaySafety } from './replaySafety';
 import { getHistoricalProvider } from './HistoricalDataProviderRegistry';
 import { loadGoldenReplayDataset } from './loadGoldenReplayDataset';
 import { buildHighConfidenceAgreeingIdeas, scheduleSignalAtBar } from './goldenReplaySchedule';
-import { goldenReplayNewsProvider, newsVisibleAt, unavailableHistoricalNewsProvider } from './HistoricalNewsProvider';
+import { goldenReplayNewsProvider, newsVisibleAt, unavailableHistoricalNewsProvider, loadHistoricalNewsArchiveProvider } from './HistoricalNewsProvider';
+import { loadHistoricalMacroProvider, macroReleasesVisibleAt, unavailableHistoricalMacroProvider } from './HistoricalMacroProvider';
+import { loadHistoricalFundamentalProvider, latestFundamentalSnapshotAsOf, unavailableHistoricalFundamentalProvider } from './HistoricalFundamentalProvider';
 import { assessDataQuality } from '../research/dataQuality';
 import { hashCanonicalDataset } from '../research/datasetHash';
 import { replayArgusStrategy } from '../research/argusStrategyReplay';
@@ -309,6 +311,40 @@ function bumpNoTrade(session: ActiveReplaySession, reason: string) {
  * here; TRAIL_STOPS_ONLY's own live docs already separate "soft-lock" from "PortfolioMonitor already
  * owns trailingStopPct exits" as two different concerns).
  */
+/**
+ * Real NewsAgent PIT vote from historical_news_archive's own stored sentimentScore (a real numeric
+ * field, not an LLM interpretation - same FinBERT-like local numeric helper role CLAUDE.md describes
+ * live NewsAgent as also using). Only votes when `newsIsRealVoter` (the golden_replay_news fixture
+ * stays CATALYST_ONLY / non-voting, unchanged from before this PIT ledger work) and at least one
+ * visible article has a finite sentiment score whose magnitude clears the config floor - avoids a
+ * near-zero/noise sentiment average being treated as a confident directional vote. Thresholds/scale
+ * come from config/replaySafety.json, never hardcoded here.
+ */
+function buildRealNewsAgentIdea(
+  newsIsRealVoter: boolean,
+  news: Array<{ sentiment: number | null }>,
+  publishedAtMs: number,
+): Array<{ kind: string; agent: string; side: 'BUY' | 'SELL'; confidence: number; publishedAtMs: number; payloadJson: string }> {
+  if (!newsIsRealVoter || news.length === 0) return [];
+  const scored = news.filter((n): n is { sentiment: number } => typeof n.sentiment === 'number' && Number.isFinite(n.sentiment));
+  if (scored.length === 0) return [];
+  const avgSentiment = scored.reduce((sum, n) => sum + n.sentiment, 0) / scored.length;
+  if (Math.abs(avgSentiment) < replaySafety.historicalNewsVoteMinAbsSentiment) return [];
+  const side: 'BUY' | 'SELL' = avgSentiment > 0 ? 'BUY' : 'SELL';
+  const confidence = Math.min(
+    replaySafety.historicalNewsVoteMaxConfidence,
+    Math.max(replaySafety.historicalNewsVoteMinConfidence, replaySafety.historicalNewsVoteMinConfidence + Math.abs(avgSentiment) * replaySafety.historicalNewsVoteConfidenceScale),
+  );
+  return [{
+    kind: 'AGENT_REASONING',
+    agent: 'NewsAgent',
+    side,
+    confidence,
+    publishedAtMs,
+    payloadJson: `avgSentiment=${avgSentiment.toFixed(3)} n=${scored.length}`,
+  }];
+}
+
 function isCampaignBuyLockedToday(session: ActiveReplaySession): boolean {
   if (!session.config.campaignEnabled) return false;
   const today = getTradingDateStr(new Date(session.clock.now()));
@@ -644,7 +680,18 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
   });
   const barsBySymbol = new Map<string, ResearchBar[]>();
   for (const ds of datasets) barsBySymbol.set(ds.symbol.toUpperCase(), [...ds.bars].sort((a, b) => a.timestamp - b.timestamp));
-  const news = config.newsProvider === 'golden_replay_news' ? goldenReplayNewsProvider() : unavailableHistoricalNewsProvider();
+  // PIT Agent Ledger System: real historical_news_archive/historical_macro_releases/
+  // historical_fundamental_snapshots reads, scoped to this replay's own symbol list and date
+  // range (never today's live feeds). Falls back to the pre-existing golden fixture / unavailable
+  // behavior whenever the archive has no rows for this window - never fabricated. See
+  // config/replaySafety.json's historicalPitAgentDisclosure for why Macro/Fundamental stay
+  // context-only (not a ChiefTrader vote) while News does vote once real data is loaded.
+  const pitWindowEndMs = Math.max(startMs, ...datasets.map((d) => d.bars.at(-1)?.timestamp ?? startMs));
+  const news = config.newsProvider === 'golden_replay_news'
+    ? goldenReplayNewsProvider()
+    : await loadHistoricalNewsArchiveProvider(config.symbols, startMs, pitWindowEndMs).catch(() => unavailableHistoricalNewsProvider());
+  const macro = await loadHistoricalMacroProvider(startMs, pitWindowEndMs).catch(() => unavailableHistoricalMacroProvider());
+  const fundamentals = await loadHistoricalFundamentalProvider(config.symbols).catch(() => unavailableHistoricalFundamentalProvider());
   const session: ActiveReplaySession = {
     replayId,
     status: 'READY',
@@ -658,6 +705,8 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
     configurationHash,
     replayHash,
     news,
+    macro,
+    fundamentals,
     events: [],
     noTrade: {},
     equity: [],
@@ -702,14 +751,17 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
         status: 'PARTIAL',
         reason: 'Live technicalSignal.ts rule math on PIT bars (confidence [0.55,0.95] when a rule fires); not the full live tick-driven TechnicalAgent loop or EventBus. Votes only when Technical independently fires BUY/SELL — never mirrors QuantEngine side.',
       },
-      NewsAgent: {
-        status: config.newsProvider === 'golden_replay_news' ? 'CATALYST_ONLY' : 'UNAVAILABLE',
-        reason: config.newsProvider === 'golden_replay_news'
-          ? 'Fixture news PIT-filtered; not a live NewsAgent voter'
-          : 'Historical news unavailable. NewsAgent excluded from this replay.',
-      },
-      FundamentalAgent: { status: 'UNAVAILABLE', reason: 'Point-in-time fundamentals not loaded' },
-      MacroAgent: { status: 'UNAVAILABLE', reason: 'Point-in-time macro releases not loaded' },
+      NewsAgent: config.newsProvider === 'golden_replay_news'
+        ? { status: 'CATALYST_ONLY', reason: 'Fixture news PIT-filtered; not a live NewsAgent voter' }
+        : news.available
+          ? { status: 'AVAILABLE', reason: `${news.note} Real historical_news_archive PIT data for this window - independent NewsAgent voter using stored sentimentScore (config/replaySafety.json historicalNewsVoteMinAbsSentiment gate), not an LLM interpretation.` }
+          : { status: 'UNAVAILABLE', reason: 'Historical news unavailable for this symbol/date range. NewsAgent excluded from this replay.' },
+      FundamentalAgent: fundamentals.available
+        ? { status: 'DATA_LOADED_CONTEXT_ONLY', reason: `${fundamentals.note} ${replaySafety.historicalPitAgentDisclosure}` }
+        : { status: 'UNAVAILABLE', reason: 'Point-in-time fundamentals not loaded for these symbols.' },
+      MacroAgent: macro.available
+        ? { status: 'DATA_LOADED_CONTEXT_ONLY', reason: `${macro.note} ${replaySafety.historicalPitAgentDisclosure}` }
+        : { status: 'UNAVAILABLE', reason: 'Point-in-time macro releases not loaded for this date range.' },
       KronosForecastAgent: { status: 'UNAVAILABLE', reason: 'Point-in-time AI time-series forecasts not loaded in replay' },
       ChiefTrader: { status: 'ENABLED', reason: 'replayChiefTraderFromEvidence vote math (no live EventBus)' },
       RiskAgent: { status: 'ENABLED', reason: 'RiskEngine.evaluateRisk on replay path' },
@@ -862,12 +914,39 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
     emit(session, 'MARKET_DATA', { close: last.close, visibleBars: visible.length }, symbol);
 
     const news = newsVisibleAt(session.news, session.cutoff, symbol);
+    const newsIsRealVoter = session.news.id === 'historical_news_archive';
     emit(session, 'NEWS', {
       count: news.length,
       status: session.news.status,
-      mode: 'CATALYST_ONLY',
+      mode: newsIsRealVoter ? 'PIT_VOTER' : 'CATALYST_ONLY',
       headlines: news.map((n) => n.headline),
     }, symbol);
+
+    // Macro/Fundamental PIT context (audit-only - see agentAvailability's DATA_LOADED_CONTEXT_ONLY
+    // status and config/replaySafety.json's historicalPitAgentDisclosure for why these do not cast
+    // a ChiefTrader vote here, unlike the real historical_news_archive-backed news vote below).
+    if (session.macro.available) {
+      const macroVisible = macroReleasesVisibleAt(session.macro, session.cutoff);
+      emit(session, 'AGENT_ASSESSMENT', {
+        agent: 'MacroAgent',
+        status: 'DATA_LOADED_CONTEXT_ONLY',
+        count: macroVisible.length,
+        releases: macroVisible.map((r) => ({ metric: r.metric, actual: r.actual, forecast: r.forecast })),
+      }, symbol);
+    }
+    if (session.fundamentals.available) {
+      const fundamentalSnap = latestFundamentalSnapshotAsOf(session.fundamentals, session.cutoff, symbol);
+      if (fundamentalSnap) {
+        emit(session, 'AGENT_ASSESSMENT', {
+          agent: 'FundamentalAgent',
+          status: 'DATA_LOADED_CONTEXT_ONLY',
+          peRatio: fundamentalSnap.peRatio,
+          pbRatio: fundamentalSnap.pbRatio,
+          roe: fundamentalSnap.roe,
+          debtToEquity: fundamentalSnap.debtToEquity,
+        }, symbol);
+      }
+    }
 
     // Stop / target exits before new entries (PortfolioMonitor-equivalent for replay).
     const openMeta = session.openStops.get(symbol);
@@ -1041,6 +1120,10 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
           ...(technical && technical.side !== 'HOLD'
             ? [{ kind: 'AGENT_REASONING', agent: 'TechnicalAgent', side: technical.side, confidence: technical.confidence, publishedAtMs: t, payloadJson: `rsi=${technical.rsi}` }]
             : []),
+          // Real PIT NewsAgent vote (historical_news_archive only) - see buildRealNewsAgentIdea's
+          // own doc comment. Macro/Fundamental deliberately do not add a vote here - context-only,
+          // see agentAvailability's DATA_LOADED_CONTEXT_ONLY status.
+          ...buildRealNewsAgentIdea(newsIsRealVoter, news, t),
         ];
       }
 
@@ -1208,8 +1291,23 @@ async function processTimestamp(session: ActiveReplaySession, t: number, nextOpe
 }
 
 export async function startReplay(id: string, opts?: { async?: boolean }) {
-  const row = runs.get(id) as { session?: ActiveReplaySession; status?: string } | undefined;
-  if (!row?.session) return { ok: false, error: 'REPLAY_NOT_FOUND' };
+  const row = runs.get(id) as { session?: ActiveReplaySession; status?: string; error?: string; code?: string } | undefined;
+  // Real bug found and fixed this pass: a row that legitimately exists (e.g. createReplayRun's own
+  // DATA_UNAVAILABLE/FAILED early-return, which always calls runs.set() before returning - see
+  // createReplayRun) has no `session` field, since a session is only ever built once a dataset
+  // actually loads. That got reported as the exact same generic REPLAY_NOT_FOUND as "this id was
+  // never created / has expired from the in-memory runs Map" - masking a real, already-known
+  // reason (e.g. an unavailable data provider) behind a misleading "not found" error instead of
+  // surfacing why the run can't start.
+  if (!row) return { ok: false, error: 'REPLAY_NOT_FOUND' };
+  if (!row.session) {
+    return {
+      ok: false,
+      error: row.error || `Replay ${id} has no runnable session (status=${row.status ?? 'UNKNOWN'}) - it never produced a session, most likely because its data provider returned no dataset at creation time.`,
+      code: row.code,
+      status: row.status,
+    };
+  }
   if (tradingEngine.state.tradingMode === 'LIVE') return { ok: false, error: 'Replay refused while LIVE' };
   if (getActiveReplaySession() && getActiveReplaySession()?.replayId !== id) {
     return { ok: false, error: 'A replay session is already active' };
@@ -1224,8 +1322,16 @@ export async function startReplay(id: string, opts?: { async?: boolean }) {
 }
 
 async function runReplayLoop(id: string) {
-  const row = runs.get(id) as { session?: ActiveReplaySession; status?: string } | undefined;
-  if (!row?.session) return { ok: false, error: 'REPLAY_NOT_FOUND' };
+  const row = runs.get(id) as { session?: ActiveReplaySession; status?: string; error?: string; code?: string } | undefined;
+  if (!row) return { ok: false, error: 'REPLAY_NOT_FOUND' };
+  if (!row.session) {
+    return {
+      ok: false,
+      error: row.error || `Replay ${id} has no runnable session (status=${row.status ?? 'UNKNOWN'})`,
+      code: row.code,
+      status: row.status,
+    };
+  }
   if (tradingEngine.state.tradingMode === 'LIVE') return { ok: false, error: 'Replay refused while LIVE' };
   if (getActiveReplaySession() && getActiveReplaySession()?.replayId !== id) {
     return { ok: false, error: 'A replay session is already active' };

@@ -68,6 +68,9 @@ Forward-looking **policy for new work**, not a claim about current runtime autho
 10. Performance claims require measurement, not assertion. **Do not migrate a component to Java simply because Java is generally faster** — profile the actual bottleneck first.
 11. All existing safety invariants apply unchanged to Java exactly as to TypeScript: `PAPER_TRADING_ONLY=true`, `LIVE_NO_GO` unless `evaluateLiveReadiness()` says otherwise, `consensusApprovalThreshold >= 0.75`, `minIndependentAgreeingAgents >= 2`, no bypass of `news_veto`, RiskEngine, OMS, BrokerManager, reconciliation, or the kill switch.
 12. Before creating any new quant/indicator/strategy calculation in TypeScript, check `quant-core-java/` for an existing implementation first.
+13. **Bug fixes to engine/quant/indicator/strategy calculation logic also go to Java, not just new features.** If a calculation already has (or is being migrated toward) a Java implementation, fix it there and let TypeScript either call through to the fix or stay `COMPATIBILITY_ONLY`/`DEPRECATED` per rule 8 — do not patch only the TypeScript copy while an existing or in-progress Java counterpart silently keeps the old bug. If no Java counterpart exists yet for the calculation being fixed, fix the bug in TypeScript now (do not block a live-safety fix on an unstarted migration), but record it as a migration candidate per the Java Migration Completion Plan docs rather than letting it become a second permanent TS-only implementation.
+
+**Living rule, not a one-time pass:** this policy applies to every future session and every future engine change, not only the migration work already completed as of 2026-08-23 — re-read this section before starting any new quant/indicator/strategy engine task.
 
 **AI development checklist (new engine feature):**
 - [ ] Search `quant-core-java/` for an existing implementation
