@@ -363,6 +363,26 @@ export default function HistoricalReplayLab() {
     }
   }, []);
 
+  // Real bug fixed: createAndStart used to call /start immediately after /create resolved, back
+  // when /create itself synchronously awaited the full dataset load (including real, paced IBKR
+  // reqHistoricalData calls) before responding - slow enough to trip server.ts's blanket 15s /api
+  // request-timeout watchdog and 504 before a runId ever came back. /create now returns almost
+  // instantly with status CREATING while the dataset load/session build finishes in the background
+  // (FullArgusReplayEngine.ts's completeReplayRun) - this polls the existing GET
+  // /research/replay/:id status endpoint (same one the RUNNING-replay poll loop already uses)
+  // until that background work lands, so /start is only ever called once a real session exists.
+  async function waitForReplayReady(replayId: string, signal: AbortSignal): Promise<any> {
+    const maxAttempts = 400; // ~5 minutes at 750ms - generous for a full ARGUS_DISCOVERY universe over IBKR's paced historical-data socket
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+      const status = await fetch(`/api/v2/research/replay/${replayId}`, { signal }).then((r) => r.json());
+      setRun(status);
+      if (status.status !== 'CREATING') return status;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+    }
+    return { ok: false, status: 'CREATING', error: `Replay ${replayId} did not finish loading data within the wait budget - check the data provider (Historical Replay Lab providers table) or try a smaller symbol universe.` };
+  }
+
   function stopPolling() {
     if (pollRef.current) {
       clearInterval(pollRef.current);
@@ -490,6 +510,21 @@ export default function HistoricalReplayLab() {
         return;
       }
       setRun(created);
+      if (created.status === 'CREATING') {
+        const controller = new AbortController();
+        pollAbortRef.current = controller;
+        const ready = await waitForReplayReady(created.replayId, controller.signal).catch((e) => {
+          if (e?.name === 'AbortError') return null;
+          throw e;
+        });
+        if (!ready) { setBusy(false); return; } // superseded by unmount/newer request
+        if (ready.status === 'DATA_UNAVAILABLE' || ready.status === 'FAILED' || (ready.ok === false && ready.status === 'CREATING')) {
+          setError(ready.error || ready.code || `Replay ${created.replayId} could not start (status=${ready.status})`);
+          setRun(ready);
+          setBusy(false);
+          return;
+        }
+      }
       const startRes = await fetch(`/api/v2/research/replay/${created.replayId}/start?async=${asyncMode ? '1' : '0'}`, {
         method: 'POST',
         credentials: 'same-origin',

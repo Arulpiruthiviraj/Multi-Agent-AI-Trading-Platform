@@ -6,6 +6,8 @@ import io.argus.quantcore.backtest.engine.Bar;
 import io.argus.quantcore.institutional.math.AugmentedDickeyFuller;
 import io.argus.quantcore.institutional.math.OrnsteinUhlenbeckEstimator;
 import io.argus.quantcore.institutional.models.FactorAlphaEngine;
+import io.argus.quantcore.institutional.models.GarchEngine;
+import io.argus.quantcore.institutional.models.HmmRegimeEngine;
 import io.argus.quantcore.institutional.models.StatArbEngine;
 import io.argus.quantcore.logging.StructuredLogger;
 import io.argus.quantcore.logging.TraceContext;
@@ -46,6 +48,8 @@ public final class QuantCoreServer {
         server.createContext("/api/v1/evaluate", this::handleEvaluate);
         server.createContext("/api/v1/institutional/factors/", this::handleInstitutionalFactors);
         server.createContext("/api/v1/institutional/pairs", this::handleInstitutionalPairs);
+        server.createContext("/api/v1/institutional/volatility/", this::handleInstitutionalVolatility);
+        server.createContext("/api/v1/institutional/regime/", this::handleInstitutionalRegime);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
     }
 
@@ -249,6 +253,178 @@ public final class QuantCoreServer {
         } finally {
             TraceContext.clear();
         }
+    }
+
+    /**
+     * GarchEngine.fit() was real, compiled, and unit-tested (GarchEngineTest.java) but had zero
+     * HTTP endpoint before this pass - unreachable from the TypeScript control plane. Same POST-
+     * bars-in-body shape as handleInstitutionalFactors, for the same reason (stateless function of
+     * caller-supplied bar history).
+     */
+    private void handleInstitutionalVolatility(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String traceId = resolveTraceId(exchange);
+        TraceContext.bind(traceId, symbol);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Bar[] bars = decodeBars(body.get("bars"));
+            if (bars == null || bars.length == 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "bars array is required"));
+                return;
+            }
+            int stepsAhead = (int) Json.asDoublePrimitive(body.get("forecastStepsAhead"), 1);
+
+            double[] returns = simpleReturns(closesOf(bars));
+            GarchEngine.Params params = GarchEngine.fit(returns);
+            if (params == null) {
+                sendJson(exchange, 422, Map.of("ok", false, "error", "insufficient return history to fit GARCH(1,1) - need at least 30 returns",
+                    "returnsAvailable", (double) returns.length));
+                return;
+            }
+            double[] variancePath = GarchEngine.conditionalVariancePath(returns, params);
+            double lastReturn = returns[returns.length - 1];
+            double lastVariance = variancePath[variancePath.length - 1];
+            double forecastVariance = GarchEngine.forecastVariance(params, lastReturn, lastVariance, stepsAhead);
+
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_VOLATILITY_COMPUTED",
+                "Fit GARCH(1,1) for " + symbol, traceId, symbol,
+                Map.of("alpha", params.alpha(), "beta", params.beta()));
+            sendJson(exchange, 200, garchResultToJson(symbol, params, lastVariance, forecastVariance, stepsAhead, returns.length));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    /**
+     * HmmRegimeEngine.fit()/decode() were real, compiled, and unit-tested (HmmRegimeEngineTest.java)
+     * but had zero HTTP endpoint before this pass. Observations are (dailyReturn, realizedVol) pairs
+     * built from the same bars the caller already sends - see rollingVolatilitySeries's own doc.
+     */
+    private void handleInstitutionalRegime(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String traceId = resolveTraceId(exchange);
+        TraceContext.bind(traceId, symbol);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Bar[] bars = decodeBars(body.get("bars"));
+            if (bars == null || bars.length == 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "bars array is required"));
+                return;
+            }
+            int realizedVolWindow = (int) Json.asDoublePrimitive(body.get("realizedVolWindow"), 10);
+            int maxIterations = (int) Json.asDoublePrimitive(body.get("maxIterations"), 100);
+
+            HmmRegimeEngine.Observation[] observations = buildRegimeObservations(bars, realizedVolWindow);
+            if (observations == null) {
+                sendJson(exchange, 422, Map.of("ok", false, "error", "insufficient bar history for the requested realizedVolWindow"));
+                return;
+            }
+            HmmRegimeEngine.Fitted fitted = HmmRegimeEngine.fit(observations, maxIterations);
+            if (fitted == null) {
+                sendJson(exchange, 422, Map.of("ok", false, "error", "insufficient observations to fit the 4-state HMM (need at least 40)",
+                    "observationsAvailable", (double) observations.length));
+                return;
+            }
+            HmmRegimeEngine.Regime currentRegime = HmmRegimeEngine.currentRegime(fitted, observations);
+
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_REGIME_COMPUTED",
+                "Fit 4-state HMM regime for " + symbol, traceId, symbol,
+                Map.of("currentRegime", currentRegime.name()));
+            sendJson(exchange, 200, hmmFittedToJson(symbol, fitted, currentRegime, observations.length));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    /** Simple (non-log) daily returns from closes, same convention FactorAlphaEngine.simpleReturns uses. */
+    private static double[] simpleReturns(double[] close) {
+        double[] out = new double[close.length - 1];
+        for (int i = 1; i < close.length; i++) {
+            out[i - 1] = close[i - 1] == 0 ? 0 : (close[i] - close[i - 1]) / close[i - 1];
+        }
+        return out;
+    }
+
+    /**
+     * Builds (dailyReturn, realizedVol) observation pairs for HmmRegimeEngine: returns[] has
+     * length bars.length-1; the trailing-window realized-vol series (window W) has length
+     * returns.length-W+1, tail-aligned to returns indices [W-1 .. returns.length-1] - so
+     * observations[i] pairs returns[i+W-1] with rollingVol[i], the same alignment
+     * FactorAlphaEngine.rollingVolatilitySeries's own tail-aligned convention uses.
+     */
+    private static HmmRegimeEngine.Observation[] buildRegimeObservations(Bar[] bars, int window) {
+        double[] returns = simpleReturns(closesOf(bars));
+        if (returns.length < window) {
+            return null;
+        }
+        int outLen = returns.length - window + 1;
+        HmmRegimeEngine.Observation[] out = new HmmRegimeEngine.Observation[outLen];
+        for (int i = 0; i < outLen; i++) {
+            double sum = 0;
+            double sumSq = 0;
+            for (int j = i; j < i + window; j++) {
+                sum += returns[j];
+            }
+            double mean = sum / window;
+            for (int j = i; j < i + window; j++) {
+                double diff = returns[j] - mean;
+                sumSq += diff * diff;
+            }
+            double realizedVol = Math.sqrt(sumSq / window);
+            out[i] = new HmmRegimeEngine.Observation(returns[i + window - 1], realizedVol);
+        }
+        return out;
+    }
+
+    private static Map<String, Object> garchResultToJson(String symbol, GarchEngine.Params p, double lastConditionalVariance, double forecastVariance, int stepsAhead, int returnsUsed) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("symbol", symbol);
+        m.put("omega", p.omega());
+        m.put("alpha", p.alpha());
+        m.put("beta", p.beta());
+        m.put("persistence", p.alpha() + p.beta());
+        m.put("logLikelihood", p.logLikelihood());
+        m.put("unconditionalVariance", p.unconditionalVariance());
+        m.put("lastConditionalVariance", lastConditionalVariance);
+        m.put("forecastStepsAhead", (double) stepsAhead);
+        m.put("forecastVariance", forecastVariance);
+        m.put("forecastVolatility", Math.sqrt(Math.max(forecastVariance, 0)));
+        m.put("returnsUsed", (double) returnsUsed);
+        return m;
+    }
+
+    private static Map<String, Object> hmmFittedToJson(String symbol, HmmRegimeEngine.Fitted fitted, HmmRegimeEngine.Regime currentRegime, int observationCount) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("symbol", symbol);
+        m.put("currentRegime", currentRegime.name());
+        m.put("logLikelihood", fitted.logLikelihood());
+        m.put("observationCount", (double) observationCount);
+        java.util.List<String> stateLabels = new java.util.ArrayList<>();
+        for (HmmRegimeEngine.Regime r : fitted.stateLabels()) stateLabels.add(r.name());
+        m.put("stateLabels", stateLabels);
+        java.util.List<Object> meansJson = new java.util.ArrayList<>();
+        for (double[] row : fitted.means()) meansJson.add(java.util.Arrays.asList(row[0], row[1]));
+        m.put("stateMeans", meansJson); // [dailyReturn, realizedVol] per state, same order as stateLabels
+        java.util.List<Object> variancesJson = new java.util.ArrayList<>();
+        for (double[] row : fitted.variances()) variancesJson.add(java.util.Arrays.asList(row[0], row[1]));
+        m.put("stateVariances", variancesJson);
+        return m;
     }
 
     private static Bar[] decodeBars(Object rawBarsField) {

@@ -33,6 +33,7 @@ import { MACDEngine } from '../engines/MACDEngine';
 import { calcBollingerBands } from './technicalSignal';
 import { compareSnapshots, ComparableIndicatorSnapshot } from './ParityComparator';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import type { ResearchBar } from '../research/ohlcvTypes';
 
 const QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR = 'QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED';
 const MIN_HISTORY_FOR_PARITY = 26; // matches SymbolState.java's MIN_HISTORY_FOR_INDICATORS
@@ -40,6 +41,50 @@ const PARITY_COMPARE_INTERVAL_MS = 60_000; // per-symbol debounce - never compar
 
 function isLiveIdeaEmissionEnabled(): boolean {
   return isQuantJavaCoreEnabled() && String(process.env[QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR] || '').toLowerCase() === 'true';
+}
+
+export interface InstitutionalVolatilityResult {
+  schemaVersion: number;
+  symbol: string;
+  omega: number;
+  alpha: number;
+  beta: number;
+  persistence: number;
+  logLikelihood: number;
+  unconditionalVariance: number;
+  lastConditionalVariance: number;
+  forecastStepsAhead: number;
+  forecastVariance: number;
+  forecastVolatility: number;
+  returnsUsed: number;
+}
+
+export interface InstitutionalRegimeResult {
+  schemaVersion: number;
+  symbol: string;
+  currentRegime: 'BULL_TRENDING' | 'BEAR_TRENDING' | 'MEAN_REVERTING' | 'HIGH_VOL_CHAOS';
+  logLikelihood: number;
+  observationCount: number;
+  stateLabels: string[];
+  stateMeans: [number, number][];
+  stateVariances: [number, number][];
+}
+
+export interface InstitutionalFactorsResult {
+  schemaVersion: number;
+  symbol: string;
+  momentum: number;
+  meanReversion: number;
+  volumeLiquidity: number;
+  volatility: number;
+  orderFlowProxy: number;
+  orderFlowProxyIsRealOrderFlow: false;
+  composite: number;
+}
+
+/** Same {timestampMs, open, high, low, close, volume} shape QuantCoreServer.java's decodeBars() expects. */
+function barsToJavaPayload(bars: ResearchBar[]): Array<{ timestampMs: number; open: number; high: number; low: number; close: number; volume: number }> {
+  return bars.map((b) => ({ timestampMs: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
 }
 
 interface RawJavaSignal {
@@ -225,6 +270,86 @@ export class QuantCoreBridgeService {
 
   cachedHealth(): { connected: boolean; checkedAt: string; detail?: string } {
     return this.lastKnownHealth;
+  }
+
+  /**
+   * Advisory-only, on-demand callers for the Java institutional volatility/regime endpoints
+   * (GarchEngine/HmmRegimeEngine, exposed over HTTP this session - see
+   * docs/audits/ARGUS_JAVA_PYTHON_NODE_PERFORMANCE_BOUNDARY_AUDIT.md §5). Deliberately NOT wired
+   * into any live emission/vote path here - "AVAILABLE BUT NOT AUTOMATICALLY ACTIVATED", matching
+   * this session's own safety boundary: turning raw macro/volatility/regime numbers into a trade
+   * direction is not something either of these functions does or should do. A caller may use the
+   * returned numbers as reasoning/context (e.g. attached to an idea's `reasoning` string) but must
+   * never treat them as an independent vote - only ChiefTraderAgent mints those, from
+   * emitTradeIdea. Same fail-closed contract as forwardTick/compareParity: any error or disabled
+   * flag returns null, never throws, never fabricates a result.
+   */
+  async fetchInstitutionalVolatility(symbol: string, bars: ResearchBar[], forecastStepsAhead = 1): Promise<InstitutionalVolatilityResult | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/volatility/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ bars: barsToJavaPayload(bars), forecastStepsAhead }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as InstitutionalVolatilityResult;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  async fetchInstitutionalFactors(symbol: string, bars: ResearchBar[], opts?: { momentumDays?: number; smaWindow?: number; zScoreWindow?: number }): Promise<InstitutionalFactorsResult | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/factors/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({
+          bars: barsToJavaPayload(bars),
+          momentumDays: opts?.momentumDays ?? 20,
+          smaWindow: opts?.smaWindow ?? 10,
+          zScoreWindow: opts?.zScoreWindow ?? 60,
+        }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as InstitutionalFactorsResult;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  async fetchInstitutionalRegime(symbol: string, bars: ResearchBar[], realizedVolWindow = 10): Promise<InstitutionalRegimeResult | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/regime/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ bars: barsToJavaPayload(bars), realizedVolWindow }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as InstitutionalRegimeResult;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
   }
 
   /**

@@ -220,6 +220,17 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    // Phase 2 of the Java engine activation plan - same gating flag/pattern as quantCoreBridge
+    // just above (no-op unless QUANT_JAVA_CORE_ENABLED=true). Gives GARCH/HMM/factor-composite a
+    // real periodic consumer (QUANT_ADVISORY_ANALYSIS_COMPLETED); still advisory-only, not wired
+    // into ChiefTrader/EvidenceAggregator - see JavaQuantAdvisoryService.ts's own header.
+    const { javaQuantAdvisoryService } = await import('../services/JavaQuantAdvisoryService');
+    javaQuantAdvisoryService.start();
+  } catch (e: any) {
+    console.warn(`[JavaQuantAdvisoryService] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { modelRuntimeManager } = await import('../ai/ModelRuntimeManager');
     const models = await modelRuntimeManager.startAndProbe();
     for (const m of models) {

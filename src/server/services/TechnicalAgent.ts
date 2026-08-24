@@ -42,6 +42,8 @@ import { generateTraceId } from '../core/traceId';
 import { notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { evaluateTechnicalSignals } from './technicalSignal';
 import { classifyLightweightRegime, encodeRegime } from '../research/lightweightRegimeClassifier';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { performance } from 'node:perf_hooks';
 
 export class TechnicalProposerAgent {
   // Tick-driven via MARKET_DATA (MarketDataWorker WebSocket), not a standalone 60s timer.
@@ -215,7 +217,26 @@ export class TechnicalProposerAgent {
     // simplified proxy, with zero drift between live and replay. Emission debouncing below is
     // LIVE-ONLY (this class, not technicalSignal.ts) - replay's own research-clock cadence is a
     // different concept and must not be wall-clock-debounced.
+    // Perf instrumentation (docs/audits/ARGUS_JAVA_PYTHON_NODE_PERFORMANCE_BOUNDARY_AUDIT.md's
+    // Phase 0): TECHNICAL_ANALYSIS_COMPLETED below already reports a millisecond-resolution
+    // latencyMs for this whole method, but Date.now() can't distinguish sub-millisecond indicator
+    // math from the rest of checkStrategies - this microsecond-resolution measurement isolates
+    // evaluateTechnicalSignals() itself, the actual CPU-bound calculation the audit's "no
+    // worker-thread offload" finding is about.
+    const indicatorCalcStartedAtMs = performance.now();
     const { indicators, momentumBreakout, meanReversion, overbought } = evaluateTechnicalSignals(prices);
+    const indicatorCalcDurationUs = Math.round((performance.now() - indicatorCalcStartedAtMs) * 1000);
+    observeSafe(() => {
+      structuredLogger.debug('technical_indicator_timing', {
+        category: 'PERFORMANCE',
+        eventType: 'TECHNICAL_INDICATOR_CALC_TIMING_US',
+        traceId,
+        decisionId: traceId,
+        symbol,
+        indicatorCalcDurationUs,
+        priceHistoryLength: prices.length,
+      });
+    });
     const { rsi, sma20, sma50, macd, macdSignal, bbUpper, bbLower } = indicators;
     const macdHistogram = macd - macdSignal;
     // Phase 6 (ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md) - regime captured

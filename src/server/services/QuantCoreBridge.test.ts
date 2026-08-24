@@ -79,6 +79,78 @@ describe('QuantCoreBridgeService - gating and tick forwarding (Phase 2)', () => 
   });
 });
 
+describe('QuantCoreBridgeService.fetchInstitutionalVolatility/fetchInstitutionalRegime - advisory-only, never wired to a vote', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  const bars = Array.from({ length: 40 }, (_, i) => ({
+    timestamp: i, open: 100 + i, high: 101 + i, low: 99 + i, close: 100.5 + i, volume: 1000,
+  }));
+
+  beforeEach(() => {
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('returns null and never calls fetch when QUANT_JAVA_CORE_ENABLED is off (default)', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch');
+    const bridge = new QuantCoreBridgeService();
+
+    expect(await bridge.fetchInstitutionalVolatility('AAPL', bars)).toBeNull();
+    expect(await bridge.fetchInstitutionalRegime('AAPL', bars)).toBeNull();
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('POSTs bars to the volatility endpoint and returns the parsed GARCH result when enabled', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', omega: 0.001, alpha: 0.05, beta: 0.9, persistence: 0.95, logLikelihood: -100, unconditionalVariance: 0.02, lastConditionalVariance: 0.019, forecastStepsAhead: 1, forecastVariance: 0.021, forecastVolatility: 0.145, returnsUsed: 39 };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalVolatility('AAPL', bars);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/institutional/volatility/AAPL'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result).toEqual(fakeResult);
+  });
+
+  it('POSTs bars to the regime endpoint and returns the parsed HMM result when enabled', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', currentRegime: 'BULL_TRENDING', logLikelihood: -50, observationCount: 30, stateLabels: ['BULL_TRENDING', 'BEAR_TRENDING', 'MEAN_REVERTING', 'HIGH_VOL_CHAOS'], stateMeans: [[0.01, 0.02]], stateVariances: [[0.001, 0.002]] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalRegime('AAPL', bars);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/v1/institutional/regime/AAPL'),
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(result).toEqual(fakeResult);
+  });
+
+  it('fails closed (returns null, never throws) when the Java process is unreachable', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const bridge = new QuantCoreBridgeService();
+    await expect(bridge.fetchInstitutionalVolatility('AAPL', bars)).resolves.toBeNull();
+    await expect(bridge.fetchInstitutionalRegime('AAPL', bars)).resolves.toBeNull();
+  });
+
+  it('fails closed (returns null) on a non-2xx response, e.g. 422 insufficient history', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response('{"ok":false}', { status: 422 }));
+
+    const bridge = new QuantCoreBridgeService();
+    expect(await bridge.fetchInstitutionalVolatility('AAPL', bars)).toBeNull();
+  });
+});
+
 describe('QuantCoreBridgeService.health()', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 

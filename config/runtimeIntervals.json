@@ -41,5 +41,6 @@
   "omsPollForFillTimeoutMs": 4000,
   "omsPollForFillIntervalMs": 400,
   "autoTradeSchedulerMs": 60000,
-  "strategyEngineShadowMs": 300000
+  "strategyEngineShadowMs": 300000,
+  "javaQuantAdvisoryMs": 90000
 }

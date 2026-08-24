@@ -585,12 +585,22 @@ export function mountResearchRoutes(v2Router: Router): void {
   v2Router.post('/research/replay/create', replayLabLimiter, async (req, res) => {
     try {
       assertNoArbitraryCode(req.body ?? {});
-      const { createReplayRun } = await import('../replay/FullArgusReplayEngine');
-      const row = await createReplayRun(req.body || {});
-      // server.ts's 15s /api request-timeout watchdog can already have sent a 504 for a slow real-
-      // provider dataset load by the time this resolves - guard instead of throwing
-      // ERR_HTTP_HEADERS_SENT (the same crash pattern already seen from other slow routes).
-      if (!res.headersSent) res.json({ ok: true, ...row, canPlaceOrders: false });
+      const { beginReplayRun, completeReplayRun } = await import('../replay/FullArgusReplayEngine');
+      // Real bug found and fixed this pass: this route used to `await createReplayRun(...)`
+      // synchronously, which includes real network I/O for non-fixture providers (IBKR
+      // reqHistoricalData is paced/serialized per symbol - a full ARGUS_DISCOVERY universe can
+      // take well over server.ts's blanket 15s /api request-timeout watchdog, which then answered
+      // with a 504 before this route ever got to respond with a runId at all). beginReplayRun does
+      // only the fast synchronous validation + row registration (status CREATING) and returns
+      // immediately; completeReplayRun (the slow dataset-load + session-build half) now runs in the
+      // background after the response is already sent. The frontend's existing 750ms status poll
+      // (already used during a RUNNING replay) picks up the CREATING -> READY/DATA_UNAVAILABLE/
+      // FAILED transition the same way it already polls run progress.
+      const { replayId, config, row } = beginReplayRun(req.body || {});
+      res.json({ ok: true, ...row, canPlaceOrders: false });
+      void completeReplayRun(replayId, config).catch((e) => {
+        console.error(`[Replay] background dataset load failed for ${replayId}`, e);
+      });
     } catch (e: any) {
       if (!res.headersSent) res.status(400).json({ ok: false, error: e.message, canPlaceOrders: false, live: 'NO-GO' });
     }

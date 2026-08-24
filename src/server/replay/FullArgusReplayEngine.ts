@@ -600,7 +600,15 @@ export function getReplayEquity(id: string) {
   return readReplayJson(id, 'equity_curve.json') || [];
 }
 
-export async function createReplayRun(body: Partial<ReplayConfig> & { python?: unknown; code?: unknown; placeOrder?: unknown } = {}) {
+/**
+ * Fast, synchronous validation + row registration - no dataset I/O. Split out of createReplayRun
+ * so the HTTP route can respond immediately (see completeReplayRun's own doc comment for why:
+ * IBKR reqHistoricalData across a full ARGUS_DISCOVERY universe is paced/serialized and can take
+ * well over server.ts's blanket 15s /api request-timeout watchdog). Direct callers (tests, scripts)
+ * should keep using createReplayRun below, which still awaits both halves and returns the exact
+ * same fully-built row it always has - this split only changes the HTTP route's own behavior.
+ */
+export function beginReplayRun(body: Partial<ReplayConfig> & { python?: unknown; code?: unknown; placeOrder?: unknown } = {}): { replayId: string; config: ReplayConfig; row: Record<string, unknown> } {
   if (body && (body.python || body.code || body.placeOrder)) {
     throw new Error('Arbitrary code/broker payloads are not allowed');
   }
@@ -619,9 +627,27 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
   if (isReplayActive()) {
     throw new Error('A replay session is already active');
   }
+  const replayId = crypto.randomUUID();
+  const row = {
+    replayId,
+    status: 'CREATING' as ReplayRunStatus,
+    config,
+    live: 'NO-GO',
+    executionEnvironment: 'REPLAY',
+    organicPaper: false,
+  };
+  runs.set(replayId, row);
+  return { replayId, config, row };
+}
+
+/**
+ * The slow half: dataset load (real IBKR/Alpaca network I/O for non-fixture providers) through
+ * final session construction. Updates the SAME row beginReplayRun already registered (same
+ * replayId) in place, to whatever terminal or READY status it resolves to.
+ */
+export async function completeReplayRun(replayId: string, config: ReplayConfig): Promise<Record<string, unknown>> {
   const datasets = await loadDatasets(config);
   if (!Array.isArray(datasets)) {
-    const replayId = crypto.randomUUID();
     const row = {
       replayId,
       status: 'DATA_UNAVAILABLE' as ReplayRunStatus,
@@ -644,7 +670,6 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
   }
   quality.issues = [...new Set([...quality.issues, ...combinedIssues])];
   if (quality.quality === 'RED') {
-    const replayId = crypto.randomUUID();
     const row = {
       replayId,
       status: 'FAILED' as ReplayRunStatus,
@@ -665,7 +690,6 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
     strategyVersions,
     argusVersion: replaySafety.replayEngineVersion,
   });
-  const replayId = crypto.randomUUID();
   const costs = replaySafety.costProfiles[config.costProfile] || replaySafety.costProfiles[replaySafety.defaultCostProfile];
   const startMs = datasets[0].bars[0]?.timestamp ?? Date.parse(config.startDate);
   const clock = new ReplayClock(startMs);
@@ -822,6 +846,18 @@ export async function createReplayRun(body: Partial<ReplayConfig> & { python?: u
     quality,
   });
   return row;
+}
+
+/**
+ * Backward-compatible full synchronous create (unchanged contract - every existing direct caller,
+ * test, and script keeps working exactly as before): registers the row, then awaits dataset load +
+ * session construction before returning the same fully-built row completeReplayRun always returned.
+ * The HTTP route (researchRoutes.ts) uses beginReplayRun/completeReplayRun directly instead, so it
+ * can respond the instant the row is registered rather than blocking on real provider network I/O.
+ */
+export async function createReplayRun(body: Partial<ReplayConfig> & { python?: unknown; code?: unknown; placeOrder?: unknown } = {}): Promise<Record<string, unknown>> {
+  const { replayId, config } = beginReplayRun(body);
+  return completeReplayRun(replayId, config);
 }
 
 export function pauseReplay(id: string) {
@@ -1301,6 +1337,12 @@ export async function startReplay(id: string, opts?: { async?: boolean }) {
   // surfacing why the run can't start.
   if (!row) return { ok: false, error: 'REPLAY_NOT_FOUND' };
   if (!row.session) {
+    // CREATING: completeReplayRun (dataset load + session build) is still running in the
+    // background - a real, expected transient state, not a failure. Caller should poll
+    // GET /research/replay/:id until status leaves CREATING before retrying /start.
+    if (row.status === 'CREATING') {
+      return { ok: false, error: 'STILL_CREATING', code: 'STILL_CREATING', status: row.status };
+    }
     return {
       ok: false,
       error: row.error || `Replay ${id} has no runnable session (status=${row.status ?? 'UNKNOWN'}) - it never produced a session, most likely because its data provider returned no dataset at creation time.`,
@@ -1325,6 +1367,9 @@ async function runReplayLoop(id: string) {
   const row = runs.get(id) as { session?: ActiveReplaySession; status?: string; error?: string; code?: string } | undefined;
   if (!row) return { ok: false, error: 'REPLAY_NOT_FOUND' };
   if (!row.session) {
+    if (row.status === 'CREATING') {
+      return { ok: false, error: 'STILL_CREATING', code: 'STILL_CREATING', status: row.status };
+    }
     return {
       ok: false,
       error: row.error || `Replay ${id} has no runnable session (status=${row.status ?? 'UNKNOWN'})`,

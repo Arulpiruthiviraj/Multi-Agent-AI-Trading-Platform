@@ -43,6 +43,8 @@ import {
 import { clusterCoversSymbol, newsImpactOnVetoScale } from '../news/newsClusterMatch';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { evaluateQuoteFreshness } from '../core/marketDataQuality';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { performance } from 'node:perf_hooks';
 import { getActiveReplaySession, replayVisibleBars } from '../replay/ReplayContext';
 import { classifyMarketSession, sessionAllowsFills } from '../replay/marketSession';
 import { replaySafety } from '../replay/replaySafety';
@@ -242,9 +244,21 @@ export class RiskEngine {
         // rejected proposal now always pays the cost of every gate's real DB/network calls
         // (portfolio, settings, consecutive-loss query, market clock, news query, and - for BUY -
         // correlation history per existing position) rather than short-circuiting early.
+        //
+        // Perf instrumentation (docs/audits/ARGUS_JAVA_PYTHON_NODE_PERFORMANCE_BOUNDARY_AUDIT.md's
+        // Phase 0): recordGate is the one call every gate already passes through uniformly, so
+        // timing the gap between consecutive calls gives a real per-gate cost breakdown with no
+        // change to any gate's own logic. DEBUG level, same convention QuantCoreServer.java uses
+        // for its own high-frequency tick log - never floods INFO-level logs by default.
+        const evalStartedAtMs = performance.now();
+        let lastGateTimestampMs = evalStartedAtMs;
+        const gateTimingsUs: Record<string, number> = {};
         const gateResults: GateResult[] = [];
         let sequence = 0;
         const recordGate = (gate: string, passed: boolean, detail: any) => {
+            const nowMs = performance.now();
+            gateTimingsUs[gate] = Math.round((nowMs - lastGateTimestampMs) * 1000);
+            lastGateTimestampMs = nowMs;
             gateResults.push({ gate, passed, detail });
             eventBus.emit(EVENTS.RISK_GATE_EVALUATED, { transactionId: proposal.transactionId, traceId: proposal.traceId, symbol: proposal.symbol, gate, sequence: sequence++, passed, detail });
         };
@@ -748,6 +762,19 @@ export class RiskEngine {
             maxQuantity = 0;
             reasoning = `Risk evaluation crashed: ${(e as Error).message}`;
             await this.persistThenPublishAssessment(proposal, { approved: false, maxQuantity: 0, reasoning, rejectionGate: 'system_error', accountEquity, buyingPower, gateResults });
+        } finally {
+            const totalDurationUs = Math.round((performance.now() - evalStartedAtMs) * 1000);
+            observeSafe(() => {
+                structuredLogger.debug('risk_gate_timing', {
+                    category: 'PERFORMANCE',
+                    eventType: 'RISK_GATE_TIMING_US',
+                    traceId: proposal.traceId,
+                    decisionId: proposal.traceId,
+                    symbol: proposal.symbol,
+                    totalDurationUs,
+                    gateTimingsUs,
+                });
+            });
         }
     }
 

@@ -223,4 +223,86 @@ class QuantCoreServerTest {
     private static Map<String, Object> barJson(int t, double close) {
         return Map.of("timestampMs", (double) t, "open", close, "high", close, "low", close, "close", close, "volume", 1000.0);
     }
+
+    // GarchEngine/HmmRegimeEngine were real, compiled, and unit-tested (GarchEngineTest.java,
+    // HmmRegimeEngineTest.java) before this pass but had zero HTTP endpoint - unreachable from the
+    // TypeScript control plane. These tests prove the new wiring, not the underlying statistics
+    // (already proven at the engine level) - so they assert response shape/plausibility rather than
+    // a specific fitted value or regime label.
+
+    @Test
+    void institutionalVolatilityFitsGarchForARealisticReturnSeries() throws Exception {
+        Random rnd = new Random(1357);
+        double price = 100;
+        List<Object> bars = new ArrayList<>();
+        double vol = 0.01;
+        for (int i = 0; i < 250; i++) {
+            // Simple vol-clustering construction (not GARCH-generated data itself - just enough
+            // heteroskedasticity that a real GARCH(1,1) fit is meaningful, not degenerate).
+            vol = 0.4 * vol + 0.6 * (0.005 + Math.abs(rnd.nextGaussian()) * 0.01);
+            double ret = rnd.nextGaussian() * vol;
+            double close = price * (1 + ret);
+            bars.add(barJson(i, close));
+            price = close;
+        }
+        var res = post("/api/v1/institutional/volatility/AAPL", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("symbol")).isEqualTo("AAPL");
+        assertThat(Json.asDouble(body.get("alpha"))).isBetween(0.0, 1.0);
+        assertThat(Json.asDouble(body.get("beta"))).isBetween(0.0, 1.0);
+        assertThat(Json.asDouble(body.get("persistence"))).isLessThan(1.0);
+        assertThat(Json.asDouble(body.get("forecastVolatility"))).isGreaterThanOrEqualTo(0.0);
+        assertThat(Json.asDouble(body.get("returnsUsed"))).isEqualTo(249.0);
+    }
+
+    @Test
+    void institutionalVolatilityReturns422WithTooFewBars() throws Exception {
+        var res = post("/api/v1/institutional/volatility/AAPL", Map.of("bars", List.of(
+            barJson(0, 100.0), barJson(1, 101.0))));
+        assertThat(res.statusCode()).isEqualTo(422);
+    }
+
+    @Test
+    void institutionalVolatilityRejectsMissingBarsField() throws Exception {
+        var res = post("/api/v1/institutional/volatility/AAPL", Map.of());
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void institutionalRegimeFitsAFourStateHmmAndReturnsAPlausibleShape() throws Exception {
+        Random rnd = new Random(9182);
+        double price = 100;
+        List<Object> bars = new ArrayList<>();
+        for (int i = 0; i < 260; i++) {
+            // Alternating calm/choppy blocks so the fitted variances aren't degenerate uniform noise.
+            boolean choppy = (i / 50) % 2 == 1;
+            double ret = rnd.nextGaussian() * (choppy ? 0.03 : 0.006) + (choppy ? 0 : 0.0015);
+            double close = price * (1 + ret);
+            bars.add(barJson(i, close));
+            price = close;
+        }
+        var res = post("/api/v1/institutional/regime/AAPL", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("symbol")).isEqualTo("AAPL");
+        assertThat(body.get("currentRegime")).isIn("BULL_TRENDING", "BEAR_TRENDING", "MEAN_REVERTING", "HIGH_VOL_CHAOS");
+        @SuppressWarnings("unchecked")
+        List<String> stateLabels = (List<String>) body.get("stateLabels");
+        assertThat(stateLabels).hasSize(4);
+        assertThat(Json.asDouble(body.get("observationCount"))).isGreaterThan(0.0);
+    }
+
+    @Test
+    void institutionalRegimeReturns422WithTooFewBars() throws Exception {
+        var res = post("/api/v1/institutional/regime/AAPL", Map.of("bars", List.of(
+            barJson(0, 100.0), barJson(1, 101.0), barJson(2, 100.5))));
+        assertThat(res.statusCode()).isEqualTo(422);
+    }
+
+    @Test
+    void institutionalRegimeRejectsMissingBarsField() throws Exception {
+        var res = post("/api/v1/institutional/regime/AAPL", Map.of());
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
 }

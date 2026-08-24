@@ -1,0 +1,36 @@
+{
+  "$comment": "Engine ownership registry (docs/audits/ARGUS_POST_MIGRATION_ARCHITECTURE_AUDIT.md, ARGUS_JAVA_ENGINE_ACTIVATION_PLAN.md Phase 1). Classifications below are derived from that audit's source/build/runtime evidence, not invented. Regenerate this file's entries only after re-verifying against real source/tests - never hand-wave a status. Status values: NODE_AUTHORITATIVE, JAVA_AUTHORITATIVE, JAVA_ADVISORY, PARITY_SHADOW, NODE_ONLY, JAVA_ONLY, DEPRECATED_CANDIDATE. javaAuthoritative for every entry below is false - nothing in this codebase has ever reached that status; do not flip it without the Phase 8 authoritative-mode work and a real soak.",
+  "indicators": {
+    "rsi": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "javaLocation": "quant-core-java RSI.java", "nodeLocation": "src/server/engines/RSIEngine.ts", "migrationStatus": "PARITY_SHADOW", "liveConsumer": "TechnicalAgent.ts (Node copy only)" },
+    "macd": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "javaLocation": "quant-core-java MACD.java", "nodeLocation": "src/server/engines/MACDEngine.ts", "migrationStatus": "PARITY_SHADOW", "liveConsumer": "TechnicalAgent.ts (Node copy only)" },
+    "bollinger": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "javaLocation": "quant-core-java Bollinger.java", "nodeLocation": "src/server/services/technicalSignal.ts", "migrationStatus": "PARITY_SHADOW", "liveConsumer": "TechnicalAgent.ts (Node copy only)" },
+    "atr": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "javaLocation": "SymbolState.tickRangeAtr (tick-range approximation, NOT equivalent to Node's)", "nodeLocation": "src/server/engines/TechnicalIndicators.ts", "migrationStatus": "NOT_A_PARITY_PAIR", "liveConsumer": "Node only - Java's version is a disclosed, non-equivalent approximation" }
+  },
+  "strategies": {
+    "momentum_breakout": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "migrationStatus": "PARITY_ONLY", "liveConsumer": "QuantSignalAgent.ts (Node copy only)" },
+    "pullback_continuation": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "migrationStatus": "PARITY_ONLY", "liveConsumer": "QuantSignalAgent.ts (Node copy only)" },
+    "mean_reversion": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "migrationStatus": "PARITY_ONLY", "liveConsumer": "QuantSignalAgent.ts (Node copy only)" },
+    "trend_following": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "migrationStatus": "PARITY_ONLY", "liveConsumer": "QuantSignalAgent.ts (Node copy only)" },
+    "range_reversion": { "owner": "NODE_AUTHORITATIVE", "javaAvailable": true, "migrationStatus": "PARITY_ONLY", "liveConsumer": "QuantSignalAgent.ts (Node copy only)" }
+  },
+  "quantModels": {
+    "garch": { "owner": "JAVA_ONLY", "javaAvailable": true, "javaLocation": "GarchEngine.java", "httpEndpoint": "/api/v1/institutional/volatility/{symbol}", "liveConsumer": "JavaQuantAdvisoryService.ts (advisory event only, not wired to ChiefTrader/EvidenceAggregator)", "javaAuthoritative": false },
+    "hmm_regime": { "owner": "JAVA_ONLY", "javaAvailable": true, "javaLocation": "HmmRegimeEngine.java", "httpEndpoint": "/api/v1/institutional/regime/{symbol}", "liveConsumer": "JavaQuantAdvisoryService.ts (advisory event only, not wired to ChiefTrader/EvidenceAggregator)", "javaAuthoritative": false },
+    "factor_composite": { "owner": "JAVA_ONLY", "javaAvailable": true, "javaLocation": "FactorAlphaEngine.java", "httpEndpoint": "/api/v1/institutional/factors/{symbol}", "liveConsumer": "JavaQuantAdvisoryService.ts (advisory event only, not wired to ChiefTrader/EvidenceAggregator)", "javaAuthoritative": false },
+    "stat_arb": { "owner": "JAVA_ONLY", "javaAvailable": true, "javaLocation": "StatArbEngine.java", "httpEndpoint": "/api/v1/institutional/pairs", "liveConsumer": "NONE - needs a pair-selection strategy before any caller can use it; deliberately out of scope for JavaQuantAdvisoryService's initial single-symbol loop", "javaAuthoritative": false }
+  },
+  "riskAndExecution": {
+    "risk_engine_24_gates": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "No Java equivalent exists anywhere. Must never move - safety-critical (CLAUDE.md protected architecture)." },
+    "position_sizing": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "Feeds RiskEngine gate 21 directly; authorization-adjacent." },
+    "oms": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "Sole .placeOrder( caller; must never move (CLAUDE.md)." },
+    "broker_adapters": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "quant-core-java has zero broker imports/credentials by design - verified by source inspection each audit pass." },
+    "chief_trader_consensus": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "EvidenceAggregator/ChiefTraderAgent have no Java counterpart. Any future Java evidence source must enter here as ONE vote among many, never an auto-approval - see Phase 3 of the activation plan, deliberately NOT implemented yet." },
+    "portfolio_monitor_exit_intelligence": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "Stop-loss/take-profit/trailing/thesis-invalidation - no Java equivalent." },
+    "reconciliation": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "No Java equivalent." }
+  },
+  "backtesting": {
+    "full_argus_replay_engine": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "The Historical Evaluation replay UI/API path - reuses real TS ChiefTrader/RiskEngine/OMS math." },
+    "backtest_engine": { "owner": "NODE_ONLY", "javaAvailable": false, "notes": "Lightweight TA-rule research engine, SAME_BAR_CLOSE." },
+    "java_backtest_engine": { "owner": "JAVA_ONLY", "javaAvailable": true, "javaLocation": "JavaBacktestEngine.java", "notes": "Standalone, separately tested, NOT wired to or cross-validated against the two Node engines. Do not treat its output as comparable evidence until a parity test exists." }
+  }
+}
