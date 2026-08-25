@@ -57,6 +57,7 @@ Engine:
   health            Check process health
   ready             Check trading readiness (LIVE readiness API)
   pipeline-ready    Process-alive vs trading-pipeline-ready (DB/market data/broker/AI providers)
+  session-report    Pre-market/market-open counters (ideas, consensus, risk, execution, AI, safety)
   nuke              Force-kill stale/zombie Argus processes (no services started after)
 
 Trading:

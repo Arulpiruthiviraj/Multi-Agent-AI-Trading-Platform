@@ -77,6 +77,14 @@ describe('sessionRecovery interrupted session', () => {
     expect(allowsNewEntryIdeas()).toBe(true);
   });
 
+  it('Part 11 crash-forensics fix: beginRuntimeSession records the real pid and parent pid, and exitCode starts null (a process cannot know its own exit code before it happens)', () => {
+    beginRuntimeSession();
+    const row = JSON.parse(readFileSync(markerPath, 'utf8'));
+    expect(row.pid).toBe(process.pid);
+    expect(row.parentPid).toBe(process.ppid);
+    expect(row.exitCode).toBeNull();
+  });
+
   it('Phase 5 crash-forensics fix: an unclean-shutdown marker is persisted as a queryable, structured TRADING_SAFETY event - not just a console line - so a future forensic audit does not depend on someone having watched the console', () => {
     const warnSpy = vi.spyOn(structuredLogger, 'warn').mockImplementation(() => {});
     writeFileSync(markerPath, JSON.stringify({

@@ -7,6 +7,7 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { AIRouter } from '../ai/AIRouter';
 import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './ExternalDataCache';
 import { AlphaVantageBudget } from './AlphaVantageBudget';
@@ -177,6 +178,9 @@ export class MacroEconomyAgent {
     }
     const symbol = universe[Math.floor(Date.now() / 75000) % universe.length];
     const traceId = generateTraceId(symbol);
+    // Real fix (2026-08-24 readiness audit, Part 2) - see FundamentalAgent.ts's identical comment.
+    eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol, requestedBy: 'MacroAgent', at: new Date().toISOString() });
+    marketDataWorker.subscribe(symbol, { requestedBy: 'MacroAgent' });
     // See FundamentalAgent.ts's identical comment.
     const currentPrice = marketDataWorker.getLatestPrice(symbol);
 

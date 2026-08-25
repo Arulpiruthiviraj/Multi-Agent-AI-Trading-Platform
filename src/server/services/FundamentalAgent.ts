@@ -7,6 +7,7 @@
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
 import { AIRouter } from '../ai/AIRouter';
 import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './ExternalDataCache';
 import { AlphaVantageBudget } from './AlphaVantageBudget';
@@ -187,6 +188,16 @@ export class FundamentalAnalysisAgent {
     }
     const symbol = universe[Math.floor(Date.now() / 60000) % universe.length];
     const traceId = generateTraceId(symbol);
+    // Real fix (2026-08-24 readiness audit, Part 2): this round-robin previously never requested
+    // coverage for its own evaluation target - it only ever passively read getLatestPrice() and
+    // hoped the symbol happened to already be streamed for some unrelated reason (opportunity-
+    // discovery priority). With only a fraction of the ~122-symbol universe actually streamed at
+    // once, most picks had no live tick at all - the deterministic, traceable cause of most
+    // MISSING_PRICE rejections. subscribe() is idempotent/cap-aware (MarketDataWorker.ts) and emits
+    // SYMBOL_NOT_SUBSCRIBED/MARKET_DATA_CAPACITY_FULL - this does not fabricate a price for THIS
+    // tick, it only improves the odds this symbol has a real one the next time it comes up.
+    eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol, requestedBy: 'FundamentalAgent', at: new Date().toISOString() });
+    marketDataWorker.subscribe(symbol, { requestedBy: 'FundamentalAgent' });
     // Same authoritative live-price source gateTradeIdea's own lookupLivePrice fallback already
     // reads (MarketDataWorker's WS tick cache, registered via setTradeIdeaLivePriceLookup) -
     // attached explicitly here rather than relying solely on that global fallback. Never invented,

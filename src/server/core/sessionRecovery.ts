@@ -11,9 +11,17 @@ import { structuredLogger } from '../observability/StructuredLogger';
 
 export interface RuntimeSessionFile {
   pid: number;
+  /** Real fix (2026-08-24 readiness audit, Part 11): the prior unexplained 16:20:51Z process
+   *  death had no parent PID or exit-code evidence at all - only these two fields, both cheap and
+   *  always available, close that specific gap for the NEXT unexplained death. Neither invents a
+   *  root cause; they only ensure more evidence exists if one recurs. */
+  parentPid: number | null;
   startedAt: string;
   lastHeartbeatAt: string;
   cleanShutdown: boolean;
+  /** Set by the process.on('exit') handler below - null until the process actually exits, since a
+   *  process cannot observe its own exit code before it happens. */
+  exitCode: number | null;
   interruptedOnLoad?: boolean;
 }
 
@@ -94,12 +102,16 @@ export function allowsNewEntryIdeas(): boolean {
   return !holdNewEntryIdeas;
 }
 
+let exitHandlerInstalled = false;
+
 export function beginRuntimeSession(): void {
   current = {
     pid: process.pid,
+    parentPid: typeof process.ppid === 'number' ? process.ppid : null,
     startedAt: new Date().toISOString(),
     lastHeartbeatAt: new Date().toISOString(),
     cleanShutdown: false,
+    exitCode: null,
   };
   write(current);
   if (!heartbeat) {
@@ -117,6 +129,21 @@ export function beginRuntimeSession(): void {
     }, 15000);
     heartbeat.unref?.();
   }
+  // Real fix (2026-08-24 readiness audit, Part 11): 'exit' is the one event Node guarantees fires
+  // on every normal exit path (including an uncaught exception after globalErrorHandlers.ts's own
+  // handling, and an explicit process.exit() call) - it cannot fire on SIGKILL/a hard OS-level
+  // kill (nothing in-process can), so this still cannot explain the prior unexplained death, but it
+  // closes the gap for every OTHER kind of exit this process might have going forward. Only
+  // synchronous work is possible here (Node's own constraint on 'exit' handlers) - fs.writeFileSync
+  // is safe, an async write would silently never complete.
+  if (!exitHandlerInstalled) {
+    exitHandlerInstalled = true;
+    process.on('exit', (code) => {
+      if (!current) return;
+      current.exitCode = code;
+      try { write(current); } catch { /* best-effort on the way out */ }
+    });
+  }
 }
 
 export function markCleanShutdown(): void {
@@ -127,9 +154,11 @@ export function markCleanShutdown(): void {
   if (!current) {
     current = {
       pid: process.pid,
+      parentPid: typeof process.ppid === 'number' ? process.ppid : null,
       startedAt: new Date().toISOString(),
       lastHeartbeatAt: new Date().toISOString(),
       cleanShutdown: true,
+      exitCode: null,
     };
   }
   current.cleanShutdown = true;

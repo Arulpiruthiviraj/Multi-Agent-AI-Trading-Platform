@@ -2,16 +2,16 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Real test coverage for the Phase 5 hardening fix - identical shape to FundamentalAgent.test.ts,
 // since MacroAgent's AI-parse code follows the exact same (now-validated) pattern.
-const { emitTradeIdea } = vi.hoisted(() => ({ emitTradeIdea: vi.fn() }));
+const { emitTradeIdea, emit } = vi.hoisted(() => ({ emitTradeIdea: vi.fn(), emit: vi.fn() }));
 const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
-const { getLatestPrice } = vi.hoisted(() => ({ getLatestPrice: vi.fn() }));
+const { getLatestPrice, subscribe } = vi.hoisted(() => ({ getLatestPrice: vi.fn(), subscribe: vi.fn() }));
 
-vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea } }));
+vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea, emit } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
-vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice } }));
+vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice, subscribe } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
   looksLikeRateLimitResponse: () => false,

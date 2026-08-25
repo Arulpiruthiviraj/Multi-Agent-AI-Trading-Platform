@@ -10,6 +10,8 @@ import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { getAIProviderHealthSnapshot, runAIProviderHealthCheckNow } from '../ai/AIProviderHealthCheck';
 import { getTradingReadinessSnapshot, renderTradingReadinessTree } from '../core/TradingReadinessGate';
+import { getTradingSessionReport, renderTradingSessionReport } from '../core/tradingSessionReport';
+import { allowsNewEntryIdeas } from '../core/sessionRecovery';
 
 export const runtimeRouter = Router();
 
@@ -98,6 +100,28 @@ runtimeRouter.get('/trading-readiness', async (req, res) => {
       return;
     }
     res.json({ ok: true, ...snapshot, live: 'NO-GO' });
+  } catch (e: unknown) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
+/**
+ * Pre-market/market-open operator observability report (2026-08-24 readiness audit, Part 10).
+ * Read-only, real counts only, scoped to the current real exchange trading day - never mixes
+ * organic PAPER/LIVE activity with REPLAY/BACKTEST/SIMULATION (see tradingSessionReport.ts's own
+ * header and the executionContextBreakdown field).
+ */
+runtimeRouter.get('/trading-session-report', async (req, res) => {
+  try {
+    const report = await getTradingSessionReport({
+      activeSymbols: marketDataWorker.getActiveSymbols().length,
+      interruptedSessionHold: !allowsNewEntryIdeas(),
+    });
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(renderTradingSessionReport(report));
+      return;
+    }
+    res.json({ ok: true, ...report, live: 'NO-GO' });
   } catch (e: unknown) {
     res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
   }

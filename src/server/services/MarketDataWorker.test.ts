@@ -268,6 +268,46 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     expect(worker.getActiveSymbols()).toContain('SPY');
   });
 
+  // Real coverage for the 2026-08-24 readiness audit, Part 2: FundamentalAgent/MacroAgent/
+  // NewsAgent previously round-robinned through the full ~122-symbol idea universe without ever
+  // requesting coverage for their own evaluation target - the deterministic cause of most
+  // MISSING_PRICE rejections. subscribe()'s new opts.requestedBy makes that request visible.
+  it('emits SYMBOL_NOT_SUBSCRIBED when a caller identifies itself and the symbol was not already streamed', () => {
+    authenticate(instances[0]);
+    emitSpy.mockClear();
+    worker.subscribe('MRVL', { requestedBy: 'FundamentalAgent' });
+    expect(emitSpy).toHaveBeenCalledWith('SYMBOL_NOT_SUBSCRIBED', expect.objectContaining({ symbol: 'MRVL', requestedBy: 'FundamentalAgent' }));
+  });
+
+  it('does not emit SYMBOL_NOT_SUBSCRIBED for an ordinary subscribe() call with no requestedBy (existing call sites unaffected)', () => {
+    authenticate(instances[0]);
+    emitSpy.mockClear();
+    worker.subscribe('MRVL');
+    expect(emitSpy).not.toHaveBeenCalledWith('SYMBOL_NOT_SUBSCRIBED', expect.anything());
+  });
+
+  it('emits MARKET_DATA_CAPACITY_FULL instead of silently dropping the request when a caller-attributed subscribe is refused at the hard cap', async () => {
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+    const cap = continuousIntelligence.maxActiveSubscriptions;
+    authenticate(instances[0]);
+    for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let requested = 0;
+    outer: for (let i = 0; i < 26; i++) {
+      for (let j = 0; j < 26; j++) {
+        worker.subscribe(`ZZ${alphabet[i]}${alphabet[j]}`);
+        requested += 1;
+        if (requested > cap + 8) break outer;
+      }
+    }
+    expect(worker.getActiveSymbols().length).toBe(cap);
+    // Every dynamic slot is fresh (within dwell) right after subscribing, so a new candidate cannot
+    // prune anything yet - the real "still full" case a caller-attributed request can hit.
+    emitSpy.mockClear();
+    worker.subscribe('VVVV', { requestedBy: 'MacroAgent' });
+    expect(emitSpy).toHaveBeenCalledWith('MARKET_DATA_CAPACITY_FULL', expect.objectContaining({ symbol: 'VVVV', requestedBy: 'MacroAgent' }));
+  });
+
   it('prunes least-active non-protected symbols at the configured cap instead of overflowing Alpaca', async () => {
     const { continuousIntelligence } = await import('../config/continuousIntelligence');
     const cap = continuousIntelligence.maxActiveSubscriptions;

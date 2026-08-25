@@ -325,6 +325,12 @@ export class NewsEngine {
               if (newsAgentEmitsTradeIdeas() && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('NewsAgent')) {
                 const ticker = looksLikeListedTicker(symbol);
                 if (!ticker) return;
+                // Real fix (2026-08-24 readiness audit, Part 2) - see FundamentalAgent.ts's
+                // identical comment. A news catalyst can legitimately be about a symbol outside the
+                // currently-streamed set - request coverage before reading the price rather than
+                // only ever passively hoping it was already subscribed for an unrelated reason.
+                eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol: ticker, requestedBy: 'NewsAgent', at: new Date().toISOString() });
+                marketDataWorker.subscribe(ticker, { requestedBy: 'NewsAgent' });
                 // Same authoritative live-price source `referencePrice` above already reads
                 // (MarketDataWorker) - attached explicitly so gateTradeIdea's price_validity gate
                 // doesn't depend solely on its own separate lookupLivePrice fallback registration.

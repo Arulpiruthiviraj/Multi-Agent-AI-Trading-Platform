@@ -441,6 +441,18 @@ const commands: Record<string, () => Promise<void>> = {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
     console.log(text);
   },
+  async 'session-report'() {
+    // Pre-market/market-open operator observability (2026-08-24 readiness audit, Part 10) - real
+    // counts only, scoped to the current trading day, organic PAPER/LIVE always reported separately
+    // from REPLAY/BACKTEST/SIMULATION (see tradingSessionReport.ts's own header).
+    const res = await fetch(`${BASE}/api/v2/runtime/trading-session-report?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
+    console.log(text);
+  },
   async config() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/config'), null, 2));
   },

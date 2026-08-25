@@ -398,7 +398,17 @@ export class MarketDataWorker {
     console.log("[MarketDataWorker] Disconnected.");
   }
 
-  subscribe(symbol: string, opts: { momentumScore?: number } = {}) {
+  /**
+   * @param opts.requestedBy - real fix (2026-08-24 readiness audit, Part 2): FundamentalAgent/
+   * MacroAgent/NewsEngine round-robin through the full idea universe (~122 symbols) but never
+   * requested coverage for their own evaluation target - they only ever passively called
+   * getLatestPrice() and hoped the symbol happened to already be streamed for some unrelated
+   * reason (opportunity-discovery priority). With only 18-90 of the universe actually streamed at
+   * once, most round-robin picks had no live tick at all - this was the deterministic, traceable
+   * cause of most MISSING_PRICE rejections. Passing requestedBy lets this call site show up in the
+   * new SYMBOL_NOT_SUBSCRIBED/MARKET_DATA_CAPACITY_FULL observability below.
+   */
+  subscribe(symbol: string, opts: { momentumScore?: number; requestedBy?: string } = {}) {
     const ticker = looksLikeListedTicker(symbol);
     if (!ticker) return;
     if (this.activeStreams.has(ticker)) {
@@ -406,6 +416,9 @@ export class MarketDataWorker {
         this.dynamicMomentumScores.set(ticker, opts.momentumScore);
       }
       return;
+    }
+    if (opts.requestedBy) {
+      eventBus.emit(EVENTS.SYMBOL_NOT_SUBSCRIBED, { symbol: ticker, requestedBy: opts.requestedBy, at: new Date().toISOString() });
     }
 
     const cap = this.effectiveStreamingCap();
@@ -416,6 +429,9 @@ export class MarketDataWorker {
       console.warn(
         `[MarketDataWorker] Refusing subscribe ${ticker} — at hard cap ${cap} (protected/core symbols retained)`,
       );
+      if (opts.requestedBy) {
+        eventBus.emit(EVENTS.MARKET_DATA_CAPACITY_FULL, { symbol: ticker, requestedBy: opts.requestedBy, cap, active: this.activeStreams.size, at: new Date().toISOString() });
+      }
       return;
     }
 
