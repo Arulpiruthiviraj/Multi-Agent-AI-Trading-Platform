@@ -35,6 +35,7 @@
 
 import { BaseAIProvider } from './AIProvider';
 import { networkEndpoints } from '../../config/networkEndpoints';
+import { aiModels } from '../../config/aiModels';
 
 // Hardening pass, Phase 6: see GeminiProvider.ts's identical comment - this provider previously
 // hardcoded "deepseek-coder" and silently ignored options.model.
@@ -82,11 +83,16 @@ export class DeepSeekProvider extends BaseAIProvider {
             messages: [{ role: "user", content: prompt }],
             // Phase 7 - see OpenAIProvider.ts's identical comment. Additive, opt-in only.
             ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+            // Real bug found live (2026-08-24) - see OpenAICompatibleProvider.ts's identical comment.
+            max_tokens: aiModels.maxResponseTokens,
         })
     });
 
     if (!response.ok) {
-        throw new Error(`DeepSeek API error: ${response.statusText}`);
+        // Real fix (2026-08-24 readiness audit, Part 5) - see OpenAICompatibleProvider.ts's identical comment.
+        let bodySnippet = '';
+        try { bodySnippet = (await response.text()).slice(0, 300); } catch { /* body already consumed or unavailable */ }
+        throw new Error(`DeepSeek API error: ${response.status} ${response.statusText}${bodySnippet ? ` - ${bodySnippet}` : ''}`);
     }
     
     const data = await response.json();

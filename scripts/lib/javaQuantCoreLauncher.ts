@@ -15,6 +15,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import net from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
+import { acquireJavaQuantCoreLaunchLock, releaseJavaQuantCoreLaunchLock } from './javaQuantCoreLock';
 
 function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
   return new Promise((resolve) => {
@@ -82,6 +83,27 @@ async function startJavaQuantCoreAndWaitUnsafe(repoRoot: string): Promise<void> 
     return;
   }
 
+  // Real fix (2026-08-24 readiness audit, Part 6): the checks above (health probe, port probe) are
+  // the cheap first line of defense, but there is a real TOCTOU race between "checked, saw nothing
+  // running" and the actual spawn below - this session found exactly that: two java.exe processes
+  // bound to the same port, from this launcher and devWithOpenAlice.ts's independent copy racing
+  // each other. The lock closes that specific window; it never replaces the health check above as
+  // the source of truth for "is Java Quant Core actually up."
+  const lock = acquireJavaQuantCoreLaunchLock(repoRoot, port);
+  if (lock.acquired === false) {
+    console.log(`[engine] Another process (pid ${lock.holderPid}) is already launching Java Quant Core - waiting for it to become healthy instead of starting a second copy.`);
+    await waitForHttpOk(healthUrl, 60_000, 'Java Quant Core GET /health');
+    return;
+  }
+
+  try {
+    await spawnJavaQuantCore(repoRoot, port, healthUrl);
+  } finally {
+    releaseJavaQuantCoreLaunchLock(repoRoot);
+  }
+}
+
+async function spawnJavaQuantCore(repoRoot: string, port: number, healthUrl: string): Promise<void> {
   const moduleDir = path.join(repoRoot, 'quant-core-java');
   const jarPath = path.join(moduleDir, 'target', 'quant-core-java-0.0.1-SNAPSHOT.jar');
   if (!fs.existsSync(moduleDir)) {

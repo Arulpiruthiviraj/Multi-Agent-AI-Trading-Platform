@@ -47,6 +47,7 @@ import { DeepSeekProvider } from './providers/DeepSeekProvider';
 import { OpenAIProvider } from './providers/OpenAIProvider';
 import { OpenAICompatibleProvider } from './providers/OpenAICompatibleProvider';
 import { NvidiaProvider } from './providers/NvidiaProvider';
+import { AnthropicProvider } from './providers/AnthropicProvider';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
@@ -641,6 +642,14 @@ export class AIRouter {
          } else if (nameLower.includes('nvidia')) {
              providerInstance = new NvidiaProvider();
              await (providerInstance as NvidiaProvider).initialize(apiKey, p.defaultModel || undefined);
+         } else if ((nameLower.includes('claude') || nameLower.includes('anthropic')) && !p.apiEndpoint) {
+             // Real fix (2026-08-24 readiness audit, Part 4): "Claude" used to fall through to the
+             // generic OpenAICompatibleProvider branch below, which speaks the OpenAI schema
+             // (Authorization: Bearer, choices[0].message.content) - not Anthropic's real API
+             // (x-api-key header, a typed content-block array response). No apiEndpoint override
+             // could have fixed that mismatch; see AnthropicProvider.ts's own header.
+             providerInstance = new AnthropicProvider();
+             await (providerInstance as AnthropicProvider).initialize(apiKey);
          } else {
 
              // Universal compatible (LiteLLM, OpenRouter, Local, Groq, etc)

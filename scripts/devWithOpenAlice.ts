@@ -38,6 +38,7 @@ import {
   shouldSkipOpenAlice,
   waitForOpenAliceMcp,
 } from './openAliceDevSupport';
+import { acquireJavaQuantCoreLaunchLock, releaseJavaQuantCoreLaunchLock } from './lib/javaQuantCoreLock';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
@@ -352,6 +353,24 @@ async function startJavaQuantCoreAndWaitUnsafe(): Promise<void> {
     return;
   }
 
+  // Real fix (2026-08-24 readiness audit, Part 6): shared with scripts/lib/javaQuantCoreLauncher.ts
+  // (the headless engine daemon's own copy of this same launch sequence) - closes the real TOCTOU
+  // race between "checked, saw nothing running" above and the actual spawn below. This session
+  // found exactly that race cause a real duplicate (two java.exe processes on the same port).
+  const lock = acquireJavaQuantCoreLaunchLock(repoRoot, port);
+  if (lock.acquired === false) {
+    console.log(`[dev] Another process (pid ${lock.holderPid}) is already launching Java Quant Core - waiting for it to become healthy instead of starting a second copy.`);
+    await waitForHttpOk(healthUrl, 60_000, 'Java Quant Core GET /health');
+    return;
+  }
+  try {
+    await spawnJavaQuantCoreForDev(port, healthUrl);
+  } finally {
+    releaseJavaQuantCoreLaunchLock(repoRoot);
+  }
+}
+
+async function spawnJavaQuantCoreForDev(port: number, healthUrl: string): Promise<void> {
   const moduleDir = path.join(repoRoot, 'quant-core-java');
   const jarPath = path.join(moduleDir, 'target', 'quant-core-java-0.0.1-SNAPSHOT.jar');
   if (!fs.existsSync(moduleDir)) {

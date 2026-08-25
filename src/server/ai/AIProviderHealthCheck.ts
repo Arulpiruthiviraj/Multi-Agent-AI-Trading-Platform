@@ -37,6 +37,7 @@ export type AIProviderHealthStatus =
   | 'MODEL_UNAVAILABLE'
   | 'RATE_LIMITED'
   | 'QUOTA_EXCEEDED'
+  | 'ACCOUNT_SUSPENDED'
   | 'TIMEOUT'
   | 'UNKNOWN';
 
@@ -100,6 +101,13 @@ function classifyError(err: unknown): AIProviderHealthStatus {
   const msg = err instanceof Error ? err.message : String(err);
   if (isTimeoutSkipError(err)) return 'TIMEOUT';
   if (isAuthFailureError(err)) return 'AUTH_FAILED';
+  // Real fix (2026-08-24 readiness audit, Part 5): "account suspended" is a real, distinct failure
+  // mode (seen live from Moonshot/Kimi - "account ... is suspended due to insufficient balance") -
+  // checked before the generic quota/rate-limit patterns below so it isn't swallowed by either.
+  // Only reachable at all now that OpenAICompatibleProvider.ts/OpenAIProvider.ts/DeepSeekProvider.ts
+  // include a response-body snippet in the thrown message - previously only status+statusText was
+  // available, which never contained this distinction.
+  if (/suspend(ed)?/i.test(msg) && /insufficient|balance|recharge/i.test(msg)) return 'ACCOUNT_SUSPENDED';
   if (/\b402\b|payment required|quota|insufficient[_ ]?quota|billing/i.test(msg)) return 'QUOTA_EXCEEDED';
   if (/\b429\b|rate[_ -]?limit/i.test(msg)) return 'RATE_LIMITED';
   if (/\b404\b/.test(msg) && /model/i.test(msg)) return 'MODEL_UNAVAILABLE';

@@ -26,9 +26,27 @@
  */
 
 import React, { useMemo, useState, useEffect } from 'react';
-import { Key, DollarSign, Route, Network, BrainCircuit, CheckCircle2, XCircle } from 'lucide-react';
+import { Key, DollarSign, Route, Network, BrainCircuit, CheckCircle2, XCircle, Zap, Loader2 } from 'lucide-react';
 import { UnavailableHint } from './UnavailableHint';
 import { useWebSocket } from '../context/WebSocketContext';
+
+/** Real minimal auth+chat probe result for one provider, from POST /api/v2/runtime/ai/providers/health/check.
+ *  Separate from the passive `health` column above (which only reflects the DB's last real
+ *  AIRouter call) - this is an on-demand, explicitly-triggered check, kept in its own state rather
+ *  than overwriting `providers` so a stale re-fetch of /api/v1/config/providers can never silently
+ *  clobber a just-run live result. */
+interface LiveCheckResult {
+  status: string;
+  latencyMs: number | null;
+  lastErrorSummary: string | null;
+  credentialSource?: 'DB' | 'ENV' | 'NONE';
+}
+
+function liveCheckBadgeClass(status: string): string {
+  if (status === 'HEALTHY') return 'text-emerald-400';
+  if (status === 'AUTH_FAILED' || status === 'PROVIDER_UNAVAILABLE' || status === 'CONFIG_MISSING' || status === 'ACCOUNT_SUSPENDED') return 'text-rose-400';
+  return 'text-amber-400'; // QUOTA_EXCEEDED, RATE_LIMITED, TIMEOUT, MODEL_UNAVAILABLE, UNKNOWN
+}
 
 type ProviderFilter = 'all' | 'active' | 'inactive';
 
@@ -119,6 +137,40 @@ export default function AIProviderManagement() {
   const [routingOverrides, setRoutingOverrides] = useState<Record<string, string>>({});
   const [routingSaveState, setRoutingSaveState] = useState<Record<string, 'saving' | 'saved' | 'error'>>({});
   const [routingSaveError, setRoutingSaveError] = useState<Record<string, string>>({});
+
+  // On-demand "Test All Providers Now" - a real minimal auth+chat probe run right now, not a wait
+  // for the periodic monitor. Kept separate from `providers` (which only reflects the last real
+  // AIRouter call recorded in the DB) so this never gets silently overwritten by a stale re-fetch.
+  const [liveCheck, setLiveCheck] = useState<Record<string, LiveCheckResult>>({});
+  const [liveCheckRunning, setLiveCheckRunning] = useState(false);
+  const [liveCheckError, setLiveCheckError] = useState<string | null>(null);
+
+  const runLiveProviderCheck = async () => {
+    setLiveCheckRunning(true);
+    setLiveCheckError(null);
+    try {
+      const res = await fetch('/api/v2/runtime/ai/providers/health/check', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok || data?.ok === false) {
+        setLiveCheckError(data?.error || `Check failed (${res.status})`);
+        return;
+      }
+      const next: Record<string, LiveCheckResult> = {};
+      for (const p of (data.providers || [])) {
+        next[p.providerId] = {
+          status: p.status,
+          latencyMs: p.latencyMs ?? null,
+          lastErrorSummary: p.lastErrorSummary ?? null,
+          credentialSource: p.credentialSource,
+        };
+      }
+      setLiveCheck(next);
+    } catch (e: any) {
+      setLiveCheckError(e?.message || 'Failed to reach the server.');
+    } finally {
+      setLiveCheckRunning(false);
+    }
+  };
 
   const fetchRoutingOverrides = () => {
     fetch('/api/v1/config/routing')
@@ -240,7 +292,18 @@ export default function AIProviderManagement() {
                   DB rows plus known catalog providers — including not configured / no key / disabled.
                 </p>
               </div>
-              <button onClick={() => {
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => { void runLiveProviderCheck(); }}
+                  disabled={liveCheckRunning}
+                  title="Runs a real, minimal authenticate()+chat('Reply with exactly: OK') probe against every registered provider right now - not a wait for the periodic monitor, never a live trading request."
+                  className="px-4 py-2 bg-indigo-600/20 hover:bg-indigo-600/30 disabled:opacity-50 text-indigo-300 text-[10px] uppercase tracking-widest font-bold rounded border border-indigo-500/40 transition-colors flex items-center gap-2"
+                >
+                  {liveCheckRunning ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
+                  {liveCheckRunning ? 'Testing...' : 'Test All Providers Now'}
+                </button>
+                <button onClick={() => {
     const provider = window.prompt("Provider Name (e.g. OpenRouter, OpenAI, Local LM Studio):");
     const model = window.prompt("Default Model (e.g. gpt-4o, mistral, llama3):");
     const apiKey = window.prompt("API Key (leave blank for local):");
@@ -252,9 +315,13 @@ export default function AIProviderManagement() {
       }).then(() => window.location.reload());
     }
   }} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white text-[10px] uppercase tracking-widest font-bold rounded transition-colors flex items-center gap-2">
-                <Key size={12} /> Add Provider
-              </button>
+                  <Key size={12} /> Add Provider
+                </button>
+              </div>
             </div>
+            {liveCheckError && (
+              <p className="text-[10px] text-rose-400 mb-4">Test failed: {liveCheckError}</p>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
                  <div className="bg-[#0A0F16] border border-slate-800 p-4 rounded-lg flex flex-col" title="Enabled providers with credentials (or local endpoints) that AIRouter can load.">
@@ -317,13 +384,14 @@ export default function AIProviderManagement() {
                     <th className="pb-3 font-medium">Avg Latency</th>
                     <th className="pb-3 font-medium">Success</th>
                     <th className="pb-3 font-medium">Health</th>
+                    <th className="pb-3 font-medium">Live Check</th>
                     <th className="pb-3 font-medium">Usage</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredProviders.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="py-8 text-center text-xs text-slate-500">
+                      <td colSpan={7} className="py-8 text-center text-xs text-slate-500">
                         No providers in this filter.
                       </td>
                     </tr>
@@ -331,6 +399,7 @@ export default function AIProviderManagement() {
                     const status = usageStatusOf(p);
                     const metricsOk = !!p.metricsAvailable;
                     const health = p.displayHealth ?? (metricsOk ? p.health : null);
+                    const live = liveCheck[p.id];
                     return (
                   <tr key={p.id} className="border-b border-slate-800/50 hover:bg-slate-800/20 transition-colors">
                     <td className="py-4">
@@ -378,6 +447,20 @@ export default function AIProviderManagement() {
                       ) : (
                         <UnavailableHint reason={p.healthNote || 'Health is updated from real AIRouter calls, not a background ping.'}>
                           --
+                        </UnavailableHint>
+                      )}
+                    </td>
+                    <td className="py-4 text-xs font-bold" title={live?.lastErrorSummary || undefined}>
+                      {live ? (
+                        <div>
+                          <span className={liveCheckBadgeClass(live.status)}>{live.status}</span>
+                          {live.latencyMs != null && (
+                            <div className="text-[10px] text-slate-500 font-normal mt-0.5">{Math.round(live.latencyMs)}ms · {live.credentialSource || '—'}</div>
+                          )}
+                        </div>
+                      ) : (
+                        <UnavailableHint reason="Not tested yet - click 'Test All Providers Now' above for a real, immediate probe.">
+                          Not tested
                         </UnavailableHint>
                       )}
                     </td>

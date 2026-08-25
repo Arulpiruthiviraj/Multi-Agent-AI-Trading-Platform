@@ -85,7 +85,13 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     // and a paid call failing on an unsupported param would be a worse outcome than skipping it.
     const body: Record<string, any> = {
         model,
-        messages: [{ role: "user", content: prompt }]
+        messages: [{ role: "user", content: prompt }],
+        // Real bug found live (2026-08-24): no provider ever capped output tokens, so every call
+        // implicitly requested the model's full max output (e.g. 16384 for gpt-4o via OpenRouter).
+        // A low-balance OpenRouter account got a genuine 402 "requires more credits, or fewer
+        // max_tokens" even though the key itself authenticated fine. Argus responses are short
+        // structured JSON - config/aiModels.json's maxResponseTokens caps this for every backend.
+        max_tokens: aiModels.maxResponseTokens,
     };
     if (options?.jsonMode && this.isLocal) {
         body.response_format = { type: 'json_object' };
@@ -119,7 +125,16 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
                   continue;
                }
             }
-            throw new Error(`${this.providerName} API error: ${response.status} ${response.statusText}`);
+            // Real fix (2026-08-24 readiness audit, Part 5): the thrown message previously carried
+            // only `${status} ${statusText}` - e.g. "429 Too Many Requests" - discarding the response
+            // body entirely, even when a provider's body clearly distinguishes a genuine rate limit
+            // from something more specific (Moonshot's "account ... is suspended due to insufficient
+            // balance" is a real example that was otherwise indistinguishable from an ordinary 429).
+            // A short body snippet lets AIProviderHealthCheck.ts's classifyError() tell them apart
+            // instead of collapsing every non-2xx response into one generic label.
+            let bodySnippet = '';
+            try { bodySnippet = (await response.text()).slice(0, 300); } catch { /* body already consumed or unavailable - message-only fallback below */ }
+            throw new Error(`${this.providerName} API error: ${response.status} ${response.statusText}${bodySnippet ? ` - ${bodySnippet}` : ''}`);
         }
 
         const data = await response.json();

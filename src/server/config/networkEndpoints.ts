@@ -48,6 +48,8 @@ export interface NetworkEndpoints {
     nvidiaBaseUrl: string;
     grokBaseUrl: string;
     openRouterBaseUrl: string;
+    anthropicMessagesUrl: string;
+    anthropicApiVersion: string;
   };
   ecosystem: {
     vibeTradingMcpPortDefault: number;
@@ -76,7 +78,7 @@ const REQUIRED_STRINGS = [
   'newsRss.userAgent', 'newsRss.yahooFinance', 'newsRss.cnbc', 'newsRss.wsj',
   'aiLocal.ollamaDefault', 'aiLocal.chronosDefault', 'aiLocal.guardianMcpUrl', 'aiLocal.liteLlmGatewayDefault',
   'aiCloud.openAiChatCompletionsUrl', 'aiCloud.deepSeekChatCompletionsUrl', 'aiCloud.nvidiaBaseUrl',
-  'aiCloud.grokBaseUrl', 'aiCloud.openRouterBaseUrl',
+  'aiCloud.grokBaseUrl', 'aiCloud.openRouterBaseUrl', 'aiCloud.anthropicMessagesUrl', 'aiCloud.anthropicApiVersion',
 ];
 const REQUIRED_NUMBERS = ['broker.ibkr.gatewayPortDefault', 'ecosystem.vibeTradingMcpPortDefault', 'ecosystem.guardianMcpPortDefault'];
 

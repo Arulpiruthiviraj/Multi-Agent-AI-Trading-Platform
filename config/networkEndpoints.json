@@ -47,7 +47,9 @@
     "deepSeekChatCompletionsUrl": "https://api.deepseek.com/v1/chat/completions",
     "nvidiaBaseUrl": "https://integrate.api.nvidia.com/v1",
     "grokBaseUrl": "https://api.x.ai/v1",
-    "openRouterBaseUrl": "https://openrouter.ai/api/v1"
+    "openRouterBaseUrl": "https://openrouter.ai/api/v1",
+    "anthropicMessagesUrl": "https://api.anthropic.com/v1/messages",
+    "anthropicApiVersion": "2023-06-01"
   },
 
   "ecosystem": {

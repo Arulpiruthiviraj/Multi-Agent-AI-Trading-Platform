@@ -469,15 +469,33 @@ export class RiskEngine {
             // more than maxPortfolioDrawdownPct below that peak. The peak only ever moves up
             // (a new real high), so a slow multi-day bleed that never trips the daily-loss
             // threshold on any single day still gets caught here.
+            //
+            // Real defect found and fixed (2026-08-24 readiness audit): this gate was the only one
+            // in this function with no replay branch - every sibling gate above (emergency_stop,
+            // autobot_enabled, duplicate_signal, ...) explicitly isolates replay from live state, but
+            // this one unconditionally read AND WROTE the shared settings.peakEquity row regardless
+            // of whether equityNow came from the live broker or a replay's own isolated
+            // HistoricalReplayBroker. A replay's own equity curve is already tracked independently
+            // (FullArgusReplayEngine.ts ratchets session.peakEquity on every bar, seeded from that
+            // run's own config.initialCapital) - reusing that existing isolated field, rather than
+            // inventing a parallel one, means a replay session with equity above the live peak can
+            // no longer silently overwrite the live drawdown reference, and a replay's own (possibly
+            // very different) starting capital can no longer be measured against a stale live peak.
             const maxDrawdownPct = settings[0]?.maxPortfolioDrawdownPct ?? 0.15;
-            const storedPeakEquity = settings[0]?.peakEquity ?? null;
-            const peakEquity = (storedPeakEquity === null || equityNow > storedPeakEquity) ? equityNow : storedPeakEquity;
-            if (peakEquity !== storedPeakEquity) {
-                try { await db.update(schema.settings).set({ peakEquity }).run(); } catch (e) { console.error('[Risk Engine] Failed to persist new peak equity', e); }
+            let peakEquity: number;
+            if (replay) {
+                if (replay.peakEquity == null || equityNow > replay.peakEquity) replay.peakEquity = equityNow;
+                peakEquity = replay.peakEquity;
+            } else {
+                const storedPeakEquity = settings[0]?.peakEquity ?? null;
+                peakEquity = (storedPeakEquity === null || equityNow > storedPeakEquity) ? equityNow : storedPeakEquity;
+                if (peakEquity !== storedPeakEquity) {
+                    try { await db.update(schema.settings).set({ peakEquity }).run(); } catch (e) { console.error('[Risk Engine] Failed to persist new peak equity', e); }
+                }
             }
             const drawdownPct = peakEquity > 0 ? Math.max(0, (peakEquity - equityNow) / peakEquity) : 0;
             const drawdownPassed = drawdownPct < maxDrawdownPct;
-            recordGate('portfolio_drawdown', drawdownPassed, { drawdownPct, maxDrawdownPct, peakEquity, equityNow });
+            recordGate('portfolio_drawdown', drawdownPassed, { drawdownPct, maxDrawdownPct, peakEquity, equityNow, replay: !!replay });
             const drawdownReason = `Portfolio drawdown ${(drawdownPct * 100).toFixed(1)}% from peak equity $${peakEquity.toFixed(2)} exceeds the configured ${(maxDrawdownPct * 100).toFixed(0)}% limit. All new trades blocked pending manual review.`;
 
             // 2a-4. Order-rate limit - counts real risk_assessments rows created in the last 60

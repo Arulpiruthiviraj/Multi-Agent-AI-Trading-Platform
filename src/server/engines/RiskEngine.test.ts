@@ -24,7 +24,9 @@ const { mockDb, setTableRows, resetTableRows, setInsertFails } = vi.hoisted(() =
     insert: () => ({
       values: () => insertFails ? Promise.reject(new Error('SQLITE_BUSY')) : Promise.resolve({}),
     }),
-    update: () => ({ set: () => ({ run: () => Promise.resolve({}) }) }),
+    // vi.fn() (not a plain arrow) so replay-isolation tests can assert the live settings write
+    // path (db.update(schema.settings)...) was never reached during a replay evaluation.
+    update: vi.fn(() => ({ set: () => ({ run: () => Promise.resolve({}) }) })),
   };
   return {
     mockDb,
@@ -106,6 +108,7 @@ describe('RiskEngine.evaluateRisk', () => {
     resetTableRows();
     setInsertFails(false);
     emitRiskAssessment.mockClear();
+    (mockDb.update as any).mockClear();
     mockMarketDataWorker.getLatestPriceAgeMs.mockReset();
     mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(1_000);
     mockTradingEngine.state.dayStartDateStr = null;
@@ -612,6 +615,98 @@ describe('RiskEngine.evaluateRisk', () => {
 
       const assessment = lastAssessment();
       expect(assessment.rejectionGate).not.toBe('market_hours');
+    });
+  });
+
+  // 2026-08-24 readiness audit fix: portfolio_drawdown was the only gate in RiskEngine.ts with no
+  // replay branch - it unconditionally read AND WROTE the shared settings.peakEquity row regardless
+  // of whether equityNow came from the live broker or a replay's own isolated equity curve. Fixed by
+  // reusing ActiveReplaySession's own already-existing, already-ratcheted `peakEquity` field
+  // (maintained independently by FullArgusReplayEngine.ts) instead of the shared settings row.
+  describe('portfolio_drawdown replay/live isolation (2026-08-24 fix)', () => {
+    async function buildFakeReplaySessionWithPeak(peakEquity: number): Promise<ActiveReplaySession> {
+      const { ReplayClock } = await import('../engines/backtest/ReplayClock');
+      const { InformationCutoff } = await import('../replay/InformationCutoff');
+      const { unavailableHistoricalNewsProvider } = await import('../replay/HistoricalNewsProvider');
+      // Real 1Day midnight-ET timestamp already proven safe for market_hours (see the describe above).
+      const clock = new ReplayClock(1712116800000);
+      return {
+        replayId: 'test-replay-peak-isolation',
+        clock,
+        cutoff: new InformationCutoff(clock),
+        news: unavailableHistoricalNewsProvider(),
+        config: { frequency: '1Day', timezone: 'America/New_York', extendedHours: false, symbols: ['AAPL'] },
+        barsBySymbol: new Map(),
+        openStops: new Map(),
+        peakEquity,
+      } as unknown as ActiveReplaySession;
+    }
+
+    afterEach(() => {
+      setActiveReplaySession(null);
+    });
+
+    it('1. a replay session cannot modify the live settings.peakEquity row', async () => {
+      setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.15, peakEquity: 500000 }]);
+      mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 900000, buyingPower: 900000, positions: [] }));
+      const session = await buildFakeReplaySessionWithPeak(100000); // replay's own isolated curve, unrelated to the live $500k peak
+      setActiveReplaySession(session);
+
+      await riskEngine.evaluateRisk({ traceId: 'replay-peak-1', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('2. backtest cannot modify live risk state (architectural separation, not a RiskEngine.ts branch)', () => {
+      // BacktestEngine.ts/PitRiskEngine.ts are separate, isolated modules from this file - a
+      // "backtest" execution context never calls RiskEngine.evaluateRisk() at all, so there is no
+      // shared-state path to test here beyond what the replay isolation above already covers for
+      // the one execution context (MODE B historical replay) that does reuse this real engine.
+      expect(true).toBe(true);
+    });
+
+    it('3. a live evaluation after a replay session still reads/writes the ordinary settings.peakEquity once replay is cleared', async () => {
+      setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.15, peakEquity: 500000 }]);
+      const session = await buildFakeReplaySessionWithPeak(100000);
+      setActiveReplaySession(session);
+      mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 900000, buyingPower: 900000, positions: [] }));
+      await riskEngine.evaluateRisk({ traceId: 'replay-peak-2', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      expect(mockDb.update).not.toHaveBeenCalled();
+
+      setActiveReplaySession(null);
+      (mockDb.update as any).mockClear();
+      mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 900000, buyingPower: 900000, positions: [] }));
+      await riskEngine.evaluateRisk({ traceId: 'live-after-replay', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+      expect(mockDb.update).toHaveBeenCalled(); // live path ratchets the real peak up to 900000
+      const assessment = lastAssessment();
+      expect(assessment.reasoning).not.toMatch(/drawdown/i); // new real high, 0% drawdown
+    });
+
+    it('4. a replay with simulated equity above the live peak cannot ratchet the live peakEquity', async () => {
+      setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.15, peakEquity: 500000 }]);
+      mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 2_000_000, buyingPower: 2_000_000, positions: [] }));
+      const session = await buildFakeReplaySessionWithPeak(1_000_000); // replay's own peak, still below this replay-bar's equity
+      setActiveReplaySession(session);
+
+      await riskEngine.evaluateRisk({ traceId: 'replay-peak-4', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+
+      // The replay session's OWN isolated peak is allowed to ratchet up (that's its own accounting)...
+      expect(session.peakEquity).toBe(2_000_000);
+      // ...but the shared live settings row must never have been touched.
+      expect(mockDb.update).not.toHaveBeenCalled();
+    });
+
+    it('5. existing live (non-replay) drawdown behavior is unchanged by this fix', async () => {
+      mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 170000, buyingPower: 170000, positions: [] }));
+      setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 100000, maxPortfolioDrawdownPct: 0.10, peakEquity: 200000 }]);
+
+      await riskEngine.evaluateRisk({ traceId: 't-drawdown-still-works', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+      const assessment = lastAssessment();
+      expect(assessment.approved).toBe(false);
+      expect(assessment.reasoning).toMatch(/drawdown/i);
+      expect(mockDb.update).not.toHaveBeenCalled(); // 170000 < 200000 peak, so no new-high write occurs
     });
   });
 

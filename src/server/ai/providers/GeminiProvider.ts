@@ -36,6 +36,7 @@
 import { BaseAIProvider } from './AIProvider';
 import { GoogleGenAI } from '@google/genai';
 import { EncryptionService } from '../../core/EncryptionService';
+import { aiModels } from '../../config/aiModels';
 
 // Hardening pass, Phase 6: this provider previously hardcoded 'gemini-2.5-flash' and silently
 // ignored options.model entirely - AIRouter.setAgentRoute()/routeTask() already built and passed
@@ -78,12 +79,15 @@ export class GeminiProvider extends BaseAIProvider {
     const response = await this.ai.models.generateContent({
         model,
         contents: prompt,
-        ...(options?.temperature !== undefined || options?.signal ? {
-          config: {
-            ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
-            ...(options?.signal ? { abortSignal: options.signal } : {}),
-          },
-        } : {}),
+        // Real bug found live (2026-08-24) - see OpenAICompatibleProvider.ts's identical comment;
+        // maxOutputTokens is always set now (previously the whole `config` block, including this,
+        // was only included when a caller passed temperature/signal - Gemini's own SDK default is
+        // otherwise unbounded).
+        config: {
+          maxOutputTokens: aiModels.maxResponseTokens,
+          ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+          ...(options?.signal ? { abortSignal: options.signal } : {}),
+        },
     });
     // Real usage split from the SDK's own response - previously hardcoded to 0 regardless of
     // the fact that usageMetadata was already available on every response.

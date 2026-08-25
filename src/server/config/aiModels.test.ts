@@ -22,4 +22,15 @@ describe('aiModels.json research routing (2026-08-20 performance audit)', () => 
     expect(isHeavyModel(aiModels.routes.ReflectionEngine.model)).toBe(true);
     expect(isResearchAgentType('ReflectionEngine')).toBe(false);
   });
+
+  it('exposes a positive maxResponseTokens cap applied to every provider call (2026-08-24 cost fix)', () => {
+    expect(aiModels.maxResponseTokens).toBeGreaterThan(0);
+    expect(Number.isInteger(aiModels.maxResponseTokens)).toBe(true);
+  });
+
+  it('routes QuantContradictionAnalyzer to Plutus so it stops defaulting to a paid provider (2026-08-24 cost fix - was 72% of that day\'s AI spend)', () => {
+    expect(aiModels.routes.QuantContradictionAnalyzer.model).toBe('0xroyce/plutus:latest');
+    expect(aiModels.routes.QuantContradictionAnalyzer.fallback).toEqual(['llama3.2:latest']);
+    expect(isHeavyModel(aiModels.routes.QuantContradictionAnalyzer.model)).toBe(false);
+  });
 });

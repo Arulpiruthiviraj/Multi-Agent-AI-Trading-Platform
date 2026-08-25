@@ -25,19 +25,22 @@ describe('OpenAIProvider - model override (Phase 6 hardening)', () => {
   }
 
   it('uses the real default model when no override is requested (existing behavior preserved)', async () => {
+    // Real cost fix (2026-08-24): default switched gpt-4o -> gpt-4o-mini - see OpenAIProvider.ts's
+    // own comment. Every Argus call here is a short structured-JSON classification, not a task that
+    // needed the larger model.
     await provider.chat('hello');
-    expect(requestedModel()).toBe('gpt-4o');
+    expect(requestedModel()).toBe('gpt-4o-mini');
   });
 
   it('the exact bug this closes: a valid per-agent model override actually reaches the real API call', async () => {
-    await provider.chat('hello', { model: 'gpt-4o-mini' });
-    expect(requestedModel()).toBe('gpt-4o-mini');
+    await provider.chat('hello', { model: 'gpt-4o' });
+    expect(requestedModel()).toBe('gpt-4o');
   });
 
   it('rejects an unsupported model name rather than silently executing against it - falls back to the real default', async () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     await provider.chat('hello', { model: 'gpt-99-nonexistent' });
-    expect(requestedModel()).toBe('gpt-4o');
+    expect(requestedModel()).toBe('gpt-4o-mini');
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
   });

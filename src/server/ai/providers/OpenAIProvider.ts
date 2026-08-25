@@ -35,11 +35,16 @@
 
 import { BaseAIProvider } from './AIProvider';
 import { networkEndpoints } from '../../config/networkEndpoints';
+import { aiModels } from '../../config/aiModels';
 
 // Hardening pass, Phase 6: see GeminiProvider.ts's identical comment - this provider previously
 // hardcoded "gpt-4o" and silently ignored options.model.
-const DEFAULT_MODEL = 'gpt-4o';
-const SUPPORTED_MODELS = new Set([DEFAULT_MODEL, 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo']);
+// Real cost fix (2026-08-24): every Argus call through this provider is a short structured-JSON
+// classification (a side, a confidence, a short reasoning string) - gpt-4o-mini is meaningfully
+// cheaper than full gpt-4o for that shape of task with no observed quality requirement for the
+// larger model. gpt-4o stays in SUPPORTED_MODELS for any caller that explicitly asks for it.
+const DEFAULT_MODEL = 'gpt-4o-mini';
+const SUPPORTED_MODELS = new Set([DEFAULT_MODEL, 'gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo']);
 
 export class OpenAIProvider extends BaseAIProvider {
   public apiKey: string = '';
@@ -87,11 +92,20 @@ export class OpenAIProvider extends BaseAIProvider {
             // trading-decision prompts. Only included when the caller actually supplies one, so
             // this never changes behavior for any call site that doesn't opt in.
             ...(options?.temperature !== undefined ? { temperature: options.temperature } : {}),
+            // Real bug found live (2026-08-24) - see OpenAICompatibleProvider.ts's identical comment.
+            max_tokens: aiModels.maxResponseTokens,
         })
     });
 
     if (!response.ok) {
-        throw new Error(`OpenAI API error: ${response.statusText}`);
+        // Real fix (2026-08-24 readiness audit, Part 5): previously dropped both the numeric status
+        // code and the response body - "OpenAI API error: Unauthorized" happened to keyword-match
+        // isAuthFailureError()'s fallback pattern, but a differently-worded body or a status whose
+        // statusText isn't a recognizable keyword would misclassify as UNKNOWN. See
+        // OpenAICompatibleProvider.ts's identical comment.
+        let bodySnippet = '';
+        try { bodySnippet = (await response.text()).slice(0, 300); } catch { /* body already consumed or unavailable */ }
+        throw new Error(`OpenAI API error: ${response.status} ${response.statusText}${bodySnippet ? ` - ${bodySnippet}` : ''}`);
     }
     
     const data = await response.json();

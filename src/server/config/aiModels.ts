@@ -18,6 +18,9 @@ export interface AiModelsConfig {
   ollama: { baseUrl: string; keepAlive: string; enabled: boolean };
   /** Outer bound for Bull/Bear research + ConsensusDebate — fail-closed HOLD when exceeded. */
   researchTimeoutMs: number;
+  /** Output-token cap sent on every provider call (max_tokens / maxOutputTokens). Controls cost and
+   *  keeps a low-balance account from implicitly requesting a model's full max output. */
+  maxResponseTokens: number;
   heavyModels: string[];
   concurrency: { maxConcurrentHeavyModels: number; maxQueueDepth: number };
   routes: Record<string, AiModelRoute>;
@@ -35,6 +38,9 @@ function loadAiModels(): AiModelsConfig {
   }
   if (typeof raw.researchTimeoutMs !== 'number' || !(raw.researchTimeoutMs > 0)) {
     throw new Error('config/aiModels.json researchTimeoutMs must be a positive number');
+  }
+  if (typeof raw.maxResponseTokens !== 'number' || !(raw.maxResponseTokens > 0)) {
+    throw new Error('config/aiModels.json maxResponseTokens must be a positive number');
   }
   if (!Array.isArray(raw.heavyModels) || !raw.heavyModels.every((m: unknown) => typeof m === 'string')) {
     throw new Error('config/aiModels.json heavyModels must be a string[]');
@@ -64,6 +70,7 @@ function loadAiModels(): AiModelsConfig {
   return {
     ollama: { baseUrl: ollama.baseUrl, keepAlive: ollama.keepAlive, enabled: ollama.enabled },
     researchTimeoutMs: raw.researchTimeoutMs as number,
+    maxResponseTokens: raw.maxResponseTokens as number,
     heavyModels: raw.heavyModels as string[],
     concurrency: { maxConcurrentHeavyModels: concurrency.maxConcurrentHeavyModels, maxQueueDepth: concurrency.maxQueueDepth },
     routes,
