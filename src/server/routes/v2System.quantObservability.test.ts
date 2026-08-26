@@ -158,6 +158,52 @@ describe('v2System quant observability routes', () => {
     });
   });
 
+  describe('GET /api/v2/quant/strategy-performance (2026-08-25 market-open readiness follow-up)', () => {
+    it('reports available:false honestly when no daily_strategy_performance rows exist in the window', async () => {
+      const res = await request(app).get('/api/v2/quant/strategy-performance?days=1');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      expect(res.body.available).toBe(false);
+      expect(res.body.byStrategy).toEqual([]);
+    });
+
+    it('aggregates real persisted daily rows per strategy across the requested window, sorted by realized P&L descending', async () => {
+      await db.insert(schema.dailyStrategyPerformance).values({
+        tradingDate: '2026-08-20', quantStrategyId: 'MOMENTUM_BREAKOUT',
+        realizedPnl: 100, unrealizedPnl: 0, tradesCount: 2, winsCount: 2, lossesCount: 0, updatedAt: Date.now(),
+      });
+      await db.insert(schema.dailyStrategyPerformance).values({
+        tradingDate: '2026-08-21', quantStrategyId: 'MOMENTUM_BREAKOUT',
+        realizedPnl: 50, unrealizedPnl: 10, tradesCount: 1, winsCount: 0, lossesCount: 1, updatedAt: Date.now(),
+      });
+      await db.insert(schema.dailyStrategyPerformance).values({
+        tradingDate: '2026-08-21', quantStrategyId: 'UNATTRIBUTED',
+        realizedPnl: -30, unrealizedPnl: 0, tradesCount: 1, winsCount: 0, lossesCount: 1, updatedAt: Date.now(),
+      });
+
+      const res = await request(app).get('/api/v2/quant/strategy-performance?days=365');
+      expect(res.status).toBe(200);
+      expect(res.body.available).toBe(true);
+      expect(res.body.byStrategy[0].quantStrategyId).toBe('MOMENTUM_BREAKOUT'); // highest realized P&L first
+      expect(res.body.byStrategy[0].realizedPnl).toBe(150); // 100 + 50 summed across both days
+      expect(res.body.byStrategy[0].tradesCount).toBe(3);
+      expect(res.body.byStrategy[0].winRatePct).toBe(66.7); // 2 wins / 3 closed
+      expect(res.body.byStrategy[0].lastActiveDate).toBe('2026-08-21'); // most recent of its two days
+      expect(res.body.byStrategy[1].quantStrategyId).toBe('UNATTRIBUTED');
+      expect(res.body.byStrategy[1].realizedPnl).toBe(-30);
+    });
+
+    it('winRatePct is null (not 0) when a strategy has trades but none are closed wins/losses yet', async () => {
+      await db.insert(schema.dailyStrategyPerformance).values({
+        tradingDate: '2026-08-22', quantStrategyId: 'MEAN_REVERSION',
+        realizedPnl: 0, unrealizedPnl: 25, tradesCount: 1, winsCount: 0, lossesCount: 0, updatedAt: Date.now(),
+      });
+      const res = await request(app).get('/api/v2/quant/strategy-performance?days=365');
+      const row = res.body.byStrategy.find((r: any) => r.quantStrategyId === 'MEAN_REVERSION');
+      expect(row.winRatePct).toBeNull();
+    });
+  });
+
   describe('GET /api/v2/quant/strategy-backtests', () => {
     it('lists real persisted strategy-backtest runs as lightweight summaries', async () => {
       await db.insert(schema.quantStrategyBacktests).values({

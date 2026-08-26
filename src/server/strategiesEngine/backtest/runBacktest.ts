@@ -67,7 +67,7 @@ function hashBars(bars: Bar[]): string {
   return hash.digest('hex');
 }
 
-function resolveStopPrice(strategy: StrategyDefinition, entryPrice: number, atr: number | null): number | null {
+export function resolveStopPrice(strategy: StrategyDefinition, entryPrice: number, atr: number | null): number | null {
   if (strategy.stopLoss.kind === 'ATR_MULTIPLE' || strategy.stopLoss.kind === 'TRAILING_ATR') {
     if (atr === null || strategy.stopLoss.value === null) return null;
     return entryPrice - atr * strategy.stopLoss.value;

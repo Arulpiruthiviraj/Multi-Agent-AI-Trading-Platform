@@ -20,6 +20,12 @@ Idea agents (Technical / News / Fundamental / Macro / PortfolioMonitor / Quant /
 Opportunity Discovery+Screener) — full list, cadences, and honesty caveats: CLAUDE.md §1
        │  TRADE_IDEA_GENERATED (gated by gateTradeIdea / looksLikeListedTicker)
        ▼
+ConfluenceCoordinator (default on) — on a qualifying TechnicalAgent signal, calls
+QuantSignalAgent/KronosForecastAgent's existing on-demand entry points for the same symbol
+(structurally independent — takes only a symbol, no vote to copy). Raises how often a second
+agent evaluates the same symbol in-window; never changes ChiefTrader's weights/threshold.
+       │
+       ▼
 ChiefTraderAgent — weighted consensus, optional AI debate, HOLD-veto
        │  CHIEF_APPROVED_IDEA
        ▼
@@ -34,6 +40,18 @@ trades + fills (unique orderId + cumulativeQuantity) → ORDER_EXECUTED
 
 Full detail (thread-safety invariants, fill idempotency, P0.1–P0.7 verified safety invariants,
 5-layer LIVE arming): `CLAUDE.md` §1.
+
+**Symbol universe feeding the idea agents above:** a curated seed/watch list, plus — when
+`ARGUS_BROAD_UNIVERSE_ENABLED=true` — `MarketUniverseScanner.ts`'s real, liquidity/price/spread/
+ADV-screened Alpaca tradable-assets funnel, merged in through the same candidate gate. Off by
+default; real API cost when on. Neither path emits a trade idea itself. Detail:
+`docs/ARGUS_OPPORTUNITY_DISCOVERY.md`.
+
+**Session-aware layer (new, 2026-08-26, Stage 1 only):** `src/server/premarket/SessionLifecycle.ts`
+tracks `PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED` plus an application state, wired into
+`ArgusCoreBoot.ts`. Observability only today — does not scan, rank, plan, or emit an idea. A
+persisted pre-market `TradePlan`, market-open revalidation, and after-close review are designed
+but not yet built; see `CLAUDE.md`'s "Adding discovery or position intelligence" section.
 
 ## Protected architecture
 

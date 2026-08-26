@@ -119,13 +119,34 @@ Idea agents (timer or MARKET_DATA):
   QuantSignalAgent     → off unless QUANT_ENGINE_ENABLED=true
   KronosForecastAgent  → optional local Chronos; honest warning if /health is down
   OpportunityDiscovery → `server.ts` starts `opportunityDiscoveryWorker` when
-                         ARGUS_OPPORTUNITY_LOOP_ENABLED is `'true'`; seed-list
-                         watchlist subscribe **only**; never TRADE_IDEA_GENERATED
-                         (current product: not market-wide discovery)
+                         ARGUS_OPPORTUNITY_LOOP_ENABLED is `'true'`; watchlist
+                         subscribe **only**; never TRADE_IDEA_GENERATED. Scan
+                         universe = curated seed/watch lists (122 names) **plus**
+                         `MarketUniverseScanner.ts`'s real, liquidity/price/spread/
+                         ADV-screened Alpaca tradable-assets funnel when
+                         `ARGUS_BROAD_UNIVERSE_ENABLED=true` (runtime-verified
+                         2026-08-26: scan universe 122→134, including a symbol
+                         no curated list carried) — real broad discovery, still
+                         bounded/capped (`broadUniverseMaxCandidates`,
+                         `broadUniverseTopNPerScan`), still never places an order
+                         or bypasses `evaluateOpportunityCandidate()`. Off by
+                         default (real Alpaca API cost/rate-limit exposure);
+                         check `GET /api/v2/continuous-intelligence/status`'s
+                         `broadUniverse` block once enabled.
   OpportunityScreener  → off unless ARGUS_OPPORTUNITY_IDEAS_ENABLED=true;
                          cheap tick-return rank; `emitTradeIdea` as one vote
  ↓ TRADE_IDEA_GENERATED {traceId, symbol, side, confidence, reasoning, agent, currentPrice?}
     (gated by gateTradeIdea / looksLikeListedTicker — DEF-24)
+    ↓ ConfluenceCoordinator (`tradingSafety.confluenceCoordinatorEnabled`, default true) listens
+      for a qualifying **TechnicalAgent** BUY/SELL (confidence ≥ `confluenceCoordinatorConfidenceThreshold`,
+      per-symbol `confluenceCoordinatorCooldownMs`) and calls QuantSignalAgent.evaluateSymbol /
+      KronosForecastAgent.evaluateOnDemand **on-demand** for that same symbol — the same on-demand
+      entry points manual CONFIRM BUY/SELL already use, not a new bypass. Both take only a symbol
+      string (no side/confidence passed in), so there is no channel to copy TechnicalAgent's vote —
+      independence is structural. Raises how often a second independent agent evaluates the same
+      symbol in-window; does not change ChiefTrader's weights, threshold, or gate. Never imports
+      OMS/RiskEngine/BrokerManager. Logged via `structuredLogger` as `CONFLUENCE_COORDINATOR_TRIGGERED`
+      (`observability_events`, not `event_traces`).
 ChiefTraderAgent
   → weights from agent_performance_stats (defaults: config/agentWeights.json)
   → optional AIRouter.routeConsensus (per-symbol cooldown); HOLD can veto
@@ -171,7 +192,7 @@ Verified in unit tests (2026-08-18). **Tests are not LIVE evidence.** `SOFTWARE_
 | ID | Invariant | Code |
 |---|---|---|
 | P0.1 | LIVE_NO_GO blocks OMS `placeOrder`; paper unaffected | `liveOrderAuthorization.ts`, `OrderManagement.ts` |
-| P0.2 | IBKR paper/live account isolation fail-closed | `config/ibkrAccountClassification.json`, `InteractiveBrokersAdapter.ts` |
+| P0.2 | IBKR paper/live account isolation fail-closed | `config/ibkrAccountClassification.json`, `IBGatewaySocketAdapter.ts` + `InteractiveBrokersWebApiAdapter.ts` (both real, registered adapters consume it — corrected 2026-08-26, was miscited to the unreferenced `InteractiveBrokersAdapter.ts` compatibility facade) |
 | P0.3 | RiskEngine persist-then-emit | `RiskEngine.ts` |
 | P0.4 | Fill unique `(orderId, cumulativeQuantity)` | `fillLedger.ts`, `drizzle/0037_fills_cumulative_unique.sql` |
 | P0.5 | Compile/test/build green in that session | `tsc`, vitest, `npm run build` |
@@ -231,7 +252,8 @@ Loaded via `src/server/config/loadRepoConfigJson.ts`. Missing required keys **fa
 | Broker | Role |
 |---|---|
 | AlpacaBroker | Paper or live REST; only fully unattended broker. TLS via `node:https` + system CA (DEF-10/11). Timeouts/retry/circuit breaker in `tradingSafety.json`. |
-| InteractiveBrokersAdapter | Client Portal Web API. Local Gateway + human 2FA ~24h (`requiresManualReauth: true`). Cannot place Canadian-exchange equities (IIROC 3200A.1(b)(i)). Gateway WAF 403 if no `User-Agent` — adapter sets one. `U*` live / `DU*` paper — adapter trusts Gateway session; P0.2 fail-closes classification mismatch. |
+| IBGatewaySocketAdapter (`ibkr_gateway`) | TWS/IB Gateway socket API (paper 4002 / 7497). No official JS client — direct TCP protocol implementation. **The currently-active broker in this deployment** (`settings.selectedBroker`). Cannot place Canadian-exchange equities (IIROC 3200A.1(b)(i)). `U*` live / `DU*` paper — P0.2 fail-closes classification mismatch. |
+| InteractiveBrokersWebApiAdapter (`ibkr_web`) | Client Portal Web API. Local Gateway + human 2FA ~24h (`requiresManualReauth: true`). Cannot place Canadian-exchange equities (IIROC 3200A.1(b)(i)). Gateway WAF 403 if no `User-Agent` — adapter sets one. `U*` live / `DU*` paper — adapter trusts Gateway session; P0.2 fail-closes classification mismatch. `InteractiveBrokersAdapter.ts` is a compatibility facade delegating to this or `IBGatewaySocketAdapter` by mode — currently unreferenced (BrokerManager registers both real adapters directly). |
 | CoinbaseBroker | Real Advanced Trade CDP-JWT. `placeOrder()` **refuses in paper** (no sandbox). Live requires LIVE_ARM. Not funded-account verified here. |
 | QuestradeBroker | Read-only OAuth2. `placeOrder()`/`modifyOrder()` throw. Never the order-placing broker. |
 
@@ -345,6 +367,10 @@ Persisted `agent_routing_overrides` **win** over `config/aiModels.json` defaults
 
 `qwen2.5:14b` is a **heavy** model (VRAM lock) available for operator override. It is **not** a default `routes` entry.
 
+**Provider cooldown (2026-08-26):** `AIRouter.noteProviderSkipFromError()` skips a failing provider via `skipProviderTemporarily()`/`filterRoutableProviders()` — previously only for timeout/unreachable errors, so a billing-suspended provider (real case: Kimi/Moonshot returning "429 … account … suspended due to insufficient balance") was re-dispatched to on every single call with no cooldown. Now also reuses `AIProviderHealthCheck.classifyError()` (exported for this) to skip `ACCOUNT_SUSPENDED`/`QUOTA_EXCEEDED` (`aiProviderQuotaExceededCooldownMs`, 30 min default) and `RATE_LIMITED` (`aiProviderUnreachableCooldownMs`). Auth failures (401/403) remain on the separate, longer `disableProviderForAuthFailure` path, unchanged.
+
+**Ollama health probe (2026-08-26):** previously "healthy" meant only `/api/tags` answered — real completions could still fail (model load/OOM/misconfiguration) while the registry reported `READY`. `ModelRuntimeManager.probeOllama()` now also attempts one cheap real completion (`/api/generate`, bounded by `ollamaCompletionProbeTimeoutMs`) against the first listed model before reporting `READY`.
+
 ## 14B VRAM concurrency lock
 
 `HeavyModelMutex` (`config/aiModels.json` `heavyModels`: `qwen2.5:14b`, `deepseek-r1:14b`):
@@ -406,7 +432,7 @@ Levels TRACE→FATAL. Safety categories never DEBUG (`safetyMinLevel` INFO). Fai
 
 ## Database (notable)
 
-Count `sqliteTable(` in `schema.ts` (drifts; **60** as of 2026-08-21). Include: `settings` (incl. campaign columns), `trades`, `fills`, `portfolio`, `daily_strategy_performance`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `agent_predictions`, `prediction_outcomes`, `news_clusters`, `news_predictions`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, `config_overrides`, …
+Count `sqliteTable(` in `schema.ts` (drifts; **65** as of 2026-08-26). Include: `settings` (incl. campaign columns), `trades`, `fills`, `portfolio`, `daily_strategy_performance`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `agent_predictions`, `prediction_outcomes`, `news_clusters`, `news_predictions`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, `config_overrides`, …
 
 Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db` (`application/octet-stream`; restart required).
 
@@ -426,7 +452,7 @@ Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db`
 | Quant default | OFF (`QUANT_ENGINE_ENABLED`) |
 | CORE strategies | UNTESTED on REAL_MARKET_DATA NEXT_BAR_OPEN |
 | Mandatory LIVE gates | Re-check `evaluateLiveReadiness()` — historically **6 / 28 PASS** family (`SOFTWARE_ORDER_PATH`, `EXECUTION_OMS`, `RISK_GATES`, `RESEARCH_WAREHOUSE`, `ZERO_COST_RESEARCH`, `QUANT_DEFAULT`); result remains **`LIVE_NO_GO`** while paper floors fail |
-| Harness (2026-08-21) | `npm test` **330** files / **2111** tests; `npm run lint` exit 0; Node **24.18.0** |
+| Harness (2026-08-26) | `npm test` **371** files / **2475** tests, all passing; `tsc --noEmit` clean; Node **24.18.0** |
 
 Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessions` 10, `minPaperCalendarDays` 30, `minPaperProfitFactor` 1.2, `minPaperExpectancy` 0, `minOosTrades` 30. REPLAY / EXTERNAL_SYNC / DIAGNOSTIC / shadow / telemetry pulse **do not count**. Script: `npx tsx scripts/organic_paper_soak_status.ts` (closes SQLite + `process.exit` — must not linger as a second DB writer).
 
@@ -479,11 +505,13 @@ Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessio
 | DEF-18 | WAL concurrent open / false SQLITE_CORRUPT | Documented; one writer |
 | DEF-23 | False `MISSING_LOCALLY` (GLD/NVDA stale snapshot / `checkedAt`) | **FIXED in unit tests**; not soak-proven on a real open. Recurrence was seen 2026-08-18 before the compare-time stamp fix. Never auto-resume. |
 | DEF-24 | Garbage LLM symbols / missing prices | **FIXED upstream** (`gateTradeIdea`); `price_validity` stays fail-closed |
+| DEF-25 | `uncaughtException`/`unhandledRejection` handler's own `console.error` call could throw when stdout/stderr's write stream broke, cascading into an unrecoverable hang | **FIXED and production-verified** (2026-08-26): `globalErrorHandlers.ts`/`crashLog.ts` now fall back to a raw fd write, plus a storm circuit-breaker (`>4 in 5s` → clean `process.exit(1)`). Recurred live once after the fix shipped — this time exited cleanly instead of hanging silently for minutes. Root external trigger for the write-stream breaking at all remains unidentified. |
+| DEF-26 | `./argus restart` (SIGTERM) is logged by the successor process as an unclean shutdown every time observed so far | **OPEN** — not yet investigated. No data-loss observed (reconciliation still runs and matches on the next boot); likely the graceful-shutdown drain doesn't finish, or its marker isn't written, before the process actually exits. |
 | NVIDIA NIM | `gpt-3.5-turbo` fallback 404 | Operator model-id |
 | UI | `App.tsx` almost untested; SPA chunk large | Thin coverage |
 | Edge | 0 organic closes; OOS/WFO failed | Calendar + research |
 
-Fixed (do not re-open as current): DEF-01 boot InternalPaper-before-Alpaca; DEF-02 warmup unused; DEF-03/04 missing reconnect imports; DEF-05/06 OMS idempotency; DEF-07 pause flag vs `tradingState`; DEF-09 evaluation queue; DEF-10/11 Alpaca TLS; DEF-22 WS-before-auth.
+Fixed (do not re-open as current): DEF-01 boot InternalPaper-before-Alpaca; DEF-02 warmup unused; DEF-03/04 missing reconnect imports; DEF-05/06 OMS idempotency; DEF-07 pause flag vs `tradingState`; DEF-09 evaluation queue; DEF-10/11 Alpaca TLS; DEF-22 WS-before-auth; DEF-25 crash-handler self-logging cascade.
 
 Canadian: automated routing **BLOCKED**. IBKR `placeOrder` does not call `isCanadianListing` as a second legal gate — IIROC block is policy + `canadianEquities: false`.
 
@@ -543,6 +571,7 @@ Do not duplicate this file. Pointers only:
 - Flag-gated OFF by default. Do not enable QUANT / penny / opportunity flags “to see if it works.”
 - Penny/micro MARKET remains unfit until a **reviewed OMS LIMIT** change (`marketOrdersFitPennyAndMicro`). Do not route around OMS.
 - `architecture.protection.test.ts` must stay green: `src/server/continuous/` and `src/server/multiAsset/` do not import OMS/RiskEngine/BrokerManager or call `.placeOrder(`.
+- `src/server/premarket/` (new 2026-08-26, Stage 1 of a session-aware market-day intelligence effort): `SessionLifecycle.ts` promotes the existing `classifyMarketSession()` (previously replay-only) into the live boot path via `ArgusCoreBoot.ts`, tracking `PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED` plus an application state (`IDLE/RESEARCHING/PLAN_BUILDING/PLAN_READY/OPEN_REVALIDATION/INTRADAY/CLOSE_REVIEW`). **Observability only this stage** — it does not scan, rank, plan, or emit a trade idea; later stages (broad-universe candidate ranking, a persisted `TradePlan`, market-open revalidation, after-close review) are designed but not yet built. Own architecture-boundary test (`premarketArchitectureBoundary.test.ts`) enforces the same no-OMS/RiskEngine/BrokerManager/ChiefTraderAgent rule and will cover every file added to this directory automatically.
 
 ## Adding a quant strategy
 

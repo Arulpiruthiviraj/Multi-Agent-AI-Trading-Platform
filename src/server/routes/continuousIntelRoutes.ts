@@ -8,6 +8,8 @@ import {
 import { getLastOpportunityScan } from '../continuous/OpportunityDiscovery';
 import { listCandidates } from '../continuous/candidateLifecycle';
 import { getLastSnapshotScanStats } from '../continuous/SnapshotScanner';
+import { getCachedBroadUniverseSymbols, getLastBroadUniverseStats } from '../continuous/MarketUniverseScanner';
+import { isBroadUniverseEnabled } from '../config/continuousIntelligence';
 import { getPipelineRateSnapshot } from '../core/pipelineRateLimit';
 import { marketDataWorker } from '../services/MarketDataWorker';
 
@@ -40,5 +42,10 @@ continuousIntelRouter.get('/status', (_req, res) => {
     candidates: listCandidates(),
     pipelineRate: getPipelineRateSnapshot(),
     ideasEmittedByScanner: 0,
+    broadUniverse: {
+      enabled: isBroadUniverseEnabled(),
+      lastRefresh: getLastBroadUniverseStats(),
+      cachedCandidateCount: getCachedBroadUniverseSymbols().length,
+    },
   });
 });

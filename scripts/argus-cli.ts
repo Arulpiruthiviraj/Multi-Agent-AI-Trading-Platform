@@ -73,12 +73,30 @@ async function fetchJson(path: string, init?: RequestInit) {
   return body;
 }
 
-async function waitForHealth(timeoutMs = 60_000): Promise<boolean> {
+/**
+ * Real, live-reproduced defect (2026-08-25 readiness audit): this previously checked only
+ * `h.ok`, which trivially returns true if ANY process - old or new - already answers on the
+ * configured port. Observed directly: `restart` failed to signal a stale/mismatched-PID-file
+ * engine (the PID-reuse guard in stopEngine() correctly refused to kill an unrelated process),
+ * then `startEngine()` spawned a brand-new child that never actually took over the port - yet
+ * the CLI reported "Engine started" with a fresh PID because the OLD process kept answering
+ * /health successfully.
+ *
+ * Note this does NOT compare against the spawned `child.pid` directly: in dev mode (tsx) the
+ * spawned process is only a CLI wrapper (`tsx/dist/cli.mjs`), which itself forks a separate child
+ * to actually run scripts/argus-engine.ts and bind the port - confirmed live (two distinct
+ * node.exe processes, wrapper -> real engine, different PIDs). Comparing the real /health pid
+ * against `child.pid` would therefore falsely fail on every normal dev-mode start. Instead the
+ * caller passes `notPid`: the pid that was already answering *before* this start attempt (if
+ * any). A genuinely new engine will report a pid different from that; the stale-process
+ * collision this fix targets reports the exact same `notPid` back.
+ */
+async function waitForHealth(timeoutMs = 60_000, notPid?: number): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
-      const h = await fetchJson('/api/v2/runtime/health') as { ok?: boolean };
-      if (h.ok) return true;
+      const h = await fetchJson('/api/v2/runtime/health') as { ok?: boolean; health?: { pid?: number } };
+      if (h.ok && (notPid === undefined || h.health?.pid !== notPid)) return true;
     } catch (e) {
       if (e instanceof AuthRequiredError) throw e;
       /* retry */
@@ -86,6 +104,31 @@ async function waitForHealth(timeoutMs = 60_000): Promise<boolean> {
     await new Promise((r) => setTimeout(r, 500));
   }
   return false;
+}
+
+/**
+ * DEF-26 support: poll until nothing answers /health, confirming a graceful shutdown request
+ * actually completed rather than assuming a fixed delay was long enough (the previous restart()
+ * used a blind 1500ms setTimeout with no confirmation at all).
+ */
+async function waitForHealthGone(timeoutMs = 15_000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const pid = await currentlyAnsweringPid();
+    if (pid === undefined) return true;
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
+}
+
+/** Best-effort read of whatever pid is currently answering /health, before a start/restart. */
+async function currentlyAnsweringPid(): Promise<number | undefined> {
+  try {
+    const h = await fetchJson('/api/v2/runtime/health') as { ok?: boolean; health?: { pid?: number } };
+    return h.ok ? h.health?.pid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function parseFlags(argv: string[]) {
@@ -179,6 +222,10 @@ async function startEngine() {
   if (useProd && !existsSync(distServer)) {
     throw new Error('Production start requested but dist/server.cjs is missing. Run: npm run build');
   }
+  // Snapshot whatever is answering /health right now (should normally be nothing, since
+  // isEngineProcessRunning() above returned false - but the whole point of this check is to
+  // catch exactly the case where the pid file lies and something is still actually listening).
+  const staleAnsweringPid = await currentlyAnsweringPid();
   const env = { ...process.env, ARGUS_HEADLESS: 'true', ARGUS_ENGINE: 'true' };
   let child;
   if (useProd) {
@@ -195,13 +242,38 @@ async function startEngine() {
   if (!child.pid) throw new Error('Failed to spawn Argus engine process');
   writeEnginePid(child.pid);
   child.unref();
-  const ready = await waitForHealth();
+  const ready = await waitForHealth(60_000, staleAnsweringPid);
+  let message = ready ? 'Engine started' : 'Engine spawned but health check timed out';
+  let reportedPid = child.pid;
+  if (!ready && staleAnsweringPid !== undefined) {
+    // Distinguish "nothing ever answered" from "the same stale process from before this start
+    // attempt is still answering on this port" - the second case needs a manual investigation
+    // (find and stop the real listener), not a retry of the same start command.
+    message = `Engine spawn requested but pid ${staleAnsweringPid} (already answering on ${BASE} before this start attempt) is still the one responding - the new process did not take over the port. Stop pid ${staleAnsweringPid} manually, then retry.`;
+  }
+  if (ready && !useProd) {
+    // Real bug found and fixed (2026-08-25, same pass as the pid-collision fix above): in --dev
+    // mode `child` is only the tsx CLI wrapper (node_modules/tsx/dist/cli.mjs), which itself
+    // forks a separate child process to actually run scripts/argus-engine.ts and bind the port -
+    // confirmed live this session (two distinct node.exe processes, wrapper -> real engine,
+    // different PIDs). Recording the wrapper's pid in the pid file meant stopEngine()'s
+    // isPidAlive() check could go stale as soon as the wrapper itself exited, even while the real
+    // engine (the child) was still healthy and serving - repeatedly observed this session as
+    // "stop"/"restart" reporting 'No engine PID file' or refusing to signal, while a real engine
+    // process kept running unmanaged. Now reconciles the pid file to whatever /health itself
+    // reports as the actual serving process's pid once it's confirmed ready.
+    const realPid = await currentlyAnsweringPid();
+    if (realPid !== undefined && realPid !== child.pid) {
+      writeEnginePid(realPid);
+      reportedPid = realPid;
+    }
+  }
   console.log(JSON.stringify({
     ok: ready,
-    pid: child.pid,
+    pid: reportedPid,
     headless: true,
     api: BASE,
-    message: ready ? 'Engine started' : 'Engine spawned but health check timed out',
+    message,
   }, null, 2));
   if (!ready) process.exit(1);
 }
@@ -226,6 +298,38 @@ async function stopEngine() {
     }, null, 2));
     return;
   }
+
+  // DEF-26 fix (2026-08-26): `process.kill(pid, 'SIGTERM')` does not invoke the target process's
+  // SIGTERM handler on Windows - empirically confirmed live (isolated parent/child probe: the
+  // child was force-terminated, handler never ran, both cross-process and via self-signal). Every
+  // prior stop/restart on this platform was therefore an unconditional hard-kill, never a real
+  // drain - which is exactly why the successor process's "did not shut down cleanly" report was
+  // accurate, not a logging bug (see gracefulShutdown.ts's requestGracefulShutdown()). Prefer a
+  // real graceful shutdown via HTTP (same-process function call, no OS signal involved); fall back
+  // to SIGTERM only when that request itself cannot be made (server unreachable/wedged).
+  let gracefulRequested = false;
+  try {
+    await fetchJson('/api/v1/system/shutdown', { method: 'POST' });
+    gracefulRequested = true;
+  } catch (e) {
+    if (e instanceof AuthRequiredError) throw e;
+    /* fall through to the SIGTERM fallback below */
+  }
+
+  if (gracefulRequested) {
+    const stopped = await waitForHealthGone(15_000);
+    clearEnginePid();
+    console.log(JSON.stringify({
+      ok: true,
+      message: stopped
+        ? 'Graceful shutdown requested and confirmed (process stopped answering /health).'
+        : 'Graceful shutdown requested but the process was still answering /health after 15s - it may still be draining, or may be wedged. Check the process directly before assuming it is stopped.',
+      pid,
+      graceful: true,
+    }, null, 2));
+    return;
+  }
+
   try {
     process.kill(pid, 'SIGTERM');
   } catch (e: unknown) {
@@ -233,7 +337,16 @@ async function stopEngine() {
     throw e;
   }
   clearEnginePid();
-  console.log(JSON.stringify({ ok: true, message: 'SIGTERM sent', pid }, null, 2));
+  // No positive confirmation the port is free yet in this fallback path (unlike the graceful
+  // path's waitForHealthGone) - give the OS a brief moment before a caller tries to start a new
+  // engine on the same port.
+  await new Promise((r) => setTimeout(r, 1000));
+  console.log(JSON.stringify({
+    ok: true,
+    message: 'Graceful HTTP shutdown request failed (server unreachable) - sent SIGTERM as a fallback. On Windows this forcefully terminates the process without running its drain sequence; the next boot will correctly report an unclean shutdown, because this one genuinely was.',
+    pid,
+    graceful: false,
+  }, null, 2));
 }
 
 async function cliLogin() {
@@ -412,8 +525,10 @@ const commands: Record<string, () => Promise<void>> = {
     return stopEngine();
   },
   async restart() {
+    // stopEngine() itself now waits for confirmation the old process actually stopped answering
+    // /health (graceful path) or applies its own short buffer (SIGTERM fallback) - no need for an
+    // additional blind fixed delay here on top of that (DEF-26 fix, 2026-08-26).
     await stopEngine().catch(() => undefined);
-    await new Promise((r) => setTimeout(r, 1500));
     return startEngine();
   },
   async status() {
@@ -452,6 +567,96 @@ const commands: Record<string, () => Promise<void>> = {
     const text = await res.text();
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${text}`);
     console.log(text);
+  },
+  /**
+   * Thin alias for 'session-report' (2026-08-25, quant-graduation/active-trading-readiness pass).
+   * Phase 5 of that task asked for a `trading-audit` command answering "why didn't Argus trade" -
+   * tradingSessionReport.ts already computes exactly that funnel (ideas generated/rejected,
+   * missing-price, consensus rounds/approved/rejected, risk evaluations/approved, orders, fills),
+   * scoped to the real current trading day from real event_traces/trades/risk_assessments rows.
+   * This is intentionally NOT a second parallel report - same route, same renderer, same data -
+   * only the command name differs, to avoid exactly the kind of silent-duplicate-implementation
+   * this codebase's own rules warn against.
+   */
+  /**
+   * Safe Research & Quant Intelligence Expansion (2026-08-25). Every subcommand hits
+   * /api/v2/research-intelligence/* - a read-only research surface that cannot place orders,
+   * bypass ChiefTrader, or touch RiskEngine/OMS/broker (architecture-test-enforced). Output is
+   * always labeled RESEARCH/ADVISORY and never counted as live trading activity - see
+   * session-report/trading-audit for that.
+   */
+  async research() {
+    const [sub, ...rest] = process.argv.slice(3);
+    const usage = () => {
+      console.log([
+        'Usage: argus research <subcommand> [args]',
+        '  audit                          List all 12 capabilities and their status',
+        '  regime <SYMBOL>                Market regime detection',
+        '  multi-factor <SYMBOL>          Multi-factor transparent scoring',
+        '  trade-setup <SYMBOL>           Research-only trade setup (NOT an approved trade)',
+        '  drawdown <SYMBOL>              Drawdown analysis on the real close-price series',
+        '  correlation <SYM1,SYM2,...>    Pairwise correlation + diversification score',
+        '  risk-reward <SYMBOL> <entry> <stop> <target> [strategyId]',
+        '  macro                          Read-only macro bias (reuses MacroAgent\'s own cache)',
+        '  strategy <universe csv> [timeframe] [targetRegime]',
+        'All output is RESEARCH/ADVISORY only - never an executed trade.',
+      ].join('\n'));
+    };
+    if (!sub || sub === '--help' || sub === '-h') { usage(); return; }
+    const base = '/api/v2/research-intelligence';
+    switch (sub) {
+      case 'audit':
+        console.log(JSON.stringify(await fetchJson(`${base}/audit`), null, 2));
+        return;
+      case 'regime':
+        if (!rest[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/regime`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        return;
+      case 'multi-factor':
+        if (!rest[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/multi-factor`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        return;
+      case 'trade-setup':
+        if (!rest[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/trade-setup`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        return;
+      case 'drawdown':
+        if (!rest[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/drawdown`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        return;
+      case 'correlation': {
+        if (!rest[0]) return usage();
+        const symbols = rest[0].split(',').map((s) => s.trim()).filter(Boolean);
+        console.log(JSON.stringify(await fetchJson(`${base}/correlation`, { method: 'POST', body: JSON.stringify({ symbols }) }), null, 2));
+        return;
+      }
+      case 'risk-reward': {
+        const [symbol, entry, stop, target, strategyId] = rest;
+        if (!symbol || entry === undefined || stop === undefined || target === undefined) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/risk-reward`, {
+          method: 'POST',
+          body: JSON.stringify({ symbol, entry: Number(entry), stop: Number(stop), target: Number(target), strategyId }),
+        }), null, 2));
+        return;
+      }
+      case 'macro':
+        console.log(JSON.stringify(await fetchJson(`${base}/macro`), null, 2));
+        return;
+      case 'strategy': {
+        if (!rest[0]) return usage();
+        const universe = rest[0].split(',').map((s) => s.trim()).filter(Boolean);
+        console.log(JSON.stringify(await fetchJson(`${base}/strategy-generation`, {
+          method: 'POST',
+          body: JSON.stringify({ universe, timeframe: rest[1], targetRegime: rest[2] }),
+        }), null, 2));
+        return;
+      }
+      default:
+        usage();
+    }
+  },
+  async 'trading-audit'() {
+    return (commands as any)['session-report']();
   },
   async config() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/config'), null, 2));

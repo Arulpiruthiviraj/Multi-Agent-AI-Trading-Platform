@@ -18,7 +18,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   X, Play, Pause, SkipBack, SkipForward, RotateCcw, Activity, Users, Scale, ShieldCheck,
-  ShieldAlert, Send, CheckCircle2, XCircle, HelpCircle, ChevronDown, ChevronRight,
+  ShieldAlert, Send, CheckCircle2, XCircle, HelpCircle, ChevronDown, ChevronRight, Brain,
 } from 'lucide-react';
 import { UnavailableHint } from './UnavailableHint';
 import { formatStatusHint, formatTransactionDecision, formatTransactionOutcome } from './observatoryHonesty';
@@ -42,6 +42,46 @@ interface RiskGate {
   detail: any;
 }
 
+interface StrategyEvaluation {
+  strategy: string;
+  side: 'BUY' | 'SELL';
+  setupScore: number;
+  confidence: number;
+  conditionsMet: string[];
+  conditionsFailed: string[];
+  contradictions: string[];
+  invalidationConditions: string[];
+  applicableRegimes: string[];
+}
+
+interface QuantAssessment {
+  createdAt: string;
+  regime: {
+    regime: string;
+    trendStrength: number;
+    volatility: string;
+    marketStructure: string;
+    confidence: number;
+    insufficientData: boolean;
+  } | null;
+  marketContext: {
+    spy: { direction?: string } | null;
+    sector: { name: string | null; etf: string | null } | null;
+  } | null;
+  strategyEvaluations: StrategyEvaluation[] | null;
+  groupedScores: { BUY: { overallSetupScore: number }; SELL: { overallSetupScore: number } } | null;
+  aiContradictionAnalysis: {
+    available: boolean;
+    aiAgreesWithSide: boolean | null;
+    additionalContradictions: string[];
+    scenarioAnalysis: string;
+    disagreementNote: string | null;
+    reason?: string;
+    provider?: string;
+  } | null;
+  emittedTradeIdea: boolean;
+}
+
 interface TransactionData {
   transaction: { id: string; symbol: string; openedAt: string; closedAt: string | null; status: string; finalDecision: string | null; outcome: string };
   consensusDecision: { symbol: string; side: string; weightedConfidence: number; threshold: number; approved: boolean; agreementsCount: number; disagreementsCount: number; debateUsed: boolean; reasoning: string | null; createdAt: string } | null;
@@ -51,6 +91,7 @@ interface TransactionData {
   order: { id: string; status: string; price: number; quantity: number; brokerOrderId: string | null; requestId: string | null; submittedAt: string | null; acceptedAt: string | null; filledAt: string | null; profitLoss: number | null } | null;
   fills: { id: number; brokerFillId: string | null; quantity: number; price: number; filledAt: string }[];
   events: { id: string; eventType: string; timestamp: number; payload: any }[];
+  quantAssessment: QuantAssessment | null;
 }
 
 const SPEEDS = [0.25, 0.5, 1, 2, 5, 10];
@@ -102,6 +143,7 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
   const [speed, setSpeed] = useState(1);
   const [expandedGate, setExpandedGate] = useState<number | null>(null);
   const [showRawEvents, setShowRawEvents] = useState(false);
+  const [expandedStrategy, setExpandedStrategy] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -163,7 +205,7 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
     );
   }
 
-  const { transaction, consensusDecision, evidence, riskAssessment, riskGates, order, fills, events } = data;
+  const { transaction, consensusDecision, evidence, riskAssessment, riskGates, order, fills, events, quantAssessment } = data;
   const currentStage = stages[stageIndex]?.key;
   const stageReached = (key: string) => {
     const idx = stages.findIndex(s => s.key === key);
@@ -291,6 +333,101 @@ export default function TransactionObservatory({ transactionId, onClose }: { tra
               {consensusDecision.reasoning && <p className="text-[11px] text-slate-400 mt-3 border-t border-slate-800 pt-3">{consensusDecision.reasoning}</p>}
             </div>
           )}
+
+          {/* Quant Engine snapshot - the real feature/strategy data closest in time to (but not
+              after) this transaction, joined server-side via GET /api/v2/transactions/:id.
+              quant_assessments is written on QuantSignalAgent's own ~5-minute cycle, not
+              per-transaction, so this is the closest real read, not an exact-timestamp match. */}
+          <div className="bg-[#111822] border border-slate-800 rounded p-4">
+            <h3 className="text-[10px] font-bold uppercase tracking-widest text-slate-500 mb-3 flex items-center gap-2"><Brain size={13} /> Quant Engine Snapshot</h3>
+            {!quantAssessment ? (
+              <div className="flex items-center gap-2 text-slate-600 italic text-xs">
+                <HelpCircle size={14} /> No quant assessment recorded near this transaction's open time.
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                <p className="text-[9px] text-slate-600 uppercase tracking-widest">
+                  Closest snapshot: {fmtTime(quantAssessment.createdAt)} {quantAssessment.createdAt !== transaction.openedAt ? '(nearest prior cycle, not an exact match)' : ''}
+                </p>
+
+                {quantAssessment.regime && (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-center">
+                    <div><p className="text-[9px] text-slate-500 uppercase tracking-widest">Regime</p><p className="text-sm font-bold text-white">{quantAssessment.regime.regime}</p></div>
+                    <div><p className="text-[9px] text-slate-500 uppercase tracking-widest">Volatility</p><p className="text-sm font-bold text-slate-300">{quantAssessment.regime.volatility}</p></div>
+                    <div><p className="text-[9px] text-slate-500 uppercase tracking-widest">Structure</p><p className="text-sm font-bold text-slate-300">{quantAssessment.regime.marketStructure}</p></div>
+                    <div><p className="text-[9px] text-slate-500 uppercase tracking-widest">Regime Confidence</p><p className="text-sm font-bold text-slate-300">{Math.round(quantAssessment.regime.confidence * 100)}%</p></div>
+                  </div>
+                )}
+                {quantAssessment.regime?.insufficientData && (
+                  <p className="text-[10px] text-amber-400">Insufficient bar history at this snapshot — regime is a best-effort read on thin data.</p>
+                )}
+
+                {quantAssessment.groupedScores && (
+                  <div className="border-t border-slate-800 pt-3">
+                    <p className="text-[9px] text-slate-500 uppercase tracking-widest mb-2">Overall Setup Score</p>
+                    <div className="flex items-center gap-4">
+                      <div className="flex-1">
+                        <div className="flex justify-between text-[9px] text-slate-500 mb-1"><span>BUY</span><span>{Math.round(quantAssessment.groupedScores.BUY.overallSetupScore)}</span></div>
+                        <div className="h-1.5 bg-slate-800 rounded overflow-hidden"><div className="h-full bg-emerald-500" style={{ width: `${Math.round(quantAssessment.groupedScores.BUY.overallSetupScore)}%` }} /></div>
+                      </div>
+                      <div className="flex-1">
+                        <div className="flex justify-between text-[9px] text-slate-500 mb-1"><span>SELL</span><span>{Math.round(quantAssessment.groupedScores.SELL.overallSetupScore)}</span></div>
+                        <div className="h-1.5 bg-slate-800 rounded overflow-hidden"><div className="h-full bg-amber-500" style={{ width: `${Math.round(quantAssessment.groupedScores.SELL.overallSetupScore)}%` }} /></div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {quantAssessment.strategyEvaluations && quantAssessment.strategyEvaluations.length > 0 && (
+                  <div className="border-t border-slate-800 pt-3">
+                    <p className="text-[9px] text-slate-500 uppercase tracking-widest mb-2">Strategies Evaluated ({quantAssessment.strategyEvaluations.length})</p>
+                    <div className="flex flex-col gap-1">
+                      {quantAssessment.strategyEvaluations.map(s => (
+                        <div key={s.strategy}>
+                          <button
+                            onClick={() => setExpandedStrategy(expandedStrategy === s.strategy ? null : s.strategy)}
+                            className="w-full flex items-center gap-2 p-2 rounded border border-slate-800 text-left transition-colors hover:border-slate-700"
+                          >
+                            {expandedStrategy === s.strategy ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                            <span className={`text-[10px] font-bold uppercase tracking-widest w-14 shrink-0 ${s.side === 'BUY' ? 'text-emerald-400' : 'text-amber-400'}`}>{s.side}</span>
+                            <span className="text-[11px] text-white font-bold flex-1 truncate">{s.strategy}</span>
+                            <span className="text-[9px] text-slate-500 shrink-0">setup {Math.round(s.setupScore)}</span>
+                            <span className="text-[9px] text-slate-400 w-12 text-right shrink-0">{Math.round(s.confidence * 100)}%</span>
+                          </button>
+                          {expandedStrategy === s.strategy && (
+                            <div className="text-[10px] text-slate-400 bg-black/30 rounded p-2 mt-1 flex flex-col gap-2">
+                              {s.conditionsMet.length > 0 && (
+                                <div><span className="text-emerald-400 font-bold uppercase tracking-widest text-[9px]">Conditions Met: </span>{s.conditionsMet.join(', ')}</div>
+                              )}
+                              {s.conditionsFailed.length > 0 && (
+                                <div><span className="text-rose-400 font-bold uppercase tracking-widest text-[9px]">Conditions Failed: </span>{s.conditionsFailed.join(', ')}</div>
+                              )}
+                              {s.contradictions.length > 0 && (
+                                <div><span className="text-amber-400 font-bold uppercase tracking-widest text-[9px]">Contradictions: </span>{s.contradictions.join(', ')}</div>
+                              )}
+                              {s.invalidationConditions.length > 0 && (
+                                <div><span className="text-slate-500 font-bold uppercase tracking-widest text-[9px]">Invalidation: </span>{s.invalidationConditions.join(', ')}</div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {quantAssessment.aiContradictionAnalysis?.available && (
+                  <div className="border-t border-slate-800 pt-3 text-[11px] text-slate-400">
+                    <p className="text-[9px] text-slate-500 uppercase tracking-widest mb-1">AI Contradiction Check {quantAssessment.aiContradictionAnalysis.provider ? `(${quantAssessment.aiContradictionAnalysis.provider})` : ''}</p>
+                    <p>{quantAssessment.aiContradictionAnalysis.scenarioAnalysis}</p>
+                    {quantAssessment.aiContradictionAnalysis.disagreementNote && (
+                      <p className="text-amber-400 mt-1">⚠ {quantAssessment.aiContradictionAnalysis.disagreementNote}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
 
           {/* Risk gate ladder */}
           <div className="bg-[#111822] border border-slate-800 rounded p-4">

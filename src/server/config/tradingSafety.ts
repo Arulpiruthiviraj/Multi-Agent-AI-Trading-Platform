@@ -50,10 +50,46 @@ export interface TradingSafety {
   aiProviderUnreachableCooldownMs: number;
   /** Skip a provider that timed out this long so NewsAgent does not re-pay the timeout every cycle. */
   aiProviderTimeoutSkipCooldownMs: number;
+  /** Skip a provider classified ACCOUNT_SUSPENDED/QUOTA_EXCEEDED this long — a billing issue does
+   *  not self-heal within a session, so this is deliberately much longer than the timeout/unreachable
+   *  cooldowns above. In-memory only; does not flip DB enabled. */
+  aiProviderQuotaExceededCooldownMs: number;
+  /**
+   * Peak Equity Recovery (2026-08-26): a boot-time integrity check (PeakEquityIntegrity.ts)
+   * treats stored settings.peakEquity as contaminated ONLY when it exceeds real broker equity by
+   * more than this multiplier AND organic PAPER fill history is too small to plausibly explain
+   * such growth (fewer than researchSafety.minPaperTrades closed trades). Deliberately
+   * conservative — a real, legitimate multi-year compounding account could still exceed this ratio
+   * eventually; the paired organic-trade-count check is what keeps this from ever overwriting a
+   * genuine peak. See the module's own header comment for the full decision tree.
+   */
+  peakEquityMaxPlausibleMultiplier: number;
   /** Free-tier AlphaVantage shared daily HTTP cap (Fund + Macro). */
   alphaVantageDailyRequestBudget: number;
   /** Guard against a wedged shared budget-consumption lock permanently starving both Fundamental/MacroAgent. */
   alphaVantageBudgetLockTimeoutMs: number;
+  /**
+   * Slots of alphaVantageDailyRequestBudget reserved exclusively for MacroAgent (Consensus Quality
+   * Audit, 2026-08-25: real DB evidence showed alphavantage:macro:GLOBAL stuck at fetched_at=0/
+   * payload={} for the entire dataset - MacroAgent's 3 calls/day were always losing the shared
+   * budget race to FundamentalAgent, which burns 1 request per distinct symbol in the idea
+   * universe and ticks more often). Non-MacroAgent callers can only consume up to
+   * (alphaVantageDailyRequestBudget - this value); MacroAgent itself is exempt from that cap.
+   */
+  alphaVantageMacroReservedRequests: number;
+  /**
+   * Agent Confluence Architecture Audit (2026-08-25): master switch for ConfluenceCoordinator.ts —
+   * when true, a qualifying TechnicalAgent signal triggers an immediate, independent on-demand
+   * evaluation from QuantEngine/KronosEngine for the same symbol (never NewsAgent — see the
+   * module's own comment). Does not change consensusApprovalThreshold, minIndependentAgreeingAgents,
+   * disagreementPenalty, or any RiskEngine/OMS/broker behavior.
+   */
+  confluenceCoordinatorEnabled: boolean;
+  /** Minimum TechnicalAgent confidence (0-1) required to trigger a confluence check. */
+  confluenceCoordinatorConfidenceThreshold: number;
+  /** Per-symbol cooldown between confluence triggers — avoids re-asking Quant/Kronos to
+   *  re-evaluate a symbol faster than consensusIdeaMaxAgeMs would even keep the result fresh for. */
+  confluenceCoordinatorCooldownMs: number;
   /** Max parallel LLM providers for routeConsensus (top-K healthy). */
   consensusMaxProviders: number;
   /** Max NewsEngine LLM escalations per pipeline cycle. */
@@ -296,8 +332,13 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'aiProviderAuthFailureCooldownMs',
   'aiProviderUnreachableCooldownMs',
   'aiProviderTimeoutSkipCooldownMs',
+  'aiProviderQuotaExceededCooldownMs',
+  'peakEquityMaxPlausibleMultiplier',
   'alphaVantageDailyRequestBudget',
   'alphaVantageBudgetLockTimeoutMs',
+  'alphaVantageMacroReservedRequests',
+  'confluenceCoordinatorConfidenceThreshold',
+  'confluenceCoordinatorCooldownMs',
   'consensusMaxProviders',
   'newsLlmMaxCallsPerCycle',
   'omsFollowUpMaxAgeMs',
@@ -424,6 +465,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.autoFlattenOnReconciliationMismatch !== 'boolean') {
     throw new Error('config/tradingSafety.json missing boolean field: autoFlattenOnReconciliationMismatch');
+  }
+  if (typeof raw.confluenceCoordinatorEnabled !== 'boolean') {
+    throw new Error('config/tradingSafety.json missing boolean field: confluenceCoordinatorEnabled');
   }
   if (typeof raw.quantColdStartBootstrapEnabledEnvVar !== 'string' || !raw.quantColdStartBootstrapEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: quantColdStartBootstrapEnabledEnvVar');

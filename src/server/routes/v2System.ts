@@ -900,11 +900,22 @@ v2Router.get('/market/sentiment-trend', async (req, res) => {
     const now = Date.now();
     const startMs = now - days * 24 * 60 * 60 * 1000;
 
-    const rows = await db.select().from(newsArticles).where(gteOp(newsArticles.publishedAt, new Date(startMs).toISOString()));
+    // Bounded + headersSent-guarded (2026-08-25): this route had neither, unlike the
+    // orchestration/capital route a few hundred lines down that already documents the exact same
+    // race with server.ts's global 15s per-request backstop. Confirmed live in data/logs/crash.log
+    // (two ERR_HTTP_HEADERS_SENT unhandledRejections today, 01:59:06Z/01:59:22Z, both pointing at
+    // this handler's catch) - an unbounded db.select()/ensureBars() call let the backstop's 504
+    // fire first, then this handler's late resolution tried to write a second response.
+    const rows = await withTimeout(
+      db.select().from(newsArticles).where(gteOp(newsArticles.publishedAt, new Date(startMs).toISOString())),
+      5000,
+      'db.select newsArticles (sentiment-trend)',
+    );
     const scored = rows.filter(r => typeof r.sentimentScore === 'number');
 
     if (scored.length === 0) {
-      return res.json({ ok: true, available: false, reason: 'No scored real news articles in the last 7 days.', data: [] });
+      if (!res.headersSent) return res.json({ ok: true, available: false, reason: 'No scored real news articles in the last 7 days.', data: [] });
+      return;
     }
 
     const byDate = new Map<string, { sum: number; count: number }>();
@@ -918,12 +929,13 @@ v2Router.get('/market/sentiment-trend', async (req, res) => {
 
     let spyByDate = new Map<string, number>();
     try {
-      await historicalDataGateway.ensureBars('SPY', '1Day', startMs, now);
-      const spyBars = await historicalDataGateway.getBars('SPY', '1Day', startMs, now);
+      await withTimeout(historicalDataGateway.ensureBars('SPY', '1Day', startMs, now), 5000, 'historicalDataGateway.ensureBars SPY (sentiment-trend)');
+      const spyBars = await withTimeout(historicalDataGateway.getBars('SPY', '1Day', startMs, now), 5000, 'historicalDataGateway.getBars SPY (sentiment-trend)');
       spyByDate = new Map(spyBars.map(b => [new Date(b.timestamp).toISOString().slice(0, 10), b.close]));
     } catch (e) {
-      // Real SPY bars unavailable (no Alpaca credentials, fetch failure) - the sentiment series
-      // above still stands on its own; the benchmark overlay is just omitted, never fabricated.
+      // Real SPY bars unavailable (no Alpaca credentials, fetch failure, or timeout) - the
+      // sentiment series above still stands on its own; the benchmark overlay is just omitted,
+      // never fabricated.
     }
 
     const data = Array.from(byDate.entries())
@@ -935,9 +947,9 @@ v2Router.get('/market/sentiment-trend', async (req, res) => {
         index: spyByDate.get(date) ?? null,
       }));
 
-    res.json({ ok: true, available: true, data });
+    if (!res.headersSent) res.json({ ok: true, available: true, data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1484,6 +1496,72 @@ v2Router.get('/quant/assessments/:symbol', async (req, res) => {
   }
 });
 
+import { dailyStrategyPerformance as dailyStrategyPerformanceTable } from '../db/schema';
+
+// ==========================================================================================
+// GET /quant/strategy-performance - the first route ever exposing daily_strategy_performance
+// (2026-08-25, market-open readiness follow-up). The table itself is not new: CampaignTracker.ts's
+// refreshCampaignProgress() has always upserted it (at boot, on ORDER_EXECUTED, and on its own
+// interval - unconditional on settings.campaignEnabled, only the campaign soft-lock/nudge features
+// are gated by that flag), attributing every organic FILLED trade to the quant strategy id that
+// opened the position (or 'UNATTRIBUTED' when a trade's opening idea did not come from a quant
+// strategy - e.g. a TechnicalAgent/NewsAgent idea). This route only reads it - it was a real,
+// already-computed gap with zero API consumer, not a new computation.
+// ==========================================================================================
+v2Router.get('/quant/strategy-performance', async (req, res) => {
+  try {
+    const days = Math.min(Math.max(parseInt((req.query.days as string) || '30', 10) || 30, 1), 365);
+    const cutoffDate = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const rows = await db.select().from(dailyStrategyPerformanceTable)
+      .where(gteOp(dailyStrategyPerformanceTable.tradingDate, cutoffDate))
+      .orderBy(desc(dailyStrategyPerformanceTable.tradingDate));
+
+    if (rows.length === 0) {
+      return res.json({
+        ok: true, available: false,
+        reason: `No daily_strategy_performance rows in the last ${days} day(s) - either no organic FILLED trades have closed yet, or the campaign tracker has not run a cycle since boot.`,
+        byStrategy: [], daily: [],
+      });
+    }
+
+    const byStrategy = new Map<string, {
+      quantStrategyId: string; realizedPnl: number; unrealizedPnl: number;
+      tradesCount: number; winsCount: number; lossesCount: number; lastActiveDate: string;
+    }>();
+    for (const r of rows) {
+      const existing = byStrategy.get(r.quantStrategyId);
+      if (existing) {
+        existing.realizedPnl += r.realizedPnl;
+        existing.unrealizedPnl += r.unrealizedPnl;
+        existing.tradesCount += r.tradesCount;
+        existing.winsCount += r.winsCount;
+        existing.lossesCount += r.lossesCount;
+        if (r.tradingDate > existing.lastActiveDate) existing.lastActiveDate = r.tradingDate;
+      } else {
+        byStrategy.set(r.quantStrategyId, {
+          quantStrategyId: r.quantStrategyId,
+          realizedPnl: r.realizedPnl, unrealizedPnl: r.unrealizedPnl,
+          tradesCount: r.tradesCount, winsCount: r.winsCount, lossesCount: r.lossesCount,
+          lastActiveDate: r.tradingDate,
+        });
+      }
+    }
+
+    res.json({
+      ok: true, available: true, days,
+      // winRatePct is null (not 0) when there are zero closed (win+loss) trades yet - an
+      // UNATTRIBUTED-only or all-open-position strategy should read "no closed trades", not "0%".
+      byStrategy: Array.from(byStrategy.values())
+        .map(s => ({ ...s, winRatePct: (s.winsCount + s.lossesCount) > 0 ? Number(((s.winsCount / (s.winsCount + s.lossesCount)) * 100).toFixed(1)) : null }))
+        .sort((a, b) => b.realizedPnl - a.realizedPnl),
+      daily: rows,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 v2Router.get('/quant/strategy-backtests', async (req, res) => {
   try {
     const rows = await db.select().from(quantStrategyBacktests).orderBy(desc(quantStrategyBacktests.createdAt)).limit(50);
@@ -1511,26 +1589,41 @@ v2Router.get('/quant/strategy-backtests', async (req, res) => {
 
 v2Router.get('/quant/strategy-backtests/:id', async (req, res) => {
   try {
-    const run: any = await backtestEngine.getStrategyRun(req.params.id);
-    if (!run) return res.status(404).json({ ok: false, error: 'Strategy backtest run not found.' });
+    // Real defect fixed (2026-08-26 peak-equity/pre-market audit): crash.log showed
+    // ERR_HTTP_HEADERS_SENT unhandledRejections pointing at this handler - an unbounded
+    // getStrategyRun() call let server.ts's global per-request timeout backstop send a response
+    // first, then this handler's late resolution tried to send a second one (404 or 200,
+    // depending on timing). Same bounded + headersSent-guarded pattern already applied to the
+    // sentiment-trend route above.
+    const run: any = await withTimeout(
+      backtestEngine.getStrategyRun(req.params.id),
+      5000,
+      'backtestEngine.getStrategyRun (quant/strategy-backtests/:id)',
+    );
+    if (!run) {
+      if (!res.headersSent) res.status(404).json({ ok: false, error: 'Strategy backtest run not found.' });
+      return;
+    }
     const tradeLog = run.tradeLog ? JSON.parse(run.tradeLog) : [];
-    res.json({
-      ok: true,
-      data: {
-        ...run,
-        regimeBreakdown: run.regimeBreakdown ? JSON.parse(run.regimeBreakdown) : null,
-        expectedValue: run.expectedValue ? JSON.parse(run.expectedValue) : null,
-        kelly: run.kelly ? JSON.parse(run.kelly) : null,
-        tradeLog,
-        equityCurve: run.equityCurve ? JSON.parse(run.equityCurve) : [],
-        // E4 - recomputed from the persisted tradeLog on every read, never a second stored copy.
-        failureBreakdown: computeFailureBreakdown(tradeLog),
-        // E7 - persisted at run time (raw bars aren't archived, so this can't be recomputed later).
-        benchmarkComparison: run.benchmarkComparison ? JSON.parse(run.benchmarkComparison) : null,
-      },
-    });
+    if (!res.headersSent) {
+      res.json({
+        ok: true,
+        data: {
+          ...run,
+          regimeBreakdown: run.regimeBreakdown ? JSON.parse(run.regimeBreakdown) : null,
+          expectedValue: run.expectedValue ? JSON.parse(run.expectedValue) : null,
+          kelly: run.kelly ? JSON.parse(run.kelly) : null,
+          tradeLog,
+          equityCurve: run.equityCurve ? JSON.parse(run.equityCurve) : [],
+          // E4 - recomputed from the persisted tradeLog on every read, never a second stored copy.
+          failureBreakdown: computeFailureBreakdown(tradeLog),
+          // E7 - persisted at run time (raw bars aren't archived, so this can't be recomputed later).
+          benchmarkComparison: run.benchmarkComparison ? JSON.parse(run.benchmarkComparison) : null,
+        },
+      });
+    }
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 

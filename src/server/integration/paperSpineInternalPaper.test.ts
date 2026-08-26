@@ -189,4 +189,121 @@ describe('PAPER spine: CHIEF_APPROVED_IDEA → Risk → OMS → InternalPaper fi
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
     tradingEngine.state.emergencyStopActive = false;
   }, 10000);
+
+  /**
+   * Real bug found and fixed (2026-08-25, post-audit hardening, Phase 6): no existing test
+   * proved a SELL/exit idea traveling through the SAME real spine as the BUY test above
+   * (RiskAgent -> RiskEngine -> OMS -> InternalPaperBroker -> fill -> localPortfolioSync ->
+   * portfolio row updated). PipelineFlatten.test.ts covers the separate manual-liquidation
+   * override path (skips consensus, not RiskEngine per CLAUDE.md), which is not the same
+   * thing as a normal consensus-approved SELL against a real open position. This test opens
+   * a real position first (via the identical CHIEF_APPROVED_IDEA BUY path proven above), then
+   * exits it the same way, verifying sell_position_exists passes, the position quantity
+   * reduces to zero via the real localPortfolioSync path, and the sale is a genuine second
+   * fill row, not a fabricated success.
+   */
+  it('opens a real position via BUY, then exits it via SELL through the same real spine (sell_position_exists, fill, position closed)', async () => {
+    const symbol = 'PSEL';
+    const buyPrice = 30;
+    const sellPrice = 31;
+    const buyTraceId = `paper-spine-sell-buy-${Date.now()}`;
+    const sellTraceId = `paper-spine-sell-exit-${Date.now()}`;
+
+    marketDataWorker.cacheObservedQuote(symbol, buyPrice);
+    const ticker = setInterval(() => {
+      BrokerManager.getInstance().tick({ [symbol]: buyPrice });
+      eventBus.emit('MARKET_DATA', { symbol, price: buyPrice, volume: 1000, timestamp: new Date().toISOString() });
+    }, 100);
+
+    let buyTrade: any;
+    try {
+      eventBus.emit('CHIEF_APPROVED_IDEA', {
+        traceId: buyTraceId,
+        symbol,
+        side: 'BUY',
+        confidence: 0.9,
+        reasoning: 'paper-spine SELL-test fixture: open the position first',
+        agentsContext: 'TechnicalAgent+NewsAgent fixture',
+        currentPrice: buyPrice,
+        evidence: [],
+      });
+
+      const buyDeadline = Date.now() + 12000;
+      while (Date.now() < buyDeadline) {
+        const rows = await db.select().from(schema.trades).where(eq(schema.trades.traceId, buyTraceId));
+        buyTrade = rows[0];
+        if (buyTrade && buyTrade.status === 'FILLED') break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } finally {
+      clearInterval(ticker);
+    }
+
+    expect(buyTrade, 'setup BUY must fill for this test to open a real position').toBeTruthy();
+    expect(buyTrade.status).toBe('FILLED');
+
+    // Real position now exists locally via syncLocalPortfolioAfterBuyFill (OMS's own fill-processing
+    // path, not asserted-into-existence by this test).
+    const [openPosition] = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, symbol));
+    expect(openPosition, 'BUY fill should have created a real local portfolio row').toBeTruthy();
+    expect(openPosition.quantity).toBe(buyTrade.quantity);
+
+    // Now exit it — same real spine, SELL side, existing position.
+    marketDataWorker.cacheObservedQuote(symbol, sellPrice);
+    const sellTicker = setInterval(() => {
+      BrokerManager.getInstance().tick({ [symbol]: sellPrice });
+      eventBus.emit('MARKET_DATA', { symbol, price: sellPrice, volume: 1000, timestamp: new Date().toISOString() });
+    }, 100);
+
+    let sellTrade: any;
+    try {
+      eventBus.emit('CHIEF_APPROVED_IDEA', {
+        traceId: sellTraceId,
+        symbol,
+        side: 'SELL',
+        confidence: 0.9,
+        reasoning: 'paper-spine SELL-test fixture: exit the position',
+        agentsContext: 'PortfolioMonitor fixture',
+        currentPrice: sellPrice,
+        evidence: [],
+      });
+
+      const sellDeadline = Date.now() + 12000;
+      while (Date.now() < sellDeadline) {
+        const rows = await db.select().from(schema.trades).where(eq(schema.trades.traceId, sellTraceId));
+        sellTrade = rows[0];
+        if (sellTrade && sellTrade.status === 'FILLED') break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    } finally {
+      clearInterval(sellTicker);
+    }
+
+    expect(sellTrade, 'OMS should have inserted a trades row for the approved SELL assessment').toBeTruthy();
+    expect(sellTrade.status).toBe('FILLED');
+    expect(sellTrade.side).toBe('SELL');
+    expect(sellTrade.symbol).toBe(symbol);
+    expect(sellTrade.quantity).toBeGreaterThan(0);
+    expect(sellTrade.brokerOrderId).toBeTruthy();
+    expect(sellTrade.id).not.toBe(buyTrade.id); // genuine second order, not the same row re-read
+
+    // sell_position_exists must be recorded and must have passed (a real position existed).
+    const [sellAssessment] = await db.select().from(schema.riskAssessments)
+      .where(eq(schema.riskAssessments.traceId, sellTraceId));
+    expect(sellAssessment.approved).toBe(true);
+    const sellGates = await db.select().from(schema.riskGateResults)
+      .where(eq(schema.riskGateResults.traceId, sellAssessment.traceId));
+    const sellPositionGate = sellGates.find((g: { gateName: string }) => g.gateName === 'sell_position_exists');
+    expect(sellPositionGate, 'sell_position_exists must be recorded for a SELL assessment').toBeTruthy();
+    expect(sellPositionGate!.passed).toBe(true);
+
+    // Real fill, not fabricated: a distinct fills row tied to the SELL order.
+    const sellFillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, sellTrade.id));
+    expect(sellFillRows.length).toBeGreaterThanOrEqual(1);
+
+    // Position closed via the real syncLocalPortfolioAfterSellFill path (full close -> row deleted),
+    // not asserted directly — this test only reads the result of that real code path.
+    const remainingPosition = await db.select().from(schema.portfolio).where(eq(schema.portfolio.symbol, symbol));
+    expect(remainingPosition).toHaveLength(0);
+  }, 30000);
 });

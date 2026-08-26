@@ -44,14 +44,24 @@ function enqueue<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 export class AlphaVantageBudget {
-  static async tryConsume(count: number = 1, nowMs: number = Date.now()): Promise<boolean> {
+  /**
+   * `caller` is optional for back-compat with any other consumer, but FundamentalAgent/MacroAgent
+   * (the only two real call sites) always pass their own name. Consensus Quality Audit
+   * (2026-08-25): real DB evidence showed MacroAgent's tiny 3-request/day need was routinely shut
+   * out entirely by FundamentalAgent burning through the shared budget across every distinct
+   * symbol in the idea universe first — alphaVantageMacroReservedRequests carves out a slice of
+   * the daily budget that only 'MacroAgent' may spend, so it is never structurally starved.
+   */
+  static async tryConsume(count: number = 1, nowMs: number = Date.now(), caller?: string): Promise<boolean> {
     if (count <= 0) return true;
     return enqueue(async () => {
       const budget = tradingSafety.alphaVantageDailyRequestBudget;
+      const reserved = Math.max(0, Math.min(budget, tradingSafety.alphaVantageMacroReservedRequests));
+      const effectiveBudget = caller === 'MacroAgent' ? budget : budget - reserved;
       const utcDate = utcDateKey(nowMs);
       const row = await ExternalDataCache.getStale<BudgetPayload>('alphavantage', 'daily-budget', null);
       const used = row && row.utcDate === utcDate && Number.isFinite(row.used) ? row.used : 0;
-      if (used + count > budget) return false;
+      if (used + count > effectiveBudget) return false;
       await ExternalDataCache.set('alphavantage', 'daily-budget', null, { utcDate, used: used + count });
       return true;
     });

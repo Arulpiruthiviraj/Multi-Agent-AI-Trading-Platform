@@ -104,7 +104,7 @@ export class FundamentalAnalysisAgent {
       return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
     }
 
-    if (!(await AlphaVantageBudget.tryConsume(1))) {
+    if (!(await AlphaVantageBudget.tryConsume(1, undefined, 'FundamentalAgent'))) {
       const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
       if (stale) {
         console.warn(`[FundamentalAgent] AlphaVantage daily budget exhausted — serving cached fundamentals for ${symbol}.`);

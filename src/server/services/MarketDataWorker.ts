@@ -45,6 +45,12 @@ type IbkrQuoteBridge = {
   subscribe(symbol: string): void;
   unsubscribe(symbol: string): void;
   clear(): void;
+  /**
+   * Real gateway-socket connectivity (2026-08-25 readiness audit, Phase 3): optional so existing
+   * callers/tests that construct a bridge without it keep working, falling back to the older
+   * (weaker) activeStreams-based guess below.
+   */
+  isConnected?(): boolean;
 };
 
 function coreStreamingSet(): Set<string> {
@@ -275,8 +281,25 @@ export class MarketDataWorker {
     this.maybeEmitMarketData(sym, price, 0, new Date(now).toISOString());
   }
 
+  /**
+   * Real bug found and fixed (2026-08-25 readiness audit, Phase 3): for the IBKR Gateway backend
+   * this previously returned `activeStreams.size > 0 || this.authenticated` - a purely local
+   * bookkeeping check, since nothing on this class ever sets `this.authenticated` for the IBKR
+   * path (that flag is only ever touched by the Alpaca WebSocket handlers below). Once at least
+   * one symbol had ever been successfully subscribed, `activeStreams.size > 0` stayed true
+   * forever, even after the real underlying IB Gateway socket disconnected later - confirmed live
+   * (10 symbols "active" per this worker's own bookkeeping while `./argus health` simultaneously
+   * reported `ibkrPaths.gatewaySocket.status: OFFLINE` and `activeMarketDataLines: 0`). Health/
+   * session-report kept reporting "Market Data: READY" indefinitely after a real disconnect,
+   * which is exactly the kind of false-positive readiness signal this audit pass is fixing
+   * elsewhere (see TradingReadinessGate.ts). Now defers to the bridge's own real connectivity
+   * check when the bridge provides one; falls back to the old heuristic only if it doesn't
+   * (existing tests construct a bridge-less ibkr_gateway context, where this branch never runs
+   * anyway since `this.ibkrBridge` is null there).
+   */
   isConnected(): boolean {
     if (this.quoteBackend === 'ibkr_gateway' && this.ibkrBridge) {
+      if (typeof this.ibkrBridge.isConnected === 'function') return this.ibkrBridge.isConnected();
       return this.activeStreams.size > 0 || this.authenticated;
     }
     return !!this.ws && this.ws.readyState === WebSocket.OPEN;

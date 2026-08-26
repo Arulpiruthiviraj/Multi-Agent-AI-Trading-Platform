@@ -60,4 +60,35 @@ describe('globalErrorHandlers', () => {
     expect(onSpy).toHaveBeenCalledWith('unhandledRejection', expect.any(Function));
     onSpy.mockRestore();
   });
+
+  it('survives console.error itself throwing (the exact 2026-08-26 incident) by falling back to a raw fd write, and never re-throws', async () => {
+    const { handleUncaughtException } = await import('./globalErrorHandlers');
+    const logPath = process.env.ARGUS_CRASH_LOG_PATH!;
+    const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {
+      throw new Error('UNKNOWN: unknown error, write');
+    });
+    const writeSyncSpy = vi.spyOn(fs, 'writeSync').mockImplementation(() => 0);
+    try {
+      expect(() => handleUncaughtException(new Error('synthetic error while console.error is broken'))).not.toThrow();
+      // The durable sink (crash.log) must still have received the error even though the
+      // console path failed.
+      expect(fs.existsSync(logPath)).toBe(true);
+      expect(fs.readFileSync(logPath, 'utf8')).toContain('synthetic error while console.error is broken');
+      // The emergency raw-fd fallback must have been used in place of the broken console.error.
+      expect(writeSyncSpy).toHaveBeenCalledWith(2, expect.stringContaining('emergency path'));
+    } finally {
+      consoleSpy.mockRestore();
+      writeSyncSpy.mockRestore();
+    }
+  });
+
+  it('storm circuit breaker exits cleanly after repeated process-level errors in a short window, instead of an unbounded cascade', async () => {
+    const { handleUncaughtException } = await import('./globalErrorHandlers');
+    for (let i = 0; i < 4; i++) {
+      handleUncaughtException(new Error(`storm error ${i}`));
+    }
+    expect(exitSpy).not.toHaveBeenCalled();
+    handleUncaughtException(new Error('storm error 5 - tips the breaker'));
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
 });

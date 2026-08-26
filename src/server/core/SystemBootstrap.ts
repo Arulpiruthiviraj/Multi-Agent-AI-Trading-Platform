@@ -44,6 +44,7 @@ import { oms } from '../services/OrderManagement';
 import { riskAgent } from '../services/RiskAgent'; 
 import { newsEngine } from '../news/NewsEngine';
 import { chiefTrader } from '../services/ChiefTraderAgent';
+import { confluenceCoordinator } from '../services/ConfluenceCoordinator';
 import { reflectionEngine } from '../services/ReflectionEngine';
 import { predictionOutcomeEvaluator } from '../services/PredictionOutcomeEvaluator';
 import { trainingExampleBuilder } from '../services/TrainingExampleBuilder';
@@ -98,6 +99,10 @@ export class SystemBootstrap {
     // worker's own start() re-checks the flag and returns immediately when it's off.
     opportunityDiscoveryWorker.start();
     newsEngine.start(); // clustering for news_veto; NewsAgent ideas gated separately
+    // Agent Confluence Architecture Audit (2026-08-25): listens for TRADE_IDEA_GENERATED, never
+    // emits one itself. Internally gated by tradingSafety.confluenceCoordinatorEnabled and
+    // isLiveIdeaGenerationEnabled() — safe to start unconditionally here, same as chiefTrader.
+    confluenceCoordinator.start();
     reflectionEngine.start();
     predictionOutcomeEvaluator.start();
     trainingExampleBuilder.start();

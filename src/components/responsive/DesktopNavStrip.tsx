@@ -2,7 +2,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import {
   Activity, AlertTriangle, BarChart3, BookOpen, BrainCircuit, Clock, Cpu,
-  Globe, Layers, List, Newspaper, Search, Settings, Shield, ShieldCheck,
+  Layers, List, Newspaper, Search, Settings, Shield, ShieldCheck,
   Target, Wallet,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -41,7 +41,6 @@ const GROUPS: StripItem[][] = [
     { id: 'news', label: 'NEWS INTEL', icon: Newspaper, buttonId: 'tab-news-btn' },
     { id: 'opportunities', label: 'OPPORTUNITY FEED', icon: Target, buttonId: 'tab-opportunities-btn' },
     { id: 'scanner', label: 'STRATEGY SCANNER', icon: Activity, buttonId: 'tab-scanner-btn' },
-    { id: 'intelligence', label: 'INTELLIGENCE', icon: Globe, buttonId: 'tab-intelligence-btn' },
   ],
   [
     { id: 'agents', label: 'AGENT NETWORK', icon: BarChart3, buttonId: 'tab-agents-btn' },

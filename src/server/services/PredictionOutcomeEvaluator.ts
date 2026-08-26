@@ -25,6 +25,7 @@ import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway
 import { tradingSafety } from '../config/tradingSafety';
 import { resolveEvaluationDueMs } from '../news/NewsPredictionEvaluation';
 import type { ExpectedHorizon } from '../news/NewsIntelligence';
+import { TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
 
 export const EVALUATION_HORIZON_MS = tradingSafety.evaluationHorizonMs;
 // Kronos-specific horizon (M5, ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md) - see tradingSafety.ts's
@@ -160,6 +161,10 @@ export class PredictionOutcomeEvaluator {
       // FORENSIC_AUDIT.md finding M1) - skip them here rather than fix it downstream in every
       // consumer.
       if (p.agentName === 'KronosEngine') continue;
+      // Real defect fixed (2026-08-26 self-improvement loop audit): never grade a Digital Twin
+      // telemetry-pulse row (UI demo animation) against real market data - see
+      // ReflectionEngine.ts's identical fix for the write-side of this same gap.
+      if (p.traceId && p.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX)) continue;
       const key = `agent_predictions:${p.id}`;
       if (evaluatedKeys.has(key)) continue;
       const predTime = new Date(p.timestamp).getTime();

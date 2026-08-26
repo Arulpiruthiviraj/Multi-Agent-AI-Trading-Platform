@@ -80,6 +80,17 @@ function startOfTradingDayMs(): number {
 /** Filled by the route layer, which has direct, non-circular access to marketDataWorker/sessionRecovery. */
 export interface TradingSessionReportOverrides {
   activeSymbols?: number;
+  /**
+   * Real bug found and fixed (2026-08-25, quant-graduation/active-trading readiness pass):
+   * this previously had no override and the report always showed a hardcoded 90 regardless of
+   * the actual active broker. Alpaca's real cap is `continuousIntelligence.maxActiveSubscriptions`
+   * (12) - IBKR Gateway raises it to ~90 via `hardCapOverride`. With Alpaca active (as it is this
+   * session), the report showed "12 / 90" implying 78 free slots, when the real, broker-aware cap
+   * (`marketDataWorker.getEffectiveStreamingCap()`) was 12 - i.e. already 100% saturated. The 44
+   * real `MARKET_DATA_CAPACITY_FULL` events logged this session are the direct evidence this was
+   * misleading operators, not just cosmetically wrong.
+   */
+  maxSymbols?: number;
   interruptedSessionHold?: boolean;
 }
 
@@ -165,7 +176,7 @@ export async function getTradingSessionReport(overrides: TradingSessionReportOve
       })(),
       marketDataReady: health?.marketDataConnected === true,
       activeSymbols: overrides.activeSymbols ?? 0,
-      maxSymbols: 90,
+      maxSymbols: overrides.maxSymbols ?? 90,
       candidateSymbolsMissingPrice: missingPrice,
     },
     decisionPipeline: {

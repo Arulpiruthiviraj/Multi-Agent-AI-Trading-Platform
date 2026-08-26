@@ -245,4 +245,9 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
   cancelMarketDataBySymbol(symbol: string): void {
     this.session.cancelMarketDataBySymbol(symbol);
   }
+
+  /** Real gateway-socket connectivity for MarketDataWorker's isConnected() (2026-08-25 fix). */
+  isMarketDataSessionConnected(): boolean {
+    return this.session.isConnected();
+  }
 }

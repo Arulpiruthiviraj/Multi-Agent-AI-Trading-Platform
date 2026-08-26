@@ -735,6 +735,9 @@ export class ChiefTraderAgent {
          threshold: CONSENSUS_APPROVAL_THRESHOLD,
          approved: true,
          reasoning: reason,
+         // Consensus Quality Audit (2026-08-25): this was previously omitted, so debate_used
+         // silently defaulted to false in the DB even on rounds ConsensusDebate actually voted in.
+         debateUsed: approvedEvidence.some(e => e.agent === 'ConsensusDebate'),
          evidence: approvedEvidence.map(e => ({
            sourceTraceId: e.traceId,
            agent: e.agent,
@@ -839,6 +842,7 @@ export class ChiefTraderAgent {
         threshold: CONSENSUS_APPROVAL_THRESHOLD,
         approved: false,
         reasoning: `No consensus reached before the evaluation window closed. Best side: ${result.side} at ${(result.confidence * 100).toFixed(1)}% (threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%). Independent agreeing agents: ${new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)).size}.`,
+        debateUsed: evidence.some(e => e.agent === 'ConsensusDebate'),
         evidence: evidence.map(e => ({
           sourceTraceId: e.traceId,
           agent: e.agent,

@@ -58,6 +58,25 @@ async function probe(url: string, timeoutMs = runtimeIntervals.modelRuntimeProbe
   }
 }
 
+/** Real, cheap completion — the actual capability trading agents need, not just process
+ *  reachability. `stream: false` so the response is a single small JSON body. */
+async function probeOllamaCompletion(model: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${OLLAMA_HOST}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model, prompt: 'ping', stream: false }),
+      signal: AbortSignal.timeout(runtimeIntervals.ollamaCompletionProbeTimeoutMs),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const body: any = await res.json().catch(() => null);
+    const text = typeof body?.response === 'string' ? body.response : '';
+    return text.length > 0 ? { ok: true } : { ok: false, error: 'empty response' };
+  } catch (e: any) {
+    return { ok: false, error: e.message };
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -170,6 +189,21 @@ export class ModelRuntimeManager {
   private async probeOllama(): Promise<ModelRegistryEntry> {
     const p = await probe(`${OLLAMA_HOST}/api/tags`);
     const models = p.body?.models?.map((m: any) => m.name) || [];
+
+    // Real gap found live (2026-08-26 forensic audit): /api/tags reachability was the entire
+    // health check, so Ollama could report READY while every real completion call failed (e.g.
+    // model load/OOM failure, wrong model name) - a "false health" pattern. If tags succeeded and
+    // at least one model is listed, also attempt one cheap real completion against that model
+    // before declaring READY.
+    let completionOk = true;
+    let completionDetail = '';
+    if (p.ok && models.length > 0) {
+      const completion = await probeOllamaCompletion(models[0]);
+      completionOk = completion.ok;
+      completionDetail = completion.ok ? '' : ` — but completion probe failed: ${completion.error || 'no output'}`;
+    }
+
+    const healthy = p.ok && completionOk;
     return {
       modelId: 'ollama',
       provider: 'Ollama',
@@ -177,14 +211,14 @@ export class ModelRuntimeManager {
       localOrRemote: 'local',
       endpoint: OLLAMA_HOST,
       capabilities: ['GENERAL_REASONING', 'NEWS_REASONING'],
-      health: p.ok ? 'READY' : 'FAILED',
+      health: healthy ? 'READY' : 'FAILED',
       latencyMs: p.latencyMs,
       version: models[0] || null,
-      loaded: p.ok,
+      loaded: healthy,
       lastCheckedAt: new Date().toISOString(),
-      failureCount: p.ok ? 0 : 1,
-      detail: p.ok ? `tags ok (${models.length} model(s))` : (p.error || 'unreachable'),
-      action: p.ok ? null : "Install Ollama and run 'ollama serve'. npm run dev starts it when ollama is on PATH.",
+      failureCount: healthy ? 0 : 1,
+      detail: p.ok ? `tags ok (${models.length} model(s))${completionDetail}` : (p.error || 'unreachable'),
+      action: healthy ? null : "Install Ollama and run 'ollama serve'. npm run dev starts it when ollama is on PATH.",
     };
   }
 

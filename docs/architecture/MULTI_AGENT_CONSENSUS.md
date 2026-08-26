@@ -58,6 +58,28 @@ triggers the same on-demand agent co-evaluation and waits for a real `ChiefTrade
 outcome at the same floors as the autonomous path (0.75 / min-2) — it does **not** shortcut
 consensus or emit `CHIEF_APPROVED_IDEA` itself.
 
+## ConfluenceCoordinator (automatic on-demand co-evaluation)
+
+Added 2026-08-25 after real DB evidence showed ~90% of consensus attempts never reached
+`minIndependentAgreeingAgents` — not from low confidence, but because `TechnicalAgent` almost
+never had a second independent agent evaluate the *same* symbol in its ~60s freshness window.
+`src/server/services/ConfluenceCoordinator.ts` (`tradingSafety.confluenceCoordinatorEnabled`,
+default **on**) listens for `TRADE_IDEA_GENERATED`, and when the emitting agent is specifically
+`TechnicalAgent` with a qualifying BUY/SELL at confidence ≥
+`confluenceCoordinatorConfidenceThreshold` (not already in a per-symbol
+`confluenceCoordinatorCooldownMs` cooldown), it calls `QuantSignalAgent.evaluateSymbol(symbol)`
+and `KronosForecastAgent.evaluateOnDemand(symbol)` — the same on-demand entry points the manual
+CONFIRM BUY/SELL path above already uses, not a new bypass. Both take only a symbol string (no
+side/confidence/reasoning), so there is no channel for either to copy TechnicalAgent's vote;
+independence is structural. It changes **how often** a second agent evaluates a symbol in-window —
+never ChiefTrader's weights, threshold, or gate. NewsAgent is deliberately excluded (real paid-API
+cost per call, no per-symbol on-demand hook, and it is already the rarest/most independent voice —
+triggering it reactively risks burning its budget on symbols it wouldn't have chosen itself).
+**Runtime-verified 2026-08-26:** fired 495 times in one ~3-hour session; quorum-cleared rounds
+(`agreements_count >= 2`) were 21.1% of that session's 180 consensus rounds. Logged via
+`structuredLogger` as `CONFLUENCE_COORDINATOR_TRIGGERED` into `observability_events` — a different
+table than the EventBus-instrumented `event_traces` most other lifecycle events land in.
+
 ## What ChiefTrader is not
 
 - Not a place to add a second "AI decides everything" shortcut — AI interprets quant evidence, it

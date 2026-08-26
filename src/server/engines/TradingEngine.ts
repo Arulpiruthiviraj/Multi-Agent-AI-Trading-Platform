@@ -98,7 +98,6 @@ export interface AutoBotState {
     history: any[];
     scheduledTasks: any[];
     cycleCount: number;
-    activeMacroShock: any;
     engines: any;
     activeCycle: any;
     learningJournal: any[];
@@ -155,7 +154,6 @@ class TradingEngine {
             history: [],
             scheduledTasks: [],
             cycleCount: 0,
-            activeMacroShock: null,
             engines: {
                 marketIntelligence: { vwap: 150.2, rvol: 1.4, gap: 0.5 },
                 trend: { primary: "Bullish", strength: 80 },

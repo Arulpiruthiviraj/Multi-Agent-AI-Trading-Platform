@@ -59,11 +59,6 @@ export const NAV_TAB_TOOLTIPS: Record<AppTabId, NavTooltipCopy> = {
     purpose:
       'Technical indicator scanner screening watchlists for RSI extremes, MACD momentum crosses, and Bollinger Band breakouts.',
   },
-  intelligence: {
-    title: 'Intelligence',
-    purpose:
-      'Fundamental analysis desk displaying macroeconomic indicators, interest rate expectations, and multi-factor company intelligence.',
-  },
   agents: {
     title: 'Agent Network',
     purpose:

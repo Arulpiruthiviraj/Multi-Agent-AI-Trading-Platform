@@ -97,17 +97,25 @@ function sanitizeErrorMessage(err: unknown): string {
 /** Additive to AIRouter's own isAuthFailureError/isUnreachableProviderError/isTimeoutSkipError -
  *  those three already exist and are reused verbatim; this adds the remaining distinctions the
  *  operator asked for (quota vs rate-limit vs model-not-found vs generic unreachable). */
-function classifyError(err: unknown): AIProviderHealthStatus {
+export function classifyError(err: unknown): AIProviderHealthStatus {
   const msg = err instanceof Error ? err.message : String(err);
   if (isTimeoutSkipError(err)) return 'TIMEOUT';
-  if (isAuthFailureError(err)) return 'AUTH_FAILED';
-  // Real fix (2026-08-24 readiness audit, Part 5): "account suspended" is a real, distinct failure
-  // mode (seen live from Moonshot/Kimi - "account ... is suspended due to insufficient balance") -
-  // checked before the generic quota/rate-limit patterns below so it isn't swallowed by either.
-  // Only reachable at all now that OpenAICompatibleProvider.ts/OpenAIProvider.ts/DeepSeekProvider.ts
-  // include a response-body snippet in the thrown message - previously only status+statusText was
-  // available, which never contained this distinction.
+  // Real fix (2026-08-24 readiness audit, Part 5, corrected 2026-08-25): "account suspended" is a
+  // real, distinct failure mode (seen live from Moonshot/Kimi - "account ... is suspended due to
+  // insufficient balance"). This must be checked BEFORE isAuthFailureError(), not just before the
+  // quota/rate-limit patterns below - isAuthFailureError()'s own `\b401\b` pattern matches the raw
+  // HTTP status embedded in the same thrown message (providers construct errors as
+  // `${status} ${statusText}${bodySnippet}`), so whenever Moonshot happens to return the suspended
+  // account's error as HTTP 401 (rather than 429/402, which it also does, inconsistently, for the
+  // exact same underlying condition), the generic 401 match fired first and silently masked this
+  // more specific, more actionable diagnosis - confirmed live this session: a direct probe with
+  // the real key got a clean 429 "suspended" body, while Argus's own classification had
+  // (before this fix) inconsistently shown AUTH_FAILED depending on which status code Moonshot's
+  // API returned for that same probe. The account-suspended check is now unconditionally first,
+  // so the classification depends only on the response body, never on which status code an
+  // upstream provider's flaky error-code choice happens to attach to it.
   if (/suspend(ed)?/i.test(msg) && /insufficient|balance|recharge/i.test(msg)) return 'ACCOUNT_SUSPENDED';
+  if (isAuthFailureError(err)) return 'AUTH_FAILED';
   if (/\b402\b|payment required|quota|insufficient[_ ]?quota|billing/i.test(msg)) return 'QUOTA_EXCEEDED';
   if (/\b429\b|rate[_ -]?limit/i.test(msg)) return 'RATE_LIMITED';
   if (/\b404\b/.test(msg) && /model/i.test(msg)) return 'MODEL_UNAVAILABLE';

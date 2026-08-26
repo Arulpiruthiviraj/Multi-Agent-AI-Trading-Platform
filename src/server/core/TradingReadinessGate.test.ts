@@ -136,6 +136,48 @@ describe('TradingReadinessGate', () => {
     expect(snapshot.nodes.find((n) => n.id === 'aiProviderLayer')!.ready).toBe(false);
   });
 
+  it('does not report tradingReady=false purely because Technical/Quant are IDLE_WAITING_FOR_MARKET_DATA pre-market (2026-08-25 fix)', async () => {
+    // Confirmed live: before this fix, every single pre-market ./argus pipeline-ready check
+    // reported tradingReady=false with reason "Technical engine not running", even though
+    // IDLE_WAITING_FOR_MARKET_DATA is the documented, expected pre-market/warmup state
+    // (CLAUDE.md "Technical after ~50 ticks") - not a real failure.
+    getPipelineAgentSnapshot.mockReturnValue({
+      togglable: [
+        { id: 'TechnicalAgent', healthy: false, healthLabel: 'IDLE_WAITING_FOR_MARKET_DATA', available: true },
+        { id: 'QuantEngine', healthy: false, healthLabel: 'IDLE_WAITING_FOR_MARKET_DATA', available: true },
+      ],
+    });
+
+    const snapshot = await getTradingReadinessSnapshot();
+
+    const technicalNode = snapshot.nodes.find((n) => n.id === 'technicalEngine')!;
+    const quantNode = snapshot.nodes.find((n) => n.id === 'quantEngine')!;
+    expect(technicalNode.ready).toBe(true);
+    expect(technicalNode.notApplicable).toBe(true);
+    expect(technicalNode.detail).toBe('IDLE_WAITING_FOR_MARKET_DATA');
+    expect(quantNode.ready).toBe(true);
+    expect(quantNode.notApplicable).toBe(true);
+    expect(snapshot.tradingReady).toBe(true);
+    expect(snapshot.reasons.some((r) => r.includes('Technical engine not running'))).toBe(false);
+  });
+
+  it('still reports Technical engine not ready when it is genuinely FAILED, not merely waiting for data', async () => {
+    getPipelineAgentSnapshot.mockReturnValue({
+      togglable: [
+        { id: 'TechnicalAgent', healthy: false, healthLabel: 'FAILED', available: true },
+        { id: 'QuantEngine', healthy: true, healthLabel: 'RUNNING', available: true },
+      ],
+    });
+
+    const snapshot = await getTradingReadinessSnapshot();
+
+    const technicalNode = snapshot.nodes.find((n) => n.id === 'technicalEngine')!;
+    expect(technicalNode.ready).toBe(false);
+    expect(technicalNode.notApplicable).toBeFalsy();
+    expect(snapshot.tradingReady).toBe(false);
+    expect(snapshot.reasons.some((r) => r.includes('Technical engine not running'))).toBe(true);
+  });
+
   it('renderTradingReadinessTree produces the ASCII tree shape with a final TRADING READY line', async () => {
     const snapshot = await getTradingReadinessSnapshot();
     const tree = renderTradingReadinessTree(snapshot);

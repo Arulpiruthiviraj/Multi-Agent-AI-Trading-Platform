@@ -7,7 +7,7 @@ import { portfolio, trades } from '../db/schema';
 import { and, desc, eq } from 'drizzle-orm';
 import { replaySafety } from '../replay/replaySafety';
 
-const NON_LIVE_OPENING_TRADE_ENVS = new Set([
+export const NON_LIVE_OPENING_TRADE_ENVS = new Set([
   'REPLAY',
   'BACKTEST',
   'SIMULATION',

@@ -9,6 +9,7 @@ export interface ShutdownHandles {
 
 let installed = false;
 let draining = false;
+let registeredHandles: ShutdownHandles = {};
 
 export async function drainTradingProcess(handles: ShutdownHandles = {}): Promise<void> {
   if (draining) return;
@@ -86,6 +87,7 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
 }
 
 export function installProcessShutdown(handles: ShutdownHandles = {}): void {
+  registeredHandles = handles;
   if (installed) return;
   installed = true;
   const onSignal = (signal: string) => {
@@ -98,8 +100,28 @@ export function installProcessShutdown(handles: ShutdownHandles = {}): void {
   process.on('SIGINT', () => onSignal('SIGINT'));
 }
 
+/**
+ * DEF-26 fix (2026-08-26): `process.kill(pid, 'SIGTERM')` from a separate process — the CLI's
+ * stop/restart path — does not invoke this process's `SIGTERM` handler on Windows at all;
+ * empirically confirmed live (an isolated parent/child probe: the child process was force-
+ * terminated with no handler invocation, both cross-process and via self-signal). Every prior
+ * CLI-driven stop/restart on this platform was therefore an unconditional hard-kill, never a real
+ * drain — which is exactly why the successor process's "did not shut down cleanly" report was
+ * accurate, not a logging bug. This function lets an in-process HTTP route (same process, plain
+ * function call, no OS signal involved) trigger the identical drain sequence the signal handler
+ * above would have run, then exit — reusing the handles `installProcessShutdown` was given at
+ * boot. `SIGTERM`/`SIGINT` listeners above are left installed unchanged (harmless, and still
+ * correct on platforms where the OS signal is real).
+ */
+export async function requestGracefulShutdown(reason: string): Promise<void> {
+  console.log(`[gracefulShutdown] Graceful shutdown requested (${reason}).`);
+  await drainTradingProcess(registeredHandles);
+  process.exit(0);
+}
+
 /** Test-only. */
 export function resetGracefulShutdownForTests(): void {
   installed = false;
   draining = false;
+  registeredHandles = {};
 }

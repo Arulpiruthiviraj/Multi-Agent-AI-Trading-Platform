@@ -27,8 +27,25 @@ import { tradingLimiter } from "../core/RateLimiters";
 import { BrokerManager } from "../../brokers/BrokerManager";
 import { tradingSafety } from "../config/tradingSafety";
 import { withTimeout } from "../services/brokerPortfolioResponse";
+import { requestGracefulShutdown } from "../core/gracefulShutdown";
 
 export const systemRouter = Router();
+
+// DEF-26 fix (2026-08-26): the CLI's stop/restart previously relied on `process.kill(pid,
+// 'SIGTERM')`, which does not invoke this process's SIGTERM handler on Windows (empirically
+// confirmed — see gracefulShutdown.ts's requestGracefulShutdown() doc comment). This route lets
+// the CLI request the same drain sequence via a normal in-process HTTP call instead of an OS
+// signal. Responds first, then drains and exits — the client sees a clean acknowledgement even
+// though the process is about to terminate.
+systemRouter.post("/system/shutdown", (req: Request, res: Response) => {
+  res.json({ ok: true, message: "Graceful shutdown initiated." });
+  setImmediate(() => {
+    requestGracefulShutdown("POST /api/v1/system/shutdown").catch((e) => {
+      console.error("[system/shutdown] Drain failed — forcing exit.", e);
+      process.exit(1);
+    });
+  });
+});
 
 // Real, live structural consistency check (DB tables, broker capabilities, seeded AI/news
 // providers, local AI service reachability) - see IntegrityValidator.ts. Never a hardcoded score.

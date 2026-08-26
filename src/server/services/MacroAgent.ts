@@ -105,7 +105,7 @@ export class MacroEconomyAgent {
 
          const avBase = networkEndpoints.marketData.alphaVantageBaseUrl;
          const fetchOne = async (fn: string): Promise<any> => {
-           if (!(await AlphaVantageBudget.tryConsume(1))) return { __budgetExhausted: true };
+           if (!(await AlphaVantageBudget.tryConsume(1, undefined, 'MacroAgent'))) return { __budgetExhausted: true };
            const r = await fetch(`${avBase}?function=${fn}&apikey=${key}`);
            if (r.status === 429) return { __http429: true };
            return r.json() as any;

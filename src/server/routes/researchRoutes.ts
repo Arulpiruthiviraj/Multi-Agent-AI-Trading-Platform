@@ -672,10 +672,22 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   v2Router.get('/research/replay/:id/portfolio', async (req, res) => {
-    const { getReplayPortfolio } = await import('../replay/FullArgusReplayEngine');
-    const portfolio = await getReplayPortfolio(String(req.params.id));
-    if (portfolio == null) return res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
-    res.json({ ok: true, portfolio, live: 'NO-GO', executionEnvironment: 'REPLAY' });
+    // Real defect fixed (2026-08-26 comprehensive remediation pass): this handler had no
+    // try/catch at all, unlike every sibling replay route in this file - an exception here would
+    // propagate as an unhandled rejection instead of a real HTTP error response, and (being
+    // async) could still race server.ts's global 15s per-request backstop like the
+    // ERR_HTTP_HEADERS_SENT defects already fixed twice in v2System.ts this session.
+    try {
+      const { getReplayPortfolio } = await import('../replay/FullArgusReplayEngine');
+      const portfolio = await getReplayPortfolio(String(req.params.id));
+      if (portfolio == null) {
+        if (!res.headersSent) res.status(404).json({ ok: false, error: 'REPLAY_NOT_FOUND' });
+        return;
+      }
+      if (!res.headersSent) res.json({ ok: true, portfolio, live: 'NO-GO', executionEnvironment: 'REPLAY' });
+    } catch (e: any) {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e?.message || String(e) });
+    }
   });
 
   v2Router.get('/research/replay/:id/equity', (req, res) => {

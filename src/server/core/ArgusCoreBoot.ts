@@ -14,6 +14,8 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { authorizeMarketDataWebSocket } from './marketDataWsOwnership';
 import { db, sqliteDb } from '../db';
 import * as schema from '../db/schema';
+import { reconcilePeakEquityIntegrity } from '../engines/PeakEquityIntegrity';
+import { isPositiveFiniteMoney } from '../engines/AccountEquity';
 
 export interface ArgusCoreBootResult {
   settingsRow: typeof schema.settings.$inferSelect | null;
@@ -85,6 +87,19 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
 
   // DEF-01: real broker before TradingEngine (Autobot restore may start reconciliation).
   await BrokerManager.getInstance().initialize();
+
+  // Peak Equity Recovery (2026-08-26): one-shot, idempotent integrity check - never runs before
+  // the broker is ready, never blocks boot on failure (fail-open, logs and continues; RiskEngine's
+  // own gate remains fail-closed on invalid equity regardless).
+  try {
+    const bootPortfolio = await BrokerManager.getInstance().getActiveBroker().portfolio();
+    if (isPositiveFiniteMoney(bootPortfolio?.equity)) {
+      await reconcilePeakEquityIntegrity(bootPortfolio.equity);
+    }
+  } catch (e) {
+    console.error('[ArgusCoreBoot] Peak equity integrity check failed (continuing boot)', e);
+  }
+
   await tradingEngine.initialize();
   beginRuntimeSession();
 
@@ -203,6 +218,17 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
     campaignTracker.start();
   } catch (e: any) {
     console.warn(`[CampaignTracker] Boot start failed: ${e.message}`);
+  }
+
+  try {
+    const { sessionLifecycleWorker } = await import('../premarket/SessionLifecycle');
+    sessionLifecycleWorker.start();
+    console.log(
+      '[SessionLifecycle] Started at boot (independent of the browser/CLI - observability only this '
+      + 'stage; does not scan, plan, or emit a trade idea).',
+    );
+  } catch (e: any) {
+    console.warn(`[SessionLifecycle] Boot start failed: ${e.message}`);
   }
 
   try {

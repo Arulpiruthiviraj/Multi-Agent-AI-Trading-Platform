@@ -120,12 +120,23 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   } catch {
     pipeline = null;
   }
+  // Pre-market/market-open readiness fix (2026-08-25): IDLE_WAITING_FOR_MARKET_DATA is the
+  // documented, expected state before ~50 ticks have arrived (CLAUDE.md "Technical after ~50
+  // ticks") or before Alpaca's clock opens - it is not a failure, exactly as `market_hours`
+  // (RiskEngine gate 12) is *expected* to fail pre-open per the pre-market checklist. Before this
+  // fix, `tradingReady` was false on every single pre-market check with reason "Technical engine
+  // not running", even though nothing was actually broken - confirmed live via ./argus
+  // session-report during PRE_MARKET. Treated the same way QuantEngine already treats
+  // "disabled by config": counted toward tradingReady, distinctly labeled, never silently folded
+  // into "RUNNING".
   const technical = pipeline?.togglable.find((a) => a.id === 'TechnicalAgent');
-  const technicalReady = technical?.healthy === true;
+  const technicalWaitingForData = technical?.healthLabel === 'IDLE_WAITING_FOR_MARKET_DATA';
+  const technicalReady = technical?.healthy === true || technicalWaitingForData;
   nodes.push({
     id: 'technicalEngine',
     label: 'Technical Engine',
     ready: technicalReady,
+    notApplicable: technicalWaitingForData,
     detail: technical?.healthLabel ?? 'UNKNOWN',
   });
   if (!technicalReady) reasons.push('Technical engine not running');
@@ -133,12 +144,13 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   const quant = pipeline?.togglable.find((a) => a.id === 'QuantEngine');
   // Quant is additive/default-off (CLAUDE.md) - not being enabled is not a failure.
   const quantApplicable = quant?.available === true;
-  const quantReady = !quantApplicable || quant?.healthy === true;
+  const quantWaitingForData = quant?.healthLabel === 'IDLE_WAITING_FOR_MARKET_DATA';
+  const quantReady = !quantApplicable || quant?.healthy === true || quantWaitingForData;
   nodes.push({
     id: 'quantEngine',
     label: 'Quant Engine',
     ready: quantReady,
-    notApplicable: !quantApplicable,
+    notApplicable: !quantApplicable || quantWaitingForData,
     detail: !quantApplicable ? 'disabled by config (QUANT_ENGINE_ENABLED not set - optional)' : (quant?.healthLabel ?? 'UNKNOWN'),
   });
   if (quantApplicable && !quantReady) reasons.push('Quant engine enabled but not running');

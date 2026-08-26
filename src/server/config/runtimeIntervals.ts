@@ -35,6 +35,10 @@ export interface RuntimeIntervals {
   openAliceRequestTimeoutMs: number;
   openAliceMcpDefaultTimeoutMs: number;
   modelRuntimeProbeTimeoutMs: number;
+  /** Bounded timeout for a real, cheap Ollama completion capability check (not just /api/tags
+   *  reachability) — a loaded/OOM/misconfigured local model can be slower than the plain
+   *  reachability probe above without being genuinely unavailable. */
+  ollamaCompletionProbeTimeoutMs: number;
   fundamentalsCacheMaxAgeMs: number;
   macroCacheMaxAgeMs: number;
   externalDataRateLimitCooldownMs: number;
@@ -53,6 +57,8 @@ export interface RuntimeIntervals {
   strategyEngineShadowMs: number;
   javaQuantAdvisoryMs: number;
   aiProviderHealthCheckMs: number;
+  /** How often the live SessionLifecycle worker re-classifies PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED. */
+  sessionLifecycleEvalMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -62,12 +68,12 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'chiefTraderWeightSyncMs', 'chiefTraderIdeaTtlMs', 'systemMetricsMs', 'portfolioReconciliationMs',
   'reconciliationBootWarmupMs', 'marketDataReconnectMs', 'networkReconnectBackoffMs', 'marketDataCrossCheckMs', 'kronosRecheckMs', 'kronosPredictionCooldownMs',
   'kronosHttpTimeoutMs', 'kronosForecastMaxConcurrent', 'openAlicePollMs', 'openAliceRequestTimeoutMs', 'openAliceMcpDefaultTimeoutMs',
-  'modelRuntimeProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
+  'modelRuntimeProbeTimeoutMs', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
   'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
-  'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs',
+  'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

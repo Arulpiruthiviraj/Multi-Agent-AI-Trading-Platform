@@ -4,7 +4,7 @@ Node.js multi-agent trading terminal (Express + Vite + `ws` + SQLite). Package n
 
 **LIVE real-money: NO-GO.** Paper: `PAPER_READY_WITH_REQUIRED_OPERATOR_ACTIONS` (supervised, conditional). Empirical edge is not established by documentation. Organic closed PAPER FILLED SELL P&L soak baseline remains **0** until soak counts real closes.
 
-**Harness (CODE-VERIFIED 2026-08-21):** `npm run lint` exit 0 · `npm test` **330** files / **2111** tests · Node **≥24.18** (package `engines.node`) · schema **60** SQLite tables.
+**Harness (CODE-VERIFIED 2026-08-26):** `npm run lint` exit 0 · `npm test` **371** files / **2475** tests · Node **≥24.18** (package `engines.node`) · schema **65** SQLite tables.
 
 ### Why "ARGUS"?
 
@@ -30,7 +30,7 @@ That metaphor maps to the protected spine — it does **not** mean unlimited vis
 
 **Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects). Architecture checklist: [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md). Name philosophy lives here; do not copy the full block into every other markdown file.
 
-Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_ENABLED`). Optional cheap screener ideas (`ARGUS_OPPORTUNITY_IDEAS_ENABLED`) are **one vote**, still require ChiefTrader min-2 + RiskEngine + OMS. Neither flag arms LIVE. Do not enable flags merely to produce trades. Optional Daily Goal Campaign: [`ARGUS_CAMPAIGN_TRACKER.md`](ARGUS_CAMPAIGN_TRACKER.md) (flag-gated; does not lower consensus).
+Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_ENABLED`), from a curated seed/watch list plus, when `ARGUS_BROAD_UNIVERSE_ENABLED=true`, a real liquidity/price/spread-screened Alpaca tradable-assets funnel (`MarketUniverseScanner.ts`) — still bounded/capped, still never a second order path. Optional cheap screener ideas (`ARGUS_OPPORTUNITY_IDEAS_ENABLED`) are **one vote**, still require ChiefTrader min-2 + RiskEngine + OMS. No discovery flag arms LIVE. Do not enable flags merely to produce trades. Optional Daily Goal Campaign: [`ARGUS_CAMPAIGN_TRACKER.md`](ARGUS_CAMPAIGN_TRACKER.md) (flag-gated; does not lower consensus).
 
 **FOR OPERATORS** (why idle / why a fill / daily health): [`docs/ARGUS_DOCUMENTATION_INDEX.md`](docs/ARGUS_DOCUMENTATION_INDEX.md) → `ARGUS_WHY_NOT_TRADING.md`, `ARGUS_DAILY_FORENSIC_CHECKLIST.md`.
 

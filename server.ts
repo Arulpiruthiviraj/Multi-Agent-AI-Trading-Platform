@@ -93,10 +93,10 @@ import { mountResearchRoutes } from "./src/server/routes/researchRoutes";
 import { evaluateLiveReadiness } from "./src/server/core/liveReadinessEngine";
 import { analyticsRouter } from "./src/server/routes/analyticsRoutes";
 import { strategyEngineRouter } from "./src/server/routes/strategyEngineRoutes";
+import { researchIntelligenceRouter } from "./src/server/routes/researchIntelligenceRoutes";
 import { webhooksRouter, triggerWebhooks } from "./src/server/routes/webhooks";
 import { generateContentWithRetry, cleanAndParseJSON } from "./src/server/ai/legacyGeminiHelpers";
 import { auditLog, AUDIT_LOG_FILE } from "./src/server/core/auditLog";
-import { chaosRouter } from "./src/server/routes/chaosRoutes";
 import { systemRouter, handlePipelineAgentsGet, handlePipelineAgentsPost } from "./src/server/routes/systemRoutes";
 import { newsRouter } from "./src/server/routes/newsRoutes";
 import { autobotRouter } from "./src/server/routes/autobotRoutes";
@@ -673,6 +673,7 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
   }
   app.use("/api/v2/analytics", analyticsRouter);
   app.use("/api/v2/strategy-engine", strategyEngineRouter);
+  app.use("/api/v2/research-intelligence", researchIntelligenceRouter);
   app.get('/api/v1/scheduler', (req, res) => {
     res.json({ tasks: scheduledTasks });
   });
@@ -1709,7 +1710,6 @@ let portfolioState = loadPortfolio();
 
 
 
-  app.use("/api/v1/chaos", chaosRouter);
 
   // Endpoints for Prompt Evolution
   app.use("/api/v1/autobot", autobotRouter);

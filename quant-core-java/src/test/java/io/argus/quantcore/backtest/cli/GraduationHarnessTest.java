@@ -14,11 +14,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class GraduationHarnessTest {
 
     @Test
-    void registersExactlyTheTwoModulesSelectedForThisPassGraduationExercise() {
+    void registersExactlyTheSevenModulesSelectedForThisPassGraduationExercise() {
         List<GraduationHarness.RegisteredStrategy> registry = GraduationHarness.registry();
         List<String> ids = registry.stream().map(GraduationHarness.RegisteredStrategy::id).toList();
 
-        assertThat(ids).containsExactlyInAnyOrder("TIME_SERIES_MOMENTUM_ENGINE", "MEAN_REVERSION_ZSCORE_ENGINE");
+        assertThat(ids).containsExactlyInAnyOrder(
+            "TIME_SERIES_MOMENTUM_ENGINE", "MEAN_REVERSION_ZSCORE_ENGINE",
+            "MOVING_AVERAGE_CROSSOVER_ENGINE", "AUTOREGRESSIVE_AR5_FORECAST_ENGINE",
+            "ARMA_3_1_FORECAST_ENGINE", "ARIMA_3_1_1_FORECAST_ENGINE", "SARIMA_1_1_1x1_0_1_5_FORECAST_ENGINE");
     }
 
     @Test

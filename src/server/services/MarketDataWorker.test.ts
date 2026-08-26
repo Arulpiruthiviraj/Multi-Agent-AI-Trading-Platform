@@ -464,4 +464,62 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     expect(worker.getActiveSymbols()).toContain('MSFT');
     expect(emitSpy).not.toHaveBeenCalledWith(expect.stringMatching(/ORDER/), expect.anything());
   });
+
+  describe('isConnected() for the IBKR Gateway backend (2026-08-25 readiness audit, Phase 3 fix)', () => {
+    it('defers to the bridge real connectivity check when the bridge provides isConnected()', () => {
+      let bridgeConnected = true;
+      worker.setBrokerQuoteContext({
+        backend: 'ibkr_gateway',
+        hardCapOverride: 90,
+        ibkrBridge: {
+          subscribe: () => {},
+          unsubscribe: () => {},
+          clear: () => {},
+          isConnected: () => bridgeConnected,
+        },
+      });
+      expect(worker.isConnected()).toBe(true);
+      bridgeConnected = false;
+      expect(worker.isConnected()).toBe(false);
+    });
+
+    it('reports disconnected once the real bridge says so, even with previously-subscribed symbols still in local bookkeeping', () => {
+      let bridgeConnected = true;
+      worker.setBrokerQuoteContext({
+        backend: 'ibkr_gateway',
+        hardCapOverride: 90,
+        ibkrBridge: {
+          subscribe: () => {},
+          unsubscribe: () => {},
+          clear: () => {},
+          isConnected: () => bridgeConnected,
+        },
+      });
+      worker.subscribe('AAPL');
+      expect(worker.getActiveSymbols()).toContain('AAPL');
+      expect(worker.isConnected()).toBe(true);
+
+      // Real gateway disconnects later - the fix (2026-08-25) is that this must now be reflected
+      // immediately, instead of staying "connected" forever just because activeStreams.size > 0
+      // from the earlier successful subscribe.
+      bridgeConnected = false;
+      expect(worker.getActiveSymbols()).toContain('AAPL'); // local bookkeeping is unchanged...
+      expect(worker.isConnected()).toBe(false); // ...but connectivity correctly reflects reality
+    });
+
+    it('falls back to the old activeStreams-based heuristic when the bridge does not provide isConnected() (back-compat)', () => {
+      worker.setBrokerQuoteContext({
+        backend: 'ibkr_gateway',
+        hardCapOverride: 90,
+        ibkrBridge: {
+          subscribe: () => {},
+          unsubscribe: () => {},
+          clear: () => {},
+        },
+      });
+      expect(worker.isConnected()).toBe(false);
+      worker.subscribe('MSFT');
+      expect(worker.isConnected()).toBe(true);
+    });
+  });
 });

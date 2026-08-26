@@ -80,7 +80,6 @@ autobotRouter.get("/", async (req: Request, res: Response) => {
     shadowPortfolio: shadowPortfolioState,
     engines: tradingEngine.state.engines,
     cycleCount: tradingEngine.state.cycleCount,
-    activeMacroShock: tradingEngine.state.activeMacroShock,
     regimeState: tradingEngine.state.regimeState,
     geneticPrompt: tradingEngine.state.geneticPrompt,
     workers: (tradingEngine.state as any).workers || [],

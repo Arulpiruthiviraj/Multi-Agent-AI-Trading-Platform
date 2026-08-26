@@ -20,6 +20,8 @@ import { defaultAgentWeights } from '../config/agentWeights';
 import { agentWeightUpdate, boundedStep } from '../research/agentWeightPolicy';
 import { rawVsEffectiveDirectional, classifyEvidenceStatus, type ClusterableRow } from '../research/effectiveSampleSize';
 import { independenceClusterGapMs, isExcludedFromWeightLearning, secondaryGroupKey } from '../research/predictionIndependencePolicy';
+import { isTelemetryPulsePayload, TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
+import { NON_LIVE_OPENING_TRADE_ENVS } from './omsEntryPrice';
 
 export class ReflectionEngine {
   private intervalId: NodeJS.Timeout | null = null;
@@ -36,6 +38,14 @@ export class ReflectionEngine {
     // (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M1). Skip it; the dashboard trajectory
     // chart (KronosDashboardData.ts) reads KronosMetrics' own write, not this one.
     if (idea.agent === 'KronosEngine') return;
+    // Real defect fixed (2026-08-26 self-improvement loop audit): the Digital Twin telemetry
+    // pulse (core/telemetryPulse.ts - synthetic EventBus sequence for UI animation only) emits
+    // raw TRADE_IDEA_GENERATED events on this same event name. ChiefTraderAgent/RiskAgent/
+    // OrderManagement already guard against it; this listener did not, so a UI demo run's
+    // fabricated 0.82/0.78-confidence TechnicalAgent/QuantEngine "ideas" were logged into
+    // agent_predictions as if real, and (confirmed live) two were later graded WIN against real
+    // AAPL price action, feeding fabricated evidence into real agentPerformanceStats.currentWeight.
+    if (isTelemetryPulsePayload(idea)) return;
     try {
       await db.insert(agentPredictions).values({
         id: crypto.randomUUID(),
@@ -78,13 +88,29 @@ export class ReflectionEngine {
   async evaluateAgents() {
     console.log("[ReflectionEngine] Measuring AI performance based on real outcomes...");
     try {
-      const allTrades = await db.select().from(trades).all();
+      // Real defect fixed (2026-08-26 self-improvement loop audit): this previously read ALL
+      // trades regardless of execution_environment. Live DB evidence: every single non-null
+      // trades.profit_loss row in the entire database (67/67) is execution_environment='REPLAY' -
+      // organic PAPER fills have never had profit_loss populated (see the peak-equity recovery
+      // report's own finding). That means generateReflectionRule() below - which makes a real
+      // LLM call and writes real learned_rules text INTO the live ChiefTrader debate prompt - had
+      // structurally never been triggered by real trading experience, only by REPLAY (historical
+      // simulation) losses mislabeled "Post-trade drawdown analysis." Restricting to real organic
+      // execution environments closes that gap; REPLAY/BACKTEST/SIMULATION/EXTERNAL_SYNC/
+      // DIAGNOSTIC continue to be excluded, matching the same organic-only convention already
+      // used by omsEntryPrice.ts and the soak-status scripts.
+      // Denylist (not allowlist), matching omsEntryPrice.ts's exact convention: a null/blank
+      // execution_environment is a legacy pre-tagging row (real trade, no stamp yet), not
+      // REPLAY/BACKTEST - it must stay included, only the known-synthetic environments are
+      // excluded.
+      const allTrades = (await db.select().from(trades).all())
+        .filter(t => !NON_LIVE_OPENING_TRADE_ENVS.has(String(t.executionEnvironment || '').toUpperCase()));
       const now = Date.now();
-      
+
       let successfulTradesCount = 0;
       let failedTradesCount = 0;
       let recentLosses: any[] = [];
-      
+
       for (const t of allTrades) {
          if (t.status !== 'FILLED' || t.side !== 'SELL') continue;
          if (t.profitLoss === null || t.profitLoss === undefined) continue;
@@ -150,7 +176,14 @@ export class ReflectionEngine {
       // Every agent except KronosEngine logs its own idea via logPrediction() above (one row per
       // real TRADE_IDEA_GENERATED), so agent_predictions + this outcome join is the correct,
       // non-duplicated source for them.
-      const predictions = await db.select().from(agentPredictions).all();
+      // Real defect fixed (2026-08-26 self-improvement loop audit): filters out any prediction
+      // whose traceId carries the Digital Twin telemetry-pulse prefix (UI demo animation, not a
+      // real trading decision) - confirmed live that 2 such fabricated rows had already been
+      // graded WIN and were feeding into this exact aggregate. Filtering here means the very next
+      // reflection cycle self-corrects agentPerformanceStats/agentConfidenceCalibration forward,
+      // with no need to hand-edit already-persisted historical rows.
+      const predictions = (await db.select().from(agentPredictions).all())
+        .filter(p => !p.traceId || !p.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX));
       const predictionById = new Map(predictions.map(p => [p.id, p]));
       const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
       for (const o of outcomes) {

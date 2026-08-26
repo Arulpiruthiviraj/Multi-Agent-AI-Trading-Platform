@@ -210,6 +210,42 @@ describe('BrokerManager.setActiveBroker paper + IBKR preflight', () => {
     expect(manager.resolveBrokerIdFromSelectedName('Simulation Mode')).toBe('internal_paper');
   });
 
+  it('resolveBootBrokerSelection: ARGUS_FORCE_ENV_BROKER_ON_BOOT wins over a persisted UI selection', () => {
+    const result = BrokerManager.resolveBootBrokerSelection({
+      envActiveBroker: 'ibkr_gateway',
+      forceEnvBrokerOnBoot: true,
+      persistedSelection: 'Alpaca',
+    });
+    expect(result).toEqual({ selectedName: 'ibkr_gateway', selectionSource: 'ARGUS_FORCE_ENV_BROKER_ON_BOOT' });
+  });
+
+  it('resolveBootBrokerSelection: a persisted UI selection wins over the .env default when not forced', () => {
+    const result = BrokerManager.resolveBootBrokerSelection({
+      envActiveBroker: 'ibkr_gateway',
+      forceEnvBrokerOnBoot: false,
+      persistedSelection: 'Alpaca',
+    });
+    expect(result).toEqual({ selectedName: 'Alpaca', selectionSource: 'settings.selectedBroker (last UI selection)' });
+  });
+
+  it('resolveBootBrokerSelection: falls back to ARGUS_ACTIVE_BROKER on a fresh DB with no prior UI selection', () => {
+    const result = BrokerManager.resolveBootBrokerSelection({
+      envActiveBroker: 'ibkr_gateway',
+      forceEnvBrokerOnBoot: false,
+      persistedSelection: undefined,
+    });
+    expect(result).toEqual({ selectedName: 'ibkr_gateway', selectionSource: 'ARGUS_ACTIVE_BROKER (no prior UI selection)' });
+  });
+
+  it('resolveBootBrokerSelection: falls back to Simulation Mode when neither .env nor the DB have a selection', () => {
+    const result = BrokerManager.resolveBootBrokerSelection({
+      envActiveBroker: undefined,
+      forceEnvBrokerOnBoot: false,
+      persistedSelection: undefined,
+    });
+    expect(result).toEqual({ selectedName: 'Simulation Mode', selectionSource: 'default' });
+  });
+
   it('refuses IBKR Gateway switch when socket ports are closed', async () => {
     const probe = await import('./ibkrTcpProbe');
     const spy = vi.spyOn(probe, 'findFirstOpenTcpPort').mockResolvedValue(null);

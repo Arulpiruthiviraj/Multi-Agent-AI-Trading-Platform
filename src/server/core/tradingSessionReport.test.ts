@@ -57,6 +57,21 @@ describe('tradingSessionReport', () => {
     expect(report.ai.degradedProviders).toBe(1);
   });
 
+  it('reports the real broker-aware streaming cap when the route passes maxSymbols, instead of always showing the hardcoded 90 (2026-08-25 fix)', async () => {
+    // Confirmed live: with Alpaca active (real cap 12 via continuousIntelligence.maxActiveSubscriptions),
+    // the report previously always showed "/ 90" regardless of the active broker, implying free
+    // capacity that did not exist - 44 real MARKET_DATA_CAPACITY_FULL events the same session were
+    // the direct evidence this was misleading, not just cosmetically wrong.
+    const report = await getTradingSessionReport({ activeSymbols: 12, maxSymbols: 12 });
+    expect(report.market.activeSymbols).toBe(12);
+    expect(report.market.maxSymbols).toBe(12);
+  });
+
+  it('still defaults maxSymbols to 90 when the route does not pass an override (back-compat)', async () => {
+    const report = await getTradingSessionReport({ activeSymbols: 5 });
+    expect(report.market.maxSymbols).toBe(90);
+  });
+
   it('counts real event_traces rows by type', async () => {
     const now = Date.now();
     setTableRows(schema.eventTraces, [

@@ -8,6 +8,13 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 /**
+ * ACTIVE, but scope-limited to {@link RsiThresholdStrategy} only (marked per CLAUDE.md's Java
+ * Engine Authority rule 8, found unmarked during the 2026-08-25 post-audit hardening pass).
+ * SignalDrivenBacktest.java (added 2026-08-24) is the generic, multi-strategy successor for any
+ * new strategy backtest (see GraduationHarness.java's registry) - this class was not replaced or
+ * deprecated, since RsiThresholdStrategy's own concurrent-multi-symbol runner still has real
+ * callers, but no NEW strategy should be wired into this class going forward.
+ *
  * Runs {@link RsiThresholdStrategy} across multiple symbols concurrently using Java 26 virtual
  * threads (one virtual thread per symbol — cheap enough that "one per symbol" needs no pooling
  * tuning even at hundreds of symbols). Research/CLI only: no live wiring, cannot write to any

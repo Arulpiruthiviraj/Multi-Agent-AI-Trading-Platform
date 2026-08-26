@@ -198,6 +198,46 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     expect(dead.chat).toHaveBeenCalledTimes(1);
   });
 
+  it('routeTask() skips an account-suspended provider (real Kimi/Moonshot 429 phrasing) on the next call — real gap found in the 2026-08-26 forensic audit: this provider was previously re-dispatched to on every single call all session', async () => {
+    const suspended = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => {
+        throw new Error(
+          'Kimi API error: 429 Too Many Requests - {"error":{"message":"Your account org-x <ak-y> is suspended due to insufficient balance, please recharge your account or check your plan and billing details","type":"exceeded_current_quota_error"}}',
+        );
+      }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('kimi-suspended', suspended);
+    aiRouter.registerProvider('ok-provider', fastProvider('{"ok":true}'));
+
+    const first = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-suspended-a');
+    expect(first.provider).toBe('ok-provider');
+    expect(suspended.chat).toHaveBeenCalledTimes(1);
+    expect(aiRouter.isProviderTemporarilySkipped('kimi-suspended')).toBe(true);
+    // Not the auth-disable path - this is a billing/quota issue, not an invalid credential.
+    expect(aiRouter.isProviderAuthDisabled('kimi-suspended')).toBe(false);
+
+    const second = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-suspended-b');
+    expect(second.provider).toBe('ok-provider');
+    expect(suspended.chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('routeTask() skips a rate-limited (429, no suspension wording) provider on the next call', async () => {
+    const rateLimited = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => { throw new Error('429 Too Many Requests'); }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('rate-limited', rateLimited);
+    aiRouter.registerProvider('ok-provider', fastProvider('{"ok":true}'));
+
+    await aiRouter.routeTask('TestAgent', 'prompt', 'trace-rl-a');
+    expect(aiRouter.isProviderTemporarilySkipped('rate-limited')).toBe(true);
+    await aiRouter.routeTask('TestAgent', 'prompt', 'trace-rl-b');
+    expect(rateLimited.chat).toHaveBeenCalledTimes(1);
+  });
+
   it('routeTask() skips a fetch-failed provider on the next call', async () => {
     const dead = {
       authenticate: vi.fn(async () => true),

@@ -9,7 +9,24 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-export const ENGINE_PID_PATH = join(process.cwd(), 'data', '.argus_engine.pid');
+const DEFAULT_ENGINE_PID_PATH = join(process.cwd(), 'data', '.argus_engine.pid');
+
+/**
+ * Real bug found and fixed (2026-08-25, E2E/CLI investigation): this was a static `const`
+ * evaluated once against the real repo cwd, with no override - so enginePid.test.ts and
+ * gracefulShutdown.test.ts (neither of which mocked this module) read/wrote/deleted the actual
+ * developer-facing data/.argus_engine.pid on every test run, including gracefulShutdown.test.ts's
+ * unconditional clearEnginePid() and enginePid.test.ts's own afterEach cleanup. Confirmed live
+ * this session: running `npm test` while a real dev engine was up repeatedly wiped its real pid
+ * file out from under it, producing "No engine PID file" on the next `./argus stop`/`restart`
+ * even though the engine was still genuinely running. Same override pattern as
+ * crashLog.ts's ARGUS_CRASH_LOG_PATH - resolved fresh on every call (not cached at module load)
+ * so a test can set the env var in beforeAll, after this module is already imported.
+ */
+export function resolveEnginePidPath(): string {
+  const override = process.env.ARGUS_ENGINE_PID_PATH?.trim();
+  return override || DEFAULT_ENGINE_PID_PATH;
+}
 
 export function ensureDataDir(): void {
   const dir = join(process.cwd(), 'data');
@@ -18,20 +35,22 @@ export function ensureDataDir(): void {
 
 export function writeEnginePid(pid: number): void {
   ensureDataDir();
-  writeFileSync(ENGINE_PID_PATH, String(pid), 'utf8');
+  writeFileSync(resolveEnginePidPath(), String(pid), 'utf8');
 }
 
 export function readEnginePid(): number | null {
-  if (!existsSync(ENGINE_PID_PATH)) return null;
-  const raw = readFileSync(ENGINE_PID_PATH, 'utf8').trim();
+  const path = resolveEnginePidPath();
+  if (!existsSync(path)) return null;
+  const raw = readFileSync(path, 'utf8').trim();
   const pid = Number.parseInt(raw, 10);
   return Number.isFinite(pid) && pid > 0 ? pid : null;
 }
 
 export function clearEnginePid(): void {
-  if (existsSync(ENGINE_PID_PATH)) {
+  const path = resolveEnginePidPath();
+  if (existsSync(path)) {
     try {
-      unlinkSync(ENGINE_PID_PATH);
+      unlinkSync(path);
     } catch {
       /* best effort */
     }

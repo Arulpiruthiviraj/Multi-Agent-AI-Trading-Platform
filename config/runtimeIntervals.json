@@ -26,6 +26,7 @@
   "openAliceRequestTimeoutMs": 86400000,
   "openAliceMcpDefaultTimeoutMs": 10000,
   "modelRuntimeProbeTimeoutMs": 2000,
+  "ollamaCompletionProbeTimeoutMs": 8000,
   "fundamentalsCacheMaxAgeMs": 86400000,
   "macroCacheMaxAgeMs": 86400000,
   "externalDataRateLimitCooldownMs": 86400000,
@@ -43,5 +44,6 @@
   "autoTradeSchedulerMs": 60000,
   "strategyEngineShadowMs": 300000,
   "javaQuantAdvisoryMs": 90000,
-  "aiProviderHealthCheckMs": 180000
+  "aiProviderHealthCheckMs": 180000,
+  "sessionLifecycleEvalMs": 60000
 }

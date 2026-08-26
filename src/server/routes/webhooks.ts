@@ -9,6 +9,7 @@
  */
 import { Router, Request, Response } from "express";
 import { isSafeOutboundUrl } from "../core/urlSafety";
+import { withTimeout } from "../services/brokerPortfolioResponse";
 
 export interface Webhook {
   id: string;
@@ -162,14 +163,25 @@ webhooksRouter.post("/test", async (req: Request, res: Response) => {
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    res.json({ success: response.ok, status: response.status });
+    // Real defect fixed (2026-08-26 comprehensive remediation pass): `url` is an arbitrary
+    // caller-supplied endpoint with NO timeout at all - a slow/hanging destination could run past
+    // server.ts's global 15s per-request backstop, which sends its own response first, then this
+    // handler's late resolution would try to send a second one, throwing ERR_HTTP_HEADERS_SENT
+    // (the same root cause already fixed twice in v2System.ts this session). Bound to 5s (well
+    // under the 15s backstop) and guard both response sites, matching that reviewed pattern.
+    const response = await withTimeout(
+      fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(5000),
+      }),
+      5000,
+      'webhook test POST',
+    );
+    if (!res.headersSent) res.json({ success: response.ok, status: response.status });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    if (!res.headersSent) res.status(500).json({ error: err.message });
   }
 });
 

@@ -1255,6 +1255,51 @@ export const strategyEnginePromotions = sqliteTable('strategy_engine_promotions'
   strategyIdx: index('idx_strategy_engine_promotions_strategy').on(table.strategyId, table.createdAt),
 }));
 
+/**
+ * Controlled Self-Evolving Trading System (2026-08-26). One row per candidate
+ * (research/evolution/StrategyEvolutionEngine.ts) — the StrategyDefinition itself is stored as
+ * JSON (definitionJson, real strategiesEngine/core/types.ts shape, not re-modeled). Consolidates
+ * candidate metadata + lifecycle status + lineage + evidence references into one row per the
+ * "reuse, don't duplicate" audit finding - real evidence substance stays in the existing
+ * quant_strategy_backtests-style tables (referenced by evaluationJson, not copied). This is the
+ * evidence-gated ladder (promotionEngine.ts's real StrategyLifecycleStatus) - never
+ * strategiesEngine's own evidence-free promoteEvidence() ladder.
+ */
+export const strategyCandidates = sqliteTable('strategy_candidates', {
+  id: text('id').primaryKey(),
+  parentCandidateId: text('parent_candidate_id'),
+  generation: integer('generation').notNull(),
+  source: text('source').notNull(), // MUTATION | LLM_HYPOTHESIS | SEED
+  reason: text('reason').notNull(),
+  definitionJson: text('definition_json').notNull(), // full StrategyDefinition (strategiesEngine/core/types.ts)
+  lifecycleStatus: text('lifecycle_status').notNull(), // promotionEngine.ts StrategyLifecycleStatus
+  championStatus: text('champion_status').notNull().default('NONE'), // CHAMPION | CHALLENGER | RETIRED | NONE
+  rejectionReason: text('rejection_reason'),
+  evaluationJson: text('evaluation_json'), // last CandidateEvaluationRecord (reproducibility metadata)
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  lifecycleIdx: index('idx_strategy_candidates_lifecycle').on(table.lifecycleStatus),
+  parentIdx: index('idx_strategy_candidates_parent').on(table.parentCandidateId),
+  championIdx: index('idx_strategy_candidates_champion').on(table.championStatus),
+}));
+
+/** Append-only audit trail — mirrors strategy_engine_promotions' own real convention exactly, for
+ *  the canonical evidence-gated ladder instead of strategiesEngine's evidence-free one. Every
+ *  evolution action (Section 24) writes exactly one row here, never mutated afterward. */
+export const strategyEvolutionEvents = sqliteTable('strategy_evolution_events', {
+  id: text('id').primaryKey(),
+  candidateId: text('candidate_id').notNull(),
+  eventType: text('event_type').notNull(), // CANDIDATE_GENERATED | CANDIDATE_BACKTEST_STARTED | ... (see eventNames.json)
+  fromStatus: text('from_status'),
+  toStatus: text('to_status'),
+  reason: text('reason').notNull(),
+  detailJson: text('detail_json'), // metrics/evidence snapshot at the time of this event - never mutated later
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  candidateIdx: index('idx_strategy_evolution_events_candidate').on(table.candidateId, table.createdAt),
+}));
+
 // Distributed tracing — per-agent chain-of-thought (additive to event_traces / consensus_evidence).
 export const agentReasoningLogs = sqliteTable('agent_reasoning_logs', {
   id: integer('id').primaryKey({ autoIncrement: true }),

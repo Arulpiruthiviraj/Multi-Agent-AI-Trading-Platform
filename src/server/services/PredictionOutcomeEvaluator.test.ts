@@ -239,4 +239,23 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
       expect(outcomes[0].outcome).toBe('LOSS'); // BEARISH but price rose - wrong direction
     });
   });
+
+  it('self-improvement loop audit (2026-08-26): never grades a Digital Twin telemetry-pulse prediction against real bars', async () => {
+    await db.insert(schema.agentPredictions).values({
+      id: 'telemetry-pulse-guard-test',
+      agentName: 'TechnicalAgent',
+      symbol: 'UPTEST',
+      prediction: 'BUY',
+      confidence: 0.82,
+      reasoning: 'TELEMETRY_PULSE — synthetic TechnicalAgent idea (UI only)',
+      timestamp: new Date(PRED_TIME).toISOString(),
+      traceId: 'telemetry-pulse-abc123',
+    });
+
+    await predictionOutcomeEvaluator.evaluatePending();
+
+    const outcomes = await db.select().from(schema.predictionOutcomes)
+      .where(eq(schema.predictionOutcomes.predictionId, 'telemetry-pulse-guard-test'));
+    expect(outcomes).toHaveLength(0); // skipped, never graded WIN/LOSS from fabricated UI data
+  });
 });

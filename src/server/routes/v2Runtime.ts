@@ -115,6 +115,7 @@ runtimeRouter.get('/trading-session-report', async (req, res) => {
   try {
     const report = await getTradingSessionReport({
       activeSymbols: marketDataWorker.getActiveSymbols().length,
+      maxSymbols: marketDataWorker.getEffectiveStreamingCap(),
       interruptedSessionHold: !allowsNewEntryIdeas(),
     });
     if (req.query.format === 'text') {

@@ -69,19 +69,23 @@ case "$cmd" in
     fi
     argus_npm_cli pipeline-ready
     ;;
-  session-report)
+  session-report|trading-audit)
     if argus_wants_help "$@"; then
-      echo "Usage: argus session-report"
+      echo "Usage: argus session-report (alias: trading-audit)"
       echo "  Pre-market/market-open operator observability: ideas generated/rejected, missing-price"
       echo "  count, consensus/risk/execution counters, AI provider health, safety flags - scoped to"
       echo "  the current trading day. Organic PAPER/LIVE activity is always reported separately from"
       echo "  REPLAY/BACKTEST/SIMULATION (see the report's own Execution Context Breakdown section)."
+      echo "  'trading-audit' is a thin alias for the same report/route - not a second implementation."
       exit 0
     fi
     argus_npm_cli session-report
     ;;
   enable|disable|kill-switch)
     if argus_wants_help "$@"; then argus_help_trading; exit 0; fi
+    argus_npm_cli "$cmd" "$@"
+    ;;
+  research)
     argus_npm_cli "$cmd" "$@"
     ;;
   positions|trades|orders|config|risk|agents)

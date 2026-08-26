@@ -125,15 +125,29 @@ export class BrokerManager {
          }
          
          const settings = await db.select().from(schema.settings).limit(1);
-         const selectedName = settings[0]?.selectedBroker || 'Simulation Mode';
+
+         const { selectedName, selectionSource } = BrokerManager.resolveBootBrokerSelection({
+             envActiveBroker: process.env.ARGUS_ACTIVE_BROKER,
+             forceEnvBrokerOnBoot: process.env.ARGUS_FORCE_ENV_BROKER_ON_BOOT === 'true',
+             persistedSelection: settings[0]?.selectedBroker,
+         });
 
          const brokerConnections = await db.select().from(schema.brokerConnections);
 
          let activeFound = false;
+         // ARGUS_ACTIVE_BROKER naturally arrives as an id (e.g. "ibkr_gateway"); a persisted UI
+         // selection is a display name (e.g. "IBKR Gateway (Socket)"). Resolve once so either form
+         // matches below without changing how the existing display-name path behaves.
+         const resolvedSelectedId = this.resolveBrokerIdFromSelectedName(selectedName);
 
          for (const [id, broker] of this.brokers.entries()) {
              if (NON_FUNCTIONAL_BROKER_IDS.has(id)) continue;
-             if (broker.name === selectedName || (selectedName === 'Simulation Mode' && id === 'internal_paper')) {
+             if (
+                 broker.name === selectedName ||
+                 id === selectedName ||
+                 (resolvedSelectedId && id === resolvedSelectedId) ||
+                 (selectedName === 'Simulation Mode' && id === 'internal_paper')
+             ) {
                  this.activeBroker = broker;
                  activeFound = true;
                  break;
@@ -141,8 +155,17 @@ export class BrokerManager {
          }
 
          if (!activeFound) {
-             console.warn(`[BrokerManager] Saved broker selection '${selectedName}' is unavailable or non-functional. Falling back to Internal Paper Simulator.`);
+             console.warn(`[BrokerManager] Broker selection '${selectedName}' (from ${selectionSource}) is unavailable or non-functional. Falling back to Internal Paper Simulator.`);
              this.activeBroker = internalPaper;
+         } else {
+             console.log(`[BrokerManager] Boot broker selection: '${this.activeBroker.name}' (source: ${selectionSource}).`);
+             // Keep settings.selectedBroker in sync when the env layer is what actually decided —
+             // same persist-on-activation pattern POST /brokers/active already uses, so Settings >
+             // Brokers reflects reality and a later plain restart (no force) still resolves the
+             // same way via the persisted-selection branch above.
+             if (selectionSource !== 'settings.selectedBroker (last UI selection)' && settings.length > 0) {
+                 await db.update(schema.settings).set({ selectedBroker: this.activeBroker.name }).where(eq(schema.settings.id, settings[0].id));
+             }
          }
 
          // Look up the connection row for the broker we actually resolved above - not for
@@ -229,6 +252,32 @@ export class BrokerManager {
 
   public registerBroker(broker: BrokerPlugin) {
     this.brokers.set(broker.id, broker);
+  }
+
+  /**
+   * Pure boot-time precedence between the .env broker default and the last broker selected via
+   * Settings > Brokers > SET ACTIVE (settings.selectedBroker). Extracted from initialize() so the
+   * precedence rule itself is unit-testable without the real DB/adapter side effects initialize()
+   * carries. See ARGUS_ACTIVE_BROKER / ARGUS_FORCE_ENV_BROKER_ON_BOOT in .env.example.
+   */
+  public static resolveBootBrokerSelection(opts: {
+    envActiveBroker?: string | null;
+    forceEnvBrokerOnBoot: boolean;
+    persistedSelection?: string | null;
+  }): { selectedName: string; selectionSource: string } {
+    const envActiveBroker = opts.envActiveBroker?.trim() || undefined;
+    const persistedSelection = opts.persistedSelection?.trim() || undefined;
+
+    if (opts.forceEnvBrokerOnBoot && envActiveBroker) {
+      return { selectedName: envActiveBroker, selectionSource: 'ARGUS_FORCE_ENV_BROKER_ON_BOOT' };
+    }
+    if (persistedSelection) {
+      return { selectedName: persistedSelection, selectionSource: 'settings.selectedBroker (last UI selection)' };
+    }
+    if (envActiveBroker) {
+      return { selectedName: envActiveBroker, selectionSource: 'ARGUS_ACTIVE_BROKER (no prior UI selection)' };
+    }
+    return { selectedName: 'Simulation Mode', selectionSource: 'default' };
   }
 
   /**
@@ -462,6 +511,7 @@ export class BrokerManager {
             clear: () => {
               broker.setQuoteSink(null);
             },
+            isConnected: () => broker.isMarketDataSessionConnected(),
           },
         });
         // Quant / HistoricalDataGateway: IB reqHistoricalData — no Alpaca REST while gateway is active.

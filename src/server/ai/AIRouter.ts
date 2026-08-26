@@ -53,6 +53,7 @@ import * as schema from '../db/schema';
 import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { EncryptionService } from '../core/EncryptionService';
+import { classifyError as classifyAIProviderError } from './AIProviderHealthCheck';
 import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADE_SIDE_VALUES } from './AIOutputValidator';
 import { tradingSafety } from '../config/tradingSafety';
 import { networkEndpoints } from '../config/networkEndpoints';
@@ -68,6 +69,7 @@ const RESEARCH_TIMEOUT_MS = aiModels.researchTimeoutMs;
 const AI_AUTH_FAILURE_COOLDOWN_MS = tradingSafety.aiProviderAuthFailureCooldownMs;
 const AI_UNREACHABLE_COOLDOWN_MS = tradingSafety.aiProviderUnreachableCooldownMs;
 const AI_TIMEOUT_SKIP_COOLDOWN_MS = tradingSafety.aiProviderTimeoutSkipCooldownMs;
+const AI_QUOTA_EXCEEDED_COOLDOWN_MS = tradingSafety.aiProviderQuotaExceededCooldownMs;
 // Phase 7 (AI_MODEL_INVENTORY.md) - a low, non-zero temperature for every real trading-decision
 // call. Previously unset anywhere (each provider's own undocumented default sampling applied) -
 // this makes AI-influenced consensus votes measurably more reproducible without forcing fully
@@ -417,6 +419,23 @@ export class AIRouter {
       return;
     }
     if (isUnreachableProviderError(err)) {
+      this.skipProviderTemporarily(providerId, AI_UNREACHABLE_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    // Real gap found live (2026-08-26 forensic audit): a billing-suspended/quota-exceeded provider
+    // (e.g. Kimi/Moonshot returning "429 ... account ... is suspended due to insufficient balance")
+    // matched none of the checks above and was re-dispatched to on every single call all session
+    // (138+ wasted round-trips observed in one ~37-minute window). AIProviderHealthCheck's own
+    // classifyError() already distinguishes this from a generic timeout/unreachable/auth failure -
+    // reused here rather than re-implementing the same pattern matching a second time.
+    const classification = classifyAIProviderError(err);
+    if (classification === 'ACCOUNT_SUSPENDED' || classification === 'QUOTA_EXCEEDED') {
+      // A billing issue does not self-heal within a session - cooldown is deliberately long.
+      this.skipProviderTemporarily(providerId, AI_QUOTA_EXCEEDED_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    if (classification === 'RATE_LIMITED') {
+      // Plain rate-limiting (no suspension) can clear on its own - same cooldown as "unreachable".
       this.skipProviderTemporarily(providerId, AI_UNREACHABLE_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
     }
   }

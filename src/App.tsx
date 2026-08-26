@@ -35,6 +35,7 @@
 
 import StrategyScanner from "./components/StrategyScanner";
 import QuantSignalsPanel from "./components/QuantSignalsPanel";
+import StrategyPerformancePanel from "./components/StrategyPerformancePanel";
 import EliteDeskPanel from "./components/EliteDeskPanel";
 import ResearchLabPanel from "./components/ResearchLabPanel";
 import AwaitingSignal from "./components/shared/AwaitingSignal";
@@ -51,7 +52,6 @@ import DigitalTwinVisualizer from "./components/DigitalTwinVisualizer";
 import OrchestrationStatus from "./components/OrchestrationStatus";
 import AlpacaNewsTicker from "./components/AlpacaNewsTicker";
 import LiveMarketNewsTicker from "./components/LiveMarketNewsTicker";
-import TradeCorrelationMatrix from "./components/TradeCorrelationMatrix";
 import BrokerManagement from "./components/BrokerManagement";
 import AIProviderManagement from "./components/AIProviderManagement";
 import { KronosDashboard } from "./components/KronosDashboard";
@@ -60,12 +60,6 @@ import DiagnosticCenter from "./components/DiagnosticCenter";
 import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
 import TradingPauseOperatorControls from "./components/TradingPauseOperatorControls";
 import LiveReadinessBanner from "./components/LiveReadinessBanner";
-import WealthAffirmationOverlay from "./components/WealthAffirmationOverlay";
-import HyperAbundanceVortex from "./components/HyperAbundanceVortex";
-import DivineWealthOverlay from "./components/DivineWealthOverlay";
-import { WealthAffirmationToggle } from "./components/WealthAffirmationToggle";
-import { WealthVortexSoundBridge } from "./components/WealthVortexSoundBridge";
-import { useWealthAffirmationSettings } from "./context/WealthAffirmationSettingsContext";
 import GuardrailsPanel from "./components/GuardrailsPanel";
 import MarketSentimentTrend from "./components/MarketSentimentTrend";
 import ChiefTraderAgent from "./components/ChiefTraderAgent";
@@ -184,8 +178,6 @@ import {
   Database,
   TrendingDown,
   History,
-  ServerCrash,
-  WifiOff,
   CornerDownRight,
   Coins,
   Calculator,
@@ -267,145 +259,6 @@ interface AgentMetric {
   profitFactor: number;
   sharpeRatio: number;
 }
-
-const mockBacktestData: Array<{ date: string; roi1: number; roi2: number; benchmark: number }> = [];
-
-/* Educational swarm copy removed from production Learning tab (was shown as EXECUTED). */
-
-const STRATEGY_DETAILS: Record<string, { desc: string; signals: string; timeframe: string }> = {
-  "Momentum & Breakout": { desc: "Stocks moving aggressively in one direction on high volume.", signals: "VWAP, Volume, EMA", timeframe: "Intraday (Mins - Hours)" },
-  "Mean Reversion": { desc: "Fading the trend. Assumes extreme price moves are temporary.", signals: "RSI, Bollinger Bands", timeframe: "Intraday (Hours)" },
-  "Scalping": { desc: "High-frequency strategy capturing tiny price movements.", signals: "Level 2, VWAP", timeframe: "Seconds - Minutes" },
-  "Gap & Go": { desc: "Exploiting imbalances at the market open.", signals: "Overnight Gap, Volume", timeframe: "Market Open" },
-  "Trend-Following": { desc: "Buying the dip within an established upward trend.", signals: "MACD, SMA/EMA", timeframe: "Intraday (Hours)" },
-  "Narrative/News Agent": { desc: "Analyzes breaking news, sentiment, and macro narratives.", signals: "NLP Sentiment, News APIs", timeframe: "Intraday - 3 Days" },
-  "Political Intel": { desc: "Monitors political events and policy shifts for sector rotations.", signals: "Policy Docs, Congressional Trades", timeframe: "Weeks" },
-};
-
-const StrategyDropdown = ({ 
-  value, 
-  onChange, 
-  colorClass,
-  customPresets = [],
-  onSavePreset,
-  onLoadPreset
-}: { 
-  value: string; 
-  onChange: (v: string) => void; 
-  colorClass: string;
-  customPresets?: any[];
-  onSavePreset?: (name: string) => void;
-  onLoadPreset?: (preset: any) => void;
-}) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [presetName, setPresetName] = useState("");
-  const dropdownRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-        setIsSaving(false);
-      }
-    };
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
-
-  const handleSave = () => {
-    if (presetName.trim() && onSavePreset) {
-      onSavePreset(presetName.trim());
-      setPresetName("");
-      setIsSaving(false);
-    }
-  };
-
-  return (
-    <div className="relative" ref={dropdownRef}>
-      <div 
-        className={`bg-transparent text-[10px] font-mono focus:outline-none transition-colors cursor-pointer flex items-center pr-4 relative min-w-[130px] ${colorClass}`}
-        onClick={() => setIsOpen(!isOpen)}
-      >
-        <span>{value}</span>
-        <div className="absolute right-0 top-1/2 -translate-y-1/2 pointer-events-none opacity-50 text-[8px]">▼</div>
-      </div>
-      {isOpen && (
-        <div className="absolute top-full left-0 mt-2 w-[280px] bg-[#0A0F16] border border-[#334155] rounded z-[70] shadow-2xl py-1 transform-gpu max-h-[400px] overflow-y-auto">
-          {Object.keys(STRATEGY_DETAILS).map(strategy => (
-            <div 
-              key={strategy}
-              className="px-3 py-2 hover:bg-slate-800/80 transition-colors cursor-pointer group flex items-center justify-between"
-              onClick={() => { onChange(strategy); setIsOpen(false); }}
-            >
-              <span className={`text-[10px] font-mono whitespace-nowrap ${value === strategy ? colorClass : 'text-slate-300 group-hover:text-white'}`}>{strategy}</span>
-              <div className="relative ml-2 flex-shrink-0">
-                <div className="text-slate-500 hover:text-indigo-400 group-hover:text-indigo-400 transition-colors p-[2px]">
-                  <Info size={12} />
-                </div>
-                <div className="absolute right-[calc(100%+8px)] bottom-1/2 translate-y-1/2 w-[240px] bg-[#1A1F2B] border border-indigo-500/30 rounded p-3 hidden group-hover:block z-[80] shadow-[0_0_20px_rgba(0,0,0,0.5)] pointer-events-none before:content-[''] before:absolute before:-right-[5px] before:top-1/2 before:-translate-y-1/2 before:w-2 before:h-2 before:rotate-45 before:bg-[#1A1F2B] before:border-r before:border-t before:border-indigo-500/30">
-                  <p className="text-[10px] text-white font-bold mb-1.5">{strategy}</p>
-                  <p className="text-[9px] text-slate-300 mb-2 leading-relaxed">{STRATEGY_DETAILS[strategy].desc}</p>
-                  <p className="text-[9px] text-slate-500 mb-1"><span className="text-slate-400 font-bold uppercase tracking-wider text-[8px]">Signals:</span> {STRATEGY_DETAILS[strategy].signals}</p>
-                  <p className="text-[9px] text-slate-500"><span className="text-slate-400 font-bold uppercase tracking-wider text-[8px]">Timeframe:</span> {STRATEGY_DETAILS[strategy].timeframe}</p>
-                </div>
-              </div>
-            </div>
-          ))}
-          
-          {onSavePreset && (
-            <>
-              <div className="border-t border-[#334155] my-1"></div>
-              {customPresets.length > 0 && (
-                <div className="px-3 py-1">
-                  <span className="text-[8px] uppercase font-bold text-slate-500 tracking-widest">Custom Presets</span>
-                  {customPresets.map((preset, idx) => (
-                    <div 
-                      key={idx}
-                      className="py-1.5 hover:bg-slate-800/80 transition-colors cursor-pointer group flex items-center justify-between"
-                      onClick={() => { if(onLoadPreset) onLoadPreset(preset); setIsOpen(false); }}
-                    >
-                      <span className="text-[10px] font-mono text-indigo-400 group-hover:text-indigo-300">{preset.name}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              
-              <div className="px-3 py-2">
-                {isSaving ? (
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="text" 
-                      value={presetName}
-                      onChange={(e) => setPresetName(e.target.value)}
-                      placeholder="Preset Name..."
-                      className="bg-[#111822] border border-slate-700 text-[10px] font-mono text-white px-2 py-1 rounded w-full focus:outline-none focus:border-indigo-500"
-                      autoFocus
-                      onKeyDown={(e) => e.key === 'Enter' && handleSave()}
-                    />
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); handleSave(); }}
-                      className="bg-indigo-600 hover:bg-indigo-500 text-white text-[9px] uppercase font-bold px-2 py-1 rounded transition-colors"
-                    >
-                      Save
-                    </button>
-                  </div>
-                ) : (
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); setIsSaving(true); }}
-                    className="w-full text-left text-[9px] uppercase font-bold text-slate-400 hover:text-white transition-colors py-1 flex items-center gap-1"
-                  >
-                    + Save Current Strategy Preset
-                  </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  );
-};
 
 /* === COMPONENT: RiskExposureDashboard === */
 /*
@@ -965,7 +818,6 @@ function withCanonicalAutobotFlag(snapshot: any): any {
  */
 export default function App() {
   const { subscribe, setEnabled: setWsEnabled } = useWebSocket();
-  const { activeMode } = useWealthAffirmationSettings();
   // Hoisted from further down in this component: several fetch-on-mount effects earlier in the
   // function body need to depend on this (see the /api/v1/autobot effect below) - a useEffect's
   // dependency array is evaluated synchronously during render, so referencing a const declared
@@ -975,16 +827,21 @@ export default function App() {
   useEffect(() => {
     setWsEnabled(isAuthenticated);
   }, [isAuthenticated, setWsEnabled]);
+  // Real bug found and fixed (2026-08-25, E2E investigation): the mount-time /api/v1/auth/status
+  // check below (verifyAuth) and an explicit user action (handleLoginSubmit/handleLogout) can
+  // race - if a user logs in while that initial status fetch is still in flight (it was sent
+  // before any session cookie existed, so it always resolves to authenticated:false), the fetch's
+  // late resolution stomped the just-completed login back to logged-out. Confirmed live via a
+  // Playwright E2E run: login succeeded (the authenticated app shell rendered, nav button became
+  // visible), then the app silently fell back to the login screen moments later mid-test. This
+  // ref makes any explicit login/logout action authoritative over a still-pending mount check,
+  // rather than "whichever resolves last wins."
+  const authActionTakenRef = useRef(false);
   const { isMobileMode, viewportMobile, override, toggleMobileView } = useMobileLayout();
   const compactNav = useCompactNav();
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [showCoach, setShowCoach] = useState(false);
-  const [runBacktest, setRunBacktest] = useState(false);
   const [showTradeHistory, setShowTradeHistory] = useState(true);
-  const [selectedStrategy1, setSelectedStrategy1] = useState("Narrative/News Agent");
-  const [selectedStrategy2, setSelectedStrategy2] = useState("Mean Reversion (RSI)");
-  const [showStrategy1, setShowStrategy1] = useState(true);
-  const [showStrategy2, setShowStrategy2] = useState(true);
 
   const [selectedTradeForJournal, setSelectedTradeForJournal] = useState<any>(null);
   const [journalModalOpen, setJournalModalOpen] = useState(false);
@@ -1147,44 +1004,6 @@ export default function App() {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [showLaunchDialog, setShowLaunchDialog] = useState(false);
   const [activeSessionConfig, setActiveSessionConfig] = useState<any>(null);
-  
-  const [hyperparams, setHyperparams] = useState({
-    newsSensitivity: 75,
-    macroTolerance: 60,
-    techSmoothing: 14,
-    sentimentBurst: 20,
-    orderFlowDepth: 5
-  });
-
-  const [strategyPresets, setStrategyPresets] = useState<any[]>(() => {
-    try {
-      const saved = localStorage.getItem("argus_strategy_presets");
-      if (saved) return JSON.parse(saved);
-    } catch (e) {
-      console.error(e);
-    }
-    return [];
-  });
-
-  const handleSaveStrategyPreset = (name: string) => {
-    const preset = {
-      name,
-      agent1: selectedStrategy1,
-      agent2: selectedStrategy2,
-      hyperparams: { ...hyperparams }
-    };
-    setStrategyPresets(prev => {
-      const updated = [...prev, preset];
-      localStorage.setItem("argus_strategy_presets", JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  const handleLoadStrategyPreset = (preset: any) => {
-    setSelectedStrategy1(preset.agent1);
-    setSelectedStrategy2(preset.agent2);
-    setHyperparams(preset.hyperparams);
-  };
 
   const [stressScenario, setStressScenario] = useState("Flash Crash");
   const [showStressTest, setShowStressTest] = useState(false);
@@ -1893,6 +1712,7 @@ export default function App() {
         return;
       }
       const body = await res.json().catch(() => ({}));
+      authActionTakenRef.current = true;
       setIsAuthenticated(true);
       setAuthPassword("");
       localStorage.setItem("argus_authenticated", "true");
@@ -1915,6 +1735,7 @@ export default function App() {
       // log out, and leaving the UI in an authenticated-looking state on a network error would be
       // worse than a session row that outlives its cookie until it naturally expires.
     } finally {
+      authActionTakenRef.current = true;
       setIsAuthenticated(false);
       localStorage.removeItem("argus_authenticated");
     }
@@ -1926,6 +1747,10 @@ export default function App() {
         const res = await fetch("/api/v1/auth/status", { credentials: "include" });
         if (res.ok) {
           const data = await res.json();
+          // Race guard (see authActionTakenRef above): an explicit login/logout that happened
+          // while this fetch was still in flight is authoritative - don't let this stale mount-
+          // time check overwrite it.
+          if (authActionTakenRef.current) return;
           setIsAuthenticated(data.authenticated === true);
           // A page load always lands here (initial mount effect), never in handleLoginSubmit's
           // branch - whether that's a browser refresh or a restored session, the wizard must
@@ -1940,49 +1765,6 @@ export default function App() {
     };
     verifyAuth();
   }, []);
-
-  // Chaos Mode states
-  const [chaosEnabled, setChaosEnabled] = useState<boolean>(false);
-  const [chaosLatencyMin, setChaosLatencyMin] = useState<number>(1000);
-  const [chaosLatencyMax, setChaosLatencyMax] = useState<number>(3000);
-  const [chaosErrorRate, setChaosErrorRate] = useState<number>(30);
-  const [chaosSelectedAgents, setChaosSelectedAgents] = useState<string[]>(["agent_news_sentiment", "agent_quant_ml"]);
-  const [chaosSaving, setChaosSaving] = useState<boolean>(false);
-  const [chaosMsg, setChaosMsg] = useState<string>("");
-
-  // Adaptive Terminal States
-  const [macroShockLoading, setMacroShockLoading] = useState<boolean>(false);
-
-  const triggerMacroShock = async () => {
-    setMacroShockLoading(true);
-    try {
-      const res = await fetch("/api/v1/chaos/macro-shock", { method: "POST" });
-      const data = await res.json();
-      if (data.ok) {
-        fetch("/api/v1/autobot").then(r => r.json()).then(d => setAutoBotConfig(d));
-      }
-    } catch (err) {
-      console.error("Failed to trigger macro shock:", err);
-    } finally {
-      setMacroShockLoading(false);
-    }
-  };
-
-  const clearMacroShock = async () => {
-    setMacroShockLoading(true);
-    try {
-      const res = await fetch("/api/v1/chaos/macro-shock/clear", { method: "POST" });
-      const data = await res.json();
-      if (data.ok) {
-        fetch("/api/v1/autobot").then(r => r.json()).then(d => setAutoBotConfig(d));
-      }
-    } catch (err) {
-      console.error("Failed to clear macro shock:", err);
-    } finally {
-      setMacroShockLoading(false);
-    }
-  };
-
 
   // Platform ledger data - declared at the top to avoid Temporal Dead Zone issues in earlier useEffects
   const [portfolioData, setPortfolioData] = useState<any | null>(null);
@@ -2426,7 +2208,7 @@ export default function App() {
   const [setupComplete, setSetupComplete] = useState(false);
   const [systemState, setSystemState] = useState<'STARTING' | 'INITIALIZING' | 'READY' | 'RUNNING' | 'STOPPED' | 'ERROR'>('STARTING');
   const [activeTab, setActiveTab] = useState<
-    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "validation" | "observatory" | "evaluation" | "diagnostics" | "news" | "intelligence" | "kronos"
+    "dashboard" | "arena" | "portfolio" | "scanner" | "agents" | "memory" | "audit" | "opportunities" | "learning" | "command" | "activity" | "documentation" | "settings" | "validation" | "observatory" | "evaluation" | "diagnostics" | "news" | "kronos"
   >("dashboard");
   const activeTabRef = useRef(activeTab);
   activeTabRef.current = activeTab;
@@ -3173,60 +2955,6 @@ export default function App() {
     }
   };
 
-  const fetchChaosConfig = async (signal?: AbortSignal) => {
-    try {
-      const res = await fetch("/api/v1/chaos/config", { signal });
-      if (res.ok) {
-        const contentType = res.headers.get("content-type");
-        if (contentType && contentType.includes("application/json")) {
-          const config = await res.json();
-          setChaosEnabled(config.enabled);
-          setChaosLatencyMin(config.latencyMin);
-          setChaosLatencyMax(config.latencyMax);
-          setChaosErrorRate(config.errorRate);
-          setChaosSelectedAgents(config.selectedAgents);
-        }
-      }
-    } catch (e) {
-      if (isAbortError(e)) return;
-      console.error("Failed to load chaos config", e);
-    }
-  };
-
-  const saveChaosConfig = async () => {
-    setChaosSaving(true);
-    setChaosMsg("");
-    try {
-      const res = await fetch("/api/v1/chaos/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          enabled: chaosEnabled,
-          latencyMin: chaosLatencyMin,
-          latencyMax: chaosLatencyMax,
-          errorRate: chaosErrorRate,
-          selectedAgents: chaosSelectedAgents,
-        }),
-      });
-      if (res.ok) {
-        setChaosMsg("Chaos Mode settings successfully synchronized to backend.");
-        fetchServerAuditTrail();
-      } else {
-        setChaosMsg("Error synchronizing Chaos settings.");
-      }
-    } catch (e) {
-      setChaosMsg("Network error saving Chaos settings.");
-    } finally {
-      setChaosSaving(false);
-      setTimeout(() => setChaosMsg(""), 4000);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab !== "settings" || !isAuthenticated) return;
-    void fetchChaosConfig();
-  }, [activeTab, isAuthenticated]);
-
   useEffect(() => {
     // Real bug fix: this effect used to run unconditionally on mount ([] deps), regardless of
     // `isAuthenticated` - a hook registration always executes during render no matter what JSX a
@@ -3248,7 +2976,6 @@ export default function App() {
       await fetchState({ signal: abort.signal });
       if (stopped || abort.signal.aborted) return;
       if (activeTabRef.current === "audit") await fetchServerAuditTrail(abort.signal);
-      if (activeTabRef.current === "settings") await fetchChaosConfig(abort.signal);
       if (stopped || abort.signal.aborted) return;
       timeout = setTimeout(() => { void loop(); }, DASHBOARD_POLL_MS);
     };
@@ -3591,14 +3318,6 @@ export default function App() {
       )}
       <AppWalkthrough />
       {showCoach && <AICoachPanel onClose={() => setShowCoach(false)} />}
-      {activeMode === 'divine_omnipresent' ? (
-        <DivineWealthOverlay />
-      ) : activeMode === 'hyper_abundance_777' ? (
-        <HyperAbundanceVortex />
-      ) : activeMode === 'sacred_gold_flow' ? (
-        <WealthAffirmationOverlay />
-      ) : null}
-      <WealthVortexSoundBridge />
       <LiveMarketNewsTicker />
       {enginesHalted && (
         <div className="bg-rose-600 px-4 py-2 flex flex-col gap-2 text-white w-full">
@@ -5881,25 +5600,6 @@ export default function App() {
           <NewsDashboardTab />
         )}
 
-        {activeTab === "intelligence" && (
-          <div className="animate-fade-in flex flex-col gap-6" id="intelligence-view">
-            <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-              <h3 className="text-sm font-bold text-white mb-2 uppercase tracking-wide">Quantitative Intelligence</h3>
-              <p className="text-[11px] text-slate-400 font-mono mb-4 leading-relaxed">
-                The old fabricated ADX/RSI/Options theater was removed. The live quant scanner (OHLCV + <code className="text-cyan-500">/api/v2/quant/*</code>) lives on Strategy Scanner so this tab does not duplicate that panel.
-                Quant agent ideas still need <code className="text-cyan-500">QUANT_ENGINE_ENABLED=true</code> and Autobot started. Kronos/Chronos is optional evidence on :8008.
-              </p>
-              <button
-                type="button"
-                onClick={() => setActiveTab("scanner")}
-                className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] font-bold uppercase tracking-widest"
-              >
-                Open Strategy Scanner
-              </button>
-            </div>
-          </div>
-        )}
-
 {activeTab === "agents" && (() => {
           const minPreds = tradingSafetyConfig.agentWinRateAlertMinPredictions;
           const scored = (learningSummary?.agentWeights ?? []).filter((a: any) => a.winRate !== null && a.totalPredictions >= minPreds);
@@ -6101,111 +5801,6 @@ export default function App() {
               </div>
             </div>
             
-            <div className="lg:col-span-3 bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-              <div className="flex justify-between items-center mb-4">
-                <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
-                  <Sliders size={15} className="text-indigo-400" />
-                  Agent Hyperparameter Tuning
-                </h3>
-                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest border border-slate-700 px-2 py-1 rounded bg-[#111822]">
-                  Live Hot-Reload Active
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 mb-6 leading-relaxed max-w-4xl">
-                Manual override console for internal agent threshold and behavior tuning. Adjusting these parameters directly impacts inference generation and confidence grading prior to the multi-agent consensus vote.
-              </p>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-                {/* News NLP Tuning */}
-                <div className="bg-[#111822] rounded p-4 border border-slate-800 relative group transition-colors hover:border-slate-700">
-                   <div className="flex items-center gap-2 mb-3">
-                     <span className="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]"></span>
-                     <h4 className="text-xs font-bold text-slate-300 uppercase tracking-widest">News NLP Agent</h4>
-                   </div>
-                   <div className="mb-4">
-                     <div className="flex justify-between text-[10px] text-slate-400 mb-1 font-mono uppercase tracking-widest">
-                       <span>Headline Sensitivity</span>
-                       <span className="text-blue-400 font-bold">{hyperparams.newsSensitivity}%</span>
-                     </div>
-                     <input 
-                       type="range" 
-                       min="0" max="100" 
-                       value={hyperparams.newsSensitivity} 
-                       onChange={(e) => setHyperparams({...hyperparams, newsSensitivity: Number(e.target.value)})}
-                       className="w-full accent-blue-500 cursor-pointer h-1.5 bg-slate-800 appearance-none rounded-full" 
-                     />
-                   </div>
-                   <p className="text-[9px] text-slate-500 leading-tight">Controls the context window threshold for interpreting breaking news. High values over-index on recent headlines.</p>
-                </div>
-
-                {/* Macro Quant Tuning */}
-                <div className="bg-[#111822] rounded p-4 border border-slate-800 relative group transition-colors hover:border-slate-700">
-                   <div className="flex items-center gap-2 mb-3">
-                     <span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.6)]"></span>
-                     <h4 className="text-xs font-bold text-slate-300 uppercase tracking-widest">Macro Quant Agent</h4>
-                   </div>
-                   <div className="mb-4">
-                     <div className="flex justify-between text-[10px] text-slate-400 mb-1 font-mono uppercase tracking-widest">
-                       <span>Yield Shock Tolerance</span>
-                       <span className="text-emerald-400 font-bold">{hyperparams.macroTolerance} bps</span>
-                     </div>
-                     <input 
-                       type="range" 
-                       min="10" max="150" 
-                       value={hyperparams.macroTolerance} 
-                       onChange={(e) => setHyperparams({...hyperparams, macroTolerance: Number(e.target.value)})}
-                       className="w-full accent-emerald-500 cursor-pointer h-1.5 bg-slate-800 appearance-none rounded-full" 
-                     />
-                   </div>
-                   <p className="text-[9px] text-slate-500 leading-tight">Defines the baseline basis point shift required in Treasury yields before the agent flags a systemic regime change.</p>
-                </div>
-
-                {/* Technical TA Tuning */}
-                <div className="bg-[#111822] rounded p-4 border border-slate-800 relative group transition-colors hover:border-slate-700">
-                   <div className="flex items-center gap-2 mb-3">
-                     <span className="w-2 h-2 rounded-full bg-purple-500 shadow-[0_0_8px_rgba(168,85,247,0.6)]"></span>
-                     <h4 className="text-xs font-bold text-slate-300 uppercase tracking-widest">Technical Agent</h4>
-                   </div>
-                   <div className="mb-4">
-                     <div className="flex justify-between text-[10px] text-slate-400 mb-1 font-mono uppercase tracking-widest">
-                       <span>Smoothing Factor (RSI)</span>
-                       <span className="text-purple-400 font-bold">{hyperparams.techSmoothing} P</span>
-                     </div>
-                     <input 
-                       type="range" 
-                       min="4" max="30" 
-                       value={hyperparams.techSmoothing} 
-                       onChange={(e) => setHyperparams({...hyperparams, techSmoothing: Number(e.target.value)})}
-                       className="w-full accent-purple-500 cursor-pointer h-1.5 bg-slate-800 appearance-none rounded-full" 
-                     />
-                   </div>
-                   <p className="text-[9px] text-slate-500 leading-tight">Adjusts the period smoothing logic across oscillators. Lower values generate more aggressive breakout signals.</p>
-                </div>
-
-                {/* Sentiment Tuning */}
-                <div className="bg-[#111822] rounded p-4 border border-slate-800 relative group transition-colors hover:border-slate-700">
-                   <div className="flex items-center gap-2 mb-3">
-                     <span className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]"></span>
-                     <h4 className="text-xs font-bold text-slate-300 uppercase tracking-widest">Sentiment Social</h4>
-                   </div>
-                   <div className="mb-4">
-                     <div className="flex justify-between text-[10px] text-slate-400 mb-1 font-mono uppercase tracking-widest">
-                       <span>Volume Burst Filter</span>
-                       <span className="text-amber-400 font-bold">{hyperparams.sentimentBurst}x</span>
-                     </div>
-                     <input 
-                       type="range" 
-                       min="1" max="10" step="0.1"
-                       value={hyperparams.sentimentBurst} 
-                       onChange={(e) => setHyperparams({...hyperparams, sentimentBurst: Number(e.target.value)})}
-                       className="w-full accent-amber-500 cursor-pointer h-1.5 bg-slate-800 appearance-none rounded-full" 
-                     />
-                   </div>
-                   <p className="text-[9px] text-slate-500 leading-tight">Multiplier threshold for validating retail engagement velocity compared to a 30-day baseline moving average.</p>
-                </div>
-              </div>
-            </div>
-
             <div className="lg:col-span-3 bg-[#1A1F2B] border border-slate-800 rounded-lg p-5" id="agent-heatmap">
                <div className="flex justify-between items-center mb-4">
                  <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide">
@@ -6222,20 +5817,6 @@ export default function App() {
                <div className="w-full overflow-x-auto">
                  <AwaitingSignal reason="Cross-regime per-agent P&L is not stored. SentimentAgent and OrderFlowAgent are not live voters. This heatmap is not a real performance series." label="Regime heatmap" />
                </div>
-              </div>
-            </div>
-
-            {/* Trade Execution Correlation */}
-            <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-              <h3 className="text-sm font-bold text-white mb-3.5 flex items-center gap-2 uppercase tracking-wide">
-                <Network size={15} className="text-emerald-400" />
-                Trade Execution Correlation Matrix
-              </h3>
-              <p className="text-xs text-slate-400 mb-5">
-                Analyze pair-wise relationships and decision overlap between different agent archetypes in real-time. Uncover which network shards co-authorize the same trade intents most frequently.
-              </p>
-              <div className="flex-1 bg-[#111822] rounded-lg border border-slate-800 p-4">
-                 <TradeCorrelationMatrix />
               </div>
             </div>
 
@@ -6942,107 +6523,6 @@ export default function App() {
                   ))}
                 </div>
               )}
-            </div>
-
-            {/* ========================================================= */}
-            {/* COMPONENT: Strategy Backtest Engine                       */}
-            {/* Purpose: Allows the user to select and compare two        */}
-            {/* separate strategy nodes against simulated historical data */}
-            {/* to review isolated performance and hypothetical drawdowns.*/}
-            {/* Notes: Both strategies can be toggled on/off to isolate   */}
-            {/* the Pnl curve comparisons.                                */}
-            {/* ========================================================= */}
-            <div className="lg:col-span-3 bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-              <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
-                <div>
-                  <h3 className="text-sm font-bold text-white mb-2 flex items-center gap-2 uppercase tracking-wide">
-                    <History size={16} className="text-indigo-400" />
-                    STRATEGY BACKTEST ENGINE
-                  </h3>
-                  <p className="text-[10px] text-slate-400 font-mono">Run selected strategy nodes against historical tick data to visualize hypothetical ROI and drawdown. Note: Real backtests run locally via Python backend.</p>
-                </div>
-                <div className="flex flex-wrap gap-2 items-center">
-                  <div className="flex items-center gap-2 bg-[#111822] border border-slate-700 rounded px-2 py-1">
-                    <div className="flex items-center gap-1">
-                      <input 
-                        type="checkbox" 
-                        checked={showStrategy1} 
-                        onChange={(e) => setShowStrategy1(e.target.checked)}
-                        className="accent-emerald-500 w-3 h-3 cursor-pointer"
-                      />
-                      <StrategyDropdown 
-                        value={selectedStrategy1} 
-                        onChange={setSelectedStrategy1} 
-                        colorClass={showStrategy1 ? 'text-emerald-400' : 'text-slate-500'}
-                        customPresets={strategyPresets}
-                        onSavePreset={handleSaveStrategyPreset}
-                        onLoadPreset={handleLoadStrategyPreset}
-                      />
-                    </div>
-                    <span className="text-slate-600 text-[10px]">||</span>
-                    <div className="flex items-center gap-1">
-                      <input 
-                        type="checkbox" 
-                        checked={showStrategy2} 
-                        onChange={(e) => setShowStrategy2(e.target.checked)}
-                        className="accent-purple-500 w-3 h-3 cursor-pointer"
-                      />
-                      <StrategyDropdown 
-                        value={selectedStrategy2} 
-                        onChange={setSelectedStrategy2} 
-                        colorClass={showStrategy2 ? 'text-purple-400' : 'text-slate-500'}
-                        customPresets={strategyPresets}
-                        onSavePreset={handleSaveStrategyPreset}
-                        onLoadPreset={handleLoadStrategyPreset}
-                      />
-                    </div>
-                  </div>
-                  <select className="bg-[#111822] border border-slate-700 text-slate-300 text-[10px] font-mono rounded px-3 py-1.5 focus:outline-none focus:border-indigo-500 transition-colors">
-                    <option>Last 30 Days</option>
-                    <option>Last 90 Days</option>
-                    <option>Year to Date</option>
-                    <option>Last 12 Months</option>
-                    <option>Custom Range</option>
-                  </select>
-                  <button
-                    onClick={() => {
-                      setRunBacktest(false);
-                      window.location.hash = 'historical-replay-lab';
-                    }}
-                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-[10px] uppercase font-bold py-1.5 px-4 rounded transition-colors flex items-center gap-2 shadow-[0_0_10px_rgba(79,70,229,0.2)]"
-                  >
-                    <Play size={12} />
-                    Open Historical Replay
-                  </button>
-                </div>
-              </div>
-
-              {/* Chart container */}
-              <div className="h-[250px] bg-[#111822] rounded-lg border border-slate-800 flex items-center justify-center p-4">
-                 <div className="text-center text-slate-500 flex flex-col items-center gap-2 max-w-md">
-                       <BarChart3 size={24} className="opacity-20 mb-1"/>
-                       <span className="text-[10px] uppercase tracking-widest font-mono text-amber-400/90">UNAVAILABLE — NO FABRICATED BACKTEST</span>
-                       <span className="text-[10px] uppercase tracking-widest font-mono">Use Research Lab → Historical Replay for real NEXT_BAR_OPEN results. This Learning chart does not invent P&amp;L.</span>
-                    </div>
-              </div>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-6">
-                 <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1">Total Return</span>
-                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
-                 </div>
-                 <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="maxDrawdown">Max Drawdown</Explainer></span>
-                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
-                 </div>
-                 <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="sharpeRatio">Sharpe Ratio</Explainer></span>
-                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
-                 </div>
-                 <div className="bg-[#111822] border border-slate-800 rounded p-3 text-center">
-                    <span className="text-[9px] uppercase font-mono text-slate-500 block mb-1"><Explainer id="winRate">Win Rate</Explainer></span>
-                    <span className="text-lg font-bold text-slate-500">UNAVAILABLE</span>
-                 </div>
-              </div>
             </div>
 
             {/* Agent Learning & Context Evolution Journal */}
@@ -8201,100 +7681,6 @@ export default function App() {
                </div>
              </div>
 
-             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
-               <div className="flex justify-between items-start mb-6">
-                 <div>
-                   <h3 className="text-sm font-bold text-white flex items-center gap-2 uppercase tracking-wide mb-1">
-                     <Coins size={16} className="text-emerald-400" />
-                     TOKEN USAGE & COST ESTIMATION (24H)
-                   </h3>
-                   <p className="text-xs text-slate-400">
-                     Estimated consumption tracking based on selected providers and active trading nodes. Premium node consumption is deliberately restricted to final confirmations.
-                   </p>
-                 </div>
-                 <div className="bg-emerald-500/10 border border-emerald-500/30 px-3 py-1.5 rounded-lg flex items-center gap-2">
-                   <Calculator size={14} className="text-emerald-400" />
-                   <span className="text-xs font-mono font-bold text-emerald-400">~$4.12 / day</span>
-                 </div>
-               </div>
-
-               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                 {/* Standard Usage */}
-                 <div className="bg-[#111822] border border-slate-800 rounded-lg p-4">
-                   <h4 className="text-xs font-bold text-slate-300 mb-3 flex items-center justify-between border-b border-slate-800 pb-2">
-                     <span className="uppercase tracking-wider flex items-center gap-2"><Activity size={12} className="text-slate-400"/> Standard Nodes Pipeline</span>
-                     <span className="text-[10px] font-mono bg-slate-800 px-1.5 py-0.5 rounded text-white">{standardLLMProvider}</span>
-                   </h4>
-                   <div className="space-y-4">
-                     <div>
-                       <div className="flex justify-between items-end mb-1">
-                         <span className="text-[10px] text-slate-400 font-mono">NewsAgent (L2 & Sentiment)</span>
-                         <span className="text-[10px] text-slate-300 font-mono">1.2M tokens <span className="text-slate-500 ml-2">~$0.18</span></span>
-                       </div>
-                       <div className="w-full bg-slate-800 h-1.5 rounded overflow-hidden">
-                         <div className="bg-slate-400 h-full w-[45%]"></div>
-                       </div>
-                     </div>
-                     <div>
-                       <div className="flex justify-between items-end mb-1">
-                         <span className="text-[10px] text-slate-400 font-mono">MacroAgent (Economic Prints)</span>
-                         <span className="text-[10px] text-slate-300 font-mono">2.8M tokens <span className="text-slate-500 ml-2">~$0.42</span></span>
-                       </div>
-                       <div className="w-full bg-slate-800 h-1.5 rounded overflow-hidden">
-                         <div className="bg-slate-400 h-full w-[70%]"></div>
-                       </div>
-                     </div>
-                     <div>
-                       <div className="flex justify-between items-end mb-1">
-                         <span className="text-[10px] text-slate-400 font-mono">Proposer Node (Aggregator)</span>
-                         <span className="text-[10px] text-slate-300 font-mono">800K tokens <span className="text-slate-500 ml-2">~$0.12</span></span>
-                       </div>
-                       <div className="w-full bg-slate-800 h-1.5 rounded overflow-hidden">
-                         <div className="bg-slate-400 h-full w-[25%]"></div>
-                       </div>
-                     </div>
-                   </div>
-                   <div className="mt-4 pt-3 border-t border-slate-800 flex justify-between items-center text-[10px] font-mono">
-                     <span className="text-slate-500">Total Standard Volume: 4.8M T/day</span>
-                     <span className="text-slate-300 font-bold">Est Cost: $0.72</span>
-                   </div>
-                 </div>
-
-                 {/* Premium Usage */}
-                 <div className="bg-[#111822] border border-indigo-500/20 rounded-lg p-4 relative overflow-hidden">
-                   <div className="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
-                   <h4 className="text-xs font-bold text-white mb-3 flex items-center justify-between border-b border-slate-800 pb-2 pl-2">
-                     <span className="uppercase tracking-wider flex items-center gap-2"><BrainCircuit size={12} className="text-indigo-400"/> Premium Arbiter Node</span>
-                     <span className="text-[10px] font-mono bg-indigo-500/20 border border-indigo-500/30 px-1.5 py-0.5 rounded text-indigo-400">{premiumLLMProvider}</span>
-                   </h4>
-                   <div className="space-y-4 pl-2">
-                     <div>
-                       <div className="flex justify-between items-end mb-1">
-                         <span className="text-[10px] text-slate-400 font-mono">RiskVerification Check</span>
-                         <span className="text-[10px] text-indigo-300 font-mono">180K tokens <span className="text-slate-500 ml-2">~$2.70</span></span>
-                       </div>
-                       <div className="w-full bg-slate-800 h-1.5 rounded overflow-hidden">
-                         <div className="bg-indigo-500 h-full w-[65%]"></div>
-                       </div>
-                     </div>
-                     <div>
-                       <div className="flex justify-between items-end mb-1">
-                         <span className="text-[10px] text-slate-400 font-mono">Context Slippage Resolver</span>
-                         <span className="text-[10px] text-indigo-300 font-mono">45K tokens <span className="text-slate-500 ml-2">~$0.70</span></span>
-                       </div>
-                       <div className="w-full bg-slate-800 h-1.5 rounded overflow-hidden">
-                         <div className="bg-indigo-500/60 h-full w-[25%]"></div>
-                       </div>
-                     </div>
-                   </div>
-                   <div className="mt-7 pt-3 border-t border-slate-800 flex justify-between items-center pl-2 text-[10px] font-mono">
-                     <span className="text-slate-500">Total Premium Volume: 225K T/day</span>
-                     <span className="text-white font-bold tracking-wider">Est Cost: $3.40</span>
-                   </div>
-                 </div>
-               </div>
-             </div>
-
              {/* Model Performance Benchmarks Row */}
              <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5">
                <div className="flex justify-between items-start mb-6">
@@ -8340,6 +7726,7 @@ export default function App() {
               setSelectedAlertSymbol={setSelectedAlertSymbol}
             />
             <QuantSignalsPanel />
+            <StrategyPerformancePanel />
             <EliteDeskPanel />
             <ResearchLabPanel />
           </div>
@@ -8561,10 +7948,9 @@ export default function App() {
                 <div className="space-y-6">
                     <div className="space-y-3">
                       <h3 className="text-[10px] font-mono font-bold text-slate-500 uppercase tracking-[0.2em]">
-                        Preferences · Mindset
+                        Preferences
                       </h3>
                       <ExplainerToggle variant="settings" />
-                      <WealthAffirmationToggle />
                     </div>
                     <EnvRuntimeSettingsPanel />
                     <div className="bg-[#0F141C] border border-slate-800 rounded-lg p-5 flex items-center justify-between gap-4">
@@ -8625,166 +8011,6 @@ export default function App() {
                 </div>
              </div>
 
-              {/* === COMPONENT: Chaos Mode Protocol Control (New Feature) === */}
-              <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6 flex flex-col animate-fade-in mb-6" id="chaos-mode-panel">
-                  <div className="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
-                     <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                       <WifiOff size={20} className={chaosEnabled ? "text-amber-500 animate-pulse" : "text-slate-400"} />
-                       Chaos Mode Swarm Stress Testing Suite
-                     </h2>
-                     <div className="flex items-center gap-3 font-mono">
-                       <span className={`text-[10px] uppercase tracking-wider px-2.5 py-0.5 rounded font-bold ${chaosEnabled ? 'bg-amber-500/15 text-amber-500 animate-pulse' : 'bg-slate-800 text-slate-500'}`}>
-                         {chaosEnabled ? "● ACTIVE" : "○ DEACTIVATED"}
-                       </span>
-                       <button
-                         onClick={() => setChaosEnabled(!chaosEnabled)}
-                         className="transition-opacity hover:opacity-90"
-                       >
-                         {chaosEnabled ? <ToggleRight size={28} className="text-amber-500" /> : <ToggleLeft size={28} className="text-slate-500" />}
-                       </button>
-                     </div>
-                  </div>
-
-                  <p className="text-xs text-slate-400 leading-relaxed mb-6">
-                    Simulate real-world network degradation, API delays, and intermittent node faults. Enabling Chaos Mode subjects selected agent nodes to artificial delays and random error responses to verify the fault tolerance and consensus resilience of the terminal's routing backend.
-                  </p>
-
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-6">
-                     {/* Left - Configuration Sliders */}
-                     <div className="space-y-5 col-span-1">
-                        <div>
-                           <div className="flex justify-between items-center mb-1">
-                              <span className="text-xs font-mono font-bold text-slate-300 uppercase tracking-wider">Simulated Latency Range</span>
-                              <span className="text-xs font-mono font-bold text-amber-400">{chaosLatencyMin}ms - {chaosLatencyMax}ms</span>
-                           </div>
-                           <div className="flex items-center gap-4">
-                              <div className="flex-1">
-                                 <span className="text-[10px] text-slate-500 font-mono block">MINIMUM</span>
-                                 <input
-                                   type="range"
-                                   min="100"
-                                   max="4000"
-                                   step="100"
-                                   value={chaosLatencyMin}
-                                   onChange={(e) => {
-                                      const val = Number(e.target.value);
-                                      setChaosLatencyMin(val);
-                                      if (val > chaosLatencyMax) setChaosLatencyMax(val);
-                                   }}
-                                   className="w-full h-1 accent-amber-500 bg-slate-700 rounded-lg cursor-pointer animate-none"
-                                 />
-                              </div>
-                              <div className="flex-1">
-                                 <span className="text-[10px] text-slate-500 font-mono block">MAXIMUM</span>
-                                 <input
-                                   type="range"
-                                   min="100"
-                                   max="8000"
-                                   step="100"
-                                   value={chaosLatencyMax}
-                                   onChange={(e) => {
-                                      const val = Number(e.target.value);
-                                      setChaosLatencyMax(val);
-                                      if (val < chaosLatencyMin) setChaosLatencyMin(val);
-                                   }}
-                                   className="w-full h-1 accent-amber-500 bg-slate-700 rounded-lg cursor-pointer animate-none"
-                                 />
-                              </div>
-                           </div>
-                        </div>
-
-                        <div>
-                           <div className="flex justify-between items-center mb-1">
-                              <span className="text-xs font-mono font-bold text-slate-300 uppercase tracking-wider">Node Failure Probability</span>
-                              <span className="text-xs font-mono font-bold text-rose-400">{chaosErrorRate}%</span>
-                           </div>
-                           <input
-                             type="range"
-                             min="0"
-                             max="100"
-                             step="5"
-                             value={chaosErrorRate}
-                             onChange={(e) => setChaosErrorRate(Number(e.target.value))}
-                             className="w-full h-1 accent-rose-500 bg-slate-700 rounded-lg cursor-pointer animate-none"
-                           />
-                           <p className="text-[10px] text-slate-500 font-mono mt-1 leading-relaxed">
-                             Chances of selected agents reporting a <code>504 TIMEOUT</code> or <code>500 INTERNAL_ERROR</code> during consensus computation.
-                           </p>
-                        </div>
-                     </div>
-
-                     {/* Right - Selected Agent Nodes */}
-                     <div className="col-span-1">
-                        <div className="flex justify-between items-center mb-3">
-                           <span className="text-xs font-mono font-bold text-slate-300 uppercase tracking-wider">Target Agent Nodes</span>
-                           <div className="flex gap-2">
-                             <button
-                               onClick={() => setChaosSelectedAgents(["agent_event_memory", "agent_narrative_tracking", "agent_political", "agent_geopolitical", "agent_news_sentiment", "agent_macro", "agent_news_historian", "agent_quant_baseline", "agent_quant_ml", "agent_proposer", "agent_risk_manager"])}
-                               className="text-[9px] font-mono uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700 font-bold"
-                             >
-                               All
-                             </button>
-                             <button
-                               onClick={() => setChaosSelectedAgents([])}
-                               className="text-[9px] font-mono uppercase bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-1 rounded border border-slate-700 font-bold"
-                             >
-                               Clear
-                             </button>
-                           </div>
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-2 max-h-[140px] overflow-y-auto p-2 bg-[#111822] rounded border border-slate-800 font-mono text-[10px]">
-                           {[
-                             { id: "agent_event_memory", label: "Event Memory" },
-                             { id: "agent_narrative_tracking", label: "Narrative Tracker" },
-                             { id: "agent_political", label: "Political Intel" },
-                             { id: "agent_geopolitical", label: "Geopolitical Desk" },
-                             { id: "agent_news_sentiment", label: "News Sentiment" },
-                             { id: "agent_macro", label: "Macro Variables" },
-                             { id: "agent_news_historian", label: "News Historian" },
-                             { id: "agent_quant_baseline", label: "Quant Baseline" },
-                             { id: "agent_quant_ml", label: "Quant ML Engine" },
-                             { id: "agent_proposer", label: "Autobot Proposer" },
-                             { id: "agent_risk_manager", label: "Autobot Risk Manager" }
-                           ].map(agent => (
-                             <label key={agent.id} className="flex items-center gap-2 text-slate-300 hover:text-white cursor-pointer select-none">
-                               <input
-                                 type="checkbox"
-                                 checked={chaosSelectedAgents.includes(agent.id)}
-                                 onChange={(e) => {
-                                   if (e.target.checked) {
-                                     setChaosSelectedAgents([...chaosSelectedAgents, agent.id]);
-                                   } else {
-                                     setChaosSelectedAgents(chaosSelectedAgents.filter(id => id !== agent.id));
-                                   }
-                                 }}
-                                 className="accent-amber-500 border-slate-800 bg-slate-900 rounded"
-                               />
-                               <span className="truncate">{agent.label}</span>
-                             </label>
-                           ))}
-                        </div>
-                     </div>
-                  </div>
-
-                  {chaosMsg && (
-                     <div className={`p-3 rounded text-center text-xs font-mono mb-4 border ${chaosMsg.includes("Error") || chaosMsg.includes("Network") ? 'bg-rose-950/20 border-rose-800 text-rose-400' : 'bg-emerald-950/20 border-emerald-800 text-emerald-400'}`}>
-                        {chaosMsg}
-                     </div>
-                  )}
-
-                  <div className="flex gap-3 justify-end border-t border-slate-800 pt-4">
-                     <button
-                       onClick={saveChaosConfig}
-                       disabled={chaosSaving}
-                       className="bg-[#D97706] hover:bg-[#B45309] text-white px-5 py-2.5 rounded text-xs font-bold font-mono transition-all flex items-center gap-2"
-                     >
-                       <ServerCrash size={14} className={chaosSaving ? "animate-spin" : ""} />
-                       {chaosSaving ? "SYNCHRONIZING..." : "SYNCHRONIZE CHAOS ENVIRONMENT"}
-                     </button>
-                  </div>
-              </div>
-
               {/* === COMPONENT: ADAPTIVE SYSTEM ENGINE ARCHITECTURE === */}
               <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6 flex flex-col mb-6" id="adaptive-terminal-panel">
                   <h2 className="text-lg font-bold text-white mb-2 flex items-center gap-2 border-b border-slate-800 pb-4">
@@ -8792,11 +8018,11 @@ export default function App() {
                     Adaptive Architecture & Evolutionary Prompting
                   </h2>
                   <p className="text-xs text-slate-400 leading-relaxed mb-6">
-                    Monitor and manually trigger the evolutionary layers of the terminal: Adaptive Market Regime-Switching calculations, Synthetic Macro Shocks, and Genetic prompt optimizers.
+                    Monitor the evolutionary layers of the terminal: Adaptive Market Regime-Switching calculations and Genetic prompt optimizers.
                   </p>
 
-                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                      
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
                       {/* Column 1: Regime-Switching */}
                       <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
                           <div>
@@ -8850,63 +8076,7 @@ export default function App() {
                           </div>
                       </div>
 
-                      {/* Column 2: Macro Shock Generator */}
-                      <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
-                          <div>
-                              <div className="flex justify-between items-center mb-3">
-                                  <h3 className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest flex items-center gap-1.5">
-                                      <AlertTriangle size={14} />
-                                      Macro Shock Generator
-                                  </h3>
-                                  <span className="text-[10px] font-mono text-slate-500">CHAOS SUITE</span>
-                              </div>
-
-                              <p className="text-xs text-slate-400 mb-4">
-                                  Inject contradictory macroeconomic news cascades generated via Gemini to evaluate bot resilience under extreme information overload.
-                              </p>
-
-                              {autoBotConfig.activeMacroShock ? (
-                                  <div className="bg-amber-950/20 border border-amber-900/30 p-3 rounded text-xs space-y-2">
-                                      <div className="flex items-center gap-1.5 text-amber-400 font-mono font-bold text-[10px] uppercase">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-ping"></span>
-                                          ACTIVE SHOCK: {autoBotConfig.activeMacroShock.title}
-                                      </div>
-                                      <p className="text-slate-300 text-[11px] leading-normal">{autoBotConfig.activeMacroShock.description}</p>
-                                      <div className="text-[10px] text-slate-400 mt-1 border-t border-amber-950/40 pt-1 leading-normal">
-                                          <span className="text-amber-500/70 uppercase font-bold text-[9px] block">Implications:</span>
-                                          {autoBotConfig.activeMacroShock.implications}
-                                      </div>
-                                  </div>
-                              ) : (
-                                  <div className="text-center py-6 text-slate-500 border border-dashed border-slate-800 rounded font-mono text-xs">
-                                      No narrative shocks active.
-                                  </div>
-                              )}
-                          </div>
-
-                          <div className="mt-4 flex gap-2">
-                              {autoBotConfig.activeMacroShock ? (
-                                  <button
-                                      onClick={clearMacroShock}
-                                      disabled={macroShockLoading}
-                                      className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold font-mono py-2 rounded text-xs transition-all uppercase"
-                                  >
-                                      {macroShockLoading ? "CLEARING..." : "CLEAR SHOCK"}
-                                  </button>
-                              ) : (
-                                  <button
-                                      onClick={triggerMacroShock}
-                                      disabled={macroShockLoading}
-                                      className="flex-1 bg-amber-600/20 hover:bg-amber-600/30 text-amber-500 border border-amber-600/40 font-bold font-mono py-2 rounded text-xs transition-all uppercase flex items-center justify-center gap-1.5"
-                                  >
-                                      <Sparkles size={12} />
-                                      {macroShockLoading ? "INJECTING..." : "INJECT NEWS CASCADE"}
-                                  </button>
-                              )}
-                          </div>
-                      </div>
-
-                      {/* Column 3: Genetic Prompt Tuning */}
+                      {/* Column 2: Genetic Prompt Tuning */}
                       <div className="bg-[#111822] border border-slate-800 rounded-lg p-4 flex flex-col justify-between">
                           <div>
                               <div className="flex justify-between items-center mb-3">

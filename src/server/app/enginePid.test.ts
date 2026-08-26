@@ -1,8 +1,9 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, beforeAll, afterAll } from 'vitest';
 import { writeFileSync, mkdirSync, existsSync, unlinkSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import os from 'node:os';
 import {
-  ENGINE_PID_PATH,
+  resolveEnginePidPath,
   claimEnginePid,
   clearEnginePid,
   isEngineProcessRunning,
@@ -13,7 +14,27 @@ import {
   writeEnginePid,
 } from './enginePid';
 
+/**
+ * Real bug found and fixed alongside this test's own isolation (2026-08-25): this file used to
+ * import the real, non-overridable ENGINE_PID_PATH and read/write/delete it directly - meaning
+ * every run of `npm test` operated on the actual developer-facing data/.argus_engine.pid, and this
+ * describe block's own afterEach unconditionally cleared it, silently wiping out a real running
+ * dev engine's pid file. ARGUS_ENGINE_PID_PATH now isolates this suite to a disposable temp file.
+ */
 describe('enginePid', () => {
+  const originalOverride = process.env.ARGUS_ENGINE_PID_PATH;
+  const tmpPidPath = join(os.tmpdir(), `argus_engine_pid_test_${Date.now()}_${process.pid}.pid`);
+
+  beforeAll(() => {
+    process.env.ARGUS_ENGINE_PID_PATH = tmpPidPath;
+  });
+
+  afterAll(() => {
+    try { unlinkSync(tmpPidPath); } catch { /* best-effort cleanup */ }
+    if (originalOverride === undefined) delete process.env.ARGUS_ENGINE_PID_PATH;
+    else process.env.ARGUS_ENGINE_PID_PATH = originalOverride;
+  });
+
   afterEach(() => {
     clearEnginePid();
   });
@@ -23,8 +44,8 @@ describe('enginePid', () => {
   });
 
   it('stale PID file is cleared by reconcileEnginePidFile', () => {
-    mkdirSync(dirname(ENGINE_PID_PATH), { recursive: true });
-    writeFileSync(ENGINE_PID_PATH, '99999999', 'utf8');
+    mkdirSync(dirname(resolveEnginePidPath()), { recursive: true });
+    writeFileSync(resolveEnginePidPath(), '99999999', 'utf8');
     const result = reconcileEnginePidFile();
     expect(result.running).toBe(false);
     expect(result.staleCleared).toBe(true);

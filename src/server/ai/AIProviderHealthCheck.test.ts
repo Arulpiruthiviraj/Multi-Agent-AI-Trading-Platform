@@ -129,6 +129,33 @@ describe('AIProviderHealthCheck', () => {
     expect(snapshot.find(r => r.providerId === 'p1')!.status).toBe('ACCOUNT_SUSPENDED');
   });
 
+  it('classifies a suspended-account error as ACCOUNT_SUSPENDED even when the same message carries a 401 status (2026-08-25 fix - the actual root cause of the reported 401-vs-429 Kimi discrepancy)', async () => {
+    // isAuthFailureError()'s own `\b401\b` pattern matches the raw status code embedded in this
+    // exact message shape (providers construct errors as `${status} ${statusText}${bodySnippet}`)
+    // - before the 2026-08-25 fix, this was classified AUTH_FAILED instead of ACCOUNT_SUSPENDED
+    // purely because Moonshot happened to attach a 401 to this particular response instead of the
+    // 429 the test above uses for the identical underlying condition (suspended account).
+    const provider = fakeProvider({ chat: async () => { throw new Error('Kimi API error: 401 Unauthorized - {"error":{"message":"Your account org-33aebcddc6224bd5815d2b2e8026966e <ak-fbuxx63a44oi11bpe981> is suspended due to insufficient balance, please recharge your account or check your plan and billing details","type":"exceeded_current_quota_error"}}'); } });
+    AIRouter.getInstance().registerProvider('p1', provider);
+    dbRows.current = [dbRow()];
+
+    await checkProviderHealth('p1', provider);
+    const snapshot = await getAIProviderHealthSnapshot();
+
+    expect(snapshot.find(r => r.providerId === 'p1')!.status).toBe('ACCOUNT_SUSPENDED');
+  });
+
+  it('classifies an ordinary 401 with no suspension language as AUTH_FAILED, not ACCOUNT_SUSPENDED (no regression)', async () => {
+    const provider = fakeProvider({ chat: async () => { throw new Error('OpenAI API error: 401 Unauthorized - {"error":{"message":"Incorrect API key provided"}}'); } });
+    AIRouter.getInstance().registerProvider('p1', provider);
+    dbRows.current = [dbRow()];
+
+    await checkProviderHealth('p1', provider);
+    const snapshot = await getAIProviderHealthSnapshot();
+
+    expect(snapshot.find(r => r.providerId === 'p1')!.status).toBe('AUTH_FAILED');
+  });
+
   it('classifies an ordinary 429 with no suspension language as RATE_LIMITED, not ACCOUNT_SUSPENDED', async () => {
     const provider = fakeProvider({ chat: async () => { throw new Error('OpenRouter API error: 429 Too Many Requests'); } });
     AIRouter.getInstance().registerProvider('p1', provider);

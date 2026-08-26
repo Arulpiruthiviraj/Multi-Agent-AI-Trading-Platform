@@ -32,10 +32,10 @@ describe('AlphaVantageBudget (DEF-13)', () => {
     expect(tradingSafety.alphaVantageDailyRequestBudget).toBeGreaterThan(0);
   });
 
-  it('allows requests until the shared daily budget is exhausted, then denies', async () => {
+  it('allows requests until the shared daily budget is exhausted, then denies (MacroAgent, exempt from the reserved-slot cap)', async () => {
     const cap = tradingSafety.alphaVantageDailyRequestBudget;
-    expect(await AlphaVantageBudget.tryConsume(cap)).toBe(true);
-    expect(await AlphaVantageBudget.tryConsume(1)).toBe(false);
+    expect(await AlphaVantageBudget.tryConsume(cap, undefined, 'MacroAgent')).toBe(true);
+    expect(await AlphaVantageBudget.tryConsume(1, undefined, 'MacroAgent')).toBe(false);
     expect(await AlphaVantageBudget.remaining()).toBe(0);
   });
 
@@ -43,9 +43,24 @@ describe('AlphaVantageBudget (DEF-13)', () => {
     const cap = tradingSafety.alphaVantageDailyRequestBudget;
     const day1 = Date.UTC(2026, 7, 17, 12, 0, 0);
     const day2 = Date.UTC(2026, 7, 18, 0, 0, 1);
-    expect(await AlphaVantageBudget.tryConsume(cap, day1)).toBe(true);
-    expect(await AlphaVantageBudget.tryConsume(1, day1)).toBe(false);
-    expect(await AlphaVantageBudget.tryConsume(1, day2)).toBe(true);
+    expect(await AlphaVantageBudget.tryConsume(cap, day1, 'MacroAgent')).toBe(true);
+    expect(await AlphaVantageBudget.tryConsume(1, day1, 'MacroAgent')).toBe(false);
+    expect(await AlphaVantageBudget.tryConsume(1, day2, 'MacroAgent')).toBe(true);
+  });
+
+  it('Consensus Quality Audit (2026-08-25): a non-MacroAgent caller cannot spend into the slots reserved for MacroAgent, but MacroAgent itself can still spend them', async () => {
+    const cap = tradingSafety.alphaVantageDailyRequestBudget;
+    const reserved = tradingSafety.alphaVantageMacroReservedRequests;
+    const nonMacroCeiling = cap - reserved;
+
+    // A generic (non-MacroAgent) caller — e.g. FundamentalAgent — is denied once it would dip
+    // into the reserved slice, even though the shared daily counter has room left overall.
+    expect(await AlphaVantageBudget.tryConsume(nonMacroCeiling, undefined, 'FundamentalAgent')).toBe(true);
+    expect(await AlphaVantageBudget.tryConsume(1, undefined, 'FundamentalAgent')).toBe(false);
+
+    // MacroAgent can still consume out of that same reserved slice.
+    expect(await AlphaVantageBudget.tryConsume(reserved, undefined, 'MacroAgent')).toBe(true);
+    expect(await AlphaVantageBudget.remaining()).toBe(0);
   });
 
   it('2026-08-18 forensic fix: a permanently-hung enqueued call times out instead of starving every later caller forever (both agents share this one queue)', async () => {

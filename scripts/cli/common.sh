@@ -58,6 +58,9 @@ Engine:
   ready             Check trading readiness (LIVE readiness API)
   pipeline-ready    Process-alive vs trading-pipeline-ready (DB/market data/broker/AI providers)
   session-report    Pre-market/market-open counters (ideas, consensus, risk, execution, AI, safety)
+  trading-audit     Alias for session-report (same report/route, not a second implementation)
+  research          Read-only research/advisory layer (regime, factors, correlation, drawdown,
+                     trade-setup, risk-reward, macro, strategy) - never places an order
   nuke              Force-kill stale/zombie Argus processes (no services started after)
 
 Trading:
