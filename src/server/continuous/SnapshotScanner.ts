@@ -23,6 +23,8 @@ export interface SnapshotScoreInput {
   minuteClose: number | null;
   dailyVolume: number | null;
   prevDayVolume: number | null;
+  /** Phase 4C (Composable Ranking) - the daily bar's real open price, for gap-behavior scoring. Optional so existing callers/fixtures built before this field existed are unaffected. */
+  open?: number | null;
 }
 
 export interface SnapshotCandidate {
@@ -188,7 +190,7 @@ function anchorSet(): Set<string> {
 function parseRawSnapshot(symbol: string, snap: Record<string, unknown> | undefined): SnapshotScoreInput | null {
   if (!snap) return null;
   const minuteBar = snap.minuteBar as { c?: number; h?: number; l?: number; v?: number } | undefined;
-  const dailyBar = snap.dailyBar as { c?: number; v?: number } | undefined;
+  const dailyBar = snap.dailyBar as { c?: number; v?: number; o?: number } | undefined;
   const prevDailyBar = snap.prevDailyBar as { c?: number; v?: number } | undefined;
   const latestTrade = snap.latestTrade as { p?: number } | undefined;
 
@@ -211,6 +213,7 @@ function parseRawSnapshot(symbol: string, snap: Record<string, unknown> | undefi
     minuteClose: typeof minuteBar?.c === 'number' ? minuteBar.c : null,
     dailyVolume: typeof dailyBar?.v === 'number' ? dailyBar.v : null,
     prevDayVolume: typeof prevDailyBar?.v === 'number' ? prevDailyBar.v : null,
+    open: typeof dailyBar?.o === 'number' ? dailyBar.o : null,
   };
 }
 
@@ -219,6 +222,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
   const universe = getSnapshotScanUniverse();
   const batchSize = continuousIntelligence.broadUniverseSnapshotBatchSize;
   const scored: SnapshotCandidate[] = [];
+  const scoredInputs: SnapshotScoreInput[] = [];
   let scanned = 0;
   let latencyMs = 0;
   let lastHttpStatus: number | null = null;
@@ -238,7 +242,10 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
           if (!input) continue;
           scanned += 1;
           const row = scoreSnapshotCandidate(input, now);
-          if (row) scored.push(row);
+          if (row) {
+            scored.push(row);
+            scoredInputs.push(input);
+          }
         }
       } catch (e) {
         const err = e as Error & { status?: number; latencyMs?: number };
@@ -273,6 +280,32 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
         + `(http=${lastHttpStatus ?? 'n/a'})`,
       );
     }
+
+    // Phase 4C (Composable Ranking, 2026-08-26): additive, persisted parallel ranking cycle using
+    // the SAME already-fetched snapshot data - no new network calls. Never affects lastRanked/
+    // lastStats/getLastSnapshotScanStats()'s existing contract, and never throws into the caller.
+    try {
+      const rankingInputs = scoredInputs.map((input, i) => ({
+        symbol: input.symbol,
+        last: input.last,
+        prevClose: input.prevClose,
+        open: input.open ?? null,
+        prevOpen: null,
+        minuteHigh: input.minuteHigh,
+        minuteLow: input.minuteLow,
+        minuteClose: input.minuteClose,
+        dailyVolume: input.dailyVolume,
+        prevDayVolume: input.prevDayVolume,
+        rawMomentumPct: scored[i].intradayPctChange,
+        rawRelativeVolume: scored[i].relativeVolume,
+        rawRangeExpansion: scored[i].rangeExpansion,
+      }));
+      const { runRankingCycle } = await import('./ComposableRanking');
+      await runRankingCycle(rankingInputs, now);
+    } catch (e) {
+      logErrorSafely('[SnapshotScanner] composable ranking cycle failed (does not affect the existing scan)', e);
+    }
+
     return scored;
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -26,6 +26,8 @@ import {
   isSnapshotScannerRth,
   type SnapshotCandidate,
 } from './SnapshotScanner';
+import { explainSnapshotHotSwapDecisions } from './SubscriptionPriorityExplainer';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 /** Reasons that require a live quote. Watchlist subscribe is allowed; BUY still hits applyAssetIdeaGate. */
 const WATCH_ALLOW_UNKNOWN_REASONS = new Set([
@@ -262,6 +264,33 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       });
       toRequest = planned;
       momentumHotSwap = planned.length > 0 && (emptySlots === 0 || rth);
+
+      // Phase 4D (Dynamic Subscription Priority Queue, 2026-08-26): recomputes the IDENTICAL
+      // decision rule planSnapshotHotSwap already applied above, purely to explain every
+      // candidate's outcome (PROMOTED/NOT_PROMOTED/ALREADY_ACTIVE + reason). Never changes
+      // `toRequest`/`momentumHotSwap` above - additive telemetry only, wrapped so it can never
+      // affect the real subscribe decision.
+      try {
+        const decisions = explainSnapshotHotSwapDecisions({
+          top, active, activeDynamic,
+          emptySlots,
+          maxSwaps: emptySlots > 0 ? Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots) : Math.min(continuousIntelligence.momentumHotSwapSlotsPerCycle, 1),
+          scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
+          scoreOf: (sym) => getLastSnapshotScore(sym) ?? marketDataWorker.getDynamicMomentumScore(sym) ?? 0,
+        });
+        for (const d of decisions) {
+          observeSafe(() => {
+            structuredLogger.info('subscription_priority_decision', {
+              category: 'DISCOVERY',
+              eventType: `SUBSCRIPTION_${d.action}`,
+              symbol: d.symbol,
+              reasoning: d.reason,
+            });
+          });
+        }
+      } catch (e) {
+        console.error('[OpportunityDiscovery] Subscription priority explainer failed (does not affect the real hot-swap decision)', e);
+      }
     } else if (emptySlots > 0) {
       toRequest = shortlist
         .filter((row) => !active.has(row.symbol))

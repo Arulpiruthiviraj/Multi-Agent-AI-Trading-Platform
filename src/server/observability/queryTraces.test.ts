@@ -143,3 +143,63 @@ describe('getDecisionTrace + observability persist', () => {
     expect(Object.keys(breakdown.stages)).toHaveLength(0);
   });
 });
+
+describe('getFullDecisionFunnelTrace (Phase 4A Decision Funnel, 2026-08-26)', () => {
+  let tmpDbPath: string;
+
+  beforeEach(() => {
+    tmpDbPath = path.join(os.tmpdir(), `argus-funnel-full-${Date.now()}-${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+  });
+
+  afterEach(() => {
+    delete process.env.ARGUS_DB_PATH;
+    for (const suffix of ['', '-wal', '-shm']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* */ }
+    }
+  });
+
+  it('prepends reconstructed pre-idea stages to the existing getDecisionTrace result, without altering it', async () => {
+    vi.resetModules();
+    const { db } = await import('../db');
+    const { eventTraces, transactionTraces } = await import('../db/schema');
+    const { getFullDecisionFunnelTrace, getDecisionTrace } = await import('./queryTraces');
+
+    const traceId = 'trace_FUNNEL_1800000000_dead';
+    const ideaTs = 1_800_000_000_000;
+    const scanTs = ideaTs - 5 * 60 * 1000;
+
+    await db.insert(transactionTraces).values({
+      traceId, symbol: 'FUNL', createdAt: new Date(ideaTs).toISOString(), lifecycleStatus: 'ANALYZING',
+    });
+    await db.insert(eventTraces).values({
+      id: 'evt-scan-full', correlationId: null, timestamp: scanTs, source: 'OpportunityDiscovery',
+      eventType: 'OPPORTUNITY_SCAN_COMPLETED',
+      payload: JSON.stringify({ shortlist: [{ symbol: 'FUNL', assetClass: 'ETF', reason: 'already_subscribed' }] }),
+    });
+    await db.insert(eventTraces).values({
+      id: 'evt-idea-full', correlationId: traceId, timestamp: ideaTs, source: 'TechnicalAgent',
+      eventType: 'TRADE_IDEA_GENERATED', payload: JSON.stringify({ symbol: 'FUNL', agent: 'TechnicalAgent' }),
+    });
+
+    const plain = await getDecisionTrace(traceId);
+    const full = await getFullDecisionFunnelTrace(traceId);
+
+    // The wrapper must not change anything getDecisionTrace already reports.
+    expect(full.timeline).toEqual(plain.timeline);
+    expect(full.symbol).toBe('FUNL');
+
+    const byStage = Object.fromEntries(full.preIdeaStages.map((s) => [s.stage, s]));
+    expect(byStage.DISCOVERED.status).toBe('RECONSTRUCTED');
+    expect(byStage.PROMOTED.status).toBe('RECONSTRUCTED');
+    expect(byStage.DATA_READY.status).toBe('RECONSTRUCTED');
+  });
+
+  it('returns empty preIdeaStages (not an error) when the trace has no symbol at all', async () => {
+    vi.resetModules();
+    const { getFullDecisionFunnelTrace } = await import('./queryTraces');
+    const full = await getFullDecisionFunnelTrace('trace_NONEXISTENT_0_0000');
+    expect(full.ok).toBe(true);
+    expect(full.preIdeaStages).toEqual([]);
+  });
+});

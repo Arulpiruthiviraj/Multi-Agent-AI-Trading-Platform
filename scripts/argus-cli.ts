@@ -658,6 +658,55 @@ const commands: Record<string, () => Promise<void>> = {
   async 'trading-audit'() {
     return (commands as any)['session-report']();
   },
+  /**
+   * Phase 4A (Decision Funnel, 2026-08-26) - answers "what happened to THIS specific idea" end to
+   * end, DISCOVERED through TRADE_CLOSED, without manual SQL. Wraps GET /api/v2/traces/:id/funnel.
+   * Usage: argus funnel <traceId>
+   */
+  async funnel() {
+    const traceId = process.argv[3];
+    if (!traceId) {
+      console.log('Usage: argus funnel <traceId>');
+      return;
+    }
+    console.log(JSON.stringify(await fetchJson(`/api/v2/traces/${encodeURIComponent(traceId)}/funnel`), null, 2));
+  },
+  /**
+   * Phase 4B (Evidence-Aware Consensus, SHADOW MODE ONLY, 2026-08-26) - shows legacy-vs-shadow
+   * consensus divergence. The shadow model never influences a real trade; this is a validation
+   * surface only, per Phase 4 Part 2's "do not replace the engine until runtime evidence supports
+   * it" requirement. Usage: argus consensus-shadow [limit]
+   */
+  async 'consensus-shadow'() {
+    const limit = process.argv[3] || '50';
+    console.log(JSON.stringify(await fetchJson(`/api/v2/consensus/shadow-comparison?limit=${encodeURIComponent(limit)}`), null, 2));
+  },
+  /**
+   * Phase 4C (Composable Candidate Ranking, 2026-08-26). Usage:
+   *   argus ranking                 - latest full ranking cycle
+   *   argus ranking <SYMBOL>        - one symbol's persisted ranking history across cycles
+   */
+  async ranking() {
+    const arg = process.argv[3];
+    if (!arg) {
+      console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/ranking/latest'), null, 2));
+      return;
+    }
+    console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/ranking/history/${encodeURIComponent(arg)}`), null, 2));
+  },
+  /**
+   * Phase 4D (Dynamic Subscription Priority Queue, 2026-08-26). Usage:
+   *   argus subscription-queue           - current capacity/utilization snapshot
+   *   argus subscription-queue decisions - recent promotion/eviction decisions with reasons
+   */
+  async 'subscription-queue'() {
+    const sub = process.argv[3];
+    if (sub === 'decisions') {
+      console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/subscription-decisions'), null, 2));
+      return;
+    }
+    console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/capacity'), null, 2));
+  },
   async config() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/config'), null, 2));
   },

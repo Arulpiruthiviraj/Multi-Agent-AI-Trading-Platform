@@ -1381,3 +1381,38 @@ export const configChangeEvents = sqliteTable('config_change_events', {
 }, (table) => ({
   settingIdx: index('idx_config_change_events_setting').on(table.setting, table.createdAt),
 }));
+
+/**
+ * Phase 4C (Composable Candidate Ranking, 2026-08-26). One row per symbol per ranking cycle -
+ * persisted so "why did this rank #3 while another ranked #89" is always answerable after the
+ * fact, not just for the single latest cycle SnapshotScanner previously exposed in-memory.
+ * componentAvailability/weightsUsed are JSON so the exact math stays reconstructable per row even
+ * as components are added/removed over time. Discovery/ranking only - never imports OMS/
+ * RiskEngine/BrokerManager, never emits TRADE_IDEA_GENERATED.
+ */
+export const candidateRankings = sqliteTable('candidate_rankings', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  symbol: text('symbol').notNull(),
+  cycleAt: text('cycle_at').notNull(),
+  momentumScore: real('momentum_score'),
+  relativeVolumeScore: real('relative_volume_score'),
+  rangeExpansionScore: real('range_expansion_score'),
+  gapScore: real('gap_score'),
+  liquidityScore: real('liquidity_score'),
+  newsCatalystScore: real('news_catalyst_score'),
+  agentConfidenceScore: real('agent_confidence_score'),
+  /** JSON: { [component]: { available: boolean, reason?: string } } */
+  componentAvailability: text('component_availability').notNull(),
+  /** JSON: { [component]: number } - the weight actually applied (excluded components carry no weight). */
+  weightsUsed: text('weights_used').notNull(),
+  finalScore: real('final_score').notNull(),
+  rank: integer('rank').notNull(),
+  previousRank: integer('previous_rank'),
+  rankDelta: integer('rank_delta'),
+  promotionRecommendation: text('promotion_recommendation').notNull(), // PROMOTE | HOLD | REJECT
+  promotionReason: text('promotion_reason').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  symbolIdx: index('idx_candidate_rankings_symbol').on(table.symbol, table.createdAt),
+  cycleIdx: index('idx_candidate_rankings_cycle').on(table.cycleAt),
+}));

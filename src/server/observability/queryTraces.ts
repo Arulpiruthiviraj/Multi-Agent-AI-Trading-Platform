@@ -15,6 +15,7 @@ import { loadAgentThoughts, loadRiskForTrace, tracingService } from '../services
 import { redactSecretsDeep } from '../core/SecretRedaction';
 import { hashSensitive } from './hashSensitive';
 import { EVENTS } from '../core/eventNames';
+import { reconstructPreIdeaStages } from './DecisionFunnelPreIdea';
 
 /**
  * Real perf fix (2026-08-18): every stage this computes from already exists as a durably
@@ -190,6 +191,25 @@ export async function getDecisionTrace(traceId: string) {
       payload: parseJson(e.payload),
     })),
   };
+}
+
+/**
+ * Phase 4A (Decision Funnel, 2026-08-26): the full DISCOVERED -> TRADE_CLOSED trace the zero-trade
+ * audit had to reconstruct by hand. Wraps getDecisionTrace() (unchanged, still the source of truth
+ * for IDEA_GENERATED onward) and prepends the pre-idea stages DecisionFunnelPreIdea.ts reconstructs
+ * from existing event_traces rows. Never duplicates getDecisionTrace's own logic.
+ */
+export async function getFullDecisionFunnelTrace(traceId: string) {
+  const trace = await getDecisionTrace(traceId);
+  if (!trace.ok || !trace.symbol) {
+    return { ...trace, preIdeaStages: [] as Awaited<ReturnType<typeof reconstructPreIdeaStages>> };
+  }
+  const ideaEvent = trace.events.find((e) => e.eventType === EVENTS.TRADE_IDEA_GENERATED);
+  if (!ideaEvent) {
+    return { ...trace, preIdeaStages: [] as Awaited<ReturnType<typeof reconstructPreIdeaStages>> };
+  }
+  const preIdeaStages = await reconstructPreIdeaStages(trace.symbol, ideaEvent.timestamp);
+  return { ...trace, preIdeaStages };
 }
 
 export async function getOrderTrace(orderId: string) {

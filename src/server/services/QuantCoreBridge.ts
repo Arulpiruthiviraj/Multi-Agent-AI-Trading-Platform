@@ -39,7 +39,9 @@ const QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR = 'QUANT_JAVA_CORE_LIVE_IDEAS_E
 const MIN_HISTORY_FOR_PARITY = 26; // matches SymbolState.java's MIN_HISTORY_FOR_INDICATORS
 const PARITY_COMPARE_INTERVAL_MS = 60_000; // per-symbol debounce - never compares every tick
 
-function isLiveIdeaEmissionEnabled(): boolean {
+/** Exported read-only for the /api/v2/quant-core/health route (Phase 3E dashboard) - callers must
+ *  never use this to gate anything beyond display; onSignal() re-checks it itself regardless. */
+export function isLiveIdeaEmissionEnabled(): boolean {
   return isQuantJavaCoreEnabled() && String(process.env[QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR] || '').toLowerCase() === 'true';
 }
 
@@ -256,9 +258,17 @@ export class QuantCoreBridgeService {
   private trackLocalHistory(symbol: string, price: number): void {
     const history = this.priceHistory[symbol] ?? (this.priceHistory[symbol] = []);
     history.push(price);
-    if (history.length > MIN_HISTORY_FOR_PARITY * 2) {
+    // Must track tradingSafety.quantJavaCoreLocalHistoryCap == SymbolState.java's CircularDoubleArray
+    // CAPACITY (200) - see that config field's own doc comment for why a shorter TS-side window
+    // was a real, proven source of live parity divergence with no algorithm bug involved.
+    if (history.length > tradingSafety.quantJavaCoreLocalHistoryCap) {
       history.shift();
     }
+  }
+
+  /** Test-only. */
+  getLocalHistoryLengthForTests(symbol: string): number {
+    return this.priceHistory[symbol]?.length ?? 0;
   }
 
   private async forwardTick(symbol: string, price: number, volume: number, timestampMs: number): Promise<boolean> {

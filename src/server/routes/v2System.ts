@@ -1902,10 +1902,17 @@ v2Router.post('/replay/historical', backtestLimiter, async (req, res) => {
 // ==========================================================================================
 v2Router.get('/quant-core/health', async (_req, res) => {
   try {
-    const { quantCoreBridge } = await import('../services/QuantCoreBridge');
+    const { quantCoreBridge, isLiveIdeaEmissionEnabled } = await import('../services/QuantCoreBridge');
     const { isQuantJavaCoreEnabled } = await import('../config/tradingSafety');
     const health = await quantCoreBridge.health();
-    res.json({ ok: true, enabled: isQuantJavaCoreEnabled(), ...health });
+    res.json({
+      ok: true,
+      enabled: isQuantJavaCoreEnabled(),
+      // Real state, not an assumed label — Phase 3 CLAUDE.md section 13: "Clearly display
+      // ADVISORY / SHADOW unless the backend configuration genuinely says otherwise."
+      liveIdeasEnabled: isLiveIdeaEmissionEnabled(),
+      ...health,
+    });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }
@@ -1933,6 +1940,88 @@ v2Router.get('/quant-core/parity', async (req, res) => {
       };
     });
     res.json({ ok: true, count: divergences.length, divergences });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ==========================================================================================
+// Phase 4B (Evidence-Aware Consensus, SHADOW MODE ONLY, 2026-08-26) — read-only legacy-vs-shadow
+// consensus divergence history. Same pattern as /confluence/recent and /quant-core/parity above:
+// ChiefTraderAgent.ts logs via structuredLogger (observability_events), never the EventBus, and
+// never influences the real approved/rejected decision - see ConsensusModelComparison.ts.
+// ==========================================================================================
+v2Router.get('/consensus/shadow-comparison', async (req, res) => {
+  try {
+    const { observabilityEvents } = await import('../db/schema');
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '50'), 10) || 50));
+    const rows = await db.select().from(observabilityEvents)
+      .where(eq(observabilityEvents.eventType, 'CONSENSUS_MODEL_COMPARISON'))
+      .orderBy(desc(observabilityEvents.ts))
+      .limit(limit);
+    const comparisons = rows.map((r) => {
+      let payload: any = null;
+      try { payload = r.payload ? JSON.parse(r.payload) : null; } catch { payload = null; }
+      return {
+        ts: new Date(r.ts).toISOString(),
+        symbol: r.symbol,
+        traceId: r.traceId,
+        legacyDecision: payload?.legacyDecision ?? null,
+        legacyApproved: payload?.legacyApproved ?? null,
+        legacyConfidence: payload?.legacyConfidence ?? null,
+        shadowDecision: payload?.shadowDecision ?? null,
+        shadowApproved: payload?.shadowApproved ?? null,
+        shadowConfidence: payload?.shadowConfidence ?? null,
+        bullishEvidence: payload?.bullishEvidence ?? null,
+        bearishEvidence: payload?.bearishEvidence ?? null,
+        uncertainty: payload?.uncertainty ?? null,
+        excludedAgents: payload?.excludedAgents ?? [],
+        reasonCode: payload?.reasonCode ?? null,
+        agree: payload?.agree ?? null,
+      };
+    });
+    const agreeCount = comparisons.filter((c) => c.agree === true).length;
+    const disagreeCount = comparisons.filter((c) => c.agree === false).length;
+    res.json({
+      ok: true,
+      count: comparisons.length,
+      agreeCount,
+      disagreeCount,
+      agreementRate: comparisons.length > 0 ? agreeCount / comparisons.length : null,
+      comparisons,
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ==========================================================================================
+// ConfluenceCoordinator (Phase 3D dashboard) — read-only recent-trigger history. Same pattern as
+// /quant-core/parity above: ConfluenceCoordinator.ts logs via structuredLogger (observability_events),
+// not the EventBus, so this route reads that durable table rather than adding a new EventBus event
+// for what is already persisted. Never implies the coordinator changed a vote — it only asks an
+// already-scheduled agent to evaluate sooner (see ConfluenceCoordinator.ts's own header comment).
+// ==========================================================================================
+v2Router.get('/confluence/recent', async (req, res) => {
+  try {
+    const { observabilityEvents } = await import('../db/schema');
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '50'), 10) || 50));
+    const rows = await db.select().from(observabilityEvents)
+      .where(eq(observabilityEvents.eventType, 'CONFLUENCE_COORDINATOR_TRIGGERED'))
+      .orderBy(desc(observabilityEvents.ts))
+      .limit(limit);
+    const triggers = rows.map((r) => {
+      let payload: any = null;
+      try { payload = r.payload ? JSON.parse(r.payload) : null; } catch { payload = null; }
+      return {
+        ts: new Date(r.ts).toISOString(),
+        symbol: r.symbol,
+        traceId: r.traceId,
+        triggeredAgents: payload?.triggeredAgents ?? [],
+        skippedAgents: payload?.skippedAgents ?? [],
+      };
+    });
+    res.json({ ok: true, count: triggers.length, triggers });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }

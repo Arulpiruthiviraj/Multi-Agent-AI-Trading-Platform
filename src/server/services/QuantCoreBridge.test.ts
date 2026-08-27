@@ -79,6 +79,50 @@ describe('QuantCoreBridgeService - gating and tick forwarding (Phase 2)', () => 
   });
 });
 
+describe('QuantCoreBridgeService - local parity-comparison history window (Quant Parity Forensics, 2026-08-26)', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('retains more than the old hardcoded 52-tick cap - must match SymbolState.java CAPACITY (200), a real prior parity-divergence root cause', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    bridge.start();
+    // 60 ticks: more than the old 52-tick cap, well under the new 200-tick cap.
+    for (let i = 0; i < 60; i++) {
+      eventBus.emit('MARKET_DATA', { symbol: 'AAPL', price: 100 + i * 0.1, volume: 10, timestamp: new Date().toISOString() });
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    bridge.stop();
+
+    expect(bridge.getLocalHistoryLengthForTests('AAPL')).toBe(60);
+  });
+
+  it('caps local history at tradingSafety.quantJavaCoreLocalHistoryCap once exceeded', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response('{"ok":true}', { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    bridge.start();
+    for (let i = 0; i < 210; i++) {
+      eventBus.emit('MARKET_DATA', { symbol: 'AAPL', price: 100 + i * 0.1, volume: 10, timestamp: new Date().toISOString() });
+      await new Promise((r) => setTimeout(r, 1));
+    }
+    bridge.stop();
+
+    expect(bridge.getLocalHistoryLengthForTests('AAPL')).toBe(200);
+  });
+});
+
 describe('QuantCoreBridgeService.fetchInstitutionalVolatility/fetchInstitutionalRegime - advisory-only, never wired to a vote', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
   const bars = Array.from({ length: 40 }, (_, i) => ({

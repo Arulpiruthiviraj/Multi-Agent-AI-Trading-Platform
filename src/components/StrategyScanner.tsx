@@ -16,6 +16,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Activity, TrendingUp, TrendingDown, Minus, Filter } from "lucide-react";
 import AwaitingSignal from "./shared/AwaitingSignal";
+import CandidateRankingPanel from "./CandidateRankingPanel";
+import CandidateRankingHistoryPanel from "./CandidateRankingHistoryPanel";
+import SubscriptionPriorityQueuePanel from "./SubscriptionPriorityQueuePanel";
 
 interface ScannerProps {
   selectedAlertSymbol: string;
@@ -148,6 +151,18 @@ export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertS
               scanned {intelScan.scanned} · rejected {intelScan.rejected} · shortlisted {intelScan.shortlisted} · subscribe requested {intelScan.subscribeRequested} · ideas emitted {intelScan.ideasEmitted} (must stay 0)
             </p>
           )}
+        </div>
+
+        <div className="mb-6">
+          <CandidateRankingPanel />
+        </div>
+
+        <div className="mb-6">
+          <CandidateRankingHistoryPanel />
+        </div>
+
+        <div className="mb-6">
+          <SubscriptionPriorityQueuePanel />
         </div>
 
         <div className="mb-6 border border-slate-800 rounded-lg p-4 bg-[#111822]">

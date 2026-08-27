@@ -28,9 +28,20 @@ ever calls the same `eventBus.emitTradeIdea()` every other agent uses (see
 `docs/architecture/MULTI_AGENT_CONSENSUS.md`) — never a shortcut around ChiefTrader, RiskEngine, or
 OMS. With the bridge active, expect periodic `QUANT_CORE_PARITY_DIVERGENCE` observability events
 (TS vs. Java indicator math disagreeing beyond floating-point noise, e.g. MACD by double-digit
-percent in observed samples) — informational only, not itself a defect in either implementation,
-but a real, open item before Java could ever become authoritative for a CORE calculation (see
-CLAUDE.md's Java 26 Engine Authority rule 9, parity tests).
+percent in observed samples) — informational only, not itself a defect in either implementation.
+
+**Root cause found (2026-08-26), not an algorithm defect.** RSI/MACD/Bollinger are byte-for-byte
+identical between TS and Java on identical fixed-length inputs (`RSITest.java`/`MACDTest.java`/
+`BollingerTest.java` assert against ground truth captured from the real TS engines — this already
+covers the "deterministic parity harness on identical inputs" requirement). The live divergence
+instead came from `QuantCoreBridge.ts` and `SymbolState.java` maintaining **different-length**
+rolling tick histories for the shadow comparison itself (TS previously capped at 52 ticks, Java at
+200) — since these indicators recompute fresh over the entire passed array each call, feeding two
+different-length slices of the same tick stream into identical algorithms reliably diverges. Fixed
+by adding `tradingSafety.quantJavaCoreLocalHistoryCap` (200, matching Java's `CircularDoubleArray`
+capacity) so both sides compare over the same window length. See CLAUDE.md's Java 26 Engine
+Authority rule 9 (parity tests) — the harness this rule asks for already existed; the bug was in
+how the shadow comparison sourced its inputs, not in the parity tests themselves.
 
 ## Known, disclosed boundary
 

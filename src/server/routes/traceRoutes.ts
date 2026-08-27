@@ -3,7 +3,7 @@
  * DB is source of truth (event_traces, transaction_traces, observability_events, risk, fills).
  */
 import { Router } from 'express';
-import { exportDecisionTraceJson, getDecisionTrace, listRecentDecisionTraces } from '../observability/queryTraces';
+import { exportDecisionTraceJson, getDecisionTrace, getFullDecisionFunnelTrace, listRecentDecisionTraces } from '../observability/queryTraces';
 
 export const traceRouter = Router();
 
@@ -23,6 +23,20 @@ traceRouter.get('/:traceId/export', async (req, res) => {
     const json = await exportDecisionTraceJson(req.params.traceId);
     res.setHeader('Content-Disposition', `attachment; filename="argus-decision-${req.params.traceId}.json"`);
     res.json(json);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+/**
+ * Phase 4A (Decision Funnel, 2026-08-26) - the full DISCOVERED -> TRADE_CLOSED trace, extending
+ * getDecisionTrace with the pre-idea stages (DISCOVERED/RANKED/PROMOTED/SUBSCRIBED/DATA_READY)
+ * reconstructed from existing event_traces rows. Read-only; no new instrumentation on the hot path.
+ */
+traceRouter.get('/:traceId/funnel', async (req, res) => {
+  try {
+    const assembled = await getFullDecisionFunnelTrace(req.params.traceId);
+    res.json(assembled);
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }

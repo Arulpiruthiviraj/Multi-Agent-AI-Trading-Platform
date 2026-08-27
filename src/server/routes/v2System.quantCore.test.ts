@@ -54,6 +54,13 @@ describe('/api/v2/quant-core routes', () => {
     expect(res.body.connected).toBe(false);
   });
 
+  it('GET /quant-core/health reports the real liveIdeasEnabled state (Phase 3E dashboard) - false by default even if the base flag were on', async () => {
+    const res = await request(app).get('/api/v2/quant-core/health');
+    expect(res.status).toBe(200);
+    // Neither QUANT_JAVA_CORE_ENABLED nor QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED is set in this test env.
+    expect(res.body.liveIdeasEnabled).toBe(false);
+  });
+
   it('GET /quant-core/parity returns an empty list when nothing has been recorded', async () => {
     const res = await request(app).get('/api/v2/quant-core/parity');
     expect(res.status).toBe(200);

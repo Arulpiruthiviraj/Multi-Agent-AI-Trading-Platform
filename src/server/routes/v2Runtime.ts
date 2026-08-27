@@ -181,6 +181,58 @@ runtimeRouter.get('/risk/status', (_req, res) => {
   });
 });
 
+// Phase 3F (Risk Center) - real 24-gate breakdown per recent risk assessment, read-only.
+// risk_gate_results records EVERY gate even after the first failure (CLAUDE.md: "every gate
+// recorded even after first failure") - this route surfaces exactly those rows, never a
+// synthesized/assumed pass. No frontend override path exists or should exist here.
+runtimeRouter.get('/risk/recent-assessments', async (req, res) => {
+  try {
+    const { db } = await import('../db');
+    const { riskAssessments, riskGateResults } = await import('../db/schema');
+    const { desc, eq, inArray } = await import('drizzle-orm');
+    const limit = Math.min(100, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+
+    const assessments = await db.select().from(riskAssessments)
+      .orderBy(desc(riskAssessments.createdAt))
+      .limit(limit);
+    if (assessments.length === 0) {
+      return res.json({ ok: true, count: 0, assessments: [] });
+    }
+
+    const traceIds = assessments.map((a) => a.traceId);
+    const gateRows = await db.select().from(riskGateResults)
+      .where(inArray(riskGateResults.traceId, traceIds))
+      .orderBy(riskGateResults.sequence);
+
+    const gatesByTrace = new Map<string, typeof gateRows>();
+    for (const g of gateRows) {
+      const list = gatesByTrace.get(g.traceId) ?? [];
+      list.push(g);
+      gatesByTrace.set(g.traceId, list);
+    }
+
+    const result = assessments.map((a) => ({
+      traceId: a.traceId,
+      symbol: a.symbol,
+      side: a.side,
+      approved: a.approved,
+      rejectionGate: a.rejectionGate,
+      accountEquity: a.accountEquity,
+      createdAt: a.createdAt,
+      gates: (gatesByTrace.get(a.traceId) ?? []).map((g) => ({
+        gateName: g.gateName,
+        sequence: g.sequence,
+        passed: g.passed,
+        detail: g.detail,
+      })),
+    }));
+
+    res.json({ ok: true, count: result.length, assessments: result });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 runtimeRouter.post('/trading/enable', tradingLimiter, async (req, res) => {
   const result = await argusApplication.enableTrading(req.body ?? {});
   if (!result.ok) {

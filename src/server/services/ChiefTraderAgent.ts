@@ -58,6 +58,8 @@ import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { type LastConsensusOutcome } from '../core/consensusExplanation';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { classifyVote, computeShadowConsensus, computeDebateMarginFromResults } from './EvidenceAwareVote';
+import { recordConsensusModelComparison } from './ConsensusModelComparison';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
@@ -300,6 +302,16 @@ export class ChiefTraderAgent {
   private debateTelemetry(debateResult: any, successCount: number, verdict: string, confidence: number) {
     const results = Array.isArray(debateResult?.results) ? debateResult.results : [];
     const failed = results.filter((r: any) => r?.status && r.status !== 'success');
+    // Phase 4B (SHADOW MODE ONLY, 2026-08-26): real per-model margin math from the SAME
+    // `debateResult.results` AIRouter.routeConsensus() already returns (real decision + real 0-100
+    // confidence per provider - never fabricated). Attached to telemetry only - `confidence` above
+    // (the real, live vote's confidence) is completely unchanged by this.
+    let evidenceAware: ReturnType<typeof computeDebateMarginFromResults> | null = null;
+    try {
+      evidenceAware = computeDebateMarginFromResults(results);
+    } catch (e) {
+      console.error('[ChiefTrader] Shadow debate-margin computation failed (does not affect the real debate vote)', e);
+    }
     return {
       providers_attempted: results.length || successCount,
       providers_succeeded: successCount,
@@ -307,6 +319,7 @@ export class ChiefTraderAgent {
       provider_errors: failed.map((r: any) => `${r.provider || 'unknown'}: ${r.error || r.status}`),
       final_verdict: verdict,
       confidence,
+      evidenceAware,
     };
   }
 
@@ -691,6 +704,25 @@ export class ChiefTraderAgent {
         sourceTraceId: e.traceId,
       })),
     });
+
+    // Phase 4B (Evidence-Aware Consensus, SHADOW MODE ONLY, 2026-08-26): computes a parallel,
+    // explainable alternative decision from the SAME `evidence` this evaluation already gathered,
+    // for comparison/persistence only. Never reads or writes `approved`/`approvedSide`/
+    // `approvedConfidence`/`reason` - the real decision above is completely unaffected. Wrapped so
+    // a bug here can never throw into the live consensus path.
+    try {
+      const shadowVotes = evidence.map(classifyVote);
+      const shadowWeights: Record<string, number> = {};
+      for (const e of evidence) shadowWeights[e.agent] = e.weight;
+      const shadow = computeShadowConsensus(shadowVotes, shadowWeights, CONSENSUS_APPROVAL_THRESHOLD);
+      recordConsensusModelComparison({
+        traceId, symbol,
+        legacyDecision: approvedSide, legacyApproved: approved, legacyConfidence: approvedConfidence,
+        threshold: CONSENSUS_APPROVAL_THRESHOLD, shadow,
+      });
+    } catch (e) {
+      console.error('[ChiefTrader] Shadow consensus computation failed (does not affect the real decision)', e);
+    }
 
     for (const e of approvedEvidence) {
       if (e.side !== 'BUY' && e.side !== 'SELL' && e.side !== 'HOLD') continue;

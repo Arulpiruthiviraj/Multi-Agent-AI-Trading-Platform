@@ -56,6 +56,10 @@ import BrokerManagement from "./components/BrokerManagement";
 import AIProviderManagement from "./components/AIProviderManagement";
 import { KronosDashboard } from "./components/KronosDashboard";
 import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
+import ConnectionHealthBadge from "./components/ConnectionHealthBadge";
+import JavaQuantCoreDashboard from "./components/JavaQuantCoreDashboard";
+import ConfluenceCenter from "./components/ConfluenceCenter";
+import ConsensusShadowPanel from "./components/ConsensusShadowPanel";
 import DiagnosticCenter from "./components/DiagnosticCenter";
 import WhyNotTradingStrip from "./components/WhyNotTradingStrip";
 import TradingPauseOperatorControls from "./components/TradingPauseOperatorControls";
@@ -68,6 +72,7 @@ import StrategySynergyMatrix from "./components/StrategySynergyMatrix";
 import LiveBotTelemetryPanel from "./components/LiveBotTelemetryPanel";
 import ShadowPortfolioBenchmark from "./components/ShadowPortfolioBenchmark";
 import RiskAttributionTreemap from "./components/RiskAttributionTreemap";
+import RiskGateHistoryPanel from "./components/RiskGateHistoryPanel";
 import StrategyProfitSunburst from "./components/StrategyProfitSunburst";
 import TradeEfficiencyReport from "./components/TradeEfficiencyReport";
 import ExecutionQualityChart from "./components/ExecutionQualityChart";
@@ -3952,6 +3957,9 @@ export default function App() {
 
               {/* RISK ATTRIBUTION TREEMAP */}
               <RiskAttributionTreemap />
+
+              {/* RISK GATE HISTORY (Phase 3F) */}
+              <RiskGateHistoryPanel />
 
               {/* STRATEGY PROFIT ATTRIBUTION SUNBURST */}
               <StrategyProfitSunburst />
@@ -7969,7 +7977,11 @@ export default function App() {
                       </button>
                     </div>
                     <AIProviderManagement />
+                    <ConnectionHealthBadge />
                     <ConnectionStatusDashboard />
+                    <JavaQuantCoreDashboard />
+                    <ConfluenceCenter />
+                    <ConsensusShadowPanel />
                     <BrokerManagement />
                     {/* Real bug fix (2026-08-18 UI audit, Phase 9): this "Old Env Settings" block and its
                         confirm modal were dead code - wrapped in className="hidden" with the only button

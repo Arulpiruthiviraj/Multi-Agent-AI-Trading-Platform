@@ -229,6 +229,19 @@ export interface TradingSafety {
    *  (0.0001 = 0.01%, matching the migration blueprint's own stated threshold). */
   quantJavaCoreDivergenceThresholdPct: number;
   /**
+   * Quant Parity Forensics (2026-08-26): cap on QuantCoreBridge.ts's own local tick-price history
+   * used to compute the TS-side snapshot for compareParity(). Must match
+   * SymbolState.java's CircularDoubleArray CAPACITY (200) - RSI/MACD/Bollinger recompute fresh
+   * over the ENTIRE passed array each call (no incremental state), so once either side has more
+   * ticks than its cap, the two snapshots are being computed over different-length windows of the
+   * same series. That is a genuine, non-algorithmic source of divergence (proven byte-for-byte
+   * identical on identical fixed inputs by RSITest.java/MACDTest.java/BollingerTest.java) and was
+   * the real root cause behind live QUANT_CORE_PARITY_DIVERGENCE events before this was found:
+   * this bridge's own cap was previously a hardcoded 52 (MIN_HISTORY_FOR_PARITY * 2), well short
+   * of Java's 200.
+   */
+  quantJavaCoreLocalHistoryCap: number;
+  /**
    * ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md Phase 8 - maximum |delta| applied
    * to agent_performance_stats.currentWeight in a single evaluateAgents() cycle, in either
    * direction (toward a computed target when evidence is LEARNING_ELIGIBLE, or toward the agent's
@@ -492,6 +505,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.quantJavaCoreDivergenceThresholdPct !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: quantJavaCoreDivergenceThresholdPct');
+  }
+  if (typeof raw.quantJavaCoreLocalHistoryCap !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreLocalHistoryCap');
   }
   return raw as unknown as TradingSafety;
 }

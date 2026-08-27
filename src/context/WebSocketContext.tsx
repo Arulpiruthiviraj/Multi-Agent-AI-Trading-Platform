@@ -44,14 +44,24 @@ import React, {
   type ReactNode,
 } from 'react';
 import { resolveWebSocketUrl } from '../lib/clientFetch';
+import {
+  type WsConnectionStatus,
+  computeReconnectDelayMs,
+  isHeartbeatStale,
+  isHeartbeatTimedOut,
+  initialConnectStatus,
+  nextStatusOnClose,
+} from './wsConnectionState';
 
-type WebSocketStatus = 'connecting' | 'connected' | 'disconnected';
+type WebSocketStatus = WsConnectionStatus;
 
 interface WebSocketContextType {
   status: WebSocketStatus;
   lastMessage: any | null;
   /** Round-trip ping→pong latency in ms; null until first pong. */
   latencyMs: number | null;
+  /** Number of consecutive reconnect attempts since the last successful connection (0 once connected). */
+  reconnectAttempt: number;
   sendMessage: (msg: any) => void;
   subscribe: (eventType: string, callback: (data: any) => void) => () => void;
   /** Close and reconnect (respects exponential backoff in onclose). */
@@ -66,6 +76,7 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   const [status, setStatus] = useState<WebSocketStatus>('disconnected');
   const [lastMessage, setLastMessage] = useState<any | null>(null);
   const [latencyMs, setLatencyMs] = useState<number | null>(null);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const ws = useRef<WebSocket | null>(null);
   const pingSentAt = useRef<number | null>(null);
   const connectRef = useRef<() => void>(() => {});
@@ -74,6 +85,15 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   const reconnectAttempts = useRef(0);
   const heartbeatInterval = useRef<NodeJS.Timeout | null>(null);
   const lastPong = useRef<number>(Date.now());
+  // Read inside the heartbeat interval closure, which otherwise only sees the status at the time
+  // the interval was created (React state, not live) - needed to avoid re-dispatching 'stale' on
+  // every 3s tick once already stale.
+  const statusRef = useRef<WebSocketStatus>('disconnected');
+  const hasConnectedOnce = useRef(false);
+  const updateStatus = (s: WebSocketStatus) => {
+    statusRef.current = s;
+    setStatus(s);
+  };
   // Hardening pass, Phase 9 (WebSocket reconnect backfill): captured at the moment the socket
   // actually drops (before the reconnect delay begins), so a subsequent successful reconnect
   // knows exactly which real events - MARKET_DATA/CALCULATION_COMPLETED excluded, matching
@@ -145,7 +165,7 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
     if (disposedRef.current) return;
     if (ws.current?.readyState === WebSocket.OPEN || ws.current?.readyState === WebSocket.CONNECTING) return;
 
-    setStatus('connecting');
+    updateStatus(initialConnectStatus(hasConnectedOnce.current));
     setLatencyMs(null);
     const newWs = new WebSocket(resolveWebSocketUrl());
 
@@ -154,8 +174,10 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
         newWs.close();
         return;
       }
-      setStatus('connected');
+      updateStatus('connected');
+      hasConnectedOnce.current = true;
       reconnectAttempts.current = 0;
+      setReconnectAttempt(0);
       console.log('[WebSocketContext] Connected to server.');
 
       // Only a reconnect (not the initial page load) has a real gap to backfill.
@@ -176,9 +198,16 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
       sendPing();
       heartbeatInterval.current = setInterval(() => {
         sendPing();
-        if (Date.now() - lastPong.current > 12000) {
+        const now = Date.now();
+        if (isHeartbeatTimedOut(lastPong.current, now)) {
           console.warn('[WebSocketContext] Heartbeat timeout. Reconnecting...');
           ws.current?.close();
+          return;
+        }
+        if (isHeartbeatStale(lastPong.current, now)) {
+          if (statusRef.current === 'connected') updateStatus('stale');
+        } else if (statusRef.current === 'stale') {
+          updateStatus('connected');
         }
       }, 3000);
     };
@@ -207,17 +236,17 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
     newWs.onclose = () => {
       if (heartbeatInterval.current) clearInterval(heartbeatInterval.current);
       if (ws.current === newWs) ws.current = null;
-      if (disposedRef.current || !enabledRef.current) {
-        setStatus('disconnected');
-        return;
-      }
-      setStatus('disconnected');
+      const nextStatus = nextStatusOnClose({ disposed: disposedRef.current, enabled: enabledRef.current });
+      updateStatus(nextStatus);
+      if (nextStatus === 'disconnected') return;
+
       // Captured at the moment of disconnect (not when the reconnect attempt later succeeds) -
       // this is the real start of the gap a backfill needs to cover.
       lastDisconnectedAt.current = Date.now();
 
-      const timeout = Math.min(1000 * Math.pow(2, reconnectAttempts.current), 30000);
+      const timeout = computeReconnectDelayMs(reconnectAttempts.current);
       reconnectAttempts.current++;
+      setReconnectAttempt(reconnectAttempts.current);
 
       console.log(`[WebSocketContext] Disconnected. Reconnecting in ${timeout}ms...`);
       reconnectTimeout.current = setTimeout(connect, timeout);
@@ -255,7 +284,7 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
       }
     }
     lastDisconnectedAt.current = Date.now();
-    setStatus('disconnected');
+    updateStatus('disconnected');
     setLatencyMs(null);
     reconnectAttempts.current = Math.min(reconnectAttempts.current, 8);
     connectRef.current();
@@ -279,8 +308,10 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
         socket.close();
       }
     }
-    setStatus('disconnected');
+    updateStatus('disconnected');
     setLatencyMs(null);
+    reconnectAttempts.current = 0;
+    setReconnectAttempt(0);
   };
 
   const setEnabled = useCallback((enabled: boolean) => {
@@ -331,8 +362,8 @@ export const WebSocketProvider = ({ children }: { children: ReactNode }) => {
   }, []);
 
   const value = useMemo(
-    () => ({ status, lastMessage, latencyMs, sendMessage, subscribe, forceReconnect, setEnabled }),
-    [status, lastMessage, latencyMs, sendMessage, subscribe, forceReconnect, setEnabled],
+    () => ({ status, lastMessage, latencyMs, reconnectAttempt, sendMessage, subscribe, forceReconnect, setEnabled }),
+    [status, lastMessage, latencyMs, reconnectAttempt, sendMessage, subscribe, forceReconnect, setEnabled],
   );
 
   return (

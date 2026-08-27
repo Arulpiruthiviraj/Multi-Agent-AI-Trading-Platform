@@ -33,7 +33,7 @@ export interface MobileMissionSnapshot {
   viewportMobile: boolean;
   refreshing: boolean;
   lastRefreshAt: number | null;
-  wsStatus: 'connecting' | 'connected' | 'disconnected';
+  wsStatus: 'connecting' | 'connected' | 'reconnecting' | 'stale' | 'disconnected';
   wsLatencyMs: number | null;
   tradingMode: string;
   marketSession: string;

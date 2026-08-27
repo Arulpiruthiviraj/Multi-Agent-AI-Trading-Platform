@@ -130,6 +130,7 @@
   "quantJavaCoreCircuitBreakerFailureThreshold": 3,
   "quantJavaCoreCircuitBreakerCooldownMs": 30000,
   "quantJavaCoreDivergenceThresholdPct": 0.0001,
+  "quantJavaCoreLocalHistoryCap": 200,
   "tradingDaysPerYear": 252,
   "newsDecisiveSentimentThreshold": 0.6,
   "aiDecisionTemperature": 0.2,

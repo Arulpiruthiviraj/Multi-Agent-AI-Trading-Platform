@@ -28,6 +28,7 @@ import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { continuousIntelligence } from '../config/continuousIntelligence';
 import { isMarketDataWebSocketAuthorized } from '../core/marketDataWsOwnership';
 import { notePipelineAgentTick } from '../core/pipelineAgentHealth';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
@@ -516,11 +517,20 @@ export class MarketDataWorker {
       if (removed >= needed) break;
       this.unsubscribe(row.symbol, { force: false });
       removed += 1;
-      console.warn(
-        `[MarketDataWorker] Pruned dynamic watch symbol ${row.symbol} `
-        + `(score=${row.momentumScore.toFixed(3)}, ticks=${row.ticks}) `
-        + `to stay within cap ${this.effectiveStreamingCap()}`,
-      );
+      const reason = `Lowest-ranked non-protected dynamic symbol (score=${row.momentumScore.toFixed(3)}, ticks=${row.ticks}) - evicted to stay within cap ${this.effectiveStreamingCap()}.`;
+      console.warn(`[MarketDataWorker] Pruned dynamic watch symbol ${row.symbol} - ${reason}`);
+      // Phase 4D (Dynamic Subscription Priority Queue, 2026-08-26): the eviction RULE above is
+      // unchanged (same score/ticks/recency ranking, same dwell protection already applied via
+      // the `ranked` filter above) - this only makes the decision queryable after the fact
+      // (GET /api/v2/discovery/subscription-events), answering "why did symbol Y lose its slot".
+      observeSafe(() => {
+        structuredLogger.info('subscription_priority_decision', {
+          category: 'DISCOVERY',
+          eventType: 'SUBSCRIPTION_EVICTED',
+          symbol: row.symbol,
+          reasoning: reason,
+        });
+      });
     }
   }
 
