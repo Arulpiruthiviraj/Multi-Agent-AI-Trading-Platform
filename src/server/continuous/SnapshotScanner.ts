@@ -10,8 +10,9 @@ import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
-import { getTradingTimeHHMM, TRADING_TIMEZONE } from '../core/TradingCalendar';
+import { getTradingTimeHHMM, TRADING_TIMEZONE, getTradingDateStr } from '../core/TradingCalendar';
 import { isEtTimeInWindow } from '../services/campaignIntraday';
+import { classifyMarketSession } from '../replay/marketSession';
 
 export interface SnapshotScoreInput {
   symbol: string;
@@ -301,9 +302,53 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
         rawRangeExpansion: scored[i].rangeExpansion,
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
-      await runRankingCycle(rankingInputs, now);
+      const rankedCandidates = await runRankingCycle(rankingInputs, now);
+
+      // Phase 4E (Pre-Market TradePlan, 2026-08-27): additive, wrapped in the SAME try/catch as
+      // the ranking cycle above - a failure here can never affect the existing scan/rank return
+      // value. Never emits TRADE_IDEA_GENERATED, never imports OMS/RiskEngine/the order-placement
+      // broker layer - see TradePlanBuilder.ts's own header for the full governance statement.
+      const marketSession = classifyMarketSession(now.getTime(), TRADING_TIMEZONE, true);
+      const planDate = getTradingDateStr(now);
+      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation } = await import('./TradePlanBuilder');
+      const inputsBySymbol = new Map(rankingInputs.map((r) => [r.symbol, r]));
+      const rankedBySymbol = new Map(rankedCandidates.map((r) => [r.symbol, r]));
+
+      if (marketSession === 'PRE_MARKET') {
+        const existing = await getTradePlansForDate(planDate);
+        if (existing.length === 0) {
+          const drafts = buildTradePlanDrafts(rankedCandidates, inputsBySymbol, planDate, now);
+          await persistTradePlanDrafts(drafts);
+        }
+      } else if (marketSession === 'REGULAR') {
+        const existing = await getTradePlansForDate(planDate);
+        for (const plan of existing) {
+          if (plan.status !== 'READY' && plan.status !== 'VALID' && plan.status !== 'REVALIDATING') continue;
+          const outcome = revalidateTradePlan(
+            { direction: plan.direction, invalidationLevel: plan.invalidationLevel, validUntil: plan.validUntil },
+            inputsBySymbol.get(plan.symbol) ?? null,
+            rankedBySymbol.get(plan.symbol) ?? null,
+            now,
+          );
+          await persistRevalidation(plan.id, outcome, now);
+        }
+      }
+
+      // Phase 4F (Missed Opportunity Intelligence, 2026-08-27): additive, same try/catch as above.
+      // Diagnostic only - classifies where a PROMOTE candidate stalled using existing telemetry;
+      // never emits a trade idea, never affects sizing/consensus. See MissedOpportunityDetector.ts.
+      const { runMissedOpportunityDetectionCycle } = await import('./MissedOpportunityDetector');
+      const { marketDataWorker } = await import('../services/MarketDataWorker');
+      await runMissedOpportunityDetectionCycle(
+        rankedCandidates,
+        new Set(marketDataWorker.getActiveSymbols()),
+        continuousIntelligence.missedOpportunityLookbackMs,
+        continuousIntelligence.missedOpportunityDetectionCooldownMs,
+        continuousIntelligence.missedOpportunityEvaluationHorizonMinutes,
+        now,
+      );
     } catch (e) {
-      logErrorSafely('[SnapshotScanner] composable ranking cycle failed (does not affect the existing scan)', e);
+      logErrorSafely('[SnapshotScanner] composable ranking / trade plan / missed-opportunity cycle failed (does not affect the existing scan)', e);
     }
 
     return scored;

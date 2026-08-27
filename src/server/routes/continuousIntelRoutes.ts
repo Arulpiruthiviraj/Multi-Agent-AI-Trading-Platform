@@ -12,8 +12,12 @@ import { getCachedBroadUniverseSymbols, getLastBroadUniverseStats } from '../con
 import { isBroadUniverseEnabled } from '../config/continuousIntelligence';
 import { getPipelineRateSnapshot } from '../core/pipelineRateLimit';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { learningRouter } from './learningRoutes';
 
 export const continuousIntelRouter = Router();
+
+// Phase 4G/4H (Learning + Champion/Challenger, 2026-08-27) - see learningRoutes.ts.
+continuousIntelRouter.use('/learning', learningRouter);
 
 // ==========================================================================================
 // Phase 4C (Composable Candidate Ranking, 2026-08-26) - real, persisted per-symbol ranking
@@ -144,6 +148,56 @@ continuousIntelRouter.get('/capacity', (_req, res) => {
       dynamicCount: Math.max(0, activeSymbols.length - coreSymbols.length),
       activeSlots: marketDataWorker.getActiveSlots(),
     });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ==========================================================================================
+// Phase 4E (Pre-Market TradePlan, 2026-08-27) - real, persisted pre-market plans + revalidation
+// history. A TradePlan is a hypothesis, never an order - this route is read-only. Discovery/
+// preparation only, never imports OMS/RiskEngine/the order-placement broker layer.
+// ==========================================================================================
+continuousIntelRouter.get('/trade-plans/:planDate', async (req, res) => {
+  try {
+    const { getTradePlansForDate } = await import('./../continuous/TradePlanBuilder');
+    const plans = await getTradePlansForDate(req.params.planDate);
+    res.json({
+      ok: true,
+      planDate: req.params.planDate,
+      count: plans.length,
+      plans: plans.map((p) => ({
+        ...p,
+        catalysts: JSON.parse(p.catalysts || '[]'),
+        componentScoresJson: undefined,
+        components: JSON.parse(p.componentScoresJson || '{}'),
+      })),
+    });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+continuousIntelRouter.get('/trade-plans/:planDate/:planId/revalidations', async (req, res) => {
+  try {
+    const { getRevalidationHistory } = await import('./../continuous/TradePlanBuilder');
+    const history = await getRevalidationHistory(req.params.planId);
+    res.json({ ok: true, planId: req.params.planId, count: history.length, history });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+continuousIntelRouter.get('/missed-opportunities', async (req, res) => {
+  try {
+    const { getMissedOpportunities } = await import('./../continuous/MissedOpportunityDetector');
+    const sinceMs = Number(req.query.sinceMs) || 24 * 60 * 60 * 1000;
+    const since = new Date(Date.now() - sinceMs).toISOString();
+    const limit = Math.min(500, Math.max(1, Number(req.query.limit) || 100));
+    const rows = await getMissedOpportunities(since, limit);
+    const byClassification: Record<string, number> = {};
+    for (const r of rows) byClassification[r.classification] = (byClassification[r.classification] ?? 0) + 1;
+    res.json({ ok: true, since, count: rows.length, byClassification, rows });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }

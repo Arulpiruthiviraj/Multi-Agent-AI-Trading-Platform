@@ -313,6 +313,23 @@ export class AIRouter {
    *  never retry more than once per boot, so a genuinely-down env credential can't loop retries. */
   private envFallbackAttempted: Set<string> = new Set();
 
+  /**
+   * Phase 9 (provider health matrix, 2026-08-27) - read-only snapshot of the in-memory routing
+   * state (skipUntil/authDisabledUntil) that filterRoutableProviders() already checks. Previously
+   * only visible by inference (a provider silently stopped receiving traffic); this exposes it
+   * directly so a health-matrix route/CLI can report actual current routing status instead of
+   * just the DB's all-time aggregate health field. Read-only - never mutates routing state.
+   */
+  public getProviderRoutingSnapshot(): Array<{ providerId: string; authDisabledUntil: number | null; skipUntil: number | null; credentialSource: 'DB' | 'ENV' | 'NONE' | null }> {
+    const ids = new Set<string>([...this.authDisabledUntil.keys(), ...this.skipUntil.keys(), ...this.credentialSource.keys(), ...this.providers.keys()]);
+    return Array.from(ids).map((providerId) => ({
+      providerId,
+      authDisabledUntil: this.authDisabledUntil.get(providerId) ?? null,
+      skipUntil: this.skipUntil.get(providerId) ?? null,
+      credentialSource: this.credentialSource.get(providerId) ?? null,
+    }));
+  }
+
   private constructor() {}
 
   public static getInstance(): AIRouter {
@@ -416,6 +433,20 @@ export class AIRouter {
   private noteProviderSkipFromError(providerId: string, err: unknown): void {
     if (isTimeoutSkipError(err)) {
       this.skipProviderTemporarily(providerId, AI_TIMEOUT_SKIP_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
+      return;
+    }
+    // Real gap found live (Phase 9, 2026-08-27): classifyAIProviderError()'s MODEL_UNAVAILABLE case
+    // (404 + "model" in the message - e.g. NVIDIA NIM's default_model misconfiguration) used to be
+    // checked AFTER isUnreachableProviderError(), whose own generic `\b404\b` pattern matches every
+    // 404 regardless of cause - so a MODEL_UNAVAILABLE 404 was always caught by the generic branch
+    // first and given the short 5-minute "maybe transient" cooldown, forever. Confirmed live: NVIDIA
+    // logged 0/623 successes over 24h while still routingState=ACTIVE, being retried roughly every 5
+    // minutes all day for a misconfiguration that cannot self-heal without an operator fixing the
+    // model id. Checking MODEL_UNAVAILABLE first, with the same long "does not self-heal within a
+    // session" cooldown as ACCOUNT_SUSPENDED/QUOTA_EXCEEDED, fixes this without touching the generic
+    // unreachable path any other 404-shaped transient failure still uses.
+    if (classifyAIProviderError(err) === 'MODEL_UNAVAILABLE') {
+      this.skipProviderTemporarily(providerId, AI_QUOTA_EXCEEDED_COOLDOWN_MS, err instanceof Error ? err.message : String(err));
       return;
     }
     if (isUnreachableProviderError(err)) {

@@ -34,6 +34,7 @@ import { tradingSafety } from '../config/tradingSafety';
 import { quantSignalAgent } from './QuantSignalAgent';
 import { kronosForecastAgent } from './KronosForecastAgent';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { recordCandidate } from '../core/recentCandidateRegistry';
 
 type TradeIdeaPayload = {
   traceId?: string;
@@ -88,6 +89,13 @@ export class ConfluenceCoordinator {
     const last = this.lastTriggeredAt.get(symbol) ?? 0;
     if (now - last < tradingSafety.confluenceCoordinatorCooldownMs) return;
     this.lastTriggeredAt.set(symbol, now);
+    // Phase 9 (same-candidate convergence): this symbol just cleared the exact same real bar
+    // (qualifying TechnicalAgent signal, cooldown respected) ConfluenceCoordinator itself already
+    // trusts enough to reactively re-check with QuantEngine/Kronos - record it so Fundamental/
+    // MacroAgent's own priority round-robin can prefer it too, when still fresh. Never a vote,
+    // never a side/confidence - just "this symbol was worth a look", the same fact this module
+    // already acts on for Quant/Kronos.
+    recordCandidate(symbol, now);
 
     const triggered: string[] = [];
     const skipped: string[] = [];

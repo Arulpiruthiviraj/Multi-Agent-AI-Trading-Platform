@@ -20,6 +20,9 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
 import { marketDataWorker } from './MarketDataWorker';
+import { selectPriorityRoundRobinSymbol } from '../core/agentRoundRobin';
+import { getRecentCandidates } from '../core/recentCandidateRegistry';
+import { tradingSafety } from '../config/tradingSafety';
 import {
   notePipelineAgentFailure,
   notePipelineAgentGated,
@@ -186,7 +189,22 @@ export class FundamentalAnalysisAgent {
       notePipelineAgentGated('FundamentalAgent');
       return;
     }
-    const symbol = universe[Math.floor(Date.now() / 60000) % universe.length];
+    // Phase 7F (2026-08-27): prioritize symbols with a real, fresh tick (same stalePriceThresholdMs
+    // RiskEngine's data_freshness gate already uses) over the full active-subscription set - a
+    // blind round-robin over every active symbol gave a quiet anchor with zero ticks the same
+    // priority as a symbol TechnicalAgent/QuantEngine are actively producing real ideas for right
+    // now, diluting per-symbol coverage further as the active set grows through the session.
+    const freshSymbols = universe.filter((s) => {
+      const age = marketDataWorker.getLatestPriceAgeMs(s);
+      return age !== null && age <= tradingSafety.stalePriceThresholdMs;
+    });
+    // Phase 9 (same-candidate convergence): prefer a symbol ConfluenceCoordinator recently found
+    // worth a reactive Quant/Kronos re-check (a real qualifying TechnicalAgent signal), when it is
+    // ALSO still fresh - never invents a candidate, just narrows the priority pool when a genuine
+    // recent one exists. Falls back to the plain freshSymbols set exactly as before otherwise.
+    const recentCandidates = getRecentCandidates(tradingSafety.recentCandidatePriorityMaxAgeMs).filter((s) => freshSymbols.includes(s));
+    const priorityPool = recentCandidates.length > 0 ? recentCandidates : freshSymbols;
+    const symbol = selectPriorityRoundRobinSymbol(universe, priorityPool, runtimeIntervals.fundamentalAgentMs, Date.now());
     const traceId = generateTraceId(symbol);
     // Real fix (2026-08-24 readiness audit, Part 2): this round-robin previously never requested
     // coverage for its own evaluation target - it only ever passively read getLatestPrice() and

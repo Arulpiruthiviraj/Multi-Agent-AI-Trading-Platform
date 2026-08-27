@@ -20,6 +20,9 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
 import { marketDataWorker } from './MarketDataWorker';
+import { selectPriorityRoundRobinSymbol } from '../core/agentRoundRobin';
+import { getRecentCandidates } from '../core/recentCandidateRegistry';
+import { tradingSafety } from '../config/tradingSafety';
 import {
   notePipelineAgentFailure,
   notePipelineAgentGated,
@@ -104,17 +107,35 @@ export class MacroEconomyAgent {
          const key = process.env.ALPHAVANTAGE_API_KEY;
 
          const avBase = networkEndpoints.marketData.alphaVantageBaseUrl;
+         const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
          const fetchOne = async (fn: string): Promise<any> => {
            if (!(await AlphaVantageBudget.tryConsume(1, undefined, 'MacroAgent'))) return { __budgetExhausted: true };
            const r = await fetch(`${avBase}?function=${fn}&apikey=${key}`);
            if (r.status === 429) return { __http429: true };
            return r.json() as any;
          };
+         // Real DB evidence (Phase 9 zero-trade root-cause audit, 2026-08-27): this cache row had
+         // never once been successfully populated - fetched_at stuck at 0 with a rolling 24h
+         // rate_limited_until. Firing 3 AlphaVantage calls back-to-back was plausible enough on its
+         // own to trip AlphaVantage's real per-minute limiter even with daily budget headroom - a
+         // small pacing delay between sub-calls reduces that without changing the real daily quota.
          const inflRes = await fetchOne('INFLATION');
+         await sleep(tradingSafety.alphaVantageMacroSubcallDelayMs);
          const fedRes = await fetchOne('FEDERAL_FUNDS_RATE');
+         await sleep(tradingSafety.alphaVantageMacroSubcallDelayMs);
          const unempRes = await fetchOne('UNEMPLOYMENT');
 
-         if ([inflRes, fedRes, unempRes].some(r => r?.__http429 || r?.__budgetExhausted || looksLikeRateLimitResponse(r))) {
+         const subResults = [inflRes, fedRes, unempRes];
+         const genuineExternalRateLimit = subResults.some(r => r?.__http429 || looksLikeRateLimitResponse(r));
+         // Real fix: __budgetExhausted only means OUR shared internal daily counter ran out this
+         // cycle (e.g. FundamentalAgent's round-robin claimed the remaining slots first) - it is not
+         // AlphaVantage itself signaling a rate limit. Treating it identically to a genuine 429 used
+         // to arm a full 24h backoff off a purely internal bookkeeping event, permanently starving
+         // MacroAgent even on a day where AlphaVantage itself never once refused a request. Only a
+         // real external signal earns the 24h cooldown; internal exhaustion just retries next cycle.
+         const internalBudgetExhausted = !genuineExternalRateLimit && subResults.some(r => r?.__budgetExhausted);
+
+         if (genuineExternalRateLimit) {
             const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
             if (stale) {
               console.warn('[MacroAgent] AlphaVantage rate limit — serving cached macro data.');
@@ -122,6 +143,16 @@ export class MacroEconomyAgent {
             }
             console.warn('[MacroAgent] AlphaVantage rate limit hit - backing off for 24h.');
             await ExternalDataCache.markRateLimited('alphavantage', 'macro', null);
+            return RATE_LIMITED_MACRO;
+         }
+
+         if (internalBudgetExhausted) {
+            const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
+            if (stale) {
+              console.warn('[MacroAgent] Shared AlphaVantage daily budget exhausted this cycle — serving cached macro data.');
+              return stale;
+            }
+            console.warn('[MacroAgent] Shared AlphaVantage daily budget exhausted this cycle — retrying next cycle (no 24h backoff; this was not AlphaVantage itself refusing the request).');
             return RATE_LIMITED_MACRO;
          }
 
@@ -176,7 +207,15 @@ export class MacroEconomyAgent {
       notePipelineAgentGated('MacroAgent');
       return;
     }
-    const symbol = universe[Math.floor(Date.now() / 75000) % universe.length];
+    // Phase 7F (2026-08-27) - see FundamentalAgent.ts's identical fix/comment.
+    const freshSymbols = universe.filter((s) => {
+      const age = marketDataWorker.getLatestPriceAgeMs(s);
+      return age !== null && age <= tradingSafety.stalePriceThresholdMs;
+    });
+    // Phase 9 (same-candidate convergence): see FundamentalAgent.ts's identical comment.
+    const recentCandidates = getRecentCandidates(tradingSafety.recentCandidatePriorityMaxAgeMs).filter((s) => freshSymbols.includes(s));
+    const priorityPool = recentCandidates.length > 0 ? recentCandidates : freshSymbols;
+    const symbol = selectPriorityRoundRobinSymbol(universe, priorityPool, runtimeIntervals.macroAgentMs, Date.now());
     const traceId = generateTraceId(symbol);
     // Real fix (2026-08-24 readiness audit, Part 2) - see FundamentalAgent.ts's identical comment.
     eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol, requestedBy: 'MacroAgent', at: new Date().toISOString() });

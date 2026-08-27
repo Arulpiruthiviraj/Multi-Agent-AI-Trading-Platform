@@ -232,6 +232,17 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
+    calibrationValidationWorker.start();
+    console.log(
+      '[CalibrationValidationWorker] Started at boot (Phase 7E, observational only - writes only to '
+      + 'the learning_versions ledger, never to the live agent_confidence_calibration table).',
+    );
+  } catch (e: any) {
+    console.warn(`[CalibrationValidationWorker] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { firstFillForensicCheckpoint } = await import('../services/FirstFillForensicCheckpoint');
     firstFillForensicCheckpoint.start();
   } catch (e: any) {

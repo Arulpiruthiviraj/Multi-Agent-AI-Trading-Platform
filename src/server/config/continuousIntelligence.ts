@@ -61,6 +61,18 @@ export interface ContinuousIntelligenceConfig {
   broadUniverseAdvLookbackDays: number;
   broadUniverseMinAvgDailyVolumeShares: number;
   broadUniverseTopNPerScan: number;
+  /** Phase 4F: minimum gap before the same symbol can be classified as a missed opportunity again. */
+  missedOpportunityDetectionCooldownMs: number;
+  /** Phase 4F: retrospective evaluation window used for MFE/MAE (minutes). */
+  missedOpportunityEvaluationHorizonMinutes: number;
+  /** Phase 4F: how far back event_traces/risk_assessments/trades are queried to build funnel signals. */
+  missedOpportunityLookbackMs: number;
+  /** Phase 4H: minimum sample size before a challenger version is eligible for promotion (mirrors Kelly's existing 20-trade floor). */
+  championChallengerMinSampleSize: number;
+  /** Phase 4H: challenger must beat the champion's metric by at least this margin to pass the promotion gate. */
+  championChallengerMinImprovementMargin: number;
+  /** Phase 7E: a calibration bucket's newest real observation older than this is flagged stale (observability only, not auto-enforced). */
+  calibrationMaxObservationAgeMs: number;
   honesty: string;
 }
 
@@ -157,6 +169,12 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     broadUniverseAdvLookbackDays: requireNumber(raw.broadUniverseAdvLookbackDays, 'broadUniverseAdvLookbackDays'),
     broadUniverseMinAvgDailyVolumeShares: requireNumber(raw.broadUniverseMinAvgDailyVolumeShares, 'broadUniverseMinAvgDailyVolumeShares'),
     broadUniverseTopNPerScan: requireNumber(raw.broadUniverseTopNPerScan, 'broadUniverseTopNPerScan'),
+    missedOpportunityDetectionCooldownMs: requireNumber(raw.missedOpportunityDetectionCooldownMs, 'missedOpportunityDetectionCooldownMs'),
+    missedOpportunityEvaluationHorizonMinutes: requireNumber(raw.missedOpportunityEvaluationHorizonMinutes, 'missedOpportunityEvaluationHorizonMinutes'),
+    missedOpportunityLookbackMs: requireNumber(raw.missedOpportunityLookbackMs, 'missedOpportunityLookbackMs'),
+    championChallengerMinSampleSize: requireNumber(raw.championChallengerMinSampleSize, 'championChallengerMinSampleSize'),
+    championChallengerMinImprovementMargin: requireNonNegativeNumber(raw.championChallengerMinImprovementMargin, 'championChallengerMinImprovementMargin'),
+    calibrationMaxObservationAgeMs: requireNumber(raw.calibrationMaxObservationAgeMs, 'calibrationMaxObservationAgeMs'),
     honesty: raw.honesty,
   };
   if (cfg.coreStreamingSymbols.length > cfg.maxActiveSubscriptions) {

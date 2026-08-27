@@ -17,6 +17,10 @@ export interface LastConsensusOutcome {
   threshold: number;
   reason: string;
   agentVotes: ConsensusVoteSnapshot[];
+  /** Phase 7E/7H MODERATE consensus tier. Absent/'STRONG' for every pre-existing evaluation path. */
+  decisionTier?: 'STRONG' | 'MODERATE';
+  /** Phase 9I "Why No Trade?" diagnostic - one machine-readable code per round, see consensusTerminalReason.ts. */
+  terminalReasonCode?: string;
 }
 
 export function formatWhyNoTrade(outcome: LastConsensusOutcome | null): string | null {
@@ -38,6 +42,7 @@ export function formatWhyNoTrade(outcome: LastConsensusOutcome | null): string |
     votes || '(no independent agent votes in the last evaluation window)',
     'Consensus: NO APPROVAL',
     `Reason: ${outcome.reason}`,
+    `Terminal reason code: ${outcome.terminalReasonCode ?? 'UNKNOWN'}`,
     `Independent agents agreeing with ${outcome.side}: ${outcome.independentAgreeingAgents}. Required: ${outcome.requiredAgents}.`,
     `Weighted confidence: ${(outcome.confidence * 100).toFixed(1)}% vs ${(outcome.threshold * 100).toFixed(0)}%.`,
   ].join('\n');

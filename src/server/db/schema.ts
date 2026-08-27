@@ -1390,6 +1390,48 @@ export const configChangeEvents = sqliteTable('config_change_events', {
  * as components are added/removed over time. Discovery/ranking only - never imports OMS/
  * RiskEngine/BrokerManager, never emits TRADE_IDEA_GENERATED.
  */
+/**
+ * Phase 4E (Pre-Market TradePlan, 2026-08-27). A TradePlan is a hypothesis, never an order - it
+ * re-enters the live pipeline (if ever wired to do so) only via the existing TRADE_IDEA_GENERATED
+ * event, same as any other agent. Building/persisting a plan here never calls ChiefTrader,
+ * RiskEngine, OMS, or BrokerManager. `componentScoresJson` links back to the exact
+ * candidate_rankings cycle the plan was built from, so the thesis is always reconstructable.
+ */
+export const tradePlans = sqliteTable('trade_plans', {
+  id: text('id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  planDate: text('plan_date').notNull(),
+  setupType: text('setup_type').notNull(), // PRIMARY | BACKUP | WATCHLIST
+  direction: text('direction').notNull(), // BUY | SELL
+  thesis: text('thesis').notNull(),
+  catalysts: text('catalysts'), // JSON string[]
+  entryZoneLow: real('entry_zone_low'),
+  entryZoneHigh: real('entry_zone_high'),
+  invalidationLevel: real('invalidation_level'),
+  targetConcept: text('target_concept'),
+  confidence: real('confidence').notNull(),
+  evidenceQuality: real('evidence_quality').notNull(),
+  rankAtCreation: integer('rank_at_creation'),
+  componentScoresJson: text('component_scores_json'),
+  status: text('status').notNull(), // DRAFT | READY | REVALIDATING | VALID | INVALIDATED | EXPIRED | EXECUTED | CLOSED
+  createdAt: text('created_at').notNull(),
+  validUntil: text('valid_until').notNull(),
+}, (table) => ({
+  planDateIdx: index('idx_trade_plans_plan_date').on(table.planDate, table.setupType),
+  symbolIdx: index('idx_trade_plans_symbol').on(table.symbol, table.createdAt),
+}));
+
+export const tradePlanRevalidations = sqliteTable('trade_plan_revalidations', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  planId: text('plan_id').notNull(),
+  revalidatedAt: text('revalidated_at').notNull(),
+  result: text('result').notNull(), // REVALIDATED | DOWNGRADED | INVALIDATED | EXPIRED
+  reason: text('reason').notNull(),
+  priceAtRevalidation: real('price_at_revalidation'),
+}, (table) => ({
+  planIdx: index('idx_trade_plan_revalidations_plan').on(table.planId, table.revalidatedAt),
+}));
+
 export const candidateRankings = sqliteTable('candidate_rankings', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   symbol: text('symbol').notNull(),
@@ -1415,4 +1457,115 @@ export const candidateRankings = sqliteTable('candidate_rankings', {
 }, (table) => ({
   symbolIdx: index('idx_candidate_rankings_symbol').on(table.symbol, table.createdAt),
   cycleIdx: index('idx_candidate_rankings_cycle').on(table.cycleAt),
+}));
+
+/**
+ * Phase 4F (Missed Opportunity Intelligence, 2026-08-27). Classifies where a candidate died in
+ * the funnel, using ONLY telemetry that already exists (candidate_rankings, event_traces,
+ * risk_assessments, trades) - never hindsight-labels a rejection as "should have traded."
+ * `evaluationStatus` starts PENDING; MFE/MAE are filled in later, explicitly retrospective, never
+ * presented as advance knowledge. Works even when zero trades occur (the entire point).
+ */
+export const missedOpportunities = sqliteTable('missed_opportunities', {
+  id: text('id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  detectedAt: text('detected_at').notNull(),
+  classification: text('classification').notNull(),
+  classificationReason: text('classification_reason').notNull(),
+  evidenceAtDecisionJson: text('evidence_at_decision_json').notNull(),
+  priceAtDetection: real('price_at_detection'),
+  evaluationHorizonMinutes: integer('evaluation_horizon_minutes').notNull(),
+  evaluationStatus: text('evaluation_status').notNull(), // PENDING | EVALUATED
+  priceAtEvaluation: real('price_at_evaluation'),
+  maxFavorableExcursionPct: real('max_favorable_excursion_pct'),
+  maxAdverseExcursionPct: real('max_adverse_excursion_pct'),
+  evaluatedAt: text('evaluated_at'),
+}, (table) => ({
+  symbolIdx: index('idx_missed_opportunities_symbol').on(table.symbol, table.detectedAt),
+  statusIdx: index('idx_missed_opportunities_status').on(table.evaluationStatus),
+}));
+
+/**
+ * Phase 4G (Learning Expansion + Versioning, 2026-08-27). Every learning observation - a closed
+ * trade, a rejected candidate, or a missed opportunity - captured with the evidence available AT
+ * DECISION TIME plus the eventual outcome, so ReflectionEngine-style learning is not limited to
+ * organic closed trades (which today number 0). `trustLevel` distinguishes an executed trade's
+ * real outcome from an observational (never-executed) one - never conflated.
+ */
+export const learningObservations = sqliteTable('learning_observations', {
+  id: text('id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  observationType: text('observation_type').notNull(), // CLOSED_TRADE | REJECTED_CANDIDATE | MISSED_OPPORTUNITY
+  trustLevel: text('trust_level').notNull(), // EXECUTED | OBSERVATIONAL
+  evidenceJson: text('evidence_json').notNull(),
+  outcomeJson: text('outcome_json'),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  typeIdx: index('idx_learning_observations_type').on(table.observationType, table.createdAt),
+}));
+
+/**
+ * Phase 4H (Champion/Challenger Controlled Evolution, 2026-08-27). Versioned learning state -
+ * never mutates agent_performance_stats/learned_rules directly. A CHALLENGER must pass an explicit
+ * promotion gate (minimum sample size + real performance comparison) before becoming CHAMPION;
+ * only one CHAMPION exists per `versionType` at a time. Promotion/rollback always produce a new
+ * row - history is never overwritten.
+ */
+export const learningVersions = sqliteTable('learning_versions', {
+  id: text('id').primaryKey(),
+  versionType: text('version_type').notNull(), // e.g. 'agentWeights', 'rankingWeights'
+  parentVersionId: text('parent_version_id'),
+  status: text('status').notNull(), // SHADOW | CANDIDATE | CHAMPION | RETIRED | ROLLED_BACK
+  stateJson: text('state_json').notNull(),
+  hypothesis: text('hypothesis'),
+  evidenceJson: text('evidence_json'),
+  sampleSize: integer('sample_size').notNull().default(0),
+  createdAt: text('created_at').notNull(),
+  promotedAt: text('promoted_at'),
+  retiredAt: text('retired_at'),
+}, (table) => ({
+  typeIdx: index('idx_learning_versions_type').on(table.versionType, table.status),
+}));
+
+export const promotionDecisions = sqliteTable('promotion_decisions', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  versionId: text('version_id').notNull(),
+  decision: text('decision').notNull(), // PASS | FAIL
+  reason: text('reason').notNull(),
+  metricsJson: text('metrics_json').notNull(),
+  decidedAt: text('decided_at').notNull(),
+}, (table) => ({
+  versionIdx: index('idx_promotion_decisions_version').on(table.versionId),
+}));
+
+export const rollbackEvents = sqliteTable('rollback_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  versionType: text('version_type').notNull(),
+  fromVersionId: text('from_version_id').notNull(),
+  toVersionId: text('to_version_id').notNull(),
+  reason: text('reason').notNull(),
+  actor: text('actor').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  typeIdx: index('idx_rollback_events_type').on(table.versionType, table.createdAt),
+}));
+
+/**
+ * Phase 4J (Session Lifecycle persistence, 2026-08-27). Append-only log of every
+ * SessionLifecycle.evaluate() transition, so a restart can recover real prior state (`from`
+ * fields no longer forced to null) instead of silently losing context. On boot the loader still
+ * re-derives the CURRENT marketSession/appState live from classifyMarketSession() - a persisted
+ * row is only ever used to know what the PREVIOUS state honestly was, and only when it is from the
+ * same trading day; a stale (prior-day) row is discarded rather than trusted.
+ */
+export const sessionLifecycleSnapshots = sqliteTable('session_lifecycle_snapshots', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  tradingDate: text('trading_date').notNull(),
+  marketSession: text('market_session').notNull(), // PRE_MARKET | REGULAR | AFTER_HOURS | CLOSED
+  appState: text('app_state').notNull(),
+  premarketFiredForDate: text('premarket_fired_for_date'),
+  evaluatedAt: text('evaluated_at').notNull(),
+  createdAt: text('created_at').notNull(),
+}, (table) => ({
+  dateIdx: index('idx_session_lifecycle_snapshots_date').on(table.tradingDate, table.evaluatedAt),
 }));

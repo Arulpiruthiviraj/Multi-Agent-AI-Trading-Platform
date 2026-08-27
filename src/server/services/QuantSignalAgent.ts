@@ -41,6 +41,7 @@ import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine'
 import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
 import { StrategyContext, StrategyEvaluation } from '../quant/strategies/types';
 import { computeGroupedScores, GroupedScores } from '../quant/scoring/GroupedScores';
+import { recordCandidate } from '../core/recentCandidateRegistry';
 import { analyzeContradictions, ContradictionAnalysisResult } from '../quant/ai/QuantContradictionAnalyzer';
 import { riskRewardRatio, expectedValue, MIN_SAMPLE_SIZE_FOR_KELLY } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
@@ -367,6 +368,11 @@ export class QuantSignalAgent {
         });
       } else {
       const catalysts = getNewsCatalysts(symbol);
+      // Phase 9 (same-candidate convergence): a real, EV/R:R-cleared QuantEngine idea is exactly
+      // the kind of "worth a look" signal ConfluenceCoordinator already records for TechnicalAgent -
+      // recording it here too makes Fundamental/MacroAgent's priority round-robin bidirectional
+      // (converge toward Quant's real signals, not only Technical's).
+      recordCandidate(symbol);
       eventBus.emitTradeIdea({
         traceId, symbol, side: idea.side, confidence: idea.confidence,
         currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',

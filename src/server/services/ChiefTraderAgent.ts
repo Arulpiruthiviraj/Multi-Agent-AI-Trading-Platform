@@ -60,6 +60,9 @@ import { type LastConsensusOutcome } from '../core/consensusExplanation';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { classifyVote, computeShadowConsensus, computeDebateMarginFromResults } from './EvidenceAwareVote';
 import { recordConsensusModelComparison } from './ConsensusModelComparison';
+import { evaluateModerateTierEligibility, type ModerateTierEligibility } from '../continuous/ModerateTierEvaluator';
+import { isConsensusModerateTierEnabled } from '../config/tradingSafety';
+import { classifyConsensusTerminalReason, type ConsensusTerminalReasonCode } from '../core/consensusTerminalReason';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
@@ -577,6 +580,9 @@ export class ChiefTraderAgent {
 
     this.lastConsensusEvalAt.set(symbol, Date.now());
     const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
+    // Phase 7E (MODERATE tier): raw, pre-calibration confidence per agent - the calibration-trust
+    // bucket lookup must bucket on the SAME raw value calibrateConfidence() itself buckets on.
+    const rawConfidenceByAgent = new Map(relevantIdeas.map(i => [i.agent, i.confidence]));
     eventBus.emit(EVENTS.CHIEF_CONSENSUS_STARTED, { traceId, symbol, ideaCount: relevantIdeas.length });
     const riskExitIdeas = relevantIdeas.filter(i => this.isRiskExit(i));
     const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
@@ -609,6 +615,26 @@ export class ChiefTraderAgent {
     let approvedPrice = result.currentPrice;
     let approvedEvidence = evidence;
     let approvedAgreed = agentsAgreed;
+    // Phase 7E/7H (MODERATE consensus tier). Stays 'STRONG' - and moderateEligibility stays null -
+    // for every case where confidence clears CONSENSUS_APPROVAL_THRESHOLD; the STRONG ladder branches
+    // below are otherwise byte-for-byte unchanged.
+    let decisionTier: 'STRONG' | 'MODERATE' = 'STRONG';
+    let moderateEligibility: ModerateTierEligibility | null = null;
+
+    // Hoisted out of the `else` branch below (Phase 9I) purely so the post-ladder terminal-reason
+    // classification can reuse these exact same computed values instead of recomputing them - no
+    // behavioral change, same expressions, same scope of use (still only meaningful/used in the
+    // non-risk-exit path).
+    const uniqueIndependent = new Set(
+      result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
+    );
+    const enoughIndependentVoices = uniqueIndependent.size >= MIN_INDEPENDENT_AGREEING_AGENTS;
+    const debateSaidHold = evidence.some(e => e.agent === 'ConsensusDebate' && e.side === 'HOLD');
+    const bearSaidHold = evidence.some(e => e.agent === bullBearResearchConfig.bearAgentName && e.side === 'HOLD');
+    const aiContradicts = evidence.some((e: any) => {
+      const review = e.quantDetail?.aiContradictionAnalysis;
+      return review?.available === true && review.aiAgreesWithSide === false;
+    });
 
     if (riskExitIdeas.length > 0) {
       const exitIdea = riskExitIdeas[riskExitIdeas.length - 1];
@@ -619,19 +645,38 @@ export class ChiefTraderAgent {
       reason = `[Risk Exit] ${exitIdea.reasoning}`;
       approvedAgreed = `${RISK_EXIT_AGENT}(wt:${this.resolveWeight(RISK_EXIT_AGENT).toFixed(2)})`;
     } else {
-      const uniqueIndependent = new Set(
-        result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
-      );
-      const enoughIndependentVoices = uniqueIndependent.size >= MIN_INDEPENDENT_AGREEING_AGENTS;
-      const debateSaidHold = evidence.some(e => e.agent === 'ConsensusDebate' && e.side === 'HOLD');
-      const bearSaidHold = evidence.some(e => e.agent === bullBearResearchConfig.bearAgentName && e.side === 'HOLD');
-      const aiContradicts = evidence.some((e: any) => {
-        const review = e.quantDetail?.aiContradictionAnalysis;
-        return review?.available === true && review.aiAgreesWithSide === false;
-      });
-
       if (result.side === 'HOLD' || result.confidence <= CONSENSUS_APPROVAL_THRESHOLD) {
         reason = `[NO TRADE] Confidence ${(result.confidence*100).toFixed(1)}% did not clear ${(CONSENSUS_APPROVAL_THRESHOLD*100).toFixed(0)}%.`;
+
+        // Phase 7E/7H MODERATE tier: only ever reached here, i.e. only for cases that already
+        // failed the STRONG check above - never runs, never changes anything, when confidence
+        // clears CONSENSUS_APPROVAL_THRESHOLD. Gated on isConsensusModerateTierEnabled() BEFORE
+        // doing anything else (not just inside evaluateModerateTierEligibility) so that with the
+        // flag off - the default - this whole block is a no-op and the pre-existing NO-TRADE
+        // rejection reason text is completely unchanged, satisfying "MODERATE-disabled = old
+        // behavior" exactly, not just in decision outcome. Reuses the SAME enoughIndependentVoices/
+        // debateSaidHold/bearSaidHold/aiContradicts this evaluation already computed (no duplicated
+        // veto logic), plus a NEW per-agent calibration-trust gate. See ModerateTierEvaluator.ts.
+        if (isConsensusModerateTierEnabled() && result.side !== 'HOLD' && result.confidence >= tradingSafety.moderateMinConfidence) {
+          moderateEligibility = await evaluateModerateTierEligibility({
+            side: result.side,
+            confidence: result.confidence,
+            enoughIndependentVoices,
+            debateSaidHold,
+            bearSaidHold,
+            aiContradicts,
+            agreeingAgents: result.agreements
+              .filter(e => e.agent !== 'ConsensusDebate')
+              .map(e => ({ agent: e.agent, rawConfidence: rawConfidenceByAgent.get(e.agent) ?? e.confidence })),
+          });
+          if (moderateEligibility.eligible) {
+            approved = true;
+            decisionTier = 'MODERATE';
+            reason = `[Chief Consensus Approval - MODERATE] Confidence ${(result.confidence*100).toFixed(1)}% cleared the MODERATE floor (${(tradingSafety.moderateMinConfidence*100).toFixed(0)}%) with a statistically-validated calibration trust gate. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${result.reasoning}`;
+          } else {
+            reason = `${reason} MODERATE tier also declined: ${moderateEligibility.reason} (${moderateEligibility.reasonCode})`;
+          }
+        }
       } else if (!enoughIndependentVoices) {
         reason = `[NO TRADE] Only ${uniqueIndependent.size} independent agent(s) agreed on ${result.side} (need ${MIN_INDEPENDENT_AGREEING_AGENTS}). A single voice is not confirmation.`;
       } else if (debateSaidHold) {
@@ -646,10 +691,32 @@ export class ChiefTraderAgent {
       }
     }
 
+    // Phase 9I ("Why No Trade?" diagnostic): pure relabeling of the branches just taken above -
+    // never itself gates approval. Risk-exit ideas already have their own unambiguous outcome
+    // (always approved) so they are exempt from this classification.
+    const holdIsDataUnavailable = result.side === 'HOLD' && evidence.some(
+      (e) => e.side === 'HOLD' && typeof e.reasoning === 'string' && e.reasoning.includes('DATA_UNAVAILABLE'),
+    );
+    let terminalReasonCode: ConsensusTerminalReasonCode = riskExitIdeas.length > 0
+      ? 'CONSENSUS_APPROVED'
+      : classifyConsensusTerminalReason({
+          approved,
+          side: result.side,
+          confidence: result.confidence,
+          strongThreshold: CONSENSUS_APPROVAL_THRESHOLD,
+          enoughIndependentVoices,
+          debateSaidHold,
+          bearSaidHold,
+          aiContradicts,
+          holdIsDataUnavailable,
+          moderateReasonCode: moderateEligibility?.reasonCode,
+        });
+
     const sideMismatch = this.consumeManualSideMismatch(symbol, approvedSide);
     if (approved && sideMismatch) {
       approved = false;
       reason = sideMismatch;
+      terminalReasonCode = 'AGENT_HOLD';
       eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
         traceId,
         symbol,
@@ -673,6 +740,8 @@ export class ChiefTraderAgent {
       threshold: CONSENSUS_APPROVAL_THRESHOLD,
       reason: reason || `Consensus ${(approvedConfidence * 100).toFixed(1)}% vs threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%`,
       agentVotes: evidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence })),
+      decisionTier,
+      terminalReasonCode,
     };
 
     // Unconditional COMPLETED signal (unlike CHIEF_APPROVED_IDEA, which only fires on approval) -
@@ -686,7 +755,56 @@ export class ChiefTraderAgent {
       side: approvedSide,
       threshold: CONSENSUS_APPROVAL_THRESHOLD,
       reason: reason || undefined,
+      decisionTier,
+      terminalReasonCode,
     });
+
+    // Phase 9 ("Why No Trade?" aggregated observability): the generic EventBus->observability_events
+    // bridge only persists {symbol} for DESK_NO_TRADE/CHIEF_CONSENSUS_COMPLETED (confirmed via direct
+    // DB inspection, 2026-08-27 - every one of 35k+ historical DESK_NO_TRADE rows carries only
+    // {"symbol":...}), so terminalReasonCode/decisionTier/independent-agent-count were being computed
+    // but never actually queryable from the DB. This is a DEDICATED, explicit structured-log record
+    // (own eventType, unconditional - every round, not just MODERATE ones) so the CLI/API aggregate
+    // report below can be built from real, persisted data rather than re-deriving it from prose.
+    observeSafe(() => {
+      structuredLogger.info('consensus_terminal_reason', {
+        category: 'CONSENSUS',
+        eventType: 'CONSENSUS_TERMINAL_REASON',
+        symbol,
+        traceId,
+        decisionId: traceId,
+        decisionTier,
+        terminalReasonCode,
+        approved,
+        rawConfidence: result.confidence,
+        finalConfidence: approvedConfidence,
+        independentAgentCount: Array.from(new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent))).length,
+        participatingAgents: evidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence })),
+        moderateReasonCode: moderateEligibility?.reasonCode,
+      });
+    });
+
+    // Phase 7E/7H explainability (MODERATE tier only - STRONG-path evaluations never populate
+    // moderateEligibility, so this never fires for the unchanged STRONG path).
+    if (moderateEligibility) {
+      const explain = moderateEligibility;
+      observeSafe(() => {
+        structuredLogger.info('moderate_tier_evaluated', {
+          category: 'CONSENSUS',
+          eventType: 'MODERATE_TIER_EVALUATED',
+          symbol,
+          decisionTier,
+          rawConsensus: result.confidence,
+          calibratedConsensus: approvedConfidence,
+          independentAgentCount: Array.from(new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent))).length,
+          participatingAgents: evidence.map(e => e.agent),
+          moderateReasonCode: explain.reasonCode,
+          moderateReason: explain.reason,
+          calibrationTrustDetails: explain.calibrationDetails,
+          paperTradingOnly: process.env.PAPER_TRADING_ONLY !== 'false',
+        });
+      });
+    }
 
     tracingService.logChiefConsensus({
       traceId,
@@ -792,6 +910,7 @@ export class ChiefTraderAgent {
          agentsContext: approvedAgreed,
          evidence: approvedEvidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence, weight: e.weight, reasoning: e.reasoning })),
          supportingQuantDetail: this.buildSupportingQuantDetail(approvedEvidence, approvedPrice),
+         decisionTier,
        });
 
        eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'APPROVED', side: approvedSide, reason });
@@ -824,7 +943,12 @@ export class ChiefTraderAgent {
          const { recordCampaignNearMissConsensus } = await import('./campaignEffortTelemetry');
          recordCampaignNearMissConsensus(approvedConfidence);
        } catch { /* fail-open */ }
-       eventBus.emit(EVENTS.DESK_NO_TRADE, { traceId, symbol, side: approvedSide, confidence: approvedConfidence, reason });
+       eventBus.emit(EVENTS.DESK_NO_TRADE, {
+         traceId, symbol, side: approvedSide, confidence: approvedConfidence, reason,
+         decisionTier,
+         moderateReasonCode: moderateEligibility?.reasonCode,
+         terminalReasonCode,
+       });
        eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'NO_TRADE', reason });
     }
   }

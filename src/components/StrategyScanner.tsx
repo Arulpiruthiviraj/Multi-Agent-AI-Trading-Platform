@@ -19,6 +19,11 @@ import AwaitingSignal from "./shared/AwaitingSignal";
 import CandidateRankingPanel from "./CandidateRankingPanel";
 import CandidateRankingHistoryPanel from "./CandidateRankingHistoryPanel";
 import SubscriptionPriorityQueuePanel from "./SubscriptionPriorityQueuePanel";
+import TradePlanDashboard from "./TradePlanDashboard";
+import MissedOpportunitiesPanel from "./MissedOpportunitiesPanel";
+import LearningObservationsPanel from "./LearningObservationsPanel";
+import ChampionChallengerPanel from "./ChampionChallengerPanel";
+import CalibrationValidationPanel from "./CalibrationValidationPanel";
 
 interface ScannerProps {
   selectedAlertSymbol: string;
@@ -163,6 +168,26 @@ export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertS
 
         <div className="mb-6">
           <SubscriptionPriorityQueuePanel />
+        </div>
+
+        <div className="mb-6">
+          <TradePlanDashboard />
+        </div>
+
+        <div className="mb-6">
+          <MissedOpportunitiesPanel />
+        </div>
+
+        <div className="mb-6">
+          <LearningObservationsPanel />
+        </div>
+
+        <div className="mb-6">
+          <ChampionChallengerPanel versionType="agent-weighting" />
+        </div>
+
+        <div className="mb-6">
+          <CalibrationValidationPanel />
         </div>
 
         <div className="mb-6 border border-slate-800 rounded-lg p-4 bg-[#111822]">

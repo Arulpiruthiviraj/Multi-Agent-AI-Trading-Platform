@@ -167,6 +167,11 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     expect(mine.reasoning).toContain('Cold-start bootstrap');
     // No real strategy evaluation backs this - stop/target/EV all honestly absent, not fabricated.
     expect(mine.quantDetail.strategyEvaluation).toBeNull();
+
+    // Phase 9 (same-candidate convergence): a real emitted QuantEngine idea registers a candidate
+    // so Fundamental/MacroAgent's priority round-robin can converge on it too.
+    const { getRecentCandidates } = await import('../core/recentCandidateRegistry');
+    expect(getRecentCandidates(300000)).toContain('QSABT');
   });
 
   it('skips a symbol honestly (no crash, no fabricated data) when Alpaca returns too few real bars', async () => {

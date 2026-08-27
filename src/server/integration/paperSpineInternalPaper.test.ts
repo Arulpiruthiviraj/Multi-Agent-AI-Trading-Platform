@@ -57,6 +57,18 @@ describe('PAPER spine: CHIEF_APPROVED_IDEA → Risk → OMS → InternalPaper fi
     delete process.env.ALPACA_SECRET_KEY;
 
     await BrokerManager.getInstance().initialize();
+
+    // Real bug found and fixed (2026-08-27): BrokerManager.getInstance().initialize() itself
+    // re-populates process.env.ALPACA_API_KEY/SECRET_KEY from the real .env file (a fresh dotenv
+    // load somewhere in its own init path), silently undoing the delete above once real Alpaca
+    // credentials are present in .env - this test then makes a REAL network call to Alpaca's
+    // /v2/clock endpoint via the market_hours gate, which fails (or passes) depending on the
+    // actual wall-clock time, making this "isolated" test dependent on real market hours. Deleting
+    // again here, after initialize() has already done whatever it does, is what actually keeps
+    // market_hours unconfigured/skipped for the rest of this suite.
+    delete process.env.ALPACA_API_KEY;
+    delete process.env.ALPACA_SECRET_KEY;
+
     const ok = await BrokerManager.getInstance().setActiveBroker('internal_paper', { initialCash: 100000 });
     expect(ok).toBe(true);
     expect(BrokerManager.getInstance().getActiveBroker().id).toBe('internal_paper');

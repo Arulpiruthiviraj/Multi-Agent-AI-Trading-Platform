@@ -6,6 +6,8 @@ import { getDecisionTrace, getOrderTrace, exportDecisionTraceJson } from '../obs
 import { db } from '../db';
 import { observabilityEvents } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
+import { buildProviderHealthMatrix } from '../observability/providerHealthMatrix';
+import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../observability/consensusPipelineReport';
 
 export const observabilityRouter = Router();
 
@@ -50,6 +52,36 @@ observabilityRouter.get('/decisions/:traceId/export', async (req, res) => {
     const json = await exportDecisionTraceJson(req.params.traceId);
     res.setHeader('Content-Disposition', `attachment; filename="argus-decision-${req.params.traceId}.json"`);
     res.json(json);
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 9 (2026-08-27): real, queryable per-provider health - never a new live probe, only DB
+// aggregates + AIRouter's in-memory routing snapshot. See providerHealthMatrix.ts's header.
+observabilityRouter.get('/provider-health-matrix', async (req, res) => {
+  try {
+    const windowHours = Math.min(parseFloat(String(req.query.windowHours || '6')) || 6, 168);
+    const matrix = await buildProviderHealthMatrix(new Date(), windowHours * 60 * 60 * 1000);
+    res.json({ ok: true, windowHours, providers: matrix });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 9 (2026-08-27): the aggregated "why no trade" dashboard - built from real
+// CONSENSUS_TERMINAL_REASON rows (see consensusPipelineReport.ts's header for why the generic
+// EventBus->observability bridge could not be reused) plus risk_assessments/trades/fills.
+observabilityRouter.get('/consensus-report', async (req, res) => {
+  try {
+    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const report = await buildConsensusPipelineReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatConsensusPipelineReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: e.message });
   }

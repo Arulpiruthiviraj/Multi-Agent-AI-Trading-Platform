@@ -169,6 +169,24 @@ runtimeRouter.get('/market/status', (_req, res) => {
   res.json({ ok: true, feed: marketDataWorker.getFeedStatus(), live: 'NO-GO' });
 });
 
+// Phase 4J (Session Lifecycle persistence, 2026-08-27) - real, in-process snapshot plus recent
+// persisted history, so a restart's recovered prior-state context is externally observable.
+runtimeRouter.get('/session-lifecycle', async (req, res) => {
+  try {
+    const { sessionLifecycleWorker } = await import('../premarket/SessionLifecycle');
+    const { db } = await import('../db');
+    const { sessionLifecycleSnapshots } = await import('../db/schema');
+    const { desc } = await import('drizzle-orm');
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '20'), 10) || 20));
+    const history = await db.select().from(sessionLifecycleSnapshots)
+      .orderBy(desc(sessionLifecycleSnapshots.evaluatedAt))
+      .limit(limit);
+    res.json({ ok: true, current: sessionLifecycleWorker.getSnapshot(), history });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 runtimeRouter.get('/risk/status', (_req, res) => {
   const health = argusRuntime.health();
   res.json({

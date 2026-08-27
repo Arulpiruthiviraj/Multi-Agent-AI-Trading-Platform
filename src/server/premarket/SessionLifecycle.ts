@@ -106,12 +106,79 @@ class SessionLifecycleManager {
     return next;
   }
 
-  start(): void {
+  /**
+   * Phase 4J (Session Lifecycle persistence, 2026-08-27). Persists every real evaluate() result
+   * from the running worker so a restart can recover genuine prior-state context instead of
+   * always emitting `from: null`. Deliberately NOT called from the plain `evaluate()` method used
+   * directly by unit tests - those must stay pure/DB-free, since they run without an isolated
+   * ARGUS_DB_PATH and would otherwise write into the real data/argus.db (DEF-18 territory).
+   */
+  private async persistSnapshot(snapshot: SessionLifecycleSnapshot): Promise<void> {
+    try {
+      const { db } = await import('../db');
+      const { sessionLifecycleSnapshots } = await import('../db/schema');
+      await db.insert(sessionLifecycleSnapshots).values({
+        tradingDate: snapshot.tradingDate,
+        marketSession: snapshot.marketSession,
+        appState: snapshot.appState,
+        premarketFiredForDate: this.lastPremarketFiredForDate,
+        evaluatedAt: snapshot.evaluatedAt,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error('[SessionLifecycle] failed to persist snapshot (does not affect live evaluation)', e);
+    }
+  }
+
+  /**
+   * Restores in-memory `current`/`lastPremarketFiredForDate` from the latest persisted row for
+   * TODAY's trading date only - a prior-day row is not trustworthy as "previous state" and is
+   * deliberately left unused (honest `from: null` is correct in that case). This never sets what
+   * the CURRENT state is; the next evaluate() call always re-derives that live from
+   * classifyMarketSession(), so a persisted row is revalidated against real conditions, never
+   * blindly trusted.
+   */
+  private async hydrateFromPersistedState(now: Date = new Date()): Promise<void> {
+    try {
+      const liveNow = evaluateSessionLifecycle(now);
+      const { db } = await import('../db');
+      const { sessionLifecycleSnapshots } = await import('../db/schema');
+      const { eq, desc } = await import('drizzle-orm');
+      const rows = await db.select().from(sessionLifecycleSnapshots)
+        .where(eq(sessionLifecycleSnapshots.tradingDate, liveNow.tradingDate))
+        .orderBy(desc(sessionLifecycleSnapshots.evaluatedAt))
+        .limit(1);
+      if (rows.length > 0) {
+        const row = rows[0];
+        this.current = {
+          marketSession: row.marketSession as MarketSession,
+          appState: row.appState as ApplicationSessionState,
+          tradingDate: row.tradingDate,
+          evaluatedAt: row.evaluatedAt,
+        };
+        this.lastPremarketFiredForDate = row.premarketFiredForDate;
+        console.log(
+          `[SessionLifecycle] Restored same-day prior state from persistence: `
+          + `marketSession=${row.marketSession} appState=${row.appState} (last evaluated ${row.evaluatedAt}).`,
+        );
+      } else {
+        console.log('[SessionLifecycle] No same-day persisted state found - starting fresh (from: null is honest here).');
+      }
+    } catch (e) {
+      console.error('[SessionLifecycle] failed to hydrate persisted state - starting fresh', e);
+    }
+  }
+
+  /** `now` is test-only (mirrors MarketDataWorker.setNowForTests's pattern) - production callers omit it. */
+  async start(now: Date = new Date()): Promise<void> {
     if (this.intervalId) return;
-    this.evaluate();
+    await this.hydrateFromPersistedState(now);
+    const first = this.evaluate(now);
+    void this.persistSnapshot(first);
     this.intervalId = setInterval(() => {
       try {
-        this.evaluate();
+        const next = this.evaluate();
+        void this.persistSnapshot(next);
       } catch (e) {
         console.error('[SessionLifecycle] evaluate() failed', e);
       }

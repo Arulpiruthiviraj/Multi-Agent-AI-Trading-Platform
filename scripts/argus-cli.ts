@@ -543,6 +543,23 @@ const commands: Record<string, () => Promise<void>> = {
   async ready() {
     console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));
   },
+  async 'provider-health'() {
+    // Phase 9 (2026-08-27): real per-provider health matrix - DB aggregates + AIRouter's live
+    // routing snapshot, never a new live probe burning real provider quota just for this report.
+    console.log(JSON.stringify(await fetchJson('/api/v2/observability/provider-health-matrix'), null, 2));
+  },
+  async 'consensus-report'() {
+    // Phase 9 (2026-08-27): the aggregated "why no trade" dashboard, built from real
+    // CONSENSUS_TERMINAL_REASON rows + risk_assessments/trades/fills. Pass --hours=N to widen
+    // the window (default 24).
+    const hoursArg = process.argv.slice(3).find((a) => a.startsWith('--hours='));
+    const hours = hoursArg ? hoursArg.slice('--hours='.length) : '24';
+    const res = await fetch(`${BASE}/api/v2/observability/consensus-report?format=text&hours=${encodeURIComponent(hours)}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'pipeline-ready'() {
     // Zero-Trade Forensic Audit follow-up: distinguishes "process alive" from "trading pipeline
     // ready" (Process/Database/MarketData/Broker/Technical/Quant/AI Provider Layer, each
@@ -707,6 +724,76 @@ const commands: Record<string, () => Promise<void>> = {
     }
     console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/capacity'), null, 2));
   },
+  /**
+   * Phase 4E (Pre-Market TradePlan, 2026-08-27). Usage:
+   *   argus trade-plan [YYYY-MM-DD]                 - all plans for that date (default: today)
+   *   argus trade-plan [YYYY-MM-DD] <planId>         - revalidation history for one plan
+   */
+  async 'trade-plan'() {
+    const planDate = process.argv[3] || new Date().toISOString().slice(0, 10);
+    const planId = process.argv[4];
+    if (planId) {
+      console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/trade-plans/${encodeURIComponent(planDate)}/${encodeURIComponent(planId)}/revalidations`), null, 2));
+      return;
+    }
+    console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/trade-plans/${encodeURIComponent(planDate)}`), null, 2));
+  },
+  /**
+   * Phase 4F (Missed Opportunity Intelligence, 2026-08-27). Usage:
+   *   argus missed-opportunities [sinceMs]  - detected misses + classification breakdown
+   *   (default lookback 24h if sinceMs omitted)
+   */
+  async 'missed-opportunities'() {
+    const sinceMs = process.argv[3];
+    const qs = sinceMs ? `?sinceMs=${encodeURIComponent(sinceMs)}` : '';
+    console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/missed-opportunities${qs}`), null, 2));
+  },
+  /**
+   * Phase 4G/4H (Learning + Champion/Challenger, 2026-08-27). Usage:
+   *   argus learning observations [sinceMs]           - trust-level breakdown + recent rows
+   *   argus learning versions <versionType>            - version history + current champion
+   *   argus learning promotions <versionType> <versionId> - promotion-decision history for one version
+   *   argus learning rollbacks <versionType>           - rollback event history
+   */
+  async learning() {
+    const sub = process.argv[3];
+    if (sub === 'observations') {
+      const sinceMs = process.argv[4];
+      const qs = sinceMs ? `?sinceMs=${encodeURIComponent(sinceMs)}` : '';
+      console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/observations${qs}`), null, 2));
+      return;
+    }
+    if (sub === 'versions') {
+      const versionType = process.argv[4];
+      console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/versions/${encodeURIComponent(versionType)}`), null, 2));
+      return;
+    }
+    if (sub === 'promotions') {
+      const versionType = process.argv[4];
+      const versionId = process.argv[5];
+      console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/versions/${encodeURIComponent(versionType)}/${encodeURIComponent(versionId)}/promotions`), null, 2));
+      return;
+    }
+    if (sub === 'rollbacks') {
+      const versionType = process.argv[4];
+      console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/versions/${encodeURIComponent(versionType)}/rollbacks`), null, 2));
+      return;
+    }
+    if (sub === 'calibration') {
+      const calSub = process.argv[4];
+      if (calSub === 'worker-status') {
+        console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/learning/calibration/worker-status'), null, 2));
+        return;
+      }
+      console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/learning/calibration/candidates'), null, 2));
+      return;
+    }
+    console.log('Usage: argus learning <observations|versions|promotions|rollbacks|calibration [worker-status]> [args...]');
+  },
+  /** Phase 4J (Session Lifecycle persistence, 2026-08-27). Current snapshot + recent persisted history. */
+  async 'session-lifecycle'() {
+    console.log(JSON.stringify(await fetchJson('/api/v2/runtime/session-lifecycle'), null, 2));
+  },
   async config() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/config'), null, 2));
   },
@@ -818,12 +905,43 @@ const commands: Record<string, () => Promise<void>> = {
     if (!handler) throw new Error(`Unknown replay subcommand: ${sub}`);
     return handler();
   },
+  /**
+   * Phase 4I (Professional CLI, partial - 2026-08-27). Groups commands by concern for
+   * discoverability. This is a documentation aid over the existing flat dispatch table, not a
+   * command-hierarchy rewrite - every name below still works exactly as a top-level `argus <name>`
+   * invocation.
+   */
+  async help() {
+    console.log('Argus CLI - HTTP client only. Never imports RiskEngine/OMS/BrokerManager directly.\n');
+    const groups: Array<[string, string[]]> = [
+      ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'config']],
+      ['Trading state / portfolio', ['positions', 'portfolio']],
+      ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
+      ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
+      ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health']],
+      ['Campaign', ['campaign']],
+      ['Replay (Historical Evaluation, MODE B)', ['replay']],
+    ];
+    for (const [label, names] of groups) {
+      const present = names.filter((n) => n in commands);
+      if (present.length > 0) console.log(`${label}:\n  ${present.join(', ')}\n`);
+    }
+    const grouped = new Set(groups.flatMap(([, names]) => names));
+    const ungrouped = Object.keys(commands).filter((c) => !grouped.has(c) && c !== 'help');
+    if (ungrouped.length > 0) console.log(`Other:\n  ${ungrouped.join(', ')}\n`);
+  },
 };
 
 const cmd = process.argv[2] || 'status';
+if (cmd === '--help' || cmd === '-h') {
+  await commands.help();
+  process.exit(0);
+}
 if (!commands[cmd]) {
   console.error(`Unknown command: ${cmd}`);
   console.error(`Available: ${Object.keys(commands).join(', ')}`);
+  console.error(`Run "argus help" for a categorized list.`);
   process.exit(1);
 }
 

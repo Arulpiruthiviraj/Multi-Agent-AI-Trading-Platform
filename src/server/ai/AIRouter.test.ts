@@ -198,6 +198,32 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     expect(dead.chat).toHaveBeenCalledTimes(1);
   });
 
+  it('routeTask() gives a model-not-found 404 (e.g. NVIDIA NIM misconfiguration) the LONG quota-style cooldown, not the short generic-404 cooldown — real gap found in the Phase 9 forensic audit: NVIDIA logged 0/623 successes over 24h while still being retried every ~5 minutes', async () => {
+    const misconfigured = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => { throw new Error("NVIDIA API error: 404 Not Found - model 'gpt-3.5-turbo' does not exist"); }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('nvidia-model-404', misconfigured);
+    aiRouter.registerProvider('ok-provider', fastProvider('{"ok":true}'));
+
+    const first = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-model-404-a');
+    expect(first.provider).toBe('ok-provider');
+    expect(aiRouter.isProviderTemporarilySkipped('nvidia-model-404')).toBe(true);
+    expect(aiRouter.isProviderAuthDisabled('nvidia-model-404')).toBe(false);
+
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const snapshot = aiRouter.getProviderRoutingSnapshot().find((r) => r.providerId === 'nvidia-model-404')!;
+    const cooldownRemainingMs = snapshot.skipUntil! - Date.now();
+    // Must be the long (quota-exceeded-style) cooldown, not the short generic-unreachable one -
+    // this is the whole point of the fix (a misconfigured model does not self-heal in 5 minutes).
+    expect(cooldownRemainingMs).toBeGreaterThan(tradingSafety.aiProviderUnreachableCooldownMs);
+
+    const second = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-model-404-b');
+    expect(second.provider).toBe('ok-provider');
+    expect(misconfigured.chat).toHaveBeenCalledTimes(1);
+  });
+
   it('routeTask() skips an account-suspended provider (real Kimi/Moonshot 429 phrasing) on the next call — real gap found in the 2026-08-26 forensic audit: this provider was previously re-dispatched to on every single call all session', async () => {
     const suspended = {
       authenticate: vi.fn(async () => true),

@@ -45,5 +45,6 @@
   "strategyEngineShadowMs": 300000,
   "javaQuantAdvisoryMs": 90000,
   "aiProviderHealthCheckMs": 180000,
-  "sessionLifecycleEvalMs": 60000
+  "sessionLifecycleEvalMs": 60000,
+  "calibrationValidationCycleMs": 900000
 }

@@ -57,5 +57,11 @@
   "broadUniverseAdvLookbackDays": 20,
   "broadUniverseMinAvgDailyVolumeShares": 500000,
   "broadUniverseTopNPerScan": 20,
-  "honesty": "Continuous intelligence, not continuous trading. OpportunityDiscovery never emits TRADE_IDEA_GENERATED. Planner cap is MarketDataWorker.getEffectiveStreamingCap(): Alpaca/default uses maxActiveSubscriptions=12; ibkr_gateway raises hardCapOverride to ibkrConnection.maxMarketDataLines (90). When emptySlots>0, Discovery fills up to maxNewSubscriptionsPerCycle (20) per scan. OpportunityScreener ideas need ARGUS_OPPORTUNITY_IDEAS_ENABLED (one vote — consensus 0.75/min-2 unchanged)."
+  "missedOpportunityDetectionCooldownMs": 1800000,
+  "missedOpportunityEvaluationHorizonMinutes": 60,
+  "missedOpportunityLookbackMs": 900000,
+  "championChallengerMinSampleSize": 20,
+  "championChallengerMinImprovementMargin": 0.05,
+  "calibrationMaxObservationAgeMs": 604800000,
+  "honesty": "Continuous intelligence, not continuous trading. OpportunityDiscovery never emits TRADE_IDEA_GENERATED. Planner cap is MarketDataWorker.getEffectiveStreamingCap(): Alpaca/default uses maxActiveSubscriptions=12; ibkr_gateway raises hardCapOverride to ibkrConnection.maxMarketDataLines (90). When emptySlots>0, Discovery fills up to maxNewSubscriptionsPerCycle (20) per scan. OpportunityScreener ideas need ARGUS_OPPORTUNITY_IDEAS_ENABLED (one vote — consensus 0.75/min-2 unchanged). Missed-opportunity detection (Phase 4F) is diagnostic-only: it classifies where a PROMOTE-recommended candidate stalled in the funnel using existing telemetry, and never emits a trade idea or affects sizing/consensus."
 }

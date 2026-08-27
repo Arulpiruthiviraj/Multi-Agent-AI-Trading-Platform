@@ -53,6 +53,7 @@ import { ConfluenceCoordinator } from './ConfluenceCoordinator';
 import { setPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { tradingSafety } from '../config/tradingSafety';
 import { CONSENSUS_APPROVAL_THRESHOLD, MIN_INDEPENDENT_AGREEING_AGENTS } from './ChiefTraderAgent';
+import { getRecentCandidates, resetRecentCandidatesForTests } from '../core/recentCandidateRegistry';
 
 function technicalIdea(overrides: Record<string, unknown> = {}) {
   return {
@@ -97,6 +98,13 @@ describe('ConfluenceCoordinator', () => {
     await flush();
     expect(evaluateSymbol).toHaveBeenCalledTimes(1);
     expect(evaluateOnDemand).toHaveBeenCalledTimes(1);
+  });
+
+  it('Phase 9 same-candidate convergence: records the triggered symbol in recentCandidateRegistry so Fundamental/MacroAgent can prioritize it', async () => {
+    resetRecentCandidatesForTests();
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ symbol: 'NVDA' }));
+    await flush();
+    expect(getRecentCandidates(300000)).toContain('NVDA');
   });
 
   it('agents remain independent: on-demand calls receive ONLY the symbol - no side, confidence, or reasoning', async () => {

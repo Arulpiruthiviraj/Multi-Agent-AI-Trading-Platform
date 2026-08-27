@@ -5,13 +5,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 const { emitTradeIdea, emit } = vi.hoisted(() => ({ emitTradeIdea: vi.fn(), emit: vi.fn() }));
 const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
-const { getLatestPrice, subscribe } = vi.hoisted(() => ({ getLatestPrice: vi.fn(), subscribe: vi.fn() }));
+const { getLatestPrice, subscribe, getLatestPriceAgeMs } = vi.hoisted(() => ({
+  getLatestPrice: vi.fn(),
+  subscribe: vi.fn(),
+  // Phase 7F: agentRoundRobin's fresh-symbol filter reads this - default to "fresh" (age 0) so
+  // these pre-existing tests keep exercising the full universe exactly as before this change.
+  getLatestPriceAgeMs: vi.fn((_s: string) => 0),
+}));
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea, emit } }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
-vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice, subscribe } }));
+vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice, subscribe, getLatestPriceAgeMs } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
   looksLikeRateLimitResponse: () => false,
@@ -312,5 +318,89 @@ describe('FundamentalAnalysisAgent - currentPrice attachment (zero-trade audit f
     const idea = emitTradeIdea.mock.calls[0][0];
     expect(idea.side).toBe('HOLD');
     expect(idea.currentPrice).toBe(99.5);
+  });
+});
+
+describe('FundamentalAnalysisAgent - Phase 7F round-robin fix (prioritize symbols with fresh ticks)', () => {
+  let agent: any;
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockResolvedValue(null);
+    getLatestPrice.mockReturnValue(100);
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    process.env.GEMINI_API_KEY = 'test-key';
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'x' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+    agent = new FundamentalAnalysisAgent();
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('selects only from symbols with a fresh tick when exactly one qualifies, instead of blindly cycling the full universe', async () => {
+    // Universe (mocked above) is ['NVDA', 'AAPL', 'TSLA'] - make only AAPL "fresh".
+    getLatestPriceAgeMs.mockImplementation((s: string) => (s === 'AAPL' ? 0 : 999999));
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.symbol).toBe('AAPL');
+  });
+
+  it('falls back to the full universe when nothing currently has a fresh tick (preserves prior behavior)', async () => {
+    getLatestPriceAgeMs.mockReturnValue(999999);
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(['NVDA', 'AAPL', 'TSLA']).toContain(idea.symbol);
+  });
+});
+
+describe('FundamentalAnalysisAgent - Phase 9 same-candidate convergence (prioritize a recent real candidate)', () => {
+  let agent: any;
+
+  beforeEach(async () => {
+    const { resetRecentCandidatesForTests } = await import('../core/recentCandidateRegistry');
+    resetRecentCandidatesForTests();
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockResolvedValue(null);
+    getLatestPrice.mockReturnValue(100);
+    getLatestPriceAgeMs.mockReturnValue(0); // all three symbols fresh
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    process.env.GEMINI_API_KEY = 'test-key';
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'x' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+    agent = new FundamentalAnalysisAgent();
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('prefers a recently-recorded real candidate over the generic fresh-symbol pool when both are fresh', async () => {
+    const { recordCandidate } = await import('../core/recentCandidateRegistry');
+    recordCandidate('TSLA');
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.symbol).toBe('TSLA');
+  });
+
+  it('falls back to the plain fresh-symbol pool when the recorded candidate is not part of the universe/is stale', async () => {
+    const { recordCandidate } = await import('../core/recentCandidateRegistry');
+    recordCandidate('ZZZZ', Date.now() - 10 * 60 * 1000); // outside recentCandidatePriorityMaxAgeMs
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(['NVDA', 'AAPL', 'TSLA']).toContain(idea.symbol);
   });
 });

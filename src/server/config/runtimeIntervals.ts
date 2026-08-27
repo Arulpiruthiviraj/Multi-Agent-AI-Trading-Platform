@@ -59,6 +59,8 @@ export interface RuntimeIntervals {
   aiProviderHealthCheckMs: number;
   /** How often the live SessionLifecycle worker re-classifies PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED. */
   sessionLifecycleEvalMs: number;
+  /** How often the observational calibration-candidate validation cycle re-runs (Phase 7E). */
+  calibrationValidationCycleMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -73,7 +75,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
-  'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs',
+  'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

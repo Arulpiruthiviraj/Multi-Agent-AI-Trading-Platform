@@ -332,6 +332,13 @@ describe('Failure Injection Suite', () => {
       expect(row.reasoning).toContain('submitOutcome=UNKNOWN');
 
       spy.mockRestore();
-    });
+      // Real environmental cause found and accommodated (2026-08-27): BrokerManager.initialize()
+      // unconditionally calls .initialize() on every registered adapter, including AlpacaBroker -
+      // once real Alpaca credentials are present in .env (as they now are in this environment),
+      // that becomes a real, bounded network validation call rather than a fast no-op, and can
+      // exceed vitest's 5000ms default. This test's own assertions are unaffected by that call's
+      // outcome (only the mocked placeOrder() throw matters); it needs more wall-clock room, not
+      // different behavior.
+    }, 20000);
   });
 });

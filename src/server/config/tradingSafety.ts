@@ -21,6 +21,34 @@ export interface TradingSafety {
   disagreementPenalty: number;
   consensusApprovalThreshold: number;
   minIndependentAgreeingAgents: number;
+  /**
+   * Phase 7E (MODERATE consensus tier, 2026-08-27). Additive, PAPER-only, default-OFF env flag.
+   * When enabled, an idea whose confidence falls in [moderateMinConfidence, consensusApprovalThreshold)
+   * can still be approved, but only through the SEPARATE, stricter MODERATE ladder in
+   * ChiefTraderAgent.ts (same independent-agent floor and hard vetoes as the STRONG path, PLUS a
+   * statistically-above-chance calibration-trust gate - see ModerateTierEvaluator.ts). Never changes
+   * the STRONG (>= consensusApprovalThreshold) path's behavior.
+   */
+  consensusModerateTierEnabledEnvVar: string;
+  /**
+   * Lower bound of the MODERATE band. Deliberately reused from ConfidenceCalibration.ts's own
+   * CONFIDENCE_BUCKETS[1].low (also debateTriggerConfidence / minStrategyConfidenceToTrade) rather
+   * than a freshly-picked number, so the MODERATE band never straddles two different calibration
+   * buckets (which would make the per-agent trust lookup ambiguous) and is not an arbitrary
+   * same-day-data artifact. This is a POLICY parameter, not an empirically-proven optimum - see
+   * ModerateTierEvaluator.ts's header for the full justification and the real-data finding it is
+   * based on (as of 2026-08-27, no calibration bucket clears the statistical-significance bar
+   * below, so MODERATE is expected to approve zero ideas until real evidence changes that).
+   */
+  moderateMinConfidence: number;
+  /**
+   * A per-agent-per-bucket calibration champion (ChampionChallengerService.ts CHAMPION status for
+   * versionType calibration:<agent>:<bucketLow>-<bucketHigh>) is only trusted by the MODERATE tier
+   * when its cluster-corrected Wilson LOWER bound exceeds this value. 0.5 is literally chance for a
+   * binary WIN/LOSS outcome - kept config-driven (not a TS literal) per CLAUDE.md, not because it is
+   * a tunable business preference.
+   */
+  moderateCalibrationTrustMinWilsonLowerBound: number;
   /** Must match config/strategyFocus.json defaultFocus. Catalog/modes stay in strategyFocus.json. */
   defaultStrategyFocus: string;
   openAliceUncertainBandLow: number;
@@ -77,6 +105,25 @@ export interface TradingSafety {
    * (alphaVantageDailyRequestBudget - this value); MacroAgent itself is exempt from that cap.
    */
   alphaVantageMacroReservedRequests: number;
+  /**
+   * Phase 9D (Zero-Trade Root-Cause Resolution, 2026-08-27): real DB evidence showed MacroAgent's
+   * alphavantage:macro:GLOBAL cache row had fetched_at=0 (never once successfully populated) with a
+   * rolling 24h rate_limited_until that kept getting re-armed. fetchMacro() fires 3 sequential
+   * AlphaVantage calls (INFLATION, FEDERAL_FUNDS_RATE, UNEMPLOYMENT) back-to-back with zero pacing -
+   * plausible enough on its own to trip AlphaVantage's real per-minute limiter even with daily
+   * budget headroom. Small delay between the 3 sub-calls to reduce that risk; see the paired fix in
+   * MacroAgent.ts that also stops treating a purely-internal budget-exhaustion signal as if it were
+   * a genuine external rate-limit response (only the latter should burn the real 24h cooldown).
+   */
+  alphaVantageMacroSubcallDelayMs: number;
+  /**
+   * Phase 9 (same-candidate convergence, 2026-08-27). How long a ConfluenceCoordinator-recorded
+   * candidate symbol (recentCandidateRegistry.ts) stays eligible to preempt FundamentalAgent/
+   * MacroAgent's generic fresh-symbol round-robin. Deliberately wider than consensusIdeaMaxAgeMs
+   * (60s) since Fundamental/Macro only tick every ~60-75s each - a 60s window would almost never
+   * survive to the next tick. 5 minutes matches the scale of stalePriceThresholdMs.
+   */
+  recentCandidatePriorityMaxAgeMs: number;
   /**
    * Agent Confluence Architecture Audit (2026-08-25): master switch for ConfluenceCoordinator.ts —
    * when true, a qualifying TechnicalAgent signal triggers an immediate, independent on-demand
@@ -322,6 +369,9 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'disagreementPenalty',
   'consensusApprovalThreshold',
   'minIndependentAgreeingAgents',
+  'moderateMinConfidence',
+  'moderateCalibrationTrustMinWilsonLowerBound',
+  'recentCandidatePriorityMaxAgeMs',
   'openAliceUncertainBandLow',
   'openAliceUncertainBandHigh',
   'maxSingleSymbolConcentrationPct',
@@ -350,6 +400,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'alphaVantageDailyRequestBudget',
   'alphaVantageBudgetLockTimeoutMs',
   'alphaVantageMacroReservedRequests',
+  'alphaVantageMacroSubcallDelayMs',
   'confluenceCoordinatorConfidenceThreshold',
   'confluenceCoordinatorCooldownMs',
   'consensusMaxProviders',
@@ -485,6 +536,9 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.quantColdStartBootstrapEnabledEnvVar !== 'string' || !raw.quantColdStartBootstrapEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: quantColdStartBootstrapEnabledEnvVar');
   }
+  if (typeof raw.consensusModerateTierEnabledEnvVar !== 'string' || !raw.consensusModerateTierEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: consensusModerateTierEnabledEnvVar');
+  }
   if (typeof raw.tradingAgentsShadowEnabledEnvVar !== 'string' || !raw.tradingAgentsShadowEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: tradingAgentsShadowEnabledEnvVar');
   }
@@ -522,6 +576,11 @@ export function isTradingAgentsShadowEnabled(): boolean {
 /** Off unless the operator has explicitly set this env var to 'true'. See quantColdStartBootstrapEnabledEnvVar's doc comment above. */
 export function isQuantColdStartBootstrapEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantColdStartBootstrapEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See consensusModerateTierEnabledEnvVar's doc comment above. */
+export function isConsensusModerateTierEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.consensusModerateTierEnabledEnvVar);
 }
 
 /** Off unless the operator has explicitly set this env var to 'true'. See quantJavaCoreEnabledEnvVar's doc comment above. */
