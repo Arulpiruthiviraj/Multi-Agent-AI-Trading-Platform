@@ -13,6 +13,7 @@ import {
   isOpportunityIdeasEnabled,
 } from '../config/continuousIntelligence';
 import { markCandidatePromoted, upsertCandidate } from './candidateLifecycle';
+import { recordCandidate } from '../core/recentCandidateRegistry';
 
 export interface ScreenerTickResult {
   emitted: boolean;
@@ -86,6 +87,11 @@ export function considerScreenerTick(
     evidence: { returnPct: ret, bars: hist.length },
   });
   markCandidatePromoted(symbol, now);
+  // Phase 9 (same-candidate convergence): a real, cheap-screened momentum candidate (this whole
+  // function's own real tick-return calculation above) is exactly the "worth a look" signal
+  // Fundamental/MacroAgent's priority round-robin already consults from Technical/Quant/
+  // OpportunityDiscovery - bridging it here unifies all four real candidate sources.
+  recordCandidate(symbol, now);
   return { emitted: true, reason: 'EMITTED', symbol };
 }
 

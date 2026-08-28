@@ -129,5 +129,11 @@ describe('OpportunityDiscovery', () => {
     expect(subs).toHaveLength(1);
     expect(subs[0].reason).toBe('SNAPSHOT_HOT_SWAP');
     expect(subs[0].symbol).toBe('AMD');
+
+    // Phase 9 (same-candidate convergence): a real momentum-ranked subscribe request also
+    // registers into recentCandidateRegistry, so Fundamental/MacroAgent's priority round-robin
+    // converges toward the broad-universe discovery system's own real ranking too.
+    const { getRecentCandidates } = await import('../core/recentCandidateRegistry');
+    expect(getRecentCandidates(300000)).toContain('AMD');
   });
 });

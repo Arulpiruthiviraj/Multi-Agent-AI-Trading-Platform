@@ -19,6 +19,7 @@ import { classifyAsset, isPennyOrMicro, type AssetSnapshot } from '../multiAsset
 import { evaluateAssetSafety } from '../multiAsset/SafetyFilter';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { upsertCandidate } from './candidateLifecycle';
+import { recordCandidate } from '../core/recentCandidateRegistry';
 import { getCachedBroadUniverseSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
 import {
   getLastSnapshotScore,
@@ -316,6 +317,14 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         momentumScore: score,
         honesty: 'Subscribe request only — not a trade idea and not an order.',
       });
+      // Phase 9 (same-candidate convergence, third real source): a real, momentum-ranked
+      // subscribe request is exactly the kind of "worth a look" signal ConfluenceCoordinator/
+      // QuantSignalAgent already register - bridging it here lets other agents' own priority
+      // round-robins (see recentCandidateRegistry.ts's callers) converge toward the broad-
+      // universe discovery system's own real ranking too, not only reactive signals. Still
+      // never a vote, never an idea, never touches OMS/RiskEngine/broker - a pure in-memory
+      // registry write, and this file still imports none of the agent-specific modules.
+      recordCandidate(symbol);
     }
 
     lastScan = {
