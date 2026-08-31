@@ -83,35 +83,50 @@ function unconditionalWinRate(rows: Row[], agent: string): number | null {
 /** Analyzes one ordered agent pair. windowMs bounds how close in time two predictions on the same
  *  symbol must be to count as the "same real evaluation episode" - reuses the same window
  *  recentCandidateRegistry already uses for same-candidate convergence, rather than inventing a new
- *  number. */
+ *  number.
+ *
+ *  Real performance fix (found live, 2026-08-31): the original implementation scanned the ENTIRE
+ *  bRows array for every single aRows entry - with TechnicalAgent's real ~55k-row history as
+ *  agentA, that is up to ~46M comparisons for just the Technical<->Quant pair, timing out the
+ *  default CLI request. Grouping bRows by symbol first (a real universe of ~120-200 symbols)
+ *  shrinks the inner scan to only that symbol's own rows - the same matching semantics (nearest
+ *  same-symbol B row within windowMs, not already paired), just without re-scanning every
+ *  unrelated symbol's rows on every outer iteration. */
 export function analyzePair(rows: Row[], agentA: string, agentB: string, windowMs: number): AgentPairDependence {
   const aRows = rows.filter((r) => r.agentName === agentA).sort((x, y) => x.timestampMs - y.timestampMs);
   const bRows = rows.filter((r) => r.agentName === agentB).sort((x, y) => x.timestampMs - y.timestampMs);
+
+  const bBySymbol = new Map<string, Row[]>();
+  for (const b of bRows) {
+    const list = bBySymbol.get(b.symbol);
+    if (list) list.push(b);
+    else bBySymbol.set(b.symbol, [b]);
+  }
+  const usedB = new Set<Row>();
 
   let coOccurrenceN = 0;
   let agreementN = 0;
   let disagreementN = 0;
   let agreementWins = 0;
   let agreementGraded = 0;
-  const usedB = new Set<number>();
 
   for (const a of aRows) {
+    const candidates = bBySymbol.get(a.symbol);
+    if (!candidates) continue;
     // Nearest same-symbol B prediction within the window, not already paired to an earlier A row.
-    let bestIdx = -1;
+    let best: Row | null = null;
     let bestGap = Infinity;
-    for (let i = 0; i < bRows.length; i++) {
-      if (usedB.has(i)) continue;
-      const b = bRows[i];
-      if (b.symbol !== a.symbol) continue;
+    for (const b of candidates) {
+      if (usedB.has(b)) continue;
       const gap = Math.abs(b.timestampMs - a.timestampMs);
       if (gap <= windowMs && gap < bestGap) {
         bestGap = gap;
-        bestIdx = i;
+        best = b;
       }
     }
-    if (bestIdx === -1) continue;
-    const b = bRows[bestIdx];
-    usedB.add(bestIdx);
+    if (!best) continue;
+    const b = best;
+    usedB.add(b);
     coOccurrenceN++;
 
     const aDirectional = a.side === 'BUY' || a.side === 'SELL';

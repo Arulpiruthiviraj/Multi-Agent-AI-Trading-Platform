@@ -598,9 +598,13 @@ const commands: Record<string, () => Promise<void>> = {
     // Phase 10 (2026-08-31, Agent Edge Discovery & Strategy Validation): decision-ready agent-edge/
     // strategy-edge/agent-combination/trading-eligibility report, built entirely from real
     // agent_predictions/prediction_outcomes/agent_performance_stats/calibration data.
+    // Real, historically-growing tables (TechnicalAgent alone: ~55k rows) mean this report's
+    // full-scan statistics (OOS/walk-forward validation especially, one full fetch per agent) can
+    // meaningfully exceed the other, cheaper reports' default timeout - a real cost of doing this
+    // rigorously rather than a hang. Defaults longer here; still overridable via the same env var.
     const res = await fetch(`${BASE}/api/v2/observability/agent-edge?format=text`, {
       headers: cliAuthHeaders(),
-      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 15_000)),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 60_000)),
     });
     console.log(await res.text());
   },
