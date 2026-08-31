@@ -12,6 +12,7 @@ import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observab
 import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
 import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
 import { buildAgentEdgeDiscoveryReport, formatAgentEdgeDiscoveryReport } from '../observability/agentEdgeDiscoveryReport';
+import { buildStrategyReadinessReport, formatStrategyReadinessReport } from '../research/strategyReadiness';
 
 export const observabilityRouter = Router();
 
@@ -149,6 +150,23 @@ observabilityRouter.get('/agent-edge', async (req, res) => {
       return;
     }
     res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 10 continuation (2026-08-31): strategy activation matrix + real per-strategy edge status
+// (argus-cli strategy-readiness) - which of the 5 CORE quant strategies are implemented/enabled/
+// reachable, and what real evidence exists for each (EV-backed vs. cold-start-bootstrap-sourced,
+// never merged).
+observabilityRouter.get('/strategy-readiness', async (req, res) => {
+  try {
+    const rows = await buildStrategyReadinessReport();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatStrategyReadinessReport(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }

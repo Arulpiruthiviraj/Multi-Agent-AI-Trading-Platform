@@ -16,11 +16,34 @@
  * precedes it - the same heuristic PortfolioMonitor.ts (Phase 16B) already uses for live exits.
  * Returns null (never a fabricated rate) when zero real closed trades exist for a strategy - which,
  * per ARGUS_PAPER_TRADING_VALIDATION.md's own finding, is the real state of this environment today.
+ *
+ * Real defect found and fixed (Phase 10, 2026-08-31 Agent Edge Discovery mission): this query had
+ * NO exclusion of REPLAY/BACKTEST/SIMULATION-tagged trades, unlike ReflectionEngine.ts's and
+ * PortfolioMonitor.ts's own use of the exact same `trades` table for the exact same "is this real
+ * organic experience" question - both of those already exclude NON_LIVE_OPENING_TRADE_ENVS
+ * (omsEntryPrice.ts). Live query confirmed this is not theoretical: 62 REPLAY-tagged FILLED
+ * MOMENTUM_BREAKOUT round-trips and 8 REPLAY-tagged FILLED TREND_FOLLOWING round-trips exist in
+ * `trades` right now, both well above MIN_SAMPLE_SIZE_FOR_KELLY - meaning this function could have
+ * silently reported a "real, live-history" win rate for those two strategies that was actually
+ * entirely simulated/historical-replay evidence, letting QuantSignalAgent's EV/Kelly gate treat
+ * REPLAY performance as if it were organic paper experience. Excluding the same environments the
+ * other two modules already exclude closes this - a strategy's live win rate now genuinely requires
+ * organic (or legacy-untagged) closed trades only.
  * ==========================================================
  */
 import { db } from '../../db';
 import * as schema from '../../db/schema';
 import { and, eq, isNotNull, lte, desc } from 'drizzle-orm';
+import { NON_LIVE_OPENING_TRADE_ENVS } from '../../services/omsEntryPrice';
+
+/** A null/blank execution_environment is a legacy pre-tagging row (real trade, no stamp yet), not
+ *  REPLAY/BACKTEST - it must stay included; only the known-synthetic environments are excluded.
+ *  Same convention as ReflectionEngine.ts/PortfolioMonitor.ts's own use of this exact exclusion set -
+ *  filtered in JS (not a SQL NOT IN) so a NULL column value is never accidentally excluded by
+ *  SQL's three-valued NOT IN semantics. */
+function isOrganicOrUntagged(executionEnvironment: string | null): boolean {
+  return !NON_LIVE_OPENING_TRADE_ENVS.has(String(executionEnvironment || '').toUpperCase());
+}
 
 export interface LiveStrategyWinRate {
   strategyId: string;
@@ -31,16 +54,16 @@ export interface LiveStrategyWinRate {
 }
 
 export async function computeLiveStrategyWinRate(strategyId: string): Promise<LiveStrategyWinRate | null> {
-  const closedSells = await db.select().from(schema.trades).where(
+  const closedSells = (await db.select().from(schema.trades).where(
     and(eq(schema.trades.side, 'SELL'), eq(schema.trades.status, 'FILLED'), isNotNull(schema.trades.profitLoss))
-  );
+  )).filter((s) => isOrganicOrUntagged(s.executionEnvironment));
 
   let wins = 0;
   let losses = 0;
 
   for (const sell of closedSells) {
     const cutoff = sell.filledAt ?? sell.timestamp;
-    const [openingBuy] = await db.select().from(schema.trades).where(
+    const openingBuyCandidates = await db.select().from(schema.trades).where(
       and(
         eq(schema.trades.symbol, sell.symbol),
         eq(schema.trades.side, 'BUY'),
@@ -48,7 +71,8 @@ export async function computeLiveStrategyWinRate(strategyId: string): Promise<Li
         isNotNull(schema.trades.quantStrategyId),
         lte(schema.trades.filledAt, cutoff),
       )
-    ).orderBy(desc(schema.trades.filledAt)).limit(1);
+    ).orderBy(desc(schema.trades.filledAt));
+    const openingBuy = openingBuyCandidates.find((b) => isOrganicOrUntagged(b.executionEnvironment));
 
     if (!openingBuy || openingBuy.quantStrategyId !== strategyId) continue;
     if ((sell.profitLoss ?? 0) > 0) wins++; else losses++;

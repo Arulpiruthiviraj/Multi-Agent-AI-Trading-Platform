@@ -8,6 +8,7 @@ import { buildAgentEdgeReport, formatAgentEdgeReport, type AgentEdgeRow } from '
 import { buildAgentDependenceReport, formatAgentDependenceReport, type AgentPairDependence } from '../research/agentDependenceAnalysis';
 import { buildAgentTradingEligibilityReport, formatAgentTradingEligibilityReport, type AgentBucketEligibility } from '../research/agentTradingEligibility';
 import { buildWeightConsistencyReport, formatWeightConsistencyReport, type WeightConsistencyRow } from '../research/agentWeightConsistency';
+import { buildStrategyReadinessReport, formatStrategyReadinessReport, type StrategyReadinessRow } from '../research/strategyReadiness';
 
 export interface AgentEdgeDiscoveryReport {
   agentEdge: AgentEdgeRow[];

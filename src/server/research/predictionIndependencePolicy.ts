@@ -39,10 +39,28 @@ export function isExcludedFromWeightLearning(agentName: string): boolean {
  * (QuantSignalAgent.ts) and must never share a statistic with EV-backed strategy ideas. Returns
  * null when no agent-specific sub-identity applies (the default (symbol, side) grouping already
  * used by effectiveSampleSize.ts is sufficient for every other agent).
+ *
+ * Real defect fixed (Phase 10, 2026-08-31 "why is QuantEngine 100% COLD_START_BOOTSTRAP"
+ * investigation): QuantSignalAgent.ts's cold-start path already names the REAL underlying named
+ * strategy that triggered it right in the reasoning text - "Cold-start bootstrap: MOMENTUM_BREAKOUT
+ * is COLD_START (zero real closed trades)..." - but this function used to check for the bootstrap
+ * phrase FIRST and return the same generic 'COLD_START_BOOTSTRAP' key regardless of which real
+ * strategy was actually behind it. Since ARGUS has zero organic closed trades to date (every named
+ * strategy is honestly COLD_START today - not a bug, just the real, current state), EVERY
+ * strategy-sourced idea has gone through this exact bootstrap path, permanently erasing which real
+ * strategy produced it before a single observation was ever logged - a genuine circular dependency
+ * (a strategy needs its own graded track record to escape bootstrap mode, but bootstrap mode never
+ * let it keep one). Extracting the real strategy name now (still honestly suffixed, never conflated
+ * with an EV-backed observation of the same strategy) lets each named strategy start accumulating
+ * its OWN attributable evidence as bootstrap trades resolve, instead of all of them forever sharing
+ * one undifferentiated bucket.
  */
 export function secondaryGroupKey(agentName: string, reasoning: string | null | undefined): string | null {
   if (agentName !== 'QuantEngine' || !reasoning) return null;
-  if (reasoning.includes('Cold-start bootstrap')) return 'COLD_START_BOOTSTRAP';
+  if (reasoning.includes('Cold-start bootstrap')) {
+    const namedStrategy = /Cold-start bootstrap:\s*([A-Z0-9_]+)\s+is\s/.exec(reasoning);
+    return namedStrategy ? `${namedStrategy[1]}__COLD_START_BOOTSTRAP` : 'COLD_START_BOOTSTRAP';
+  }
   const match = /QuantEngine\/([A-Z0-9_]+):/.exec(reasoning);
   return match ? match[1] : null;
 }

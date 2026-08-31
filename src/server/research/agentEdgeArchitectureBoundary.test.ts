@@ -17,6 +17,7 @@ const FILES = [
   'chronologicalEdgeValidation.ts',
   'agentTradingEligibility.ts',
   'agentWeightConsistency.ts',
+  'strategyReadiness.ts',
 ];
 
 function sourceOf(file: string): string {
