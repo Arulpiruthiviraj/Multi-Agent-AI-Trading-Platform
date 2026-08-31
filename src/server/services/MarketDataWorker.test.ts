@@ -528,6 +528,26 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
   // actively-streamed set gets one genuine chance at live data on its next evaluation cycle,
   // without ever growing the permanent subscription universe or evicting a protected/rescued symbol.
   describe('requestTemporaryDataRescue()', () => {
+    it('is a free no-op for a permanently protected core symbol - never consumes a bounded rescue slot, since it was never at eviction risk to begin with (real defect found live in production: QQQ/AAPL/TSLA rescues fired on a boot-time transient and could have starved a genuinely at-risk symbol out of the bounded budget)', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      const protectedSymbol = continuousIntelligence.protectedSymbols[0];
+      const result = worker.requestTemporaryDataRescue(protectedSymbol, 'boot-transient');
+      expect(result.granted).toBe(true);
+      expect(result.evictedSymbol).toBeNull();
+      // No bounded-slot bookkeeping was created for it at all.
+      expect(worker.getActiveTemporaryRescues().map((r) => r.symbol)).not.toContain(protectedSymbol);
+
+      // Confirm the full concurrent budget is still available for a genuinely at-risk symbol.
+      for (const sym of ['LNG', 'XOM', 'CRM']) {
+        const r = worker.requestTemporaryDataRescue(sym, 'real-need');
+        expect(r.granted).toBe(true);
+      }
+    });
+
     it('subscribes and protects a not-yet-subscribed symbol at capacity by evicting exactly one safe candidate', async () => {
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       const cap = continuousIntelligence.maxActiveSubscriptions;

@@ -231,6 +231,18 @@ export class MarketDataWorker {
       return { granted: false, symbol: quoteKey(symbol), alreadySubscribed: false, evictedSymbol: null, deniedReason: 'INVALID_SYMBOL' };
     }
 
+    // Real defect found live in production (2026-08-31, hours after this mechanism deployed):
+    // a boot-time transient (every symbol briefly shows no tick age at all right after process
+    // start) caused rescue GRANTS for QQQ/AAPL/TSLA - permanently protected/core symbols that were
+    // never actually at eviction risk. Each grant consumed one of only
+    // maxConcurrentTemporaryDataRescues slots, which could starve a genuinely at-risk symbol
+    // (the real MOMENTUM_BREAKOUT case, e.g. LNG/XOM) out of a rescue during the same window.
+    // A permanently protected symbol never needs eviction-immunity - it already has it
+    // unconditionally - so this never touches the bounded rescue budget for it.
+    if (protectedStreamingSet().has(ticker)) {
+      return { granted: true, symbol: ticker, alreadySubscribed: this.activeStreams.has(ticker), evictedSymbol: null };
+    }
+
     // Extending an already-active rescue (or one on an already-subscribed symbol) never evicts
     // anyone and never counts twice against the concurrent-rescue cap.
     const alreadyRescued = this.hasActiveRescue(ticker);
