@@ -163,11 +163,19 @@ export async function buildAgentEdgeReport(): Promise<AgentEdgeRow[]> {
 }
 
 export function formatAgentEdgeReport(rows: AgentEdgeRow[]): string {
-  const lines = ['AGENT EDGE', '----------', 'Agent'.padEnd(24) + 'Strategy'.padEnd(24) + 'N'.padEnd(8) + 'EffN'.padEnd(8) + 'WinRate'.padEnd(10) + 'WilsonLo'.padEnd(10) + 'Brier'.padEnd(8) + 'Status'];
+  // Real bug fixed twice already (a fixed column width overflowed once for 'COLD_START_BOOTSTRAP'
+  // and again for the longer '<STRATEGY>__COLD_START_BOOTSTRAP' combined ids) - width is now
+  // derived from the actual longest value in this specific report, so it can never overflow again
+  // regardless of how long a future strategy/sub-identity name gets.
+  const strategyLabels = rows.map((r) => r.strategyId ?? '(overall)');
+  const agentWidth = Math.max(24, ...rows.map((r) => r.agentName.length + 2));
+  const strategyWidth = Math.max(10, ...strategyLabels.map((s) => s.length + 2));
+
+  const lines = ['AGENT EDGE', '----------', 'Agent'.padEnd(agentWidth) + 'Strategy'.padEnd(strategyWidth) + 'N'.padEnd(8) + 'EffN'.padEnd(8) + 'WinRate'.padEnd(10) + 'WilsonLo'.padEnd(10) + 'Brier'.padEnd(8) + 'Status'];
   for (const r of rows) {
     lines.push(
-      r.agentName.padEnd(24)
-      + (r.strategyId ?? '(overall)').padEnd(24)
+      r.agentName.padEnd(agentWidth)
+      + (r.strategyId ?? '(overall)').padEnd(strategyWidth)
       + String(r.rawN).padEnd(8)
       + String(r.effectiveN).padEnd(8)
       + (r.winRate !== null ? r.winRate.toFixed(3) : 'N/A').padEnd(10)

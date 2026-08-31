@@ -105,4 +105,17 @@ describe('agentEdgeAnalytics', () => {
     expect(text).toContain('AGENT EDGE');
     expect(text).toContain('WinnerAgent');
   });
+
+  it('formatAgentEdgeReport never overflows a column, even for a long combined strategy id like "<STRATEGY>__COLD_START_BOOTSTRAP" - real bug fixed twice with fixed widths, now derives width from the longest actual value', () => {
+    const longRows: import('./agentEdgeAnalytics').AgentEdgeRow[] = [{
+      agentName: 'QuantEngine', strategyId: 'PULLBACK_CONTINUATION__COLD_START_BOOTSTRAP',
+      rawN: 494, effectiveN: 22, winRate: 0.227, wilsonLower: 0.101, wilsonUpper: 0.4,
+      brierScore: 0.362, buyRate: 1, sellRate: 0, holdRate: 0, abstentionRate: 0,
+      sampleMaturity: 'LEARNING_ELIGIBLE', statisticalStatus: 'BELOW_CHANCE', excludedFromWeightLearning: false,
+    }];
+    const text = mod.formatAgentEdgeReport(longRows);
+    const dataLine = text.split('\n').find((l) => l.includes('PULLBACK_CONTINUATION'))!;
+    // The long strategy id must not run directly into the "494" N value with no separating space.
+    expect(dataLine).not.toMatch(/BOOTSTRAP494/);
+  });
 });
