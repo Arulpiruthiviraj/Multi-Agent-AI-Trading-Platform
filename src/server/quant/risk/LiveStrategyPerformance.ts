@@ -53,14 +53,32 @@ export interface LiveStrategyWinRate {
   winProbability: number;
 }
 
-export async function computeLiveStrategyWinRate(strategyId: string): Promise<LiveStrategyWinRate | null> {
+/** One real, organic (or legacy-untagged) closed round-trip: a FILLED SELL matched to the most
+ *  recent FILLED BUY for the same symbol preceding it (the same heuristic PortfolioMonitor.ts's
+ *  live exits already use - this codebase has no per-lot position tracking). Real fill prices,
+ *  real quantity, real dollar profitLoss - never a fabricated or estimated number. */
+export interface RealClosedRoundTrip {
+  strategyId: string;
+  symbol: string;
+  entryPrice: number;
+  exitPrice: number;
+  quantity: number;
+  profitLoss: number;
+  filledAt: string;
+}
+
+/**
+ * Phase 13 (2026-08-31 real-edge audit): shared by computeLiveStrategyWinRate() (below) and
+ * StrategyProfitabilityReport.ts, so this exact real BUY/SELL matching logic exists in exactly
+ * one place rather than being reimplemented per consumer. Returns every strategy's real closed
+ * round-trips - callers filter by strategyId themselves.
+ */
+export async function getRealClosedRoundTrips(): Promise<RealClosedRoundTrip[]> {
   const closedSells = (await db.select().from(schema.trades).where(
     and(eq(schema.trades.side, 'SELL'), eq(schema.trades.status, 'FILLED'), isNotNull(schema.trades.profitLoss))
   )).filter((s) => isOrganicOrUntagged(s.executionEnvironment));
 
-  let wins = 0;
-  let losses = 0;
-
+  const roundTrips: RealClosedRoundTrip[] = [];
   for (const sell of closedSells) {
     const cutoff = sell.filledAt ?? sell.timestamp;
     const openingBuyCandidates = await db.select().from(schema.trades).where(
@@ -73,11 +91,24 @@ export async function computeLiveStrategyWinRate(strategyId: string): Promise<Li
       )
     ).orderBy(desc(schema.trades.filledAt));
     const openingBuy = openingBuyCandidates.find((b) => isOrganicOrUntagged(b.executionEnvironment));
-
-    if (!openingBuy || openingBuy.quantStrategyId !== strategyId) continue;
-    if ((sell.profitLoss ?? 0) > 0) wins++; else losses++;
+    if (!openingBuy || !openingBuy.quantStrategyId) continue;
+    roundTrips.push({
+      strategyId: openingBuy.quantStrategyId,
+      symbol: sell.symbol,
+      entryPrice: openingBuy.price,
+      exitPrice: sell.price,
+      quantity: sell.quantity,
+      profitLoss: sell.profitLoss ?? 0,
+      filledAt: sell.filledAt ?? sell.timestamp,
+    });
   }
+  return roundTrips;
+}
 
+export async function computeLiveStrategyWinRate(strategyId: string): Promise<LiveStrategyWinRate | null> {
+  const mine = (await getRealClosedRoundTrips()).filter((r) => r.strategyId === strategyId);
+  const wins = mine.filter((r) => r.profitLoss > 0).length;
+  const losses = mine.length - wins;
   const sampleSize = wins + losses;
   if (sampleSize === 0) return null;
   return { strategyId, sampleSize, wins, losses, winProbability: wins / sampleSize };

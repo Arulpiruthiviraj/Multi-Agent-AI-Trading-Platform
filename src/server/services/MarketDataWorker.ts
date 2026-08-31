@@ -92,6 +92,9 @@ export class MarketDataWorker {
   private dynamicMomentumScores: Map<string, number> = new Map();
   /** Wall-clock ms when each dynamic symbol was (re)subscribed. */
   private subscribedAtMs: Map<string, number> = new Map();
+  /** Bounded, single-use eviction-immunity grants from requestTemporaryDataRescue() - never a
+   *  permanent subscription; auto-expires and is swept by releaseExpiredTemporaryDataRescues(). */
+  private temporaryRescues: Map<string, { expiresAtMs: number; reason: string }> = new Map();
   /** When set (ibkr_gateway active), overrides Alpaca-safe cap from continuousIntelligence. */
   private hardCapOverride: number | null = null;
   private quoteBackend: MarketDataQuoteBackend = 'alpaca';
@@ -194,6 +197,114 @@ export class MarketDataWorker {
   /** Test-only: freeze/advance wall clock for dwell checks. */
   setNowForTests(ms: number | null): void {
     this.testNowMs = ms;
+  }
+
+  private hasActiveRescue(symbol: string): boolean {
+    const r = this.temporaryRescues.get(symbol);
+    if (!r) return false;
+    if (this.wallMs() >= r.expiresAtMs) {
+      this.temporaryRescues.delete(symbol);
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Phase 13 (2026-08-31 strategy-starvation remediation): a strategy's real, fully-constructed
+   * idea (e.g. QuantEngine's cold-start bootstrap for MOMENTUM_BREAKOUT) can be discarded solely
+   * because assessDataQuality(symbol).tradeBlocked is true for a symbol outside the actively-
+   * streamed set - real, evidence-backed root cause traced in the Phase 13 audit (LNG/XOM winning
+   * MOMENTUM_BREAKOUT's real selection 249 times, 0 real emissions, all blocked by
+   * SYMBOL_NOT_SUBSCRIBED / STALE_MARKET_DATA). This grants that symbol a BOUNDED, single-use
+   * eviction-immunity window so its NEXT evaluation cycle has a genuine chance at live data -
+   * it never bypasses the CURRENT cycle's stale-data block (the caller's current idea is still
+   * correctly discarded if data is stale right now), never fabricates a price, and never grows the
+   * permanent subscription universe: the grant auto-expires (temporaryDataRescueMaxDurationMs) and
+   * is swept by releaseExpiredTemporaryDataRescues() - after that it is exactly as evictable as any
+   * other dynamic symbol, never specially retained.
+   */
+  requestTemporaryDataRescue(symbol: string, reason: string): {
+    granted: boolean; symbol: string; alreadySubscribed: boolean; evictedSymbol: string | null; deniedReason?: string;
+  } {
+    const ticker = looksLikeListedTicker(symbol) || quoteKey(symbol);
+    if (!ticker) {
+      return { granted: false, symbol: quoteKey(symbol), alreadySubscribed: false, evictedSymbol: null, deniedReason: 'INVALID_SYMBOL' };
+    }
+
+    // Extending an already-active rescue (or one on an already-subscribed symbol) never evicts
+    // anyone and never counts twice against the concurrent-rescue cap.
+    const alreadyRescued = this.hasActiveRescue(ticker);
+    const alreadySubscribed = this.activeStreams.has(ticker);
+
+    if (!alreadyRescued) {
+      const activeRescueCount = Array.from(this.temporaryRescues.keys()).filter((s) => this.hasActiveRescue(s)).length;
+      if (activeRescueCount >= continuousIntelligence.maxConcurrentTemporaryDataRescues) {
+        return { granted: false, symbol: ticker, alreadySubscribed, evictedSymbol: null, deniedReason: 'RESCUE_CAPACITY_FULL' };
+      }
+    }
+
+    let evictedSymbol: string | null = null;
+    if (!alreadySubscribed) {
+      const cap = this.effectiveStreamingCap();
+      if (this.activeStreams.size >= cap) {
+        const candidate = this.pickEvictionCandidate();
+        if (!candidate) {
+          return { granted: false, symbol: ticker, alreadySubscribed: false, evictedSymbol: null, deniedReason: 'AT_CAPACITY_NO_SAFE_EVICTION' };
+        }
+        this.unsubscribe(candidate, { force: false });
+        evictedSymbol = candidate;
+        observeSafe(() => {
+          structuredLogger.info('subscription_priority_decision', {
+            category: 'DISCOVERY',
+            eventType: 'SUBSCRIPTION_EVICTED',
+            symbol: candidate,
+            reasoning: `Evicted to free one slot for a bounded temporary data rescue on ${ticker} (${reason}).`,
+          });
+        });
+      }
+      this.subscribe(ticker, { requestedBy: reason });
+    }
+
+    const expiresAtMs = this.wallMs() + Math.max(1, continuousIntelligence.temporaryDataRescueMaxDurationMs);
+    this.temporaryRescues.set(ticker, { expiresAtMs, reason });
+
+    observeSafe(() => {
+      structuredLogger.info('temporary_data_rescue_granted', {
+        category: 'DISCOVERY',
+        eventType: 'TEMPORARY_DATA_RESCUE_GRANTED',
+        symbol: ticker,
+        reasoning: `${reason}${evictedSymbol ? ` - evicted ${evictedSymbol} for one rescue slot` : alreadySubscribed ? ' - already subscribed, only the eviction-immunity window was extended' : ''}. Expires in ${continuousIntelligence.temporaryDataRescueMaxDurationMs}ms; never a permanent subscription.`,
+      });
+    });
+
+    return { granted: true, symbol: ticker, alreadySubscribed, evictedSymbol };
+  }
+
+  /** Read-only view for reports/tests - never mutates state. */
+  getActiveTemporaryRescues(): Array<{ symbol: string; expiresAtMs: number; reason: string }> {
+    return Array.from(this.temporaryRescues.entries())
+      .filter(([s]) => this.hasActiveRescue(s))
+      .map(([symbol, r]) => ({ symbol, expiresAtMs: r.expiresAtMs, reason: r.reason }));
+  }
+
+  /** Periodic sweep: a rescue past its bound stops being specially protected - it does not force
+   *  an unsubscribe (something organic may have kept it useful in the meantime); it simply becomes
+   *  exactly as evictable as any other dynamic symbol again, same as before the rescue. */
+  releaseExpiredTemporaryDataRescues(): void {
+    const now = this.wallMs();
+    for (const [symbol, r] of Array.from(this.temporaryRescues.entries())) {
+      if (now >= r.expiresAtMs) {
+        this.temporaryRescues.delete(symbol);
+        observeSafe(() => {
+          structuredLogger.info('temporary_data_rescue_released', {
+            category: 'DISCOVERY',
+            eventType: 'TEMPORARY_DATA_RESCUE_RELEASED',
+            symbol,
+            reasoning: `Bounded rescue window elapsed (${r.reason}) - no longer specially protected from eviction.`,
+          });
+        });
+      }
+    }
   }
 
   private wallMs(): number {
@@ -325,6 +436,11 @@ export class MarketDataWorker {
   }
 
   private maybeEmitMarketData(symbol: string, price: number, volume: number, timestamp: string) {
+    // Piggybacks on the real tick cadence (cheap - temporaryRescues is bounded by
+    // maxConcurrentTemporaryDataRescues) rather than a dedicated timer; runs regardless of the
+    // Autobot-gated early return just below, since a rescue's bounded expiry must not depend on
+    // whether Autobot happens to be on for whichever OTHER symbol just ticked.
+    if (this.temporaryRescues.size > 0) this.releaseExpiredTemporaryDataRescues();
     // Always cache the last quote for RiskEngine/UI freshness (callers write latestPrices
     // before this). Emit MARKET_DATA only while Autobot is on and tradingState is
     // TRADING_ENABLED — otherwise tick-driven idea agents would keep warming from Autobot-off
@@ -485,18 +601,17 @@ export class MarketDataWorker {
   }
 
   /**
-   * Drop least-scored / least-ticked non-protected watch symbols so new candidates can join
-   * without exceeding Alpaca IEX subscription limits (symbol limit exceeded).
-   * Always sends Alpaca unsubscribe on the open socket before the caller may subscribe.
-   * Core anchors (protectedSymbols / coreStreamingSymbols) are never evicted here.
-   * Unscored dynamics rank as score 0 (not +Infinity). Fresh dwell-protected symbols are skipped.
+   * Shared eviction ranking: lowest momentum/ticks/recency first, excluding protected core
+   * symbols, dwell-protected fresh symbols, AND symbols currently holding an active temporary
+   * data rescue (Phase 13) - a rescue grant must never be immediately undone by the very next
+   * unrelated prune, or it would not actually give the strategy its one bounded chance at live data.
    */
-  private pruneLeastActiveWatchSymbols(needed: number = 1): void {
-    if (needed <= 0) return;
+  private rankEvictionCandidates(): Array<{ symbol: string; momentumScore: number; ticks: number; lastMs: number }> {
     const protectedSet = protectedStreamingSet();
-    const ranked = Array.from(this.activeStreams)
+    return Array.from(this.activeStreams)
       .filter((s) => !protectedSet.has(s))
       .filter((s) => !this.isWithinDynamicDwell(s))
+      .filter((s) => !this.hasActiveRescue(s))
       .map((s) => ({
         symbol: s,
         momentumScore: this.dynamicMomentumScores.get(s) ?? 0,
@@ -511,6 +626,23 @@ export class MarketDataWorker {
         if (a.ticks !== b.ticks) return a.ticks - b.ticks;
         return a.lastMs - b.lastMs;
       });
+  }
+
+  /** Query-only: the next symbol pruneLeastActiveWatchSymbols would evict, without evicting it. */
+  private pickEvictionCandidate(): string | null {
+    return this.rankEvictionCandidates()[0]?.symbol ?? null;
+  }
+
+  /**
+   * Drop least-scored / least-ticked non-protected watch symbols so new candidates can join
+   * without exceeding Alpaca IEX subscription limits (symbol limit exceeded).
+   * Always sends Alpaca unsubscribe on the open socket before the caller may subscribe.
+   * Core anchors (protectedSymbols / coreStreamingSymbols) are never evicted here.
+   * Unscored dynamics rank as score 0 (not +Infinity). Fresh dwell-protected symbols are skipped.
+   */
+  private pruneLeastActiveWatchSymbols(needed: number = 1): void {
+    if (needed <= 0) return;
+    const ranked = this.rankEvictionCandidates();
 
     let removed = 0;
     for (const row of ranked) {

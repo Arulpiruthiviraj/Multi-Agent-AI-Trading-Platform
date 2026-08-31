@@ -48,6 +48,13 @@ export interface ContinuousIntelligenceConfig {
   minDynamicDwellMs: number;
   /** Alternate dwell exit: enough ticks to evaluate setups before eviction. */
   minDynamicDwellTicks: number;
+  /** Bounded, single-use protection window for MarketDataWorker.requestTemporaryDataRescue() -
+   *  "one more evaluation cycle" of live data for a strategy idea that was otherwise discarded
+   *  solely by STALE_MARKET_DATA. Never permanent - auto-released after this many ms. */
+  temporaryDataRescueMaxDurationMs: number;
+  /** Bounded exploration: at most this many symbols may hold an active rescue at once, so a burst
+   *  of starved-strategy requests cannot dominate the real subscription capacity. */
+  maxConcurrentTemporaryDataRescues: number;
   broadUniverseEnabledEnvVar: string;
   broadUniverseAssetsCacheTtlMs: number;
   broadUniverseSnapshotCacheTtlMs: number;
@@ -156,6 +163,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     snapshotMomentumScoreEdge: requireNonNegativeNumber(raw.snapshotMomentumScoreEdge, 'snapshotMomentumScoreEdge'),
     minDynamicDwellMs: requireNumber(raw.minDynamicDwellMs, 'minDynamicDwellMs'),
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
+    temporaryDataRescueMaxDurationMs: requireNumber(raw.temporaryDataRescueMaxDurationMs, 'temporaryDataRescueMaxDurationMs'),
+    maxConcurrentTemporaryDataRescues: requireNumber(raw.maxConcurrentTemporaryDataRescues, 'maxConcurrentTemporaryDataRescues'),
     broadUniverseEnabledEnvVar: raw.broadUniverseEnabledEnvVar,
     broadUniverseAssetsCacheTtlMs: requireNumber(raw.broadUniverseAssetsCacheTtlMs, 'broadUniverseAssetsCacheTtlMs'),
     broadUniverseSnapshotCacheTtlMs: requireNumber(raw.broadUniverseSnapshotCacheTtlMs, 'broadUniverseSnapshotCacheTtlMs'),

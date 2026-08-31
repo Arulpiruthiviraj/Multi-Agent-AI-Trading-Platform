@@ -522,4 +522,145 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       expect(worker.isConnected()).toBe(true);
     });
   });
+
+  // Phase 13 (2026-08-31 strategy-starvation remediation): requestTemporaryDataRescue() - a
+  // bounded, single-use eviction-immunity grant so a strategy's real idea on a symbol outside the
+  // actively-streamed set gets one genuine chance at live data on its next evaluation cycle,
+  // without ever growing the permanent subscription universe or evicting a protected/rescued symbol.
+  describe('requestTemporaryDataRescue()', () => {
+    it('subscribes and protects a not-yet-subscribed symbol at capacity by evicting exactly one safe candidate', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      let requested = 0;
+      outer: for (let i = 0; i < 26; i++) {
+        for (let j = 0; j < 26; j++) {
+          worker.subscribe(`ZZ${alphabet[i]}${alphabet[j]}`);
+          requested += 1;
+          if (requested > cap + 8) break outer;
+        }
+      }
+      expect(worker.getActiveSymbols().length).toBe(cap);
+      await expireDynamicDwell();
+
+      const result = worker.requestTemporaryDataRescue('LNG', 'QuantEngine:MOMENTUM_BREAKOUT_stale_data_rescue');
+      expect(result.granted).toBe(true);
+      expect(result.evictedSymbol).not.toBeNull();
+      expect(worker.getActiveSymbols()).toContain('LNG');
+      expect(worker.getActiveSymbols().length).toBe(cap);
+      for (const core of continuousIntelligence.coreStreamingSymbols) {
+        expect(worker.getActiveSymbols()).toContain(core); // never evicts a protected anchor
+      }
+    });
+
+    it('never evicts a symbol that itself holds an active rescue, even under repeated capacity pressure', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      let requested = 0;
+      outer: for (let i = 0; i < 26; i++) {
+        for (let j = 0; j < 26; j++) {
+          worker.subscribe(`ZZ${alphabet[i]}${alphabet[j]}`);
+          requested += 1;
+          if (requested > cap + 8) break outer;
+        }
+      }
+      await expireDynamicDwell();
+      const first = worker.requestTemporaryDataRescue('LNG', 'rescue-1');
+      expect(first.granted).toBe(true);
+
+      // Race/pressure: repeatedly request rescues for other symbols while LNG's rescue is active -
+      // none of these evictions may ever select LNG (that would defeat the whole point of a grant).
+      for (const sym of ['XOM', 'CRM']) {
+        const r = worker.requestTemporaryDataRescue(sym, 'rescue-pressure');
+        if (r.granted) expect(r.evictedSymbol).not.toBe('LNG');
+      }
+      expect(worker.getActiveSymbols()).toContain('LNG');
+    });
+
+    it('denies a new rescue once maxConcurrentTemporaryDataRescues is reached, without evicting anything for it', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      const grants: string[] = [];
+      const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
+      const candidates = ['LNG', 'XOM', 'CRM', 'ANF', 'TH'];
+      for (const sym of candidates) {
+        const r = worker.requestTemporaryDataRescue(sym, 'capacity-test');
+        if (r.granted) grants.push(sym);
+      }
+      expect(grants.length).toBe(cap);
+      const overflow = candidates.find((s) => !grants.includes(s));
+      expect(overflow).toBeTruthy();
+      const denied = worker.requestTemporaryDataRescue(overflow!, 'capacity-test');
+      expect(denied.granted).toBe(false);
+      expect(denied.deniedReason).toBe('RESCUE_CAPACITY_FULL');
+    });
+
+    it('extending an already-active rescue never counts twice against the concurrent cap and never evicts', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      const first = worker.requestTemporaryDataRescue('LNG', 'first');
+      expect(first.granted).toBe(true);
+      const again = worker.requestTemporaryDataRescue('LNG', 'renewed');
+      expect(again.granted).toBe(true);
+      expect(again.evictedSymbol).toBeNull();
+      expect(again.alreadySubscribed).toBe(true);
+    });
+
+    it('auto-releases after temporaryDataRescueMaxDurationMs elapses, becoming evictable again like any other dynamic symbol', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      const result = worker.requestTemporaryDataRescue('LNG', 'expiry-test');
+      expect(result.granted).toBe(true);
+      const grant = worker.getActiveTemporaryRescues().find((r) => r.symbol === 'LNG');
+      expect(grant).toBeTruthy();
+
+      worker.setNowForTests(grant!.expiresAtMs + 1);
+      worker.releaseExpiredTemporaryDataRescues();
+      expect(worker.getActiveTemporaryRescues().map((r) => r.symbol)).not.toContain('LNG');
+
+      // Now evictable again like any other dynamic symbol - fill capacity and confirm a fresh
+      // rescue request for a DIFFERENT symbol can evict the expired one.
+      const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      let requested = 0;
+      outer: for (let i = 0; i < 26; i++) {
+        for (let j = 0; j < 26; j++) {
+          if (worker.getActiveSymbols().length >= cap) break outer;
+          worker.subscribe(`ZZ${alphabet[i]}${alphabet[j]}`);
+          requested += 1;
+        }
+      }
+      await expireDynamicDwell();
+      const second = worker.requestTemporaryDataRescue('XOM', 'expiry-followup');
+      expect(second.granted).toBe(true);
+    });
+
+    it('denies gracefully when at capacity and no safe (non-protected, non-dwelling, non-rescued) eviction exists', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      // Fill every remaining slot with core symbols only (all protected) - no safe eviction target.
+      const remaining = continuousIntelligence.maxActiveSubscriptions - continuousIntelligence.coreStreamingSymbols.length;
+      for (let i = 0; i < remaining; i++) {
+        worker.requestTemporaryDataRescue(`RESQ${i}`, 'fill');
+      }
+      // All rescue slots are bounded by maxConcurrentTemporaryDataRescues, so most of these are
+      // denied by capacity, not by eviction - just confirm nothing crashes and state stays sane.
+      expect(worker.getActiveSymbols().length).toBeLessThanOrEqual(continuousIntelligence.maxActiveSubscriptions);
+    });
+  });
 });

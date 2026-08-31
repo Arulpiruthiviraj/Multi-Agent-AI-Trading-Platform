@@ -629,6 +629,16 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'strategy-profitability'() {
+    // Phase 13 (2026-08-31 real-edge audit): real net-P&L per strategy from real closed
+    // round-trip fills - never estimated. Separate from strategy-fairness/strategy-readiness:
+    // this answers "would trading this strategy have made money," not direction-correctness.
+    const res = await fetch(`${BASE}/api/v2/observability/strategy-profitability?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    console.log(await res.text());
+  },
   async 'pipeline-ready'() {
     // Zero-Trade Forensic Audit follow-up: distinguishes "process alive" from "trading pipeline
     // ready" (Process/Database/MarketData/Broker/Technical/Quant/AI Provider Layer, each
@@ -988,7 +998,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

@@ -138,6 +138,54 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     ]));
   });
 
+  it('Phase 13: a quarantined strategy is excluded from real selection but its background evaluation (strategyEvaluations persistence) is completely unaffected', async () => {
+    const { quarantineStrategyForEmission, reinstateStrategyForEmission } = await import('../quant/strategies/StrategyEmissionEligibility');
+    const quarantined = ['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'TREND_FOLLOWING'];
+    const quarantineAt = new Date();
+    // Quarantine every CORE strategy that could win a BULLISH_TREND regime here, so real
+    // selection is guaranteed to find nothing eligible - a strong, deterministic assertion that
+    // does not depend on knowing exactly which one bestStrategyIdea would otherwise have picked.
+    for (const strategy of quarantined) {
+      await quarantineStrategyForEmission(strategy, 'test quarantine', {}, 10, quarantineAt);
+    }
+
+    const receivedIdeas: any[] = [];
+    const listener = (idea: any) => receivedIdeas.push(idea);
+    let result: any;
+    try {
+      stubUptrendingFetch();
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSAQR']);
+      marketDataWorker.cacheObservedQuote('QSAQR', 125); // rules out STALE_MARKET_DATA as a confound
+      const { tradingEngine } = await import('../engines/TradingEngine');
+      tradingEngine.state.strategy = 'ADAPTIVE_MULTI_STRATEGY';
+      tradingEngine.state.enabled = true;
+      tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+      eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
+      process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED = 'true'; // even bootstrap must not rescue a quarantined strategy
+      const agent = new QuantSignalAgent();
+      result = await agent.evaluateSymbol('QSAQR');
+    } finally {
+      delete process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED;
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
+      // This file's tests share one DB for its whole run - reinstate immediately so later tests
+      // that rely on these real strategy names being able to win are never affected by this one.
+      const reinstateAt = new Date(quarantineAt.getTime() + 60_000);
+      for (const strategy of quarantined) {
+        await reinstateStrategyForEmission(strategy, 'test cleanup - restore real eligibility for other tests', reinstateAt);
+      }
+    }
+
+    expect(result).not.toBeNull();
+    // Background evaluation is completely unaffected - the quarantined strategies are still
+    // fully evaluated and their real scores still persisted for research/monitoring.
+    const ids = result!.strategyEvaluations.map((e: any) => e.strategy);
+    expect(ids).toEqual(expect.arrayContaining(['MOMENTUM_BREAKOUT', 'PULLBACK_CONTINUATION', 'TREND_FOLLOWING']));
+    // Since BULLISH_TREND's entire regime-preferred pool was quarantined, no strategy-sourced idea
+    // (EV-backed or cold-start bootstrap) can win real selection - no trade idea emits at all.
+    expect(receivedIdeas.find((i) => i.symbol === 'QSAQR')).toBeUndefined();
+  });
+
   it('emits a cold-start regime-only bootstrap idea only when QUANT_COLD_START_BOOTSTRAP_ENABLED=true, still via the normal TRADE_IDEA_GENERATED path (ARGUS_PREDICTION_EDGE_AND_LEARNING_IMPLEMENTATION_AUDIT.md)', async () => {
     stubUptrendingFetch();
     // <=5 letters - looksLikeListedTicker/gateTradeIdea (DEF-24) silently routes anything longer
@@ -172,6 +220,34 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     // so Fundamental/MacroAgent's priority round-robin can converge on it too.
     const { getRecentCandidates } = await import('../core/recentCandidateRegistry');
     expect(getRecentCandidates(300000)).toContain('QSABT');
+  });
+
+  it('Phase 13: requests a bounded temporary data rescue (never bypassing the current cycle\'s stale-data block) when a real cold-start-bootstrap idea is discarded solely for STALE_MARKET_DATA', async () => {
+    stubUptrendingFetch();
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSARQ']);
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    // Deliberately no cacheObservedQuote() call - assessDataQuality's market_data channel sees no
+    // tick age at all (UNKNOWN grade), so tradeBlocked is true, same as a real unsubscribed symbol.
+    const rescueSpy = vi.spyOn(marketDataWorker, 'requestTemporaryDataRescue');
+
+    const receivedIdeas: any[] = [];
+    const listener = (idea: any) => receivedIdeas.push(idea);
+    eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
+    try {
+      process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED = 'true';
+      const agent = new QuantSignalAgent();
+      await agent.evaluateSymbol('QSARQ');
+    } finally {
+      delete process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED;
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
+    }
+
+    // Never bypasses the block for THIS cycle - the idea is still correctly discarded.
+    expect(receivedIdeas.find((i) => i.symbol === 'QSARQ')).toBeUndefined();
+    // But a bounded rescue was requested so the NEXT cycle has a real chance at live data.
+    expect(rescueSpy).toHaveBeenCalledWith('QSARQ', expect.stringContaining('QuantEngine:'));
   });
 
   it('skips a symbol honestly (no crash, no fabricated data) when Alpaca returns too few real bars', async () => {

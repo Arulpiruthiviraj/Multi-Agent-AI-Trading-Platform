@@ -14,6 +14,7 @@ import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from 
 import { buildAgentEdgeDiscoveryReport, formatAgentEdgeDiscoveryReport } from '../observability/agentEdgeDiscoveryReport';
 import { buildStrategyReadinessReport, formatStrategyReadinessReport } from '../research/strategyReadiness';
 import { buildStrategyFairnessReport, formatStrategyFairnessReport } from '../research/strategySelectionReplay';
+import { buildStrategyProfitabilityReport, formatStrategyProfitabilityReport } from '../research/strategyProfitabilityReport';
 
 export const observabilityRouter = Router();
 
@@ -184,6 +185,23 @@ observabilityRouter.get('/strategy-fairness', async (req, res) => {
     const rows = await buildStrategyFairnessReport();
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatStrategyFairnessReport(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 13 (2026-08-31 real-edge audit): real net-P&L trading-profitability per strategy, using
+// real fill prices from getRealClosedRoundTrips() - never estimated. Deliberately separate from
+// strategy-fairness/strategy-readiness (predictive-selection questions) - this answers "would
+// trading this strategy have made money," not "did its direction call turn out correct."
+observabilityRouter.get('/strategy-profitability', async (req, res) => {
+  try {
+    const rows = await buildStrategyProfitabilityReport();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatStrategyProfitabilityReport(rows));
       return;
     }
     res.json({ ok: true, rows });

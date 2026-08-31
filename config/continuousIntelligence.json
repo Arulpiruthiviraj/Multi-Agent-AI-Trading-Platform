@@ -30,6 +30,8 @@
   "snapshotMomentumScoreEdge": 0.15,
   "minDynamicDwellMs": 60000,
   "minDynamicDwellTicks": 10,
+  "temporaryDataRescueMaxDurationMs": 300000,
+  "maxConcurrentTemporaryDataRescues": 3,
   "momentumScanUniverseSymbols": [
     "SPY", "QQQ", "IWM", "DIA", "GLD", "SMH", "XLF", "XLE", "XLK", "SOXL", "TQQQ", "SQQQ",
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA", "AVGO", "BRK.B",

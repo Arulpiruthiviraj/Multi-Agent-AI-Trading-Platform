@@ -36,6 +36,7 @@ import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../quant/indicators/supportResistance';
 import { computeSmcFeatures } from '../quant/indicators/smc';
 import { evaluateAll, bestStrategyIdea } from '../quant/strategies/StrategyEngine';
+import { filterQuarantinedStrategies } from '../quant/strategies/StrategyEmissionEligibility';
 import { resolvePaperTestingOverlay } from '../research/paperTestingOverlay';
 import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine';
 import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
@@ -54,6 +55,7 @@ import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { assessDataQuality } from '../core/dataQuality';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { getNewsCatalysts } from './NewsCatalystStore';
 import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
 import { isMultiAssetEnabled } from '../config/multiAsset';
@@ -299,9 +301,15 @@ export class QuantSignalAgent {
     };
 
     const traceId = generateTraceId(symbol);
+    // Phase 13 (2026-08-31 real-edge audit): a strategy with real, repeatedly-verified negative
+    // evidence (e.g. PULLBACK_CONTINUATION) can be quarantined from winning real selection without
+    // stopping its background evaluation - strategyEvaluations (persisted below, unfiltered) and
+    // adaptedEvaluations' own telemetry above are both completely unaffected; only the pool
+    // bestStrategyIdea() actually picks from is filtered here.
+    const emissionEligibleEvaluations = await filterQuarantinedStrategies(adaptedEvaluations);
     // Phase 4: the real Strategy Engine is the primary idea source; the Phase-3 regime-only mapping
     // is an honest fallback for when no individual strategy's own conditions clear its confidence bar.
-    const ranked = rankEvaluationsForRegime(adaptedEvaluations, regime.regime);
+    const ranked = rankEvaluationsForRegime(emissionEligibleEvaluations, regime.regime);
     const forPick = regime.volatility === 'HIGH'
       ? ranked.map(e => ({
           ...e,
@@ -412,8 +420,31 @@ export class QuantSignalAgent {
     if (idea && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('QuantEngine')) {
       const dataQuality = assessDataQuality(symbol);
       if (dataQuality.tradeBlocked) {
+        // Phase 13 (2026-08-31 strategy-starvation remediation): a real, fully-constructed idea
+        // (EV-backed or cold-start bootstrap) is about to be discarded ONLY because this symbol's
+        // live data is stale/unsubscribed - never bypasses that block for THIS cycle (the idea is
+        // still correctly discarded below), but requests a bounded, single-use rescue so the
+        // strategy's NEXT evaluation cycle has a genuine shot at live data. See the Phase 13 audit:
+        // MOMENTUM_BREAKOUT won real selection 249 times, 0 real emissions, all traced to exactly
+        // this gate for exactly this reason (LNG/XOM outside the actively-streamed set).
+        const rescueStrategyName = idea.strategy === 'COLD_START_BOOTSTRAP'
+          ? (idea.reasoning.match(/Cold-start bootstrap: (\S+) is/)?.[1] ?? 'COLD_START_BOOTSTRAP')
+          : idea.strategy;
+        const rescue = marketDataWorker.requestTemporaryDataRescue(
+          symbol,
+          `QuantEngine:${rescueStrategyName}_stale_data_rescue`,
+        );
         eventBus.emit(EVENTS.DESK_NO_TRADE, {
           traceId, symbol, code: 'STALE_MARKET_DATA', reason: dataQuality.blockReason,
+        });
+        observeSafe(() => {
+          structuredLogger.info('quant_idea_discarded_stale_data', {
+            category: 'DISCOVERY',
+            eventType: 'QUANT_IDEA_DISCARDED_STALE_DATA',
+            symbol,
+            traceId,
+            reasoning: `${rescueStrategyName} idea discarded (${dataQuality.blockReason}). Rescue ${rescue.granted ? 'GRANTED' : `DENIED (${rescue.deniedReason})`}.`,
+          });
         });
       } else {
       const catalysts = getNewsCatalysts(symbol);
