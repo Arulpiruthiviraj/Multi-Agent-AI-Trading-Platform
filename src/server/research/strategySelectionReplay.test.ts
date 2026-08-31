@@ -84,6 +84,22 @@ describe('strategySelectionReplay', () => {
     expect(rangeRev.status).toBe('SELECTED_NEVER_EMITTED');
   });
 
+  it('distinguishes RANKED_BUT_INELIGIBLE (wins its regime-preferred ranking but never clears the real confidence-eligibility gate) from SELECTED_NEVER_EMITTED - reproduces the real MEAN_REVERSION finding: rank1Core > 0 but predictedWinner === 0', async () => {
+    const regime = { regime: 'SIDEWAYS_RANGE', confidence: 0.7, volatility: 'NORMAL', insufficientData: false };
+    for (let i = 0; i < 20; i++) {
+      await seedQuantAssessment(`qa-ineligible-${i}`, 'INELIGIBLESYM', regime, [
+        // MEAN_REVERSION is the ONLY strategy present this cycle (so it always "wins" the ranking
+        // among a field of one), but its confidence never clears MIN_STRATEGY_CONFIDENCE_TO_TRADE (0.6).
+        { strategy: 'MEAN_REVERSION', side: 'BUY', setupScore: 40, confidence: 0.4, conditionsMet: [], conditionsFailed: [], contradictions: [], invalidationConditions: [], stop: { price: null, basis: '' }, target: { price: null, basis: '' }, applicableRegimes: ['SIDEWAYS_RANGE'] },
+      ]);
+    }
+    const rows = await mod.buildStrategyFairnessReport();
+    const meanRev = rows.find((r) => r.strategyId === 'MEAN_REVERSION')!;
+    expect(meanRev.rank1Core).toBeGreaterThan(0);
+    expect(meanRev.predictedWinner).toBe(0);
+    expect(meanRev.status).toBe('RANKED_BUT_INELIGIBLE');
+  });
+
   it('classifies a strategy with real emitted AND graded observations as HAS_GRADED_EVIDENCE', async () => {
     await db.insert(schema.agentPredictions).values({
       id: 'pred-graded-1', agentName: 'QuantEngine', symbol: 'GRADEDSYM', prediction: 'BUY', confidence: 0.7,

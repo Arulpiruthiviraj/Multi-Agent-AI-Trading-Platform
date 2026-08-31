@@ -42,7 +42,7 @@ export interface StrategyFairnessRow {
   /** Of realEmissions, how many have a real graded (WIN/LOSS) outcome. REAL LIVE DATA. */
   realGradedOutcomes: number;
   /** predictedWinner > 0 but realEmissions === 0: genuinely starved, not merely "never a good enough setup". */
-  status: 'NEVER_EVALUATED' | 'EVALUATED_NEVER_SELECTED' | 'SELECTED_NEVER_EMITTED' | 'EMITTED_NEVER_GRADED' | 'HAS_GRADED_EVIDENCE';
+  status: 'NEVER_EVALUATED' | 'EVALUATED_NEVER_SELECTED' | 'RANKED_BUT_INELIGIBLE' | 'SELECTED_NEVER_EMITTED' | 'EMITTED_NEVER_GRADED' | 'HAS_GRADED_EVIDENCE';
 }
 
 export async function buildStrategyFairnessReport(): Promise<StrategyFairnessRow[]> {
@@ -116,11 +116,19 @@ export async function buildStrategyFairnessReport(): Promise<StrategyFairnessRow
     // this specific replay's quant_assessments scope didn't happen to capture its pre-ranking
     // evaluations (e.g. a different historical retention window) - never let an absence of one
     // signal override the presence of the other.
+    // Real distinction (Phase 12, 2026-08-31): ranking #1 within the regime-preferred subset
+    // (rank1Core) is NOT the same as bestStrategyIdea() actually selecting a strategy - that
+    // function first filters by MIN_STRATEGY_CONFIDENCE_TO_TRADE, then picks the top-ranked
+    // survivor (predictedWinner). A strategy can rank first every time its regime comes up yet
+    // never once clear the confidence gate (e.g. MEAN_REVERSION: rank1Core > 0, predictedWinner
+    // === 0) - that is genuinely "ranked but ineligible", not "selected" in the sense the real
+    // code means it, and conflating the two would overstate how close it came to real emission.
     let status: StrategyFairnessRow['status'];
     if (emissions.graded > 0) status = 'HAS_GRADED_EVIDENCE';
     else if (emissions.emitted > 0) status = 'EMITTED_NEVER_GRADED';
     else if (s.totalEvaluations === 0) status = 'NEVER_EVALUATED';
-    else if (s.rank1Core > 0) status = 'SELECTED_NEVER_EMITTED';
+    else if (s.predictedWinner > 0) status = 'SELECTED_NEVER_EMITTED';
+    else if (s.rank1Core > 0) status = 'RANKED_BUT_INELIGIBLE';
     else status = 'EVALUATED_NEVER_SELECTED';
 
     result.push({
