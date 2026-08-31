@@ -584,6 +584,16 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'calibration-maturity'() {
+    // Phase 9 (2026-08-31): explicit UNVALIDATED/LEARNING/CALIBRATED/TRUSTED classification per
+    // (agent, confidence bucket) - reuses only already-computed effective-N/Wilson-lower-bound data,
+    // never gates a trade. See calibrationMaturity.ts's header for the exact state definitions.
+    const res = await fetch(`${BASE}/api/v2/observability/calibration-maturity?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'pipeline-ready'() {
     // Zero-Trade Forensic Audit follow-up: distinguishes "process alive" from "trading pipeline
     // ready" (Process/Database/MarketData/Broker/Technical/Quant/AI Provider Layer, each
@@ -943,7 +953,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

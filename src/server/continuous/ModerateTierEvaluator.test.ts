@@ -148,4 +148,35 @@ describe('ModerateTierEvaluator', () => {
     expect(result.trustworthy).toBe(false);
     expect(result.championEffectiveN).toBeNull();
   });
+
+  it('is NOT trustworthy for a CHAMPION whose own recorded Wilson lower bound is at/below the floor - real bug fixed 2026-08-31 (Phase 9): a champion promoted before the significance gate existed must not be blindly trusted forever', async () => {
+    const versionType = candidateBuilder.calibrationVersionType('StaleAgent', { low: 0.6, high: 0.7 });
+    const id = `lv-${versionType}-stale-test`;
+    await db.insert(schema.learningVersions).values({
+      id, versionType, status: 'CHAMPION',
+      stateJson: JSON.stringify({ candidateCalibratedConfidence: 0.65, effectiveN: 50, effectiveWins: 26, wilsonLower: 0.408, wilsonUpper: 0.6, bucketMidpoint: 0.65 }),
+      hypothesis: 'pre-gate legacy champion', sampleSize: 50,
+      createdAt: '2026-08-20T00:00:00.000Z', promotedAt: '2026-08-20T00:00:00.000Z',
+    });
+
+    const result = await mod.isAgentBucketCalibrationTrustworthy('StaleAgent', 0.65);
+    expect(result.trustworthy).toBe(false);
+    expect(result.championEffectiveN).toBe(50);
+    expect(result.reason).toContain('predates');
+  });
+
+  it('IS trustworthy for a CHAMPION whose own recorded Wilson lower bound clears the floor - the fix does not reject a genuinely qualifying champion', async () => {
+    const versionType = candidateBuilder.calibrationVersionType('GoodAgent', { low: 0.6, high: 0.7 });
+    const id = `lv-${versionType}-good-test`;
+    await db.insert(schema.learningVersions).values({
+      id, versionType, status: 'CHAMPION',
+      stateJson: JSON.stringify({ candidateCalibratedConfidence: 0.72, effectiveN: 50, effectiveWins: 38, wilsonLower: 0.62, wilsonUpper: 0.86, bucketMidpoint: 0.65 }),
+      hypothesis: 'genuinely qualifying champion', sampleSize: 50,
+      createdAt: new Date().toISOString(), promotedAt: new Date().toISOString(),
+    });
+
+    const result = await mod.isAgentBucketCalibrationTrustworthy('GoodAgent', 0.65);
+    expect(result.trustworthy).toBe(true);
+    expect(result.championEffectiveN).toBe(50);
+  });
 });

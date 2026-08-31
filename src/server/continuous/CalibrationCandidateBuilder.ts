@@ -287,6 +287,20 @@ export async function runCalibrationValidationCycle(now: Date = new Date()): Pro
           versionId, decision: 'FAIL', reason,
           effectiveN: c.effectiveN, candidateCalibratedConfidence: c.candidateCalibratedConfidence,
         });
+        // Real bug fixed (Phase 9, 2026-08-31): this gate was added 2026-08-27, after several
+        // (agent, bucket) champions had already been promoted under the prior, looser sample-size-
+        // only rule. Without this, a champion promoted before the gate existed stays CHAMPION
+        // forever - every subsequent cycle just holds the NEW candidate at CANDIDATE and leaves the
+        // stale champion untouched, since decidePromotion() is never reached for a failing
+        // candidate. isAgentBucketCalibrationTrustworthy() now also re-checks a champion's own
+        // wilsonLower defensively, but retiring it here keeps the ledger itself honest (CHAMPION
+        // means "currently above chance", not "was above chance under some now-superseded rule")
+        // for any other consumer, not just this one call site.
+        await ChampionChallenger.retireCurrentChampion(
+          versionType,
+          `Retired on re-evaluation: ${reason}`,
+          now,
+        );
         continue;
       }
 

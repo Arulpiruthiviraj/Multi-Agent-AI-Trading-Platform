@@ -157,6 +157,52 @@ describe('CalibrationCandidateBuilder', () => {
     expect(champion).toBeNull();
   });
 
+  it('retires a pre-existing CHAMPION on re-evaluation when fresh evidence no longer clears the above-chance gate - real bug fixed 2026-08-31 (Phase 9)', async () => {
+    // Simulate a champion promoted before the Phase 7E significance gate existed (i.e. a real
+    // champion the ledger already trusts, seeded directly rather than via a passing cycle).
+    const versionType = mod.calibrationVersionType('RetireMeAgent', { low: 0.6, high: 0.7 });
+    await db.insert(schema.learningVersions).values({
+      id: 'lv-retire-me-legacy', versionType, status: 'CHAMPION',
+      stateJson: JSON.stringify({ candidateCalibratedConfidence: 0.65, effectiveN: 40, effectiveWins: 26, wilsonLower: 0.45, wilsonUpper: 0.75, bucketMidpoint: 0.65 }),
+      hypothesis: 'legacy pre-gate champion', sampleSize: 40,
+      createdAt: '2026-08-20T00:00:00.000Z', promotedAt: '2026-08-20T00:00:00.000Z',
+    });
+    const preCheck = await championChallenger.getChampion(versionType);
+    expect(preCheck?.status).toBe('CHAMPION');
+
+    // Fresh evidence for the same (agent, bucket): 30 independent, chance-level (50/50) outcomes -
+    // clears the sample-size floor but not the above-chance bar, same shape as the ChanceAgent test.
+    await db.insert(schema.agentConfidenceCalibration).values({
+      agentName: 'RetireMeAgent', bucketLow: 0.6, bucketHigh: 0.7,
+      wins: 15, losses: 15, calibratedConfidence: 0.55, lastEvaluated: new Date().toISOString(),
+    });
+    const base = new Date('2026-08-29T09:00:00.000Z').getTime();
+    for (let i = 0; i < 30; i++) {
+      const id = `pred-retire-${i}`;
+      await db.insert(schema.agentPredictions).values({
+        id, agentName: 'RetireMeAgent', symbol: 'RETIRE', prediction: 'BUY', confidence: 0.65,
+        reasoning: 'chance-level test prediction', timestamp: new Date(base + i * 2 * 60 * 60000).toISOString(),
+      });
+      await db.insert(schema.predictionOutcomes).values({
+        predictionId: id, sourceTable: 'agent_predictions', symbol: 'RETIRE',
+        actualPrice: 101, actualReturn: 0.01, actualDirection: 'UP',
+        mfe: 0.01, mae: 0, outcome: i % 2 === 0 ? 'WIN' : 'LOSS', evaluatedAt: new Date().toISOString(),
+      });
+    }
+
+    const results = await mod.runCalibrationValidationCycle();
+    const result = results.find((r) => r.agentName === 'RetireMeAgent')!;
+    expect(result.decision).toBe('FAIL');
+
+    // The pre-existing champion must now be retired - getChampion() only ever returns CHAMPION rows.
+    const afterChampion = await championChallenger.getChampion(versionType);
+    expect(afterChampion).toBeNull();
+
+    const legacyRow = (await db.select().from(schema.learningVersions)).find((r: any) => r.id === 'lv-retire-me-legacy');
+    expect(legacyRow.status).toBe('RETIRED');
+    expect(legacyRow.retiredAt).not.toBeNull();
+  });
+
   it('flags a bucket as stale when its newest observation is older than the configured max age', async () => {
     await db.insert(schema.agentConfidenceCalibration).values({
       agentName: 'StaleAgent', bucketLow: 0, bucketHigh: 0.6,

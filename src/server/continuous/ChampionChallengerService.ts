@@ -142,6 +142,36 @@ export async function decidePromotion(
   return result;
 }
 
+/**
+ * Retires the current CHAMPION for a versionType with NO replacement promoted - distinct from
+ * decidePromotion()'s retire-then-promote pair, which only ever retires a champion in the same
+ * breath it installs a new one. A consumer needs this when fresh evidence re-evaluates a bucket
+ * and finds it no longer clears the promotion bar at all (not merely "a different candidate is
+ * better") - the honest outcome is "no trustworthy champion right now", not "keep the old one
+ * forever because nothing has replaced it yet". No-op (returns false) when there is no current
+ * champion for this versionType.
+ */
+export async function retireCurrentChampion(versionType: string, reason: string, now: Date = new Date()): Promise<boolean> {
+  const currentChampion = await getChampion(versionType);
+  if (!currentChampion) return false;
+  try {
+    await db.update(learningVersions)
+      .set({ status: 'RETIRED', retiredAt: now.toISOString() })
+      .where(eq(learningVersions.id, currentChampion.id));
+    await db.insert(promotionDecisions).values({
+      versionId: currentChampion.id,
+      decision: 'FAIL',
+      reason,
+      metricsJson: JSON.stringify({ retiredNoReplacement: true }),
+      decidedAt: now.toISOString(),
+    });
+    return true;
+  } catch (e) {
+    logErrorSafely(`[ChampionChallengerService] failed to retire stale champion for ${versionType}`, e);
+    return false;
+  }
+}
+
 export async function getPromotionHistory(versionId: string): Promise<Array<typeof promotionDecisions.$inferSelect>> {
   return db.select().from(promotionDecisions)
     .where(eq(promotionDecisions.versionId, versionId))

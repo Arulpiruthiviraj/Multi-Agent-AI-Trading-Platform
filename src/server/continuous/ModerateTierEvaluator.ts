@@ -42,6 +42,23 @@ export interface AgentCalibrationTrust {
  * bucket) pair - i.e. CalibrationCandidateBuilder's runCalibrationValidationCycle has both cleared
  * the effective-sample-size floor AND the Wilson-lower-bound-above-chance bar for it. Reads only
  * the observational learning_versions ledger; never touches agent_confidence_calibration.
+ *
+ * Real bug found and fixed (Phase 9, 2026-08-31 zero-trade remediation pass): this used to trust
+ * ANY row with status='CHAMPION', with no re-check of that row's own recorded wilsonLower. The
+ * Wilson-lower-bound significance gate in runCalibrationValidationCycle() (this module's sibling)
+ * was added on 2026-08-27 as a Phase 7E addition - AFTER at least 12 (agent, bucket) champions had
+ * already been promoted under the prior, looser rule (sample-size floor only, no above-chance
+ * check). The validation worker (CalibrationValidationWorker.ts) runs on a live interval and
+ * correctly holds every NEW candidate at CANDIDATE when it fails today's bar - confirmed live,
+ * fresh CANDIDATE rows exist from today - but decidePromotion() has no demotion path: an existing
+ * CHAMPION is never re-validated or retired once a later cycle's evidence would no longer support
+ * it. Live query (2026-08-31) confirmed all 12 current champions have wilsonLower below the
+ * configured 0.5 floor (max observed: 0.471) - every one of them predates the gate and would fail
+ * it today. Without this fix, isAgentBucketCalibrationTrustworthy() would return trustworthy:true
+ * for any of those stale champions, letting the MODERATE tier trust calibration the system's own
+ * current rules say is not yet proven above chance - a real fail-OPEN gap in a safety gate, not a
+ * theoretical one. This re-check makes the gate strictly more conservative (fail-closed on a stale
+ * or malformed champion), never less - it can only ever remove trust that was previously granted.
  */
 export async function isAgentBucketCalibrationTrustworthy(agent: string, rawConfidence: number): Promise<AgentCalibrationTrust> {
   const bucket = bucketFor(rawConfidence);
@@ -49,9 +66,23 @@ export async function isAgentBucketCalibrationTrustworthy(agent: string, rawConf
   try {
     const champion = await getChampion(versionType);
     if (champion) {
+      const minWilsonLower = tradingSafety.moderateCalibrationTrustMinWilsonLowerBound;
+      let wilsonLower: number | null = null;
+      try {
+        const state = JSON.parse(champion.stateJson) as { wilsonLower?: number | null };
+        wilsonLower = typeof state.wilsonLower === 'number' ? state.wilsonLower : null;
+      } catch {
+        wilsonLower = null;
+      }
+      if (wilsonLower !== null && wilsonLower > minWilsonLower) {
+        return {
+          agent, rawConfidence, trustworthy: true, championEffectiveN: champion.sampleSize,
+          reason: `Statistically-validated calibration champion exists for ${agent}'s ${bucket.low}-${bucket.high} bucket (effective N=${champion.sampleSize}, Wilson lower bound ${wilsonLower.toFixed(4)}).`,
+        };
+      }
       return {
-        agent, rawConfidence, trustworthy: true, championEffectiveN: champion.sampleSize,
-        reason: `Statistically-validated calibration champion exists for ${agent}'s ${bucket.low}-${bucket.high} bucket (effective N=${champion.sampleSize}).`,
+        agent, rawConfidence, trustworthy: false, championEffectiveN: champion.sampleSize,
+        reason: `Calibration champion for ${agent}'s ${bucket.low}-${bucket.high} bucket predates today's above-chance bar and no longer qualifies (Wilson lower bound ${wilsonLower === null ? 'unrecorded' : wilsonLower.toFixed(4)}, need >${minWilsonLower}) - stale champion, not re-validated as trustworthy.`,
       };
     }
     return {

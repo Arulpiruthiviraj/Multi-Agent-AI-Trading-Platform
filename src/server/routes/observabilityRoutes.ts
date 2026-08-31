@@ -10,6 +10,7 @@ import { buildProviderHealthMatrix } from '../observability/providerHealthMatrix
 import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../observability/consensusPipelineReport';
 import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observability/tradingFunnelReport';
 import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
+import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
 
 export const observabilityRouter = Router();
 
@@ -116,6 +117,22 @@ observabilityRouter.get('/why-no-trade', async (req, res) => {
       return;
     }
     res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 9 (2026-08-31): explicit calibration maturity classification (Phase 6 "safe maturity
+// model") - UNVALIDATED/LEARNING/CALIBRATED/TRUSTED per (agent, bucket), reusing only already-
+// computed effective-N/Wilson-lower-bound data. Read-only, never gates a trade.
+observabilityRouter.get('/calibration-maturity', async (req, res) => {
+  try {
+    const rows = await buildCalibrationMaturityReport();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatCalibrationMaturityReport(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }

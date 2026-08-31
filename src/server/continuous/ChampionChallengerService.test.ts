@@ -113,4 +113,31 @@ describe('ChampionChallengerService', () => {
     await expect(mod.rollbackToVersion('never-had-a-champion', 'nonexistent', 'test', 'operator'))
       .rejects.toThrow(/No current champion/);
   });
+
+  it('retireCurrentChampion retires the current champion with no replacement (Phase 9, 2026-08-31 stale-champion fix)', async () => {
+    const versionType = 'test-retire-only';
+    const v1 = await mod.createShadowVersion(versionType, JSON.stringify({ weight: 1 }), 'hypothesis');
+    await mod.promoteToCandidate(v1, JSON.stringify({ sample: 25 }), 25);
+    await mod.decidePromotion(v1, versionType, {
+      metricName: 'accuracy', candidateMetricValue: 0.55, championMetricValue: null, sampleSize: 25,
+    });
+    expect((await mod.getChampion(versionType))?.id).toBe(v1);
+
+    const retired = await mod.retireCurrentChampion(versionType, 'no longer clears the bar on re-evaluation');
+    expect(retired).toBe(true);
+    expect(await mod.getChampion(versionType)).toBeNull();
+
+    const history = await mod.getVersionHistory(versionType);
+    const retiredRow = history.find((v) => v.id === v1);
+    expect(retiredRow?.status).toBe('RETIRED');
+    expect(retiredRow?.retiredAt).not.toBeNull();
+
+    const promotionHistory = await mod.getPromotionHistory(v1);
+    expect(promotionHistory.some((p) => p.decision === 'FAIL' && p.reason.includes('no longer clears the bar'))).toBe(true);
+  });
+
+  it('retireCurrentChampion is a no-op (returns false) when there is no current champion', async () => {
+    const retired = await mod.retireCurrentChampion('never-had-a-champion-2', 'irrelevant');
+    expect(retired).toBe(false);
+  });
 });
