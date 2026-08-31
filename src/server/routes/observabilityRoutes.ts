@@ -13,6 +13,7 @@ import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/
 import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
 import { buildAgentEdgeDiscoveryReport, formatAgentEdgeDiscoveryReport } from '../observability/agentEdgeDiscoveryReport';
 import { buildStrategyReadinessReport, formatStrategyReadinessReport } from '../research/strategyReadiness';
+import { buildStrategyFairnessReport, formatStrategyFairnessReport } from '../research/strategySelectionReplay';
 
 export const observabilityRouter = Router();
 
@@ -164,6 +165,25 @@ observabilityRouter.get('/strategy-readiness', async (req, res) => {
     const rows = await buildStrategyReadinessReport();
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatStrategyReadinessReport(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 12 (2026-08-31): strategy-fairness report - replays the REAL production selection code
+// (rankEvaluationsForRegime/selectEvaluationsForAdaptiveRegime/bestStrategyIdea) against real
+// historical quant_assessments rows, cross-referenced with real agent_predictions ground truth, to
+// distinguish "evaluated but never selected" from "selected but never emitted" from "emitted but
+// never graded" (argus-cli strategy-fairness). Can take several seconds - real, non-trivial
+// computation over potentially tens of thousands of real rows, not a hang.
+observabilityRouter.get('/strategy-fairness', async (req, res) => {
+  try {
+    const rows = await buildStrategyFairnessReport();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatStrategyFairnessReport(rows));
       return;
     }
     res.json({ ok: true, rows });

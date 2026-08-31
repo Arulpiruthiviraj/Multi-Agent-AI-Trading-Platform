@@ -93,6 +93,39 @@ export function deriveIdeaFromRegime(regime: RegimeResult): DerivedIdea | null {
   return null; // SIDEWAYS_RANGE - no directional idea
 }
 
+/**
+ * Real bug found and fixed (Phase 12, 2026-08-31 zero-emission discrepancy investigation):
+ * deriveIdeaFromRegime() alone structurally can never bootstrap a mean-reversion-family CORE
+ * strategy (RANGE_REVERSION/MEAN_REVERSION) - it returns null unconditionally for SIDEWAYS_RANGE,
+ * which is the ONLY regime those two strategies are ever the regime-preferred winner in. Exact
+ * replay of the real selection code (rankEvaluationsForRegime/selectEvaluationsForAdaptiveRegime/
+ * bestStrategyIdea) against real historical quant_assessments rows proved RANGE_REVERSION would
+ * have won real strategy selection ~2,742 times (confidence up to 0.944), 100% of them during
+ * SIDEWAYS_RANGE - a total, structural deadlock, not bad luck or a bad strategy.
+ *
+ * This function is the exact fallback chain QuantSignalAgent.evaluateSymbol() now uses: try the
+ * regime-only derivation first (unchanged behavior for BULLISH_TREND/BEARISH_TREND); if that
+ * yields nothing, fall back to the strategy's own already-computed side/confidence - real,
+ * validated output from bestStrategyIdea() (which already cleared MIN_STRATEGY_CONFIDENCE_TO_TRADE),
+ * never fabricated. Extracted as a small, pure, separately-testable function rather than left
+ * inline, since crafting real market bars that trigger a specific strategy's exact multi-condition
+ * entry through the full evaluateSymbol() pipeline is impractical for a focused regression test.
+ */
+export function deriveColdStartBootstrapIdea(
+  regime: RegimeResult,
+  strategyName: string,
+  strategySide: 'BUY' | 'SELL',
+  strategyConfidence: number,
+): DerivedIdea | null {
+  const regimeIdea = deriveIdeaFromRegime(regime);
+  if (regimeIdea) return regimeIdea;
+  return {
+    side: strategySide,
+    confidence: strategyConfidence,
+    reasoning: `QuantEngine: no directional regime signal for ${regime.regime} - falling back to ${strategyName}'s own real setup (side ${strategySide}, confidence ${strategyConfidence.toFixed(2)}) instead of discarding it.`,
+  };
+}
+
 export class QuantSignalAgent {
   private intervalId: NodeJS.Timeout | null = null;
 
@@ -310,9 +343,25 @@ export class QuantSignalAgent {
         // RiskEngine (24 gates, including its own stopLossAssumptionPct-based sizing since this
         // idea carries no stop) -> OMS pipeline unchanged.
         const stateLabel = !liveWinRate ? 'COLD_START (zero real closed trades)' : `WARMING_UP (${liveWinRate.sampleSize} real closed trades, below the ${MIN_SAMPLE_SIZE_FOR_KELLY}-trade trust threshold)`;
-        const bootstrapIdea = isQuantColdStartBootstrapEnabled() ? deriveIdeaFromRegime(regime) : null;
+        // Real bug found and fixed (Phase 12, 2026-08-31 zero-emission discrepancy investigation):
+        // deriveIdeaFromRegime() structurally returns null for SIDEWAYS_RANGE (no directional
+        // regime signal by design) and for BULLISH/BEARISH_TREND when regime.confidence itself is
+        // thin - it was the ONLY source this bootstrap path ever consulted. Exact historical replay
+        // of this real selection code against real quant_assessments rows proved RANGE_REVERSION
+        // would have won real strategy selection ~2,742 times (confidence up to 0.944) - 100% of
+        // them during SIDEWAYS_RANGE, where deriveIdeaFromRegime ALWAYS returns null. That is a
+        // real, structural, total deadlock for any mean-reversion-family CORE strategy: it can only
+        // ever win selection in the one regime this fallback refuses to handle. The strategy's own
+        // real, already-computed side/confidence (bestStrategyIdea's own MIN_STRATEGY_CONFIDENCE_TO_
+        // TRADE-cleared output, captured in `strategyIdea` before this block overwrites it) is real,
+        // validated signal, not a fabrication - falling back to it when the regime alone gives no
+        // directional read lets a genuinely-scored setup bootstrap the same way a trending-regime
+        // one already could, without inventing anything new.
+        const bootstrapIdea = isQuantColdStartBootstrapEnabled()
+          ? deriveColdStartBootstrapIdea(regime, matchedStrategyEvaluation.strategy, strategyIdea.side, strategyIdea.confidence)
+          : null;
         if (bootstrapIdea) {
-          console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} setup found but is ${stateLabel} - emitting a cold-start regime-only bootstrap idea instead (QUANT_COLD_START_BOOTSTRAP_ENABLED=true).`);
+          console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} setup found but is ${stateLabel} - emitting a cold-start bootstrap idea instead (QUANT_COLD_START_BOOTSTRAP_ENABLED=true).`);
           strategyIdea = {
             side: bootstrapIdea.side,
             confidence: bootstrapIdea.confidence,

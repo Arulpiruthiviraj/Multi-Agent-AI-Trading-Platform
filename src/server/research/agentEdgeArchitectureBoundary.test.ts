@@ -18,6 +18,7 @@ const FILES = [
   'agentTradingEligibility.ts',
   'agentWeightConsistency.ts',
   'strategyReadiness.ts',
+  'strategySelectionReplay.ts',
 ];
 
 function sourceOf(file: string): string {
