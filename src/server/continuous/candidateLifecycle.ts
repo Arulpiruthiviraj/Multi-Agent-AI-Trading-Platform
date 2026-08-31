@@ -68,6 +68,28 @@ export function markCandidatePromoted(symbol: string, now: number = Date.now()):
   cap();
 }
 
+/**
+ * Phase 9 (time-bounded evaluation window, 2026-08-31). Real gap confirmed: 'STALE' has been a
+ * declared CandidateState since this module's own header comment first listed it, but nothing in
+ * the codebase ever actually set it - a candidate that stopped being re-scanned (e.g. it fell out
+ * of the broad-universe shortlist) just sat at its last real state (DISCOVERED/WATCHING) forever,
+ * with no candidate ever reaching STALE. This does not gate consensus/RiskEngine/OMS in any way -
+ * it only keeps this observability-facing lifecycle honest about age, matching what listCandidates()
+ * callers (the continuous-intelligence status route, CLI ranking) already assume STALE means.
+ * Never demotes PROMOTED/FILTERED_OUT (those are real, already-final outcomes for that scan).
+ */
+export function expireStaleCandidates(maxAgeMs: number, now: number = Date.now()): number {
+  let expired = 0;
+  for (const [symbol, record] of candidates) {
+    if (record.state === 'PROMOTED' || record.state === 'FILTERED_OUT' || record.state === 'STALE') continue;
+    if (now - record.updatedAt > maxAgeMs) {
+      candidates.set(symbol, { ...record, state: 'STALE' });
+      expired++;
+    }
+  }
+  return expired;
+}
+
 export function getCandidate(symbol: string): CandidateRecord | undefined {
   return candidates.get(symbol.toUpperCase());
 }

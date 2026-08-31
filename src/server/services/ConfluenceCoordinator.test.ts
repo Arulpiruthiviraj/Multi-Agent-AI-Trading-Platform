@@ -38,6 +38,10 @@ const { evaluateSymbol, isEnabledPublic, evaluateOnDemand } = vi.hoisted(() => (
   isEnabledPublic: vi.fn().mockReturnValue(true),
   evaluateOnDemand: vi.fn().mockResolvedValue({ status: 'forecasted' }),
 }));
+const { fundamentalEvaluateSymbol, macroEvaluateSymbol } = vi.hoisted(() => ({
+  fundamentalEvaluateSymbol: vi.fn().mockResolvedValue(undefined),
+  macroEvaluateSymbol: vi.fn().mockResolvedValue(undefined),
+}));
 
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: fakeEventBus }));
@@ -47,6 +51,12 @@ vi.mock('./QuantSignalAgent', () => ({
 }));
 vi.mock('./KronosForecastAgent', () => ({
   kronosForecastAgent: { evaluateOnDemand },
+}));
+vi.mock('./FundamentalAgent', () => ({
+  fundamentalAgent: { evaluateSymbol: fundamentalEvaluateSymbol },
+}));
+vi.mock('./MacroAgent', () => ({
+  macroAgent: { evaluateSymbol: macroEvaluateSymbol },
 }));
 
 import { ConfluenceCoordinator } from './ConfluenceCoordinator';
@@ -98,6 +108,27 @@ describe('ConfluenceCoordinator', () => {
     await flush();
     expect(evaluateSymbol).toHaveBeenCalledTimes(1);
     expect(evaluateOnDemand).toHaveBeenCalledTimes(1);
+  });
+
+  it('Phase 9: a high-confidence (>= moderateMinConfidence) TechnicalAgent signal ALSO triggers Fundamental/MacroAgent on-demand, not just Quant/Kronos', async () => {
+    fundamentalEvaluateSymbol.mockClear();
+    macroEvaluateSymbol.mockClear();
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ confidence: tradingSafety.moderateMinConfidence }));
+    await flush();
+    expect(fundamentalEvaluateSymbol).toHaveBeenCalledWith('AAPL');
+    expect(macroEvaluateSymbol).toHaveBeenCalledWith('AAPL');
+  });
+
+  it('Phase 9: a qualifying-but-below-moderate-confidence signal still triggers Quant/Kronos but NOT Fundamental/MacroAgent (scarce AlphaVantage budget reserved for stronger candidates)', async () => {
+    fundamentalEvaluateSymbol.mockClear();
+    macroEvaluateSymbol.mockClear();
+    evaluateSymbol.mockClear();
+    const belowModerate = Math.max(tradingSafety.confluenceCoordinatorConfidenceThreshold, tradingSafety.moderateMinConfidence - 0.05);
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ confidence: belowModerate }));
+    await flush();
+    expect(evaluateSymbol).toHaveBeenCalledTimes(1); // QuantEngine still triggered
+    expect(fundamentalEvaluateSymbol).not.toHaveBeenCalled();
+    expect(macroEvaluateSymbol).not.toHaveBeenCalled();
   });
 
   it('Phase 9 same-candidate convergence: records the triggered symbol in recentCandidateRegistry so Fundamental/MacroAgent can prioritize it', async () => {

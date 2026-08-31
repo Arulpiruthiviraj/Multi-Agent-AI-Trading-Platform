@@ -14,7 +14,7 @@ traceRouter.get('/', async (req, res) => {
     const traces = await listRecentDecisionTraces({ symbol, status, limit: capped });
     res.json({ ok: true, traces });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -24,7 +24,7 @@ traceRouter.get('/:traceId/export', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="argus-decision-${req.params.traceId}.json"`);
     res.json(json);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -38,7 +38,7 @@ traceRouter.get('/:traceId/funnel', async (req, res) => {
     const assembled = await getFullDecisionFunnelTrace(req.params.traceId);
     res.json(assembled);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -55,6 +55,6 @@ traceRouter.get('/:traceId', async (req, res) => {
       totalLatencyMs: Math.max(0, lastMs - firstMs),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });

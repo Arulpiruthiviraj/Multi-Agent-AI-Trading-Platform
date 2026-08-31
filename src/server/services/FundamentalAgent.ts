@@ -205,6 +205,23 @@ export class FundamentalAnalysisAgent {
     const recentCandidates = getRecentCandidates(tradingSafety.recentCandidatePriorityMaxAgeMs).filter((s) => freshSymbols.includes(s));
     const priorityPool = recentCandidates.length > 0 ? recentCandidates : freshSymbols;
     const symbol = selectPriorityRoundRobinSymbol(universe, priorityPool, runtimeIntervals.fundamentalAgentMs, Date.now());
+    await this.evaluateSymbol(symbol);
+  }
+
+  /**
+   * Phase 9 (same-candidate convergence, 2026-08-27): extracted from analyzeFundamentals() so
+   * ConfluenceCoordinator can request an on-demand evaluation for a specific real candidate symbol
+   * (the same on-demand pattern already used for QuantEngine/KronosEngine), instead of only ever
+   * waiting for this agent's own round-robin to land on it up to fundamentalAgentMs later. Every
+   * gate/cache/budget check below is identical and still applies regardless of caller - an
+   * on-demand call that has no real budget left, or whose data isn't fresh, gets the exact same
+   * fail-closed DATA_UNAVAILABLE HOLD the scheduled path would. Re-checks the safety gate itself
+   * (not just relying on the scheduled caller having already checked it) so this can never become
+   * a way to bypass Autobot-off/interrupted-session holds via the on-demand path.
+   */
+  async evaluateSymbol(symbol: string): Promise<void> {
+    if (!isLiveIdeaGenerationEnabled() || !isPipelineAgentEnabled('FundamentalAgent')) return;
+
     const traceId = generateTraceId(symbol);
     // Real fix (2026-08-24 readiness audit, Part 2): this round-robin previously never requested
     // coverage for its own evaluation target - it only ever passively read getLatestPrice() and

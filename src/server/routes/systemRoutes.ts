@@ -130,7 +130,7 @@ export async function handlePipelineAgentsGet(_req: Request, res: Response): Pro
     const { getPipelineAgentSnapshot } = await import('../core/pipelineAgentSnapshot');
     res.json({ ok: true, ...getPipelineAgentSnapshot() });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 }
 
@@ -175,7 +175,7 @@ export async function handlePipelineAgentsPost(req: Request, res: Response): Pro
     await persistPipelineAgentEnabled();
     res.json({ ok: true, ...getPipelineAgentSnapshot() });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 }
 

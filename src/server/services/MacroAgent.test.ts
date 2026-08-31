@@ -404,3 +404,35 @@ describe('MacroEconomyAgent - Phase 9 same-candidate convergence (prioritize a r
     expect(idea.symbol).toBe('TSLA');
   });
 });
+
+describe('MacroEconomyAgent - evaluateSymbol() on-demand entry point (Phase 9 same-candidate convergence)', () => {
+  let agent: any;
+  const macro = { inflation: '3.1', fedFundsRate: '5.25', unemployment: '4.0' };
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockImplementation(async (_p: string, dataType: string) => (dataType === 'macro' ? macro : null));
+    getLatestPrice.mockReturnValue(410);
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    process.env.GEMINI_API_KEY = 'test-key';
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'SELL', confidence: 0.68, reasoning: 'on-demand real fixture' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+    agent = new MacroEconomyAgent();
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('evaluates the EXACT symbol it is given, bypassing the round-robin entirely - this is what ConfluenceCoordinator now calls', async () => {
+    await agent.evaluateSymbol('AMD');
+
+    expect(emitTradeIdea).toHaveBeenCalledTimes(1);
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.symbol).toBe('AMD');
+    expect(idea.agent).toBe('MacroAgent');
+    expect(idea.side).toBe('SELL');
+  });
+});

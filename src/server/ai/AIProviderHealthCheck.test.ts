@@ -178,6 +178,28 @@ describe('AIProviderHealthCheck', () => {
     expect(snapshot.find(r => r.providerId === 'p1')!.status).toBe('PROVIDER_UNAVAILABLE');
   });
 
+  it('classifies a real "410 Gone" error as MODEL_UNAVAILABLE, not PROVIDER_UNAVAILABLE (Phase 9 Friday forensic audit, 2026-08-28: NVIDIA logged 676 real 410s that day, matching no prior classifier)', async () => {
+    const provider = fakeProvider({ chat: async () => { throw new Error('NVIDIA API error: 410 Gone - {"type":"about:blank","title":"Gone","status":410}'); } });
+    AIRouter.getInstance().registerProvider('p1', provider);
+    dbRows.current = [dbRow()];
+
+    await checkProviderHealth('p1', provider);
+    const snapshot = await getAIProviderHealthSnapshot();
+
+    expect(snapshot.find(r => r.providerId === 'p1')!.status).toBe('MODEL_UNAVAILABLE');
+  });
+
+  it('classifies a bare 500 Internal Server Error as PROVIDER_UNAVAILABLE (transient - real gap found: previously matched no classifier at all, arming zero cooldown)', async () => {
+    const provider = fakeProvider({ chat: async () => { throw new Error('OpenAI API error: 500 Internal Server Error'); } });
+    AIRouter.getInstance().registerProvider('p1', provider);
+    dbRows.current = [dbRow()];
+
+    await checkProviderHealth('p1', provider);
+    const snapshot = await getAIProviderHealthSnapshot();
+
+    expect(snapshot.find(r => r.providerId === 'p1')!.status).toBe('PROVIDER_UNAVAILABLE');
+  });
+
   it('increments consecutiveFailures across repeated failures and resets to 0 on the next success', async () => {
     const failing = fakeProvider({ chat: async () => { throw new Error('401 Unauthorized'); } });
     AIRouter.getInstance().registerProvider('p1', failing);

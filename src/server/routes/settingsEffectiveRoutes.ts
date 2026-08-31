@@ -25,7 +25,7 @@ settingsEffectiveRouter.get('/effective', async (_req, res) => {
       settings: listEffectiveRuntimeSettings(),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -34,7 +34,7 @@ settingsEffectiveRouter.get('/effective/export', async (_req, res) => {
     await hydrateRuntimeConfigFromDb();
     res.json({ ok: true, ...exportEffectiveRuntimeConfigRedacted() });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -45,7 +45,7 @@ settingsEffectiveRouter.get('/effective/:key', async (req, res) => {
     if (!row) return res.status(404).json({ ok: false, error: 'Unknown setting' });
     res.json({ ok: true, ...row });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -60,7 +60,7 @@ settingsEffectiveRouter.post('/overrides', tradingLimiter, async (req, res) => {
       note: 'Override stored in config_overrides. .env was not modified. Safety-locked keys cannot be set this way.',
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -71,7 +71,7 @@ settingsEffectiveRouter.post('/overrides/:key/reset', tradingLimiter, async (req
     if (result.ok === false) return res.status(result.status).json({ ok: false, error: result.error });
     res.json({ ok: true, ...result.resolved, note: 'Database override removed. Effective value is now .env or the safe default.' });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -86,6 +86,6 @@ settingsEffectiveRouter.post('/overrides/reset-all', tradingLimiter, async (req,
       note: 'Only config_overrides rows were deleted. trades, fills, portfolio, risk, audit, and broker credentials were not touched. .env was not modified.',
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });

@@ -216,6 +216,16 @@ export class MacroEconomyAgent {
     const recentCandidates = getRecentCandidates(tradingSafety.recentCandidatePriorityMaxAgeMs).filter((s) => freshSymbols.includes(s));
     const priorityPool = recentCandidates.length > 0 ? recentCandidates : freshSymbols;
     const symbol = selectPriorityRoundRobinSymbol(universe, priorityPool, runtimeIntervals.macroAgentMs, Date.now());
+    await this.evaluateSymbol(symbol);
+  }
+
+  /** Phase 9 (same-candidate convergence) - see FundamentalAgent.ts's identical evaluateSymbol()
+   *  for the full rationale. Lets ConfluenceCoordinator request an on-demand evaluation for a
+   *  specific real candidate symbol instead of only ever waiting for this agent's own round-robin.
+   *  Re-checks the safety gate itself, independent of the caller. */
+  async evaluateSymbol(symbol: string): Promise<void> {
+    if (!isLiveIdeaGenerationEnabled() || !isPipelineAgentEnabled('MacroAgent')) return;
+
     const traceId = generateTraceId(symbol);
     // Real fix (2026-08-24 readiness audit, Part 2) - see FundamentalAgent.ts's identical comment.
     eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol, requestedBy: 'MacroAgent', at: new Date().toISOString() });

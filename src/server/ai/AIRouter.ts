@@ -206,10 +206,18 @@ export function isAuthFailureError(err: unknown): boolean {
     || /unauthorized|forbidden|invalid api key|api key not valid|api_key_invalid|authentication/i.test(msg);
 }
 
-/** 404 / network-down — skip for aiProviderUnreachableCooldownMs; do not flip DB enabled. */
+/**
+ * 404 / network-down / transient server errors — skip for aiProviderUnreachableCooldownMs; do not
+ * flip DB enabled. Real gap found (Phase 9 Friday forensic audit, 2026-08-28 crash/ai_calls
+ * evidence): 408/409/500/502/503/504 previously matched NONE of noteProviderSkipFromError's
+ * classifiers, meaning a provider returning a plain 5xx got no cooldown armed at all and was
+ * re-dispatched to on every single call, same as if it were perfectly healthy. These are
+ * genuinely transient (unlike a permanently-dead model/endpoint - see isModelUnavailableError
+ * below for that case) so they get the short cooldown, not the long one.
+ */
 export function isUnreachableProviderError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
-  return /\b404\b/.test(msg)
+  return /\b(404|408|409|500|502|503|504)\b/.test(msg)
     || /fetch failed/i.test(msg)
     || /ENOTFOUND|ECONNREFUSED|ECONNRESET|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_SOCKET/i.test(msg);
 }

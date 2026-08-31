@@ -22,7 +22,7 @@ learningRouter.get('/observations', async (req, res) => {
     ]);
     res.json({ ok: true, since, count: rows.length, breakdown, rows });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -35,7 +35,7 @@ learningRouter.get('/versions/:versionType', async (req, res) => {
     ]);
     res.json({ ok: true, versionType: req.params.versionType, championId: champion?.id ?? null, count: versions.length, versions });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -45,7 +45,7 @@ learningRouter.get('/versions/:versionType/:versionId/promotions', async (req, r
     const history = await getPromotionHistory(req.params.versionId);
     res.json({ ok: true, versionId: req.params.versionId, count: history.length, history });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -55,7 +55,7 @@ learningRouter.get('/versions/:versionType/rollbacks', async (req, res) => {
     const history = await getRollbackHistory(req.params.versionType);
     res.json({ ok: true, versionType: req.params.versionType, count: history.length, history });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -69,7 +69,7 @@ learningRouter.get('/calibration/candidates', async (_req, res) => {
     const candidates = await buildCalibrationCandidates();
     res.json({ ok: true, count: candidates.length, candidates });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -78,6 +78,6 @@ learningRouter.get('/calibration/worker-status', async (_req, res) => {
     const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
     res.json({ ok: true, ...calibrationValidationWorker.getStatus() });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });

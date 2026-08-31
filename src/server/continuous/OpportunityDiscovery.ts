@@ -18,8 +18,9 @@ import { isPennyStockEnabled } from '../config/multiAsset';
 import { classifyAsset, isPennyOrMicro, type AssetSnapshot } from '../multiAsset/AssetClassifier';
 import { evaluateAssetSafety } from '../multiAsset/SafetyFilter';
 import { marketDataWorker } from '../services/MarketDataWorker';
-import { upsertCandidate } from './candidateLifecycle';
+import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
+import { tradingSafety } from '../config/tradingSafety';
 import { getCachedBroadUniverseSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
 import {
   getLastSnapshotScore,
@@ -215,6 +216,16 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
     return lastScan;
   }
   inFlight = true;
+  // Phase 9 (time-bounded evaluation window): a candidate this scan does not re-shortlist this
+  // cycle ages out of DISCOVERED/WATCHING into STALE rather than sitting at its last real state
+  // forever. Reuses recentCandidatePriorityMaxAgeMs (the same "still worth prioritizing" window
+  // recentCandidateRegistry.ts already uses) rather than inventing a new number. Observability
+  // only - never touches consensus/RiskEngine/OMS.
+  try {
+    expireStaleCandidates(tradingSafety.recentCandidatePriorityMaxAgeMs, now.getTime());
+  } catch (e) {
+    console.error('[OpportunityDiscovery] expireStaleCandidates failed (does not affect the real scan)', e);
+  }
   const rejectedReasons: Record<string, number> = {};
   const shortlist: OpportunityScanStats['shortlist'] = [];
   const rth = isSnapshotScannerRth(now);

@@ -560,6 +560,30 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'trading-funnel'() {
+    // Phase 9 (2026-08-31): the single authoritative trading-funnel dashboard - candidateLifecycle
+    // state counts + consensusPipelineReport + providerHealthMatrix in one view. Pass --hours=N
+    // to widen the consensus/risk/fill window (default 24); candidate counts are always "now".
+    const hoursArg = process.argv.slice(3).find((a) => a.startsWith('--hours='));
+    const hours = hoursArg ? hoursArg.slice('--hours='.length) : '24';
+    const res = await fetch(`${BASE}/api/v2/observability/trading-funnel?format=text&hours=${encodeURIComponent(hours)}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'why-no-trade'() {
+    // Phase 9 (2026-08-31): single-candidate explainer. Pass --symbol=NVDA to check a specific
+    // symbol's most recent evaluation; omitted, shows the most recent evaluation of any symbol.
+    const symbolArg = process.argv.slice(3).find((a) => a.startsWith('--symbol='));
+    const symbol = symbolArg ? symbolArg.slice('--symbol='.length) : '';
+    const qs = symbol ? `symbol=${encodeURIComponent(symbol)}&` : '';
+    const res = await fetch(`${BASE}/api/v2/observability/why-no-trade?${qs}format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'pipeline-ready'() {
     // Zero-Trade Forensic Audit follow-up: distinguishes "process alive" from "trading pipeline
     // ready" (Process/Database/MarketData/Broker/Technical/Quant/AI Provider Layer, each
@@ -919,7 +943,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

@@ -224,6 +224,30 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     expect(misconfigured.chat).toHaveBeenCalledTimes(1);
   });
 
+  it('routeTask() gives a real "410 Gone" (the ACTUAL Friday 2026-08-28 NVIDIA failure - 676 occurrences that day alone, distinct from the 404 case above) the same LONG cooldown, not zero cooldown', async () => {
+    const gone = {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => { throw new Error('NVIDIA API error: 410 Gone - {"type":"about:blank","title":"Gone","status":410}'); }),
+      estimateCost: vi.fn(() => 0),
+    };
+    aiRouter.registerProvider('nvidia-410', gone);
+    aiRouter.registerProvider('ok-provider', fastProvider('{"ok":true}'));
+
+    const first = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-410-a');
+    expect(first.provider).toBe('ok-provider');
+    expect(aiRouter.isProviderTemporarilySkipped('nvidia-410')).toBe(true);
+    expect(aiRouter.isProviderAuthDisabled('nvidia-410')).toBe(false);
+
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const snapshot = aiRouter.getProviderRoutingSnapshot().find((r) => r.providerId === 'nvidia-410')!;
+    const cooldownRemainingMs = snapshot.skipUntil! - Date.now();
+    expect(cooldownRemainingMs).toBeGreaterThan(tradingSafety.aiProviderUnreachableCooldownMs);
+
+    const second = await aiRouter.routeTask('TestAgent', 'prompt', 'trace-410-b');
+    expect(second.provider).toBe('ok-provider');
+    expect(gone.chat).toHaveBeenCalledTimes(1);
+  });
+
   it('routeTask() skips an account-suspended provider (real Kimi/Moonshot 429 phrasing) on the next call — real gap found in the 2026-08-26 forensic audit: this provider was previously re-dispatched to on every single call all session', async () => {
     const suspended = {
       authenticate: vi.fn(async () => true),
@@ -372,6 +396,16 @@ describe('isAuthFailureError - real bug fix: Gemini real-key-rejection phrasing 
     expect(isUnreachableProviderError(new Error('NVIDIA API error: 404 Not Found'))).toBe(true);
     expect(isUnreachableProviderError(new Error('fetch failed'))).toBe(true);
     expect(isTimeoutSkipError(new Error('NVIDIA API error: 404 Not Found'))).toBe(false);
+  });
+
+  it('classifies 408/409/500/502/503/504 as unreachable too (Phase 9 Friday forensic audit, 2026-08-28: these previously matched no classifier, arming zero cooldown). 410 is deliberately NOT included here - it is classified as MODEL_UNAVAILABLE (long cooldown) earlier in noteProviderSkipFromError\'s chain, see the classifyError/routeTask tests below.', async () => {
+    const { isUnreachableProviderError } = await import('./AIRouter');
+    expect(isUnreachableProviderError(new Error('Request Timeout: 408'))).toBe(true);
+    expect(isUnreachableProviderError(new Error('409 Conflict'))).toBe(true);
+    expect(isUnreachableProviderError(new Error('OpenAI API error: 500 Internal Server Error'))).toBe(true);
+    expect(isUnreachableProviderError(new Error('502 Bad Gateway'))).toBe(true);
+    expect(isUnreachableProviderError(new Error('503 Service Unavailable'))).toBe(true);
+    expect(isUnreachableProviderError(new Error('504 Gateway Timeout'))).toBe(true);
   });
 });
 

@@ -183,7 +183,7 @@ runtimeRouter.get('/session-lifecycle', async (req, res) => {
       .limit(limit);
     res.json({ ok: true, current: sessionLifecycleWorker.getSnapshot(), history });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -247,7 +247,7 @@ runtimeRouter.get('/risk/recent-assessments', async (req, res) => {
 
     res.json({ ok: true, count: result.length, assessments: result });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 

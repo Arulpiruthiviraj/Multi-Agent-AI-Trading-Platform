@@ -404,3 +404,51 @@ describe('FundamentalAnalysisAgent - Phase 9 same-candidate convergence (priorit
     expect(['NVDA', 'AAPL', 'TSLA']).toContain(idea.symbol);
   });
 });
+
+describe('FundamentalAnalysisAgent - evaluateSymbol() on-demand entry point (Phase 9 same-candidate convergence)', () => {
+  let agent: any;
+  const fundamentals = { peRatio: '28.4', epsGrowth: '0.12', debtToEquity: '0.5' };
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    // Real fundamentals cache HIT (same pattern as the Phase 7 caching describe block above) -
+    // avoids a real AlphaVantage network call; only the AI-analysis cache is a miss.
+    getFresh.mockImplementation(async (_p: string, dataType: string) => (dataType === 'fundamentals' ? fundamentals : null));
+    getLatestPrice.mockReturnValue(250);
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    process.env.GEMINI_API_KEY = 'test-key';
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.72, reasoning: 'on-demand real fixture' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+    agent = new FundamentalAnalysisAgent();
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('evaluates the EXACT symbol it is given, bypassing the round-robin entirely - this is what ConfluenceCoordinator now calls', async () => {
+    await agent.evaluateSymbol('NVDA');
+
+    expect(emitTradeIdea).toHaveBeenCalledTimes(1);
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.symbol).toBe('NVDA');
+    expect(idea.agent).toBe('FundamentalAgent');
+    expect(idea.side).toBe('BUY');
+  });
+
+  it('still fails closed (no fabricated vote) when the real AlphaVantage budget is exhausted, even on-demand', async () => {
+    getFresh.mockResolvedValue(null); // force a cache MISS so the real budget check is actually reached; ExternalDataCache.getStale defaults to null (mocked at file top)
+    const { AlphaVantageBudget } = await import('./AlphaVantageBudget');
+    const spy = vi.spyOn(AlphaVantageBudget, 'tryConsume').mockResolvedValue(false);
+
+    await agent.evaluateSymbol('MSFT');
+
+    expect(emitTradeIdea).toHaveBeenCalledTimes(1);
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.reasoning).toContain('DATA_UNAVAILABLE');
+    spy.mockRestore();
+  });
+});

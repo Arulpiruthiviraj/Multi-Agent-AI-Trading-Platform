@@ -195,7 +195,7 @@ v2Router.get('/agents/performance', async (req, res) => {
     const stats = await db.select().from(agentPerformanceStats).all();
     res.json({ ok: true, stats });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -210,7 +210,7 @@ v2Router.post('/system/toggle', tradingLimiter, async (req, res) => {
     }
     res.json({ ok: true, status: argusApplication.status() });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -240,7 +240,7 @@ v2Router.get('/data/trades', async (req, res) => {
     const allTrades = await db.select().from(trades).orderBy(desc(trades.timestamp)).limit(50).all();
     res.json({ ok: true, trades: allTrades });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -249,7 +249,7 @@ v2Router.get('/data/portfolio', async (req, res) => {
     const holdings = await db.select().from(portfolio).all();
     res.json({ ok: true, portfolio: holdings });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -274,7 +274,7 @@ v2Router.post('/system/backtest', backtestLimiter, async (req, res) => {
       promotionPath: 'POST /api/v2/research/canonical/core',
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -310,7 +310,7 @@ v2Router.get('/system/events', async (req, res) => {
     }));
     res.json({ ok: true, events, backfill: true });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -335,7 +335,7 @@ v2Router.get('/system/trace/:traceId', async (req, res) => {
     }));
     res.json({ ok: true, trace, source: 'db' });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -345,7 +345,7 @@ v2Router.get('/data/explainability/:traceId', async (req, res) => {
     const report = await db.select().from(explainabilityReports).where(eq(explainabilityReports.traceId, traceId)).get();
     res.json({ ok: true, report });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -401,7 +401,7 @@ v2Router.get('/transactions', async (req, res) => {
       }),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -471,7 +471,7 @@ v2Router.get('/transactions/:id', async (req, res) => {
     if (!data) return res.status(404).json({ ok: false, error: `No transaction found for id ${req.params.id}` });
     res.json({ ok: true, ...data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -607,7 +607,7 @@ v2Router.get('/transactions/:id/export', async (req, res) => {
     res.set('Content-Type', 'application/json; charset=utf-8');
     res.send(JSON.stringify({ ok: true, ...data }, null, 2));
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -709,7 +709,7 @@ v2Router.get('/system/mission-control', async (req, res) => {
       eventsPerSec,
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -766,7 +766,7 @@ v2Router.get('/strategy/rsi-scan', async (req, res) => {
 
     res.json({ ok: true, results });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -780,7 +780,7 @@ v2Router.get('/strategy/agent-synergy', async (req, res) => {
     })));
     res.json({ ok: true, ...result, windowDays, sampleSize: rows.length });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -856,7 +856,7 @@ v2Router.post('/trading/execute-override', tradingLimiter, async (req, res) => {
       note: 'Consensus approved — RiskEngine 24 gates and OMS still apply asynchronously.',
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -875,7 +875,7 @@ v2Router.post('/trading/cancel-order/:id', tradingLimiter, async (req, res) => {
     }
     res.json({ ok: true });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -999,7 +999,7 @@ v2Router.get('/trading/execution-quality', async (req, res) => {
 
     res.json({ ok: true, available: true, data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1062,7 +1062,7 @@ v2Router.get('/agents/efficiency', async (req, res) => {
 
     res.json({ ok: true, available: true, data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1117,7 +1117,7 @@ v2Router.get('/ai/token-consumption', async (req, res) => {
       },
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1159,7 +1159,7 @@ v2Router.get('/opportunities', async (req, res) => {
 
     res.json({ ok: true, available: true, data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1204,7 +1204,7 @@ v2Router.get('/portfolio/risk-attribution', async (req, res) => {
 
     res.json({ ok: true, available: true, totalValue: Number(totalValue.toFixed(2)), data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1273,7 +1273,7 @@ v2Router.get('/portfolio/stress-test', async (req, res) => {
       },
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1317,7 +1317,7 @@ v2Router.get('/portfolio/pnl-by-symbol', async (req, res) => {
 
     res.json({ ok: true, available: true, horizon, data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1361,7 +1361,7 @@ v2Router.get('/agents/learning-summary', async (req, res) => {
       recentLearnedRules: ruleRows.map(r => ({ agent: r.agent, cause: r.cause, rule: r.rule, confidence: r.confidence, timestamp: r.timestamp })),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1391,7 +1391,7 @@ v2Router.get('/system/startup-health', async (_req, res) => {
     const services = await collectStartupHealth();
     res.json({ ok: true, services });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1411,7 +1411,7 @@ v2Router.get('/desk/lifecycle', async (_req, res) => {
       transitions: rows,
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1462,7 +1462,7 @@ v2Router.get('/quant/experiments/audit-trail', async (req, res) => {
       note: 'Full experiment provenance, including rejected/pruned trials - never only the winning search result. deflatedSharpe is null unless both strategyId and a numObservations query param are supplied and at least 2 trials for that strategy carry a real outOfSampleMetrics.sharpe value.',
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1492,7 +1492,7 @@ v2Router.get('/quant/assessments/:symbol', async (req, res) => {
       })),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1558,7 +1558,7 @@ v2Router.get('/quant/strategy-performance', async (req, res) => {
       daily: rows,
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1583,7 +1583,7 @@ v2Router.get('/quant/strategy-backtests', async (req, res) => {
       } as Record<string, unknown>)),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1669,7 +1669,7 @@ v2Router.post('/quant/strategy-backtests/:id/monte-carlo', async (req, res) => {
     const result = runMonteCarlo({ rMultiples, initialCapital, riskPerTradePct, pathLength, simulations });
     res.json({ ok: true, data: result });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1693,7 +1693,7 @@ v2Router.get('/quant/strategy-backtests/:id/decision-log', async (req, res) => {
       })),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1708,7 +1708,7 @@ v2Router.get('/ai/prediction-validation', async (req, res) => {
     const data = await computeAIPredictionValidation(since);
     res.json({ ok: true, data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1723,7 +1723,7 @@ v2Router.get('/paper-trading/report', async (req, res) => {
     const data = await computePaperTradingReport(since);
     res.json({ ok: true, data });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1733,7 +1733,7 @@ v2Router.get('/orchestration/models', async (_req, res) => {
     const models = await modelRuntimeManager.refresh();
     res.json({ ok: true, models });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1819,7 +1819,7 @@ v2Router.get('/diagnostics', async (_req, res) => {
     const snap = await collectDiagnostics();
     res.json({ ok: true, ...snap });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1829,7 +1829,7 @@ v2Router.get('/diagnostics/why-not-trading', async (_req, res) => {
     const snap = await collectDiagnostics();
     res.json({ ok: true, ...snap.whyNotTrading, timestamp: snap.timestamp });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1847,7 +1847,7 @@ v2Router.get('/diagnostics/why/:id', async (req, res) => {
     const explanation = await explainTransaction(assembled);
     res.json({ ok: true, ...explanation });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1871,7 +1871,7 @@ v2Router.post('/diagnostics/retry/:component', async (req, res) => {
     }
     res.status(400).json({ ok: false, error: `Retry is not defined for ${component}` });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1880,7 +1880,7 @@ v2Router.get('/replay/ai-availability', async (_req, res) => {
     const { aiHistoricalReplayAvailability } = await import('../replay/aiReplayAvailability');
     res.json({ ok: true, data: aiHistoricalReplayAvailability() });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1914,7 +1914,7 @@ v2Router.get('/quant-core/health', async (_req, res) => {
       ...health,
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1941,7 +1941,7 @@ v2Router.get('/quant-core/parity', async (req, res) => {
     });
     res.json({ ok: true, count: divergences.length, divergences });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -1991,7 +1991,7 @@ v2Router.get('/consensus/shadow-comparison', async (req, res) => {
       comparisons,
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2023,7 +2023,7 @@ v2Router.get('/confluence/recent', async (req, res) => {
     });
     res.json({ ok: true, count: triggers.length, triggers });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2043,7 +2043,7 @@ v2Router.get('/campaign/status', async (_req, res) => {
         'Campaign tracker does not bypass RiskEngine, OMS, ChiefTrader consensus, or PositionSizing. LOCK_AND_IDLE / TRAIL_STOPS_ONLY only soft-block NEW BUY idea generation; SELL/exits remain allowed when TRADING_ENABLED.',
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2112,7 +2112,7 @@ v2Router.patch('/campaign/settings', async (req, res) => {
   try {
     await handleCampaignSettingsUpdate(req, res);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -2120,6 +2120,6 @@ v2Router.post('/campaign/settings', async (req, res) => {
   try {
     await handleCampaignSettingsUpdate(req, res);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });

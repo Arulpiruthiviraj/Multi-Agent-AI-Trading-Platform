@@ -119,6 +119,15 @@ export function classifyError(err: unknown): AIProviderHealthStatus {
   if (/\b402\b|payment required|quota|insufficient[_ ]?quota|billing/i.test(msg)) return 'QUOTA_EXCEEDED';
   if (/\b429\b|rate[_ -]?limit/i.test(msg)) return 'RATE_LIMITED';
   if (/\b404\b/.test(msg) && /model/i.test(msg)) return 'MODEL_UNAVAILABLE';
+  // Real gap found (Phase 9 Friday forensic audit, 2026-08-28): NVIDIA logged 676 real "410 Gone"
+  // failures that day alone, matching none of the classifiers above or below - noteProviderSkipFromError
+  // armed no cooldown at all, so the provider was retried on every single call, all day. Unlike a
+  // bare 404 (too generic/common for transient causes - typo'd URL, momentary routing issue - to
+  // treat as a permanent quarantine on its own), HTTP 410 is a deliberate, unambiguous "this
+  // resource is permanently gone" signal per the HTTP spec - no corroborating "model" keyword
+  // required. Classified the same as MODEL_UNAVAILABLE so it gets the same long,
+  // does-not-self-heal-within-a-session cooldown, not the short transient one.
+  if (/\b410\b/.test(msg)) return 'MODEL_UNAVAILABLE';
   if (isUnreachableProviderError(err)) return 'PROVIDER_UNAVAILABLE';
   return 'UNKNOWN';
 }

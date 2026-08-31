@@ -33,6 +33,8 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { tradingSafety } from '../config/tradingSafety';
 import { quantSignalAgent } from './QuantSignalAgent';
 import { kronosForecastAgent } from './KronosForecastAgent';
+import { fundamentalAgent } from './FundamentalAgent';
+import { macroAgent } from './MacroAgent';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 
@@ -128,6 +130,37 @@ export class ConfluenceCoordinator {
       );
     } else {
       skipped.push('KronosEngine:disabled');
+    }
+
+    // Phase 9 (same-candidate convergence): Fundamental/MacroAgent are wired here too, but gated
+    // on a STRICTER confidence bar (moderateMinConfidence, 0.6) than the base 0.5 this function
+    // already requires - unlike Quant/Kronos (free, local compute), every on-demand Fundamental/
+    // Macro call can spend a real, scarce AlphaVantage request. Reserving them for the stronger
+    // half of qualifying signals is the same "spend scarce budget on the best candidates" principle
+    // the AlphaVantageBudget reservation logic already applies elsewhere - not a new number, reuses
+    // the existing MODERATE-tier confidence floor. evaluateSymbol() itself still fails closed
+    // (cached/rate-limited HOLD, never fabricated) if the day's real budget is already spent.
+    const highConfidence = typeof idea.confidence === 'number' && idea.confidence >= tradingSafety.moderateMinConfidence;
+    if (highConfidence && isPipelineAgentEnabled('FundamentalAgent')) {
+      triggered.push('FundamentalAgent');
+      jobs.push(
+        fundamentalAgent.evaluateSymbol(symbol).catch((e: unknown) => {
+          console.warn(`[ConfluenceCoordinator] FundamentalAgent on-demand evaluation failed for ${symbol}`, e);
+        }),
+      );
+    } else {
+      skipped.push(highConfidence ? 'FundamentalAgent:disabled' : 'FundamentalAgent:below_moderate_confidence');
+    }
+
+    if (highConfidence && isPipelineAgentEnabled('MacroAgent')) {
+      triggered.push('MacroAgent');
+      jobs.push(
+        macroAgent.evaluateSymbol(symbol).catch((e: unknown) => {
+          console.warn(`[ConfluenceCoordinator] MacroAgent on-demand evaluation failed for ${symbol}`, e);
+        }),
+      );
+    } else {
+      skipped.push(highConfidence ? 'MacroAgent:disabled' : 'MacroAgent:below_moderate_confidence');
     }
 
     // NewsAgent deliberately excluded: real paid-API cost per call (CLAUDE.md), no existing

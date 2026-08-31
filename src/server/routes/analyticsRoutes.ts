@@ -75,6 +75,6 @@ analyticsRouter.get('/scorecards', async (req, res) => {
 
     res.json({ ok: true, scorecards });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });

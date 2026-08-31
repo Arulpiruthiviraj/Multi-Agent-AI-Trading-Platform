@@ -8,6 +8,8 @@ import { observabilityEvents } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
 import { buildProviderHealthMatrix } from '../observability/providerHealthMatrix';
 import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../observability/consensusPipelineReport';
+import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observability/tradingFunnelReport';
+import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
 
 export const observabilityRouter = Router();
 
@@ -35,7 +37,7 @@ observabilityRouter.get('/events', async (req, res) => {
       : await db.select().from(observabilityEvents).orderBy(desc(observabilityEvents.ts)).limit(limit);
     res.json({ ok: true, events: rows });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -43,7 +45,7 @@ observabilityRouter.get('/decisions/:traceId', async (req, res) => {
   try {
     res.json(await getDecisionTrace(req.params.traceId));
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -53,7 +55,7 @@ observabilityRouter.get('/decisions/:traceId/export', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="argus-decision-${req.params.traceId}.json"`);
     res.json(json);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -65,7 +67,7 @@ observabilityRouter.get('/provider-health-matrix', async (req, res) => {
     const matrix = await buildProviderHealthMatrix(new Date(), windowHours * 60 * 60 * 1000);
     res.json({ ok: true, windowHours, providers: matrix });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -83,7 +85,39 @@ observabilityRouter.get('/consensus-report', async (req, res) => {
     }
     res.json({ ok: true, report });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 9 (2026-08-31): the single authoritative trading-funnel dashboard (argus-cli trading-funnel)
+// - composes candidateLifecycle counts + consensusPipelineReport + providerHealthMatrix, no new data path.
+observabilityRouter.get('/trading-funnel', async (req, res) => {
+  try {
+    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const report = await buildTradingFunnelReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatTradingFunnelReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 9 (2026-08-31): single-candidate "why did this not trade" explainer (argus-cli why-no-trade).
+observabilityRouter.get('/why-no-trade', async (req, res) => {
+  try {
+    const symbol = typeof req.query.symbol === 'string' ? req.query.symbol : undefined;
+    const report = await buildWhyNoTradeReport(symbol);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatWhyNoTradeReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -93,6 +127,6 @@ observabilityRouter.get('/orders/:orderId', async (req, res) => {
     if (!result.ok) return res.status(404).json(result);
     res.json(result);
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });

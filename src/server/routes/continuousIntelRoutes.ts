@@ -67,7 +67,7 @@ continuousIntelRouter.get('/ranking/latest', async (req, res) => {
       })),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -98,7 +98,7 @@ continuousIntelRouter.get('/ranking/history/:symbol', async (req, res) => {
       })),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -129,7 +129,7 @@ continuousIntelRouter.get('/subscription-decisions', async (req, res) => {
       })),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -149,7 +149,7 @@ continuousIntelRouter.get('/capacity', (_req, res) => {
       activeSlots: marketDataWorker.getActiveSlots(),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -174,7 +174,7 @@ continuousIntelRouter.get('/trade-plans/:planDate', async (req, res) => {
       })),
     });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -184,7 +184,7 @@ continuousIntelRouter.get('/trade-plans/:planDate/:planId/revalidations', async 
     const history = await getRevalidationHistory(req.params.planId);
     res.json({ ok: true, planId: req.params.planId, count: history.length, history });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -199,7 +199,7 @@ continuousIntelRouter.get('/missed-opportunities', async (req, res) => {
     for (const r of rows) byClassification[r.classification] = (byClassification[r.classification] ?? 0) + 1;
     res.json({ ok: true, since, count: rows.length, byClassification, rows });
   } catch (e: any) {
-    res.status(500).json({ ok: false, error: e.message });
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
 });
 
