@@ -8,7 +8,7 @@
  */
 import { db } from '../db';
 import { observabilityEvents, riskAssessments, riskGateResults } from '../db/schema';
-import { eq, desc } from 'drizzle-orm';
+import { eq, desc, and } from 'drizzle-orm';
 import { getCandidate } from '../continuous/candidateLifecycle';
 
 export interface WhyNoTradeReport {
@@ -31,15 +31,19 @@ export interface WhyNoTradeReport {
   };
 }
 
+// Filters by eventType at the SQL level (not just symbol, then in-memory .find over a capped
+// window) - noisier event types (ticks, subscriptions) for an actively-scanned symbol can easily
+// outnumber its real CONSENSUS_TERMINAL_REASON rows within any small in-memory window, which would
+// silently hide a real historical evaluation behind a false "not found".
 export async function buildWhyNoTradeReport(symbol?: string): Promise<WhyNoTradeReport> {
-  const rows = symbol
-    ? await db.select().from(observabilityEvents)
-        .where(eq(observabilityEvents.symbol, symbol.toUpperCase()))
-        .orderBy(desc(observabilityEvents.ts)).limit(50)
-    : await db.select().from(observabilityEvents)
-        .orderBy(desc(observabilityEvents.ts)).limit(50);
+  const whereClause = symbol
+    ? and(eq(observabilityEvents.eventType, 'CONSENSUS_TERMINAL_REASON'), eq(observabilityEvents.symbol, symbol.toUpperCase()))
+    : eq(observabilityEvents.eventType, 'CONSENSUS_TERMINAL_REASON');
+  const rows = await db.select().from(observabilityEvents)
+    .where(whereClause)
+    .orderBy(desc(observabilityEvents.ts)).limit(1);
 
-  const row = rows.find((r) => r.eventType === 'CONSENSUS_TERMINAL_REASON');
+  const row = rows[0];
   if (!row) {
     return {
       symbol: symbol ? symbol.toUpperCase() : null,

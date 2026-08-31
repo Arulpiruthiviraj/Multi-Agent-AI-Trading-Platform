@@ -83,6 +83,20 @@ describe('whyNoTradeReport', () => {
     expect(report.participatingAgents).toHaveLength(2);
   });
 
+  it('finds a real CONSENSUS_TERMINAL_REASON row even when 60 noisier same-symbol events (ticks/subscriptions) are more recent - regression for a bug where an in-memory top-50-by-ts window silently hid it', async () => {
+    await seedTerminalReasonEvent({ ts: 1000, symbol: 'ZZZZ', traceId: 'trace-real', terminalReasonCode: 'AGENT_HOLD' });
+    for (let i = 0; i < 60; i++) {
+      await db.insert(schema.observabilityEvents).values({
+        id: `noise-${i}`, ts: 2000 + i, level: 'INFO', category: 'DISCOVERY', eventType: 'SUBSCRIPTION_PROMOTED',
+        loggerName: 'argus', message: 'subscription_priority_decision', sessionId: 'sess-1', symbol: 'ZZZZ',
+        payload: null,
+      });
+    }
+    const report = await mod.buildWhyNoTradeReport('ZZZZ');
+    expect(report.found).toBe(true);
+    expect(report.traceId).toBe('trace-real');
+  });
+
   it('joins real risk_assessments/risk_gate_results by traceId when consensus was approved', async () => {
     await seedTerminalReasonEvent({
       symbol: 'AAPL', traceId: 'trace-approved', approved: true, decisionTier: 'STRONG',
