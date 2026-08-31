@@ -187,9 +187,22 @@ export class ChiefTraderAgent {
 
     setInterval(() => {
        this.recordUnresolvedAsNoConsensus().catch(e => console.error('[ChiefTrader] Failed to record NO_CONSENSUS transactions', e));
-       // Keep ideas for symbols whose debate is still in flight - wiping them would make the
-       // eventual debate completion evaluate an empty set and silently drop the original thesis.
-       this.recentIdeas = this.recentIdeas.filter(i => (this.pendingDebates.get(i.symbol) || 0) > 0);
+       // Real defect found and fixed (2026-08-31 zero-trade consensus-blocker forensic audit):
+       // this used to unconditionally wipe every idea for a symbol with no debate in flight,
+       // regardless of that idea's own age - anchored to wall-clock time since this interval was
+       // registered, not to each idea's receivedAt. A genuinely independent agent's still-fresh
+       // vote (e.g. 10s old, far under consensusIdeaMaxAgeMs) could be discarded here purely
+       // because of its unlucky phase alignment with this fixed-period tick, before a second
+       // agent's vote ever arrived to combine with it - silently capping the real consensus
+       // window well below the documented consensusIdeaMaxAgeMs. Proven with a deterministic
+       // fake-timer test (ChiefTraderAgent.ideaSweepTiming.test.ts) reproducing exactly this
+       // sequence against the real class. Fix: keep an idea if its OWN debate is pending, or if
+       // it is still within consensusIdeaMaxAgeMs by isConsensusIdeaFresh - never lowers or
+       // changes CONSENSUS_APPROVAL_THRESHOLD/MIN_INDEPENDENT_AGREEING_AGENTS, it only stops
+       // discarding still-fresh evidence early.
+       this.recentIdeas = this.recentIdeas.filter(
+         i => (this.pendingDebates.get(i.symbol) || 0) > 0 || isConsensusIdeaFresh(i.receivedAt),
+       );
     }, runtimeIntervals.chiefTraderIdeaTtlMs);
     
     // Sync dynamic weights from database every 10 seconds
