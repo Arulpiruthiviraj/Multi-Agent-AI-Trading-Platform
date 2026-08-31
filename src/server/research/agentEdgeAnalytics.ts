@@ -163,11 +163,11 @@ export async function buildAgentEdgeReport(): Promise<AgentEdgeRow[]> {
 }
 
 export function formatAgentEdgeReport(rows: AgentEdgeRow[]): string {
-  const lines = ['AGENT EDGE', '----------', 'Agent'.padEnd(24) + 'Strategy'.padEnd(20) + 'N'.padEnd(8) + 'EffN'.padEnd(8) + 'WinRate'.padEnd(10) + 'WilsonLo'.padEnd(10) + 'Brier'.padEnd(8) + 'Status'];
+  const lines = ['AGENT EDGE', '----------', 'Agent'.padEnd(24) + 'Strategy'.padEnd(24) + 'N'.padEnd(8) + 'EffN'.padEnd(8) + 'WinRate'.padEnd(10) + 'WilsonLo'.padEnd(10) + 'Brier'.padEnd(8) + 'Status'];
   for (const r of rows) {
     lines.push(
       r.agentName.padEnd(24)
-      + (r.strategyId ?? '(overall)').padEnd(20)
+      + (r.strategyId ?? '(overall)').padEnd(24)
       + String(r.rawN).padEnd(8)
       + String(r.effectiveN).padEnd(8)
       + (r.winRate !== null ? r.winRate.toFixed(3) : 'N/A').padEnd(10)
