@@ -11,6 +11,7 @@ import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../
 import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observability/tradingFunnelReport';
 import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
 import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
+import { buildAgentEdgeDiscoveryReport, formatAgentEdgeDiscoveryReport } from '../observability/agentEdgeDiscoveryReport';
 
 export const observabilityRouter = Router();
 
@@ -133,6 +134,21 @@ observabilityRouter.get('/calibration-maturity', async (req, res) => {
       return;
     }
     res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 10 (2026-08-31): Agent Edge Discovery & Strategy Validation - the decision-ready
+// agent-edge / strategy-edge / agent-combination / trading-eligibility report (argus-cli agent-edge).
+observabilityRouter.get('/agent-edge', async (req, res) => {
+  try {
+    const report = await buildAgentEdgeDiscoveryReport();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatAgentEdgeDiscoveryReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
