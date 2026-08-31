@@ -91,4 +91,22 @@ describe('strategyReadiness', () => {
     expect(text).toContain('STRATEGY READINESS');
     expect(text).toContain('MOMENTUM_BREAKOUT');
   });
+
+  it('includes a currently-enabled EXPERIMENTAL strategy (isCore:false), not just the 5 CORE ones - real gap fixed (Phase 11, 2026-08-31): a live .env check found all 16 experimental strategies enabled in production, but this report previously only ever covered the 5 hardcoded CORE ids, silently omitting 16 real, currently-live strategies from the activation matrix', async () => {
+    const before = await mod.buildStrategyReadinessReport();
+    expect(before.find((r) => r.strategyId === 'OSCILLATOR_MOMENTUM')).toBeUndefined();
+
+    process.env.QUANT_OSCILLATOR_MOMENTUM_ENABLED = 'true';
+    try {
+      const rows = await mod.buildStrategyReadinessReport();
+      expect(rows.length).toBe(before.length + 1); // exactly one new row: the newly-enabled experimental strategy
+      const oscillator = rows.find((r) => r.strategyId === 'OSCILLATOR_MOMENTUM')!;
+      expect(oscillator).toBeDefined();
+      expect(oscillator.isCore).toBe(false);
+      const momentum = rows.find((r) => r.strategyId === 'MOMENTUM_BREAKOUT')!;
+      expect(momentum.isCore).toBe(true);
+    } finally {
+      delete process.env.QUANT_OSCILLATOR_MOMENTUM_ENABLED;
+    }
+  });
 });

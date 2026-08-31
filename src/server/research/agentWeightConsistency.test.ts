@@ -75,4 +75,23 @@ describe('agentWeightConsistency', () => {
     expect(text).toContain('AGENT WEIGHT CONSISTENCY');
     expect(text).toContain('DivergedWeightAgent');
   });
+
+  it('uses the EFFECTIVE (clustered) win rate, not the raw agent_performance_stats.winRate column - real bug fixed (Phase 11, 2026-08-31): this reproduces the real QuantEngine case (raw winRate 0.480, effectiveCorrect/effectivePredictions 18/51=0.353) where the two genuinely differ, and the report must side with the effective figure since that is what ReflectionEngine.ts itself actually uses to set currentWeight', async () => {
+    await db.insert(schema.agentPerformanceStats).values({
+      agentName: 'RawVsEffectiveAgent',
+      totalPredictions: 839, correctPredictions: 403, winRate: 0.480, // raw - inflated by correlated duplicates
+      effectivePredictions: 51, effectiveCorrect: 18, // effective win rate: 18/51 = 0.3529...
+      evidenceStatus: 'LEARNING_ELIGIBLE',
+      currentWeight: 0.706, // the real, correct weight this effective win rate would set
+      lastEvaluated: new Date().toISOString(),
+    });
+    const rows = await mod.buildWeightConsistencyReport();
+    const row = rows.find((r) => r.agentName === 'RawVsEffectiveAgent')!;
+    expect(row.effectiveWinRate).toBeCloseTo(18 / 51, 5);
+    // 1.0 + (0.3529 - 0.5) * 2 ~= 0.706 - matches currentWeight almost exactly, so this must be
+    // reported as CONSISTENT. Before the fix, this used raw winRate (0.480) -> expected ~0.961,
+    // falsely flagging a real, correct weight as inconsistent.
+    expect(row.expectedWeightFromPerformance).toBeCloseTo(0.706, 2);
+    expect(row.consistent).toBe(true);
+  });
 });
