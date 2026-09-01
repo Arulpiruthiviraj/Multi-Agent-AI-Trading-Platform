@@ -1,5 +1,5 @@
 {
-  "$comment": "Per-agent local Ollama model specialization. Reviewed config change, not a UI knob. Every key under 'routes' is a REAL, confirmed agentType string from an actual AIRouter.routeTask('<agentType>', ...) call site (grepped across src/server before this file was written) - not an abstract domain label with no real code behind it. Applied at AIRouter.initialize() via setAgentRoute() as a DEFAULT, BEFORE persisted agent_routing_overrides load - a user's own routing choice from Settings still wins over this file. 'fallback' is a same-provider model retry (OpenAICompatibleProvider.ts), tried in order before AIRouter's own cross-provider failover takes over. researchTimeoutMs is the hard outer Abort/timeout cap for ALL agent inference (8s) so hung local models fail closed to HOLD without blocking the event loop.",
+  "$comment": "Per-agent local Ollama model specialization. Reviewed config change, not a UI knob. Every key under 'routes' is a REAL, confirmed agentType string from an actual AIRouter.routeTask('<agentType>', ...) call site (grepped across src/server before this file was written) - not an abstract domain label with no real code behind it. Applied at AIRouter.initialize() via setAgentRoute() as a DEFAULT, BEFORE persisted agent_routing_overrides load - a user's own routing choice from Settings still wins over this file. 'fallback' is a same-provider model retry (OpenAICompatibleProvider.ts), tried in order before AIRouter's own cross-provider failover takes over. researchTimeoutMs is the hard outer Abort/timeout cap for every REMOTE (paid) provider's agent inference (8s) so a hung cloud call fails closed to HOLD without blocking the event loop. ollamaHardTimeoutMs is the separate, longer outer cap used only for local Ollama-routed calls (real fix, 2026-09-02): a live test against 0xroyce/plutus:latest measured a 13.4s round trip of which 12.1s was pure model-load time (cold model, not warm in memory) - well past the 8s cap, so nearly every Ollama call whose model wasn't already warm was timing out and silently falling back to a paid provider (confirmed live: Mistral alone had absorbed 13k+ real paid requests / $7.30 cost while Ollama's own recorded success rate was ~6%). Same fail-closed-to-HOLD behavior applies either way if the cap is exceeded - this only changes how long a genuinely local, $0 call is given before that fail-closed kicks in.",
   "notes": [
     "TechnicalAgent has no AI call to bind - it is deterministic real RSI/MACD/Bollinger math (CLAUDE.md), never calls AIRouter. Not listed here; do not fabricate a routing entry for it. There is no RULE_BASED fallback token to wire up here for the same reason - it is already 100% rule-based, always.",
     "ChiefTraderAgent's consensus debate uses AIRouter.routeConsensus('ConsensusDebate', ...), which calls MULTIPLE providers in parallel to build a real weighted vote - it has no per-call model-override parameter the way routeTask() does, so a single model cannot be 'the' Chief Trader model without a deeper routeConsensus change not made in this pass. Not listed here. Consensus calls use researchTimeoutMs (not the generic tradingSafety.aiProviderTimeoutMs).",
@@ -14,6 +14,7 @@
     "enabled": true
   },
   "researchTimeoutMs": 8000,
+  "ollamaHardTimeoutMs": 25000,
   "maxResponseTokens": 512,
   "heavyModels": ["qwen2.5:14b", "deepseek-r1:14b"],
   "concurrency": {
@@ -24,42 +25,42 @@
     "NewsAgent": {
       "model": "fingpt:latest",
       "temperature": 0.2,
-      "timeoutMs": 8000,
+      "timeoutMs": 20000,
       "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
       "rationale": "Fine-tuned on financial news/headlines/sentiment - real specialization match for NewsScoringEngine's sentiment+catalyst scoring."
     },
     "FundamentalAgent": {
       "model": "0xroyce/plutus:latest",
       "temperature": 0.2,
-      "timeoutMs": 8000,
+      "timeoutMs": 20000,
       "fallback": ["llama3.2:latest"],
       "rationale": "Fine-tuned on financial/economic/valuation texts - balance-sheet-style analysis matches FundamentalAgent's P/E, EPS growth, debt/equity prompt."
     },
     "MacroAgent": {
       "model": "0xroyce/plutus:latest",
       "temperature": 0.2,
-      "timeoutMs": 8000,
+      "timeoutMs": 20000,
       "fallback": ["llama3.2:latest"],
       "rationale": "Same model as FundamentalAgent - Plutus's training explicitly covers macroeconomic regime evaluation (yield curves, rate shifts), matching MacroAgent's CPI/Fed Funds/unemployment prompt."
     },
     "ReflectionEngine": {
       "model": "deepseek-r1:14b",
       "temperature": 0.3,
-      "timeoutMs": 8000,
+      "timeoutMs": 20000,
       "fallback": ["0xroyce/plutus:latest", "llama3.2:latest"],
       "rationale": "Deep chain-of-thought model for real post-trade post-mortem analysis on actual outcomes (ReflectionEngine.ts). Hard-capped at researchTimeoutMs so it cannot monopolize HeavyModelMutex."
     },
     "BullResearcher": {
       "model": "0xroyce/plutus:latest",
       "temperature": 0.2,
-      "timeoutMs": 8000,
+      "timeoutMs": 20000,
       "fallback": ["llama3.2:latest"],
       "rationale": "Adversarial debate role (config/bullBearResearch.json) - Plutus like FundamentalAgent so Bull/Bear leave the HeavyModelMutex queue shared with ReflectionEngine."
     },
     "BearResearcher": {
       "model": "0xroyce/plutus:latest",
       "temperature": 0.2,
-      "timeoutMs": 8000,
+      "timeoutMs": 20000,
       "fallback": ["llama3.2:latest"],
       "rationale": "Same as BullResearcher."
     },
@@ -73,7 +74,7 @@
     "QuantContradictionAnalyzer": {
       "model": "0xroyce/plutus:latest",
       "temperature": 0.2,
-      "timeoutMs": 8000,
+      "timeoutMs": 20000,
       "fallback": ["llama3.2:latest"],
       "rationale": "Real cost fix (2026-08-24) - this real routeTask('QuantContradictionAnalyzer', ...) call site (quant/ai/QuantContradictionAnalyzer.ts) had no entry here, so it fell through to AIRouter's generic priority-sorted provider selection and landed on a paid provider by default - 72% of that day's (still tiny, ~$0.017 total) AI spend came from this one agent alone. Its task (AGREES/DISAGREES/UNCERTAIN read on already-computed regime/strategy/score summaries - see that file's own header) is the same shape as FundamentalAgent/MacroAgent's structured-financial-read task, so it gets the same Plutus routing."
     }

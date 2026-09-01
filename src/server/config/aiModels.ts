@@ -16,8 +16,12 @@ export interface AiModelRoute {
 
 export interface AiModelsConfig {
   ollama: { baseUrl: string; keepAlive: string; enabled: boolean };
-  /** Outer bound for Bull/Bear research + ConsensusDebate — fail-closed HOLD when exceeded. */
+  /** Outer bound for every REMOTE (paid) provider's agent inference — fail-closed HOLD when exceeded. */
   researchTimeoutMs: number;
+  /** Separate, longer outer bound used only for local Ollama-routed calls — a cold (not-yet-warm)
+   *  local model's load time alone can exceed researchTimeoutMs, which otherwise fails the call
+   *  closed and forces a paid-provider fallback for what should be a free local call. */
+  ollamaHardTimeoutMs: number;
   /** Output-token cap sent on every provider call (max_tokens / maxOutputTokens). Controls cost and
    *  keeps a low-balance account from implicitly requesting a model's full max output. */
   maxResponseTokens: number;
@@ -38,6 +42,9 @@ function loadAiModels(): AiModelsConfig {
   }
   if (typeof raw.researchTimeoutMs !== 'number' || !(raw.researchTimeoutMs > 0)) {
     throw new Error('config/aiModels.json researchTimeoutMs must be a positive number');
+  }
+  if (typeof raw.ollamaHardTimeoutMs !== 'number' || !(raw.ollamaHardTimeoutMs > 0)) {
+    throw new Error('config/aiModels.json ollamaHardTimeoutMs must be a positive number');
   }
   if (typeof raw.maxResponseTokens !== 'number' || !(raw.maxResponseTokens > 0)) {
     throw new Error('config/aiModels.json maxResponseTokens must be a positive number');
@@ -70,6 +77,7 @@ function loadAiModels(): AiModelsConfig {
   return {
     ollama: { baseUrl: ollama.baseUrl, keepAlive: ollama.keepAlive, enabled: ollama.enabled },
     researchTimeoutMs: raw.researchTimeoutMs as number,
+    ollamaHardTimeoutMs: raw.ollamaHardTimeoutMs as number,
     maxResponseTokens: raw.maxResponseTokens as number,
     heavyModels: raw.heavyModels as string[],
     concurrency: { maxConcurrentHeavyModels: concurrency.maxConcurrentHeavyModels, maxQueueDepth: concurrency.maxQueueDepth },

@@ -134,6 +134,39 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     }
   }, 15_000);
 
+  it('routeTask() gives a local Ollama provider ollamaHardTimeoutMs, not the short remote researchTimeoutMs, before failing closed - real fix: a cold Ollama model load alone measured 12s+, exceeding the old shared 8s cap', async () => {
+    const { aiModels } = await import('../config/aiModels');
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    expect(aiModels.ollamaHardTimeoutMs).toBeGreaterThan(aiModels.researchTimeoutMs);
+
+    await db.insert(schema.aiProviders).values({
+      id: 'ollama-local-hung',
+      providerName: 'Ollama (Local)',
+      apiEndpoint: 'http://127.0.0.1:11434/v1',
+    });
+    try {
+      aiRouter.registerProvider('ollama-local-hung', hungProvider());
+
+      let settled = false;
+      const p = aiRouter.routeTask('TestAgent', 'test prompt', 'trace-ollama-local')
+        .then(() => 'RESOLVED').catch((e: any) => e.message)
+        .then((r: any) => { settled = true; return r; });
+
+      // Advance just past the OLD short remote cap (8s) - must still be hung if the fix holds.
+      await vi.advanceTimersByTimeAsync(aiModels.researchTimeoutMs + 500);
+      expect(settled).toBe(false);
+
+      // Advance the rest of the way to the real local cap (25s) - now it must fail closed.
+      await vi.advanceTimersByTimeAsync(aiModels.ollamaHardTimeoutMs - aiModels.researchTimeoutMs + 1_000);
+      const result = await p;
+      expect(settled).toBe(true);
+      expect(result).toMatch(/All AI providers failed/);
+    } finally {
+      await db.delete(schema.aiProviders).where((await import('drizzle-orm')).eq(schema.aiProviders.id, 'ollama-local-hung'));
+    }
+  }, 30_000);
+
   it('routeConsensus() still aggregates a real successful provider alongside a timed-out one', async () => {
     aiRouter.registerProvider('hung-consensus-2', hungProvider());
     aiRouter.registerProvider('fast-consensus', fastProvider('{"decision":"SELL","confidence":80,"reasoning":"test","supportingFactors":[],"risks":[]}'));

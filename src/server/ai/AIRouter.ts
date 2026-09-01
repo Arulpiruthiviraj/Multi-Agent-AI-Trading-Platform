@@ -64,8 +64,10 @@ import { hashSensitive } from '../observability/hashSensitive';
 // Router timeout (tradingSafety.aiProviderTimeoutMs) plus AbortController so fetch-based
 // providers cancel in-flight HTTP instead of hanging after the caller has already failed over.
 const AI_PROVIDER_TIMEOUT_MS = tradingSafety.aiProviderTimeoutMs;
-/** Bull/Bear + ConsensusDebate — config/aiModels.json researchTimeoutMs (fail-closed HOLD). */
+/** Bull/Bear + ConsensusDebate + every remote provider — config/aiModels.json researchTimeoutMs (fail-closed HOLD). */
 const RESEARCH_TIMEOUT_MS = aiModels.researchTimeoutMs;
+/** Local Ollama calls only — longer than RESEARCH_TIMEOUT_MS to survive a cold model load. */
+const OLLAMA_HARD_TIMEOUT_MS = aiModels.ollamaHardTimeoutMs;
 const AI_AUTH_FAILURE_COOLDOWN_MS = tradingSafety.aiProviderAuthFailureCooldownMs;
 const AI_UNREACHABLE_COOLDOWN_MS = tradingSafety.aiProviderUnreachableCooldownMs;
 const AI_TIMEOUT_SKIP_COOLDOWN_MS = tradingSafety.aiProviderTimeoutSkipCooldownMs;
@@ -192,6 +194,15 @@ function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number, pro
 // failed before any tokens were counted (0 tokens -> 0 cost regardless of pricing formula).
 function isLocalProviderRow(row: { apiEndpoint: string | null } | undefined): boolean {
   return !!row?.apiEndpoint && (row.apiEndpoint.includes('localhost') || row.apiEndpoint.includes('127.0.0.1'));
+}
+
+// Real fix (2026-09-02): a live cold-load test against Ollama's 0xroyce/plutus:latest measured a
+// 13.4s round trip, 12.1s of which was pure model-load (not inference) - well past the 8s
+// RESEARCH_TIMEOUT_MS every provider previously shared, so most Ollama calls timed out before
+// finishing a cold load and silently fell back to a paid provider. Local calls get their own,
+// longer hard cap; every remote/paid provider's cap is unchanged.
+function resolveHardCapMs(row: { apiEndpoint: string | null } | undefined): number {
+  return isLocalProviderRow(row) ? OLLAMA_HARD_TIMEOUT_MS : RESEARCH_TIMEOUT_MS;
 }
 
 // Real bug fix, found live: Gemini's actual real-key-rejection message is "API key not valid.
@@ -824,8 +835,9 @@ export class AIRouter {
             // Format prompt for consensus format
             const fullPrompt = prompt + "\n\nIMPORTANT: You must return a strict JSON object with this format (no markdown code blocks):\n{\n  \"decision\": \"BUY\" | \"SELL\" | \"HOLD\",\n  \"confidence\": 0-100,\n  \"reasoning\": \"Detailed explanation...\",\n  \"supportingFactors\": [\"fact1\"],\n  \"risks\": [\"risk1\"]\n}";
             
-            // Consensus/debate uses researchTimeoutMs so slow inference fails closed without blocking.
-            const res = await withTimeout((signal) => provider.chat(fullPrompt, { model: undefined, temperature: AI_DECISION_TEMPERATURE, signal }), RESEARCH_TIMEOUT_MS, providerId);
+            // Consensus/debate uses researchTimeoutMs (or the longer local-only cap for an Ollama
+            // participant) so slow inference fails closed without blocking.
+            const res = await withTimeout((signal) => provider.chat(fullPrompt, { model: undefined, temperature: AI_DECISION_TEMPERATURE, signal }), resolveHardCapMs(dbStats.find(s => s.id === providerId)), providerId);
             const latency = Date.now() - pStart;
             
             // Log usage
@@ -1041,9 +1053,10 @@ export class AIRouter {
             // or other remotes — each 404 was billed against NewsAgent's 12s×3 = 36s outer budget.
             const fallbackModels = (reqModel && isLocalProviderRow(providerRow)) ? route?.fallback : undefined;
             const researchBound = isResearchAgentType(agentType);
-            // Hard outer cap: researchTimeoutMs (8s) for every agent inference — fail-closed HOLD,
-            // never stall the event loop on hung Ollama/heavy-mutex queues.
-            const hardCapMs = RESEARCH_TIMEOUT_MS;
+            // Hard outer cap: researchTimeoutMs (8s) for remote providers, ollamaHardTimeoutMs (25s)
+            // for local Ollama calls (a cold model's load time alone can exceed 8s) — fail-closed
+            // HOLD either way, never stall the event loop on a hung Ollama/heavy-mutex queue.
+            const hardCapMs = resolveHardCapMs(providerRow);
             const perModelTimeoutMs = Math.min(
               researchBound
                 ? (route?.timeoutMs ?? RESEARCH_TIMEOUT_MS)
