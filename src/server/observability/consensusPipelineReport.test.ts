@@ -110,6 +110,40 @@ describe('consensusPipelineReport', () => {
     expect(report.fillsRecorded).toBe(1);
   });
 
+  it('excludes HISTORICAL_REPLAY-tagged risk_assessments/trades/fills from the organic counts (real defect found 2026-09-01: a replay run sharing this DB was being counted as live paper activity)', async () => {
+    const sinceIso = '2026-08-28T00:00:00.000Z';
+    await db.insert(schema.riskAssessments).values({
+      traceId: 'trace-organic-1', symbol: 'AAPL', side: 'BUY', approved: true, maxQuantity: 10,
+      createdAt: '2026-08-28T12:00:00.000Z',
+    });
+    await db.insert(schema.riskAssessments).values({
+      traceId: 'replay-abc123-1712154600000-AAPL-BUY-x', symbol: 'AAPL', side: 'BUY', approved: true, maxQuantity: 10,
+      createdAt: '2026-08-28T12:00:05.000Z',
+    });
+    await db.insert(schema.trades).values({
+      id: 'trade-organic-1', symbol: 'AAPL', side: 'BUY', quantity: 10, price: 100, status: 'FILLED',
+      timestamp: '2026-08-28T12:00:10.000Z', submittedAt: '2026-08-28T12:00:10.000Z',
+      executionEnvironment: 'PAPER',
+    });
+    await db.insert(schema.trades).values({
+      id: 'trade-replay-1', symbol: 'AAPL', side: 'BUY', quantity: 10, price: 100, status: 'FILLED',
+      timestamp: '2026-08-28T12:00:11.000Z', submittedAt: '2026-08-28T12:00:11.000Z',
+      executionEnvironment: 'REPLAY', brokerId: 'historical_replay',
+    });
+    await db.insert(schema.fills).values({
+      orderId: 'trade-organic-1', quantity: 10, price: 100, filledAt: '2026-08-28T12:00:20.000Z', cumulativeQuantity: 10,
+    });
+    await db.insert(schema.fills).values({
+      orderId: 'trade-replay-1', quantity: 10, price: 100, filledAt: '2026-08-28T12:00:21.000Z', cumulativeQuantity: 10,
+    });
+
+    const report = await mod.buildConsensusPipelineReport(sinceIso);
+    expect(report.riskEngineReached).toBe(1);
+    expect(report.riskApproved).toBe(1);
+    expect(report.ordersPlaced).toBe(1);
+    expect(report.fillsRecorded).toBe(1);
+  });
+
   it('formatConsensusPipelineReport renders a readable CLI text block', async () => {
     const report = await mod.buildConsensusPipelineReport(new Date('2026-08-27T00:00:00.000Z').toISOString());
     const text = mod.formatConsensusPipelineReport(report);

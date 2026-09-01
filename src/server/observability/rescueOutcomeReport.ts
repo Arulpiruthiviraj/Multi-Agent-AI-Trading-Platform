@@ -10,6 +10,7 @@
 import { db } from '../db';
 import { observabilityEvents, riskAssessments, trades } from '../db/schema';
 import { and, eq, gte, asc } from 'drizzle-orm';
+import { classifyTradeEnvironment, isReplayTraceId } from '../research/organicPaper';
 
 export interface RescueOutcomeRow {
   symbol: string;
@@ -56,15 +57,19 @@ export async function buildRescueOutcomeReport(sinceIso: string): Promise<Rescue
       } catch { /* leave false */ }
     }
 
-    const riskRows = await db.select().from(riskAssessments).where(
+    // Real defect found 2026-09-01: a rescue grant could be falsely correlated to an unrelated
+    // HISTORICAL_REPLAY run that happened to touch the same symbol within the 30-minute follow-up
+    // window (confirmed live: an AAPL/TSLA rescue grant showed RiskApproved/PaperFill=true purely
+    // from a same-symbol replay test run, not the rescue actually reaching RiskEngine organically).
+    const riskRowsAll = await db.select().from(riskAssessments).where(
       and(eq(riskAssessments.symbol, ev.symbol), gte(riskAssessments.createdAt, grantedAtIso)),
     );
-    const relevantRisk = riskRows.filter((r) => r.createdAt <= windowEndIso);
+    const relevantRisk = riskRowsAll.filter((r) => r.createdAt <= windowEndIso && !isReplayTraceId(r.traceId));
 
-    const tradeRows = await db.select().from(trades).where(
+    const tradeRowsAll = await db.select().from(trades).where(
       and(eq(trades.symbol, ev.symbol), eq(trades.status, 'FILLED'), gte(trades.timestamp, grantedAtIso)),
     );
-    const relevantFills = tradeRows.filter((t) => t.timestamp <= windowEndIso);
+    const relevantFills = tradeRowsAll.filter((t) => t.timestamp <= windowEndIso && classifyTradeEnvironment(t) !== 'REPLAY');
 
     let reason = '';
     try { reason = JSON.parse(ev.payload as string).reasoning ?? ''; } catch { /* leave empty */ }

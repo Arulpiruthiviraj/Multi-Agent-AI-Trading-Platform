@@ -2,8 +2,21 @@
  * Organic paper counting. Rejected, cancelled, unit-test, replay, and backtest rows are not organic.
  */
 import { getTradingDateStr } from '../core/TradingCalendar';
+import { replaySafety } from '../replay/replaySafety';
 
 export type ExecutionEnvironment = 'BACKTEST' | 'REPLAY' | 'SIMULATION' | 'PAPER' | 'LIVE' | 'UNKNOWN';
+
+/**
+ * risk_assessments has no executionEnvironment/brokerId column to classify by, so a
+ * replay-originated row is only identifiable by its trace_id prefix (FullArgusReplayEngine.ts
+ * mints every replay traceId as `${replaySafety.replayTracePrefix}${replayId}-...`). Real defect
+ * found 2026-09-01: observability reports that query risk_assessments/trades/fills by time window
+ * alone (consensusPipelineReport.ts, rescueOutcomeReport.ts) counted historical-replay rows as if
+ * they were organic activity whenever a replay run shared the production DB.
+ */
+export function isReplayTraceId(traceId?: string | null): boolean {
+  return !!traceId && traceId.startsWith(replaySafety.replayTracePrefix);
+}
 
 const TEST_TRACE = /^(test|qa-|gates-|crash-|lifecycle-|vitest|diag-)/i;
 

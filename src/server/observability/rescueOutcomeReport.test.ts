@@ -77,6 +77,29 @@ describe('rescueOutcomeReport', () => {
     expect(row.paperFillProduced).toBe(true);
   });
 
+  it('does not falsely attribute an unrelated HISTORICAL_REPLAY run to a rescue grant just because it touched the same symbol in the follow-up window (real defect found live 2026-09-01)', async () => {
+    const grantedAtMs = Date.now();
+    await seedRescueGrant('AAPLX', grantedAtMs, 'MOMENTUM_BREAKOUT rescue');
+
+    // No real CONSENSUS_TERMINAL_REASON for this symbol - only a same-symbol replay run's
+    // risk_assessments/trades rows land in the follow-up window, exactly like the live case found.
+    await db.insert(schema.riskAssessments).values({
+      traceId: 'replay-xyz789-1712154600000-AAPLX-BUY-y', symbol: 'AAPLX', side: 'BUY', approved: true, maxQuantity: 10,
+      createdAt: new Date(grantedAtMs + 6000).toISOString(),
+    });
+    await db.insert(schema.trades).values({
+      id: 'trade-aaplx-replay-1', symbol: 'AAPLX', side: 'BUY', quantity: 10, price: 100, status: 'FILLED',
+      timestamp: new Date(grantedAtMs + 7000).toISOString(),
+      executionEnvironment: 'REPLAY', brokerId: 'historical_replay',
+    });
+
+    const rows = await mod.buildRescueOutcomeReport(new Date(grantedAtMs - 60_000).toISOString());
+    const row = rows.find((r) => r.symbol === 'AAPLX')!;
+    expect(row.riskEngineReached).toBe(false);
+    expect(row.riskApproved).toBe(false);
+    expect(row.paperFillProduced).toBe(false);
+  });
+
   it('formatRescueOutcomeReport never crashes on zero rows', () => {
     expect(mod.formatRescueOutcomeReport([])).toContain('no temporary data rescue grants');
   });

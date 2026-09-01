@@ -71,6 +71,12 @@ export interface QuantThresholds {
   priceSourceDivergencePct: number;
   kronosTimeframe: string;
   groupedScoreWeights: GroupedScoreWeights;
+  /** Phase 15 bounded strategy-exploration scheduler (StrategyExplorationScheduler.ts). Off entirely disables the reordering - bestStrategyIdea() picks exactly as it always has. */
+  strategyExplorationEnabled: boolean;
+  /** How long a strategy's own exploration promotion lasts before it is eligible to be promoted again. */
+  strategyExplorationCooldownMs: number;
+  /** System-wide minimum gap between any two exploration promotions, across all symbols/strategies. */
+  strategyExplorationMinIntervalMs: number;
 }
 
 const NUMERIC_KEYS: (keyof QuantThresholds)[] = [
@@ -85,6 +91,7 @@ const NUMERIC_KEYS: (keyof QuantThresholds)[] = [
   'kronosMinHistory', 'kronosMaxHistory', 'kronosHorizon', 'kronosNeutralBandPct',
   'baseSlippagePct', 'atrSlippageMultiplier', 'sizeImpactMultiplier', 'maxSlippagePct',
   'priceSourceDivergencePct',
+  'strategyExplorationCooldownMs', 'strategyExplorationMinIntervalMs',
 ];
 
 const WEIGHT_KEYS: (keyof GroupedScoreWeights)[] = [
@@ -100,6 +107,9 @@ function loadQuantThresholds(): QuantThresholds {
   }
   if (typeof raw.kronosTimeframe !== 'string' || !raw.kronosTimeframe) {
     throw new Error('config/quantThresholds.json missing string field: kronosTimeframe');
+  }
+  if (typeof raw.strategyExplorationEnabled !== 'boolean') {
+    throw new Error('config/quantThresholds.json missing boolean field: strategyExplorationEnabled');
   }
   const weights = raw.groupedScoreWeights;
   if (!weights || typeof weights !== 'object') {

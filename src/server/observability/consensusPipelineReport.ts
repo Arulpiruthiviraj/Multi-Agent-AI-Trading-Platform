@@ -10,6 +10,7 @@
 import { db } from '../db';
 import { observabilityEvents, riskAssessments, trades, fills } from '../db/schema';
 import { and, eq, gte, sql } from 'drizzle-orm';
+import { classifyTradeEnvironment, isReplayTraceId } from '../research/organicPaper';
 
 export interface ConsensusPipelineReport {
   windowSinceIso: string;
@@ -82,9 +83,21 @@ export async function buildConsensusPipelineReport(sinceIso: string): Promise<Co
     terminalReasonCounts.set(code, (terminalReasonCounts.get(code) ?? 0) + 1);
   }
 
-  const riskRows = await db.select().from(riskAssessments).where(gte(riskAssessments.createdAt, sinceIso));
-  const orderRows = await db.select().from(trades).where(gte(trades.submittedAt, sinceIso));
-  const fillRows = await db.select({ id: fills.id }).from(fills).where(gte(fills.filledAt, sinceIso));
+  // Real defect found 2026-09-01: these three queries counted HISTORICAL_REPLAY-tagged rows as
+  // organic activity whenever a replay run shared this production DB (risk_assessments has no
+  // environment column at all, so trace_id prefix is the only signal; trades/fills are excluded
+  // via the same classifyTradeEnvironment() organic paper already uses everywhere else).
+  const riskRowsAll = await db.select().from(riskAssessments).where(gte(riskAssessments.createdAt, sinceIso));
+  const riskRows = riskRowsAll.filter((r) => !isReplayTraceId(r.traceId));
+  const orderRowsAll = await db.select().from(trades).where(gte(trades.submittedAt, sinceIso));
+  const orderRows = orderRowsAll.filter((r) => classifyTradeEnvironment(r) !== 'REPLAY');
+  const fillRowsAll = await db.select({
+    id: fills.id,
+    executionEnvironment: trades.executionEnvironment,
+    traceId: trades.traceId,
+    reasoning: trades.reasoning,
+  }).from(fills).innerJoin(trades, eq(fills.orderId, trades.id)).where(gte(fills.filledAt, sinceIso));
+  const fillRows = fillRowsAll.filter((r) => classifyTradeEnvironment(r) !== 'REPLAY');
 
   const topTerminalReasons = Array.from(terminalReasonCounts.entries())
     .map(([code, count]) => ({ code, count }))

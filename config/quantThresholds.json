@@ -47,5 +47,9 @@
     "volume": 0.10,
     "vwap": 0.10,
     "priceStructure": 0.10
-  }
+  },
+  "_strategyExplorationComment": "Phase 15 (2026-09-01 bounded exploration): real evidence (rescueOutcomeReport, live quant_assessments) found MOMENTUM_BREAKOUT and most experimental strategies are evaluated correctly and often clear MIN_STRATEGY_CONFIDENCE_TO_TRADE, but are perpetually out-ranked by setupScore among 21 live strategies and so never win bestStrategyIdea()'s single-winner selection. This does NOT lower any confidence bar, add a new emission channel, or bypass ChiefTrader/RiskEngine - it only bounds how often the natural top-ranked strategy is deprioritized in favor of a real, already-qualifying, long-unselected strategy, subject to both a per-strategy cooldown and a system-wide rate limit.",
+  "strategyExplorationEnabled": true,
+  "strategyExplorationCooldownMs": 86400000,
+  "strategyExplorationMinIntervalMs": 900000
 }

@@ -37,6 +37,7 @@ import { computeSupportResistanceFeatures } from '../quant/indicators/supportRes
 import { computeSmcFeatures } from '../quant/indicators/smc';
 import { evaluateAll, bestStrategyIdea } from '../quant/strategies/StrategyEngine';
 import { filterQuarantinedStrategies } from '../quant/strategies/StrategyEmissionEligibility';
+import { selectWithBoundedExploration } from '../quant/strategies/StrategyExplorationScheduler';
 import { resolvePaperTestingOverlay } from '../research/paperTestingOverlay';
 import { snapshotFromStrategyContext } from '../quant/QuantitativeFeatureEngine';
 import { assembleTradeThesis } from '../quant/thesis/assembleTradeThesis';
@@ -316,7 +317,16 @@ export class QuantSignalAgent {
           confidence: Math.round(e.confidence * deskIntelligence.highVolatilityConfidenceMultiplier * 100) / 100,
         }))
       : ranked;
-    let strategyIdea = bestStrategyIdea(forPick);
+    // Phase 15 (2026-09-01 bounded exploration, Rule 4): real evidence found 19 of 21 live
+    // strategies never organically emit because bestStrategyIdea() always picks the single
+    // highest-setupScore strategy, and the same few strategies dominate that ranking every cycle.
+    // This reorders the candidate list only when a real, already-qualifying strategy has gone
+    // unselected longer than a bounded cooldown, subject to a system-wide rate limit - never
+    // changes any strategy's own confidence/setupScore, never touches quarantined strategies
+    // (already filtered out of `forPick` above), and bestStrategyIdea()'s own
+    // MIN_STRATEGY_CONFIDENCE_TO_TRADE bar still applies exactly as before.
+    const explorationAdjusted = selectWithBoundedExploration(forPick);
+    let strategyIdea = bestStrategyIdea(explorationAdjusted);
     let matchedStrategyEvaluation = strategyIdea ? strategyEvaluations.find(e => e.strategy === strategyIdea!.strategy) ?? null : null;
 
     // Phase 16F (ARGUS_PHASE16_READINESS_REPORT.md) - a strategy-sourced idea (real stop/target,
