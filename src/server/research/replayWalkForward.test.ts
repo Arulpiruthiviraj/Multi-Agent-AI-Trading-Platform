@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { summarizeWalkForwardConsistency, type ReplayFoldResult } from './replayWalkForward';
 
 function makeFold(foldIndex: number, strategyStats: ReplayFoldResult['strategyStats']): ReplayFoldResult {
@@ -72,5 +72,54 @@ describe('summarizeWalkForwardConsistency', () => {
     const verdicts = summarizeWalkForwardConsistency(folds, 5);
     expect(verdicts.find((v) => v.strategyId === 'STRATEGY_A')!.status).toBe('CONSISTENT_ABOVE_CHANCE');
     expect(verdicts.find((v) => v.strategyId === 'STRATEGY_B')!.status).toBe('CONSISTENT_BELOW_CHANCE');
+  });
+});
+
+// Real gap found and fixed (Phase 16, 2026-09-01): experimentLedger.ts's real trial-counting /
+// multiple-testing-warning / Deflated Sharpe Ratio infrastructure existed but nothing in this
+// walk-forward path ever called recordExperimentTrial() - a full multi-strategy matrix run was
+// structurally invisible to that existing protection. These tests mock FullArgusReplayEngine (a
+// real replay run is slow/network-dependent) to prove the orchestration wiring itself: one real
+// experimentLedger trial per (strategy, fold), including strategies with zero closed trades.
+vi.mock('../replay/FullArgusReplayEngine', () => ({
+  createReplayRun: vi.fn(async () => ({ replayId: 'fake-replay-1', status: 'READY', datasetHash: 'sha256:fake-dataset-hash' })),
+  startReplay: vi.fn(async () => ({ replayId: 'fake-replay-1', status: 'COMPLETED', datasetHash: 'sha256:fake-dataset-hash' })),
+  getReplayTrades: vi.fn(() => [
+    { timestamp: Date.parse('2026-02-01T00:00:00.000Z'), symbol: 'AAPL', side: 'SELL', quantity: 1, price: 100, strategyId: 'MOMENTUM_BREAKOUT', traceId: 't1', realizedPnl: 50, executionEnvironment: 'REPLAY' },
+  ]),
+}));
+
+describe('runReplayWalkForward - experimentLedger integration', () => {
+  beforeEach(async () => {
+    const { resetExperimentLedgerForTests } = await import('./experimentLedger');
+    resetExperimentLedgerForTests();
+  });
+
+  it('records one real experimentLedger trial per (strategy, fold), including strategies with zero closed trades in that fold', async () => {
+    const { runReplayWalkForward } = await import('./replayWalkForward');
+    const { experimentLedgerSnapshot, experimentAuditTrail } = await import('./experimentLedger');
+
+    await runReplayWalkForward({
+      symbols: ['AAPL'],
+      strategyIds: ['MOMENTUM_BREAKOUT', 'MEAN_REVERSION'],
+      startDate: '2026-02-01',
+      endDate: '2026-02-28',
+      foldCount: 1,
+    });
+
+    const snapshot = experimentLedgerSnapshot();
+    expect(snapshot.trials).toBe(2); // both requested strategies get a trial this fold, even MEAN_REVERSION with zero trades
+    expect(snapshot.byStrategy.MOMENTUM_BREAKOUT).toBe(1);
+    expect(snapshot.byStrategy.MEAN_REVERSION).toBe(1);
+
+    const mbTrials = experimentAuditTrail('MOMENTUM_BREAKOUT');
+    expect(mbTrials).toHaveLength(1);
+    expect(mbTrials[0].datasetHash).toBe('sha256:fake-dataset-hash');
+    expect((mbTrials[0].outOfSampleMetrics as any).closedTrades).toBe(1);
+    expect((mbTrials[0].outOfSampleMetrics as any).netPnl).toBe(50);
+
+    const mrTrials = experimentAuditTrail('MEAN_REVERSION');
+    expect(mrTrials).toHaveLength(1);
+    expect((mrTrials[0].outOfSampleMetrics as any).closedTrades).toBe(0);
   });
 });

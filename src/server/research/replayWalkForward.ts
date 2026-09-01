@@ -23,6 +23,7 @@
  */
 import { createReplayRun, startReplay, getReplayTrades } from '../replay/FullArgusReplayEngine';
 import { wilsonInterval } from './effectiveSampleSize';
+import { recordExperimentTrial } from './experimentLedger';
 
 export interface ReplayTradeRow {
   timestamp: number;
@@ -156,6 +157,30 @@ export async function runReplayWalkForward(config: ReplayWalkForwardConfig): Pro
         if (t.realizedPnl > 0) strategyStats[key].wins += 1;
         else strategyStats[key].losses += 1;
       }
+    }
+
+    // Real gap found and fixed (Phase 16 reporting-integrity/overfitting sweep, 2026-09-01):
+    // experimentLedger.ts already has a real trial counter, a >multipleTestingWarnAboveTrials
+    // warning, and a real Deflated Sharpe Ratio calculation (Bailey & Lopez de Prado) - but nothing
+    // in this walk-forward path ever called recordExperimentTrial(), so a full multi-strategy
+    // matrix run here would be structurally invisible to that existing protection. One trial per
+    // (strategy, fold) is recorded here - every strategy actually tested this fold, including ones
+    // with zero closed trades, since a strategy that was tested and found nothing is still a real
+    // trial for multiple-testing purposes, not merely the strategies that happened to trade.
+    const datasetHash = String((finalRun as any).datasetHash ?? (run as any).datasetHash ?? `unknown-${replayId}`);
+    for (const strategyId of config.strategyIds) {
+      const stats = strategyStats[strategyId];
+      recordExperimentTrial(strategyId, datasetHash, {
+        datasetPeriod: { start: fromDate, end: toDate },
+        executionModel: 'NEXT_BAR_OPEN',
+        outOfSampleMetrics: {
+          closedTrades: stats?.closedTrades ?? 0,
+          wins: stats?.wins ?? 0,
+          losses: stats?.losses ?? 0,
+          netPnl: stats?.netPnl ?? 0,
+        },
+        wfoConfig: { foldIndex: i, foldCount: config.foldCount, symbols: config.symbols },
+      });
     }
 
     results.push({
