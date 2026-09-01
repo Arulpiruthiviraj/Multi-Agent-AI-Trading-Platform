@@ -4,6 +4,7 @@
  */
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 import { resolveDbDir } from '../db/resolveDbDir';
 import { isRuntimeFlagEnabled } from '../config/effectiveRuntimeConfig';
 
@@ -25,7 +26,13 @@ export function resolvePaperTestingOverlay(regime: string): PaperTestingOverlay 
   const dbPath = process.env.ARGUS_DB_PATH || path.join(resolveDbDir(process.platform, existsSync, process.cwd(), path.resolve), 'argus.db');
   if (!existsSync(dbPath)) return empty('strategy_configurations db missing');
   try {
-    const Database = require('better-sqlite3') as typeof import('better-sqlite3');
+    // Real latent bug found and fixed (Phase 14 historical-replay mission, 2026-08-31):
+    // require('better-sqlite3') throws "require is not defined" in this server's ESM runtime.
+    // Currently unreachable in this deployment (QUANT_PAPER_TESTING_PARAMS is not set), and the
+    // surrounding try/catch already failed safely (`overlay read failed: require is not defined`,
+    // never fabricated data) rather than crashing - but it would never have actually worked the
+    // moment an operator enabled that flag. better-sqlite3 is a real npm dependency, imported
+    // normally like every other module here.
     const sqlite = new Database(dbPath, { readonly: true, fileMustExist: true });
     try {
       const rows = sqlite.prepare(

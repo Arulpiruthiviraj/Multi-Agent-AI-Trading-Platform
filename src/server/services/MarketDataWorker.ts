@@ -373,11 +373,17 @@ export class MarketDataWorker {
     const key = quoteKey(symbol);
     const t = this.latestPriceTimestamps.get(key) ?? this.latestPriceTimestamps.get(symbol);
     if (typeof t !== 'number') return null;
-    try {
-      const { getActiveReplaySession } = require('../replay/ReplayContext');
-      const replay = getActiveReplaySession();
-      if (replay) return Math.max(0, replay.clock.now() - t);
-    } catch { /* replay module optional during early boot */ }
+    // Real, live-reproduced defect found and removed (Phase 14 historical-replay mission,
+    // 2026-08-31): this used to attempt `require('../replay/ReplayContext')` to substitute a
+    // replay's simulated clock for real wall-clock time - `require` does not exist in this
+    // server's ESM runtime ("require is not defined", confirmed live against a real running
+    // replay), so the surrounding try/catch silently swallowed that error on every single call and
+    // always fell through to the line below anyway. Removing the dead branch changes nothing
+    // observable - it was already a no-op - and is correct architecturally too:
+    // HistoricalReplayMarketDataContext.ts's own header states it "never mutates MarketDataWorker
+    // live state", using a fully separate, isolated quote cache (cacheReplayQuote/
+    // getReplayQuoteAgeMs) with the replay's own simulated clock passed in explicitly - this live
+    // function was never the real path replay relies on for price-age freshness.
     return Date.now() - t;
   }
 

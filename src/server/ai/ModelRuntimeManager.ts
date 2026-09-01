@@ -9,6 +9,7 @@
  * Client Portal :5000 vs STANDBY when Alpaca/Internal Paper is active).
  */
 import { spawn, type ChildProcess } from 'child_process';
+import path from 'node:path';
 import { eventBus } from '../core/EventBus';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 import { preferIpv4Loopback, resolveLocalAiServiceUrl } from './preferIpv4Loopback';
@@ -94,7 +95,11 @@ function trySpawn(command: string, args: string[], label: string): void {
 
 function trySpawnChronos(): void {
   const port = process.env.LOCAL_AI_SERVICE_PORT || '8008';
-  const script = require('path').join(process.cwd(), 'scripts', 'local_ai_service.py');
+  // Real bug found and fixed (Phase 14 historical-replay mission, 2026-08-31): require('path')
+  // throws "require is not defined" in this server's ESM runtime, unguarded by any try/catch -
+  // every trySpawnChronos() call would have failed here before ever reaching the spawn attempt
+  // below. path is a normal ESM import like every other module dependency in this file.
+  const script = path.join(process.cwd(), 'scripts', 'local_ai_service.py');
   const py = process.platform === 'win32' ? 'python' : 'python3';
   try {
     const child = spawn(py, [script], {

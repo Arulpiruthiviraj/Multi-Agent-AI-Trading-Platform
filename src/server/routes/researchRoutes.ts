@@ -781,18 +781,31 @@ export function mountResearchRoutes(v2Router: Router): void {
     res.json({ ok: true, evaluations: ids.map((id) => ({ replayId: id })), live: 'NO-GO' });
   });
 
-  v2Router.get('/historical-evaluations/:id', (req, res) => {
-    const { getHistoricalEvaluation } = require('../replay/HistoricalEvaluationService') as typeof import('../replay/HistoricalEvaluationService');
-    const row = getHistoricalEvaluation(String(req.params.id));
-    if (!row) return res.status(404).json({ ok: false, error: 'EVALUATION_NOT_FOUND' });
-    res.json({ ok: true, ...row, live: 'NO-GO' });
+  // Real bug found live (Phase 14 historical-replay mission, 2026-08-31): these two handlers used
+  // CommonJS require() in this ESM server ("require is not defined" - reproduced live against a
+  // real running replay run), unlike every other handler in this file which already uses
+  // `await import(...)`. Fixed to match that existing, working pattern - no behavior change beyond
+  // actually working.
+  v2Router.get('/historical-evaluations/:id', async (req, res) => {
+    try {
+      const { getHistoricalEvaluation } = await import('../replay/HistoricalEvaluationService');
+      const row = getHistoricalEvaluation(String(req.params.id));
+      if (!row) return res.status(404).json({ ok: false, error: 'EVALUATION_NOT_FOUND' });
+      res.json({ ok: true, ...row, live: 'NO-GO' });
+    } catch (e: any) {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
-  v2Router.get('/historical-evaluations/:id/report', (req, res) => {
-    const { getHistoricalEvaluationReport } = require('../replay/HistoricalEvaluationService') as typeof import('../replay/HistoricalEvaluationService');
-    const report = getHistoricalEvaluationReport(String(req.params.id));
-    if (!report) return res.status(404).json({ ok: false, error: 'EVALUATION_NOT_FOUND' });
-    res.json({ ok: true, ...report, live: 'NO-GO' });
+  v2Router.get('/historical-evaluations/:id/report', async (req, res) => {
+    try {
+      const { getHistoricalEvaluationReport } = await import('../replay/HistoricalEvaluationService');
+      const report = getHistoricalEvaluationReport(String(req.params.id));
+      if (!report) return res.status(404).json({ ok: false, error: 'EVALUATION_NOT_FOUND' });
+      res.json({ ok: true, ...report, live: 'NO-GO' });
+    } catch (e: any) {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   v2Router.get('/historical-evaluations/:id/export', (req, res) => {

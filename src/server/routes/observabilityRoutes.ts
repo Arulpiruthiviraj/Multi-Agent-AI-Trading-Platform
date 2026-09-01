@@ -16,6 +16,7 @@ import { buildStrategyReadinessReport, formatStrategyReadinessReport } from '../
 import { buildStrategyFairnessReport, formatStrategyFairnessReport } from '../research/strategySelectionReplay';
 import { buildStrategyProfitabilityReport, formatStrategyProfitabilityReport } from '../research/strategyProfitabilityReport';
 import { buildRescueOutcomeReport, formatRescueOutcomeReport } from '../observability/rescueOutcomeReport';
+import { buildStrategyScorecard, formatStrategyScorecard } from '../research/strategyScorecard';
 
 export const observabilityRouter = Router();
 
@@ -222,6 +223,24 @@ observabilityRouter.get('/rescue-outcomes', async (req, res) => {
     const rows = await buildRescueOutcomeReport(sinceIso);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatRescueOutcomeReport(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 14 (2026-08-31): complete 21-strategy scorecard combining strategy-fairness,
+// strategy-profitability, and lifecycle status (real data, always available). Replay-derived
+// walk-forward verdicts are NOT run automatically here (running replay is a real, potentially
+// long-running operation this read-only report must never trigger) - it reports organic-only
+// classifications unless replay verdicts are supplied out of band.
+observabilityRouter.get('/strategy-scorecard', async (req, res) => {
+  try {
+    const rows = await buildStrategyScorecard([]);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatStrategyScorecard(rows));
       return;
     }
     res.json({ ok: true, rows });

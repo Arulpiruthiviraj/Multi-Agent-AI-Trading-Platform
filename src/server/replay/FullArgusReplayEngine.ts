@@ -46,7 +46,7 @@ import { emptyEvidence, deriveLifecycleStatus, liveGoNoGo } from '../research/pr
 import { getVectorBTStatus } from '../research/VectorBTService';
 import { freezeStrategyVersion } from '../research/strategySpecs';
 import { hashReplayConfiguration, hashReplayIdentity } from './replayHash';
-import { appendReplayEvent, writeReplayJson } from './replayStore';
+import { appendReplayEvent, writeReplayJson, readReplayJson } from './replayStore';
 import { buildReplayPerformance, buildDecisionFunnel, buildAgentEvaluation } from './replayReport';
 import { analyzeMissedOpportunities } from './MissedOpportunityAnalysis';
 import {
@@ -578,7 +578,12 @@ export function getReplayTrades(id: string) {
   if (!row) return null;
   if (row.trades) return row.trades;
   if (row.session?.tradeLedger) return row.session.tradeLedger;
-  const { readReplayJson } = require('./replayStore') as typeof import('./replayStore');
+  // Real bug found and fixed (Phase 14 historical-replay mission, 2026-08-31): this used
+  // require('./replayStore') - `require` does not exist in this server's ESM runtime ("require is
+  // not defined", confirmed live), and this call site has no try/catch, so any run not held in the
+  // in-memory `runs` map (e.g. after a restart) would throw instead of falling back to the JSON
+  // store on disk. replayStore is already a real, non-circular static import elsewhere in this
+  // file - readReplayJson is simply added to that same import.
   return readReplayJson(id, 'trades.json') || [];
 }
 
@@ -596,7 +601,8 @@ export function getReplayEquity(id: string) {
   if (!row) return null;
   if (row.equity) return row.equity;
   if (row.session?.equity) return row.session.equity;
-  const { readReplayJson } = require('./replayStore') as typeof import('./replayStore');
+  // Same real bug/fix as getReplayTrades() just above - require() is broken in this ESM runtime;
+  // readReplayJson is now a real static import.
   return readReplayJson(id, 'equity_curve.json') || [];
 }
 
