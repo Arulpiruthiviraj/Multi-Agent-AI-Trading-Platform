@@ -326,6 +326,23 @@ export class QuantSignalAgent {
     // (already filtered out of `forPick` above), and bestStrategyIdea()'s own
     // MIN_STRATEGY_CONFIDENCE_TO_TRADE bar still applies exactly as before.
     const explorationAdjusted = selectWithBoundedExploration(forPick);
+    // Observability gap found and fixed Phase 16 (2026-09-01): the scheduler itself is a pure
+    // reordering function with no logging, so there was previously no way to tell "exploration
+    // promoted a different strategy" apart from "regime-adaptive filtering naturally produced a
+    // different top strategy" from persisted quant_assessments alone. This is the only new signal
+    // Phase 16 adds - it never changes which strategy gets picked, only records when the pick
+    // differs from what forPick's own ranking would have produced unmodified.
+    if (explorationAdjusted[0] && forPick[0] && explorationAdjusted[0].strategy !== forPick[0].strategy) {
+      observeSafe(() => {
+        structuredLogger.info('strategy_exploration_promoted', {
+          category: 'DISCOVERY',
+          eventType: 'STRATEGY_EXPLORATION_PROMOTED',
+          symbol,
+          traceId,
+          reasoning: `Exploration promoted ${explorationAdjusted[0].strategy} (setupScore ${explorationAdjusted[0].setupScore}) over the natural top-ranked ${forPick[0].strategy} (setupScore ${forPick[0].setupScore}).`,
+        });
+      });
+    }
     let strategyIdea = bestStrategyIdea(explorationAdjusted);
     let matchedStrategyEvaluation = strategyIdea ? strategyEvaluations.find(e => e.strategy === strategyIdea!.strategy) ?? null : null;
 

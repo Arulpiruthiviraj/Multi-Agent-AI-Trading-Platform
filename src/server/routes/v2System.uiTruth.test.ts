@@ -105,5 +105,18 @@ describe('GET /api/v2/market/sentiment-trend and /api/v2/trading/execution-quali
       expect(point.speedMs).toBeLessThan(15000);
       expect(point).not.toHaveProperty('slippageBps');
     });
+
+    it('excludes HISTORICAL_REPLAY fills from execution quality (real defect found Phase 16: no environment filter meant a same-day replay run would be counted as real broker latency)', async () => {
+      const submittedAt = new Date(Date.now() - 3000).toISOString();
+      const filledAt = new Date().toISOString();
+      await db.insert(schema.trades).values({
+        id: 'exec-replay-1', symbol: 'NVDA', side: 'BUY', quantity: 5, price: 900,
+        status: 'FILLED', timestamp: filledAt, submittedAt, filledAt,
+        executionEnvironment: 'REPLAY', brokerId: 'historical_replay',
+      });
+      const res = await request(app).get('/api/v2/trading/execution-quality');
+      expect(res.status).toBe(200);
+      expect(res.body.data.find((d: any) => d.id === 'exec-replay-1')).toBeUndefined();
+    });
   });
 });

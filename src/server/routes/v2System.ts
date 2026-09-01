@@ -58,6 +58,7 @@ import { quantForumStrategies } from '../config/quantForumStrategies';
 import { deskIntelligence, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
 import { noTradeReasonsConfig } from '../config/noTradeReasons';
+import { classifyTradeEnvironment } from '../research/organicPaper';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
 import { mountResearchRoutes } from './researchRoutes';
@@ -662,9 +663,12 @@ v2Router.get('/system/mission-control', async (req, res) => {
       brokerCapabilities = broker.getCapabilities();
     } catch { /* no active broker configured */ }
 
-    // Trades today / win rate / realized P&L: real trades rows for today only.
+    // Trades today / win rate / realized P&L: real trades rows for today only. Real defect found
+    // Phase 16 (2026-09-01 reporting-integrity sweep): no environment filter here, so a
+    // HISTORICAL_REPLAY run sharing this DB the same day would be counted as organic win
+    // rate/P&L - excluded the same way Phase 15 fixed consensusPipelineReport.ts.
     const allTrades = await db.select().from(trades);
-    const todaysFilled = allTrades.filter(t => t.status === 'FILLED' && t.timestamp?.startsWith(todayStr));
+    const todaysFilled = allTrades.filter(t => t.status === 'FILLED' && t.timestamp?.startsWith(todayStr) && classifyTradeEnvironment(t) !== 'REPLAY');
     const withPnl = todaysFilled.filter(t => t.profitLoss !== null && t.profitLoss !== undefined);
     const wins = withPnl.filter(t => (t.profitLoss ?? 0) > 0).length;
     const winRate = withPnl.length > 0 ? wins / withPnl.length : null;
@@ -978,7 +982,9 @@ v2Router.get('/trading/execution-quality', async (req, res) => {
       .orderBy(desc(trades.timestamp))
       .limit(200);
 
-    const withTiming = rows.filter(r => r.submittedAt && r.filledAt);
+    // Real defect found Phase 16: excludes HISTORICAL_REPLAY fills from the same DB window, same
+    // reasoning as the trades-today fix above - execution quality is a claim about the real broker.
+    const withTiming = rows.filter(r => r.submittedAt && r.filledAt && classifyTradeEnvironment(r) !== 'REPLAY');
 
     if (withTiming.length === 0) {
       return res.json({ ok: true, available: false, reason: 'No FILLED trades with both submittedAt and filledAt recorded in the last 30 days.', data: [] });
@@ -1301,7 +1307,9 @@ v2Router.get('/portfolio/pnl-by-symbol', async (req, res) => {
     const rows = await db.select().from(trades)
       .where(andOp(eq(trades.status, 'FILLED'), gteOp(trades.timestamp, startIso)));
 
-    const withPnl = rows.filter(r => typeof r.profitLoss === 'number');
+    // Real defect found Phase 16: same HISTORICAL_REPLAY exclusion as the other two P&L/quality
+    // endpoints above - per-symbol realized P&L must be real broker P&L, never replay P&L.
+    const withPnl = rows.filter(r => typeof r.profitLoss === 'number' && classifyTradeEnvironment(r) !== 'REPLAY');
     if (withPnl.length === 0) {
       return res.json({ ok: true, available: false, reason: `No real FILLED trades with realized P&L in the ${horizon} window.`, data: [] });
     }

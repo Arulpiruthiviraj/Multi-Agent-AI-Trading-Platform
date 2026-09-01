@@ -76,6 +76,16 @@ describe('GET /api/v2/portfolio/pnl-by-symbol', () => {
     expect(res.body.data.find((d: any) => d.symbol === 'MSFT')).toBeUndefined();
   });
 
+  it('excludes HISTORICAL_REPLAY-tagged trades from per-symbol P&L (real defect found Phase 16: no environment filter meant a same-day replay run would be counted as organic realized P&L)', async () => {
+    const now = new Date().toISOString();
+    await db.insert(schema.trades).values([
+      { id: 't-replay-1', symbol: 'GOOGL', side: 'SELL', quantity: 4, price: 150, status: 'FILLED', timestamp: now, profitLoss: 500, executionEnvironment: 'REPLAY', brokerId: 'historical_replay' },
+    ]);
+    const res = await request(app).get('/api/v2/portfolio/pnl-by-symbol');
+    expect(res.status).toBe(200);
+    expect(res.body.data.find((d: any) => d.symbol === 'GOOGL')).toBeUndefined();
+  });
+
   it('respects the horizon query param', async () => {
     const res = await request(app).get('/api/v2/portfolio/pnl-by-symbol?horizon=YTD');
     expect(res.status).toBe(200);
