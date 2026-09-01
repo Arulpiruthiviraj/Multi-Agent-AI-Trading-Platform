@@ -9,6 +9,7 @@ vi.mock('../core/alpacaTls', () => ({
 }));
 
 import { alpacaFetch } from '../core/alpacaTls';
+import { flushObservabilityStore } from '../observability/ObservabilityStore';
 import {
   fetchTradableAssets,
   screenAssets,
@@ -187,6 +188,69 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
     expect(stats.error).toContain('assets endpoint down');
     expect(getLastBroadUniverseStats().error).toContain('assets endpoint down');
   });
+
+  it('Phase A (Discovery Lineage): logs a real DISCOVERY_CANDIDATE_ADMITTED/FILTERED event with the exact reason for every stage-2 candidate - the real gap that made FRVO unexplainable (2026-09-01 forensic audit)', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'HIGH', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+      { symbol: 'THINADV', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      HIGH: { latestTrade: { p: 50 }, dailyBar: { v: 5_000_000, c: 50 }, latestQuote: { bp: 49.95, ap: 50.05 } },
+      THINADV: { latestTrade: { p: 100 }, dailyBar: { v: 100_000, c: 100 }, latestQuote: { bp: 99.9, ap: 100.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ HIGH: [5_000_000, 5_000_000], THINADV: [100_000, 100_000] }));
+    await refreshBroadUniverseCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_ADMITTED'));
+    const filteredRows = await db.select().from(schema.observabilityEvents).where(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_FILTERED'));
+
+    const highRow = rows.find((r) => r.symbol === 'HIGH');
+    expect(highRow).toBeDefined();
+    const highPayload = JSON.parse(highRow!.payload as string);
+    expect(highPayload.source).toBe('BROAD_UNIVERSE');
+    expect(highPayload.reason).toBeNull();
+
+    const thinAdvRow = filteredRows.find((r) => r.symbol === 'THINADV');
+    expect(thinAdvRow).toBeDefined();
+    const thinAdvPayload = JSON.parse(thinAdvRow!.payload as string);
+    expect(thinAdvPayload.reason).toBe('ADV'); // real 20-day ADV (100k shares) below the floor - never a silent disappearance again
+  });
+
+  it('Phase A: a candidate that clears every liquidity gate but still loses the final rank cap is logged as RANK_CAP, not ADV - a real, distinct reason', async () => {
+    process.env[FLAG] = 'true';
+    const originalCap = continuousIntelligence.broadUniverseMaxCandidates;
+    (continuousIntelligence as any).broadUniverseMaxCandidates = 1;
+    try {
+      mockFetch.mockResolvedValueOnce(jsonResponse([
+        { symbol: 'TOPPICK', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+        { symbol: 'RUNNERUP', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+      ]));
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        TOPPICK: { latestTrade: { p: 50 }, dailyBar: { v: 10_000_000, c: 50 }, latestQuote: { bp: 49.95, ap: 50.05 } },
+        RUNNERUP: { latestTrade: { p: 50 }, dailyBar: { v: 5_000_000, c: 50 }, latestQuote: { bp: 49.95, ap: 50.05 } },
+      }));
+      mockFetch.mockResolvedValueOnce(barsResponse({ TOPPICK: [10_000_000, 10_000_000], RUNNERUP: [5_000_000, 5_000_000] }));
+      await refreshBroadUniverseCache();
+      await flushObservabilityStore();
+
+      const { db } = await import('../db');
+      const schema = await import('../db/schema');
+      const { eq, and } = await import('drizzle-orm');
+      const rows = await db.select().from(schema.observabilityEvents).where(
+        and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_FILTERED'), eq(schema.observabilityEvents.symbol, 'RUNNERUP')),
+      );
+      expect(rows.length).toBeGreaterThan(0);
+      const payload = JSON.parse(rows[rows.length - 1].payload as string);
+      expect(payload.reason).toBe('RANK_CAP'); // cleared price/dollar-volume/spread/ADV, still lost the final cap - not the same as an ADV failure
+    } finally {
+      (continuousIntelligence as any).broadUniverseMaxCandidates = originalCap;
+    }
+  });
 });
 
 describe('MarketUniverseScanner - movers flag gating', () => {
@@ -251,5 +315,56 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     expect(stats.ran).toBe(true);
     expect(stats.error).toContain('movers endpoint down');
     expect(getLastMoverScanStats().error).toContain('movers endpoint down');
+  });
+
+  it('Phase A (Discovery Lineage): logs the exact real reason for every raw mover, including a symbol Alpaca returned as a mover but never gave a snapshot for at all - the real FRVO-class gap (2026-09-01 forensic audit)', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([
+      { symbol: 'PENNYW', percent_change: 596 },
+      { symbol: 'REALMOVE', percent_change: 12 },
+      { symbol: 'GHOSTMOVE', percent_change: 28 }, // real Alpaca movers row, but no snapshot ever returned for it
+    ]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      PENNYW: { latestTrade: { p: 0.02 }, dailyBar: { v: 500_000, c: 0.02 }, latestQuote: { bp: 0.018, ap: 0.022 } },
+      REALMOVE: { latestTrade: { p: 80 }, dailyBar: { v: 2_000_000, c: 80 }, latestQuote: { bp: 79.9, ap: 80.1 } },
+      // GHOSTMOVE intentionally absent - mirrors a real Alpaca snapshot response missing a symbol.
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ REALMOVE: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    async function reasonFor(symbol: string, eventType: 'DISCOVERY_CANDIDATE_ADMITTED' | 'DISCOVERY_CANDIDATE_FILTERED') {
+      const rows = await db.select().from(schema.observabilityEvents).where(
+        and(eq(schema.observabilityEvents.eventType, eventType), eq(schema.observabilityEvents.symbol, symbol)),
+      );
+      expect(rows.length).toBeGreaterThan(0);
+      return JSON.parse(rows[rows.length - 1].payload as string).reason;
+    }
+    expect(await reasonFor('GHOSTMOVE', 'DISCOVERY_CANDIDATE_FILTERED')).toBe('NO_SNAPSHOT_DATA');
+    expect(await reasonFor('PENNYW', 'DISCOVERY_CANDIDATE_FILTERED')).toBe('PRICE');
+    expect(await reasonFor('REALMOVE', 'DISCOVERY_CANDIDATE_ADMITTED')).toBeNull();
+  });
+
+  it('Phase A: logs ADV as the reason when a mover clears price/dollar-volume/spread but fails the real 20-day ADV floor', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'THINADVMOVER', percent_change: 20 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      THINADVMOVER: { latestTrade: { p: 100 }, dailyBar: { v: 100_000, c: 100 }, latestQuote: { bp: 99.9, ap: 100.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ THINADVMOVER: [100_000, 100_000] }));
+    await refreshMoversCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(
+      and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_FILTERED'), eq(schema.observabilityEvents.symbol, 'THINADVMOVER')),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(JSON.parse(rows[rows.length - 1].payload as string).reason).toBe('ADV');
   });
 });

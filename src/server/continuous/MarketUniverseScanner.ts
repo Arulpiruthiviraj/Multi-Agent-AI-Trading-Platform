@@ -21,6 +21,7 @@ import { continuousIntelligence, isBroadUniverseEnabled, isMoversEnabled } from 
 import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 interface AlpacaAsset {
   symbol: string;
@@ -132,12 +133,58 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
   return results;
 }
 
-function passesScreen(snap: AlpacaSnapshot): boolean {
+export type ScreenRejectReason = 'PRICE' | 'DOLLAR_VOLUME' | 'SPREAD';
+
+/** Real Phase 18 finding: a symbol that failed this screen previously just vanished from the
+ *  candidate list with zero record of why - the exact gap that made a real, verified market mover
+ *  (FRVO, 2026-09-01 forensic audit) architecturally unexplainable after the fact. Returns the
+ *  specific reason, not just a boolean, so the caller can log it. */
+function evaluateScreen(snap: AlpacaSnapshot): { pass: boolean; reason: ScreenRejectReason | null } {
   const cfg = continuousIntelligence;
-  if (snap.price < cfg.broadUniverseMinPrice || snap.price > cfg.broadUniverseMaxPrice) return false;
-  if (snap.dollarVolume < cfg.broadUniverseMinDollarVolume) return false;
-  if (snap.spreadBps != null && snap.spreadBps > cfg.broadUniverseMaxSpreadBps) return false;
-  return true;
+  if (snap.price < cfg.broadUniverseMinPrice || snap.price > cfg.broadUniverseMaxPrice) return { pass: false, reason: 'PRICE' };
+  if (snap.dollarVolume < cfg.broadUniverseMinDollarVolume) return { pass: false, reason: 'DOLLAR_VOLUME' };
+  if (snap.spreadBps != null && snap.spreadBps > cfg.broadUniverseMaxSpreadBps) return { pass: false, reason: 'SPREAD' };
+  return { pass: true, reason: null };
+}
+
+function passesScreen(snap: AlpacaSnapshot): boolean {
+  return evaluateScreen(snap).pass;
+}
+
+export type DiscoverySource = 'BROAD_UNIVERSE' | 'MARKET_MOVER';
+export type DiscoveryRejectReason = ScreenRejectReason | 'ADV' | 'NO_SNAPSHOT_DATA' | 'RANK_CAP';
+
+/**
+ * Discovery Lineage Ledger, Phase A (2026-09-02 forensic audit follow-up). Real per-candidate
+ * admit/reject decision, persisted via the existing observability_events pipeline (no new table) -
+ * so a future FRVO-class miss becomes a real, queryable "candidate seen, rejected at stage X for
+ * reason Y" row instead of an unexplainable disappearance. Never gates a trade, never emits
+ * TRADE_IDEA_GENERATED or WATCHLIST_SUBSCRIBE_REQUESTED - purely descriptive of what this file's
+ * own real screening already decided.
+ */
+function logDiscoveryCandidateDecision(input: {
+  symbol: string;
+  source: DiscoverySource;
+  admitted: boolean;
+  reason: DiscoveryRejectReason | null;
+  price?: number | null;
+  dollarVolume?: number | null;
+  spreadBps?: number | null;
+  advShares?: number | null;
+}): void {
+  observeSafe(() => {
+    structuredLogger.info('discovery_candidate_decision', {
+      category: 'DISCOVERY',
+      eventType: input.admitted ? 'DISCOVERY_CANDIDATE_ADMITTED' : 'DISCOVERY_CANDIDATE_FILTERED',
+      symbol: input.symbol,
+      source: input.source,
+      reason: input.reason,
+      price: input.price ?? null,
+      dollarVolume: input.dollarVolume ?? null,
+      spreadBps: input.spreadBps ?? null,
+      advShares: input.advShares ?? null,
+    });
+  });
 }
 
 interface AlpacaBarsResponse {
@@ -192,13 +239,30 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
   try {
     const assets = await fetchTradableAssets();
     const screened = await screenAssets(assets);
+    // Stage-1 (price/dollar-volume/spread) rejections are not logged per-symbol here - the
+    // tradable-assets list is thousands of rows, and this stage runs only every
+    // broadUniverseAssetsCacheTtlMs (24h), so per-symbol logging here would be a real
+    // observability-volume cost for comparatively low decision value. Stage-2 (ADV, below) is
+    // already narrowed to price/volume/spread survivors and IS logged per-symbol.
     const stage2 = screened.filter(passesScreen);
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
-    const passing = stage2
-      .filter((s) => passesAdvScreen(s.symbol, advMap))
+    const advPassers = stage2.filter((s) => passesAdvScreen(s.symbol, advMap));
+    const passing = advPassers
       .sort((a, b) => b.dollarVolume - a.dollarVolume)
       .slice(0, continuousIntelligence.broadUniverseMaxCandidates)
       .map((s) => s.symbol);
+    const passingSet = new Set(passing);
+    for (const s of stage2) {
+      const admitted = passingSet.has(s.symbol);
+      // Distinguish an outright ADV-floor failure from a candidate that cleared every real
+      // liquidity gate but still lost the final dollar-volume-desc rank cutoff
+      // (broadUniverseMaxCandidates) - these are different, real reasons, not the same one.
+      const reason: DiscoveryRejectReason | null = admitted ? null : (passesAdvScreen(s.symbol, advMap) ? 'RANK_CAP' : 'ADV');
+      logDiscoveryCandidateDecision({
+        symbol: s.symbol, source: 'BROAD_UNIVERSE', admitted, reason,
+        price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+      });
+    }
     snapshotCache = { fetchedAt: Date.now(), symbols: passing };
     lastStats = {
       ran: true,
@@ -319,8 +383,33 @@ export async function refreshMoversCache(): Promise<MoverScanStats> {
   try {
     const { symbols, gainersFetched, losersFetched } = await fetchTopMovers();
     const screened = await screenAssets(symbols);
-    const stage2 = screened.filter(passesScreen);
+    // Movers is a small, bounded set (moversFetchTopNPerSide * 2 at most) refreshed every
+    // moversCacheTtlMs (5 min) - unlike the thousands-of-assets broad-universe scan, every decision
+    // here is cheap to log per-symbol, and this is exactly the funnel a real, verified market mover
+    // (FRVO, 2026-09-01 forensic audit) came through before disappearing without a trace.
+    const screenedSymbols = new Set(screened.map((s) => s.symbol));
+    for (const symbol of symbols) {
+      if (!screenedSymbols.has(symbol)) {
+        logDiscoveryCandidateDecision({ symbol, source: 'MARKET_MOVER', admitted: false, reason: 'NO_SNAPSHOT_DATA' });
+      }
+    }
+    const stage2: AlpacaSnapshot[] = [];
+    for (const s of screened) {
+      const result = evaluateScreen(s);
+      if (result.pass) {
+        stage2.push(s);
+      } else {
+        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'MARKET_MOVER', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps });
+      }
+    }
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
+    for (const s of stage2) {
+      const admitted = passesAdvScreen(s.symbol, advMap);
+      logDiscoveryCandidateDecision({
+        symbol: s.symbol, source: 'MARKET_MOVER', admitted, reason: admitted ? null : 'ADV',
+        price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+      });
+    }
     const passing = stage2
       .filter((s) => passesAdvScreen(s.symbol, advMap))
       .sort((a, b) => b.dollarVolume - a.dollarVolume)

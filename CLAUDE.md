@@ -155,6 +155,18 @@ Idea agents (timer or MARKET_DATA):
                          `argus-cli exploration-health` /
                          `argus-cli rescue-occupants`
                          (`src/server/observability/explorationHealthReport.ts`).
+                         Discovery Lineage Ledger (2026-09-02):
+                         `MarketUniverseScanner`'s liquidity screen now logs a real
+                         `DISCOVERY_CANDIDATE_ADMITTED`/`DISCOVERY_CANDIDATE_FILTERED`
+                         event per candidate with the exact reason
+                         (`PRICE`/`DOLLAR_VOLUME`/`SPREAD`/`ADV`/`RANK_CAP`/
+                         `NO_SNAPSHOT_DATA`) — previously a rejected candidate simply
+                         vanished with no record, the exact gap that made a real,
+                         externally-verified mover (FRVO, 2026-09-01 forensic audit)
+                         unexplainable after the fact. `argus-cli discovery-lineage
+                         --symbol=X` joins that decision through to
+                         subscription/evaluation/consensus/risk/OMS. Only covers
+                         activity after this phase shipped.
   OpportunityScreener  → off unless ARGUS_OPPORTUNITY_IDEAS_ENABLED=true;
                          cheap tick-return rank; `emitTradeIdea` as one vote
  ↓ TRADE_IDEA_GENERATED {traceId, symbol, side, confidence, reasoning, agent, currentPrice?}

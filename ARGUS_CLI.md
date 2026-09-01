@@ -193,6 +193,12 @@ shortlisted candidates (watchlist-subscribe only — **never** a second order pa
 ./argus ai-cost-governor        # Project A: current policy, per-(agent,provider) real graded-
                                  # outcome quality ledger, and recent shadow-mode decisions - off by
                                  # default, never gates a trade
+./argus discovery-lineage --symbol=<SYMBOL> [--hours=24]
+                                 # Phase A (2026-09-02): per-symbol discovery admit/filter decision
+                                 # (with the real reason - PRICE/DOLLAR_VOLUME/SPREAD/ADV/RANK_CAP/
+                                 # NO_SNAPSHOT_DATA) plus how far it got through subscription/
+                                 # evaluation/consensus/risk/OMS. Only covers activity after this
+                                 # phase shipped - cannot retroactively explain an earlier miss.
 ```
 
 All of the above are read-only correlations over already-persisted `observability_events` /

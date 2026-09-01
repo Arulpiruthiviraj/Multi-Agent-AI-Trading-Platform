@@ -20,6 +20,7 @@ import { buildStrategyScorecard, formatStrategyScorecard } from '../research/str
 import { buildExplorationHealthReport, formatExplorationHealthReport } from '../observability/explorationHealthReport';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observability/aiCostGovernorReport';
+import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
 
 export const observabilityRouter = Router();
 
@@ -312,6 +313,30 @@ observabilityRouter.get('/ai-cost-governor', async (req, res) => {
     const report = await buildAiCostGovernorReport(limit);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatAiCostGovernorReport(report));
+      return;
+    }
+    res.json({ ok: true, ...report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase A (Discovery Lineage Ledger, 2026-09-02 forensic audit follow-up): per-symbol admit/filter
+// decision from MarketUniverseScanner's real liquidity screen, plus how far that symbol got through
+// subscription/evaluation/consensus/risk/OMS. Discovery-stage data only exists for activity after
+// this phase shipped - it cannot retroactively explain an earlier miss, only future ones.
+observabilityRouter.get('/discovery-lineage', async (req, res) => {
+  try {
+    const symbol = typeof req.query.symbol === 'string' ? req.query.symbol : '';
+    if (!symbol) {
+      res.status(400).json({ ok: false, error: 'symbol query parameter is required' });
+      return;
+    }
+    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const report = await buildDiscoveryLineageReport(symbol, sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatDiscoveryLineageReport(report));
       return;
     }
     res.json({ ok: true, ...report });

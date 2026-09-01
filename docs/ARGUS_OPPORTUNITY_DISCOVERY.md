@@ -47,6 +47,20 @@ to rescue grant/denial, idea discard/emission, consensus, RiskEngine, and OMS/fi
 `traceId` into a Level 0–6 success ladder) and `argus-cli rescue-occupants` (who currently holds a
 rescue slot, what class, since when) — see `ARGUS_CLI.md` § Observability.
 
+## Discovery Lineage Ledger (Phase A, 2026-09-02)
+
+Before this phase, a candidate `MarketUniverseScanner`'s liquidity screen rejected (or a raw mover
+Alpaca never returned a snapshot for at all) simply vanished with zero record — the exact gap that
+made a real, externally-verified market mover (FRVO, `docs/audits/ARGUS_UNIVERSAL_DISCOVERY_PAPER_TRADING_FORENSIC_AUDIT_2026-09-01.md`)
+architecturally unexplainable after the fact. Both `refreshBroadUniverseCache()` and
+`refreshMoversCache()` now log a real `DISCOVERY_CANDIDATE_ADMITTED`/`DISCOVERY_CANDIDATE_FILTERED`
+event per candidate (movers: every stage; broad-universe: the ADV/rank-cap stage only, to bound log
+volume against a thousands-of-assets scan), with the exact reason
+(`PRICE`/`DOLLAR_VOLUME`/`SPREAD`/`ADV`/`RANK_CAP`/`NO_SNAPSHOT_DATA`). `argus-cli discovery-lineage
+--symbol=X` joins that decision through to subscription/quant-evaluation/idea/consensus/risk/OMS —
+see `ARGUS_CLI.md` § Observability. This only covers activity after the phase shipped; it cannot
+retroactively explain an earlier miss.
+
 Watch vs BUY: unknown spread / unknown dollar volume / MARKET-unfit **do not** block watchlist subscribe (chicken-and-egg). Known wide spread, poor liquidity, and excessive volatility still reject. BUY still hits `applyAssetIdeaGate`.
 
 ## Funnel
