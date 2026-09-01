@@ -61,6 +61,51 @@ volume against a thousands-of-assets scan), with the exact reason
 see `ARGUS_CLI.md` § Observability. This only covers activity after the phase shipped; it cannot
 retroactively explain an earlier miss.
 
+## Phase 3 — Dynamic Market Data Allocation (2026-09-02)
+
+`OpportunityDiscovery`'s hot-swap priority ranking (`planSnapshotHotSwap`, active whenever
+`momentumRotationEnabled` is true) previously used only `SnapshotScanner`'s own intraday momentum
+recompute — a real signal, but disconnected from the separate real external mover signal
+`MarketUniverseScanner`'s movers funnel already computes. `blendedHotSwapScore()` now gives a symbol
+that is a currently-cached, real, liquidity-screened Alpaca mover (`getCachedMoverSymbols()`) an
+additive priority bonus (`moverPriorityScoreBonus`, default 0.5) on top of its own momentum score —
+no new DB query, no new API call, no new cache; it just wires two already-real signals together so
+they stop competing blindly for the same scarce subscription/rescue capacity.
+
+## Phase C — Universal Discovery Expansion: gap detection (2026-09-02)
+
+A genuinely new discovery signal, computed from data already fetched for the liquidity screen at
+zero additional API cost: `screenAssets()` now also extracts `dailyBar.o` (session open) and
+computes each candidate's real intraday `gapPct`. A candidate whose `|gapPct|` clears
+`gapMoverMinAbsPct` (default 5%) is tagged `gapMover: true` in the Discovery Lineage Ledger — never a
+bypass of the price/dollar-volume/spread/ADV screen, purely an additional classification surfaced via
+`discovery-lineage`.
+
+## Phase 5 — Discovery → Outcome Learning (2026-09-02)
+
+For an admitted mover candidate with a real, already-computed direction signal (`gapPct`), Argus now
+records a real shadow prediction — "this candidate's own real intraday direction, continuing" — via
+the *existing* `recordPrediction()`/`PredictionOutcomeEvaluator`/`ReflectionEngine` pipeline
+(`ModelPerformanceTracker.ts`'s own established pattern for Java shadow models), under agent name
+`DiscoveryOutcomeTracker`. This is never a new grading system, never emits `TRADE_IDEA_GENERATED`,
+and never becomes a live ChiefTrader vote (this agent name never appears in a real consensus round —
+its `agent_performance_stats.currentWeight`, if computed, is simply never consulted). Over time this
+answers "was this discovery signal directionally useful in hindsight" using the exact same
+already-tested, already-running outcome-grading infrastructure every other agent's predictions go
+through — queryable via the existing `agent_performance_stats`/`agent_confidence_calibration` tables,
+no new query code needed.
+
+## Phase B — Score normalization (2026-09-02, reviewed default OFF)
+
+`config/quantThresholds.json`'s `strategyScoreNormalizationEnabled` (default `false`) — when enabled,
+`StrategyEngine.evaluateAll()` ranks eligible strategies by a z-score against each strategy's own real
+historical `setupScore` distribution (from already-persisted `quant_assessments` rows) instead of
+comparing raw `setupScore` across strategies with structurally different scoring formulas (real,
+same-day evidence: `MEAN_REVERSION` mean 18.2 vs `FIBONACCI_PULLBACK` mean 76.7). A strategy below
+`strategyScoreNormalizationMinSample` (20) keeps its raw `setupScore` (documented cold-start
+fallback). Never changes `MIN_STRATEGY_CONFIDENCE_TO_TRADE` eligibility or touches
+ChiefTrader/RiskEngine/OMS/consensus. See `docs/audits/ARGUS_PHASE18_SCORE_NORMALIZATION_RESEARCH_NOTE.md`.
+
 Watch vs BUY: unknown spread / unknown dollar volume / MARKET-unfit **do not** block watchlist subscribe (chicken-and-egg). Known wide spread, poor liquidity, and excessive volatility still reject. BUY still hits `applyAssetIdeaGate`.
 
 ## Funnel

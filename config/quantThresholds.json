@@ -51,5 +51,9 @@
   "_strategyExplorationComment": "Phase 15 (2026-09-01 bounded exploration): real evidence (rescueOutcomeReport, live quant_assessments) found MOMENTUM_BREAKOUT and most experimental strategies are evaluated correctly and often clear MIN_STRATEGY_CONFIDENCE_TO_TRADE, but are perpetually out-ranked by setupScore among 21 live strategies and so never win bestStrategyIdea()'s single-winner selection. This does NOT lower any confidence bar, add a new emission channel, or bypass ChiefTrader/RiskEngine - it only bounds how often the natural top-ranked strategy is deprioritized in favor of a real, already-qualifying, long-unselected strategy, subject to both a per-strategy cooldown and a system-wide rate limit.",
   "strategyExplorationEnabled": true,
   "strategyExplorationCooldownMs": 86400000,
-  "strategyExplorationMinIntervalMs": 900000
+  "strategyExplorationMinIntervalMs": 900000,
+  "_strategyScoreNormalizationComment": "Phase B (2026-09-02 forensic-audit follow-up): live evidence (2026-09-01 forensic audit, reproduced same-day) showed setupScore means ranging from 18.2 (MEAN_REVERSION) to 76.7 (FIBONACCI_PULLBACK) - a >4x gap - and only 11 of 21 strategies ever ranked #1 naturally in a full session despite every strategy receiving the same ~3,900 evaluations. Off entirely leaves bestStrategyIdea() picking exactly as it always has (raw setupScore descending). When on, ranking among already-eligible strategies (MIN_STRATEGY_CONFIDENCE_TO_TRADE gate is completely unchanged) uses a z-score against each strategy's OWN real historical setupScore distribution instead of comparing incomparable raw scores across strategies. Reviewed default OFF - the mechanism is implemented and tested, not yet observed live.",
+  "strategyScoreNormalizationEnabled": false,
+  "strategyScoreNormalizationMinSample": 20,
+  "strategyScoreNormalizationCacheTtlMs": 1800000
 }

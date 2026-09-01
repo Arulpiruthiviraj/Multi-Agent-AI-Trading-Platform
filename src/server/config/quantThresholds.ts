@@ -77,6 +77,18 @@ export interface QuantThresholds {
   strategyExplorationCooldownMs: number;
   /** System-wide minimum gap between any two exploration promotions, across all symbols/strategies. */
   strategyExplorationMinIntervalMs: number;
+  /** Phase B (2026-09-02 score-normalization): off entirely leaves evaluateAll()'s cross-strategy
+   *  sort exactly as it always has (raw setupScore descending). When true, ranking among eligible
+   *  strategies uses a z-score against each strategy's OWN real historical setupScore distribution
+   *  (from already-persisted quant_assessments rows) instead of comparing raw setupScore across
+   *  strategies with structurally different scoring formulas. Never changes eligibility (still
+   *  gated by MIN_STRATEGY_CONFIDENCE_TO_TRADE, untouched) or which strategies exist. */
+  strategyScoreNormalizationEnabled: boolean;
+  /** A strategy with fewer than this many historical graded quant_assessments rows keeps its raw
+   *  setupScore (documented cold-start fallback) rather than an unreliable thin-sample z-score. */
+  strategyScoreNormalizationMinSample: number;
+  /** How often the historical mean/stddev-per-strategy cache is refreshed from the DB. */
+  strategyScoreNormalizationCacheTtlMs: number;
 }
 
 const NUMERIC_KEYS: (keyof QuantThresholds)[] = [
@@ -92,6 +104,7 @@ const NUMERIC_KEYS: (keyof QuantThresholds)[] = [
   'baseSlippagePct', 'atrSlippageMultiplier', 'sizeImpactMultiplier', 'maxSlippagePct',
   'priceSourceDivergencePct',
   'strategyExplorationCooldownMs', 'strategyExplorationMinIntervalMs',
+  'strategyScoreNormalizationMinSample', 'strategyScoreNormalizationCacheTtlMs',
 ];
 
 const WEIGHT_KEYS: (keyof GroupedScoreWeights)[] = [
@@ -110,6 +123,9 @@ function loadQuantThresholds(): QuantThresholds {
   }
   if (typeof raw.strategyExplorationEnabled !== 'boolean') {
     throw new Error('config/quantThresholds.json missing boolean field: strategyExplorationEnabled');
+  }
+  if (typeof raw.strategyScoreNormalizationEnabled !== 'boolean') {
+    throw new Error('config/quantThresholds.json missing boolean field: strategyScoreNormalizationEnabled');
   }
   const weights = raw.groupedScoreWeights;
   if (!weights || typeof weights !== 'object') {

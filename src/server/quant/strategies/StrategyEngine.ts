@@ -49,6 +49,13 @@ import { isExperimentalStrategyLive } from '../../config/quantExperimentalStrate
 import type { RegimeLabel } from '../RegimeEngine';
 import { resolvePaperTestingOverlay } from '../../research/paperTestingOverlay';
 import { filterStrategiesForAsset } from '../../multiAsset/StrategyRouter';
+import { quantThresholds } from '../../config/quantThresholds';
+import {
+  computeNormalizedRank,
+  getCachedStrategyHistoricalStats,
+  isStrategyHistoricalStatsCacheStale,
+  refreshStrategyHistoricalStats,
+} from './StrategyScoreNormalizer';
 
 /** Original five. Also exported as ALL_STRATEGIES for callers that list "live default" strategies. */
 export const CORE_STRATEGIES: StrategyDefinition[] = [momentumBreakout, pullbackContinuation, meanReversion, trendFollowing, rangeReversion];
@@ -107,7 +114,7 @@ export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
   if (overlay.rows.length > 0) {
     console.log(`[StrategyEngine] research-param inbox: ${overlay.reason}`);
   }
-  return filterStrategiesForAsset(resolveStrategiesForLiveEvaluation(), ctx.assetClass)
+  const evaluated = filterStrategiesForAsset(resolveStrategiesForLiveEvaluation(), ctx.assetClass)
     .map(strategy => {
       const evaluation = strategy.evaluate(ctx);
       const regimeMatches = evaluation.applicableRegimes.includes(ctx.regime.regime);
@@ -115,6 +122,17 @@ export function evaluateAll(ctx: StrategyContext): StrategyEvaluation[] {
       return { ...evaluation, confidence };
     })
     .sort((a, b) => b.setupScore - a.setupScore);
+
+  // Phase B (2026-09-02 score-normalization, reviewed default OFF -
+  // quantThresholds.strategyScoreNormalizationEnabled): off entirely, this is exactly the raw
+  // setupScore-descending sort above, unchanged. When on, re-ranks using each strategy's own real
+  // historical setupScore distribution instead of comparing incomparable raw scores across
+  // strategies with structurally different scoring formulas (real, same-day evidence:
+  // MEAN_REVERSION mean 18.2 vs FIBONACCI_PULLBACK mean 76.7). Never changes eligibility
+  // (MIN_STRATEGY_CONFIDENCE_TO_TRADE, applied downstream in bestStrategyIdea(), is untouched).
+  if (!quantThresholds.strategyScoreNormalizationEnabled) return evaluated;
+  if (isStrategyHistoricalStatsCacheStale()) void refreshStrategyHistoricalStats();
+  return computeNormalizedRank(evaluated, getCachedStrategyHistoricalStats(), quantThresholds.strategyScoreNormalizationMinSample);
 }
 
 /** Real minimum bar before a strategy's evaluation is trusted enough to drive a trade idea -

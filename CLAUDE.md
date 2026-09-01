@@ -167,6 +167,30 @@ Idea agents (timer or MARKET_DATA):
                          --symbol=X` joins that decision through to
                          subscription/evaluation/consensus/risk/OMS. Only covers
                          activity after this phase shipped.
+                         Phases 3/C/5 (2026-09-02, same follow-up): (3) Dynamic
+                         Market Data Allocation — `blendedHotSwapScore()` blends
+                         SnapshotScanner's momentum score with the movers
+                         funnel's real signal (`moverPriorityScoreBonus`),
+                         so the two discovery mechanisms stop competing
+                         blindly for scarce subscription slots. (C) gap
+                         detection — `screenAssets()` also extracts
+                         `dailyBar.o` (zero new API cost) and tags a
+                         candidate `gapMover:true` at `gapMoverMinAbsPct`
+                         (5%) in the Discovery Lineage Ledger. (5) Discovery
+                         → Outcome Learning — an admitted mover with a real
+                         gap signal gets a real shadow prediction recorded
+                         under agent name `DiscoveryOutcomeTracker` via the
+                         *existing* `recordPrediction()`/ReflectionEngine
+                         grading pipeline (`ModelPerformanceTracker.ts`'s own
+                         pattern) — never a new grading system, never a live
+                         ChiefTrader vote. Score normalization (Phase B,
+                         reviewed default OFF): `quantThresholds.
+                         strategyScoreNormalizationEnabled` re-ranks eligible
+                         strategies by a z-score against each strategy's own
+                         real historical `setupScore` distribution instead of
+                         comparing raw scores across strategies with
+                         structurally different formulas — never touches
+                         `MIN_STRATEGY_CONFIDENCE_TO_TRADE` or consensus.
   OpportunityScreener  → off unless ARGUS_OPPORTUNITY_IDEAS_ENABLED=true;
                          cheap tick-return rank; `emitTradeIdea` as one vote
  ↓ TRADE_IDEA_GENERATED {traceId, symbol, side, confidence, reasoning, agent, currentPrice?}

@@ -348,6 +348,85 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     expect(await reasonFor('REALMOVE', 'DISCOVERY_CANDIDATE_ADMITTED')).toBeNull();
   });
 
+  it('Phase C (Universal Discovery Expansion): tags a real intraday gap mover using the SAME already-fetched snapshot data - zero new API call', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'BIGGAPPER', percent_change: 25 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      // Opened at 50, now trading at 60 - a real +20% intraday gap, well above the 5% default threshold.
+      BIGGAPPER: { latestTrade: { p: 60 }, dailyBar: { o: 50, v: 2_000_000, c: 60 }, latestQuote: { bp: 59.9, ap: 60.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ BIGGAPPER: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(
+      and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_ADMITTED'), eq(schema.observabilityEvents.symbol, 'BIGGAPPER')),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const payload = JSON.parse(rows[rows.length - 1].payload as string);
+    expect(payload.gapMover).toBe(true);
+    expect(payload.gapPct).toBeCloseTo(0.2, 2);
+  });
+
+  it('Phase 5 (Discovery -> Outcome Learning): an admitted mover with a real direction signal gets a real shadow prediction recorded via the EXISTING agent_predictions pipeline', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'OUTCOMEPROBE', percent_change: 15 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      OUTCOMEPROBE: { latestTrade: { p: 115 }, dailyBar: { o: 100, v: 2_000_000, c: 115 }, latestQuote: { bp: 114.9, ap: 115.1 } }, // +15% real gap
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ OUTCOMEPROBE: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.agentPredictions).where(
+      and(eq(schema.agentPredictions.agentName, 'DiscoveryOutcomeTracker'), eq(schema.agentPredictions.symbol, 'OUTCOMEPROBE')),
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].prediction).toBe('BUY'); // real +15% gap -> BUY-direction probe
+    expect(rows[0].confidence).toBe(0.5); // neutral - a discovery-quality probe, never a real trading signal
+  });
+
+  it('Phase 5: a candidate with no computable gap (no real open price in the response) gets no fabricated shadow prediction', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'NOGAPDATA', percent_change: 10 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      NOGAPDATA: { latestTrade: { p: 50 }, dailyBar: { v: 2_000_000, c: 50 }, latestQuote: { bp: 49.9, ap: 50.1 } }, // no dailyBar.o at all
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ NOGAPDATA: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.agentPredictions).where(eq(schema.agentPredictions.symbol, 'NOGAPDATA'));
+    expect(rows).toHaveLength(0); // no real direction signal - never guessed
+  });
+
+  it('Phase C: a small, real intraday move below the reviewed gap threshold is never tagged a gap mover', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'SMALLMOVE', percent_change: 8 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      SMALLMOVE: { latestTrade: { p: 51 }, dailyBar: { o: 50, v: 2_000_000, c: 51 }, latestQuote: { bp: 50.9, ap: 51.1 } }, // +2%, below the 5% threshold
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ SMALLMOVE: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(
+      and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_ADMITTED'), eq(schema.observabilityEvents.symbol, 'SMALLMOVE')),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(JSON.parse(rows[rows.length - 1].payload as string).gapMover).toBe(false);
+  });
+
   it('Phase A: logs ADV as the reason when a mover clears price/dollar-volume/spread but fails the real 20-day ADV floor', async () => {
     process.env[MOVERS_FLAG] = 'true';
     mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'THINADVMOVER', percent_change: 20 }]));

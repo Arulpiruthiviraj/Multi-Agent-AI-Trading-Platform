@@ -1,7 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { evaluateAll, bestStrategyIdea, ALL_STRATEGIES, regimeStrategyEligibility } from './StrategyEngine';
 import { baseFixture } from './testHelpers';
 import { StrategyEvaluation } from './types';
+import { quantThresholds } from '../../config/quantThresholds';
 
 describe('StrategyEngine.evaluateAll', () => {
   it('runs all 5 real strategies and sorts results by setupScore descending', () => {
@@ -15,6 +16,33 @@ describe('StrategyEngine.evaluateAll', () => {
     for (let i = 1; i < results.length; i++) {
       expect(results[i - 1].setupScore).toBeGreaterThanOrEqual(results[i].setupScore);
     }
+  });
+
+  describe('Phase B score normalization (reviewed default OFF)', () => {
+    afterEach(() => {
+      (quantThresholds as any).strategyScoreNormalizationEnabled = false; // restore the reviewed default
+    });
+
+    it('is a strict no-op when disabled (the reviewed default) - identical to the raw setupScore-descending sort', () => {
+      const ctx = baseFixture();
+      expect(quantThresholds.strategyScoreNormalizationEnabled).toBe(false);
+      const results = evaluateAll(ctx);
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1].setupScore).toBeGreaterThanOrEqual(results[i].setupScore);
+      }
+    });
+
+    it('when enabled with no historical cache yet warmed, every strategy falls back to raw setupScore (thin-sample fallback) - still a valid, non-throwing result', () => {
+      const ctx = baseFixture();
+      (quantThresholds as any).strategyScoreNormalizationEnabled = true;
+      const results = evaluateAll(ctx);
+      expect(results).toHaveLength(5);
+      // Thin-sample fallback compares raw setupScore for every strategy (no cached stats exist in
+      // this test process yet) - same ordering guarantee as the flag-off path.
+      for (let i = 1; i < results.length; i++) {
+        expect(results[i - 1].setupScore).toBeGreaterThanOrEqual(results[i].setupScore);
+      }
+    });
   });
 
   it('discounts (does not zero) a strategy\'s confidence when evaluated outside its own applicable regime', () => {

@@ -13,6 +13,7 @@ import {
   evaluateOpportunityCandidate,
   getOpportunityScanUniverse,
   planSnapshotHotSwap,
+  blendedHotSwapScore,
 } from './OpportunityDiscovery';
 import * as SnapshotScanner from './SnapshotScanner';
 
@@ -135,5 +136,62 @@ describe('OpportunityDiscovery', () => {
     // converges toward the broad-universe discovery system's own real ranking too.
     const { getRecentCandidates } = await import('../core/recentCandidateRegistry');
     expect(getRecentCandidates(300000)).toContain('AMD');
+  });
+});
+
+/**
+ * Phase 3 (Dynamic Market Data Allocation, 2026-09-02 forensic-audit follow-up):
+ * blendedHotSwapScore() combines SnapshotScanner's own momentum score with the SEPARATE, real
+ * external mover signal MarketUniverseScanner's movers funnel already computes - two real
+ * discovery mechanisms that previously never talked to each other for subscription-priority
+ * purposes. Uses the real refreshMoversCache()/getCachedMoverSymbols() pair (mocked Alpaca fetch
+ * only, same pattern as MarketUniverseScanner.test.ts), never a fabricated mover list.
+ */
+describe('OpportunityDiscovery.blendedHotSwapScore - Phase 3 Dynamic Market Data Allocation', () => {
+  const MOVERS_FLAG = continuousIntelligence.moversEnabledEnvVar;
+
+  afterEach(async () => {
+    delete process.env[MOVERS_FLAG];
+    const { resetMarketUniverseScannerForTests } = await import('./MarketUniverseScanner');
+    resetMarketUniverseScannerForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('gives a real, currently-cached Alpaca mover an additive priority bonus over an equally-scored non-mover', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    const realAlpacaTls = await import('../core/alpacaTls');
+    vi.spyOn(realAlpacaTls, 'alpacaFetch').mockImplementation(async (url: string) => {
+      if (url.includes('/movers')) {
+        return {
+          ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({
+            gainers: [{ symbol: 'REALMOVER', price: 80, change: 5, percent_change: 12 }],
+            losers: [],
+          }),
+        } as any;
+      }
+      if (url.includes('/snapshots')) {
+        return {
+          ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({ REALMOVER: { latestTrade: { p: 80 }, dailyBar: { v: 2_000_000, c: 80 }, latestQuote: { bp: 79.9, ap: 80.1 } } }),
+        } as any;
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ bars: { REALMOVER: [{ v: 2_000_000 }, { v: 2_000_000 }] } }) } as any;
+    });
+
+    const { refreshMoversCache } = await import('./MarketUniverseScanner');
+    await refreshMoversCache();
+
+    const baseScoreOf = () => 1.0; // both symbols have an identical underlying momentum score
+    const moverScore = blendedHotSwapScore('REALMOVER', baseScoreOf);
+    const nonMoverScore = blendedHotSwapScore('SOMEOTHERSYMBOL', baseScoreOf);
+    expect(moverScore).toBeGreaterThan(nonMoverScore);
+    expect(moverScore).toBeCloseTo(1.0 + continuousIntelligence.moverPriorityScoreBonus);
+    expect(nonMoverScore).toBe(1.0);
+  });
+
+  it('when the movers flag is off (or nothing is cached), the bonus never applies - identical to the pre-Phase-3 score', () => {
+    const baseScoreOf = () => 0.7;
+    expect(blendedHotSwapScore('ANYSYMBOL', baseScoreOf)).toBe(0.7);
   });
 });

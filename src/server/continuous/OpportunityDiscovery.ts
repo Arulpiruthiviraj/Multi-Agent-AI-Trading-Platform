@@ -145,6 +145,24 @@ export function evaluateOpportunityCandidate(
   };
 }
 
+/**
+ * Phase 3 (Dynamic Market Data Allocation, 2026-09-02 forensic-audit follow-up). Before this, the
+ * hot-swap priority ranking (planSnapshotHotSwap, below) only ever used SnapshotScanner's own
+ * intraday momentum recompute - a real signal, but entirely disconnected from the SEPARATE real
+ * external mover signal MarketUniverseScanner's movers funnel already computes (real Alpaca top-
+ * gainers/losers, liquidity-screened). This blends both real signals into one priority score
+ * instead of letting the two discovery mechanisms compete blindly for the same scarce
+ * subscription/rescue capacity: a symbol the movers funnel has already verified as a real,
+ * currently-admitted mover gets a real, configured priority bonus on top of its own momentum score.
+ * Uses only the already-computed, already-cached `getCachedMoverSymbols()` list - no new DB query,
+ * no new API call, no new cache.
+ */
+export function blendedHotSwapScore(sym: string, baseScoreOf: (symbol: string) => number): number {
+  const base = baseScoreOf(sym);
+  const isVerifiedMover = getCachedMoverSymbols().includes(sym.toUpperCase());
+  return isVerifiedMover ? base + continuousIntelligence.moverPriorityScoreBonus : base;
+}
+
 function weakestDynamicScore(
   activeDynamic: string[],
   scoreOf: (symbol: string) => number,
@@ -273,10 +291,10 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         emptySlots,
         maxSwaps,
         scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
-        scoreOf: (sym) =>
-          getLastSnapshotScore(sym)
-          ?? marketDataWorker.getDynamicMomentumScore(sym)
-          ?? 0,
+        scoreOf: (sym) => blendedHotSwapScore(sym, (s) =>
+          getLastSnapshotScore(s)
+          ?? marketDataWorker.getDynamicMomentumScore(s)
+          ?? 0),
       });
       toRequest = planned;
       momentumHotSwap = planned.length > 0 && (emptySlots === 0 || rth);
@@ -292,7 +310,7 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
           emptySlots,
           maxSwaps: emptySlots > 0 ? Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots) : Math.min(continuousIntelligence.momentumHotSwapSlotsPerCycle, 1),
           scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
-          scoreOf: (sym) => getLastSnapshotScore(sym) ?? marketDataWorker.getDynamicMomentumScore(sym) ?? 0,
+          scoreOf: (sym) => blendedHotSwapScore(sym, (s) => getLastSnapshotScore(s) ?? marketDataWorker.getDynamicMomentumScore(s) ?? 0),
         });
         for (const d of decisions) {
           observeSafe(() => {

@@ -44,6 +44,12 @@ export interface ContinuousIntelligenceConfig {
   snapshotTopCandidates: number;
   /** New candidate must beat weakest dynamic slot by this score margin to hot-swap. */
   snapshotMomentumScoreEdge: number;
+  /** Phase 3 (Dynamic Market Data Allocation): additive hot-swap priority bonus for a symbol that
+   *  is a currently-cached, real, liquidity-screened Alpaca mover. */
+  moverPriorityScoreBonus: number;
+  /** Phase C (Universal Discovery Expansion): minimum absolute intraday gap-vs-open to tag a
+   *  candidate gapMover:true in the Discovery Lineage Ledger - observability only. */
+  gapMoverMinAbsPct: number;
   /** Dynamic symbols are eviction-immune until this dwell elapses (unless tick floor met). */
   minDynamicDwellMs: number;
   /** Alternate dwell exit: enough ticks to evaluate setups before eviction. */
@@ -182,6 +188,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     snapshotScanOffHoursMs: requireNumber(raw.snapshotScanOffHoursMs, 'snapshotScanOffHoursMs'),
     snapshotTopCandidates: requireNumber(raw.snapshotTopCandidates, 'snapshotTopCandidates'),
     snapshotMomentumScoreEdge: requireNonNegativeNumber(raw.snapshotMomentumScoreEdge, 'snapshotMomentumScoreEdge'),
+    moverPriorityScoreBonus: requireNonNegativeNumber(raw.moverPriorityScoreBonus, 'moverPriorityScoreBonus'),
+    gapMoverMinAbsPct: requireNonNegativeNumber(raw.gapMoverMinAbsPct, 'gapMoverMinAbsPct'),
     minDynamicDwellMs: requireNumber(raw.minDynamicDwellMs, 'minDynamicDwellMs'),
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
     temporaryDataRescueMaxDurationMs: requireNumber(raw.temporaryDataRescueMaxDurationMs, 'temporaryDataRescueMaxDurationMs'),

@@ -22,6 +22,7 @@ import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { recordPrediction } from '../services/ModelPerformanceTracker';
 
 interface AlpacaAsset {
   symbol: string;
@@ -36,6 +37,10 @@ interface AlpacaSnapshot {
   price: number;
   dollarVolume: number;
   spreadBps: number | null;
+  /** Phase C (2026-09-02): today's real intraday gap vs the session open, e.g. 0.05 = +5%. Reuses
+   *  the SAME already-fetched Alpaca snapshot response (dailyBar.o) - zero new API call, zero new
+   *  cost. Null when the response carries no real open price to compute it from. */
+  gapPct: number | null;
 }
 
 export interface BroadUniverseStats {
@@ -118,13 +123,17 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
         const volume = snap?.dailyBar?.v;
         const bid = snap?.latestQuote?.bp;
         const ask = snap?.latestQuote?.ap;
+        const openPrice = snap?.dailyBar?.o;
         if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) continue;
         if (typeof volume !== 'number' || !Number.isFinite(volume) || volume <= 0) continue;
         const dollarVolume = price * volume;
         const spreadBps = (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0)
           ? ((ask - bid) / ((ask + bid) / 2)) * 10000
           : null;
-        results.push({ symbol, price, dollarVolume, spreadBps });
+        const gapPct = (typeof openPrice === 'number' && Number.isFinite(openPrice) && openPrice > 0)
+          ? (price - openPrice) / openPrice
+          : null;
+        results.push({ symbol, price, dollarVolume, spreadBps, gapPct });
       }
     } catch (e) {
       logErrorSafely('[MarketUniverseScanner] snapshot batch failed', e);
@@ -171,6 +180,12 @@ function logDiscoveryCandidateDecision(input: {
   dollarVolume?: number | null;
   spreadBps?: number | null;
   advShares?: number | null;
+  /** Phase C (2026-09-02): true when this candidate's real intraday gap (see AlpacaSnapshot.gapPct)
+   *  clears continuousIntelligence.gapMoverMinAbsPct - a genuinely additional discovery signal
+   *  (gap-ups/gap-downs), computed from data already fetched for the liquidity screen, never a
+   *  new API call or a bypass of that screen. */
+  gapMover?: boolean;
+  gapPct?: number | null;
 }): void {
   observeSafe(() => {
     structuredLogger.info('discovery_candidate_decision', {
@@ -183,8 +198,38 @@ function logDiscoveryCandidateDecision(input: {
       dollarVolume: input.dollarVolume ?? null,
       spreadBps: input.spreadBps ?? null,
       advShares: input.advShares ?? null,
+      gapMover: input.gapMover ?? false,
+      gapPct: input.gapPct ?? null,
     });
   });
+}
+
+/** Real, config-driven gap-mover classification - true only when this candidate's real intraday
+ *  gap (computed from data already fetched for the liquidity screen) clears the reviewed
+ *  threshold. Never a new API call, never a bypass of passesScreen/passesAdvScreen. */
+function isGapMover(snap: AlpacaSnapshot): boolean {
+  return snap.gapPct !== null && Math.abs(snap.gapPct) >= continuousIntelligence.gapMoverMinAbsPct;
+}
+
+/**
+ * Phase 5 (Discovery -> Outcome Learning). Records a real shadow prediction - "this admitted
+ * mover's own real intraday direction, continuing" - via the EXISTING recordPrediction() pipeline
+ * (ModelPerformanceTracker.ts), never a new grading system. Fails closed (logs, never throws) -
+ * matches recordPrediction()'s own contract, since this must never affect the real discovery
+ * refresh it is called from.
+ */
+async function recordDiscoveryOutcomeProbe(symbol: string, gapPct: number): Promise<void> {
+  try {
+    await recordPrediction({
+      agentName: 'DiscoveryOutcomeTracker',
+      symbol,
+      side: gapPct >= 0 ? 'BUY' : 'SELL',
+      confidence: 0.5, // neutral - this is a discovery-quality probe, never a real trading signal
+      reasoning: `Phase 5 discovery-outcome probe: real intraday gap ${(gapPct * 100).toFixed(1)}% at movers admission - was this discovery signal directionally useful in hindsight?`,
+    });
+  } catch (e) {
+    console.error('[MarketUniverseScanner] Discovery-outcome probe failed (does not affect the real discovery refresh)', e);
+  }
 }
 
 interface AlpacaBarsResponse {
@@ -261,6 +306,7 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'BROAD_UNIVERSE', admitted, reason,
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+        gapMover: isGapMover(s), gapPct: s.gapPct,
       });
     }
     snapshotCache = { fetchedAt: Date.now(), symbols: passing };
@@ -399,7 +445,7 @@ export async function refreshMoversCache(): Promise<MoverScanStats> {
       if (result.pass) {
         stage2.push(s);
       } else {
-        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'MARKET_MOVER', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps });
+        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'MARKET_MOVER', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct });
       }
     }
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
@@ -408,7 +454,20 @@ export async function refreshMoversCache(): Promise<MoverScanStats> {
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'MARKET_MOVER', admitted, reason: admitted ? null : 'ADV',
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+        gapMover: isGapMover(s), gapPct: s.gapPct,
       });
+      // Phase 5 (Discovery -> Outcome Learning, 2026-09-02 forensic-audit follow-up): for an
+      // ADMITTED candidate with a real, already-computed direction signal (gapPct), record a real
+      // shadow prediction via the EXISTING recordPrediction()/PredictionOutcomeEvaluator/
+      // ReflectionEngine pipeline (ModelPerformanceTracker.ts's own established pattern for Java
+      // shadow models) - never a new grading system, never emits TRADE_IDEA_GENERATED, never a
+      // live ChiefTrader vote (this agentName never appears in a real consensus round). This is
+      // how "was this discovery signal useful" gets a REAL, outcome-graded answer over time,
+      // queryable later via the existing agent_performance_stats/agent_confidence_calibration
+      // tables under agentName 'DiscoveryOutcomeTracker' - no new query code needed.
+      if (admitted && s.gapPct !== null) {
+        await recordDiscoveryOutcomeProbe(s.symbol, s.gapPct);
+      }
     }
     const passing = stage2
       .filter((s) => passesAdvScreen(s.symbol, advMap))
