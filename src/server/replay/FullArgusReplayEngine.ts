@@ -27,7 +27,7 @@ import { buildHighConfidenceAgreeingIdeas, scheduleSignalAtBar } from './goldenR
 import { goldenReplayNewsProvider, newsVisibleAt, unavailableHistoricalNewsProvider, loadHistoricalNewsArchiveProvider } from './HistoricalNewsProvider';
 import { loadHistoricalMacroProvider, macroReleasesVisibleAt, unavailableHistoricalMacroProvider } from './HistoricalMacroProvider';
 import { loadHistoricalFundamentalProvider, latestFundamentalSnapshotAsOf, unavailableHistoricalFundamentalProvider } from './HistoricalFundamentalProvider';
-import { assessDataQuality } from '../research/dataQuality';
+import { assessDataQuality, expectedStepMs } from '../research/dataQuality';
 import { hashCanonicalDataset } from '../research/datasetHash';
 import { replayArgusStrategy } from '../research/argusStrategyReplay';
 import { MIN_BARS } from '../quant/RegimeEngine';
@@ -889,10 +889,44 @@ export function stopReplay(id: string) {
   return { ok: true, status: 'STOP_REQUESTED' };
 }
 
+/**
+ * A 1Day bar's own timestamp is midnight in the exchange timezone - a daily-bar labeling
+ * convention (confirmed against real Alpaca daily data), not evidence the market was closed the
+ * whole day. classifyMarketSession/sessionAllowsFills key off minutes-into-day, so an unshifted
+ * midnight timestamp always classifies as CLOSED and HistoricalReplayBroker.placeOrder rejects
+ * every single daily-frequency order regardless of strategy/consensus/capital (real defect found
+ * during Phase 14 walk-forward: 100% INSUFFICIENT_BUYING_POWER_OR_RISK-labeled rejections that
+ * were actually all-CLOSED-session rejections). Fix is scoped to the fill-eligibility clock only:
+ * shift it 12h into the same calendar day (safely inside the regular session window on every day,
+ * including the two DST-transition days/year) before classifying. `t` itself - anti-lookahead
+ * cutoff, bar visibility/matching, and every persisted trade/order timestamp via session.clock -
+ * is untouched, so nothing about lookahead safety or historical accuracy changes.
+ */
+const DAILY_BAR_SESSION_CLASSIFICATION_OFFSET_MS = 12 * 60 * 60 * 1000;
+
+/**
+ * Only shifts when the RAW timestamp itself would classify as CLOSED - the actual defect
+ * condition. Some daily-frequency datasets (e.g. loadGoldenReplayDataset's golden_replay fixture)
+ * already place their '1Day'-labeled bars at a real market-open timestamp; shifting those
+ * unconditionally would move an already-valid REGULAR timestamp into AFTER_HOURS/CLOSED instead.
+ * Gating on "unshifted result is CLOSED" makes the fix self-limiting: it only ever rescues a bar
+ * that is currently being wrongly rejected, and a weekend bar (already CLOSED for a reason the
+ * 12h shift can't change, since it never crosses into a different weekday from midnight) is
+ * correctly left CLOSED.
+ * Exported for direct regression testing (see FullArgusReplayEngine.dailyBarFillClock.test.ts).
+ */
+export function computeReplayFillClockMs(barTimestampMs: number, frequency: string, timezone: string, extendedHours: boolean): number {
+  const isDailyBarFrequency = expectedStepMs(frequency) === 86_400_000;
+  if (!isDailyBarFrequency) return barTimestampMs;
+  if (classifyMarketSession(barTimestampMs, timezone, extendedHours) !== 'CLOSED') return barTimestampMs;
+  return barTimestampMs + DAILY_BAR_SESSION_CLASSIFICATION_OFFSET_MS;
+}
+
 async function processTimestamp(session: ActiveReplaySession, t: number, nextOpenBySymbol: Map<string, number>) {
   session.clock.advance(t);
-  session.broker.clockNowMs = t;
-  const sessionName = classifyMarketSession(t, session.config.timezone, session.config.extendedHours);
+  const fillClockMs = computeReplayFillClockMs(t, session.config.frequency, session.config.timezone, session.config.extendedHours);
+  session.broker.clockNowMs = fillClockMs;
+  const sessionName = classifyMarketSession(fillClockMs, session.config.timezone, session.config.extendedHours);
   emit(session, 'MARKET_SESSION', { session: sessionName }, undefined);
   const prices: Record<string, number> = {};
   const useGoldenSchedule = session.config.dataProvider === 'golden_replay';
