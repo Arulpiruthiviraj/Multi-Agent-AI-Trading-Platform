@@ -32,6 +32,7 @@
   "minDynamicDwellTicks": 10,
   "temporaryDataRescueMaxDurationMs": 300000,
   "maxConcurrentTemporaryDataRescues": 3,
+  "rescueReservedSlotsForPriorityClasses": 1,
   "momentumScanUniverseSymbols": [
     "SPY", "QQQ", "IWM", "DIA", "GLD", "SMH", "XLF", "XLE", "XLK", "SOXL", "TQQQ", "SQQQ",
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA", "AVGO", "BRK.B",

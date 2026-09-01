@@ -247,7 +247,40 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     // Never bypasses the block for THIS cycle - the idea is still correctly discarded.
     expect(receivedIdeas.find((i) => i.symbol === 'QSARQ')).toBeUndefined();
     // But a bounded rescue was requested so the NEXT cycle has a real chance at live data.
-    expect(rescueSpy).toHaveBeenCalledWith('QSARQ', expect.stringContaining('QuantEngine:'));
+    // Phase 18: also carries the request class (ROUTINE_RECOVERY here - no exploration promotion,
+    // no market-mover membership in this fixture) and traceId for rescue-fairness admission.
+    expect(rescueSpy).toHaveBeenCalledWith(
+      'QSARQ',
+      expect.stringContaining('QuantEngine:'),
+      expect.objectContaining({ requestClass: 'ROUTINE_RECOVERY', traceId: expect.any(String) }),
+    );
+  });
+
+  it('Phase 18: classifies the rescue request as MARKET_MOVER when the symbol is a real Alpaca-movers survivor (not exploration-promoted)', async () => {
+    stubUptrendingFetch();
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSAMV']);
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    const rescueSpy = vi.spyOn(marketDataWorker, 'requestTemporaryDataRescue');
+
+    const MarketUniverseScanner = await import('../continuous/MarketUniverseScanner');
+    const moverSpy = vi.spyOn(MarketUniverseScanner, 'getCachedMoverSymbols').mockReturnValue(['QSAMV']);
+
+    try {
+      process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED = 'true';
+      const agent = new QuantSignalAgent();
+      await agent.evaluateSymbol('QSAMV');
+    } finally {
+      delete process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED;
+      moverSpy.mockRestore();
+    }
+
+    expect(rescueSpy).toHaveBeenCalledWith(
+      'QSAMV',
+      expect.stringContaining('QuantEngine:'),
+      expect.objectContaining({ requestClass: 'MARKET_MOVER' }),
+    );
   });
 
   it('skips a symbol honestly (no crash, no fabricated data) when Alpaca returns too few real bars', async () => {

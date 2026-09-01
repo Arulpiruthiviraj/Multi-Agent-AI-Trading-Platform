@@ -27,6 +27,7 @@ import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import * as schema from '../db/schema';
 import { marketDataWorker } from './MarketDataWorker';
+import { getCachedMoverSymbols } from '../continuous/MarketUniverseScanner';
 import { historicalDataGateway, Bar } from '../engines/backtest/HistoricalDataGateway';
 import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
 import { classifyRegime, RegimeResult } from '../quant/RegimeEngine';
@@ -326,13 +327,25 @@ export class QuantSignalAgent {
     // (already filtered out of `forPick` above), and bestStrategyIdea()'s own
     // MIN_STRATEGY_CONFIDENCE_TO_TRADE bar still applies exactly as before.
     const explorationAdjusted = selectWithBoundedExploration(forPick);
+    // Phase 18 (2026-09-01 rescue-fairness fix): classifies THIS symbol/cycle's rescue requests
+    // (if any are needed later below) so MarketDataWorker's reserved-capacity rule can tell a rare,
+    // bounded exploration/mover opportunity apart from a routine repeat-requester - real evidence
+    // (Phase 17 audit) found the undifferentiated pool let a handful of routine repeat-requesters
+    // (AAPL/TSLA/AI) permanently deny two real exploration promotions (CRM, ONON) RESCUE_CAPACITY_FULL.
+    const wasExplorationPromoted = !!(explorationAdjusted[0] && forPick[0] && explorationAdjusted[0].strategy !== forPick[0].strategy);
+    const isMarketMoverSymbol = !wasExplorationPromoted && getCachedMoverSymbols().includes(symbol.toUpperCase());
+    const rescueRequestClass: 'ROUTINE_RECOVERY' | 'EXPLORATION' | 'MARKET_MOVER' = wasExplorationPromoted
+      ? 'EXPLORATION'
+      : isMarketMoverSymbol
+        ? 'MARKET_MOVER'
+        : 'ROUTINE_RECOVERY';
     // Observability gap found and fixed Phase 16 (2026-09-01): the scheduler itself is a pure
     // reordering function with no logging, so there was previously no way to tell "exploration
     // promoted a different strategy" apart from "regime-adaptive filtering naturally produced a
     // different top strategy" from persisted quant_assessments alone. This is the only new signal
     // Phase 16 adds - it never changes which strategy gets picked, only records when the pick
     // differs from what forPick's own ranking would have produced unmodified.
-    if (explorationAdjusted[0] && forPick[0] && explorationAdjusted[0].strategy !== forPick[0].strategy) {
+    if (wasExplorationPromoted) {
       observeSafe(() => {
         structuredLogger.info('strategy_exploration_promoted', {
           category: 'DISCOVERY',
@@ -460,6 +473,7 @@ export class QuantSignalAgent {
         const rescue = marketDataWorker.requestTemporaryDataRescue(
           symbol,
           `QuantEngine:${rescueStrategyName}_stale_data_rescue`,
+          { requestClass: rescueRequestClass, traceId },
         );
         eventBus.emit(EVENTS.DESK_NO_TRADE, {
           traceId, symbol, code: 'STALE_MARKET_DATA', reason: dataQuality.blockReason,

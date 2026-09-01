@@ -239,6 +239,7 @@ describe('MacroEconomyAgent - currentPrice attachment (zero-trade audit fix)', (
 
 describe('MacroEconomyAgent - Phase 7F round-robin fix (prioritize symbols with fresh ticks)', () => {
   let agent: any;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
     emitTradeIdea.mockClear();
@@ -249,18 +250,34 @@ describe('MacroEconomyAgent - Phase 7F round-robin fix (prioritize symbols with 
     process.env.ALPHAVANTAGE_API_KEY = 'test-key';
     process.env.GEMINI_API_KEY = 'test-key';
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'x' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+    // getFresh returns null for 'macro' in this block, so analyzeMacro() falls through to the real
+    // fetchMacro() AlphaVantage path (3 real subcalls + 2 real alphaVantageMacroSubcallDelayMs
+    // pacing sleeps) unless fetch is mocked and timers are faked here too - without this, these
+    // tests made genuine outbound network calls and depended on real wall-clock pacing, which was
+    // fast enough in isolation but flaky (occasional timeout / wrong round-robin pick from real
+    // Date.now() drift) under a loaded full-suite run.
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({ status: 200, json: async () => ({ data: [{ value: '1.0' }] }) } as any);
+    vi.useFakeTimers();
     agent = new MacroEconomyAgent();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    fetchSpy?.mockRestore();
     delete process.env.ALPHAVANTAGE_API_KEY;
     delete process.env.GEMINI_API_KEY;
   });
 
+  async function runAnalyzeMacro() {
+    const p = agent.analyzeMacro();
+    await vi.advanceTimersByTimeAsync(10000);
+    await p;
+  }
+
   it('selects only from symbols with a fresh tick when exactly one qualifies, instead of blindly cycling the full universe', async () => {
     getLatestPriceAgeMs.mockImplementation((s: string) => (s === 'AAPL' ? 0 : 999999));
 
-    await agent.analyzeMacro();
+    await runAnalyzeMacro();
 
     const idea = emitTradeIdea.mock.calls[0][0];
     expect(idea.symbol).toBe('AAPL');
@@ -269,7 +286,7 @@ describe('MacroEconomyAgent - Phase 7F round-robin fix (prioritize symbols with 
   it('falls back to the full universe when nothing currently has a fresh tick (preserves prior behavior)', async () => {
     getLatestPriceAgeMs.mockReturnValue(999999);
 
-    await agent.analyzeMacro();
+    await runAnalyzeMacro();
 
     const idea = emitTradeIdea.mock.calls[0][0];
     expect(['NVDA', 'AAPL', 'TSLA']).toContain(idea.symbol);
@@ -373,6 +390,7 @@ describe('MacroEconomyAgent - genuine vs internal rate-limit distinction (Phase 
 
 describe('MacroEconomyAgent - Phase 9 same-candidate convergence (prioritize a recent real candidate)', () => {
   let agent: any;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(async () => {
     const { resetRecentCandidatesForTests } = await import('../core/recentCandidateRegistry');
@@ -386,10 +404,19 @@ describe('MacroEconomyAgent - Phase 9 same-candidate convergence (prioritize a r
     process.env.ALPHAVANTAGE_API_KEY = 'test-key';
     process.env.GEMINI_API_KEY = 'test-key';
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'x' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+    // Same real-fetchMacro-path issue as the Phase 7F block above: getFresh returns null for
+    // 'macro' here, so without mocking fetch + faking timers this test made a real AlphaVantage
+    // network call and incurred real alphaVantageMacroSubcallDelayMs pacing sleeps, which was the
+    // actual (previously undiagnosed) source of this test's full-suite flakiness - not a bug in
+    // recentCandidateRegistry or the round-robin selector themselves.
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({ status: 200, json: async () => ({ data: [{ value: '1.0' }] }) } as any);
+    vi.useFakeTimers();
     agent = new MacroEconomyAgent();
   });
 
   afterEach(() => {
+    vi.useRealTimers();
+    fetchSpy?.mockRestore();
     delete process.env.ALPHAVANTAGE_API_KEY;
     delete process.env.GEMINI_API_KEY;
   });
@@ -398,7 +425,9 @@ describe('MacroEconomyAgent - Phase 9 same-candidate convergence (prioritize a r
     const { recordCandidate } = await import('../core/recentCandidateRegistry');
     recordCandidate('TSLA');
 
-    await agent.analyzeMacro();
+    const p = agent.analyzeMacro();
+    await vi.advanceTimersByTimeAsync(10000);
+    await p;
 
     const idea = emitTradeIdea.mock.calls[0][0];
     expect(idea.symbol).toBe('TSLA');

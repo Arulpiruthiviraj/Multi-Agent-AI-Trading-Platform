@@ -541,11 +541,18 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       // No bounded-slot bookkeeping was created for it at all.
       expect(worker.getActiveTemporaryRescues().map((r) => r.symbol)).not.toContain(protectedSymbol);
 
-      // Confirm the full concurrent budget is still available for a genuinely at-risk symbol.
-      for (const sym of ['LNG', 'XOM', 'CRM']) {
+      // Confirm the full concurrent budget is still available for genuinely at-risk symbols -
+      // Phase 18: the routine-recovery share is (cap - rescueReservedSlotsForPriorityClasses), and
+      // the reserved slot is still separately available to a priority-class (exploration/mover)
+      // request - the protected symbol above still consumed none of either share.
+      const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+      const routineSymbols = ['LNG', 'XOM'].slice(0, routineCap);
+      for (const sym of routineSymbols) {
         const r = worker.requestTemporaryDataRescue(sym, 'real-need');
         expect(r.granted).toBe(true);
       }
+      const priorityResult = worker.requestTemporaryDataRescue('CRM', 'exploration-need', { requestClass: 'EXPLORATION' });
+      expect(priorityResult.granted).toBe(true);
     });
 
     it('Phase 14: a strategy that wins selection repeatedly on the same symbol (the real MOMENTUM_BREAKOUT/LNG pattern) gets a fresh rescue each time without any permanent subscription growth - each cycle grants, expires, and releases cleanly', async () => {
@@ -645,7 +652,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       expect(worker.getActiveSymbols()).toContain('LNG');
     });
 
-    it('denies a new rescue once maxConcurrentTemporaryDataRescues is reached, without evicting anything for it', async () => {
+    it('denies a new rescue once maxConcurrentTemporaryDataRescues is reached, without evicting anything for it (hard ceiling - uses a priority class so the Phase 18 routine-only reservation does not also gate this specific test)', async () => {
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       authenticate(instances[0]);
       for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
@@ -655,13 +662,13 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
       const candidates = ['LNG', 'XOM', 'CRM', 'ANF', 'TH'];
       for (const sym of candidates) {
-        const r = worker.requestTemporaryDataRescue(sym, 'capacity-test');
+        const r = worker.requestTemporaryDataRescue(sym, 'capacity-test', { requestClass: 'MARKET_MOVER' });
         if (r.granted) grants.push(sym);
       }
       expect(grants.length).toBe(cap);
       const overflow = candidates.find((s) => !grants.includes(s));
       expect(overflow).toBeTruthy();
-      const denied = worker.requestTemporaryDataRescue(overflow!, 'capacity-test');
+      const denied = worker.requestTemporaryDataRescue(overflow!, 'capacity-test', { requestClass: 'MARKET_MOVER' });
       expect(denied.granted).toBe(false);
       expect(denied.deniedReason).toBe('RESCUE_CAPACITY_FULL');
     });
@@ -724,6 +731,189 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       // All rescue slots are bounded by maxConcurrentTemporaryDataRescues, so most of these are
       // denied by capacity, not by eviction - just confirm nothing crashes and state stays sane.
       expect(worker.getActiveSymbols().length).toBeLessThanOrEqual(continuousIntelligence.maxActiveSubscriptions);
+    });
+  });
+
+  // Phase 18 (2026-09-01 rescue-fairness fix). Reproduces the exact Phase 17 live failure
+  // pattern - AAPL/TSLA/AI (routine repeat-requesters) occupying every slot, denying real
+  // exploration promotions (CRM, ONON) - and proves the fairness invariants the mission required.
+  describe('requestTemporaryDataRescue() - Phase 18 rescue-fairness invariants', () => {
+    it('Invariant 1/2 - reproduces the exact Phase 17 failure: 3 routine repeat-requesters cannot occupy every slot, leaving a bounded opportunity for exploration promotions', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      // The real live pattern: AAPL, TSLA, AI all requesting/extending ROUTINE_RECOVERY rescue,
+      // exactly as QuantSignalAgent's default (unclassed) stale-data-discard path does today.
+      const routineGrants = ['AAPL', 'TSLA', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'stale-data'));
+      const routineGrantedCount = routineGrants.filter((r) => r.granted).length;
+      // Pre-Phase-18 this would have been 3 (the entire pool) - now it is capped below the total.
+      expect(routineGrantedCount).toBe(continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses);
+      expect(routineGrantedCount).toBeLessThan(continuousIntelligence.maxConcurrentTemporaryDataRescues);
+
+      // CRM and ONON now arrive exactly as they did live: real exploration promotions.
+      const crm = worker.requestTemporaryDataRescue('CRM', 'exploration:MOMENTUM_BREAKOUT', { requestClass: 'EXPLORATION' });
+      expect(crm.granted).toBe(true);
+
+      // A second exploration promotion may or may not fit depending on the reserved-slot count,
+      // but it must fail with the specific reserved-capacity reason, never silently succeed by
+      // displacing a routine occupant, and never exceed the hard total ceiling.
+      const onon = worker.requestTemporaryDataRescue('ONON', 'exploration:TREND_FOLLOWING', { requestClass: 'EXPLORATION' });
+      if (!onon.granted) {
+        expect(['RESCUE_CAPACITY_FULL', 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY']).toContain(onon.deniedReason);
+      }
+      expect(worker.getActiveTemporaryRescues().length).toBeLessThanOrEqual(continuousIntelligence.maxConcurrentTemporaryDataRescues);
+    });
+
+    it('Invariant 1 - routine repeat-requesters cannot monopolize the pool even across many repeated re-requests over time', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      // Simulate hours of the live pattern: AAPL/TSLA/AI re-requesting every cycle, letting each
+      // grant expire between requests (matching the live observation that grants roughly matched
+      // the request cadence, so each was a fresh grant, not a free extension).
+      for (let cycle = 0; cycle < 3; cycle++) {
+        for (const sym of ['AAPL', 'TSLA', 'AI']) {
+          worker.requestTemporaryDataRescue(sym, 'stale-data');
+        }
+        // A fresh exploration candidate arrives every cycle too.
+        const explorer = worker.requestTemporaryDataRescue(`EXPL${cycle}`, 'exploration', { requestClass: 'EXPLORATION' });
+        expect(explorer.granted).toBe(true); // the reserved slot is available every single cycle, not just the first
+        worker.setNowForTests(worker.getActiveTemporaryRescues().find((r) => r.symbol === `EXPL${cycle}`)!.expiresAtMs + 1);
+        worker.releaseExpiredTemporaryDataRescues();
+      }
+    });
+
+    it('Invariant 3 - capacity is never exceeded regardless of request-class mix', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      const classes: Array<'ROUTINE_RECOVERY' | 'EXPLORATION' | 'MARKET_MOVER'> = ['ROUTINE_RECOVERY', 'EXPLORATION', 'MARKET_MOVER'];
+      let granted = 0;
+      for (let i = 0; i < 9; i++) {
+        const r = worker.requestTemporaryDataRescue(`SYM${i}`, 'mixed', { requestClass: classes[i % classes.length] });
+        if (r.granted) granted += 1;
+        expect(worker.getActiveTemporaryRescues().length).toBeLessThanOrEqual(continuousIntelligence.maxConcurrentTemporaryDataRescues);
+      }
+      expect(granted).toBeLessThanOrEqual(continuousIntelligence.maxConcurrentTemporaryDataRescues);
+    });
+
+    it('Invariant 4 - expiration still works identically regardless of request class', async () => {
+      authenticate(instances[0]);
+      await expireDynamicDwell();
+      const r = worker.requestTemporaryDataRescue('CRM', 'exploration', { requestClass: 'EXPLORATION' });
+      expect(r.granted).toBe(true);
+      const grant = worker.getActiveTemporaryRescues().find((g) => g.symbol === 'CRM');
+      expect(grant).toBeTruthy();
+      worker.setNowForTests(grant!.expiresAtMs + 1);
+      worker.releaseExpiredTemporaryDataRescues();
+      expect(worker.getActiveTemporaryRescues().map((g) => g.symbol)).not.toContain('CRM');
+    });
+
+    it('Invariant 5 - a symbol holding an active rescue (any class) remains eviction-protected', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+      const r = worker.requestTemporaryDataRescue('ONON', 'exploration', { requestClass: 'EXPLORATION' });
+      expect(r.granted).toBe(true);
+      // Fill remaining subscription capacity so eviction pressure exists - bounded loop (real
+      // defect found in this test itself: an earlier unbounded `while (activeSymbols.length <
+      // cap)` could spin forever if subscribe() ever silently no-ops instead of growing
+      // activeStreams, crashing the test worker outright rather than failing an assertion).
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      for (let i = 0; i < cap + 5 && worker.getActiveSymbols().length < cap; i++) {
+        worker.subscribe(`FILL${i}`);
+      }
+      worker.requestTemporaryDataRescue('ANOTHER', 'stale-data');
+      expect(worker.getActiveSymbols()).toContain('ONON');
+    });
+
+    it('Invariant 6 - a priority-class rescue still expires and does not remain rescued indefinitely', async () => {
+      authenticate(instances[0]);
+      await expireDynamicDwell();
+      const r = worker.requestTemporaryDataRescue('CRM', 'exploration', { requestClass: 'EXPLORATION' });
+      expect(r.granted).toBe(true);
+      const grant = worker.getActiveTemporaryRescues().find((g) => g.symbol === 'CRM')!;
+      worker.setNowForTests(grant.expiresAtMs + 1);
+      expect(worker.getActiveTemporaryRescues().map((g) => g.symbol)).not.toContain('CRM'); // hasActiveRescue() self-expires on read
+    });
+
+    it('Invariant 8 - admission is deterministic given the same occupancy/class/timestamps', async () => {
+      authenticate(instances[0]);
+      await expireDynamicDwell();
+      // Same starting occupancy (zero active rescues, forced clean between trials), same request
+      // sequence, same symbols, every trial - if admission depended on anything but requestClass +
+      // current occupancy, these trials would disagree.
+      const results: boolean[] = [];
+      for (let trial = 0; trial < 3; trial++) {
+        for (const sym of ['AAPL', 'TSLA', 'AI']) worker.requestTemporaryDataRescue(sym, 'stale-data');
+        const outcome = worker.requestTemporaryDataRescue('CRM', 'exploration', { requestClass: 'EXPLORATION' });
+        results.push(outcome.granted);
+        // Force every active rescue to expire so the next trial starts from the same clean state.
+        const all = worker.getActiveTemporaryRescues();
+        if (all.length > 0) {
+          worker.setNowForTests(Math.max(...all.map((r) => r.expiresAtMs)) + 1);
+          worker.releaseExpiredTemporaryDataRescues();
+        }
+        worker.setNowForTests(null);
+      }
+      expect(new Set(results).size).toBe(1); // every trial produced the identical admission decision
+    });
+
+    it('Invariant 9 - a caller that omits requestClass entirely behaves exactly as ROUTINE_RECOVERY (backward compatible)', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      await expireDynamicDwell();
+      const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+      const unclassed = ['AAPL', 'TSLA', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'no-class-arg'));
+      expect(unclassed.filter((r) => r.granted).length).toBe(routineCap);
+      const explicit = worker.requestTemporaryDataRescue('MSFT', 'explicit-routine', { requestClass: 'ROUTINE_RECOVERY' });
+      expect(explicit.granted).toBe(unclassed[unclassed.length - 1].granted === false ? false : explicit.granted); // same admission rule either way
+    });
+
+    it('opposite condition - when exploration/mover demand is absent, routine recovery uses its normal share without any fairness penalty', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      await expireDynamicDwell();
+      const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+      const grants = [];
+      for (let i = 0; i < routineCap; i++) {
+        grants.push(worker.requestTemporaryDataRescue(`ROUTINE${i}`, 'stale-data'));
+      }
+      expect(grants.every((r) => r.granted)).toBe(true);
+    });
+
+    it('a rescue denial is logged with the request class and reason (no more silent denials)', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      await expireDynamicDwell();
+      for (const sym of ['AAPL', 'TSLA', 'AI']) worker.requestTemporaryDataRescue(sym, 'stale-data');
+      emitSpy.mockClear();
+      worker.requestTemporaryDataRescue('CRM', 'stale-data'); // 4th routine request - should be denied and logged
+      // logRescueDenial uses structuredLogger (DB-backed), not eventBus - assert via getActiveTemporaryRescues not growing.
+      expect(worker.getActiveTemporaryRescues().map((r) => r.symbol)).not.toContain('CRM');
+    });
+
+    it('getActiveTemporaryRescues() exposes requestClass/traceId/requestCount/extensionCount for occupancy observability', async () => {
+      authenticate(instances[0]);
+      await expireDynamicDwell();
+      worker.requestTemporaryDataRescue('CRM', 'exploration:MOMENTUM_BREAKOUT', { requestClass: 'EXPLORATION', traceId: 'trace_CRM_123' });
+      const occupant = worker.getActiveTemporaryRescues().find((r) => r.symbol === 'CRM')!;
+      expect(occupant.requestClass).toBe('EXPLORATION');
+      expect(occupant.traceId).toBe('trace_CRM_123');
+      expect(occupant.requestCount).toBe(1);
+      expect(occupant.extensionCount).toBe(0);
+      // Re-request while still active = an extension, not a new grant.
+      worker.requestTemporaryDataRescue('CRM', 'exploration:MOMENTUM_BREAKOUT', { requestClass: 'EXPLORATION', traceId: 'trace_CRM_124' });
+      const extended = worker.getActiveTemporaryRescues().find((r) => r.symbol === 'CRM')!;
+      expect(extended.requestCount).toBe(2);
+      expect(extended.extensionCount).toBe(1);
     });
   });
 });

@@ -17,6 +17,8 @@ import { buildStrategyFairnessReport, formatStrategyFairnessReport } from '../re
 import { buildStrategyProfitabilityReport, formatStrategyProfitabilityReport } from '../research/strategyProfitabilityReport';
 import { buildRescueOutcomeReport, formatRescueOutcomeReport } from '../observability/rescueOutcomeReport';
 import { buildStrategyScorecard, formatStrategyScorecard } from '../research/strategyScorecard';
+import { buildExplorationHealthReport, formatExplorationHealthReport } from '../observability/explorationHealthReport';
+import { marketDataWorker } from '../services/MarketDataWorker';
 
 export const observabilityRouter = Router();
 
@@ -244,6 +246,57 @@ observabilityRouter.get('/strategy-scorecard', async (req, res) => {
       return;
     }
     res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 18 (2026-09-01 rescue-fairness + exploration-observability mission), Part 5/6/10: joins
+// STRATEGY_EXPLORATION_PROMOTED to rescue grant/denial, idea discard/emission, consensus, RiskEngine,
+// and OMS/fill outcomes by shared traceId, producing a Level 0-6 success ladder per promotion. Read-only.
+observabilityRouter.get('/exploration-health', async (req, res) => {
+  try {
+    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const report = await buildExplorationHealthReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatExplorationHealthReport(report));
+      return;
+    }
+    res.json({ ok: true, ...report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 18, Part 7: current temporary-data-rescue occupants (who holds a rescue slot right now,
+// what class, since when, how many times renewed) - read-only introspection of live in-memory
+// admission state, no secrets/credentials/account data.
+observabilityRouter.get('/rescue-occupants', async (req, res) => {
+  try {
+    const occupants = marketDataWorker.getActiveTemporaryRescues();
+    if (req.query.format === 'text') {
+      const lines = ['RESCUE OCCUPANTS (current temporary-data-rescue slot holders)', '-----------------------------------------------------------'];
+      if (occupants.length === 0) {
+        lines.push('(no active rescues)');
+      } else {
+        lines.push('Symbol'.padEnd(10) + 'Class'.padEnd(18) + 'GrantedAt'.padEnd(26) + 'ExpiresAt'.padEnd(26) + 'Requests'.padEnd(10) + 'Extensions'.padEnd(12) + 'TraceId');
+        for (const o of occupants) {
+          lines.push(
+            String(o.symbol).padEnd(10)
+            + String(o.requestClass).padEnd(18)
+            + new Date(o.grantedAtMs).toISOString().padEnd(26)
+            + new Date(o.expiresAtMs).toISOString().padEnd(26)
+            + String(o.requestCount).padEnd(10)
+            + String(o.extensionCount).padEnd(12)
+            + String(o.traceId ?? '-'),
+          );
+        }
+      }
+      res.type('text/plain').send(lines.join('\n'));
+      return;
+    }
+    res.json({ ok: true, occupants });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }

@@ -55,6 +55,14 @@ export interface ContinuousIntelligenceConfig {
   /** Bounded exploration: at most this many symbols may hold an active rescue at once, so a burst
    *  of starved-strategy requests cannot dominate the real subscription capacity. */
   maxConcurrentTemporaryDataRescues: number;
+  /** Phase 18 (2026-09-01 rescue-fairness fix): real evidence (Phase 17 audit) found the same
+   *  handful of ROUTINE_RECOVERY repeat-requesters (AAPL/TSLA/AI) occupied every rescue slot for
+   *  hours, denying two real exploration promotions (CRM, ONON) with RESCUE_CAPACITY_FULL. This
+   *  many slots are reserved exclusively for EXPLORATION/MARKET_MOVER-class requests -
+   *  ROUTINE_RECOVERY requests are capped at (maxConcurrentTemporaryDataRescues - this value), so a
+   *  bounded opportunity for exploration/mover candidates always exists even under high routine
+   *  demand. Must be < maxConcurrentTemporaryDataRescues. */
+  rescueReservedSlotsForPriorityClasses: number;
   broadUniverseEnabledEnvVar: string;
   broadUniverseAssetsCacheTtlMs: number;
   broadUniverseSnapshotCacheTtlMs: number;
@@ -178,6 +186,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
     temporaryDataRescueMaxDurationMs: requireNumber(raw.temporaryDataRescueMaxDurationMs, 'temporaryDataRescueMaxDurationMs'),
     maxConcurrentTemporaryDataRescues: requireNumber(raw.maxConcurrentTemporaryDataRescues, 'maxConcurrentTemporaryDataRescues'),
+    rescueReservedSlotsForPriorityClasses: requireNumber(raw.rescueReservedSlotsForPriorityClasses, 'rescueReservedSlotsForPriorityClasses'),
     broadUniverseEnabledEnvVar: raw.broadUniverseEnabledEnvVar,
     broadUniverseAssetsCacheTtlMs: requireNumber(raw.broadUniverseAssetsCacheTtlMs, 'broadUniverseAssetsCacheTtlMs'),
     broadUniverseSnapshotCacheTtlMs: requireNumber(raw.broadUniverseSnapshotCacheTtlMs, 'broadUniverseSnapshotCacheTtlMs'),
@@ -206,6 +215,11 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
   if (cfg.coreStreamingSymbols.length > cfg.maxActiveSubscriptions) {
     throw new Error(
       'config/continuousIntelligence.json coreStreamingSymbols length must be <= maxActiveSubscriptions',
+    );
+  }
+  if (cfg.rescueReservedSlotsForPriorityClasses >= cfg.maxConcurrentTemporaryDataRescues) {
+    throw new Error(
+      'config/continuousIntelligence.json rescueReservedSlotsForPriorityClasses must be < maxConcurrentTemporaryDataRescues (routine recovery must retain at least one usable slot)',
     );
   }
   return cfg;

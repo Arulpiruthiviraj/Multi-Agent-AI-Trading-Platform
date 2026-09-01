@@ -652,6 +652,26 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'exploration-health'() {
+    // Phase 18 (2026-09-01 rescue-fairness + exploration-observability mission): joins each
+    // STRATEGY_EXPLORATION_PROMOTED promotion to rescue grant/denial, idea discard/emission,
+    // consensus, RiskEngine, and OMS/fill outcomes by shared traceId - a Level 0-6 success ladder
+    // per promotion. Read-only correlation over already-persisted rows.
+    const res = await fetch(`${BASE}/api/v2/observability/exploration-health?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'rescue-occupants'() {
+    // Phase 18, Part 7: who currently holds a temporary-data-rescue slot, what class, since when,
+    // how many times renewed. Live in-memory admission-state introspection, no secrets involved.
+    const res = await fetch(`${BASE}/api/v2/observability/rescue-occupants?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'strategy-scorecard'() {
     // Phase 14 (2026-08-31): complete 21-strategy scorecard - fairness + organic profitability +
     // lifecycle status, real data only. Does not itself run replay (a separate, long-running step).
@@ -1020,7 +1040,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'strategy-scorecard']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'strategy-scorecard']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

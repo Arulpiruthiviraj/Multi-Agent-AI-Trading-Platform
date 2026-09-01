@@ -32,6 +32,26 @@ import { observeSafe, structuredLogger } from '../observability/StructuredLogger
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
+/**
+ * Phase 18 (2026-09-01 rescue-fairness fix). Real evidence (Phase 17 forensic audit): the
+ * temporary-rescue pool had no concept of WHY a request was made - a routine repeat-requester
+ * (a symbol needing rescue every cycle for hours) and a rare, bounded exploration promotion
+ * competed for the same slots on equal footing. Live-observed: AAPL/TSLA/AI occupied all 3 slots
+ * for hours; two real exploration promotions (CRM->MOMENTUM_BREAKOUT, ONON->TREND_FOLLOWING) were
+ * both denied RESCUE_CAPACITY_FULL. ROUTINE_RECOVERY is the pre-existing, undifferentiated case
+ * (a strategy idea discarded solely by stale data, requesting one more cycle's chance - unchanged
+ * behavior for any caller that does not specify a class, preserving exact backward compatibility).
+ * EXPLORATION/MARKET_MOVER identify requests this fix specifically protects a reserved allowance
+ * for (see rescueReservedSlotsForPriorityClasses).
+ */
+export type RescueRequestClass = 'ROUTINE_RECOVERY' | 'EXPLORATION' | 'MARKET_MOVER';
+
+export type RescueDeniedReason =
+  | 'INVALID_SYMBOL'
+  | 'RESCUE_CAPACITY_FULL'
+  | 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY'
+  | 'AT_CAPACITY_NO_SAFE_EVICTION';
+
 function quoteKey(symbol: string): string {
   return String(symbol || '').trim().toUpperCase();
 }
@@ -93,8 +113,18 @@ export class MarketDataWorker {
   /** Wall-clock ms when each dynamic symbol was (re)subscribed. */
   private subscribedAtMs: Map<string, number> = new Map();
   /** Bounded, single-use eviction-immunity grants from requestTemporaryDataRescue() - never a
-   *  permanent subscription; auto-expires and is swept by releaseExpiredTemporaryDataRescues(). */
-  private temporaryRescues: Map<string, { expiresAtMs: number; reason: string }> = new Map();
+   *  permanent subscription; auto-expires and is swept by releaseExpiredTemporaryDataRescues().
+   *  requestCount/extensionCount and traceId are purely observational (Phase 18) - never read by
+   *  the admission decision itself, which depends only on requestClass + current occupancy. */
+  private temporaryRescues: Map<string, {
+    expiresAtMs: number;
+    reason: string;
+    requestClass: RescueRequestClass;
+    traceId: string | null;
+    grantedAtMs: number;
+    requestCount: number;
+    extensionCount: number;
+  }> = new Map();
   /** When set (ibkr_gateway active), overrides Alpaca-safe cap from continuousIntelligence. */
   private hardCapOverride: number | null = null;
   private quoteBackend: MarketDataQuoteBackend = 'alpaca';
@@ -223,12 +253,48 @@ export class MarketDataWorker {
    * is swept by releaseExpiredTemporaryDataRescues() - after that it is exactly as evictable as any
    * other dynamic symbol, never specially retained.
    */
-  requestTemporaryDataRescue(symbol: string, reason: string): {
-    granted: boolean; symbol: string; alreadySubscribed: boolean; evictedSymbol: string | null; deniedReason?: string;
+  /** Shared denial log - Phase 18: previously only the GRANT path logged anything; a denial
+   *  (including the pre-existing RESCUE_CAPACITY_FULL/AT_CAPACITY_NO_SAFE_EVICTION cases) left no
+   *  record at all, forcing the exact manual event-correlation the Phase 17 audit had to do by
+   *  hand. Never mutates state - purely observational. */
+  private logRescueDenial(
+    ticker: string,
+    reason: string,
+    requestClass: RescueRequestClass,
+    traceId: string | null,
+    deniedReason: RescueDeniedReason,
+  ): void {
+    observeSafe(() => {
+      structuredLogger.info('temporary_data_rescue_denied', {
+        category: 'DISCOVERY',
+        eventType: 'TEMPORARY_DATA_RESCUE_DENIED',
+        symbol: ticker,
+        traceId: traceId ?? undefined,
+        reasoning: `${reason} [class=${requestClass}] denied: ${deniedReason}.`,
+      });
+    });
+  }
+
+  requestTemporaryDataRescue(
+    symbol: string,
+    reason: string,
+    opts: { requestClass?: RescueRequestClass; traceId?: string } = {},
+  ): {
+    granted: boolean; symbol: string; alreadySubscribed: boolean; evictedSymbol: string | null; deniedReason?: RescueDeniedReason;
   } {
+    // Backward-compatible default (Invariant 9): any existing caller that does not pass opts (or
+    // omits requestClass) is treated exactly as before this fix - a routine recovery request,
+    // subject to the same admission rule that existed pre-Phase-18 once combined with the reserved
+    // allowance below (reservedForPriorityClasses only ever narrows ROUTINE_RECOVERY's own ceiling,
+    // it never changes behavior for a caller that always identified as ROUTINE_RECOVERY).
+    const requestClass: RescueRequestClass = opts.requestClass ?? 'ROUTINE_RECOVERY';
+    const traceId = opts.traceId ?? null;
+
     const ticker = looksLikeListedTicker(symbol) || quoteKey(symbol);
     if (!ticker) {
-      return { granted: false, symbol: quoteKey(symbol), alreadySubscribed: false, evictedSymbol: null, deniedReason: 'INVALID_SYMBOL' };
+      const fallback = quoteKey(symbol);
+      this.logRescueDenial(fallback, reason, requestClass, traceId, 'INVALID_SYMBOL');
+      return { granted: false, symbol: fallback, alreadySubscribed: false, evictedSymbol: null, deniedReason: 'INVALID_SYMBOL' };
     }
 
     // Real defect found live in production (2026-08-31, hours after this mechanism deployed):
@@ -247,11 +313,30 @@ export class MarketDataWorker {
     // anyone and never counts twice against the concurrent-rescue cap.
     const alreadyRescued = this.hasActiveRescue(ticker);
     const alreadySubscribed = this.activeStreams.has(ticker);
+    const existing = this.temporaryRescues.get(ticker);
 
     if (!alreadyRescued) {
-      const activeRescueCount = Array.from(this.temporaryRescues.keys()).filter((s) => this.hasActiveRescue(s)).length;
-      if (activeRescueCount >= continuousIntelligence.maxConcurrentTemporaryDataRescues) {
+      const activeEntries = Array.from(this.temporaryRescues.entries()).filter(([s]) => this.hasActiveRescue(s));
+      // Invariant 3: capacity never exceeds the configured maximum, regardless of class.
+      if (activeEntries.length >= continuousIntelligence.maxConcurrentTemporaryDataRescues) {
+        this.logRescueDenial(ticker, reason, requestClass, traceId, 'RESCUE_CAPACITY_FULL');
         return { granted: false, symbol: ticker, alreadySubscribed, evictedSymbol: null, deniedReason: 'RESCUE_CAPACITY_FULL' };
+      }
+      // Phase 18 fairness rule: a ROUTINE_RECOVERY request (the pre-existing, undifferentiated
+      // case - e.g. a symbol whose idea is discarded by stale data on a normal, non-exploration
+      // cycle) is additionally capped below the full pool, reserving rescueReservedSlotsForPriorityClasses
+      // slots exclusively for EXPLORATION/MARKET_MOVER requests. This is the entire fix: it
+      // guarantees a bounded exploration/mover opportunity even when routine demand is high enough
+      // to otherwise consume every slot (the exact live-observed AAPL/TSLA/AI pattern), without
+      // touching the hard total-capacity ceiling above, without preempting an already-granted
+      // rescue, and without any new state beyond the requestClass already being recorded.
+      if (requestClass === 'ROUTINE_RECOVERY') {
+        const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+        const activeRoutineCount = activeEntries.filter(([, r]) => r.requestClass === 'ROUTINE_RECOVERY').length;
+        if (activeRoutineCount >= routineCap) {
+          this.logRescueDenial(ticker, reason, requestClass, traceId, 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY');
+          return { granted: false, symbol: ticker, alreadySubscribed, evictedSymbol: null, deniedReason: 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY' };
+        }
       }
     }
 
@@ -261,6 +346,7 @@ export class MarketDataWorker {
       if (this.activeStreams.size >= cap) {
         const candidate = this.pickEvictionCandidate();
         if (!candidate) {
+          this.logRescueDenial(ticker, reason, requestClass, traceId, 'AT_CAPACITY_NO_SAFE_EVICTION');
           return { granted: false, symbol: ticker, alreadySubscribed: false, evictedSymbol: null, deniedReason: 'AT_CAPACITY_NO_SAFE_EVICTION' };
         }
         this.unsubscribe(candidate, { force: false });
@@ -278,25 +364,55 @@ export class MarketDataWorker {
     }
 
     const expiresAtMs = this.wallMs() + Math.max(1, continuousIntelligence.temporaryDataRescueMaxDurationMs);
-    this.temporaryRescues.set(ticker, { expiresAtMs, reason });
+    this.temporaryRescues.set(ticker, {
+      expiresAtMs,
+      reason,
+      requestClass,
+      traceId,
+      grantedAtMs: existing?.grantedAtMs ?? this.wallMs(),
+      requestCount: (existing?.requestCount ?? 0) + 1,
+      extensionCount: (existing?.extensionCount ?? 0) + (alreadyRescued ? 1 : 0),
+    });
 
     observeSafe(() => {
       structuredLogger.info('temporary_data_rescue_granted', {
         category: 'DISCOVERY',
         eventType: 'TEMPORARY_DATA_RESCUE_GRANTED',
         symbol: ticker,
-        reasoning: `${reason}${evictedSymbol ? ` - evicted ${evictedSymbol} for one rescue slot` : alreadySubscribed ? ' - already subscribed, only the eviction-immunity window was extended' : ''}. Expires in ${continuousIntelligence.temporaryDataRescueMaxDurationMs}ms; never a permanent subscription.`,
+        traceId: traceId ?? undefined,
+        reasoning: `${reason} [class=${requestClass}]${evictedSymbol ? ` - evicted ${evictedSymbol} for one rescue slot` : alreadySubscribed ? ' - already subscribed, only the eviction-immunity window was extended' : ''}. Expires in ${continuousIntelligence.temporaryDataRescueMaxDurationMs}ms; never a permanent subscription.`,
       });
     });
 
     return { granted: true, symbol: ticker, alreadySubscribed, evictedSymbol };
   }
 
-  /** Read-only view for reports/tests - never mutates state. */
-  getActiveTemporaryRescues(): Array<{ symbol: string; expiresAtMs: number; reason: string }> {
+  /** Read-only view for reports/tests - never mutates state. Phase 18: now exposes class,
+   *  traceId, and request/extension counts so "who currently owns rescue capacity and why" is
+   *  directly answerable without joining logs. Never exposes secrets/credentials/account data -
+   *  every field here was already either public (symbol) or purely internal bookkeeping. */
+  getActiveTemporaryRescues(): Array<{
+    symbol: string;
+    expiresAtMs: number;
+    reason: string;
+    requestClass: RescueRequestClass;
+    traceId: string | null;
+    grantedAtMs: number;
+    requestCount: number;
+    extensionCount: number;
+  }> {
     return Array.from(this.temporaryRescues.entries())
       .filter(([s]) => this.hasActiveRescue(s))
-      .map(([symbol, r]) => ({ symbol, expiresAtMs: r.expiresAtMs, reason: r.reason }));
+      .map(([symbol, r]) => ({
+        symbol,
+        expiresAtMs: r.expiresAtMs,
+        reason: r.reason,
+        requestClass: r.requestClass,
+        traceId: r.traceId,
+        grantedAtMs: r.grantedAtMs,
+        requestCount: r.requestCount,
+        extensionCount: r.extensionCount,
+      }));
   }
 
   /** Periodic sweep: a rescue past its bound stops being specially protected - it does not force
