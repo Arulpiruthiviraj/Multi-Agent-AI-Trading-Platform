@@ -368,6 +368,124 @@ describe('AIRouter provider timeout (Phase 1)', () => {
   });
 });
 
+/**
+ * Phase A4/A5 AI Cost Governor integration (docs/audits/ARGUS_PROJECT_A_AI_COST_GOVERNOR_DESIGN_NOTE.md).
+ * Real ai_providers DB rows (needed so computeGovernorReorder can see a real providerName/cost-tier
+ * mapping), real env-var flag toggling - same isRuntimeFlagEnabled() precedence chain production uses.
+ */
+describe('AIRouter Phase A4/A5: AI Cost Governor integration', () => {
+  let tmpDbPath: string;
+  let sqliteDb: any;
+  let db: any;
+  let schema: any;
+  let aiRouter: any;
+  let AIRouterClass: any;
+
+  function fastProvider(content: string): any {
+    return {
+      authenticate: vi.fn(async () => true),
+      chat: vi.fn(async () => ({ content, tokens: 10, inputTokens: 5, outputTokens: 5 })),
+      estimateCost: vi.fn(() => 0),
+    };
+  }
+
+  beforeAll(async () => {
+    tmpDbPath = path.join(os.tmpdir(), `argus_airouter_governor_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+    // Earlier describe blocks in this same test file already imported and closed a `../db`
+    // connection in this file's module registry - vi.resetModules() forces a fresh import against
+    // our new tmpDbPath instead of returning that now-closed cached instance (same pattern as the
+    // OPS-1 describe block below).
+    vi.resetModules();
+    ({ db, sqliteDb } = await import('../db'));
+    schema = await import('../db/schema');
+    ({ AIRouter: AIRouterClass } = await import('./AIRouter'));
+  });
+
+  afterAll(() => {
+    try { sqliteDb.close(); } catch { /* already closed */ }
+    for (const suffix of ['', '-shm', '-wal']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }
+    }
+    delete process.env.ARGUS_DB_PATH;
+  });
+
+  beforeEach(() => {
+    aiRouter = AIRouterClass.getInstance();
+    aiRouter.clearProviders();
+    delete process.env.AI_COST_GOVERNOR_ENABLED;
+    delete process.env.AI_COST_GOVERNOR_LIVE_ENABLED;
+  });
+
+  afterEach(() => {
+    delete process.env.AI_COST_GOVERNOR_ENABLED;
+    delete process.env.AI_COST_GOVERNOR_LIVE_ENABLED;
+  });
+
+  async function seedProviderRow(id: string, providerName: string) {
+    await db.insert(schema.aiProviders).values({ id, providerName, health: 'Healthy', successRate: 100 });
+  }
+
+  it('flag OFF (default): FundamentalAgent still uses whatever order AIRouter would have used anyway - Mistral (registered first) answers, not Ollama', async () => {
+    await seedProviderRow('mistral-row', 'Mistral');
+    await seedProviderRow('ollama-row', 'Ollama (Local)');
+    aiRouter.registerProvider('mistral-row', fastProvider('{"recommendation":"BUY","confidence":0.7,"reasoning":"mistral"}'));
+    aiRouter.registerProvider('ollama-row', fastProvider('{"recommendation":"BUY","confidence":0.7,"reasoning":"ollama"}'));
+
+    const result = await aiRouter.routeTask('FundamentalAgent', 'prompt', 'trace-gov-off');
+    expect(result.provider).toBe('mistral-row'); // unchanged: governor never ran
+  });
+
+  it('shadow-only (flag on, live off - the default once the master flag is set): still uses the ORIGINAL order, governor only computes+logs', async () => {
+    process.env.AI_COST_GOVERNOR_ENABLED = 'true';
+    await seedProviderRow('mistral-row2', 'Mistral');
+    await seedProviderRow('ollama-row2', 'Ollama (Local)');
+    aiRouter.registerProvider('mistral-row2', fastProvider('{"recommendation":"BUY","confidence":0.7,"reasoning":"mistral"}'));
+    aiRouter.registerProvider('ollama-row2', fastProvider('{"recommendation":"BUY","confidence":0.7,"reasoning":"ollama"}'));
+
+    const result = await aiRouter.routeTask('FundamentalAgent', 'prompt', 'trace-gov-shadow');
+    expect(result.provider).toBe('mistral-row2'); // real routing unaffected by shadow mode
+  });
+
+  it('live-enabled (both flags true): FundamentalAgent (policy LOCAL,ECONOMICAL) now actually prefers the LOCAL provider over Mistral', async () => {
+    process.env.AI_COST_GOVERNOR_ENABLED = 'true';
+    process.env.AI_COST_GOVERNOR_LIVE_ENABLED = 'true';
+    await seedProviderRow('mistral-row3', 'Mistral');
+    await seedProviderRow('ollama-row3', 'Ollama (Local)');
+    aiRouter.registerProvider('mistral-row3', fastProvider('{"recommendation":"BUY","confidence":0.7,"reasoning":"mistral"}'));
+    aiRouter.registerProvider('ollama-row3', fastProvider('{"recommendation":"BUY","confidence":0.7,"reasoning":"ollama"}'));
+
+    const result = await aiRouter.routeTask('FundamentalAgent', 'prompt', 'trace-gov-live');
+    expect(result.provider).toBe('ollama-row3'); // governor actually reordered real routing
+  });
+
+  it('live-enabled: an agentType with no configured policy (ConsensusDebate) is completely untouched even when the master + live flags are both on', async () => {
+    process.env.AI_COST_GOVERNOR_ENABLED = 'true';
+    process.env.AI_COST_GOVERNOR_LIVE_ENABLED = 'true';
+    await seedProviderRow('mistral-row4', 'Mistral');
+    await seedProviderRow('ollama-row4', 'Ollama (Local)');
+    aiRouter.registerProvider('mistral-row4', fastProvider('{"decision":"BUY","confidence":80,"reasoning":"mistral","supportingFactors":[],"risks":[]}'));
+    aiRouter.registerProvider('ollama-row4', fastProvider('{"decision":"BUY","confidence":80,"reasoning":"ollama","supportingFactors":[],"risks":[]}'));
+
+    // routeConsensus fans out to all available providers in parallel - ordering is not the same
+    // concept there, but this proves the governor path is not even consulted for ConsensusDebate.
+    const result = await aiRouter.routeConsensus('ConsensusDebate', 'prompt', 'trace-gov-consensus');
+    expect(result.results.map((r: any) => r.status).sort()).toEqual(['success', 'success']);
+  });
+
+  it('a throwing governor (simulated via a broken policy lookup) fails OPEN - routing proceeds exactly as if the flag were off', async () => {
+    process.env.AI_COST_GOVERNOR_ENABLED = 'true';
+    process.env.AI_COST_GOVERNOR_LIVE_ENABLED = 'true';
+    // No ai_providers rows seeded for these ids at all - dbStats.find(...) returns undefined,
+    // providerName falls back to the raw id, which has no cost-tier mapping - exercises the
+    // "genuine ambiguity, fail open" path end-to-end through the real AIRouter call site.
+    aiRouter.registerProvider('totally-unmapped-provider', fastProvider('{"recommendation":"BUY","confidence":0.7,"reasoning":"x"}'));
+
+    const result = await aiRouter.routeTask('FundamentalAgent', 'prompt', 'trace-gov-failopen');
+    expect(result.provider).toBe('totally-unmapped-provider'); // still answers - never a new outage
+  });
+});
+
 describe('AIRouter provider selection helpers (DEF-14/15)', () => {
   it('skips remote providers with no API key and keeps local ones', async () => {
     const { shouldSkipUnconfiguredProvider, selectConsensusProviders } = await import('./AIRouter');

@@ -60,6 +60,8 @@ import { networkEndpoints } from '../config/networkEndpoints';
 import { aiModels, isResearchAgentType } from '../config/aiModels';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { hashSensitive } from '../observability/hashSensitive';
+import { isAiCostGovernorEnabled, isAiCostGovernorShadowOnly } from '../config/aiCostGovernor';
+import { computeGovernorReorder, recordGovernorShadowComparison } from './AICostGovernor';
 
 // Router timeout (tradingSafety.aiProviderTimeoutMs) plus AbortController so fetch-based
 // providers cancel in-flight HTTP instead of hanging after the caller has already failed over.
@@ -1012,7 +1014,28 @@ export class AIRouter {
             availableProviders.unshift(pref);
         }
     }
-    
+
+    // Phase A4/A5 (AI Cost Governor, docs/audits/ARGUS_PROJECT_A_AI_COST_GOVERNOR_DESIGN_NOTE.md) -
+    // OFF by default (isAiCostGovernorEnabled() false). Fails open: any error here is swallowed and
+    // routing proceeds exactly as it would have without the governor. Shadow mode (the default even
+    // once the master flag is on) only computes and logs what the governor WOULD have chosen -
+    // `availableProviders` is only actually replaced once an operator has ALSO explicitly turned
+    // live mode on. Never touches ChiefTrader/RiskEngine/OMS/consensus/routeConsensus.
+    try {
+      if (isAiCostGovernorEnabled()) {
+        const governorRows = availableProviders.map(([id]) => ({ id, providerName: dbStats.find(s => s.id === id)?.providerName ?? id }));
+        const decision = computeGovernorReorder(agentType, governorRows);
+        const liveEnabled = !isAiCostGovernorShadowOnly();
+        recordGovernorShadowComparison({ traceId, agentType, decision, liveEnabled });
+        if (liveEnabled && decision.changed) {
+          const byId = new Map(availableProviders);
+          availableProviders = decision.reorderedProviderIds
+            .filter((id) => byId.has(id))
+            .map((id) => [id, byId.get(id)!] as [string, AIProvider]);
+        }
+      }
+    } catch (e) { /* fail open - a governor bug must never affect real routing */ }
+
     if (availableProviders.length === 0) {
        const unroutable = this.countUnroutableReasons(Array.from(this.providers.entries()), dbStats);
        const message = describeConsensusProvidersUnavailable({

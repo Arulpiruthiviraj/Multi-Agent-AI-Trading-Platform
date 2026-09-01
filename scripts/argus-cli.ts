@@ -672,6 +672,16 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'ai-cost-governor'() {
+    // Project A (2026-09-02): current policy, per-(agent,provider) real graded-outcome quality
+    // ledger, and recent shadow-mode decisions. Off by default (config/aiCostGovernor.json);
+    // never gates a trade.
+    const res = await fetch(`${BASE}/api/v2/observability/ai-cost-governor?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'strategy-scorecard'() {
     // Phase 14 (2026-08-31): complete 21-strategy scorecard - fairness + organic profitability +
     // lifecycle status, real data only. Does not itself run replay (a separate, long-running step).
@@ -1040,7 +1050,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'strategy-scorecard']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'strategy-scorecard']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

@@ -505,8 +505,14 @@ export const agentConfidenceCalibration = sqliteTable('agent_confidence_calibrat
   // observed accuracy once enough real outcomes exist to justify overriding the prior.
   calibratedConfidence: real('calibrated_confidence').notNull(),
   lastEvaluated: text('last_evaluated').notNull(),
+  // Phase A3 (AI Cost Governor design note, 2026-09-02): provider dimension added to the SAME
+  // Beta-Binomial calibration this table already did per (agent, bucket). 'ALL' is the
+  // pre-existing aggregate row shape every current consumer (ModerateTierEvaluator,
+  // calibrationMaturity) still reads and keeps reading unchanged - a real provider id here is an
+  // ADDITIONAL row alongside it, never a replacement.
+  provider: text('provider').notNull().default('ALL'),
 }, (table) => ({
-  agentBucketIdx: uniqueIndex('idx_agent_confidence_calibration_bucket').on(table.agentName, table.bucketLow),
+  agentBucketIdx: uniqueIndex('idx_agent_confidence_calibration_bucket').on(table.agentName, table.bucketLow, table.provider),
 }));
 
 export const explainabilityReports = sqliteTable('explainability_reports', {

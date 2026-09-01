@@ -142,6 +142,14 @@ export class ReflectionEngine {
       // NewsAgent's real overall win rate can look unremarkable while it's still systematically
       // overconfident specifically in its high-confidence bucket, which a flat weight can't see.
       const calibrationMap: Record<string, Record<string, { wins: number; losses: number }>> = {};
+      // Phase A3 (AI Cost Governor design note, 2026-09-02): the SAME wins/losses, additionally
+      // grouped by the real AI provider that produced each prediction (agentPredictions.provider,
+      // already captured at write time by logPrediction()). Written as ADDITIONAL rows in
+      // agent_confidence_calibration (provider != 'ALL') alongside the existing agent-wide 'ALL'
+      // aggregate below - never instead of it. A prediction with no captured provider (e.g. the
+      // deterministic TechnicalAgent, which never calls AIRouter) is simply not counted here; it
+      // still counts toward the 'ALL' aggregate exactly as before.
+      const providerCalibrationMap: Record<string, Record<string, Record<string, { wins: number; losses: number }>>> = {};
       // ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md Phase 1/4 - the same
       // outcomes also collected here, per-row, so effective (autocorrelation-clustered) sample
       // size can gate live weight learning below. statsMap/calibrationMap above stay RAW and are
@@ -151,6 +159,7 @@ export class ReflectionEngine {
       const accumulate = (
         agentName: string, confidence: number, outcome: string, actualReturn: number | null,
         symbol: string, side: string, timestampMs: number, secondaryKey: string | null,
+        provider: string | null = null,
       ) => {
         if (!statsMap[agentName]) statsMap[agentName] = { total: 0, correct: 0, sumReturn: 0 };
         if (!rowsByAgent[agentName]) rowsByAgent[agentName] = [];
@@ -171,6 +180,14 @@ export class ReflectionEngine {
         if (!calibrationMap[agentName][bucketKey]) calibrationMap[agentName][bucketKey] = { wins: 0, losses: 0 };
         if (outcome === 'WIN') calibrationMap[agentName][bucketKey].wins += 1;
         else calibrationMap[agentName][bucketKey].losses += 1;
+
+        if (provider) {
+          if (!providerCalibrationMap[agentName]) providerCalibrationMap[agentName] = {};
+          if (!providerCalibrationMap[agentName][provider]) providerCalibrationMap[agentName][provider] = {};
+          if (!providerCalibrationMap[agentName][provider][bucketKey]) providerCalibrationMap[agentName][provider][bucketKey] = { wins: 0, losses: 0 };
+          if (outcome === 'WIN') providerCalibrationMap[agentName][provider][bucketKey].wins += 1;
+          else providerCalibrationMap[agentName][provider][bucketKey].losses += 1;
+        }
       };
 
       // Every agent except KronosEngine logs its own idea via logPrediction() above (one row per
@@ -193,6 +210,7 @@ export class ReflectionEngine {
           p.agentName, p.confidence, o.outcome, o.actualReturn,
           p.symbol, p.prediction, new Date(p.timestamp).getTime(),
           secondaryGroupKey(p.agentName, p.reasoning),
+          p.provider ?? null,
         );
       }
 
@@ -214,11 +232,31 @@ export class ReflectionEngine {
           const calibratedConfidence = calibratedConfidenceForBucket({ low, high }, wins, losses);
           await db.insert(agentConfidenceCalibration).values({
             agentName, bucketLow: low, bucketHigh: high, wins, losses, calibratedConfidence,
-            lastEvaluated: new Date().toISOString(),
+            provider: 'ALL', lastEvaluated: new Date().toISOString(),
           }).onConflictDoUpdate({
-            target: [agentConfidenceCalibration.agentName, agentConfidenceCalibration.bucketLow],
+            target: [agentConfidenceCalibration.agentName, agentConfidenceCalibration.bucketLow, agentConfidenceCalibration.provider],
             set: { wins, losses, calibratedConfidence, lastEvaluated: new Date().toISOString() },
           });
+        }
+      }
+
+      // Phase A3 (AI Cost Governor, 2026-09-02): additional per-provider rows, same Beta-Binomial
+      // math, alongside the 'ALL' aggregate above - never replacing it. Feeds the AI Cost
+      // Governor's calibrated-quality gate (docs/audits/ARGUS_PROJECT_A_AI_COST_GOVERNOR_DESIGN_NOTE.md
+      // §D); no existing consumer (ModerateTierEvaluator, calibrationMaturity) reads provider != 'ALL'.
+      for (const [agentName, byProvider] of Object.entries(providerCalibrationMap)) {
+        for (const [provider, buckets] of Object.entries(byProvider)) {
+          for (const [bucketKey, { wins, losses }] of Object.entries(buckets)) {
+            const [low, high] = bucketKey.split('-').map(Number);
+            const calibratedConfidence = calibratedConfidenceForBucket({ low, high }, wins, losses);
+            await db.insert(agentConfidenceCalibration).values({
+              agentName, bucketLow: low, bucketHigh: high, wins, losses, calibratedConfidence,
+              provider, lastEvaluated: new Date().toISOString(),
+            }).onConflictDoUpdate({
+              target: [agentConfidenceCalibration.agentName, agentConfidenceCalibration.bucketLow, agentConfidenceCalibration.provider],
+              set: { wins, losses, calibratedConfidence, lastEvaluated: new Date().toISOString() },
+            });
+          }
         }
       }
 

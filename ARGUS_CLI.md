@@ -190,6 +190,9 @@ shortlisted candidates (watchlist-subscribe only — **never** a second order pa
 ./argus rescue-occupants        # Phase 18: who currently holds a temporary-data-rescue slot, what
                                  # class (ROUTINE_RECOVERY/EXPLORATION/MARKET_MOVER), since when
 ./argus strategy-scorecard      # combined fairness + profitability + lifecycle status, all 21 strategies
+./argus ai-cost-governor        # Project A: current policy, per-(agent,provider) real graded-
+                                 # outcome quality ledger, and recent shadow-mode decisions - off by
+                                 # default, never gates a trade
 ```
 
 All of the above are read-only correlations over already-persisted `observability_events` /

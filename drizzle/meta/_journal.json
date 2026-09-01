@@ -379,6 +379,13 @@
       "when": 1787831257054,
       "tag": "0053_superb_fat_cobra",
       "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1788298805323,
+      "tag": "0054_big_prowler",
+      "breakpoints": true
     }
   ]
 }

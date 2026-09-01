@@ -122,6 +122,48 @@ describe('ReflectionEngine - real confidence calibration computation', () => {
     expect(statsRow.correctPredictions).toBe(3);
   });
 
+  it('Phase A3: writes an ADDITIONAL per-provider calibration row alongside the existing ALL aggregate, never instead of it', async () => {
+    async function seedWithProvider(agentName: string, confidence: number, outcome: 'WIN' | 'LOSS', provider: string) {
+      const id = crypto.randomUUID();
+      await db.insert(schema.agentPredictions).values({
+        id, agentName, symbol: 'AAPL', prediction: 'BUY', confidence, reasoning: 'test',
+        timestamp: new Date().toISOString(), provider,
+      });
+      await db.insert(schema.predictionOutcomes).values({
+        predictionId: id, sourceTable: 'agent_predictions', symbol: 'AAPL', outcome, evaluatedAt: new Date().toISOString(),
+      });
+    }
+    for (let i = 0; i < 4; i++) await seedWithProvider('TestProviderAgent', 0.85, 'WIN', 'ollama');
+    for (let i = 0; i < 1; i++) await seedWithProvider('TestProviderAgent', 0.85, 'LOSS', 'ollama');
+    for (let i = 0; i < 1; i++) await seedWithProvider('TestProviderAgent', 0.85, 'WIN', 'mistral');
+    for (let i = 0; i < 4; i++) await seedWithProvider('TestProviderAgent', 0.85, 'LOSS', 'mistral');
+
+    await reflectionEngine.evaluateAgents();
+
+    const rows = await db.select().from(schema.agentConfidenceCalibration).where(
+      and(eq(schema.agentConfidenceCalibration.agentName, 'TestProviderAgent'), eq(schema.agentConfidenceCalibration.bucketLow, 0.8))
+    );
+    const allRow = rows.find((r: any) => r.provider === 'ALL');
+    const ollamaRow = rows.find((r: any) => r.provider === 'ollama');
+    const mistralRow = rows.find((r: any) => r.provider === 'mistral');
+
+    expect(allRow).toBeDefined();
+    expect(allRow.wins).toBe(5); // 4 (ollama) + 1 (mistral) - the pre-existing aggregate is unaffected by the new dimension
+    expect(allRow.losses).toBe(5);
+
+    expect(ollamaRow).toBeDefined();
+    expect(ollamaRow.wins).toBe(4);
+    expect(ollamaRow.losses).toBe(1);
+
+    expect(mistralRow).toBeDefined();
+    expect(mistralRow.wins).toBe(1);
+    expect(mistralRow.losses).toBe(4);
+
+    // Same real Beta-Binomial math, just one more grouping key - ollama's real 80% accuracy in
+    // this bucket must calibrate meaningfully higher than mistral's real 20% accuracy.
+    expect(ollamaRow.calibratedConfidence).toBeGreaterThan(mistralRow.calibratedConfidence);
+  });
+
   it('N_A outcomes (HOLD-style predictions) are excluded from calibration, same as they already are from win-rate stats', async () => {
     const id = crypto.randomUUID();
     await db.insert(schema.agentPredictions).values({

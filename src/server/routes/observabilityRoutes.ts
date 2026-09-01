@@ -19,6 +19,7 @@ import { buildRescueOutcomeReport, formatRescueOutcomeReport } from '../observab
 import { buildStrategyScorecard, formatStrategyScorecard } from '../research/strategyScorecard';
 import { buildExplorationHealthReport, formatExplorationHealthReport } from '../observability/explorationHealthReport';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observability/aiCostGovernorReport';
 
 export const observabilityRouter = Router();
 
@@ -297,6 +298,23 @@ observabilityRouter.get('/rescue-occupants', async (req, res) => {
       return;
     }
     res.json({ ok: true, occupants });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase A2/A5/M (AI Cost Governor, 2026-09-02): current policy, the per-(agent,provider) real
+// graded-outcome quality ledger, and recent shadow-mode decisions. Read-only; the governor itself
+// is off by default (config/aiCostGovernor.json) and never gates a trade.
+observabilityRouter.get('/ai-cost-governor', async (req, res) => {
+  try {
+    const limit = Math.min(200, Math.max(1, parseInt(String(req.query.limit ?? '50'), 10) || 50));
+    const report = await buildAiCostGovernorReport(limit);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatAiCostGovernorReport(report));
+      return;
+    }
+    res.json({ ok: true, ...report });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
