@@ -126,13 +126,35 @@ Idea agents (timer or MARKET_DATA):
                          ADV-screened Alpaca tradable-assets funnel when
                          `ARGUS_BROAD_UNIVERSE_ENABLED=true` (runtime-verified
                          2026-08-26: scan universe 122→134, including a symbol
-                         no curated list carried) — real broad discovery, still
+                         no curated list carried) **plus** a real Alpaca
+                         `/v1beta1/screener/stocks/movers` top-gainers/losers
+                         funnel when `ARGUS_MARKET_MOVERS_ENABLED=true`
+                         (re-screened through the same liquidity/ADV gates,
+                         since the raw movers response includes illiquid
+                         sub-$1 names) — real broad discovery, still
                          bounded/capped (`broadUniverseMaxCandidates`,
-                         `broadUniverseTopNPerScan`), still never places an order
-                         or bypasses `evaluateOpportunityCandidate()`. Off by
+                         `broadUniverseTopNPerScan`, `moversTopNPerScan`),
+                         still never places an order or bypasses
+                         `evaluateOpportunityCandidate()`. Both off by
                          default (real Alpaca API cost/rate-limit exposure);
                          check `GET /api/v2/continuous-intelligence/status`'s
-                         `broadUniverse` block once enabled.
+                         `broadUniverse`/`movers` blocks once enabled. A
+                         bounded `MarketDataWorker.requestTemporaryDataRescue`
+                         mechanism (capped at `maxConcurrentTemporaryDataRescues`,
+                         3) lets a starved-but-qualifying symbol borrow a data
+                         slot for one more evaluation — never implies trade
+                         eligibility, never bypasses a gate. Admission is
+                         request-class-aware as of 2026-09-01 (Phase 18):
+                         `rescueReservedSlotsForPriorityClasses` (1) reserves
+                         that many slots for `EXPLORATION`/`MARKET_MOVER`
+                         requests so a repeat `ROUTINE_RECOVERY` requester
+                         can no longer exhaust every slot first (the real
+                         CRM/ONON denial pattern this fixed). Every denial is
+                         now logged (`TEMPORARY_DATA_RESCUE_DENIED`, reason
+                         code included) — previously silent. Observability:
+                         `argus-cli exploration-health` /
+                         `argus-cli rescue-occupants`
+                         (`src/server/observability/explorationHealthReport.ts`).
   OpportunityScreener  → off unless ARGUS_OPPORTUNITY_IDEAS_ENABLED=true;
                          cheap tick-return rank; `emitTradeIdea` as one vote
  ↓ TRADE_IDEA_GENERATED {traceId, symbol, side, confidence, reasoning, agent, currentPrice?}
@@ -240,6 +262,7 @@ Loaded via `src/server/config/loadRepoConfigJson.ts`. Missing required keys **fa
 | `runtimeIntervals.json` | Worker intervals |
 | `consensusFixtures.json` | Test fixtures |
 | `quantThresholds.json` | Core strategy/regime/scoring numbers; TechnicalAgent debounce cooldown; lightweight-regime-classifier bands |
+| `continuousIntelligence.json` | Discovery universe (seed/watch/momentum symbol lists), subscription/rescue capacity (`maxActiveSubscriptions`, `maxConcurrentTemporaryDataRescues`, `rescueReservedSlotsForPriorityClasses`), broad-universe/movers liquidity thresholds, scan cadences |
 
 ## EventBus
 
@@ -432,7 +455,7 @@ Levels TRACE→FATAL. Safety categories never DEBUG (`safetyMinLevel` INFO). Fai
 
 ## Database (notable)
 
-Count `sqliteTable(` in `schema.ts` (drifts; **65** as of 2026-08-26). Include: `settings` (incl. campaign columns), `trades`, `fills`, `portfolio`, `daily_strategy_performance`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `agent_predictions`, `prediction_outcomes`, `news_clusters`, `news_predictions`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, `config_overrides`, …
+Count `sqliteTable(` in `schema.ts` (drifts; **74** as of 2026-09-01). Include: `settings` (incl. campaign columns), `trades`, `fills`, `portfolio`, `daily_strategy_performance`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `agent_predictions`, `prediction_outcomes`, `news_clusters`, `news_predictions`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, `config_overrides`, …
 
 Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db` (`application/octet-stream`; restart required).
 
@@ -452,7 +475,7 @@ Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db`
 | Quant default | OFF (`QUANT_ENGINE_ENABLED`) |
 | CORE strategies | UNTESTED on REAL_MARKET_DATA NEXT_BAR_OPEN |
 | Mandatory LIVE gates | Re-check `evaluateLiveReadiness()` — historically **6 / 28 PASS** family (`SOFTWARE_ORDER_PATH`, `EXECUTION_OMS`, `RISK_GATES`, `RESEARCH_WAREHOUSE`, `ZERO_COST_RESEARCH`, `QUANT_DEFAULT`); result remains **`LIVE_NO_GO`** while paper floors fail |
-| Harness (2026-08-26) | `npm test` **371** files / **2475** tests, all passing; `tsc --noEmit` clean; Node **24.18.0** |
+| Harness (2026-09-01) | `npm test` **428** files / **2889** tests, all passing; `tsc --noEmit` clean; Node **24.18.0** |
 
 Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessions` 10, `minPaperCalendarDays` 30, `minPaperProfitFactor` 1.2, `minPaperExpectancy` 0, `minOosTrades` 30. REPLAY / EXTERNAL_SYNC / DIAGNOSTIC / shadow / telemetry pulse **do not count**. Script: `npx tsx scripts/organic_paper_soak_status.ts` (closes SQLite + `process.exit` — must not linger as a second DB writer).
 

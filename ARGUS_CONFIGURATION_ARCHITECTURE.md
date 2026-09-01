@@ -12,7 +12,7 @@
 | `config/runtimeEnvCatalog.json` | Classification matrix (type, default, overridable, secret, applyMode) |
 | Existing `settings` row | Unrelated operator knobs already in DB (take-profit %, Autobot, budget, pipeline agent map, **campaign** fields, …). Unchanged layering: campaign targets are settings, not `tradingSafety` literals. |
 | Encrypted `brokerConnections` | Broker secrets entered in the Setup Wizard. Unchanged. |
-| `config/*.json` | Reviewed numbers (e.g. `tradingSafety.json`, `continuousIntelligence.json` `maxActiveSubscriptions=30`). Missing required keys fail boot. |
+| `config/*.json` | Reviewed numbers (e.g. `tradingSafety.json`, `continuousIntelligence.json` `maxActiveSubscriptions=12`, Alpaca default; 90 under `ibkr_gateway`). Missing required keys fail boot. |
 | `config/runtimeEnvCatalog.json` | Includes flags such as `QUANT_ENGINE_ENABLED`, `ARGUS_OPPORTUNITY_LOOP_ENABLED`, `ARGUS_OPPORTUNITY_IDEAS_ENABLED` — check catalog for exact defaults / `applyMode`. |
 | `config/tradingSafety.json` | Hard safety numbers (consensus, cooldowns, `kronosEvaluationHorizonMs`, campaign velocity / trail / ATR multiples). Env *names* for some flags live here as `*EnabledEnvVar` strings (e.g. `QUANT_COLD_START_BOOTSTRAP_ENABLED`) even when not duplicated in the runtime catalog. |
 

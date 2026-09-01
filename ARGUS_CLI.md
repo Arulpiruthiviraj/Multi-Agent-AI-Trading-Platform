@@ -168,6 +168,36 @@ Reports the real scan/shortlist/subscription state: last scan's scanned count an
 shortlisted candidates (watchlist-subscribe only — **never** a second order path per
 `CLAUDE.md`), and `MarketDataWorker`'s active subscription count against its configured cap.
 
+### Consensus / funnel / strategy observability
+
+```bash
+./argus funnel                  # GET /api/v2/observability/trading-funnel - candidates, agent votes,
+                                 # independence, calibration, RiskEngine/OMS/fills, top no-trade reasons
+./argus consensus-shadow        # shadow consensus-mode comparison (read-only, does not vote)
+./argus consensus-report        # GET /api/v2/observability/consensus-report - "why no trade" dashboard
+./argus provider-health         # per-AI-provider health/cooldown/recent-call-rate matrix
+./argus trading-funnel          # same report as `funnel`, explicit name
+./argus why-no-trade [symbol]   # single-candidate "why did this not trade" explainer
+./argus calibration-maturity    # UNVALIDATED/LEARNING/CALIBRATED/TRUSTED per (agent, bucket)
+./argus agent-edge              # agent-edge / strategy-edge / trading-eligibility report
+./argus strategy-readiness      # per-strategy readiness classification
+./argus strategy-fairness       # organic strategy-selection fairness (setupScore concentration)
+./argus strategy-profitability  # real net P&L per strategy from actual fill prices, never estimated
+./argus rescue-outcomes         # did a temporary market-data rescue lead to consensus/RiskEngine/a fill?
+./argus exploration-health      # Phase 18: joins each STRATEGY_EXPLORATION_PROMOTED promotion to
+                                 # rescue grant/denial, idea discard/emission, consensus, RiskEngine,
+                                 # and OMS/fill outcomes by shared traceId - a Level 0-6 success ladder
+./argus rescue-occupants        # Phase 18: who currently holds a temporary-data-rescue slot, what
+                                 # class (ROUTINE_RECOVERY/EXPLORATION/MARKET_MOVER), since when
+./argus strategy-scorecard      # combined fairness + profitability + lifecycle status, all 21 strategies
+```
+
+All of the above are read-only correlations over already-persisted `observability_events` /
+`risk_assessments` / `trades` rows — none of them is a new decision path, and none can trigger a trade.
+Add `--format=json` semantics are handled server-side (`?format=text` for the human-readable table,
+omit for JSON) — these commands print the text form by default. See `docs/ARGUS_OPPORTUNITY_DISCOVERY.md`
+for the rescue-fairness mechanism `exploration-health`/`rescue-occupants` report on.
+
 ### Daily Goal Campaign
 
 ```bash

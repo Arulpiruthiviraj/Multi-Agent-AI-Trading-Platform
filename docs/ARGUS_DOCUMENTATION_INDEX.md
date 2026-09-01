@@ -71,7 +71,7 @@ Extend around the protected spine. Do not rewrite ChiefTrader / RiskEngine / OMS
 | Doc | Contents |
 |---|---|
 | Binding five | `CLAUDE.md`, contract, protection, invariants, AI change rules |
-| `docs/ARGUS_OPPORTUNITY_DISCOVERY.md` | Seed watchlist vs optional screener ideas (`maxActiveSubscriptions` **30**) |
+| `docs/ARGUS_OPPORTUNITY_DISCOVERY.md` | Seed watchlist vs optional screener ideas (`maxActiveSubscriptions` **12**, Alpaca default; 90 under `ibkr_gateway`); rescue-fairness + exploration-health |
 | `docs/ARGUS_PORTFOLIO_INTELLIGENCE.md` | Position SELL still uses the spine |
 | `docs/ARGUS_READINESS.md` | Levels 1–6; LIVE stays NO-GO |
 | `docs/ARGUS_INCIDENTS.md` | Incident notes (root incident reports were folded here) |
