@@ -21,7 +21,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
-import { getCachedBroadUniverseSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+import { getCachedBroadUniverseSymbols, getCachedMoverSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
 import {
   getLastSnapshotScore,
   getTopMomentumCandidates,
@@ -100,6 +100,10 @@ export function getOpportunityScanUniverse(): string[] {
     ...continuousIntelligence.watchUniverseSymbols,
     ...continuousIntelligence.momentumScanUniverseSymbols,
     ...getCachedBroadUniverseSymbols().slice(0, continuousIntelligence.broadUniverseTopNPerScan),
+    // Phase 17 (2026-09-01): real Alpaca top-gainers/losers, already liquidity/ADV-screened by
+    // MarketUniverseScanner.refreshMoversCache() - same evaluateOpportunityCandidate() gate below,
+    // never a trade by itself.
+    ...getCachedMoverSymbols().slice(0, continuousIntelligence.moversTopNPerScan),
   ];
   if (isPennyStockEnabled()) {
     names.push(...continuousIntelligence.pennyWatchSymbols);

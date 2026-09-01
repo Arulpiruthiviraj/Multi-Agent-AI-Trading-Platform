@@ -17,7 +17,7 @@
  *     Symbols a batch fails to return bars for are excluded (fail-closed), not assumed liquid.
  * Final candidate list is ranked by dollar volume descending and capped at broadUniverseMaxCandidates.
  */
-import { continuousIntelligence, isBroadUniverseEnabled } from '../config/continuousIntelligence';
+import { continuousIntelligence, isBroadUniverseEnabled, isMoversEnabled } from '../config/continuousIntelligence';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
@@ -246,28 +246,148 @@ export function resetMarketUniverseScannerForTests(): void {
   snapshotCache = null;
   inFlight = false;
   lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
+  moversCache = null;
+  moversInFlight = false;
+  lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
+}
+
+// ==========================================================================================
+// Phase 17 (2026-09-01): real Alpaca top-gainers/losers screener - an additional discovery
+// signal ("what's actually moving today"), separate from the liquidity-only broad universe
+// above. Default OFF (ARGUS_MARKET_MOVERS_ENABLED). Same real, already-authenticated Alpaca
+// API - no scraping, no new credential, no new external dependency. A raw mover symbol (Alpaca's
+// real /v1beta1/screener/stocks/movers response includes plenty of sub-$1 warrants and other
+// illiquid names - confirmed live) is never merged into the scan universe unfiltered: it must
+// still clear the exact same passesScreen()/passesAdvScreen() liquidity gates every broad-universe
+// candidate already has to clear. This only ever feeds WATCHLIST_SUBSCRIBE_REQUESTED-style
+// candidates into OpportunityDiscovery's existing evaluateOpportunityCandidate() gate - it never
+// emits TRADE_IDEA_GENERATED, never calls placeOrder, and never bypasses ChiefTrader/RiskEngine.
+// ==========================================================================================
+
+interface AlpacaMover {
+  symbol: string;
+  price: number;
+  change: number;
+  percent_change: number;
+}
+
+interface AlpacaMoversResponse {
+  gainers: AlpacaMover[];
+  losers: AlpacaMover[];
+}
+
+export interface MoverScanStats {
+  ran: boolean;
+  enabled: boolean;
+  gainersFetched: number;
+  losersFetched: number;
+  screened: number;
+  candidates: number;
+  error: string | null;
+  at: string;
+}
+
+let moversCache: { fetchedAt: number; symbols: string[] } | null = null;
+let moversInFlight = false;
+let lastMoverStats: MoverScanStats = {
+  ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(),
+};
+
+/** Real Alpaca top-gainers/losers screener - the same account credentials as every other Alpaca
+ *  call in this file, no scraping. Returns raw symbols (deduped, uppercased) - unscreened. */
+export async function fetchTopMovers(): Promise<{ symbols: string[]; gainersFetched: number; losersFetched: number }> {
+  const top = continuousIntelligence.moversFetchTopNPerSide;
+  const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v1beta1/screener/stocks/movers?top=${top}`;
+  const raw = await fetchJson<AlpacaMoversResponse>(url, 15000);
+  const gainers = Array.isArray(raw.gainers) ? raw.gainers : [];
+  const losers = Array.isArray(raw.losers) ? raw.losers : [];
+  const symbols = [...new Set(
+    [...gainers, ...losers].map((m) => String(m.symbol || '').trim().toUpperCase()).filter(Boolean),
+  )];
+  return { symbols, gainersFetched: gainers.length, losersFetched: losers.length };
+}
+
+/** Full refresh: fetch real movers, screen them through the same liquidity/ADV gates as the
+ *  broad universe, cache the resulting candidate symbol list. */
+export async function refreshMoversCache(): Promise<MoverScanStats> {
+  if (!isMoversEnabled()) {
+    lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString() };
+    return lastMoverStats;
+  }
+  if (moversInFlight) return lastMoverStats;
+  moversInFlight = true;
+  try {
+    const { symbols, gainersFetched, losersFetched } = await fetchTopMovers();
+    const screened = await screenAssets(symbols);
+    const stage2 = screened.filter(passesScreen);
+    const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
+    const passing = stage2
+      .filter((s) => passesAdvScreen(s.symbol, advMap))
+      .sort((a, b) => b.dollarVolume - a.dollarVolume)
+      .map((s) => s.symbol);
+    moversCache = { fetchedAt: Date.now(), symbols: passing };
+    lastMoverStats = {
+      ran: true, enabled: true, gainersFetched, losersFetched, screened: screened.length, candidates: passing.length, error: null, at: new Date().toISOString(),
+    };
+    return lastMoverStats;
+  } catch (e: any) {
+    logErrorSafely('[MarketUniverseScanner] movers refresh failed', e);
+    lastMoverStats = {
+      ran: true, enabled: true, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: moversCache?.symbols.length || 0, error: e?.message || String(e), at: new Date().toISOString(),
+    };
+    return lastMoverStats;
+  } finally {
+    moversInFlight = false;
+  }
+}
+
+/** Synchronous read of whatever the last successful movers refresh produced. Empty until a refresh has run. */
+export function getCachedMoverSymbols(): string[] {
+  if (!isMoversEnabled()) return [];
+  const now = Date.now();
+  if (!moversCache || now - moversCache.fetchedAt > continuousIntelligence.moversCacheTtlMs) {
+    return moversCache?.symbols || [];
+  }
+  return moversCache.symbols;
+}
+
+export function getLastMoverScanStats(): MoverScanStats {
+  return lastMoverStats;
 }
 
 export class MarketUniverseScannerWorker {
   private intervalId: NodeJS.Timeout | null = null;
+  private moversIntervalId: NodeJS.Timeout | null = null;
 
   start(): void {
     if (!isBroadUniverseEnabled()) {
       console.log('[MarketUniverseScanner] ARGUS_BROAD_UNIVERSE_ENABLED is not true - idle.');
-      return;
-    }
-    if (this.intervalId) return;
-    void refreshBroadUniverseCache();
-    this.intervalId = setInterval(() => {
+    } else if (!this.intervalId) {
       void refreshBroadUniverseCache();
-    }, continuousIntelligence.broadUniverseAssetsCacheTtlMs);
-    console.log('[MarketUniverseScanner] Broad-universe refresh started.');
+      this.intervalId = setInterval(() => {
+        void refreshBroadUniverseCache();
+      }, continuousIntelligence.broadUniverseAssetsCacheTtlMs);
+      console.log('[MarketUniverseScanner] Broad-universe refresh started.');
+    }
+    if (!isMoversEnabled()) {
+      console.log('[MarketUniverseScanner] ARGUS_MARKET_MOVERS_ENABLED is not true - idle.');
+    } else if (!this.moversIntervalId) {
+      void refreshMoversCache();
+      this.moversIntervalId = setInterval(() => {
+        void refreshMoversCache();
+      }, continuousIntelligence.moversCacheTtlMs);
+      console.log('[MarketUniverseScanner] Market-movers refresh started.');
+    }
   }
 
   stop(): void {
     if (this.intervalId) {
       clearInterval(this.intervalId);
       this.intervalId = null;
+    }
+    if (this.moversIntervalId) {
+      clearInterval(this.moversIntervalId);
+      this.moversIntervalId = null;
     }
   }
 }

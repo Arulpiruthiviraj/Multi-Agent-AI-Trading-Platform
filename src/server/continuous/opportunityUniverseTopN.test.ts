@@ -6,6 +6,7 @@ import { continuousIntelligence } from '../config/continuousIntelligence';
 // takes the real top-N off that ranked list rather than folding in the whole cached set.
 vi.mock('./MarketUniverseScanner', () => ({
   getCachedBroadUniverseSymbols: () => ['BEST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH'],
+  getCachedMoverSymbols: () => [],
   marketUniverseScannerWorker: { start: vi.fn(), stop: vi.fn() },
 }));
 

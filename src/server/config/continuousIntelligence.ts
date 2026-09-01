@@ -68,6 +68,16 @@ export interface ContinuousIntelligenceConfig {
   broadUniverseAdvLookbackDays: number;
   broadUniverseMinAvgDailyVolumeShares: number;
   broadUniverseTopNPerScan: number;
+  /** Phase 17 (2026-09-01): real Alpaca top-gainers/losers screener as an additional discovery
+   *  source, gated separately from the liquidity-only broad universe. Same real Alpaca API/creds,
+   *  no scraping, no new external dependency. Results still pass through the exact same
+   *  price/dollar-volume/spread/exchange/ADV screen broadUniverse* already enforces before merging
+   *  into the scan universe - a raw mover (e.g. a penny warrant) is never fed to the pipeline
+   *  unfiltered. */
+  moversEnabledEnvVar: string;
+  moversCacheTtlMs: number;
+  moversFetchTopNPerSide: number;
+  moversTopNPerScan: number;
   /** Phase 4F: minimum gap before the same symbol can be classified as a missed opportunity again. */
   missedOpportunityDetectionCooldownMs: number;
   /** Phase 4F: retrospective evaluation window used for MFE/MAE (minutes). */
@@ -131,6 +141,9 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
   if (typeof raw.broadUniverseEnabledEnvVar !== 'string' || !raw.broadUniverseEnabledEnvVar) {
     throw new Error('config/continuousIntelligence.json missing broadUniverseEnabledEnvVar');
   }
+  if (typeof raw.moversEnabledEnvVar !== 'string' || !raw.moversEnabledEnvVar) {
+    throw new Error('config/continuousIntelligence.json missing moversEnabledEnvVar');
+  }
   const cfg: ContinuousIntelligenceConfig = {
     opportunityLoopEnabledEnvVar: raw.opportunityLoopEnabledEnvVar,
     opportunityIdeasEnabledEnvVar: raw.opportunityIdeasEnabledEnvVar,
@@ -178,6 +191,10 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     broadUniverseAdvLookbackDays: requireNumber(raw.broadUniverseAdvLookbackDays, 'broadUniverseAdvLookbackDays'),
     broadUniverseMinAvgDailyVolumeShares: requireNumber(raw.broadUniverseMinAvgDailyVolumeShares, 'broadUniverseMinAvgDailyVolumeShares'),
     broadUniverseTopNPerScan: requireNumber(raw.broadUniverseTopNPerScan, 'broadUniverseTopNPerScan'),
+    moversEnabledEnvVar: raw.moversEnabledEnvVar,
+    moversCacheTtlMs: requireNumber(raw.moversCacheTtlMs, 'moversCacheTtlMs'),
+    moversFetchTopNPerSide: requireNumber(raw.moversFetchTopNPerSide, 'moversFetchTopNPerSide'),
+    moversTopNPerScan: requireNumber(raw.moversTopNPerScan, 'moversTopNPerScan'),
     missedOpportunityDetectionCooldownMs: requireNumber(raw.missedOpportunityDetectionCooldownMs, 'missedOpportunityDetectionCooldownMs'),
     missedOpportunityEvaluationHorizonMinutes: requireNumber(raw.missedOpportunityEvaluationHorizonMinutes, 'missedOpportunityEvaluationHorizonMinutes'),
     missedOpportunityLookbackMs: requireNumber(raw.missedOpportunityLookbackMs, 'missedOpportunityLookbackMs'),
@@ -210,4 +227,8 @@ export function isPortfolioIntelEnabled(): boolean {
 
 export function isBroadUniverseEnabled(): boolean {
   return isRuntimeFlagEnabled(continuousIntelligence.broadUniverseEnabledEnvVar);
+}
+
+export function isMoversEnabled(): boolean {
+  return isRuntimeFlagEnabled(continuousIntelligence.moversEnabledEnvVar);
 }

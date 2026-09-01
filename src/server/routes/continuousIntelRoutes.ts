@@ -8,8 +8,8 @@ import {
 import { getLastOpportunityScan } from '../continuous/OpportunityDiscovery';
 import { listCandidates } from '../continuous/candidateLifecycle';
 import { getLastSnapshotScanStats } from '../continuous/SnapshotScanner';
-import { getCachedBroadUniverseSymbols, getLastBroadUniverseStats } from '../continuous/MarketUniverseScanner';
-import { isBroadUniverseEnabled } from '../config/continuousIntelligence';
+import { getCachedBroadUniverseSymbols, getLastBroadUniverseStats, getCachedMoverSymbols, getLastMoverScanStats } from '../continuous/MarketUniverseScanner';
+import { isBroadUniverseEnabled, isMoversEnabled } from '../config/continuousIntelligence';
 import { getPipelineRateSnapshot } from '../core/pipelineRateLimit';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { learningRouter } from './learningRoutes';
@@ -239,6 +239,11 @@ continuousIntelRouter.get('/status', (_req, res) => {
       enabled: isBroadUniverseEnabled(),
       lastRefresh: getLastBroadUniverseStats(),
       cachedCandidateCount: getCachedBroadUniverseSymbols().length,
+    },
+    movers: {
+      enabled: isMoversEnabled(),
+      lastRefresh: getLastMoverScanStats(),
+      cachedCandidateCount: getCachedMoverSymbols().length,
     },
   });
 });

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { continuousIntelligence } from '../config/continuousIntelligence';
 
 const FLAG = continuousIntelligence.broadUniverseEnabledEnvVar;
+const MOVERS_FLAG = continuousIntelligence.moversEnabledEnvVar;
 
 vi.mock('../core/alpacaTls', () => ({
   alpacaFetch: vi.fn(),
@@ -16,6 +17,10 @@ import {
   getCachedBroadUniverseSymbols,
   getLastBroadUniverseStats,
   resetMarketUniverseScannerForTests,
+  fetchTopMovers,
+  refreshMoversCache,
+  getCachedMoverSymbols,
+  getLastMoverScanStats,
 } from './MarketUniverseScanner';
 
 function barsResponse(bars: Record<string, number[]>) {
@@ -32,9 +37,17 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
 
 afterEach(() => {
   delete process.env[FLAG];
+  delete process.env[MOVERS_FLAG];
   mockFetch.mockReset();
   resetMarketUniverseScannerForTests();
 });
+
+function moversResponse(gainers: Array<{ symbol: string; price?: number; percent_change?: number }>, losers: Array<{ symbol: string; price?: number; percent_change?: number }> = []) {
+  return jsonResponse({
+    gainers: gainers.map((g) => ({ symbol: g.symbol, price: g.price ?? 10, change: 0, percent_change: g.percent_change ?? 10 })),
+    losers: losers.map((l) => ({ symbol: l.symbol, price: l.price ?? 10, change: 0, percent_change: l.percent_change ?? -10 })),
+  });
+}
 
 describe('MarketUniverseScanner - flag gating', () => {
   it('refreshBroadUniverseCache is a no-op when the flag is off', async () => {
@@ -173,5 +186,70 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
     expect(stats.ran).toBe(true);
     expect(stats.error).toContain('assets endpoint down');
     expect(getLastBroadUniverseStats().error).toContain('assets endpoint down');
+  });
+});
+
+describe('MarketUniverseScanner - movers flag gating', () => {
+  it('refreshMoversCache is a no-op when the flag is off', async () => {
+    delete process.env[MOVERS_FLAG];
+    const stats = await refreshMoversCache();
+    expect(stats.ran).toBe(false);
+    expect(stats.enabled).toBe(false);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('getCachedMoverSymbols returns empty when the flag is off, even with a warm cache', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'ABCD' }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      ABCD: { latestTrade: { p: 50 }, dailyBar: { v: 1_000_000, c: 50 }, latestQuote: { bp: 49.95, ap: 50.05 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ ABCD: [600_000, 600_000] }));
+    await refreshMoversCache();
+    expect(getCachedMoverSymbols().length).toBeGreaterThan(0);
+    delete process.env[MOVERS_FLAG];
+    expect(getCachedMoverSymbols()).toEqual([]);
+  });
+});
+
+describe('MarketUniverseScanner - fetchTopMovers', () => {
+  it('returns a deduped, uppercased symbol list from real gainers + losers', async () => {
+    mockFetch.mockResolvedValueOnce(moversResponse(
+      [{ symbol: 'good', percent_change: 20 }, { symbol: 'DUPE' }],
+      [{ symbol: 'dupe', percent_change: -15 }, { symbol: 'BAD' }],
+    ));
+    const result = await fetchTopMovers();
+    expect(result.symbols.sort()).toEqual(['BAD', 'DUPE', 'GOOD'].sort());
+    expect(result.gainersFetched).toBe(2);
+    expect(result.losersFetched).toBe(2);
+  });
+});
+
+describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
+  it('excludes a raw mover that fails the exact same liquidity screen every broad-universe candidate must clear (real Alpaca movers include sub-$1 warrants)', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([
+      { symbol: 'PENNYW', percent_change: 596 }, // real observed shape: a warrant far below broadUniverseMinPrice
+      { symbol: 'REALMOVE', percent_change: 12 },
+    ]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      PENNYW: { latestTrade: { p: 0.02 }, dailyBar: { v: 500_000, c: 0.02 }, latestQuote: { bp: 0.018, ap: 0.022 } },
+      REALMOVE: { latestTrade: { p: 80 }, dailyBar: { v: 2_000_000, c: 80 }, latestQuote: { bp: 79.9, ap: 80.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ REALMOVE: [2_000_000, 2_000_000] }));
+    const stats = await refreshMoversCache();
+    expect(stats.ran).toBe(true);
+    expect(stats.gainersFetched).toBe(2);
+    expect(getCachedMoverSymbols()).toContain('REALMOVE');
+    expect(getCachedMoverSymbols()).not.toContain('PENNYW'); // price 0.02 < broadUniverseMinPrice (5)
+  });
+
+  it('records the error and does not crash when the movers endpoint itself fails', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockRejectedValueOnce(new Error('movers endpoint down'));
+    const stats = await refreshMoversCache();
+    expect(stats.ran).toBe(true);
+    expect(stats.error).toContain('movers endpoint down');
+    expect(getLastMoverScanStats().error).toContain('movers endpoint down');
   });
 });
