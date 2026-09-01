@@ -113,4 +113,84 @@ describe('chronologicalEdgeValidation', () => {
     const result = await mod.validateAgentWalkForward('FlippingWfAgent', 4);
     expect(result.status).toBe('WALK_FORWARD_FAILED');
   });
+
+  // Phase 14 (2026-08-31 historical-replay & fair-exploration mission): strategy-level OOS/walk-
+  // forward, reusing the exact same split/fold/Wilson math, attributed via secondaryGroupKey
+  // instead of raw agentName - the real gap this mission's Objective 6/8 needed closed
+  // (chronologicalEdgeValidation previously could only judge QuantEngine as a whole, blending all
+  // 21 strategies together, never one strategy's own consistency).
+  function seedStrategy(strategyId: string, symbol: string, ts: number, outcome: 'WIN' | 'LOSS', idSuffix: string) {
+    const id = `pred-strategy-${strategyId}-${idSuffix}`;
+    return Promise.all([
+      db.insert(schema.agentPredictions).values({
+        id, agentName: 'QuantEngine', symbol, prediction: 'BUY', confidence: 0.7,
+        reasoning: `QuantEngine/${strategyId}: setupScore 80, confidence 0.7.`, timestamp: new Date(ts).toISOString(),
+      }),
+      db.insert(schema.predictionOutcomes).values({
+        predictionId: id, sourceTable: 'agent_predictions', symbol,
+        actualPrice: 101, actualReturn: 0.01, actualDirection: 'UP',
+        mfe: 0.01, mae: 0, outcome, evaluatedAt: new Date(ts).toISOString(),
+      }),
+    ]);
+  }
+
+  function seedStrategyBootstrap(strategyId: string, symbol: string, ts: number, outcome: 'WIN' | 'LOSS', idSuffix: string) {
+    const id = `pred-strategy-boot-${strategyId}-${idSuffix}`;
+    return Promise.all([
+      db.insert(schema.agentPredictions).values({
+        id, agentName: 'QuantEngine', symbol, prediction: 'BUY', confidence: 0.7,
+        reasoning: `QuantEngine: no directional regime signal - falling back to ${strategyId}'s own real setup. Cold-start bootstrap: ${strategyId} is COLD_START.`,
+        timestamp: new Date(ts).toISOString(),
+      }),
+      db.insert(schema.predictionOutcomes).values({
+        predictionId: id, sourceTable: 'agent_predictions', symbol,
+        actualPrice: 101, actualReturn: 0.01, actualDirection: 'UP',
+        mfe: 0.01, mae: 0, outcome, evaluatedAt: new Date(ts).toISOString(),
+      }),
+    ]);
+  }
+
+  it('validateStrategyOutOfSample returns INSUFFICIENT_SAMPLE for a strategy with no real emissions yet', async () => {
+    const result = await mod.validateStrategyOutOfSample('NEVER_EMITTED_STRATEGY');
+    expect(result.status).toBe('INSUFFICIENT_SAMPLE');
+  });
+
+  it('validateStrategyOutOfSample PASSES for a strategy that is consistently above chance including its own OOS period, and never mixes in another strategy\'s evidence', async () => {
+    const base = new Date('2026-04-01T00:00:00.000Z').getTime();
+    for (let i = 0; i < 120; i++) {
+      await seedStrategy('GOOD_STRATEGY', `SYM${i}`, base + i * 24 * 60 * 60000, i % 4 === 3 ? 'LOSS' : 'WIN', `gs${i}`);
+    }
+    // A different strategy, interleaved in time, performing badly - must never contaminate GOOD_STRATEGY's own result.
+    for (let i = 0; i < 120; i++) {
+      await seedStrategy('BAD_STRATEGY', `SYM${i}`, base + i * 24 * 60 * 60000, i % 4 === 0 ? 'WIN' : 'LOSS', `bs${i}`);
+    }
+    const goodResult = await mod.validateStrategyOutOfSample('GOOD_STRATEGY');
+    expect(goodResult.status).toBe('OOS_PASSED');
+    const badResult = await mod.validateStrategyOutOfSample('BAD_STRATEGY');
+    expect(badResult.status).toBe('OOS_FAILED');
+  });
+
+  it('validateStrategyOutOfSample collapses both EV-backed and cold-start-bootstrap-sourced emissions into the same real strategy evidence pool', async () => {
+    const base = new Date('2026-03-01T00:00:00.000Z').getTime();
+    for (let i = 0; i < 60; i++) {
+      await seedStrategy('MIXED_SOURCE_STRATEGY', `SYM${i}`, base + i * 24 * 60 * 60000, i % 4 === 3 ? 'LOSS' : 'WIN', `mx${i}`);
+    }
+    for (let i = 60; i < 120; i++) {
+      await seedStrategyBootstrap('MIXED_SOURCE_STRATEGY', `SYM${i}`, base + i * 24 * 60 * 60000, i % 4 === 3 ? 'LOSS' : 'WIN', `mx${i}`);
+    }
+    const result = await mod.validateStrategyOutOfSample('MIXED_SOURCE_STRATEGY');
+    expect(result.status).toBe('OOS_PASSED');
+  });
+
+  it('validateStrategyWalkForward FAILS when a strategy\'s consistency breaks down across chronological folds', async () => {
+    const base = new Date('2026-02-01T00:00:00.000Z').getTime();
+    for (let i = 0; i < 50; i++) {
+      await seedStrategy('FLIPPING_STRATEGY', `SYM${i}`, base + i * 24 * 60 * 60000, i % 5 === 4 ? 'LOSS' : 'WIN', `flip${i}`);
+    }
+    for (let i = 50; i < 100; i++) {
+      await seedStrategy('FLIPPING_STRATEGY', `SYM${i}`, base + i * 24 * 60 * 60000, i % 5 === 4 ? 'WIN' : 'LOSS', `flip${i}`);
+    }
+    const result = await mod.validateStrategyWalkForward('FLIPPING_STRATEGY', 4);
+    expect(result.status).toBe('WALK_FORWARD_FAILED');
+  });
 });

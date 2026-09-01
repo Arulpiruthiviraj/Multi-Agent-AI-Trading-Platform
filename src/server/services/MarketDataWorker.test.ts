@@ -548,6 +548,49 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       }
     });
 
+    it('Phase 14: a strategy that wins selection repeatedly on the same symbol (the real MOMENTUM_BREAKOUT/LNG pattern) gets a fresh rescue each time without any permanent subscription growth - each cycle grants, expires, and releases cleanly', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      for (let cycle = 0; cycle < 5; cycle++) {
+        const before = worker.getActiveSymbols().length;
+        const result = worker.requestTemporaryDataRescue('LNG', 'MOMENTUM_BREAKOUT repeated win');
+        expect(result.granted).toBe(true);
+        expect(worker.getActiveSymbols().length).toBeLessThanOrEqual(cap);
+
+        const grant = worker.getActiveTemporaryRescues().find((r) => r.symbol === 'LNG');
+        expect(grant).toBeTruthy();
+        worker.setNowForTests(grant!.expiresAtMs + 1);
+        worker.releaseExpiredTemporaryDataRescues();
+        expect(worker.getActiveTemporaryRescues().map((r) => r.symbol)).not.toContain('LNG');
+        // Total active-stream count never permanently grows across repeated cycles - no leak.
+        expect(worker.getActiveSymbols().length).toBeLessThanOrEqual(Math.max(before, cap));
+      }
+    });
+
+    it('Phase 14: no permanent subscription leak - after many distinct symbols cycle through rescue and expiry, active-stream count never exceeds the hard cap', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      const candidates = ['LNG', 'XOM', 'CRM', 'ANF', 'TH', 'BAC', 'PSN', 'INTU', 'EQT', 'COLD'];
+      for (const sym of candidates) {
+        worker.requestTemporaryDataRescue(sym, 'leak-test');
+        expect(worker.getActiveSymbols().length).toBeLessThanOrEqual(cap);
+        const grant = worker.getActiveTemporaryRescues().find((r) => r.symbol === sym);
+        if (grant) {
+          worker.setNowForTests(grant.expiresAtMs + 1);
+          worker.releaseExpiredTemporaryDataRescues();
+        }
+        expect(worker.getActiveSymbols().length).toBeLessThanOrEqual(cap);
+      }
+    });
+
     it('subscribes and protects a not-yet-subscribed symbol at capacity by evicting exactly one safe candidate', async () => {
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       const cap = continuousIntelligence.maxActiveSubscriptions;

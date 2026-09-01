@@ -18,9 +18,19 @@ import { db } from '../db';
 import { agentPredictions, predictionOutcomes } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { clusterByTimeGap, wilsonInterval, classifyEvidenceStatus, type ClusterableRow } from './effectiveSampleSize';
-import { independenceClusterGapMs } from './predictionIndependencePolicy';
+import { independenceClusterGapMs, secondaryGroupKey } from './predictionIndependencePolicy';
 import { continuousIntelligence } from '../config/continuousIntelligence';
 import { TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
+
+const COLD_START_BOOTSTRAP_SUFFIX = '__COLD_START_BOOTSTRAP';
+
+/** Attributes a QuantEngine emission back to its real strategy, whether it was EV-backed or
+ *  cold-start-bootstrap-sourced - the same real-vs-bootstrap collapsing strategySelectionReplay.ts
+ *  already uses for the single "did this strategy ever really emit" fairness question. Kept
+ *  separate here since OOS/walk-forward is a stricter, chronological-only question. */
+function realStrategyIdFromGroupKey(key: string): string {
+  return key.endsWith(COLD_START_BOOTSTRAP_SUFFIX) ? key.slice(0, -COLD_START_BOOTSTRAP_SUFFIX.length) : key;
+}
 
 export interface SplitResult {
   label: 'TRAIN' | 'VALIDATION' | 'OOS';
@@ -74,6 +84,38 @@ async function fetchClusterableRows(agentName: string): Promise<ClusterableRow[]
     .sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
+/**
+ * Phase 14: strategy-level equivalent of fetchClusterableRows() - all real QuantEngine emissions
+ * attributed to strategyId via secondaryGroupKey (both EV-backed and cold-start-bootstrap-sourced
+ * variants collapse to the same real strategy, matching strategySelectionReplay.ts's own real-vs-
+ * bootstrap attribution). Reuses the exact same ClusterableRow shape/clustering/Wilson machinery
+ * as the agent-level path above - this is not a second implementation, only a different filter on
+ * the same underlying agent_predictions/prediction_outcomes rows.
+ */
+async function fetchClusterableRowsForStrategy(strategyId: string): Promise<ClusterableRow[]> {
+  const preds = await db.select().from(agentPredictions).where(eq(agentPredictions.agentName, 'QuantEngine'));
+  const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
+  const outcomeByPredId = new Map(outcomes.map((o) => [o.predictionId, o]));
+
+  return preds
+    .filter((p) => !p.traceId || !p.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX))
+    .filter((p) => {
+      const key = secondaryGroupKey('QuantEngine', p.reasoning);
+      return key !== null && realStrategyIdFromGroupKey(key) === strategyId;
+    })
+    .map((p) => {
+      const o = outcomeByPredId.get(p.id);
+      return {
+        symbol: p.symbol, agent: 'QuantEngine', side: p.prediction,
+        timestampMs: new Date(p.timestamp).getTime(),
+        outcome: (o?.outcome as 'WIN' | 'LOSS' | 'N_A') ?? 'N_A',
+        secondaryKey: strategyId,
+      };
+    })
+    .filter((r) => r.outcome !== 'N_A')
+    .sort((a, b) => a.timestampMs - b.timestampMs);
+}
+
 function summarizeWindow(rows: ClusterableRow[], gapMs: number, fromMs: number, toMs: number): { effectiveN: number; winRate: number | null; wilsonLower: number | null; wilsonUpper: number | null } {
   const windowRows = rows.filter((r) => r.timestampMs >= fromMs && r.timestampMs < toMs);
   const clusters = clusterByTimeGap(windowRows, gapMs).filter((c) => c.outcome !== 'N_A');
@@ -82,18 +124,18 @@ function summarizeWindow(rows: ClusterableRow[], gapMs: number, fromMs: number, 
   return { effectiveN: clusters.length, winRate: interval.pointEstimate, wilsonLower: interval.lower, wilsonUpper: interval.upper };
 }
 
-/** Chronological 60/20/20 TRAIN/VALIDATION/OOS split. OOS_FAILED when the OOS window's own Wilson
- *  lower bound does not clear chance even though enough OOS evidence exists to judge it - i.e. an
- *  apparent overall edge did not survive being checked against the most recent, previously-unseen
- *  real period. */
-export async function validateAgentOutOfSample(agentName: string): Promise<OosValidationResult> {
-  const rows = await fetchClusterableRows(agentName);
+/** Shared core: chronological 60/20/20 TRAIN/VALIDATION/OOS split over any already-fetched,
+ *  already-sorted ClusterableRow series. OOS_FAILED when the OOS window's own Wilson lower bound
+ *  does not clear chance even though enough OOS evidence exists to judge it - i.e. an apparent
+ *  overall edge did not survive being checked against the most recent, previously-unseen real
+ *  period. Used by both the agent-level and strategy-level public functions below - one
+ *  implementation, two identity dimensions. */
+function runOutOfSampleSplit(label: string, rows: ClusterableRow[], gapMs: number): Omit<OosValidationResult, 'agentName'> {
   const minSampleSize = continuousIntelligence.championChallengerMinSampleSize;
   if (rows.length === 0) {
-    return { agentName, splits: [], status: 'INSUFFICIENT_SAMPLE', reason: 'No graded predictions exist yet for this agent.' };
+    return { splits: [], status: 'INSUFFICIENT_SAMPLE', reason: 'No graded predictions exist yet for this label.' };
   }
 
-  const gapMs = independenceClusterGapMs(agentName);
   const firstMs = rows[0].timestampMs;
   const lastMs = rows[rows.length - 1].timestampMs + 1;
   const span = lastMs - firstMs;
@@ -112,31 +154,53 @@ export async function validateAgentOutOfSample(agentName: string): Promise<OosVa
 
   if (classifyEvidenceStatus(oos.effectiveN, minSampleSize) === 'INSUFFICIENT_EVIDENCE') {
     return {
-      agentName, splits, status: 'INSUFFICIENT_SAMPLE',
+      splits, status: 'INSUFFICIENT_SAMPLE',
       reason: `OOS window has only ${oos.effectiveN} effective observations (need ${minSampleSize}) - too little real evidence to judge out-of-sample performance yet.`,
     };
   }
 
   if (oos.wilsonLower !== null && oos.wilsonLower > 0.5) {
-    return { agentName, splits, status: 'OOS_PASSED', reason: `OOS win rate's Wilson lower bound (${oos.wilsonLower.toFixed(4)}) clears chance.` };
+    return { splits, status: 'OOS_PASSED', reason: `OOS win rate's Wilson lower bound (${oos.wilsonLower.toFixed(4)}) clears chance.` };
   }
   return {
-    agentName, splits, status: 'OOS_FAILED',
+    splits, status: 'OOS_FAILED',
     reason: `OOS win rate's Wilson lower bound (${oos.wilsonLower === null ? 'N/A' : oos.wilsonLower.toFixed(4)}) does not clear chance (>0.5 required) - any apparent overall edge did not survive the most recent held-out real period.`,
   };
+}
+
+/** Chronological 60/20/20 TRAIN/VALIDATION/OOS split. OOS_FAILED when the OOS window's own Wilson
+ *  lower bound does not clear chance even though enough OOS evidence exists to judge it - i.e. an
+ *  apparent overall edge did not survive being checked against the most recent, previously-unseen
+ *  real period. */
+export async function validateAgentOutOfSample(agentName: string): Promise<OosValidationResult> {
+  const rows = await fetchClusterableRows(agentName);
+  const gapMs = independenceClusterGapMs(agentName);
+  return { agentName, ...runOutOfSampleSplit(agentName, rows, gapMs) };
+}
+
+/**
+ * Phase 14: strategy-level OOS validation - the exact same chronological 60/20/20 split and
+ * Wilson-lower-bound-above-chance judgment as validateAgentOutOfSample(), applied to one
+ * QuantEngine strategy's own real emissions (via secondaryGroupKey attribution) instead of an
+ * entire agent's. Answers "did MOMENTUM_BREAKOUT's (or any strategy's) apparent edge survive being
+ * checked against its own most recent, previously-unseen real period" - not merely QuantEngine's
+ * blended average across all 21 strategies.
+ */
+export async function validateStrategyOutOfSample(strategyId: string): Promise<OosValidationResult> {
+  const rows = await fetchClusterableRowsForStrategy(strategyId);
+  const gapMs = independenceClusterGapMs('QuantEngine');
+  return { agentName: strategyId, ...runOutOfSampleSplit(strategyId, rows, gapMs) };
 }
 
 /** Rolling chronological folds (default 4) checking whether real accuracy is CONSISTENT across
  *  separate real periods, rather than driven by one stretch. Not re-fitting a model (these agents
  *  have no trainable parameters) - this is a consistency check over real, already-graded outcomes. */
-export async function validateAgentWalkForward(agentName: string, foldCount = 4): Promise<WalkForwardResult> {
-  const rows = await fetchClusterableRows(agentName);
+function runWalkForwardFolds(rows: ClusterableRow[], gapMs: number, foldCount: number): Omit<WalkForwardResult, 'agentName'> {
   const minSampleSize = continuousIntelligence.championChallengerMinSampleSize;
   if (rows.length === 0) {
-    return { agentName, folds: [], status: 'INSUFFICIENT_SAMPLE', reason: 'No graded predictions exist yet for this agent.' };
+    return { folds: [], status: 'INSUFFICIENT_SAMPLE', reason: 'No graded predictions exist yet for this label.' };
   }
 
-  const gapMs = independenceClusterGapMs(agentName);
   const firstMs = rows[0].timestampMs;
   const lastMs = rows[rows.length - 1].timestampMs + 1;
   const span = lastMs - firstMs;
@@ -152,7 +216,7 @@ export async function validateAgentWalkForward(agentName: string, foldCount = 4)
   const judgeable = folds.filter((f) => classifyEvidenceStatus(f.effectiveN, minSampleSize) === 'LEARNING_ELIGIBLE');
   if (judgeable.length < 2) {
     return {
-      agentName, folds, status: 'INSUFFICIENT_SAMPLE',
+      folds, status: 'INSUFFICIENT_SAMPLE',
       reason: `Only ${judgeable.length} of ${foldCount} chronological folds have enough effective evidence to judge (need >=2 to compare) - too little real history yet.`,
     };
   }
@@ -164,15 +228,33 @@ export async function validateAgentWalkForward(agentName: string, foldCount = 4)
   // statistic is not a stable, real edge, it is regime- or luck-dependent.
   if (aboveChance > 0 && belowChance > 0) {
     return {
-      agentName, folds, status: 'WALK_FORWARD_FAILED',
+      folds, status: 'WALK_FORWARD_FAILED',
       reason: `${aboveChance} fold(s) sit clearly above chance and ${belowChance} sit clearly below chance - real performance is not consistent across chronological periods, not a stable edge.`,
     };
   }
   if (aboveChance === judgeable.length) {
-    return { agentName, folds, status: 'WALK_FORWARD_PASSED', reason: `All ${judgeable.length} judgeable folds sit above chance - consistent across chronological periods.` };
+    return { folds, status: 'WALK_FORWARD_PASSED', reason: `All ${judgeable.length} judgeable folds sit above chance - consistent across chronological periods.` };
   }
   return {
-    agentName, folds, status: 'WALK_FORWARD_FAILED',
+    folds, status: 'WALK_FORWARD_FAILED',
     reason: `No judgeable fold clears chance - no consistent edge detected across chronological periods.`,
   };
+}
+
+export async function validateAgentWalkForward(agentName: string, foldCount = 4): Promise<WalkForwardResult> {
+  const rows = await fetchClusterableRows(agentName);
+  const gapMs = independenceClusterGapMs(agentName);
+  return { agentName, ...runWalkForwardFolds(rows, gapMs, foldCount) };
+}
+
+/**
+ * Phase 14: strategy-level walk-forward - the exact same rolling-fold consistency check as
+ * validateAgentWalkForward(), applied to one QuantEngine strategy's own real emissions instead of
+ * an entire agent's blended average. A strategy's overall win rate might look fine while actually
+ * being driven by one lucky stretch - this answers whether it holds up fold-by-fold on its own.
+ */
+export async function validateStrategyWalkForward(strategyId: string, foldCount = 4): Promise<WalkForwardResult> {
+  const rows = await fetchClusterableRowsForStrategy(strategyId);
+  const gapMs = independenceClusterGapMs('QuantEngine');
+  return { agentName: strategyId, ...runWalkForwardFolds(rows, gapMs, foldCount) };
 }

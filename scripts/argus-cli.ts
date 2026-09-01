@@ -633,7 +633,20 @@ const commands: Record<string, () => Promise<void>> = {
     // Phase 13 (2026-08-31 real-edge audit): real net-P&L per strategy from real closed
     // round-trip fills - never estimated. Separate from strategy-fairness/strategy-readiness:
     // this answers "would trading this strategy have made money," not direction-correctness.
-    const res = await fetch(`${BASE}/api/v2/observability/strategy-profitability?format=text`, {
+    // Pass --costProfile=Base|Conservative|Optimistic|... to change the CONFIGURED SIMULATION
+    // ASSUMPTION applied on top of real fills (replaySafety.json) - default is replaySafety's own.
+    const profileArg = process.argv.slice(3).find((a) => a.startsWith('--costProfile='));
+    const qs = profileArg ? `&costProfile=${encodeURIComponent(profileArg.slice('--costProfile='.length))}` : '';
+    const res = await fetch(`${BASE}/api/v2/observability/strategy-profitability?format=text${qs}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'rescue-outcomes'() {
+    // Phase 14 (2026-08-31): did a temporary market-data rescue grant actually lead to consensus,
+    // RiskEngine, and a paper fill? Real correlation over already-persisted rows.
+    const res = await fetch(`${BASE}/api/v2/observability/rescue-outcomes?format=text`, {
       headers: cliAuthHeaders(),
       signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
     });
@@ -998,7 +1011,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

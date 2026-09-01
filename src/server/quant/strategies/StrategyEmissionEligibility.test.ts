@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import type { StrategyLifecycleStatus } from './StrategyEmissionEligibility';
 
 describe('StrategyEmissionEligibility', () => {
   let tmpDbPath: string;
@@ -76,5 +77,37 @@ describe('StrategyEmissionEligibility', () => {
   it('filterQuarantinedStrategies handles an empty array without querying the database', async () => {
     const filtered = await mod.filterQuarantinedStrategies([]);
     expect(filtered).toEqual([]);
+  });
+
+  it('getStrategyLifecycleStatus reports UNTESTED for a strategy with no lifecycle row - the current baseline default', async () => {
+    expect(await mod.getStrategyLifecycleStatus('BRAND_NEW_STRATEGY')).toBe('UNTESTED');
+  });
+
+  it('non-exposure-removing statuses (CANDIDATE, ACTIVE_EXPLORATION, VALIDATED, CHAMPION, SHADOW, ROLLED_BACK) never quarantine - only RETIRED and DEGRADED do', async () => {
+    const eligibleStatuses: StrategyLifecycleStatus[] = ['SHADOW', 'CANDIDATE', 'ACTIVE_EXPLORATION', 'VALIDATED', 'CHAMPION', 'ROLLED_BACK'];
+    for (const status of eligibleStatuses) {
+      const strategyId = `ELIGIBLE_${status}`;
+      await mod.recordStrategyLifecycleTransition(strategyId, status, `testing ${status}`, null, 0);
+      expect(await mod.isStrategyQuarantinedForEmission(strategyId)).toBe(false);
+    }
+    await mod.recordStrategyLifecycleTransition('DEGRADED_STRATEGY', 'DEGRADED', 'evidence turned negative', { winRate: 0.3 }, 15);
+    expect(await mod.isStrategyQuarantinedForEmission('DEGRADED_STRATEGY')).toBe(true);
+  });
+
+  it('getStrategyLifecycleHistory returns the full, timestamped, append-only audit trail in most-recent-first order', async () => {
+    const t0 = new Date('2026-07-01T00:00:00.000Z');
+    const t1 = new Date('2026-07-15T00:00:00.000Z');
+    const t2 = new Date('2026-08-01T00:00:00.000Z');
+    await mod.recordStrategyLifecycleTransition('AUDIT_STRATEGY', 'CANDIDATE', 'first showed promise', { n: 5 }, 5, t0);
+    await mod.recordStrategyLifecycleTransition('AUDIT_STRATEGY', 'ACTIVE_EXPLORATION', 'granted bounded exposure', { n: 12 }, 12, t1);
+    await mod.recordStrategyLifecycleTransition('AUDIT_STRATEGY', 'DEGRADED', 'evidence turned negative', { n: 22, winRate: 0.2 }, 22, t2);
+
+    const history = await mod.getStrategyLifecycleHistory('AUDIT_STRATEGY');
+    expect(history.length).toBe(3);
+    expect(history.map((h) => h.status)).toEqual(['DEGRADED', 'ACTIVE_EXPLORATION', 'CANDIDATE']);
+    expect(history[0].evidence).toEqual({ n: 22, winRate: 0.2 });
+    expect(history[0].sampleSize).toBe(22);
+    // Every transition is preserved - nothing was overwritten by the later ones.
+    expect(history[2].hypothesis).toBe('first showed promise');
   });
 });

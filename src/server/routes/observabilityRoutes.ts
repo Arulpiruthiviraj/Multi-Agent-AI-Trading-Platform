@@ -15,6 +15,7 @@ import { buildAgentEdgeDiscoveryReport, formatAgentEdgeDiscoveryReport } from '.
 import { buildStrategyReadinessReport, formatStrategyReadinessReport } from '../research/strategyReadiness';
 import { buildStrategyFairnessReport, formatStrategyFairnessReport } from '../research/strategySelectionReplay';
 import { buildStrategyProfitabilityReport, formatStrategyProfitabilityReport } from '../research/strategyProfitabilityReport';
+import { buildRescueOutcomeReport, formatRescueOutcomeReport } from '../observability/rescueOutcomeReport';
 
 export const observabilityRouter = Router();
 
@@ -199,9 +200,28 @@ observabilityRouter.get('/strategy-fairness', async (req, res) => {
 // trading this strategy have made money," not "did its direction call turn out correct."
 observabilityRouter.get('/strategy-profitability', async (req, res) => {
   try {
-    const rows = await buildStrategyProfitabilityReport();
+    const costProfile = typeof req.query.costProfile === 'string' ? req.query.costProfile : undefined;
+    const rows = await buildStrategyProfitabilityReport(costProfile);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatStrategyProfitabilityReport(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 14 (2026-08-31): did a temporary market-data rescue grant (MarketDataWorker.
+// requestTemporaryDataRescue) actually lead to consensus/RiskEngine/a paper fill? Read-only
+// correlation over already-persisted rows - never a new decision path.
+observabilityRouter.get('/rescue-outcomes', async (req, res) => {
+  try {
+    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const rows = await buildRescueOutcomeReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatRescueOutcomeReport(rows));
       return;
     }
     res.json({ ok: true, rows });

@@ -104,4 +104,24 @@ describe('strategyProfitabilityReport', () => {
   it('formatStrategyProfitabilityReport renders a readable table and never crashes on zero rows', () => {
     expect(mod.formatStrategyProfitabilityReport([])).toContain('no real organic closed round-trips');
   });
+
+  // Phase 14 (2026-08-31 historical-replay & fair-exploration mission), Objective 3: observed vs.
+  // configured-simulation cost distinction, reusing replaySafety.json's existing cost profiles.
+  it('simulatedNetPnl is strictly the OBSERVED netPnl minus the configured cost-profile estimate - never presented as itself observed', async () => {
+    await seedRoundTrip('COST_SIM_STRATEGY', 'AAPL', 100, 105, 10, '2026-02-01T10:00:00.000Z');
+    await seedRoundTrip('COST_SIM_STRATEGY', 'AAPL', 100, 103, 10, '2026-02-02T10:00:00.000Z');
+    const rows = await mod.buildStrategyProfitabilityReport('Base');
+    const row = rows.find((r) => r.strategyId === 'COST_SIM_STRATEGY')!;
+    expect(row.simulatedCostProfile).toBe('Base');
+    expect(row.simulatedTransactionCosts).toBeGreaterThan(0);
+    expect(row.simulatedNetPnl).toBeCloseTo(row.netPnl - row.simulatedTransactionCosts, 6);
+    // A stricter cost profile must never produce a LOWER estimated cost than a cheaper one.
+    const conservativeRows = await mod.buildStrategyProfitabilityReport('Conservative');
+    const conservativeRow = conservativeRows.find((r) => r.strategyId === 'COST_SIM_STRATEGY')!;
+    expect(conservativeRow.simulatedTransactionCosts).toBeGreaterThan(row.simulatedTransactionCosts);
+  });
+
+  it('an unknown cost profile name is rejected rather than silently defaulting to an unlabeled assumption', async () => {
+    await expect(mod.buildStrategyProfitabilityReport('NOT_A_REAL_PROFILE')).rejects.toThrow(/Unknown cost profile/);
+  });
 });
