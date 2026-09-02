@@ -23,6 +23,8 @@ import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { recordPrediction } from '../services/ModelPerformanceTracker';
+import { withDiscoveryCircuitBreaker, resetDiscoveryCircuitBreakersForTests } from '../core/discoveryHttpCircuitBreaker';
+import { normalizeSymbols } from '../core/symbolNormalization';
 
 interface AlpacaAsset {
   symbol: string;
@@ -41,6 +43,10 @@ interface AlpacaSnapshot {
    *  the SAME already-fetched Alpaca snapshot response (dailyBar.o) - zero new API call, zero new
    *  cost. Null when the response carries no real open price to compute it from. */
   gapPct: number | null;
+  /** Phase 27 (2026-09-02): raw today's-session share volume from the SAME already-fetched
+   *  dailyBar.v used to compute dollarVolume above - kept separately so it can later be divided by
+   *  the real ADV (fetched only for stage-2 survivors) to get a relative-volume ratio. */
+  volume: number;
 }
 
 export interface BroadUniverseStats {
@@ -74,17 +80,19 @@ function authHeaders(): Record<string, string> {
 }
 
 async function fetchJson<T>(url: string, timeoutMs: number): Promise<T> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const res = await alpacaFetch(url, { headers: authHeaders(), signal: controller.signal });
-    if (!res.ok) {
-      throw new Error(`Alpaca request failed ${res.status} for ${url}`);
+  return withDiscoveryCircuitBreaker('MarketUniverseScanner', async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await alpacaFetch(url, { headers: authHeaders(), signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(`Alpaca request failed ${res.status} for ${url}`);
+      }
+      return (await res.json()) as T;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    return (await res.json()) as T;
-  } finally {
-    clearTimeout(timeoutId);
-  }
+  });
 }
 
 /** Real Alpaca tradable-assets list, cached. Filters to active/tradable US equities on allowed exchanges. */
@@ -133,7 +141,7 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
         const gapPct = (typeof openPrice === 'number' && Number.isFinite(openPrice) && openPrice > 0)
           ? (price - openPrice) / openPrice
           : null;
-        results.push({ symbol, price, dollarVolume, spreadBps, gapPct });
+        results.push({ symbol, price, dollarVolume, spreadBps, gapPct, volume });
       }
     } catch (e) {
       logErrorSafely('[MarketUniverseScanner] snapshot batch failed', e);
@@ -186,6 +194,11 @@ function logDiscoveryCandidateDecision(input: {
    *  new API call or a bypass of that screen. */
   gapMover?: boolean;
   gapPct?: number | null;
+  /** Phase 27 (2026-09-02): true when this candidate's real today's-volume/ADV ratio (see
+   *  computeRvol()) clears continuousIntelligence.rvolMoverMinRatio - observability only, computed
+   *  from data already fetched for the liquidity/ADV screens, never a new API call. */
+  rvolMover?: boolean;
+  rvol?: number | null;
 }): void {
   observeSafe(() => {
     structuredLogger.info('discovery_candidate_decision', {
@@ -200,6 +213,8 @@ function logDiscoveryCandidateDecision(input: {
       advShares: input.advShares ?? null,
       gapMover: input.gapMover ?? false,
       gapPct: input.gapPct ?? null,
+      rvolMover: input.rvolMover ?? false,
+      rvol: input.rvol ?? null,
     });
   });
 }
@@ -209,6 +224,21 @@ function logDiscoveryCandidateDecision(input: {
  *  threshold. Never a new API call, never a bypass of passesScreen/passesAdvScreen. */
 function isGapMover(snap: AlpacaSnapshot): boolean {
   return snap.gapPct !== null && Math.abs(snap.gapPct) >= continuousIntelligence.gapMoverMinAbsPct;
+}
+
+/** Real today's-volume / ADV ratio - null when no real ADV was fetched for this symbol (ADV is
+ *  only fetched for stage-2 liquidity-screen survivors, never fabricated for the rest). */
+function computeRvol(snap: AlpacaSnapshot, advMap: Map<string, number>): number | null {
+  const adv = advMap.get(snap.symbol);
+  if (adv == null || adv <= 0) return null;
+  return snap.volume / adv;
+}
+
+/** Real, config-driven relative-volume-mover classification, symmetric to isGapMover() - true only
+ *  when computeRvol() clears the reviewed threshold. Never a new API call, never a bypass of
+ *  passesScreen/passesAdvScreen. */
+function isRvolMover(rvol: number | null): boolean {
+  return rvol !== null && rvol >= continuousIntelligence.rvolMoverMinRatio;
 }
 
 /**
@@ -303,11 +333,20 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       // liquidity gate but still lost the final dollar-volume-desc rank cutoff
       // (broadUniverseMaxCandidates) - these are different, real reasons, not the same one.
       const reason: DiscoveryRejectReason | null = admitted ? null : (passesAdvScreen(s.symbol, advMap) ? 'RANK_CAP' : 'ADV');
+      const rvol = computeRvol(s, advMap);
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'BROAD_UNIVERSE', admitted, reason,
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
         gapMover: isGapMover(s), gapPct: s.gapPct,
+        rvolMover: isRvolMover(rvol), rvol,
       });
+      // Phase 27 (2026-09-02): extends Phase 5 (Discovery -> Outcome Learning) to the broad-universe
+      // funnel too - previously this only ran for movers. Same EXISTING recordPrediction() pipeline,
+      // same real-direction-signal-only condition (never a fabricated probe when gapPct is null),
+      // bounded by the same broadUniverseMaxCandidates rank cap the `passing` list already enforces.
+      if (admitted && s.gapPct !== null) {
+        await recordDiscoveryOutcomeProbe(s.symbol, s.gapPct);
+      }
     }
     snapshotCache = { fetchedAt: Date.now(), symbols: passing };
     lastStats = {
@@ -359,6 +398,7 @@ export function resetMarketUniverseScannerForTests(): void {
   moversCache = null;
   moversInFlight = false;
   lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
+  resetDiscoveryCircuitBreakersForTests();
 }
 
 // ==========================================================================================
@@ -411,9 +451,7 @@ export async function fetchTopMovers(): Promise<{ symbols: string[]; gainersFetc
   const raw = await fetchJson<AlpacaMoversResponse>(url, 15000);
   const gainers = Array.isArray(raw.gainers) ? raw.gainers : [];
   const losers = Array.isArray(raw.losers) ? raw.losers : [];
-  const symbols = [...new Set(
-    [...gainers, ...losers].map((m) => String(m.symbol || '').trim().toUpperCase()).filter(Boolean),
-  )];
+  const symbols = normalizeSymbols([...gainers, ...losers].map((m) => String(m.symbol || '')));
   return { symbols, gainersFetched: gainers.length, losersFetched: losers.length };
 }
 
@@ -451,10 +489,12 @@ export async function refreshMoversCache(): Promise<MoverScanStats> {
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
     for (const s of stage2) {
       const admitted = passesAdvScreen(s.symbol, advMap);
+      const rvol = computeRvol(s, advMap);
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'MARKET_MOVER', admitted, reason: admitted ? null : 'ADV',
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
         gapMover: isGapMover(s), gapPct: s.gapPct,
+        rvolMover: isRvolMover(rvol), rvol,
       });
       // Phase 5 (Discovery -> Outcome Learning, 2026-09-02 forensic-audit follow-up): for an
       // ADMITTED candidate with a real, already-computed direction signal (gapPct), record a real

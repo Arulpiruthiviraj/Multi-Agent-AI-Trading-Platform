@@ -106,6 +106,36 @@ same-day evidence: `MEAN_REVERSION` mean 18.2 vs `FIBONACCI_PULLBACK` mean 76.7)
 fallback). Never changes `MIN_STRATEGY_CONFIDENCE_TO_TRADE` eligibility or touches
 ChiefTrader/RiskEngine/OMS/consensus. See `docs/audits/ARGUS_PHASE18_SCORE_NORMALIZATION_RESEARCH_NOTE.md`.
 
+## Phase 27 — relative volume, outcome-learning coverage, dedup consolidation, circuit breaker (2026-09-02)
+
+Four small, real reliability/consistency follow-ups to the Phase 3/B/C/5 work above, same review
+standard, no new flags:
+
+- **Relative volume** (symmetric to Phase C's gap detection): `screenAssets()` keeps the raw
+  `dailyBar.v` share volume it already fetches; once the real ADV is fetched for the liquidity
+  screen (`fetchAvgDailyVolumeShares()`), `volume / adv` is computed at zero additional API cost. A
+  candidate whose ratio clears `rvolMoverMinRatio` (default 2x) is tagged `rvolMover: true` /
+  `rvol: <ratio>` in the Discovery Lineage Ledger, same as `gapMover`/`gapPct`.
+- **Discovery → Outcome Learning now covers broad universe too**: Phase 5's shadow-prediction probe
+  (`recordDiscoveryOutcomeProbe()`, agent name `DiscoveryOutcomeTracker`) previously only ran from
+  `refreshMoversCache()`. It now also runs from `refreshBroadUniverseCache()` for every truly admitted
+  candidate (after the `broadUniverseMaxCandidates` rank cap, not before) with a real `gapPct` — same
+  existing `recordPrediction()` pipeline, same real-signal-only condition.
+- **Dedup consolidation**: the same `[...new Set(names.map((s) => s.trim().toUpperCase()).filter(...))]`
+  pattern had been independently re-implemented in `OpportunityDiscovery.ts`, `SnapshotScanner.ts`,
+  `MomentumUniverseScanner.ts` (twice), and `MarketUniverseScanner.ts`'s movers dedup — five call
+  sites, same logic. Consolidated into `src/server/core/symbolNormalization.ts`
+  (`normalizeSymbols` / `normalizeAndValidateSymbols`); behavior is unchanged, verified by the full
+  existing test suite for all five call sites plus new dedicated unit tests for the shared utility.
+- **Discovery HTTP circuit breaker**: `MarketUniverseScanner.ts`'s Alpaca calls went through
+  `alpacaFetch()` (`src/server/core/alpacaTls.ts`), which is TLS-fallback only — no retry, no circuit
+  breaker, unlike `AlpacaBroker.ts`'s own order-path `fetchAlpaca()`. A sustained Alpaca outage would
+  have had every discovery refresh cycle hammer it with no cooldown. `withDiscoveryCircuitBreaker()`
+  (`src/server/core/discoveryHttpCircuitBreaker.ts`) now wraps `fetchJson()`, reusing the SAME
+  reviewed `tradingSafety.alpacaCircuitBreakerFailureThreshold`/`CooldownMs` values rather than
+  inventing new config — one independent breaker instance per named caller, so a broad-universe
+  outage cannot also trip the movers scanner. Does not touch `AlpacaBroker.ts` or any order-path code.
+
 Watch vs BUY: unknown spread / unknown dollar volume / MARKET-unfit **do not** block watchlist subscribe (chicken-and-egg). Known wide spread, poor liquidity, and excessive volatility still reject. BUY still hits `applyAssetIdeaGate`.
 
 ## Funnel

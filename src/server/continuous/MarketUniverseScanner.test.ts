@@ -251,6 +251,54 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
       (continuousIntelligence as any).broadUniverseMaxCandidates = originalCap;
     }
   });
+
+  it('Phase 27 (Discovery -> Outcome Learning extended to broad universe): an admitted broad-universe candidate with a real direction signal gets a real shadow prediction via the SAME EXISTING agent_predictions pipeline movers already use', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'BROADPROBE', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      BROADPROBE: { latestTrade: { p: 55 }, dailyBar: { o: 50, v: 5_000_000, c: 55 }, latestQuote: { bp: 54.9, ap: 55.1 } }, // real +10% gap
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ BROADPROBE: [5_000_000, 5_000_000] }));
+    await refreshBroadUniverseCache();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.agentPredictions).where(
+      and(eq(schema.agentPredictions.agentName, 'DiscoveryOutcomeTracker'), eq(schema.agentPredictions.symbol, 'BROADPROBE')),
+    );
+    expect(rows.length).toBe(1);
+    expect(rows[0].prediction).toBe('BUY');
+    expect(rows[0].confidence).toBe(0.5);
+  });
+
+  it('Phase 27: a broad-universe candidate rejected by the rank cap gets no shadow prediction - only truly admitted candidates are probed', async () => {
+    process.env[FLAG] = 'true';
+    const originalCap = continuousIntelligence.broadUniverseMaxCandidates;
+    (continuousIntelligence as any).broadUniverseMaxCandidates = 1;
+    try {
+      mockFetch.mockResolvedValueOnce(jsonResponse([
+        { symbol: 'BROADTOP', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+        { symbol: 'BROADRUNNERUP', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+      ]));
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        BROADTOP: { latestTrade: { p: 55 }, dailyBar: { o: 50, v: 10_000_000, c: 55 }, latestQuote: { bp: 54.9, ap: 55.1 } },
+        BROADRUNNERUP: { latestTrade: { p: 55 }, dailyBar: { o: 50, v: 5_000_000, c: 55 }, latestQuote: { bp: 54.9, ap: 55.1 } },
+      }));
+      mockFetch.mockResolvedValueOnce(barsResponse({ BROADTOP: [10_000_000, 10_000_000], BROADRUNNERUP: [5_000_000, 5_000_000] }));
+      await refreshBroadUniverseCache();
+
+      const { db } = await import('../db');
+      const schema = await import('../db/schema');
+      const { eq } = await import('drizzle-orm');
+      const rows = await db.select().from(schema.agentPredictions).where(eq(schema.agentPredictions.symbol, 'BROADRUNNERUP'));
+      expect(rows).toHaveLength(0); // lost the rank cap - never truly admitted, never probed
+    } finally {
+      (continuousIntelligence as any).broadUniverseMaxCandidates = originalCap;
+    }
+  });
 });
 
 describe('MarketUniverseScanner - movers flag gating', () => {
@@ -425,6 +473,52 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     );
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.parse(rows[rows.length - 1].payload as string).gapMover).toBe(false);
+  });
+
+  it('Phase 27 (relative volume): tags a real relative-volume mover using the SAME already-fetched snapshot + ADV data - zero new API call', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'HIGHRVOL', percent_change: 6 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      // Today's volume 6,000,000 vs a real 2,000,000-share ADV -> 3x, above the 2x default threshold.
+      HIGHRVOL: { latestTrade: { p: 51 }, dailyBar: { o: 50, v: 6_000_000, c: 51 }, latestQuote: { bp: 50.9, ap: 51.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ HIGHRVOL: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(
+      and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_ADMITTED'), eq(schema.observabilityEvents.symbol, 'HIGHRVOL')),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const payload = JSON.parse(rows[rows.length - 1].payload as string);
+    expect(payload.rvolMover).toBe(true);
+    expect(payload.rvol).toBeCloseTo(3, 2);
+  });
+
+  it('Phase 27: real volume below the reviewed relative-volume threshold is never tagged a relative-volume mover', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'NORMALVOL', percent_change: 6 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      // Today's volume 2,000,000 vs a real 2,000,000-share ADV -> 1x, below the 2x default threshold.
+      NORMALVOL: { latestTrade: { p: 51 }, dailyBar: { o: 50, v: 2_000_000, c: 51 }, latestQuote: { bp: 50.9, ap: 51.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ NORMALVOL: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(
+      and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_ADMITTED'), eq(schema.observabilityEvents.symbol, 'NORMALVOL')),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const payload = JSON.parse(rows[rows.length - 1].payload as string);
+    expect(payload.rvolMover).toBe(false);
+    expect(payload.rvol).toBeCloseTo(1, 2);
   });
 
   it('Phase A: logs ADV as the reason when a mover clears price/dollar-volume/spread but fails the real 20-day ADV floor', async () => {

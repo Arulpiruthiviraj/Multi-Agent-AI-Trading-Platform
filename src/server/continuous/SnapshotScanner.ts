@@ -10,6 +10,7 @@ import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { normalizeAndValidateSymbols } from '../core/symbolNormalization';
 import { getTradingTimeHHMM, TRADING_TIMEZONE, getTradingDateStr } from '../core/TradingCalendar';
 import { isEtTimeInWindow } from '../services/campaignIntraday';
 import { classifyMarketSession } from '../replay/marketSession';
@@ -179,7 +180,7 @@ export function getSnapshotScanUniverse(): string[] {
     ...continuousIntelligence.campaignOpeningSurgeSymbols,
     ...continuousIntelligence.momentumScanUniverseSymbols,
   ];
-  return [...new Set(names.map((s) => s.trim().toUpperCase()).filter((s) => looksLikeListedTicker(s)))];
+  return normalizeAndValidateSymbols(names);
 }
 
 function anchorSet(): Set<string> {

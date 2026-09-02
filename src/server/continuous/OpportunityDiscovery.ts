@@ -10,6 +10,7 @@
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { normalizeSymbols } from '../core/symbolNormalization';
 import {
   continuousIntelligence,
   isOpportunityLoopEnabled,
@@ -108,7 +109,7 @@ export function getOpportunityScanUniverse(): string[] {
   if (isPennyStockEnabled()) {
     names.push(...continuousIntelligence.pennyWatchSymbols);
   }
-  return [...new Set(names.map((s) => s.trim().toUpperCase()).filter(Boolean))];
+  return normalizeSymbols(names);
 }
 
 export function evaluateOpportunityCandidate(

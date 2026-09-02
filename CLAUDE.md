@@ -191,6 +191,30 @@ Idea agents (timer or MARKET_DATA):
                          comparing raw scores across strategies with
                          structurally different formulas — never touches
                          `MIN_STRATEGY_CONFIDENCE_TO_TRADE` or consensus.
+                         Phase 27 (2026-09-02, same follow-up): relative-volume
+                         detection, symmetric to gap detection — `screenAssets()`
+                         also keeps the raw `dailyBar.v` share volume it already
+                         fetches, divided by the real ADV already fetched for the
+                         liquidity screen (`fetchAvgDailyVolumeShares()`, zero new
+                         API cost) to tag a candidate `rvolMover:true` at
+                         `rvolMoverMinRatio` (2x) in the Discovery Lineage Ledger.
+                         Discovery → Outcome Learning (Phase 5) now also covers the
+                         broad-universe funnel (`refreshBroadUniverseCache()`), not
+                         just movers — same existing `recordPrediction()` pipeline,
+                         same real-signal-only condition, bounded by the same
+                         `broadUniverseMaxCandidates` rank cap. The four independent
+                         `[...new Set(names.map(...).filter(...))]` dedup blocks
+                         across `OpportunityDiscovery.ts`/`SnapshotScanner.ts`/
+                         `MomentumUniverseScanner.ts`(×2)/`MarketUniverseScanner.ts`
+                         are consolidated into `src/server/core/symbolNormalization.ts`
+                         (`normalizeSymbols`/`normalizeAndValidateSymbols`) — same
+                         behavior, one place. `MarketUniverseScanner.ts`'s Alpaca
+                         calls are now wrapped in a small, generic, per-named-caller
+                         circuit breaker (`src/server/core/discoveryHttpCircuitBreaker.ts`)
+                         reusing the SAME reviewed `alpacaCircuitBreakerFailureThreshold`/
+                         `CooldownMs` `AlpacaBroker.ts` already uses for the order
+                         path — the discovery scanners previously had zero
+                         circuit-breaker protection at all.
   OpportunityScreener  → off unless ARGUS_OPPORTUNITY_IDEAS_ENABLED=true;
                          cheap tick-return rank; `emitTradeIdea` as one vote
  ↓ TRADE_IDEA_GENERATED {traceId, symbol, side, confidence, reasoning, agent, currentPrice?}

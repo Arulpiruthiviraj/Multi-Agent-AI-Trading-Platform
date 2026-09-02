@@ -50,6 +50,9 @@ export interface ContinuousIntelligenceConfig {
   /** Phase C (Universal Discovery Expansion): minimum absolute intraday gap-vs-open to tag a
    *  candidate gapMover:true in the Discovery Lineage Ledger - observability only. */
   gapMoverMinAbsPct: number;
+  /** Phase 27 (Universal Discovery Expansion follow-up): minimum today's-volume / ADV ratio to tag
+   *  a candidate rvolMover:true in the Discovery Lineage Ledger - observability only. */
+  rvolMoverMinRatio: number;
   /** Dynamic symbols are eviction-immune until this dwell elapses (unless tick floor met). */
   minDynamicDwellMs: number;
   /** Alternate dwell exit: enough ticks to evaluate setups before eviction. */
@@ -190,6 +193,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     snapshotMomentumScoreEdge: requireNonNegativeNumber(raw.snapshotMomentumScoreEdge, 'snapshotMomentumScoreEdge'),
     moverPriorityScoreBonus: requireNonNegativeNumber(raw.moverPriorityScoreBonus, 'moverPriorityScoreBonus'),
     gapMoverMinAbsPct: requireNonNegativeNumber(raw.gapMoverMinAbsPct, 'gapMoverMinAbsPct'),
+    rvolMoverMinRatio: requireNonNegativeNumber(raw.rvolMoverMinRatio, 'rvolMoverMinRatio'),
     minDynamicDwellMs: requireNumber(raw.minDynamicDwellMs, 'minDynamicDwellMs'),
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
     temporaryDataRescueMaxDurationMs: requireNumber(raw.temporaryDataRescueMaxDurationMs, 'temporaryDataRescueMaxDurationMs'),

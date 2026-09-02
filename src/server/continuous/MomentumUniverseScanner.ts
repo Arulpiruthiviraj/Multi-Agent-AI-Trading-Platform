@@ -8,7 +8,7 @@ import { continuousIntelligence } from '../config/continuousIntelligence';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
-import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { normalizeAndValidateSymbols } from '../core/symbolNormalization';
 import { getNewsCatalysts } from '../services/NewsCatalystStore';
 import { isEtTimeInWindow } from '../services/campaignIntraday';
 import { getTradingTimeHHMM } from '../core/TradingCalendar';
@@ -165,7 +165,7 @@ function parseSnapshot(symbol: string, snap: Record<string, unknown> | undefined
 /** Batched Alpaca IEX snapshots → momentum metrics. Failed batches are skipped (fail-open per batch). */
 export async function fetchMomentumSnapshots(symbols: string[]): Promise<MomentumSnapshotMetrics[]> {
   const batchSize = continuousIntelligence.broadUniverseSnapshotBatchSize;
-  const unique = [...new Set(symbols.map((s) => s.trim().toUpperCase()).filter((s) => looksLikeListedTicker(s)))];
+  const unique = normalizeAndValidateSymbols(symbols);
   const results: MomentumSnapshotMetrics[] = [];
   for (let i = 0; i < unique.length; i += batchSize) {
     const batch = unique.slice(i, i + batchSize);
@@ -190,7 +190,7 @@ export function getMomentumScanUniverse(): string[] {
     ...continuousIntelligence.campaignOpeningSurgeSymbols,
     ...continuousIntelligence.momentumScanUniverseSymbols,
   ];
-  return [...new Set(names.map((s) => s.trim().toUpperCase()).filter((s) => looksLikeListedTicker(s)))];
+  return normalizeAndValidateSymbols(names);
 }
 
 /**

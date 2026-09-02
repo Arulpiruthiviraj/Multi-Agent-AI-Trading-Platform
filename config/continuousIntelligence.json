@@ -32,6 +32,8 @@
   "moverPriorityScoreBonus": 0.5,
   "_gapMoverMinAbsPctComment": "Phase C (Universal Discovery Expansion, 2026-09-02): real intraday gap-vs-open classification computed from the SAME Alpaca snapshot data already fetched for the liquidity screen (dailyBar.o) - zero new API call. A candidate with |gapPct| at or above this is tagged gapMover:true in the Discovery Lineage Ledger - observability only, never a bypass of the price/dollar-volume/spread/ADV screen.",
   "gapMoverMinAbsPct": 0.05,
+  "_rvolMoverMinRatioComment": "Phase 27 (Universal Discovery Expansion follow-up, 2026-09-02): real relative-volume classification - today's already-fetched snapshot volume (dailyBar.v, same data screenAssets() already pulls) divided by the already-fetched broadUniverseAdvLookbackDays-day average daily volume (fetchAvgDailyVolumeShares(), same data the ADV gate already pulls) - zero new API call. A candidate whose volume/ADV ratio is at or above this is tagged rvolMover:true in the Discovery Lineage Ledger - observability only, never a bypass of the price/dollar-volume/spread/ADV screen.",
+  "rvolMoverMinRatio": 2,
   "minDynamicDwellMs": 60000,
   "minDynamicDwellTicks": 10,
   "temporaryDataRescueMaxDurationMs": 300000,

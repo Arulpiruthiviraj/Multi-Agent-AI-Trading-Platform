@@ -29,6 +29,10 @@ export interface DiscoveryDecisionEvent {
    *  cleared the reviewed threshold - a genuinely additional discovery signal, not a new source. */
   gapMover: boolean;
   gapPct: number | null;
+  /** Phase 27 (Universal Discovery Expansion follow-up): true when this candidate's real
+   *  today's-volume/ADV ratio cleared the reviewed threshold - symmetric to gapMover above. */
+  rvolMover: boolean;
+  rvol: number | null;
 }
 
 export interface DiscoveryLineageReport {
@@ -73,6 +77,8 @@ export async function buildDiscoveryLineageReport(symbol: string, sinceIso: stri
         advShares: p.advShares ?? null,
         gapMover: p.gapMover ?? false,
         gapPct: p.gapPct ?? null,
+        rvolMover: p.rvolMover ?? false,
+        rvol: p.rvol ?? null,
       };
     })
     .sort((a, b) => a.ts.localeCompare(b.ts));
@@ -150,7 +156,7 @@ export function formatDiscoveryLineageReport(r: DiscoveryLineageReport): string 
   } else {
     lines.push('Discovery decisions:');
     for (const d of r.discoveryDecisions) {
-      lines.push(`  ${d.ts} ${d.source} ${d.admitted ? 'ADMITTED' : `FILTERED (${d.reason})`} price=${d.price ?? '-'} $vol=${d.dollarVolume ?? '-'} spreadBps=${d.spreadBps ?? '-'} adv=${d.advShares ?? '-'}${d.gapMover ? ` gapMover(${((d.gapPct ?? 0) * 100).toFixed(1)}%)` : ''}`);
+      lines.push(`  ${d.ts} ${d.source} ${d.admitted ? 'ADMITTED' : `FILTERED (${d.reason})`} price=${d.price ?? '-'} $vol=${d.dollarVolume ?? '-'} spreadBps=${d.spreadBps ?? '-'} adv=${d.advShares ?? '-'}${d.gapMover ? ` gapMover(${((d.gapPct ?? 0) * 100).toFixed(1)}%)` : ''}${d.rvolMover ? ` rvolMover(${(d.rvol ?? 0).toFixed(1)}x)` : ''}`);
     }
   }
   lines.push(
