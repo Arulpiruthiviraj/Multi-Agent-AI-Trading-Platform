@@ -29,6 +29,8 @@ import { continuousIntelligence } from '../config/continuousIntelligence';
 import { isMarketDataWebSocketAuthorized } from '../core/marketDataWsOwnership';
 import { notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { logDiscoveryCandidateDecision } from '../observability/discoveryCandidateLedger';
+import { hasRealCatalystEvidence } from './NewsCatalystStore';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
@@ -43,14 +45,34 @@ const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
  * behavior for any caller that does not specify a class, preserving exact backward compatibility).
  * EXPLORATION/MARKET_MOVER identify requests this fix specifically protects a reserved allowance
  * for (see rescueReservedSlotsForPriorityClasses).
+ *
+ * 'NEWS_CATALYST' added Phase 28 (2026-09-02 P0 discovery fix, real FRVO incident 2026-09-01): a
+ * candidate backed by real, reviewed news-catalyst evidence (NewsCatalystStore.hasRealCatalystEvidence())
+ * gets the SAME bounded priority treatment as EXPLORATION/MARKET_MOVER - it is not narrowed by the
+ * ROUTINE_RECOVERY reserved-capacity rule below (see the `requestClass === 'ROUTINE_RECOVERY'` check).
  */
-export type RescueRequestClass = 'ROUTINE_RECOVERY' | 'EXPLORATION' | 'MARKET_MOVER';
+export type RescueRequestClass = 'ROUTINE_RECOVERY' | 'EXPLORATION' | 'MARKET_MOVER' | 'NEWS_CATALYST';
 
 export type RescueDeniedReason =
   | 'INVALID_SYMBOL'
   | 'RESCUE_CAPACITY_FULL'
   | 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY'
   | 'AT_CAPACITY_NO_SAFE_EVICTION';
+
+/**
+ * Phase 28 (2026-09-02 P0 discovery fix). Confirmed root cause of the real FRVO incident
+ * (2026-09-01): the concurrent-rescue budget made no distinction between a request that needs a
+ * candidate's FIRST live tick (NEW_DATA_ACQUISITION) and one that merely extends an
+ * ALREADY-SUBSCRIBED symbol's eviction-immunity window (RENEWAL). Live evidence: AAPL/TSLA/ABNB
+ * were already subscribed and only ever needed RENEWAL, yet their requests occupied the SAME
+ * budget FRVO's genuine NEW_DATA_ACQUISITION request needed - FRVO was denied RESCUE_CAPACITY_FULL
+ * 11 times in a row purely because renewal-only traffic had exhausted the shared pool.
+ *
+ * Derived from the symbol's ACTUAL current subscription state at request time
+ * (`activeStreams.has(ticker)`) - never inferred from requestClass, reason text, or caller
+ * identity, and never passed in by the caller.
+ */
+export type RescueIntent = 'NEW_DATA_ACQUISITION' | 'RENEWAL';
 
 function quoteKey(symbol: string): string {
   return String(symbol || '').trim().toUpperCase();
@@ -115,11 +137,14 @@ export class MarketDataWorker {
   /** Bounded, single-use eviction-immunity grants from requestTemporaryDataRescue() - never a
    *  permanent subscription; auto-expires and is swept by releaseExpiredTemporaryDataRescues().
    *  requestCount/extensionCount and traceId are purely observational (Phase 18) - never read by
-   *  the admission decision itself, which depends only on requestClass + current occupancy. */
+   *  the admission decision itself, which depends on requestClass + intent + current occupancy
+   *  (Phase 28 adds `intent`: the admission check below counts only NEW_DATA_ACQUISITION entries
+   *  against the concurrent-rescue budget - a RENEWAL entry never competes for that budget). */
   private temporaryRescues: Map<string, {
     expiresAtMs: number;
     reason: string;
     requestClass: RescueRequestClass;
+    intent: RescueIntent;
     traceId: string | null;
     grantedAtMs: number;
     requestCount: number;
@@ -132,6 +157,11 @@ export class MarketDataWorker {
   /** Optional frozen clock for dwell-unit tests. */
   private testNowMs: number | null = null;
   private lastRejectLogMs: Map<string, number> = new Map();
+  /** Phase 28 (2026-09-02 P0 discovery fix): per-symbol dedup for the news-triggered discovery-
+   *  lineage log below - reuses tradingSafety.marketDataRejectLogDedupMs (same cooldown constant
+   *  lastRejectLogMs already uses) so a symbol re-requested many times in a short window logs one
+   *  lineage entry, not one per attempt. */
+  private lastNewsDiscoveryLogMs: Map<string, number> = new Map();
   private disconnectedAt: number | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectBackoff = new ReconnectBackoff();
@@ -263,6 +293,7 @@ export class MarketDataWorker {
     requestClass: RescueRequestClass,
     traceId: string | null,
     deniedReason: RescueDeniedReason,
+    intent: RescueIntent,
   ): void {
     observeSafe(() => {
       structuredLogger.info('temporary_data_rescue_denied', {
@@ -270,7 +301,18 @@ export class MarketDataWorker {
         eventType: 'TEMPORARY_DATA_RESCUE_DENIED',
         symbol: ticker,
         traceId: traceId ?? undefined,
-        reasoning: `${reason} [class=${requestClass}] denied: ${deniedReason}.`,
+        // Phase 28: explicit fields (not just embedded in `reasoning`) so a future FRVO-class
+        // incident is queryable without regex-parsing free text - "was this symbol already
+        // subscribed / did it have any tick history at all" is exactly the distinction that took
+        // manual event correlation to reconstruct for the real FRVO case.
+        requestClass,
+        requestIntent: intent,
+        alreadySubscribed: this.activeStreams.has(ticker),
+        hasFreshTick: this.lastTick.has(ticker),
+        deniedReason,
+        // [intent=...] is inserted BEFORE "denied:" so explorationHealthReport.ts's
+        // /denied: (\S+)\.$/ extraction of the trailing denial reason keeps matching unchanged.
+        reasoning: `${reason} [class=${requestClass}] [intent=${intent}] denied: ${deniedReason}.`,
       });
     });
   }
@@ -293,7 +335,9 @@ export class MarketDataWorker {
     const ticker = looksLikeListedTicker(symbol) || quoteKey(symbol);
     if (!ticker) {
       const fallback = quoteKey(symbol);
-      this.logRescueDenial(fallback, reason, requestClass, traceId, 'INVALID_SYMBOL');
+      // Real subscription state is meaningless for an invalid symbol - NEW_DATA_ACQUISITION is the
+      // honest default (there is no "existing subscription" to renew).
+      this.logRescueDenial(fallback, reason, requestClass, traceId, 'INVALID_SYMBOL', 'NEW_DATA_ACQUISITION');
       return { granted: false, symbol: fallback, alreadySubscribed: false, evictedSymbol: null, deniedReason: 'INVALID_SYMBOL' };
     }
 
@@ -315,26 +359,42 @@ export class MarketDataWorker {
     const alreadySubscribed = this.activeStreams.has(ticker);
     const existing = this.temporaryRescues.get(ticker);
 
-    if (!alreadyRescued) {
-      const activeEntries = Array.from(this.temporaryRescues.entries()).filter(([s]) => this.hasActiveRescue(s));
+    // Phase 28 (2026-09-02 P0 discovery fix): real, current subscription state - never inferred
+    // from requestClass or caller identity. A symbol already in activeStreams does not need a
+    // fresh tick acquired; it only ever needs its eviction-immunity window extended (RENEWAL).
+    const intent: RescueIntent = alreadySubscribed ? 'RENEWAL' : 'NEW_DATA_ACQUISITION';
+
+    // The confirmed FRVO root cause: a RENEWAL request (already-subscribed AAPL/TSLA/ABNB
+    // repeatedly re-extending immunity) must never compete for the SAME budget a genuine
+    // NEW_DATA_ACQUISITION request (FRVO, no live tick at all) needs. RENEWAL is therefore
+    // exempted from the concurrent-rescue-budget check entirely below - it is not "unlimited"
+    // capacity: a RENEWAL request can only ever exist for a symbol already occupying one of the
+    // hard-capped effectiveStreamingCap() active-stream slots, so it is already structurally
+    // bounded by that pre-existing, unchanged cap. Do NOT increase maxConcurrentTemporaryDataRescues
+    // to solve this - that would still let renewal-only traffic starve acquisition, just with a
+    // larger shared pool. The correct fix is accounting separation, not more capacity.
+    if (!alreadyRescued && intent === 'NEW_DATA_ACQUISITION') {
+      const activeEntries = Array.from(this.temporaryRescues.entries())
+        .filter(([s]) => this.hasActiveRescue(s))
+        .filter(([, r]) => r.intent === 'NEW_DATA_ACQUISITION');
       // Invariant 3: capacity never exceeds the configured maximum, regardless of class.
       if (activeEntries.length >= continuousIntelligence.maxConcurrentTemporaryDataRescues) {
-        this.logRescueDenial(ticker, reason, requestClass, traceId, 'RESCUE_CAPACITY_FULL');
+        this.logRescueDenial(ticker, reason, requestClass, traceId, 'RESCUE_CAPACITY_FULL', intent);
         return { granted: false, symbol: ticker, alreadySubscribed, evictedSymbol: null, deniedReason: 'RESCUE_CAPACITY_FULL' };
       }
       // Phase 18 fairness rule: a ROUTINE_RECOVERY request (the pre-existing, undifferentiated
       // case - e.g. a symbol whose idea is discarded by stale data on a normal, non-exploration
       // cycle) is additionally capped below the full pool, reserving rescueReservedSlotsForPriorityClasses
-      // slots exclusively for EXPLORATION/MARKET_MOVER requests. This is the entire fix: it
-      // guarantees a bounded exploration/mover opportunity even when routine demand is high enough
-      // to otherwise consume every slot (the exact live-observed AAPL/TSLA/AI pattern), without
-      // touching the hard total-capacity ceiling above, without preempting an already-granted
-      // rescue, and without any new state beyond the requestClass already being recorded.
+      // slots exclusively for EXPLORATION/MARKET_MOVER/NEWS_CATALYST requests. This is the entire
+      // fix: it guarantees a bounded exploration/mover/news-catalyst opportunity even when routine
+      // demand is high enough to otherwise consume every slot (the exact live-observed AAPL/TSLA/AI
+      // pattern), without touching the hard total-capacity ceiling above, without preempting an
+      // already-granted rescue, and without any new state beyond the requestClass already recorded.
       if (requestClass === 'ROUTINE_RECOVERY') {
         const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
         const activeRoutineCount = activeEntries.filter(([, r]) => r.requestClass === 'ROUTINE_RECOVERY').length;
         if (activeRoutineCount >= routineCap) {
-          this.logRescueDenial(ticker, reason, requestClass, traceId, 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY');
+          this.logRescueDenial(ticker, reason, requestClass, traceId, 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY', intent);
           return { granted: false, symbol: ticker, alreadySubscribed, evictedSymbol: null, deniedReason: 'ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY' };
         }
       }
@@ -346,7 +406,7 @@ export class MarketDataWorker {
       if (this.activeStreams.size >= cap) {
         const candidate = this.pickEvictionCandidate();
         if (!candidate) {
-          this.logRescueDenial(ticker, reason, requestClass, traceId, 'AT_CAPACITY_NO_SAFE_EVICTION');
+          this.logRescueDenial(ticker, reason, requestClass, traceId, 'AT_CAPACITY_NO_SAFE_EVICTION', intent);
           return { granted: false, symbol: ticker, alreadySubscribed: false, evictedSymbol: null, deniedReason: 'AT_CAPACITY_NO_SAFE_EVICTION' };
         }
         this.unsubscribe(candidate, { force: false });
@@ -368,6 +428,7 @@ export class MarketDataWorker {
       expiresAtMs,
       reason,
       requestClass,
+      intent,
       traceId,
       grantedAtMs: existing?.grantedAtMs ?? this.wallMs(),
       requestCount: (existing?.requestCount ?? 0) + 1,
@@ -380,7 +441,11 @@ export class MarketDataWorker {
         eventType: 'TEMPORARY_DATA_RESCUE_GRANTED',
         symbol: ticker,
         traceId: traceId ?? undefined,
-        reasoning: `${reason} [class=${requestClass}]${evictedSymbol ? ` - evicted ${evictedSymbol} for one rescue slot` : alreadySubscribed ? ' - already subscribed, only the eviction-immunity window was extended' : ''}. Expires in ${continuousIntelligence.temporaryDataRescueMaxDurationMs}ms; never a permanent subscription.`,
+        requestClass,
+        requestIntent: intent,
+        alreadySubscribed,
+        hasFreshTick: this.lastTick.has(ticker),
+        reasoning: `${reason} [class=${requestClass}] [intent=${intent}]${evictedSymbol ? ` - evicted ${evictedSymbol} for one rescue slot` : alreadySubscribed ? ' - already subscribed, only the eviction-immunity window was extended' : ''}. Expires in ${continuousIntelligence.temporaryDataRescueMaxDurationMs}ms; never a permanent subscription.`,
       });
     });
 
@@ -396,6 +461,7 @@ export class MarketDataWorker {
     expiresAtMs: number;
     reason: string;
     requestClass: RescueRequestClass;
+    intent: RescueIntent;
     traceId: string | null;
     grantedAtMs: number;
     requestCount: number;
@@ -408,6 +474,7 @@ export class MarketDataWorker {
         expiresAtMs: r.expiresAtMs,
         reason: r.reason,
         requestClass: r.requestClass,
+        intent: r.intent,
         traceId: r.traceId,
         grantedAtMs: r.grantedAtMs,
         requestCount: r.requestCount,
@@ -693,6 +760,7 @@ export class MarketDataWorker {
     }
     if (opts.requestedBy) {
       eventBus.emit(EVENTS.SYMBOL_NOT_SUBSCRIBED, { symbol: ticker, requestedBy: opts.requestedBy, at: new Date().toISOString() });
+      this.logNewsDiscoveryLineageIfCatalystBacked(ticker);
     }
 
     const cap = this.effectiveStreamingCap();
@@ -732,6 +800,32 @@ export class MarketDataWorker {
       this.ws.send(JSON.stringify({ action: "subscribe", quotes: [ticker], trades: [ticker] }));
     }
     console.log(`[MarketDataWorker] Subscribed to ${ticker} (${this.activeStreams.size}/${cap})`);
+  }
+
+  /**
+   * Phase 28 (2026-09-02 P0 discovery fix), Discovery Lineage extension. The real FRVO incident
+   * (2026-09-01) entered ARGUS through exactly this path - a news-driven agent (NewsAgent/
+   * MacroAgent/FundamentalAgent) requesting a price snapshot for a symbol with no active
+   * subscription - and that entry was previously invisible to the Discovery Lineage Ledger
+   * (candidate_rankings / DISCOVERY_CANDIDATE_ADMITTED), which only ever saw BROAD_UNIVERSE/
+   * MARKET_MOVER admissions. Extends the SAME existing ledger (logDiscoveryCandidateDecision(),
+   * previously private to MarketUniverseScanner.ts, now shared) rather than creating a second one.
+   *
+   * Only logs when real catalyst evidence exists (NewsCatalystStore.hasRealCatalystEvidence(),
+   * the exact same reviewed strength/bias bar used for NEWS_CATALYST rescue priority) - a routine
+   * FundamentalAgent/MacroAgent round-robin price check on an already-known seed/watch symbol is
+   * NOT itself a "discovery" event and must not be logged as one. Deduped per symbol using the
+   * same tradingSafety.marketDataRejectLogDedupMs cooldown lastRejectLogMs already uses, so one
+   * real news-driven entry does not become dozens of duplicate lineage rows across repeated
+   * agent re-attempts on the same still-unsubscribed symbol.
+   */
+  private logNewsDiscoveryLineageIfCatalystBacked(ticker: string): void {
+    if (!hasRealCatalystEvidence(ticker)) return;
+    const now = this.wallMs();
+    const lastLog = this.lastNewsDiscoveryLogMs.get(ticker) ?? 0;
+    if (now - lastLog < tradingSafety.marketDataRejectLogDedupMs) return;
+    this.lastNewsDiscoveryLogMs.set(ticker, now);
+    logDiscoveryCandidateDecision({ symbol: ticker, source: 'NEWS', admitted: true, reason: null });
   }
 
   /**

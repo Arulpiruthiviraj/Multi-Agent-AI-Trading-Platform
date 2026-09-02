@@ -21,10 +21,14 @@ import { continuousIntelligence, isBroadUniverseEnabled, isMoversEnabled } from 
 import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
-import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { recordPrediction } from '../services/ModelPerformanceTracker';
 import { withDiscoveryCircuitBreaker, resetDiscoveryCircuitBreakersForTests } from '../core/discoveryHttpCircuitBreaker';
 import { normalizeSymbols } from '../core/symbolNormalization';
+import {
+  logDiscoveryCandidateDecision,
+  type DiscoveryRejectReason,
+  type ScreenRejectReason,
+} from '../observability/discoveryCandidateLedger';
 
 interface AlpacaAsset {
   symbol: string;
@@ -150,8 +154,6 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
   return results;
 }
 
-export type ScreenRejectReason = 'PRICE' | 'DOLLAR_VOLUME' | 'SPREAD';
-
 /** Real Phase 18 finding: a symbol that failed this screen previously just vanished from the
  *  candidate list with zero record of why - the exact gap that made a real, verified market mover
  *  (FRVO, 2026-09-01 forensic audit) architecturally unexplainable after the fact. Returns the
@@ -166,57 +168,6 @@ function evaluateScreen(snap: AlpacaSnapshot): { pass: boolean; reason: ScreenRe
 
 function passesScreen(snap: AlpacaSnapshot): boolean {
   return evaluateScreen(snap).pass;
-}
-
-export type DiscoverySource = 'BROAD_UNIVERSE' | 'MARKET_MOVER';
-export type DiscoveryRejectReason = ScreenRejectReason | 'ADV' | 'NO_SNAPSHOT_DATA' | 'RANK_CAP';
-
-/**
- * Discovery Lineage Ledger, Phase A (2026-09-02 forensic audit follow-up). Real per-candidate
- * admit/reject decision, persisted via the existing observability_events pipeline (no new table) -
- * so a future FRVO-class miss becomes a real, queryable "candidate seen, rejected at stage X for
- * reason Y" row instead of an unexplainable disappearance. Never gates a trade, never emits
- * TRADE_IDEA_GENERATED or WATCHLIST_SUBSCRIBE_REQUESTED - purely descriptive of what this file's
- * own real screening already decided.
- */
-function logDiscoveryCandidateDecision(input: {
-  symbol: string;
-  source: DiscoverySource;
-  admitted: boolean;
-  reason: DiscoveryRejectReason | null;
-  price?: number | null;
-  dollarVolume?: number | null;
-  spreadBps?: number | null;
-  advShares?: number | null;
-  /** Phase C (2026-09-02): true when this candidate's real intraday gap (see AlpacaSnapshot.gapPct)
-   *  clears continuousIntelligence.gapMoverMinAbsPct - a genuinely additional discovery signal
-   *  (gap-ups/gap-downs), computed from data already fetched for the liquidity screen, never a
-   *  new API call or a bypass of that screen. */
-  gapMover?: boolean;
-  gapPct?: number | null;
-  /** Phase 27 (2026-09-02): true when this candidate's real today's-volume/ADV ratio (see
-   *  computeRvol()) clears continuousIntelligence.rvolMoverMinRatio - observability only, computed
-   *  from data already fetched for the liquidity/ADV screens, never a new API call. */
-  rvolMover?: boolean;
-  rvol?: number | null;
-}): void {
-  observeSafe(() => {
-    structuredLogger.info('discovery_candidate_decision', {
-      category: 'DISCOVERY',
-      eventType: input.admitted ? 'DISCOVERY_CANDIDATE_ADMITTED' : 'DISCOVERY_CANDIDATE_FILTERED',
-      symbol: input.symbol,
-      source: input.source,
-      reason: input.reason,
-      price: input.price ?? null,
-      dollarVolume: input.dollarVolume ?? null,
-      spreadBps: input.spreadBps ?? null,
-      advShares: input.advShares ?? null,
-      gapMover: input.gapMover ?? false,
-      gapPct: input.gapPct ?? null,
-      rvolMover: input.rvolMover ?? false,
-      rvol: input.rvol ?? null,
-    });
-  });
 }
 
 /** Real, config-driven gap-mover classification - true only when this candidate's real intraday

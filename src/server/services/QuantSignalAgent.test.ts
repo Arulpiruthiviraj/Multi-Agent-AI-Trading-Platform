@@ -283,6 +283,74 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     );
   });
 
+  it('Phase 28 (P0 discovery fix): classifies the rescue request as NEWS_CATALYST when the symbol has real, reviewed NewsCatalystStore evidence (not exploration/mover) - the exact FRVO scenario', async () => {
+    const { recordNewsCatalyst, clearNewsCatalystsForTests } = await import('./NewsCatalystStore');
+    clearNewsCatalystsForTests();
+    stubUptrendingFetch();
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSANC']);
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    const rescueSpy = vi.spyOn(marketDataWorker, 'requestTemporaryDataRescue');
+
+    // Real catalyst evidence - the same shape/bar NewsAgent's own real pipeline records, not a
+    // fabricated confidence invented just for this test.
+    recordNewsCatalyst({
+      traceId: 't-qsanc-1',
+      symbol: 'QSANC',
+      headline: 'Test Company (QSANC) announces real catalyst event',
+      source: 'unit-test',
+      publishedAtMs: Date.now(),
+      sentiment: 0.6,
+      credibility: 0.9,
+      catalystStrength: 'HIGH',
+      tradingBias: 'BULLISH',
+      contribution: 0.3,
+      reasoning: 'unit test fixture',
+      recordedAt: new Date().toISOString(),
+    });
+
+    try {
+      process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED = 'true';
+      const agent = new QuantSignalAgent();
+      await agent.evaluateSymbol('QSANC');
+    } finally {
+      delete process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED;
+      clearNewsCatalystsForTests();
+    }
+
+    expect(rescueSpy).toHaveBeenCalledWith(
+      'QSANC',
+      expect.stringContaining('QuantEngine:'),
+      expect.objectContaining({ requestClass: 'NEWS_CATALYST' }),
+    );
+  });
+
+  it('Phase 28: does NOT classify as NEWS_CATALYST when no real catalyst evidence exists - never fabricates confidence for an ordinary symbol', async () => {
+    const { clearNewsCatalystsForTests } = await import('./NewsCatalystStore');
+    clearNewsCatalystsForTests();
+    stubUptrendingFetch();
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSANO']);
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    const rescueSpy = vi.spyOn(marketDataWorker, 'requestTemporaryDataRescue');
+
+    try {
+      process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED = 'true';
+      const agent = new QuantSignalAgent();
+      await agent.evaluateSymbol('QSANO');
+    } finally {
+      delete process.env.QUANT_COLD_START_BOOTSTRAP_ENABLED;
+    }
+
+    expect(rescueSpy).toHaveBeenCalledWith(
+      'QSANO',
+      expect.stringContaining('QuantEngine:'),
+      expect.objectContaining({ requestClass: 'ROUTINE_RECOVERY' }),
+    );
+  });
+
   it('skips a symbol honestly (no crash, no fabricated data) when Alpaca returns too few real bars', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,

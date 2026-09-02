@@ -26,7 +26,7 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { marketDataWorker } from './MarketDataWorker';
+import { marketDataWorker, type RescueRequestClass } from './MarketDataWorker';
 import { getCachedMoverSymbols } from '../continuous/MarketUniverseScanner';
 import { historicalDataGateway, Bar } from '../engines/backtest/HistoricalDataGateway';
 import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
@@ -58,7 +58,7 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { assessDataQuality } from '../core/dataQuality';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
-import { getNewsCatalysts } from './NewsCatalystStore';
+import { getNewsCatalysts, hasRealCatalystEvidence } from './NewsCatalystStore';
 import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
 import { isMultiAssetEnabled } from '../config/multiAsset';
 import { classifyAsset } from '../multiAsset/AssetClassifier';
@@ -334,11 +334,21 @@ export class QuantSignalAgent {
     // (AAPL/TSLA/AI) permanently deny two real exploration promotions (CRM, ONON) RESCUE_CAPACITY_FULL.
     const wasExplorationPromoted = !!(explorationAdjusted[0] && forPick[0] && explorationAdjusted[0].strategy !== forPick[0].strategy);
     const isMarketMoverSymbol = !wasExplorationPromoted && getCachedMoverSymbols().includes(symbol.toUpperCase());
-    const rescueRequestClass: 'ROUTINE_RECOVERY' | 'EXPLORATION' | 'MARKET_MOVER' = wasExplorationPromoted
+    // Phase 28 (2026-09-02 P0 discovery fix): confirmed root cause of the real FRVO incident
+    // (2026-09-01) - a real, catalyst-backed candidate (genuine GlobeNewswire story, real
+    // NewsCatalystStore evidence) was classified ROUTINE_RECOVERY, the SAME low-priority bucket as
+    // an ordinary repeat-requester, and was denied a rescue 11/11 times. hasRealCatalystEvidence()
+    // reuses the EXACT SAME reviewed strength/bias bar NewsCatalystStore already uses to decide
+    // whether to stage a catalyst for market open - never a fabricated confidence, never "every
+    // headline is high priority."
+    const isNewsCatalystSymbol = !wasExplorationPromoted && !isMarketMoverSymbol && hasRealCatalystEvidence(symbol);
+    const rescueRequestClass: RescueRequestClass = wasExplorationPromoted
       ? 'EXPLORATION'
       : isMarketMoverSymbol
         ? 'MARKET_MOVER'
-        : 'ROUTINE_RECOVERY';
+        : isNewsCatalystSymbol
+          ? 'NEWS_CATALYST'
+          : 'ROUTINE_RECOVERY';
     // Observability gap found and fixed Phase 16 (2026-09-01): the scheduler itself is a pure
     // reordering function with no logging, so there was previously no way to tell "exploration
     // promoted a different strategy" apart from "regime-adaptive filtering naturally produced a

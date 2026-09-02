@@ -61,6 +61,8 @@ vi.mock('../core/ideaGenerationGate', () => ({
 }));
 
 import { MarketDataWorker } from './MarketDataWorker';
+import { structuredLogger } from '../observability/StructuredLogger';
+import { recordNewsCatalyst, clearNewsCatalystsForTests } from './NewsCatalystStore';
 
 function sendMessage(ws: any, msg: any) {
   ws.emit('message', Buffer.from(JSON.stringify([msg])));
@@ -744,9 +746,16 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
       await expireDynamicDwell();
 
-      // The real live pattern: AAPL, TSLA, AI all requesting/extending ROUTINE_RECOVERY rescue,
-      // exactly as QuantSignalAgent's default (unclassed) stale-data-discard path does today.
-      const routineGrants = ['AAPL', 'TSLA', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'stale-data'));
+      // The real live pattern: 3 symbols requesting/extending ROUTINE_RECOVERY rescue, exactly as
+      // QuantSignalAgent's default (unclassed) stale-data-discard path does today. Phase 28
+      // (2026-09-02 P0 discovery fix): deliberately NOT AAPL/TSLA here - those are real
+      // continuousIntelligence.seedSymbols, auto-subscribed by ensureDefaultSubscriptions() the
+      // moment authenticate() fires above, so a genuine rescue request on them is now correctly
+      // classified RENEWAL (already subscribed) and no longer competes for this ACQUISITION-only
+      // capacity check at all - LNG/XOM/AI are real, deliberately non-seed/non-core symbols so
+      // this test still reproduces genuine NEW_DATA_ACQUISITION contention, matching the real
+      // FRVO incident's own acquisition-side symbol (never itself a seed/core name).
+      const routineGrants = ['LNG', 'XOM', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'stale-data'));
       const routineGrantedCount = routineGrants.filter((r) => r.granted).length;
       // Pre-Phase-18 this would have been 3 (the entire pool) - now it is capped below the total.
       expect(routineGrantedCount).toBe(continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses);
@@ -871,9 +880,12 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       authenticate(instances[0]);
       await expireDynamicDwell();
       const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
-      const unclassed = ['AAPL', 'TSLA', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'no-class-arg'));
+      // Phase 28: LNG/XOM/AI, not AAPL/TSLA/MSFT - those three are real seedSymbols, auto-subscribed
+      // by authenticate() above, so they are now correctly classified RENEWAL (see Invariant 1/2's
+      // comment) and would no longer exercise the ACQUISITION-only capacity check this test targets.
+      const unclassed = ['LNG', 'XOM', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'no-class-arg'));
       expect(unclassed.filter((r) => r.granted).length).toBe(routineCap);
-      const explicit = worker.requestTemporaryDataRescue('MSFT', 'explicit-routine', { requestClass: 'ROUTINE_RECOVERY' });
+      const explicit = worker.requestTemporaryDataRescue('CRM', 'explicit-routine', { requestClass: 'ROUTINE_RECOVERY' });
       expect(explicit.granted).toBe(unclassed[unclassed.length - 1].granted === false ? false : explicit.granted); // same admission rule either way
     });
 
@@ -893,7 +905,8 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       authenticate(instances[0]);
       await expireDynamicDwell();
-      for (const sym of ['AAPL', 'TSLA', 'AI']) worker.requestTemporaryDataRescue(sym, 'stale-data');
+      // Phase 28: LNG/XOM/AI, not AAPL/TSLA - see Invariant 1/2's comment (seedSymbols auto-subscribe).
+      for (const sym of ['LNG', 'XOM', 'AI']) worker.requestTemporaryDataRescue(sym, 'stale-data');
       emitSpy.mockClear();
       worker.requestTemporaryDataRescue('CRM', 'stale-data'); // 4th routine request - should be denied and logged
       // logRescueDenial uses structuredLogger (DB-backed), not eventBus - assert via getActiveTemporaryRescues not growing.
@@ -914,6 +927,247 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       const extended = worker.getActiveTemporaryRescues().find((r) => r.symbol === 'CRM')!;
       expect(extended.requestCount).toBe(2);
       expect(extended.extensionCount).toBe(1);
+    });
+  });
+
+  // Phase 28 (2026-09-02 P0 discovery fix). Confirmed root cause of the real FRVO incident
+  // (2026-09-01): a request on an already-subscribed symbol that only ever needs its
+  // eviction-immunity window extended (RENEWAL) was counted against the SAME concurrent-rescue
+  // budget a genuinely unsubscribed candidate needing its first live tick (NEW_DATA_ACQUISITION)
+  // needed. Live evidence: AAPL/TSLA/ABNB (already subscribed) occupied all 3 slots for the
+  // entire ~50-minute window, denying FRVO (never subscribed, real GlobeNewswire catalyst) 11
+  // times in a row with RESCUE_CAPACITY_FULL. These tests use generic, deliberately non-real-
+  // incident symbol names (never "FRVO" itself) to prove the fix addresses the general class of
+  // defect, not one hardcoded ticker.
+  describe('requestTemporaryDataRescue() - Phase 28 rescue-intent segmentation (P0 discovery fix)', () => {
+    // looksLikeListedTicker() (subscribe()'s own validation) requires 1-5 PURE uppercase letters -
+    // no digits - so digit-suffixed placeholder symbols (e.g. "RENEW0") silently fail to subscribe,
+    // which would make these tests assert on their own broken fixture rather than the real fix.
+    // This generates deterministic, distinct, always-valid synthetic tickers instead.
+    function testTicker(i: number): string {
+      const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      return `Z${letters[i % 26]}${letters[Math.floor(i / 26) % 26]}`;
+    }
+
+    it('reproduces the exact confirmed defect and proves the fix: N already-subscribed renewal-only symbols filling the OLD shared pool no longer deny a genuine first-tick candidate', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
+
+      // The AAPL/TSLA/ABNB-equivalent: real, already-subscribed symbols that only ever request a
+      // RENEWAL of their eviction-immunity - never a first tick, since they already have live data.
+      const renewalOnly = Array.from({ length: cap }, (_, i) => testTicker(i));
+      for (const sym of renewalOnly) worker.subscribe(sym);
+      expect(renewalOnly.every((sym) => worker.getActiveSymbols().includes(sym))).toBe(true);
+
+      // OLD behavior (pre-Phase-28): this loop alone would have consumed the entire
+      // maxConcurrentTemporaryDataRescues pool, exactly as AAPL/TSLA/ABNB did live.
+      const renewalGrants = renewalOnly.map((sym) => worker.requestTemporaryDataRescue(sym, 'renew-immunity'));
+      expect(renewalGrants.every((r) => r.granted)).toBe(true);
+      expect(renewalGrants.every((r) => r.alreadySubscribed)).toBe(true);
+
+      // The FRVO-equivalent: a genuinely new, never-subscribed candidate needing its first tick.
+      // Under the OLD shared-pool behavior this would be denied RESCUE_CAPACITY_FULL, exactly as
+      // FRVO was denied 11/11 times. Under the fix, renewal-only occupancy above must not count
+      // against this candidate's acquisition budget at all.
+      const newCandidateSymbol = testTicker(cap);
+      const newCandidate = worker.requestTemporaryDataRescue(newCandidateSymbol, 'stale-data');
+      expect(newCandidate.granted).toBe(true);
+      expect(newCandidate.alreadySubscribed).toBe(false);
+
+      const occupants = worker.getActiveTemporaryRescues();
+      for (const sym of renewalOnly) {
+        expect(occupants.find((o) => o.symbol === sym)?.intent).toBe('RENEWAL');
+      }
+      expect(occupants.find((o) => o.symbol === newCandidateSymbol)?.intent).toBe('NEW_DATA_ACQUISITION');
+    });
+
+    it('a RENEWAL request never consumes NEW_DATA_ACQUISITION capacity, even when it fills what would have been the entire shared pool', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
+
+      const renewalOnly = Array.from({ length: cap * 2 }, (_, i) => testTicker(i)); // deliberately MORE than the total rescue cap
+      for (const sym of renewalOnly) worker.subscribe(sym);
+      for (const sym of renewalOnly) {
+        const r = worker.requestTemporaryDataRescue(sym, 'renew-immunity');
+        expect(r.granted).toBe(true); // never denied - RENEWAL is not bound by the acquisition cap
+      }
+
+      // The full NEW_DATA_ACQUISITION budget must still be independently available - but only
+      // routineCap of it is guaranteed to a default (ROUTINE_RECOVERY) requester; the remaining
+      // reservedSlotsForPriorityClasses share is reserved for EXPLORATION/MARKET_MOVER/NEWS_CATALYST,
+      // exactly as it was before this fix (Phase 18) - this test only proves the RENEWAL traffic
+      // above never ate into any part of this budget, not that the reserved-slot rule is gone.
+      const routineCap = cap - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+      const acquisitionGrants: boolean[] = [];
+      for (let i = 0; i < routineCap; i++) {
+        acquisitionGrants.push(worker.requestTemporaryDataRescue(testTicker(cap * 2 + i), 'stale-data').granted);
+      }
+      expect(acquisitionGrants.every(Boolean)).toBe(true);
+      // The reserved slot is still available to a priority-class acquisition request.
+      const priorityAcquisition = worker.requestTemporaryDataRescue(testTicker(cap * 2 + routineCap), 'stale-data', { requestClass: 'EXPLORATION' });
+      expect(priorityAcquisition.granted).toBe(true);
+      // And the acquisition cap is still real and enforced once genuinely exhausted.
+      const overflow = worker.requestTemporaryDataRescue(testTicker(cap * 3), 'stale-data');
+      expect(overflow.granted).toBe(false);
+      expect(overflow.deniedReason).toBe('RESCUE_CAPACITY_FULL');
+    });
+
+    it('N renewal-only requesters, scaled from 1 up to the maximum plausible concurrent count derived from the real streaming cap, never trigger a rescue-BUDGET denial for a genuine acquisition candidate', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const maxPlausibleN = continuousIntelligence.maxActiveSubscriptions; // derived from the real cap, not assumed
+      for (let n = 1; n <= maxPlausibleN; n++) {
+        const worker2 = new MarketDataWorker();
+        const renewalSymbols = Array.from({ length: n }, (_, i) => testTicker(i));
+        for (const sym of renewalSymbols) worker2.subscribe(sym);
+        worker2.setNowForTests(Date.now() + continuousIntelligence.minDynamicDwellMs + 1000);
+        for (const sym of renewalSymbols) {
+          expect(worker2.requestTemporaryDataRescue(sym, 'renew').granted).toBe(true);
+        }
+        const acquisition = worker2.requestTemporaryDataRescue(testTicker(maxPlausibleN + n), 'stale-data');
+        // At n < maxPlausibleN there is always a free active-stream slot, so acquisition must
+        // succeed outright. Only at n === maxPlausibleN is every slot both occupied AND held under
+        // an active (thus eviction-immune) rescue grant - a genuinely separate, pre-existing,
+        // real capacity/eviction boundary this fix does not touch and must not weaken (rescue
+        // immunity must keep meaning immunity). If denied there, the reason must be
+        // AT_CAPACITY_NO_SAFE_EVICTION specifically - proving the denial is a real capacity limit,
+        // NEVER the rescue-budget-sharing defect this fix targets (RESCUE_CAPACITY_FULL /
+        // ROUTINE_CAPACITY_RESERVED_FOR_PRIORITY), which is exactly what would have wrongly denied
+        // it before Phase 28.
+        if (!acquisition.granted) {
+          expect(n).toBe(maxPlausibleN);
+          expect(acquisition.deniedReason).toBe('AT_CAPACITY_NO_SAFE_EVICTION');
+        }
+        worker2.setNowForTests(null);
+        worker2.stop();
+      }
+    });
+
+    it('RENEWAL admission never fabricates a fresh tick - hasFreshTick in the grant log reflects real lastTick state, and no tick is ever synthesized by granting a rescue', async () => {
+      const sym = testTicker(0);
+      worker.subscribe(sym);
+      const grantSpy = vi.spyOn(structuredLogger, 'info');
+      const result = worker.requestTemporaryDataRescue(sym, 'renew-immunity');
+      expect(result.granted).toBe(true);
+      const grantedCall = grantSpy.mock.calls.find(([msg]) => msg === 'temporary_data_rescue_granted');
+      expect(grantedCall).toBeTruthy();
+      expect(grantedCall![1].hasFreshTick).toBe(false); // never recorded a real tick - never claimed otherwise
+      grantSpy.mockRestore();
+    });
+
+    it('a denied acquisition request logs requestIntent=NEW_DATA_ACQUISITION explicitly (queryable without regex-parsing the reasoning string)', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
+      for (let i = 0; i < cap; i++) worker.requestTemporaryDataRescue(testTicker(i), 'stale-data');
+      const denySpy = vi.spyOn(structuredLogger, 'info');
+      const denied = worker.requestTemporaryDataRescue(testTicker(cap), 'stale-data');
+      expect(denied.granted).toBe(false);
+      const deniedCall = denySpy.mock.calls.find(([msg]) => msg === 'temporary_data_rescue_denied');
+      expect(deniedCall).toBeTruthy();
+      expect(deniedCall![1].requestIntent).toBe('NEW_DATA_ACQUISITION');
+      expect(deniedCall![1].alreadySubscribed).toBe(false);
+      denySpy.mockRestore();
+    });
+
+    it('a RENEWAL grant remains excluded from eviction candidates, identically to an ACQUISITION grant (Invariant 5 regression, both intents)', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      authenticate(instances[0]);
+      for (const core of continuousIntelligence.coreStreamingSymbols) worker.subscribe(core);
+      await expireDynamicDwell();
+
+      const protectedRenewal = testTicker(0);
+      worker.subscribe(protectedRenewal);
+      const r = worker.requestTemporaryDataRescue(protectedRenewal, 'renew-immunity');
+      expect(r.granted).toBe(true);
+      expect(r.alreadySubscribed).toBe(true);
+
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      for (let i = 1; i < cap + 5 && worker.getActiveSymbols().length < cap; i++) {
+        worker.subscribe(testTicker(i));
+      }
+      worker.requestTemporaryDataRescue(testTicker(cap + 10), 'stale-data');
+      expect(worker.getActiveSymbols()).toContain(protectedRenewal);
+    });
+  });
+
+  // Phase 28 (2026-09-02 P0 discovery fix), Discovery Lineage extension. The real FRVO incident
+  // entered ARGUS through exactly this path (NewsAgent's price request for a not-yet-subscribed
+  // symbol) with zero lineage record at the time - this closes that gap using the SAME existing
+  // Discovery Lineage Ledger mechanism (logDiscoveryCandidateDecision(), previously private to
+  // MarketUniverseScanner.ts, now shared) rather than a second one.
+  describe('subscribe() - Phase 28 Discovery Lineage: source=NEWS tagging', () => {
+    afterEach(() => clearNewsCatalystsForTests());
+
+    it('logs a source=NEWS discovery-lineage admission when a not-yet-subscribed symbol has real catalyst evidence', () => {
+      recordNewsCatalyst({
+        traceId: 't-lineage-1', symbol: 'ZNEW', headline: 'Real catalyst', source: 'unit',
+        publishedAtMs: Date.now(), sentiment: 0.5, credibility: 0.9, catalystStrength: 'HIGH',
+        tradingBias: 'BULLISH', contribution: 0.2, reasoning: 'unit', recordedAt: new Date().toISOString(),
+      });
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      worker.subscribe('ZNEW', { requestedBy: 'NewsAgent' });
+      const call = logSpy.mock.calls.find(([msg]) => msg === 'discovery_candidate_decision');
+      expect(call).toBeTruthy();
+      expect(call![1].eventType).toBe('DISCOVERY_CANDIDATE_ADMITTED');
+      expect(call![1].source).toBe('NEWS');
+      expect(call![1].symbol).toBe('ZNEW');
+      logSpy.mockRestore();
+    });
+
+    it('does NOT log a discovery-lineage entry when no real catalyst evidence exists - a routine round-robin price check on an ordinary symbol is not itself a "discovery" event', () => {
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      worker.subscribe('ZORD', { requestedBy: 'FundamentalAgent' });
+      const call = logSpy.mock.calls.find(([msg]) => msg === 'discovery_candidate_decision');
+      expect(call).toBeUndefined();
+      logSpy.mockRestore();
+    });
+
+    it('does not log a discovery-lineage entry when the symbol is already subscribed - only a genuine not-yet-subscribed entry counts as discovery', () => {
+      recordNewsCatalyst({
+        traceId: 't-lineage-2', symbol: 'ZALR', headline: 'Real catalyst', source: 'unit',
+        publishedAtMs: Date.now(), sentiment: 0.5, credibility: 0.9, catalystStrength: 'HIGH',
+        tradingBias: 'BULLISH', contribution: 0.2, reasoning: 'unit', recordedAt: new Date().toISOString(),
+      });
+      worker.subscribe('ZALR'); // already subscribed before any requestedBy-driven lookup
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      worker.subscribe('ZALR', { requestedBy: 'NewsAgent' });
+      const call = logSpy.mock.calls.find(([msg]) => msg === 'discovery_candidate_decision');
+      expect(call).toBeUndefined();
+      logSpy.mockRestore();
+    });
+
+    it('deduplicates repeated news-driven lookups on the same still-unsubscribed symbol - one real entry, not one per attempt', async () => {
+      const { continuousIntelligence } = await import('../config/continuousIntelligence');
+      recordNewsCatalyst({
+        traceId: 't-lineage-3', symbol: 'ZDUP', headline: 'Real catalyst', source: 'unit',
+        publishedAtMs: Date.now(), sentiment: 0.5, credibility: 0.9, catalystStrength: 'HIGH',
+        tradingBias: 'BULLISH', contribution: 0.2, reasoning: 'unit', recordedAt: new Date().toISOString(),
+      });
+      // Fill every active-stream slot with freshly-subscribed (dwell-protected, unevictable)
+      // symbols first, so ZDUP's own subscribe() attempts below all genuinely fail to acquire a
+      // slot - the real repeat-attempt pattern (FundamentalAgent/MacroAgent/NewsAgent round-robin
+      // re-checking the same still-unsubscribed symbol every cycle), not a one-and-done success.
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+      for (let i = 0; i < cap; i++) worker.subscribe(`Y${letters[i % 26]}${letters[Math.floor(i / 26)]}`);
+      expect(worker.getActiveSymbols()).not.toContain('ZDUP');
+
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      worker.subscribe('ZDUP', { requestedBy: 'NewsAgent' });
+      worker.subscribe('ZDUP', { requestedBy: 'MacroAgent' });
+      worker.subscribe('ZDUP', { requestedBy: 'FundamentalAgent' });
+      expect(worker.getActiveSymbols()).not.toContain('ZDUP'); // confirms it genuinely never subscribed across all 3 attempts
+      const calls = logSpy.mock.calls.filter(([msg]) => msg === 'discovery_candidate_decision');
+      expect(calls.length).toBe(1);
+      logSpy.mockRestore();
+    });
+
+    it('a real Alpaca-mover/broad-universe admission is unaffected - source provenance for the existing funnels is untouched by this extension', async () => {
+      const { logDiscoveryCandidateDecision } = await import('../observability/discoveryCandidateLedger');
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      logDiscoveryCandidateDecision({ symbol: 'ZMOV', source: 'MARKET_MOVER', admitted: true, reason: null });
+      const call = logSpy.mock.calls.find(([msg]) => msg === 'discovery_candidate_decision');
+      expect(call![1].source).toBe('MARKET_MOVER');
+      logSpy.mockRestore();
     });
   });
 });

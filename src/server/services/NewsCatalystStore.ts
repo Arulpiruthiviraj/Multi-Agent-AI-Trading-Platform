@@ -86,6 +86,20 @@ export function getNewsCatalysts(symbol: string): NewsCatalyst[] {
   return [...(bySymbol.get(symbol.toUpperCase()) ?? [])];
 }
 
+/**
+ * Phase 28 (2026-09-02 P0 discovery fix). Real, reviewed bar for "does this symbol have genuine
+ * catalyst evidence" - reuses the EXACT same strength/bias bar recordNewsCatalyst() already uses
+ * to decide whether to stage a catalyst for market open, rather than inventing a new confidence
+ * threshold. Used to (a) classify a MarketDataWorker rescue request as NEWS_CATALYST-priority and
+ * (b) tag a news-triggered discovery-lineage entry as source=NEWS. Never gates a trade decision -
+ * purely a discovery/observability signal.
+ */
+export function hasRealCatalystEvidence(symbol: string): boolean {
+  return getNewsCatalysts(symbol).some(
+    (c) => c.tradingBias !== 'NEUTRAL' && (c.catalystStrength === 'HIGH' || c.catalystStrength === 'MODERATE'),
+  );
+}
+
 export function listRecentNewsCatalysts(limit = 20): NewsCatalyst[] {
   pruneExpired();
   const all = [...bySymbol.values()].flat();
