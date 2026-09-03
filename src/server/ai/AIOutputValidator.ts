@@ -59,6 +59,51 @@ export function coerceString(raw: unknown, fallback: string): string {
   return typeof raw === 'string' && raw.length > 0 ? raw : fallback;
 }
 
+/**
+ * Best-effort extraction of a JSON object from raw LLM text. Every OpenAI-compatible remote
+ * provider (Mistral, OpenRouter, Kimi, NVIDIA, ...) only gets a hard `response_format:json_object`
+ * constraint when the call is local (OpenAICompatibleProvider.ts's chatOnce() scopes that param to
+ * `this.isLocal` calls only) - a paid provider is free to wrap its otherwise-valid JSON answer in a
+ * ```json ... ``` markdown fence, and often does. AIRouter.ts's own consensus-debate parse already
+ * defends against exactly this (strips a fence before JSON.parse); FundamentalAgent.ts/MacroAgent.ts
+ * did not, and a real Mistral response confirmed the failure mode live (2026-09-02): a well-formed,
+ * substantive analysis (real confidence, real reasoning) wrapped in a ```json fence threw a
+ * SyntaxError from a bare `JSON.parse(res.content)`, silently discarded as a fail-closed
+ * HOLD/confidence-0 "analysis failed this tick" vote - one that then dragged down every consensus
+ * evaluation it participated in without ever being able to contribute a real signal.
+ *
+ * Tries, in order: the raw trimmed text; the text with a leading/trailing ```/```json fence
+ * stripped; the substring from the first `{` to the last `}` (for prose-wrapped JSON with no fence
+ * at all). Returns null on genuine failure - callers must supply their own safe default (e.g. HOLD/
+ * 0 confidence), never invent a parsed value.
+ */
+export function parseJsonFromLlmContent(content: string): unknown | null {
+  const trimmed = content.trim();
+  const candidates: string[] = [trimmed];
+
+  let fenced = trimmed;
+  if (fenced.startsWith('```json')) fenced = fenced.slice(7);
+  else if (fenced.startsWith('```')) fenced = fenced.slice(3);
+  if (fenced.endsWith('```')) fenced = fenced.slice(0, -3);
+  fenced = fenced.trim();
+  if (fenced !== trimmed) candidates.push(fenced);
+
+  const firstBrace = trimmed.indexOf('{');
+  const lastBrace = trimmed.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    candidates.push(trimmed.slice(firstBrace, lastBrace + 1));
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate);
+    } catch {
+      // try the next candidate
+    }
+  }
+  return null;
+}
+
 export function coerceStringArray(raw: unknown): string[] {
   if (!Array.isArray(raw)) return [];
   return raw.filter((x): x is string => typeof x === 'string' && x.length > 0);

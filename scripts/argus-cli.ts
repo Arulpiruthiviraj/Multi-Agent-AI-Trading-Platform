@@ -91,6 +91,19 @@ async function fetchJson(path: string, init?: RequestInit) {
  * any). A genuinely new engine will report a pid different from that; the stale-process
  * collision this fix targets reports the exact same `notPid` back.
  */
+/**
+ * Full "is everything actually fine" report - runtime health + broker connection + AI provider
+ * pool + Kronos/Chronos + QuantCoreBridge, in one place. Shared by `argus-cli health` and a
+ * successful `argus-cli start` (so starting no longer requires a manual follow-up `health` call to
+ * see the same picture this session already needed to reconstruct by hand).
+ */
+async function printFullHealthReport(): Promise<void> {
+  console.log(JSON.stringify(await fetchJson('/api/v2/runtime/health'), null, 2));
+  const qc = await fetchJson('/api/v2/quant-core/health') as { enabled: boolean; connected: boolean; detail?: string };
+  const label = !qc.enabled ? 'DISABLED' : qc.connected ? 'CONNECTED' : 'DISCONNECTED';
+  console.log(`QuantCoreBridge: ${label}${qc.detail ? ` (${qc.detail})` : ''}`);
+}
+
 async function waitForHealth(timeoutMs = 60_000, notPid?: number): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -242,7 +255,11 @@ async function startEngine() {
   if (!child.pid) throw new Error('Failed to spawn Argus engine process');
   writeEnginePid(child.pid);
   child.unref();
-  const ready = await waitForHealth(60_000, staleAnsweringPid);
+  // Real-world boot time on this machine consistently runs 65-75s (ArgusCoreBoot + migrations +
+  // model probes), past a 60s cap - repeatedly observed reporting a false "health check timed out"
+  // moments before /health actually came up healthy. Default raised to 150s; still overridable.
+  const startTimeoutMs = Number(process.env.ARGUS_CLI_START_TIMEOUT_MS || 150_000);
+  const ready = await waitForHealth(startTimeoutMs, staleAnsweringPid);
   let message = ready ? 'Engine started' : 'Engine spawned but health check timed out';
   let reportedPid = child.pid;
   if (!ready && staleAnsweringPid !== undefined) {
@@ -276,6 +293,10 @@ async function startEngine() {
     message,
   }, null, 2));
   if (!ready) process.exit(1);
+  // "make sure everything is working fine" - print the same broker/AI-provider/Kronos/
+  // QuantCoreBridge picture `argus-cli health` gives, right here, instead of requiring a separate
+  // manual follow-up command to see it.
+  await printFullHealthReport();
 }
 
 async function stopEngine() {
@@ -535,13 +556,25 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/status'), null, 2));
   },
   async health() {
-    console.log(JSON.stringify(await fetchJson('/api/v2/runtime/health'), null, 2));
-    const qc = await fetchJson('/api/v2/quant-core/health') as { enabled: boolean; connected: boolean; detail?: string };
-    const label = !qc.enabled ? 'DISABLED' : qc.connected ? 'CONNECTED' : 'DISCONNECTED';
-    console.log(`QuantCoreBridge: ${label}${qc.detail ? ` (${qc.detail})` : ''}`);
+    return printFullHealthReport();
   },
   async ready() {
     console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));
+  },
+  async 'research-recommend'() {
+    // LangGraph research service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - shadow-only,
+    // never auto-promotes. Pass --strategy=MOMENTUM_BREAKOUT (default GOLDEN_SMA).
+    // Real, observed live duration for a strategy with actual evidence (two sequential local LLM
+    // calls): ~14s - well past this CLI's own generic 10s default fetch timeout, which caused a
+    // real false "aborted due to timeout" report even though the run completed and persisted
+    // correctly server-side. 60s comfortably covers config/langGraphResearch.json's own
+    // requestTimeoutMs (45s) plus round-trip overhead.
+    const strategyArg = process.argv.slice(3).find((a) => a.startsWith('--strategy='));
+    const strategyId = strategyArg ? strategyArg.slice('--strategy='.length) : 'GOLDEN_SMA';
+    console.log(JSON.stringify(await fetchJson(`/api/v2/research/strategy-graduation/${encodeURIComponent(strategyId)}`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(60_000),
+    }), null, 2));
   },
   async 'provider-health'() {
     // Phase 9 (2026-08-27): real per-provider health matrix - DB aggregates + AIRouter's live

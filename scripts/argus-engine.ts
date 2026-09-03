@@ -32,17 +32,42 @@ try {
 
 console.log('[Argus Engine] starting dedicated daemon (same Argus Core as browser mode).');
 
+const path = await import('node:path');
+const { fileURLToPath } = await import('node:url');
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, '..');
+
 // Optional companion, mirrors devWithOpenAlice.ts's own opt-in Java Quant Core start (same
 // QUANT_JAVA_CORE_ENABLED flag, same advisory-only/no-broker-access contract) - previously only
 // the full `npm run dev` ecosystem launcher brought this up, so `./argus start`'s leaner engine
 // daemon never did. Fire-and-forget: never awaited, never allowed to delay or block engine boot -
 // startJavaQuantCoreAndWait() itself never throws, matching the existing companion-launch pattern.
 if (String(process.env.QUANT_JAVA_CORE_ENABLED || '').toLowerCase() === 'true') {
-  const path = await import('node:path');
-  const { fileURLToPath } = await import('node:url');
   const { startJavaQuantCoreAndWait } = await import('./lib/javaQuantCoreLauncher.ts');
-  const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-  void startJavaQuantCoreAndWait(path.resolve(scriptDir, '..'));
+  void startJavaQuantCoreAndWait(repoRoot);
+}
+
+// Chronos/Kronos companion - on by default (opposite polarity from Java Quant Core above: Chronos
+// is a normal, expected companion, same ARGUS_SKIP_CHRONOS convention devWithOpenAlice.ts already
+// uses for `npm run dev`, not an opt-in experimental one). Mirrors devWithOpenAlice.ts's own
+// startChronosAndWait() so `./argus start`/`argus-cli start`'s leaner engine daemon does not leave
+// Kronos KRONOS_UNAVAILABLE just because nobody ran `npm run ai:serve` in another terminal.
+// Fire-and-forget, same contract as the Java block above - ensureChronosRunning() never throws.
+if (String(process.env.ARGUS_SKIP_CHRONOS || '').toLowerCase() !== 'true') {
+  const { ensureChronosRunning } = await import('./lib/chronosLauncher.ts');
+  void ensureChronosRunning(repoRoot);
+}
+
+// LangGraph research companion (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - opt-in, same
+// off-by-default polarity as the Java Quant Core block above, not Chronos's on-by-default one:
+// this is a new, unvalidated, shadow-only advisory capability, not yet a normal expected
+// companion. Isolated Python process, loopback HTTP only, no broker credentials, no SQLite
+// access, never on the live trading path - see LangGraphResearchService.ts's own header for the
+// enforced boundary. Fire-and-forget, same contract as the other two companions above.
+if (String(process.env.LANGGRAPH_RESEARCH_ENABLED || '').toLowerCase() === 'true') {
+  const { ensureLangGraphResearchRunning } = await import('./lib/langGraphLauncher.ts');
+  const { langGraphResearch } = await import('../src/server/config/langGraphResearch.ts');
+  void ensureLangGraphResearchRunning(repoRoot, langGraphResearch.port);
 }
 
 await import('../server.ts');

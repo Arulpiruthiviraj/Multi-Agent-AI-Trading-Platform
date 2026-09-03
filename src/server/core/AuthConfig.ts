@@ -152,6 +152,22 @@ export function isMutatingApiPath(path: string | undefined): boolean {
   return path.startsWith('/api/v1/') || path.startsWith('/api/v2/');
 }
 
+/**
+ * Narrow, loopback-only auth exemption for the isolated LangGraph research service's one
+ * read-only evidence lookup (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). That service has
+ * no broker credentials and no session by design; this is the one real call it makes back into
+ * Argus. Applies regardless of whether AUTH_PASSWORD is configured - unlike
+ * allowUnauthenticatedRequest() above (which only relaxes anything when auth is fully disabled),
+ * this exemption is scoped to exactly one GET route, returns no secret/PII/broker data, and still
+ * requires the request to come from this same machine (isLoopbackAddress) - the same trust
+ * boundary the no-auth-mode dev-token bypass already relies on, just narrower.
+ */
+export function isExemptLoopbackResearchEvidenceRequest(method: string | undefined, path: string | undefined, ip: string | undefined | null): boolean {
+  if (String(method || '').toUpperCase() !== 'GET') return false;
+  if (!path || !path.startsWith('/api/v2/research/strategy-evidence/')) return false;
+  return isLoopbackAddress(ip);
+}
+
 export function hasValidDevToken(presented: string | string[] | undefined, expected: string | undefined): boolean {
   if (!expected || expected.length < 8) return false;
   const token = Array.isArray(presented) ? presented[0] : presented;

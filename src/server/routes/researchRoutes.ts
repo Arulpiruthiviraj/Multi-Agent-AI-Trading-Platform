@@ -7,7 +7,9 @@ import { labeledCapitals } from '../research/capitalLabels';
 import { createPaperExperiment } from '../research/paperExperiment';
 import { deriveLifecycleStatus, emptyEvidence, evidenceFromCanonicalRun, liveGoNoGo } from '../research/promotionEngine';
 import { costStress, permutationTestPnls, sensitivityAround } from '../research/robustness';
-import { coreStrategyInventory, experimentalInventory, liveCandidateReportMarkdown, researchComparisonMatrix } from '../research/strategyEvidence';
+import { coreStrategyInventory, experimentalInventory, liveCandidateReportMarkdown, researchComparisonMatrix, strategyEvidenceDetail } from '../research/strategyEvidence';
+import { runStrategyGraduationRecommendation } from '../services/ResearchAgentRunner';
+import { getRecommendationById, listRecommendationsForStrategy } from '../research/researchRecommendations';
 import { getVectorBTStatus, runResearchCli, compareEngines } from '../research/VectorBTService';
 import { createJob, getJob, updateJob } from '../research/researchJobs';
 import { runSmaCrossover, signalUsesOnlyClosesThrough } from '../research/smaCrossover';
@@ -60,6 +62,79 @@ export function mountResearchRoutes(v2Router: Router): void {
       experimental: experimentalInventory(),
       promotion: 'evidence_only',
     });
+  });
+
+  // Narrow, read-only interface for the isolated LangGraph research service
+  // (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - returns exactly one strategy's already-
+  // computed evidence/lifecycle/go-no-go, never a general database query surface. Same auth as
+  // every other /research/* route; the LangGraph service calls this like any other HTTP client,
+  // it never touches SQLite directly.
+  v2Router.get('/research/strategy-evidence/:strategyId', (req, res) => {
+    const strategyId = String(req.params.strategyId || '').trim();
+    const known = [...researchSafety.coreStrategyIds, ...researchSafety.experimentalStrategyIds, 'GOLDEN_SMA'];
+    if (!known.includes(strategyId)) {
+      return res.status(404).json({ ok: false, error: 'UNKNOWN_STRATEGY_ID', known });
+    }
+    res.json({ ok: true, live: 'NO-GO', ...strategyEvidenceDetail(strategyId) });
+  });
+
+  // Shadow-only strategy-graduation recommendation, produced by the isolated LangGraph research
+  // service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). This route only triggers a run and
+  // returns its result - it never promotes anything, never touches StrategyEngine.ts's arrays,
+  // never reaches ChiefTrader/RiskEngine/OMS. Rate-limited like other research-run routes since
+  // each call makes a real (local) LLM call through the companion service.
+  v2Router.post('/research/strategy-graduation/:strategyId', backtestLimiter, async (req, res) => {
+    const strategyId = String(req.params.strategyId || '').trim();
+    const known = [...researchSafety.coreStrategyIds, ...researchSafety.experimentalStrategyIds, 'GOLDEN_SMA'];
+    if (!known.includes(strategyId)) {
+      return res.status(404).json({ ok: false, error: 'UNKNOWN_STRATEGY_ID', known });
+    }
+    // Real bug found live (Phase 3 runtime verification, 2026-09-03): a real LLM-backed run here
+    // legitimately takes 11-16s (Ollama chat completion x2), which can exceed server.ts's own
+    // blanket 15s /api request-timeout watchdog - that backstop sends its own 504 first, then this
+    // handler's `await` finally resolves and this res.json() below threw a real, reproduced-live
+    // unhandledRejection (ERR_HTTP_HEADERS_SENT), the exact same race already documented and guarded
+    // elsewhere in this codebase (server.ts's /api/v1/portfolio comment). Guarding here the same way
+    // makes the now-pointless second write a no-op instead of a thrown, logged error. The run itself
+    // still completes and persists correctly either way - only the HTTP response is ever raced.
+    const run = await runStrategyGraduationRecommendation({ strategyId });
+    if (!res.headersSent) {
+      res.json({
+        ok: true,
+        live: 'NO-GO',
+        shadowOnly: true,
+        note: 'Advisory research only - never auto-promotes, never reaches ChiefTrader/RiskEngine/OMS.',
+        ...run,
+      });
+    }
+  });
+
+  // Phase 3 (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md): read-only human-review surface over
+  // the same research_agent_runs rows the route above writes. Pure GET - no route in this file lets
+  // a caller promote/enable a strategy, modify risk/sizing/broker config, or place an order; the
+  // response is always explicitly labeled RESEARCH_RECOMMENDATION / notATradingApproval.
+  v2Router.get('/research/strategy-recommendations/:recommendationId', async (req, res) => {
+    const recommendationId = String(req.params.recommendationId || '').trim();
+    if (!recommendationId) {
+      return res.status(400).json({ ok: false, error: 'RECOMMENDATION_ID_REQUIRED' });
+    }
+    const view = await getRecommendationById(recommendationId);
+    if (!view) return res.status(404).json({ ok: false, error: 'RECOMMENDATION_NOT_FOUND' });
+    res.json({ ok: true, live: 'NO-GO', ...view });
+  });
+
+  v2Router.get('/research/strategy-recommendations', async (req, res) => {
+    const strategyId = String(req.query.strategyId || '').trim();
+    const known = [...researchSafety.coreStrategyIds, ...researchSafety.experimentalStrategyIds, 'GOLDEN_SMA'];
+    if (!strategyId) {
+      return res.status(400).json({ ok: false, error: 'STRATEGY_ID_REQUIRED', known });
+    }
+    if (!known.includes(strategyId)) {
+      return res.status(404).json({ ok: false, error: 'UNKNOWN_STRATEGY_ID', known });
+    }
+    const limit = Number(req.query.limit ?? 20);
+    const recommendations = await listRecommendationsForStrategy(strategyId, Number.isFinite(limit) ? limit : 20);
+    res.json({ ok: true, live: 'NO-GO', strategyId, recommendations });
   });
 
   v2Router.get('/research/dataset/golden', (_req, res) => {

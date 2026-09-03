@@ -82,6 +82,37 @@ describe('MacroEconomyAgent - AI output validation (Phase 5 hardening)', () => {
     expect(idea.confidence).toBeCloseTo(0.65);
     expect(idea.reasoning).toContain('dovish pivot expected');
   });
+
+  // Real bug found live (2026-09-02): a bare JSON.parse(res.content) threw on a genuine Mistral
+  // response wrapped in a ```json fence, silently discarding a real 0.65-confidence analysis as a
+  // fail-closed HOLD/0 "analysis failed this tick" vote - which then dragged down every consensus
+  // evaluation it participated in. Remote (paid) providers only get response_format:json_object
+  // when the call is local, so any provider is free to fence its JSON, and at least one does.
+  it('still extracts the real recommendation from a response wrapped in a ```json fence, instead of failing closed to HOLD', async () => {
+    routeTask.mockResolvedValue({
+      content: '```json\n' + JSON.stringify({ recommendation: 'HOLD', confidence: 0.65, reasoning: 'mixed macro signals' }) + '\n```',
+      aiCallId: 'c4', provider: 'mistral', latency: 100,
+    });
+
+    await agent.analyzeMacro();
+
+    expect(emitTradeIdea).toHaveBeenCalledTimes(1);
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.reasoning).toContain('mixed macro signals');
+    expect(idea.confidence).toBeCloseTo(0.65);
+  });
+
+  it('fails closed to a real HOLD/0-confidence idea (not a thrown error) when the LLM response is genuinely unparseable', async () => {
+    routeTask.mockResolvedValue({ content: 'The macro outlook is unclear right now.', aiCallId: 'c5', provider: 'mistral', latency: 100 });
+
+    await agent.analyzeMacro();
+
+    expect(emitTradeIdea).toHaveBeenCalledTimes(1);
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.confidence).toBe(0);
+    expect(idea.reasoning).toContain('not parseable JSON');
+  });
 });
 
 describe('MacroEconomyAgent - secret leakage (Phase 8 hardening)', () => {

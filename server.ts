@@ -110,7 +110,7 @@ import { brokerPortfolioError, withTimeout } from "./src/server/services/brokerP
 import { resolvePositionStopTarget } from "./src/server/services/PortfolioMonitor";
 import { loadInternalNewsForTicker } from "./src/server/services/internalNewsForTicker";
 import { tradingSafety } from "./src/server/config/tradingSafety";
-import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest } from "./src/server/core/AuthConfig";
+import { isAuthEnabled, validateCredentials as validateCredentialsPure, isSessionValid, enforceAuthConfigOrExit, allowUnauthenticatedRequest, isExemptLoopbackResearchEvidenceRequest } from "./src/server/core/AuthConfig";
 import { persistAllowlistedSecrets, secretsStatusFromEnvAndDb, SECRET_ALLOWLIST } from "./src/server/core/persistEncryptedSecrets";
 import { loginLimiter, aiLimiter, tradingLimiter, backtestLimiter, wsUpgradeLimiter, webhookLimiter } from "./src/server/core/RateLimiters";
 import http from "http";
@@ -574,6 +574,7 @@ if (fs.existsSync(SECRETS_FILE_IGNORED)) {
 
   app.use(async (req: Request & { actor?: string }, res, next) => {
     if (req.path.startsWith('/api/v1/auth')) return next();
+    if (isExemptLoopbackResearchEvidenceRequest(req.method, req.path, req.ip || req.socket?.remoteAddress)) return next();
     if (await isAuthed(req)) {
       await maybeRefreshSession(req, res);
       req.actor = await getCurrentActor(req);

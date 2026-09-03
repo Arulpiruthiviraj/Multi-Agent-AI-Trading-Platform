@@ -38,6 +38,7 @@ import QuantSignalsPanel from "./components/QuantSignalsPanel";
 import StrategyPerformancePanel from "./components/StrategyPerformancePanel";
 import EliteDeskPanel from "./components/EliteDeskPanel";
 import ResearchLabPanel from "./components/ResearchLabPanel";
+import StrategyResearchRecommendations from "./components/StrategyResearchRecommendations";
 import AwaitingSignal from "./components/shared/AwaitingSignal";
 import { SafeResponsiveContainer } from "./components/shared/SafeResponsiveContainer";
 import tradingSafetyConfig from "../config/tradingSafety.json";
@@ -7737,6 +7738,7 @@ export default function App() {
             <StrategyPerformancePanel />
             <EliteDeskPanel />
             <ResearchLabPanel />
+            <StrategyResearchRecommendations />
           </div>
         )}
 

@@ -20,6 +20,7 @@ data/backups/
 data/ohlcv_export.json
 data/research/
 data/replays/
+data/*_launch.lock
 models/
 sqlite.db
 quant-core-java/target/

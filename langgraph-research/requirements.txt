@@ -1,0 +1,7 @@
+# LangGraph research service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md).
+# Isolated Python process - own pinned requirements, separate from requirements-ai.txt
+# (Chronos/FinBERT) and requirements-research.txt (VectorBT), which serve unrelated companions.
+langgraph==1.2.11
+pydantic==2.13.4
+requests==2.34.2
+pytest==8.4.2

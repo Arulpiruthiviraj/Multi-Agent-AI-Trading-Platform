@@ -1575,3 +1575,29 @@ export const sessionLifecycleSnapshots = sqliteTable('session_lifecycle_snapshot
 }, (table) => ({
   dateIdx: index('idx_session_lifecycle_snapshots_date').on(table.tradingDate, table.evaluatedAt),
 }));
+
+/**
+ * LangGraph research-service run ledger (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md).
+ * Additive only - this Node process (the sole SQLite writer, per src/server/db/index.ts) is what
+ * persists a finished run; the isolated Python LangGraph service never opens this database itself
+ * and has no credentials to do so. A row here is always advisory/research output, never a trade,
+ * never a strategy-array mutation, never something ChiefTraderAgent/RiskEngine/OMS reads.
+ */
+export const researchAgentRuns = sqliteTable('research_agent_runs', {
+  id: text('id').primaryKey(),
+  correlationId: text('correlation_id').notNull(),
+  kind: text('kind').notNull(), // e.g. STRATEGY_GRADUATION_RECOMMENDATION
+  strategyId: text('strategy_id'),
+  requestJson: text('request_json').notNull(),
+  status: text('status').notNull(), // PENDING | COMPLETED | FAILED | UNAVAILABLE
+  resultJson: text('result_json'),
+  errorMessage: text('error_message'),
+  graphVersion: text('graph_version'),
+  providerModel: text('provider_model'),
+  durationMs: integer('duration_ms'),
+  createdAt: text('created_at').notNull(),
+  completedAt: text('completed_at'),
+}, (table) => ({
+  correlationIdx: index('idx_research_agent_runs_correlation').on(table.correlationId),
+  strategyIdx: index('idx_research_agent_runs_strategy').on(table.strategyId, table.createdAt),
+}));

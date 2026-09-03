@@ -7,6 +7,7 @@ import {
   enforceAuthConfigOrExit,
   DEFAULT_SESSION_SECRET,
   allowUnauthenticatedRequest,
+  isExemptLoopbackResearchEvidenceRequest,
 } from './AuthConfig';
 
 const REAL_ENV = {
@@ -182,5 +183,32 @@ describe('AuthConfig - mutating API lockdown when AUTH_PASSWORD is unset', () =>
         NODE_ENV: 'development',
       },
     })).toBe(false);
+  });
+});
+
+describe('AuthConfig - isExemptLoopbackResearchEvidenceRequest (LangGraph research service boundary)', () => {
+  it('allows a loopback GET to the one strategy-evidence route, even with no session at all', () => {
+    expect(isExemptLoopbackResearchEvidenceRequest('GET', '/api/v2/research/strategy-evidence/GOLDEN_SMA', '127.0.0.1')).toBe(true);
+  });
+
+  it('allows ::1 (IPv6 loopback) the same way', () => {
+    expect(isExemptLoopbackResearchEvidenceRequest('GET', '/api/v2/research/strategy-evidence/GOLDEN_SMA', '::1')).toBe(true);
+  });
+
+  it('rejects the same path from a non-loopback address', () => {
+    expect(isExemptLoopbackResearchEvidenceRequest('GET', '/api/v2/research/strategy-evidence/GOLDEN_SMA', '10.0.0.8')).toBe(false);
+  });
+
+  it('rejects a POST to the same path, even from loopback (this exemption is GET-only)', () => {
+    expect(isExemptLoopbackResearchEvidenceRequest('POST', '/api/v2/research/strategy-evidence/GOLDEN_SMA', '127.0.0.1')).toBe(false);
+  });
+
+  it('rejects a different route entirely, even from loopback - the exemption must not widen into a general bypass', () => {
+    expect(isExemptLoopbackResearchEvidenceRequest('GET', '/api/v2/runtime/status', '127.0.0.1')).toBe(false);
+    expect(isExemptLoopbackResearchEvidenceRequest('GET', '/api/v2/research/strategy-graduation/GOLDEN_SMA', '127.0.0.1')).toBe(false);
+  });
+
+  it('rejects a missing/undefined ip', () => {
+    expect(isExemptLoopbackResearchEvidenceRequest('GET', '/api/v2/research/strategy-evidence/GOLDEN_SMA', undefined)).toBe(false);
   });
 });

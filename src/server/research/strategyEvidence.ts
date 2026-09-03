@@ -118,6 +118,33 @@ export function researchComparisonMatrix() {
   };
 }
 
+/**
+ * Full structured evidence for exactly one strategy id - read-only, no side effects. Added as the
+ * narrow read-only interface a LangGraph research service can call over HTTP instead of touching
+ * SQLite directly (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). Reuses the same
+ * resolveEvidence()/deriveLifecycleStatus()/liveGoNoGo() every other report in this file already
+ * calls - never a second, parallel evidence computation.
+ */
+export function strategyEvidenceDetail(strategyId: string): {
+  strategyId: string;
+  evaluated: boolean;
+  lifecycleStatus: ReturnType<typeof deriveLifecycleStatus>;
+  live: 'GO' | 'NO-GO';
+  failedGates: string[];
+  evidence: StrategyEvidence;
+} {
+  const { evidence, evaluated } = resolveEvidence(strategyId);
+  const { live, failedGates } = liveGoNoGo(evidence);
+  return {
+    strategyId,
+    evaluated,
+    lifecycleStatus: deriveLifecycleStatus(evidence),
+    live,
+    failedGates,
+    evidence,
+  };
+}
+
 export function liveCandidateReportMarkdown(): string {
   const lines = ['# LIVE_CANDIDATE_REPORT', '', 'Promotion evidence from baseline_index when present. Never fabricated.', ''];
   for (const id of [...researchSafety.coreStrategyIds, ...researchSafety.experimentalStrategyIds, 'GOLDEN_SMA']) {

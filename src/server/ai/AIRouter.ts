@@ -54,7 +54,7 @@ import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 import { EncryptionService } from '../core/EncryptionService';
 import { classifyError as classifyAIProviderError } from './AIProviderHealthCheck';
-import { coerceEnum, clampScore, coerceString, coerceStringArray, TRADE_SIDE_VALUES } from './AIOutputValidator';
+import { coerceEnum, clampScore, coerceString, coerceStringArray, parseJsonFromLlmContent, TRADE_SIDE_VALUES } from './AIOutputValidator';
 import { tradingSafety } from '../config/tradingSafety';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { aiModels, isResearchAgentType } from '../config/aiModels';
@@ -864,17 +864,15 @@ export class AIRouter {
                 });
             } catch (e) {}
 
-            let parsed: any = {};
-            try {
-               let cleanText = res.content.trim();
-               if (cleanText.startsWith('```json')) cleanText = cleanText.substring(7);
-               if (cleanText.startsWith('```')) cleanText = cleanText.substring(3);
-               if (cleanText.endsWith('```')) cleanText = cleanText.substring(0, cleanText.length - 3);
-               parsed = JSON.parse(cleanText.trim());
-            } catch (e) {
-               // Fallback parsing
-               parsed = { decision: res.content.toUpperCase().includes("BUY") ? "BUY" : res.content.toUpperCase().includes("SELL") ? "SELL" : "HOLD", confidence: 50, reasoning: res.content, supportingFactors: [], risks: [] };
-            }
+            // Shared with FundamentalAgent.ts/MacroAgent.ts's identical fence-stripping need
+            // (parseJsonFromLlmContent's own header has the full root-cause chain) - this call
+            // site's own fallback stays intentionally more lenient than theirs: a genuinely
+            // unparseable response still degrades to a keyword-guessed decision rather than a hard
+            // HOLD/0, since consensus-debate already treats HOLD as one vote among several.
+            const parsed: any = parseJsonFromLlmContent(res.content) ?? {
+               decision: res.content.toUpperCase().includes("BUY") ? "BUY" : res.content.toUpperCase().includes("SELL") ? "SELL" : "HOLD",
+               confidence: 50, reasoning: res.content, supportingFactors: [], risks: [],
+            };
 
             const aiCallId = await logAiCall({
                 traceId, agent: agentType, provider: providerId, model: 'consensus',

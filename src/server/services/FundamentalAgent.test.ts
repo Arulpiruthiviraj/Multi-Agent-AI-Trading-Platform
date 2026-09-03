@@ -91,6 +91,37 @@ describe('FundamentalAnalysisAgent - AI output validation (Phase 5 hardening)', 
     const idea = emitTradeIdea.mock.calls[0][0];
     expect(idea.reasoning).toContain('No reasoning provided.');
   });
+
+  // Real bug found live (2026-09-02) via MacroAgent's identical call site - see
+  // AIOutputValidator.ts's parseJsonFromLlmContent() header for the full root-cause chain. A bare
+  // JSON.parse(res.content) threw on a response wrapped in a ```json fence, silently discarding a
+  // real analysis as a fail-closed HOLD/0 vote instead of a genuine recommendation.
+  it('still extracts the real recommendation from a response wrapped in a ```json fence, instead of failing closed to HOLD', async () => {
+    routeTask.mockResolvedValue({
+      content: '```json\n' + JSON.stringify({ recommendation: 'BUY', confidence: 0.72, reasoning: 'strong balance sheet' }) + '\n```',
+      aiCallId: 'c5', provider: 'mistral', latency: 100,
+    });
+
+    await agent.analyzeFundamentals();
+
+    expect(emitTradeIdea).toHaveBeenCalledTimes(1);
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+    expect(idea.confidence).toBeCloseTo(0.72);
+    expect(idea.reasoning).toContain('strong balance sheet');
+  });
+
+  it('fails closed to a real HOLD/0-confidence idea (not a thrown error) when the LLM response is genuinely unparseable', async () => {
+    routeTask.mockResolvedValue({ content: 'Fundamentals look mixed this quarter.', aiCallId: 'c6', provider: 'mistral', latency: 100 });
+
+    await agent.analyzeFundamentals();
+
+    expect(emitTradeIdea).toHaveBeenCalledTimes(1);
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.confidence).toBe(0);
+    expect(idea.reasoning).toContain('not parseable JSON');
+  });
 });
 
 describe('FundamentalAnalysisAgent - AI response caching (Phase 7 hardening)', () => {

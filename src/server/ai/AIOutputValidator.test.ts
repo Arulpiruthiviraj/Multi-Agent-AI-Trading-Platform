@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { coerceEnum, clampScore, normalizeConfidence01, coerceString, coerceStringArray, TRADE_SIDE_VALUES, TRADING_BIAS_VALUES, looksLikeListedTicker, rejectIfPriceDisagrees } from './AIOutputValidator';
+import { coerceEnum, clampScore, normalizeConfidence01, coerceString, coerceStringArray, parseJsonFromLlmContent, TRADE_SIDE_VALUES, TRADING_BIAS_VALUES, looksLikeListedTicker, rejectIfPriceDisagrees } from './AIOutputValidator';
 
 describe('coerceEnum', () => {
   it('matches case-insensitively', () => {
@@ -102,6 +102,39 @@ describe('looksLikeListedTicker (Phase 16G)', () => {
     expect(looksLikeListedTicker('Toast Stock (not specified)')).toBeNull();
     expect(looksLikeListedTicker('')).toBeNull();
     expect(looksLikeListedTicker(null)).toBeNull();
+  });
+});
+
+describe('parseJsonFromLlmContent', () => {
+  it('parses plain, unwrapped JSON directly', () => {
+    expect(parseJsonFromLlmContent('{"recommendation":"BUY","confidence":0.7}')).toEqual({ recommendation: 'BUY', confidence: 0.7 });
+  });
+
+  // The real bug this closes (2026-09-02): MacroAgent.ts/FundamentalAgent.ts did a bare
+  // JSON.parse(res.content) with no fence-stripping, unlike AIRouter.ts's own consensus-debate
+  // parse which already defended against this. A real live Mistral response confirmed the failure
+  // mode - remote providers only get response_format:json_object when the call is local
+  // (OpenAICompatibleProvider.ts's chatOnce()), so a paid provider is free to wrap valid JSON in a
+  // markdown fence, and Mistral did exactly that.
+  it('strips a ```json ... ``` fence before parsing', () => {
+    const content = '```json\n{"recommendation":"HOLD","confidence":0.65,"reasoning":"mixed signals"}\n```';
+    expect(parseJsonFromLlmContent(content)).toEqual({ recommendation: 'HOLD', confidence: 0.65, reasoning: 'mixed signals' });
+  });
+
+  it('strips a bare ``` ... ``` fence (no "json" language tag) before parsing', () => {
+    const content = '```\n{"recommendation":"SELL","confidence":0.4}\n```';
+    expect(parseJsonFromLlmContent(content)).toEqual({ recommendation: 'SELL', confidence: 0.4 });
+  });
+
+  it('extracts a JSON object embedded in surrounding prose with no fence at all', () => {
+    const content = 'Here is my analysis:\n{"recommendation":"BUY","confidence":0.55}\nHope that helps!';
+    expect(parseJsonFromLlmContent(content)).toEqual({ recommendation: 'BUY', confidence: 0.55 });
+  });
+
+  it('returns null on genuinely unparseable content, never inventing a value', () => {
+    expect(parseJsonFromLlmContent('The market looks uncertain today, no clear signal.')).toBeNull();
+    expect(parseJsonFromLlmContent('')).toBeNull();
+    expect(parseJsonFromLlmContent('```json\n{not valid json\n```')).toBeNull();
   });
 });
 

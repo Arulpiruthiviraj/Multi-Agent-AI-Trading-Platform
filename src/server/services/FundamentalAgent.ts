@@ -11,7 +11,7 @@ import { EVENTS } from '../core/eventNames';
 import { AIRouter } from '../ai/AIRouter';
 import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './ExternalDataCache';
 import { AlphaVantageBudget } from './AlphaVantageBudget';
-import { coerceEnum, normalizeConfidence01, coerceString, TRADE_SIDE_VALUES } from '../ai/AIOutputValidator';
+import { coerceEnum, normalizeConfidence01, coerceString, parseJsonFromLlmContent, TRADE_SIDE_VALUES } from '../ai/AIOutputValidator';
 import { logErrorSafely } from '../core/SecretRedaction';
 import { generateTraceId } from '../core/traceId';
 import { runtimeIntervals } from '../config/runtimeIntervals';
@@ -273,7 +273,16 @@ export class FundamentalAnalysisAgent {
                 return;
              }
 
-             const raw = JSON.parse(res.content);
+             // Real bug found live (2026-09-02): a bare JSON.parse(res.content) threw on a valid,
+             // substantive AI response that happened to be wrapped in a ```json fence - see
+             // parseJsonFromLlmContent()'s own header for the full root-cause chain and evidence
+             // (confirmed against MacroAgent's identical call site, same shared LLM/provider path).
+             const raw = parseJsonFromLlmContent(res.content) as Record<string, unknown> | null;
+             if (raw === null) {
+                this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamental LLM response was not parseable JSON.', currentPrice);
+                notePipelineAgentFailure('FundamentalAgent', 'unparseable LLM JSON');
+                return;
+             }
              analysis = {
                 recommendation: coerceEnum(raw.recommendation, TRADE_SIDE_VALUES, 'HOLD'),
                 confidence: normalizeConfidence01(raw.confidence),
