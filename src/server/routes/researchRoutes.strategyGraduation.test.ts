@@ -3,11 +3,15 @@ import request from 'supertest';
 import express from 'express';
 import { Router } from 'express';
 
-const { runStrategyGraduationRecommendation } = vi.hoisted(() => ({ runStrategyGraduationRecommendation: vi.fn() }));
-vi.mock('../services/ResearchAgentRunner', () => ({ runStrategyGraduationRecommendation }));
+const { beginStrategyGraduationRun, completeStrategyGraduationRun, cancelResearchRun } = vi.hoisted(() => ({
+  beginStrategyGraduationRun: vi.fn(),
+  completeStrategyGraduationRun: vi.fn(),
+  cancelResearchRun: vi.fn(),
+}));
+vi.mock('../services/ResearchAgentRunner', () => ({ beginStrategyGraduationRun, completeStrategyGraduationRun, cancelResearchRun }));
 
 // mountResearchRoutes pulls in a large real dependency graph (VectorBTService, replay engine,
-// etc.) - only the two routes this session added are under test here, exercised through the real
+// etc.) - only the routes this session added are under test here, exercised through the real
 // mountResearchRoutes() function (not reimplemented), with only the LangGraph orchestration layer
 // mocked.
 import { mountResearchRoutes } from './researchRoutes';
@@ -16,7 +20,9 @@ describe('researchRoutes: strategy-evidence / strategy-graduation (LangGraph res
   let app: express.Express;
 
   beforeEach(() => {
-    runStrategyGraduationRecommendation.mockReset();
+    beginStrategyGraduationRun.mockReset();
+    completeStrategyGraduationRun.mockReset().mockResolvedValue(undefined);
+    cancelResearchRun.mockReset();
     app = express();
     app.use(express.json());
     const v2Router = Router();
@@ -43,20 +49,40 @@ describe('researchRoutes: strategy-evidence / strategy-graduation (LangGraph res
   it('POST /research/strategy-graduation/:strategyId returns 404 for an unknown id without ever invoking the runner', async () => {
     const res = await request(app).post('/api/v2/research/strategy-graduation/NOT_A_REAL_STRATEGY');
     expect(res.status).toBe(404);
-    expect(runStrategyGraduationRecommendation).not.toHaveBeenCalled();
+    expect(beginStrategyGraduationRun).not.toHaveBeenCalled();
   });
 
-  it('POST /research/strategy-graduation/:strategyId invokes the runner and reports shadow-only, never-promotes', async () => {
-    runStrategyGraduationRecommendation.mockResolvedValue({
-      runId: 'run-1', correlationId: 'corr-1', status: 'UNAVAILABLE',
-      outcome: { ok: false, reason: 'DISABLED' },
-    });
+  it('POST /research/strategy-graduation/:strategyId (Phase 3.1) returns immediately with PENDING and never blocks on the slow completion', async () => {
+    beginStrategyGraduationRun.mockResolvedValue({ runId: 'run-1', correlationId: 'corr-1', status: 'PENDING' });
+    // completeStrategyGraduationRun deliberately never resolves in this test - if the route awaited
+    // it, this request would hang and the test would time out. It doesn't hang, proving the route
+    // truly does not await the slow path.
+    completeStrategyGraduationRun.mockReturnValue(new Promise(() => {}));
+
     const res = await request(app).post('/api/v2/research/strategy-graduation/GOLDEN_SMA');
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.live).toBe('NO-GO');
     expect(res.body.shadowOnly).toBe(true);
-    expect(res.body.status).toBe('UNAVAILABLE');
-    expect(runStrategyGraduationRecommendation).toHaveBeenCalledWith({ strategyId: 'GOLDEN_SMA' });
+    expect(res.body.status).toBe('PENDING');
+    expect(res.body.runId).toBe('run-1');
+    expect(beginStrategyGraduationRun).toHaveBeenCalledWith({ strategyId: 'GOLDEN_SMA' });
+    expect(completeStrategyGraduationRun).toHaveBeenCalledWith('run-1', 'corr-1', 'GOLDEN_SMA');
+  });
+
+  it('POST /research/strategy-graduation/:strategyId does not invoke the slow path when begin already returned a terminal status (e.g. max concurrency)', async () => {
+    beginStrategyGraduationRun.mockResolvedValue({ runId: 'run-2', correlationId: 'corr-2', status: 'FAILED' });
+    const res = await request(app).post('/api/v2/research/strategy-graduation/GOLDEN_SMA');
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('FAILED');
+    expect(completeStrategyGraduationRun).not.toHaveBeenCalled();
+  });
+
+  it('POST /research/runs/:runId/cancel requires a runId and reports the cancellation outcome', async () => {
+    cancelResearchRun.mockResolvedValue({ cancelled: true });
+    const res = await request(app).post('/api/v2/research/runs/run-1/cancel');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, cancelled: true });
+    expect(cancelResearchRun).toHaveBeenCalledWith('run-1');
   });
 });

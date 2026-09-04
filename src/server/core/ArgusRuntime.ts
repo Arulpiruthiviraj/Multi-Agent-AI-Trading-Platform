@@ -46,6 +46,12 @@ export interface ArgusRuntimeHealth {
   pid: number;
   uptimeMs: number;
   engineDaemon: boolean;
+  /** Opportunity-capture remediation (2026-09-03, Sept-2 forensic-audit follow-up): a raw
+   *  process.memoryUsage() snapshot - the two prior silent engine deaths that day left zero
+   *  crash.log evidence, so this makes memory pressure at least observable in every health poll
+   *  leading up to a future death, even though it cannot itself diagnose a death already past. */
+  memoryRssMb: number;
+  memoryHeapUsedMb: number;
 }
 
 export class ArgusRuntime {
@@ -180,6 +186,7 @@ export class ArgusRuntime {
     }
     const phase = this.derivePhase();
     const safeMode = phase === 'SAFE_MODE' || tradingEngine.state.emergencyStopActive;
+    const mem = process.memoryUsage();
     return {
       ok: isArgusCoreBooted() && this.phase !== 'FAILED',
       phase,
@@ -195,6 +202,8 @@ export class ArgusRuntime {
       pid: process.pid,
       uptimeMs: Math.round(process.uptime() * 1000),
       engineDaemon: isArgusEngineDaemon(),
+      memoryRssMb: Math.round((mem.rss / (1024 * 1024)) * 10) / 10,
+      memoryHeapUsedMb: Math.round((mem.heapUsed / (1024 * 1024)) * 10) / 10,
     };
   }
 }

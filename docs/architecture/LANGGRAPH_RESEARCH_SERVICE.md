@@ -5,12 +5,87 @@ shadow-only advisory companion — the same architectural tier as `quant-core-ja
 `scripts/local_ai_service.py` (Chronos), not a new entry point into
 ChiefTraderAgent/RiskEngine/OrderManagement/BrokerManager.
 
-**Status: Phase 0-3 implemented and runtime-verified. Phases 4-5 are NOT implemented** (see "Known
+**Status: Phase 0-3.1 implemented and runtime-verified. Phase 4A-5 are NOT implemented** (see "Known
 limitations"). Phase 3 turned the Phase 0-2 recommendation into a proper human-reviewable artifact:
 counter-evidence, a deterministic (non-LLM) evidence-strength/missing-evidence assessment, a
-deterministic `humanReviewRequired` flag, a read-only Node API, and a read-only frontend panel. It
-adds **zero** new write paths, **zero** new promotion authority, and **zero** new outbound calls —
-every Phase 3 field is computed from data the Phase 0-2 workflow already had.
+deterministic `humanReviewRequired` flag, a read-only Node API, and a read-only frontend panel.
+Phase 3.1 (2026-09-03) fixed a real production race (a genuine LLM-backed run, 11-16s, could
+exceed `server.ts`'s 15s HTTP watchdog) by making the recommendation request asynchronous by
+construction, added a real state machine (`PENDING → RUNNING → COMPLETED|FAILED|UNAVAILABLE|
+TIMEOUT|CANCELLED|FAILED_ON_RESTART`), enforced the previously-unenforced `maxConcurrentRuns`
+config, and added restart-orphan recovery. All of this adds **zero** new write paths, **zero** new
+promotion authority, and **zero** new outbound calls — it is entirely an execution-lifecycle fix
+around the same Phase 0-2/3 workflow.
+
+## Phase 3.1: asynchronous research execution lifecycle
+
+**The defect this replaces**: `POST /research/strategy-graduation/:strategyId` used to await the
+full LangGraph call (11-16s for a real LLM-backed run) before responding. This could exceed
+`server.ts`'s blanket 15s `/api` request-timeout backstop, which would send its own 504 first; when
+the real result then arrived, the route's own `res.json(...)` threw a real, reproduced-live
+`unhandledRejection` (`ERR_HTTP_HEADERS_SENT`) — confirmed in `data/logs/crash.log`,
+`2026-09-03T10:44:50.577Z`. A `res.headersSent` guard (added in the same forensic pass) stopped the
+crash but not the underlying false-timeout UX.
+
+**The fix**: the POST route now only awaits `beginStrategyGraduationRun()` — a fast DB insert — and
+responds in milliseconds with `{ status: "PENDING", runId, correlationId, ... }`. The slow LangGraph
+call happens in `completeStrategyGraduationRun()`, invoked detached (`void completeStrategyGraduationRun(...)`)
+after the response is already sent. This mirrors this same file's own pre-existing
+`beginReplayRun`/`completeReplayRun` precedent (`POST /research/replay/create`) rather than
+inventing a new pattern. The result is retrieved through the **existing** read-only
+`GET /research/strategy-recommendations/:recommendationId` route — no new, competing "runs"
+resource was added, per the explicit instruction not to invent a second persistence model when
+`research_agent_runs` already supports this.
+
+### State machine
+
+```
+PENDING --(begin)--> RUNNING --(LangGraph call)--> COMPLETED | FAILED | UNAVAILABLE | TIMEOUT
+   |                                                                          ^
+   +--(cancelResearchRun, best-effort)--> CANCELLED  <-----------------------+
+                                                          (a late-arriving result can never
+                                                           overwrite an already-CANCELLED row)
+(any PENDING/RUNNING row found orphaned from a PRIOR process) --> FAILED_ON_RESTART
+```
+
+Every transition away from `PENDING`/`RUNNING` is a single conditional `UPDATE ... WHERE status IN
+('PENDING','RUNNING')` — this is what makes completion **idempotent** and prevents
+**double-finalization**: if `cancelResearchRun` wins the race, the LangGraph call's own eventual
+completion write becomes a no-op against an already-terminal row.
+
+### Bounded concurrency (a real, confirmed gap that is now closed)
+
+`config/langGraphResearch.json`'s `maxConcurrentRuns` was loaded and validated but had **zero
+enforcement anywhere** in the codebase — confirmed by grep before this fix. `ResearchAgentRunner.ts`
+now holds a simple in-process counter (a single Node process is the sole orchestrator here — no
+distributed state needed); a `begin()` call beyond the configured limit is persisted as an
+immediately-terminal `FAILED` row (`errorMessage: "MAX_CONCURRENCY_REACHED: ..."`), never queued,
+never silently dropped, and never allowed to call LangGraph at all.
+
+### Restart recovery
+
+A `PENDING`/`RUNNING` row left behind by a prior process (killed, crashed, or restarted mid-run) can
+never be resumed — the in-memory background task that would have completed it no longer exists.
+`recoverOrphanedResearchRunsOnce()` runs exactly once per process, lazily, before the first new run
+this process starts, transitioning any such row to `FAILED_ON_RESTART` with an honest
+`errorMessage`. This needed no dedicated boot-sequence hook in `ArgusCoreBoot.ts`/`server.ts` — it
+is entirely self-contained inside `ResearchAgentRunner.ts`.
+
+### Cancellation
+
+`POST /research/runs/:runId/cancel` marks a `PENDING`/`RUNNING` run `CANCELLED`. This is
+**best-effort** — it cannot interrupt an HTTP call already in flight to the LangGraph companion (no
+cancellation token exists on that transport) — but it does two real things: it wins the race against
+a later completion write (see the state machine above), and it gives a human-visible, auditable
+record that cancellation was requested. Cancelling an already-terminal or unknown run is a safe
+no-op, never an error.
+
+### CLI
+
+`argus-cli research-recommend` still gives an operator one command, one final answer — the POST
+call itself is now fast, and the command polls the existing read API (same 750ms interval, 60s
+bound) until the run reaches a terminal status, rather than relying on the HTTP contract staying
+synchronous.
 
 ## The one-paragraph version
 
@@ -316,12 +391,22 @@ existed. To remove entirely: delete `langgraph-research/`, `scripts/lib/langGrap
   static architecture-boundary check above plus real runtime verification (see the Phase 3
   implementation report) rather than a new, unprecedented React Testing Library harness for one
   component.
+- **Phase 3.1** — `src/server/services/ResearchAgentRunner.test.ts` (13 tests): PENDING→RUNNING→
+  terminal transitions, FAILED-envelope mapping, TIMEOUT-vs-UNAVAILABLE distinction, bounded
+  concurrency (rejection at the configured limit, slot release on completion), idempotent
+  completion/no-double-finalization (cancellation wins the race against a later completion write),
+  cancelling an already-terminal or unknown run (safe no-op), restart-orphan recovery (swept once
+  per process, not re-swept on every call). `researchRoutes.strategyGraduation.test.ts` updated for
+  the new async response shape (asserts the route never awaits the slow path — a held, deliberately
+  never-resolving mock would hang the test if it did) plus the new cancel route.
 
 ## Known limitations (as of this implementation)
 
 - Only reads one strategy's evidence; no cross-strategy comparison workflow yet.
-- No cross-restart resumability — a run interrupted mid-graph is simply lost, never silently
-  resumed with stale state (the correct fail-closed choice for a bounded advisory workflow).
+- No cross-restart **resumability** of a specific interrupted run (by design, Part D/E) — a run
+  orphaned by a restart is marked `FAILED_ON_RESTART`, never silently resumed with stale
+  in-memory state. This is distinct from durability: the run's own row, and every prior completed
+  run, remain fully intact and queryable across a restart.
 - Depends on a local Ollama model being loaded; no fallback provider (by design — see "Provider
   integration" above).
 - `recommendation`'s three-value enum (`PROMOTE_ELIGIBLE_FOR_HUMAN_REVIEW` /
@@ -332,7 +417,11 @@ existed. To remove entirely: delete `langgraph-research/`, `scripts/lib/langGrap
   `counterEvidence`/`missingEvidence`/`evidenceStrength` fields carry the additional nuance instead.
 - No frontend automated test coverage (React Testing Library or equivalent) — matches the rest of
   this SPA, which has none; see "Testing" above for what does cover this surface.
-- Phases 4-5 of the original architecture assessment (wiring toward the existing promotion gate,
-  closed-loop/autonomous learning) are explicitly **not** implemented here — this document now
-  covers Phase 0-3 (isolated service, one real shadow-only workflow, and a human-reviewable
-  recommendation with a read-only API/UI) only.
+- **Phase 4A (structured research-experiment proposals) is explicitly NOT implemented** in this
+  pass — a deliberate, time-boxed scope cut (this pass prioritized finishing and thoroughly testing
+  Phase 3.1 over starting Phase 4A's anti-hallucination-validated experiment-proposal schema
+  shallowly). Phases 4B-5 (deterministic validation execution, promotion-gate integration,
+  controlled self-improvement) remain **not** implemented, unchanged from before this pass — this
+  document now covers Phase 0-3.1 (isolated service, one real shadow-only workflow, a
+  human-reviewable recommendation with a read-only API/UI, and an asynchronous, restart-safe,
+  bounded-concurrency execution lifecycle) only.

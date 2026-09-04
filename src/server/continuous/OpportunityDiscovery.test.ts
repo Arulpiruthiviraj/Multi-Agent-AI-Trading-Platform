@@ -195,3 +195,73 @@ describe('OpportunityDiscovery.blendedHotSwapScore - Phase 3 Dynamic Market Data
     expect(blendedHotSwapScore('ANYSYMBOL', baseScoreOf)).toBe(0.7);
   });
 });
+
+/**
+ * Universal Opportunity Discovery follow-up (2026-09-03): blendedHotSwapScore() also blends in
+ * ComposableRanking's persisted finalScore (getLastComposableScore()) - the real gap this closes
+ * is that runRankingCycle()'s 7-component, evidence-aware score (gap/liquidity/newsCatalyst/
+ * agentConfidence, not just raw momentum) previously had zero influence on subscription/eviction
+ * decisions; it only ever fed TradePlanBuilder and MissedOpportunityDetector.
+ */
+describe('OpportunityDiscovery.blendedHotSwapScore - composable-ranking wiring', () => {
+  afterEach(() => {
+    SnapshotScanner.resetSnapshotScannerForTests();
+    vi.restoreAllMocks();
+  });
+
+  it('gives a symbol with a strong composable finalScore an additive bonus over an equally-momentum-scored symbol with no composable score', () => {
+    vi.spyOn(SnapshotScanner, 'getLastComposableScore').mockImplementation((s: string) =>
+      s === 'STRONGEVIDENCE' ? 0.9 : null);
+    const baseScoreOf = () => 1.0;
+    const withEvidence = blendedHotSwapScore('STRONGEVIDENCE', baseScoreOf);
+    const withoutEvidence = blendedHotSwapScore('NOEVIDENCE', baseScoreOf);
+    expect(withEvidence).toBeGreaterThan(withoutEvidence);
+    expect(withEvidence).toBeCloseTo(1.0 + (0.9 * continuousIntelligence.composableRankingHotSwapWeight));
+    expect(withoutEvidence).toBe(1.0);
+  });
+
+  it('never fabricates a composable bonus when no ranking cycle has produced a score for this symbol yet', () => {
+    vi.spyOn(SnapshotScanner, 'getLastComposableScore').mockReturnValue(null);
+    const baseScoreOf = () => 0.42;
+    expect(blendedHotSwapScore('UNSCANNED', baseScoreOf)).toBe(0.42);
+  });
+
+  it('composable bonus and mover bonus stack additively when both apply', async () => {
+    const MOVERS_FLAG = continuousIntelligence.moversEnabledEnvVar;
+    process.env[MOVERS_FLAG] = 'true';
+    const realAlpacaTls = await import('../core/alpacaTls');
+    vi.spyOn(realAlpacaTls, 'alpacaFetch').mockImplementation(async (url: string) => {
+      if (url.includes('/movers')) {
+        return {
+          ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({
+            gainers: [{ symbol: 'DOUBLEBOOST', price: 80, change: 5, percent_change: 12 }],
+            losers: [],
+          }),
+        } as any;
+      }
+      if (url.includes('/snapshots')) {
+        return {
+          ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({ DOUBLEBOOST: { latestTrade: { p: 80 }, dailyBar: { v: 2_000_000, c: 80 }, latestQuote: { bp: 79.9, ap: 80.1 } } }),
+        } as any;
+      }
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ bars: { DOUBLEBOOST: [{ v: 2_000_000 }, { v: 2_000_000 }] } }) } as any;
+    });
+
+    const { refreshMoversCache } = await import('./MarketUniverseScanner');
+    await refreshMoversCache();
+    vi.spyOn(SnapshotScanner, 'getLastComposableScore').mockImplementation((s: string) =>
+      s === 'DOUBLEBOOST' ? 0.5 : null);
+
+    const baseScoreOf = () => 1.0;
+    const score = blendedHotSwapScore('DOUBLEBOOST', baseScoreOf);
+    expect(score).toBeCloseTo(
+      1.0 + continuousIntelligence.moverPriorityScoreBonus + (0.5 * continuousIntelligence.composableRankingHotSwapWeight),
+    );
+
+    delete process.env[MOVERS_FLAG];
+    const { resetMarketUniverseScannerForTests } = await import('./MarketUniverseScanner');
+    resetMarketUniverseScannerForTests();
+  });
+});

@@ -564,17 +564,34 @@ const commands: Record<string, () => Promise<void>> = {
   async 'research-recommend'() {
     // LangGraph research service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - shadow-only,
     // never auto-promotes. Pass --strategy=MOMENTUM_BREAKOUT (default GOLDEN_SMA).
-    // Real, observed live duration for a strategy with actual evidence (two sequential local LLM
-    // calls): ~14s - well past this CLI's own generic 10s default fetch timeout, which caused a
-    // real false "aborted due to timeout" report even though the run completed and persisted
-    // correctly server-side. 60s comfortably covers config/langGraphResearch.json's own
-    // requestTimeoutMs (45s) plus round-trip overhead.
+    // Phase 3.1 (2026-09-03): POST is now asynchronous by construction (see researchRoutes.ts) -
+    // it returns a PENDING runId in milliseconds rather than blocking for the real 11-16s LLM
+    // call, which used to race this CLI's own fetch timeout (and, server-side, server.ts's 15s
+    // watchdog). This command now polls the existing read-only recommendation route until the run
+    // reaches a terminal status, preserving the same "one command, one final answer" UX for an
+    // operator without the underlying HTTP contract needing to stay synchronous.
     const strategyArg = process.argv.slice(3).find((a) => a.startsWith('--strategy='));
     const strategyId = strategyArg ? strategyArg.slice('--strategy='.length) : 'GOLDEN_SMA';
-    console.log(JSON.stringify(await fetchJson(`/api/v2/research/strategy-graduation/${encodeURIComponent(strategyId)}`, {
+    const begun = await fetchJson(`/api/v2/research/strategy-graduation/${encodeURIComponent(strategyId)}`, {
       method: 'POST',
-      signal: AbortSignal.timeout(60_000),
-    }), null, 2));
+      signal: AbortSignal.timeout(10_000), // this call itself is now fast - no 60s needed
+    }) as { ok?: boolean; runId?: string; status?: string };
+
+    if (!begun.runId || begun.status !== 'PENDING') {
+      console.log(JSON.stringify(begun, null, 2)); // already terminal (e.g. MAX_CONCURRENCY_REACHED)
+      return;
+    }
+
+    const TERMINAL = new Set(['COMPLETED', 'FAILED', 'UNAVAILABLE', 'TIMEOUT', 'CANCELLED', 'FAILED_ON_RESTART']);
+    const deadline = Date.now() + 60_000; // covers requestTimeoutMs (45s) + round-trip overhead
+    let last: unknown = begun;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 750));
+      const view = await fetchJson(`/api/v2/research/strategy-recommendations/${encodeURIComponent(begun.runId)}`);
+      last = view;
+      if (TERMINAL.has((view as { status?: string })?.status || '')) break;
+    }
+    console.log(JSON.stringify(last, null, 2));
   },
   async 'provider-health'() {
     // Phase 9 (2026-08-27): real per-provider health matrix - DB aggregates + AIRouter's live

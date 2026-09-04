@@ -28,7 +28,10 @@ import type { StrategyGraduationResult } from '../services/LangGraphResearchServ
 
 export const STRATEGY_GRADUATION_KIND = 'STRATEGY_GRADUATION_RECOMMENDATION';
 
-export type RecommendationRunStatus = 'PENDING' | 'COMPLETED' | 'FAILED' | 'UNAVAILABLE';
+// Phase 3.1: extended additively with RUNNING/TIMEOUT/CANCELLED/FAILED_ON_RESTART - see
+// ResearchAgentRunner.ts's own state-machine header for the full transition model.
+export type RecommendationRunStatus =
+  | 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'UNAVAILABLE' | 'TIMEOUT' | 'CANCELLED' | 'FAILED_ON_RESTART';
 
 export interface RecommendationView {
   disposition: 'RESEARCH_RECOMMENDATION';

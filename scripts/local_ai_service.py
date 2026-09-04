@@ -116,11 +116,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             started = time.perf_counter()
-            context = torch.tensor(prices, dtype=torch.float32)
-            # num_samples=40 - enough to get a stable median/quantile spread without being slow
-            # on CPU; this is a real sampled forecast distribution, not a single point guess.
-            forecast = pipeline.predict(context, prediction_length=horizon, num_samples=40)[0]
-            quantiles = torch.quantile(forecast, torch.tensor([0.1, 0.5, 0.9]), dim=0)
+            # torch.inference_mode() - this service only ever does forward inference, never
+            # backprop. Without it, every call builds and retains a full autograd graph it never
+            # needs; over many hours of repeated calls (KronosForecastAgent: up to 1/symbol/60s
+            # during market hours) that is a well-documented PyTorch memory-accumulation pattern.
+            # Real, measured impact: this process's committed memory grew to ~42.8GB after ~5
+            # hours of a live trading session - directly correlated with contemporaneous Windows
+            # "low virtual memory" events and a silent engine death in the same window.
+            with torch.inference_mode():
+                context = torch.tensor(prices, dtype=torch.float32)
+                # num_samples=40 - enough to get a stable median/quantile spread without being slow
+                # on CPU; this is a real sampled forecast distribution, not a single point guess.
+                forecast = pipeline.predict(context, prediction_length=horizon, num_samples=40)[0]
+                quantiles = torch.quantile(forecast, torch.tensor([0.1, 0.5, 0.9]), dim=0)
             LAST_INFERENCE_MS = round((time.perf_counter() - started) * 1000, 1)
 
             self._send_json(200, {
@@ -144,8 +152,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             # FinBERT truncates internally at 512 tokens; a hard character cap here just
-            # avoids sending pathologically large payloads through the pipeline.
-            result = sentiment_pipeline(text[:2000])[0]
+            # avoids sending pathologically large payloads through the pipeline. Same
+            # inference_mode() rationale as /forecast above - forward-only, no autograd needed.
+            with torch.inference_mode():
+                result = sentiment_pipeline(text[:2000])[0]
             label = result["label"].lower()
             score = float(result["score"])
             signed_score = score if label == "positive" else (-score if label == "negative" else 0.0)

@@ -24,6 +24,7 @@ import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
 import { getCachedBroadUniverseSymbols, getCachedMoverSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
 import {
+  getLastComposableScore,
   getLastSnapshotScore,
   getTopMomentumCandidates,
   isSnapshotScannerRth,
@@ -157,11 +158,27 @@ export function evaluateOpportunityCandidate(
  * currently-admitted mover gets a real, configured priority bonus on top of its own momentum score.
  * Uses only the already-computed, already-cached `getCachedMoverSymbols()` list - no new DB query,
  * no new API call, no new cache.
+ *
+ * Universal Opportunity Discovery follow-up (2026-09-03): also blends in ComposableRanking's own
+ * persisted finalScore (getLastComposableScore()) when available for this symbol this cycle. Real
+ * gap found by direct source inspection: runRankingCycle()'s 7-component, evidence-aware score
+ * (momentum + relativeVolume + rangeExpansion + gap + liquidity + newsCatalyst + agentConfidence,
+ * each explicitly AVAILABLE/UNAVAILABLE rather than silently zeroed) already runs every cycle and
+ * is already persisted to candidate_rankings, but until this change had ZERO path into any actual
+ * subscription/eviction decision - it only ever fed TradePlanBuilder (premarket drafts) and
+ * MissedOpportunityDetector (post-hoc classification). A candidate with strong gap/liquidity/news/
+ * agent-confidence evidence but modest raw momentum could rank #1 on the composable score and still
+ * never receive a market-data slot. Additive and zero when unavailable (never fabricated as 0-as-
+ * penalty), matching the moverPriorityScoreBonus pattern above.
  */
 export function blendedHotSwapScore(sym: string, baseScoreOf: (symbol: string) => number): number {
   const base = baseScoreOf(sym);
   const isVerifiedMover = getCachedMoverSymbols().includes(sym.toUpperCase());
-  return isVerifiedMover ? base + continuousIntelligence.moverPriorityScoreBonus : base;
+  const withMoverBonus = isVerifiedMover ? base + continuousIntelligence.moverPriorityScoreBonus : base;
+  const composableScore = getLastComposableScore(sym);
+  return composableScore != null
+    ? withMoverBonus + (composableScore * continuousIntelligence.composableRankingHotSwapWeight)
+    : withMoverBonus;
 }
 
 function weakestDynamicScore(

@@ -9,6 +9,12 @@ import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
 
 export interface TradingSafety {
   stalePriceThresholdMs: number;
+  /** Bounded wait (NewsEngine's async fresh-price acquisition, waitForFreshPrice.ts) for a
+   *  just-requested subscription to produce its first live tick before giving up and reporting
+   *  NEWS_DATA_UNAVAILABLE - never an unbounded wait, never a stale/fabricated fallback price. */
+  newsPriceWaitTimeoutMs: number;
+  /** Poll cadence while waiting inside newsPriceWaitTimeoutMs. */
+  newsPriceWaitPollIntervalMs: number;
   /** Reject ticks whose source timestamp is this far in the future (clock skew budget). */
   tickFutureSkewMs: number;
   /** Ignore out-of-order ticks older than last accepted tick by more than this epsilon. */
@@ -360,6 +366,8 @@ export interface TradingSafety {
 
 const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'stalePriceThresholdMs',
+  'newsPriceWaitTimeoutMs',
+  'newsPriceWaitPollIntervalMs',
   'tickFutureSkewMs',
   'tickOutOfOrderEpsilonMs',
   'marketDataRejectLogDedupMs',

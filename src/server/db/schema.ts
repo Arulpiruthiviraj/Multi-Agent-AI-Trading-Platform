@@ -1589,13 +1589,20 @@ export const researchAgentRuns = sqliteTable('research_agent_runs', {
   kind: text('kind').notNull(), // e.g. STRATEGY_GRADUATION_RECOMMENDATION
   strategyId: text('strategy_id'),
   requestJson: text('request_json').notNull(),
-  status: text('status').notNull(), // PENDING | COMPLETED | FAILED | UNAVAILABLE
+  // Phase 3.1 (2026-09-03): extended additively - PENDING/COMPLETED/FAILED/UNAVAILABLE are the
+  // original Phase 2 values (unchanged meaning, still read by existing consumers); RUNNING/
+  // TIMEOUT/CANCELLED/FAILED_ON_RESTART are new.
+  status: text('status').notNull(), // PENDING | RUNNING | COMPLETED | FAILED | UNAVAILABLE | TIMEOUT | CANCELLED | FAILED_ON_RESTART
   resultJson: text('result_json'),
   errorMessage: text('error_message'),
   graphVersion: text('graph_version'),
   providerModel: text('provider_model'),
   durationMs: integer('duration_ms'),
   createdAt: text('created_at').notNull(),
+  /** Phase 3.1: set when the detached background task actually starts calling LangGraph (distinct
+   *  from createdAt, which is when the PENDING row was first persisted) - lets queue latency
+   *  (startedAt - createdAt) be measured separately from execution latency (completedAt - startedAt). */
+  startedAt: text('started_at'),
   completedAt: text('completed_at'),
 }, (table) => ({
   correlationIdx: index('idx_research_agent_runs_correlation').on(table.correlationId),

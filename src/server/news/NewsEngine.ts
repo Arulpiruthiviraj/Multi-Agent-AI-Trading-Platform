@@ -23,6 +23,8 @@ import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { waitForFreshMarketData } from '../core/waitForFreshMarketData';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { recordNewsPrediction } from './NewsPredictionLedger';
 import { resolveNewsEnginePollMs, isUsEquityRegularSession } from './newsSessionCadence';
 import { marketOpenNewsConfluence } from './MarketOpenNewsConfluence';
@@ -325,34 +327,70 @@ export class NewsEngine {
               if (newsAgentEmitsTradeIdeas() && isLiveIdeaGenerationEnabled() && isPipelineAgentEnabled('NewsAgent')) {
                 const ticker = looksLikeListedTicker(symbol);
                 if (!ticker) return;
-                // Real fix (2026-08-24 readiness audit, Part 2) - see FundamentalAgent.ts's
-                // identical comment. A news catalyst can legitimately be about a symbol outside the
-                // currently-streamed set - request coverage before reading the price rather than
-                // only ever passively hoping it was already subscribed for an unrelated reason.
                 eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol: ticker, requestedBy: 'NewsAgent', at: new Date().toISOString() });
-                marketDataWorker.subscribe(ticker, { requestedBy: 'NewsAgent' });
-                // Same authoritative live-price source `referencePrice` above already reads
-                // (MarketDataWorker) - attached explicitly so gateTradeIdea's price_validity gate
-                // doesn't depend solely on its own separate lookupLivePrice fallback registration.
-                eventBus.emitTradeIdea({
-                   traceId,
-                   symbol: ticker,
-                   side: newsSide,
-                   confidence: newsConfidence,
-                   currentPrice: marketDataWorker.getLatestPrice(ticker) ?? undefined,
-                   reasoning: `[News Intelligence] ${aiAnalysis.reasoning}`,
-                   agent: "NewsAgent",
-                   newsDetails: {
-                       used: true,
-                       sentiment: (aiAnalysis as any).sentimentScore || 0,
-                       confidence: aiAnalysis.confidence / 100,
-                       sources: normalized.source,
-                       reasoning: aiAnalysis.reasoning
-                   },
-                   aiCallId: aiAnalysis._aiCallId,
-                   provider: aiAnalysis._provider,
-                   latencyMs: aiAnalysis._latencyMs,
-                });
+                // Real fix (2026-09-03, Sept-2 forensic-audit remediation - see
+                // docs/audits/ARGUS_ARCHITECTURE_AND_MARKET_DAY_FORENSIC_AUDIT_2026-09-02.md
+                // section 13.1). The prior version requested a subscription and then read
+                // marketDataWorker.getLatestPrice() on the very next line, with zero wait for that
+                // subscription to actually produce a tick - for exactly the case this exists to
+                // handle (a catalyst about a symbol outside the currently-streamed set), that
+                // reliably returned null and every idea was rejected MISSING_PRICE before
+                // ChiefTrader ever saw it (confirmed live: 147/147 Sept-2 MISSING_PRICE rejections,
+                // ~100% NewsAgent). Fixed by awaiting a bounded, allocator-aware wait for a real
+                // fresh tick (waitForFreshMarketData.ts, goes through the same reviewed
+                // requestTemporaryDataRescue() path every other rescue caller uses, class
+                // NEWS_CATALYST) instead of a raw subscribe()+immediate-read. Fire-and-forget so a
+                // slow/denied wait for one symbol never blocks this loop's other symbols/articles.
+                // FundamentalAgent.ts has the identical latent structural bug at its own matching
+                // comment - not fixed in this pass; a separately-scoped follow-up.
+                void (async () => {
+                  try {
+                    const outcome = await waitForFreshMarketData(ticker, {
+                      requestClass: 'NEWS_CATALYST',
+                      reason: 'NewsAgent_awaiting_fresh_price',
+                      traceId,
+                    });
+                    if (outcome.ok === false) {
+                      const eventType = outcome.reason === 'RESCUE_DENIED' ? 'NEWS_IDEA_DISCARDED_RESCUE_DENIED'
+                        : outcome.reason === 'ERROR' ? 'NEWS_IDEA_DISCARDED_ERROR'
+                        : 'NEWS_IDEA_DISCARDED_NO_FRESH_DATA';
+                      const reasoning = outcome.reason === 'RESCUE_DENIED'
+                        ? `NewsAgent idea for ${ticker} discarded - market-data rescue denied (${outcome.deniedReason}). No fabricated price emitted.`
+                        : outcome.reason === 'ERROR'
+                        ? `NewsAgent idea for ${ticker} discarded - fresh-data wait errored (${outcome.detail}). No fabricated price emitted.`
+                        : `NewsAgent idea for ${ticker} discarded - no fresh tick arrived within ${tradingSafety.newsPriceWaitTimeoutMs}ms of requesting coverage. No fabricated price emitted.`;
+                      observeSafe(() => {
+                        structuredLogger.info('news_idea_discarded_no_fresh_data', {
+                          category: 'DISCOVERY', eventType, symbol: ticker, traceId, reasoning,
+                        });
+                      });
+                      return;
+                    }
+                    // Same authoritative live-price source `referencePrice` above already reads
+                    // (MarketDataWorker) - now a real, freshness-verified tick, never stale/fabricated.
+                    eventBus.emitTradeIdea({
+                       traceId,
+                       symbol: ticker,
+                       side: newsSide,
+                       confidence: newsConfidence,
+                       currentPrice: outcome.price,
+                       reasoning: `[News Intelligence] ${aiAnalysis.reasoning}`,
+                       agent: "NewsAgent",
+                       newsDetails: {
+                           used: true,
+                           sentiment: (aiAnalysis as any).sentimentScore || 0,
+                           confidence: aiAnalysis.confidence / 100,
+                           sources: normalized.source,
+                           reasoning: aiAnalysis.reasoning
+                       },
+                       aiCallId: aiAnalysis._aiCallId,
+                       provider: aiAnalysis._provider,
+                       latencyMs: aiAnalysis._latencyMs,
+                    });
+                  } catch (e) {
+                    console.error(`[NewsEngine] fresh-data wait failed for ${ticker}`, e);
+                  }
+                })();
               }
             });
           }

@@ -47,6 +47,16 @@ export interface ContinuousIntelligenceConfig {
   /** Phase 3 (Dynamic Market Data Allocation): additive hot-swap priority bonus for a symbol that
    *  is a currently-cached, real, liquidity-screened Alpaca mover. */
   moverPriorityScoreBonus: number;
+  /** Universal Opportunity Discovery follow-up (2026-09-03): additive hot-swap priority bonus,
+   *  scaled by ComposableRanking's own persisted finalScore (0-1) for the symbol this cycle, when
+   *  available. Before this, blendedHotSwapScore() only ever saw SnapshotScanner's own raw
+   *  momentum/RVOL/range score - the richer, evidence-aware 7-component ranking (gap, liquidity,
+   *  newsCatalyst, agentConfidence) computed every cycle by runRankingCycle() had ZERO influence on
+   *  which symbols actually receive a scarce market-data slot; it only ever fed TradePlanBuilder and
+   *  MissedOpportunityDetector (diagnostic/planning paths). This wires the same already-computed
+   *  score into the real subscription decision. Zero when no composable score is available this
+   *  cycle for that symbol (never fabricated as 0-as-penalty). */
+  composableRankingHotSwapWeight: number;
   /** Phase C (Universal Discovery Expansion): minimum absolute intraday gap-vs-open to tag a
    *  candidate gapMover:true in the Discovery Lineage Ledger - observability only. */
   gapMoverMinAbsPct: number;
@@ -192,6 +202,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     snapshotTopCandidates: requireNumber(raw.snapshotTopCandidates, 'snapshotTopCandidates'),
     snapshotMomentumScoreEdge: requireNonNegativeNumber(raw.snapshotMomentumScoreEdge, 'snapshotMomentumScoreEdge'),
     moverPriorityScoreBonus: requireNonNegativeNumber(raw.moverPriorityScoreBonus, 'moverPriorityScoreBonus'),
+    composableRankingHotSwapWeight: requireNonNegativeNumber(raw.composableRankingHotSwapWeight, 'composableRankingHotSwapWeight'),
     gapMoverMinAbsPct: requireNonNegativeNumber(raw.gapMoverMinAbsPct, 'gapMoverMinAbsPct'),
     rvolMoverMinRatio: requireNonNegativeNumber(raw.rvolMoverMinRatio, 'rvolMoverMinRatio'),
     minDynamicDwellMs: requireNumber(raw.minDynamicDwellMs, 'minDynamicDwellMs'),

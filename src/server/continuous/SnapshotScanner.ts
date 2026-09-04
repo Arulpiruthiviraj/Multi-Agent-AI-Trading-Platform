@@ -58,6 +58,9 @@ const SCORE_WEIGHT_RANGE = 0.2;
 
 let lastRanked: SnapshotCandidate[] = [];
 let lastScoreBySymbol = new Map<string, number>();
+/** ComposableRanking's own persisted finalScore (0-1) per symbol from the most recent ranking
+ *  cycle - see getLastComposableScore() below for why this exists. */
+let lastComposableScoreBySymbol = new Map<string, number>();
 let lastStats: SnapshotScanStats = {
   ran: false,
   rth: false,
@@ -304,6 +307,11 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
       const rankedCandidates = await runRankingCycle(rankingInputs, now);
+      // Universal Opportunity Discovery follow-up (2026-09-03): expose the SAME already-computed
+      // finalScore this cycle produced to blendedHotSwapScore() via getLastComposableScore() -
+      // see that function's own comment for why this closes a real gap (finalScore previously had
+      // zero influence on which symbols receive a market-data slot).
+      lastComposableScoreBySymbol = new Map(rankedCandidates.map((r) => [r.symbol, r.finalScore]));
 
       // Phase 4E (Pre-Market TradePlan, 2026-08-27): additive, wrapped in the SAME try/catch as
       // the ranking cycle above - a failure here can never affect the existing scan/rank return
@@ -392,6 +400,16 @@ export function getLastSnapshotScore(symbol: string): number | null {
   return typeof v === 'number' ? v : null;
 }
 
+/**
+ * ComposableRanking's persisted finalScore (0-1) for this symbol from the most recent ranking
+ * cycle, or null when unavailable (never fabricated as 0) - e.g. the composable ranking cycle
+ * hasn't run yet this session, or this symbol wasn't part of the scanned universe this cycle.
+ */
+export function getLastComposableScore(symbol: string): number | null {
+  const v = lastComposableScoreBySymbol.get(String(symbol || '').trim().toUpperCase());
+  return typeof v === 'number' ? v : null;
+}
+
 export function getLastSnapshotScanStats(): SnapshotScanStats {
   return lastStats;
 }
@@ -421,6 +439,7 @@ export function setSnapshotRanksForTests(rows: SnapshotCandidate[]): void {
 export function resetSnapshotScannerForTests(): void {
   lastRanked = [];
   lastScoreBySymbol = new Map();
+  lastComposableScoreBySymbol = new Map();
   lastStats = {
     ran: false,
     rth: false,

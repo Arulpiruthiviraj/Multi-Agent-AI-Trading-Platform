@@ -8,7 +8,7 @@ import { createPaperExperiment } from '../research/paperExperiment';
 import { deriveLifecycleStatus, emptyEvidence, evidenceFromCanonicalRun, liveGoNoGo } from '../research/promotionEngine';
 import { costStress, permutationTestPnls, sensitivityAround } from '../research/robustness';
 import { coreStrategyInventory, experimentalInventory, liveCandidateReportMarkdown, researchComparisonMatrix, strategyEvidenceDetail } from '../research/strategyEvidence';
-import { runStrategyGraduationRecommendation } from '../services/ResearchAgentRunner';
+import { beginStrategyGraduationRun, completeStrategyGraduationRun, cancelResearchRun } from '../services/ResearchAgentRunner';
 import { getRecommendationById, listRecommendationsForStrategy } from '../research/researchRecommendations';
 import { getVectorBTStatus, runResearchCli, compareEngines } from '../research/VectorBTService';
 import { createJob, getJob, updateJob } from '../research/researchJobs';
@@ -83,30 +83,46 @@ export function mountResearchRoutes(v2Router: Router): void {
   // returns its result - it never promotes anything, never touches StrategyEngine.ts's arrays,
   // never reaches ChiefTrader/RiskEngine/OMS. Rate-limited like other research-run routes since
   // each call makes a real (local) LLM call through the companion service.
+  // Phase 3.1 (2026-09-03): asynchronous by construction - the real defect this replaces (a real
+  // LLM-backed run legitimately takes 11-16s, which can exceed server.ts's own blanket 15s /api
+  // request-timeout watchdog, reproduced live as an unhandledRejection ERR_HTTP_HEADERS_SENT before
+  // this fix) is now structurally impossible: this handler only ever awaits the fast
+  // beginStrategyGraduationRun() (a DB insert), then lets the slow LangGraph call continue detached
+  // after the response is already sent - mirroring this same file's own beginReplayRun/
+  // completeReplayRun precedent (POST /research/replay/create) rather than inventing a new pattern.
+  // The result is retrieved via the existing read-only GET /research/strategy-recommendations/:id
+  // route below - no second, competing "runs" resource was added.
   v2Router.post('/research/strategy-graduation/:strategyId', backtestLimiter, async (req, res) => {
     const strategyId = String(req.params.strategyId || '').trim();
     const known = [...researchSafety.coreStrategyIds, ...researchSafety.experimentalStrategyIds, 'GOLDEN_SMA'];
     if (!known.includes(strategyId)) {
       return res.status(404).json({ ok: false, error: 'UNKNOWN_STRATEGY_ID', known });
     }
-    // Real bug found live (Phase 3 runtime verification, 2026-09-03): a real LLM-backed run here
-    // legitimately takes 11-16s (Ollama chat completion x2), which can exceed server.ts's own
-    // blanket 15s /api request-timeout watchdog - that backstop sends its own 504 first, then this
-    // handler's `await` finally resolves and this res.json() below threw a real, reproduced-live
-    // unhandledRejection (ERR_HTTP_HEADERS_SENT), the exact same race already documented and guarded
-    // elsewhere in this codebase (server.ts's /api/v1/portfolio comment). Guarding here the same way
-    // makes the now-pointless second write a no-op instead of a thrown, logged error. The run itself
-    // still completes and persists correctly either way - only the HTTP response is ever raced.
-    const run = await runStrategyGraduationRecommendation({ strategyId });
-    if (!res.headersSent) {
-      res.json({
-        ok: true,
-        live: 'NO-GO',
-        shadowOnly: true,
-        note: 'Advisory research only - never auto-promotes, never reaches ChiefTrader/RiskEngine/OMS.',
-        ...run,
+    const begun = await beginStrategyGraduationRun({ strategyId });
+    res.json({
+      ok: true,
+      live: 'NO-GO',
+      shadowOnly: true,
+      note: 'Advisory research only - never auto-promotes, never reaches ChiefTrader/RiskEngine/OMS.',
+      runId: begun.runId,
+      correlationId: begun.correlationId,
+      status: begun.status,
+    });
+    if (begun.status === 'PENDING') {
+      void completeStrategyGraduationRun(begun.runId, begun.correlationId, strategyId).catch((e) => {
+        console.error(`[researchRoutes] Detached strategy-graduation run ${begun.runId} failed unexpectedly:`, e);
       });
     }
+  });
+
+  // Best-effort cancellation - see ResearchAgentRunner.ts's cancelResearchRun() for exactly what
+  // this can and cannot do (it cannot interrupt an in-flight HTTP call to the LangGraph companion,
+  // but it does prevent a late-arriving result from overwriting the CANCELLED status).
+  v2Router.post('/research/runs/:runId/cancel', backtestLimiter, async (req, res) => {
+    const runId = String(req.params.runId || '').trim();
+    if (!runId) return res.status(400).json({ ok: false, error: 'RUN_ID_REQUIRED' });
+    const result = await cancelResearchRun(runId);
+    res.json({ ok: true, ...result });
   });
 
   // Phase 3 (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md): read-only human-review surface over

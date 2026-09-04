@@ -120,16 +120,15 @@ export default function StrategyResearchRecommendations() {
     fetch(`/api/v2/research/strategy-graduation/${encodeURIComponent(strategyId)}`, { method: "POST" })
       .then((r) => r.json())
       .then((body) => {
-        // A real LLM-backed run commonly takes 11-16s - the HTTP response can race the server's
-        // own request-timeout watchdog and come back as a plain error body even though the run
-        // itself completes and persists correctly a few seconds later (see
-        // docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md's known limitations). The delayed
-        // re-fetches below pick up that real completion without requiring a manual refresh.
+        // Phase 3.1: this POST is asynchronous by construction - it returns PENDING in
+        // milliseconds (never blocks for the real 11-16s LLM call, which now runs detached
+        // server-side). The delayed re-fetches below are the PRIMARY way this panel observes the
+        // real completion, not a fallback for a rare race.
         setRequestNote(
-          body?.status === "COMPLETED"
-            ? "New research run completed."
+          body?.status === "PENDING"
+            ? "Run submitted - a real LLM-backed run typically takes 6-16s. Refreshing shortly to pick up the result automatically."
             : body?.status
-              ? `Research run finished with status: ${body.status}.`
+              ? `Run did not start: ${body.status}${body?.errorMessage ? ` (${body.errorMessage})` : ""}.`
               : "Run submitted - refreshing shortly to pick up the result once it completes."
         );
         loadRecommendations(strategyId);

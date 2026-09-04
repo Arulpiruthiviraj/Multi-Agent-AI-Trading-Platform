@@ -68,16 +68,33 @@ describe('ArgusCoreBoot', () => {
     ({ sqliteDb } = await import('../db'));
 
     // Regression assertion (P1 fix, 2026-09-03): bootArgusCore() above just ran a real
-    // beginRuntimeSession() write - prove it landed only in the isolated tmp path and the real
-    // production runtime-session file is byte-identical to what it was before this test started
-    // (or still absent, if it was absent before).
+    // beginRuntimeSession() write - prove it landed only in the isolated tmp path, never the real
+    // production runtime-session file.
+    //
+    // Real flake found live (2026-09-03, same day): running this suite while a real Argus engine
+    // happened to be running concurrently against the SAME production file made a naive
+    // byte-identical comparison fail - the real engine's own legitimate periodic heartbeat write
+    // (lastHeartbeatAt) landed between this test's two snapshots. That is expected behavior for an
+    // actually-running production process, not evidence this test polluted anything - the pid in
+    // both snapshots was identical (the real engine's own pid, not a vitest-worker pid), which is
+    // exactly the property that matters. Comparing structurally and excluding only the one field a
+    // live heartbeat is expected to change keeps this a real regression check (a fake pid/startedAt
+    // landing here would still fail) without being flaky against a real concurrently-running engine
+    // (which CLAUDE.md's own operational guidance says not to do anyway - full-suite runs and the
+    // live paper engine should not overlap - but this assertion should not be flaky if they do).
     let productionSessionAfter: string | null;
     try {
       productionSessionAfter = fs.readFileSync(PRODUCTION_SESSION_PATH, 'utf8');
     } catch {
       productionSessionAfter = null;
     }
-    expect(productionSessionAfter).toBe(productionSessionSnapshot);
+    if (productionSessionSnapshot === null || productionSessionAfter === null) {
+      expect(productionSessionAfter).toBe(productionSessionSnapshot);
+    } else {
+      const before = JSON.parse(productionSessionSnapshot);
+      const after = JSON.parse(productionSessionAfter);
+      expect({ ...after, lastHeartbeatAt: undefined }).toEqual({ ...before, lastHeartbeatAt: undefined });
+    }
     expect(fs.existsSync(tmpSessionPath)).toBe(true);
   }, 120_000);
 });
