@@ -14,6 +14,13 @@
   "marketDataSampleEveryN": 50,
   "processTelemetryIntervalMs": 15000,
   "processTelemetryRingSize": 120,
+  "_memoryTelemetryComment": "Readiness pass (2026-09-04): a durable (persisted, not in-memory-only) memory sample on a much coarser cadence than processTelemetryIntervalMs, specifically so a future silent death has real Argus-side memory-trend history to examine instead of relying on Windows' own external resource-exhaustion detector (the only evidence available for the Sept 2-3 deaths). Thresholds are evidence-labeled, not asserted precise: warning=2048MB sits above every healthy Node RSS baseline observed this session (600-800MB in the first 30-60min); critical=3584MB sits just under the ~3.85GB Node RSS peak that immediately preceded a prior silent death - close enough to alert before reaching that exact danger zone, not a proven safe ceiling. Recalibrate once a full RTH session's real Node memory curve (post Chronos-leak-fix) exists.",
+  "memoryTelemetryPersistIntervalMs": 300000,
+  "memoryTelemetryWarningRssMb": 2048,
+  "memoryTelemetryCriticalRssMb": 3584,
+  "_memoryTelemetryCommittedComment": "Readiness audit (2026-09-04) found the RSS thresholds above structurally CANNOT see the real Chronos failure mode on this Windows host. Measured live: the sidecar held 15,245.9MB of pagefile/commit charge and 6,451 OS threads while reporting 469.9MB working set - Windows had trimmed the working set, so this sampler had recorded level=NORMAL for hours against a process consuming ~30% of the host's ~50.9GB commit limit. Crucially, that instance had served ZERO inferences (/health lastInferenceMs was null), so commit growth of this shape is NOT explained by the torch.inference_mode() autograd-retention fix alone - thread accumulation in ThreadingHTTPServer is the larger contributor and remains open. These thresholds therefore watch COMMITTED memory (psutil memory_info().vms - pagefile charge on Windows, virtual size on POSIX) via the new numeric /health field committedMemoryMb. HONESTY: no committed-memory baseline for a FRESHLY started, healthy Chronos+FinBERT has been measured yet, so both numbers are provisional bounds chosen from the degraded measurement, not a calibrated healthy range - warning=6144MB and critical=12288MB both sit below the observed 15,245.9MB and leave real headroom under the commit limit. Expect the currently-running (degraded) sidecar to report CRITICAL immediately; that is the intended behaviour. Re-derive both once a fresh restart's real curve exists.",
+  "memoryTelemetryWarningCommittedMb": 6144,
+  "memoryTelemetryCriticalCommittedMb": 12288,
   "marketDataPersist": false,
   "maxPayloadChars": 8000,
   "promptHashLength": 16,
@@ -65,6 +72,7 @@
     "MODEL_UNAVAILABLE": { "category": "AI", "defaultLevel": "WARN" },
     "MODEL_FALLBACK": { "category": "AI", "defaultLevel": "WARN" },
     "SYSTEM_ANOMALY": { "category": "SYSTEM", "defaultLevel": "ERROR" },
+    "MEMORY_TELEMETRY_SAMPLE": { "category": "SYSTEM", "defaultLevel": "INFO" },
     "DESK_NO_TRADE": { "category": "AGENT", "defaultLevel": "INFO" },
     "TRADE_LIFECYCLE": { "category": "ORDER", "defaultLevel": "INFO" }
   }

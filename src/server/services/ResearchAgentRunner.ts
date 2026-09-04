@@ -56,6 +56,16 @@ const NON_TERMINAL_STATUSES: ResearchRunStatus[] = ['PENDING', 'RUNNING'];
 export interface StrategyGraduationRunRequest {
   strategyId: string;
   correlationId?: string;
+  /** ResearchTriggerEngine (2026-09-04): defaults to MANUAL (the original, only, behavior) when
+   *  omitted - every pre-existing caller (the HTTP route) is unaffected. */
+  triggerType?: 'MANUAL' | 'TRADE_BATCH';
+  triggerReason?: string;
+  /** Idempotency key for automatic triggers - the real-world event (e.g. a fill's trade id) this
+   *  run was created for. Omitted (null) for MANUAL runs, which have no single triggering event. */
+  triggerEventId?: string;
+  /** What the trigger actually knew at decision time - see schema.ts's own comment on why this is
+   *  preserved rather than left to be re-derived later from mutable current state. */
+  evidenceSnapshot?: Record<string, unknown>;
 }
 
 export interface StrategyGraduationRunOutcome {
@@ -128,6 +138,10 @@ export async function beginStrategyGraduationRun(req: StrategyGraduationRunReque
   const runId = uuidv4();
   const correlationId = req.correlationId || uuidv4();
   const createdAt = new Date().toISOString();
+  const triggerType = req.triggerType ?? 'MANUAL';
+  const triggerReason = req.triggerReason ?? null;
+  const triggerEventId = req.triggerEventId ?? null;
+  const evidenceSnapshotJson = req.evidenceSnapshot ? JSON.stringify(req.evidenceSnapshot) : null;
 
   if (!tryAcquireRunSlot()) {
     // At capacity right now - recorded as a real, auditable attempt rather than silently dropped,
@@ -143,6 +157,10 @@ export async function beginStrategyGraduationRun(req: StrategyGraduationRunReque
         errorMessage: `MAX_CONCURRENCY_REACHED: ${langGraphResearch.maxConcurrentRuns} run(s) already in flight.`,
         createdAt,
         completedAt: createdAt,
+        triggerType,
+        triggerReason,
+        triggerEventId,
+        evidenceSnapshotJson,
       });
     } catch (e) {
       console.error('[ResearchAgentRunner] Failed to persist MAX_CONCURRENCY_REACHED run row:', e);
@@ -159,6 +177,10 @@ export async function beginStrategyGraduationRun(req: StrategyGraduationRunReque
       requestJson: JSON.stringify({ strategyId: req.strategyId }),
       status: 'PENDING',
       createdAt,
+      triggerType,
+      triggerReason,
+      triggerEventId,
+      evidenceSnapshotJson,
     });
   } catch (e) {
     console.error('[ResearchAgentRunner] Failed to persist PENDING run row:', e);

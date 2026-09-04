@@ -223,6 +223,43 @@ async function runJavaReplay(args: Record<string, string>): Promise<void> {
   if (exitCode !== 0) process.exit(exitCode);
 }
 
+/**
+ * Pure - no I/O, no spawn. The exact `node` argv the engine is launched with, isolated here so
+ * this one decision is directly unit-testable without mocking child_process or the CLI's own
+ * dispatch loop.
+ *
+ * Silent-engine-death investigation (2026-09-04): the --dev (non-prod) path used to spawn tsx's
+ * CLI wrapper (node_modules/tsx/dist/cli.mjs), which itself forks a SEPARATE child process to
+ * actually run argus-engine.ts (confirmed live via Win32_Process parent/child inspection: two
+ * distinct node.exe PIDs, wrapper -> real engine - the exact topology the pid-reconciliation block
+ * in startEngine() below was written to work around). That two-process shape is a real risk on
+ * Windows: this host has already demonstrated non-standard process semantics once (DEF-26 -
+ * process.kill(pid, 'SIGTERM') never invokes the target's own handler here), so a wrapper parent
+ * exiting for any reason - expected or not - can plausibly tear down its child via Windows Job
+ * Object propagation even with detached:true, which decouples reliably on POSIX but not always on
+ * Windows. That would produce exactly the observed signature: the real engine stops with no JS
+ * exception, no crash.log entry, and no SIGTERM handler ever invoked.
+ *
+ * Fix: invoke tsx's own PUBLIC loader hooks directly on `node` (package.json exports "." ->
+ * dist/loader.mjs, "./preflight" -> dist/preflight.cjs - the same mechanism tsx's own README
+ * documents as `node --import tsx ./file.ts`), so the spawned process IS the real engine - no
+ * wrapper, no parent-child chain, so this failure mode becomes structurally impossible rather than
+ * merely unlikely. Verified live (2026-09-04): exactly one node.exe process after this change,
+ * versus two (wrapper + child) before it.
+ */
+export function buildEngineSpawnArgs(useProd: boolean, root: string): { args: string[] } {
+  if (useProd) {
+    return { args: [join(root, 'scripts', 'argus-engine-prod.mjs')] };
+  }
+  return {
+    args: [
+      '--require', 'tsx/preflight',
+      '--import', 'tsx',
+      join(root, 'scripts', 'argus-engine.ts'),
+    ],
+  };
+}
+
 async function startEngine() {
   const flags = parseFlags(process.argv.slice(3));
   if (isEngineProcessRunning()) {
@@ -240,18 +277,8 @@ async function startEngine() {
   // catch exactly the case where the pid file lies and something is still actually listening).
   const staleAnsweringPid = await currentlyAnsweringPid();
   const env = { ...process.env, ARGUS_HEADLESS: 'true', ARGUS_ENGINE: 'true' };
-  let child;
-  if (useProd) {
-    child = spawn(process.execPath, [join(ROOT, 'scripts', 'argus-engine-prod.mjs')], { cwd: ROOT, env, detached: true, stdio: 'ignore' });
-  } else {
-    const tsx = join(ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs');
-    child = spawn(process.execPath, [tsx, join(ROOT, 'scripts', 'argus-engine.ts')], {
-      cwd: ROOT,
-      env,
-      detached: true,
-      stdio: 'ignore',
-    });
-  }
+  const spawnSpec = buildEngineSpawnArgs(useProd, ROOT);
+  const child = spawn(process.execPath, spawnSpec.args, { cwd: ROOT, env, detached: true, stdio: 'ignore' });
   if (!child.pid) throw new Error('Failed to spawn Argus engine process');
   writeEnginePid(child.pid);
   child.unref();
@@ -269,16 +296,12 @@ async function startEngine() {
     message = `Engine spawn requested but pid ${staleAnsweringPid} (already answering on ${BASE} before this start attempt) is still the one responding - the new process did not take over the port. Stop pid ${staleAnsweringPid} manually, then retry.`;
   }
   if (ready && !useProd) {
-    // Real bug found and fixed (2026-08-25, same pass as the pid-collision fix above): in --dev
-    // mode `child` is only the tsx CLI wrapper (node_modules/tsx/dist/cli.mjs), which itself
-    // forks a separate child process to actually run scripts/argus-engine.ts and bind the port -
-    // confirmed live this session (two distinct node.exe processes, wrapper -> real engine,
-    // different PIDs). Recording the wrapper's pid in the pid file meant stopEngine()'s
-    // isPidAlive() check could go stale as soon as the wrapper itself exited, even while the real
-    // engine (the child) was still healthy and serving - repeatedly observed this session as
-    // "stop"/"restart" reporting 'No engine PID file' or refusing to signal, while a real engine
-    // process kept running unmanaged. Now reconciles the pid file to whatever /health itself
-    // reports as the actual serving process's pid once it's confirmed ready.
+    // Originally written (2026-08-25) to reconcile the pid file when --dev mode spawned tsx's CLI
+    // wrapper, which forked a separate real-engine child under a different pid. 2026-09-04: that
+    // wrapper is gone (see the spawn above) - `child.pid` is now already the real serving process,
+    // so `realPid` below is expected to always equal it. Left in place as a harmless defensive
+    // no-op rather than removed: if a future change ever reintroduces an intermediary process, the
+    // pid file still self-corrects to whatever /health actually reports instead of going stale.
     const realPid = await currentlyAnsweringPid();
     if (realPid !== undefined && realPid !== child.pid) {
       writeEnginePid(realPid);
@@ -560,6 +583,27 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async ready() {
     console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));
+  },
+  async resume() {
+    // Full-remediation pass (2026-09-04, docs/audits/ARGUS_FULL_PAPER_TRADING_REMEDIATION_2026-09-04.md
+    // §28 Paper-Trading Resume Safety): the real tradingState resume path, distinct from
+    // /autobot/toggle (which only gates new BUY idea generation, not the tradingState machine
+    // itself). Operator-controlled by design - never called automatically by anything in this
+    // codebase. Pass --reason="..." to record why; defaults to a generic operator-resume reason.
+    const reasonArg = process.argv.slice(3).find((a) => a.startsWith('--reason='));
+    const reason = reasonArg ? reasonArg.slice('--reason='.length) : 'Operator resume via argus-cli';
+    console.log(JSON.stringify(await fetchJson('/api/v1/system/resume', {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }), null, 2));
+  },
+  async pause() {
+    const reasonArg = process.argv.slice(3).find((a) => a.startsWith('--reason='));
+    const reason = reasonArg ? reasonArg.slice('--reason='.length) : 'Operator pause via argus-cli';
+    console.log(JSON.stringify(await fetchJson('/api/v1/system/pause', {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }), null, 2));
   },
   async 'research-recommend'() {
     // LangGraph research service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - shadow-only,

@@ -27,6 +27,19 @@ export interface ObservabilityConfig {
   marketDataSampleEveryN: number;
   processTelemetryIntervalMs: number;
   processTelemetryRingSize: number;
+  /** Readiness pass (2026-09-04): processTelemetry's own ring buffer is in-memory only and lost on
+   *  process death - exactly the blind spot that made the Sept 2-3 silent-death investigations
+   *  depend on Windows' own external resource-exhaustion detector instead of anything Argus itself
+   *  recorded. This is a much coarser, DURABLE (persisted via structuredLogger -> observability_events,
+   *  survives restarts) sample specifically for post-mortem trend analysis, not live diagnostics. */
+  memoryTelemetryPersistIntervalMs: number;
+  memoryTelemetryWarningRssMb: number;
+  memoryTelemetryCriticalRssMb: number;
+  /** Committed (pagefile/virtual), NOT resident, memory thresholds for the Chronos sidecar. Separate
+   *  from the RSS thresholds because committed is legitimately a large multiple of RSS for a healthy
+   *  PyTorch process - see config/observability.json's comment for the measured evidence. */
+  memoryTelemetryWarningCommittedMb: number;
+  memoryTelemetryCriticalCommittedMb: number;
   marketDataPersist: boolean;
   maxPayloadChars: number;
   promptHashLength: number;
@@ -43,6 +56,8 @@ const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'schemaVersion', 'batchFlushMs', 'maxBatchSize', 'maxQueueSize',
   'retentionDays', 'retentionSweepMs', 'marketDataSampleEveryN',
   'processTelemetryIntervalMs', 'processTelemetryRingSize',
+  'memoryTelemetryPersistIntervalMs', 'memoryTelemetryWarningRssMb', 'memoryTelemetryCriticalRssMb',
+  'memoryTelemetryWarningCommittedMb', 'memoryTelemetryCriticalCommittedMb',
   'maxPayloadChars', 'promptHashLength',
   'legacyJsonlMaxBytes', 'legacyJsonlMaxBackups',
 ];

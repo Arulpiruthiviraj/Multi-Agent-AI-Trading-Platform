@@ -52,6 +52,20 @@ vi.mock('../engines/kronos/KronosEngine', () => ({
   },
 }));
 
+const oodGateEnabled = vi.hoisted(() => ({ value: false }));
+vi.mock('../config/kronosDissimilarityGate', () => ({
+  isKronosDissimilarityGateEnabled: () => oodGateEnabled.value,
+}));
+
+const { assessDissimilarityMock } = vi.hoisted(() => ({ assessDissimilarityMock: vi.fn() }));
+vi.mock('../quant/KronosDissimilarityGate', () => ({
+  computeInputFeatures: (closes: number[]) => (closes.length >= 5 ? { realizedVolatility: 0.01, meanAbsReturn: 0.005, rangeRatio: 0.02 } : null),
+  assessDissimilarity: (...args: any[]) => assessDissimilarityMock(...args),
+  getCachedKronosReferenceStats: () => ({ count: 100, mean: {}, stdev: {} }),
+  isKronosReferenceStatsCacheStale: () => false,
+  refreshKronosReferenceStats: vi.fn(),
+}));
+
 import { KronosForecastAgent } from './KronosForecastAgent';
 import { EVENTS } from '../core/eventNames';
 
@@ -65,6 +79,9 @@ describe('KronosForecastAgent Chronos unavailable fail-closed', () => {
     predict.mockReset();
     getStatus.mockReturnValue({ isAvailable: false });
     ideaGenEnabled.value = true;
+    oodGateEnabled.value = false;
+    assessDissimilarityMock.mockReset();
+    assessDissimilarityMock.mockReturnValue({ status: 'IN_DISTRIBUTION', maxAbsZ: 0.5, perFeatureZ: {}, referenceSampleSize: 100 });
   });
 
   afterEach(() => {
@@ -202,5 +219,79 @@ describe('KronosForecastAgent Chronos unavailable fail-closed', () => {
     await (agent as any).onTick({ symbol: 'QQQ', price: 403 });
     expect(predict).toHaveBeenCalledTimes(2);
     expect(emitTradeIdea).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'QQQ', side: 'BUY' }));
+  });
+
+  describe('Model-trust / dissimilarity gate (2026-09-04)', () => {
+    it('is dormant by default - never calls assessDissimilarity and still emits ideas normally when KRONOS_OOD_GATE_ENABLED is off', async () => {
+      getStatus.mockReturnValue({ isAvailable: true });
+      predict.mockResolvedValue({
+        symbol: 'AMD', prediction: 'BUY', confidence: 0.75, expectedMove: '+1.0%',
+        forecastHorizon: 5, support: 100, resistance: 110,
+      });
+
+      const agent = new KronosForecastAgent();
+      (agent as any).priceHistory.AMD = [100, 101, 102, 103, 104];
+      await (agent as any).onTick({ symbol: 'AMD', price: 105 });
+
+      expect(assessDissimilarityMock).not.toHaveBeenCalled();
+      expect(emitTradeIdea).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'AMD', side: 'BUY' }));
+    });
+
+    it('rejects the live idea (never emitTradeIdea) and publishes KRONOS_OOD_REJECTED when the gate is enabled and the input is NOVEL - independent of a high model confidence', async () => {
+      oodGateEnabled.value = true;
+      assessDissimilarityMock.mockReturnValue({ status: 'NOVEL', maxAbsZ: 6.2, perFeatureZ: { realizedVolatility: 6.2 }, referenceSampleSize: 100 });
+      getStatus.mockReturnValue({ isAvailable: true });
+      predict.mockResolvedValue({
+        // Deliberately high confidence - proves OOD rejection is not overridden by it.
+        symbol: 'CRM', prediction: 'SELL', confidence: 0.91, expectedMove: '-2.0%',
+        forecastHorizon: 5, support: 90, resistance: 95,
+      });
+
+      const agent = new KronosForecastAgent();
+      (agent as any).priceHistory.CRM = [200, 201, 202, 203, 204];
+      await (agent as any).onTick({ symbol: 'CRM', price: 205 });
+
+      expect(assessDissimilarityMock).toHaveBeenCalled();
+      expect(emitTradeIdea).not.toHaveBeenCalled();
+      expect(publish).toHaveBeenCalledWith(
+        EVENTS.KRONOS_OOD_REJECTED,
+        expect.objectContaining({ symbol: 'CRM', side: 'SELL', confidence: 0.91, maxAbsZ: 6.2 }),
+      );
+      expect(noteGated).toHaveBeenCalled();
+    });
+
+    it('still emits the idea when the gate is enabled but the input is IN_DISTRIBUTION', async () => {
+      oodGateEnabled.value = true;
+      assessDissimilarityMock.mockReturnValue({ status: 'IN_DISTRIBUTION', maxAbsZ: 0.8, perFeatureZ: {}, referenceSampleSize: 100 });
+      getStatus.mockReturnValue({ isAvailable: true });
+      predict.mockResolvedValue({
+        symbol: 'IBM', prediction: 'BUY', confidence: 0.6, expectedMove: '+0.5%',
+        forecastHorizon: 5, support: 140, resistance: 150,
+      });
+
+      const agent = new KronosForecastAgent();
+      (agent as any).priceHistory.IBM = [140, 141, 142, 143, 144];
+      await (agent as any).onTick({ symbol: 'IBM', price: 145 });
+
+      expect(assessDissimilarityMock).toHaveBeenCalled();
+      expect(emitTradeIdea).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'IBM', side: 'BUY' }));
+      expect(publish).not.toHaveBeenCalledWith(EVENTS.KRONOS_OOD_REJECTED, expect.anything());
+    });
+
+    it('treats an insufficient-reference-data assessment as safe to emit (not enough evidence to reject, never fabricated as NOVEL)', async () => {
+      oodGateEnabled.value = true;
+      assessDissimilarityMock.mockReturnValue({ status: 'INSUFFICIENT_REFERENCE_DATA', maxAbsZ: null, perFeatureZ: null, referenceSampleSize: 3 });
+      getStatus.mockReturnValue({ isAvailable: true });
+      predict.mockResolvedValue({
+        symbol: 'ORCL', prediction: 'BUY', confidence: 0.65, expectedMove: '+0.6%',
+        forecastHorizon: 5, support: 100, resistance: 110,
+      });
+
+      const agent = new KronosForecastAgent();
+      (agent as any).priceHistory.ORCL = [100, 101, 102, 103, 104];
+      await (agent as any).onTick({ symbol: 'ORCL', price: 105 });
+
+      expect(emitTradeIdea).toHaveBeenCalledWith(expect.objectContaining({ symbol: 'ORCL', side: 'BUY' }));
+    });
   });
 });

@@ -46,7 +46,7 @@ describe('agentEdgeAnalytics', () => {
     expect(rows).toEqual([]);
   });
 
-  it('classifies a statistically significant WINNING agent as ABOVE_CHANCE', async () => {
+  it('classifies a statistically significant WINNING agent as ABOVE_CHANCE / EDGE_SUPPORTED', async () => {
     const base = new Date('2026-08-01T09:00:00.000Z').getTime();
     for (let i = 0; i < 30; i++) {
       await seedGraded('WinnerAgent', 'WIN', 'BUY', 0.7, base + i * 2 * 60 * 60000, i < 25 ? 'WIN' : 'LOSS', `w${i}`);
@@ -55,12 +55,13 @@ describe('agentEdgeAnalytics', () => {
     const row = rows.find((r) => r.agentName === 'WinnerAgent' && r.strategyId === null)!;
     expect(row.statisticalStatus).toBe('ABOVE_CHANCE');
     expect(row.sampleMaturity).toBe('LEARNING_ELIGIBLE');
+    expect(row.evidenceClassification).toBe('EDGE_SUPPORTED');
     expect(row.wilsonLower).toBeGreaterThan(0.5);
     expect(row.brierScore).not.toBeNull();
     expect(row.brierScore!).toBeLessThan(0.25); // better than the always-guess-50% baseline
   });
 
-  it('classifies a statistically INSIGNIFICANT (chance-level) agent with enough N as neither ABOVE nor BELOW chance', async () => {
+  it('classifies a statistically INSIGNIFICANT (chance-level) agent with enough N as neither ABOVE nor BELOW chance - NO_EDGE, not INSUFFICIENT_EVIDENCE', async () => {
     const base = new Date('2026-08-02T09:00:00.000Z').getTime();
     for (let i = 0; i < 30; i++) {
       await seedGraded('ChanceAgentEdge', 'CHN', 'BUY', 0.65, base + i * 2 * 60 * 60000, i % 2 === 0 ? 'WIN' : 'LOSS', `c${i}`);
@@ -69,9 +70,13 @@ describe('agentEdgeAnalytics', () => {
     const row = rows.find((r) => r.agentName === 'ChanceAgentEdge' && r.strategyId === null)!;
     expect(row.sampleMaturity).toBe('LEARNING_ELIGIBLE');
     expect(row.statisticalStatus).toBe('NO_EDGE_DETECTABLE');
+    // The whole point of this derived field: enough real evidence exists here (unlike the thin-N
+    // case below), so this must read as a real, tested "no edge" - never conflated with "not
+    // enough data yet", which would be a different, weaker claim.
+    expect(row.evidenceClassification).toBe('NO_EDGE');
   });
 
-  it('classifies an agent below the sample-size floor as NO_EDGE_DETECTABLE with INSUFFICIENT_EVIDENCE maturity, regardless of its raw win rate', async () => {
+  it('classifies an agent below the sample-size floor as NO_EDGE_DETECTABLE with INSUFFICIENT_EVIDENCE maturity, regardless of its raw win rate - and NEVER as EDGE_SUPPORTED no matter how high the raw win rate looks', async () => {
     const base = new Date('2026-08-03T09:00:00.000Z').getTime();
     for (let i = 0; i < 5; i++) {
       await seedGraded('ThinAgentEdge', 'THN', 'BUY', 0.7, base + i * 2 * 60 * 60000, 'WIN', `t${i}`);
@@ -80,6 +85,20 @@ describe('agentEdgeAnalytics', () => {
     const row = rows.find((r) => r.agentName === 'ThinAgentEdge' && r.strategyId === null)!;
     expect(row.sampleMaturity).toBe('INSUFFICIENT_EVIDENCE');
     expect(row.statisticalStatus).toBe('NO_EDGE_DETECTABLE');
+    // 5/5 WINs (100% raw win rate) must NOT read as EDGE_SUPPORTED - this is exactly the
+    // "do not let a small n become a promotion signal" case the mission named.
+    expect(row.evidenceClassification).toBe('INSUFFICIENT_EVIDENCE');
+  });
+
+  it('classifies a statistically significant LOSING agent as BELOW_CHANCE / EDGE_DISPROVEN, distinct from NO_EDGE', async () => {
+    const base = new Date('2026-08-05T09:00:00.000Z').getTime();
+    for (let i = 0; i < 30; i++) {
+      await seedGraded('LoserAgentEdge', 'LSR', 'BUY', 0.7, base + i * 2 * 60 * 60000, i < 25 ? 'LOSS' : 'WIN', `l${i}`);
+    }
+    const rows = await mod.buildAgentEdgeReport();
+    const row = rows.find((r) => r.agentName === 'LoserAgentEdge' && r.strategyId === null)!;
+    expect(row.statisticalStatus).toBe('BELOW_CHANCE');
+    expect(row.evidenceClassification).toBe('EDGE_DISPROVEN');
   });
 
   it('produces a separate row per real QuantEngine strategy id (secondaryGroupKey), not just one overall row', async () => {
@@ -112,6 +131,7 @@ describe('agentEdgeAnalytics', () => {
       rawN: 494, effectiveN: 22, winRate: 0.227, wilsonLower: 0.101, wilsonUpper: 0.4,
       brierScore: 0.362, buyRate: 1, sellRate: 0, holdRate: 0, abstentionRate: 0,
       sampleMaturity: 'LEARNING_ELIGIBLE', statisticalStatus: 'BELOW_CHANCE', excludedFromWeightLearning: false,
+      evidenceClassification: 'EDGE_DISPROVEN',
     }];
     const text = mod.formatAgentEdgeReport(longRows);
     const dataLine = text.split('\n').find((l) => l.includes('PULLBACK_CONTINUATION'))!;

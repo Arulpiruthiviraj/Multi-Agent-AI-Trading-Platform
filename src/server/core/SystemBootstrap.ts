@@ -62,6 +62,7 @@ import { transactionLifecycleTracker } from '../services/TransactionLifecycleTra
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
 import { alertingService } from '../services/AlertingService';
 import { aiFailureCircuitBreaker } from '../services/AIFailureCircuitBreaker';
+import { startResearchTriggerEngine } from '../services/ResearchTriggerEngine';
 import { startEnabledIdeaAgents, stopAllIdeaAgents } from './pipelineAgentRuntime';
 
 export class SystemBootstrap {
@@ -77,6 +78,7 @@ export class SystemBootstrap {
     oms.start();
     alertingService.start();
     aiFailureCircuitBreaker.start();
+    startResearchTriggerEngine();
     riskAgent;
     chiefTrader;
     transactionLifecycleTracker;

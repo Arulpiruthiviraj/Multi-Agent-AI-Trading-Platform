@@ -12,18 +12,51 @@ if this process isn't running - see KronosModelManager.ts.
 """
 import json
 import os
+import signal
 import sys
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import urllib.request
+from http.server import BaseHTTPRequestHandler
 
-import torch
-from chronos import ChronosPipeline
-from transformers import pipeline as hf_pipeline
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
+from bounded_http_server import BoundedThreadingHTTPServer, send_json_and_close, start_graceful_shutdown  # noqa: E402
 
 MODEL_NAME = os.environ.get("CHRONOS_MODEL", "amazon/chronos-t5-mini")
 FINBERT_MODEL_NAME = os.environ.get("FINBERT_MODEL", "ProsusAI/finbert")
 PORT = int(os.environ.get("LOCAL_AI_SERVICE_PORT", "8008"))
 MIN_CONTEXT_LENGTH = 5
+# See scripts/lib/bounded_http_server.py's own header for the full rationale (2026-09-04 thread-
+# accumulation fix): a real ceiling on concurrent connections, and a bound on how long any one
+# connection may sit before its handler thread is forced to give it up.
+MAX_CONCURRENT_CONNECTIONS = int(os.environ.get("LOCAL_AI_SERVICE_MAX_CONNECTIONS", "8"))
+CONNECTION_TIMEOUT_SECONDS = int(os.environ.get("LOCAL_AI_SERVICE_CONNECTION_TIMEOUT_S", "30"))
+
+# Readiness/reliability pass (2026-09-04): scripts/lib/chronosLauncher.ts already guards both
+# official startup paths (npm run dev's ecosystem launcher and the headless engine daemon) with a
+# health-check-first + file lock, so two *launchers* racing can't double-spawn this script. What
+# that TS-side guard cannot see is a direct, manual `npm run ai:serve` (or any other bare
+# invocation of this file) racing against one of those launchers - the exact sequence that
+# produced a real, observed duplicate instance live on 2026-09-03 (an operator/incident-response
+# `npm run ai:serve` overlapped with the engine daemon's own ensureChronosRunning(), and both spent
+# ~15-30s loading a full copy of Chronos+FinBERT into memory before only one could bind the port).
+# Checking health here, before either expensive model load begins, protects every invocation path,
+# not just the two already-guarded ones - and costs one cheap HTTP call on the common "nothing else
+# running yet" path.
+def _already_healthy(port: int) -> bool:
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/health", timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+if _already_healthy(PORT):
+    print(f"[local_ai_service] Another instance is already healthy on port {PORT} - not loading a second copy. Exiting.")
+    sys.exit(0)
+
+import torch
+from chronos import ChronosPipeline
+from transformers import pipeline as hf_pipeline
 
 # Prefer CUDA, then Apple MPS, else CPU — never claim GPU when running on CPU/MPS.
 if torch.cuda.is_available():
@@ -34,6 +67,48 @@ else:
     DEVICE = "cpu"
 
 LAST_INFERENCE_MS = 0.0
+
+
+def _committed_memory_mb():
+    """
+    Best-effort COMMITTED (not resident) memory for this process, in MB, or None.
+
+    Why this exists separately from _memory_usage_label()'s RSS (2026-09-04 readiness audit):
+    the real Chronos failure mode observed on this Windows host is commit-charge growth, NOT
+    working-set growth. Measured live during that audit: 15,245.9 MB of pagefile/commit charge
+    while RSS was 469.9 MB - Windows had simply trimmed the working set. Any monitor watching RSS
+    alone therefore reports a comfortable number for the exact condition that precedes host
+    commit-limit exhaustion and the silent Node engine deaths that audit was chasing.
+    psutil's memory_info().vms is the pagefile/commit charge on Windows and the virtual size on
+    POSIX; both are the right "how much has this process actually committed" signal here. Honest
+    None (never a fabricated 0) when psutil is unavailable - the Node side records it as null.
+    """
+    try:
+        import psutil  # optional
+        return psutil.Process(os.getpid()).memory_info().vms / (1024 * 1024)
+    except Exception:
+        return None
+
+
+def _thread_count():
+    """
+    Live OS thread count, or None.
+
+    Reported because it is the leading indicator of the dominant commit-growth mechanism found by
+    the 2026-09-04 audit, and one this service could not previously surface at all: the same
+    instance measured at 15,245.9 MB of commit was holding 6,451 threads while having served ZERO
+    inferences (lastInferenceMs was null). ThreadingHTTPServer starts one thread per connection, so
+    a client holding HTTP keep-alive connections open pins a thread each, and every thread costs
+    its committed stack reservation - which accumulates as commit charge that RSS never shows. This
+    is NOT addressed by the torch.inference_mode() change (that fixes autograd retention on the
+    inference path, a real but separate mechanism). Surfacing the count makes the remaining
+    mechanism measurable instead of inferred. Honest None when psutil is unavailable.
+    """
+    try:
+        import psutil  # optional
+        return psutil.Process(os.getpid()).num_threads()
+    except Exception:
+        return None
 
 
 def _memory_usage_label() -> str:
@@ -74,13 +149,15 @@ print(f"[local_ai_service] {FINBERT_MODEL_NAME} loaded and resident in memory.")
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Bounds how long any one connection (idle keep-alive, slow client, or worse) may pin a handler
+    # thread before the socket read simply times out - BaseHTTPRequestHandler (via
+    # socketserver.StreamRequestHandler.setup()) applies this to the connection automatically.
+    # Defense-in-depth alongside the explicit Connection: close below and the bounded thread pool
+    # in scripts/lib/bounded_http_server.py - see that module's own header for the full rationale.
+    timeout = CONNECTION_TIMEOUT_SECONDS
+
     def _send_json(self, status: int, payload: dict) -> None:
-        body = json.dumps(payload).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        send_json_and_close(self, status, payload)
 
     def do_GET(self) -> None:
         global LAST_INFERENCE_MS
@@ -91,6 +168,12 @@ class Handler(BaseHTTPRequestHandler):
                 "sentimentModel": FINBERT_MODEL_NAME,
                 "device": DEVICE,
                 "memoryUsage": _memory_usage_label(),
+                # Additive field (2026-09-04). Numeric, not a display label, so the Node side never
+                # has to regex a human string for the one number that actually predicts the failure.
+                # Null when psutil is unavailable - never a fabricated value. See
+                # _committed_memory_mb() for why RSS alone is not sufficient on this host.
+                "committedMemoryMb": _committed_memory_mb(),
+                "threadCount": _thread_count(),
                 "gpuUsage": "N/A (CPU/MPS)" if DEVICE in ("cpu", "mps") else "cuda",
                 "lastInferenceMs": LAST_INFERENCE_MS if LAST_INFERENCE_MS > 0 else None,
             })
@@ -174,6 +257,22 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    server = ThreadingHTTPServer(("127.0.0.1", PORT), Handler)
-    print(f"[local_ai_service] Listening on http://127.0.0.1:{PORT} device={DEVICE}")
+    server = BoundedThreadingHTTPServer(("127.0.0.1", PORT), Handler, MAX_CONCURRENT_CONNECTIONS)
+
+    # Graceful shutdown (2026-09-04 reliability pass): previously this process had no signal
+    # handling at all - the only way it stopped was an OS-level kill, leaving no chance to close
+    # the listening socket or in-flight connections cleanly and contributing to "no orphan
+    # sidecars" being merely hoped for rather than enforced.
+    def _handle_shutdown_signal(signum, _frame):
+        print(f"[local_ai_service] Received signal {signum} - shutting down cleanly.")
+        start_graceful_shutdown(server)
+
+    signal.signal(signal.SIGTERM, _handle_shutdown_signal)
+    signal.signal(signal.SIGINT, _handle_shutdown_signal)
+
+    print(
+        f"[local_ai_service] Listening on http://127.0.0.1:{PORT} device={DEVICE} "
+        f"(max {MAX_CONCURRENT_CONNECTIONS} concurrent connections, "
+        f"{CONNECTION_TIMEOUT_SECONDS}s connection timeout)"
+    )
     server.serve_forever()

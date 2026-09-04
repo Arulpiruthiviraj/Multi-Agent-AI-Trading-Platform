@@ -335,6 +335,33 @@ describe('Architecture protection: incident-remediation contracts', () => {
     expect(core).not.toMatch(/from ['"]vite['"]/);
   });
 
+  it('ResearchTriggerEngine.ts never imports RiskEngine/OMS/BrokerManager/ChiefTraderAgent, never calls placeOrder, never emits a trade idea or mutates strategy lifecycle/registry', () => {
+    const text = readFileSync(join(ROOT, 'src/server/services/ResearchTriggerEngine.ts'), 'utf8');
+    expect(text).not.toMatch(/from ['"][^'"]*\/RiskEngine['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*OrderManagement['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*BrokerManager['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*ChiefTraderAgent['"]/);
+    expect(text).not.toMatch(/\.placeOrder\(/);
+    expect(text).not.toMatch(/emitTradeIdea\(/);
+    expect(text).not.toMatch(/CHIEF_APPROVED_IDEA/);
+    expect(text).not.toMatch(/setTradingState/);
+    expect(text).not.toMatch(/strategyEngineActiveIds|StrategyRegistry/);
+    // Reuses the existing Phase 3.1 async architecture rather than a second execution mechanism.
+    expect(text).toMatch(/beginStrategyGraduationRun/);
+  });
+
+  it('KronosDissimilarityGate.ts (model-trust/OOD gate, 2026-09-04) never imports RiskEngine/OMS/BrokerManager/ChiefTraderAgent/EventBus and never places or influences an order itself - it is a pure statistics module KronosForecastAgent consults', () => {
+    const text = readFileSync(join(ROOT, 'src/server/quant/KronosDissimilarityGate.ts'), 'utf8');
+    expect(text).not.toMatch(/from ['"][^'"]*\/RiskEngine['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*OrderManagement['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*BrokerManager['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*ChiefTraderAgent['"]/);
+    expect(text).not.toMatch(/from ['"][^'"]*\/EventBus['"]/);
+    expect(text).not.toMatch(/\.placeOrder\(/);
+    expect(text).not.toMatch(/emitTradeIdea\(/);
+    expect(text).not.toMatch(/CHIEF_APPROVED_IDEA/);
+  });
+
   it("a browser WebSocket client disconnecting cannot reach TradingEngine/RiskEngine/OMS/BrokerManager", () => {
     // Extracts the exact ws.on('close', ...) handler body from server.ts and proves it only ever
     // does listener cleanup (eventBus.off) - never anything that could pause/resume trading,

@@ -24,8 +24,11 @@ import { agentPredictions, kronosPredictions, predictionOutcomes, newsPrediction
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { tradingSafety } from '../config/tradingSafety';
 import { resolveEvaluationDueMs } from '../news/NewsPredictionEvaluation';
+import { resolveEvaluationHorizonMs, secondaryGroupKey } from '../research/predictionIndependencePolicy';
 import type { ExpectedHorizon } from '../news/NewsIntelligence';
 import { TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
+import { evaluationHorizons } from '../config/evaluationHorizons';
+import { evaluateTrendFollowingExit } from './TrendFollowingExitEvaluator';
 
 export const EVALUATION_HORIZON_MS = tradingSafety.evaluationHorizonMs;
 // Kronos-specific horizon (M5, ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md) - see tradingSafety.ts's
@@ -168,9 +171,53 @@ export class PredictionOutcomeEvaluator {
       const key = `agent_predictions:${p.id}`;
       if (evaluatedKeys.has(key)) continue;
       const predTime = new Date(p.timestamp).getTime();
-      if (now - predTime < EVALUATION_HORIZON_MS) continue;
+      // Evaluation-horizon-mismatch remediation (2026-09-04): resolved per agent/strategy instead
+      // of the previous blind universal EVALUATION_HORIZON_MS - see predictionIndependencePolicy.ts's
+      // resolveEvaluationHorizonMs() and config/evaluationHorizons.json for the full rationale.
+      const horizonMs = resolveEvaluationHorizonMs(p.agentName, p.reasoning);
+      if (now - predTime < horizonMs) continue;
 
-      const result = await evaluatePrediction(p.id, 'agent_predictions', p.symbol, p.prediction, predTime);
+      // Exit-aware evaluation follow-up (2026-09-04): strategies with no real fixed target (e.g.
+      // TREND_FOLLOWING) are graded by a real walk-forward exit simulation instead of a
+      // fixed-horizon snapshot - see config/evaluationHorizons.json's exitAwareStrategyIds comment
+      // and TrendFollowingExitEvaluator.ts for the full rationale. Membership is config-driven, not
+      // a hardcoded strategy-id literal, per this codebase's own standing rule.
+      const rawStrategyKey = p.agentName === 'QuantEngine' ? secondaryGroupKey('QuantEngine', p.reasoning) : null;
+      const strategyId = rawStrategyKey ? rawStrategyKey.replace(/__COLD_START_BOOTSTRAP$/, '') : null;
+      if (strategyId && (p.prediction === 'BUY' || p.prediction === 'SELL')
+        && evaluationHorizons.exitAwareStrategyIds.includes(strategyId)) {
+        const exitResult = await evaluateTrendFollowingExit(
+          p.symbol, p.prediction, predTime, evaluationHorizons.exitAwareMaxWalkForwardMs,
+        );
+        if (!exitResult) continue; // insufficient real bar data - never fabricate, retry later
+        const walkForwardElapsed = now - predTime >= evaluationHorizons.exitAwareMaxWalkForwardMs;
+        // A real exit was found (WIN/LOSS/N_A-flat) -> persist now. Still open -> only persist once
+        // the full walk-forward window has elapsed (an honest, final "inconclusive" record), never
+        // sooner - retried next cycle otherwise so a later real exit is not missed.
+        if (exitResult.outcome === 'STILL_OPEN' && !walkForwardElapsed) continue;
+        const actualDirection: 'UP' | 'DOWN' | 'FLAT' = exitResult.finalPrice > exitResult.entryPrice
+          ? 'UP' : exitResult.finalPrice < exitResult.entryPrice ? 'DOWN' : 'FLAT';
+        const mapped: EvaluatedOutcome = {
+          predictionId: p.id,
+          sourceTable: 'agent_predictions',
+          symbol: p.symbol,
+          actualPrice: exitResult.finalPrice,
+          actualReturn: exitResult.actualReturn ?? 0,
+          actualDirection,
+          mfe: null, // not modeled by the exit-aware walk-forward - honestly omitted, not fabricated
+          mae: null,
+          outcome: exitResult.outcome === 'STILL_OPEN' ? 'N_A' : exitResult.outcome,
+          evaluatedAt: new Date().toISOString(),
+        };
+        try {
+          await db.insert(predictionOutcomes).values(mapped).onConflictDoNothing();
+        } catch (e) {
+          console.error('[PredictionOutcomeEvaluator] Failed to persist exit-aware outcome', e);
+        }
+        continue;
+      }
+
+      const result = await evaluatePrediction(p.id, 'agent_predictions', p.symbol, p.prediction, predTime, horizonMs);
       if (result) {
         try {
           await db.insert(predictionOutcomes).values(result).onConflictDoNothing();

@@ -1,0 +1,11 @@
+{
+  "$comment": "ResearchTriggerEngine (2026-09-04): deterministic, non-LLM logic that decides WHEN to automatically invoke the isolated LangGraph research service (config/langGraphResearch.json) - never an LLM deciding to wake itself up. Off unless researchTriggerEnabledEnvVar is 'true' AND LANGGRAPH_RESEARCH_ENABLED is also 'true' (this engine is meaningless without the underlying research service). Same off-unless-explicit convention as aiCostGovernor.json/langGraphResearch.json.",
+  "researchTriggerEnabledEnvVar": "RESEARCH_TRIGGER_ENABLED",
+  "requirePaperTrading": true,
+  "_minimumCompletedTradesComment": "Not empirically derived for THIS purpose - reuses continuousIntelligence.json's championChallengerMinSampleSize (20), the existing 'is this enough evidence to act on' threshold this codebase already uses for a comparable purpose (promoting a challenger strategy). Needs its own calibration once real automatic-trigger history exists.",
+  "minimumCompletedTrades": 20,
+  "_minimumResearchIntervalMsComment": "Per-strategy cooldown after an automatic run completes, before another can fire for the same strategy - prevents a fast-filling strategy from research-storming. 4 hours is a starting point, not a measured value - requires calibration.",
+  "minimumResearchIntervalMs": 14400000,
+  "maxAutomaticRunsPerStrategyPerDay": 3,
+  "maxGlobalAutomaticRunsPerDay": 10
+}

@@ -400,6 +400,20 @@
       "when": 1788439690705,
       "tag": "0056_chilly_wolverine",
       "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "6",
+      "when": 1788485111325,
+      "tag": "0057_outgoing_boom_boom",
+      "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1788492658359,
+      "tag": "0058_loose_nightmare",
+      "breakpoints": true
     }
   ]
 }

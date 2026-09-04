@@ -12,11 +12,32 @@
  */
 import { tradingSafety } from '../config/tradingSafety';
 import { agentWeightConfig } from '../config/agentWeights';
+import { evaluationHorizons } from '../config/evaluationHorizons';
 
 /** Time-gap threshold (ms) for clustering this agent's own predictions into independent observations. */
 export function independenceClusterGapMs(agentName: string): number {
   if (agentName === 'KronosEngine') return tradingSafety.kronosEvaluationHorizonMs;
   return tradingSafety.evaluationHorizonMs;
+}
+
+/**
+ * Evaluation-horizon-mismatch remediation (2026-09-04): the actual WIN/LOSS grading window
+ * PredictionOutcomeEvaluator.ts uses, resolved per agent (and, for QuantEngine, per real
+ * underlying strategy via the SAME secondaryGroupKey() extraction already used for independence
+ * clustering) - see config/evaluationHorizons.json's own $comment for why a single universal
+ * 60-minute clock was wrong for every source. KronosEngine keeps its own dedicated
+ * kronosEvaluationHorizonMs, unchanged, resolved by the caller before this function is ever
+ * reached (mirrors independenceClusterGapMs's own Kronos special-case).
+ */
+export function resolveEvaluationHorizonMs(agentName: string, reasoning: string | null | undefined): number {
+  if (agentName === 'QuantEngine') {
+    const rawKey = secondaryGroupKey(agentName, reasoning);
+    const strategyId = rawKey ? rawKey.replace(/__COLD_START_BOOTSTRAP$/, '') : null;
+    if (strategyId && evaluationHorizons.byQuantStrategyId[strategyId] != null) {
+      return evaluationHorizons.byQuantStrategyId[strategyId];
+    }
+  }
+  return evaluationHorizons.byAgentName[agentName] ?? tradingSafety.evaluationHorizonMs;
 }
 
 /**

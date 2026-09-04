@@ -666,6 +666,15 @@ export const kronosPredictions = sqliteTable('kronos_predictions', {
   // forecast be joined to the transaction it may have contributed evidence to.
   traceId: text('trace_id'),
   transactionId: text('transaction_id'),
+  // Model-trust / dissimilarity-gate follow-up (2026-09-04, KronosDissimilarityGate.ts): the real
+  // input-window statistics computed from the SAME price history this prediction was actually made
+  // from (sample stdev of log returns, mean absolute return, high/low range ratio) - persisted here,
+  // not recomputed, so a later reference-distribution build is one indexed table scan instead of
+  // re-deriving every past prediction's own input window from historical bars. Nullable: older rows
+  // predate this column and simply never contribute to the reference distribution.
+  inputRealizedVolatility: real('input_realized_volatility'),
+  inputMeanAbsReturn: real('input_mean_abs_return'),
+  inputRangeRatio: real('input_range_ratio'),
 });
 
 // Per-agent AI provider routing overrides (Phase 6). AIRouter.setAgentRoute() already existed and
@@ -1604,7 +1613,20 @@ export const researchAgentRuns = sqliteTable('research_agent_runs', {
    *  (startedAt - createdAt) be measured separately from execution latency (completedAt - startedAt). */
   startedAt: text('started_at'),
   completedAt: text('completed_at'),
+  /** ResearchTriggerEngine (2026-09-04): who/what created this run. Null on every pre-existing row
+   *  (all of which were MANUAL, from a human hitting the research route directly) - never backfilled,
+   *  since that would be inventing history. New rows always set this explicitly. */
+  triggerType: text('trigger_type'), // MANUAL | TRADE_BATCH (only value implemented this phase)
+  triggerReason: text('trigger_reason'),
+  /** The real-world event this run was created FOR (the triggering fill's trade id) - the
+   *  idempotency key that prevents duplicate delivery of the same fill from creating two runs. */
+  triggerEventId: text('trigger_event_id'),
+  /** What ResearchTriggerEngine actually knew at the moment it decided to trigger - preserved so a
+   *  later reviewer can answer "what did Argus know when it decided to investigate this," not just
+   *  "what is agent_performance_stats now" (which mutates). */
+  evidenceSnapshotJson: text('evidence_snapshot_json'),
 }, (table) => ({
   correlationIdx: index('idx_research_agent_runs_correlation').on(table.correlationId),
   strategyIdx: index('idx_research_agent_runs_strategy').on(table.strategyId, table.createdAt),
+  triggerEventIdx: index('idx_research_agent_runs_trigger_event').on(table.triggerEventId),
 }));

@@ -31,6 +31,11 @@ import { quantThresholds } from '../config/quantThresholds';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { notePipelineAgentFailure, notePipelineAgentGated, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { generateTraceId } from '../core/traceId';
+import { isKronosDissimilarityGateEnabled } from '../config/kronosDissimilarityGate';
+import {
+  computeInputFeatures, assessDissimilarity,
+  getCachedKronosReferenceStats, isKronosReferenceStatsCacheStale, refreshKronosReferenceStats,
+} from '../quant/KronosDissimilarityGate';
 
 // Chronos needs a real window of history to say anything meaningful about the next few steps -
 // this is a real minimum, not an arbitrary one: too short a context is indistinguishable from
@@ -102,9 +107,10 @@ export class KronosForecastAgent {
     this.priceHistory[sym] = history.slice(-MAX_HISTORY);
     this.lastPredictionAt[sym] = 0;
     try {
-      const prediction = await kronosEngine.predict(sym, HORIZON, TIMEFRAME, this.priceHistory[sym].slice());
+      const inputCloses = this.priceHistory[sym].slice();
+      const prediction = await kronosEngine.predict(sym, HORIZON, TIMEFRAME, inputCloses);
       if (!kronosEngine.getStatus().isAvailable) return { status: 'chronos_unavailable' };
-      this.broadcastForecast(prediction);
+      this.broadcastForecast(prediction, inputCloses);
       notePipelineAgentSuccess('KronosEngine');
       return { status: 'forecasted' };
     } catch (e: any) {
@@ -153,13 +159,14 @@ export class KronosForecastAgent {
     this.lastPredictionAt[data.symbol] = Date.now();
 
     try {
-      const prediction = await kronosEngine.predict(data.symbol, HORIZON, TIMEFRAME, history.slice());
+      const inputCloses = history.slice();
+      const prediction = await kronosEngine.predict(data.symbol, HORIZON, TIMEFRAME, inputCloses);
       // Fail-closed for ideas: never emit BUY/SELL if availability flipped while the call was in flight.
       if (!kronosEngine.getStatus().isAvailable) {
         this.emitUnavailableTelemetry(data.symbol, 'Chronos became unavailable during forecast');
         return;
       }
-      this.broadcastForecast(prediction);
+      this.broadcastForecast(prediction, inputCloses);
       notePipelineAgentSuccess('KronosEngine');
     } catch (e: any) {
       notePipelineAgentFailure('KronosEngine', e);
@@ -174,7 +181,7 @@ export class KronosForecastAgent {
    * BUY/SELL trade ideas require live idea generation (Autobot + TRADING_ENABLED + session hold).
    * Forecasts are already persisted by KronosEngine.metrics regardless of Autobot.
    */
-  private broadcastForecast(prediction: ForecastPrediction) {
+  private broadcastForecast(prediction: ForecastPrediction, inputCloses: number[]) {
     if (prediction.prediction !== 'BUY' && prediction.prediction !== 'SELL') {
       return;
     }
@@ -196,6 +203,33 @@ export class KronosForecastAgent {
     if (!isLiveIdeaGenerationEnabled()) {
       notePipelineAgentGated('KronosEngine');
       return;
+    }
+
+    // Model-trust / dissimilarity gate (2026-09-04, off unless KRONOS_OOD_GATE_ENABLED='true'):
+    // independent of prediction.confidence by construction (assessDissimilarity never receives
+    // it) - a model saying 80%+ confidence does not override a NOVEL (out-of-distribution)
+    // classification. Only the live IDEA is rejected here; the forecast itself was already
+    // persisted above via KronosEngine.metrics, so research/observability value is never lost.
+    if (isKronosDissimilarityGateEnabled()) {
+      const features = computeInputFeatures(inputCloses);
+      if (isKronosReferenceStatsCacheStale()) void refreshKronosReferenceStats();
+      const assessment = features
+        ? assessDissimilarity(features, getCachedKronosReferenceStats())
+        : { status: 'INSUFFICIENT_REFERENCE_DATA' as const, maxAbsZ: null, perFeatureZ: null, referenceSampleSize: 0 };
+      if (assessment.status === 'NOVEL') {
+        eventBus.publish(EVENTS.KRONOS_OOD_REJECTED, {
+          symbol: prediction.symbol,
+          side: prediction.prediction,
+          confidence: prediction.confidence,
+          maxAbsZ: assessment.maxAbsZ,
+          perFeatureZ: assessment.perFeatureZ,
+          referenceSampleSize: assessment.referenceSampleSize,
+          agent: 'KronosEngine',
+          timestamp: new Date().toISOString(),
+        });
+        notePipelineAgentGated('KronosEngine');
+        return;
+      }
     }
 
     eventBus.emitTradeIdea({

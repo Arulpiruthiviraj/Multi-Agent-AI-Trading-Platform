@@ -240,6 +240,87 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
     });
   });
 
+  describe('Exit-aware evaluation wiring (2026-09-04 follow-up): TREND_FOLLOWING routes through TrendFollowingExitEvaluator, not the generic fixed-horizon path', () => {
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    async function seedDailyBars(symbol: string, entryTimeMs: number, closesFromDayMinus60: number[]): Promise<void> {
+      const rows = closesFromDayMinus60.map((close, i) => {
+        const ts = entryTimeMs - 60 * DAY_MS + i * DAY_MS;
+        return {
+          id: `${symbol}:1Day:${ts}`, symbol, timeframe: '1Day', timestamp: ts,
+          open: close, high: close + 0.5, low: close - 0.5, close, volume: 1_000_000, source: 'test',
+        };
+      });
+      for (const row of rows) await db.insert(schema.ohlcvBars).values(row);
+    }
+
+    it('a real TREND_FOLLOWING stop-out is graded via the real exit-simulation path, not a fixed-horizon snapshot', async () => {
+      // Old enough to clear TREND_FOLLOWING's own gating horizon (7d, byQuantStrategyId) but well
+      // inside the 90d exit-aware walk-forward bound.
+      const entryTimeMs = Date.now() - 10 * DAY_MS;
+      const lookback = Array.from({ length: 61 }, () => 100);
+      const rise = Array.from({ length: 5 }, (_, i) => 100 + i * 1.2);
+      const fall = Array.from({ length: 4 }, (_, i) => 106 - i * 3); // forces a real close-below-SMA50 stop-out quickly
+      await seedDailyBars('TFWIRING', entryTimeMs, [...lookback, ...rise, ...fall]);
+
+      await db.insert(schema.agentPredictions).values({
+        id: 'tf-wiring-1', agentName: 'QuantEngine', symbol: 'TFWIRING', prediction: 'BUY',
+        confidence: 0.7, reasoning: 'QuantEngine/TREND_FOLLOWING: SMA50 uptrend, ADX confirmed',
+        timestamp: new Date(entryTimeMs).toISOString(),
+      });
+
+      await predictionOutcomeEvaluator.evaluatePending();
+
+      const outcomes = await db.select().from(schema.predictionOutcomes)
+        .where(eq(schema.predictionOutcomes.predictionId, 'tf-wiring-1'));
+      expect(outcomes).toHaveLength(1);
+      // The generic evaluatePrediction() only ever reads 1Min bars (none seeded here for TFWIRING)
+      // and would have returned null; a persisted row proves the daily-bar exit-aware path ran.
+      expect(outcomes[0].mfe).toBeNull(); // exit-aware evaluator honestly does not model running MFE/MAE
+      expect(outcomes[0].mae).toBeNull();
+      expect(['WIN', 'LOSS', 'N_A']).toContain(outcomes[0].outcome);
+    });
+
+    it('a still-open TREND_FOLLOWING position well short of the 90d walk-forward bound is not persisted yet - never a premature snapshot', async () => {
+      const entryTimeMs = Date.now() - 10 * DAY_MS;
+      const lookback = Array.from({ length: 61 }, () => 100);
+      const uptrend = Array.from({ length: 9 }, (_, i) => 100 + i * 0.8); // never stops out
+      await seedDailyBars('TFSTILLOPEN', entryTimeMs, [...lookback, ...uptrend]);
+
+      await db.insert(schema.agentPredictions).values({
+        id: 'tf-wiring-2', agentName: 'QuantEngine', symbol: 'TFSTILLOPEN', prediction: 'BUY',
+        confidence: 0.7, reasoning: 'QuantEngine/TREND_FOLLOWING: SMA50 uptrend, ADX confirmed',
+        timestamp: new Date(entryTimeMs).toISOString(),
+      });
+
+      await predictionOutcomeEvaluator.evaluatePending();
+
+      const outcomes = await db.select().from(schema.predictionOutcomes)
+        .where(eq(schema.predictionOutcomes.predictionId, 'tf-wiring-2'));
+      expect(outcomes).toHaveLength(0); // correctly retried later, not forced into a fabricated result
+    });
+
+    it('a non-exit-aware QuantEngine strategy (PULLBACK_CONTINUATION) still uses the generic fixed-horizon path, with real MFE/MAE computed', async () => {
+      const oldTimestamp = new Date(PRED_TIME).toISOString(); // real 1Min bars already seeded on UPTEST
+      await db.insert(schema.agentPredictions).values({
+        id: 'pc-control-1', agentName: 'QuantEngine', symbol: 'UPTEST', prediction: 'BUY',
+        confidence: 0.7, reasoning: 'QuantEngine/PULLBACK_CONTINUATION: pullback confirmed',
+        timestamp: oldTimestamp,
+      });
+
+      await predictionOutcomeEvaluator.evaluatePending();
+
+      const outcomes = await db.select().from(schema.predictionOutcomes)
+        .where(eq(schema.predictionOutcomes.predictionId, 'pc-control-1'));
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0].outcome).toBe('WIN');
+      // Generic evaluatePrediction() always computes real MFE/MAE - proves this row took the
+      // untouched, pre-existing path, not the exit-aware one.
+      expect(outcomes[0].mfe).not.toBeNull();
+      expect(outcomes[0].mae).not.toBeNull();
+    });
+  });
+
   it('self-improvement loop audit (2026-08-26): never grades a Digital Twin telemetry-pulse prediction against real bars', async () => {
     await db.insert(schema.agentPredictions).values({
       id: 'telemetry-pulse-guard-test',

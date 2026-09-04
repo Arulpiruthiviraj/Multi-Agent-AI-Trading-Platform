@@ -1,15 +1,26 @@
 import { db } from '../../db';
 import * as schema from '../../db/schema';
 import { ForecastPrediction } from '../forecasting/IForecastEngine';
+import { computeInputFeatures } from '../../quant/KronosDissimilarityGate';
 import crypto from 'crypto';
 
 export class KronosMetrics {
-  
+
   public async recordPrediction(prediction: ForecastPrediction, inputCandles: any[], latencyMs?: number | null) {
     try {
       const trajectory = (prediction.predictedOHLC || [])
         .map((c: any) => (typeof c === 'number' ? c : c?.close))
         .filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v));
+
+      // Model-trust / dissimilarity-gate follow-up (2026-09-04): persist the real input-window
+      // statistics this SAME prediction was actually made from, so a later reference-distribution
+      // build (KronosDissimilarityGate.ts) is one indexed table scan instead of re-deriving every
+      // past prediction's own input window from historical bars. Never fabricated - null when the
+      // input window was too thin to compute (mirrors KronosInference.ts's own >=5-point minimum).
+      const closesForFeatures = (inputCandles || [])
+        .map((c: any) => (typeof c === 'number' ? c : c?.close ?? c?.price))
+        .filter((v: unknown): v is number => typeof v === 'number' && Number.isFinite(v));
+      const inputFeatures = computeInputFeatures(closesForFeatures);
 
       await db.insert(schema.kronosPredictions).values({
         symbol: prediction.symbol,
@@ -26,6 +37,9 @@ export class KronosMetrics {
         marketStructure: prediction.marketStructure || 'Unknown',
         momentum: prediction.momentum || 'Unknown',
         timestamp: prediction.timestamp || new Date().toISOString(),
+        inputRealizedVolatility: inputFeatures?.realizedVolatility ?? null,
+        inputMeanAbsReturn: inputFeatures?.meanAbsReturn ?? null,
+        inputRangeRatio: inputFeatures?.rangeRatio ?? null,
       });
 
       // Dual-write into agent_predictions so ReflectionEngine / prediction_outcomes / dashboard

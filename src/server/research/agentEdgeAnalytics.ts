@@ -36,6 +36,32 @@ export interface AgentEdgeRow {
   sampleMaturity: 'INSUFFICIENT_EVIDENCE' | 'LEARNING_ELIGIBLE';
   statisticalStatus: 'NO_EDGE_DETECTABLE' | 'BELOW_CHANCE' | 'ABOVE_CHANCE';
   excludedFromWeightLearning: boolean;
+  /**
+   * Exit-aware-evaluation follow-up (2026-09-04): a single, unambiguous 4-way read of
+   * sampleMaturity + statisticalStatus combined - added because a reader (or a raw ad-hoc script
+   * like scripts/reevaluate_horizons.ts, which has no clustering/Wilson-interval machinery at all)
+   * can otherwise report a bare win-rate percentage from a small raw N as if it were a real edge
+   * finding. This derives no new statistic - it only names the same two existing fields' four real
+   * combinations so "not enough evidence yet" can never be read as "no edge" or "edge disproven":
+   *   INSUFFICIENT_EVIDENCE - effective N has not cleared the trust floor; the statistic below is
+   *                            not yet meaningful, in either direction. NEVER a promotion signal.
+   *   NO_EDGE                - enough independent evidence exists, but its Wilson interval straddles
+   *                            50% - tested and genuinely inconclusive, not merely unmeasured.
+   *   EDGE_SUPPORTED         - enough evidence AND the Wilson lower bound exceeds 50% (ABOVE_CHANCE).
+   *   EDGE_DISPROVEN         - enough evidence AND the Wilson upper bound is below 50% (BELOW_CHANCE)
+   *                            - actively negatively predictive, not just "no edge".
+   */
+  evidenceClassification: 'INSUFFICIENT_EVIDENCE' | 'NO_EDGE' | 'EDGE_SUPPORTED' | 'EDGE_DISPROVEN';
+}
+
+function classifyEvidence(
+  sampleMaturity: AgentEdgeRow['sampleMaturity'],
+  statisticalStatus: AgentEdgeRow['statisticalStatus'],
+): AgentEdgeRow['evidenceClassification'] {
+  if (sampleMaturity === 'INSUFFICIENT_EVIDENCE') return 'INSUFFICIENT_EVIDENCE';
+  if (statisticalStatus === 'ABOVE_CHANCE') return 'EDGE_SUPPORTED';
+  if (statisticalStatus === 'BELOW_CHANCE') return 'EDGE_DISPROVEN';
+  return 'NO_EDGE';
 }
 
 interface FetchedRow {
@@ -138,6 +164,7 @@ function computeGroup(agentName: string, strategyId: string | null, allRows: Fet
     abstentionRate: total > 0 ? abstentionN / total : 0,
     sampleMaturity, statisticalStatus,
     excludedFromWeightLearning: isExcludedFromWeightLearning(agentName),
+    evidenceClassification: classifyEvidence(sampleMaturity, statisticalStatus),
   };
 }
 
@@ -171,7 +198,7 @@ export function formatAgentEdgeReport(rows: AgentEdgeRow[]): string {
   const agentWidth = Math.max(24, ...rows.map((r) => r.agentName.length + 2));
   const strategyWidth = Math.max(10, ...strategyLabels.map((s) => s.length + 2));
 
-  const lines = ['AGENT EDGE', '----------', 'Agent'.padEnd(agentWidth) + 'Strategy'.padEnd(strategyWidth) + 'N'.padEnd(8) + 'EffN'.padEnd(8) + 'WinRate'.padEnd(10) + 'WilsonLo'.padEnd(10) + 'Brier'.padEnd(8) + 'Status'];
+  const lines = ['AGENT EDGE', '----------', 'Agent'.padEnd(agentWidth) + 'Strategy'.padEnd(strategyWidth) + 'N'.padEnd(8) + 'EffN'.padEnd(8) + 'WinRate'.padEnd(10) + 'WilsonLo'.padEnd(10) + 'Brier'.padEnd(8) + 'Evidence'.padEnd(20) + 'Status'];
   for (const r of rows) {
     lines.push(
       r.agentName.padEnd(agentWidth)
@@ -181,6 +208,7 @@ export function formatAgentEdgeReport(rows: AgentEdgeRow[]): string {
       + (r.winRate !== null ? r.winRate.toFixed(3) : 'N/A').padEnd(10)
       + (r.wilsonLower !== null ? r.wilsonLower.toFixed(3) : 'N/A').padEnd(10)
       + (r.brierScore !== null ? r.brierScore.toFixed(3) : 'N/A').padEnd(8)
+      + r.evidenceClassification.padEnd(20)
       + r.statisticalStatus,
     );
   }
