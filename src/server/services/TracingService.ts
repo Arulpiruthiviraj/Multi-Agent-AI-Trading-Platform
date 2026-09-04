@@ -92,6 +92,34 @@ class TracingService {
 
   logAgentThought(input: AgentThoughtInput): void {
     if (!input.traceId) return;
+    this.logAgentReasoningRow(input);
+    this.ensureTraceRow(input.traceId, input.symbol, 'ANALYZING', [input.agentName]);
+  }
+
+  /**
+   * Writes only the agent_reasoning_logs row (plus its TRACE_SPAN), never touching
+   * transaction_traces.lifecycleStatus. Real bug found during the 2026-09-04 missed-opportunity
+   * forensic audit: logChiefConsensus() used to call the public logAgentThought() (below) to log
+   * ChiefTraderAgent's own synthetic reasoning entry AFTER already writing the real terminal
+   * status (CONSENSUS_REACHED/NO_CONSENSUS) via upsertTrace() two lines above it. But
+   * logAgentThought() unconditionally calls ensureTraceRow(..., 'ANALYZING', ...) for every
+   * agent-reasoning write - including that ChiefTraderAgent one - which silently clobbered the
+   * just-written terminal status back to 'ANALYZING' on every single consensus round, live,
+   * all day. Confirmed against the running DB: 100% of today's transaction_traces rows for
+   * QQQ/SPY read lifecycleStatus='ANALYZING' even though terminalReason correctly showed
+   * "[NO TRADE] Confidence X% did not clear 75%." This corrupted a documented decision-trace
+   * table (CLAUDE.md section 4's 7-table reconstruction) and fed a real downstream bug in
+   * MissedOpportunityDetector.getFunnelSignals(), which used the mere existence of a
+   * transaction_traces row (any lifecycleStatus) as its "hadChiefApproval" signal - producing
+   * false EXECUTION_MISS classifications ("Approved by both ChiefTrader and RiskEngine, but no
+   * fill was ever recorded") for QQQ/SPY today when ChiefTrader had in fact never approved either
+   * symbol (zero CHIEF_CONSENSUS_COMPLETED approved=true events, zero risk_assessments rows,
+   * zero CHIEF_APPROVED_IDEA events for either symbol all day). Callers that have already set an
+   * authoritative terminal status themselves (logChiefConsensus) must use this method instead of
+   * the public logAgentThought() for any reasoning entry logged after that point.
+   */
+  private logAgentReasoningRow(input: AgentThoughtInput): void {
+    if (!input.traceId) return;
     const row: typeof agentReasoningLogs.$inferInsert = {
       traceId: input.traceId,
       timestamp: input.timestamp ?? new Date().toISOString(),
@@ -105,7 +133,6 @@ class TracingService {
       executionLatencyMs: input.executionLatencyMs ?? null,
     };
     this.enqueue({ kind: 'agent', row });
-    this.ensureTraceRow(input.traceId, input.symbol, 'ANALYZING', [input.agentName]);
     this.emitSpan(input.traceId, 'AGENT_REASONING', {
       agent: input.agentName,
       symbol: input.symbol,
@@ -127,7 +154,9 @@ class TracingService {
       consensusThreshold: input.consensusThreshold,
       terminalReason: input.terminalReason,
     });
-    this.logAgentThought({
+    // logAgentReasoningRow(), not logAgentThought() - this must NOT re-touch lifecycleStatus,
+    // which was just set to its real terminal value above. See that method's docstring.
+    this.logAgentReasoningRow({
       traceId: input.traceId,
       agentName: 'ChiefTraderAgent',
       symbol: input.symbol,

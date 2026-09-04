@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { classifyMiss, buildMissedOpportunityRecord, evaluateAgainstPriceSeries, type FunnelSignals } from './MissedOpportunityDetector';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { classifyMiss, buildMissedOpportunityRecord, evaluateAgainstPriceSeries, getFunnelSignals, type FunnelSignals } from './MissedOpportunityDetector';
 import type { RankedCandidate } from './ComposableRanking';
 
 function ranked(promotionRecommendation: RankedCandidate['promotionRecommendation'], overrides: Partial<RankedCandidate> = {}): RankedCandidate {
@@ -123,6 +126,71 @@ describe('buildMissedOpportunityRecord', () => {
     }), null, 60);
     expect(rec).not.toBeNull();
     expect(rec!.priceAtDetection).toBeNull();
+  });
+});
+
+describe('getFunnelSignals (real-DB regression, 2026-09-04 missed-opportunity forensic audit)', () => {
+  let tmpDbPath: string;
+
+  beforeEach(() => {
+    tmpDbPath = path.join(os.tmpdir(), `argus-missed-opp-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+  });
+
+  afterEach(() => {
+    delete process.env.ARGUS_DB_PATH;
+    try {
+      if (fs.existsSync(tmpDbPath)) fs.unlinkSync(tmpDbPath);
+      if (fs.existsSync(`${tmpDbPath}-wal`)) fs.unlinkSync(`${tmpDbPath}-wal`);
+    } catch {
+      // ignore cleanup errors on Windows file locks
+    }
+  });
+
+  it('real bug fix: a symbol with only rejected (NO_CONSENSUS) transaction_traces rows must NOT be treated as chief-approved', async () => {
+    // Confirmed live on 2026-09-04: QQQ and SPY were each classified EXECUTION_MISS ("Approved by
+    // both ChiefTrader and RiskEngine, but no fill was ever recorded") purely because a
+    // transaction_traces row existed for them - even though every one of those rows recorded a
+    // rejected consensus round ("[NO TRADE] Confidence X% did not clear 75%."). Zero
+    // CHIEF_CONSENSUS_COMPLETED approved=true events and zero risk_assessments rows existed for
+    // either symbol that entire day.
+    const { db } = await import('../db');
+    const { transactionTraces } = await import('../db/schema');
+
+    await db.insert(transactionTraces).values({
+      traceId: 'trace_QQQ_REJECTED_1',
+      symbol: 'QQQ',
+      createdAt: new Date().toISOString(),
+      lifecycleStatus: 'ANALYZING', // the exact real-world corrupted value seen live, pre-fix
+      terminalReason: '[NO TRADE] Confidence 25.1% did not clear 75%.',
+      consensusScore: 0.251,
+      consensusThreshold: 0.75,
+    });
+
+    const signals = await getFunnelSignals('QQQ', null, true, new Date(Date.now() - 3600_000).toISOString());
+    expect(signals.hadChiefApproval).toBe(false);
+
+    const result = classifyMiss({ ...signals, ranked: null, hadAgentIdeaThisWindow: true, hadFilledTrade: false });
+    expect(result.classification).not.toBe('EXECUTION_MISS');
+    expect(result.classification).toBe('CONSENSUS_REJECTION');
+  });
+
+  it('correctly recognized approval: a symbol with a CONSENSUS_REACHED transaction_traces row IS chief-approved', async () => {
+    const { db } = await import('../db');
+    const { transactionTraces } = await import('../db/schema');
+
+    await db.insert(transactionTraces).values({
+      traceId: 'trace_MRK_APPROVED_1',
+      symbol: 'MRK',
+      createdAt: new Date().toISOString(),
+      lifecycleStatus: 'CONSENSUS_REACHED',
+      terminalReason: 'Consensus reached: 0.81 >= 0.75',
+      consensusScore: 0.81,
+      consensusThreshold: 0.75,
+    });
+
+    const signals = await getFunnelSignals('MRK', null, true, new Date(Date.now() - 3600_000).toISOString());
+    expect(signals.hadChiefApproval).toBe(true);
   });
 });
 

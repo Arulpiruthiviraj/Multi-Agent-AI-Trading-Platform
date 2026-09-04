@@ -12,7 +12,39 @@ import { db } from '../db';
 import { missedOpportunities, riskAssessments, trades, agentReasoningLogs, transactionTraces } from '../db/schema';
 import { eq, and, gte, lte } from 'drizzle-orm';
 import type { RankedCandidate } from './ComposableRanking';
+import type { TraceLifecycleStatus } from '../services/TracingService';
 import { logErrorSafely } from '../core/SecretRedaction';
+
+/**
+ * transaction_traces.lifecycleStatus values that can only exist once ChiefTrader consensus has
+ * actually been REACHED (approved) for that trace - i.e. every status at or downstream of
+ * TracingService's 'CONSENSUS_REACHED'. 'ANALYZING'/'INITIATED'/'NO_CONSENSUS' are intermediate
+ * or explicitly-rejected states and must never count as chief approval.
+ *
+ * Real bug fixed here (2026-09-04 missed-opportunity forensic audit): getFunnelSignals() used to
+ * derive hadChiefApproval from `txTraces.length > 0` - the mere EXISTENCE of any transaction_traces
+ * row for the symbol in-window, regardless of its lifecycleStatus. Every agent-reasoning write
+ * (including intermediate, non-approving ones) creates/touches a transaction_traces row via
+ * TracingService.ensureTraceRow(), so this was true for almost any symbol that received so much as
+ * one agent evaluation - it did not require ChiefTrader approval at all. Confirmed live: QQQ and
+ * SPY were each classified EXECUTION_MISS ("Approved by both ChiefTrader and RiskEngine, but no
+ * fill was ever recorded") multiple times on 2026-09-04 even though neither symbol had a single
+ * CHIEF_CONSENSUS_COMPLETED approved=true event, CHIEF_APPROVED_IDEA event, or risk_assessments
+ * row anywhere in the entire database for that day - ChiefTrader had in fact never approved either
+ * symbol; every one of their transaction_traces rows was a rejected ("[NO TRADE] Confidence X% did
+ * not clear 75%.") round. Checking lifecycleStatus directly (rather than row existence) is the
+ * correct fix and only works because TracingService.ts's own logChiefConsensus()/logAgentThought()
+ * ordering bug (a real terminal-status-clobbering bug found in the same investigation) is fixed
+ * alongside this - see that file's logAgentReasoningRow() docstring.
+ */
+// Array annotated against the real TraceLifecycleStatus union (compiler-checked - a typo or a
+// future status added to that type without a decision here won't silently compile). Widened to
+// Set<string> only for the .has() call below, since transaction_traces.lifecycleStatus is a plain
+// text column at the DB layer, not the literal type.
+const CHIEF_APPROVAL_OR_LATER_STATUS_LIST: TraceLifecycleStatus[] = [
+  'CONSENSUS_REACHED', 'RISK_APPROVED', 'RISK_REJECTED', 'ORDER_SUBMITTED', 'FILLED', 'CANCELLED',
+];
+const CHIEF_APPROVAL_OR_LATER_STATUSES = new Set<string>(CHIEF_APPROVAL_OR_LATER_STATUS_LIST);
 
 export type MissClassification =
   | 'RANKING_MISS' | 'SUBSCRIPTION_MISS' | 'AGENT_MISS'
@@ -211,7 +243,7 @@ export async function getFunnelSignals(
     ranked,
     isActivelySubscribed,
     hadAgentIdeaThisWindow: ideaLogs.length > 0,
-    hadChiefApproval: txTraces.length > 0,
+    hadChiefApproval: txTraces.some(t => CHIEF_APPROVAL_OR_LATER_STATUSES.has(t.lifecycleStatus)),
     hadRiskAssessment: riskRows.length > 0,
     riskApproved: latestRisk ? latestRisk.approved : null,
     hadFilledTrade: tradeRows.length > 0,

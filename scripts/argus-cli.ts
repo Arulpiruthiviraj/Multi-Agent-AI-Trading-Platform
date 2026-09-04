@@ -1178,22 +1178,34 @@ const commands: Record<string, () => Promise<void>> = {
   },
 };
 
-const cmd = process.argv[2] || 'status';
-if (cmd === '--help' || cmd === '-h') {
-  await commands.help();
-  process.exit(0);
-}
-if (!commands[cmd]) {
-  console.error(`Unknown command: ${cmd}`);
-  console.error(`Available: ${Object.keys(commands).join(', ')}`);
-  console.error(`Run "argus help" for a categorized list.`);
-  process.exit(1);
-}
-
-commands[cmd]().catch((e) => {
-  console.error(e.message || e);
-  if (e instanceof AuthRequiredError || (e && typeof e === 'object' && 'exitCode' in e && (e as { exitCode: number }).exitCode === EXIT_AUTH)) {
-    process.exit(EXIT_AUTH);
+// Real bug found and fixed (2026-09-04, exposed by argus-cli.spawn.test.ts - the first test ever
+// to import this file as a module rather than only running it as a script): this dispatch used to
+// run unconditionally at module load, with no guard distinguishing "invoked as `tsx argus-cli.ts
+// <command>`" from "imported for its exported pure functions". A test importing anything from this
+// file therefore also executed this entire block as a side effect - parsing argv, potentially
+// calling commands[], and reaching a real process.exit(1) (vitest intercepts it rather than
+// actually killing the worker, but it still surfaced as an unhandled-rejection warning: "This
+// might cause false positive tests"). Guarded the same way a CommonJS `require.main === module`
+// check would: only run when this file is the actual entry point Node was invoked with.
+const isMainModule = process.argv[1] != null && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMainModule) {
+  const cmd = process.argv[2] || 'status';
+  if (cmd === '--help' || cmd === '-h') {
+    await commands.help();
+    process.exit(0);
   }
-  process.exit(1);
-});
+  if (!commands[cmd]) {
+    console.error(`Unknown command: ${cmd}`);
+    console.error(`Available: ${Object.keys(commands).join(', ')}`);
+    console.error(`Run "argus help" for a categorized list.`);
+    process.exit(1);
+  }
+
+  commands[cmd]().catch((e) => {
+    console.error(e.message || e);
+    if (e instanceof AuthRequiredError || (e && typeof e === 'object' && 'exitCode' in e && (e as { exitCode: number }).exitCode === EXIT_AUTH)) {
+      process.exit(EXIT_AUTH);
+    }
+    process.exit(1);
+  });
+}

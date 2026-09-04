@@ -20,6 +20,7 @@ from http.server import BaseHTTPRequestHandler
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from bounded_http_server import BoundedThreadingHTTPServer, send_json_and_close, start_graceful_shutdown  # noqa: E402
+from inference_worker import run_on_inference_worker  # noqa: E402
 
 MODEL_NAME = os.environ.get("CHRONOS_MODEL", "amazon/chronos-t5-mini")
 FINBERT_MODEL_NAME = os.environ.get("FINBERT_MODEL", "ProsusAI/finbert")
@@ -148,6 +149,41 @@ sentiment_pipeline = hf_pipeline("sentiment-analysis", model=FINBERT_MODEL_NAME)
 print(f"[local_ai_service] {FINBERT_MODEL_NAME} loaded and resident in memory.")
 
 
+def _run_forecast_inference(prices, horizon):
+    """The actual torch/Chronos work for one /forecast call. Always invoked via
+    run_on_inference_worker() below - NEVER called directly from an HTTP handler thread. See
+    scripts/lib/inference_worker.py's module docstring for why: calling this directly from a
+    per-connection handler thread is exactly the mechanism that was confirmed live on 2026-09-04 to
+    leak one native MKL/OpenMP thread pool per HTTP connection (thread count +40 across 8 real
+    /forecast calls, even with connection concurrency bounded to 8)."""
+    started = time.perf_counter()
+    # torch.inference_mode() - this service only ever does forward inference, never backprop.
+    # Without it, every call builds and retains a full autograd graph it never needs; over many
+    # hours of repeated calls (KronosForecastAgent: up to 1/symbol/60s during market hours) that is
+    # a well-documented PyTorch memory-accumulation pattern. Real, measured impact: this process's
+    # committed memory grew to ~42.8GB after ~5 hours of a live trading session - directly
+    # correlated with contemporaneous Windows "low virtual memory" events and a silent engine death
+    # in the same window.
+    with torch.inference_mode():
+        context = torch.tensor(prices, dtype=torch.float32)
+        # num_samples=40 - enough to get a stable median/quantile spread without being slow on CPU;
+        # this is a real sampled forecast distribution, not a single point guess.
+        forecast = pipeline.predict(context, prediction_length=horizon, num_samples=40)[0]
+        quantiles = torch.quantile(forecast, torch.tensor([0.1, 0.5, 0.9]), dim=0)
+    latency_ms = round((time.perf_counter() - started) * 1000, 1)
+    return quantiles, latency_ms
+
+
+def _run_sentiment_inference(text):
+    """The actual torch/FinBERT work for one /sentiment call. Always invoked via
+    run_on_inference_worker() below - never directly from an HTTP handler thread, for the same
+    thread-confinement reason as _run_forecast_inference above."""
+    # FinBERT truncates internally at 512 tokens; the caller already hard-caps text length before
+    # this is called. Same inference_mode() rationale - forward-only, no autograd needed.
+    with torch.inference_mode():
+        return sentiment_pipeline(text)[0]
+
+
 class Handler(BaseHTTPRequestHandler):
     # Bounds how long any one connection (idle keep-alive, slow client, or worse) may pin a handler
     # thread before the socket read simply times out - BaseHTTPRequestHandler (via
@@ -198,21 +234,13 @@ class Handler(BaseHTTPRequestHandler):
                 self._send_json(400, {"error": f"'prices' must be a list of at least {MIN_CONTEXT_LENGTH} numbers"})
                 return
 
-            started = time.perf_counter()
-            # torch.inference_mode() - this service only ever does forward inference, never
-            # backprop. Without it, every call builds and retains a full autograd graph it never
-            # needs; over many hours of repeated calls (KronosForecastAgent: up to 1/symbol/60s
-            # during market hours) that is a well-documented PyTorch memory-accumulation pattern.
-            # Real, measured impact: this process's committed memory grew to ~42.8GB after ~5
-            # hours of a live trading session - directly correlated with contemporaneous Windows
-            # "low virtual memory" events and a silent engine death in the same window.
-            with torch.inference_mode():
-                context = torch.tensor(prices, dtype=torch.float32)
-                # num_samples=40 - enough to get a stable median/quantile spread without being slow
-                # on CPU; this is a real sampled forecast distribution, not a single point guess.
-                forecast = pipeline.predict(context, prediction_length=horizon, num_samples=40)[0]
-                quantiles = torch.quantile(forecast, torch.tensor([0.1, 0.5, 0.9]), dim=0)
-            LAST_INFERENCE_MS = round((time.perf_counter() - started) * 1000, 1)
+            # Routed through the single dedicated inference-worker thread (2026-09-04 phase 2
+            # fix) - this handler thread (a brand-new thread per HTTP connection) never itself
+            # calls into torch/Chronos. See _run_forecast_inference's docstring and
+            # scripts/lib/inference_worker.py for why: calling torch directly from here was
+            # confirmed live to leak a native MKL/OpenMP thread pool per connection.
+            quantiles, latency_ms = run_on_inference_worker(_run_forecast_inference, prices, horizon)
+            LAST_INFERENCE_MS = latency_ms
 
             self._send_json(200, {
                 "model": MODEL_NAME,
@@ -235,10 +263,10 @@ class Handler(BaseHTTPRequestHandler):
                 return
 
             # FinBERT truncates internally at 512 tokens; a hard character cap here just
-            # avoids sending pathologically large payloads through the pipeline. Same
-            # inference_mode() rationale as /forecast above - forward-only, no autograd needed.
-            with torch.inference_mode():
-                result = sentiment_pipeline(text[:2000])[0]
+            # avoids sending pathologically large payloads through the pipeline. Routed through
+            # the single dedicated inference-worker thread for the same reason as /forecast above
+            # - this handler thread never itself calls into torch/FinBERT.
+            result = run_on_inference_worker(_run_sentiment_inference, text[:2000])
             label = result["label"].lower()
             score = float(result["score"])
             signed_score = score if label == "positive" else (-score if label == "negative" else 0.0)
