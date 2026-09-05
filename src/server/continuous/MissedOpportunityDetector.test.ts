@@ -29,6 +29,7 @@ function baseSignals(overrides: Partial<FunnelSignals> = {}): FunnelSignals {
     hadRiskAssessment: true,
     riskApproved: true,
     hadFilledTrade: true,
+    tradePlanStatus: null,
     ...overrides,
   };
 }
@@ -62,6 +63,26 @@ describe('classifyMiss', () => {
   it('classifies fully approved with no fill as EXECUTION_MISS', () => {
     const r = classifyMiss(baseSignals({ hadFilledTrade: false, hadRiskAssessment: true, riskApproved: true }));
     expect(r.classification).toBe('EXECUTION_MISS');
+  });
+
+  it('classifies no-idea + INVALIDATED TradePlan as THESIS_INVALIDATED, not the generic AGENT_MISS', () => {
+    const r = classifyMiss(baseSignals({ hadFilledTrade: false, hadAgentIdeaThisWindow: false, tradePlanStatus: 'INVALIDATED' }));
+    expect(r.classification).toBe('THESIS_INVALIDATED');
+  });
+
+  it('classifies no-idea + EXPIRED TradePlan as THESIS_INVALIDATED', () => {
+    const r = classifyMiss(baseSignals({ hadFilledTrade: false, hadAgentIdeaThisWindow: false, tradePlanStatus: 'EXPIRED' }));
+    expect(r.classification).toBe('THESIS_INVALIDATED');
+  });
+
+  it('a VALID (not invalidated/expired) TradePlan does not preempt the generic AGENT_MISS', () => {
+    const r = classifyMiss(baseSignals({ hadFilledTrade: false, hadAgentIdeaThisWindow: false, tradePlanStatus: 'VALID' }));
+    expect(r.classification).toBe('AGENT_MISS');
+  });
+
+  it('no TradePlan at all (tradePlanStatus null) does not preempt AGENT_MISS', () => {
+    const r = classifyMiss(baseSignals({ hadFilledTrade: false, hadAgentIdeaThisWindow: false, tradePlanStatus: null }));
+    expect(r.classification).toBe('AGENT_MISS');
   });
 
   it('classifies fully approved with no risk assessment at all as EXECUTION_MISS', () => {
@@ -191,6 +212,37 @@ describe('getFunnelSignals (real-DB regression, 2026-09-04 missed-opportunity fo
 
     const signals = await getFunnelSignals('MRK', null, true, new Date(Date.now() - 3600_000).toISOString());
     expect(signals.hadChiefApproval).toBe(true);
+  });
+
+  it('tradePlanStatus stays null when planDate is omitted (default, zero-cost path)', async () => {
+    const signals = await getFunnelSignals('NVDA', null, true, new Date(Date.now() - 3600_000).toISOString());
+    expect(signals.tradePlanStatus).toBeNull();
+  });
+
+  it('tradePlanStatus reflects the real most-recent TradePlan row for symbol+planDate', async () => {
+    const { db } = await import('../db');
+    const { tradePlans } = await import('../db/schema');
+    await db.insert(tradePlans).values({
+      id: 'plan-1', symbol: 'SNOW', planDate: '2026-09-05', setupType: 'PRIMARY', direction: 'BUY',
+      thesis: 't', catalysts: '[]', confidence: 0.8, evidenceQuality: 1, componentScoresJson: '{}',
+      status: 'INVALIDATED', createdAt: new Date().toISOString(), validUntil: '2026-09-05T20:00:00.000Z',
+    });
+
+    const signals = await getFunnelSignals('SNOW', null, true, new Date(Date.now() - 3600_000).toISOString(), '2026-09-05');
+    expect(signals.tradePlanStatus).toBe('INVALIDATED');
+  });
+
+  it('tradePlanStatus is null when a plan exists for a different planDate', async () => {
+    const { db } = await import('../db');
+    const { tradePlans } = await import('../db/schema');
+    await db.insert(tradePlans).values({
+      id: 'plan-2', symbol: 'PLTR', planDate: '2026-09-04', setupType: 'PRIMARY', direction: 'BUY',
+      thesis: 't', catalysts: '[]', confidence: 0.8, evidenceQuality: 1, componentScoresJson: '{}',
+      status: 'INVALIDATED', createdAt: new Date().toISOString(), validUntil: '2026-09-04T20:00:00.000Z',
+    });
+
+    const signals = await getFunnelSignals('PLTR', null, true, new Date(Date.now() - 3600_000).toISOString(), '2026-09-05');
+    expect(signals.tradePlanStatus).toBeNull();
   });
 });
 

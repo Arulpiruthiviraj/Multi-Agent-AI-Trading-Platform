@@ -173,7 +173,7 @@ runtimeRouter.get('/market/status', (_req, res) => {
 // persisted history, so a restart's recovered prior-state context is externally observable.
 runtimeRouter.get('/session-lifecycle', async (req, res) => {
   try {
-    const { sessionLifecycleWorker } = await import('../premarket/SessionLifecycle');
+    const { sessionLifecycleWorker, getRefinedSnapshot } = await import('../premarket/SessionLifecycle');
     const { db } = await import('../db');
     const { sessionLifecycleSnapshots } = await import('../db/schema');
     const { desc } = await import('drizzle-orm');
@@ -181,7 +181,13 @@ runtimeRouter.get('/session-lifecycle', async (req, res) => {
     const history = await db.select().from(sessionLifecycleSnapshots)
       .orderBy(desc(sessionLifecycleSnapshots.evaluatedAt))
       .limit(limit);
-    res.json({ ok: true, current: sessionLifecycleWorker.getSnapshot(), history });
+    // Session-Aware Trading Architecture Phase 1 (2026-09-05): `current` stays the worker's own
+    // deterministic snapshot (unchanged contract); `refined` additionally reflects real TradePlan
+    // state (PLAN_BUILDING/PLAN_READY/OPEN_REVALIDATION) - see SessionLifecycle.ts's
+    // getRefinedSnapshot() doc comment for why this is a separate read, not a mutation of `current`.
+    const current = sessionLifecycleWorker.getSnapshot();
+    const refined = await getRefinedSnapshot(current);
+    res.json({ ok: true, current, refined, history });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }

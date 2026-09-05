@@ -146,7 +146,7 @@ export function AutonomousLaunchDialog({
 
         <div className="p-5 flex flex-col gap-4">
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            Allocation, daily target, max loss, and strategy mode are already on the dashboard. This sheet confirms readiness only — consensus stays 0.75 / min-2; RiskEngine 24 gates stay fail-closed.
+            Allocation, daily target, max loss, and strategy mode are already on the dashboard. This sheet confirms readiness only — consensus stays 0.75 / min-2; RiskEngine 25 gates stay fail-closed.
           </p>
 
           <div className="bg-[#111822] border border-slate-800 rounded-lg p-4">

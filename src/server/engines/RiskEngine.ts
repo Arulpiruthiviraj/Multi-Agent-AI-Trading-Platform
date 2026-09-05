@@ -23,14 +23,16 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { historicalDataGateway } from './backtest/HistoricalDataGateway';
 import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizing';
 import { runWithObservabilityContext } from '../observability/ObservabilityContext';
-import { getTradingDateStr } from '../core/TradingCalendar';
+import { getTradingDateStr, TRADING_TIMEZONE } from '../core/TradingCalendar';
+import { evaluateExtendedHoursExecutionPolicy, isExtendedHoursSession } from '../risk/ExtendedHoursExecutionPolicy';
+import { getCachedAvgDailyVolumeShares } from '../risk/ExtendedHoursLiquidityCache';
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { applySubordinateAssetNotionalCap } from '../multiAsset/ideaEligibility';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
 import { reservePendingCapital, snapshotReservedNotional } from './PendingCapitalReservations';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { campaignVelocityMaxTradeDollars } from '../services/campaignIntraday';
-import { tradingSafety, portfolioRiskPctForLevel } from '../config/tradingSafety';
+import { tradingSafety, portfolioRiskPctForLevel, isExtendedHoursExecutionEnabled } from '../config/tradingSafety';
 import { alpacaFetch } from '../core/alpacaTls';
 import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
 import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
@@ -529,8 +531,23 @@ export class RiskEngine {
                     ? 'open'
                     : (sessionAllowsFills(classifyMarketSession(nowMs, replay.config.timezone, replay.config.extendedHours), replay.config.extendedHours) ? 'open' : 'closed'))
                 : await readMarketClock();
-            const marketHoursPassed = marketClock === 'open' || marketClock === 'unconfigured';
-            recordGate('market_hours', marketHoursPassed, { marketClock, skipped: marketClock === 'unconfigured', replay: !!replay, dailyBarSessionAssumed: isDailyFrequency });
+            // Session-Aware Trading Architecture Phase 5 (2026-09-05): extendedHoursEnabled is
+            // false for every replay evaluation and false live unless the operator has explicitly
+            // set EXTENDED_HOURS_EXECUTION_ENABLED - in both of those (today, universal) cases
+            // liveSessionForExtendedHours stays 'CLOSED' and extendedHoursAllowsFills stays false,
+            // so marketHoursPassed below is IDENTICAL to its pre-existing expression. This only
+            // ever adds a new way to PASS (never a new way to fail) gate 12, and only when the
+            // operator has opted in.
+            const extendedHoursEnabled = !replay && isExtendedHoursExecutionEnabled();
+            const liveSessionForExtendedHours = extendedHoursEnabled
+                ? classifyMarketSession(nowMs, TRADING_TIMEZONE, true)
+                : ('CLOSED' as const);
+            const extendedHoursAllowsFills = extendedHoursEnabled && sessionAllowsFills(liveSessionForExtendedHours, true);
+            const marketHoursPassed = marketClock === 'open' || marketClock === 'unconfigured' || extendedHoursAllowsFills;
+            recordGate('market_hours', marketHoursPassed, {
+                marketClock, skipped: marketClock === 'unconfigured', replay: !!replay, dailyBarSessionAssumed: isDailyFrequency,
+                extendedHoursEnabled, extendedHoursSession: extendedHoursEnabled ? liveSessionForExtendedHours : undefined,
+            });
             const marketHoursReason = marketClock === 'unavailable'
                 ? 'Alpaca market clock unavailable (HTTP/network failure). Fail-closed: new trades blocked until the clock can be read.'
                 : 'Market is currently closed (Alpaca clock).';
@@ -714,6 +731,34 @@ export class RiskEngine {
                 recordGate('daily_buy_notional', false, { skipped: true, reason: 'invalid price - daily buy notional not evaluated' });
             }
 
+            // Gate 25 (Session-Aware Trading Architecture Phase 5, 2026-09-05). Placed after every
+            // pre-existing gate so it can NEVER change which gate is reported as the first failure
+            // for any scenario that already failed an earlier gate - it only ever matters when
+            // gates 1-24 all pass AND this is a genuine, operator-enabled extended-hours attempt.
+            // Every input below is only actually computed when extendedHoursEnabled is true - a
+            // broker/adapter (real or a test double) is never asked for anything beyond what it
+            // already had to support before this gate existed, in the (today, universal) disabled
+            // case. evaluateExtendedHoursExecutionPolicy() itself would ignore these anyway when
+            // disabled, but computing them unconditionally would mean calling broker.getCapabilities()
+            // - a real broker-adapter method most callers never needed before - on every single
+            // risk evaluation regardless of whether this feature is even on.
+            const extendedHoursNotional = extendedHoursEnabled && Number.isFinite(maxQuantity) && Number.isFinite(currentPrice) ? maxQuantity * currentPrice : null;
+            // ADV is only ever read (and its background cache refresh only ever triggered) for a
+            // genuine extended-hours session attempt - never for every regular-session order just
+            // because the flag happens to be on, matching every other input here's own cost discipline.
+            const inExtendedHoursSession = extendedHoursEnabled && isExtendedHoursSession(liveSessionForExtendedHours);
+            const extendedHoursResult = evaluateExtendedHoursExecutionPolicy({
+                session: liveSessionForExtendedHours,
+                extendedHoursExecutionEnabled: extendedHoursEnabled,
+                brokerCapabilities: extendedHoursEnabled ? (broker.getCapabilities?.() ?? null) : null,
+                quoteAgeMs: extendedHoursEnabled ? marketDataWorker.getLatestPriceAgeMs(proposal.symbol) : null,
+                spreadBps: extendedHoursEnabled ? marketDataWorker.getLatestSpreadBps(proposal.symbol, tradingSafety.extendedHoursMaxQuoteAgeMs) : null,
+                avgDailyVolumeShares: inExtendedHoursSession ? getCachedAvgDailyVolumeShares(proposal.symbol) : null,
+                notionalDollars: extendedHoursNotional,
+            });
+            recordGate('extended_hours_execution_policy', extendedHoursResult.passed, extendedHoursResult.detail);
+            const extendedHoursReason = extendedHoursResult.reason;
+
             const capitalRejectReason = (gateResults.find(g => g.gate === 'argus_capital_allocation')?.detail as any)?.reason
                 || 'Rejected by Argus capital allocation guard.';
             const dailyBuyNotionalReason = (gateResults.find(g => g.gate === 'daily_buy_notional')?.detail as any)?.reason
@@ -745,6 +790,7 @@ export class RiskEngine {
                     : firstFailure!.gate === 'sell_position_exists' ? sellPositionReason
                     : firstFailure!.gate === 'argus_capital_allocation' ? capitalRejectReason
                     : firstFailure!.gate === 'daily_buy_notional' ? dailyBuyNotionalReason
+                    : firstFailure!.gate === 'extended_hours_execution_policy' ? extendedHoursReason
                     : firstFailure!.gate === INVALID_ACCOUNT_EQUITY ? 'INVALID_ACCOUNT_EQUITY: broker equity is missing or not positive. No placeholder balance is used.'
                     : `Rejected by gate: ${firstFailure!.gate}`;
             } else {

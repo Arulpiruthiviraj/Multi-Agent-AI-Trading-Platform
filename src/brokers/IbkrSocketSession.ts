@@ -18,6 +18,50 @@ import { loadIbkrConnection, ibkrSocketPortCandidates, type IbkrConnectionConfig
 import { findFirstOpenTcpPort } from './ibkrTcpProbe';
 import type { Bar } from '../server/engines/backtest/HistoricalDataGateway';
 
+/**
+ * Pure order-object construction, extracted from placeStockOrder() (2026-09-05, Extended-Hours
+ * Execution Policy) so this real, safety-relevant construction logic is directly unit-testable
+ * without a live/mocked IB socket connection - same pattern as this session's other extracted
+ * pure functions (e.g. ChiefTraderAgent.loadJavaInstitutionalDebateContext, KronosInference.
+ * computeKronosConfidence).
+ */
+export function buildIbkrOrder(orderId: number, opts: {
+  side: 'BUY' | 'SELL';
+  quantity: number;
+  type: 'MARKET' | 'LIMIT' | 'STOP' | 'STOP_LIMIT';
+  limitPrice?: number;
+  stopPrice?: number;
+  account?: string;
+  extendedHours?: boolean;
+}): any {
+  let orderType = OrderType.MKT;
+  if (opts.type === 'LIMIT') orderType = OrderType.LMT;
+  else if (opts.type === 'STOP') orderType = OrderType.STP;
+  else if (opts.type === 'STOP_LIMIT') orderType = OrderType.STP_LMT;
+
+  const order: any = {
+    orderId,
+    action: opts.side === 'SELL' ? OrderAction.SELL : OrderAction.BUY,
+    totalQuantity: opts.quantity,
+    orderType,
+    tif: 'DAY',
+    account: opts.account || undefined,
+    transmit: true,
+  };
+  if (opts.type === 'LIMIT' || opts.type === 'STOP_LIMIT') {
+    order.lmtPrice = opts.limitPrice;
+  }
+  if (opts.type === 'STOP' || opts.type === 'STOP_LIMIT') {
+    order.auxPrice = opts.stopPrice;
+  }
+  // Extended-Hours Execution Policy (2026-09-05): outsideRth only honored for LIMIT - mission's
+  // own "no blind market orders outside RTH" rule, matching AlpacaBroker's identical constraint.
+  if (opts.extendedHours && opts.type === 'LIMIT') {
+    order.outsideRth = true;
+  }
+  return order;
+}
+
 export type IbkrSocketConnectionInfo = {
   adapter: 'IB_GATEWAY_SOCKET';
   host: string;
@@ -71,6 +115,24 @@ export class IbkrSocketSession {
   private activeMktData = new Map<number, string>();
   private symbolToTicker = new Map<string, number>();
   private tickHandler: ((symbol: string, price: number) => void) | null = null;
+  /**
+   * Real bug found and fixed (2026-09-04 opportunity-capture remediation): `subscribeMarketData()`
+   * fires `reqMktData()` and immediately records the symbol as "active" bookkeeping — it never
+   * confirmed IB actually granted the line. IB reports a rejected/unsubscribed market-data request
+   * (e.g. error 354 "Requested market data is not subscribed", or a missing-permissions message) as
+   * an `error` event carrying that request's `reqId` — but the handler below only acted on errors
+   * seen before the initial `connect()` promise settled; any error arriving afterward (which is
+   * exactly when a per-symbol reqMktData rejection arrives) was silently dropped, with no log, no
+   * observability event, nothing. Confirmed live: NVDA/AAPL/MSFT/META/TSLA/AMD/IWM sat in
+   * MarketDataWorker's "active" slot list for minutes with tickCount=0 while the ETF/gold anchors
+   * (GLD/QQQ/SPY, subscribed long before) kept accumulating ticks normally — the exact shape a
+   * silently-rejected reqMktData produces. `recordMarketDataError()`/`marketDataErrorHandler` make
+   * that failure visible (never a new kill switch, never a change to what gets subscribed) so an
+   * operator — and MissedOpportunityDetector-class tooling — can see *why* a "subscribed" symbol
+   * never received real data, instead of it looking like a silent, unexplained data gap.
+   */
+  private marketDataErrorHandler: ((symbol: string, code: number, message: string) => void) | null = null;
+  private marketDataErrors = new Map<string, { code: number; message: string; atMs: number }>();
   private nextHistReqId = 50_000;
   /** Serialize historical requests — IB paces hist data; avoid storms. */
   private histChain: Promise<unknown> = Promise.resolve();
@@ -81,6 +143,29 @@ export class IbkrSocketSession {
 
   setTickHandler(handler: ((symbol: string, price: number) => void) | null): void {
     this.tickHandler = handler;
+  }
+
+  /** Fires whenever IB rejects/errors an *active* market-data reqId (post-connect included). */
+  setMarketDataErrorHandler(handler: ((symbol: string, code: number, message: string) => void) | null): void {
+    this.marketDataErrorHandler = handler;
+  }
+
+  /** Most recent market-data error recorded for `symbol`, if any (cleared on a fresh subscribe). */
+  getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
+    return this.marketDataErrors.get(symbol.toUpperCase()) ?? null;
+  }
+
+  private handleMarketDataError(reqId: number | undefined, code: number, message: string): void {
+    if (reqId == null) return;
+    const symbol = this.activeMktData.get(reqId);
+    if (!symbol) return;
+    const record = { code, message, atMs: Date.now() };
+    this.marketDataErrors.set(symbol, record);
+    try {
+      this.marketDataErrorHandler?.(symbol, code, message);
+    } catch {
+      /* never let a downstream sink break the socket session */
+    }
   }
 
   getConnectionInfo(): IbkrSocketConnectionInfo {
@@ -151,9 +236,15 @@ export class IbkrSocketSession {
         if (!settled && code === ErrorCode.CONNECT_FAIL) {
           console.warn(`[IBKR Socket] error code=${code} reqId=${reqId}: ${err?.message || err}`);
           void this.disconnect().finally(() => finish(false));
-        } else if (!settled) {
+          return;
+        }
+        if (!settled) {
           console.warn(`[IBKR Socket] warning code=${code} reqId=${reqId}: ${err?.message || err}`);
         }
+        // Runs both before and after settle — a per-symbol reqMktData rejection (e.g. "market
+        // data is not subscribed") only ever arrives after the connection itself is up, so this
+        // must not be gated on `!settled` the way the connect-handshake branches above are.
+        this.handleMarketDataError(reqId, Number(code), String(err?.message ?? err ?? ''));
       });
 
       ib.on(EventName.nextValidId, (orderId: number) => {
@@ -337,32 +428,17 @@ export class IbkrSocketSession {
     limitPrice?: number;
     stopPrice?: number;
     account?: string;
+    /** Extended-Hours Execution Policy (2026-09-05). Requests IB's real outsideRth order flag -
+     *  only honored for a LIMIT order (mission's own "no blind market orders" rule outside RTH,
+     *  matching AlpacaBroker's identical LIMIT-only constraint on its own extended_hours flag). */
+    extendedHours?: boolean;
   }): number {
     if (!this.ib || !this.connected) {
       throw new Error('IBKR socket session is not connected. Start IB Gateway Desktop (paper port 4002) and retry.');
     }
     const orderId = this.allocateOrderId();
     const contract = this.stockContract(opts.symbol);
-    let orderType = OrderType.MKT;
-    if (opts.type === 'LIMIT') orderType = OrderType.LMT;
-    else if (opts.type === 'STOP') orderType = OrderType.STP;
-    else if (opts.type === 'STOP_LIMIT') orderType = OrderType.STP_LMT;
-
-    const order: any = {
-      orderId,
-      action: opts.side === 'SELL' ? OrderAction.SELL : OrderAction.BUY,
-      totalQuantity: opts.quantity,
-      orderType,
-      tif: 'DAY',
-      account: opts.account || this.accountId || undefined,
-      transmit: true,
-    };
-    if (opts.type === 'LIMIT' || opts.type === 'STOP_LIMIT') {
-      order.lmtPrice = opts.limitPrice;
-    }
-    if (opts.type === 'STOP' || opts.type === 'STOP_LIMIT') {
-      order.auxPrice = opts.stopPrice;
-    }
+    const order = buildIbkrOrder(orderId, { ...opts, account: opts.account || this.accountId || undefined });
 
     this.ib.placeOrder(orderId, contract, order);
     this.trackedOrders.set(orderId, {
@@ -524,6 +600,7 @@ export class IbkrSocketSession {
       throw new Error(`IBKR market-data line cap reached (${this.cfg.maxMarketDataLines}).`);
     }
     const tickerId = this.marketDataTicker++;
+    this.marketDataErrors.delete(sym);
     this.ib.reqMktData(tickerId, this.stockContract(sym), '', false, false);
     this.activeMktData.set(tickerId, sym);
     this.symbolToTicker.set(sym, tickerId);
@@ -539,7 +616,10 @@ export class IbkrSocketSession {
       /* ignore */
     }
     this.activeMktData.delete(tickerId);
-    if (sym) this.symbolToTicker.delete(sym);
+    if (sym) {
+      this.symbolToTicker.delete(sym);
+      this.marketDataErrors.delete(sym);
+    }
   }
 
   cancelMarketDataBySymbol(symbol: string): void {

@@ -15,6 +15,7 @@ import { db } from '../db';
 import { observabilityEvents, quantAssessments, riskAssessments, trades } from '../db/schema';
 import { and, eq, gte } from 'drizzle-orm';
 import { classifyTradeEnvironment, isReplayTraceId } from '../research/organicPaper';
+import { marketDataWorker } from '../services/MarketDataWorker';
 
 export interface DiscoveryDecisionEvent {
   ts: string;
@@ -48,6 +49,19 @@ export interface DiscoveryLineageReport {
   riskApproved: boolean;
   omsOrderPlaced: boolean;
   fillReached: boolean;
+  /**
+   * Live MarketDataWorker snapshot (2026-09-04 opportunity-capture remediation), not a windowed DB
+   * query - this is the ONE stage the rest of this report could not previously see: a symbol can
+   * have real subscribeRequestedCount > 0 and still never receive a tick, and until this addition
+   * that looked identical to "subscribed and just hasn't ticked yet in the window" instead of "IB
+   * rejected the market-data line and it will never tick." Null fields mean "not currently in
+   * MarketDataWorker's active-stream set" (may have been evicted, or never actually admitted despite
+   * a subscribe *request*).
+   */
+  currentlySubscribed: boolean;
+  currentTickCount: number | null;
+  currentDwellAgeMs: number | null;
+  marketDataError: { code: number; message: string; atMs: number } | null;
   /** Plain-language summary of where this symbol's lineage currently terminates, using only what
    *  was actually observed - never a guess at a stage with zero evidence. */
   terminalSummary: string;
@@ -114,6 +128,12 @@ export async function buildDiscoveryLineageReport(symbol: string, sinceIso: stri
   const omsOrderPlaced = genuineTrades.length > 0;
   const fillReached = genuineTrades.some((t) => t.status === 'FILLED');
 
+  const liveSlot = marketDataWorker.getActiveSlots().find((s) => s.symbol === sym) ?? null;
+  const currentlySubscribed = liveSlot != null;
+  const currentTickCount = liveSlot?.tickCount ?? null;
+  const currentDwellAgeMs = liveSlot?.dwellAgeMs ?? null;
+  const marketDataError = liveSlot?.marketDataError ?? marketDataWorker.getMarketDataError(sym);
+
   let terminalSummary: string;
   if (fillReached) terminalSummary = 'Reached a real (non-REPLAY) fill.';
   else if (omsOrderPlaced) terminalSummary = 'Reached OMS but no fill recorded in this window.';
@@ -122,6 +142,8 @@ export async function buildDiscoveryLineageReport(symbol: string, sinceIso: stri
   else if (consensusRows.length > 0) terminalSummary = `Consensus evaluated but never approved (top reason: ${Object.entries(consensusRejectionReasons).sort((a, b) => b[1] - a[1])[0]?.[0] ?? 'unknown'}).`;
   else if (ideaEmittedCount > 0) terminalSummary = 'A trade idea was emitted but never reached a recorded consensus decision in this window.';
   else if (qaRows.length > 0) terminalSummary = 'QuantEngine evaluated this symbol but never emitted a trade idea in this window.';
+  else if (marketDataError) terminalSummary = `Currently subscribed but IB rejected the market-data line (code ${marketDataError.code}: ${marketDataError.message}) - it will never tick until this is resolved (commonly a missing market-data-line entitlement for this symbol/exchange).`;
+  else if (currentlySubscribed && currentTickCount === 0) terminalSummary = 'Currently subscribed (no market-data error recorded) but has not yet received a real tick.';
   else if (subscribeRequestedCount > 0) terminalSummary = 'Subscribed but never reached a recorded QuantEngine evaluation in this window.';
   else if (discoveryDecisions.some((d) => d.admitted)) terminalSummary = 'Admitted by discovery but never reached a recorded subscription request in this window.';
   else if (discoveryDecisions.length > 0) terminalSummary = `Filtered at discovery (${discoveryDecisions[discoveryDecisions.length - 1].reason ?? 'unknown reason'}).`;
@@ -140,6 +162,10 @@ export async function buildDiscoveryLineageReport(symbol: string, sinceIso: stri
     riskApproved,
     omsOrderPlaced,
     fillReached,
+    currentlySubscribed,
+    currentTickCount,
+    currentDwellAgeMs,
+    marketDataError,
     terminalSummary,
   };
 }
@@ -162,6 +188,8 @@ export function formatDiscoveryLineageReport(r: DiscoveryLineageReport): string 
   lines.push(
     '',
     `Subscribe requests: ${r.subscribeRequestedCount}`,
+    `Currently subscribed (live): ${r.currentlySubscribed}${r.currentlySubscribed ? ` (tickCount=${r.currentTickCount}, dwellAgeMs=${r.currentDwellAgeMs})` : ''}`,
+    `Market-data error (live): ${r.marketDataError ? `code ${r.marketDataError.code}: ${r.marketDataError.message}` : 'none'}`,
     `Quant evaluations: ${r.quantEvaluationCount}`,
     `Ideas emitted: ${r.ideaEmittedCount}`,
     `Consensus approved: ${r.consensusApprovedCount}`,

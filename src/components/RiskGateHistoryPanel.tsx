@@ -1,5 +1,5 @@
 /**
- * Phase 3F - Risk Center. Real 24-gate breakdown per recent risk assessment
+ * Phase 3F - Risk Center. Real 25-gate breakdown per recent risk assessment
  * (GET /api/v2/runtime/risk/recent-assessments) — every gate as actually recorded by
  * RiskEngine.ts, including gates recorded after the first failure. Read-only: no frontend
  * override, no "force approve", no bypass control exists here or anywhere in the UI.

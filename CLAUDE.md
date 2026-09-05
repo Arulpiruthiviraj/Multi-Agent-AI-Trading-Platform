@@ -10,7 +10,7 @@ Argus is a Node.js multi-agent trading terminal (Express + Vite SPA + `ws` + SQL
 
 AI coding agents **must not** alter the protected trading architecture unless the repository owner explicitly authorizes an architectural change. Full contract: `ARGUS_ARCHITECTURE_PROTECTION.md`.
 
-**Invariant (discovery + ownership):** Opportunity Discovery and Existing Position Intelligence **feed the same protected spine**. They never become a second order path. New candidates and open-position HOLD/REDUCE/SELL recommendations enter only as `TRADE_IDEA_GENERATED` via `eventBus.emitTradeIdea` (or watchlist subscribe, which is **not** a trade). Then: ChiefTrader → RiskEngine (24 gates) → PositionSizing → OMS → BrokerManager. Do not shortcut ChiefTrader, RiskEngine, sizing, OMS, or `placeOrder` to “make it trade more.” Do not lower consensus (`tradingSafety.consensusApprovalThreshold` / `minIndependentAgreeingAgents`) or risk numbers for frequency.
+**Invariant (discovery + ownership):** Opportunity Discovery and Existing Position Intelligence **feed the same protected spine**. They never become a second order path. New candidates and open-position HOLD/REDUCE/SELL recommendations enter only as `TRADE_IDEA_GENERATED` via `eventBus.emitTradeIdea` (or watchlist subscribe, which is **not** a trade). Then: ChiefTrader → RiskEngine (25 gates) → PositionSizing → OMS → BrokerManager. Do not shortcut ChiefTrader, RiskEngine, sizing, OMS, or `placeOrder` to “make it trade more.” Do not lower consensus (`tradingSafety.consensusApprovalThreshold` / `minIndependentAgreeingAgents`) or risk numbers for frequency.
 
 Protected (extend through the documented interface only — never replace, bypass, weaken, or duplicate): `ChiefTraderAgent`, `RiskEngine`, `OrderManagementService`, `BrokerManager` + broker adapters, reconciliation, the kill-switch system, the trading-state machine, portfolio accounting, order lifecycle, fill processing, position reconciliation, the 24 risk gates, paper/live safety controls (5-layer LIVE arming).
 
@@ -26,7 +26,7 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 | Source | Use for |
 |---|---|
-| This file | Live path, 24 gates, AI routing, traces, soak, defects, working rules |
+| This file | Live path, 25 gates, AI routing, traces, soak, defects, working rules |
 | `README.md` | Setup, commands, `.env`, local AI, ecosystem spawn; **Why "ARGUS"?** name philosophy |
 | `docs/ARGUS_DOCUMENTATION_INDEX.md` | Operator vs developer forensic debugging / DB / EventBus (does **not** replace this contract) |
 | `config/*.json` | Numbers, strategy IDs, event names — not TypeScript literals |
@@ -69,6 +69,10 @@ Forward-looking **policy for new work**, not a claim about current runtime autho
 11. All existing safety invariants apply unchanged to Java exactly as to TypeScript: `PAPER_TRADING_ONLY=true`, `LIVE_NO_GO` unless `evaluateLiveReadiness()` says otherwise, `consensusApprovalThreshold >= 0.75`, `minIndependentAgreeingAgents >= 2`, no bypass of `news_veto`, RiskEngine, OMS, BrokerManager, reconciliation, or the kill switch.
 12. Before creating any new quant/indicator/strategy calculation in TypeScript, check `quant-core-java/` for an existing implementation first.
 13. **Bug fixes to engine/quant/indicator/strategy calculation logic also go to Java, not just new features.** If a calculation already has (or is being migrated toward) a Java implementation, fix it there and let TypeScript either call through to the fix or stay `COMPATIBILITY_ONLY`/`DEPRECATED` per rule 8 — do not patch only the TypeScript copy while an existing or in-progress Java counterpart silently keeps the old bug. If no Java counterpart exists yet for the calculation being fixed, fix the bug in TypeScript now (do not block a live-safety fix on an unstarted migration), but record it as a migration candidate per the Java Migration Completion Plan docs rather than letting it become a second permanent TS-only implementation.
+
+**`quant-core-java/institutional/` inventory (`config/engineOwnership.json`, ~35 engines — GARCH/EGARCH/DCC-GARCH, HMM regime, 5-factor composite, stat-arb, correlation, quant ensemble, PCA, decision tree/random forest/gradient boosting/KNN, linear SVM, AR/VAR/ARMA/ARIMA/SARIMA, Kalman filter, mean-variance/risk-parity optimizers, dynamic factor model, and more):** almost all real and unit-tested, almost all `RESEARCH` status (zero HTTP endpoint, zero consumer — doing nothing). 3 are `SHADOW` (`garch`, `hmm_regime`, `factor_composite`): a real HTTP endpoint, called every cycle by `JavaQuantAdvisoryService.ts`, producing real graded predictions under agent name `JavaFactorComposite` in `agent_performance_stats`. **This is a large amount of already-built capability sitting idle — the gap is activation, not missing code.** Two distinct, separately-gated activation steps exist, and they are not the same thing:
+    - **Reasoning-context injection (done, 2026-09-04):** `ChiefTraderAgent.ts`'s `loadJavaInstitutionalDebateContext()` folds real GARCH/regime/factor-composite output into the debate prompt as text-only context, same pattern and same safety contract as `learnedRulesText` above — never a vote, never touches consensus math, gated on `isQuantJavaCoreEnabled()` (already `true` in this deployment's `.env`, so this is live as of the next engine restart, not a future opt-in).
+    - **A real independent vote (`factor_composite` → `emitTradeIdea`) — still NOT done, and per `docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md`'s own Phase 3 precondition, not yet eligible:** that blueprint requires "a real multi-week window... no shortcuts on calendar time" of clean shadow-divergence tracking before any Java-sourced signal may call `emitTradeIdea`. `JavaQuantAdvisoryService` is currently doing exactly that Phase-2-style shadow tracking today; the soak has not been run to completion. Do not wire this vote in without that precondition being genuinely met — this is a deliberate, named, not-yet-satisfied gate, not an oversight to route around.
 
 **Living rule, not a one-time pass:** this policy applies to every future session and every future engine change, not only the migration work already completed as of 2026-08-23 — re-read this section before starting any new quant/indicator/strategy engine task.
 
@@ -141,17 +145,26 @@ Idea agents (timer or MARKET_DATA):
                          `broadUniverse`/`movers` blocks once enabled. A
                          bounded `MarketDataWorker.requestTemporaryDataRescue`
                          mechanism (capped at `maxConcurrentTemporaryDataRescues`,
-                         3) lets a starved-but-qualifying symbol borrow a data
+                         6) lets a starved-but-qualifying symbol borrow a data
                          slot for one more evaluation — never implies trade
                          eligibility, never bypasses a gate. Admission is
                          request-class-aware as of 2026-09-01 (Phase 18):
-                         `rescueReservedSlotsForPriorityClasses` (1) reserves
+                         `rescueReservedSlotsForPriorityClasses` (2) reserves
                          that many slots for `EXPLORATION`/`MARKET_MOVER`
                          requests so a repeat `ROUTINE_RECOVERY` requester
                          can no longer exhaust every slot first (the real
                          CRM/ONON denial pattern this fixed). Every denial is
                          now logged (`TEMPORARY_DATA_RESCUE_DENIED`, reason
-                         code included) — previously silent. Observability:
+                         code included) — previously silent. Capacity raised
+                         3→6 / reserved slots 1→2 on 2026-09-05, grounded in a
+                         fresh live-DB query of `observability_events` over the
+                         prior 3 days showing a 74.7% denial rate (293 denied /
+                         99 granted) specifically on `NEWS_CATALYST` +
+                         `NEW_DATA_ACQUISITION` requests while every `RENEWAL`
+                         intent sat at 0% denial — i.e. real acquisition demand
+                         was starving under the old cap, not renewal noise.
+                         Ratio (routine:reserved) preserved at 2:1 rather than
+                         picked arbitrarily. Observability:
                          `argus-cli exploration-health` /
                          `argus-cli rescue-occupants`
                          (`src/server/observability/explorationHealthReport.ts`).
@@ -293,7 +306,7 @@ Also verified: P1.1 SIGTERM/SIGINT drain (`gracefulShutdown.ts` — pause, stop 
 
 ## How a BUY / SELL happens
 
-BUY: ticks → idea (Technical after ~50 ticks, or timers) → ChiefTrader (debate if confidence > `debateTriggerConfidence`; min **2** independent agents; bar **0.75**; HOLD with confidence > 0 penalizes) → RiskEngine (needs live price; all 24 gates recorded) → whole-share MARKET → broker. OpenAlice does not block.
+BUY: ticks → idea (Technical after ~50 ticks, or timers) → ChiefTrader (debate if confidence > `debateTriggerConfidence`; min **2** independent agents; bar **0.75**; HOLD with confidence > 0 penalizes) → RiskEngine (needs live price; all 25 gates recorded) → whole-share MARKET (or, off by default, a real extended-hours LIMIT order per §2's gate 25) → broker. OpenAlice does not block.
 
 SELL: same path + `sell_position_exists`. No fractional/notional shares: `Math.floor(dollars / price)`; Alpaca `qty` only.
 
@@ -368,9 +381,11 @@ Backtest `run()` = TA-like rules, no AI. `runStrategyBacktest()` = named strateg
 
 `ReflectionEngine` (~60s) scores predictions vs price, updates `agent_performance_stats.currentWeight`. LLM rule text → `learned_rules`. Recent rule text is truncated into the ChiefTrader **debate prompt only** (`debateLearnedRulesCount` / `debateLearnedRuleMaxChars`). It does not override RiskEngine.
 
+`generateCalibrationInsightRules()` (2026-09-04, `ReflectionEngine.ts`) is a second, independent source into the same `learned_rules` table: `generateReflectionRule()` above only fires on a real organic FILLED SELL loss in the last hour (structurally near-never true — organic closed PAPER SELL P&L is 0), so the qualitative rule-text side of the reflection loop was effectively starved even though the quantitative weight side worked fine. This one instead reads the effective-sample (autocorrelation-clustered) calibration `evaluateAgents()` already computes every cycle for every agent, and fires only when an agent's 95% Wilson-interval **upper bound** is below chance (a conservative bar — not "unproven," genuinely "worse than a coin flip even in the best case"), gated by `reflectionCalibrationRuleCooldownMs` (24h default, `tradingSafety.json`) per agent so it can't spam the same insight every 60s cycle. Same safety contract as every other `learned_rules` writer: text-only, debate-prompt-only, never touches `currentWeight` or RiskEngine.
+
 ## Frontend honesty
 
-**20** desktop `AppTabId`s (`src/components/responsive/responsiveNavConfig.ts` `ALL_TABS`): dashboard, command, portfolio, arena, agents, evaluation, memory, activity, observatory, scanner, intelligence, learning, kronos, opportunities, news, settings, diagnostics, audit, validation, documentation. There is **no** `deployment` tab (that copy lives inside validation). Mixed REAL/MOCK.
+**20** desktop `AppTabId`s (`src/components/responsive/responsiveNavConfig.ts` `ALL_TABS`, corrected 2026-09-05 — the prior "20" count here actually only matched 19 real ids and listed a phantom `intelligence` tab that has never existed in `ALL_TABS`; the true prior count was 19, and this file's own count was already wrong before the addition below): dashboard, command, portfolio, arena, agents, evaluation, memory, activity, observatory, scanner, learning, kronos, opportunities, **premarket** (new, 2026-09-05 — read-only `PremarketIntelligence.tsx`, session state + today's real TradePlans + latest ranking + missed-opportunity diagnostics, consumes only already-existing `continuousIntelRoutes.ts`/`v2Runtime.ts` endpoints, no new backend query logic), news, settings, diagnostics, audit, validation, documentation. There is **no** `deployment` tab (that copy lives inside validation). Mixed REAL/MOCK.
 
 Phone layout (`src/components/mobile/`, width <768 or Mobile toggle): **6** tabs `cockpit | positions | brain | risk | terminal | settings`. Operator how-to: `docs/ARGUS_MOBILE_SETTINGS.md`.
 
@@ -391,7 +406,7 @@ Do not dump hidden chain-of-thought. Safe: side, confidence, EV, model name, lat
 
 ---
 
-# 2. 24-Gate RiskEngine Reference
+# 2. 25-Gate RiskEngine Reference
 
 Catalog order: `config/riskGateOrder.json`. Pass/fail must come from `RISK_GATE_EVALUATED` / `risk_gate_results` — never from the JSON file alone. All gates are **recorded** even after the first failure. The **first failure in evaluation order** is the reported rejection. AI cannot override this ladder.
 
@@ -423,8 +438,11 @@ Numbers below are the production `tradingSafety.json` / settings defaults as of 
 | 22 | `sell_position_exists` | **SELL only.** Recorded on SELL; BUY assessments omit it. Must have quantity &gt; 0. |
 | 23 | `argus_capital_allocation` | BUY notional ≤ remaining Argus allocation (budget − positions − pending BUYs). Example: broker `$2000`, budget `$100` → `$101` BUY fails here. |
 | 24 | `daily_buy_notional` | Cumulative BUY dollars on the NY session vs paper/LIVE caps. |
+| 25 | `extended_hours_execution_policy` | Session-Aware Trading Architecture Phase 5 (2026-09-05). Auto-passes (skipped) unless the order is a genuine `PRE_MARKET`/`AFTER_HOURS` attempt AND `EXTENDED_HOURS_EXECUTION_ENABLED=true` (off by default — zero behavior change for every RTH order and every deployment that hasn't opted in). When applicable: requires `BrokerCapabilities.extendedHoursOrders`, a fresh quote (≤ `extendedHoursMaxQuoteAgeMs`, 900000), a real bid/ask spread ≤ `extendedHoursMaxSpreadBps` (50 — **fails closed with no spread data at all**, never assumes tight), and notional ≤ `extendedHoursMaxNotionalDollars` ($1000, deliberately stricter than gate 16). Logic in `src/server/risk/ExtendedHoursExecutionPolicy.ts`. Min-liquidity/ADV is explicitly **NOT_IMPLEMENTED** (no honest data source for it yet) — do not fabricate one. |
 
-Older “18-gate” lists omitted 1–7 (`autobot_enabled` through `invalid_account_equity`). **24 is current.**
+Older “18-gate” lists omitted 1–7 (`autobot_enabled` through `invalid_account_equity`). **25 is current** (was 24 through 2026-09-04).
+
+**Extended-hours order construction (Phase 5, off by default):** when `EXTENDED_HOURS_EXECUTION_ENABLED=true` and gates 1-25 all pass for a `PRE_MARKET`/`AFTER_HOURS` order with a valid price, OMS (`resolveOrderConstruction()`) sends a real `LIMIT` order with the broker's extended-hours flag (`AlpacaBroker`: `extended_hours:true`; `IBGatewaySocketAdapter`: `outsideRth:true` via `IbkrSocketSession.buildIbkrOrder()`) instead of `MARKET` — never for a `MARKET` order (would be rejected/unsafe), never fabricating a limit price when none is available (falls back to `MARKET`, which gate 12 would then correctly block outside RTH anyway). Gate 12 (`market_hours`) itself gained the matching additive OR-branch: still binary Alpaca-clock live by default; only consults `classifyMarketSession()` when this same flag is on.
 
 ---
 
@@ -519,7 +537,7 @@ Levels TRACE→FATAL. Safety categories never DEBUG (`safetyMinLevel` INFO). Fai
 
 ## Database (notable)
 
-Count `sqliteTable(` in `schema.ts` (drifts; **74** as of 2026-09-01). Include: `settings` (incl. campaign columns), `trades`, `fills`, `portfolio`, `daily_strategy_performance`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `agent_predictions`, `prediction_outcomes`, `news_clusters`, `news_predictions`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, `config_overrides`, …
+Count `sqliteTable(` in `schema.ts` (drifts; **75** as of 2026-09-04). Include: `settings` (incl. campaign columns), `trades`, `fills`, `portfolio`, `daily_strategy_performance`, `ai_calls`, `event_traces`, `observability_events`, `risk_assessments`, `risk_gate_results`, `transaction_traces`, `agent_reasoning_logs`, `agent_predictions`, `prediction_outcomes`, `news_clusters`, `news_predictions`, `ohlcv_bars`, `quant_assessments`, `kill_switch_events`, `reconciliation_events`, `config_overrides`, …
 
 Backup: `GET /api/v1/system/export-db`. Restore: `POST /api/v1/system/import-db` (`application/octet-stream`; restart required).
 
@@ -658,7 +676,14 @@ Do not duplicate this file. Pointers only:
 - Flag-gated OFF by default. Do not enable QUANT / penny / opportunity flags “to see if it works.”
 - Penny/micro MARKET remains unfit until a **reviewed OMS LIMIT** change (`marketOrdersFitPennyAndMicro`). Do not route around OMS.
 - `architecture.protection.test.ts` must stay green: `src/server/continuous/` and `src/server/multiAsset/` do not import OMS/RiskEngine/BrokerManager or call `.placeOrder(`.
-- `src/server/premarket/` (new 2026-08-26, Stage 1 of a session-aware market-day intelligence effort): `SessionLifecycle.ts` promotes the existing `classifyMarketSession()` (previously replay-only) into the live boot path via `ArgusCoreBoot.ts`, tracking `PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED` plus an application state (`IDLE/RESEARCHING/PLAN_BUILDING/PLAN_READY/OPEN_REVALIDATION/INTRADAY/CLOSE_REVIEW`). **Observability only this stage** — it does not scan, rank, plan, or emit a trade idea; later stages (broad-universe candidate ranking, a persisted `TradePlan`, market-open revalidation, after-close review) are designed but not yet built. Own architecture-boundary test (`premarketArchitectureBoundary.test.ts`) enforces the same no-OMS/RiskEngine/BrokerManager/ChiefTraderAgent rule and will cover every file added to this directory automatically.
+- `src/server/premarket/` (2026-08-26, Stage 1 of a session-aware market-day intelligence effort): `SessionLifecycle.ts` promotes the existing `classifyMarketSession()` (previously replay-only) into the live boot path via `ArgusCoreBoot.ts`, tracking `PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED` plus an application state (`IDLE/RESEARCHING/PLAN_BUILDING/PLAN_READY/OPEN_REVALIDATION/INTRADAY/CLOSE_REVIEW`). **Observability only this stage** — it does not scan, rank, plan, or emit a trade idea. Own architecture-boundary test (`premarketArchitectureBoundary.test.ts`) enforces the same no-OMS/RiskEngine/BrokerManager/ChiefTraderAgent rule and will cover every file added to this directory automatically.
+  - **Correction (2026-09-05 forensic audit, `docs/architecture/ARGUS_SESSION_AWARE_TRADING_ARCHITECTURE.md`):** the "later stages... designed but not yet built" claim above was stale. Broad-universe candidate ranking (`ComposableRanking.ts`), a persisted TradePlan with thesis/entry-zone/invalidation (`TradePlanBuilder.ts`), and market-open revalidation already existed, built 2026-08-27 as `src/server/continuous/`'s own "Phase 4" series — just in a disconnected module tree that never read `SessionLifecycle`'s state. See the audit + `docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md` for the full two-systems finding.
+  - **Session-Aware Trading Architecture Phase 1 (2026-09-05):** `SessionLifecycleSnapshot` gained `sessionId`, `isExtendedHours`, `isTradingDay`, `minutesToOpen/SinceOpen/ToClose` (all holiday-blind, matching every other session representation in this codebase — see the audit doc §2.3 for why). New `getRefinedSnapshot()` (additive, read-only, never mutates the worker's own `current`/event-emission state) resolves `PLAN_BUILDING`/`PLAN_READY`/`OPEN_REVALIDATION` from real `TradePlanBuilder.getTradePlansForDate()` state — the first code to actually assign those three `ApplicationSessionState` values. Exposed via `GET /api/v2/runtime/session-lifecycle`'s new `refined` field.
+  - **Phase 3:** `ComposableRanking.ts` gained an 8th ranking component, `javaQuantScore`, sourced from `quantCoreBridge.fetchInstitutionalFactors()` (`FactorAlphaEngine.java`) — the Java quant engine's first path into ranking/discovery scoring. Deliberately NOT computed for the whole scan universe (bar-fetch + Java HTTP cost per symbol) — `runRankingCycle()`'s new `javaQuantBarsBySymbol` parameter defaults to an empty map, zero added cost unless a caller opts a specific symbol in. Not yet wired to a live caller.
+  - **Phase 4:** `TradePlanDraft` gained `confluenceScore` (fraction of available components independently clearing an agreement bar — distinct from `confidence`'s weighted magnitude, per the gap analysis's finding that this file previously conflated the two) and `catalystType`/`catalystSourceCount` (from `news_clusters.eventType`/`sourceCount`, optional caller-supplied via the new `fetchNewsCatalystDetails()`, null by default).
+  - **Phase 7:** `MissedOpportunityDetector`'s taxonomy gained `THESIS_INVALIDATED` — a symbol with no agent idea AND an `INVALIDATED`/`EXPIRED` TradePlan for the day is classified distinctly from the generic `AGENT_MISS`.
+  - **Phase 5 (2026-09-05, implemented after explicit operator sign-off):** extended-hours execution — OMS limit-order construction (`resolveOrderConstruction()`), per-broker `extended_hours`/`outsideRth` flags (`AlpacaBroker`, `IBGatewaySocketAdapter`/`IbkrSocketSession.buildIbkrOrder()`), RiskEngine gate 12's additive extended-hours OR-branch, and the new gate 25 `extended_hours_execution_policy` (`src/server/risk/ExtendedHoursExecutionPolicy.ts`) — see §2's gate table. Off by default (`EXTENDED_HOURS_EXECUTION_ENABLED`); every existing gate/order path is provably byte-for-byte unchanged when disabled (verified: full suite 453 files / 3,264 tests green after this change, including dedicated tests proving the disabled-by-default no-op for gates 12/25 and OMS). Real, honest gap deliberately left unimplemented: no min-liquidity/ADV check (no data source this codebase can honestly back it with — see the gate 25 row in §2).
+  - **Gap 7 follow-up (2026-09-05):** the gap-analysis doc's §8 explicitly called for measuring before touching `MarketDataWorker`'s shared 12-slot/rescue allocator rather than guessing at a number. That measurement was done — a live `observability_events` query over the prior 3 days showed a 74.7% denial rate (293/392) on `NEWS_CATALYST`+`NEW_DATA_ACQUISITION` requests specifically, versus 0% on every `RENEWAL` intent, i.e. genuine acquisition demand (not renewal noise) was starving. Fix applied is a global cap increase (`maxConcurrentTemporaryDataRescues` 3→6, `rescueReservedSlotsForPriorityClasses` 1→2, ratio preserved), **not** the session-partitioned reserved class §8 speculated about (premarket vs. RTH) — that would require the `minutesToOpen`-style `SessionContext` fields from Phase 1 wired into the allocator itself, which was not done. Full `MarketDataWorker.test.ts` suite (70 tests) green after the change, including 5 tests whose fixed-size symbol-array fixtures had to be resized off the old cap.
 
 ## Adding a quant strategy
 

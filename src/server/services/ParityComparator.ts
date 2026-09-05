@@ -48,3 +48,61 @@ export function compareSnapshots(
 
   return divergences;
 }
+
+/**
+ * QuantSignalAgent.evaluateSymbol()'s RegimeEngine.classifyRegime(bars) shadow-parity companion
+ * to compareSnapshots() above (QuantCoreBridge.compareRegimeParity). Deliberately TOP-LEVEL fields
+ * only (regime/trendStrength/volatility/marketStructure/confidence) - the nested trend/volatility/
+ * priceAction feature sub-objects on RegimeResult are NOT diffed here (disclosed scope reduction,
+ * matching the Java-side route's own comment); a full nested-feature parity comparison is a larger
+ * follow-up, not attempted in this pass.
+ */
+export interface ComparableRegimeSnapshot {
+  regime: string;
+  trendStrength: number;
+  volatility: string;
+  marketStructure: string;
+  confidence: number;
+}
+
+export interface RegimeFieldDivergence {
+  field: string;
+  tsValue: string | number;
+  javaValue: string | number;
+  diffPct?: number; // present only for the two numeric fields (trendStrength/confidence)
+}
+
+/**
+ * regime/volatility/marketStructure are enum-like strings - divergence there is a real classification
+ * disagreement (exact string mismatch, no percentage), not a rounding difference. trendStrength/
+ * confidence are numeric and use the same diffPct-over-threshold convention as compareSnapshots
+ * (a value of exactly 0 on the TS side is skipped, same division-by-zero rationale).
+ */
+export function compareRegimeSnapshots(
+  ts: ComparableRegimeSnapshot,
+  java: ComparableRegimeSnapshot,
+  thresholdPct: number = tradingSafety.quantJavaCoreDivergenceThresholdPct,
+): RegimeFieldDivergence[] {
+  const divergences: RegimeFieldDivergence[] = [];
+
+  const stringFields: (keyof ComparableRegimeSnapshot)[] = ['regime', 'volatility', 'marketStructure'];
+  for (const field of stringFields) {
+    if (ts[field] !== java[field]) {
+      divergences.push({ field, tsValue: ts[field], javaValue: java[field] });
+    }
+  }
+
+  const numericFields: (keyof ComparableRegimeSnapshot)[] = ['trendStrength', 'confidence'];
+  for (const field of numericFields) {
+    const tsValue = ts[field] as number;
+    const javaValue = java[field] as number;
+    if (tsValue === 0 || !Number.isFinite(tsValue) || !Number.isFinite(javaValue)) continue;
+
+    const diffPct = Math.abs(tsValue - javaValue) / Math.abs(tsValue);
+    if (diffPct > thresholdPct) {
+      divergences.push({ field, tsValue, javaValue, diffPct });
+    }
+  }
+
+  return divergences;
+}

@@ -1,12 +1,12 @@
 import type { LucideIcon } from 'lucide-react';
 import {
   Activity, BarChart2, BookOpen, BrainCircuit, Clock, FileText,
-  Layers, LineChart, Newspaper, Search, Settings, Shield, Terminal, TrendingUp, Zap,
+  Layers, LineChart, Newspaper, Search, Settings, Shield, Sunrise, Terminal, TrendingUp, Zap,
 } from 'lucide-react';
 
 export type AppTabId =
   | 'dashboard' | 'command' | 'portfolio' | 'arena' | 'news' | 'opportunities'
-  | 'scanner' | 'agents' | 'evaluation' | 'kronos' | 'learning'
+  | 'scanner' | 'agents' | 'evaluation' | 'kronos' | 'learning' | 'premarket'
   | 'memory' | 'observatory' | 'activity' | 'diagnostics' | 'audit' | 'validation'
   | 'settings' | 'documentation';
 
@@ -33,6 +33,7 @@ export const ALL_TABS: TabDef[] = [
   { id: 'learning', label: 'Learning & Evolution', icon: BookOpen, domain: 'quant' },
   { id: 'kronos', label: 'Kronos Forecast', icon: Activity, domain: 'quant' },
   { id: 'opportunities', label: 'Opportunity Feed', icon: TrendingUp, domain: 'quant' },
+  { id: 'premarket', label: 'Premarket Intelligence', icon: Sunrise, domain: 'quant' },
   { id: 'news', label: 'News Dashboard', icon: Newspaper, domain: 'system' },
   { id: 'settings', label: 'Settings', icon: Settings, domain: 'system' },
   { id: 'diagnostics', label: 'Diagnostics', icon: Terminal, domain: 'system' },

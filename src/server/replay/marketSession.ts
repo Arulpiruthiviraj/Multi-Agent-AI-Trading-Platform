@@ -2,7 +2,10 @@ import { replaySafety } from './replaySafety';
 
 export type MarketSession = 'PRE_MARKET' | 'REGULAR' | 'AFTER_HOURS' | 'CLOSED';
 
-function minutesInTimezone(ms: number, timeZone: string): number {
+/** Exported for SessionLifecycle.ts's SessionContext fields (minutesToOpen/SinceOpen/ToClose,
+ *  isTradingDay) - reusing this module's own weekday/minute math rather than a 10th independent
+ *  reimplementation (see docs/architecture/ARGUS_SESSION_AWARE_TRADING_ARCHITECTURE.md §2.2). */
+export function minutesInTimezone(ms: number, timeZone: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,
     hour: '2-digit',
@@ -15,7 +18,8 @@ function minutesInTimezone(ms: number, timeZone: string): number {
   return hour * 60 + minute;
 }
 
-function weekdayInTimezone(ms: number, timeZone: string): string {
+/** Exported for the same reason as minutesInTimezone above. */
+export function weekdayInTimezone(ms: number, timeZone: string): string {
   return new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(new Date(ms));
 }
 

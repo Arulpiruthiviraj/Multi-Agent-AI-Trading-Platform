@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto';
 import { db } from '../db';
 import { tradePlans, tradePlanRevalidations } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
-import type { RankedCandidate, RankingInput } from './ComposableRanking';
+import type { RankedCandidate, RankingInput, NewsCatalystDetail } from './ComposableRanking';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
@@ -50,6 +50,20 @@ export interface TradePlanDraft {
   invalidationLevel: number | null;
   targetConcept: string;
   confidence: number;
+  /** Session-Aware Trading Architecture Phase 4 (2026-09-05): DISTINCT from confidence, per
+   *  docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §5.1's finding that this file previously
+   *  used candidate.finalScore for both concepts. confidence is the weighted-average MAGNITUDE
+   *  (how strong is the signal); confluenceScore is the fraction of AVAILABLE components that
+   *  independently clear a "meaningfully supportive" bar - how many separate pieces of evidence
+   *  agree, not how strong any one of them is. A plan can have high confidence driven by one
+   *  dominant component and low confluence (few independent sources agree), or the reverse. */
+  confluenceScore: number;
+  /** Structured catalyst evidence (news_clusters.eventType/sourceCount) - null when no news
+   *  catalyst detail was supplied to buildTradePlanDrafts() this cycle (optional, caller-supplied;
+   *  never fabricated when absent). sourceCount is a raw corroboration count, not a calibrated
+   *  reliability score - see NewsCatalystDetail's own doc comment in ComposableRanking.ts. */
+  catalystType: string | null;
+  catalystSourceCount: number | null;
   evidenceQuality: number;
   rankAtCreation: number;
   componentScoresJson: string;
@@ -66,6 +80,21 @@ function classifySetupType(rank: number, promotionRecommendation: string, thresh
   if (rank <= thresholds.primaryCount + thresholds.backupCount) return 'BACKUP';
   if (rank <= thresholds.primaryCount + thresholds.backupCount + thresholds.watchlistCount) return 'WATCHLIST';
   return null;
+}
+
+/** A component "agrees" if it's available AND clears this bar - not merely present. Matches this
+ *  file's own local-named-constant convention (DEFAULT_TRADE_PLAN_THRESHOLDS, PROMOTE_THRESHOLD
+ *  in ComposableRanking.ts) rather than a config-file entry for a not-yet-validated construct. */
+const CONFLUENCE_AGREEMENT_THRESHOLD = 0.5;
+
+/** Fraction of AVAILABLE components that independently clear CONFLUENCE_AGREEMENT_THRESHOLD -
+ *  see TradePlanDraft.confluenceScore's own doc comment for why this is distinct from confidence. */
+function computeConfluenceScore(candidate: RankedCandidate): number {
+  const components = Object.values(candidate.components);
+  const available = components.filter((c) => c.available);
+  if (available.length === 0) return 0;
+  const agreeing = available.filter((c) => (c.score ?? 0) >= CONFLUENCE_AGREEMENT_THRESHOLD);
+  return agreeing.length / available.length;
 }
 
 function buildThesis(candidate: RankedCandidate, input: RankingInput, direction: 'BUY' | 'SELL'): string {
@@ -116,6 +145,11 @@ export function buildTradePlanDrafts(
   planDate: string,
   now: Date = new Date(),
   thresholds: TradePlanThresholds = DEFAULT_TRADE_PLAN_THRESHOLDS,
+  /** Optional, caller-supplied (e.g. ComposableRanking.fetchNewsCatalystDetails()) - default empty
+   *  map means catalystType/catalystSourceCount stay null, identical behavior to before this
+   *  parameter existed. Kept optional/pure rather than making this function fetch its own data,
+   *  preserving its existing "pure, synchronous, directly testable" contract. */
+  catalystDetailsBySymbol: Map<string, NewsCatalystDetail> = new Map(),
 ): TradePlanDraft[] {
   const drafts: TradePlanDraft[] = [];
   const validUntil = endOfTradingDayIso(planDate);
@@ -133,6 +167,7 @@ export function buildTradePlanDrafts(
     const catalysts: string[] = [];
     if (candidate.components.newsCatalyst.available) catalysts.push(`News catalyst (score ${candidate.components.newsCatalyst.score!.toFixed(2)})`);
     if (candidate.components.gap.available && candidate.components.gap.score! > 0.3) catalysts.push('Gap behavior');
+    const catalystDetail = catalystDetailsBySymbol.get(candidate.symbol) ?? null;
 
     drafts.push({
       id: randomUUID(),
@@ -147,9 +182,12 @@ export function buildTradePlanDrafts(
       invalidationLevel,
       targetConcept: direction === 'BUY' ? 'Momentum continuation toward the session high' : 'Momentum continuation toward the session low',
       confidence: candidate.finalScore,
-      // Real completeness measure - fraction of the 7 named components that had actual data this
-      // cycle, independent of finalScore (a high score built on 2/7 available components is
-      // weaker evidence than the same score built on 6/7).
+      confluenceScore: computeConfluenceScore(candidate),
+      catalystType: catalystDetail?.eventType ?? null,
+      catalystSourceCount: catalystDetail?.sourceCount ?? null,
+      // Real completeness measure - fraction of the 8 named components that had actual data this
+      // cycle, independent of finalScore (a high score built on 2/8 available components is
+      // weaker evidence than the same score built on 6/8).
       evidenceQuality: Object.values(candidate.components).filter((c) => c.available).length / Object.keys(candidate.components).length,
       rankAtCreation: candidate.rank,
       componentScoresJson: JSON.stringify(candidate.components),
@@ -212,7 +250,54 @@ export function revalidateTradePlan(
   return { result: 'REVALIDATED', reason: `Current ranking cycle still recommends PROMOTE (score ${currentRanked.finalScore.toFixed(3)}); price within thesis bounds.`, priceAtRevalidation: currentInput.last };
 }
 
-export async function persistRevalidation(planId: string, outcome: RevalidationOutcome, now: Date = new Date()): Promise<void> {
+/** Caller-supplied context for the shadow-tracking prediction below - kept optional and separate
+ *  from RevalidationOutcome (which is a pure decision result, not persisted plan data) rather than
+ *  re-querying the plan row this function already has no other reason to read. */
+export interface TradePlanShadowContext {
+  symbol: string;
+  direction: 'BUY' | 'SELL';
+  confidence: number;
+}
+
+/**
+ * Session-Aware Trading Architecture Phase 5 gap-analysis follow-up (2026-09-05,
+ * docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §5): records a real, graded shadow prediction
+ * the FIRST time a plan's thesis survives revalidation into VALID - via the SAME existing
+ * recordPrediction() pipeline (ModelPerformanceTracker.ts) DiscoveryOutcomeTracker already uses,
+ * never a new grading system. This is explicitly NOT the TRADE_IDEA_GENERATED wiring
+ * TradePlanBuilder.ts's own header describes as "a SEPARATE, deliberately NOT-yet-made decision" -
+ * it never calls emitTradeIdea, never touches ChiefTrader/RiskEngine/OMS, and has zero effect on
+ * the live trading pipeline. Its only purpose is to start accumulating real, gradeable evidence
+ * (via ReflectionEngine's existing prediction-outcome scoring) on whether TradePlan-sourced theses
+ * are directionally reliable - the exact evidence gap the gap analysis flagged as missing before
+ * any live wiring could be considered.
+ */
+async function recordTradePlanShadowPrediction(planId: string, context: TradePlanShadowContext): Promise<void> {
+  try {
+    const { recordPrediction } = await import('../services/ModelPerformanceTracker');
+    await recordPrediction({
+      agentName: 'TradePlanShadowTracker',
+      symbol: context.symbol,
+      side: context.direction,
+      confidence: context.confidence,
+      reasoning: `Shadow-mode prediction: TradePlan ${planId} reached VALID (survived revalidation) - was this thesis directionally useful in hindsight? Never emitted as a live trade idea.`,
+    });
+  } catch (e) {
+    console.error('[TradePlanBuilder] Shadow-tracking prediction failed (does not affect the real revalidation)', e);
+  }
+}
+
+export async function persistRevalidation(
+  planId: string,
+  outcome: RevalidationOutcome,
+  now: Date = new Date(),
+  /** Optional (default undefined - no shadow prediction recorded, identical behavior to before
+   *  this parameter existed). SnapshotScanner.ts's REGULAR-session revalidation loop supplies
+   *  `previousStatus` (the plan row it already fetched) and `shadowContext` (symbol/direction/
+   *  confidence, also already in scope) so this function never needs a second DB read. */
+  previousStatus?: TradePlanStatus,
+  shadowContext?: TradePlanShadowContext,
+): Promise<void> {
   try {
     await db.insert(tradePlanRevalidations).values({
       planId,
@@ -225,6 +310,10 @@ export async function persistRevalidation(planId: string, outcome: RevalidationO
       : outcome.result === 'DOWNGRADED' ? 'REVALIDATING'
         : outcome.result === 'EXPIRED' ? 'EXPIRED' : 'INVALIDATED';
     await db.update(tradePlans).set({ status: newStatus }).where(eq(tradePlans.id, planId));
+
+    if (newStatus === 'VALID' && previousStatus !== 'VALID' && shadowContext) {
+      await recordTradePlanShadowPrediction(planId, shadowContext);
+    }
   } catch (e) {
     console.error('[TradePlanBuilder] Failed to persist revalidation', e);
   }

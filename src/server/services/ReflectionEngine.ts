@@ -9,7 +9,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, agentPerformanceStats, agentConfidenceCalibration, trades, learnedRules, predictionOutcomes, kronosPredictions } from '../db/schema';
-import { eq } from 'drizzle-orm';
+import { eq, desc } from 'drizzle-orm';
 import { eventBus } from '../core/EventBus';
 import { AIRouter } from '../ai/AIRouter';
 import { bucketFor, calibratedConfidenceForBucket } from './ConfidenceCalibration';
@@ -260,6 +260,15 @@ export class ReflectionEngine {
         }
       }
 
+      // Phase 3 activation-plan-adjacent addition (2026-09-04, Shadow-Account-inspired): unlike
+      // generateReflectionRule() below (gated on a real organic FILLED SELL loss in the last
+      // hour - structurally near-never true today; organic closed PAPER SELL P&L is 0 per
+      // CLAUDE.md), the effective-sample calibration this loop already computes for EVERY agent
+      // every cycle is real and abundant (tens of thousands of graded prediction_outcomes rows).
+      // Collected here, fed to generateCalibrationInsightRules() after the loop - same
+      // learned_rules table, same debate-prompt consumer, genuinely new evidence source.
+      const agentEvidenceSummaries: Array<{ agentName: string; effectiveN: number; effectiveWinRate: number; wilsonUpper: number }> = [];
+
       for (const [agentName, data] of Object.entries(statsMap)) {
         if (data.total === 0) continue;
         const rawWinRate = data.correct / (data.total || 1);
@@ -274,6 +283,13 @@ export class ReflectionEngine {
         const eff = rawVsEffectiveDirectional(rows, independenceClusterGapMs(agentName));
         const evidenceStatus = classifyEvidenceStatus(eff.effectiveN, tradingSafety.minSampleSizeForTrust);
         const effectiveWinRate = eff.effectiveN > 0 ? eff.effectiveWins / eff.effectiveN : 0;
+
+        // "Directional call quality" isn't a meaningful concept for a risk-exit agent (see the
+        // isExcludedFromWeightLearning branch below) - exclude it from calibration-insight rules
+        // for the same reason its live weight never moves from this evidence.
+        if (evidenceStatus === 'LEARNING_ELIGIBLE' && !isExcludedFromWeightLearning(agentName)) {
+          agentEvidenceSummaries.push({ agentName, effectiveN: eff.effectiveN, effectiveWinRate, wilsonUpper: eff.effectiveInterval.upper });
+        }
 
         const [existingStats] = await db.select().from(agentPerformanceStats).where(eq(agentPerformanceStats.agentName, agentName));
         const previousWeight = existingStats?.currentWeight ?? defaultAgentWeights[agentName] ?? 1.0;
@@ -337,8 +353,51 @@ export class ReflectionEngine {
       if (recentLosses.length > 0) {
           await this.generateReflectionRule(recentLosses);
       }
+
+      await this.generateCalibrationInsightRules(agentEvidenceSummaries);
     } catch (e) {
       console.error("[ReflectionEngine] Error evaluating agents:", e);
+    }
+  }
+
+  /**
+   * Shadow-Account-inspired: extract a real, actionable rule from an agent's own graded
+   * prediction history (already computed above) instead of only ever reacting to a rare organic
+   * realized loss. Conservative trigger by design - only fires when even the OPTIMISTIC end of
+   * the confidence interval (wilsonUpper) is below chance, i.e. this is not "not yet proven
+   * good," it is "real evidence this agent is currently doing worse than a coin flip." Same
+   * safety contract as generateReflectionRule(): writes text-only learned_rules, consumed only
+   * by loadDebateLearnedRulesText() ("they do not override RiskEngine") - never touches
+   * currentWeight (already updated above from the same evidence via agentWeightUpdate/boundedStep),
+   * never emits a trade idea, never calls RiskEngine/OMS.
+   */
+  async generateCalibrationInsightRules(summaries: Array<{ agentName: string; effectiveN: number; effectiveWinRate: number; wilsonUpper: number }>) {
+    const cooldownMs = tradingSafety.reflectionCalibrationRuleCooldownMs;
+    for (const s of summaries) {
+      if (s.wilsonUpper >= 0.5) continue;
+      const cause = `Calibration insight: ${s.agentName}`;
+      try {
+        const [mostRecent] = await db.select().from(learnedRules)
+          .where(eq(learnedRules.cause, cause))
+          .orderBy(desc(learnedRules.timestamp)).limit(1);
+        if (mostRecent && Date.now() - new Date(mostRecent.timestamp).getTime() < cooldownMs) continue;
+
+        const prompt = `Agent "${s.agentName}" has ${s.effectiveN} independent (autocorrelation-clustered) graded ` +
+          `predictions with an effective win rate of ${(s.effectiveWinRate * 100).toFixed(1)}% (95% confidence upper ` +
+          `bound ${(s.wilsonUpper * 100).toFixed(1)}% - even in the best case this agent is performing worse than ` +
+          `chance). Write a 1-sentence strict rule for a trading debate to apply extra scrutiny to this agent's votes.`;
+        const traceId = crypto.randomUUID();
+        const res = await AIRouter.getInstance().routeTask('ReflectionEngine', prompt, traceId);
+        const rule = res.content ||
+          `${s.agentName}'s recent directional calls have performed below chance (95% CI upper bound ${(s.wilsonUpper * 100).toFixed(1)}%) - apply extra scrutiny to its votes.`;
+
+        eventBus.emitLearningEvent({ traceId, agent: 'ReflectionEngine', cause, rule, confidence: 0.9 });
+        await db.insert(learnedRules).values({
+          id: crypto.randomUUID(), rule, agent: 'ReflectionEngine', cause, confidence: 0.9, timestamp: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error(`[ReflectionEngine] Failed to generate calibration insight rule for ${s.agentName}:`, e);
+      }
     }
   }
 

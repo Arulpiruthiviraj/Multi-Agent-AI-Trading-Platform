@@ -119,4 +119,43 @@ describe('discoveryLineageReport', () => {
     expect(text).toContain('DISCOVERY LINEAGE');
     expect(text).toContain('TERMINAL SUMMARY');
   });
+
+  // 2026-09-04 opportunity-capture remediation: the live MarketDataWorker snapshot (currentlySubscribed/
+  // marketDataError) closes the exact gap that made NVDA's real "462 subscribe requests, only 2
+  // TechnicalAgent evals" look like an unexplained silent stall - this asserts it renders as a real,
+  // specific terminal reason instead.
+  it('a symbol subscribed live with a real IBKR market-data rejection reports the specific cause, not a generic stall', async () => {
+    const { marketDataWorker } = await import('../services/MarketDataWorker');
+    const symbol = 'ZZMDE';
+    const tsMs = Date.now();
+    await db.insert(schema.observabilityEvents).values({
+      id: nextId(), ts: tsMs, level: 'INFO', category: 'DISCOVERY', eventType: 'WATCHLIST_SUBSCRIBE_REQUESTED', loggerName: 'argus', message: 'm', sessionId: 's', symbol, payload: null,
+    });
+    marketDataWorker.subscribe(symbol, { momentumScore: 0.77 });
+    marketDataWorker.recordMarketDataError(symbol, 354, 'Requested market data is not subscribed.');
+
+    const report = await mod.buildDiscoveryLineageReport(symbol, new Date(tsMs - 60_000).toISOString());
+    expect(report.currentlySubscribed).toBe(true);
+    expect(report.currentTickCount).toBe(0);
+    expect(report.marketDataError).toEqual(expect.objectContaining({ code: 354 }));
+    expect(report.terminalSummary).toMatch(/IB rejected the market-data line \(code 354/);
+
+    const text = mod.formatDiscoveryLineageReport(report);
+    expect(text).toContain('Market-data error (live): code 354');
+
+    marketDataWorker.unsubscribe(symbol, { force: true });
+  });
+
+  it('a symbol currently subscribed with no error and no ticks yet reports a distinct, honest stall reason', async () => {
+    const { marketDataWorker } = await import('../services/MarketDataWorker');
+    const symbol = 'ZZNOE';
+    marketDataWorker.subscribe(symbol, { momentumScore: 0.5 });
+
+    const report = await mod.buildDiscoveryLineageReport(symbol, new Date(Date.now() - 60_000).toISOString());
+    expect(report.currentlySubscribed).toBe(true);
+    expect(report.marketDataError).toBeNull();
+    expect(report.terminalSummary).toMatch(/has not yet received a real tick/);
+
+    marketDataWorker.unsubscribe(symbol, { force: true });
+  });
 });

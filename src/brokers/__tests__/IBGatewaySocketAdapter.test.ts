@@ -34,4 +34,20 @@ describe('IBGatewaySocketAdapter', () => {
       a.getHistoricalBars('AAPL', '1Day', Date.now() - 86_400_000 * 30, Date.now()),
     ).rejects.toThrow(/not connected/i);
   });
+
+  // 2026-09-04 opportunity-capture remediation: a rejected reqMktData request used to vanish
+  // silently once the initial connect handshake had settled. setMarketDataErrorHandler/
+  // getMarketDataError pass through to the underlying session so BrokerManager can wire real IB
+  // rejections into MarketDataWorker's observability surface.
+  it('passes setMarketDataErrorHandler/getMarketDataError through to the session', () => {
+    const a = new IBGatewaySocketAdapter();
+    const handler = vi.fn();
+    a.setMarketDataErrorHandler(handler);
+    const session: any = (a as any).session;
+    session.activeMktData.set(1, 'NVDA');
+    session.handleMarketDataError(1, 354, 'Requested market data is not subscribed.');
+    expect(handler).toHaveBeenCalledWith('NVDA', 354, 'Requested market data is not subscribed.');
+    expect(a.getMarketDataError('NVDA')?.code).toBe(354);
+    expect(a.getMarketDataError('AAPL')).toBeNull();
+  });
 });

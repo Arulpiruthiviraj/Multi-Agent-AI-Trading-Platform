@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Bar } from '../engines/backtest/HistoricalDataGateway';
-import { classifyRegime } from './RegimeEngine';
+import { classifyRegime, classifyDeskSession } from './RegimeEngine';
 
 function bar(i: number, close: number, rangePct = 0.01): Bar {
   return {
@@ -73,5 +73,29 @@ describe('RegimeEngine.classifyRegime', () => {
     const choppy = classifyRegime(choppyMix);
 
     expect(strong.confidence).toBeGreaterThan(choppy.confidence);
+  });
+});
+
+describe('RegimeEngine.classifyDeskSession', () => {
+  // 2026-08-27 is a Thursday, 2026-08-29 a Saturday, 2026-08-30 a Sunday; EDT is UTC-4 that week.
+  function etOn(dateIso: string, hh: number, mm: number): Date {
+    return new Date(`${dateIso}T${String(hh + 4).padStart(2, '0')}:${String(mm).padStart(2, '0')}:00.000Z`);
+  }
+
+  it('classifies a weekday morning correctly (unaffected by the weekend fix)', () => {
+    const result = classifyDeskSession('NORMAL', 'RANGING', etOn('2026-08-27', 10, 0));
+    expect(result.phase).toBe('MORNING');
+  });
+
+  it('weekend-awareness fix: a Saturday at a normal RTH morning clock-time is UNKNOWN, not misclassified as an intraday phase', () => {
+    const result = classifyDeskSession('NORMAL', 'RANGING', etOn('2026-08-29', 10, 0));
+    expect(result.phase).toBe('UNKNOWN');
+    expect(result.source).toMatch(/weekend/i);
+  });
+
+  it('weekend-awareness fix: a Sunday at a normal RTH afternoon clock-time is also UNKNOWN', () => {
+    const result = classifyDeskSession('NORMAL', 'RANGING', etOn('2026-08-30', 14, 0));
+    expect(result.phase).toBe('UNKNOWN');
+    expect(result.source).toMatch(/weekend/i);
   });
 });

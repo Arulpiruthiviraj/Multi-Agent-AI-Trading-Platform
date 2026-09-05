@@ -24,6 +24,7 @@
     "sufficient_size",
     "sell_position_exists",
     "argus_capital_allocation",
-    "daily_buy_notional"
+    "daily_buy_notional",
+    "extended_hours_execution_policy"
   ]
 }

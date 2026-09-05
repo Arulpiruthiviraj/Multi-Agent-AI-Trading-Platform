@@ -21,6 +21,7 @@ function fullComponents(overrides: Partial<ComponentSet> = {}): ComponentSet {
     momentum: availComp(0.8), relativeVolume: availComp(0.7), rangeExpansion: availComp(0.5),
     gap: availComp(0.4), liquidity: availComp(0.6),
     newsCatalyst: unavailComp('no cluster'), agentConfidence: unavailComp('no prediction'),
+    javaQuantScore: unavailComp('not requested'),
     ...overrides,
   };
 }
@@ -111,8 +112,50 @@ describe('buildTradePlanDrafts', () => {
     const candidates = [ranked('PARTIAL', 1, 'PROMOTE')];
     const inputs = new Map([['PARTIAL', input('PARTIAL')]]);
     const drafts = buildTradePlanDrafts(candidates, inputs, '2026-08-27');
-    // fullComponents() has 5 available of 7 total (newsCatalyst/agentConfidence unavailable).
-    expect(drafts[0].evidenceQuality).toBeCloseTo(5 / 7, 5);
+    // fullComponents() has 5 available of 8 total (newsCatalyst/agentConfidence/javaQuantScore unavailable).
+    expect(drafts[0].evidenceQuality).toBeCloseTo(5 / 8, 5);
+  });
+
+  it('confluenceScore is distinct from confidence - fraction of available components clearing the agreement bar', () => {
+    // fullComponents(): momentum 0.8, relativeVolume 0.7, rangeExpansion 0.5, gap 0.4, liquidity 0.6 (5 available).
+    // Agreement bar is 0.5: momentum/relativeVolume/rangeExpansion/liquidity clear it (4), gap (0.4) does not.
+    const candidates = [ranked('CONF', 1, 'PROMOTE', 0.95)]; // finalScore/confidence deliberately very high
+    const inputs = new Map([['CONF', input('CONF')]]);
+    const drafts = buildTradePlanDrafts(candidates, inputs, '2026-08-27');
+    expect(drafts[0].confidence).toBe(0.95);
+    expect(drafts[0].confluenceScore).toBeCloseTo(4 / 5, 5); // NOT equal to confidence
+  });
+
+  it('confluenceScore is 0 when no components are available, never NaN or fabricated', () => {
+    const allUnavailable: ComponentSet = {
+      momentum: unavailComp('x'), relativeVolume: unavailComp('x'), rangeExpansion: unavailComp('x'),
+      gap: unavailComp('x'), liquidity: unavailComp('x'), newsCatalyst: unavailComp('x'),
+      agentConfidence: unavailComp('x'), javaQuantScore: unavailComp('x'),
+    };
+    const candidates: RankedCandidate[] = [{
+      symbol: 'EMPTY', components: allUnavailable, finalScore: 0.5, weightsUsed: {},
+      rank: 1, previousRank: null, rankDelta: null, promotionRecommendation: 'PROMOTE', promotionReason: 'test',
+    }];
+    const inputs = new Map([['EMPTY', input('EMPTY')]]);
+    const drafts = buildTradePlanDrafts(candidates, inputs, '2026-08-27');
+    expect(drafts[0].confluenceScore).toBe(0);
+  });
+
+  it('catalystType/catalystSourceCount stay null when no catalyst detail is supplied (default, zero-cost path)', () => {
+    const candidates = [ranked('NOCATALYST', 1, 'PROMOTE')];
+    const inputs = new Map([['NOCATALYST', input('NOCATALYST')]]);
+    const drafts = buildTradePlanDrafts(candidates, inputs, '2026-08-27');
+    expect(drafts[0].catalystType).toBeNull();
+    expect(drafts[0].catalystSourceCount).toBeNull();
+  });
+
+  it('catalystType/catalystSourceCount populate from a caller-supplied detail map', () => {
+    const candidates = [ranked('EARN', 1, 'PROMOTE')];
+    const inputs = new Map([['EARN', input('EARN')]]);
+    const details = new Map([['EARN', { eventType: 'earnings', sourceCount: 4, impactScore: 0.9 }]]);
+    const drafts = buildTradePlanDrafts(candidates, inputs, '2026-08-27', new Date(), DEFAULT_TRADE_PLAN_THRESHOLDS, details);
+    expect(drafts[0].catalystType).toBe('earnings');
+    expect(drafts[0].catalystSourceCount).toBe(4);
   });
 
   it('respects custom thresholds', () => {
@@ -223,5 +266,58 @@ describe('TradePlanBuilder persistence (DB-backed)', () => {
 
     const plans = await getTradePlansForDate('2026-08-27');
     expect(plans[0].status).toBe('INVALIDATED');
+  });
+
+  it('persistRevalidation records a shadow prediction (never a live trade idea) the first time a plan reaches VALID', async () => {
+    vi.resetModules();
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { buildTradePlanDrafts: build, persistTradePlanDrafts, persistRevalidation } = await import('./TradePlanBuilder');
+    const candidates = [ranked('AAPL', 1, 'PROMOTE')];
+    const inputs = new Map([['AAPL', input('AAPL')]]);
+    const drafts = build(candidates, inputs, '2026-08-27');
+    await persistTradePlanDrafts(drafts);
+    const shadowContext = { symbol: 'AAPL', direction: 'BUY' as const, confidence: 0.8 };
+
+    await persistRevalidation(
+      drafts[0].id,
+      { result: 'REVALIDATED', reason: 'test revalidation', priceAtRevalidation: 101 },
+      new Date(),
+      'READY', // previousStatus - not yet VALID
+      shadowContext,
+    );
+
+    const rows = await db.select().from(schema.agentPredictions);
+    const shadowRows = rows.filter((r) => r.agentName === 'TradePlanShadowTracker' && r.symbol === 'AAPL');
+    expect(shadowRows).toHaveLength(1);
+    expect(shadowRows[0].prediction).toBe('BUY');
+
+    // Second revalidation with previousStatus already VALID must NOT record a second shadow
+    // prediction for the same still-valid plan (would otherwise spam a prediction every ~30s cycle).
+    await persistRevalidation(
+      drafts[0].id,
+      { result: 'REVALIDATED', reason: 'test revalidation 2', priceAtRevalidation: 102 },
+      new Date(),
+      'VALID', // previousStatus - already VALID from the call above
+      shadowContext,
+    );
+    const rowsAfter = await db.select().from(schema.agentPredictions);
+    expect(rowsAfter.filter((r) => r.agentName === 'TradePlanShadowTracker' && r.symbol === 'AAPL')).toHaveLength(1);
+  });
+
+  it('persistRevalidation records no shadow prediction when no shadowContext is supplied (identical to before this parameter existed)', async () => {
+    vi.resetModules();
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { buildTradePlanDrafts: build, persistTradePlanDrafts, persistRevalidation } = await import('./TradePlanBuilder');
+    const candidates = [ranked('AAPL', 1, 'PROMOTE')];
+    const inputs = new Map([['AAPL', input('AAPL')]]);
+    const drafts = build(candidates, inputs, '2026-08-27');
+    await persistTradePlanDrafts(drafts);
+
+    await persistRevalidation(drafts[0].id, { result: 'REVALIDATED', reason: 'test', priceAtRevalidation: 101 });
+
+    const rows = await db.select().from(schema.agentPredictions);
+    expect(rows.filter((r) => r.agentName === 'TradePlanShadowTracker')).toHaveLength(0);
   });
 });

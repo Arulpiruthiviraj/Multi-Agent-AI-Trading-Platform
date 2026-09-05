@@ -127,6 +127,13 @@ export class MarketDataWorker {
   private ws: WebSocket | null = null;
   private latestPrices: Map<string, number> = new Map();
   private latestPriceTimestamps: Map<string, number> = new Map();
+  /** Extended-Hours Execution Policy (2026-09-05): Alpaca's real-time quote message ("q") already
+   *  carries an ask price (msg.ap) alongside the bid (msg.bp) this class already captures - it was
+   *  simply never stored. This is the one real source of a genuine bid/ask spread anywhere in this
+   *  codebase (there is no L2 feed - see CLAUDE.md's "L2 Depth Data Unavailable" honesty rule).
+   *  Timestamped the same way latestPriceTimestamps is, so staleness can be checked the same way. */
+  private latestAskPrices: Map<string, number> = new Map();
+  private latestAskTimestamps: Map<string, number> = new Map();
   private lastTick: Map<string, { timestampMs: number; price: number }> = new Map();
   /** Tick counts for dynamic-slot eviction (least-ticked non-core first). */
   private tickCounts: Map<string, number> = new Map();
@@ -162,6 +169,12 @@ export class MarketDataWorker {
    *  lastRejectLogMs already uses) so a symbol re-requested many times in a short window logs one
    *  lineage entry, not one per attempt. */
   private lastNewsDiscoveryLogMs: Map<string, number> = new Map();
+  /** Set via recordMarketDataError() (BrokerManager wires the IBKR bridge's real reqMktData
+   *  rejections here — see IbkrSocketSession.ts's 2026-09-04 fix). Never set for Alpaca; that
+   *  backend's failures already surface as reconnect/backoff logs. Purely observational: does not
+   *  change subscription/eviction behavior, only makes an otherwise-silent per-symbol data-line
+   *  rejection visible on getActiveSlots()/the /capacity endpoint. */
+  private marketDataErrors: Map<string, { code: number; message: string; atMs: number }> = new Map();
   private disconnectedAt: number | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectBackoff = new ReconnectBackoff();
@@ -512,8 +525,26 @@ export class MarketDataWorker {
   }
 
   /**
-   * Operator/forensic view of the 12-slot stream (anchors first, then dynamics).
-   * Does not emit events or mutate subscriptions.
+   * Records a real per-symbol market-data rejection (currently: IBKR reqMktData errors relayed
+   * from IbkrSocketSession via BrokerManager). Read-only bookkeeping — never evicts, never
+   * un-subscribes, never touches OMS/RiskEngine. Exists so a symbol that looks "active" but is
+   * silently receiving zero ticks (the confirmed 2026-09-04 NVDA-class defect) is diagnosable
+   * instead of looking like an unexplained data gap.
+   */
+  recordMarketDataError(symbol: string, code: number, message: string): void {
+    const sym = quoteKey(symbol);
+    if (!sym) return;
+    this.marketDataErrors.set(sym, { code, message, atMs: this.wallMs() });
+  }
+
+  getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
+    return this.marketDataErrors.get(quoteKey(symbol)) ?? null;
+  }
+
+  /**
+   * Operator/forensic view of the streamed set (anchors first, then dynamics). Cap is whatever
+   * getEffectiveStreamingCap() currently reports (12 Alpaca-safe default, ~90 under IBKR Gateway's
+   * hardCapOverride) — not a fixed 12. Does not emit events or mutate subscriptions.
    */
   getActiveSlots(): Array<{
     slot: number;
@@ -522,6 +553,7 @@ export class MarketDataWorker {
     score: number;
     dwellAgeMs: number;
     tickCount: number;
+    marketDataError: { code: number; message: string; atMs: number } | null;
   }> {
     const core = coreStreamingSet();
     const now = this.wallMs();
@@ -538,6 +570,7 @@ export class MarketDataWorker {
         score: this.dynamicMomentumScores.get(symbol) ?? 0,
         dwellAgeMs: Math.max(0, now - subscribedAt),
         tickCount: this.tickCounts.get(symbol) ?? 0,
+        marketDataError: this.marketDataErrors.get(symbol) ?? null,
       };
     });
   }
@@ -568,6 +601,31 @@ export class MarketDataWorker {
     // getReplayQuoteAgeMs) with the replay's own simulated clock passed in explicitly - this live
     // function was never the real path replay relies on for price-age freshness.
     return Date.now() - t;
+  }
+
+  /** Real ask price from the last "q" message that carried one, or null if none has ever arrived
+   *  for this symbol. Never fabricated from the bid price or any other proxy. */
+  getLatestAsk(symbol: string): number | null {
+    const key = quoteKey(symbol);
+    return this.latestAskPrices.get(key) ?? this.latestAskPrices.get(symbol) ?? null;
+  }
+
+  /**
+   * Real bid/ask spread in basis points, computed only when BOTH a bid (latestPrices) and an ask
+   * (latestAskPrices) exist AND the ask observation is no older than maxAgeMs relative to now -
+   * a bid from 4pm paired with an ask from 9am would be a fabricated spread, not a real one. Returns
+   * null (never a fabricated 0 or a stale number) when either side is missing or the ask is stale.
+   */
+  getLatestSpreadBps(symbol: string, maxAgeMs: number): number | null {
+    const key = quoteKey(symbol);
+    const bid = this.latestPrices.get(key) ?? this.latestPrices.get(symbol);
+    const ask = this.latestAskPrices.get(key) ?? this.latestAskPrices.get(symbol);
+    const askAt = this.latestAskTimestamps.get(key) ?? this.latestAskTimestamps.get(symbol);
+    if (typeof bid !== 'number' || typeof ask !== 'number' || typeof askAt !== 'number') return null;
+    if (Date.now() - askAt > maxAgeMs) return null;
+    if (!(bid > 0) || !(ask > 0) || ask < bid) return null;
+    const mid = (bid + ask) / 2;
+    return mid > 0 ? ((ask - bid) / mid) * 10_000 : null;
   }
 
   /**
@@ -906,6 +964,7 @@ export class MarketDataWorker {
     this.dynamicMomentumScores.delete(ticker);
     this.tickCounts.delete(ticker);
     this.subscribedAtMs.delete(ticker);
+    this.marketDataErrors.delete(ticker);
     if (this.quoteBackend === 'ibkr_gateway' && this.ibkrBridge) {
       try { this.ibkrBridge.unsubscribe(ticker); } catch { /* ignore */ }
       return;
@@ -1091,6 +1150,12 @@ export class MarketDataWorker {
           this.lastTick.set(sym, { timestampMs, price: msg.bp });
           this.latestPrices.set(sym, msg.bp);
           this.latestPriceTimestamps.set(sym, Date.now());
+          // Additive only - never gates isDuplicateTick/acceptTickTimestamp/maybeEmitMarketData
+          // above, all of which stay keyed on the bid price exactly as before this field existed.
+          if (typeof msg.ap === 'number' && Number.isFinite(msg.ap) && msg.ap > 0) {
+            this.latestAskPrices.set(sym, msg.ap);
+            this.latestAskTimestamps.set(sym, Date.now());
+          }
           this.tickCounts.set(sym, (this.tickCounts.get(sym) ?? 0) + 1);
           if (this.lastError && /symbol limit exceeded/i.test(this.lastError)) {
             this.lastError = null;

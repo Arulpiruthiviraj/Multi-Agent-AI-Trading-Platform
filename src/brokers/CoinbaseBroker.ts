@@ -76,6 +76,7 @@ export class CoinbaseBroker implements BrokerPlugin {
       shortSelling: false, // spot only - this adapter doesn't implement margin/derivatives endpoints
       streamingMarketData: false,
       requiresManualReauth: false, // pure API-key/JWT auth, no recurring human step
+      extendedHoursOrders: false, // crypto is 24/7 - the RTH/premarket concept this flag governs doesn't apply
     };
   }
 

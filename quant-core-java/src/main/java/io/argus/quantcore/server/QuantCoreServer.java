@@ -16,6 +16,7 @@ import io.argus.quantcore.institutional.models.RegimeVolatilityOverlay;
 import io.argus.quantcore.institutional.data.MarketDataQualityEngine;
 import io.argus.quantcore.institutional.features.FeaturePipeline;
 import io.argus.quantcore.institutional.features.FeatureSnapshot;
+import io.argus.quantcore.features.RegimeEngine;
 import io.argus.quantcore.logging.StructuredLogger;
 import io.argus.quantcore.logging.TraceContext;
 import io.argus.quantcore.server.json.Json;
@@ -53,6 +54,7 @@ public final class QuantCoreServer {
         server.createContext("/api/v1/ticks", this::handleTicks);
         server.createContext("/api/v1/indicators/", this::handleIndicators);
         server.createContext("/api/v1/evaluate", this::handleEvaluate);
+        server.createContext("/api/v1/features/regime/", this::handleFeaturesRegime);
         server.createContext("/api/v1/institutional/factors/", this::handleInstitutionalFactors);
         server.createContext("/api/v1/institutional/pairs", this::handleInstitutionalPairs);
         server.createContext("/api/v1/institutional/volatility/", this::handleInstitutionalVolatility);
@@ -416,6 +418,58 @@ public final class QuantCoreServer {
         } finally {
             TraceContext.clear();
         }
+    }
+
+    /**
+     * SHADOW-ONLY parity endpoint (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md,
+     * Phase 2 feature-pipeline follow-up): a pure, stateless function of caller-supplied bars,
+     * same POST-bars-in-body shape as handleInstitutionalFactors/Volatility/Regime/Features above
+     * (decodeBars() on a {@code {"bars":[...]}} body) - no new serialization convention invented.
+     * Returns RegimeEngine.classifyRegime(bars)'s TOP-LEVEL fields only (regime, trendStrength,
+     * volatility, marketStructure, confidence, insufficientData) - the nested trend/volatility/
+     * priceAction feature sub-objects are intentionally NOT serialized here (TS-side
+     * QuantCoreBridge.compareRegimeParity only diffs the top-level fields; a full nested-feature
+     * parity comparison is a larger follow-up, not attempted in this pass).
+     */
+    private void handleFeaturesRegime(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        String symbol = path.substring(path.lastIndexOf('/') + 1);
+        String traceId = resolveTraceId(exchange);
+        TraceContext.bind(traceId, symbol);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Bar[] bars = decodeBars(body.get("bars"));
+            if (bars == null || bars.length == 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "bars array is required"));
+                return;
+            }
+            RegimeEngine.Result result = RegimeEngine.classifyRegime(List.of(bars));
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "FEATURES_REGIME_COMPUTED",
+                "Classified regime for " + symbol, traceId, symbol,
+                Map.of("regime", result.regime(), "confidence", result.confidence()));
+            sendJson(exchange, 200, regimeResultToJson(symbol, result));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    private static Map<String, Object> regimeResultToJson(String symbol, RegimeEngine.Result r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("symbol", symbol);
+        m.put("regime", r.regime());
+        m.put("trendStrength", r.trendStrength());
+        m.put("volatility", r.volatility());
+        m.put("marketStructure", r.marketStructure());
+        m.put("confidence", r.confidence());
+        m.put("insufficientData", r.insufficientData());
+        return m;
     }
 
     /**

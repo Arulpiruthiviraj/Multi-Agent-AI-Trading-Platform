@@ -83,6 +83,11 @@ export class HistoricalReplayBroker implements BrokerPlugin {
       shortSelling: this.shortSelling,
       streamingMarketData: false,
       requiresManualReauth: false,
+      // sessionAllowsFills()/extendedHours are already real replay-config concepts, but
+      // placeOrder() never reads Order.extendedHours - false here would be misleading only if the
+      // replay config's own extendedHours flag were the same thing; it governs FILL ELIGIBILITY by
+      // session (already handled), not a broker-specific order-type flag. False is honest either way.
+      extendedHoursOrders: false,
     };
   }
   async health() { return 'Healthy'; }

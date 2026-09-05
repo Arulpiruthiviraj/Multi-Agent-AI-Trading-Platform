@@ -96,6 +96,35 @@ function toCloses(ohlcvData: any[]): number[] {
     .filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
 }
 
+/**
+ * Confidence from how tight the sampled quantile spread is relative to price - a forecast where
+ * the 10th/90th percentile samples barely disagree is a more confident call than one where
+ * they're far apart. Exported for direct unit testing of the calibration below.
+ *
+ * 2026-09-04 recalibration: the original multiplier (4) assumed relativeSpread would commonly
+ * range wide enough to use the full [floor, ceiling] band. Live evidence contradicted that - a
+ * 3,000-row sample of real kronos_predictions rows showed relativeSpread at p50/p25/p10/p5 = 0%,
+ * p90 = 0.73%, p99 = 2.24%, and correspondingly confidence sat at exactly the 0.85 ceiling on
+ * 2,999/3,000 real predictions. With multiplier=4, even the p99 spread (0.0224) only pulls
+ * confidence to ~0.91, still clamped to the ceiling - the entire real distribution was saturating
+ * it. kronosConfidenceSpreadMultiplier=25 was chosen so the measured p90 spread lands at ~0.82
+ * (just under the ceiling) and the measured p99 spread lands at ~0.44 (well below it), so
+ * confidence actually varies across the range Kronos really produces instead of reading a
+ * constant value regardless of forecast tightness.
+ *
+ * This fixes a degenerate SIGNAL (a constant is strictly less informative than a real varying
+ * one) - it does NOT establish that tighter spreads correlate with more accurate forecasts, and
+ * it does NOT change KronosEngine's measured win rate. That remains a separate, unresolved
+ * question (agent_performance_stats: Wilson lower bound ~0.48, i.e. not distinguishable from
+ * chance) and this change makes no claim about it either way.
+ */
+export function computeKronosConfidence(relativeSpread: number): number {
+  const floor = quantThresholds.kronosConfidenceFloor;
+  const ceiling = quantThresholds.kronosConfidenceCeiling;
+  const multiplier = quantThresholds.kronosConfidenceSpreadMultiplier;
+  return Math.max(floor, Math.min(ceiling, 1 - relativeSpread * multiplier));
+}
+
 function buildPrediction(symbol: string, timeframe: string, horizon: number, lastPrice: number, forecast: ChronosForecastResponse): ForecastPrediction {
   const medianEnd = forecast.median[forecast.median.length - 1];
   const lowEnd = forecast.low[forecast.low.length - 1];
@@ -104,12 +133,8 @@ function buildPrediction(symbol: string, timeframe: string, horizon: number, las
   const pctChange = (medianEnd - lastPrice) / lastPrice;
   const direction = pctChange > NEUTRAL_BAND_PCT ? 'BUY' : pctChange < -NEUTRAL_BAND_PCT ? 'SELL' : 'HOLD';
 
-  // Confidence from how tight the sampled quantile spread is relative to price - a forecast
-  // where the 10th/90th percentile samples barely disagree is a more confident call than one
-  // where they're far apart. Clamped to [0.3, 0.85]: this is a small model on a short context,
-  // never claim near-certainty from it.
   const relativeSpread = Math.abs(highEnd - lowEnd) / Math.abs(lastPrice);
-  const confidence = Math.max(0.3, Math.min(0.85, 1 - relativeSpread * 4));
+  const confidence = computeKronosConfidence(relativeSpread);
 
   return {
     symbol,

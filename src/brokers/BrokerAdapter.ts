@@ -57,6 +57,11 @@ export interface Order {
   trailAmount?: number;
   takeProfitPrice?: number;
   stopLossPrice?: number;
+  /** Extended-Hours Execution Policy (2026-09-05). Requests premarket/after-hours eligibility for
+   *  this order - additive, defaults to unset/false everywhere. An adapter that doesn't honor it
+   *  (BrokerCapabilities.extendedHoursOrders === false) simply ignores it and the order behaves
+   *  exactly as it always has, matching every other optional field on this interface. */
+  extendedHours?: boolean;
 }
 
 export interface Position {
@@ -107,6 +112,12 @@ export interface BrokerCapabilities {
   // browser 2FA login roughly every 24h - there is no official headless bypass). False for
   // adapters that authenticate purely via API key/secret with no recurring human step.
   requiresManualReauth: boolean;
+  /** Extended-Hours Execution Policy (2026-09-05). True only for an adapter whose placeOrder()
+   *  actually constructs a real extended-hours-eligible order (Alpaca's extended_hours flag, IB's
+   *  outsideRth flag) when Order.extendedHours is set - never a claim of theoretical broker-API
+   *  support the adapter code doesn't back up, same discipline as canPlaceOrders above. Defaults
+   *  to false for every existing adapter until this pass's own broker-specific wiring lands. */
+  extendedHoursOrders: boolean;
 }
 
 export interface BrokerPlugin {

@@ -119,6 +119,42 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     expect(emitMarketData).toHaveBeenCalledTimes(1);
   });
 
+  it('getLatestAsk/getLatestSpreadBps: captures a real ask price from a quote message and computes a real spread', () => {
+    const ws = instances[0];
+    authenticate(ws);
+    sendMessage(ws, { T: 'q', S: 'AAPL', bp: 150.00, ap: 150.30, bs: 100, t: '2026-01-15T14:30:00.000000000Z' });
+
+    expect(worker.getLatestAsk('AAPL')).toBe(150.30);
+    // mid = 150.15, spread = 0.30/150.15 * 10000 ≈ 19.98 bps
+    expect(worker.getLatestSpreadBps('AAPL', 60_000)).toBeCloseTo(19.98, 1);
+  });
+
+  it('getLatestAsk/getLatestSpreadBps return null when no quote has ever carried an ask (never fabricated)', () => {
+    const ws = instances[0];
+    authenticate(ws);
+    sendMessage(ws, { T: 'q', S: 'NOASK', bp: 50, bs: 100, t: '2026-01-15T14:30:00.000000000Z' }); // no `ap` field
+
+    expect(worker.getLatestAsk('NOASK')).toBeNull();
+    expect(worker.getLatestSpreadBps('NOASK', 60_000)).toBeNull();
+  });
+
+  it('getLatestSpreadBps returns null when the ask observation is older than maxAgeMs', () => {
+    // getLatestSpreadBps (like the existing getLatestPriceAgeMs it mirrors) reads the real wall
+    // clock, not the setNowForTests()/wallMs() dwell-check clock - real timers must be faked here.
+    vi.useFakeTimers();
+    try {
+      const ws = instances[0];
+      authenticate(ws);
+      sendMessage(ws, { T: 'q', S: 'STALEASK', bp: 100, ap: 100.5, bs: 100, t: '2026-01-15T14:30:00.000000000Z' });
+      vi.advanceTimersByTime(120_000);
+
+      expect(worker.getLatestSpreadBps('STALEASK', 60_000)).toBeNull();
+      expect(worker.getLatestAsk('STALEASK')).toBe(100.5); // getLatestAsk itself is not age-bounded
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a genuinely new tick for the same symbol (different timestamp) is never discarded as a false-positive duplicate', () => {
     const ws = instances[0];
     authenticate(ws);
@@ -459,6 +495,49 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     expect(worker.getEffectiveStreamingCap()).toBeLessThanOrEqual(20);
   });
 
+  // 2026-09-04 opportunity-capture remediation: a real IBKR reqMktData rejection used to vanish
+  // silently — the symbol stayed "active" forever with zero ticks and no diagnostic trail.
+  // recordMarketDataError()/getActiveSlots() make that failure visible without changing what gets
+  // subscribed or evicted.
+  describe('recordMarketDataError() (IBKR reqMktData rejection surfacing)', () => {
+    it('is null for a symbol with no recorded error', () => {
+      expect(worker.getMarketDataError('NVDA')).toBeNull();
+    });
+
+    it('records and returns the error, case-insensitively', () => {
+      worker.recordMarketDataError('nvda', 354, 'Requested market data is not subscribed.');
+      const err = worker.getMarketDataError('NVDA');
+      expect(err).not.toBeNull();
+      expect(err?.code).toBe(354);
+      expect(err?.message).toBe('Requested market data is not subscribed.');
+      expect(typeof err?.atMs).toBe('number');
+    });
+
+    it('surfaces marketDataError on getActiveSlots() for a subscribed symbol', () => {
+      worker.subscribe('NVDA', { momentumScore: 0.77 });
+      worker.recordMarketDataError('NVDA', 354, 'Requested market data is not subscribed.');
+      const slot = worker.getActiveSlots().find((s) => s.symbol === 'NVDA');
+      expect(slot).toBeDefined();
+      expect(slot?.marketDataError).toEqual(
+        expect.objectContaining({ code: 354, message: 'Requested market data is not subscribed.' }),
+      );
+    });
+
+    it('reports null marketDataError for a healthy subscribed symbol', () => {
+      worker.subscribe('AAPL', { momentumScore: 0.5 });
+      const slot = worker.getActiveSlots().find((s) => s.symbol === 'AAPL');
+      expect(slot?.marketDataError).toBeNull();
+    });
+
+    it('clears the tracked error when the symbol is unsubscribed', () => {
+      worker.subscribe('META', { momentumScore: 0.4 });
+      worker.recordMarketDataError('META', 354, 'rejected');
+      expect(worker.getMarketDataError('META')).not.toBeNull();
+      worker.unsubscribe('META');
+      expect(worker.getMarketDataError('META')).toBeNull();
+    });
+  });
+
   it('WATCHLIST_SUBSCRIBE_REQUESTED expands the IEX set without placing an order', () => {
     const handler = subscribeSpy.mock.calls.find((c: unknown[]) => c[0] === 'WATCHLIST_SUBSCRIBE_REQUESTED')?.[1] as ((p: { symbol?: string }) => void) | undefined;
     expect(handler).toBeTypeOf('function');
@@ -662,7 +741,9 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
 
       const grants: string[] = [];
       const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
-      const candidates = ['LNG', 'XOM', 'CRM', 'ANF', 'TH'];
+      // Sized to cap+1 (not a fixed literal list) so there's always exactly one guaranteed
+      // overflow candidate regardless of config, matching this test's own intent.
+      const candidates = Array.from({ length: cap + 1 }, (_, i) => `CAND${i}`);
       for (const sym of candidates) {
         const r = worker.requestTemporaryDataRescue(sym, 'capacity-test', { requestClass: 'MARKET_MOVER' });
         if (r.granted) grants.push(sym);
@@ -752,13 +833,17 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       // continuousIntelligence.seedSymbols, auto-subscribed by ensureDefaultSubscriptions() the
       // moment authenticate() fires above, so a genuine rescue request on them is now correctly
       // classified RENEWAL (already subscribed) and no longer competes for this ACQUISITION-only
-      // capacity check at all - LNG/XOM/AI are real, deliberately non-seed/non-core symbols so
-      // this test still reproduces genuine NEW_DATA_ACQUISITION contention, matching the real
-      // FRVO incident's own acquisition-side symbol (never itself a seed/core name).
-      const routineGrants = ['LNG', 'XOM', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'stale-data'));
+      // capacity check at all - the generated symbols below are real, deliberately non-seed/non-core
+      // so this test still reproduces genuine NEW_DATA_ACQUISITION contention, matching the real
+      // FRVO incident's own acquisition-side symbol (never itself a seed/core name). One MORE than
+      // routineCap requesters (not a fixed literal count) so the cap genuinely binds regardless of
+      // config - matching this test's own stated intent ("cannot occupy every slot").
+      const routineCapForThisTest = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+      const routineRequesterSymbols = Array.from({ length: routineCapForThisTest + 1 }, (_, i) => `ROUT${i}`);
+      const routineGrants = routineRequesterSymbols.map((sym) => worker.requestTemporaryDataRescue(sym, 'stale-data'));
       const routineGrantedCount = routineGrants.filter((r) => r.granted).length;
-      // Pre-Phase-18 this would have been 3 (the entire pool) - now it is capped below the total.
-      expect(routineGrantedCount).toBe(continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses);
+      // Pre-Phase-18 this would have been the entire pool - now it is capped below the total.
+      expect(routineGrantedCount).toBe(routineCapForThisTest);
       expect(routineGrantedCount).toBeLessThan(continuousIntelligence.maxConcurrentTemporaryDataRescues);
 
       // CRM and ONON now arrive exactly as they did live: real exploration promotions.
@@ -880,10 +965,13 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       authenticate(instances[0]);
       await expireDynamicDwell();
       const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
-      // Phase 28: LNG/XOM/AI, not AAPL/TSLA/MSFT - those three are real seedSymbols, auto-subscribed
-      // by authenticate() above, so they are now correctly classified RENEWAL (see Invariant 1/2's
-      // comment) and would no longer exercise the ACQUISITION-only capacity check this test targets.
-      const unclassed = ['LNG', 'XOM', 'AI'].map((sym) => worker.requestTemporaryDataRescue(sym, 'no-class-arg'));
+      // Phase 28: non-seed symbols (not AAPL/TSLA/MSFT - those three are real seedSymbols,
+      // auto-subscribed by authenticate() above, so they'd be classified RENEWAL, not exercising
+      // the ACQUISITION-only capacity check this test targets). Sized to routineCap (not a fixed
+      // literal count) so this test scales automatically with config, exactly like the
+      // "opposite condition" test below already does.
+      const unclassedSymbols = Array.from({ length: routineCap }, (_, i) => `UNCL${i}`);
+      const unclassed = unclassedSymbols.map((sym) => worker.requestTemporaryDataRescue(sym, 'no-class-arg'));
       expect(unclassed.filter((r) => r.granted).length).toBe(routineCap);
       const explicit = worker.requestTemporaryDataRescue('CRM', 'explicit-routine', { requestClass: 'ROUTINE_RECOVERY' });
       expect(explicit.granted).toBe(unclassed[unclassed.length - 1].granted === false ? false : explicit.granted); // same admission rule either way
@@ -905,10 +993,12 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       authenticate(instances[0]);
       await expireDynamicDwell();
-      // Phase 28: LNG/XOM/AI, not AAPL/TSLA - see Invariant 1/2's comment (seedSymbols auto-subscribe).
-      for (const sym of ['LNG', 'XOM', 'AI']) worker.requestTemporaryDataRescue(sym, 'stale-data');
+      const routineCap = continuousIntelligence.maxConcurrentTemporaryDataRescues - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+      // Phase 28: non-seed symbols - see Invariant 1/2's comment (seedSymbols auto-subscribe).
+      // Sized to routineCap so this fills exactly the real routine capacity regardless of config.
+      for (let i = 0; i < routineCap; i++) worker.requestTemporaryDataRescue(`FILL${i}`, 'stale-data');
       emitSpy.mockClear();
-      worker.requestTemporaryDataRescue('CRM', 'stale-data'); // 4th routine request - should be denied and logged
+      worker.requestTemporaryDataRescue('CRM', 'stale-data'); // one past routineCap - should be denied and logged
       // logRescueDenial uses structuredLogger (DB-backed), not eventBus - assert via getActiveTemporaryRescues not growing.
       expect(worker.getActiveTemporaryRescues().map((r) => r.symbol)).not.toContain('CRM');
     });
@@ -985,7 +1075,11 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       const { continuousIntelligence } = await import('../config/continuousIntelligence');
       const cap = continuousIntelligence.maxConcurrentTemporaryDataRescues;
 
-      const renewalOnly = Array.from({ length: cap * 2 }, (_, i) => testTicker(i)); // deliberately MORE than the total rescue cap
+      // Sized to exactly `cap` (fills, not doubles, the entire theoretical rescue pool) rather
+      // than cap*2 - large enough to prove RENEWAL is exempt from the acquisition cap, small
+      // enough to leave real subscription-slot headroom (maxActiveSubscriptions) for the
+      // acquisition requests below, regardless of how large `cap` itself is configured to be.
+      const renewalOnly = Array.from({ length: cap }, (_, i) => testTicker(i));
       for (const sym of renewalOnly) worker.subscribe(sym);
       for (const sym of renewalOnly) {
         const r = worker.requestTemporaryDataRescue(sym, 'renew-immunity');
@@ -1000,14 +1094,22 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       const routineCap = cap - continuousIntelligence.rescueReservedSlotsForPriorityClasses;
       const acquisitionGrants: boolean[] = [];
       for (let i = 0; i < routineCap; i++) {
-        acquisitionGrants.push(worker.requestTemporaryDataRescue(testTicker(cap * 2 + i), 'stale-data').granted);
+        acquisitionGrants.push(worker.requestTemporaryDataRescue(testTicker(cap + i), 'stale-data').granted);
       }
       expect(acquisitionGrants.every(Boolean)).toBe(true);
-      // The reserved slot is still available to a priority-class acquisition request.
-      const priorityAcquisition = worker.requestTemporaryDataRescue(testTicker(cap * 2 + routineCap), 'stale-data', { requestClass: 'EXPLORATION' });
-      expect(priorityAcquisition.granted).toBe(true);
-      // And the acquisition cap is still real and enforced once genuinely exhausted.
-      const overflow = worker.requestTemporaryDataRescue(testTicker(cap * 3), 'stale-data');
+      // Every reserved slot (not just one) is still available to priority-class acquisition
+      // requests - drain all of them so the pool is genuinely, not just partially, exhausted.
+      const reservedSlots = continuousIntelligence.rescueReservedSlotsForPriorityClasses;
+      const priorityGrants: boolean[] = [];
+      for (let i = 0; i < reservedSlots; i++) {
+        priorityGrants.push(
+          worker.requestTemporaryDataRescue(testTicker(cap + routineCap + i), 'stale-data', { requestClass: 'EXPLORATION' }).granted,
+        );
+      }
+      expect(priorityGrants.every(Boolean)).toBe(true);
+      // routineCap + reservedSlots === cap, so capacity is now genuinely full - the next request
+      // of any class must be denied for being full, not merely reserved-for-priority.
+      const overflow = worker.requestTemporaryDataRescue(testTicker(cap + routineCap + reservedSlots), 'stale-data');
       expect(overflow.granted).toBe(false);
       expect(overflow.deniedReason).toBe('RESCUE_CAPACITY_FULL');
     });

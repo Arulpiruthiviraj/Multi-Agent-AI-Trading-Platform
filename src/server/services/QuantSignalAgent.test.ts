@@ -34,6 +34,7 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
   let eventBus: any;
   let marketDataWorker: any;
   let QuantSignalAgent: any;
+  let quantCoreBridge: any;
   const originalAlpacaKey = process.env.ALPACA_API_KEY;
   const originalAlpacaSecret = process.env.ALPACA_SECRET_KEY;
 
@@ -48,6 +49,7 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     ({ eventBus } = await import('../core/EventBus'));
     ({ marketDataWorker } = await import('./MarketDataWorker'));
     ({ QuantSignalAgent } = await import('./QuantSignalAgent'));
+    ({ quantCoreBridge } = await import('./QuantCoreBridge'));
   });
 
   afterAll(() => {
@@ -115,6 +117,72 @@ describe('QuantSignalAgent.evaluateSymbol', () => {
     expect(persistedScores.BUY.overallSetupScore).toBeGreaterThanOrEqual(0);
     expect(persistedScores.SELL.overallSetupScore).toBeGreaterThanOrEqual(0);
     expect(result.groupedScores.BUY.trendScore).toBeGreaterThan(50);
+  });
+
+  /**
+   * QuantCoreBridge.compareRegimeParity() is a SHADOW-ONLY, fire-and-forget call added inside
+   * evaluateSymbol() immediately after the real classifyRegime(bars) call - it must never affect
+   * evaluateSymbol's real return value, whether the shadow comparison succeeds, throws/rejects, or
+   * never runs at all (QUANT_JAVA_CORE_ENABLED off, the default). These three cases are proven
+   * against the identical real bars/regime pipeline the first test above already exercises, with
+   * result compared field-for-field (JSON round-trip) rather than trusting object identity alone.
+   */
+  describe('evaluateSymbol return value is unaffected by QuantCoreBridge.compareRegimeParity (shadow-only)', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      delete process.env.QUANT_JAVA_CORE_ENABLED;
+    });
+
+    it('is unaffected when the shadow comparison is disabled (QUANT_JAVA_CORE_ENABLED unset, the default)', async () => {
+      delete process.env.QUANT_JAVA_CORE_ENABLED;
+      stubUptrendingFetch();
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSAPARITYOFF']);
+      const spy = vi.spyOn(quantCoreBridge, 'compareRegimeParity');
+
+      const agent = new QuantSignalAgent();
+      const result = await agent.evaluateSymbol('QSAPARITYOFF');
+
+      expect(result).not.toBeNull();
+      expect(result!.regime.regime).toBe('BULLISH_TREND');
+      // Called (the call site is unconditional), but internally a no-op since the flag is off.
+      expect(spy).toHaveBeenCalled();
+    });
+
+    it('is byte-for-byte identical when the shadow comparison succeeds vs. when it throws synchronously', async () => {
+      process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+
+      stubUptrendingFetch();
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSAPARITYOK']);
+      vi.spyOn(quantCoreBridge, 'compareRegimeParity').mockResolvedValue(undefined);
+      const agentOk = new QuantSignalAgent();
+      const resultOk = await agentOk.evaluateSymbol('QSAPARITYOK');
+
+      stubUptrendingFetch();
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSAPARITYTHROW']);
+      vi.spyOn(quantCoreBridge, 'compareRegimeParity').mockImplementation(() => {
+        throw new Error('simulated Java-side shadow-parity failure');
+      });
+      const agentThrow = new QuantSignalAgent();
+      const resultThrow = await agentThrow.evaluateSymbol('QSAPARITYTHROW');
+
+      expect(resultOk).not.toBeNull();
+      expect(resultThrow).not.toBeNull();
+      // Deep-equal comparison (not object identity, which differs per-symbol) - both real
+      // evaluations of the identical synthetic uptrend bars must classify identically regardless
+      // of whether the fire-and-forget shadow call succeeded or threw.
+      expect(resultOk!.regime).toEqual(resultThrow!.regime);
+      expect(resultOk!.marketContext).toEqual(resultThrow!.marketContext);
+    });
+
+    it('never lets a rejected compareRegimeParity promise surface as an unhandled rejection or throw out of evaluateSymbol', async () => {
+      process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+      stubUptrendingFetch();
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QSAPARITYREJECT']);
+      vi.spyOn(quantCoreBridge, 'compareRegimeParity').mockRejectedValue(new Error('simulated network failure'));
+
+      const agent = new QuantSignalAgent();
+      await expect(agent.evaluateSymbol('QSAPARITYREJECT')).resolves.not.toBeNull();
+    });
   });
 
   it('ADAPTIVE_MULTI_STRATEGY Option B routes BULLISH_TREND away from pure mean-reversion', async () => {

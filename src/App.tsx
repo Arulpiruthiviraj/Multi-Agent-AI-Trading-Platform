@@ -85,6 +85,7 @@ import LiveTradeJourneyOverlay from "./components/LiveTradeJourneyOverlay";
 import AgentComparisonModal from "./components/AgentComparisonModal";
 import GlobalSearch from "./components/GlobalSearch";
 import DocumentationTab from "./components/DocumentationTab";
+import PremarketIntelligence from "./components/PremarketIntelligence";
 import { ExplainerToggle } from "./components/ExplainerToggle";
 import { EnvRuntimeSettingsPanel } from "./components/EnvRuntimeSettingsPanel";
 import { Explainer } from "./components/ContextualTooltip";
@@ -6393,6 +6394,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {activeTab === "premarket" && <PremarketIntelligence />}
 
         {/* --- LEARNING & EVOLUTION DASHBOARD --- */}
         {activeTab === "learning" && (

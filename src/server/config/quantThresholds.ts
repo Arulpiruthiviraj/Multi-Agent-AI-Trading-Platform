@@ -64,6 +64,15 @@ export interface QuantThresholds {
   kronosMaxHistory: number;
   kronosHorizon: number;
   kronosNeutralBandPct: number;
+  /** Floor of KronosInference.ts's spread-to-confidence mapping (never below this). */
+  kronosConfidenceFloor: number;
+  /** Ceiling of KronosInference.ts's spread-to-confidence mapping ("never claim near-certainty from a small model"). */
+  kronosConfidenceCeiling: number;
+  /** Multiplier in confidence = clamp(1 - relativeSpread * M, floor, ceiling). Recalibrated
+   *  2026-09-04 against the real kronos_predictions distribution (3,000-row live sample: p90
+   *  relativeSpread 0.73%, p99 2.24%) after the previous value of 4 was found to saturate the
+   *  ceiling on ~100% of real predictions - see KronosInference.ts's buildPrediction() comment. */
+  kronosConfidenceSpreadMultiplier: number;
   baseSlippagePct: number;
   atrSlippageMultiplier: number;
   sizeImpactMultiplier: number;
@@ -101,6 +110,7 @@ const NUMERIC_KEYS: (keyof QuantThresholds)[] = [
   'lightweightRegimeMinBars', 'lightweightVolatilityHighBandWidthPct', 'lightweightVolatilityLowBandWidthPct',
   'bollingerPeriod', 'rsiMinBars',
   'kronosMinHistory', 'kronosMaxHistory', 'kronosHorizon', 'kronosNeutralBandPct',
+  'kronosConfidenceFloor', 'kronosConfidenceCeiling', 'kronosConfidenceSpreadMultiplier',
   'baseSlippagePct', 'atrSlippageMultiplier', 'sizeImpactMultiplier', 'maxSlippagePct',
   'priceSourceDivergencePct',
   'strategyExplorationCooldownMs', 'strategyExplorationMinIntervalMs',

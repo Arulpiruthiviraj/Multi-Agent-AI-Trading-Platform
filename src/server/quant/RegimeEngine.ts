@@ -27,6 +27,7 @@ import { computePriceActionFeatures, PriceActionFeatures } from './indicators/pr
 
 import { tradingSafety } from '../config/tradingSafety';
 import { quantThresholds } from '../config/quantThresholds';
+import { weekdayInTimezone } from '../replay/marketSession';
 
 export type RegimeLabel = 'BULLISH_TREND' | 'BEARISH_TREND' | 'SIDEWAYS_RANGE';
 export type VolatilityLabel = 'HIGH' | 'LOW' | 'NORMAL';
@@ -181,6 +182,14 @@ export function classifyDeskSession(
   marketStructure: MarketStructureLabel,
   now: Date = new Date(),
 ): NonNullable<RegimeResult['deskSession']> {
+  // Weekend-awareness fix (docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §4): this function
+  // used to derive phase purely from minute-of-day, so a Saturday/Sunday would be misclassified as
+  // an intraday phase (e.g. 'MORNING') as if the market were open. Reuses weekdayInTimezone() —
+  // the same shared weekday helper classifyMarketSession() itself uses — rather than a second
+  // independent weekday reimplementation, matching that module's own reuse convention.
+  const weekday = weekdayInTimezone(now.getTime(), 'America/New_York');
+  const isWeekend = weekday === 'Sat' || weekday === 'Sun';
+
   const ny = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', minute: 'numeric', hour12: false }).formatToParts(now);
   const hour = Number(ny.find(p => p.type === 'hour')?.value ?? NaN);
   const minute = Number(ny.find(p => p.type === 'minute')?.value ?? NaN);
@@ -188,7 +197,7 @@ export function classifyDeskSession(
   const open = tradingSafety.usEquityRthOpenMinute;
   const close = tradingSafety.usEquityRthCloseMinute;
   let phase: NonNullable<RegimeResult['deskSession']>['phase'] = 'UNKNOWN';
-  if (Number.isFinite(minutes)) {
+  if (!isWeekend && Number.isFinite(minutes)) {
     if (minutes < open) phase = 'PREMARKET';
     else if (minutes < open + 30) phase = 'OPEN';
     else if (minutes < open + 150) phase = 'MORNING';
@@ -198,7 +207,9 @@ export function classifyDeskSession(
   }
   return {
     phase,
-    source: 'America/New_York clock vs tradingSafety RTH minutes — not a volume profile.',
+    source: isWeekend
+      ? 'America/New_York clock vs tradingSafety RTH minutes — weekend (no session; not a volume profile).'
+      : 'America/New_York clock vs tradingSafety RTH minutes — not a volume profile.',
     highVolatility: volatility === 'HIGH',
     lowVolatility: volatility === 'LOW',
     meanReversionEnvironment: marketStructure === 'RANGING',

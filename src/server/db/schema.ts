@@ -1425,6 +1425,11 @@ export const tradePlans = sqliteTable('trade_plans', {
   invalidationLevel: real('invalidation_level'),
   targetConcept: text('target_concept'),
   confidence: real('confidence').notNull(),
+  /** Session-Aware Trading Architecture Phase 4 (2026-09-05) - distinct from confidence, see
+   *  TradePlanBuilder.ts's TradePlanDraft.confluenceScore doc comment. */
+  confluenceScore: real('confluence_score'),
+  catalystType: text('catalyst_type'),
+  catalystSourceCount: integer('catalyst_source_count'),
   evidenceQuality: real('evidence_quality').notNull(),
   rankAtCreation: integer('rank_at_creation'),
   componentScoresJson: text('component_scores_json'),
@@ -1458,6 +1463,11 @@ export const candidateRankings = sqliteTable('candidate_rankings', {
   liquidityScore: real('liquidity_score'),
   newsCatalystScore: real('news_catalyst_score'),
   agentConfidenceScore: real('agent_confidence_score'),
+  /** Session-Aware Trading Architecture Phase 3 (2026-09-05): 8th component, sourced from
+   *  quant-core-java's FactorAlphaEngine composite (QuantCoreBridge.fetchInstitutionalFactors())
+   *  - the Java quant engine's one and only path into ranking/discovery scoring. Null when
+   *  unavailable (Java core disabled, or insufficient bar history) - never a fabricated score. */
+  javaQuantScore: real('java_quant_score'),
   /** JSON: { [component]: { available: boolean, reason?: string } } */
   componentAvailability: text('component_availability').notNull(),
   /** JSON: { [component]: number } - the weight actually applied (excluded components carry no weight). */

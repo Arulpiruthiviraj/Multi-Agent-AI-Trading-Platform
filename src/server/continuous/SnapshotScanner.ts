@@ -12,8 +12,8 @@ import { logErrorSafely } from '../core/SecretRedaction';
 import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { normalizeAndValidateSymbols } from '../core/symbolNormalization';
 import { getTradingTimeHHMM, TRADING_TIMEZONE, getTradingDateStr } from '../core/TradingCalendar';
-import { isEtTimeInWindow } from '../services/campaignIntraday';
 import { classifyMarketSession } from '../replay/marketSession';
+import type { ResearchBar } from '../research/ohlcvTypes';
 
 export interface SnapshotScoreInput {
   symbol: string;
@@ -101,14 +101,17 @@ async function fetchJson<T>(url: string, timeoutMs: number): Promise<{ data: T; 
   }
 }
 
-/** Weekday 09:30–16:00 America/New_York (ignores exchange holidays — fail-open for scan cadence). */
+/**
+ * Weekday 09:30-16:00 America/New_York (ignores exchange holidays — fail-open for scan cadence).
+ * Delegates to classifyMarketSession() rather than re-deriving weekday/minute math a second time
+ * (2026-09-05 session-representation consolidation - see
+ * docs/architecture/ARGUS_SESSION_AWARE_TRADING_ARCHITECTURE.md §2.2, representation #6). Behavior
+ * is unchanged: classifyMarketSession's REGULAR branch is the identical [09:30, 16:00) weekday
+ * window this function always used, verified against isEtTimeInWindow's own inclusive-start/
+ * exclusive-end semantics before this refactor.
+ */
 export function isSnapshotScannerRth(now: Date = new Date()): boolean {
-  const weekday = new Intl.DateTimeFormat('en-US', {
-    timeZone: TRADING_TIMEZONE,
-    weekday: 'short',
-  }).format(now);
-  if (weekday === 'Sat' || weekday === 'Sun') return false;
-  return isEtTimeInWindow(getTradingTimeHHMM(now), '09:30', '16:00');
+  return classifyMarketSession(now.getTime(), TRADING_TIMEZONE, false) === 'REGULAR';
 }
 
 /** Minutes since 09:30 ET, clamped to [1, 390]. */
@@ -290,6 +293,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
     // the SAME already-fetched snapshot data - no new network calls. Never affects lastRanked/
     // lastStats/getLastSnapshotScanStats()'s existing contract, and never throws into the caller.
     try {
+      const marketSession = classifyMarketSession(now.getTime(), TRADING_TIMEZONE, true);
       const rankingInputs = scoredInputs.map((input, i) => ({
         symbol: input.symbol,
         last: input.last,
@@ -306,7 +310,52 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
         rawRangeExpansion: scored[i].rangeExpansion,
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
-      const rankedCandidates = await runRankingCycle(rankingInputs, now);
+      const planDate = getTradingDateStr(now);
+      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation } = await import('./TradePlanBuilder');
+
+      let rankedCandidates = await runRankingCycle(rankingInputs, now, new Map(), marketSession);
+
+      // Session-Aware Trading Architecture Phase 3 follow-up (2026-09-05): javaQuantScore's one
+      // live wiring point - ONLY the once-per-trading-day PRE_MARKET plan-building cycle (never
+      // every ~30s RTH tick, which would multiply Java HTTP + bar-fetch cost with no evidence yet
+      // that it's worth that cost - see ComposableRanking.fetchJavaQuantScores' own doc comment).
+      // A second runRankingCycle() call, bounded to the top-N candidates by the SAME deterministic
+      // pre-score already computed above (no Java involvement in which symbols get picked), and
+      // only when the Java core is actually enabled (isQuantJavaCoreEnabled - zero cost otherwise)
+      // and no plan already exists for today (matches the existing "build once per day" gate below).
+      if (marketSession === 'PRE_MARKET') {
+        const existingForJava = await getTradePlansForDate(planDate);
+        if (existingForJava.length === 0) {
+          try {
+            const { isQuantJavaCoreEnabled } = await import('../config/tradingSafety');
+            if (isQuantJavaCoreEnabled()) {
+              const topSymbols = scored.slice(0, continuousIntelligence.javaQuantScoreCandidateLimit).map((r) => r.symbol);
+              if (topSymbols.length > 0) {
+                const { historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway');
+                const { LOOKBACK_DAYS, TIMEFRAME } = await import('../services/JavaQuantAdvisoryService');
+                const endMs = now.getTime();
+                const startMs = endMs - LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+                const javaQuantBarsBySymbol = new Map<string, ResearchBar[]>();
+                await Promise.all(topSymbols.map(async (symbol) => {
+                  try {
+                    await historicalDataGateway.ensureBars(symbol, TIMEFRAME, startMs, endMs);
+                    const bars = await historicalDataGateway.getBars(symbol, TIMEFRAME, startMs, endMs);
+                    if (bars.length > 0) javaQuantBarsBySymbol.set(symbol, bars);
+                  } catch (e) {
+                    logErrorSafely(`[SnapshotScanner] Java quant bar fetch failed for ${symbol} (falls back to javaQuantScore unavailable for this symbol)`, e);
+                  }
+                }));
+                if (javaQuantBarsBySymbol.size > 0) {
+                  rankedCandidates = await runRankingCycle(rankingInputs, now, javaQuantBarsBySymbol, marketSession);
+                }
+              }
+            }
+          } catch (e) {
+            logErrorSafely('[SnapshotScanner] javaQuantScore pre-market wiring failed (falls back to the ranking cycle without it)', e);
+          }
+        }
+      }
+
       // Universal Opportunity Discovery follow-up (2026-09-03): expose the SAME already-computed
       // finalScore this cycle produced to blendedHotSwapScore() via getLastComposableScore() -
       // see that function's own comment for why this closes a real gap (finalScore previously had
@@ -317,9 +366,6 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       // the ranking cycle above - a failure here can never affect the existing scan/rank return
       // value. Never emits TRADE_IDEA_GENERATED, never imports OMS/RiskEngine/the order-placement
       // broker layer - see TradePlanBuilder.ts's own header for the full governance statement.
-      const marketSession = classifyMarketSession(now.getTime(), TRADING_TIMEZONE, true);
-      const planDate = getTradingDateStr(now);
-      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation } = await import('./TradePlanBuilder');
       const inputsBySymbol = new Map(rankingInputs.map((r) => [r.symbol, r]));
       const rankedBySymbol = new Map(rankedCandidates.map((r) => [r.symbol, r]));
 
@@ -339,7 +385,11 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
             rankedBySymbol.get(plan.symbol) ?? null,
             now,
           );
-          await persistRevalidation(plan.id, outcome, now);
+          await persistRevalidation(plan.id, outcome, now, plan.status, {
+            symbol: plan.symbol,
+            direction: plan.direction as 'BUY' | 'SELL',
+            confidence: plan.confidence,
+          });
         }
       }
 

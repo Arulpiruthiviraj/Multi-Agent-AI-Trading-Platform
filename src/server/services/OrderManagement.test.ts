@@ -104,6 +104,7 @@ describe('OrderManagementService.executeOrder', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete process.env.EXTENDED_HOURS_EXECUTION_ENABLED;
   });
 
   it('refuses to place a second order for a traceId that already has one (idempotency)', async () => {
@@ -156,6 +157,59 @@ describe('OrderManagementService.executeOrder', () => {
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'price-trace', undefined, undefined, null, null, null, null, 150);
     expect(tradesInserts[0].price).toBe(150);
     expect(getFinalTradeRow().price).toBe(99);
+  });
+
+  describe('Session-Aware Trading Architecture Phase 5 (2026-09-05): extended-hours order construction', () => {
+    // 2026-01-14 is a Wednesday; EST (no DST) is UTC-5, so 08:00 ET = 13:00 UTC.
+    const PRE_MARKET_UTC = new Date('2026-01-14T13:00:00.000Z');
+
+    it('extended-hours execution disabled (default): sends plain MARKET even during premarket hours - zero behavior change', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(PRE_MARKET_UTC);
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-off', status: 'FILLED', averageFillPrice: 150 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'eh-off-trace', undefined, undefined, null, null, null, null, 150);
+
+      expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'MARKET' }));
+      expect(placeOrder).not.toHaveBeenCalledWith(expect.objectContaining({ extendedHours: true }));
+    });
+
+    it('enabled + premarket + valid intendedPrice: sends a real LIMIT order with extendedHours:true', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(PRE_MARKET_UTC);
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-on', status: 'FILLED', averageFillPrice: 150.25 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'eh-on-trace', undefined, undefined, null, null, null, null, 150.25);
+
+      expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'LIMIT', price: 150.25, extendedHours: true }));
+    });
+
+    it('enabled + premarket but no intendedPrice: falls back to MARKET rather than fabricating a limit price', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(PRE_MARKET_UTC);
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-nopx', status: 'FILLED', averageFillPrice: 150 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'eh-nopx-trace');
+
+      expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'MARKET' }));
+    });
+
+    it('enabled but REGULAR session: sends plain MARKET, unaffected by the flag', async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date('2026-01-14T15:00:00.000Z')); // 10:00 ET, REGULAR session
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      const placeOrder = vi.fn(async () => ({ id: 'order-eh-regular', status: 'FILLED', averageFillPrice: 150 }));
+      mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+
+      await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'eh-regular-trace', undefined, undefined, null, null, null, null, 150);
+
+      expect(placeOrder).toHaveBeenCalledWith(expect.objectContaining({ type: 'MARKET' }));
+    });
   });
 
   it('places a fresh order when no prior trade exists for the traceId, and records the real fill', async () => {

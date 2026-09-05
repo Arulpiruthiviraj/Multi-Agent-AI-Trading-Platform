@@ -382,6 +382,52 @@ class QuantCoreServerTest {
         assertThat(res.statusCode()).isEqualTo(400);
     }
 
+    // RegimeEngine.classifyRegime was real, compiled, and unit-tested (Phase2FeatureParityTest,
+    // byte-for-byte against RegimeEngine.ts) but had zero HTTP endpoint before this pass - the
+    // shadow-only parity route QuantCoreBridge.compareRegimeParity() calls from evaluateSymbol().
+    // These tests prove the new wiring/JSON shape, not the underlying classification math (already
+    // proven at the unit level by Phase2FeatureParityTest).
+
+    @Test
+    void featuresRegimeReturnsTopLevelRegimeFieldsForSufficientBars() throws Exception {
+        Random rnd = new Random(42);
+        double price = 100;
+        List<Object> bars = new ArrayList<>();
+        for (int i = 0; i < 260; i++) {
+            price *= 1 + (rnd.nextGaussian() * 0.01 + 0.001);
+            bars.add(barJson(i, price));
+        }
+        var res = post("/api/v1/features/regime/AAPL", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("symbol")).isEqualTo("AAPL");
+        assertThat(body.get("regime")).isIn("BULLISH_TREND", "BEARISH_TREND", "SIDEWAYS_RANGE");
+        assertThat(body.get("volatility")).isIn("HIGH", "LOW", "NORMAL");
+        assertThat(body.get("marketStructure")).isIn("TRENDING", "RANGING", "CHOPPY");
+        assertThat(Json.asDouble(body.get("confidence"))).isBetween(0.0, 1.0);
+        assertThat(Json.asDouble(body.get("trendStrength"))).isBetween(0.0, 100.0);
+        assertThat(body.get("insufficientData")).isEqualTo(false);
+        // Deliberately NOT asserting on nested trend/volatility/priceAction sub-objects - the route
+        // intentionally serializes top-level fields only (see handleFeaturesRegime's own comment).
+        assertThat(body).doesNotContainKey("features");
+        assertThat(body).doesNotContainKey("trend");
+    }
+
+    @Test
+    void featuresRegimeFlagsInsufficientDataUnderTheMinBarsFloor() throws Exception {
+        List<Object> bars = List.of(barJson(0, 100.0), barJson(1, 101.0), barJson(2, 100.5));
+        var res = post("/api/v1/features/regime/THIN", Map.of("bars", bars));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("insufficientData")).isEqualTo(true);
+    }
+
+    @Test
+    void featuresRegimeRejectsMissingBarsField() throws Exception {
+        var res = post("/api/v1/features/regime/AAPL", Map.of());
+        assertThat(res.statusCode()).isEqualTo(400);
+    }
+
     // CorrelationEngine (wrapping the previously-uncalled EwmaCovariance) had zero HTTP endpoint -
     // proves the new /institutional/correlation wiring, not the underlying math (already covered
     // by CorrelationEngineTest at the unit level).

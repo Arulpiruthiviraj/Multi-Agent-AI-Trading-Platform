@@ -128,6 +128,10 @@ export class InteractiveBrokersWebApiAdapter implements BrokerPlugin {
       shortSelling: false, // not implemented this pass
       streamingMarketData: false,
       requiresManualReauth: true, // browser 2FA login required ~every 24h; see module comment
+      // placeOrder() does not construct an outsideRth-equivalent order field - the real (accidental)
+      // extended-hours completion path this adapter has is via generic IBKR warning auto-confirm,
+      // not a deliberate order-construction capability - see the sessionIsolation test's own note.
+      extendedHoursOrders: false,
     };
   }
 

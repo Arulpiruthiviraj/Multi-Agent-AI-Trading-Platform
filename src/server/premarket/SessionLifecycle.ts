@@ -20,7 +20,8 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { getTradingDateStr, TRADING_TIMEZONE } from '../core/TradingCalendar';
-import { classifyMarketSession, type MarketSession } from '../replay/marketSession';
+import { classifyMarketSession, minutesInTimezone, weekdayInTimezone, type MarketSession } from '../replay/marketSession';
+import { replaySafety } from '../replay/replaySafety';
 
 export type ApplicationSessionState =
   | 'IDLE'
@@ -36,6 +37,28 @@ export interface SessionLifecycleSnapshot {
   appState: ApplicationSessionState;
   tradingDate: string;
   evaluatedAt: string;
+  /** Stable per-trading-day identifier. Deliberately just a deterministic function of tradingDate
+   *  (not a random UUID) - two evaluations on the same trading day must agree on this value. */
+  sessionId: string;
+  /** True whenever extended-hours trading is possible under this classifier's own PRE_MARKET/
+   *  AFTER_HOURS branches - i.e. marketSession is PRE_MARKET or AFTER_HOURS. False for REGULAR
+   *  (extended-hours logic doesn't apply) and for CLOSED (no session of any kind is active). */
+  isExtendedHours: boolean;
+  /** True on any weekday. Deliberately holiday-blind, matching every other session representation
+   *  in this codebase (classifyMarketSession itself has no holiday table) - see
+   *  docs/architecture/ARGUS_SESSION_AWARE_TRADING_ARCHITECTURE.md §2.3 for why. A real
+   *  holiday-aware value would require Alpaca's /v2/clock, which this module may not import
+   *  (RiskEngine.ts owns that call and this directory is architecturally barred from RiskEngine).
+   *  False on Saturday/Sunday only. */
+  isTradingDay: boolean;
+  /** Signed minutes to/since the 09:30 ET regular-session open and 16:00 ET close, from the same
+   *  fixed minute-of-day table classifyMarketSession() itself uses (replaySafety.json) - honestly
+   *  holiday-blind like every field above. Positive minutesToOpen means the open hasn't happened
+   *  yet today; negative means it already has. Same convention for minutesToClose. null on a
+   *  non-trading day (Sat/Sun), since "minutes to an open that isn't happening" has no honest value. */
+  minutesToOpen: number | null;
+  minutesSinceOpen: number | null;
+  minutesToClose: number | null;
 }
 
 /**
@@ -55,12 +78,24 @@ const MARKET_SESSION_TO_APP_STATE: Record<MarketSession, ApplicationSessionState
 
 /** Pure — no timers, no EventBus, safe to unit test directly. */
 export function evaluateSessionLifecycle(now: Date = new Date()): SessionLifecycleSnapshot {
-  const marketSession = classifyMarketSession(now.getTime(), TRADING_TIMEZONE, true);
+  const nowMs = now.getTime();
+  const marketSession = classifyMarketSession(nowMs, TRADING_TIMEZONE, true);
+  const tradingDate = getTradingDateStr(now);
+  const weekday = weekdayInTimezone(nowMs, TRADING_TIMEZONE);
+  const isTradingDay = weekday !== 'Sat' && weekday !== 'Sun';
+  const mins = isTradingDay ? minutesInTimezone(nowMs, TRADING_TIMEZONE) : null;
+
   return {
     marketSession,
     appState: MARKET_SESSION_TO_APP_STATE[marketSession],
-    tradingDate: getTradingDateStr(now),
+    tradingDate,
     evaluatedAt: now.toISOString(),
+    sessionId: `argus-session-${tradingDate}`,
+    isExtendedHours: marketSession === 'PRE_MARKET' || marketSession === 'AFTER_HOURS',
+    isTradingDay,
+    minutesToOpen: mins == null ? null : replaySafety.regularSessionStartMinutes - mins,
+    minutesSinceOpen: mins == null ? null : mins - replaySafety.regularSessionStartMinutes,
+    minutesToClose: mins == null ? null : replaySafety.regularSessionEndMinutes - mins,
   };
 }
 
@@ -150,7 +185,12 @@ class SessionLifecycleManager {
         .limit(1);
       if (rows.length > 0) {
         const row = rows[0];
+        // liveNow's derived fields (sessionId/isExtendedHours/isTradingDay/minutesTo*) reflect
+        // NOW, not the historical persisted evaluatedAt - correct, since a restored snapshot is
+        // about to be revalidated against real conditions on the very next evaluate() anyway (see
+        // this method's own doc comment above).
         this.current = {
+          ...liveNow,
           marketSession: row.marketSession as MarketSession,
           appState: row.appState as ApplicationSessionState,
           tradingDate: row.tradingDate,
@@ -205,3 +245,41 @@ class SessionLifecycleManager {
 }
 
 export const sessionLifecycleWorker = new SessionLifecycleManager();
+
+/**
+ * Read-only refinement of appState using real TradePlan existence/status for the snapshot's own
+ * tradingDate - closes the gap this file's own header flagged: PLAN_BUILDING/PLAN_READY/
+ * OPEN_REVALIDATION were declared in ApplicationSessionState but never assigned by any code path
+ * (see docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §2).
+ *
+ * Deliberately NOT folded into SessionLifecycleManager.evaluate()/`current`: that method's own
+ * transition-detection (`prev.appState !== next.appState`) compares against its OWN prior
+ * deterministic computation, and mutating `current` to a refined value here would make every
+ * subsequent tick's deterministic recomputation look like a spurious transition back to the
+ * unrefined state - a real correctness bug, not a style preference. Instead this is a pure,
+ * additive READ function: call it wherever a caller wants the richer state (the runtime API route
+ * does), while the worker's own event-emission semantics stay exactly as tested above, untouched.
+ *
+ * `getTradePlansForDate` is a plain read-only DB query (no OMS/RiskEngine/BrokerManager/broker
+ * adapter, no placeOrder, no emitTradeIdea) - satisfies premarketArchitectureBoundary.test.ts's
+ * literal checks exactly as SessionLifecycle.ts's existing DB persistence calls already do.
+ * Fails closed to the unrefined snapshot on any error (DB unavailable, import failure, etc.) -
+ * never throws, never blocks a caller that just wants basic session info.
+ */
+export async function getRefinedSnapshot(
+  snapshot: SessionLifecycleSnapshot = sessionLifecycleWorker.getSnapshot(),
+): Promise<SessionLifecycleSnapshot> {
+  if (snapshot.marketSession !== 'PRE_MARKET' && snapshot.marketSession !== 'REGULAR') return snapshot;
+  try {
+    const { getTradePlansForDate } = await import('../continuous/TradePlanBuilder');
+    const plans = await getTradePlansForDate(snapshot.tradingDate);
+    if (snapshot.marketSession === 'PRE_MARKET') {
+      return { ...snapshot, appState: plans.length === 0 ? 'PLAN_BUILDING' : 'PLAN_READY' };
+    }
+    const stillRevalidating = plans.some((p) => p.status === 'READY' || p.status === 'VALID' || p.status === 'REVALIDATING');
+    return stillRevalidating ? { ...snapshot, appState: 'OPEN_REVALIDATION' } : snapshot;
+  } catch (e) {
+    console.error('[SessionLifecycle] getRefinedSnapshot() failed - returning unrefined snapshot', e);
+    return snapshot;
+  }
+}

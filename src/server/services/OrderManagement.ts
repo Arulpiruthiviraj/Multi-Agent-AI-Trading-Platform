@@ -60,6 +60,10 @@ import { insertIncrementalFill } from './fillLedger';
 import { resolvePreTradeEntryPrice } from './omsEntryPrice';
 import { syncLocalPortfolioAfterSellFill, syncLocalPortfolioAfterBuyFill } from './localPortfolioSync';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { isExtendedHoursExecutionEnabled } from '../config/tradingSafety';
+import { resolveOrderConstruction } from '../risk/ExtendedHoursExecutionPolicy';
+import { classifyMarketSession } from '../replay/marketSession';
+import { TRADING_TIMEZONE } from '../core/TradingCalendar';
 
 function getActiveReplaySessionSafe(): { replayId: string } | null {
   try {
@@ -387,12 +391,29 @@ export class OrderManagementService {
       // itself deduplicates on - so a timeout-triggered retry inside placeOrder() can never create
       // a second real order for this same local row, even if the first attempt actually reached
       // Alpaca and only the response was lost.
+      // Session-Aware Trading Architecture Phase 5 (2026-09-05). Off by default and a no-op for
+      // replay (HistoricalReplayBroker has its own, entirely separate fill-simulation semantics -
+      // see HistoricalReplayBroker.ts's own header). resolveOrderConstruction() returns exactly
+      // {type:'MARKET'} whenever the flag is disabled, the session is REGULAR, or no valid
+      // intendedPrice is available - byte-for-byte the same order this call has always sent.
+      // RiskEngine's own gate 25 (extended_hours_execution_policy) has already independently
+      // evaluated the same session+flag+broker-capability+quote-freshness+spread+notional
+      // checks before this order was ever approved - this is not the primary safeguard.
+      const orderConstruction = replayActive
+        ? ({ type: 'MARKET' } as const)
+        : resolveOrderConstruction(
+            classifyMarketSession(Date.now(), TRADING_TIMEZONE, true),
+            intendedPrice,
+            isExtendedHoursExecutionEnabled(),
+          );
       const brokerOrder = await activeBroker.placeOrder({
           symbol,
           side: side as 'BUY' | 'SELL',
-          type: 'MARKET',
           quantity,
           clientOrderId: orderId,
+          ...(orderConstruction.type === 'LIMIT'
+            ? { type: 'LIMIT', price: orderConstruction.price, extendedHours: true }
+            : { type: 'MARKET' }),
       });
 
       brokerOrderId = brokerOrder.id ?? null;

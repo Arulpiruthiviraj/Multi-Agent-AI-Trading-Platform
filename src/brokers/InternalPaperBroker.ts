@@ -56,6 +56,7 @@ export class InternalPaperBroker implements BrokerPlugin {
       shortSelling: false, // tick() comment: "we assume long only for simplicity"
       streamingMarketData: false,
       requiresManualReauth: false,
+      extendedHoursOrders: false, // pure in-memory simulator, no order-type construction of any kind
     };
   }
   async health() { return "Healthy"; }

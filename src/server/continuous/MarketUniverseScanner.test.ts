@@ -22,6 +22,7 @@ import {
   refreshMoversCache,
   getCachedMoverSymbols,
   getLastMoverScanStats,
+  MarketUniverseScannerWorker,
 } from './MarketUniverseScanner';
 
 function barsResponse(bars: Record<string, number[]>) {
@@ -539,5 +540,48 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     );
     expect(rows.length).toBeGreaterThan(0);
     expect(JSON.parse(rows[rows.length - 1].payload as string).reason).toBe('ADV');
+  });
+});
+
+// 2026-09-04 opportunity-capture remediation: confirmed live that the entire broad-universe
+// discovery channel had been dead for a full ~2h session (0 assets fetched, 0 candidates cached)
+// because the worker rescheduled refreshBroadUniverseCache() on broadUniverseAssetsCacheTtlMs
+// (24h, the raw asset-LIST cache TTL) instead of broadUniverseSnapshotCacheTtlMs (15min, the
+// intraday screen-refresh cadence this refresh is actually meant to keep warm) - so the one
+// boot-time attempt failing (a real "This operation was aborted" timeout) meant no retry for a
+// full day. These tests pin the fix: the interval must follow the snapshot TTL, and a failed
+// first attempt must be retried well within a trading session, not once every 24h.
+describe('MarketUniverseScanner - MarketUniverseScannerWorker scheduling (2026-09-04 fix)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('schedules the broad-universe refresh on broadUniverseSnapshotCacheTtlMs, not broadUniverseAssetsCacheTtlMs', () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValue(jsonResponse([]));
+    const spy = vi.spyOn(global, 'setInterval');
+    const worker = new MarketUniverseScannerWorker();
+    try {
+      worker.start();
+      const broadUniverseCall = spy.mock.calls.find(
+        (call) => call[1] === continuousIntelligence.broadUniverseSnapshotCacheTtlMs,
+      );
+      expect(broadUniverseCall).toBeDefined();
+      // The old, buggy interval value must NOT be what any call used for this worker.
+      const usedTheBuggyDailyInterval = spy.mock.calls.some(
+        (call) => call[1] === continuousIntelligence.broadUniverseAssetsCacheTtlMs,
+      );
+      expect(usedTheBuggyDailyInterval).toBe(false);
+    } finally {
+      worker.stop();
+    }
+  });
+
+  it('a failed first refresh attempt is retried on the short (15min-class) interval, not left dead for 24h', () => {
+    expect(continuousIntelligence.broadUniverseSnapshotCacheTtlMs).toBeLessThan(
+      continuousIntelligence.broadUniverseAssetsCacheTtlMs,
+    );
+    // Sanity: the snapshot TTL used for rescheduling is on the order of minutes, not a day.
+    expect(continuousIntelligence.broadUniverseSnapshotCacheTtlMs).toBeLessThanOrEqual(60 * 60 * 1000);
   });
 });

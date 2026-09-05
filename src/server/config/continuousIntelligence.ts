@@ -117,6 +117,14 @@ export interface ContinuousIntelligenceConfig {
   championChallengerMinImprovementMargin: number;
   /** Phase 7E: a calibration bucket's newest real observation older than this is flagged stale (observability only, not auto-enforced). */
   calibrationMaxObservationAgeMs: number;
+  /** Session-Aware Trading Architecture Phase 2 follow-up (2026-09-05): ComposableRanking's
+   *  promote/reject bar, selected by real MarketSession instead of one hardcoded pair. Values are
+   *  identical across sessions by default - see the JSON file's own comment for why. */
+  rankingThresholdsBySession: Record<'PRE_MARKET' | 'REGULAR' | 'AFTER_HOURS', { promote: number; reject: number }>;
+  /** Session-Aware Trading Architecture Phase 3 follow-up (2026-09-05): how many top-momentum
+   *  candidates may receive a real javaQuantScore (Java quant engine bar-fetch + HTTP call) during
+   *  the once-per-day PRE_MARKET plan-building cycle. Never applied to the ~30s RTH ranking loop. */
+  javaQuantScoreCandidateLimit: number;
   honesty: string;
 }
 
@@ -149,6 +157,34 @@ function requireNonNegativeNumber(raw: unknown, label: string): number {
     throw new Error(`config/continuousIntelligence.json ${label} must be a finite number >= 0`);
   }
   return raw;
+}
+
+const RANKING_THRESHOLD_SESSIONS = ['PRE_MARKET', 'REGULAR', 'AFTER_HOURS'] as const;
+
+function requireRankingThresholdsBySession(raw: unknown, label: string): ContinuousIntelligenceConfig['rankingThresholdsBySession'] {
+  if (typeof raw !== 'object' || raw === null) {
+    throw new Error(`config/continuousIntelligence.json ${label} must be an object keyed by MarketSession`);
+  }
+  const obj = raw as Record<string, unknown>;
+  const result = {} as ContinuousIntelligenceConfig['rankingThresholdsBySession'];
+  for (const session of RANKING_THRESHOLD_SESSIONS) {
+    const entry = obj[session];
+    if (typeof entry !== 'object' || entry === null) {
+      throw new Error(`config/continuousIntelligence.json ${label}.${session} must be an object with promote/reject`);
+    }
+    const { promote, reject } = entry as Record<string, unknown>;
+    if (typeof promote !== 'number' || !Number.isFinite(promote) || promote < 0 || promote > 1) {
+      throw new Error(`config/continuousIntelligence.json ${label}.${session}.promote must be a finite number in [0,1]`);
+    }
+    if (typeof reject !== 'number' || !Number.isFinite(reject) || reject < 0 || reject > 1) {
+      throw new Error(`config/continuousIntelligence.json ${label}.${session}.reject must be a finite number in [0,1]`);
+    }
+    if (reject >= promote) {
+      throw new Error(`config/continuousIntelligence.json ${label}.${session}.reject must be < .promote`);
+    }
+    result[session] = { promote, reject };
+  }
+  return result;
 }
 
 function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
@@ -233,6 +269,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     championChallengerMinSampleSize: requireNumber(raw.championChallengerMinSampleSize, 'championChallengerMinSampleSize'),
     championChallengerMinImprovementMargin: requireNonNegativeNumber(raw.championChallengerMinImprovementMargin, 'championChallengerMinImprovementMargin'),
     calibrationMaxObservationAgeMs: requireNumber(raw.calibrationMaxObservationAgeMs, 'calibrationMaxObservationAgeMs'),
+    rankingThresholdsBySession: requireRankingThresholdsBySession(raw.rankingThresholdsBySession, 'rankingThresholdsBySession'),
+    javaQuantScoreCandidateLimit: requireNumber(raw.javaQuantScoreCandidateLimit, 'javaQuantScoreCandidateLimit'),
     honesty: raw.honesty,
   };
   if (cfg.coreStreamingSymbols.length > cfg.maxActiveSubscriptions) {

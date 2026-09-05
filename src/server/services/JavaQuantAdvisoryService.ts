@@ -37,7 +37,9 @@ import type { ResearchBar } from '../research/ohlcvTypes';
 // already does turning RSI/MACD into a confidence. 2.0 is a reasoned scale (most composite values
 // observed in practice fall within +-2), not a backtested constant - same honesty discipline as
 // RegimeVolatilityOverlay's own declared assumptions.
-const FACTOR_CONFIDENCE_SCALE = 2.0;
+// Exported for ComposableRanking.ts's javaQuantScore component (2026-09-05) - same reasoned scale,
+// reused rather than a second hardcoded 2.0 literal for the same underlying quantity.
+export const FACTOR_CONFIDENCE_SCALE = 2.0;
 const MIN_FACTOR_CONFIDENCE = 0.05;
 const MAX_FACTOR_CONFIDENCE = 0.95;
 
@@ -51,9 +53,12 @@ function factorCompositeToVote(composite: number): EnsembleModelVote | null {
 // Real floor GarchEngine/HmmRegimeEngine themselves enforce (30 returns / 40 observations) plus
 // margin - matches this codebase's convention of deriving gate values from the same math the
 // callee uses rather than an arbitrary round number. See GarchEngine.fit()/HmmRegimeEngine.fit().
-const MIN_BARS_FOR_ANALYSIS = 60;
-const LOOKBACK_DAYS = 260;
-const TIMEFRAME = '1Day';
+// Exported for reuse by ChiefTraderAgent.ts's debate-context fetch (same institutional-analysis
+// inputs, on-demand for one symbol instead of this service's own round-robin timer) - one source
+// of truth for the bar window rather than a second, possibly-drifting copy of these numbers.
+export const MIN_BARS_FOR_ANALYSIS = 60;
+export const LOOKBACK_DAYS = 260;
+export const TIMEFRAME = '1Day';
 
 class JavaQuantAdvisoryService {
   private intervalId: ReturnType<typeof setInterval> | null = null;

@@ -63,6 +63,14 @@ import { recordConsensusModelComparison } from './ConsensusModelComparison';
 import { evaluateModerateTierEligibility, type ModerateTierEligibility } from '../continuous/ModerateTierEvaluator';
 import { isConsensusModerateTierEnabled } from '../config/tradingSafety';
 import { classifyConsensusTerminalReason, type ConsensusTerminalReasonCode } from '../core/consensusTerminalReason';
+import { isQuantJavaCoreEnabled } from '../config/tradingSafety';
+import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
+import { quantCoreBridge } from './QuantCoreBridge';
+import {
+  MIN_BARS_FOR_ANALYSIS as JAVA_ADVISORY_MIN_BARS,
+  LOOKBACK_DAYS as JAVA_ADVISORY_LOOKBACK_DAYS,
+  TIMEFRAME as JAVA_ADVISORY_TIMEFRAME,
+} from './JavaQuantAdvisoryService';
 
 export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
 /** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
@@ -81,6 +89,70 @@ async function loadDebateLearnedRulesText(): Promise<string> {
     return `\nRecent learned rules (text only; they do not override RiskEngine):\n${lines.join('\n')}`;
   } catch (e) {
     console.warn('[ChiefTrader] Failed to load learned_rules for debate prompt', e);
+    return '';
+  }
+}
+
+/**
+ * Java institutional-layer analysis (GARCH volatility, HMM regime, 5-factor composite) folded
+ * into the debate prompt as text-only context - same pattern and same safety contract as
+ * loadDebateLearnedRulesText() above. Explicitly the sanctioned use QuantCoreBridge.ts's own
+ * fetchInstitutionalVolatility() doc comment describes: "may be used as reasoning/context...
+ * but must never treat them as an independent vote - only ChiefTraderAgent mints those, from
+ * emitTradeIdea." This function does exactly that and nothing more:
+ *
+ * - Does NOT call eventBus.emitTradeIdea, does NOT count toward MIN_INDEPENDENT_AGREEING_AGENTS,
+ *   does NOT touch consensus/confidence math, does NOT record a prediction (JavaQuantAdvisoryService's
+ *   own periodic loop already owns that bookkeeping for whichever symbol its round-robin cursor
+ *   lands on - this on-demand call must not create a second, competing prediction row).
+ * - Off entirely unless isQuantJavaCoreEnabled() (the same base flag every other Java consumer in
+ *   this codebase gates on) - zero bars fetch, zero HTTP calls when disabled, matching this
+ *   file's existing convention (learnedRulesText/researchBlock) of adding no latency when unused.
+ * - Fails closed on every dependency (historicalDataGateway, the three Java HTTP calls): any
+ *   failure, missing data, or all-null result returns '' silently - the debate proceeds exactly
+ *   as it would have before this function existed. Never throws.
+ * - This is the explicit "Phase 3 of the activation plan" gap docs/audits/ARGUS_POST_MIGRATION_ARCHITECTURE_AUDIT.md
+ *   and config/engineOwnership.json flagged as recommended-but-not-done ("wire into ChiefTrader
+ *   reasoning context, advisory-only") - deliberately NOT the stricter, still-unmet
+ *   docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 3 (a real emitTradeIdea vote,
+ *   gated on a multi-week clean divergence soak that has not run for this layer).
+ */
+export async function loadJavaInstitutionalDebateContext(symbol: string): Promise<string> {
+  if (!isQuantJavaCoreEnabled()) return '';
+  try {
+    const endMs = Date.now();
+    const startMs = endMs - JAVA_ADVISORY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+    await historicalDataGateway.ensureBars(symbol, JAVA_ADVISORY_TIMEFRAME, startMs, endMs);
+    const bars = await historicalDataGateway.getBars(symbol, JAVA_ADVISORY_TIMEFRAME, startMs, endMs);
+    if (bars.length < JAVA_ADVISORY_MIN_BARS) return '';
+
+    const [garch, regime, factor] = await Promise.all([
+      quantCoreBridge.fetchInstitutionalVolatility(symbol, bars),
+      quantCoreBridge.fetchInstitutionalRegime(symbol, bars),
+      quantCoreBridge.fetchInstitutionalFactors(symbol, bars),
+    ]);
+    if (garch === null && regime === null && factor === null) return '';
+
+    const lines: string[] = [];
+    if (factor !== null) {
+      lines.push(
+        `Factor composite ${factor.composite.toFixed(3)} (momentum ${factor.momentum.toFixed(2)}, ` +
+        `mean-reversion ${factor.meanReversion.toFixed(2)}, volume/liquidity ${factor.volumeLiquidity.toFixed(2)}, ` +
+        `volatility ${factor.volatility.toFixed(2)}, order-flow proxy [OHLC-derived, not L2] ${factor.orderFlowProxy.toFixed(2)})`,
+      );
+    }
+    if (regime !== null) {
+      lines.push(`Regime: ${regime.currentRegime} (HMM log-likelihood ${regime.logLikelihood.toFixed(1)}, ${regime.observationCount} observations)`);
+    }
+    if (garch !== null) {
+      lines.push(
+        `GARCH(1,1): realized volatility ${(garch.realizedVolatility * 100).toFixed(2)}% ` +
+        `(${garch.realizedVolPercentile.toFixed(0)}th percentile${garch.volatilityCompressed ? ', compressed' : ''}${garch.volatilityExpanded ? ', expanded' : ''})`,
+      );
+    }
+    return `\nJava institutional analysis (deterministic math, context only - does not vote or override RiskEngine):\n${lines.join('\n')}`;
+  } catch (e) {
+    console.warn('[ChiefTrader] Failed to load Java institutional context for debate prompt', e);
     return '';
   }
 }
@@ -405,6 +477,7 @@ export class ChiefTraderAgent {
         this.lastDebateStartedAt.set(idea.symbol, Date.now());
 
         const learnedRulesText = await loadDebateLearnedRulesText();
+        const javaInstitutionalContext = await loadJavaInstitutionalDebateContext(idea.symbol);
         let researchBlock = '';
         if (isBullBearResearchEnabled()) {
           try {
@@ -434,7 +507,7 @@ export class ChiefTraderAgent {
           }
         }
 
-        const debatePrompt = `Analyze this trading idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}.${learnedRulesText}${researchBlock} Actively search for reasons NOT to trade. If the setup is poor, verdict must be HOLD.`;
+        const debatePrompt = `Analyze this trading idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}.${learnedRulesText}${javaInstitutionalContext}${researchBlock} Actively search for reasons NOT to trade. If the setup is poor, verdict must be HOLD.`;
 
         AIRouter.getInstance().routeConsensus("ConsensusDebate", debatePrompt, idea.traceId).then(debateResult => {
            const attempted = Array.isArray(debateResult?.results) ? debateResult.results.length : 0;

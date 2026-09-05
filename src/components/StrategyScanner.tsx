@@ -213,7 +213,7 @@ export default function StrategyScanner({ selectedAlertSymbol, setSelectedAlertS
                       <td className="py-1 pr-3">{row.symbol}</td>
                       <td className="py-1 pr-3">{row.assetClass}</td>
                       <td className={`py-1 pr-3 ${row.safety === 'BLOCK' ? 'text-rose-400' : row.safety === 'WATCH' ? 'text-amber-400' : 'text-emerald-400'}`}>{row.safety}</td>
-                      <td className="py-1">{row.eligibleForTradeIdea ? 'YES (still needs ChiefTrader + 24 gates)' : 'NO — not an order'}</td>
+                      <td className="py-1">{row.eligibleForTradeIdea ? 'YES (still needs ChiefTrader + 25 gates)' : 'NO — not an order'}</td>
                     </tr>
                   ))}
                 </tbody>

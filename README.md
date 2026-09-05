@@ -23,12 +23,12 @@ That metaphor maps to the protected spine — it does **not** mean unlimited vis
 | Philosophy | In Argus |
 |---|---|
 | Many eyes | Specialized agents/engines (Technical, Quant, News/Catalyst, Fundamental, Macro **where those actually vote**; unused UI names are not live voters) |
-| Continuous vigilance | Market data, 24-gate RiskEngine, reconciliation, process/health monitoring |
+| Continuous vigilance | Market data, 25-gate RiskEngine, reconciliation, process/health monitoring |
 | Observe before acting | Discovery → ChiefTrader consensus → RiskEngine → PositionSizing → OMS → broker |
 | Guarded execution | Consensus bar + min independent agents, OMS sole production `placeOrder`, kill switch, recon |
 | Learning through observation | Historical Evaluation is evidence/diagnosis — **not** LIVE proof, **not** organic paper, **not** autonomous RiskEngine rewrite. `ReflectionEngine` updates weights/debate prompt only |
 
-**Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 24-gate RiskEngine, AI routing, decision traces, soak floors, defects). Architecture checklist: [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md). Name philosophy lives here; do not copy the full block into every other markdown file.
+**Agents / operators:** root [`CLAUDE.md`](CLAUDE.md) is the single operational master spec (live path, 25-gate RiskEngine, AI routing, decision traces, soak floors, defects). Architecture checklist: [`ARGUS_ARCHITECTURE_INVARIANTS.md`](ARGUS_ARCHITECTURE_INVARIANTS.md). Name philosophy lives here; do not copy the full block into every other markdown file.
 
 Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_ENABLED`), from a curated seed/watch list plus, when `ARGUS_BROAD_UNIVERSE_ENABLED=true`, a real liquidity/price/spread-screened Alpaca tradable-assets funnel (`MarketUniverseScanner.ts`), and, when `ARGUS_MARKET_MOVERS_ENABLED=true`, a real Alpaca top-gainers/losers screener run through the same liquidity/ADV screen — both still bounded/capped, still never a second order path. A bounded temporary-data-rescue mechanism (`MarketDataWorker.requestTemporaryDataRescue`, capped at `maxConcurrentTemporaryDataRescues`) lets a starved-but-qualifying candidate borrow a data slot; it reserves capacity fairly across routine-recovery vs. exploration/mover requests but never implies trade eligibility or bypasses any gate — see `docs/ARGUS_OPPORTUNITY_DISCOVERY.md`. Optional cheap screener ideas (`ARGUS_OPPORTUNITY_IDEAS_ENABLED`) are **one vote**, still require ChiefTrader min-2 + RiskEngine + OMS. No discovery flag arms LIVE. Do not enable flags merely to produce trades. Optional Daily Goal Campaign: [`ARGUS_CAMPAIGN_TRACKER.md`](ARGUS_CAMPAIGN_TRACKER.md) (flag-gated; does not lower consensus).
 
@@ -54,7 +54,7 @@ Opportunity discovery is **subscribe/rank** by default (`ARGUS_OPPORTUNITY_LOOP_
 │ ARGUS — SOLE EXECUTION AUTHORITY                                           │
 │  MarketData / Idea Agents ──► TRADE_IDEA_GENERATED                         │
 │  ChiefTrader (consensus)  ──► CHIEF_APPROVED_IDEA                          │
-│  RiskEngine (24 gates)    ──► RISK_ASSESSMENT_COMPLETED                    │
+│  RiskEngine (25 gates)    ──► RISK_ASSESSMENT_COMPLETED                    │
 │  OMS ──► BrokerManager.placeOrder() ──► trades / fills                     │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -112,7 +112,7 @@ All trading continues through the one protected decision path, unchanged by this
 
 ```
 Market Data → Idea agents (incl. Java-backed Quant signals where wired) → ChiefTraderAgent
-  → RiskAgent → RiskEngine (24 gates) → OrderManagementService → BrokerManager → Broker
+  → RiskAgent → RiskEngine (25 gates) → OrderManagementService → BrokerManager → Broker
 ```
 
 This policy does **not** require migrating the React UI, Express/API layer, CLI, persistence, or

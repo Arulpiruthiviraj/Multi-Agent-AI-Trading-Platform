@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach, beforeAll, afterAll } 
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { evaluateSessionLifecycle, sessionLifecycleWorker } from './SessionLifecycle';
+import { evaluateSessionLifecycle, sessionLifecycleWorker, getRefinedSnapshot } from './SessionLifecycle';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 
@@ -47,6 +47,41 @@ describe('evaluateSessionLifecycle (pure, boot-classification)', () => {
     const snap = evaluateSessionLifecycle(etOnSaturday(10, 0));
     expect(snap.marketSession).toBe('CLOSED');
     expect(snap.appState).toBe('IDLE');
+  });
+});
+
+describe('evaluateSessionLifecycle — SessionContext fields', () => {
+  it('PRE_MARKET: isExtendedHours true, isTradingDay true, minutesToOpen positive, minutesSinceOpen negative', () => {
+    const snap = evaluateSessionLifecycle(etOnWednesday(8, 0)); // 08:00 ET, open is 09:30 -> 90 min to open
+    expect(snap.isExtendedHours).toBe(true);
+    expect(snap.isTradingDay).toBe(true);
+    expect(snap.minutesToOpen).toBe(90);
+    expect(snap.minutesSinceOpen).toBe(-90);
+    expect(snap.minutesToClose).toBe(480); // 16:00 - 08:00 = 480
+    expect(snap.sessionId).toBe('argus-session-2026-08-26');
+  });
+
+  it('REGULAR: isExtendedHours false, minutesSinceOpen positive', () => {
+    const snap = evaluateSessionLifecycle(etOnWednesday(10, 15)); // 45 min after 09:30 open
+    expect(snap.isExtendedHours).toBe(false);
+    expect(snap.isTradingDay).toBe(true);
+    expect(snap.minutesSinceOpen).toBe(45);
+    expect(snap.minutesToOpen).toBe(-45);
+  });
+
+  it('weekend: isTradingDay false, all minute fields null', () => {
+    const snap = evaluateSessionLifecycle(etOnSaturday(10, 0));
+    expect(snap.isTradingDay).toBe(false);
+    expect(snap.isExtendedHours).toBe(false);
+    expect(snap.minutesToOpen).toBeNull();
+    expect(snap.minutesSinceOpen).toBeNull();
+    expect(snap.minutesToClose).toBeNull();
+  });
+
+  it('sessionId is stable across multiple evaluations on the same trading day', () => {
+    const a = evaluateSessionLifecycle(etOnWednesday(8, 0));
+    const b = evaluateSessionLifecycle(etOnWednesday(14, 0));
+    expect(a.sessionId).toBe(b.sessionId);
   });
 });
 
@@ -128,6 +163,79 @@ describe('sessionLifecycleWorker (stateful, event-emitting)', () => {
   it('getSnapshot() reflects the most recent evaluate() call', () => {
     sessionLifecycleWorker.evaluate(etOnWednesday(10, 0));
     expect(sessionLifecycleWorker.getSnapshot()).toMatchObject({ marketSession: 'REGULAR', appState: 'INTRADAY' });
+  });
+
+  describe('getRefinedSnapshot — real TradePlan-aware appState refinement', () => {
+    beforeEach(async () => {
+      await db.delete(schema.tradePlans);
+    });
+    afterEach(async () => {
+      await db.delete(schema.tradePlans);
+    });
+
+    function baseTradePlanRow(overrides: Partial<typeof schema.tradePlans.$inferInsert> = {}) {
+      return {
+        id: `plan-${Math.random()}`,
+        symbol: 'AAPL',
+        planDate: '2026-08-26',
+        setupType: 'PRIMARY',
+        direction: 'BUY',
+        thesis: 'test thesis',
+        catalysts: JSON.stringify([]),
+        entryZoneLow: 100, entryZoneHigh: 101,
+        invalidationLevel: 98,
+        targetConcept: 'test target',
+        confidence: 0.8, evidenceQuality: 1,
+        rankAtCreation: 1,
+        componentScoresJson: '{}',
+        status: 'READY',
+        createdAt: new Date().toISOString(),
+        validUntil: '2026-08-26T20:00:00.000Z',
+        ...overrides,
+      };
+    }
+
+    it('PRE_MARKET with no existing plans -> PLAN_BUILDING', async () => {
+      const snap = evaluateSessionLifecycle(etOnWednesday(8, 0));
+      const refined = await getRefinedSnapshot(snap);
+      expect(refined.appState).toBe('PLAN_BUILDING');
+      expect(refined.marketSession).toBe('PRE_MARKET'); // unrefined fields pass through unchanged
+    });
+
+    it('PRE_MARKET with existing plans -> PLAN_READY', async () => {
+      await db.insert(schema.tradePlans).values(baseTradePlanRow());
+      const snap = evaluateSessionLifecycle(etOnWednesday(8, 0));
+      const refined = await getRefinedSnapshot(snap);
+      expect(refined.appState).toBe('PLAN_READY');
+    });
+
+    it('REGULAR with a plan still READY/VALID/REVALIDATING -> OPEN_REVALIDATION', async () => {
+      await db.insert(schema.tradePlans).values(baseTradePlanRow({ status: 'VALID' }));
+      const snap = evaluateSessionLifecycle(etOnWednesday(10, 0));
+      const refined = await getRefinedSnapshot(snap);
+      expect(refined.appState).toBe('OPEN_REVALIDATION');
+    });
+
+    it('REGULAR with only terminal-status plans -> unrefined (INTRADAY)', async () => {
+      await db.insert(schema.tradePlans).values(baseTradePlanRow({ status: 'INVALIDATED' }));
+      const snap = evaluateSessionLifecycle(etOnWednesday(10, 0));
+      const refined = await getRefinedSnapshot(snap);
+      expect(refined.appState).toBe('INTRADAY');
+    });
+
+    it('CLOSED/AFTER_HOURS pass through unrefined regardless of plan state', async () => {
+      await db.insert(schema.tradePlans).values(baseTradePlanRow());
+      const snap = evaluateSessionLifecycle(etOnWednesday(2, 0)); // CLOSED
+      const refined = await getRefinedSnapshot(snap);
+      expect(refined.appState).toBe('IDLE');
+    });
+
+    it('never mutates sessionLifecycleWorker\'s own current/event-emission state', async () => {
+      sessionLifecycleWorker.evaluate(etOnWednesday(8, 0));
+      const before = sessionLifecycleWorker.getSnapshot();
+      await getRefinedSnapshot(before);
+      expect(sessionLifecycleWorker.getSnapshot()).toEqual(before); // untouched by the refinement call
+    });
   });
 
   describe('Phase 4J: persistence across restart', () => {

@@ -92,6 +92,7 @@ export class AlpacaBroker implements BrokerPlugin {
       shortSelling: false, // placeOrder doesn't send a short-specific side/flag
       streamingMarketData: false, // real-time ticks come from MarketDataWorker's own WS, not this class
       requiresManualReauth: false, // pure API key/secret auth, no recurring human step
+      extendedHoursOrders: true, // placeOrder() sends extended_hours:true for a LIMIT+day order when Order.extendedHours is set
     };
   }
   async health() { return "Healthy"; }
@@ -324,6 +325,15 @@ export class AlpacaBroker implements BrokerPlugin {
     };
     if (payload.type === 'limit') payload.limit_price = orderData.price;
     if (payload.type === 'stop') payload.stop_price = orderData.stopPrice;
+    // Extended-Hours Execution Policy (2026-09-05). Alpaca's real API only honors extended_hours
+    // on a LIMIT + day order - never set it for MARKET (Alpaca would reject the combination, and a
+    // blind market order outside RTH is exactly what this whole policy exists to prevent). Silently
+    // ignoring the flag on a market order (rather than sending a doomed request) matches this
+    // adapter's existing "additive field a caller may not need" convention for every other optional
+    // Order field above.
+    if (orderData.extendedHours && payload.type === 'limit') {
+      payload.extended_hours = true;
+    }
     // Phase 1 - when the caller supplies a real idempotency key, pass it through as Alpaca's own
     // `client_order_id` and mark this specific POST safe to retry on timeout/network error: Alpaca
     // deduplicates real order submissions on this field, so a retried submission with the SAME key

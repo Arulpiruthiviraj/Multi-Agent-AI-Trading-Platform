@@ -39,8 +39,16 @@
   "minDynamicDwellMs": 60000,
   "minDynamicDwellTicks": 10,
   "temporaryDataRescueMaxDurationMs": 300000,
-  "maxConcurrentTemporaryDataRescues": 3,
-  "rescueReservedSlotsForPriorityClasses": 1,
+  "maxConcurrentTemporaryDataRescues": 6,
+  "rescueReservedSlotsForPriorityClasses": 2,
+  "_rankingThresholdsBySessionComment": "Session-Aware Trading Architecture Phase 2 follow-up (2026-09-05, docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md's revised Phase 2 scope): ComposableRanking.runRankingCycle() now selects promote/reject thresholds by real MarketSession instead of one hardcoded pair for every session. Values are IDENTICAL across all three sessions by default - this only wires the session-parameterization mechanism the gap analysis called for, it does not itself assert that premarket should have a different (e.g. stricter, for thinner liquidity) bar than RTH, which would be a real tuning claim with no evidence behind it yet. An operator can differentiate these later once real premarket promote/reject outcomes exist to justify it.",
+  "rankingThresholdsBySession": {
+    "PRE_MARKET": { "promote": 0.65, "reject": 0.25 },
+    "REGULAR": { "promote": 0.65, "reject": 0.25 },
+    "AFTER_HOURS": { "promote": 0.65, "reject": 0.25 }
+  },
+  "_javaQuantScoreCandidateLimitComment": "Session-Aware Trading Architecture Phase 3 follow-up (2026-09-05): javaQuantScore (ComposableRanking.ts) is now actually wired to a live caller - SnapshotScanner's once-per-trading-day PRE_MARKET plan-building cycle only (never the ~30s RTH ranking loop, which would multiply Java HTTP + bar-fetch cost by every cycle for no evidence-backed benefit yet). Bounded to this many top-momentum candidates (by the SAME deterministic pre-score already computed, before Java is ever called) - matches DEFAULT_TRADE_PLAN_THRESHOLDS' total tier capacity (primaryCount 3 + backupCount 5 + watchlistCount 15 = 23) rounded down, since a symbol outside that range cannot receive a TradePlan tier anyway. Zero cost when QUANT_JAVA_CORE_ENABLED is off (isQuantJavaCoreEnabled() gate checked first).",
+  "javaQuantScoreCandidateLimit": 20,
   "momentumScanUniverseSymbols": [
     "SPY", "QQQ", "IWM", "DIA", "GLD", "SMH", "XLF", "XLE", "XLK", "SOXL", "TQQQ", "SQQQ",
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA", "AVGO", "BRK.B",

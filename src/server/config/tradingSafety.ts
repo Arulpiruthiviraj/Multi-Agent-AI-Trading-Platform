@@ -228,6 +228,13 @@ export interface TradingSafety {
   /** Fallback order-notional cap when settings.maxTradeSize is unset. Not paper cash. */
   defaultMaxTradeSizeDollars: number;
   minSampleSizeForTrust: number;
+  /** Floor between two calibration-insight learned_rules for the SAME underlying agent
+   *  (ReflectionEngine.generateCalibrationInsightRules) - reflectionEngineMs (60s) runs far more
+   *  often than a real evidence-eligibility change, so without this an agent stuck below chance
+   *  would regenerate a near-identical rule every cycle and crowd out genuinely new post-loss
+   *  rules in loadDebateLearnedRulesText()'s "5 most recent" window. Default 24h: daily is often
+   *  enough to reflect a real evidence change, rare enough not to spam. */
+  reflectionCalibrationRuleCooldownMs: number;
   minTradesForPaperValidation: number;
   maxKellyFractionOfCapital: number;
   kellyFractionDefault: number;
@@ -260,6 +267,36 @@ export interface TradingSafety {
    * ready without implying the capability itself exists.
    */
   tradingAgentsShadowEnabledEnvVar: string;
+  /**
+   * Session-Aware Trading Architecture Phase 5 (2026-09-05, ARGUS_PREMARKET_GAP_ANALYSIS.md §7).
+   * Off by default. Gates ALL of: RiskEngine gate 12's new extended-hours OR-branch (still fails
+   * closed to the existing binary Alpaca-clock check when this is off), the new
+   * extended_hours_execution_policy gate 25 (auto-passes/no-ops when off - it only ever evaluates
+   * when this flag is on AND the session is PRE_MARKET/AFTER_HOURS), and OMS's LIMIT-order
+   * construction for extended hours (falls back to the existing MARKET order when off). Turning
+   * this on does not itself weaken or skip any of the other 24 gates.
+   */
+  extendedHoursExecutionEnabledEnvVar: string;
+  /** Max acceptable real bid/ask spread (basis points, MarketDataWorker.getLatestSpreadBps) for an
+   *  extended-hours order. No L2 feed exists in this codebase - this is the one real spread source
+   *  (Alpaca IEX top-of-book), not a fabricated estimate. */
+  extendedHoursMaxSpreadBps: number;
+  /** Max age (ms) of both the last trade/quote AND the ask side specifically before an
+   *  extended-hours order is refused - premarket/after-hours ticks are naturally sparser than RTH,
+   *  so this is deliberately looser than stalePriceThresholdMs, not the same number reused blindly. */
+  extendedHoursMaxQuoteAgeMs: number;
+  /** Extended-hours notional cap (dollars) - deliberately separate from and typically stricter
+   *  than maxTradeSize/order_notional_cap (gate 16), reflecting the mission's own instruction that
+   *  premarket may require STRICTER controls (wider spreads, lower liquidity, higher volatility),
+   *  never the same or looser bar. */
+  extendedHoursMaxNotionalDollars: number;
+  /** Session-Aware Trading Architecture Phase 5 follow-up (2026-09-05): minimum real average daily
+   *  volume (shares) required for an extended-hours order, sourced from the SAME
+   *  fetchAvgDailyVolumeShares() the broad-universe liquidity screen already uses (via
+   *  ExtendedHoursLiquidityCache.ts) - not a new, duplicate ADV calculation. Default reuses
+   *  continuousIntelligence.json's own existing broadUniverseMinAvgDailyVolumeShares bar (500000)
+   *  rather than inventing an unreviewed number, applied here to a deliberately stricter context. */
+  extendedHoursMinAvgDailyVolumeShares: number;
   /**
    * docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 2 - gates QuantCoreBridge.ts's
    * entire subscription to MARKET_DATA. Default off. Even when on, Phase 2 only forwards ticks
@@ -475,7 +512,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'fallbackTrailingStopPct',
   'internalPaperDefaultCash',
   'defaultMaxTradeSizeDollars',
-  'minSampleSizeForTrust',
+  'minSampleSizeForTrust', 'reflectionCalibrationRuleCooldownMs',
   'minTradesForPaperValidation',
   'maxKellyFractionOfCapital',
   'kellyFractionDefault',
@@ -523,6 +560,10 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'settingsBoundBudgetMin',
   'settingsBoundBudgetMax',
   'rebalanceMinDriftPctOfEquity',
+  'extendedHoursMaxSpreadBps',
+  'extendedHoursMaxQuoteAgeMs',
+  'extendedHoursMaxNotionalDollars',
+  'extendedHoursMinAvgDailyVolumeShares',
 ];
 
 function loadTradingSafety(): TradingSafety {
@@ -549,6 +590,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.tradingAgentsShadowEnabledEnvVar !== 'string' || !raw.tradingAgentsShadowEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: tradingAgentsShadowEnabledEnvVar');
+  }
+  if (typeof raw.extendedHoursExecutionEnabledEnvVar !== 'string' || !raw.extendedHoursExecutionEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: extendedHoursExecutionEnabledEnvVar');
   }
   if (typeof raw.quantJavaCoreEnabledEnvVar !== 'string' || !raw.quantJavaCoreEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: quantJavaCoreEnabledEnvVar');
@@ -579,6 +623,11 @@ export const tradingSafety: TradingSafety = loadTradingSafety();
 /** Scaffold-only - no caller uses this yet. See tradingAgentsShadowEnabledEnvVar's doc comment above. */
 export function isTradingAgentsShadowEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.tradingAgentsShadowEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See extendedHoursExecutionEnabledEnvVar's doc comment above. */
+export function isExtendedHoursExecutionEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.extendedHoursExecutionEnabledEnvVar);
 }
 
 /** Off unless the operator has explicitly set this env var to 'true'. See quantColdStartBootstrapEnabledEnvVar's doc comment above. */

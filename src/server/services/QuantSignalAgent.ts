@@ -31,6 +31,7 @@ import { getCachedMoverSymbols } from '../continuous/MarketUniverseScanner';
 import { historicalDataGateway, Bar } from '../engines/backtest/HistoricalDataGateway';
 import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
 import { classifyRegime, RegimeResult } from '../quant/RegimeEngine';
+import { quantCoreBridge } from './QuantCoreBridge';
 import { getMarketContext, MarketContextResult } from '../quant/MarketContext';
 import { computeMomentumFeatures } from '../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../quant/indicators/volume';
@@ -247,6 +248,20 @@ export class QuantSignalAgent {
     }
 
     const regime = classifyRegime(bars);
+    // SHADOW-ONLY Java parity check (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase
+    // 2 feature-pipeline follow-up): never awaited - must add zero latency to evaluateSymbol and can
+    // never affect its real return value. QuantCoreBridge.compareRegimeParity() is itself fully
+    // fail-closed (disabled flag / open breaker / network error / non-2xx all no-op silently), but
+    // `.catch()` alone only guards a REJECTED promise - if the call ever threw SYNCHRONOUSLY before
+    // returning one (confirmed by a real test: a mocked/future implementation that throws before its
+    // first `await`), `.catch()` is never reached and the exception would propagate straight into
+    // this method. Wrapping the call itself in try/catch closes that gap regardless of how
+    // compareRegimeParity fails.
+    try {
+      void quantCoreBridge.compareRegimeParity(symbol, bars, regime).catch(() => {});
+    } catch {
+      /* shadow diagnostics only - must never affect real evaluation */
+    }
     const marketContext = await getMarketContext(symbol, bars, TIMEFRAME, startMs, endMs);
     const currentPrice = bars[bars.length - 1].close;
 

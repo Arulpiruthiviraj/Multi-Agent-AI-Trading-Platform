@@ -50,6 +50,7 @@ import { eventBus } from '../server/core/EventBus';
 import { EVENTS } from '../server/core/eventNames';
 import { getActiveReplaySession } from '../server/replay/ReplayContext';
 import { logErrorSafely } from '../server/core/SecretRedaction';
+import { structuredLogger } from '../server/observability/StructuredLogger';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
@@ -502,6 +503,22 @@ export class BrokerManager {
       if (broker.id === 'ibkr_gateway' && broker instanceof IBGatewaySocketAdapter) {
         const cfg = loadIbkrConnection();
         broker.setQuoteSink((symbol, price) => marketDataWorker.ingestIbkrQuote(symbol, price));
+        // 2026-09-04 opportunity-capture remediation: a rejected reqMktData request (e.g. missing
+        // market-data-line permissions for that symbol/exchange) used to vanish silently — the
+        // symbol stayed in MarketDataWorker's "active" bookkeeping forever with zero real ticks,
+        // confirmed live for several rank-1 equity candidates. Purely observational — recordMarketDataError
+        // never evicts or resubscribes; it only makes the failure visible via getActiveSlots()/
+        // /api/v2/continuous-intelligence/capacity and the structured log below.
+        broker.setMarketDataErrorHandler((symbol, code, message) => {
+          marketDataWorker.recordMarketDataError(symbol, code, message);
+          structuredLogger.warn(`IBKR market-data rejection for ${symbol}: code=${code} ${message}`, {
+            category: 'MARKET_DATA',
+            eventType: 'IBKR_MARKET_DATA_ERROR',
+            component: 'BrokerManager',
+            symbol,
+            code,
+          });
+        });
         marketDataWorker.setBrokerQuoteContext({
           backend: 'ibkr_gateway',
           hardCapOverride: cfg.maxMarketDataLines,
@@ -510,6 +527,7 @@ export class BrokerManager {
             unsubscribe: (sym) => broker.cancelMarketDataBySymbol(sym),
             clear: () => {
               broker.setQuoteSink(null);
+              broker.setMarketDataErrorHandler(null);
             },
             isConnected: () => broker.isMarketDataSessionConnected(),
           },

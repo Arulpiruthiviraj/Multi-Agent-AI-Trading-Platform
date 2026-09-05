@@ -16,7 +16,7 @@ const FLOW_STEPS: FlowStep[] = [
   { icon: <Search size={16} />, title: 'Step 1: The Scout Scans the Market', summary: 'Continuously looks across the market and filters out illiquid or low-quality names.' },
   { icon: <Users size={16} />, title: 'Step 2: The AI Committee Debates', summary: 'Chart, forecast, fundamental, and macro specialists each weigh in on whether the setup is worth pursuing.' },
   { icon: <Scale size={16} />, title: 'Step 3: The 2-Person Rule', summary: 'At least 2 independent analysts must strongly agree (≥75% confidence), or Argus walks away.' },
-  { icon: <ShieldCheck size={16} />, title: 'Step 4: The 24-Gate Safety Vault', summary: 'Pre-trade checks verify budget limits, spread quality, and every other safety rule.' },
+  { icon: <ShieldCheck size={16} />, title: 'Step 4: The 25-Gate Safety Vault', summary: 'Pre-trade checks verify budget limits, spread quality, and every other safety rule.' },
   { icon: <Zap size={16} />, title: 'Step 5: Safe Paper Execution', summary: 'The order is sent to your simulated paper broker account — never real money.' },
   { icon: <RefreshCw size={16} />, title: 'Step 6: 24/7 Position Guard', summary: 'The portfolio loop watches every open trade to lock in profit or cut losses quickly.' },
 ];

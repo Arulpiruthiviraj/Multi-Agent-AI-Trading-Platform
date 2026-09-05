@@ -108,6 +108,7 @@ export class QuestradeBroker implements BrokerPlugin {
       shortSelling: false,
       streamingMarketData: false,
       requiresManualReauth: false, // refresh-token OAuth renews itself; no recurring human step
+      extendedHoursOrders: false, // placeOrder() throws - never the order-placing broker
     };
   }
   async health() {

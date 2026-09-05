@@ -12,7 +12,7 @@ import {
 
 const WEIGHTS: RankingWeights = {
   momentum: 1, relativeVolume: 1, rangeExpansion: 0.5, gap: 0.5, liquidity: 0.5,
-  newsCatalyst: 1, agentConfidence: 0.5,
+  newsCatalyst: 1, agentConfidence: 0.5, javaQuantScore: 1,
 };
 
 describe('computeDeterministicComponents', () => {
@@ -76,6 +76,7 @@ function fullComponentSet(overrides: Partial<ComponentSet>): ComponentSet {
     liquidity: { score: 0.5, available: true },
     newsCatalyst: { score: null, available: false, reason: 'no cluster' },
     agentConfidence: { score: null, available: false, reason: 'no prediction' },
+    javaQuantScore: { score: null, available: false, reason: 'not requested' },
   };
   return { ...base, ...overrides };
 }
@@ -191,6 +192,22 @@ describe('fetchNewsCatalystScores / fetchAgentConfidenceScores (DB-backed)', () 
     expect(result.get('MSFT')?.available).toBe(false);
   });
 
+  it('fetchNewsCatalystDetails returns real eventType/sourceCount, taking the highest-impact cluster per symbol', async () => {
+    vi.resetModules();
+    const { db } = await import('../db');
+    const { newsClusters: table } = await import('../db/schema');
+    const { fetchNewsCatalystDetails } = await import('./ComposableRanking');
+
+    await db.insert(table).values([
+      { id: 'nc-lo', title: 'minor', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), impactScore: 0.3, symbols: JSON.stringify(['AAPL']), eventType: 'analyst_action', sourceCount: 1 },
+      { id: 'nc-hi', title: 'earnings beat', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), impactScore: 0.9, symbols: JSON.stringify(['AAPL']), eventType: 'earnings', sourceCount: 5 },
+    ]);
+
+    const result = await fetchNewsCatalystDetails(['AAPL', 'MSFT'], 60 * 60 * 1000);
+    expect(result.get('AAPL')).toEqual({ eventType: 'earnings', sourceCount: 5, impactScore: 0.9 }); // higher-impact cluster wins
+    expect(result.get('MSFT')).toBeUndefined();
+  });
+
   it('finds the most recent agent prediction confidence per symbol, marking symbols with no prediction unavailable', async () => {
     vi.resetModules();
     const { db } = await import('../db');
@@ -207,5 +224,74 @@ describe('fetchNewsCatalystScores / fetchAgentConfidenceScores (DB-backed)', () 
     expect(result.get('NVDA')?.available).toBe(true);
     expect(result.get('NVDA')?.score).toBeCloseTo(0.7, 5);
     expect(result.get('SPY')?.available).toBe(false);
+  });
+});
+
+describe('fetchJavaQuantScores', () => {
+  afterEach(() => {
+    vi.doUnmock('../services/QuantCoreBridge');
+    vi.resetModules();
+  });
+
+  const fakeBars = [{ timestamp: 1, open: 1, high: 1, low: 1, close: 1, volume: 1 }] as any;
+
+  it('computes a real magnitude score from a positive composite, clamped to [0,1]', async () => {
+    vi.resetModules();
+    vi.doMock('../services/QuantCoreBridge', () => ({
+      quantCoreBridge: { fetchInstitutionalFactors: vi.fn(async () => ({ composite: 1.0 })) },
+    }));
+    const { fetchJavaQuantScores } = await import('./ComposableRanking');
+    const result = await fetchJavaQuantScores(new Map([['AAPL', fakeBars]]));
+    expect(result.get('AAPL')).toEqual({ score: 0.5, available: true }); // |1.0| / 2.0 scale
+  });
+
+  it('takes the magnitude of a negative composite (direction is not a ranking-component concept)', async () => {
+    vi.resetModules();
+    vi.doMock('../services/QuantCoreBridge', () => ({
+      quantCoreBridge: { fetchInstitutionalFactors: vi.fn(async () => ({ composite: -1.5 })) },
+    }));
+    const { fetchJavaQuantScores } = await import('./ComposableRanking');
+    const result = await fetchJavaQuantScores(new Map([['AAPL', fakeBars]]));
+    expect(result.get('AAPL')?.score).toBeCloseTo(0.75, 5); // |-1.5| / 2.0
+  });
+
+  it('clamps an extreme composite to 1.0 rather than an unbounded score', async () => {
+    vi.resetModules();
+    vi.doMock('../services/QuantCoreBridge', () => ({
+      quantCoreBridge: { fetchInstitutionalFactors: vi.fn(async () => ({ composite: 50 })) },
+    }));
+    const { fetchJavaQuantScores } = await import('./ComposableRanking');
+    const result = await fetchJavaQuantScores(new Map([['AAPL', fakeBars]]));
+    expect(result.get('AAPL')?.score).toBe(1);
+  });
+
+  it('marks a symbol unavailable (never a fabricated score) when the Java core returns null', async () => {
+    vi.resetModules();
+    vi.doMock('../services/QuantCoreBridge', () => ({
+      quantCoreBridge: { fetchInstitutionalFactors: vi.fn(async () => null) },
+    }));
+    const { fetchJavaQuantScores } = await import('./ComposableRanking');
+    const result = await fetchJavaQuantScores(new Map([['AAPL', fakeBars]]));
+    expect(result.get('AAPL')).toEqual({ score: null, available: false, reason: expect.any(String) });
+  });
+
+  it('fails closed to unavailable when the Java bridge call throws', async () => {
+    vi.resetModules();
+    vi.doMock('../services/QuantCoreBridge', () => ({
+      quantCoreBridge: { fetchInstitutionalFactors: vi.fn(async () => { throw new Error('unreachable'); }) },
+    }));
+    const { fetchJavaQuantScores } = await import('./ComposableRanking');
+    const result = await fetchJavaQuantScores(new Map([['AAPL', fakeBars]]));
+    expect(result.get('AAPL')?.available).toBe(false);
+  });
+
+  it('returns an empty map (zero calls) for an empty input map - the default, zero-added-cost path', async () => {
+    vi.resetModules();
+    const fetchInstitutionalFactors = vi.fn();
+    vi.doMock('../services/QuantCoreBridge', () => ({ quantCoreBridge: { fetchInstitutionalFactors } }));
+    const { fetchJavaQuantScores } = await import('./ComposableRanking');
+    const result = await fetchJavaQuantScores(new Map());
+    expect(result.size).toBe(0);
+    expect(fetchInstitutionalFactors).not.toHaveBeenCalled();
   });
 });

@@ -31,9 +31,10 @@ import { tradingSafety, isQuantJavaCoreEnabled } from '../config/tradingSafety';
 import { RSIEngine } from '../engines/RSIEngine';
 import { MACDEngine } from '../engines/MACDEngine';
 import { calcBollingerBands } from './technicalSignal';
-import { compareSnapshots, ComparableIndicatorSnapshot } from './ParityComparator';
+import { compareSnapshots, ComparableIndicatorSnapshot, compareRegimeSnapshots, ComparableRegimeSnapshot } from './ParityComparator';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import type { ResearchBar } from '../research/ohlcvTypes';
+import type { RegimeResult } from '../quant/RegimeEngine';
 
 const QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR = 'QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED';
 const MIN_HISTORY_FOR_PARITY = 26; // matches SymbolState.java's MIN_HISTORY_FOR_INDICATORS
@@ -208,6 +209,10 @@ export class QuantCoreBridgeService {
   private listening = false;
   private readonly priceHistory: Record<string, number[]> = {};
   private readonly lastParityCompareAt: Record<string, number> = {};
+  /** Same PARITY_COMPARE_INTERVAL_MS throttle pattern as lastParityCompareAt above, kept in its
+   *  own map (not shared with the tick-indicator comparison) so the two independent shadow checks
+   *  never suppress one another's debounce window. */
+  private readonly lastRegimeParityCompareAt: Record<string, number> = {};
   private readonly breaker = new CircuitBreaker();
   private readonly rsiEngine = new RSIEngine(14);
   private readonly macdEngine = new MACDEngine(12, 26, 9);
@@ -327,6 +332,57 @@ export class QuantCoreBridgeService {
           component: 'QuantCoreBridge',
           symbol,
           eventType: 'QUANT_CORE_PARITY_DIVERGENCE',
+          divergences,
+        });
+      });
+    } catch {
+      /* fail-open for shadow diagnostics only - never surfaces to the live pipeline */
+    }
+  }
+
+  /**
+   * SHADOW-ONLY: QuantSignalAgent.evaluateSymbol() calls this immediately after its own real
+   * classifyRegime(bars) call, passing the same already-fetched bars and the real TS RegimeResult
+   * it just computed. Fire-and-forget by design at the call site (never awaited by evaluateSymbol) -
+   * this method itself never throws, never mutates strategyContext, never emits an idea, and never
+   * changes evaluateSymbol's return value. Same fail-closed contract as compareParity(): any
+   * disabled flag, open breaker, non-2xx response, or network error is a silent no-op.
+   */
+  async compareRegimeParity(symbol: string, bars: ResearchBar[], tsRegime: RegimeResult): Promise<void> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return;
+
+    const now = Date.now();
+    const lastCompare = this.lastRegimeParityCompareAt[symbol] ?? 0;
+    if (now - lastCompare < PARITY_COMPARE_INTERVAL_MS) return;
+    this.lastRegimeParityCompareAt[symbol] = now;
+
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/features/regime/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ bars: barsToJavaPayload(bars) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) return;
+      const javaRegime = (await res.json()) as ComparableRegimeSnapshot & { insufficientData?: boolean };
+      if (javaRegime.insufficientData) return;
+
+      const tsSnapshot: ComparableRegimeSnapshot = {
+        regime: tsRegime.regime,
+        trendStrength: tsRegime.trendStrength,
+        volatility: tsRegime.volatility,
+        marketStructure: tsRegime.marketStructure,
+        confidence: tsRegime.confidence,
+      };
+      const divergences = compareRegimeSnapshots(tsSnapshot, javaRegime);
+      if (divergences.length === 0) return;
+
+      observeSafe(() => {
+        structuredLogger.warn('quant_core_parity_divergence', {
+          category: 'OBSERVABILITY',
+          component: 'QuantCoreBridge',
+          symbol,
+          eventType: 'QUANT_CORE_REGIME_PARITY_DIVERGENCE',
           divergences,
         });
       });

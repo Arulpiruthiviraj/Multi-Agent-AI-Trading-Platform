@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as schema from '../db/schema';
 import { getTradingDateStr } from '../core/TradingCalendar';
 import { tradingSafety } from '../config/tradingSafety';
+import { resetExtendedHoursLiquidityCacheForTests, setCachedAvgDailyVolumeSharesForTests } from '../risk/ExtendedHoursLiquidityCache';
 
 // db.select().from(table)...limit()/where()/orderBy() all resolve to whatever rows were
 // registered for that specific table via setTableRows(). Mirrors drizzle's own thenable
@@ -57,7 +58,10 @@ const { mockTradingEngine } = vi.hoisted(() => ({
 }));
 
 const { mockMarketDataWorker } = vi.hoisted(() => ({
-  mockMarketDataWorker: { getLatestPriceAgeMs: vi.fn(() => null as number | null) },
+  mockMarketDataWorker: {
+    getLatestPriceAgeMs: vi.fn(() => null as number | null),
+    getLatestSpreadBps: vi.fn(() => null as number | null),
+  },
 }));
 
 const { emitRiskAssessment } = vi.hoisted(() => ({ emitRiskAssessment: vi.fn() }));
@@ -111,6 +115,10 @@ describe('RiskEngine.evaluateRisk', () => {
     (mockDb.update as any).mockClear();
     mockMarketDataWorker.getLatestPriceAgeMs.mockReset();
     mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(1_000);
+    mockMarketDataWorker.getLatestSpreadBps.mockReset();
+    mockMarketDataWorker.getLatestSpreadBps.mockReturnValue(null);
+    delete process.env.EXTENDED_HOURS_EXECUTION_ENABLED;
+    resetExtendedHoursLiquidityCacheForTests();
     mockTradingEngine.state.dayStartDateStr = null;
     mockTradingEngine.state.dayStartEquity = null;
     mockTradingEngine.state.currentDailyLoss = 0;
@@ -541,6 +549,102 @@ describe('RiskEngine.evaluateRisk', () => {
     const assessment = lastAssessment();
     expect(assessment.approved).toBe(false);
     expect(assessment.reasoning).toMatch(/Market is currently closed/);
+  });
+
+  describe('Session-Aware Trading Architecture Phase 5 (2026-09-05): gate 12 extended-hours OR-branch + gate 25', () => {
+    // 2026-01-14 is a Wednesday; EST (no DST in January) is UTC-5, so 08:00 ET = 13:00 UTC.
+    const PRE_MARKET_UTC = new Date('2026-01-14T13:00:00.000Z');
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      vi.setSystemTime(PRE_MARKET_UTC);
+      // Force the Alpaca clock to report closed - proves any pass below comes from the NEW
+      // extended-hours branch, not from the pre-existing is_open/unconfigured paths.
+      process.env.ALPACA_API_KEY = 'key';
+      process.env.ALPACA_SECRET_KEY = 'secret';
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ is_open: false }) })));
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('extended-hours execution disabled (default): gate 12 still fails exactly as before - zero behavior change', async () => {
+      await riskEngine.evaluateRisk({ traceId: 'eh-off', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      const assessment = lastAssessment();
+      expect(assessment.approved).toBe(false);
+      expect(assessment.rejectionGate).toBe('market_hours');
+    });
+
+    it('enabled + capable broker + fresh quote + tight spread + small notional: market_hours passes AND extended_hours_execution_policy passes', async () => {
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      // maxTradeSize deliberately small (real sizing at the default $3000/$1,000,000-budget
+      // combo used elsewhere in this file sizes well above extendedHoursMaxNotionalDollars
+      // ($1000) - confirmed live by this test before this override was added) so the resulting
+      // sized notional actually clears the strict extended-hours cap, isolating this test to
+      // the broker-capability/quote/spread checks it's meant to exercise.
+      setTableRows(schema.settings, [{ riskLevel: 'Balanced', maxTradeSize: 500, budget: 1_000_000 }]);
+      mockBrokerHolder.broker = { ...makeBroker(basePortfolio()), getCapabilities: () => ({ extendedHoursOrders: true }) };
+      mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(60_000);
+      mockMarketDataWorker.getLatestSpreadBps.mockReturnValue(20);
+      // Real ADV check (2026-09-05): a cold cache fails closed by design, so this "everything
+      // passes" test primes it directly rather than waiting on a real (unmocked) network fetch.
+      setCachedAvgDailyVolumeSharesForTests('AAPL', 2_000_000);
+
+      await riskEngine.evaluateRisk({ traceId: 'eh-on-pass', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      const assessment = lastAssessment();
+      expect(assessment.rejectionGate).not.toBe('market_hours');
+      expect(assessment.rejectionGate).not.toBe('extended_hours_execution_policy');
+    });
+
+    it('enabled + capable broker + fresh quote + tight spread, but no cached ADV data yet: rejected, never assumes sufficient liquidity', async () => {
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      mockBrokerHolder.broker = { ...makeBroker(basePortfolio()), getCapabilities: () => ({ extendedHoursOrders: true }) };
+      mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(60_000);
+      mockMarketDataWorker.getLatestSpreadBps.mockReturnValue(20);
+
+      await riskEngine.evaluateRisk({ traceId: 'eh-on-noadv', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      const assessment = lastAssessment();
+      expect(assessment.rejectionGate).toBe('extended_hours_execution_policy');
+      expect(assessment.reasoning).toMatch(/NO_LIQUIDITY_DATA/);
+    });
+
+    it('enabled but broker lacks extended-hours capability: rejected by extended_hours_execution_policy, not market_hours', async () => {
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      mockBrokerHolder.broker = { ...makeBroker(basePortfolio()), getCapabilities: () => ({ extendedHoursOrders: false }) };
+      mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(60_000);
+      mockMarketDataWorker.getLatestSpreadBps.mockReturnValue(20);
+
+      await riskEngine.evaluateRisk({ traceId: 'eh-on-nocap', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      const assessment = lastAssessment();
+      expect(assessment.approved).toBe(false);
+      expect(assessment.rejectionGate).toBe('extended_hours_execution_policy');
+      expect(assessment.reasoning).toMatch(/BROKER_UNSUPPORTED/);
+    });
+
+    it('enabled + capable broker but no real spread data: rejected, never assumes a tight spread', async () => {
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      mockBrokerHolder.broker = { ...makeBroker(basePortfolio()), getCapabilities: () => ({ extendedHoursOrders: true }) };
+      mockMarketDataWorker.getLatestPriceAgeMs.mockReturnValue(60_000);
+      mockMarketDataWorker.getLatestSpreadBps.mockReturnValue(null);
+
+      await riskEngine.evaluateRisk({ traceId: 'eh-on-nospread', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      const assessment = lastAssessment();
+      expect(assessment.rejectionGate).toBe('extended_hours_execution_policy');
+      expect(assessment.reasoning).toMatch(/NO_SPREAD_DATA/);
+    });
+
+    it('a REGULAR-session order is completely unaffected by the flag being on', async () => {
+      process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'true';
+      vi.setSystemTime(new Date('2026-01-14T15:00:00.000Z')); // 10:00 ET, REGULAR session
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ is_open: true }) })));
+      mockBrokerHolder.broker = { ...makeBroker(basePortfolio()), getCapabilities: () => ({ extendedHoursOrders: false }) };
+
+      await riskEngine.evaluateRisk({ traceId: 'eh-regular', symbol: 'AAPL', side: 'BUY', currentPrice: 100 });
+      const assessment = lastAssessment();
+      expect(assessment.rejectionGate).not.toBe('extended_hours_execution_policy');
+      expect(assessment.rejectionGate).not.toBe('market_hours');
+    });
   });
 
   describe('market_hours in replay mode (1Day midnight-timestamp fix)', () => {

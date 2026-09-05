@@ -126,6 +126,53 @@ describe('AlpacaBroker reliability (Phase 1)', () => {
     expect(result.clientOrderId).toBe('my-idempotency-key');
   });
 
+  it('Extended-Hours Execution Policy: extendedHours + LIMIT sends Alpaca a real extended_hours:true', async () => {
+    let capturedBody: any = null;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, options: any) => {
+      capturedBody = JSON.parse(options.body);
+      return {
+        ok: true, status: 200, headers: new Headers(),
+        json: async () => ({ id: 'order-eh-1', symbol: 'AAPL', side: 'buy', order_type: 'limit', status: 'accepted', qty: '1', filled_qty: '0', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+      };
+    }));
+
+    await runAndAdvance(
+      broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'LIMIT', price: 150.25, quantity: 1, extendedHours: true })
+    );
+    expect(capturedBody.extended_hours).toBe(true);
+    expect(capturedBody.limit_price).toBe(150.25);
+  });
+
+  it('Extended-Hours Execution Policy: extendedHours is NEVER sent for a MARKET order, even if requested - Alpaca would reject the combination', async () => {
+    let capturedBody: any = null;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, options: any) => {
+      capturedBody = JSON.parse(options.body);
+      return {
+        ok: true, status: 200, headers: new Headers(),
+        json: async () => ({ id: 'order-eh-2', symbol: 'AAPL', side: 'buy', order_type: 'market', status: 'accepted', qty: '1', filled_qty: '0', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+      };
+    }));
+
+    await runAndAdvance(
+      broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 1, extendedHours: true })
+    );
+    expect(capturedBody.extended_hours).toBeUndefined();
+  });
+
+  it('a regular order (no extendedHours requested) never sends the field at all - zero behavior change for the common case', async () => {
+    let capturedBody: any = null;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, options: any) => {
+      capturedBody = JSON.parse(options.body);
+      return {
+        ok: true, status: 200, headers: new Headers(),
+        json: async () => ({ id: 'order-plain', symbol: 'AAPL', side: 'buy', order_type: 'market', status: 'accepted', qty: '1', filled_qty: '0', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
+      };
+    }));
+
+    await runAndAdvance(broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 1 }));
+    expect('extended_hours' in capturedBody).toBe(false);
+  });
+
   it('real bug found and fixed: placeOrder() carries the fill price through for a MARKET order that fills synchronously in the POST response', async () => {
     // Alpaca (especially paper) commonly fills a MARKET order within the same POST /v2/orders
     // response - status "filled" with filled_avg_price already set. OMS only re-polls for a fresh

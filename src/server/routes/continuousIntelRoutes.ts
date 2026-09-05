@@ -60,6 +60,7 @@ continuousIntelRouter.get('/ranking/latest', async (req, res) => {
           liquidity: r.liquidityScore,
           newsCatalyst: r.newsCatalystScore,
           agentConfidence: r.agentConfidenceScore,
+          javaQuantScore: r.javaQuantScore,
         },
         componentAvailability: JSON.parse(r.componentAvailability || '{}'),
         promotionRecommendation: r.promotionRecommendation,

@@ -503,9 +503,29 @@ export class MarketUniverseScannerWorker {
       console.log('[MarketUniverseScanner] ARGUS_BROAD_UNIVERSE_ENABLED is not true - idle.');
     } else if (!this.intervalId) {
       void refreshBroadUniverseCache();
+      // Real bug found and fixed (2026-09-04 opportunity-capture remediation, confirmed live):
+      // this used to reschedule on `broadUniverseAssetsCacheTtlMs` (86400000ms / 24h) - the TTL
+      // that governs ONLY fetchTradableAssets()'s own internal cache of the raw Alpaca asset list
+      // (correctly a once-a-day concern; the list of tradable US equities barely changes
+      // intraday). `broadUniverseSnapshotCacheTtlMs` (900000ms / 15min) already exists
+      // specifically for the intraday-relevant part of the SAME refresh - the price/volume/spread
+      // screen that DOES need to re-run regularly - but nothing ever scheduled a call on that
+      // cadence; this interval was the only caller of refreshBroadUniverseCache() after boot.
+      // Confirmed live: the one boot-time call failed ("This operation was aborted" - the 15s
+      // fetchTradableAssets() timeout raced Alpaca's full tradable-assets response), and because
+      // this interval would not fire again for 24h, the ENTIRE broad-universe discovery channel
+      // (curated seed/watch lists plus the real Alpaca liquidity-screened universe meant to catch
+      // names like AMC/NTAP that aren't on any curated list) sat completely dead - 0 assets
+      // fetched, 0 candidates cached - for the whole session, with no retry. Rescheduling on
+      // broadUniverseSnapshotCacheTtlMs both matches the cache this refresh is actually meant to
+      // keep warm AND turns a single transient timeout into a self-healing ~15-minute retry
+      // instead of a silent 24-hour outage. fetchTradableAssets()'s own 24h internal cache check
+      // is unchanged, so this does not add extra full-asset-list Alpaca calls - only the
+      // screen/ADV work (already batched, already rate-limited via the discovery circuit breaker)
+      // repeats on the shorter cadence, which is the documented intraday-refresh intent.
       this.intervalId = setInterval(() => {
         void refreshBroadUniverseCache();
-      }, continuousIntelligence.broadUniverseAssetsCacheTtlMs);
+      }, continuousIntelligence.broadUniverseSnapshotCacheTtlMs);
       console.log('[MarketUniverseScanner] Broad-universe refresh started.');
     }
     if (!isMoversEnabled()) {

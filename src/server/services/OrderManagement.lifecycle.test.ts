@@ -45,7 +45,7 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
       getCapabilities: (): BrokerCapabilities => ({
         canPlaceOrders: true, canCancelOrders, paperTrading: true, liveTrading: false,
         usEquities: true, canadianEquities: false, crypto: false, options: false,
-        shortSelling: false, streamingMarketData: false, requiresManualReauth: false,
+        shortSelling: false, streamingMarketData: false, requiresManualReauth: false, extendedHoursOrders: false,
       }),
       portfolio: async () => ({ cash: 100000, buyingPower: 100000, equity: 100000, positions: [] }),
       orders: async () => ordersResponse,

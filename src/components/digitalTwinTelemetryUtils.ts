@@ -157,7 +157,7 @@ function humanStageLabel(type: string, payload: Record<string, unknown>): string
     case 'CHIEF_CONSENSUS_COMPLETED':
       return payload.approved ? 'Chief approved' : `NO_CONSENSUS (${fmtPct(payload.confidence)})`;
     case 'RISK_ASSESSMENT_COMPLETED':
-      return payload.approved ? '24-gate risk PASS' : `Risk REJECT (${payload.gate || 'gate'})`;
+      return payload.approved ? '25-gate risk PASS' : `Risk REJECT (${payload.gate || 'gate'})`;
     case 'ORDER_SUBMITTED':
       return `OMS submit ${payload.side || ''} qty ${payload.quantity ?? '—'}`;
     case 'ORDER_EXECUTED':

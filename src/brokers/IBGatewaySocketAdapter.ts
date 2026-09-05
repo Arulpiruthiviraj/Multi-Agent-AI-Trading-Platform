@@ -31,6 +31,19 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       : null);
   }
 
+  /**
+   * Surfaces a real IB reqMktData rejection (e.g. missing market-data-line permissions) for a
+   * symbol MarketDataWorker believes is actively subscribed. Read-only observability wiring —
+   * never changes what gets subscribed, never touches OMS/RiskEngine/BrokerManager order paths.
+   */
+  setMarketDataErrorHandler(handler: ((symbol: string, code: number, message: string) => void) | null): void {
+    this.session.setMarketDataErrorHandler(handler);
+  }
+
+  getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
+    return this.session.getMarketDataError(symbol);
+  }
+
   getConnectionSnapshot(): Record<string, unknown> {
     const info = this.session.getConnectionInfo();
     return {
@@ -62,6 +75,7 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       shortSelling: false,
       streamingMarketData: true,
       requiresManualReauth: false,
+      extendedHoursOrders: true, // placeOrder() sets outsideRth:true for a LIMIT order when Order.extendedHours is set
     };
   }
 
@@ -185,6 +199,7 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       limitPrice: order.price,
       stopPrice: order.stopPrice,
       account: accountId || undefined,
+      extendedHours: order.extendedHours,
     });
 
     return {

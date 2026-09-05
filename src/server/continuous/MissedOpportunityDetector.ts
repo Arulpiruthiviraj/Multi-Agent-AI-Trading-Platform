@@ -9,8 +9,8 @@
  * live trading pipeline.
  */
 import { db } from '../db';
-import { missedOpportunities, riskAssessments, trades, agentReasoningLogs, transactionTraces } from '../db/schema';
-import { eq, and, gte, lte } from 'drizzle-orm';
+import { missedOpportunities, riskAssessments, trades, agentReasoningLogs, transactionTraces, tradePlans } from '../db/schema';
+import { eq, and, gte, lte, desc } from 'drizzle-orm';
 import type { RankedCandidate } from './ComposableRanking';
 import type { TraceLifecycleStatus } from '../services/TracingService';
 import { logErrorSafely } from '../core/SecretRedaction';
@@ -48,7 +48,14 @@ const CHIEF_APPROVAL_OR_LATER_STATUSES = new Set<string>(CHIEF_APPROVAL_OR_LATER
 
 export type MissClassification =
   | 'RANKING_MISS' | 'SUBSCRIPTION_MISS' | 'AGENT_MISS'
-  | 'CONSENSUS_REJECTION' | 'RISK_REJECTION' | 'EXECUTION_MISS' | 'NOT_ACTUALLY_MISS';
+  | 'CONSENSUS_REJECTION' | 'RISK_REJECTION' | 'EXECUTION_MISS' | 'NOT_ACTUALLY_MISS'
+  /** Session-Aware Trading Architecture Phase 7 (2026-09-05): a premarket TradePlan existed for
+   *  this symbol (planDate === today) and was INVALIDATED or EXPIRED by TradePlanBuilder's own
+   *  revalidation logic before any agent/ChiefTrader/RiskEngine stage was ever reached. Distinct
+   *  from CONSENSUS_REJECTION/RISK_REJECTION (which require the idea to have actually been
+   *  evaluated by those stages) - this classifies a real, distinct failure point: the thesis
+   *  itself was withdrawn upstream of the live idea pipeline entirely. */
+  | 'THESIS_INVALIDATED';
 
 export interface FunnelSignals {
   symbol: string;
@@ -59,6 +66,10 @@ export interface FunnelSignals {
   hadRiskAssessment: boolean;
   riskApproved: boolean | null;
   hadFilledTrade: boolean;
+  /** Most recent TradePlan status for this symbol/planDate, or null if no plan exists this
+   *  trading day. 'INVALIDATED'/'EXPIRED' here is a real, distinct explanation for a missing
+   *  agent idea - see THESIS_INVALIDATED's own doc comment on MissClassification. */
+  tradePlanStatus: string | null;
 }
 
 export interface ClassificationResult {
@@ -79,6 +90,9 @@ export function classifyMiss(signals: FunnelSignals): ClassificationResult {
     return { classification: 'SUBSCRIPTION_MISS', reason: 'Ranked as PROMOTE-worthy but never became an active market-data subscription this window.' };
   }
   if (!signals.hadAgentIdeaThisWindow) {
+    if (signals.tradePlanStatus === 'INVALIDATED' || signals.tradePlanStatus === 'EXPIRED') {
+      return { classification: 'THESIS_INVALIDATED', reason: `Premarket TradePlan was ${signals.tradePlanStatus} before any agent evaluated this symbol this window.` };
+    }
     return { classification: 'AGENT_MISS', reason: 'Actively subscribed, but no agent produced a TRADE_IDEA_GENERATED for this symbol in the evaluation window.' };
   }
   if (!signals.hadChiefApproval) {
@@ -222,8 +236,12 @@ export async function getFunnelSignals(
   ranked: RankedCandidate | null,
   isActivelySubscribed: boolean,
   windowStartIso: string,
+  /** Optional (default null - no TradePlan lookup, tradePlanStatus stays null). The caller's
+   *  trading-date string (getTradingDateStr(now)) - used only to look up whether a premarket
+   *  TradePlan exists for this symbol today, never to redefine the window above. */
+  planDate: string | null = null,
 ): Promise<FunnelSignals> {
-  const [ideaLogs, txTraces, riskRows, tradeRows] = await Promise.all([
+  const [ideaLogs, txTraces, riskRows, tradeRows, planRows] = await Promise.all([
     db.select().from(agentReasoningLogs)
       .where(and(eq(agentReasoningLogs.symbol, symbol), gte(agentReasoningLogs.timestamp, windowStartIso))),
     db.select().from(transactionTraces)
@@ -232,6 +250,11 @@ export async function getFunnelSignals(
       .where(and(eq(riskAssessments.symbol, symbol), gte(riskAssessments.createdAt, windowStartIso))),
     db.select().from(trades)
       .where(and(eq(trades.symbol, symbol), eq(trades.status, 'FILLED'), gte(trades.timestamp, windowStartIso))),
+    planDate
+      ? db.select({ status: tradePlans.status }).from(tradePlans)
+          .where(and(eq(tradePlans.symbol, symbol), eq(tradePlans.planDate, planDate)))
+          .orderBy(desc(tradePlans.createdAt)).limit(1)
+      : Promise.resolve([]),
   ]);
 
   const latestRisk = riskRows.length > 0
@@ -239,6 +262,7 @@ export async function getFunnelSignals(
     : null;
 
   return {
+    tradePlanStatus: planRows.length > 0 ? planRows[0].status : null,
     symbol,
     ranked,
     isActivelySubscribed,
@@ -270,6 +294,8 @@ export async function runMissedOpportunityDetectionCycle(
   const windowStartIso = new Date(nowMs - lookbackMs).toISOString();
   const candidates = rankedCandidates.filter((c) => c.promotionRecommendation === 'PROMOTE');
   const records: MissedOpportunityRecord[] = [];
+  const { getTradingDateStr } = await import('../core/TradingCalendar');
+  const planDate = getTradingDateStr(now);
 
   for (const candidate of candidates) {
     const lastDetected = lastDetectedAtMsBySymbol.get(candidate.symbol);
@@ -281,6 +307,7 @@ export async function runMissedOpportunityDetectionCycle(
         candidate,
         activeSymbols.has(candidate.symbol),
         windowStartIso,
+        planDate,
       );
       const record = buildMissedOpportunityRecord(signals, null, evaluationHorizonMinutes, now);
       if (record) {
