@@ -311,7 +311,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
       const planDate = getTradingDateStr(now);
-      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation } = await import('./TradePlanBuilder');
+      const { buildTradePlanDrafts, persistTradePlanDrafts, getTradePlansForDate, revalidateTradePlan, persistRevalidation, emitTradePlanIdea } = await import('./TradePlanBuilder');
 
       let rankedCandidates = await runRankingCycle(rankingInputs, now, new Map(), marketSession);
 
@@ -374,6 +374,14 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
         if (existing.length === 0) {
           const drafts = buildTradePlanDrafts(rankedCandidates, inputsBySymbol, planDate, now);
           await persistTradePlanDrafts(drafts);
+          // 2026-09-05, explicit operator authorization (see TradePlanBuilder.ts's own header) -
+          // one independent TRADE_IDEA_GENERATED vote per PRIMARY-tier draft. No-op (returns
+          // emitted:false) unless ARGUS_TRADE_PLAN_IDEAS_ENABLED, Autobot, and the TradePlanBuilder
+          // pipeline-agent toggle are all on - identical behavior to before this call existed for
+          // every deployment that has not made this explicit choice.
+          for (const draft of drafts) {
+            emitTradePlanIdea(draft, inputsBySymbol.get(draft.symbol)?.last ?? null);
+          }
         }
       } else if (marketSession === 'REGULAR') {
         const existing = await getTradePlansForDate(planDate);

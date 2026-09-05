@@ -33,6 +33,12 @@
       "label": "Quant",
       "description": "Additive QuantSignalAgent ideas. Requires QUANT_ENGINE_ENABLED=true.",
       "requiresEnv": "QUANT_ENGINE_ENABLED"
+    },
+    {
+      "id": "TradePlanBuilder",
+      "label": "Premarket TradePlan",
+      "description": "One TRADE_IDEA_GENERATED per PRIMARY-tier premarket TradePlan when the ranking cycle clears PROMOTE. Requires ARGUS_TRADE_PLAN_IDEAS_ENABLED=true (2026-09-05, explicit operator authorization - see TradePlanBuilder.ts's own header).",
+      "requiresEnv": "ARGUS_TRADE_PLAN_IDEAS_ENABLED"
     }
   ],
   "alwaysOn": [

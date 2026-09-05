@@ -6,7 +6,8 @@
     "NewsAgent": 0.25,
     "QuantEngine": 0.15,
     "KronosEngine": 0.20,
-    "OpportunityScreener": 0.10
+    "OpportunityScreener": 0.10,
+    "TradePlanBuilder": 0.10
   },
   "consensusDebateWeight": 0.35,
   "unlistedAgentWeight": 1.0,

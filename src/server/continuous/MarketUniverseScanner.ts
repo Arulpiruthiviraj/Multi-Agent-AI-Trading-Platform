@@ -107,7 +107,7 @@ export async function fetchTradableAssets(): Promise<string[]> {
   }
   const allowed = new Set(continuousIntelligence.broadUniverseAllowedExchanges);
   const url = `${networkEndpoints.broker.alpaca.paperBaseUrl}/v2/assets?status=active&asset_class=us_equity`;
-  const assets = await fetchJson<AlpacaAsset[]>(url, 15000);
+  const assets = await fetchJson<AlpacaAsset[]>(url, continuousIntelligence.broadUniverseAssetsFetchTimeoutMs);
   const symbols = assets
     .filter((a) => a.tradable && a.status === 'active' && allowed.has(a.exchange))
     .map((a) => a.symbol.trim().toUpperCase())

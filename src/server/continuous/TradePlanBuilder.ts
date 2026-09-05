@@ -4,13 +4,22 @@
  *
  * Governance (do not weaken):
  * - Discovery/preparation only. Never imports OMS/RiskEngine/ChiefTraderAgent/the order-placement
- *   broker layer. Never emits TRADE_IDEA_GENERATED. Building and persisting a plan has zero effect
- *   on the live trading pipeline.
- * - Whether/how a VALID plan ever re-enters the live pipeline (via the existing
- *   TRADE_IDEA_GENERATED path, the only entry point the protected spine accepts) is a SEPARATE,
- *   deliberately NOT-yet-made decision - this module only builds, persists, and revalidates plans.
- *   No emission wiring exists here, matching this session's own "shadow/decision-report before
- *   touching anything idea-emission-adjacent" discipline.
+ *   broker layer. Building and persisting a plan has zero effect on the live trading pipeline by
+ *   itself.
+ * - **2026-09-05 update, explicit operator authorization**
+ *   (docs/audits/ARGUS_PREMARKET_TRADING_IMPLEMENTATION.md §12): this module's prior stance was
+ *   "never emits TRADE_IDEA_GENERATED... a SEPARATE, deliberately NOT-yet-made decision," gated
+ *   behind accumulating real graded evidence via TradePlanShadowTracker first (matching the Java
+ *   factor-composite precedent). The repository owner was told that reasoning explicitly and chose
+ *   to override it for this deployment. `emitTradePlanIdea()` below is the result: it emits
+ *   exactly ONE independent TRADE_IDEA_GENERATED vote per PRIMARY-tier plan, through the same
+ *   architecture-protection allowlist mechanism `OpportunityScreener.ts` already uses (see
+ *   `src/server/architecture.protection.test.ts`) - never a bypass of ChiefTrader/RiskEngine/OMS,
+ *   never CHIEF_APPROVED_IDEA, never `.placeOrder(` from this file. Off by default
+ *   (`ARGUS_TRADE_PLAN_IDEAS_ENABLED`) for any deployment that has not made the same explicit
+ *   choice. `recordTradePlanShadowPrediction()` below is unaffected and keeps running regardless -
+ *   the evidence-gathering mechanism still exists even though this deployment chose not to wait
+ *   for it.
  * - Every numeric field (entry zone, invalidation level) is derived from real fields the ranking
  *   cycle already fetched (last price, minuteHigh/Low, prevClose) - never a fabricated indicator
  *   (no ATR, no synthetic volatility estimate) that this deployment cannot honestly compute yet.
@@ -20,6 +29,11 @@ import { db } from '../db';
 import { tradePlans, tradePlanRevalidations } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
 import type { RankedCandidate, RankingInput, NewsCatalystDetail } from './ComposableRanking';
+import { eventBus } from '../core/EventBus';
+import { generateTraceId } from '../core/traceId';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
+import { isTradePlanIdeasEnabled } from '../config/continuousIntelligence';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
@@ -206,6 +220,56 @@ export async function persistTradePlanDrafts(drafts: TradePlanDraft[]): Promise<
   } catch (e) {
     console.error('[TradePlanBuilder] Failed to persist trade plan drafts', e);
   }
+}
+
+export interface TradePlanIdeaResult {
+  emitted: boolean;
+  reason: string;
+  symbol: string;
+}
+
+/**
+ * 2026-09-05, explicit operator authorization - see this file's own header. Emits exactly ONE
+ * TRADE_IDEA_GENERATED per PRIMARY-tier plan (never BACKUP/WATCHLIST - a deliberately conservative
+ * scope given zero prior track record; the operator can widen this later). This is one independent
+ * vote into the existing ChiefTraderAgent consensus (same 0.75 bar, same min-2-independent-agents
+ * floor as every other agent) - never a bypass, never CHIEF_APPROVED_IDEA, never `.placeOrder(`
+ * from this module. Gated behind THREE independent checks, matching OpportunityScreener.ts's own
+ * pattern exactly: the master flag (isTradePlanIdeasEnabled), the Autobot/session-recovery/
+ * campaign-lock composite gate (isLiveIdeaGenerationEnabled), and the per-agent Mission Control
+ * toggle (isPipelineAgentEnabled) - any one of the three being off means zero ideas emitted.
+ */
+export function emitTradePlanIdea(draft: TradePlanDraft, currentPrice: number | null): TradePlanIdeaResult {
+  if (draft.setupType !== 'PRIMARY') {
+    return { emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: draft.symbol };
+  }
+  if (!isTradePlanIdeasEnabled()) {
+    return { emitted: false, reason: 'FLAG_OFF', symbol: draft.symbol };
+  }
+  if (!isPipelineAgentEnabled('TradePlanBuilder')) {
+    return { emitted: false, reason: 'AGENT_DISABLED', symbol: draft.symbol };
+  }
+  if (!isLiveIdeaGenerationEnabled()) {
+    return { emitted: false, reason: 'IDEA_GENERATION_GATED', symbol: draft.symbol };
+  }
+  if (currentPrice == null || !Number.isFinite(currentPrice) || currentPrice <= 0) {
+    return { emitted: false, reason: 'INVALID_PRICE', symbol: draft.symbol };
+  }
+
+  const traceId = generateTraceId(draft.symbol);
+  eventBus.emitTradeIdea({
+    traceId,
+    symbol: draft.symbol,
+    side: draft.direction,
+    confidence: draft.confidence,
+    currentPrice,
+    reasoning: `[TradePlan ${draft.id}, PRIMARY tier, rank #${draft.rankAtCreation}] ${draft.thesis}`,
+    agent: 'TradePlanBuilder',
+    strategy: 'PREMARKET_TRADE_PLAN',
+    timeframe: 'premarket_daily',
+    evidence: { confluenceScore: draft.confluenceScore, evidenceQuality: draft.evidenceQuality, setupType: draft.setupType },
+  });
+  return { emitted: true, reason: 'EMITTED', symbol: draft.symbol };
 }
 
 export interface RevalidationOutcome {

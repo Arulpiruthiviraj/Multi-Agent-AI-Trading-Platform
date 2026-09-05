@@ -120,19 +120,32 @@ describe('Architecture protection: extension-zone modules cannot reach the spine
     expect(text).not.toMatch(/\.emit\(\s*(EVENTS\.TRADE_IDEA_GENERATED|['"]TRADE_IDEA_GENERATED['"])/);
   });
 
-  it('only OpportunityScreener in continuous/ may emitTradeIdea (still one vote; never CHIEF_APPROVED_IDEA)', () => {
+  it('only OpportunityScreener and TradePlanBuilder in continuous/ may emitTradeIdea (still one vote each; never CHIEF_APPROVED_IDEA)', () => {
+    // TradePlanBuilder.ts added 2026-09-05 at the repository owner's explicit, informed request
+    // (docs/audits/ARGUS_PREMARKET_TRADING_IMPLEMENTATION.md §12) - overriding this codebase's own
+    // prior recommendation to wait for real graded shadow-tracking evidence first (see that file's
+    // header). A real architectural decision, not a drive-by import: still exactly one independent
+    // vote per PRIMARY-tier TradePlan, still goes through the unchanged ChiefTrader/RiskEngine/OMS
+    // spine, still gated behind ARGUS_TRADE_PLAN_IDEAS_ENABLED + Autobot + the per-agent toggle.
+    const ALLOWED_EMITTERS_IN_CONTINUOUS = new Set([
+      'src/server/continuous/OpportunityScreener.ts',
+      'src/server/continuous/TradePlanBuilder.ts',
+    ]);
     const hits: string[] = [];
     for (const f of SERVER_TS_FILES) {
       const path = rel(f);
       if (!path.startsWith('src/server/continuous/')) continue;
       const text = readFileSync(f, 'utf8');
       if (!/emitTradeIdea\(/.test(text)) continue;
-      if (path !== 'src/server/continuous/OpportunityScreener.ts') hits.push(path);
+      if (!ALLOWED_EMITTERS_IN_CONTINUOUS.has(path)) hits.push(path);
     }
     expect(hits).toEqual([]);
     const screener = readFileSync(join(ROOT, 'src/server/continuous/OpportunityScreener.ts'), 'utf8');
     expect(screener).toMatch(/emitTradeIdea\(/);
     expect(screener).not.toMatch(/\.placeOrder\(/);
+    const tradePlanBuilder = readFileSync(join(ROOT, 'src/server/continuous/TradePlanBuilder.ts'), 'utf8');
+    expect(tradePlanBuilder).toMatch(/emitTradeIdea\(/);
+    expect(tradePlanBuilder).not.toMatch(/\.placeOrder\(/);
   });
 
   it('continuous/ never emits CHIEF_APPROVED_IDEA or imports ChiefTrader (ideas enter via emitTradeIdea only)', () => {

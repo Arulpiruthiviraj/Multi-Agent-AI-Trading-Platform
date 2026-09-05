@@ -8,6 +8,7 @@ import {
   revalidateTradePlan,
   persistRevalidation,
   getTradePlansForDate,
+  type TradePlanStatus,
 } from './TradePlanBuilder';
 import { getRefinedSnapshot, evaluateSessionLifecycle } from '../premarket/SessionLifecycle';
 import type { RankedCandidate, RankingInput, ComponentSet } from './ComposableRanking';
@@ -110,7 +111,7 @@ describe('RTH handoff integration: PRE_MARKET plan -> REGULAR revalidation -> te
       etOnThursday(10, 0),
     );
     expect(outcome1.result).toBe('REVALIDATED');
-    await persistRevalidation(plan.id, outcome1, etOnThursday(10, 0), plan.status, { symbol: 'HANDA', direction: 'BUY', confidence: plan.confidence });
+    await persistRevalidation(plan.id, outcome1, etOnThursday(10, 0), plan.status as TradePlanStatus, { symbol: 'HANDA', direction: 'BUY', confidence: plan.confidence });
     expect(await currentStatus(planId)).toBe('VALID');
 
     // Session now refines to OPEN_REVALIDATION - a real open plan still needs revalidating.
@@ -130,7 +131,7 @@ describe('RTH handoff integration: PRE_MARKET plan -> REGULAR revalidation -> te
       ranked('HANDA', 1, 'PROMOTE'),
       etOnThursday(10, 30),
     );
-    await persistRevalidation(planAfter1.id, outcome2, etOnThursday(10, 30), planAfter1.status, { symbol: 'HANDA', direction: 'BUY', confidence: planAfter1.confidence });
+    await persistRevalidation(planAfter1.id, outcome2, etOnThursday(10, 30), planAfter1.status as TradePlanStatus, { symbol: 'HANDA', direction: 'BUY', confidence: planAfter1.confidence });
     expect(await currentStatus(planId)).toBe('VALID');
     const shadowRowsAfter = await db.select().from(schema.agentPredictions).where(eq(schema.agentPredictions.agentName, 'TradePlanShadowTracker'));
     expect(shadowRowsAfter.filter((r) => r.symbol === 'HANDA')).toHaveLength(1); // still exactly one
@@ -147,7 +148,7 @@ describe('RTH handoff integration: PRE_MARKET plan -> REGULAR revalidation -> te
       etOnThursday(10, 0),
     );
     expect(outcome.result).toBe('DOWNGRADED');
-    await persistRevalidation(plan.id, outcome, etOnThursday(10, 0), plan.status);
+    await persistRevalidation(plan.id, outcome, etOnThursday(10, 0), plan.status as TradePlanStatus);
     expect(await currentStatus(planId)).toBe('REVALIDATING');
 
     const regularSnap = evaluateSessionLifecycle(etOnThursday(10, 0));
@@ -171,7 +172,7 @@ describe('RTH handoff integration: PRE_MARKET plan -> REGULAR revalidation -> te
       etOnThursday(10, 0),
     );
     expect(outcome.result).toBe('INVALIDATED');
-    await persistRevalidation(plan.id, outcome, etOnThursday(10, 0), plan.status);
+    await persistRevalidation(plan.id, outcome, etOnThursday(10, 0), plan.status as TradePlanStatus);
     expect(await currentStatus(planId)).toBe('INVALIDATED');
 
     const regularSnap = evaluateSessionLifecycle(etOnThursday(10, 0));
@@ -191,7 +192,7 @@ describe('RTH handoff integration: PRE_MARKET plan -> REGULAR revalidation -> te
       afterClose,
     );
     expect(outcome.result).toBe('EXPIRED');
-    await persistRevalidation(plan.id, outcome, afterClose, plan.status);
+    await persistRevalidation(plan.id, outcome, afterClose, plan.status as TradePlanStatus);
     expect(await currentStatus(planId)).toBe('EXPIRED');
 
     const regularSnap = evaluateSessionLifecycle(etOnThursday(10, 0));
@@ -210,7 +211,7 @@ describe('RTH handoff integration: PRE_MARKET plan -> REGULAR revalidation -> te
       ranked('HANDE2', 1, 'PROMOTE'),
       etOnThursday(10, 0),
     );
-    await persistRevalidation(terminalPlan.id, terminalOutcome, etOnThursday(10, 0), terminalPlan.status);
+    await persistRevalidation(terminalPlan.id, terminalOutcome, etOnThursday(10, 0), terminalPlan.status as TradePlanStatus);
     expect(await currentStatus(terminalPlanId)).toBe('INVALIDATED');
     expect(await currentStatus(openPlanId)).toBe('READY'); // untouched - still open
 

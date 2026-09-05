@@ -9,6 +9,8 @@ export interface ContinuousIntelligenceConfig {
   opportunityLoopEnabledEnvVar: string;
   opportunityIdeasEnabledEnvVar: string;
   portfolioIntelEnabledEnvVar: string;
+  /** 2026-09-05, explicit operator authorization - see the JSON file's own comment. */
+  tradePlanIdeasEnabledEnvVar: string;
   opportunityScanMs: number;
   maxActiveSubscriptions: number;
   maxNewSubscriptionsPerCycle: number;
@@ -85,6 +87,7 @@ export interface ContinuousIntelligenceConfig {
   broadUniverseEnabledEnvVar: string;
   broadUniverseAssetsCacheTtlMs: number;
   broadUniverseSnapshotCacheTtlMs: number;
+  broadUniverseAssetsFetchTimeoutMs: number;
   broadUniverseMinPrice: number;
   broadUniverseMaxPrice: number;
   broadUniverseMinDollarVolume: number;
@@ -198,6 +201,9 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
   if (typeof raw.portfolioIntelEnabledEnvVar !== 'string' || !raw.portfolioIntelEnabledEnvVar) {
     throw new Error('config/continuousIntelligence.json missing portfolioIntelEnabledEnvVar');
   }
+  if (typeof raw.tradePlanIdeasEnabledEnvVar !== 'string' || !raw.tradePlanIdeasEnabledEnvVar) {
+    throw new Error('config/continuousIntelligence.json missing tradePlanIdeasEnabledEnvVar');
+  }
   if (typeof raw.honesty !== 'string' || !raw.honesty) {
     throw new Error('config/continuousIntelligence.json missing honesty');
   }
@@ -210,6 +216,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
   const cfg: ContinuousIntelligenceConfig = {
     opportunityLoopEnabledEnvVar: raw.opportunityLoopEnabledEnvVar,
     opportunityIdeasEnabledEnvVar: raw.opportunityIdeasEnabledEnvVar,
+    tradePlanIdeasEnabledEnvVar: raw.tradePlanIdeasEnabledEnvVar,
     portfolioIntelEnabledEnvVar: raw.portfolioIntelEnabledEnvVar,
     opportunityScanMs: requireNumber(raw.opportunityScanMs, 'opportunityScanMs'),
     maxActiveSubscriptions: requireNumber(raw.maxActiveSubscriptions, 'maxActiveSubscriptions'),
@@ -249,6 +256,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     broadUniverseEnabledEnvVar: raw.broadUniverseEnabledEnvVar,
     broadUniverseAssetsCacheTtlMs: requireNumber(raw.broadUniverseAssetsCacheTtlMs, 'broadUniverseAssetsCacheTtlMs'),
     broadUniverseSnapshotCacheTtlMs: requireNumber(raw.broadUniverseSnapshotCacheTtlMs, 'broadUniverseSnapshotCacheTtlMs'),
+    broadUniverseAssetsFetchTimeoutMs: requireNumber(raw.broadUniverseAssetsFetchTimeoutMs, 'broadUniverseAssetsFetchTimeoutMs'),
     broadUniverseMinPrice: requireNumber(raw.broadUniverseMinPrice, 'broadUniverseMinPrice'),
     broadUniverseMaxPrice: requireNumber(raw.broadUniverseMaxPrice, 'broadUniverseMaxPrice'),
     broadUniverseMinDollarVolume: requireNumber(raw.broadUniverseMinDollarVolume, 'broadUniverseMinDollarVolume'),
@@ -298,6 +306,10 @@ export function isOpportunityIdeasEnabled(): boolean {
 
 export function isPortfolioIntelEnabled(): boolean {
   return isRuntimeFlagEnabled(continuousIntelligence.portfolioIntelEnabledEnvVar);
+}
+
+export function isTradePlanIdeasEnabled(): boolean {
+  return isRuntimeFlagEnabled(continuousIntelligence.tradePlanIdeasEnabledEnvVar);
 }
 
 export function isBroadUniverseEnabled(): boolean {

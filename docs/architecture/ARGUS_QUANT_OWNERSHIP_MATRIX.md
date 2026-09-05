@@ -94,10 +94,26 @@ by the orchestrating session (not just the porting agent) on the two highest-ris
 `RegimeEngine.java`'s dead-zone/vote-counting logic and `MarketContext.java`'s `minOverlap`
 correlation/beta semantics — both confirmed faithful.
 
-**What is still NOT done** (this was explicitly out of scope for this pass, not an oversight):
-`QuantSignalAgent.ts`/`FullArgusReplayEngine.ts` do not call this Java pipeline yet — TypeScript
-remains the only live-wired implementation. No shadow-mode parity-logging period has run. No TS
-file has been touched, deprecated, or deleted. `QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED` is unchanged.
+**Update (2026-09-05): shadow wiring deployed live, soak clock started.** `QuantSignalAgent.ts`'s
+`evaluateSymbol()` now calls `QuantCoreBridge.compareRegimeParity(symbol, bars, regime)` immediately
+after its own real `classifyRegime(bars)` call — fire-and-forget, double-wrapped (async `.catch()`
+plus a synchronous try/catch, after a real test caught that the first layer alone didn't cover a
+synchronous throw), gated solely by the existing `QUANT_JAVA_CORE_ENABLED` flag. Deployed to the
+live engine (PID 37108, 2026-09-05T13:02 UTC) after: full suite verification (TS 62/62 targeted +
+tsc clean on every file this work touches; Java 344/344 `mvn test`, `BUILD SUCCESS`), reconciliation
+confirmed clean (0 mismatches), single clean process topology confirmed. **This is the first moment
+any real divergence data can exist** — before this, "shadow-verified" meant synthetic fixtures only.
+Check `observability_events` for `QUANT_CORE_REGIME_PARITY_DIVERGENCE` rows to see real accumulated
+soak data; there were zero as of deployment. Do not shortcut the "real multi-week window, no
+shortcuts on calendar time" precondition (`JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md`) no matter how
+clean early samples look — a few hours or days is not the soak period.
+
+**What is still NOT done:** `QuantSignalAgent.ts` still uses ONLY its own TS `classifyRegime`/
+`getMarketContext` output for every real decision — the Java comparison is observation-only.
+`FullArgusReplayEngine.ts` does not call the Java pipeline at all. `MarketContext`/full feature-set
+comparison was deliberately not wired (regime-only, by design — see the wiring agent's own scope
+note). No TS file has been touched, deprecated, or deleted. `QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED`
+remains unchanged and must not be set true until the real soak period above is complete.
 
 **Unrelated but important discovery made while verifying this work:** the repo's root `.gitignore`
 had a bare `models/` pattern (meant only for the top-level `models/` ML-artifact directory) that was
