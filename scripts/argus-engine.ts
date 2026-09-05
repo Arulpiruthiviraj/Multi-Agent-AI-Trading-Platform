@@ -58,7 +58,7 @@ if (String(process.env.ARGUS_SKIP_CHRONOS || '').toLowerCase() !== 'true') {
   void ensureChronosRunning(repoRoot);
 }
 
-// LangGraph research companion (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - opt-in, same
+// LangGraph research companion (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)) - opt-in, same
 // off-by-default polarity as the Java Quant Core block above, not Chronos's on-by-default one:
 // this is a new, unvalidated, shadow-only advisory capability, not yet a normal expected
 // companion. Isolated Python process, loopback HTTP only, no broker credentials, no SQLite

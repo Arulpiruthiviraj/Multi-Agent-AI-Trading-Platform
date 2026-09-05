@@ -114,7 +114,7 @@ async function loadDebateLearnedRulesText(): Promise<string> {
  * - This is the explicit "Phase 3 of the activation plan" gap docs/audits/ARGUS_POST_MIGRATION_ARCHITECTURE_AUDIT.md
  *   and config/engineOwnership.json flagged as recommended-but-not-done ("wire into ChiefTrader
  *   reasoning context, advisory-only") - deliberately NOT the stricter, still-unmet
- *   docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 3 (a real emitTradeIdea vote,
+ *   docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase 3 (a real emitTradeIdea vote,
  *   gated on a multi-week clean divergence soak that has not run for this layer).
  */
 export async function loadJavaInstitutionalDebateContext(symbol: string): Promise<string> {

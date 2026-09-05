@@ -298,7 +298,7 @@ export interface TradingSafety {
    *  rather than inventing an unreviewed number, applied here to a deliberately stricter context. */
   extendedHoursMinAvgDailyVolumeShares: number;
   /**
-   * docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 2 - gates QuantCoreBridge.ts's
+   * docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase 2 - gates QuantCoreBridge.ts's
    * entire subscription to MARKET_DATA. Default off. Even when on, Phase 2 only forwards ticks
    * and logs shadow-parity divergence (ParityComparator.ts) - it does not call emitTradeIdea.
    * That is Phase 3, gated by this SAME flag plus its own additional checks in QuantCoreBridge.

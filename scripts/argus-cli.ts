@@ -606,7 +606,7 @@ const commands: Record<string, () => Promise<void>> = {
     }), null, 2));
   },
   async 'research-recommend'() {
-    // LangGraph research service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - shadow-only,
+    // LangGraph research service (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)) - shadow-only,
     // never auto-promotes. Pass --strategy=MOMENTUM_BREAKOUT (default GOLDEN_SMA).
     // Phase 3.1 (2026-09-03): POST is now asynchronous by construction (see researchRoutes.ts) -
     // it returns a PENDING runId in milliseconds rather than blocking for the real 11-16s LLM

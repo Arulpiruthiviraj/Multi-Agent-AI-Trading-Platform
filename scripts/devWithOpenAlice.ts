@@ -306,7 +306,7 @@ async function startChronosAndWait(): Promise<void> {
 }
 
 /**
- * Java 26 Quant Core (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md) - advisory-only,
+ * Java 26 Quant Core (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section)) - advisory-only,
  * loopback-only, no broker access. Off by default: only starts when QUANT_JAVA_CORE_ENABLED=true,
  * the OPPOSITE polarity of Chronos/Ollama/OpenAlice (which are on unless explicitly skipped) -
  * this one is explicitly opt-in since it's still a shadow-mode research bridge, not a required

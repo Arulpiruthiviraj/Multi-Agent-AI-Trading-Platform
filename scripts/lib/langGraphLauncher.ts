@@ -1,5 +1,5 @@
 /**
- * Shared LangGraph research-service companion launcher (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md).
+ * Shared LangGraph research-service companion launcher (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)).
  * Mirrors chronosLauncher.ts's structure exactly - self-contained isPortOpen/waitForHttpOk/
  * findPython rather than importing devWithOpenAlice.ts (not designed as a library), same reasoning
  * as that file's own header.

@@ -182,7 +182,7 @@ export function classifyDeskSession(
   marketStructure: MarketStructureLabel,
   now: Date = new Date(),
 ): NonNullable<RegimeResult['deskSession']> {
-  // Weekend-awareness fix (docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §4): this function
+  // Weekend-awareness fix (docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §4): this function
   // used to derive phase purely from minute-of-day, so a Saturday/Sunday would be misclassified as
   // an intraday phase (e.g. 'MORNING') as if the market were open. Reuses weekdayInTimezone() —
   // the same shared weekday helper classifyMarketSession() itself uses — rather than a second

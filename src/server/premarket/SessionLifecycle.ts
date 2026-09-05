@@ -46,7 +46,7 @@ export interface SessionLifecycleSnapshot {
   isExtendedHours: boolean;
   /** True on any weekday. Deliberately holiday-blind, matching every other session representation
    *  in this codebase (classifyMarketSession itself has no holiday table) - see
-   *  docs/architecture/ARGUS_SESSION_AWARE_TRADING_ARCHITECTURE.md §2.3 for why. A real
+   *  docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §2.3 for why. A real
    *  holiday-aware value would require Alpaca's /v2/clock, which this module may not import
    *  (RiskEngine.ts owns that call and this directory is architecturally barred from RiskEngine).
    *  False on Saturday/Sunday only. */
@@ -250,7 +250,7 @@ export const sessionLifecycleWorker = new SessionLifecycleManager();
  * Read-only refinement of appState using real TradePlan existence/status for the snapshot's own
  * tradingDate - closes the gap this file's own header flagged: PLAN_BUILDING/PLAN_READY/
  * OPEN_REVALIDATION were declared in ApplicationSessionState but never assigned by any code path
- * (see docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §2).
+ * (see docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §2).
  *
  * Deliberately NOT folded into SessionLifecycleManager.evaluate()/`current`: that method's own
  * transition-detection (`prev.appState !== next.appState`) compares against its OWN prior

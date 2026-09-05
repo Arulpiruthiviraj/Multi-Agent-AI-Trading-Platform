@@ -1,6 +1,6 @@
 /**
  * Architecture-protection regression suite for the LangGraph research service
- * (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). Mirrors architecture.protection.test.ts's own
+ * (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)). Mirrors architecture.protection.test.ts's own
  * static-check pattern exactly, applied to the new integration surface this session added:
  *
  *   - src/server/services/LangGraphResearchService.ts (Node HTTP client)

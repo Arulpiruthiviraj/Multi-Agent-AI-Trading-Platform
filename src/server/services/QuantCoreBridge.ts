@@ -1,6 +1,6 @@
 /**
  * TypeScript-side client for the local, advisory-only Java Quant Core process
- * (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md, Phases 2-3).
+ * (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section), Phases 2-3).
  *
  * Governance (do not weaken):
  * - Everything here is gated by tradingSafety.quantJavaCoreEnabledEnvVar (QUANT_JAVA_CORE_ENABLED,

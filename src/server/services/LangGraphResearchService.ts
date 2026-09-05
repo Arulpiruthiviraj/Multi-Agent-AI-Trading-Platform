@@ -3,7 +3,7 @@
  * LangGraphResearchService.ts
  *
  * Thin HTTP client to the isolated LangGraph research companion (langgraph-research/, a separate
- * Python process - docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). Mirrors QuantCoreBridge.ts's
+ * Python process - docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)). Mirrors QuantCoreBridge.ts's
  * own fetch/timeout/health pattern exactly (same AbortSignal.timeout convention, same
  * connected/checkedAt health shape).
  *

@@ -105,7 +105,7 @@ async function fetchJson<T>(url: string, timeoutMs: number): Promise<{ data: T; 
  * Weekday 09:30-16:00 America/New_York (ignores exchange holidays — fail-open for scan cadence).
  * Delegates to classifyMarketSession() rather than re-deriving weekday/minute math a second time
  * (2026-09-05 session-representation consolidation - see
- * docs/architecture/ARGUS_SESSION_AWARE_TRADING_ARCHITECTURE.md §2.2, representation #6). Behavior
+ * docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §2.2, representation #6). Behavior
  * is unchanged: classifyMarketSession's REGULAR branch is the identical [09:30, 16:00) weekday
  * window this function always used, verified against isEtTimeInWindow's own inclusive-start/
  * exclusive-end semantics before this refactor.

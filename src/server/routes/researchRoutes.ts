@@ -65,7 +65,7 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   // Narrow, read-only interface for the isolated LangGraph research service
-  // (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md) - returns exactly one strategy's already-
+  // (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)) - returns exactly one strategy's already-
   // computed evidence/lifecycle/go-no-go, never a general database query surface. Same auth as
   // every other /research/* route; the LangGraph service calls this like any other HTTP client,
   // it never touches SQLite directly.
@@ -79,7 +79,7 @@ export function mountResearchRoutes(v2Router: Router): void {
   });
 
   // Shadow-only strategy-graduation recommendation, produced by the isolated LangGraph research
-  // service (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). This route only triggers a run and
+  // service (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)). This route only triggers a run and
   // returns its result - it never promotes anything, never touches StrategyEngine.ts's arrays,
   // never reaches ChiefTrader/RiskEngine/OMS. Rate-limited like other research-run routes since
   // each call makes a real (local) LLM call through the companion service.
@@ -125,7 +125,7 @@ export function mountResearchRoutes(v2Router: Router): void {
     res.json({ ok: true, ...result });
   });
 
-  // Phase 3 (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md): read-only human-review surface over
+  // Phase 3 (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)): read-only human-review surface over
   // the same research_agent_runs rows the route above writes. Pure GET - no route in this file lets
   // a caller promote/enable a strategy, modify risk/sizing/broker config, or place an order; the
   // response is always explicitly labeled RESEARCH_RECOMMENDATION / notATradingApproval.

@@ -4,7 +4,7 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 
 **Why the name ARGUS?** [`README.md`](../README.md) § Why "ARGUS"? (Argus Panoptes — many eyes, one disciplined decision process). Do not treat the metaphor as unlimited visibility or a second trading brain.
 
-**Verified harness (2026-08-23):** `npm run lint` exit 0 · `npm test` **348** files / **2207** tests (re-check with `npm test` — trust the runner, not a remembered count) · Node **24.18.0** / npm **12** · schema **60** tables · **LIVE_NO_GO** · organic closed PAPER FILLED SELL P&L soak baseline still **0** until soak counts real closes.
+**Verified harness (2026-09-05):** `npm run lint` exit 0 · run `npm test` yourself for the current file/test count — trust the runner, not a remembered number · Node **24.18.0** / npm **12** · schema **75** tables (`grep -c "sqliteTable(" src/server/db/schema.ts`) · RiskEngine is **25** gates (`config/riskGateOrder.json`, `src/server/engines/RiskEngine.ts`) · **LIVE_NO_GO** · organic closed PAPER FILLED SELL P&L soak baseline still **0** until soak counts real closes.
 
 ---
 
@@ -13,7 +13,7 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 | Doc | Role |
 |---|---|
 | [`README.md`](../README.md) | Name philosophy, setup, commands (`start:engine`) |
-| [`CLAUDE.md`](../CLAUDE.md) | Operational master spec — live path, 24 gates, soak, LIVE_NO_GO |
+| [`CLAUDE.md`](../CLAUDE.md) | Operational master spec — live path, 25 gates, soak, LIVE_NO_GO |
 | [`ARGUS_ARCHITECTURE_CONTRACT.md`](../ARGUS_ARCHITECTURE_CONTRACT.md) | Binding 15-point contract |
 | [`ARGUS_ARCHITECTURE_PROTECTION.md`](../ARGUS_ARCHITECTURE_PROTECTION.md) | What must not be modified |
 | [`ARGUS_ARCHITECTURE_INVARIANTS.md`](../ARGUS_ARCHITECTURE_INVARIANTS.md) | Spine / safety / required tests |
@@ -25,10 +25,7 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 | [`ARGUS_CAMPAIGN_TRACKER.md`](../ARGUS_CAMPAIGN_TRACKER.md) | Daily Goal Campaign (flag-gated; attribution + soft-lock) |
 | [`ARGUS_CONFIGURATION_ARCHITECTURE.md`](../ARGUS_CONFIGURATION_ARCHITECTURE.md) | Config layers / overlays |
 | [`ARGUS_CONFIGURATION_SECURITY.md`](../ARGUS_CONFIGURATION_SECURITY.md) | Secrets / auth / overlays |
-| [`docs/architecture/SYSTEM_OVERVIEW.md`](architecture/SYSTEM_OVERVIEW.md) | Navigational architecture summary (points back to `CLAUDE.md`) |
-| [`docs/architecture/RISK_ENGINE_24_GATES.md`](architecture/RISK_ENGINE_24_GATES.md) | 24-gate name list + how to verify current thresholds |
-| [`docs/architecture/MULTI_AGENT_CONSENSUS.md`](architecture/MULTI_AGENT_CONSENSUS.md) | ChiefTrader weighting/debate/quorum mechanics |
-| [`docs/architecture/JAVA_QUANT_CORE.md`](architecture/JAVA_QUANT_CORE.md) | Java Quant Core entry point (→ blueprint + status audit) |
+| [`docs/architecture/ARGUS_ARCHITECTURE.md`](architecture/ARGUS_ARCHITECTURE.md) | The one living architecture reference — system overview, ChiefTrader consensus, RiskEngine gates (25, current), Java Quant Core, LangGraph Research Service, Premarket/Session-Aware Trading Architecture |
 | [`docs/operations/DEVOPS_LIFECYCLE.md`](operations/DEVOPS_LIFECYCLE.md) | `argus.sh` / `npm run dev` process lifecycle |
 | [`docs/operations/IBKR_GATEWAY_SETUP.md`](operations/IBKR_GATEWAY_SETUP.md) | IB Gateway socket/web_api setup + troubleshooting |
 | [`docs/operations/CAMPAIGN_MANAGEMENT.md`](operations/CAMPAIGN_MANAGEMENT.md) | Daily Goal Campaign operations summary |

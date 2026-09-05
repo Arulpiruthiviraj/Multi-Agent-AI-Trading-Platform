@@ -4,7 +4,7 @@ export type MarketSession = 'PRE_MARKET' | 'REGULAR' | 'AFTER_HOURS' | 'CLOSED';
 
 /** Exported for SessionLifecycle.ts's SessionContext fields (minutesToOpen/SinceOpen/ToClose,
  *  isTradingDay) - reusing this module's own weekday/minute math rather than a 10th independent
- *  reimplementation (see docs/architecture/ARGUS_SESSION_AWARE_TRADING_ARCHITECTURE.md §2.2). */
+ *  reimplementation (see docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §2.2). */
 export function minutesInTimezone(ms: number, timeZone: string): number {
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone,

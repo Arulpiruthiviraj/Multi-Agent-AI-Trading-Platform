@@ -4,7 +4,10 @@ import {
   isOpportunityIdeasEnabled,
   isOpportunityLoopEnabled,
   isPortfolioIntelEnabled,
+  isTradePlanIdeasEnabled,
 } from '../config/continuousIntelligence';
+import { isExtendedHoursExecutionEnabled } from '../config/tradingSafety';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { getLastOpportunityScan } from '../continuous/OpportunityDiscovery';
 import { listCandidates } from '../continuous/candidateLifecycle';
 import { getLastSnapshotScanStats } from '../continuous/SnapshotScanner';
@@ -212,6 +215,12 @@ continuousIntelRouter.get('/status', (_req, res) => {
     opportunityLoopEnabled: isOpportunityLoopEnabled(),
     opportunityIdeasEnabled: isOpportunityIdeasEnabled(),
     portfolioIntelEnabled: isPortfolioIntelEnabled(),
+    // 2026-09-05, explicit operator authorization (docs/audits/ARGUS_PREMARKET_TRADING_IMPLEMENTATION.md
+    // §12) - real, current status of TradePlanBuilder's live PRIMARY-tier idea emission, so the UI
+    // (PremarketIntelligence.tsx) can show an honest ARMED/idle indicator instead of a static claim.
+    tradePlanIdeasEnabled: isTradePlanIdeasEnabled(),
+    tradePlanBuilderAgentEnabled: isPipelineAgentEnabled('TradePlanBuilder'),
+    extendedHoursExecutionEnabled: isExtendedHoursExecutionEnabled(),
     honesty: continuousIntelligence.honesty,
     entryConsensusUnchanged: true,
     consensusNote: 'ChiefTrader min-agents and 0.75 bar are unchanged. Risk-exit SELL from PortfolioManager still skips entry quorum and still hits RiskEngine/OMS.',

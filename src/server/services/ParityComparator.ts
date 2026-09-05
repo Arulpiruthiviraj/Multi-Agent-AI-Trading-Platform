@@ -1,6 +1,6 @@
 /**
  * Shadow-parity comparison between TypeScript-computed and Java-computed indicator snapshots
- * (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 2). Pure comparison logic only
+ * (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase 2). Pure comparison logic only
  * - no network, no EventBus, never touches ChiefTrader/RiskEngine. QuantCoreBridge.ts calls
  * compareSnapshots() with the two already-fetched/computed snapshots and logs the result.
  */

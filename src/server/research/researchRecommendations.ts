@@ -2,7 +2,7 @@
  * ==========================================================
  * researchRecommendations.ts
  *
- * Phase 3 (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md): the read-only, human-reviewable view
+ * Phase 3 (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)): the read-only, human-reviewable view
  * over research_agent_runs rows produced by ResearchAgentRunner.ts. Pure read/reshape - no writes,
  * no new table, no mutation of any historical row. Every row already written by Phase 2 is treated
  * as an immutable research artifact; a fresh recommendation is always a NEW row (see
@@ -43,7 +43,7 @@ export interface RecommendationView {
   status: RecommendationRunStatus;
   /** Re-derived from errorMessage - one of DISABLED | UNAVAILABLE | TIMEOUT | INVALID_RESPONSE |
    *  a graph-side error code, or null when status is COMPLETED. Never collapses UNAVAILABLE and
-   *  FAILED into one meaning - see docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md. */
+   *  FAILED into one meaning - see docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section). */
   failureReason: string | null;
   graphVersion: string | null;
   providerModel: string | null;

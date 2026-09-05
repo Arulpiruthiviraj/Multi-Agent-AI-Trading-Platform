@@ -4,11 +4,14 @@
  * already-tested REST endpoints (continuousIntelRouter's /trade-plans, /ranking/latest,
  * /missed-opportunities; v2Runtime's /session-lifecycle) - no new backend query logic lives here.
  *
- * Honesty: TradePlans are hypotheses, never orders (TradePlanBuilder.ts's own governance
- * statement) - this view never exposes an "execute" or "override" control, matching every other
- * discovery/intel surface in this codebase (RiskGateHistoryPanel.tsx's "no bypass control exists
- * here" convention). No TradePlan currently reaches TRADE_IDEA_GENERATED - see the implementation
- * report's §4 item 5 for why that wiring is deliberately not built yet.
+ * Honesty: this view itself never exposes an "execute" or "override" control, matching every
+ * other discovery/intel surface in this codebase (RiskGateHistoryPanel.tsx's "no bypass control
+ * exists here" convention) - nothing on this PAGE can trigger a trade. As of 2026-09-05 (explicit
+ * operator authorization, docs/audits/ARGUS_PREMARKET_TRADING_IMPLEMENTATION.md §12), a
+ * PRIMARY-tier plan listed here DOES reach TRADE_IDEA_GENERATED as one independent ChiefTrader
+ * vote (TradePlanBuilder.emitTradePlanIdea()) when ARGUS_TRADE_PLAN_IDEAS_ENABLED is on - so a
+ * plan's STATUS badge below can change as a real consequence of ChiefTrader/RiskEngine/OMS
+ * processing it, same as any other agent's idea. See §12 for the full gating detail.
  */
 import React, { useEffect, useRef, useState } from 'react';
 import { Sunrise, Clock, ListChecks, Target, AlertTriangle, RefreshCw } from 'lucide-react';
@@ -84,11 +87,18 @@ function fmtMinutes(m: number | null): string {
   return `${sign}${m}m`;
 }
 
+interface LiveWiringStatus {
+  tradePlanIdeasEnabled: boolean;
+  tradePlanBuilderAgentEnabled: boolean;
+  extendedHoursExecutionEnabled: boolean;
+}
+
 export default function PremarketIntelligence() {
   const [session, setSession] = useState<SessionLifecycleSnapshot | null>(null);
   const [plans, setPlans] = useState<TradePlan[] | null>(null);
   const [ranking, setRanking] = useState<RankedCandidate[] | null>(null);
   const [missed, setMissed] = useState<MissedOpportunityRow[] | null>(null);
+  const [liveWiring, setLiveWiring] = useState<LiveWiringStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -117,6 +127,21 @@ export default function PremarketIntelligence() {
       .then((r) => r.json())
       .then((d) => { if (d.ok) setMissed(d.rows || []); })
       .catch((e) => { if (e?.name !== 'AbortError') setError(e.message); });
+
+    // Real, current flag status (2026-09-05, docs/audits/ARGUS_PREMARKET_TRADING_IMPLEMENTATION.md
+    // §12) - drives the ARMED/idle badge below. Never assumed from a static claim.
+    fetch('/api/v2/continuous-intelligence/status', { signal: controller.signal })
+      .then((r) => r.json())
+      .then((d) => {
+        if (d.ok) {
+          setLiveWiring({
+            tradePlanIdeasEnabled: !!d.tradePlanIdeasEnabled,
+            tradePlanBuilderAgentEnabled: !!d.tradePlanBuilderAgentEnabled,
+            extendedHoursExecutionEnabled: !!d.extendedHoursExecutionEnabled,
+          });
+        }
+      })
+      .catch((e) => { if (e?.name !== 'AbortError') setError(e.message); });
   };
 
   useEffect(() => {
@@ -138,8 +163,20 @@ export default function PremarketIntelligence() {
           </h3>
           <div className="flex items-center gap-3">
             <span className="text-[10px] font-mono bg-cyan-900/50 text-cyan-400 px-2 py-1 rounded">
-              READ-ONLY — NO EXECUTE/OVERRIDE CONTROL
+              THIS PAGE IS READ-ONLY — NO EXECUTE/OVERRIDE CONTROL HERE
             </span>
+            {liveWiring?.tradePlanIdeasEnabled && liveWiring?.tradePlanBuilderAgentEnabled ? (
+              <span
+                className="text-[10px] font-mono bg-rose-900/50 text-rose-400 px-2 py-1 rounded font-bold"
+                title="PRIMARY-tier plans below emit a real TRADE_IDEA_GENERATED vote into ChiefTrader (config/pipelineAgents.json 'TradePlanBuilder' + ARGUS_TRADE_PLAN_IDEAS_ENABLED). Still subject to the same 25 RiskEngine gates and 0.75 consensus bar as every other agent."
+              >
+                LIVE PREMARKET IDEAS: ARMED{liveWiring.extendedHoursExecutionEnabled ? ' + EXTENDED-HOURS EXECUTION' : ''}
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono bg-slate-800 text-slate-500 px-2 py-1 rounded" title="ARGUS_TRADE_PLAN_IDEAS_ENABLED or the TradePlanBuilder Mission Control toggle is off - no TradePlan reaches TRADE_IDEA_GENERATED.">
+                LIVE PREMARKET IDEAS: OFF
+              </span>
+            )}
             <button onClick={fetchAll} className="flex items-center gap-2 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-emerald-400 text-[10px] uppercase tracking-widest font-bold rounded">
               <RefreshCw size={12} /> Refresh
             </button>

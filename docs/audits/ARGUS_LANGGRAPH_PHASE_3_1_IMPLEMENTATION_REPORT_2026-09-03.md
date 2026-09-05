@@ -42,7 +42,7 @@ AFTER (Phase 3.1):
 | `src/components/StrategyResearchRecommendations.tsx` | Messaging updated to reflect PENDING being the *normal* immediate response, not a rare race outcome |
 | `src/server/services/ResearchAgentRunner.test.ts` (new) | 13 tests |
 | `src/server/routes/researchRoutes.strategyGraduation.test.ts` | Rewritten for the new async response shape + cancel route |
-| `docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md` | Phase 3.1 section, updated limitations |
+| `docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)` | Phase 3.1 section, updated limitations |
 
 ## 4. Research run state machine
 

@@ -121,7 +121,7 @@ export function researchComparisonMatrix() {
 /**
  * Full structured evidence for exactly one strategy id - read-only, no side effects. Added as the
  * narrow read-only interface a LangGraph research service can call over HTTP instead of touching
- * SQLite directly (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). Reuses the same
+ * SQLite directly (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)). Reuses the same
  * resolveEvidence()/deriveLifecycleStatus()/liveGoNoGo() every other report in this file already
  * calls - never a second, parallel evidence computation.
  */

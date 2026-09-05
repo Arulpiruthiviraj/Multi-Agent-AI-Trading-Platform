@@ -1905,7 +1905,7 @@ v2Router.post('/replay/historical', backtestLimiter, async (req, res) => {
 
 // ==========================================================================================
 // Java Quant Core advisory bridge (QuantCoreBridge.ts) — read-only connectivity check.
-// docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase 2. Never places orders; this
+// docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase 2. Never places orders; this
 // route only surfaces whether the local, loopback-only Java process answered a health probe.
 // ==========================================================================================
 v2Router.get('/quant-core/health', async (_req, res) => {

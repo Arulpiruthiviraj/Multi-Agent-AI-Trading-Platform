@@ -3,7 +3,7 @@
  * ResearchAgentRunner.ts
  *
  * Node-side orchestration for the isolated LangGraph research service
- * (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). This is the ONLY place a LangGraph result is
+ * (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)). This is the ONLY place a LangGraph result is
  * written to Argus's database - the Python process never opens data/argus.db itself; it returns a
  * validated JSON envelope over HTTP (LangGraphResearchService.ts), and this file persists it
  * through the existing DB singleton (src/server/db/index.ts), exactly like any other agent's

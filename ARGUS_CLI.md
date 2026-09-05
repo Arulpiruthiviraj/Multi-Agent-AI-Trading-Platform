@@ -36,7 +36,7 @@ The optional Java Quant Core (`quant-core-java/`, port 8085, default **off** —
 decision spine above: it is a loopback-only, advisory calculation service (indicator math + CORE
 strategy decision logic + a research backtester) that Argus Engine's own `QuantCoreBridge.ts`
 talks to. It has no broker access, no credentials, and cannot place an order. See
-`docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md` and
+`docs/architecture/ARGUS_ARCHITECTURE.md` § Java Quant Core and
 `docs/audits/JAVA_QUANT_CORE_MIGRATION_STATUS_AUDIT.md`.
 
 Shell operator entry: [`./argus`](argus) — see [`ARGUS_SHELL_CLI.md`](ARGUS_SHELL_CLI.md).  
@@ -324,9 +324,11 @@ via `mvn -B package -DskipTests` on first use if missing) and streams its output
 HistoricalReplayBroker involvement. The CLI prints an explicit banner every time this flag is
 used so the difference is never missed. Default (no `--engine` flag, or `--engine node`) is the
 real Historical Evaluation path described above. See
-`docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md` §4 (Phase 4) for why the 5 CORE
-strategies aren't wired into this backtester yet (they need a feature-computation pipeline —
-RegimeEngine/trend/volume/priceAction/supportResistance/MarketContext — not ported to Java).
+`docs/architecture/ARGUS_ARCHITECTURE.md` § Java Quant Core for why the 5 CORE
+strategies aren't wired into this backtester yet (the feature-computation pipeline they need —
+RegimeEngine/trend/volume/priceAction/supportResistance/MarketContext — was ported to Java
+2026-09-05, but only as a shadow-only regime-parity check inside `QuantSignalAgent`; it is not yet
+wired into this backtester).
 
 ---
 

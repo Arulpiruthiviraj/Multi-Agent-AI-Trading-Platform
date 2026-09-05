@@ -44,4 +44,4 @@ sizing input.
 
 - `ARGUS_CAMPAIGN_TRACKER.md` — full contract, settings fields, badges, effort telemetry
 - `src/components/dashboard/GoalCampaignCard.tsx` — the dashboard UI
-- `docs/architecture/RISK_ENGINE_24_GATES.md` — gate 23 (`argus_capital_allocation`)
+- `docs/architecture/ARGUS_ARCHITECTURE.md (Risk Engine Gates section)` — gate 23 (`argus_capital_allocation`)

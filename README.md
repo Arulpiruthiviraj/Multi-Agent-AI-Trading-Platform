@@ -96,7 +96,7 @@ non-performance-critical workflows — this includes the entire protected tradin
 
 **Java 26 engine** (`quant-core-java/`) owns quantitative calculations, indicators, strategy
 calculations, strategy evaluation, and high-throughput/parallelizable market computation, as an
-additive, advisory-only, isolated module — see `docs/architecture/JAVA_QUANT_CORE.md`. It is not
+additive, advisory-only, isolated module — see `docs/architecture/ARGUS_ARCHITECTURE.md` § Java Quant Core. It is not
 currently authoritative for anything in the live/paper trading path (see "Engine Authority Rule"
 below for the *forward-looking* policy on new work, not a claim about today's runtime).
 

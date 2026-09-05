@@ -1,6 +1,6 @@
 /**
  * Loads config/langGraphResearch.json - the isolated LangGraph research service
- * (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). A reviewed config change, not a UI/API knob.
+ * (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)). A reviewed config change, not a UI/API knob.
  * Same off-unless-explicit convention as config/aiCostGovernor.json's master flag.
  */
 import { loadRepoConfigJson } from './loadRepoConfigJson';

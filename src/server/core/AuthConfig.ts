@@ -154,7 +154,7 @@ export function isMutatingApiPath(path: string | undefined): boolean {
 
 /**
  * Narrow, loopback-only auth exemption for the isolated LangGraph research service's one
- * read-only evidence lookup (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md). That service has
+ * read-only evidence lookup (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)). That service has
  * no broker credentials and no session by design; this is the one real call it makes back into
  * Argus. Applies regardless of whether AUTH_PASSWORD is configured - unlike
  * allowUnauthenticatedRequest() above (which only relaxes anything when auth is fully disabled),

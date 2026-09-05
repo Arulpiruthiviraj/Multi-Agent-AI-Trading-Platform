@@ -213,7 +213,7 @@ export async function fetchAgentConfidenceScores(symbols: string[], lookbackMs: 
 
 /**
  * Session-Aware Trading Architecture Phase 3 (2026-09-05): the Java quant engine's one path into
- * ranking, per docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §6 - the prior 7 components were
+ * ranking, per docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §6 - the prior 7 components were
  * pure TypeScript arithmetic with zero Java involvement, contradicting this codebase's own
  * Java-authority policy for new quant/scoring work (CLAUDE.md "Java 26 Engine Authority").
  *

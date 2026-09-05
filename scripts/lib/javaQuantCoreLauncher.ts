@@ -7,7 +7,7 @@
  * from devWithOpenAlice.ts, which is not designed as a library and stays untouched here to avoid
  * destabilizing its own already-working ecosystem-launch behavior.
  *
- * Advisory-only, loopback-only, no broker access (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md).
+ * Advisory-only, loopback-only, no broker access (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section)).
  * Off by default: only starts when QUANT_JAVA_CORE_ENABLED=true. Never throws to the caller - a
  * failure here must never take down the real engine daemon, only leave this companion unavailable.
  */

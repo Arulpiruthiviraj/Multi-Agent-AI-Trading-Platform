@@ -52,7 +52,7 @@ created and probes the real ports/health endpoints those companions expose.
 |---|---|
 | `logs/argus-dev.log` | Combined stdout/stderr of the entire `npm run dev` process tree (everything using `stdio:'inherit'`) |
 | `logs/ollama-serve.log` | Ollama's own dedicated log (started directly by `argus.sh`, not through the Node tree) |
-| `logs/quant-core-java.log` | Java Quant Core's dedicated log (structured JSON lines — see `docs/architecture/JAVA_QUANT_CORE.md`) |
+| `logs/quant-core-java.log` | Java Quant Core's dedicated log (structured JSON lines — see `docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section)`) |
 
 ## First-run / troubleshooting
 
@@ -65,5 +65,5 @@ created and probes the real ports/health endpoints those companions expose.
 ## Related
 
 - `docs/operations/IBKR_GATEWAY_SETUP.md`
-- `docs/architecture/JAVA_QUANT_CORE.md`
+- `docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section)`
 - `README.md` — `npm run dev` variants (`dev:core`, `dev:server-only`, `dev:headless`, ...)

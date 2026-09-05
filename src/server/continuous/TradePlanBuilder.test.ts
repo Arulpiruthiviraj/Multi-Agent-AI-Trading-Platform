@@ -5,9 +5,15 @@ import path from 'path';
 import {
   buildTradePlanDrafts,
   revalidateTradePlan,
+  emitTradePlanIdea,
   DEFAULT_TRADE_PLAN_THRESHOLDS,
 } from './TradePlanBuilder';
 import type { RankedCandidate, RankingInput, ComponentSet } from './ComposableRanking';
+import { continuousIntelligence } from '../config/continuousIntelligence';
+import { eventBus } from '../core/EventBus';
+import { EVENTS } from '../core/eventNames';
+import { tradingEngine } from '../engines/TradingEngine';
+import { setPipelineAgentEnabled } from '../core/pipelineAgentGate';
 
 function availComp(score: number): ComponentSet[keyof ComponentSet] {
   return { score, available: true };
@@ -319,5 +325,82 @@ describe('TradePlanBuilder persistence (DB-backed)', () => {
 
     const rows = await db.select().from(schema.agentPredictions);
     expect(rows.filter((r) => r.agentName === 'TradePlanShadowTracker')).toHaveLength(0);
+  });
+});
+
+describe('emitTradePlanIdea (2026-09-05, explicit operator authorization)', () => {
+  const FLAG = continuousIntelligence.tradePlanIdeasEnabledEnvVar;
+
+  function primaryDraft(overrides: Partial<ReturnType<typeof buildTradePlanDrafts>[number]> = {}) {
+    const candidates = [ranked('AAPL', 1, 'PROMOTE')];
+    const inputs = new Map([['AAPL', input('AAPL')]]);
+    const [draft] = buildTradePlanDrafts(candidates, inputs, '2026-08-27');
+    expect(draft.setupType).toBe('PRIMARY'); // sanity - test fixture assumption
+    return { ...draft, ...overrides };
+  }
+
+  beforeEach(() => {
+    process.env[FLAG] = 'true';
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    setPipelineAgentEnabled('TradePlanBuilder', true);
+  });
+
+  afterEach(() => {
+    delete process.env[FLAG];
+    setPipelineAgentEnabled('TradePlanBuilder', true); // restore default for other test files
+  });
+
+  it('does nothing (FLAG_OFF) when ARGUS_TRADE_PLAN_IDEAS_ENABLED is not true', () => {
+    delete process.env[FLAG];
+    const result = emitTradePlanIdea(primaryDraft(), 100);
+    expect(result).toEqual({ emitted: false, reason: 'FLAG_OFF', symbol: 'AAPL' });
+  });
+
+  it('does nothing (NOT_PRIMARY_TIER) for a BACKUP or WATCHLIST setup', () => {
+    const backup = primaryDraft({ setupType: 'BACKUP' as const });
+    expect(emitTradePlanIdea(backup, 100)).toEqual({ emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: 'AAPL' });
+    const watchlist = primaryDraft({ setupType: 'WATCHLIST' as const });
+    expect(emitTradePlanIdea(watchlist, 100)).toEqual({ emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: 'AAPL' });
+  });
+
+  it('does nothing (AGENT_DISABLED) when the TradePlanBuilder Mission Control toggle is off', () => {
+    setPipelineAgentEnabled('TradePlanBuilder', false);
+    const result = emitTradePlanIdea(primaryDraft(), 100);
+    expect(result).toEqual({ emitted: false, reason: 'AGENT_DISABLED', symbol: 'AAPL' });
+  });
+
+  it('does nothing (IDEA_GENERATION_GATED) when Autobot is off', () => {
+    tradingEngine.state.enabled = false;
+    const result = emitTradePlanIdea(primaryDraft(), 100);
+    expect(result).toEqual({ emitted: false, reason: 'IDEA_GENERATION_GATED', symbol: 'AAPL' });
+  });
+
+  it('does nothing (INVALID_PRICE) when no current price is available - never fabricates one', () => {
+    expect(emitTradePlanIdea(primaryDraft(), null)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL' });
+    expect(emitTradePlanIdea(primaryDraft(), 0)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL' });
+    expect(emitTradePlanIdea(primaryDraft(), -5)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL' });
+  });
+
+  it('emits exactly one real TRADE_IDEA_GENERATED, as agent TradePlanBuilder, when every gate clears', () => {
+    const ideas: any[] = [];
+    const onIdea = (p: any) => ideas.push(p);
+    eventBus.subscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+    try {
+      const draft = primaryDraft();
+      const result = emitTradePlanIdea(draft, 100);
+      expect(result).toEqual({ emitted: true, reason: 'EMITTED', symbol: 'AAPL' });
+      expect(ideas).toHaveLength(1);
+      expect(ideas[0]).toMatchObject({
+        symbol: 'AAPL',
+        side: draft.direction,
+        agent: 'TradePlanBuilder',
+        currentPrice: 100,
+      });
+      expect(typeof ideas[0].traceId).toBe('string');
+      expect(ideas[0].traceId.length).toBeGreaterThan(0);
+    } finally {
+      eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+    }
   });
 });

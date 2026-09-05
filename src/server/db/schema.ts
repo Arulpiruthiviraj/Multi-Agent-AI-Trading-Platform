@@ -1596,7 +1596,7 @@ export const sessionLifecycleSnapshots = sqliteTable('session_lifecycle_snapshot
 }));
 
 /**
- * LangGraph research-service run ledger (docs/architecture/LANGGRAPH_RESEARCH_SERVICE.md).
+ * LangGraph research-service run ledger (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)).
  * Additive only - this Node process (the sole SQLite writer, per src/server/db/index.ts) is what
  * persists a finished run; the isolated Python LangGraph service never opens this database itself
  * and has no credentials to do so. A row here is always advisory/research output, never a trade,

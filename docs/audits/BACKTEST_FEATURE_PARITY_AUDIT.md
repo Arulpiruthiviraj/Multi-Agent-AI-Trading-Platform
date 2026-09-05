@@ -3,7 +3,7 @@
 Read-only audit. No code changes. Scope: `src/server/replay/FullArgusReplayEngine.ts` (read in full,
 1423 lines), `src/brokers/HistoricalReplayBroker.ts` (read in full, 289 lines), `src/server/engines/RiskEngine.ts`'s
 replay-branching logic (grepped and read in context, not the full 24-gate body line-by-line — the
-non-replay behavior of each gate is taken from `docs/architecture/RISK_ENGINE_24_GATES.md`/`CLAUDE.md`,
+non-replay behavior of each gate is taken from `docs/architecture/ARGUS_ARCHITECTURE.md (Risk Engine Gates section)`/`CLAUDE.md`,
 already verified against this file earlier in this session, not re-derived here). `BacktestEngine.ts`
 (1008 lines, TS `SAME_BAR_CLOSE` engine) and `JavaBacktestEngine`/`quant-core-java`'s backtest package
 were **not** re-read line-by-line this pass — their scope and disclosed limitations were already

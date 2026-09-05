@@ -248,7 +248,7 @@ export class QuantSignalAgent {
     }
 
     const regime = classifyRegime(bars);
-    // SHADOW-ONLY Java parity check (docs/architecture/JAVA_QUANT_CORE_MIGRATION_BLUEPRINT.md Phase
+    // SHADOW-ONLY Java parity check (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase
     // 2 feature-pipeline follow-up): never awaited - must add zero latency to evaluateSymbol and can
     // never affect its real return value. QuantCoreBridge.compareRegimeParity() is itself fully
     // fail-closed (disabled flag / open breaker / network error / non-2xx all no-op silently), but

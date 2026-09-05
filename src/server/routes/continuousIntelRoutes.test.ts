@@ -34,4 +34,12 @@ describe('/api/v2/continuous-intelligence/status', () => {
       expect(typeof row.relativeVolume).toBe('number');
     }
   });
+
+  it('reports real, current tradePlanIdeasEnabled/tradePlanBuilderAgentEnabled/extendedHoursExecutionEnabled status (2026-09-05, docs/audits/ARGUS_PREMARKET_TRADING_IMPLEMENTATION.md §12)', async () => {
+    const res = await request(app).get('/api/v2/continuous-intelligence/status');
+    expect(res.status).toBe(200);
+    expect(typeof res.body.tradePlanIdeasEnabled).toBe('boolean');
+    expect(typeof res.body.tradePlanBuilderAgentEnabled).toBe('boolean');
+    expect(typeof res.body.extendedHoursExecutionEnabled).toBe('boolean');
+  });
 });

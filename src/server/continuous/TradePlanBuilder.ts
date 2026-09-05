@@ -15,7 +15,7 @@
  *   exactly ONE independent TRADE_IDEA_GENERATED vote per PRIMARY-tier plan, through the same
  *   architecture-protection allowlist mechanism `OpportunityScreener.ts` already uses (see
  *   `src/server/architecture.protection.test.ts`) - never a bypass of ChiefTrader/RiskEngine/OMS,
- *   never CHIEF_APPROVED_IDEA, never `.placeOrder(` from this file. Off by default
+ *   never CHIEF_APPROVED_IDEA, never a placeOrder call from this file. Off by default
  *   (`ARGUS_TRADE_PLAN_IDEAS_ENABLED`) for any deployment that has not made the same explicit
  *   choice. `recordTradePlanShadowPrediction()` below is unaffected and keeps running regardless -
  *   the evidence-gathering mechanism still exists even though this deployment chose not to wait
@@ -65,7 +65,7 @@ export interface TradePlanDraft {
   targetConcept: string;
   confidence: number;
   /** Session-Aware Trading Architecture Phase 4 (2026-09-05): DISTINCT from confidence, per
-   *  docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §5.1's finding that this file previously
+   *  docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §5.1's finding that this file previously
    *  used candidate.finalScore for both concepts. confidence is the weighted-average MAGNITUDE
    *  (how strong is the signal); confluenceScore is the fraction of AVAILABLE components that
    *  independently clear a "meaningfully supportive" bar - how many separate pieces of evidence
@@ -233,7 +233,7 @@ export interface TradePlanIdeaResult {
  * TRADE_IDEA_GENERATED per PRIMARY-tier plan (never BACKUP/WATCHLIST - a deliberately conservative
  * scope given zero prior track record; the operator can widen this later). This is one independent
  * vote into the existing ChiefTraderAgent consensus (same 0.75 bar, same min-2-independent-agents
- * floor as every other agent) - never a bypass, never CHIEF_APPROVED_IDEA, never `.placeOrder(`
+ * floor as every other agent) - never a bypass, never CHIEF_APPROVED_IDEA, never a placeOrder call
  * from this module. Gated behind THREE independent checks, matching OpportunityScreener.ts's own
  * pattern exactly: the master flag (isTradePlanIdeasEnabled), the Autobot/session-recovery/
  * campaign-lock composite gate (isLiveIdeaGenerationEnabled), and the per-agent Mission Control
@@ -325,7 +325,7 @@ export interface TradePlanShadowContext {
 
 /**
  * Session-Aware Trading Architecture Phase 5 gap-analysis follow-up (2026-09-05,
- * docs/architecture/ARGUS_PREMARKET_GAP_ANALYSIS.md §5): records a real, graded shadow prediction
+ * docs/architecture/ARGUS_ARCHITECTURE.md (Premarket / Session-Aware Trading Architecture section) §5): records a real, graded shadow prediction
  * the FIRST time a plan's thesis survives revalidation into VALID - via the SAME existing
  * recordPrediction() pipeline (ModelPerformanceTracker.ts) DiscoveryOutcomeTracker already uses,
  * never a new grading system. This is explicitly NOT the TRADE_IDEA_GENERATED wiring

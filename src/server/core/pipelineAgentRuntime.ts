@@ -21,6 +21,11 @@ const runtimes: Record<string, AgentRuntime> = {
   MacroAgent: { start: () => macroAgent.start(), stop: () => macroAgent.stop() },
   KronosEngine: { start: () => kronosForecastAgent.start(), stop: () => kronosForecastAgent.stop() },
   QuantEngine: { start: () => quantSignalAgent.start(), stop: () => quantSignalAgent.stop() },
+  // No independent worker (same shape as NewsAgent above) - the ranking cycle that calls
+  // emitTradePlanIdea() is owned/started by SnapshotScanner/ArgusCoreBoot, not this toggle. The
+  // real gate is the isPipelineAgentEnabled('TradePlanBuilder') check inline in
+  // TradePlanBuilder.emitTradePlanIdea() itself.
+  TradePlanBuilder: { start: () => { /* gated inline in emitTradePlanIdea() */ }, stop: () => { /* same */ } },
 };
 
 let ideaWorkersArmed = false;
