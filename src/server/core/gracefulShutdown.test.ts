@@ -15,6 +15,39 @@ vi.mock('../services/MarketDataWorker', () => ({
 vi.mock('../db', () => ({
   sqliteDb: { pragma: vi.fn(), close: vi.fn() },
 }));
+// Real gap found and fixed (2026-09-05, post-implementation forensic audit): these 9 interval-
+// driven workers were never stopped during drain, even though several do real DB writes on their
+// own timer (SessionLifecycle most notably - always running, independent of Autobot). A tick
+// landing after sqliteDb.close() throws "database connection is not open"; reproduced live during
+// this pass. Mocked here (not left real) so this test can assert each is actually stopped, the
+// same way marketDataWorker/system above already are.
+vi.mock('../premarket/SessionLifecycle', () => ({
+  sessionLifecycleWorker: { stop: vi.fn() },
+}));
+vi.mock('../services/JavaQuantAdvisoryService', () => ({
+  javaQuantAdvisoryService: { stop: vi.fn() },
+}));
+vi.mock('../continuous/CalibrationValidationWorker', () => ({
+  calibrationValidationWorker: { stop: vi.fn() },
+}));
+vi.mock('../continuous/MarketUniverseScanner', () => ({
+  marketUniverseScannerWorker: { stop: vi.fn() },
+}));
+vi.mock('../services/CampaignTracker', () => ({
+  campaignTracker: { stop: vi.fn() },
+}));
+vi.mock('../services/AutoTradeScheduler', () => ({
+  autoTradeScheduler: { stop: vi.fn() },
+}));
+vi.mock('../news/MarketOpenNewsConfluence', () => ({
+  marketOpenNewsConfluence: { stop: vi.fn() },
+}));
+vi.mock('../services/StrategyEngineShadowRunner', () => ({
+  strategyEngineShadowRunner: { stop: vi.fn() },
+}));
+vi.mock('../integrations/openalice/OpenAliceVerificationService', () => ({
+  openAliceVerificationService: { stopPolling: vi.fn() },
+}));
 
 describe('gracefulShutdown drain', () => {
   const sessionPath = join(tmpdir(), `argus_shutdown_session_${process.pid}.json`);
@@ -60,6 +93,34 @@ describe('gracefulShutdown drain', () => {
     );
     expect(system.stop).toHaveBeenCalled();
     expect(marketDataWorker.stop).toHaveBeenCalled();
+
+    // Real gap fixed this pass: these 9 workers must all be stopped BEFORE sqliteDb.close() below,
+    // not just "eventually" - a tick from any one of them after close() throws, and enough of them
+    // firing together trips the storm circuit-breaker into an unplanned exit (reproduced live).
+    const { sessionLifecycleWorker } = await import('../premarket/SessionLifecycle');
+    const { javaQuantAdvisoryService } = await import('../services/JavaQuantAdvisoryService');
+    const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
+    const { marketUniverseScannerWorker } = await import('../continuous/MarketUniverseScanner');
+    const { campaignTracker } = await import('../services/CampaignTracker');
+    const { autoTradeScheduler } = await import('../services/AutoTradeScheduler');
+    const { marketOpenNewsConfluence } = await import('../news/MarketOpenNewsConfluence');
+    const { strategyEngineShadowRunner } = await import('../services/StrategyEngineShadowRunner');
+    const { openAliceVerificationService } = await import('../integrations/openalice/OpenAliceVerificationService');
+    expect(sessionLifecycleWorker.stop).toHaveBeenCalled();
+    expect(javaQuantAdvisoryService.stop).toHaveBeenCalled();
+    expect(calibrationValidationWorker.stop).toHaveBeenCalled();
+    expect(marketUniverseScannerWorker.stop).toHaveBeenCalled();
+    expect(campaignTracker.stop).toHaveBeenCalled();
+    expect(autoTradeScheduler.stop).toHaveBeenCalled();
+    expect(marketOpenNewsConfluence.stop).toHaveBeenCalled();
+    expect(strategyEngineShadowRunner.stop).toHaveBeenCalled();
+    expect(openAliceVerificationService.stopPolling).toHaveBeenCalled();
+
+    // Order matters: every worker above must stop BEFORE the DB closes, not after.
+    const sessionLifecycleOrder = (sessionLifecycleWorker.stop as any).mock.invocationCallOrder[0];
+    const dbCloseOrder = (sqliteDb.close as any).mock.invocationCallOrder[0];
+    expect(sessionLifecycleOrder).toBeLessThan(dbCloseOrder);
+
     expect(sqliteDb.pragma).toHaveBeenCalledWith('wal_checkpoint(TRUNCATE)');
     expect(sqliteDb.close).toHaveBeenCalled();
     expect(httpClose).toHaveBeenCalled();

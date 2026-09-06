@@ -93,6 +93,6 @@ Unchanged by the daemon: `FullArgusReplayEngine` → production RiskEngine → O
 ## Safety
 
 - ONE RiskEngine, ONE OMS, ONE EventBus
-- `PAPER_TRADING_ONLY`, LIVE_NO_GO, 24 gates, 5-layer LIVE arming
+- `PAPER_TRADING_ONLY`, LIVE_NO_GO, 25 gates, 5-layer LIVE arming
 - CLI/API cannot call broker directly
 - Replay isolated from live EventBus / live quote cache

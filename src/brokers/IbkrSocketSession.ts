@@ -17,6 +17,7 @@ import type { Contract } from '@stoqey/ib';
 import { loadIbkrConnection, ibkrSocketPortCandidates, type IbkrConnectionConfig } from '../server/config/ibkrConnection';
 import { findFirstOpenTcpPort } from './ibkrTcpProbe';
 import type { Bar } from '../server/engines/backtest/HistoricalDataGateway';
+import { ReconnectBackoff } from '../server/core/reconnectBackoff';
 
 /**
  * Pure order-object construction, extracted from placeStockOrder() (2026-09-05, Extended-Hours
@@ -136,9 +137,49 @@ export class IbkrSocketSession {
   private nextHistReqId = 50_000;
   /** Serialize historical requests — IB paces hist data; avoid storms. */
   private histChain: Promise<unknown> = Promise.resolve();
+  /**
+   * Real asymmetry found and fixed (2026-09-06, post-implementation forensic audit): this session
+   * had no reconnect-with-backoff of any kind, unlike MarketDataWorker.ts's Alpaca WebSocket path
+   * (which already uses this SAME ReconnectBackoff utility). If IB Gateway Desktop was down at
+   * boot, or dropped later (closed, forced logout, network hiccup), this connection stayed dead
+   * until a full Argus process restart - reproduced live during this pass. connect() itself is
+   * cheap to retry when Gateway is down (findFirstOpenTcpPort's own 1500ms probe fails fast, the
+   * real IB API handshake is never attempted), so periodic retry costs nothing when there is
+   * genuinely nothing listening. Armed only after the first real connect() attempt (never before
+   * this adapter is actually asked to connect), and only while the process is running - this never
+   * bypasses OMS/RiskEngine and never places an order; it only tries to restore the same
+   * connection the adapter already had permission to make.
+   */
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectBackoff = new ReconnectBackoff();
+  private autoReconnectArmed = false;
+  private lastPreferLive = false;
 
   constructor(cfg?: IbkrConnectionConfig) {
     this.cfg = cfg || loadIbkrConnection();
+  }
+
+  private clearReconnectTimer(): void {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+  }
+
+  private scheduleReconnect(reason: string): void {
+    if (!this.autoReconnectArmed || this.reconnectTimer) return;
+    const delayMs = this.reconnectBackoff.nextDelayMs();
+    console.log(`[IBKR Socket] Scheduling reconnect in ${delayMs}ms (${reason})`);
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connect(this.lastPreferLive);
+    }, delayMs);
+  }
+
+  /** Stops future auto-reconnect attempts (e.g. this broker is no longer the active selection). Does not tear down an already-open connection. */
+  stopAutoReconnect(): void {
+    this.autoReconnectArmed = false;
+    this.clearReconnectTimer();
   }
 
   setTickHandler(handler: ((symbol: string, price: number) => void) | null): void {
@@ -185,6 +226,9 @@ export class IbkrSocketSession {
   }
 
   async connect(preferLive = false): Promise<boolean> {
+    this.lastPreferLive = preferLive;
+    this.autoReconnectArmed = true;
+    this.clearReconnectTimer(); // an explicit connect() attempt supersedes any pending auto-retry
     await this.disconnect();
 
     const ports = ibkrSocketPortCandidates(this.cfg, preferLive);
@@ -194,6 +238,7 @@ export class IbkrSocketSession {
         `[IBKR Socket] IB Gateway not detected on ${this.cfg.host}:${ports.join('/')}. ` +
           'Launch IB Gateway Desktop in Paper mode (API socket enabled, Read-Only API unchecked).',
       );
+      this.scheduleReconnect('Gateway not detected on connect attempt');
       return false;
     }
 
@@ -218,7 +263,10 @@ export class IbkrSocketSession {
 
       const timer = setTimeout(() => {
         console.warn(`[IBKR Socket] Connect timeout after ${timeoutMs}ms on ${this.cfg.host}:${openPort}`);
-        void this.disconnect().finally(() => finish(false));
+        void this.disconnect().finally(() => {
+          finish(false);
+          this.scheduleReconnect('connect timeout');
+        });
       }, timeoutMs);
 
       ib.on(EventName.connected, () => {
@@ -230,12 +278,20 @@ export class IbkrSocketSession {
 
       ib.on(EventName.disconnected, () => {
         this.connected = false;
+        // Covers a connection that was UP and then dropped (Gateway closed, forced logout, network
+        // hiccup) - the finish(false) paths below only cover a connection attempt that never
+        // succeeded in the first place. A no-op when this fires as part of an intentional
+        // connect()/disconnect() call, since that path already clears/reschedules the timer itself.
+        if (settled) this.scheduleReconnect('IB Gateway disconnected');
       });
 
       ib.on(EventName.error, (err, code, reqId) => {
         if (!settled && code === ErrorCode.CONNECT_FAIL) {
           console.warn(`[IBKR Socket] error code=${code} reqId=${reqId}: ${err?.message || err}`);
-          void this.disconnect().finally(() => finish(false));
+          void this.disconnect().finally(() => {
+            finish(false);
+            this.scheduleReconnect('connect failed');
+          });
           return;
         }
         if (!settled) {
@@ -273,6 +329,7 @@ export class IbkrSocketSession {
           }
           this.requestAccountSummary();
           ib.reqPositions();
+          this.reconnectBackoff.reset();
           finish(true);
         }
       });

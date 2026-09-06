@@ -354,32 +354,39 @@ describe('emitTradePlanIdea (2026-09-05, explicit operator authorization)', () =
   it('does nothing (FLAG_OFF) when ARGUS_TRADE_PLAN_IDEAS_ENABLED is not true', () => {
     delete process.env[FLAG];
     const result = emitTradePlanIdea(primaryDraft(), 100);
-    expect(result).toEqual({ emitted: false, reason: 'FLAG_OFF', symbol: 'AAPL' });
+    expect(result).toEqual({ emitted: false, reason: 'FLAG_OFF', symbol: 'AAPL', rescueRequested: false });
   });
 
   it('does nothing (NOT_PRIMARY_TIER) for a BACKUP or WATCHLIST setup', () => {
     const backup = primaryDraft({ setupType: 'BACKUP' as const });
-    expect(emitTradePlanIdea(backup, 100)).toEqual({ emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: 'AAPL' });
+    expect(emitTradePlanIdea(backup, 100)).toEqual({ emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: 'AAPL', rescueRequested: false });
     const watchlist = primaryDraft({ setupType: 'WATCHLIST' as const });
-    expect(emitTradePlanIdea(watchlist, 100)).toEqual({ emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: 'AAPL' });
+    expect(emitTradePlanIdea(watchlist, 100)).toEqual({ emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: 'AAPL', rescueRequested: false });
   });
 
   it('does nothing (AGENT_DISABLED) when the TradePlanBuilder Mission Control toggle is off', () => {
     setPipelineAgentEnabled('TradePlanBuilder', false);
     const result = emitTradePlanIdea(primaryDraft(), 100);
-    expect(result).toEqual({ emitted: false, reason: 'AGENT_DISABLED', symbol: 'AAPL' });
+    expect(result).toEqual({ emitted: false, reason: 'AGENT_DISABLED', symbol: 'AAPL', rescueRequested: false });
   });
 
   it('does nothing (IDEA_GENERATION_GATED) when Autobot is off', () => {
     tradingEngine.state.enabled = false;
     const result = emitTradePlanIdea(primaryDraft(), 100);
-    expect(result).toEqual({ emitted: false, reason: 'IDEA_GENERATION_GATED', symbol: 'AAPL' });
+    expect(result).toEqual({ emitted: false, reason: 'IDEA_GENERATION_GATED', symbol: 'AAPL', rescueRequested: false });
   });
 
   it('does nothing (INVALID_PRICE) when no current price is available - never fabricates one', () => {
-    expect(emitTradePlanIdea(primaryDraft(), null)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL' });
-    expect(emitTradePlanIdea(primaryDraft(), 0)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL' });
-    expect(emitTradePlanIdea(primaryDraft(), -5)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL' });
+    expect(emitTradePlanIdea(primaryDraft(), null)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL', rescueRequested: false });
+    expect(emitTradePlanIdea(primaryDraft(), 0)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL', rescueRequested: false });
+    expect(emitTradePlanIdea(primaryDraft(), -5)).toEqual({ emitted: false, reason: 'INVALID_PRICE', symbol: 'AAPL', rescueRequested: false });
+  });
+
+  it('requests a real market-data rescue subscription for the symbol before emitting - RiskEngine gate 13 (data_freshness) otherwise fails closed for any symbol outside the active WebSocket pool', () => {
+    const draft = primaryDraft();
+    const result = emitTradePlanIdea(draft, 100);
+    expect(result.emitted).toBe(true);
+    expect(result.rescueRequested).toBe(true);
   });
 
   it('emits exactly one real TRADE_IDEA_GENERATED, as agent TradePlanBuilder, when every gate clears', () => {
@@ -389,7 +396,7 @@ describe('emitTradePlanIdea (2026-09-05, explicit operator authorization)', () =
     try {
       const draft = primaryDraft();
       const result = emitTradePlanIdea(draft, 100);
-      expect(result).toEqual({ emitted: true, reason: 'EMITTED', symbol: 'AAPL' });
+      expect(result).toEqual({ emitted: true, reason: 'EMITTED', symbol: 'AAPL', rescueRequested: true });
       expect(ideas).toHaveLength(1);
       expect(ideas[0]).toMatchObject({
         symbol: 'AAPL',

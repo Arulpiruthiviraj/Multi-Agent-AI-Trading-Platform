@@ -28,7 +28,7 @@ Compared to **average cost**, not a session high.
 |---|---|
 | Trigger | `PnL > takeProfitPct` (default 15) when **no** quant stop/target/thesis on the opening lot |
 | Consensus | Risk-exit: **skips** min-2 / debate |
-| RiskEngine | Full 24 gates (SELL) |
+| RiskEngine | Full 25 gates (SELL) |
 | OMS | Normal |
 | Evidence | `EXIT_CODE=TARGET_REACHED` in reasoning; `agent: PortfolioManager` |
 

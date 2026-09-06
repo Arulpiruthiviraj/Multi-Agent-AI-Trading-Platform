@@ -60,6 +60,70 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
   } catch (e) {
     console.error('[gracefulShutdown] Failed to stop PortfolioReconciliation', e);
   }
+  // Real gap found and fixed this pass (2026-09-05, post-implementation forensic audit): none of
+  // the workers below were ever stopped during drain, even though several of them (SessionLifecycle
+  // most notably - a real DB write every ~60s, started independent of Autobot at core boot) keep
+  // running on their own setInterval right up until sqliteDb.close() below. A tick landing after
+  // close() throws "The database connection is not open"; if enough of these fire within the same
+  // window, globalErrorHandlers.ts's own storm circuit-breaker (">4 in 5s") converts that into a
+  // clean-but-unplanned process exit - reproduced live during this pass. Stopping every known
+  // interval-driven worker BEFORE the DB closes, not after, is the correct fix - SystemBootstrap.stop()
+  // and the three explicit stops above already cover most idea/execution agents; these are the
+  // remainder (session/premarket, research/calibration, discovery, and optional campaign workers).
+  try {
+    const { sessionLifecycleWorker } = await import('../premarket/SessionLifecycle');
+    sessionLifecycleWorker.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop SessionLifecycle', e);
+  }
+  try {
+    const { javaQuantAdvisoryService } = await import('../services/JavaQuantAdvisoryService');
+    javaQuantAdvisoryService.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop JavaQuantAdvisoryService', e);
+  }
+  try {
+    const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
+    calibrationValidationWorker.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop CalibrationValidationWorker', e);
+  }
+  try {
+    const { marketUniverseScannerWorker } = await import('../continuous/MarketUniverseScanner');
+    marketUniverseScannerWorker.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop MarketUniverseScanner', e);
+  }
+  try {
+    const { campaignTracker } = await import('../services/CampaignTracker');
+    campaignTracker.stop(); // also stops campaignWatchlistBoostWorker and campaignOpeningSurgeWorker internally
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop CampaignTracker', e);
+  }
+  try {
+    const { autoTradeScheduler } = await import('../services/AutoTradeScheduler');
+    autoTradeScheduler.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop AutoTradeScheduler', e);
+  }
+  try {
+    const { marketOpenNewsConfluence } = await import('../news/MarketOpenNewsConfluence');
+    marketOpenNewsConfluence.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop MarketOpenNewsConfluence', e);
+  }
+  try {
+    const { strategyEngineShadowRunner } = await import('../services/StrategyEngineShadowRunner');
+    strategyEngineShadowRunner.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop StrategyEngineShadowRunner', e);
+  }
+  try {
+    const { openAliceVerificationService } = await import('../integrations/openalice/OpenAliceVerificationService');
+    openAliceVerificationService.stopPolling();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop OpenAliceVerificationService', e);
+  }
   try {
     const { sqliteDb } = await import('../db');
     sqliteDb.pragma('wal_checkpoint(TRUNCATE)');

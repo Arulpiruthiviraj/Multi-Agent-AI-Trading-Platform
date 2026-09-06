@@ -50,9 +50,10 @@ Usage:
   argus <command> [options]
 
 Engine:
-  start             Start Argus Engine
-  stop              Gracefully stop Argus Engine
-  restart           Restart Argus Engine
+  start [cli|web]   Start Argus Engine - cli (default): headless, API only.
+                    web: full dev ecosystem with the browser UI (./argus.sh start).
+  stop [cli|web]    Gracefully stop Argus Engine (same cli/web split as start)
+  restart [cli|web] Restart Argus Engine (same cli/web split as start)
   status            Show runtime status
   health            Check process health
   ready             Check trading readiness (LIVE readiness API)
@@ -111,11 +112,17 @@ EOF
 
 argus_help_start() {
   cat <<'EOF'
-Usage: argus start [--dev|--prod|--headless]
+Usage: argus start [cli|web] [--dev|--prod]
 
-  --dev       Development engine (npm run start:engine / tsx)
-  --prod      Production engine (requires dist/server.cjs)
-  --headless  Headless engine (default for start via CLI)
+  cli   (default) Headless API-only engine, no browser UI - npm run argus-cli's own
+        start lifecycle (scripts/argus-engine.ts). This is what "argus start" has
+        always done; "cli" is just the explicit name for it.
+  web   Full dev ecosystem with the browser UI - delegates to ./argus.sh start
+        (npm run dev: Vite + Express on :3000, plus Chronos/Ollama/sibling engines
+        as configured). A separate process lifecycle from cli mode - stop/restart
+        it the same way: "argus stop web" / "argus restart web".
+
+  --dev/--prod apply to cli mode only (web mode is always the dev ecosystem).
 
 Does not spawn a second engine if one is already running.
 EOF
@@ -123,18 +130,22 @@ EOF
 
 argus_help_stop() {
   cat <<'EOF'
-Usage: argus stop
+Usage: argus stop [cli|web]
 
-Sends SIGTERM via existing engine PID lifecycle (graceful shutdown).
-Does not use kill -9.
+  cli  (default) Stops the headless engine via its PID lifecycle (graceful shutdown,
+       no kill -9).
+  web  Stops the web-UI dev ecosystem started by "argus start web" (delegates to
+       ./argus.sh stop) - a different process lifecycle from cli mode.
 EOF
 }
 
 argus_help_restart() {
   cat <<'EOF'
-Usage: argus restart
+Usage: argus restart [cli|web]
 
-Stops then starts the Argus Engine via existing lifecycle.
+Stops then starts the Argus Engine via the existing lifecycle for whichever mode
+you specify (default cli). "argus restart web" restarts the web-UI dev ecosystem
+instead - it does not restart a cli-mode engine, and vice versa.
 EOF
 }
 
@@ -254,23 +265,27 @@ EOF
 }
 
 argus_cmd_start() {
+  # Web-UI mode ("argus start web") never reaches this function - the top-level ./argus router
+  # execs into argus.sh before argus_cmd_start is called. This function only ever starts the
+  # headless CLI engine, so it always passes --headless - there used to be a --ui/--with-ui flag
+  # here that looked like it toggled that off, but nothing downstream (this function's own
+  # unconditional --headless below, nor argus-cli.ts's startEngine()) ever actually read it. It
+  # was silently a no-op. Removed rather than fixed in place, since "argus start web" is now the
+  # real, working way to get the web UI - see ARGUS_SHELL_CLI.md.
   local mode="dev"
-  local headless=1
   for a in "$@"; do
     case "$a" in
       --prod) mode="prod" ;;
       --dev) mode="dev" ;;
-      --headless|-H) headless=1 ;;
-      --ui|--with-ui) headless=0 ;;
     esac
   done
 
   # Already running? Prefer TS CLI (PID + health) — do not duplicate spawn.
   if argus_has_flag --json "$@"; then
     if [[ "$mode" == "prod" ]]; then
-      argus_npm_cli start --prod ${headless:+--headless}
+      argus_npm_cli start --prod --headless
     else
-      argus_npm_cli start ${headless:+--headless}
+      argus_npm_cli start --headless
     fi
     return $?
   fi

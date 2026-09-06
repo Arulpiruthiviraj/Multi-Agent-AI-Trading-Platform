@@ -1,6 +1,6 @@
 # Argus RiskEngine forensics
 
-24 gates. Catalog order: `config/riskGateOrder.json` (**UI catalog only**). Pass/fail from `risk_gate_results` / `RISK_GATE_EVALUATED`.
+25 gates. Catalog order: `config/riskGateOrder.json` (**UI catalog only**). Pass/fail from `risk_gate_results` / `RISK_GATE_EVALUATED`.
 
 **CODE-VERIFIED** — `src/server/engines/RiskEngine.ts`, CLAUDE.md §2, `tradingSafety.json`, settings defaults.
 

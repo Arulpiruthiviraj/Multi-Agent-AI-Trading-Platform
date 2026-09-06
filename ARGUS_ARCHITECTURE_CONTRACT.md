@@ -25,7 +25,7 @@ SPECIALIZED AGENTS (Technical, Kronos, Quant, Fundamental, Macro, News/Catalyst)
     ↓
 CHIEF TRADER / CONSENSUS
     ↓
-RISK ENGINE (24 gates, persist-then-emit)
+RISK ENGINE (25 gates, persist-then-emit)
     ↓
 POSITION SIZING
     ↓
@@ -46,7 +46,7 @@ Do not replace this spine with a shortcut implementation.
 
 ## 2. Protected execution spine
 
-Protected (extend through documented interfaces only): `ChiefTraderAgent`, `RiskEngine`, `PositionSizing`, `OrderManagementService`, `BrokerManager` + adapters, reconciliation, kill-switch / trading-state machine, 24 risk gates, 5-layer LIVE arming.
+Protected (extend through documented interfaces only): `ChiefTraderAgent`, `RiskEngine`, `PositionSizing`, `OrderManagementService`, `BrokerManager` + adapters, reconciliation, kill-switch / trading-state machine, 25 risk gates, 5-layer LIVE arming.
 
 A new `placeOrder` caller, a new `CHIEF_APPROVED_IDEA` emitter outside the reviewed allowlist, or a discovery/scanner OMS path **must fail CI**.
 
@@ -60,7 +60,7 @@ Broker is source of truth for remote quantity. Never auto-flatten unexplained mi
 
 ## 4. Protected risk gates
 
-All 24 gates in `config/riskGateOrder.json` stay recorded. Do not skip, reorder for convenience, or let AI override the first failure. `price_validity` and `data_freshness` remain fail-closed.
+All 25 gates in `config/riskGateOrder.json` stay recorded. Do not skip, reorder for convenience, or let AI override the first failure. `price_validity` and `data_freshness` remain fail-closed.
 
 ---
 

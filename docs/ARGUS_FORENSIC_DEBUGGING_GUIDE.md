@@ -66,7 +66,7 @@ CHIEF_APPROVED_IDEA (mints transactions.id)
     ↓
 RiskValidationAgent (thin forwarder)
     ↓
-RiskEngine.evaluateRisk (24 gates, serialized queue)
+RiskEngine.evaluateRisk (25 gates, serialized queue)
     persist risk_assessments + risk_gate_results
     ↓
 RISK_ASSESSMENT_COMPLETED   OR   RISK_BLOCK (persist failed)

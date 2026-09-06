@@ -169,7 +169,7 @@ WHERE trace_id = '…'
 ORDER BY sequence;
 ```
 
-All 24 gates are recorded (SELL adds `sell_position_exists`; BUY omits it). Catalog order: `config/riskGateOrder.json`. Pass/fail **must** come from this table, not the JSON file.
+All 25 gates are recorded (SELL adds `sell_position_exists`; BUY omits it). Catalog order: `config/riskGateOrder.json`. Pass/fail **must** come from this table, not the JSON file.
 
 See [ARGUS_RISK_FORENSICS.md](ARGUS_RISK_FORENSICS.md). SQL: `05_risk_failures.sql`, `06_risk_gate_summary.sql`.
 

@@ -84,7 +84,7 @@ Weighted consensus + optional debate. See [ARGUS_CONSENSUS_FORENSICS.md](ARGUS_C
 
 ### RiskValidationAgent / RiskEngine
 
-Thin forwarder + 24 gates. Cannot disable.
+Thin forwarder + 25 gates. Cannot disable.
 
 ### OrderManagementService
 

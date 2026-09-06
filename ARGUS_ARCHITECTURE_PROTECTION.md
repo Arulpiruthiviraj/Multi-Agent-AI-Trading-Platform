@@ -33,7 +33,7 @@ IDEA GENERATION (TechnicalAgent, NewsEngine, FundamentalAgent, MacroAgent, Krono
     ↓  TRADE_IDEA_GENERATED (via EventBus.emitTradeIdea)
 ChiefTraderAgent
     ↓  reviewIdea() → (optional ConsensusDebate) → evaluateConsensus()
-RiskEngine (all 24 gates, config/riskGateOrder.json)
+RiskEngine (all 25 gates, config/riskGateOrder.json)
     ↓  RISK_ASSESSMENT_COMPLETED
 OrderManagementService (OMS)
     ↓  authorizeProductionOrder (P0.1) → placeOrder
@@ -47,7 +47,7 @@ No new component may skip a stage this spine requires. Concretely:
 - **No scanner, agent, discovery service, or portfolio monitor may call `BrokerManager.placeOrder()`, `OrderManagementService`, or any broker adapter directly.** `OMS` is the sole production `.placeOrder(` caller — enforced today by `phase21.invariants.test.ts`.
 - **No new idea source may emit anything other than `TRADE_IDEA_GENERATED`** via `eventBus.emitTradeIdea(...)`. That is the one door into the spine.
 - **No new component may bypass `ChiefTraderAgent`'s consensus math** (`consensusApprovalThreshold`, `minIndependentAgreeingAgents`) except the existing, narrow `PortfolioManager` risk-exit bypass (`isRiskExit()` in `ChiefTraderAgent.ts`), which skips debate/quorum but never skips RiskEngine — that exception is capital preservation, not a template for new bypasses.
-- **No new component may weaken, reorder, or skip any of RiskEngine's 24 gates** (`config/riskGateOrder.json` is catalog order only; pass/fail is always read from `risk_gate_results`, never assumed).
+- **No new component may weaken, reorder, or skip any of RiskEngine's 25 gates** (`config/riskGateOrder.json` is catalog order only; pass/fail is always read from `risk_gate_results`, never assumed).
 - **No new component may auto-resume trading after a kill-switch or reconciliation pause.** `TRADING_PAUSED` / `EMERGENCY_STOP` require an operator action; `autoFlattenOnReconciliationMismatch` stays `false`.
 - **No new component may change `consensusApprovalThreshold`, `minIndependentAgreeingAgents`, or any RiskEngine numeric gate to increase trade frequency.** Numbers live in `config/tradingSafety.json`, reviewed changes only, never a runtime/UI knob for this purpose.
 - **No new component may arm LIVE, flip `PAPER_TRADING_ONLY`, or add an env-var shortcut around the 5-layer LIVE arming sequence.**

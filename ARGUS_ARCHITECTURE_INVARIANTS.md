@@ -9,7 +9,7 @@ This is the contract. Code + tests beat this file. Adding markdown does not rais
 ```
 MARKET DATA → CANDIDATE / IDEA AGENTS → TRADE_IDEA_GENERATED
   → ChiefTrader (consensus / debate)
-  → RiskEngine (24 gates, persist-then-emit)
+  → RiskEngine (25 gates, persist-then-emit)
   → PositionSizing
   → OMS (sole production placeOrder)
   → BrokerManager / adapter
@@ -35,7 +35,7 @@ Do not “fix” a blocked trade by lowering thresholds so that trades occur.
 
 ## D. Components that must not be bypassed
 
-`ChiefTraderAgent`, `RiskEngine`, `PositionSizing`, `OrderManagementService`, `BrokerManager`, reconciliation, kill-switch / trading-state machine, 24 gates, 5-layer LIVE arming.
+`ChiefTraderAgent`, `RiskEngine`, `PositionSizing`, `OrderManagementService`, `BrokerManager`, reconciliation, kill-switch / trading-state machine, 25 gates, 5-layer LIVE arming.
 
 `OpportunityDiscovery` must not `emitTradeIdea`. `ExitIntelligenceEngine` must not import EventBus / OMS / brokers. PortfolioMonitor SELL still goes `emitTradeIdea` → (risk-exit may skip debate) → RiskEngine → OMS.
 

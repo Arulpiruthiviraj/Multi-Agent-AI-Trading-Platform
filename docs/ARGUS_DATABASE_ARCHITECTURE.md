@@ -1,6 +1,6 @@
 # Argus database architecture
 
-**CODE-VERIFIED** against `src/server/db/schema.ts` (count `sqliteTable(` = **60**) and `drizzle/*.sql` (**0000–0046**, 47 SQL files as of 2026-08-21). Re-count with `rg -c "sqliteTable\(" src/server/db/schema.ts`.
+**CODE-VERIFIED** against `src/server/db/schema.ts` (count `sqliteTable(` = **75** as of 2026-09-05) and `drizzle/*.sql` (**0000–0060**, 61 SQL files as of 2026-09-05). Re-count with `rg -c "sqliteTable\(" src/server/db/schema.ts` — both drift, don't trust a remembered number.
 
 **SQL foreign keys:** none. `schema.ts` does not call `references()`. Drizzle comments that say “FK” are **APPLICATION-LEVEL RELATIONSHIP** only.
 
@@ -314,4 +314,4 @@ WAL checkpoint: graceful shutdown (`gracefulShutdown.ts`). Backup: `GET /api/v1/
 
 ## Migrations
 
-47 SQL files `drizzle/0000_*.sql` … `drizzle/0046_campaign_eod_flatten.sql` (journal in `drizzle/meta/_journal.json`). Multi-statement files require `--> statement-breakpoint` (0040 lesson). Schema drift: **CODE-VERIFIED** table count is `schema.ts` (**60** `sqliteTable(`), not a remembered number.
+61 SQL files `drizzle/0000_*.sql` … `drizzle/0060_warm_quasimodo.sql` (journal in `drizzle/meta/_journal.json`). Multi-statement files require `--> statement-breakpoint` (0040 lesson). Schema drift: **CODE-VERIFIED** table count is `schema.ts` (**75** `sqliteTable(` as of 2026-09-05), not a remembered number.

@@ -34,6 +34,7 @@ import { generateTraceId } from '../core/traceId';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { isTradePlanIdeasEnabled } from '../config/continuousIntelligence';
+import { marketDataWorker } from '../services/MarketDataWorker';
 
 export type SetupType = 'PRIMARY' | 'BACKUP' | 'WATCHLIST';
 export type TradePlanStatus = 'DRAFT' | 'READY' | 'REVALIDATING' | 'VALID' | 'INVALIDATED' | 'EXPIRED' | 'EXECUTED' | 'CLOSED';
@@ -226,6 +227,15 @@ export interface TradePlanIdeaResult {
   emitted: boolean;
   reason: string;
   symbol: string;
+  /** Real post-implementation audit finding (2026-09-05): RiskEngine's gate 13 (data_freshness)
+   *  checks MarketDataWorker's own live WEBSOCKET tick cache (getLatestPriceAgeMs), which is a
+   *  DIFFERENT data source than the REST snapshot ComposableRanking/TradePlanBuilder score from -
+   *  a PRIMARY-tier symbol outside the ~12-slot active subscription pool has a null tick age and
+   *  WILL fail gate 13 regardless of this idea's own (real, not fabricated) currentPrice. True only
+   *  when this call actually requested a rescue subscription for the symbol - never a guarantee
+   *  gate 13 passes (a rescue grants a subscription, not an instant tick), but a real, honest
+   *  improvement over emitting into a symbol nobody ever asked MarketDataWorker to track. */
+  rescueRequested: boolean;
 }
 
 /**
@@ -241,20 +251,30 @@ export interface TradePlanIdeaResult {
  */
 export function emitTradePlanIdea(draft: TradePlanDraft, currentPrice: number | null): TradePlanIdeaResult {
   if (draft.setupType !== 'PRIMARY') {
-    return { emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: draft.symbol };
+    return { emitted: false, reason: 'NOT_PRIMARY_TIER', symbol: draft.symbol, rescueRequested: false };
   }
   if (!isTradePlanIdeasEnabled()) {
-    return { emitted: false, reason: 'FLAG_OFF', symbol: draft.symbol };
+    return { emitted: false, reason: 'FLAG_OFF', symbol: draft.symbol, rescueRequested: false };
   }
   if (!isPipelineAgentEnabled('TradePlanBuilder')) {
-    return { emitted: false, reason: 'AGENT_DISABLED', symbol: draft.symbol };
+    return { emitted: false, reason: 'AGENT_DISABLED', symbol: draft.symbol, rescueRequested: false };
   }
   if (!isLiveIdeaGenerationEnabled()) {
-    return { emitted: false, reason: 'IDEA_GENERATION_GATED', symbol: draft.symbol };
+    return { emitted: false, reason: 'IDEA_GENERATION_GATED', symbol: draft.symbol, rescueRequested: false };
   }
   if (currentPrice == null || !Number.isFinite(currentPrice) || currentPrice <= 0) {
-    return { emitted: false, reason: 'INVALID_PRICE', symbol: draft.symbol };
+    return { emitted: false, reason: 'INVALID_PRICE', symbol: draft.symbol, rescueRequested: false };
   }
+
+  // Real post-implementation audit finding (2026-09-05): RiskEngine gate 13 (data_freshness)
+  // checks MarketDataWorker's own live tick cache, a DIFFERENT data source than the REST snapshot
+  // this idea's currentPrice came from - a PRIMARY-tier symbol outside the active ~12-slot
+  // subscription pool has a null tick age and fails gate 13 regardless of anything here. Requesting
+  // a rescue (the SAME bounded mechanism OpportunityDiscovery already uses for this exact problem)
+  // gives the symbol a real chance to start ticking before ChiefTrader's async debate concludes -
+  // not a guarantee (a rescue grants a subscription, not an instant tick), but a real, honest
+  // improvement over emitting into a symbol nobody ever asked MarketDataWorker to track.
+  const rescue = marketDataWorker.requestTemporaryDataRescue(draft.symbol, 'premarket_trade_plan_idea', { requestClass: 'EXPLORATION' });
 
   const traceId = generateTraceId(draft.symbol);
   eventBus.emitTradeIdea({
@@ -269,7 +289,7 @@ export function emitTradePlanIdea(draft: TradePlanDraft, currentPrice: number | 
     timeframe: 'premarket_daily',
     evidence: { confluenceScore: draft.confluenceScore, evidenceQuality: draft.evidenceQuality, setupType: draft.setupType },
   });
-  return { emitted: true, reason: 'EMITTED', symbol: draft.symbol };
+  return { emitted: true, reason: 'EMITTED', symbol: draft.symbol, rescueRequested: rescue.granted };
 }
 
 export interface RevalidationOutcome {

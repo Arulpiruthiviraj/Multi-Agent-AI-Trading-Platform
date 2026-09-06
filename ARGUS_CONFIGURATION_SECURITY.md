@@ -16,7 +16,7 @@
 | PAPER_TRADING_ONLY | Cannot override. `isPaperTradingOnlyEnforced()` still reads env. |
 | LIVE_ARM / ENABLE LIVE TRADING phrase | Not a catalog key. Unchanged. |
 | authorizeProductionOrder / LIVE_NO_GO | Unchanged. |
-| RiskEngine 24 gates | Unchanged. Not Settings-overridable here. |
+| RiskEngine 25 gates | Unchanged. Not Settings-overridable here. |
 | OMS sole placeOrder | Unchanged. Dual-config routes do not import OMS/BrokerManager. |
 | ARGUS_DB_PATH / AUTH_* / ENCRYPTION_SECRET | Catalogued as locked. |
 

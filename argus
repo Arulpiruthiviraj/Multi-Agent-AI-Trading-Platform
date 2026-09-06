@@ -26,14 +26,27 @@ case "$cmd" in
     ;;
   start)
     if argus_wants_help "$@"; then argus_help_start; exit 0; fi
+    if [[ "${1:-}" == "web" ]]; then
+      shift
+      exec "$ARGUS_ROOT/argus.sh" start
+    fi
+    [[ "${1:-}" == "cli" ]] && shift
     argus_cmd_start "$@"
     ;;
   stop)
     if argus_wants_help "$@"; then argus_help_stop; exit 0; fi
+    if [[ "${1:-}" == "web" ]]; then
+      exec "$ARGUS_ROOT/argus.sh" stop
+    fi
+    [[ "${1:-}" == "cli" ]] && shift
     argus_npm_cli stop
     ;;
   restart)
     if argus_wants_help "$@"; then argus_help_restart; exit 0; fi
+    if [[ "${1:-}" == "web" ]]; then
+      exec "$ARGUS_ROOT/argus.sh" restart
+    fi
+    [[ "${1:-}" == "cli" ]] && shift
     argus_npm_cli restart
     ;;
   nuke)

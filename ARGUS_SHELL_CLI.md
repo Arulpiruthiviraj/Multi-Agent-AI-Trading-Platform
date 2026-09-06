@@ -62,8 +62,8 @@ Legacy full-ecosystem DevOps script remains at [`argus.sh`](argus.sh) (`npm run 
 |---------|----------------|
 | `help` / `--help` / `-h` | Local help |
 | `version` / `--version` | package.json + API URL |
-| `start [--dev\|--prod\|--headless]` | `argus-cli start` → engine PID spawn |
-| `stop` / `restart` | `argus-cli` + SIGTERM graceful path |
+| `start [cli\|web] [--dev\|--prod]` | `cli` (default): `argus-cli start` → engine PID spawn, headless, no browser UI. `web`: delegates to `./argus.sh start` (full dev ecosystem, browser UI) |
+| `stop [cli\|web]` / `restart [cli\|web]` | `cli` (default): `argus-cli` + SIGTERM graceful path. `web`: `./argus.sh stop`/`restart` — a separate process lifecycle from `cli` mode, since `argus.sh` tracks its own PID (`.argus_dev.pid`), not the engine's |
 | `status [--json]` | `GET /api/v2/runtime/status` |
 | `health [--json]` | `GET /api/v2/runtime/health` |
 | `ready [--json]` | `GET /api/v2/live-readiness` |
@@ -80,7 +80,8 @@ Legacy full-ecosystem DevOps script remains at [`argus.sh`](argus.sh) (`npm run 
 ### Examples
 
 ```bash
-./argus start --headless
+./argus start           # same as: ./argus start cli — headless, API only
+./argus start web       # full dev ecosystem with the browser UI (./argus.sh start)
 ./argus login          # required when AUTH_PASSWORD is set on the engine
 ./argus status
 ./argus enable
@@ -88,7 +89,7 @@ Legacy full-ecosystem DevOps script remains at [`argus.sh`](argus.sh) (`npm run 
 ./argus replay run --capital 2000 --start 2025-01-01 --end 2025-12-31
 ./argus doctor
 ./argus logout
-./argus stop
+./argus stop            # stops cli-mode engine; use "argus stop web" to stop web mode instead
 ```
 
 ### Auth note
@@ -144,11 +145,18 @@ JSON comes from the engine API (via `argus-cli`), not from parsing human text.
 
 | Mode | Command |
 |------|---------|
-| Dev engine | `./argus start` or `./argus start --dev` |
-| Prod engine | `npm run build` then `./argus start --prod` |
-| npm aliases | `npm run start:engine` / `start:engine:prod` |
+| Dev engine (headless, no UI) | `./argus start` or `./argus start cli --dev` |
+| Prod engine (headless, no UI) | `npm run build` then `./argus start --prod` |
+| Dev ecosystem with browser UI | `./argus start web` (delegates to `./argus.sh start` → `npm run dev`) |
+| npm aliases | `npm run start:engine` / `start:engine:prod` / `npm run dev` (web) |
 
-Duplicate start does **not** spawn a second engine (PID + message).
+Duplicate start does **not** spawn a second engine (PID + message) for `cli` mode.
+`web` mode has its own separate duplicate/port-conflict handling in `argus.sh`.
+
+**`cli` and `web` are two independent process lifecycles**, tracked by different PID files
+(`data/.argus_engine.pid` vs `.argus_dev.pid`) — starting one does not stop the other, and
+`argus stop`/`restart` only ever act on the mode you specify (default `cli`). Don't run both
+at once against the same port (3000); `argus.sh start` will detect the conflict and prompt.
 
 ---
 

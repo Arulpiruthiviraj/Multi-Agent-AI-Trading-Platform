@@ -407,9 +407,9 @@ live database.
 | Quant capability | TS impl. | Java impl. | Currently active | Owner | Status |
 |---|---|---|---|---|---|
 | SMA / EMA | `TechnicalIndicators.ts` | `indicators/MovingAverages.java` | TS (live) | TS | PARITY_VERIFIED |
-| RSI | `RSIEngine.ts` | `indicators/RSI.java` | TS (live) | TS | PARITY_VERIFIED (byte-for-byte, real TS ground truth) |
-| MACD | `MACDEngine.ts` | `indicators/MACD.java` | TS (live) | TS | PARITY_VERIFIED |
-| Bollinger Bands | `technicalSignal.ts` | `indicators/Bollinger.java` | TS (live) | TS | PARITY_VERIFIED |
+| RSI | `RSIEngine.ts` | `indicators/RSI.java` | TS (live) | TS | **CORRECTED 2026-09-06**: PARITY_VERIFIED only against synthetic fixtures. Real production shadow-comparison (`QUANT_CORE_PARITY_DIVERGENCE`, 14,207 events 2026-08-24→09-04) shows 80% diverging >5%, 56% diverging >20% on real ticks. See `docs/audits/ARGUS_CURRENT_STATE_AND_PAPER_READINESS_AUDIT.md` §17. Root cause not yet investigated. |
+| MACD | `MACDEngine.ts` | `indicators/MACD.java` | TS (live) | TS | Same correction as RSI above — implicated in the same divergence data. |
+| Bollinger Bands | `technicalSignal.ts` | `indicators/Bollinger.java` | TS (live) | TS | PARITY_VERIFIED against synthetic fixtures; not separately broken out in the production divergence data above (RSI/MACD/MACD-signal were the fields checked) — unconfirmed either way in real traffic. |
 | ATR / volatility (tick-range) | `TechnicalIndicators.ts` | `indicators/Volatility.java` | TS (live) | TS | PARITY_VERIFIED |
 | Rolling statistics | `quant/statistics.ts` | `stats/RollingStatistics.java` | TS (live) | TS | PARITY_VERIFIED |
 | Correlation/covariance/beta/skew/kurtosis/autocorrelation | `statistics.ts` | `stats/Correlation.java` | TS (live) | TS | PARITY_VERIFIED |
@@ -533,6 +533,114 @@ NEXT STEP:                                          Continue the real shadow-soa
 ```
 
 See `ARGUS_CLI.md` §4/§8 for details on each.
+
+---
+
+## Python AI/ML Service (Chronos / FinBERT)
+
+**Audited 2026-09-05, at explicit operator request, specifically to decide whether to migrate this
+service to FastAPI. Verdict: no — see § Should this become FastAPI? below.**
+
+### What it is
+
+`scripts/local_ai_service.py` (306 lines) — a single persistent Python process backing
+`KronosInference.ts`'s real forecast calls and the news/sentiment pipeline's FinBERT scoring. Not a
+framework-based service: a bare `http.server.BaseHTTPRequestHandler` on top of a bounded
+`ThreadingHTTPServer` subclass. Loads both models once at startup and keeps them resident — never
+reloaded per request. Launched via `npm run ai:serve`; the Node side (`KronosModelManager.ts`)
+polls `GET /health` and treats an unreachable service as "unavailable," never fatal.
+
+Two supporting modules, both deliberately kept model-independent so they're unit-testable without
+a 15-30s Chronos/FinBERT load:
+- `scripts/lib/bounded_http_server.py` (88 lines) — `BoundedThreadingHTTPServer`, `send_json_and_close`, `start_graceful_shutdown`.
+- `scripts/lib/inference_worker.py` (79 lines) — `run_on_inference_worker()`, a single dedicated worker thread.
+
+### Routes
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | `status`, `model`, `sentimentModel`, `device`, `memoryUsage`, `committedMemoryMb`, `threadCount`, `gpuUsage`, `lastInferenceMs` |
+| POST | `/forecast` | `{prices, horizon}` → Chronos quantile forecast (`low`/`median`/`high`, `num_samples=40`) |
+| POST | `/sentiment` | `{text}` → FinBERT `{label, score, signedScore}` (text hard-capped at 2000 chars before the model's own 512-token internal truncation) |
+
+### The real defect this service had, and the real fix (not a framework problem)
+
+A 2026-09-04 readiness audit found this process holding **6,451 threads and 15,245.9 MB of
+committed (pagefile) memory while having served zero inferences** — RSS stayed low the whole time
+(Windows trims idle thread stacks from the working set), so a memory monitor watching RSS alone
+read "NORMAL" throughout. Root cause, found and fixed in two layers:
+
+1. **HTTP-layer symptom** (`bounded_http_server.py`): stock `http.server.ThreadingHTTPServer`
+   spawns one thread per accepted connection with no ceiling. Fixed with a real bounded semaphore
+   (`BoundedThreadingHTTPServer`, `MAX_CONCURRENT_CONNECTIONS`, default 8), an explicit
+   `Connection: close` on every response instead of relying on keep-alive inference, and a
+   per-connection socket timeout (`CONNECTION_TIMEOUT_SECONDS`, default 30s). This fix alone was
+   confirmed **insufficient**.
+2. **Actual root cause** (`inference_worker.py`): `ThreadingHTTPServer`, even bounded, still hands
+   each connection a *brand-new* `threading.Thread` — never a thread drawn from a reused pool. The
+   first time any given OS thread calls into PyTorch/MKL/OpenMP-backed code, those native backends
+   initialize a per-calling-thread native worker pool that is cached at the process level and never
+   torn down — confirmed live: 8 sequential real `/forecast` calls grew thread count by +40 and
+   committed memory by ~214MB even with connections capped at 8. Fixed by confining every
+   torch/pipeline call in the whole process to **one single, long-lived worker thread**
+   (`ThreadPoolExecutor(max_workers=1)`, created once at import time, never recreated) — every HTTP
+   handler thread submits work to it and blocks on the result, so MKL/OpenMP only ever observes one
+   calling thread for the process's entire lifetime.
+
+Also present: `torch.inference_mode()` on every inference call (prevents autograd-graph retention —
+a real, separate mechanism from the thread-pool leak above; without it, committed memory was
+measured growing to ~42.8GB after ~5 hours of live trading-session load), graceful SIGTERM/SIGINT
+shutdown (previously the only way to stop this process was an OS-level kill), and a duplicate-launch
+guard (`_already_healthy()` checks `/health` before either model load begins, closing a real
+2026-09-03 incident where a manual `npm run ai:serve` raced the engine daemon's own launcher and
+both spent 15-30s loading a full model copy before only one could bind the port).
+
+**None of the above is a FastAPI-shaped problem.** Every defect was either an HTTP-connection-layer
+concurrency bound (fixed with a semaphore, not a framework) or a native-library thread-affinity
+issue (fixed with worker-thread confinement, orthogonal to what HTTP framework sits in front of it —
+FastAPI's default `async def` handlers would still each be free to call into torch from whatever
+thread/event-loop context they run on unless the same single-worker confinement were added
+underneath it anyway).
+
+### Should this become FastAPI?
+
+**Not now — no code change made, this is a documented decision, not a deferred one.** The current
+service is small (3 routes, ~470 lines total across all 3 files), already bounded correctly, and has
+no request/response-schema complexity or auth requirements that a hand-rolled `http.server` is
+straining under. Per this codebase's own standing rule (CLAUDE.md's Java 26 Engine Authority §10:
+*"do not migrate a component... simply because [X] is generally faster/better — profile the actual
+bottleneck first"*), the same principle applies here: there is no profiled bottleneck FastAPI would
+address, and the resource-safety mechanism required (single-worker thread confinement) is unrelated
+to which HTTP framework sits on top of it.
+
+**Revisit this decision if and when any of these becomes concretely true** (not preemptively):
+- Multiple independent endpoint families emerge (today: 3 routes, all closely related)
+- Request/response schemas become hard to maintain by hand (today: 2 simple JSON bodies)
+- Authentication/validation requirements increase beyond localhost-only trust
+- Concurrent inference becomes deliberately necessary (today: intentionally serialized to one worker thread — a design goal, not a limitation to lift casually)
+- Operational observability would materially improve (structured request tracing, OpenAPI docs for an operator/integration audience)
+- Deployment/maintenance becomes easier under a framework than the current bare script
+- Profiling demonstrates a real, current bottleneck FastAPI specifically addresses
+
+**Hard boundary, regardless of the above:** FastAPI (or any Python service) must never be inserted
+between Node and Java Quant Core. `Node → QuantCoreBridge.ts → Java` is the quantitative boundary
+and stays exactly two hops. Python's role is AI/ML inference (Chronos/FinBERT, this section) and
+isolated research services (LangGraph, next section) — never a relay in the market-data → quant
+path, per Java 26 Engine Authority rule 3 (TypeScript reaches Java only through the established
+bridge, "never a new ad hoc process/IPC channel").
+
+### Technology ownership (explicit, so future work doesn't blur these lines)
+
+```
+Node / TypeScript          Java Quant Core            Python
+├─ orchestration           ├─ indicators              ├─ Chronos (forecast)
+├─ EventBus                ├─ feature engineering      ├─ FinBERT (sentiment)
+├─ agents                  ├─ quantitative scoring      ├─ ML/AI inference
+├─ discovery                ├─ ALL production strategies └─ isolated research services
+├─ ChiefTrader              ├─ Wyckoff (when built)         (LangGraph — next section)
+├─ RiskEngine                └─ backtest/live/paper
+└─ OMS                          quantitative truth
+```
 
 ---
 
