@@ -2,6 +2,8 @@
  * Process-local registry of optional services. Never marks READY without evidence.
  * Probes use short timeouts; failures leave the app usable.
  */
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import { resolveLocalAiServiceUrl } from '../ai/preferIpv4Loopback';
 import { networkEndpoints } from '../config/networkEndpoints';
 
@@ -113,6 +115,51 @@ export async function collectStartupHealth(timeoutMs = 2000): Promise<StartupHea
     fix: 'Start Ollama. Skip with ARGUS_SKIP_OLLAMA=true.',
     latencyMs: ollama.latencyMs,
   }));
+
+  // External liveness watchdog (scripts/argusWatchdog.ts, 2026-09-07 P0 remediation) - a separate
+  // process outside this one, so it cannot be probed over HTTP or by pid the way the companions
+  // above are; it writes its own heartbeat file every poll tick instead. Reading that file here
+  // does not solve the infinite-regress problem (nothing watches this watchdog's watcher) - it
+  // means the SAME `argus-cli health`/`start` report an operator already checks per the pre-session
+  // checklist also answers "is my guardian still alive", instead of that being a separate, easy-to-
+  // forget manual check. Missing file (watchdog never started, or an older Argus version before
+  // this existed) is NOT_CONFIGURED, not FAILED - this was always optional, never a hard dependency.
+  {
+    const watchdogHeartbeatPath = process.env.ARGUS_WATCHDOG_HEARTBEAT_PATH?.trim()
+      || join(process.cwd(), 'data', 'logs', '.argus_watchdog_heartbeat.json');
+    let watchdogStatus: StartupHealthStatus = 'NOT_CONFIGURED';
+    let watchdogRootCause: string | null = 'Watchdog heartbeat file not found - the watchdog (npm run argus:watchdog) was never started, or not started for this session.';
+    let watchdogAgeMs: number | null = null;
+    if (existsSync(watchdogHeartbeatPath)) {
+      try {
+        const raw = JSON.parse(readFileSync(watchdogHeartbeatPath, 'utf8')) as { lastTickAt?: string; state?: string };
+        const t = raw?.lastTickAt ? Date.parse(raw.lastTickAt) : NaN;
+        watchdogAgeMs = Number.isFinite(t) ? Date.now() - t : null;
+        // A watchdog tick should land at least once per its own poll interval - 5 minutes is a
+        // generous multiple of any sane poll interval (default 30s) without being so long that a
+        // genuinely dead watchdog reads as READY for an unreasonable stretch.
+        if (watchdogAgeMs !== null && watchdogAgeMs < 5 * 60_000) {
+          watchdogStatus = 'READY';
+          watchdogRootCause = null;
+        } else {
+          watchdogStatus = 'FAILED';
+          watchdogRootCause = `Watchdog heartbeat is stale (last tick ${watchdogAgeMs === null ? 'unparseable' : `${Math.round(watchdogAgeMs / 1000)}s ago`}) - the watchdog process itself may have died. Nothing currently watches the watchdog.`;
+        }
+      } catch (e: any) {
+        watchdogStatus = 'FAILED';
+        watchdogRootCause = `Watchdog heartbeat file unreadable/corrupt: ${e?.message ?? String(e)}`;
+      }
+    }
+    entries.push(stamp({
+      service: 'Watchdog',
+      status: watchdogStatus,
+      error: watchdogStatus === 'FAILED' ? watchdogRootCause : null,
+      rootCause: watchdogRootCause,
+      impact: 'If the watchdog is not running or has died, an unexpected engine death will not be auto-detected or auto-recovered - it will sit down until an operator manually checks.',
+      fix: 'Run `npm run argus:watchdog` in its own terminal.',
+      latencyMs: watchdogAgeMs,
+    }));
+  }
 
   entries.push(stamp({
     service: 'VectorBTResearch',

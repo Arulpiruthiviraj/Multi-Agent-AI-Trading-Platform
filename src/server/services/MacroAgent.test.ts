@@ -3,7 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Real test coverage for the Phase 5 hardening fix - identical shape to FundamentalAgent.test.ts,
 // since MacroAgent's AI-parse code follows the exact same (now-validated) pattern.
 const { emitTradeIdea, emit } = vi.hoisted(() => ({ emitTradeIdea: vi.fn(), emit: vi.fn() }));
-const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
+const { routeTask, hasAnyRoutableProvider } = vi.hoisted(() => ({
+  routeTask: vi.fn(),
+  // Default implementation preserves every pre-existing test's behavior (they toggle
+  // process.env.GEMINI_API_KEY to control this exact branch) - see the vi.mock('../ai/AIRouter', ...)
+  // comment below. A dedicated regression test overrides this per-call via mockResolvedValueOnce to
+  // prove the actual 2026-09-07 bug fix: this is no longer tied to GEMINI_API_KEY specifically.
+  hasAnyRoutableProvider: vi.fn(() => Promise.resolve(!!process.env.GEMINI_API_KEY)),
+}));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
 const { getLatestPrice, subscribe, getLatestPriceAgeMs } = vi.hoisted(() => ({
   // 2026-09-06 MISSING_PRICE remediation - see FundamentalAgent.test.ts's identical comment.
@@ -29,12 +36,31 @@ const { getLatestPrice, subscribe, getLatestPriceAgeMs } = vi.hoisted(() => ({
 const { waitForFreshMarketData } = vi.hoisted(() => ({
   waitForFreshMarketData: vi.fn(async (): Promise<{ ok: true; price: number; alreadyFresh: boolean } | { ok: false; reason: string; deniedReason?: string; detail?: string }> => ({ ok: true, price: 100, alreadyFresh: true })),
 }));
+// 2026-09-07 Fincept advisory wiring - real module reads a live SQLite file that does not exist in
+// a test process; mocked directly, defaulting to "unavailable" (null) so every pre-existing test
+// keeps behaving exactly as before this feature was added (fail-silent is the documented contract).
+const { getFinceptMacroSnapshot } = vi.hoisted(() => ({
+  getFinceptMacroSnapshot: vi.fn((): { vix: number | null; indices: Record<string, { price: number | null; changePct: number | null }>; asOfMs: number } | null => null),
+}));
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea, emit } }));
 vi.mock('../core/waitForFreshMarketData', () => ({ waitForFreshMarketData }));
+vi.mock('./FinceptCacheAdapter', async () => {
+  const actual = await vi.importActual<typeof import('./FinceptCacheAdapter')>('./FinceptCacheAdapter');
+  return { ...actual, getFinceptMacroSnapshot };
+});
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
-vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
+// hasAnyRoutableProvider() replaced the old `process.env.GEMINI_API_KEY` gate (2026-09-07 fix -
+// see MacroAgent.ts's comment at the call site: the old gate hardcoded one specific provider and
+// never checked whether e.g. Ollama alone was actually configured/routable). Reusing the same
+// per-test GEMINI_API_KEY set/delete calls below as the mock's own signal keeps every existing
+// test's intent unchanged (set = "a provider is available", delete = "no LLM configured") without
+// rewriting each call site individually - this mock is intentionally a thin proxy over that env
+// var, not a claim about AIRouter's own real routable-provider logic (which has its own tests).
+vi.mock('../ai/AIRouter', () => ({
+  AIRouter: { getInstance: () => ({ routeTask, hasAnyRoutableProvider }) },
+}));
 vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice, subscribe, getLatestPriceAgeMs } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
@@ -60,6 +86,8 @@ beforeEach(() => {
   getLatestPriceAgeMs.mockImplementation(() => 0);
   waitForFreshMarketData.mockReset();
   waitForFreshMarketData.mockImplementation(async () => ({ ok: true, price: 100, alreadyFresh: true }));
+  getFinceptMacroSnapshot.mockReset();
+  getFinceptMacroSnapshot.mockImplementation(() => null);
 });
 
 describe('MacroEconomyAgent - AI output validation (Phase 5 hardening)', () => {
@@ -539,5 +567,106 @@ describe('MacroEconomyAgent - evaluateSymbol() on-demand entry point (Phase 9 sa
     expect(idea.symbol).toBe('AMD');
     expect(idea.agent).toBe('MacroAgent');
     expect(idea.side).toBe('SELL');
+  });
+});
+
+// Fincept advisory wiring (2026-09-07, off by default via ENABLE_FINCEPT_CACHE_ADVISORY): a
+// read-only, text-only supplementary note from a locally-running Fincept Terminal's cache.db.
+// Must never affect confidence/side and must degrade to a no-op when unavailable (the common case
+// - see FinceptCacheAdapter.ts's own header for why that cache is empty most of the time in reality).
+describe('MacroEconomyAgent - Fincept advisory context (2026-09-07)', () => {
+  let agent: any;
+  const macro = { inflation: '3.1', fedFundsRate: '5.25', unemployment: '4.0' };
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockImplementation(async (_p: string, dataType: string) => (dataType === 'macro' ? macro : null));
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    process.env.GEMINI_API_KEY = 'test-key';
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'real analysis text' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+    agent = new MacroEconomyAgent();
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+  });
+
+  it('appends the Fincept snapshot to reasoning TEXT ONLY when one is available, never touching confidence/side', async () => {
+    getFinceptMacroSnapshot.mockReturnValue({
+      vix: 15.16,
+      indices: { 'S&P 500': { price: 5123.45, changePct: 0.42 } },
+      asOfMs: Date.now(),
+    });
+
+    await agent.analyzeMacro();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+    expect(idea.confidence).toBeCloseTo(0.7);
+    expect(idea.reasoning).toContain('real analysis text');
+    expect(idea.reasoning).toContain('Fincept Terminal supplementary context');
+    expect(idea.reasoning).toContain('VIX 15.16');
+    expect(idea.reasoning).toContain('S&P 500 5123.45');
+  });
+
+  it('omits the Fincept note cleanly when no snapshot is available - the common case, not an error', async () => {
+    getFinceptMacroSnapshot.mockReturnValue(null);
+
+    await agent.analyzeMacro();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+    expect(idea.reasoning).toContain('real analysis text');
+    expect(idea.reasoning).not.toContain('Fincept');
+  });
+});
+
+describe('MacroEconomyAgent - directional analysis is not tied to one specific provider (2026-09-07 fix)', () => {
+  const macro = { inflation: '3.1', fedFundsRate: '5.25', unemployment: '4.0' };
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockImplementation(async (_p: string, dataType: string) => (dataType === 'macro' ? macro : null));
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    delete process.env.GEMINI_API_KEY; // deliberately absent - this is the whole point of this test
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.6, reasoning: 'ollama-routed analysis' }), aiCallId: 'c', provider: 'ollama', latency: 50 });
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+  });
+
+  it('still attempts a directional read with GEMINI_API_KEY unset, as long as AIRouter reports a routable provider (e.g. Ollama-only)', async () => {
+    // Real bug this proves fixed: the old gate was `if (process.env.GEMINI_API_KEY)`, hardcoded to
+    // one provider - an Ollama-only deployment (no Gemini key at all) would never reach this path
+    // regardless of Ollama's real availability, always falling through to the
+    // "no LLM configured" HOLD instead. hasAnyRoutableProvider() is the real decoupling point.
+    hasAnyRoutableProvider.mockResolvedValueOnce(true);
+    const agent = new MacroEconomyAgent();
+
+    await agent.analyzeMacro();
+
+    expect(routeTask).toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+    expect(idea.reasoning).toContain('ollama-routed analysis');
+  });
+
+  it('still falls back to the "no LLM configured" HOLD when truly nothing is routable, GEMINI_API_KEY or otherwise', async () => {
+    hasAnyRoutableProvider.mockResolvedValueOnce(false);
+    const agent = new MacroEconomyAgent();
+
+    await agent.analyzeMacro();
+
+    expect(routeTask).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.confidence).toBe(0);
+    expect(idea.reasoning).toContain('no LLM is configured');
   });
 });

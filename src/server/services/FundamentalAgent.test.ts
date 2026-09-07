@@ -3,7 +3,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Real test coverage for the Phase 5 hardening fix: analysis.recommendation/confidence used to
 // flow straight from JSON.parse() into a real TRADE_IDEA_GENERATED event with zero validation.
 const { emitTradeIdea, emit } = vi.hoisted(() => ({ emitTradeIdea: vi.fn(), emit: vi.fn() }));
-const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
+const { routeTask, hasAnyRoutableProvider } = vi.hoisted(() => ({
+  routeTask: vi.fn(),
+  // Default implementation preserves every pre-existing test's behavior (they toggle
+  // process.env.GEMINI_API_KEY to control this exact branch) - see the vi.mock('../ai/AIRouter', ...)
+  // comment below. A dedicated regression test overrides this per-call via mockResolvedValueOnce to
+  // prove the actual 2026-09-07 bug fix: this is no longer tied to GEMINI_API_KEY specifically.
+  hasAnyRoutableProvider: vi.fn(() => Promise.resolve(!!process.env.GEMINI_API_KEY)),
+}));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
 const { getLatestPrice, subscribe, getLatestPriceAgeMs } = vi.hoisted(() => ({
   getLatestPrice: vi.fn(() => 100),
@@ -29,7 +36,13 @@ vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea, emit } }));
 vi.mock('../core/waitForFreshMarketData', () => ({ waitForFreshMarketData }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
-vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
+// hasAnyRoutableProvider() replaced the old `process.env.GEMINI_API_KEY` gate (2026-09-07 fix -
+// see FundamentalAgent.ts's comment at the call site). Reusing the same per-test GEMINI_API_KEY
+// set/delete calls below as the mock's own signal keeps every existing test's intent unchanged
+// without rewriting each call site individually.
+vi.mock('../ai/AIRouter', () => ({
+  AIRouter: { getInstance: () => ({ routeTask, hasAnyRoutableProvider }) },
+}));
 vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice, subscribe, getLatestPriceAgeMs } }));
     vi.mock('./ExternalDataCache', () => ({
       ExternalDataCache: { getFresh, isRateLimited: vi.fn(async () => false), getStale: vi.fn(async () => null), set: setCache, markRateLimited: vi.fn() },
@@ -515,5 +528,53 @@ describe('FundamentalAnalysisAgent - evaluateSymbol() on-demand entry point (Pha
     expect(idea.side).toBe('HOLD');
     expect(idea.reasoning).toContain('DATA_UNAVAILABLE');
     spy.mockRestore();
+  });
+});
+
+describe('FundamentalAnalysisAgent - directional analysis is not tied to one specific provider (2026-09-07 fix)', () => {
+  const fundamentals = { peRatio: '28.4', epsGrowth: '0.12', debtToEquity: '0.5' };
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockImplementation(async (_p: string, dataType: string) => (dataType === 'fundamentals' ? fundamentals : null));
+    getLatestPrice.mockReturnValue(250);
+    process.env.ALPHAVANTAGE_API_KEY = 'test-key';
+    delete process.env.GEMINI_API_KEY; // deliberately absent - this is the whole point of this test
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.6, reasoning: 'ollama-routed analysis' }), aiCallId: 'c', provider: 'ollama', latency: 50 });
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+  });
+
+  it('still attempts a directional read with GEMINI_API_KEY unset, as long as AIRouter reports a routable provider (e.g. Ollama-only)', async () => {
+    // Real bug this proves fixed: the old gate was `if (process.env.GEMINI_API_KEY)`, hardcoded to
+    // one provider - an Ollama-only deployment (no Gemini key at all) would never reach this path
+    // regardless of Ollama's real availability, always falling through to the
+    // "no LLM configured" HOLD instead. hasAnyRoutableProvider() is the real decoupling point.
+    hasAnyRoutableProvider.mockResolvedValueOnce(true);
+    const agent = new FundamentalAnalysisAgent();
+
+    await agent.analyzeFundamentals();
+
+    expect(routeTask).toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+    expect(idea.reasoning).toContain('ollama-routed analysis');
+  });
+
+  it('still falls back to the "no LLM configured" HOLD when truly nothing is routable, GEMINI_API_KEY or otherwise', async () => {
+    hasAnyRoutableProvider.mockResolvedValueOnce(false);
+    const agent = new FundamentalAnalysisAgent();
+
+    await agent.analyzeFundamentals();
+
+    expect(routeTask).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.confidence).toBe(0);
+    expect(idea.reasoning).toContain('no LLM is configured');
   });
 });

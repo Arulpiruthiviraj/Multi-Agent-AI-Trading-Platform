@@ -102,6 +102,33 @@ async function printFullHealthReport(): Promise<void> {
   const qc = await fetchJson('/api/v2/quant-core/health') as { enabled: boolean; connected: boolean; detail?: string };
   const label = !qc.enabled ? 'DISABLED' : qc.connected ? 'CONNECTED' : 'DISCONNECTED';
   console.log(`QuantCoreBridge: ${label}${qc.detail ? ` (${qc.detail})` : ''}`);
+
+  // Real gap closed (2026-09-07): the durable per-component reason (StartupHealthRegistry.ts's
+  // collectStartupHealth() - status/rootCause/impact/fix for OpenAlice/Chronos/Ollama/QuantSignalAgent/
+  // Alpaca/AIRouter) previously only existed behind a raw HTTP route
+  // (GET /api/v2/system/startup-health) with no CLI surface - an operator asking "why isn't Ollama/
+  // Chronos connected" had to already know that route and hand-craft an authenticated request. Folding
+  // it into the SAME report `argus-cli health` and a successful `start`/`restart` already print means
+  // every companion service's explicit reason is visible by default, not just IBKR/broker/AI-provider
+  // pool (which were already in /api/v2/runtime/health above). This is on-demand/always-fresh (each
+  // service is re-probed on every call) - unlike ServerLogBuffer's 500-line console-log ring, it is not
+  // subject to early-boot log lines being evicted by later log volume before an operator can look.
+  try {
+    const startup = await fetchJson('/api/v2/system/startup-health') as {
+      services: Array<{ service: string; status: string; rootCause: string | null; impact: string; fix: string }>;
+    };
+    console.log('Companion services:');
+    for (const s of startup.services) {
+      const reason = s.rootCause ? ` - ${s.rootCause}` : '';
+      console.log(`  ${s.service}: ${s.status}${reason}`);
+      if (s.status === 'FAILED' || s.status === 'DEGRADED') {
+        console.log(`    impact: ${s.impact}`);
+        console.log(`    fix: ${s.fix}`);
+      }
+    }
+  } catch (e: any) {
+    console.log(`Companion services: unavailable (${e?.message || e})`);
+  }
 }
 
 async function waitForHealth(timeoutMs = 60_000, notPid?: number): Promise<boolean> {

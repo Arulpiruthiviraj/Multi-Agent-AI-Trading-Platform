@@ -32,6 +32,21 @@ try {
 
 console.log('[Argus Engine] starting dedicated daemon (same Argus Core as browser mode).');
 
+// Real bug found and fixed (2026-09-07): the companion launchers below (Chronos/Ollama/Java/
+// LangGraph) are fire-and-forget - they log asynchronously while `await import('../server.ts')`
+// at the bottom of this file races ahead to boot the real server. ArgusCoreBoot.ts's own
+// installServerLogBuffer() call (what makes console output queryable via `argus-cli logs` /
+// GET /api/v2/system/logs/recent) only runs partway through that later boot sequence, and the
+// headless daemon's own child process is spawned with stdio:'ignore' - so any companion-launcher
+// console.log/warn that fires before ArgusCoreBoot reaches its own call is lost forever, not just
+// delayed. Confirmed live: after adding Ollama auto-start, its "Starting Ollama..."/"Ollama is
+// healthy..." messages never appeared in `argus-cli logs`, while later, unrelated
+// `[ModelRuntime]` probe messages (logged well after boot) did. installServerLogBuffer() is
+// idempotent (guarded by its own `installed` flag - see ServerLogBuffer.ts), so calling it here
+// too is safe and makes it the first console consumer, before any companion launcher can log.
+const { installServerLogBuffer } = await import('../src/server/services/ServerLogBuffer.ts');
+installServerLogBuffer();
+
 const path = await import('node:path');
 const { fileURLToPath } = await import('node:url');
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
@@ -56,6 +71,17 @@ if (String(process.env.QUANT_JAVA_CORE_ENABLED || '').toLowerCase() === 'true') 
 if (String(process.env.ARGUS_SKIP_CHRONOS || '').toLowerCase() !== 'true') {
   const { ensureChronosRunning } = await import('./lib/chronosLauncher.ts');
   void ensureChronosRunning(repoRoot);
+}
+
+// Ollama companion - same on-by-default polarity as Chronos above (ARGUS_SKIP_OLLAMA convention,
+// matching devWithOpenAlice.ts's existing flag name). Real gap closed (2026-09-07): unlike Chronos,
+// nothing previously auto-started Ollama for the headless engine daemon - ModelRuntimeManager only
+// spawns it when ARGUS_START_LOCAL_MODELS=true, which only `npm run dev` sets. `./argus start` used
+// to just probe-and-report FAILED. Fire-and-forget, same contract as the other companions above -
+// ensureOllamaRunning() never throws.
+if (String(process.env.ARGUS_SKIP_OLLAMA || '').toLowerCase() !== 'true') {
+  const { ensureOllamaRunning } = await import('./lib/ollamaLauncher.ts');
+  void ensureOllamaRunning(repoRoot);
 }
 
 // LangGraph research companion (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)) - opt-in, same

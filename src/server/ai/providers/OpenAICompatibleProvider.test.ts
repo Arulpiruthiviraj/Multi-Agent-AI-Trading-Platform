@@ -52,6 +52,34 @@ describe('OpenAICompatibleProvider - real same-provider model fallback + keep_al
     expect(secondBody.model).toBe('0xroyce/plutus:latest');
   });
 
+  it('CRITICAL: falls back to the next model when the primary resolves HTTP-success but with empty content - real bug found live 2026-09-07 (fingpt:latest returned empty content, `finish_reason: stop`, for every prompt tried, and the old code returned that empty result immediately instead of trying the fallback model)', async () => {
+    fetchMock
+      .mockResolvedValueOnce(okResponse('')) // primary model "succeeds" with empty content
+      .mockResolvedValueOnce(okResponse('{"ok":true}')); // fallback model gives a real answer
+
+    const provider = new OpenAICompatibleProvider('Ollama (Local)', 'http://127.0.0.1:11434/v1', true);
+    await provider.initialize('', 'fingpt:latest');
+
+    const result = await provider.chat('prompt', { model: 'fingpt:latest', fallbackModels: ['0xroyce/plutus:latest'] });
+    expect(result.content).toBe('{"ok":true}');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondBody = JSON.parse(fetchMock.mock.calls[1][1].body);
+    expect(secondBody.model).toBe('0xroyce/plutus:latest');
+  });
+
+  it('returns the last empty-content result (rather than throwing) when every model in the list produces only empty content - preserves the existing downstream "empty response" HOLD handling', async () => {
+    fetchMock
+      .mockResolvedValueOnce(okResponse(''))
+      .mockResolvedValueOnce(okResponse(''));
+
+    const provider = new OpenAICompatibleProvider('Ollama (Local)', 'http://127.0.0.1:11434/v1', true);
+    await provider.initialize('', 'fingpt:latest');
+
+    const result = await provider.chat('prompt', { model: 'fingpt:latest', fallbackModels: ['0xroyce/plutus:latest'] });
+    expect(result.content).toBe('');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('CRITICAL: each fallback model gets its OWN fresh timeout, not a shared remainder from the primary model (real bug found live in production)', async () => {
     // Primary model hangs until its own real AbortSignal fires (simulates a genuinely
     // cold-starting/contended local model) - with the OLD shared-deadline bug, the SAME signal

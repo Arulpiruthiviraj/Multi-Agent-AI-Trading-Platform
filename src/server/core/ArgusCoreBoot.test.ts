@@ -12,17 +12,8 @@ describe('ArgusCoreBoot', () => {
   let tmpDbPath: string;
   let tmpSessionPath: string;
   let sqliteDb: any;
-  let productionSessionSnapshot: string | null;
 
   beforeAll(async () => {
-    // Snapshot BEFORE overriding the session-recovery path, so this proves the production file is
-    // untouched by this test run specifically - not merely absent for unrelated reasons.
-    try {
-      productionSessionSnapshot = fs.readFileSync(PRODUCTION_SESSION_PATH, 'utf8');
-    } catch {
-      productionSessionSnapshot = null; // legitimately absent (e.g. a fresh clone) - still asserted below
-    }
-
     tmpDbPath = path.join(os.tmpdir(), `argus_coreboot_${Date.now()}_${process.pid}.db`);
     process.env.ARGUS_DB_PATH = tmpDbPath;
     process.env.PAPER_TRADING_ONLY = 'true';
@@ -67,34 +58,32 @@ describe('ArgusCoreBoot', () => {
 
     ({ sqliteDb } = await import('../db'));
 
-    // Regression assertion (P1 fix, 2026-09-03): bootArgusCore() above just ran a real
-    // beginRuntimeSession() write - prove it landed only in the isolated tmp path, never the real
-    // production runtime-session file.
+    // Regression assertion (P1 fix, 2026-09-03; hardened 2026-09-07): bootArgusCore() above just
+    // ran a real beginRuntimeSession() write - prove it landed only in the isolated tmp path,
+    // never the real production runtime-session file.
     //
-    // Real flake found live (2026-09-03, same day): running this suite while a real Argus engine
-    // happened to be running concurrently against the SAME production file made a naive
-    // byte-identical comparison fail - the real engine's own legitimate periodic heartbeat write
-    // (lastHeartbeatAt) landed between this test's two snapshots. That is expected behavior for an
-    // actually-running production process, not evidence this test polluted anything - the pid in
-    // both snapshots was identical (the real engine's own pid, not a vitest-worker pid), which is
-    // exactly the property that matters. Comparing structurally and excluding only the one field a
-    // live heartbeat is expected to change keeps this a real regression check (a fake pid/startedAt
-    // landing here would still fail) without being flaky against a real concurrently-running engine
-    // (which CLAUDE.md's own operational guidance says not to do anyway - full-suite runs and the
-    // live paper engine should not overlap - but this assertion should not be flaky if they do).
-    let productionSessionAfter: string | null;
+    // 2026-09-07 readiness audit: the previous version of this assertion snapshotted the
+    // production file's full content before and after, excluding only `lastHeartbeatAt`, on the
+    // theory that a concurrently-running real engine only ever changes that one field between
+    // ticks. That assumption broke live during this audit's own test run: a real, unplanned engine
+    // restart happened to land in the exact window between this test's two snapshots, changing
+    // `pid`/`parentPid`/`startedAt` too - a legitimate event on the operator's machine, unrelated
+    // to this test, that nonetheless failed the old assertion. Comparing against a concurrently-
+    // running production file's mutable content is inherently not parallel-safe or deterministic,
+    // regardless of which fields are excluded - the fix is to stop depending on that content at
+    // all. The real invariant this test needs to prove is narrower and does not care what a real
+    // engine does concurrently: this vitest worker's own pid must never appear in the production
+    // file, because that would mean the override above failed to redirect the write.
+    let productionSessionAfter: { pid?: number } | null = null;
     try {
-      productionSessionAfter = fs.readFileSync(PRODUCTION_SESSION_PATH, 'utf8');
+      productionSessionAfter = JSON.parse(fs.readFileSync(PRODUCTION_SESSION_PATH, 'utf8'));
     } catch {
-      productionSessionAfter = null;
+      productionSessionAfter = null; // legitimately absent, or unreadable - either way, not this test's pid
     }
-    if (productionSessionSnapshot === null || productionSessionAfter === null) {
-      expect(productionSessionAfter).toBe(productionSessionSnapshot);
-    } else {
-      const before = JSON.parse(productionSessionSnapshot);
-      const after = JSON.parse(productionSessionAfter);
-      expect({ ...after, lastHeartbeatAt: undefined }).toEqual({ ...before, lastHeartbeatAt: undefined });
+    if (productionSessionAfter) {
+      expect(productionSessionAfter.pid).not.toBe(process.pid);
     }
-    expect(fs.existsSync(tmpSessionPath)).toBe(true);
+    const tmpSessionContent = JSON.parse(fs.readFileSync(tmpSessionPath, 'utf8'));
+    expect(tmpSessionContent.pid).toBe(process.pid);
   }, 120_000);
 });

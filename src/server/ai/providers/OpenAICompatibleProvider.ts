@@ -196,6 +196,16 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
     const externalSignal: AbortSignal | undefined = options?.signal;
 
     let lastError: Error | null = null;
+    // Real bug found live (2026-09-07): a model can respond HTTP-200 with genuinely empty content
+    // (confirmed live: fingpt:latest via Ollama returned `completion_tokens: 1`/empty content for
+    // every prompt tried, including its real intended financial-news-analysis shape) - that never
+    // threw, so this loop used to `return` it immediately as if it were a real answer, never trying
+    // the next fallback model in modelsToTry. Kept as the eventual return value ONLY if every model
+    // in the list produces empty content, so the existing downstream "empty response" HOLD handling
+    // (MacroAgent.ts/FundamentalAgent.ts/NewsScoringEngine.ts) still sees the same shape it already
+    // handles correctly - this only adds the missing retry, it does not change what a caller sees
+    // when nothing in the whole list can answer.
+    let lastEmptyResult: { content: string, tokens: number, inputTokens?: number, outputTokens?: number } | null = null;
     for (const model of modelsToTry) {
       let controller: AbortController | undefined;
       let timer: NodeJS.Timeout | undefined;
@@ -211,7 +221,15 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
           }
           attemptOptions = { ...options, signal: controller.signal };
         }
-        return await heavyModelMutex.run(model, () => this.chatOnce(model, prompt, attemptOptions, headers));
+        const result = await heavyModelMutex.run(model, () => this.chatOnce(model, prompt, attemptOptions, headers));
+        if (!result.content) {
+          lastEmptyResult = result;
+          if (modelsToTry.indexOf(model) < modelsToTry.length - 1) {
+            console.warn(`[${this.providerName}] Model '${model}' returned empty content - trying fallback model.`);
+          }
+          continue;
+        }
+        return result;
       } catch (err: any) {
         lastError = err;
         if (modelsToTry.indexOf(model) < modelsToTry.length - 1) {
@@ -222,6 +240,7 @@ export class OpenAICompatibleProvider extends BaseAIProvider {
         if (externalSignal && onExternalAbort) externalSignal.removeEventListener('abort', onExternalAbort);
       }
     }
+    if (lastEmptyResult) return lastEmptyResult;
     throw lastError ?? new Error(`${this.providerName} failed after retries`);
   }
 

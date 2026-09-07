@@ -18,6 +18,7 @@
     "start:engine": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argus-engine.ts",
     "start:engine:prod": "node scripts/argus-engine-prod.mjs",
     "argus-cli": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argus-cli.ts",
+    "argus:watchdog": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argusWatchdog.ts",
     "argus": "bash ./argus",
     "argus:ecosystem": "bash ./argus.sh",
     "stop": "bash ./argus stop",

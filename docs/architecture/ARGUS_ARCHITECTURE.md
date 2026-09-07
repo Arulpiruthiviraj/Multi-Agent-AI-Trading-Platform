@@ -110,10 +110,23 @@ lifetime (does not spam-retrigger once an operator has re-enabled trading).
 | IB Gateway / TWS (external app) | 4002 (paper) / 7497 | Broker socket Argus connects *to* — Argus does not launch or own this process | Probed, never auto-launched |
 | Java Quant Core (`quant-core-java/`) | 8085 | **Optional, advisory-only** calculation bridge — see § Java Quant Core below | Off unless `QUANT_JAVA_CORE_ENABLED=true` |
 | LangGraph Research Service (`langgraph-research/`) | 8090 | **Optional, advisory-only** strategy-graduation recommendation companion — see § LangGraph Research Service below | Off unless `LANGGRAPH_RESEARCH_ENABLED=true` |
+| Fincept Terminal (external app, `src/server/services/FinceptCacheAdapter.ts`) | n/a (file-based) | **Optional, advisory-only, read-only** VIX/index context read from an independently-running Fincept Terminal's SQLite `cache.db` into `MacroAgent`'s reasoning text — never the prompt/cache key, never confidence/side. Argus does not launch, own, or hold credentials for this process. | Off unless `ENABLE_FINCEPT_CACHE_ADVISORY=true` |
 
 None of these processes can place an order, hold broker credentials (except the Argus Engine
 process itself), or bypass the spine above. Ecosystem startup mechanics:
 `docs/operations/DEVOPS_LIFECYCLE.md`.
+
+**Fincept Terminal integration, the real ground truth (2026-09-07, verified against the actual
+open-source C++ source, not documentation or a relayed prompt):** Fincept's only genuine external-
+facing surface (`src/mcp/TerminalMcpBridge.cpp` in its own repo) binds an OS-assigned ephemeral port
+and mints a fresh, never-persisted auth token on every launch — deliberately, for its own bundled
+Python subprocess only. There is no supported way for an external process to reach it, and this was
+not treated as a gap to route around. The one real, safe read path is its `cache.db`'s generic
+`unified_cache` key/value table (no credential columns, unlike `fincept.db`'s `credentials`/
+`secure_credentials` tables, which `FinceptCacheAdapter.ts` never touches) — but that table is far
+more transient than a live feed: it only holds data while Fincept's own UI is actively displaying
+it, and was observed going from 57 rows to zero within minutes with no code change on either side.
+`getFinceptMacroSnapshot()` returning `null` is therefore the common case, not an error.
 
 ### Where else to go
 

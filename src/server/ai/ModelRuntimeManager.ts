@@ -14,6 +14,7 @@ import { eventBus } from '../core/EventBus';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 import { preferIpv4Loopback, resolveLocalAiServiceUrl } from './preferIpv4Loopback';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { aiModels } from '../config/aiModels';
 import { networkEndpoints } from '../config/networkEndpoints';
 import {
   probeIbkrEcosystemHealth,
@@ -67,7 +68,16 @@ async function probeOllamaCompletion(model: string): Promise<{ ok: boolean; erro
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model, prompt: 'ping', stream: false }),
-      signal: AbortSignal.timeout(runtimeIntervals.ollamaCompletionProbeTimeoutMs),
+      // Real bug found live (2026-09-07): this used runtimeIntervals.ollamaCompletionProbeTimeoutMs
+      // (8s) - the same cap AIRouter.ts's own comment documents as meant for REMOTE (paid)
+      // providers, whose 2026-09-02 fix explicitly split off a separate, longer
+      // aiModels.ollamaHardTimeoutMs (25s) for local Ollama specifically, after a live cold-load
+      // test measured ~13s round-trip. This probe was never updated to match, so it kept aborting
+      // real, successful-but-slower Ollama completions (reproduced live: fingpt:latest genuinely
+      // took ~14.6s here, mostly reported load time) and showing FAILED in the Model Runtime panel
+      // even while the SAME model was routing real agent calls successfully elsewhere. Reusing the
+      // established local-Ollama timeout instead of inventing a third value.
+      signal: AbortSignal.timeout(aiModels.ollamaHardTimeoutMs),
     });
     if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
     const body: any = await res.json().catch(() => null);

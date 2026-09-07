@@ -278,7 +278,12 @@ export class FundamentalAnalysisAgent {
           return;
        }
 
-       if (process.env.GEMINI_API_KEY) {
+       // Real bug found live (2026-09-07, same investigation as MacroAgent.ts's identical fix -
+       // docs/audits/ARGUS_POST_AUDIT_REMEDIATION_PLAN.md R13): see that file's comment for the
+       // full rationale. This gate previously only checked `process.env.GEMINI_API_KEY`, so an
+       // Ollama-only deployment would never attempt a directional read here regardless of Ollama's
+       // real availability.
+       if (await AIRouter.getInstance().hasAnyRoutableProvider()) {
           const cacheDataType = `llm-analysis:FundamentalAgent:${AI_ANALYSIS_PROMPT_VERSION}:${hashObject(data)}`;
           const cached = await ExternalDataCache.getFresh<CachedAnalysis>('ai-cache', cacheDataType, symbol, AI_ANALYSIS_CACHE_MAX_AGE_MS);
 
@@ -290,7 +295,13 @@ export class FundamentalAnalysisAgent {
           if (cached) {
              analysis = cached;
           } else {
-             const res = await AIRouter.getInstance().routeTask('FundamentalAgent', `Analyze these fundamentals for ${symbol}: P/E Ratio: ${data.peRatio}, EPS Growth: ${data.epsGrowth}%, Debt/Equity: ${data.debtToEquity}. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
+             // Same enum-clarity fix as MacroAgent.ts's identical call site (2026-09-07) - applied
+             // here too for consistency, though the MacroAgent-specific finding that motivated it
+             // (627 stored real responses, 0 literal BUY/SELL) does NOT apply to FundamentalAgent,
+             // which the same investigation confirmed already produces real graded directional
+             // calls (36 WIN / 25 LOSS in agent_performance_stats history). This only reduces
+             // ambiguous synonym drift; coerceEnum's safe-default-to-HOLD behavior is unchanged.
+             const res = await AIRouter.getInstance().routeTask('FundamentalAgent', `Analyze these fundamentals for ${symbol}: P/E Ratio: ${data.peRatio}, EPS Growth: ${data.epsGrowth}%, Debt/Equity: ${data.debtToEquity}. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }. recommendation must be exactly one of: "BUY", "SELL", "HOLD" - no other word or synonym.`, traceId);
              if (!res.content) {
                 this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Fundamental LLM returned an empty response.', currentPrice);
                 notePipelineAgentFailure('FundamentalAgent', 'empty LLM content');

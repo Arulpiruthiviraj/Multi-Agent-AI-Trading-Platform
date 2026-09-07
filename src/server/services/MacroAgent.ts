@@ -24,6 +24,7 @@ import { waitForFreshMarketData } from '../core/waitForFreshMarketData';
 import { selectPriorityRoundRobinSymbol } from '../core/agentRoundRobin';
 import { getRecentCandidates } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
+import { getFinceptMacroSnapshot, formatFinceptMacroSnapshotForPrompt } from './FinceptCacheAdapter';
 import {
   notePipelineAgentFailure,
   notePipelineAgentGated,
@@ -265,7 +266,16 @@ export class MacroEconomyAgent {
           return;
        }
 
-       if (process.env.GEMINI_API_KEY) {
+       // Real bug found live (2026-09-07, MacroAgent 100%-HOLD investigation,
+       // docs/audits/ARGUS_POST_AUDIT_REMEDIATION_PLAN.md R13): this gate previously checked only
+       // `process.env.GEMINI_API_KEY`, hardcoded to one specific provider - a deployment configured
+       // with only Ollama (no Gemini key at all, e.g. after this session's own AI Cost Governor
+       // push toward preferring free local models) would never even attempt a directional read
+       // here, always falling through to the "no LLM configured" HOLD below, regardless of Ollama's
+       // real availability. AIRouter.hasAnyRoutableProvider() reuses routeTask's own routable-
+       // provider filter (cooldown/disabled-aware), so this now correctly reflects whatever the
+       // real routing table can actually reach - Ollama-only, Gemini-only, or both.
+       if (await AIRouter.getInstance().hasAnyRoutableProvider()) {
           const cacheDataType = `llm-analysis:MacroAgent:${AI_ANALYSIS_PROMPT_VERSION}:${hashObject(data)}`;
           const cached = await ExternalDataCache.getFresh<CachedAnalysis>('ai-cache', cacheDataType, symbol, AI_ANALYSIS_CACHE_MAX_AGE_MS);
 
@@ -277,7 +287,20 @@ export class MacroEconomyAgent {
           if (cached) {
              analysis = cached;
           } else {
-             const res = await AIRouter.getInstance().routeTask('MacroAgent', `Analyze these macroeconomic indicators for their impact on ${symbol}: CPI ${data.inflation}%, Fed Funds Rate ${data.fedFundsRate}%, Unemployment ${data.unemployment}%. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }`, traceId);
+             // Real, evidence-backed fix (2026-09-07, MacroAgent 100%-HOLD investigation): a direct
+             // read of 627 real, complete stored responses (data/argus.db's ai_calls table,
+             // agent='MacroAgent', raw_response length > 500) found the model never once returned a
+             // literal "BUY"/"SELL" for this prompt - 599 said "Hold" outright, and the other 28
+             // used a non-standard synonym (NEUTRAL/MAINTAIN/MONITOR/ADOPT/EXERCISE/PROCEED) that
+             // coerceEnum() already, correctly, safely defaults to HOLD rather than guessing (see
+             // AIOutputValidator.ts's own documented contract - this was never a coercion bug).
+             // This is not a fabricated-signal fix - it does not push the model toward more BUY/SELL
+             // calls, nor touch confidence/RiskEngine/consensus. It only removes an unforced source
+             // of noise (a model reaching for its own synonym instead of the exact expected word) by
+             // stating the literal allowed values, so a genuine HOLD reads as HOLD and a genuine
+             // directional read - if the model ever has one for macro data - isn't lost to
+             // a wording mismatch instead of a real safe-default.
+             const res = await AIRouter.getInstance().routeTask('MacroAgent', `Analyze these macroeconomic indicators for their impact on ${symbol}: CPI ${data.inflation}%, Fed Funds Rate ${data.fedFundsRate}%, Unemployment ${data.unemployment}%. Return strict JSON: { summary, recommendation, confidence, supportingEvidence, risks, reasoning }. recommendation must be exactly one of: "BUY", "SELL", "HOLD" - no other word or synonym.`, traceId);
              if (!res.content) {
                 this.emitHold(traceId, symbol, 'DATA_UNAVAILABLE: Macro LLM returned an empty response.', currentPrice);
                 notePipelineAgentFailure('MacroAgent', 'empty LLM content');
@@ -304,13 +327,25 @@ export class MacroEconomyAgent {
              await ExternalDataCache.set('ai-cache', cacheDataType, symbol, analysis);
           }
 
+          // Fincept advisory context (2026-09-07, off by default via
+          // ENABLE_FINCEPT_CACHE_ADVISORY): appended to the REASONING TEXT only,
+          // deliberately outside the cached `analysis` object above and computed
+          // fresh on every emit regardless of cache hit/miss - it must never
+          // affect the LLM prompt/cache key (see FinceptCacheAdapter.ts's header:
+          // folding a live snapshot into the hashed prompt would let a changed
+          // VIX go unnoticed by a cache hit) and never affect confidence/side.
+          // Fails silently to '' when Fincept isn't running or has no fresh
+          // data - the common case - and the line is simply omitted.
+          const finceptSnapshot = getFinceptMacroSnapshot();
+          const finceptNote = finceptSnapshot ? ` ${formatFinceptMacroSnapshotForPrompt(finceptSnapshot)}` : '';
+
           eventBus.emitTradeIdea({
              traceId,
              symbol,
              side: analysis.recommendation,
              confidence: analysis.confidence,
              currentPrice: currentPrice ?? undefined,
-             reasoning: `[Macro AI] ${analysis.reasoning}`,
+             reasoning: `[Macro AI] ${analysis.reasoning}${finceptNote}`,
              agent: "MacroAgent",
              aiCallId,
              provider,

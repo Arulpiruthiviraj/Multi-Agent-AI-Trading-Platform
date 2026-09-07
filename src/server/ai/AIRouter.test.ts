@@ -94,6 +94,22 @@ describe('AIRouter provider timeout (Phase 1)', () => {
     expect(result.provider).toBe('fast-second');
   }, 15_000);
 
+  it('routeTask() fails over to the next provider when the first resolves HTTP-success but with empty content - real bug found live 2026-09-07 (fingpt:latest via Ollama returned empty content for every prompt tried; the old code treated any non-throwing resolution as a full success and never tried the next provider)', async () => {
+    aiRouter.registerProvider('empty-content-first', fastProvider(''));
+    aiRouter.registerProvider('real-content-second', fastProvider('{"decision":"BUY"}'));
+
+    const result = await aiRouter.routeTask('TestAgent', 'test prompt', 'trace-empty-content');
+    expect(result.content).toContain('BUY');
+    expect(result.provider).toBe('real-content-second');
+  });
+
+  it('routeTask() still returns (rather than hangs) when every provider produces only empty content - throws All AI providers failed, matching how a real thrown error is already handled', async () => {
+    aiRouter.registerProvider('empty-content-only', fastProvider(''));
+
+    await expect(aiRouter.routeTask('TestAgent', 'test prompt', 'trace-all-empty'))
+      .rejects.toThrow(/All AI providers failed/);
+  });
+
   it("routeConsensus() treats a hung provider's timeout exactly like any other failure - reports status:error, never blocks the overall Promise.all", async () => {
     aiRouter.registerProvider('hung-consensus', hungProvider());
 

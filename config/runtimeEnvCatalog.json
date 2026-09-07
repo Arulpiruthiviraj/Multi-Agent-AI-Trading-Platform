@@ -363,6 +363,30 @@
       "description": "npm run dev orchestrator only."
     },
     {
+      "key": "ENABLE_FINCEPT_CACHE_ADVISORY",
+      "category": "ADVANCED",
+      "label": "Fincept cache advisory read",
+      "type": "boolean",
+      "default": "false",
+      "overridable": false,
+      "secret": false,
+      "safetyLocked": false,
+      "applyMode": "BOOT_ONLY",
+      "description": "Read-only, text-only advisory context (VIX/index snapshot) from a locally-running Fincept Terminal's cache.db into MacroAgent's reasoning. Never touches confidence, side, RiskEngine, or order placement. Fails silently (no context attached) if Fincept is not running or the file is unreadable."
+    },
+    {
+      "key": "FINCEPT_CACHE_DB_PATH",
+      "category": "ADVANCED",
+      "label": "Fincept cache.db path override",
+      "type": "string",
+      "default": "",
+      "overridable": false,
+      "secret": false,
+      "safetyLocked": false,
+      "applyMode": "BOOT_ONLY",
+      "description": "Overrides the auto-detected path to Fincept Terminal's cache.db (default: <home>/AppData/Local/com.fincept.terminal/data/cache.db on Windows). Only read when ENABLE_FINCEPT_CACHE_ADVISORY=true."
+    },
+    {
       "key": "ARGUS_SKIP_CHRONOS",
       "category": "LOCAL AI",
       "label": "Skip Chronos spawn",

@@ -1088,9 +1088,23 @@ export class AIRouter {
             // No fallback multiplier stretch past hardCap — one attempt budget only.
             const totalTimeoutMs = hardCapMs;
             res = await withTimeout((signal) => provider.chat(prompt, { model: reqModel, jsonMode, temperature: effectiveTemperature, signal, fallbackModels, timeoutMs: route ? perModelTimeoutMs : undefined }), totalTimeoutMs, providerId);
-            
+
+            // Real bug found live (2026-09-07): a provider call that resolves without throwing was
+            // always treated as a full success below - health credited, no failover - even when
+            // `res.content` is genuinely empty (confirmed live: fingpt:latest via Ollama returned
+            // HTTP-200 with empty content for every prompt tried, including its real intended
+            // financial-news-analysis shape). Throwing here reuses the exact same, already-tested
+            // catch block below (failedProviders bookkeeping, health-degrade, cross-provider
+            // failover) instead of duplicating it - a caller whose own `if (!res.content)` check
+            // used to handle this now instead sees routeTask() throw once every provider/fallback
+            // model is genuinely exhausted, which every existing call site already wraps in its own
+            // try/catch and treats as a safe, fail-closed HOLD either way.
+            if (!res.content) {
+              throw new Error('empty content');
+            }
+
             latency = Date.now() - startTime;
-            
+
             // Log usage to DB
             try {
                 const callCost = provider.estimateCost(res.inputTokens || 0, res.outputTokens ?? res.tokens);

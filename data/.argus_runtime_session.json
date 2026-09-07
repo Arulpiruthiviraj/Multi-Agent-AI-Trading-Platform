@@ -1,8 +1,8 @@
 {
-  "pid": 10640,
-  "parentPid": 9132,
-  "startedAt": "2026-09-07T13:08:00.367Z",
-  "lastHeartbeatAt": "2026-09-07T13:10:47.279Z",
+  "pid": 10224,
+  "parentPid": 15028,
+  "startedAt": "2026-09-07T22:45:31.765Z",
+  "lastHeartbeatAt": "2026-09-07T22:45:31.766Z",
   "cleanShutdown": false,
   "exitCode": null
 }
