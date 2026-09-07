@@ -88,6 +88,7 @@ vi.mock('./backtest/HistoricalDataGateway', () => ({ historicalDataGateway: mock
 
 import { riskEngine, resetMarketClockCacheForTests, isDailyReplayFrequency } from './RiskEngine';
 import { setActiveReplaySession, type ActiveReplaySession } from '../replay/ReplayContext';
+import { snapshotReservedNotional, resetPendingCapitalReservationsForTests } from './PendingCapitalReservations';
 
 function makeBroker(portfolio: any) {
   return { portfolio: vi.fn(async () => portfolio) };
@@ -967,5 +968,50 @@ describe('RiskEngine.evaluateRisk', () => {
     mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 0 }));
     await riskEngine.evaluateRisk({ traceId: 'persist-fail', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
     expect(emitRiskAssessment).not.toHaveBeenCalled();
+  });
+
+  // Real leak found in a 2026-09-07 adversarial audit: gate 23 (argus_capital_allocation) reserves
+  // capital the instant it passes (PendingCapitalReservations.ts), but the ONLY other caller that
+  // releases it is OMS's executeOrder() - which never runs unless RISK_ASSESSMENT_COMPLETED is
+  // actually emitted with approved:true. A persist failure AFTER gate 23 has already passed (unlike
+  // the test above, where invalid equity means gate 23 never even runs) used to leak that
+  // reservation forever, making gate 23 progressively - and wrongly - more conservative every time
+  // it happened, until a process restart. Fixed in persistThenPublishAssessment() by releasing the
+  // reservation on any path that will not hand off to OMS (persist failure, or approved:false for
+  // any reason including one raised by a later gate after 23 already passed).
+  it('does not leak the gate-23 capital reservation when persistence fails AFTER capital was already reserved', async () => {
+    resetPendingCapitalReservationsForTests();
+    // Real equity/budget so gate 23 genuinely passes and reserves capital, unlike the equity:0 test
+    // above where gate 23 is skipped entirely (SKIPPED_INVALID_ACCOUNT_EQUITY) and never reserves.
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 100000, buyingPower: 100000 }));
+    setInsertFails(true);
+
+    await riskEngine.evaluateRisk({ traceId: 'persist-fail-after-reserve', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+    expect(emitRiskAssessment).not.toHaveBeenCalled();
+    expect(snapshotReservedNotional()).toBe(0);
+  });
+
+  it('does not leak the gate-23 capital reservation when a LATER gate rejects the same evaluation (gate 23 passed, overall approved:false)', async () => {
+    resetPendingCapitalReservationsForTests();
+    mockBrokerHolder.broker = makeBroker(basePortfolio({ equity: 100000, buyingPower: 100000 }));
+    mockTradingEngine.state.tradingMode = 'PAPER';
+    // Gate 23 (argus_capital_allocation) sizes off $1,000,000 budget vs. open/pending BUY notional -
+    // these rows are all FILLED (terminal), so they don't count as "pending" there and gate 23
+    // passes easily. Gate 24 (daily_buy_notional, evaluated AFTER 23) sums ALL of today's
+    // FILLED-or-open BUY notional regardless of terminal status - $110,000 already deployed today
+    // exceeds the $100,000 paper cap (tradingSafety.maxDailyBuyNotionalDollars), rejecting the
+    // overall evaluation even though gate 23 itself already reserved capital for this traceId.
+    setTableRows(schema.trades, Array.from({ length: 10 }, (_, i) => ({
+      id: `t${i}`, side: 'BUY', status: 'FILLED', symbol: 'MSFT', price: 110, quantity: 100,
+      timestamp: new Date().toISOString(), executionEnvironment: 'PAPER',
+    })));
+
+    await riskEngine.evaluateRisk({ traceId: 'later-gate-rejects-after-reserve', symbol: 'AAPL', side: 'BUY', currentPrice: 150 });
+
+    const assessment = lastAssessment();
+    expect(assessment.approved).toBe(false);
+    expect(assessment.rejectionGate).toBe('daily_buy_notional');
+    expect(snapshotReservedNotional()).toBe(0);
   });
 });

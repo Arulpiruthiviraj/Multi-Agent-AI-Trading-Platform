@@ -125,6 +125,14 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     console.error('[gracefulShutdown] Failed to stop OpenAliceVerificationService', e);
   }
   try {
+    // R2 remediation (2026-09-06) - added after DEF-27's own lesson: stop every interval-driven
+    // worker before sqliteDb.close() below, not after.
+    const { stopHeartbeatWatchdog } = await import('./heartbeatWatchdog');
+    stopHeartbeatWatchdog();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop HeartbeatWatchdog', e);
+  }
+  try {
     const { sqliteDb } = await import('../db');
     sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
     sqliteDb.close();

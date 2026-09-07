@@ -80,6 +80,7 @@
   "quantBarsRateLimitBaseBackoffMs": 30000,
   "quantBarsRateLimitMaxBackoffMs": 300000,
   "pipelineAgentDeadAfterMs": 180000,
+  "heartbeatWatchdogSilenceThresholdMs": 900000,
   "debateLearnedRulesCount": 5,
   "debateLearnedRuleMaxChars": 280,
   "quantExitIdeaConfidence": 0.85,

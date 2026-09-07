@@ -20,7 +20,14 @@ describe('ArgusRuntime lifecycle', () => {
     expect(argusRuntime.getSnapshot().phase).toBe('STOPPED');
     await argusRuntime.initialize();
     expect(argusRuntime.getSnapshot().phase).toMatch(/RUNNING|SAFE_MODE/);
-    expect(argusRuntime.health().coreBooted).toBe(true);
+    const health = argusRuntime.health();
+    expect(health.coreBooted).toBe(true);
+    // R4 diagnostic-logging fix (2026-09-07): health() must surface enough of
+    // MarketDataWorker.getFeedStatus() to actually diagnose a marketDataConnected:false report,
+    // not just the bare boolean the Sept-6 audit found insufficient.
+    expect(typeof health.marketDataAuthenticated).toBe('boolean');
+    expect(health.marketDataLastError === null || typeof health.marketDataLastError === 'string').toBe(true);
+    expect(health.marketDataReadyState === null || typeof health.marketDataReadyState === 'number').toBe(true);
   }, 60_000);
 
   it('stop pauses trading without throwing', async () => {

@@ -85,6 +85,20 @@ lifecycle, fill processing, the risk gate ladder (now 25 gates), and paper/live 
 duplicated. Full contract: `ARGUS_ARCHITECTURE_PROTECTION.md`, `ARGUS_ARCHITECTURE_CONTRACT.md`,
 `ARGUS_ARCHITECTURE_INVARIANTS.md` (all repo-root, out of scope for this doc).
 
+### Silent-death watchdog (`src/server/core/heartbeatWatchdog.ts`, added 2026-09-07 R2 remediation)
+
+Complements — does not replace — an external process supervisor (still an operator/ops
+responsibility; a crashed process cannot watch itself). Detects the *other* failure mode: the
+process stays alive while some interval-driven worker has gone silently, invisibly dead. Signal:
+`NewsAgent`'s heartbeat (`pipelineAgentHealth.ts`) is the one idea-agent heartbeat that ticks
+unconditionally on its own timer regardless of Autobot/session state; a prolonged gap in it,
+corroborated by `MarketDataWorker.isConnected()` also reporting disconnected (so a NewsEngine-only
+glitch alone cannot trip this), is treated as a genuine silent-death signature
+(`tradingSafety.heartbeatWatchdogSilenceThresholdMs`, 900000ms). On trip: reuses the existing
+`tradingEngine.setTradingState('TRADING_PAUSED', ...)` path — the same one reconciliation mismatches
+use, never a second/new kill switch — and never auto-resumes. One pause attempt per process
+lifetime (does not spam-retrigger once an operator has re-enabled trading).
+
 ### Companion processes (all optional, all outside the decision spine)
 
 | Process | Port | Role | Default |

@@ -293,6 +293,16 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
     console.warn(`[AIProviderHealthCheck] Boot start failed: ${e.message}`);
   }
 
+  try {
+    // R2 (2026-09-06 post-audit remediation) - see heartbeatWatchdog.ts's own header for the full
+    // rationale/signal choice. Reuses tradingEngine.setTradingState('TRADING_PAUSED', ...) - never
+    // a second kill switch - and never auto-resumes.
+    const { startHeartbeatWatchdog } = await import('./heartbeatWatchdog');
+    startHeartbeatWatchdog();
+  } catch (e: any) {
+    console.warn(`[HeartbeatWatchdog] Boot start failed: ${e.message}`);
+  }
+
   const row = settings[0];
   if (row) {
     Object.assign(tradingEngine.state, {

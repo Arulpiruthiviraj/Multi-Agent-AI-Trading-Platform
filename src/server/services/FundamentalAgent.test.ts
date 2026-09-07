@@ -6,14 +6,27 @@ const { emitTradeIdea, emit } = vi.hoisted(() => ({ emitTradeIdea: vi.fn(), emit
 const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
 const { getLatestPrice, subscribe, getLatestPriceAgeMs } = vi.hoisted(() => ({
-  getLatestPrice: vi.fn(),
+  getLatestPrice: vi.fn(() => 100),
   subscribe: vi.fn(),
   // Phase 7F: agentRoundRobin's fresh-symbol filter reads this - default to "fresh" (age 0) so
   // these pre-existing tests keep exercising the full universe exactly as before this change.
   getLatestPriceAgeMs: vi.fn((_s: string) => 0),
 }));
+// 2026-09-06 MISSING_PRICE remediation: evaluateSymbol() now genuinely gates on a fresh price via
+// waitForFreshMarketData() before proceeding. Mocked directly (not the real module) rather than
+// mocking two levels down at requestTemporaryDataRescue/getLatestPrice - the real module's
+// internal inFlight dedup Map is process-wide, module-scoped state that leaked across tests when
+// this was tried at that lower level (confirmed live: a resolved-but-not-yet-deleted promise for a
+// symbol two round-robin-adjacent tests both happened to pick caused one test to silently reuse
+// another test's mocked denial). Mocking this function directly sidesteps that shared-state class
+// of problem entirely. Defaults to a fresh price so every pre-existing test that doesn't care about
+// price keeps working exactly as before this change; a test that specifically cares overrides it.
+const { waitForFreshMarketData } = vi.hoisted(() => ({
+  waitForFreshMarketData: vi.fn(async (): Promise<{ ok: true; price: number; alreadyFresh: boolean } | { ok: false; reason: string; deniedReason?: string; detail?: string }> => ({ ok: true, price: 100, alreadyFresh: true })),
+}));
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea, emit } }));
+vi.mock('../core/waitForFreshMarketData', () => ({ waitForFreshMarketData }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
@@ -25,6 +38,18 @@ vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice, subsc
 }));
 
 import { FundamentalAnalysisAgent } from './FundamentalAgent';
+
+// 2026-09-06 MISSING_PRICE remediation - see MacroAgent.test.ts's identical file-wide beforeEach
+// for the full rationale (evaluateSymbol() now genuinely gates on a fresh price before doing
+// anything else; this guarantees every test in this file starts from a known-good default).
+beforeEach(() => {
+  getLatestPrice.mockReset();
+  getLatestPrice.mockImplementation(() => 100);
+  getLatestPriceAgeMs.mockReset();
+  getLatestPriceAgeMs.mockImplementation(() => 0);
+  waitForFreshMarketData.mockReset();
+  waitForFreshMarketData.mockImplementation(async () => ({ ok: true, price: 100, alreadyFresh: true }));
+});
 
 describe('FundamentalAnalysisAgent - AI output validation (Phase 5 hardening)', () => {
   let agent: any;
@@ -287,7 +312,11 @@ describe('FundamentalAnalysisAgent - currentPrice attachment (zero-trade audit f
   beforeEach(() => {
     emitTradeIdea.mockClear();
     routeTask.mockClear();
-    getLatestPrice.mockReset();
+    // waitForFreshMarketData is mocked at the top of this file (2026-09-06 MISSING_PRICE fix) -
+    // reset to the file-wide fresh-price default here too, since this block's own tests each
+    // control it explicitly (mirrors getLatestPrice's own pre-existing reset-then-restore pattern).
+    waitForFreshMarketData.mockReset();
+    waitForFreshMarketData.mockImplementation(async () => ({ ok: true, price: 100, alreadyFresh: true }));
     getFresh.mockReset();
     getFresh.mockImplementation(async (_provider: string, dataType: string) => {
       if (dataType === 'fundamentals') return { peRatio: '25.4', epsGrowth: '12', debtToEquity: '0.8' };
@@ -303,8 +332,8 @@ describe('FundamentalAnalysisAgent - currentPrice attachment (zero-trade audit f
     delete process.env.GEMINI_API_KEY;
   });
 
-  it('a BUY idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
-    getLatestPrice.mockReturnValue(187.42);
+  it('a BUY idea carries the real live currentPrice from waitForFreshMarketData, reaching the contract with a valid price', async () => {
+    waitForFreshMarketData.mockResolvedValue({ ok: true, price: 187.42, alreadyFresh: true });
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.8, reasoning: 'strong growth' }), aiCallId: 'c1', provider: 'gemini', latency: 100 });
 
     await agent.analyzeFundamentals();
@@ -314,8 +343,8 @@ describe('FundamentalAnalysisAgent - currentPrice attachment (zero-trade audit f
     expect(idea.currentPrice).toBe(187.42);
   });
 
-  it('a SELL idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
-    getLatestPrice.mockReturnValue(412.9);
+  it('a SELL idea carries the real live currentPrice from waitForFreshMarketData, reaching the contract with a valid price', async () => {
+    waitForFreshMarketData.mockResolvedValue({ ok: true, price: 412.9, alreadyFresh: true });
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'SELL', confidence: 0.65, reasoning: 'weak margins' }), aiCallId: 'c2', provider: 'gemini', latency: 100 });
 
     await agent.analyzeFundamentals();
@@ -325,23 +354,28 @@ describe('FundamentalAnalysisAgent - currentPrice attachment (zero-trade audit f
     expect(idea.currentPrice).toBe(412.9);
   });
 
-  it('never invents a price - when MarketDataWorker has no live tick for this symbol, currentPrice is left undefined rather than fabricated', async () => {
-    getLatestPrice.mockReturnValue(null);
+  it('never invents a price - when no fresh market-data rescue can be granted, a HOLD/DATA_UNAVAILABLE is emitted instead of a priced idea (2026-09-06 MISSING_PRICE fix)', async () => {
+    // Superseded test, updated in place: previously this let a BUY idea through with an
+    // undefined currentPrice and relied on gateTradeIdea's separate MISSING_PRICE gate to catch
+    // it downstream (real live rejections: 219 observed). The fix now stops the idea at the
+    // source instead - see waitForFreshMarketData.ts / this file's evaluateSymbol() header comment.
+    waitForFreshMarketData.mockResolvedValue({ ok: false, reason: 'RESCUE_DENIED', deniedReason: 'RESCUE_CAPACITY_FULL' });
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.8, reasoning: 'strong growth' }), aiCallId: 'c3', provider: 'gemini', latency: 100 });
 
     await agent.analyzeFundamentals();
 
+    expect(routeTask).not.toHaveBeenCalled(); // never even reaches the LLM call without a fresh price
     const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.confidence).toBe(0);
     expect(idea.currentPrice).toBeUndefined();
-    // The real, unmocked gateTradeIdea (src/server/core/tradeIdeaContract.ts) is what actually
-    // fails this closed as MISSING_PRICE - covered directly (not re-mocked here) in
-    // tradeIdeaContract.test.ts's "rejects a listed ticker with no live price" cases. This test
-    // only proves FundamentalAgent's own contribution: it must not paper over a missing price.
+    expect(idea.reasoning).toContain('DATA_UNAVAILABLE');
+    expect(idea.reasoning).toContain('RESCUE_CAPACITY_FULL');
   });
 
   it('attaches currentPrice on every emit path, including the DATA_UNAVAILABLE HOLD when fundamentals providers are not configured', async () => {
     delete process.env.ALPHAVANTAGE_API_KEY;
-    getLatestPrice.mockReturnValue(99.5);
+    waitForFreshMarketData.mockResolvedValue({ ok: true, price: 99.5, alreadyFresh: true });
     agent = new FundamentalAnalysisAgent();
 
     await agent.analyzeFundamentals();

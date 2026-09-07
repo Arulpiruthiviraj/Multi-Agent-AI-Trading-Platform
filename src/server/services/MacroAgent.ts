@@ -20,6 +20,7 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
 import { marketDataWorker } from './MarketDataWorker';
+import { waitForFreshMarketData } from '../core/waitForFreshMarketData';
 import { selectPriorityRoundRobinSymbol } from '../core/agentRoundRobin';
 import { getRecentCandidates } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
@@ -227,11 +228,29 @@ export class MacroEconomyAgent {
     if (!isLiveIdeaGenerationEnabled() || !isPipelineAgentEnabled('MacroAgent')) return;
 
     const traceId = generateTraceId(symbol);
-    // Real fix (2026-08-24 readiness audit, Part 2) - see FundamentalAgent.ts's identical comment.
+    // Original fix (2026-08-24 readiness audit, Part 2) + completed fix (2026-09-06 remediation,
+    // docs/audits/ARGUS_CURRENT_STATE_AND_PAPER_READINESS_AUDIT.md §26/§30 finding R3) - see
+    // FundamentalAgent.ts's identical evaluateSymbol() for the full rationale: MacroAgent was
+    // confirmed live (real DB query) as one of the two dominant MISSING_PRICE sources after
+    // NewsEngine's 2026-09-03 fix collapsed that agent's share. Same fix applied here.
     eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol, requestedBy: 'MacroAgent', at: new Date().toISOString() });
     marketDataWorker.subscribe(symbol, { requestedBy: 'MacroAgent' });
-    // See FundamentalAgent.ts's identical comment.
-    const currentPrice = marketDataWorker.getLatestPrice(symbol);
+    const freshData = await waitForFreshMarketData(symbol, {
+      requestClass: 'ROUTINE_RECOVERY',
+      reason: 'MacroAgent_awaiting_fresh_price',
+      traceId,
+    });
+    if (freshData.ok === false) {
+      const reasoning = freshData.reason === 'RESCUE_DENIED'
+        ? `DATA_UNAVAILABLE: market-data rescue denied for ${symbol} (${freshData.deniedReason}). No fabricated price emitted.`
+        : freshData.reason === 'ERROR'
+        ? `DATA_UNAVAILABLE: fresh-data wait errored for ${symbol} (${freshData.detail}). No fabricated price emitted.`
+        : `DATA_UNAVAILABLE: no fresh tick arrived for ${symbol} within ${tradingSafety.newsPriceWaitTimeoutMs}ms. No fabricated price emitted.`;
+      this.emitHold(traceId, symbol, reasoning, null);
+      notePipelineAgentSuccess('MacroAgent');
+      return;
+    }
+    const currentPrice = freshData.price;
 
     try {
        const data = await this.fetchMacro();

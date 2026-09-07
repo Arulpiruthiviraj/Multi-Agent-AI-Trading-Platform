@@ -48,6 +48,11 @@ vi.mock('../services/StrategyEngineShadowRunner', () => ({
 vi.mock('../integrations/openalice/OpenAliceVerificationService', () => ({
   openAliceVerificationService: { stopPolling: vi.fn() },
 }));
+// R2 remediation (2026-09-07) - heartbeatWatchdog.ts is a 10th interval-driven worker added after
+// this pass; mocked here (not left real) for the same reason as the 9 above.
+vi.mock('./heartbeatWatchdog', () => ({
+  stopHeartbeatWatchdog: vi.fn(),
+}));
 
 describe('gracefulShutdown drain', () => {
   const sessionPath = join(tmpdir(), `argus_shutdown_session_${process.pid}.json`);
@@ -94,9 +99,10 @@ describe('gracefulShutdown drain', () => {
     expect(system.stop).toHaveBeenCalled();
     expect(marketDataWorker.stop).toHaveBeenCalled();
 
-    // Real gap fixed this pass: these 9 workers must all be stopped BEFORE sqliteDb.close() below,
-    // not just "eventually" - a tick from any one of them after close() throws, and enough of them
-    // firing together trips the storm circuit-breaker into an unplanned exit (reproduced live).
+    // Real gap fixed this pass: these workers (9 originally, +1 heartbeatWatchdog added 2026-09-07)
+    // must all be stopped BEFORE sqliteDb.close() below, not just "eventually" - a tick from any one
+    // of them after close() throws, and enough of them firing together trips the storm
+    // circuit-breaker into an unplanned exit (reproduced live).
     const { sessionLifecycleWorker } = await import('../premarket/SessionLifecycle');
     const { javaQuantAdvisoryService } = await import('../services/JavaQuantAdvisoryService');
     const { calibrationValidationWorker } = await import('../continuous/CalibrationValidationWorker');
@@ -106,6 +112,7 @@ describe('gracefulShutdown drain', () => {
     const { marketOpenNewsConfluence } = await import('../news/MarketOpenNewsConfluence');
     const { strategyEngineShadowRunner } = await import('../services/StrategyEngineShadowRunner');
     const { openAliceVerificationService } = await import('../integrations/openalice/OpenAliceVerificationService');
+    const { stopHeartbeatWatchdog } = await import('./heartbeatWatchdog');
     expect(sessionLifecycleWorker.stop).toHaveBeenCalled();
     expect(javaQuantAdvisoryService.stop).toHaveBeenCalled();
     expect(calibrationValidationWorker.stop).toHaveBeenCalled();
@@ -115,6 +122,7 @@ describe('gracefulShutdown drain', () => {
     expect(marketOpenNewsConfluence.stop).toHaveBeenCalled();
     expect(strategyEngineShadowRunner.stop).toHaveBeenCalled();
     expect(openAliceVerificationService.stopPolling).toHaveBeenCalled();
+    expect(stopHeartbeatWatchdog).toHaveBeenCalled();
 
     // Order matters: every worker above must stop BEFORE the DB closes, not after.
     const sessionLifecycleOrder = (sessionLifecycleWorker.stop as any).mock.invocationCallOrder[0];

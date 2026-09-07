@@ -55,6 +55,24 @@ if (process.env.ARGUS_TEST_ALLOW_OLLAMA !== 'true') {
   process.env.OLLAMA_HOST = 'http://127.0.0.1:9';
 }
 
+// Real gap found 2026-09-07 (post-audit remediation full-suite run): with this deployment's real
+// .env genuinely carrying EXTENDED_HOURS_EXECUTION_ENABLED=true (CLAUDE.md's Phase 5 note) and the
+// suite run during real pre-market wall-clock hours, RiskEngine gate 25 correctly (by design)
+// rejected every order in 4 unrelated integration/RiskEngine test files as
+// EXTENDED_HOURS_BROKER_UNSUPPORTED (InternalPaperBroker has no extended-hours order construction)
+// - not a RiskEngine bug, a test-hermeticity gap: those tests never intended to exercise the
+// extended-hours path and don't control for real wall-clock time either. RiskEngine.test.ts /
+// OrderManagement.test.ts already `delete` this themselves before each test that needs the plain
+// path and explicitly set it back to 'true' within the specific tests that want extended-hours
+// behavior - same opt-in idiom as ARGUS_TEST_ALLOW_CHRONOS/OLLAMA/OPENALICE above, just applied
+// suite-wide so a future new test file cannot silently reacquire this same leakage. Assigned (not
+// deleted) - same reason as OPENALICE_ENABLED above: dotenv.config() (transitively triggered by
+// EncryptionService.ts et al. at module-load time, later than this file) does not override a key
+// that is already set, but happily repopulates one that was merely deleted.
+if (process.env.ARGUS_TEST_ALLOW_EXTENDED_HOURS !== 'true') {
+  process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'false';
+}
+
 afterAll(() => {
   for (const suffix of ['', '-shm', '-wal']) {
     try { fs.unlinkSync(defaultDbPath + suffix); } catch { /* best-effort cleanup - may never have been created */ }

@@ -61,6 +61,8 @@ export interface RuntimeIntervals {
   sessionLifecycleEvalMs: number;
   /** How often the observational calibration-candidate validation cycle re-runs (Phase 7E). */
   calibrationValidationCycleMs: number;
+  /** heartbeatWatchdog.ts (R2 remediation) check cadence. */
+  heartbeatWatchdogCheckMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -76,6 +78,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
   'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
+  'heartbeatWatchdogCheckMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

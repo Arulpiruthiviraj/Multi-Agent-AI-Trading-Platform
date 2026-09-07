@@ -29,7 +29,7 @@ import { getCachedAvgDailyVolumeShares } from '../risk/ExtendedHoursLiquidityCac
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
 import { applySubordinateAssetNotionalCap } from '../multiAsset/ideaEligibility';
 import { snapshotCapital, evaluateAllocationGuard } from './CapitalAllocation';
-import { reservePendingCapital, snapshotReservedNotional } from './PendingCapitalReservations';
+import { reservePendingCapital, releasePendingCapitalReservation, snapshotReservedNotional } from './PendingCapitalReservations';
 import { evaluateDailyBuyNotional, resolveDailyBuyNotionalCap, sumDailyBuyNotional } from './DailyBuyNotional';
 import { campaignVelocityMaxTradeDollars } from '../services/campaignIntraday';
 import { tradingSafety, portfolioRiskPctForLevel, isExtendedHoursExecutionEnabled } from '../config/tradingSafety';
@@ -843,8 +843,25 @@ export class RiskEngine {
     }
 
     private async persistThenPublishAssessment(proposal: any, result: { approved: boolean, maxQuantity: number, reasoning: string, rejectionGate: string | null, accountEquity?: number, buyingPower?: number, gateResults: GateResult[] }) {
+        // Real leak found (2026-09-07 adversarial audit): gate 23 (argus_capital_allocation) calls
+        // reservePendingCapital() the instant it passes, and the ONLY other caller of
+        // releasePendingCapitalReservation() is OMS's executeOrder() - which only ever runs if
+        // RISK_ASSESSMENT_COMPLETED is actually emitted below AND result.approved is true. Two real
+        // paths reach this function without ever emitting that event (or with approved forced
+        // false): a persist failure right below, and the outer evaluateRiskSerialized() catch block
+        // ("Risk evaluation crashed") after gate 23 already reserved capital for this traceId. Either
+        // way, OMS never runs, the reservation is never released, and it leaks for the remainder of
+        // this process's uptime - gate 23 then double-counts that phantom notional against every
+        // future evaluation, made strictly MORE conservative (never more permissive) by the bug, but
+        // a real, compounding false-rejection risk over a long-running session. Releasing here
+        // covers every path that will not hand off to OMS - the approved+persisted success path
+        // still relies on OMS's own release once the real trades row exists (unchanged).
+        if (!result.approved) {
+            releasePendingCapitalReservation(proposal.traceId);
+        }
         const persisted = await this.persistAssessment(proposal, result);
         if (!persisted) {
+            releasePendingCapitalReservation(proposal.traceId);
             eventBus.emit(EVENTS.RISK_BLOCK, {
                 gate: 'risk_assessment_persist',
                 reasoning: 'RISK_ASSESSMENT_PERSIST_FAILED: assessment was not written; OMS will not execute.',

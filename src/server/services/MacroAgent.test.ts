@@ -6,14 +6,32 @@ const { emitTradeIdea, emit } = vi.hoisted(() => ({ emitTradeIdea: vi.fn(), emit
 const { routeTask } = vi.hoisted(() => ({ routeTask: vi.fn() }));
 const { getFresh, setCache } = vi.hoisted(() => ({ getFresh: vi.fn(), setCache: vi.fn() }));
 const { getLatestPrice, subscribe, getLatestPriceAgeMs } = vi.hoisted(() => ({
-  getLatestPrice: vi.fn(),
+  // 2026-09-06 MISSING_PRICE remediation - see FundamentalAgent.test.ts's identical comment.
+  getLatestPrice: vi.fn(() => 100),
   subscribe: vi.fn(),
   // Phase 7F: agentRoundRobin's fresh-symbol filter reads this - default to "fresh" (age 0) so
   // these pre-existing tests keep exercising the full universe exactly as before this change.
+  // Still real/used: this filter is independent of waitForFreshMarketData, which is now mocked
+  // directly below (see its own comment) rather than through this lower-level dependency.
   getLatestPriceAgeMs: vi.fn((_s: string) => 0),
+}));
+// 2026-09-06 MISSING_PRICE remediation: mocked directly (not the real module, and not via its
+// requestTemporaryDataRescue/getLatestPrice dependencies) for the identical reason documented in
+// FundamentalAgent.test.ts's matching comment - the real module's module-scoped `inFlight` dedup
+// Map is real, unmocked, process-wide state. Here it surfaced through a different trigger than
+// FundamentalAgent's: this file's "genuine vs internal rate-limit" and "paces the 3 sub-calls"
+// tests use vi.useFakeTimers() + a real sleep()-based poll inside waitForFreshMarketData - a
+// promise whose internal setTimeout was scheduled under fake timers can be left permanently
+// pending across the vi.useRealTimers() teardown in afterEach, and the next test that evaluates
+// the same symbol picks up that same dead, never-resolving promise via inFlight.get(), hanging
+// forever before ever reaching fetchMacro()/fetch (confirmed live: fetchSpy/markRateLimited both
+// saw 0 calls). Mocking this function directly sidesteps the shared module state entirely.
+const { waitForFreshMarketData } = vi.hoisted(() => ({
+  waitForFreshMarketData: vi.fn(async (): Promise<{ ok: true; price: number; alreadyFresh: boolean } | { ok: false; reason: string; deniedReason?: string; detail?: string }> => ({ ok: true, price: 100, alreadyFresh: true })),
 }));
 
 vi.mock('../core/EventBus', () => ({ eventBus: { emitTradeIdea, emit } }));
+vi.mock('../core/waitForFreshMarketData', () => ({ waitForFreshMarketData }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => true }));
 vi.mock('../core/ideaUniverse', () => ({ resolveIdeaUniverse: () => ['NVDA', 'AAPL', 'TSLA'] }));
 vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeTask }) } }));
@@ -26,6 +44,23 @@ vi.mock('./MarketDataWorker', () => ({ marketDataWorker: { getLatestPrice, subsc
 
 import { MacroEconomyAgent } from './MacroAgent';
 import * as tradingSafetyModule from '../config/tradingSafety';
+
+// 2026-09-06 MISSING_PRICE remediation: evaluateSymbol()/analyzeMacro() now genuinely gate on a
+// fresh price via waitForFreshMarketData() (mocked directly - see its own hoisted comment above)
+// before doing anything else. A file-wide beforeEach here (runs before every describe block's own
+// local beforeEach, per vitest's hook ordering) guarantees every test in this file starts from the
+// same known-good "fresh price available" default, regardless of what a same-file neighboring test
+// set via mockResolvedValue/mockResolvedValueOnce - far more robust than patching each describe
+// block's own beforeEach individually. getLatestPriceAgeMs stays here too since it independently
+// drives round-robin symbol PRIORITIZATION (Phase 7F), unrelated to waitForFreshMarketData.
+beforeEach(() => {
+  getLatestPrice.mockReset();
+  getLatestPrice.mockImplementation(() => 100);
+  getLatestPriceAgeMs.mockReset();
+  getLatestPriceAgeMs.mockImplementation(() => 0);
+  waitForFreshMarketData.mockReset();
+  waitForFreshMarketData.mockImplementation(async () => ({ ok: true, price: 100, alreadyFresh: true }));
+});
 
 describe('MacroEconomyAgent - AI output validation (Phase 5 hardening)', () => {
   let agent: any;
@@ -222,7 +257,11 @@ describe('MacroEconomyAgent - currentPrice attachment (zero-trade audit fix)', (
   beforeEach(() => {
     emitTradeIdea.mockClear();
     routeTask.mockClear();
-    getLatestPrice.mockReset();
+    // waitForFreshMarketData is mocked at the top of this file (2026-09-06 MISSING_PRICE fix) -
+    // reset to the file-wide fresh-price default here too, since this block's own tests each
+    // control it explicitly (mirrors FundamentalAgent.test.ts's identical pattern).
+    waitForFreshMarketData.mockReset();
+    waitForFreshMarketData.mockImplementation(async () => ({ ok: true, price: 100, alreadyFresh: true }));
     getFresh.mockReset();
     getFresh.mockImplementation(async (_p: string, dataType: string) => (dataType === 'macro' ? macro : null));
     process.env.ALPHAVANTAGE_API_KEY = 'test-key';
@@ -235,8 +274,8 @@ describe('MacroEconomyAgent - currentPrice attachment (zero-trade audit fix)', (
     delete process.env.GEMINI_API_KEY;
   });
 
-  it('a BUY idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
-    getLatestPrice.mockReturnValue(452.11);
+  it('a BUY idea carries the real live currentPrice from waitForFreshMarketData, reaching the contract with a valid price', async () => {
+    waitForFreshMarketData.mockResolvedValue({ ok: true, price: 452.11, alreadyFresh: true });
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'dovish pivot' }), aiCallId: 'c1', provider: 'gemini', latency: 100 });
 
     await agent.analyzeMacro();
@@ -246,8 +285,8 @@ describe('MacroEconomyAgent - currentPrice attachment (zero-trade audit fix)', (
     expect(idea.currentPrice).toBe(452.11);
   });
 
-  it('a SELL idea carries the real live currentPrice from MarketDataWorker, reaching the contract with a valid price', async () => {
-    getLatestPrice.mockReturnValue(88.3);
+  it('a SELL idea carries the real live currentPrice from waitForFreshMarketData, reaching the contract with a valid price', async () => {
+    waitForFreshMarketData.mockResolvedValue({ ok: true, price: 88.3, alreadyFresh: true });
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'SELL', confidence: 0.6, reasoning: 'hawkish surprise' }), aiCallId: 'c2', provider: 'gemini', latency: 100 });
 
     await agent.analyzeMacro();
@@ -257,14 +296,20 @@ describe('MacroEconomyAgent - currentPrice attachment (zero-trade audit fix)', (
     expect(idea.currentPrice).toBe(88.3);
   });
 
-  it('never invents a price - when MarketDataWorker has no live tick for this symbol, currentPrice is left undefined rather than fabricated', async () => {
-    getLatestPrice.mockReturnValue(null);
+  it('never invents a price - when no fresh market-data rescue can be granted, a HOLD/DATA_UNAVAILABLE is emitted instead of a priced idea (2026-09-06 MISSING_PRICE fix)', async () => {
+    // Superseded test, updated in place - see FundamentalAgent.test.ts's identical comment.
+    waitForFreshMarketData.mockResolvedValue({ ok: false, reason: 'RESCUE_DENIED', deniedReason: 'RESCUE_CAPACITY_FULL' });
     routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'dovish pivot' }), aiCallId: 'c3', provider: 'gemini', latency: 100 });
 
     await agent.analyzeMacro();
 
+    expect(routeTask).not.toHaveBeenCalled();
     const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.confidence).toBe(0);
     expect(idea.currentPrice).toBeUndefined();
+    expect(idea.reasoning).toContain('DATA_UNAVAILABLE');
+    expect(idea.reasoning).toContain('RESCUE_CAPACITY_FULL');
   });
 });
 

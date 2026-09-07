@@ -46,5 +46,6 @@
   "javaQuantAdvisoryMs": 90000,
   "aiProviderHealthCheckMs": 180000,
   "sessionLifecycleEvalMs": 60000,
-  "calibrationValidationCycleMs": 900000
+  "calibrationValidationCycleMs": 900000,
+  "heartbeatWatchdogCheckMs": 60000
 }

@@ -20,6 +20,7 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
 import { marketDataWorker } from './MarketDataWorker';
+import { waitForFreshMarketData } from '../core/waitForFreshMarketData';
 import { selectPriorityRoundRobinSymbol } from '../core/agentRoundRobin';
 import { getRecentCandidates } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
@@ -223,21 +224,44 @@ export class FundamentalAnalysisAgent {
     if (!isLiveIdeaGenerationEnabled() || !isPipelineAgentEnabled('FundamentalAgent')) return;
 
     const traceId = generateTraceId(symbol);
-    // Real fix (2026-08-24 readiness audit, Part 2): this round-robin previously never requested
-    // coverage for its own evaluation target - it only ever passively read getLatestPrice() and
-    // hoped the symbol happened to already be streamed for some unrelated reason (opportunity-
-    // discovery priority). With only a fraction of the ~122-symbol universe actually streamed at
-    // once, most picks had no live tick at all - the deterministic, traceable cause of most
-    // MISSING_PRICE rejections. subscribe() is idempotent/cap-aware (MarketDataWorker.ts) and emits
-    // SYMBOL_NOT_SUBSCRIBED/MARKET_DATA_CAPACITY_FULL - this does not fabricate a price for THIS
-    // tick, it only improves the odds this symbol has a real one the next time it comes up.
+    // Original fix (2026-08-24 readiness audit, Part 2): request coverage for the evaluation
+    // target instead of passively hoping it happened to already be streamed. subscribe() is
+    // idempotent/cap-aware (MarketDataWorker.ts) and improves the odds this symbol has a real
+    // tick the *next* time it comes up - it does not help THIS tick, since a fresh subscription
+    // has no tick yet at the moment it's requested.
+    //
+    // Completed fix (2026-09-06 remediation, docs/audits/ARGUS_CURRENT_STATE_AND_PAPER_READINESS_AUDIT.md
+    // §26/§30 finding R3): the 2026-09-03 NewsEngine fix for this identical structural bug
+    // (NewsEngine.ts's own comment at its matching call site) was explicitly NOT extended here at
+    // the time - confirmed live via real DB query: FundamentalAgent became the dominant MISSING_PRICE
+    // source (203 of 09-03's 366 rejections) the moment NewsEngine's share collapsed, with MacroAgent
+    // as the other major source. Applying the identical, already-reviewed fix here: a bounded,
+    // allocator-aware wait for a real fresh tick (waitForFreshMarketData.ts, same
+    // requestTemporaryDataRescue() path every other rescue caller uses) instead of a raw
+    // subscribe()+immediate-read. ROUTINE_RECOVERY is the correct request class here (a scheduled
+    // round-robin re-evaluation, not a news catalyst or exploration candidate) - per the same
+    // audit's own capacity data, ROUTINE_RECOVERY/RENEWAL requests see ~0% denial, so this should
+    // resolve cleanly in the common case and fail closed (never fabricate a price) otherwise.
     eventBus.emit(EVENTS.PRICE_SNAPSHOT_REQUESTED, { symbol, requestedBy: 'FundamentalAgent', at: new Date().toISOString() });
     marketDataWorker.subscribe(symbol, { requestedBy: 'FundamentalAgent' });
+    const freshData = await waitForFreshMarketData(symbol, {
+      requestClass: 'ROUTINE_RECOVERY',
+      reason: 'FundamentalAgent_awaiting_fresh_price',
+      traceId,
+    });
+    if (freshData.ok === false) {
+      const reasoning = freshData.reason === 'RESCUE_DENIED'
+        ? `DATA_UNAVAILABLE: market-data rescue denied for ${symbol} (${freshData.deniedReason}). No fabricated price emitted.`
+        : freshData.reason === 'ERROR'
+        ? `DATA_UNAVAILABLE: fresh-data wait errored for ${symbol} (${freshData.detail}). No fabricated price emitted.`
+        : `DATA_UNAVAILABLE: no fresh tick arrived for ${symbol} within ${tradingSafety.newsPriceWaitTimeoutMs}ms. No fabricated price emitted.`;
+      this.emitHold(traceId, symbol, reasoning, null);
+      notePipelineAgentSuccess('FundamentalAgent');
+      return;
+    }
     // Same authoritative live-price source gateTradeIdea's own lookupLivePrice fallback already
-    // reads (MarketDataWorker's WS tick cache, registered via setTradeIdeaLivePriceLookup) -
-    // attached explicitly here rather than relying solely on that global fallback. Never invented,
-    // never stale: null when this symbol has no live tick yet, exactly like the fallback would see.
-    const currentPrice = marketDataWorker.getLatestPrice(symbol);
+    // reads (MarketDataWorker's WS tick cache) - now a real, confirmed-fresh tick, never invented.
+    const currentPrice = freshData.price;
 
     try {
        const data = await this.fetchFundamentals(symbol);

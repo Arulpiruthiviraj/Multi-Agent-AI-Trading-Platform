@@ -190,6 +190,19 @@ export interface TradingSafety {
   quantBarsRateLimitMaxBackoffMs: number;
   /** Idea-agent lastTickAt older than this is reported as enabled+dead. */
   pipelineAgentDeadAfterMs: number;
+  /**
+   * heartbeatWatchdog.ts (R2, 2026-09-07 post-audit remediation - "no silent-death
+   * observability/supervision"): NewsAgent's own heartbeat (notePipelineAgentTick('NewsAgent'))
+   * ticks unconditionally on its own timer regardless of Autobot/session state (NewsEngine
+   * clustering "stays on with Autobot" per pipelineAgentRuntime.ts's own header) - the one
+   * reliably always-on signal in this codebase, distinct from FundamentalAgent/MacroAgent/
+   * TechnicalAgent whose timers are stopped/started with Autobot or driven only by real market
+   * ticks. A gap this long, corroborated by MarketDataWorker also reporting disconnected, is
+   * treated as a genuine silent-death signature rather than a normal off-hours lull - must stay
+   * comfortably above newsEngineOffHoursMs (runtimeIntervals.json, 300000) so a slow off-hours
+   * cadence alone never trips this.
+   */
+  heartbeatWatchdogSilenceThresholdMs: number;
   debateLearnedRulesCount: number;
   debateLearnedRuleMaxChars: number;
   quantExitIdeaConfidence: number;
@@ -479,6 +492,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantBarsRateLimitBaseBackoffMs',
   'quantBarsRateLimitMaxBackoffMs',
   'pipelineAgentDeadAfterMs',
+  'heartbeatWatchdogSilenceThresholdMs',
   'debateLearnedRulesCount',
   'debateLearnedRuleMaxChars',
   'quantExitIdeaConfidence',

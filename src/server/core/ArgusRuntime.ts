@@ -39,6 +39,17 @@ export interface ArgusRuntimeHealth {
   autobotEnabled: boolean;
   emergencyStopActive: boolean;
   marketDataConnected: boolean;
+  /** R4 diagnostic-logging fix (2026-09-07 post-audit remediation, §7/§30 P1 finding #3): the
+   *  audit found `marketDataConnected:false` while IBKR's gatewaySocket itself reported CONNECTED,
+   *  cause UNKNOWN at audit time, precisely because this endpoint exposed only the boolean and
+   *  none of getFeedStatus()'s other fields an operator would need to actually diagnose that gap
+   *  (was the WS/socket connected but never authenticated? was there a real lastError - e.g. IBKR
+   *  error 354, market-data-line-not-subscribed? what did the raw readyState say?). Cannot itself
+   *  root-cause the Sept-6 finding (that needs a real Monday-open observation), but the next
+   *  occurrence of this exact symptom will have real evidence attached instead of a bare boolean. */
+  marketDataAuthenticated: boolean;
+  marketDataLastError: string | null;
+  marketDataReadyState: number | null;
   brokerId: string | null;
   pipelineRunning: boolean;
   liveReadiness: string;
@@ -195,6 +206,9 @@ export class ArgusRuntime {
       autobotEnabled: tradingEngine.state.enabled,
       emergencyStopActive: tradingEngine.state.emergencyStopActive,
       marketDataConnected: feed.connected,
+      marketDataAuthenticated: feed.authenticated,
+      marketDataLastError: feed.lastError,
+      marketDataReadyState: feed.readyState,
       brokerId,
       pipelineRunning: system.getStatus().running,
       liveReadiness: evaluateLiveReadiness().result,

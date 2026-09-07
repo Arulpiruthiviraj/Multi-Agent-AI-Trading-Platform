@@ -68,6 +68,13 @@ export function installObservabilityEventBridge(): void {
       const level = (tax?.defaultLevel || 'INFO') as ObservabilityLevel;
       recordDomainMetrics(eventType, payload);
       const ids = snapshotObservabilityIds(payload);
+      // Real gap found (2026-09-06/07 post-audit remediation, §21 P2 finding): this fixed field
+      // set is trade-idea-shaped, so any event whose real payload uses different field names
+      // silently persists as `{}` once every extracted field comes back undefined and
+      // JSON.stringify drops them all - confirmed live for AI_PROVIDERS_EXHAUSTED (real fields
+      // agentType/lastError/providersAttempted, none of which matched anything below). Added those
+      // three narrowly for this diagnosed case rather than reworking the schema for every possible
+      // event shape - a broader per-event-type extraction scheme is a larger, separate change.
       const safePayload = redactSecretsDeep({
         symbol: payload?.symbol,
         side: payload?.side,
@@ -78,6 +85,9 @@ export function installObservabilityEventBridge(): void {
         confidence: payload?.confidence,
         orderId: payload?.orderId ?? payload?.id,
         stage: payload?.stage,
+        agentType: payload?.agentType,
+        lastError: payload?.lastError,
+        providersAttempted: payload?.providersAttempted,
       });
       logStructured(level, eventType, {
         category,
