@@ -41,4 +41,29 @@ class OptionStockCombinationEngineTest {
     void returnsNullRatherThanFabricating_whenCollarStrikesMisordered() {
         assertThat(OptionStockCombinationEngine.collar(100, 105, 95, 0.20)).isNull();
     }
+
+    @Test
+    void coveredPut_isTheMirrorOfCoveredCall() {
+        // Short stock at 98, short 95 put for 2.00 -> breakeven 100, maxReward = 98-95+2 = 5.
+        var result = OptionStockCombinationEngine.coveredPut(98, 95, 2.00);
+        assertThat(result).isNotNull();
+        assertThat(result.breakeven()).isCloseTo(100.0, within(1e-9));
+        assertThat(result.maxReward()).isCloseTo(5.0, within(1e-9));
+        assertThat(result.maxRisk()).isEqualTo(Double.POSITIVE_INFINITY);
+    }
+
+    @Test
+    void protectiveCall_isTheMirrorOfProtectivePut() {
+        // Short stock at 100, long 100 call for 3.25 -> breakeven 96.75, maxReward 96.75, maxRisk 3.25.
+        var result = OptionStockCombinationEngine.protectiveCall(100, 100, 3.25);
+        assertThat(result).isNotNull();
+        assertThat(result.breakeven()).isCloseTo(96.75, within(1e-9));
+        assertThat(result.maxReward()).isCloseTo(96.75, within(1e-9));
+        assertThat(result.maxRisk()).isCloseTo(3.25, within(1e-9));
+    }
+
+    @Test
+    void returnsNullRatherThanFabricating_whenCoveredPutInputsInvalid() {
+        assertThat(OptionStockCombinationEngine.coveredPut(0, 95, 2.00)).isNull();
+    }
 }
