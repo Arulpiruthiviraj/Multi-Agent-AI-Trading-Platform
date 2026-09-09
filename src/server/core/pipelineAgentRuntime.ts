@@ -26,6 +26,12 @@ const runtimes: Record<string, AgentRuntime> = {
   // real gate is the isPipelineAgentEnabled('TradePlanBuilder') check inline in
   // TradePlanBuilder.emitTradePlanIdea() itself.
   TradePlanBuilder: { start: () => { /* gated inline in emitTradePlanIdea() */ }, stop: () => { /* same */ } },
+  // No independent worker (same shape as TradePlanBuilder above) - javaQuantAdvisoryService's own
+  // round-robin analysis timer is owned/started by SystemBootstrap (gated on QUANT_JAVA_CORE_ENABLED,
+  // a separate flag - it must keep running for QUANT_ADVISORY_ANALYSIS_COMPLETED observability and
+  // shadow-tracking regardless of this toggle). The real gate is the inline
+  // isPipelineAgentEnabled('JavaFactorComposite') check before its emitTradeIdea() call.
+  JavaFactorComposite: { start: () => { /* gated inline in JavaQuantAdvisoryService.analyzeSymbol() */ }, stop: () => { /* same */ } },
 };
 
 let ideaWorkersArmed = false;

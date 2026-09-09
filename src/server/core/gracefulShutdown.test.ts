@@ -15,6 +15,11 @@ vi.mock('../services/MarketDataWorker', () => ({
 vi.mock('../db', () => ({
   sqliteDb: { pragma: vi.fn(), close: vi.fn() },
 }));
+// Short, deterministic drain timeout for tests (real default is tradingSafety.json's 5000ms) so
+// the force-close test below doesn't need to wait for the real production timeout.
+vi.mock('../config/tradingSafety', () => ({
+  tradingSafety: { gracefulShutdownHttpDrainTimeoutMs: 20 },
+}));
 // Real gap found and fixed (2026-09-05, post-implementation forensic audit): these 9 interval-
 // driven workers were never stopped during drain, even though several do real DB writes on their
 // own timer (SessionLifecycle most notably - always running, independent of Autobot). A tick
@@ -133,9 +138,41 @@ describe('gracefulShutdown drain', () => {
     expect(sqliteDb.close).toHaveBeenCalled();
     expect(httpClose).toHaveBeenCalled();
     expect(wsClose).toHaveBeenCalled();
+
+    // Real bug found and fixed (2026-09-08, live-reproduced): HTTP/WS must close BEFORE the DB,
+    // not after - otherwise an in-flight/polling request served between the old close() ordering
+    // hits a closed SQLite connection (reproduced live: a 2026-09-07 crash.log burst of
+    // "database connection is not open" from researchRoutes.ts, spanning the whole window between
+    // the old sqliteDb.close() and the HTTP server actually finishing its drain).
+    const httpCloseOrder = (httpClose as any).mock.invocationCallOrder[0];
+    const wsCloseOrder = (wsClose as any).mock.invocationCallOrder[0];
+    expect(httpCloseOrder).toBeLessThan(dbCloseOrder);
+    expect(wsCloseOrder).toBeLessThan(dbCloseOrder);
     const { readFileSync } = await import('node:fs');
     const marker = JSON.parse(readFileSync(sessionPath, 'utf8'));
     expect(marker.cleanShutdown).toBe(true);
+  });
+
+  // Real bug found and fixed (2026-09-08): a lingering keep-alive HTTP connection must never hang
+  // process shutdown forever. If httpServer.close()'s callback never fires within
+  // gracefulShutdownHttpDrainTimeoutMs, the drain must force-close via closeAllConnections() and
+  // proceed anyway.
+  it('force-closes a hung HTTP server via closeAllConnections instead of hanging shutdown', async () => {
+    const { drainTradingProcess } = await import('./gracefulShutdown');
+    const { sqliteDb } = await import('../db');
+    const httpClose = vi.fn(); // never invokes its callback - simulates a hung/lingering connection
+    const closeAllConnections = vi.fn();
+    const wsClose = vi.fn((cb?: (err?: Error) => void) => { cb?.(); });
+
+    await drainTradingProcess({
+      httpServer: { close: httpClose, closeAllConnections },
+      wss: { close: wsClose },
+    });
+
+    expect(httpClose).toHaveBeenCalled();
+    expect(closeAllConnections).toHaveBeenCalled();
+    // Drain must still complete and reach the DB close despite the hung callback.
+    expect(sqliteDb.close).toHaveBeenCalled();
   });
 
   it('installProcessShutdown registers SIGTERM and SIGINT once', async () => {

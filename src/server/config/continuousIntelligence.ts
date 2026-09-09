@@ -114,6 +114,11 @@ export interface ContinuousIntelligenceConfig {
   missedOpportunityEvaluationHorizonMinutes: number;
   /** Phase 4F: how far back event_traces/risk_assessments/trades are queried to build funnel signals. */
   missedOpportunityLookbackMs: number;
+  /** Real defect fix (2026-09-09): runMissedOpportunityDetectionCycle() persisted PENDING records
+   *  but nothing ever evaluated them (getPendingEvaluations/persistEvaluation had zero production
+   *  callers - live query confirmed 592/592 rows PENDING since the table existed). This is the
+   *  cadence for the new MissedOpportunityEvaluator worker that closes that gap. */
+  missedOpportunityEvaluationIntervalMs: number;
   /** Phase 4H: minimum sample size before a challenger version is eligible for promotion (mirrors Kelly's existing 20-trade floor). */
   championChallengerMinSampleSize: number;
   /** Phase 4H: challenger must beat the champion's metric by at least this margin to pass the promotion gate. */
@@ -274,6 +279,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     missedOpportunityDetectionCooldownMs: requireNumber(raw.missedOpportunityDetectionCooldownMs, 'missedOpportunityDetectionCooldownMs'),
     missedOpportunityEvaluationHorizonMinutes: requireNumber(raw.missedOpportunityEvaluationHorizonMinutes, 'missedOpportunityEvaluationHorizonMinutes'),
     missedOpportunityLookbackMs: requireNumber(raw.missedOpportunityLookbackMs, 'missedOpportunityLookbackMs'),
+    missedOpportunityEvaluationIntervalMs: requireNumber(raw.missedOpportunityEvaluationIntervalMs, 'missedOpportunityEvaluationIntervalMs'),
     championChallengerMinSampleSize: requireNumber(raw.championChallengerMinSampleSize, 'championChallengerMinSampleSize'),
     championChallengerMinImprovementMargin: requireNonNegativeNumber(raw.championChallengerMinImprovementMargin, 'championChallengerMinImprovementMargin'),
     calibrationMaxObservationAgeMs: requireNumber(raw.calibrationMaxObservationAgeMs, 'calibrationMaxObservationAgeMs'),

@@ -87,6 +87,7 @@
   "missedOpportunityDetectionCooldownMs": 1800000,
   "missedOpportunityEvaluationHorizonMinutes": 60,
   "missedOpportunityLookbackMs": 900000,
+  "missedOpportunityEvaluationIntervalMs": 300000,
   "championChallengerMinSampleSize": 20,
   "championChallengerMinImprovementMargin": 0.05,
   "calibrationMaxObservationAgeMs": 604800000,

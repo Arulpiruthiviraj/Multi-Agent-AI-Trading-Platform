@@ -18,6 +18,16 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 
+# Same rationale as this repo's `node --use-system-ca` everywhere else: on this host, TLS
+# interception (a corporate/local root CA trusted by Windows but absent from Python's bundled
+# certifi store) makes certifi-based verification of huggingface.co fail with
+# CERTIFICATE_VERIFY_FAILED even though the OS trust store (and therefore curl/Node) accepts it
+# fine. truststore.inject_into_ssl() patches ssl.SSLContext to verify against the OS store instead,
+# fixing httpx/requests/huggingface_hub without vendoring or disabling verification.
+import truststore  # noqa: E402
+
+truststore.inject_into_ssl()
+
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from bounded_http_server import BoundedThreadingHTTPServer, send_json_and_close, start_graceful_shutdown  # noqa: E402
 from inference_worker import run_on_inference_worker  # noqa: E402

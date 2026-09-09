@@ -5,7 +5,11 @@ import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway
 import { quantCoreBridge } from './QuantCoreBridge';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
 import { recordPrediction } from './ModelPerformanceTracker';
-import { javaQuantAdvisoryService } from './JavaQuantAdvisoryService';
+import { javaQuantAdvisoryService, emitJavaQuantVoteIfEligible } from './JavaQuantAdvisoryService';
+import { tradingEngine } from '../engines/TradingEngine';
+import { setPipelineAgentEnabled } from '../core/pipelineAgentGate';
+import { tradingSafety } from '../config/tradingSafety';
+import type { QuantAdvisoryPayload } from './QuantAdvisoryPayload';
 
 vi.mock('../engines/backtest/HistoricalDataGateway', () => ({
   historicalDataGateway: {
@@ -188,5 +192,97 @@ describe('JavaQuantAdvisoryService - Phase 2 activation, advisory-only', () => {
 
     const call = emitSpy.mock.calls.find((c) => c[0] === EVENTS.QUANT_ADVISORY_ANALYSIS_COMPLETED);
     expect((call![1] as any).health.javaAvailable).toBe(false);
+  });
+});
+
+describe('emitJavaQuantVoteIfEligible (2026-09-09, explicit operator override)', () => {
+  const FLAG = 'ARGUS_JAVA_QUANT_VOTE_ENABLED';
+
+  function advisory(overrides: Partial<QuantAdvisoryPayload> = {}): QuantAdvisoryPayload {
+    return {
+      schemaVersion: 1,
+      executionEnvironment: 'ADVISORY_ONLY',
+      symbol: 'AAPL',
+      timestamp: new Date().toISOString(),
+      rawSide: 'BUY',
+      rawAvgConfidence: 0.7,
+      rawEffectiveIndependentCount: 1,
+      regime: 'BULL_TRENDING',
+      regimeMultiplier: 1.0,
+      currentVolatility: 0.02,
+      volatilityMultiplier: 0.9,
+      adjustedConfidence: 0.65, // clears the default javaQuantVoteMinConfidence (0.6)
+      gated: false,
+      reasoning: 'trend-aligned BUY',
+      agreeingModelIds: ['factor_composite'],
+      dissentingModelIds: [],
+      ...overrides,
+    } as QuantAdvisoryPayload;
+  }
+
+  beforeEach(() => {
+    process.env[FLAG] = 'true';
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    setPipelineAgentEnabled('JavaFactorComposite', true);
+  });
+
+  afterEach(() => {
+    delete process.env[FLAG];
+    setPipelineAgentEnabled('JavaFactorComposite', true); // restore default for other test files
+  });
+
+  it('does nothing (FLAG_OFF) when ARGUS_JAVA_QUANT_VOTE_ENABLED is not true', () => {
+    delete process.env[FLAG];
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory(), 190)).toEqual({ emitted: false, reason: 'FLAG_OFF' });
+  });
+
+  it('does nothing (AGENT_DISABLED) when the JavaFactorComposite Mission Control toggle is off', () => {
+    setPipelineAgentEnabled('JavaFactorComposite', false);
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory(), 190)).toEqual({ emitted: false, reason: 'AGENT_DISABLED' });
+  });
+
+  it('does nothing (IDEA_GENERATION_GATED) when Autobot is off', () => {
+    tradingEngine.state.enabled = false;
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory(), 190)).toEqual({ emitted: false, reason: 'IDEA_GENERATION_GATED' });
+  });
+
+  it('does nothing (ADVISORY_GATED) when Java\'s own regime/volatility gating already flagged the signal untrustworthy', () => {
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory({ gated: true }), 190)).toEqual({ emitted: false, reason: 'ADVISORY_GATED' });
+  });
+
+  it('does nothing (NEUTRAL_SIDE) when the advisory has no real directional call', () => {
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory({ rawSide: 'NEUTRAL' }), 190)).toEqual({ emitted: false, reason: 'NEUTRAL_SIDE' });
+  });
+
+  it('does nothing (BELOW_MIN_CONFIDENCE) when adjustedConfidence has not cleared javaQuantVoteMinConfidence', () => {
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory({ adjustedConfidence: tradingSafety.javaQuantVoteMinConfidence - 0.01 }), 190))
+      .toEqual({ emitted: false, reason: 'BELOW_MIN_CONFIDENCE' });
+  });
+
+  it('does nothing (INVALID_PRICE) when no current price is available - never fabricates one', () => {
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory(), null)).toEqual({ emitted: false, reason: 'INVALID_PRICE' });
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory(), 0)).toEqual({ emitted: false, reason: 'INVALID_PRICE' });
+    expect(emitJavaQuantVoteIfEligible('AAPL', advisory(), -5)).toEqual({ emitted: false, reason: 'INVALID_PRICE' });
+  });
+
+  it('emits exactly one real TRADE_IDEA_GENERATED, as agent JavaFactorComposite, when every gate clears', () => {
+    const ideas: any[] = [];
+    const onIdea = (p: any) => ideas.push(p);
+    eventBus.subscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+    try {
+      const result = emitJavaQuantVoteIfEligible('AAPL', advisory(), 190);
+      expect(result).toEqual({ emitted: true, reason: 'EMITTED' });
+      expect(ideas.length).toBe(1);
+      expect(ideas[0]).toMatchObject({
+        symbol: 'AAPL',
+        side: 'BUY',
+        confidence: 0.65,
+        currentPrice: 190,
+        agent: 'JavaFactorComposite',
+      });
+    } finally {
+      eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+    }
   });
 });

@@ -481,6 +481,35 @@ export class QuantCoreBridgeService {
    * before trusting the indicator fields, same discipline the Java side itself enforces (RED
    * quality never even builds a snapshot server-side; this returns null in that case too).
    */
+  /**
+   * 2026-09-09: reaches the generic /institutional/strategy/{strategyId}/{symbol} dispatcher
+   * (QuantCoreServer.java) that HTTP-exposes the batch of previously-endpoint-less RESEARCH
+   * engines. Returns the raw response map as-is (each strategyId has its own real field shape -
+   * see QuantCoreServer.java's evaluateResearchStrategy() switch) rather than a typed interface
+   * per engine, matching this bridge's own fail-closed contract: null on any error/disabled-flag/
+   * insufficient-data (HTTP 422)/unknown-strategyId (404), never fabricated.
+   */
+  async fetchResearchStrategy(strategyId: string, symbol: string, bars: ResearchBar[], params?: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/strategy/${encodeURIComponent(strategyId)}/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ bars: barsToJavaPayload(bars), ...(params ?? {}) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as Record<string, unknown>;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
   async fetchInstitutionalFeatures(symbol: string, bars: ResearchBar[], asOfMs?: number): Promise<InstitutionalFeaturesResult | null> {
     if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
     try {

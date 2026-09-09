@@ -289,6 +289,13 @@ export async function runMissedOpportunityDetectionCycle(
   cooldownMs: number,
   evaluationHorizonMinutes: number,
   now: Date = new Date(),
+  /** Real defect fix (2026-09-09): every record used to be persisted with priceAtDetection
+   *  hardcoded to null (live query confirmed 44/44 rows for a real trading day), which made
+   *  MissedOpportunityEvaluator's later evaluateAgainstPriceSeries() call impossible to ever
+   *  succeed - it fails closed on a missing detection price by design, never fabricates one.
+   *  Optional (default undefined - preserves the prior null behavior for any other caller) so
+   *  this is additive, not a breaking signature change. */
+  priceAtDetectionBySymbol?: Map<string, number>,
 ): Promise<void> {
   const nowMs = now.getTime();
   const windowStartIso = new Date(nowMs - lookbackMs).toISOString();
@@ -309,7 +316,8 @@ export async function runMissedOpportunityDetectionCycle(
         windowStartIso,
         planDate,
       );
-      const record = buildMissedOpportunityRecord(signals, null, evaluationHorizonMinutes, now);
+      const priceAtDetection = priceAtDetectionBySymbol?.get(candidate.symbol) ?? null;
+      const record = buildMissedOpportunityRecord(signals, priceAtDetection, evaluationHorizonMinutes, now);
       if (record) {
         records.push(record);
         lastDetectedAtMsBySymbol.set(candidate.symbol, nowMs);

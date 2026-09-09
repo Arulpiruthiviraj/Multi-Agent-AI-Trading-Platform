@@ -98,6 +98,10 @@ case "$cmd" in
     if argus_wants_help "$@"; then argus_help_trading; exit 0; fi
     argus_npm_cli "$cmd" "$@"
     ;;
+  watchdog-start|watchdog-stop|watchdog-restart|watchdog-status)
+    if argus_wants_help "$@"; then argus_help_watchdog; exit 0; fi
+    argus_npm_cli "$cmd" "$@"
+    ;;
   research)
     argus_npm_cli "$cmd" "$@"
     ;;

@@ -164,4 +164,23 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
     const [row] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'crash-4'));
     expect(row.status).toBe('PENDING'); // left honestly alone, never guessed at
   });
+
+  it('no false rejection: a lookup that THROWS (e.g. IBKR order rehydration not yet complete after reconnect) leaves the row untouched rather than marking it REJECTED - the UNKNOWN state must never be conflated with a confirmed absence', async () => {
+    await seedCrashedRow('crash-5', 'PENDING');
+    // Reconciliation re-scans every non-terminal/REJECTED row each cycle (by design - a REJECTED
+    // row from an earlier cycle can still be corrected later), so earlier tests' rows are also in
+    // scope here. A plain mockImplementationOnce would risk being consumed by whichever row the
+    // query happens to process first, not necessarily crash-5 - key the throw to this test's own id.
+    lookupSpy.mockImplementation(async (clientOrderId: string) => {
+      if (clientOrderId === 'crash-5') {
+        throw new Error('IBKR order rehydration (reqOpenOrders) has not completed yet on this connection - order state is unknown, not confirmed absent.');
+      }
+      return lookupResponses[clientOrderId] ?? null;
+    });
+
+    await expect(oms.reconcileStaleOrders()).resolves.not.toThrow();
+
+    const [row] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'crash-5'));
+    expect(row.status).toBe('PENDING'); // NOT REJECTED - ambiguous state was correctly left alone, to be retried next cycle
+  });
 });

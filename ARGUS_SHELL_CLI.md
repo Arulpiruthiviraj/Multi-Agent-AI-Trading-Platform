@@ -69,6 +69,7 @@ Legacy full-ecosystem DevOps script remains at [`argus.sh`](argus.sh) (`npm run 
 | `ready [--json]` | `GET /api/v2/live-readiness` |
 | `enable` / `disable` | runtime trading enable/disable |
 | `kill-switch` | existing emergency-stop API |
+| `watchdog-start` / `watchdog-stop` / `watchdog-restart` / `watchdog-status` | detached external liveness supervisor (`scripts/argusWatchdog.ts`) — restarts the engine on a confirmed unexpected death; never resumes trading itself |
 | `positions` / `trades` / `orders` | runtime portfolio APIs |
 | `config` / `risk` / `agents` / `events` / `logs` | observability APIs |
 | `replay run\|list\|report\|analyze\|diagnostics` | Historical Evaluation API (inside engine) |

@@ -34,4 +34,14 @@ describe('buildIbkrOrder (Extended-Hours Execution Policy, 2026-09-05)', () => {
     expect(order.auxPrice).toBe(95);
     expect('outsideRth' in order).toBe(false);
   });
+
+  it('sets orderRef to clientOrderId when provided (2026-09-09 crash-recovery fix)', () => {
+    const order = buildIbkrOrder(6, { side: 'BUY', quantity: 3, type: 'MARKET', clientOrderId: 'trade-uuid-abc' });
+    expect(order.orderRef).toBe('trade-uuid-abc');
+  });
+
+  it('omits orderRef entirely when no clientOrderId is given - no behavior change for the pre-fix call shape', () => {
+    const order = buildIbkrOrder(7, { side: 'BUY', quantity: 3, type: 'MARKET' });
+    expect('orderRef' in order).toBe(false);
+  });
 });

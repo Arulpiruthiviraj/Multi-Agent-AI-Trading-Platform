@@ -47,6 +47,7 @@ import { chiefTrader } from '../services/ChiefTraderAgent';
 import { confluenceCoordinator } from '../services/ConfluenceCoordinator';
 import { reflectionEngine } from '../services/ReflectionEngine';
 import { predictionOutcomeEvaluator } from '../services/PredictionOutcomeEvaluator';
+import { missedOpportunityEvaluator } from '../continuous/MissedOpportunityEvaluator';
 import { trainingExampleBuilder } from '../services/TrainingExampleBuilder';
 import { systemMetricsWorker } from '../services/SystemMetricsWorker';
 import { marketRegimeAgent } from '../services/MarketRegimeAgent';
@@ -107,6 +108,10 @@ export class SystemBootstrap {
     confluenceCoordinator.start();
     reflectionEngine.start();
     predictionOutcomeEvaluator.start();
+    // Real defect fix (2026-09-09): closes the gap where missed-opportunity records were
+    // persisted PENDING forever - see MissedOpportunityEvaluator.ts's own header for the
+    // live-verified finding (592/592 historical rows never evaluated).
+    missedOpportunityEvaluator.start();
     trainingExampleBuilder.start();
     systemMetricsWorker.start();
     dbBackupService.start();
@@ -140,6 +145,7 @@ export class SystemBootstrap {
     stopAllIdeaAgents();
     reflectionEngine.stop();
     predictionOutcomeEvaluator.stop();
+    missedOpportunityEvaluator.stop();
     trainingExampleBuilder.stop();
     systemMetricsWorker.stop();
     dbBackupService.stop();

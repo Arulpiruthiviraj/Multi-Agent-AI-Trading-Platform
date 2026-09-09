@@ -48,6 +48,44 @@ export interface TradingSafety {
    */
   moderateMinConfidence: number;
   /**
+   * Java Quant Engine independent vote (2026-09-09, explicit operator override of this
+   * codebase's own documented Phase 3 precondition - see docs/architecture/ARGUS_ARCHITECTURE.md
+   * § Java Quant Core and CLAUDE.md's Java 26 Engine Authority section, both updated in the same
+   * change that introduced this). The operator was told directly that the prior recommendation
+   * was to wait for a real multi-week shadow-divergence-tracking window before trusting a
+   * Java-sourced signal enough to vote, and chose to proceed anyway - same pattern as
+   * TradePlanBuilder's 2026-09-05 override. `advisory.adjustedConfidence` (already
+   * regime/volatility-discounted by QuantEnsembleEngine.java, not the raw factor composite) must
+   * clear this floor before JavaQuantAdvisoryService.ts calls emitTradeIdea. A policy parameter,
+   * not an empirically-proven optimum - chosen to match moderateMinConfidence's own reasoning
+   * (the post-discount confidence must clear the same floor a single well-calibrated non-Java
+   * agent would need).
+   */
+  javaQuantVoteMinConfidence: number;
+  /**
+   * QuantEngine internal-ensemble independent qualification (2026-09-09, explicit operator
+   * override). Default OFF. The 2026-09-09 QuantEngine Expansion design doc
+   * (docs/audits/ARGUS_QUANTENGINE_EXPANSION_DESIGN_2026-09-09.md §16) recommended keeping the
+   * two-agent floor until real correlation/outcome data exists to validate QuantEnsembleEngine.java's
+   * effectiveIndependentCount() math (its correlation matrix is a reviewed assumption, not measured).
+   * The operator was told that directly and chose to override it anyway - same pattern as
+   * TradePlanBuilder (2026-09-05) and the Java factor_composite vote (2026-09-09). When enabled,
+   * ChiefTraderAgent.ts's independent-voice floor can be satisfied by QuantEngine's OWN internal
+   * ensemble alone (multiple strategy families, correlation-adjusted via QuantEnsembleEngine.java)
+   * instead of requiring a second, separate agent - but ONLY when it clears a bar strictly higher
+   * than the normal 2-independent-agent minimum: minQuantIndependentFamilies distinct strategy
+   * families, minQuantIndependentEffectiveCount effective independent count, AND the normal STRONG
+   * confidence threshold. Every other gate (RiskEngine, OMS, hard vetoes, data quality) is
+   * completely unchanged.
+   */
+  quantIndependentQualificationEnabledEnvVar: string;
+  /** Minimum distinct strategy families that must agree for QuantEngine's internal ensemble to
+   *  qualify as independent confirmation on its own. See quantIndependentQualificationEnabledEnvVar. */
+  minQuantIndependentFamilies: number;
+  /** Minimum QuantEnsembleEngine.java effectiveIndependentCount (correlation-adjusted, Kish/
+   *  Grinold-Kahn breadth) for the same qualification. See quantIndependentQualificationEnabledEnvVar. */
+  minQuantIndependentEffectiveCount: number;
+  /**
    * A per-agent-per-bucket calibration champion (ChampionChallengerService.ts CHAMPION status for
    * versionType calibration:<agent>:<bucketLow>-<bucketHigh>) is only trusted by the MODERATE tier
    * when its cluster-corrected Wilson LOWER bound exceeds this value. 0.5 is literally chance for a
@@ -203,6 +241,10 @@ export interface TradingSafety {
    * cadence alone never trips this.
    */
   heartbeatWatchdogSilenceThresholdMs: number;
+  /** Bounded wait for in-flight HTTP requests/WS connections to drain during gracefulShutdown's
+   *  drainTradingProcess() BEFORE sqliteDb.close() runs - not unbounded, so a lingering keep-alive
+   *  socket can never hang process shutdown. See gracefulShutdown.ts's header comment. */
+  gracefulShutdownHttpDrainTimeoutMs: number;
   debateLearnedRulesCount: number;
   debateLearnedRuleMaxChars: number;
   quantExitIdeaConfidence: number;
@@ -317,6 +359,8 @@ export interface TradingSafety {
    * That is Phase 3, gated by this SAME flag plus its own additional checks in QuantCoreBridge.
    */
   quantJavaCoreEnabledEnvVar: string;
+  /** 2026-09-09, explicit operator override - see javaQuantVoteMinConfidence's own doc comment. */
+  javaQuantVoteEnabledEnvVar: string;
   /** Loopback-only base URL for the local Java advisory process. Never reachable off this host. */
   quantJavaCoreBaseUrl: string;
   /** Hard timeout for any single call to the Java process - must never add material latency to
@@ -428,6 +472,9 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'consensusApprovalThreshold',
   'minIndependentAgreeingAgents',
   'moderateMinConfidence',
+  'javaQuantVoteMinConfidence',
+  'minQuantIndependentFamilies',
+  'minQuantIndependentEffectiveCount',
   'moderateCalibrationTrustMinWilsonLowerBound',
   'recentCandidatePriorityMaxAgeMs',
   'openAliceUncertainBandLow',
@@ -493,6 +540,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantBarsRateLimitMaxBackoffMs',
   'pipelineAgentDeadAfterMs',
   'heartbeatWatchdogSilenceThresholdMs',
+  'gracefulShutdownHttpDrainTimeoutMs',
   'debateLearnedRulesCount',
   'debateLearnedRuleMaxChars',
   'quantExitIdeaConfidence',
@@ -629,6 +677,12 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.quantJavaCoreLocalHistoryCap !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: quantJavaCoreLocalHistoryCap');
   }
+  if (typeof raw.javaQuantVoteEnabledEnvVar !== 'string' || !raw.javaQuantVoteEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: javaQuantVoteEnabledEnvVar');
+  }
+  if (typeof raw.quantIndependentQualificationEnabledEnvVar !== 'string' || !raw.quantIndependentQualificationEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantIndependentQualificationEnabledEnvVar');
+  }
   return raw as unknown as TradingSafety;
 }
 
@@ -657,6 +711,16 @@ export function isConsensusModerateTierEnabled(): boolean {
 /** Off unless the operator has explicitly set this env var to 'true'. See quantJavaCoreEnabledEnvVar's doc comment above. */
 export function isQuantJavaCoreEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantJavaCoreEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See javaQuantVoteEnabledEnvVar's doc comment above (javaQuantVoteMinConfidence). */
+export function isJavaQuantVoteEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.javaQuantVoteEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See quantIndependentQualificationEnabledEnvVar's doc comment above. */
+export function isQuantIndependentQualificationEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantIndependentQualificationEnabledEnvVar);
 }
 
 export function portfolioRiskPctForLevel(riskLevel: string | undefined | null): number {

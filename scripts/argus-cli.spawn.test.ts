@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'node:path';
-import { buildEngineSpawnArgs } from './argus-cli';
+import { buildEngineSpawnArgs, buildWatchdogSpawnArgs } from './argus-cli';
 
 /**
  * Silent-engine-death investigation (2026-09-04): a live silent death was traced to a real,
@@ -40,6 +40,37 @@ describe('buildEngineSpawnArgs', () => {
   it('is a pure function - identical inputs always produce identical, deterministic output', () => {
     const a = buildEngineSpawnArgs(false, '/root');
     const b = buildEngineSpawnArgs(false, '/root');
+    expect(a).toEqual(b);
+  });
+});
+
+/**
+ * "closing this tab should not bring argus down" (2026-09-08, operator report): the watchdog was
+ * only ever launched via `npm run argus:watchdog`, which itself invokes tsx's CLI wrapper
+ * (node_modules/tsx/dist/cli.mjs) - the exact wrapper-forks-a-child shape buildEngineSpawnArgs
+ * above was fixed to avoid for the engine. Live process-tree inspection that session showed the
+ * watchdog as a direct child of its launching terminal's shell chain, with no detachment. These
+ * tests lock in the same fix for the watchdog: single-process, wrapper-free spawn.
+ */
+describe('buildWatchdogSpawnArgs', () => {
+  it('never spawns tsx/dist/cli.mjs (the wrapper that forks a separate real-watchdog child)', () => {
+    const { args } = buildWatchdogSpawnArgs('C:\\fake-root');
+    expect(args.some((a) => /tsx[\\/]dist[\\/]cli\.mjs/.test(a))).toBe(false);
+  });
+
+  it('launches argusWatchdog.ts as the target of a direct node invocation using tsx\'s public loader hooks', () => {
+    const root = 'C:\\fake-root';
+    const { args } = buildWatchdogSpawnArgs(root);
+    expect(args).toEqual([
+      '--require', 'tsx/preflight',
+      '--import', 'tsx',
+      join(root, 'scripts', 'argusWatchdog.ts'),
+    ]);
+  });
+
+  it('is a pure function - identical inputs always produce identical, deterministic output', () => {
+    const a = buildWatchdogSpawnArgs('/root');
+    const b = buildWatchdogSpawnArgs('/root');
     expect(a).toEqual(b);
   });
 });

@@ -160,6 +160,13 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
   async orders(): Promise<Order[]> {
     return this.session.listTrackedOrders().map((o) => ({
       id: String(o.id),
+      // Real bug fix (2026-09-09 P0 remediation sprint): previously omitted here, which broke
+      // OrderManagement.reconcileInboundBrokerOrders()'s own dedup check (`o.clientOrderId &&
+      // byClientId.has(o.clientOrderId)`) for every IBKR order, including this process's own
+      // rehydrated-on-reconnect orders (now populated - see IbkrSocketSession's openOrder/
+      // execDetails handlers) - a locally-known order would have been misfiled as an unrecognized
+      // SOURCE: EXTERNAL_MANUAL fill instead of reconciled normally.
+      clientOrderId: o.clientOrderId || undefined,
       symbol: o.symbol,
       side: o.side,
       type: o.type,
@@ -200,10 +207,16 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       stopPrice: order.stopPrice,
       account: accountId || undefined,
       extendedHours: order.extendedHours,
+      // Order-lifecycle crash recovery (2026-09-09 P0 remediation sprint): OMS already always
+      // passes clientOrderId (the local trades.id UUID) into every placeOrder() call - see
+      // OrderManagement.ts executeOrder(). Previously dropped silently here, which is exactly why
+      // getOrderByClientOrderId() below had nothing to answer with for IBKR before this fix.
+      clientOrderId: order.clientOrderId,
     });
 
     return {
       id: String(orderId),
+      clientOrderId: order.clientOrderId,
       symbol: order.symbol,
       side: order.side,
       type,
@@ -213,6 +226,46 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       price: order.price,
       createdAt: new Date(),
       updatedAt: new Date(),
+    };
+  }
+
+  /**
+   * Order-lifecycle crash recovery (2026-09-09 P0 remediation sprint) - the IBKR counterpart to
+   * AlpacaBroker.getOrderByClientOrderId(). OrderManagement.reconcileStaleOrders() calls this
+   * generically whenever a broker implements it; before this method existed, IBKR silently took
+   * the "not every broker supports lookup-by-client-order-id" no-op path forever, so a crash
+   * between "IB accepted the order" and "Argus recorded it locally" was structurally unrecoverable
+   * for IBKR specifically (Alpaca already had it).
+   *
+   * Deliberately THROWS (not returns null) when this connection's initial order rehydration
+   * (reqOpenOrders -> openOrderEnd, triggered on every connect - see IbkrSocketSession.connect())
+   * hasn't completed yet, rather than answering "not found". reconcileStaleOrders() treats a thrown
+   * lookup as "try again next cycle" (skips the row) - the correct behavior for genuine ambiguity.
+   * Returning null here instead would read as a confirmed "IB never received this order" and mark
+   * a real, still-open broker order REJECTED purely because Argus asked before rehydration
+   * finished - a false rejection, exactly what this whole mechanism exists to prevent.
+   */
+  async getOrderByClientOrderId(clientOrderId: string): Promise<Order | null> {
+    if (!this.session.isConnected()) {
+      throw new Error('IBKR Gateway socket is not connected - cannot answer order lookup (ambiguous, not a confirmed absence).');
+    }
+    if (!this.session.hasCompletedInitialRehydration()) {
+      throw new Error('IBKR order rehydration (reqOpenOrders) has not completed yet on this connection - order state is unknown, not confirmed absent.');
+    }
+    const tracked = this.session.getTrackedOrderByClientOrderId(clientOrderId);
+    if (!tracked) return null;
+    return {
+      id: String(tracked.id),
+      clientOrderId: tracked.clientOrderId || undefined,
+      symbol: tracked.symbol,
+      side: tracked.side,
+      type: tracked.type,
+      status: tracked.status,
+      quantity: tracked.quantity,
+      filledQuantity: tracked.filledQuantity,
+      averageFillPrice: tracked.averageFillPrice || undefined,
+      createdAt: tracked.createdAt,
+      updatedAt: tracked.updatedAt,
     };
   }
 

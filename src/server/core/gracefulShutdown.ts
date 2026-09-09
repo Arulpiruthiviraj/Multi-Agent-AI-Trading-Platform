@@ -1,10 +1,67 @@
 /**
- * SIGTERM/SIGINT drain: stop new trades, stop workers, checkpoint/close SQLite, close HTTP/WS.
+ * SIGTERM/SIGINT drain: stop new trades, stop workers, close HTTP/WS (bounded wait for in-flight
+ * requests to drain), THEN checkpoint/close SQLite.
  * Does not place or cancel broker orders (unknown in-flight stays PENDING for crash recovery).
+ *
+ * Real bug found and fixed (2026-09-08, live-reproduced): this used to close SQLite BEFORE closing
+ * the HTTP server. DEF-27 (see below) fixed 9 interval-driven background workers ticking after
+ * close() and throwing "database connection is not open" - but a live HTTP route can hit the exact
+ * same failure: `close()` only stops accepting NEW connections, in-flight/polling requests (e.g. a
+ * UI panel polling every 15-30s) keep being served and keep querying `db` until the server actually
+ * finishes draining. Reproduced live: a 2026-09-07 22:28-22:36 crash.log burst of ~30
+ * `TypeError: The database connection is not open` from `researchRoutes.ts`'s
+ * `GET /research/vectorbt/status`, spanning the whole window between SQLite closing and the HTTP
+ * server finishing its close() drain - enough to trip globalErrorHandlers.ts's own storm
+ * circuit-breaker (">4 in 5s") into an unplanned exit. Fix: close WS then HTTP first (bounded by
+ * `gracefulShutdownHttpDrainTimeoutMs`, tradingSafety.json, so a lingering keep-alive socket can
+ * never hang shutdown - Node's `closeAllConnections()` force-closes whatever remains once the
+ * timeout fires), and only then checkpoint/close SQLite - so no request can ever observe a closed DB.
  */
 export interface ShutdownHandles {
-  httpServer?: { close: (callback?: (err?: Error) => void) => unknown };
+  httpServer?: {
+    close: (callback?: (err?: Error) => void) => unknown;
+    closeAllConnections?: () => void;
+  };
   wss?: { close: (callback?: (err?: Error) => void) => unknown };
+}
+
+/** Closes a handle, resolving either when its callback fires or when `timeoutMs` elapses -
+ *  whichever comes first - so a lingering connection can never hang process shutdown. On timeout,
+ *  calls `forceClose` (if given) to cut off whatever is left. */
+async function closeWithTimeout(
+  label: string,
+  close: (callback?: (err?: Error) => void) => unknown,
+  timeoutMs: number,
+  forceClose?: () => void,
+): Promise<void> {
+  let settled = false;
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      console.error(`[gracefulShutdown] ${label}.close() did not finish within ${timeoutMs}ms - forcing.`);
+      try {
+        forceClose?.();
+      } catch (e) {
+        console.error(`[gracefulShutdown] ${label} forceClose failed`, e);
+      }
+      resolve();
+    }, timeoutMs);
+    try {
+      close(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      });
+    } catch (e) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      console.error(`[gracefulShutdown] ${label}.close() threw`, e);
+      resolve();
+    }
+  });
 }
 
 let installed = false;
@@ -132,6 +189,26 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
   } catch (e) {
     console.error('[gracefulShutdown] Failed to stop HeartbeatWatchdog', e);
   }
+  // Close WS then HTTP BEFORE SQLite (see header comment) - bounded so an in-flight/keep-alive
+  // connection can never hang shutdown, and so no late request can ever hit a closed DB.
+  let drainTimeoutMs = 5000;
+  try {
+    const { tradingSafety } = await import('../config/tradingSafety');
+    drainTimeoutMs = tradingSafety.gracefulShutdownHttpDrainTimeoutMs;
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to load tradingSafety config for drain timeout, using fallback', e);
+  }
+  if (handles.wss) {
+    await closeWithTimeout('wss', handles.wss.close, drainTimeoutMs);
+  }
+  if (handles.httpServer) {
+    await closeWithTimeout(
+      'httpServer',
+      handles.httpServer.close,
+      drainTimeoutMs,
+      handles.httpServer.closeAllConnections,
+    );
+  }
   try {
     const { sqliteDb } = await import('../db');
     sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
@@ -139,22 +216,6 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
   } catch (e) {
     console.error('[gracefulShutdown] Failed to close SQLite', e);
   }
-  await new Promise<void>((resolve) => {
-    if (!handles.wss) return resolve();
-    try {
-      handles.wss.close(() => resolve());
-    } catch {
-      resolve();
-    }
-  });
-  await new Promise<void>((resolve) => {
-    if (!handles.httpServer) return resolve();
-    try {
-      handles.httpServer.close(() => resolve());
-    } catch {
-      resolve();
-    }
-  });
   console.log('[gracefulShutdown] Drain complete.');
 }
 

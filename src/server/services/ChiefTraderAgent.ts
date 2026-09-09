@@ -63,7 +63,7 @@ import { recordConsensusModelComparison } from './ConsensusModelComparison';
 import { evaluateModerateTierEligibility, type ModerateTierEligibility } from '../continuous/ModerateTierEvaluator';
 import { isConsensusModerateTierEnabled } from '../config/tradingSafety';
 import { classifyConsensusTerminalReason, type ConsensusTerminalReasonCode } from '../core/consensusTerminalReason';
-import { isQuantJavaCoreEnabled } from '../config/tradingSafety';
+import { isQuantJavaCoreEnabled, isQuantIndependentQualificationEnabled } from '../config/tradingSafety';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { quantCoreBridge } from './QuantCoreBridge';
 import {
@@ -704,7 +704,7 @@ export class ChiefTraderAgent {
     // Phase 7E/7H (MODERATE consensus tier). Stays 'STRONG' - and moderateEligibility stays null -
     // for every case where confidence clears CONSENSUS_APPROVAL_THRESHOLD; the STRONG ladder branches
     // below are otherwise byte-for-byte unchanged.
-    let decisionTier: 'STRONG' | 'MODERATE' = 'STRONG';
+    let decisionTier: 'STRONG' | 'MODERATE' | 'QUANT_INDEPENDENT' = 'STRONG';
     let moderateEligibility: ModerateTierEligibility | null = null;
 
     // Hoisted out of the `else` branch below (Phase 9I) purely so the post-ladder terminal-reason
@@ -715,6 +715,19 @@ export class ChiefTraderAgent {
       result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
     );
     const enoughIndependentVoices = uniqueIndependent.size >= MIN_INDEPENDENT_AGREEING_AGENTS;
+    // 2026-09-09, explicit operator override - see this function's own doc comment on
+    // isQuantIndependentQualificationEnabled (config/tradingSafety.json). When enabled, a
+    // QuantEngine idea carrying a real, correlation-adjusted internal-ensemble qualification
+    // (built in QuantSignalAgent.ts's computeInternalEnsembleQualification(), backed by
+    // QuantEnsembleEngine.java - never a naive vote count) can satisfy the independent-voice floor
+    // on its own, at a bar strictly ABOVE the normal 2-agent minimum (minQuantIndependentFamilies
+    // distinct strategy families, minQuantIndependentEffectiveCount effective independent count).
+    // Every other requirement below (STRONG confidence, hard vetoes, RiskEngine, OMS) is completely
+    // unchanged - this only ever substitutes for the SECOND agent, never for confidence or safety.
+    const quantIndependentQualification = evidence.find(
+      (e: any) => e.agent === 'QuantEngine' && e.side === result.side && e.quantDetail?.internalEnsemble?.qualifiesAsIndependent === true,
+    ) as any;
+    const quantIndependentEligible = isQuantIndependentQualificationEnabled() && !!quantIndependentQualification;
     const debateSaidHold = evidence.some(e => e.agent === 'ConsensusDebate' && e.side === 'HOLD');
     const bearSaidHold = evidence.some(e => e.agent === bullBearResearchConfig.bearAgentName && e.side === 'HOLD');
     const aiContradicts = evidence.some((e: any) => {
@@ -763,7 +776,7 @@ export class ChiefTraderAgent {
             reason = `${reason} MODERATE tier also declined: ${moderateEligibility.reason} (${moderateEligibility.reasonCode})`;
           }
         }
-      } else if (!enoughIndependentVoices) {
+      } else if (!enoughIndependentVoices && !quantIndependentEligible) {
         reason = `[NO TRADE] Only ${uniqueIndependent.size} independent agent(s) agreed on ${result.side} (need ${MIN_INDEPENDENT_AGREEING_AGENTS}). A single voice is not confirmation.`;
       } else if (debateSaidHold) {
         reason = `[NO TRADE] Adversarial debate verdict was HOLD - the thesis did not survive a search for reasons not to trade.`;
@@ -771,6 +784,11 @@ export class ChiefTraderAgent {
         reason = `[NO TRADE] ${bullBearResearchConfig.bearAgentName} found a high-confidence case against the trade.`;
       } else if (aiContradicts) {
         reason = `[NO TRADE] Quant AI contradiction review disagrees with the deterministic side - thesis challenged, not overwritten.`;
+      } else if (!enoughIndependentVoices && quantIndependentEligible) {
+        approved = true;
+        decisionTier = 'QUANT_INDEPENDENT';
+        const ie = quantIndependentQualification.quantDetail.internalEnsemble;
+        reason = `[Chief Consensus Approval - QUANT_INDEPENDENT] QuantEngine's own internal ensemble stood in for a second agent (explicit operator override, 2026-09-09): ${ie.familyCount} independent strategy families [${ie.agreeingFamilies.join(', ')}], effectiveIndependentCount ${ie.effectiveIndependentCount.toFixed(2)} (correlation-adjusted, QuantEnsembleEngine.java). Final Confidence: ${(result.confidence*100).toFixed(1)}%. Rationale: ${result.reasoning}`;
       } else {
         approved = true;
         reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(result.confidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${result.reasoning}`;

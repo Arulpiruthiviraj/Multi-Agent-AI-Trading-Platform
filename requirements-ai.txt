@@ -9,3 +9,4 @@ yfinance
 ta
 neuralforecast
 chronos-forecasting
+truststore

@@ -64,6 +64,12 @@ Engine:
                      trade-setup, risk-reward, macro, strategy) - never places an order
   nuke              Force-kill stale/zombie Argus processes (no services started after)
 
+Watchdog (2026-09-08, detached auto-restart supervisor for the engine):
+  watchdog-start    Start the watchdog detached (survives its launching terminal closing)
+  watchdog-stop     Stop the watchdog
+  watchdog-restart  Restart the watchdog
+  watchdog-status   Show whether the watchdog is running and its pid
+
 Trading:
   enable            Enable Autobot
   disable           Disable Autobot
@@ -181,6 +187,28 @@ Usage: argus enable | disable | kill-switch
 
 Delegates to Argus Application over HTTP.
 Does not bypass RiskEngine, kill-switch, or LIVE safety.
+EOF
+}
+
+argus_help_watchdog() {
+  cat <<'EOF'
+Usage: argus watchdog-start | watchdog-stop | watchdog-restart | watchdog-status
+
+External liveness watchdog (scripts/argusWatchdog.ts) - a process OUTSIDE the engine that
+polls its health and, only on a genuinely confirmed unexpected death (never after an
+intentional stop), restarts it. Restarting never resumes trading on its own - the engine
+always comes back to TRADING_PAUSED; an operator still must explicitly "argus resume".
+
+watchdog-start    Spawns the watchdog detached (like "argus start" does for the engine) -
+                  it keeps running even if the terminal that launched it closes. Prefer
+                  this over a bare "npm run argus:watchdog", which stays foreground/
+                  tied to its terminal.
+watchdog-stop     Stops the watchdog process.
+watchdog-restart  Stop then start (resets its restart-budget bookkeeping).
+watchdog-status   Reports whether it's running and its pid.
+
+Does not contain RiskEngine/OMS/BrokerManager and never calls a resume endpoint - it only
+ever runs the same "argus start" an operator would type by hand.
 EOF
 }
 

@@ -3,29 +3,45 @@
  * config/engineOwnership.json): gives the previously-zero-consumer Java institutional models
  * (GARCH, HMM regime, factor composite) a real, on-demand consumer.
  *
- * Deliberately advisory-only, matching engineOwnership.json's own notes for these models:
- * - Does NOT call eventBus.emitTradeIdea - only the generic EventBus.emit for observability.
- * - Does NOT import or touch EvidenceAggregator, ChiefTraderAgent, RiskEngine, OrderManagement,
- *   or BrokerManager.
- * - Wiring QUANT_ADVISORY_ANALYSIS_COMPLETED into the consensus vote is Phase 3 of the activation
- *   plan - an explicit, separate, NOT-YET-TAKEN decision. That plan itself warns that Java
- *   evidence must enter as one vote among many, never automatic approval, and that correlated
- *   evidence must not be double-counted - both unresolved design questions this service
- *   deliberately does not attempt to answer by simply existing.
+ * Matching engineOwnership.json's own notes for these models:
+ * - Does NOT import or touch EvidenceAggregator, RiskEngine, OrderManagement, or BrokerManager.
+ * - Never calls placeOrder, never emits CHIEF_APPROVED_IDEA, never touches consensus math,
+ *   thresholds, or RiskEngine gates - it only casts one independent vote through the SAME
+ *   eventBus.emitTradeIdea() entry point every other idea agent uses.
  * - Off entirely unless isQuantJavaCoreEnabled() (same base flag QuantCoreBridge.ts already
  *   gates on) - zero timer, zero network calls, zero-op when disabled.
  * - Fails closed on every real-data dependency (historicalDataGateway, the Java HTTP calls):
  *   any failure just skips that symbol's analysis for this tick, never throws, never fabricates
  *   a result.
+ *
+ * Real independent vote (2026-09-09, explicit operator override): Phase 3 of the activation plan
+ * ("wiring QUANT_ADVISORY_ANALYSIS_COMPLETED into the consensus vote") was a deliberate,
+ * NOT-YET-TAKEN decision, gated on a real multi-week clean shadow-divergence-tracking window per
+ * docs/architecture/ARGUS_ARCHITECTURE.md's own stated Phase 3 precondition. The operator was
+ * told that precondition directly and chose to override it - the same pattern as
+ * TradePlanBuilder.ts's 2026-09-05 override (see that file's header). `emitJavaQuantVoteIfEligible()`
+ * below is the result: gated behind THREE independent checks (matching TradePlanBuilder's own
+ * pattern exactly) - the master flag (isJavaQuantVoteEnabled), the Autobot/session-recovery/
+ * campaign-lock composite gate (isLiveIdeaGenerationEnabled), and the per-agent Mission Control
+ * toggle (isPipelineAgentEnabled('JavaFactorComposite')) - any one being off means zero votes
+ * emitted. Even when all three are on, the vote only fires when Java's OWN regime/volatility
+ * gating already says the signal is trustworthy (`!advisory.gated`), the side is directional (not
+ * NEUTRAL), and the post-discount confidence clears `javaQuantVoteMinConfidence` - never less
+ * scrutiny than an idea already needed, only an additional bar. `TradePlanShadowTracker`-style
+ * shadow evidence (`recordPrediction` below) keeps being recorded regardless, so this deployment
+ * still has real graded track record accumulating even though it chose not to wait for it first.
  */
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
-import { isQuantJavaCoreEnabled } from '../config/tradingSafety';
+import { generateTraceId } from '../core/traceId';
+import { isQuantJavaCoreEnabled, isJavaQuantVoteEnabled, tradingSafety } from '../config/tradingSafety';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { resolveIdeaUniverse } from '../core/ideaUniverse';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { quantCoreBridge, type EnsembleModelVote, type EnsembleSide } from './QuantCoreBridge';
-import { buildQuantAdvisoryPayload } from './QuantAdvisoryPayload';
+import { buildQuantAdvisoryPayload, type QuantAdvisoryPayload } from './QuantAdvisoryPayload';
 import { recordPrediction } from './ModelPerformanceTracker';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import type { ResearchBar } from '../research/ohlcvTypes';
@@ -173,10 +189,68 @@ class JavaQuantAdvisoryService {
             reasoning: advisory.reasoning,
             regime: advisory.regime,
           });
+          // Real independent vote (2026-09-09 operator override) - see this file's own header.
+          // bars[bars.length-1].close is the last real 1Day bar this same cycle already fetched
+          // (zero new cost); RiskEngine gate 13 (data_freshness) separately checks this against
+          // MarketDataWorker's own live tick cache before ever approving an order, so a daily
+          // close here is honest, not a shortcut around that gate.
+          emitJavaQuantVoteIfEligible(symbol, payload, bars[bars.length - 1].close);
         }
       }
     }
   }
+}
+
+export interface JavaQuantVoteResult {
+  emitted: boolean;
+  reason: 'EMITTED' | 'FLAG_OFF' | 'AGENT_DISABLED' | 'IDEA_GENERATION_GATED' | 'ADVISORY_GATED' | 'NEUTRAL_SIDE' | 'BELOW_MIN_CONFIDENCE' | 'INVALID_PRICE';
+}
+
+/**
+ * 2026-09-09, explicit operator override of this codebase's own documented Phase 3
+ * shadow-tracking precondition - see this file's own header for the full reasoning. One
+ * independent TRADE_IDEA_GENERATED vote per eligible advisory, same eventBus.emitTradeIdea entry
+ * point and same downstream ChiefTrader/RiskEngine/OMS spine every other agent uses - never a
+ * CHIEF_APPROVED_IDEA, never a placeOrder call from this module. Gated behind THREE independent
+ * checks matching TradePlanBuilder.emitTradePlanIdea()'s own pattern exactly, PLUS Java's own
+ * advisory-level gating (never less scrutiny than the advisory already applied, only additional).
+ */
+export function emitJavaQuantVoteIfEligible(
+  symbol: string,
+  advisory: QuantAdvisoryPayload,
+  currentPrice: number | null,
+): JavaQuantVoteResult {
+  if (!isJavaQuantVoteEnabled()) return { emitted: false, reason: 'FLAG_OFF' };
+  if (!isPipelineAgentEnabled('JavaFactorComposite')) return { emitted: false, reason: 'AGENT_DISABLED' };
+  if (!isLiveIdeaGenerationEnabled()) return { emitted: false, reason: 'IDEA_GENERATION_GATED' };
+  if (advisory.gated) return { emitted: false, reason: 'ADVISORY_GATED' };
+  if (advisory.rawSide === 'NEUTRAL') return { emitted: false, reason: 'NEUTRAL_SIDE' };
+  if (advisory.adjustedConfidence < tradingSafety.javaQuantVoteMinConfidence) {
+    return { emitted: false, reason: 'BELOW_MIN_CONFIDENCE' };
+  }
+  if (currentPrice == null || !Number.isFinite(currentPrice) || currentPrice <= 0) {
+    return { emitted: false, reason: 'INVALID_PRICE' };
+  }
+
+  const traceId = generateTraceId(symbol);
+  eventBus.emitTradeIdea({
+    traceId,
+    symbol,
+    side: advisory.rawSide,
+    confidence: advisory.adjustedConfidence,
+    currentPrice,
+    reasoning: `[Java Factor Composite, regime=${advisory.regime}] ${advisory.reasoning}`,
+    agent: 'JavaFactorComposite',
+    strategy: 'JAVA_FACTOR_COMPOSITE',
+    timeframe: 'daily',
+    evidence: {
+      rawAvgConfidence: advisory.rawAvgConfidence,
+      regimeMultiplier: advisory.regimeMultiplier,
+      volatilityMultiplier: advisory.volatilityMultiplier,
+      agreeingModelIds: advisory.agreeingModelIds,
+    },
+  });
+  return { emitted: true, reason: 'EMITTED' };
 }
 
 export const javaQuantAdvisoryService = new JavaQuantAdvisoryService();

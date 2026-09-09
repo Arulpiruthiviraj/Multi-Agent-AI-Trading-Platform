@@ -61,4 +61,44 @@ describe('MissedOpportunityDetector persistence + learning integration', () => {
     const observations = await learningMod.getLearningObservations({ observationType: 'MISSED_OPPORTUNITY' });
     expect(observations.length).toBe(1); // still just the one from the previous test - no new row for the missing id
   });
+
+  // Real defect fix (2026-09-09): runMissedOpportunityDetectionCycle used to hardcode
+  // priceAtDetection to null at its only production call site, which made every persisted record
+  // permanently unevaluable (evaluateAgainstPriceSeries fails closed on a missing price by
+  // design). This proves the fix: passing priceAtDetectionBySymbol now actually reaches the
+  // persisted row.
+  it('runMissedOpportunityDetectionCycle persists a real priceAtDetection when priceAtDetectionBySymbol supplies one', async () => {
+    const ranked = {
+      symbol: 'MOCX', components: {}, finalScore: 0.9, weightsUsed: {},
+      rank: 1, previousRank: null, rankDelta: null,
+      promotionRecommendation: 'PROMOTE' as const, promotionReason: 'test',
+    } as unknown as import('./ComposableRanking').RankedCandidate;
+    await mod.runMissedOpportunityDetectionCycle(
+      [ranked],
+      new Set(), // not actively subscribed -> SUBSCRIPTION_MISS, no other tables needed
+      3_600_000,
+      0,
+      60,
+      new Date(),
+      new Map([['MOCX', 42.5]]),
+    );
+    const rows = await mod.getMissedOpportunities(new Date(Date.now() - 3_600_000).toISOString());
+    const row = rows.find((r) => r.symbol === 'MOCX');
+    expect(row).toBeDefined();
+    expect(row?.classification).toBe('SUBSCRIPTION_MISS');
+    expect(row?.priceAtDetection).toBe(42.5);
+  });
+
+  it('runMissedOpportunityDetectionCycle falls back to null when no price is supplied for the symbol (preserves prior behavior for other callers)', async () => {
+    const ranked = {
+      symbol: 'MOCY', components: {}, finalScore: 0.9, weightsUsed: {},
+      rank: 1, previousRank: null, rankDelta: null,
+      promotionRecommendation: 'PROMOTE' as const, promotionReason: 'test',
+    } as unknown as import('./ComposableRanking').RankedCandidate;
+    await mod.runMissedOpportunityDetectionCycle([ranked], new Set(), 3_600_000, 0, 60, new Date());
+    const rows = await mod.getMissedOpportunities(new Date(Date.now() - 3_600_000).toISOString());
+    const row = rows.find((r) => r.symbol === 'MOCY');
+    expect(row).toBeDefined();
+    expect(row?.priceAtDetection).toBeNull();
+  });
 });

@@ -6,9 +6,13 @@ import io.argus.quantcore.stats.RollingStatistics;
 /**
  * Residual return decomposition: regresses a symbol's returns on a benchmark's returns (real OLS,
  * no duplicate stats), leaving a residual (idiosyncratic) return series. This single decomposition
- * serves BOTH "residual momentum" (item 14: is the idiosyncratic component trending) and "residual
- * mean reversion" (item 18: is the idiosyncratic component at a statistical extreme) - they are
- * the same real regression output interpreted two ways, not two independent models.
+ * serves "residual momentum" (item 14: is the idiosyncratic component trending), "residual mean
+ * reversion" (item 18: is the idiosyncratic component at a statistical extreme), and - added
+ * 2026-09-09, catalog #53/#193 - idiosyncratic volatility (Ang, Hodrick, Xing &amp; Zhang, "The
+ * Cross-Section of Volatility and Expected Returns," J. Finance 2006) and beta itself as the
+ * Frazzini-Pedersen "Betting Against Beta" (2014) low-beta-anomaly input - they are all the same
+ * real regression output read four different ways, not four independent models. {@code beta} was
+ * already exposed for exactly this reason even before today's addition.
  */
 public final class ResidualReturnEngine {
 
@@ -20,7 +24,9 @@ public final class ResidualReturnEngine {
         double alpha,
         double rSquared,
         double residualZScore,
-        double residualMomentum
+        double residualMomentum,
+        double idiosyncraticVolatility, // stddev of the regression residuals - catalog #53/#193
+        String residualMeanReversionSignal // BUY/SELL/NEUTRAL based on residualZScore vs the caller's own threshold - "UNKNOWN" only when threshold isn't supplied
     ) {
     }
 
@@ -29,9 +35,13 @@ public final class ResidualReturnEngine {
      * @param benchmarkReturns  chronological simple returns, same length/alignment (e.g. SPY).
      * @param zWindow           Z-score window over the residual series (e.g. 20).
      * @param momentumWindow    trailing sum window over the residual series (e.g. 10).
+     * @param residualZThreshold |Z| at/beyond this triggers residualMeanReversionSignal
+     *                          (caller-supplied, not defaulted - "extreme" is a judgment call this
+     *                          class won't make for you, matching this session's established
+     *                          convention elsewhere, e.g. VixEffectiveRatioFilterEngine).
      * @return null if there isn't enough aligned data to regress and both derived stats.
      */
-    public static Result evaluate(double[] symbolReturns, double[] benchmarkReturns, int zWindow, int momentumWindow) {
+    public static Result evaluate(double[] symbolReturns, double[] benchmarkReturns, int zWindow, int momentumWindow, double residualZThreshold) {
         int n = symbolReturns.length;
         if (benchmarkReturns.length != n || n <= Math.max(zWindow, momentumWindow) + 2) {
             return null;
@@ -56,6 +66,20 @@ public final class ResidualReturnEngine {
             momentum += residuals[i];
         }
 
-        return new Result(beta, alpha, reg.rSquared(), z, momentum);
+        double meanResidual = 0;
+        for (double r : residuals) meanResidual += r;
+        meanResidual /= residuals.length;
+        double sumSq = 0;
+        for (double r : residuals) sumSq += (r - meanResidual) * (r - meanResidual);
+        double idiosyncraticVolatility = Math.sqrt(sumSq / residuals.length);
+
+        String signal = z <= -residualZThreshold ? "BUY" : z >= residualZThreshold ? "SELL" : "NEUTRAL";
+
+        return new Result(beta, alpha, reg.rSquared(), z, momentum, idiosyncraticVolatility, signal);
+    }
+
+    /** Back-compatible overload for existing callers not using the new mean-reversion signal - a threshold of positive infinity means the signal always reads NEUTRAL. */
+    public static Result evaluate(double[] symbolReturns, double[] benchmarkReturns, int zWindow, int momentumWindow) {
+        return evaluate(symbolReturns, benchmarkReturns, zWindow, momentumWindow, Double.POSITIVE_INFINITY);
     }
 }

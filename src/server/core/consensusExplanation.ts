@@ -17,8 +17,10 @@ export interface LastConsensusOutcome {
   threshold: number;
   reason: string;
   agentVotes: ConsensusVoteSnapshot[];
-  /** Phase 7E/7H MODERATE consensus tier. Absent/'STRONG' for every pre-existing evaluation path. */
-  decisionTier?: 'STRONG' | 'MODERATE';
+  /** Phase 7E/7H MODERATE consensus tier; QUANT_INDEPENDENT added 2026-09-09 (explicit operator
+   *  override - see ChiefTraderAgent.ts's own doc comment). Absent/'STRONG' for every pre-existing
+   *  evaluation path. */
+  decisionTier?: 'STRONG' | 'MODERATE' | 'QUANT_INDEPENDENT';
   /** Phase 9I "Why No Trade?" diagnostic - one machine-readable code per round, see consensusTerminalReason.ts. */
   terminalReasonCode?: string;
 }

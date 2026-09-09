@@ -21,6 +21,11 @@ data/ohlcv_export.json
 data/research/
 data/replays/
 data/*_launch.lock
+data/logs/
+data/.argus_engine.pid
+data/.argus_watchdog.pid
+data/.argus_dev.pid
+data/.argus_runtime_session.json
 /models/
 sqlite.db
 quant-core-java/target/

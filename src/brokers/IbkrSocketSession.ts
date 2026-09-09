@@ -34,6 +34,14 @@ export function buildIbkrOrder(orderId: number, opts: {
   stopPrice?: number;
   account?: string;
   extendedHours?: boolean;
+  /** Real crash-recovery fix (2026-09-09): set as IB's own `orderRef` field - a real, broker-side
+   *  free-text tag (not a local-only value) that IB echoes back on every openOrder/orderStatus/
+   *  execDetails event for this order, including after a full Argus process restart. This is what
+   *  makes getTrackedOrderByClientOrderId() below actually work, closing the exact gap the
+   *  2026-09-09 forensic audit found: OMS's own client_order_id contract previously did nothing at
+   *  all for IBKR (real + broker-deduped for Alpaca only). IB's own limit is 100 characters -
+   *  Argus's UUID-shaped trade ids (36 chars) fit with room to spare. */
+  clientOrderId?: string;
 }): any {
   let orderType = OrderType.MKT;
   if (opts.type === 'LIMIT') orderType = OrderType.LMT;
@@ -49,6 +57,9 @@ export function buildIbkrOrder(orderId: number, opts: {
     account: opts.account || undefined,
     transmit: true,
   };
+  if (opts.clientOrderId) {
+    order.orderRef = opts.clientOrderId;
+  }
   if (opts.type === 'LIMIT' || opts.type === 'STOP_LIMIT') {
     order.lmtPrice = opts.limitPrice;
   }
@@ -99,7 +110,29 @@ type TrackedOrder = {
   status: 'PENDING' | 'FILLED' | 'PARTIALLY_FILLED' | 'CANCELED' | 'REJECTED';
   createdAt: Date;
   updatedAt: Date;
+  /**
+   * Real crash-recovery fix (2026-09-09, forensic audit finding): previously never set anywhere
+   * in this file, so OMS's own client_order_id idempotency contract (real + broker-deduped for
+   * Alpaca) silently did nothing for IBKR - a process crash between sending an order and
+   * persisting it locally was structurally unrecoverable, not merely degraded. Set from IB's own
+   * `orderRef` field (Order.orderRef, a free-text tag IB itself stores and echoes back on every
+   * openOrder/orderStatus/execDetails event for that order - not a local-only value). Null for an
+   * order placed without one (e.g. a manually-triggered order path that doesn't pass clientOrderId).
+   */
+  clientOrderId: string | null;
 };
+
+/** IB's own order-status vocabulary -> Argus's Order.status enum. Shared by the live orderStatus
+ *  handler and by openOrder-based rehydration so a rehydrated order's status is derived exactly
+ *  the same way a live one already is - no second, possibly-drifting mapping. */
+function mapIbkrStatusToTrackedStatus(ibStatus: string, filledQuantity: number, totalQuantity: number): TrackedOrder['status'] {
+  const st = String(ibStatus || '').toLowerCase();
+  if (st.includes('fill') && filledQuantity + 1e-9 >= totalQuantity && totalQuantity > 0) return 'FILLED';
+  if (st.includes('fill') || filledQuantity > 0) return 'PARTIALLY_FILLED';
+  if (st.includes('cancel')) return 'CANCELED';
+  if (st.includes('inactive') || st.includes('reject')) return 'REJECTED';
+  return 'PENDING';
+}
 
 export class IbkrSocketSession {
   private ib: IBApi | null = null;
@@ -107,6 +140,10 @@ export class IbkrSocketSession {
   private connected = false;
   private nextOrderId = 1;
   private trackedOrders = new Map<number, TrackedOrder>();
+  /** clientOrderId (IB orderRef) -> IB orderId. Populated both when Argus itself places an order
+   *  and when an order is rehydrated from IB on connect (see connect()'s openOrder handler) - the
+   *  crash-recovery fix this whole block exists for depends on the second case specifically. */
+  private clientOrderIdIndex = new Map<string, number>();
   private accountId: string | null = null;
   private serverTime: string | null = null;
   private port: number | null = null;
@@ -154,6 +191,17 @@ export class IbkrSocketSession {
   private reconnectBackoff = new ReconnectBackoff();
   private autoReconnectArmed = false;
   private lastPreferLive = false;
+  /**
+   * Order-lifecycle crash recovery (2026-09-09 P0 remediation sprint). `trackedOrders`/
+   * `clientOrderIdIndex` are in-memory only, so after a process restart they start empty even
+   * though IB itself still knows about every open/recent order. This flag distinguishes "rehydration
+   * from IB hasn't happened yet on this connection" (unknown - retry later) from "rehydration
+   * completed and this order genuinely isn't at the broker" (a real, confirmed answer) - the two
+   * must never be conflated, or a live broker order would get marked REJECTED locally by mistake
+   * (a false rejection) purely because Argus asked before openOrderEnd arrived. Reset to false at
+   * the start of every connect() attempt; set true when IB's openOrderEnd fires for that connection.
+   */
+  private openOrdersRehydrationComplete = false;
 
   constructor(cfg?: IbkrConnectionConfig) {
     this.cfg = cfg || loadIbkrConnection();
@@ -229,6 +277,7 @@ export class IbkrSocketSession {
     this.lastPreferLive = preferLive;
     this.autoReconnectArmed = true;
     this.clearReconnectTimer(); // an explicit connect() attempt supersedes any pending auto-retry
+    this.openOrdersRehydrationComplete = false;
     await this.disconnect();
 
     const ports = ibkrSocketPortCandidates(this.cfg, preferLive);
@@ -329,6 +378,20 @@ export class IbkrSocketSession {
           }
           this.requestAccountSummary();
           ib.reqPositions();
+          // Order-lifecycle crash recovery: rehydrate whatever IB itself still knows about for this
+          // account on every successful (re)connect - not just on first boot. Covers the exact
+          // dangerous window the 2026-09-09 forensic audit found: Argus sends an order, IB accepts
+          // it, Argus crashes/restarts before ever recording that locally. reqOpenOrders() answers
+          // via the openOrder/openOrderEnd handlers below; reqExecutions() (no filter = "all
+          // recent for this account") separately recovers fills for orders that already fully
+          // filled and dropped out of the open-orders set before this reconnect happened - the
+          // "crash immediately after a full fill" scenario reqOpenOrders() alone cannot cover.
+          try {
+            ib.reqOpenOrders();
+            ib.reqExecutions(9002, {});
+          } catch (e: any) {
+            console.error(`[IBKR Socket] order-lifecycle rehydration request failed: ${e?.message || e}`);
+          }
           this.reconnectBackoff.reset();
           finish(true);
         }
@@ -363,12 +426,7 @@ export class IbkrSocketSession {
         const filledQty = Number(filled) || 0;
         row.filledQuantity = filledQty;
         if (Number(avgFillPrice) > 0) row.averageFillPrice = Number(avgFillPrice);
-        const st = String(status || '').toLowerCase();
-        if (st.includes('fill') && filledQty + 1e-9 >= row.quantity) row.status = 'FILLED';
-        else if (st.includes('fill') || filledQty > 0) row.status = 'PARTIALLY_FILLED';
-        else if (st.includes('cancel')) row.status = 'CANCELED';
-        else if (st.includes('inactive') || st.includes('reject')) row.status = 'REJECTED';
-        else row.status = 'PENDING';
+        row.status = mapIbkrStatusToTrackedStatus(String(status || ''), filledQty, row.quantity);
         row.updatedAt = new Date();
         // Refresh positions after fills so PortfolioMonitor / recon see IB state promptly.
         if (row.status === 'FILLED' || row.status === 'PARTIALLY_FILLED') {
@@ -378,13 +436,99 @@ export class IbkrSocketSession {
         }
       });
 
-      ib.on(EventName.execDetails, (_reqId, _contract, execution) => {
+      /**
+       * Order-lifecycle crash recovery: IB replies to reqOpenOrders() (called on every successful
+       * connect, above) with one openOrder event per order it still has open for this account,
+       * terminated by openOrderEnd. This is what makes getTrackedOrderByClientOrderId() actually
+       * survive a process restart - without it, trackedOrders/clientOrderIdIndex reset to empty on
+       * every boot and a live broker order would look identical to "never sent" to
+       * OrderManagement.reconcileStaleOrders(), risking a false REJECTED mark on a real open order.
+       * Never overwrites an order this process itself already has fresher in-memory state for
+       * (placeStockOrder() already recorded it); only fills in orders this process doesn't yet know
+       * about - genuinely rehydrated state, not a guess.
+       */
+      ib.on(EventName.openOrder, (orderId, contract, order, orderState) => {
+        const totalQuantity = Number((order as any)?.totalQuantity) || 0;
+        const filledQuantity = Number((order as any)?.filledQuantity) || 0;
+        const clientOrderId: string | null = (order as any)?.orderRef || null;
+        const existing = this.trackedOrders.get(orderId);
+        if (existing) {
+          // Already tracked (this process placed it, or a prior openOrder already rehydrated it) -
+          // only backfill clientOrderId if this process somehow didn't already have it.
+          if (clientOrderId && !existing.clientOrderId) {
+            existing.clientOrderId = clientOrderId;
+            this.clientOrderIdIndex.set(clientOrderId, orderId);
+          }
+          return;
+        }
+        const side: 'BUY' | 'SELL' = String((order as any)?.action || '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+        const rehydrated: TrackedOrder = {
+          id: orderId,
+          symbol: String(contract?.symbol || '').toUpperCase(),
+          side,
+          type: 'MARKET',
+          quantity: totalQuantity,
+          filledQuantity,
+          averageFillPrice: 0,
+          status: mapIbkrStatusToTrackedStatus(String(orderState?.status || ''), filledQuantity, totalQuantity),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+          clientOrderId,
+        };
+        this.trackedOrders.set(orderId, rehydrated);
+        if (clientOrderId) this.clientOrderIdIndex.set(clientOrderId, orderId);
+        console.warn(
+          `[IBKR Socket] Rehydrated order ${orderId} (${rehydrated.symbol} ${side} x${totalQuantity}, status=${rehydrated.status}` +
+            `${clientOrderId ? `, clientOrderId=${clientOrderId}` : ', NO clientOrderId - not placed by (or predates) this crash-recovery mechanism'}` +
+            ') on reconnect - was not in this process\'s in-memory order state before this point.',
+        );
+      });
+
+      ib.on(EventName.openOrderEnd, () => {
+        this.openOrdersRehydrationComplete = true;
+      });
+
+      ib.on(EventName.execDetails, (_reqId, contract, execution) => {
         const orderId = Number((execution as any)?.orderId);
         if (!Number.isFinite(orderId)) return;
-        const row = this.trackedOrders.get(orderId);
-        if (!row) return;
         const shares = Number((execution as any)?.shares) || 0;
         const price = Number((execution as any)?.price) || 0;
+        const execClientOrderId: string | null = (execution as any)?.orderRef || null;
+        let row = this.trackedOrders.get(orderId);
+        if (!row) {
+          // Crash-recovery case reqOpenOrders() alone cannot cover: an order that fully filled and
+          // dropped out of IB's open-orders set before this process could reconnect. Execution
+          // objects carry their own orderRef (Execution.orderRef, same free-text tag as
+          // Order.orderRef), so this can still be mapped back to Argus's clientOrderId even with no
+          // matching openOrder event. Total quantity is unknown from an execution alone - best
+          // honest estimate is "at least this many shares traded", marked FILLED (not
+          // PARTIALLY_FILLED) since a fully-dropped-from-open-orders order is the common case this
+          // branch exists for; a later, still-arriving execDetails for the same orderId (a real
+          // multi-fill order) correctly upgrades filledQuantity below rather than losing it.
+          const side: 'BUY' | 'SELL' = String((execution as any)?.side || '').toUpperCase() === 'SLD' ? 'SELL' : 'BUY';
+          row = {
+            id: orderId,
+            symbol: String(contract?.symbol || '').toUpperCase(),
+            side,
+            type: 'MARKET',
+            quantity: shares,
+            filledQuantity: 0,
+            averageFillPrice: 0,
+            status: 'PENDING',
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            clientOrderId: execClientOrderId,
+          };
+          this.trackedOrders.set(orderId, row);
+          if (execClientOrderId) this.clientOrderIdIndex.set(execClientOrderId, orderId);
+          console.warn(
+            `[IBKR Socket] Rehydrated order ${orderId} from a bare execution (no openOrder seen)` +
+              `${execClientOrderId ? `, clientOrderId=${execClientOrderId}` : ', NO clientOrderId on the execution itself either - cannot map to a local trade row'}.`,
+          );
+        } else if (execClientOrderId && !row.clientOrderId) {
+          row.clientOrderId = execClientOrderId;
+          this.clientOrderIdIndex.set(execClientOrderId, orderId);
+        }
         if (shares > 0) {
           const prevFilled = row.filledQuantity;
           const newFilled = prevFilled + shares;
@@ -395,6 +539,7 @@ export class IbkrSocketSession {
                 : price;
           }
           row.filledQuantity = newFilled;
+          row.quantity = Math.max(row.quantity, newFilled);
           if (newFilled + 1e-9 >= row.quantity) row.status = 'FILLED';
           else row.status = 'PARTIALLY_FILLED';
           row.updatedAt = new Date();
@@ -436,6 +581,7 @@ export class IbkrSocketSession {
     const ib = this.ib;
     this.ib = null;
     this.connected = false;
+    this.openOrdersRehydrationComplete = false;
     this.activeMktData.clear();
     this.symbolToTicker.clear();
     if (!ib) return;
@@ -489,6 +635,8 @@ export class IbkrSocketSession {
      *  only honored for a LIMIT order (mission's own "no blind market orders" rule outside RTH,
      *  matching AlpacaBroker's identical LIMIT-only constraint on its own extended_hours flag). */
     extendedHours?: boolean;
+    /** Real crash-recovery fix (2026-09-09) - see buildIbkrOrder()'s own doc comment. */
+    clientOrderId?: string;
   }): number {
     if (!this.ib || !this.connected) {
       throw new Error('IBKR socket session is not connected. Start IB Gateway Desktop (paper port 4002) and retry.');
@@ -509,8 +657,38 @@ export class IbkrSocketSession {
       status: 'PENDING',
       createdAt: new Date(),
       updatedAt: new Date(),
+      clientOrderId: opts.clientOrderId || null,
     });
+    if (opts.clientOrderId) {
+      this.clientOrderIdIndex.set(opts.clientOrderId, orderId);
+    }
     return orderId;
+  }
+
+  /**
+   * Real crash-recovery fix (2026-09-09 forensic audit finding): the one lookup
+   * OrderManagement.ts's reconcileStaleOrders() needs and, before this fix, IBKR had no way to
+   * ever answer - see IBGatewaySocketAdapter.ts's getOrderByClientOrderId() for the public
+   * BrokerAdapter-interface wiring. Works for orders THIS process placed (populated in
+   * placeStockOrder() above) and, more importantly for actual crash recovery, for orders
+   * rehydrated from IB itself on connect() via reqOpenOrders()/reqExecutions() - see connect()'s
+   * openOrder handler.
+   */
+  getTrackedOrderByClientOrderId(clientOrderId: string): TrackedOrder | undefined {
+    const orderId = this.clientOrderIdIndex.get(clientOrderId);
+    return orderId != null ? this.trackedOrders.get(orderId) : undefined;
+  }
+
+  /**
+   * False before IB's openOrderEnd has arrived for the CURRENT connection (rehydration in flight
+   * or not yet requested - e.g. never connected, or reconnecting right now). Callers doing
+   * crash-recovery lookups (IBGatewaySocketAdapter.getOrderByClientOrderId()) must treat "not found
+   * while this is false" as genuinely unknown, not as a confirmed absence - the exact distinction
+   * that keeps OrderManagement.reconcileStaleOrders() from marking a real, live IB order REJECTED
+   * just because Argus asked before rehydration finished.
+   */
+  hasCompletedInitialRehydration(): boolean {
+    return this.connected && this.openOrdersRehydrationComplete;
   }
 
   listTrackedOrders(): TrackedOrder[] {

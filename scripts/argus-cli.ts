@@ -15,6 +15,13 @@ import {
   writeEnginePid,
 } from '../src/server/app/enginePid';
 import {
+  clearWatchdogPid,
+  isPidAlive,
+  isWatchdogProcessRunning,
+  readWatchdogPid,
+  writeWatchdogPid,
+} from '../src/server/app/watchdogPid';
+import {
   buildCliAuthHeaders,
   clearSessionFile,
   collectSetCookieHeaders,
@@ -420,6 +427,63 @@ async function stopEngine() {
   }, null, 2));
 }
 
+/**
+ * "closing this tab should not bring argus down" (2026-09-08, operator report): the watchdog was
+ * only ever launchable via `npm run argus:watchdog` run directly in a foreground terminal - live
+ * process-tree inspection that session showed it as a child of that terminal's bash -> npm -> cmd
+ * chain, with no detachment at all. That npm script also still spawns tsx's CLI wrapper
+ * (node_modules/tsx/dist/cli.mjs), the exact wrapper-forks-a-real-child shape the engine's own
+ * startEngine()/buildEngineSpawnArgs() comment above documents as a live Windows Job Object risk
+ * (a wrapper parent exiting - e.g. its owning terminal tab closing - can tear down its child even
+ * with detached:true). `watchdog start` below spawns the watchdog the same safe, wrapper-free way
+ * buildEngineSpawnArgs() already does for the engine (node --require tsx/preflight --import tsx
+ * <file>, detached:true, stdio:'ignore', unref()), so it survives its launching terminal closing.
+ */
+export function buildWatchdogSpawnArgs(root: string): { args: string[] } {
+  return {
+    args: [
+      '--require', 'tsx/preflight',
+      '--import', 'tsx',
+      join(root, 'scripts', 'argusWatchdog.ts'),
+    ],
+  };
+}
+
+async function startWatchdog() {
+  if (isWatchdogProcessRunning()) {
+    console.log(JSON.stringify({ ok: true, message: 'Watchdog already running', pid: readWatchdogPid() }, null, 2));
+    return;
+  }
+  const spawnSpec = buildWatchdogSpawnArgs(ROOT);
+  const child = spawn(process.execPath, spawnSpec.args, { cwd: ROOT, env: process.env, detached: true, stdio: 'ignore' });
+  if (!child.pid) throw new Error('Failed to spawn Argus watchdog process');
+  writeWatchdogPid(child.pid);
+  child.unref();
+  console.log(JSON.stringify({ ok: true, pid: child.pid, message: 'Watchdog started (detached).' }, null, 2));
+}
+
+async function stopWatchdog() {
+  const pid = readWatchdogPid();
+  if (!pid) {
+    console.log(JSON.stringify({ ok: true, message: 'No watchdog PID file' }, null, 2));
+    return;
+  }
+  if (!isPidAlive(pid)) {
+    clearWatchdogPid();
+    console.log(JSON.stringify({ ok: true, message: 'Watchdog PID file was stale (process already gone).', pid }, null, 2));
+    return;
+  }
+  // The watchdog installs no SIGTERM handler of its own (it holds no DB connection / broker state
+  // to drain) - on this platform SIGTERM unconditionally terminates the target (same Windows
+  // behavior DEF-26 documented for the engine), which is exactly what's wanted here.
+  try {
+    process.kill(pid, 'SIGTERM');
+  } finally {
+    clearWatchdogPid();
+  }
+  console.log(JSON.stringify({ ok: true, message: 'Watchdog stopped.', pid }, null, 2));
+}
+
 async function cliLogin() {
   const creds = resolveCliCredentials();
   if (!creds) {
@@ -601,6 +665,20 @@ const commands: Record<string, () => Promise<void>> = {
     // additional blind fixed delay here on top of that (DEF-26 fix, 2026-08-26).
     await stopEngine().catch(() => undefined);
     return startEngine();
+  },
+  async 'watchdog-start'() {
+    return startWatchdog();
+  },
+  async 'watchdog-stop'() {
+    return stopWatchdog();
+  },
+  async 'watchdog-restart'() {
+    await stopWatchdog().catch(() => undefined);
+    return startWatchdog();
+  },
+  async 'watchdog-status'() {
+    const running = isWatchdogProcessRunning();
+    console.log(JSON.stringify({ ok: true, running, pid: running ? readWatchdogPid() : null }, null, 2));
   },
   async status() {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/status'), null, 2));
@@ -1187,6 +1265,7 @@ const commands: Record<string, () => Promise<void>> = {
     console.log('Argus CLI - HTTP client only. Never imports RiskEngine/OMS/BrokerManager directly.\n');
     const groups: Array<[string, string[]]> = [
       ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'config']],
+      ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
       ['Trading state / portfolio', ['positions', 'portfolio']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],

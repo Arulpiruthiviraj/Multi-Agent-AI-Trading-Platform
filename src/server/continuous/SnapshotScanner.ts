@@ -406,6 +406,13 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       // never emits a trade idea, never affects sizing/consensus. See MissedOpportunityDetector.ts.
       const { runMissedOpportunityDetectionCycle } = await import('./MissedOpportunityDetector');
       const { marketDataWorker } = await import('../services/MarketDataWorker');
+      // Real defect fix (2026-09-09): priceAtDetection used to be hardcoded null at the only
+      // production call site, which made every persisted record permanently unevaluable (fails
+      // closed by design - evaluateAgainstPriceSeries() never fabricates a missing price). Reuse
+      // the same rankingInputs snapshot this cycle already fetched - no new API cost.
+      const priceAtDetectionBySymbol = new Map(
+        Array.from(inputsBySymbol.entries()).map(([sym, input]) => [sym, input.last]),
+      );
       await runMissedOpportunityDetectionCycle(
         rankedCandidates,
         new Set(marketDataWorker.getActiveSymbols()),
@@ -413,6 +420,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
         continuousIntelligence.missedOpportunityDetectionCooldownMs,
         continuousIntelligence.missedOpportunityEvaluationHorizonMinutes,
         now,
+        priceAtDetectionBySymbol,
       );
     } catch (e) {
       logErrorSafely('[SnapshotScanner] composable ranking / trade plan / missed-opportunity cycle failed (does not affect the existing scan)', e);

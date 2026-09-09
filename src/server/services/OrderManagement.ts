@@ -115,6 +115,8 @@ export class OrderManagementService {
   private intervalId: NodeJS.Timeout | null = null;
   private crashRecoveryIntervalId: NodeJS.Timeout | null = null;
   private followUpWarned = new Set<string>();
+  /** Unrecognized-open-broker-order ids already warned/paused-for (2026-09-09 P0 sprint) - avoids re-pausing every CRASH_RECOVERY_INTERVAL_MS cycle for the same still-unresolved order. */
+  private unknownPendingOrderWarned = new Set<string>();
 
   constructor() {
     eventBus.on('RISK_ASSESSMENT_COMPLETED', async (assessment) => {
@@ -653,18 +655,42 @@ export class OrderManagementService {
     }
     const byBrokerId = new Set(local.map((t: any) => t.brokerOrderId).filter(Boolean));
     const byClientId = new Set(local.map((t: any) => t.id));
+    const unknownPendingWarned = this.unknownPendingOrderWarned;
 
     for (const o of brokerOrders) {
       const created = o.createdAt instanceof Date ? o.createdAt.getTime() : Date.parse(String(o.createdAt || 0));
       if (Number.isFinite(created) && created < cutoff) continue;
       const filledQty = o.filledQuantity ?? 0;
-      if (filledQty <= 0 && o.status !== 'FILLED' && o.status !== 'PARTIALLY_FILLED') continue;
       if (byBrokerId.has(o.id)) continue;
       if (o.clientOrderId && byClientId.has(o.clientOrderId)) {
         const row = local.find((t: any) => t.id === o.clientOrderId);
         if (row) await this.applyFollowUpUpdate(row, o);
         continue;
       }
+      // Phase 1.5 (2026-09-09 P0 remediation sprint): a genuinely unrecognized broker order that
+      // has NOT filled yet (PENDING/PARTIALLY_FILLED with zero fill, or an open unfilled LIMIT) was
+      // previously invisible here entirely - the loop below only ever acted once real fill dollars
+      // existed. An order sitting open at the broker that Argus has no record of at all (manually
+      // placed in TWS, or surfaced by a genuine identity mismatch) is exactly the ambiguous-state
+      // case the sprint's "UNKNOWN -> PAUSE -> RECONCILE, never UNKNOWN -> RETRY" invariant is
+      // about - never auto-cancelled, never assumed safe, surfaced loudly and trading paused until
+      // an operator resolves it. One-time warn per orderId (not every 60s cycle) via the same
+      // in-memory Set pattern followUpWarned already uses.
+      if (filledQty <= 0 && !isTerminalOrderStatus(o.status)) {
+        if (!unknownPendingWarned.has(o.id)) {
+          unknownPendingWarned.add(o.id);
+          console.error(`[OMS] CRITICAL unrecognized open broker order ${o.id} (${o.side} ${o.quantity} ${o.symbol}, status=${o.status}) has no matching local trades row - pausing trading pending operator reconciliation.`);
+          await triggerWebhooks({
+            type: 'reconciliation_mismatch',
+            title: 'Unrecognized open broker order (trading paused)',
+            message: `Broker order ${o.id} ${o.side} ${o.quantity} ${o.symbol} (status=${o.status}) has no matching local OMS row and has not filled. Trading paused pending operator reconciliation.`,
+            details: { brokerOrderId: o.id, symbol: o.symbol, side: o.side, quantity: o.quantity, status: o.status },
+          });
+          await this.pauseTradingForOrphan(`Unrecognized open broker order ${o.id} (${o.symbol}) with no matching local trades row - never auto-cancelled or auto-retried.`);
+        }
+        continue;
+      }
+      if (o.status !== 'FILLED' && o.status !== 'PARTIALLY_FILLED') continue;
       if (filledQty <= 0) continue;
       const fillPrice = o.averageFillPrice || o.price || 0;
       if (!(fillPrice > 0)) continue;

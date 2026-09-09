@@ -50,7 +50,8 @@ import { analyzeContradictions, ContradictionAnalysisResult } from '../quant/ai/
 import { riskRewardRatio, expectedValue, MIN_SAMPLE_SIZE_FOR_KELLY } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
-import { tradingSafety, isQuantColdStartBootstrapEnabled } from '../config/tradingSafety';
+import { tradingSafety, isQuantColdStartBootstrapEnabled, isQuantIndependentQualificationEnabled } from '../config/tradingSafety';
+import { computeInternalEnsembleQualification } from '../quant/internalQuantEnsemble';
 import { isRuntimeFlagEnabled, resolveRuntimeNumber } from '../config/effectiveRuntimeConfig';
 import { deskIntelligence, rankEvaluationsForRegime, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 import { filterEvaluationsForStrategyFocus, normalizeStrategyFocus, selectEvaluationsForAdaptiveRegime } from '../config/strategyFocus';
@@ -519,11 +520,20 @@ export class QuantSignalAgent {
       // recording it here too makes Fundamental/MacroAgent's priority round-robin bidirectional
       // (converge toward Quant's real signals, not only Technical's).
       recordCandidate(symbol);
+      // 2026-09-09, explicit operator override (see ChiefTraderAgent.ts's doc comment on
+      // isQuantIndependentQualificationEnabled). Only computed when the flag is on - zero extra
+      // Java calls for every deployment that hasn't made this choice. Attached to evidence
+      // regardless of outcome so real qualification/non-qualification history accumulates either
+      // way; ChiefTraderAgent.ts is the only place this can actually change an approval.
+      const internalEnsemble = isQuantIndependentQualificationEnabled() && (idea.side === 'BUY' || idea.side === 'SELL')
+        ? await computeInternalEnsembleQualification(symbol, bars, strategyEvaluations, idea.side)
+        : null;
       eventBus.emitTradeIdea({
         traceId, symbol, side: idea.side, confidence: idea.confidence,
         currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
         quantDetail: {
           regime,
+          internalEnsemble,
           strategyEvaluation: matchedStrategyEvaluation,
           groupedScores: groupedScores[idea.side],
           contradictions: matchedStrategyEvaluation?.contradictions ?? [],

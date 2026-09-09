@@ -489,7 +489,46 @@ for `QUANT_CORE_REGIME_PARITY_DIVERGENCE` rows for accumulated soak data (zero a
 - `QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED` remains unchanged and must not be set true until a real,
   multi-week shadow-soak period (no shortcuts on calendar time, per the original migration
   blueprint's own precondition) is complete — a few hours or days of clean samples is **not**
-  sufficient.
+  sufficient. This is a distinct flag/code path from the override immediately below — it governs
+  `QuantSignalAgent.ts`'s own TS-vs-Java regime-parity comparison, which is still untouched.
+
+**2026-09-09 addendum — a narrower, separate override, explicit operator decision:** the same
+"real multi-week shadow-soak, no shortcuts on calendar time" precondition above also governed
+whether `JavaQuantAdvisoryService.ts`'s `factor_composite` advisory (GARCH/HMM-regime/5-factor
+composite, `SHADOW` status per `config/engineOwnership.json`) could ever call `emitTradeIdea`. The
+operator was told that precondition directly — the shadow soak had not run to completion — and
+chose to override it anyway, the same way `ARGUS_TRADE_PLAN_IDEAS_ENABLED` overrode
+`TradePlanShadowTracker`'s equivalent precondition on 2026-09-05. `emitJavaQuantVoteIfEligible()`
+(new function, same file) now casts one independent vote (agent `JavaFactorComposite`) into the
+unchanged ChiefTrader consensus whenever `ARGUS_JAVA_QUANT_VOTE_ENABLED` (off by default, on in
+this deployment's `.env`) plus Autobot/session-recovery plus the `JavaFactorComposite` Mission
+Control toggle are all on, AND Java's own advisory-level gating already trusts the signal
+(`!advisory.gated`, directional side, `adjustedConfidence >= tradingSafety.javaQuantVoteMinConfidence`
+— 0.6). This override is scoped to that one advisory/vote path only — `QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED`
+above (a different flag, a different code path in `QuantSignalAgent.ts`) remains untouched and
+still gated on the real precondition.
+
+**2026-09-09, same day, a second and materially larger override — QuantEngine internal-ensemble
+independent qualification:** distinct from the `factor_composite` vote above, this changes the
+*shape* of ChiefTrader's own approval requirement rather than adding one more vote to it. The
+`ARGUS_QUANTENGINE_EXPANSION_DESIGN_2026-09-09.md` companion audit (§16) recommended against this
+specifically — `QuantEnsembleEngine.java`'s `effectiveIndependentCount()` correlation matrix is a
+reviewed assumption, not measured data, and no historical strategy-outcome ledger exists yet to
+show strong internal consensus outperforms weak consensus. Told this directly, the operator
+overrode it anyway. Implementation: `src/server/quant/internalQuantEnsemble.ts` builds one combined
+vote list (currently-firing TS strategies + 10 Java RESEARCH engines newly reachable via
+`QuantCoreServer.java`'s generic `/api/v1/institutional/strategy/{strategyId}/{symbol}` dispatcher,
+`src/server/quant/strategyFamilies.ts`'s real family classification), scores it through
+`QuantEnsembleEngine.java`, and — only when `ARGUS_QUANT_INDEPENDENT_QUALIFICATION_ENABLED` is on
+(off by default, on in this deployment's `.env`) — lets `ChiefTraderAgent.ts` treat a single
+`QuantEngine` idea as satisfying the independent-voice floor when it clears a bar strictly above the
+normal 2-agent minimum (`minQuantIndependentFamilies` 3, `minQuantIndependentEffectiveCount` 2.5,
+`config/tradingSafety.json`), reported as decision tier `QUANT_INDEPENDENT`. Every other requirement
+(0.75 STRONG confidence, hard vetoes, RiskEngine's 25 gates, OMS) is unchanged — this substitutes
+only for the second agent. See `docs/audits/ARGUS_QUANTENGINE_EXPANSION_DESIGN_2026-09-09.md` §16
+for the full evidence-based reasoning this overrides, and this file's own tests
+(`ChiefTraderAgent.quantIndependent.test.ts`, `internalQuantEnsemble.test.ts`) for the
+flag-off-is-byte-for-byte-unchanged proof.
 
 **Unrelated but important discovery made while verifying this work:** the repo's root
 `.gitignore` had a bare `models/` pattern that was also silently matching
@@ -1246,3 +1285,113 @@ mechanism) or whether the existing pool is adequate once actually measured under
   the extended-hours execution finding called out at the top of this section — treat anything not
   explicitly re-verified here as accurate as of the audits' own 2026-09-05 date, not as re-checked
   today.
+
+## IBKR order-lifecycle crash recovery (2026-09-09 P0 remediation sprint, `CLAUDE.md` DEF-30)
+
+**Problem found (2026-09-09 forensic audit):** `OrderManagement.ts`'s `reconcileStaleOrders()` and
+`reconcileInboundBrokerOrders()` were already real, correct, broker-agnostic crash-recovery
+machinery (`reconcileStaleOrders()` predates this sprint — comment cites an earlier
+`ARGUS_SAFETY_HARDENING_REPORT.md` Phase 1 pass; `AlpacaBroker.getOrderByClientOrderId()` already
+implemented the contract it depends on). But **IBKR had never implemented that contract at all**:
+`buildIbkrOrder()`/`placeStockOrder()` never set IB's `Order.orderRef` field, `IbkrSocketSession`'s
+`trackedOrders` map was in-memory only (empty after every process restart, by construction), and
+`IBGatewaySocketAdapter` had no `getOrderByClientOrderId()` method — so the generic mechanism's own
+`typeof broker.getOrderByClientOrderId !== 'function'` guard silently no-op'd for IBKR, every time.
+A crash between "IB accepted the order" and "Argus recorded it locally" was therefore structurally
+unrecoverable for IBKR specifically — the exact gap `docs/audits/` cite as the highest-priority
+execution-safety defect at the time this section was written.
+
+**Identity mechanism (investigated, not invented):** IB's `Order.orderRef` (`@stoqey/ib`'s own
+`order.d.ts`) is a free-text field (~100 chars), set by the placing client, persisted by IB, and
+echoed back on `openOrder`, `orderStatus`, and `execDetails` events for that order's entire
+lifetime — including after a full Argus process restart or IB Gateway restart, as long as the same
+IB account is queried. `Execution.orderRef` (`execution.d.ts`) carries the same value independently
+on each individual fill. OMS already always passes `clientOrderId: <local trades.id>` into every
+`placeOrder()` call (`OrderManagement.ts` `executeOrder()`) — this fix simply makes IBKR forward
+that value into `orderRef`, and makes IBKR read it back out, matching the pattern
+`AlpacaBroker.ts`'s `client_order_id` query param already established for the other broker.
+
+**Fix, by file:**
+- `src/brokers/IbkrSocketSession.ts`: `buildIbkrOrder()` sets `order.orderRef` from
+  `opts.clientOrderId`. `TrackedOrder` gained a `clientOrderId` field and a
+  `clientOrderIdIndex: Map<string, number>` (clientOrderId → IB orderId). `connect()` calls
+  `ib.reqOpenOrders()` + `ib.reqExecutions(9002, {})` on every successful (re)connect (not just
+  first boot). New `openOrder`/`openOrderEnd` handlers rehydrate `trackedOrders` for any order IB
+  reports that this process instance didn't place itself (a prior instance's order, surviving a
+  crash) — never overwrites an order this process already has fresher state for. `execDetails` was
+  extended to do the same via `Execution.orderRef` for the case `reqOpenOrders()` alone cannot
+  cover: an order that fully filled and dropped out of IB's open-orders set before this process
+  could reconnect. `hasCompletedInitialRehydration()` (true only after `openOrderEnd` for the
+  *current* connection) is the mechanism that keeps "rehydration hasn't finished yet" from being
+  mistaken for "confirmed absent" downstream.
+- `src/brokers/IBGatewaySocketAdapter.ts`: `placeOrder()` now forwards `order.clientOrderId` into
+  `session.placeStockOrder()`. New `getOrderByClientOrderId()` implements the `BrokerAdapter`
+  optional-interface contract — deliberately **throws** (not `null`) while
+  `!session.hasCompletedInitialRehydration()`, so `OrderManagement.reconcileStaleOrders()`'s
+  existing catch-and-skip-this-cycle behavior applies instead of a false REJECTED mark on a real,
+  still-open broker order. `orders()` now includes `clientOrderId` in its mapped `Order[]` — this
+  was a real, separate bug: without it, `reconcileInboundBrokerOrders()`'s own dedup check
+  (`o.clientOrderId && byClientId.has(...)`) could never succeed for any IBKR order, so even an
+  order Argus fully recognized would have been misfiled as an unrecognized `SOURCE: EXTERNAL_MANUAL`
+  fill once rehydration started populating `orders()` at all.
+- `src/server/services/OrderManagement.ts`: `reconcileInboundBrokerOrders()` gained a new branch —
+  a broker order with **no** matching local `trades` row that has **not yet filled** (previously
+  invisible to this function entirely; the pre-existing logic only ever acted once real fill dollars
+  existed) now pauses trading via the existing `pauseTradingForOrphan()` path (no second kill
+  switch) and surfaces via `triggerWebhooks()` — never auto-cancelled, never auto-retried, matching
+  the sprint's required invariant (`UNKNOWN → PAUSE → RECONCILE`, never `UNKNOWN → RETRY`).
+
+**What this does not fix:** a bare `execDetails` whose `Execution.orderRef` is itself empty (some
+order types/vintages may not carry it) still cannot be mapped back to a local `trades` row — it is
+rehydrated and logged loudly, not silently dropped, but stays unreconciled until an operator looks;
+the unknown-order pause is periodic (`CRASH_RECOVERY_INTERVAL_MS`), not instantaneous. Neither gap
+changes the core invariant: no blind retry, no duplicate order, no silently-lost fill.
+
+**Tests:** `src/brokers/__tests__/IbkrSocketSession.crashRecovery.test.ts` (new, 7 tests — clientOrderId
+round-trip, rehydration-in-flight vs. complete, `openOrder`/`execDetails`-based rehydration, no
+overwrite of self-placed orders, multi-fill accumulation, reconnect resets rehydration state),
+2 new cases in `IbkrSocketSession.buildIbkrOrder.test.ts`, a new "no false rejection" case in
+`OrderManagement.crashRecovery.test.ts`, and `OrderManagement.unrecognizedBrokerOrder.test.ts` (new
+file — kept separate because `db`/`sqliteDb` are process-wide singletons keyed off `ARGUS_DB_PATH`
+at first import; a second `describe` block in the same test file reusing `await import('../db')`
+gets back the first block's already-closed connection).
+
+## News prompt-injection isolation (2026-09-09 P0 remediation sprint, `CLAUDE.md` DEF-31)
+
+**Problem found:** `NewsScoringEngine.analyzeWithAI()` interpolated externally-sourced
+`article.title`/`content`/`source` (RSS feeds, paid news APIs — untrusted, attacker-influenceable
+text) directly into the LLM prompt via a bare template literal, with no delimiter separating
+instructions from data. Concretely exploitable, not theoretical: `NewsEngine.ts` feeds
+`aiAnalysis.tradingBias`/`confidence` straight into `eventBus.emitTradeIdea()` as one of
+ChiefTrader's independent votes, so a successful injection is a route toward influencing a real
+trade idea, not just bad output text.
+
+**Fix:** `buildNewsAnalysisPrompt()` (`src/server/news/NewsScoringEngine.ts`) places all
+instructions and the output schema *before* a single `<UNTRUSTED_ARTICLE_DATA>...
+</UNTRUSTED_ARTICLE_DATA>` block, with an explicit instruction that everything inside is data to
+analyze, never commands — covering fake system/role messages, fake JSON impersonating the real
+output schema, and prompt-extraction attempts. `neutralizeDelimiterEscapes()` strips any literal
+occurrence of the tag strings from the untrusted text itself, so embedded article text cannot forge
+a fake closing tag and escape the block. The instructional prose itself deliberately avoids
+spelling out the literal `<UNTRUSTED_ARTICLE_DATA>` syntax a second time (an early version of this
+fix did, which created a spurious extra "closing tag" occurrence before the real block even opened —
+harmless to the security boundary since it sat in the trusted instruction text, but worth noting as
+a documented pitfall for anyone extending this pattern to another agent's prompt).
+
+This is structural isolation, not the *only* defense — `AIOutputValidator`'s pre-existing
+`clampScore`/`coerceEnum`/`coerceString`/`looksLikeListedTicker` (unchanged by this fix)
+independently bound every field to its valid schema/range regardless of what the model was tricked
+into emitting, and `materiality`/`novelty`/`expectedHorizon`/`catalystType` were already, and
+remain, deterministic server-side values never taken from the LLM at all — see this file's own
+`AIAnalysisResult` doc comment. Defense in depth: even a "compromised" model response cannot exceed
+the schema's own bounds.
+
+**Not yet extended:** other agents (`FundamentalAgent`, `MacroAgent`, Bull/Bear research) also embed
+externally-sourced text (data-provider responses, research notes) into their own prompts — same
+class of risk, out of scope for this pass, a real candidate for the next hardening cycle rather than
+an oversight to treat as already covered.
+
+**Tests:** `src/server/news/NewsScoringEngine.promptInjection.test.ts` (new, 10 tests) covering the
+full hostile-input battery this sprint required: "ignore previous instructions", fake system
+messages, fake JSON, role-like content, injection via title/body/source, delimiter-escape forgery,
+prompt extraction, and an end-to-end "compromised response" check confirming clamping still holds.

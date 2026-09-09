@@ -14,6 +14,16 @@ import io.argus.quantcore.institutional.models.CorrelationEngine;
 import io.argus.quantcore.institutional.models.QuantEnsembleEngine;
 import io.argus.quantcore.institutional.models.RegimeVolatilityOverlay;
 import io.argus.quantcore.institutional.data.MarketDataQualityEngine;
+import io.argus.quantcore.institutional.models.RsiMeanReversionEngine;
+import io.argus.quantcore.institutional.models.MacdCrossoverEngine;
+import io.argus.quantcore.institutional.models.BollingerMeanReversionEngine;
+import io.argus.quantcore.institutional.models.MovingAverageCrossoverEngine;
+import io.argus.quantcore.institutional.models.DonchianChannelEngine;
+import io.argus.quantcore.institutional.models.TrendStrengthEngine;
+import io.argus.quantcore.institutional.models.MeanReversionZScoreEngine;
+import io.argus.quantcore.institutional.models.StochasticOscillatorEngine;
+import io.argus.quantcore.institutional.models.TimeSeriesMomentumEngine;
+import io.argus.quantcore.institutional.models.VolumeSignalEngine;
 import io.argus.quantcore.institutional.features.FeaturePipeline;
 import io.argus.quantcore.institutional.features.FeatureSnapshot;
 import io.argus.quantcore.features.RegimeEngine;
@@ -63,6 +73,12 @@ public final class QuantCoreServer {
         server.createContext("/api/v1/institutional/correlation", this::handleInstitutionalCorrelation);
         server.createContext("/api/v1/institutional/ensemble", this::handleInstitutionalEnsemble);
         server.createContext("/api/v1/institutional/advisory", this::handleInstitutionalAdvisory);
+        // 2026-09-09: HTTP-exposes 10 previously-endpoint-less RESEARCH-status engines (real,
+        // unit-tested Java classes that already existed - see config/engineOwnership.json).
+        // Exposing an endpoint is not the same as wiring a live consumer: nothing in
+        // JavaQuantAdvisoryService.ts or QuantSignalAgent.ts calls this route yet. It only makes
+        // these engines reachable for backtesting/research tooling instead of dead code.
+        server.createContext("/api/v1/institutional/strategy/", this::handleInstitutionalStrategy);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
     }
 
@@ -859,6 +875,213 @@ public final class QuantCoreServer {
     private static double[] closesOf(Bar[] bars) {
         double[] out = new double[bars.length];
         for (int i = 0; i < bars.length; i++) out[i] = bars[i].close();
+        return out;
+    }
+
+    private static double[] highsOf(Bar[] bars) {
+        double[] out = new double[bars.length];
+        for (int i = 0; i < bars.length; i++) out[i] = bars[i].high();
+        return out;
+    }
+
+    private static double[] lowsOf(Bar[] bars) {
+        double[] out = new double[bars.length];
+        for (int i = 0; i < bars.length; i++) out[i] = bars[i].low();
+        return out;
+    }
+
+    private static double[] volumesOf(Bar[] bars) {
+        double[] out = new double[bars.length];
+        for (int i = 0; i < bars.length; i++) out[i] = bars[i].volume();
+        return out;
+    }
+
+    /**
+     * Single generic dispatcher for the batch of previously-endpoint-less RESEARCH engines
+     * (2026-09-09) - see the server-construction comment on this route's registration. Path shape:
+     * POST /api/v1/institutional/strategy/{strategyId}/{symbol}, body {"bars": [...], ...params}.
+     * strategyId matches config/engineOwnership.json's quantModels keys exactly - one dispatcher,
+     * not ten near-duplicate handlers, since every one of these engines already takes plain
+     * double[] arrays (no institutional-specific request/response shape needed).
+     */
+    private void handleInstitutionalStrategy(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        String[] parts = path.replaceFirst("^/api/v1/institutional/strategy/", "").split("/");
+        if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "path must be /institutional/strategy/{strategyId}/{symbol}"));
+            return;
+        }
+        String strategyId = parts[0];
+        String symbol = parts[1];
+        String traceId = resolveTraceId(exchange);
+        TraceContext.bind(traceId, symbol);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Bar[] bars = decodeBars(body.get("bars"));
+            if (bars == null || bars.length == 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "bars array is required"));
+                return;
+            }
+            Map<String, Object> result = evaluateResearchStrategy(strategyId, symbol, bars, body);
+            if (result == null) {
+                sendJson(exchange, 404, Map.of("ok", false, "error", "unknown or unwired strategyId: " + strategyId));
+                return;
+            }
+            // evaluateResearchStrategy() always pre-populates schemaVersion/strategyId/symbol
+            // (3 fields) before dispatching - a case whose engine returns null for insufficient
+            // data returns the map at exactly that baseline size, never truly empty. size() <= 3
+            // is the real "no engine-specific fields were added" signal.
+            if (result.size() <= 3) {
+                sendJson(exchange, 422, Map.of("ok", false, "error", "insufficient bar history for " + strategyId,
+                    "barsProvided", (double) bars.length));
+                return;
+            }
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "RESEARCH_STRATEGY_EVALUATED",
+                "Evaluated " + strategyId + " for " + symbol, traceId, symbol, Map.of("strategyId", strategyId));
+            sendJson(exchange, 200, result);
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    /** Returns null for an unrecognized strategyId, an empty map when the engine itself returns null (insufficient data - never fabricated). */
+    private static Map<String, Object> evaluateResearchStrategy(String strategyId, String symbol, Bar[] bars, Map<String, Object> body) {
+        double[] closes = closesOf(bars);
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("schemaVersion", 1.0);
+        out.put("strategyId", strategyId);
+        out.put("symbol", symbol);
+
+        switch (strategyId) {
+            case "rsi_mean_reversion" -> {
+                int period = (int) Json.asDoublePrimitive(body.get("period"), RsiMeanReversionEngine.DEFAULT_PERIOD);
+                double oversold = Json.asDoublePrimitive(body.get("oversoldThreshold"), RsiMeanReversionEngine.DEFAULT_OVERSOLD);
+                double overbought = Json.asDoublePrimitive(body.get("overboughtThreshold"), RsiMeanReversionEngine.DEFAULT_OVERBOUGHT);
+                var r = RsiMeanReversionEngine.evaluate(closes, period, oversold, overbought);
+                if (r == null) return out;
+                out.put("rsi", r.rsi());
+                out.put("oversold", r.oversold());
+                out.put("overbought", r.overbought());
+                out.put("fadeSignal", r.fadeSignal());
+            }
+            case "macd_crossover" -> {
+                int shortP = (int) Json.asDoublePrimitive(body.get("shortPeriod"), 12);
+                int longP = (int) Json.asDoublePrimitive(body.get("longPeriod"), 26);
+                int signalP = (int) Json.asDoublePrimitive(body.get("signalPeriod"), 9);
+                var r = MacdCrossoverEngine.evaluate(closes, shortP, longP, signalP);
+                if (r == null) return out;
+                out.put("macd", r.macd());
+                out.put("signal", r.signal());
+                out.put("histogram", r.histogram());
+                out.put("bullishCross", r.bullishCross());
+                out.put("bearishCross", r.bearishCross());
+            }
+            case "bollinger_mean_reversion" -> {
+                int period = (int) Json.asDoublePrimitive(body.get("period"), 20);
+                var r = BollingerMeanReversionEngine.evaluate(closes, period);
+                if (r == null) return out;
+                out.put("close", r.close());
+                out.put("upperBand", r.upperBand());
+                out.put("lowerBand", r.lowerBand());
+                out.put("atOrBeyondUpperBand", r.atOrBeyondUpperBand());
+                out.put("atOrBeyondLowerBand", r.atOrBeyondLowerBand());
+                out.put("fadeSignal", r.fadeSignal());
+            }
+            case "moving_average_crossover" -> {
+                int fastP = (int) Json.asDoublePrimitive(body.get("fastPeriod"), 20);
+                int slowP = (int) Json.asDoublePrimitive(body.get("slowPeriod"), 50);
+                String maType = body.get("maType") instanceof String s ? s : "SMA";
+                var r = MovingAverageCrossoverEngine.evaluate(closes, fastP, slowP,
+                    "EMA".equals(maType) ? MovingAverageCrossoverEngine.MaType.EMA : MovingAverageCrossoverEngine.MaType.SMA);
+                if (r == null) return out;
+                out.put("fastValue", r.fastValue());
+                out.put("slowValue", r.slowValue());
+                out.put("bullishCross", r.bullishCross());
+                out.put("bearishCross", r.bearishCross());
+                out.put("fastAboveSlow", r.fastAboveSlow());
+            }
+            case "donchian_channel" -> {
+                int period = (int) Json.asDoublePrimitive(body.get("period"), 20);
+                var r = DonchianChannelEngine.evaluate(highsOf(bars), lowsOf(bars), closes, period);
+                if (r == null) return out;
+                out.put("upperChannel", r.upperChannel());
+                out.put("lowerChannel", r.lowerChannel());
+                out.put("currentClose", r.currentClose());
+                out.put("breakoutUp", r.breakoutUp());
+                out.put("breakoutDown", r.breakoutDown());
+                out.put("channelWidthPct", r.channelWidthPct());
+            }
+            case "trend_strength_adx" -> {
+                int period = (int) Json.asDoublePrimitive(body.get("period"), 14);
+                var r = TrendStrengthEngine.evaluate(highsOf(bars), lowsOf(bars), closes, period);
+                if (r == null) return out;
+                out.put("adx", r.adx());
+                out.put("plusDI", r.plusDI());
+                out.put("minusDI", r.minusDI());
+                out.put("strongTrend", r.strongTrend());
+                out.put("trendingUp", r.trendingUp());
+            }
+            case "mean_reversion_zscore" -> {
+                int window = (int) Json.asDoublePrimitive(body.get("window"), 20);
+                double extreme = Json.asDoublePrimitive(body.get("extremeZScore"), 2.0);
+                var r = MeanReversionZScoreEngine.evaluate(closes, window, extreme);
+                if (r == null) return out;
+                out.put("zScore", r.zScore());
+                out.put("extremeOverbought", r.extremeOverbought());
+                out.put("extremeOversold", r.extremeOversold());
+                out.put("fadeSignal", r.fadeSignal());
+            }
+            case "stochastic_oscillator" -> {
+                int period = (int) Json.asDoublePrimitive(body.get("period"), 14);
+                int dPeriod = (int) Json.asDoublePrimitive(body.get("dPeriod"), 3);
+                var r = StochasticOscillatorEngine.evaluate(highsOf(bars), lowsOf(bars), closes, period, dPeriod);
+                if (r == null) return out;
+                out.put("percentK", r.percentK());
+                out.put("percentD", r.percentD());
+                out.put("overbought", r.overbought());
+                out.put("oversold", r.oversold());
+                out.put("bullishCross", r.bullishCross());
+                out.put("bearishCross", r.bearishCross());
+            }
+            case "time_series_momentum" -> {
+                int shortBars = (int) Json.asDoublePrimitive(body.get("shortBars"), 20);
+                int mediumBars = (int) Json.asDoublePrimitive(body.get("mediumBars"), 60);
+                int longBars = (int) Json.asDoublePrimitive(body.get("longBars"), 120);
+                var r = TimeSeriesMomentumEngine.evaluate(closes, shortBars, mediumBars, longBars);
+                if (r == null) return out;
+                out.put("shortTermReturn", r.shortTerm() != null ? r.shortTerm().totalReturn() : null);
+                out.put("mediumTermReturn", r.mediumTerm() != null ? r.mediumTerm().totalReturn() : null);
+                out.put("longTermReturn", r.longTerm() != null ? r.longTerm().totalReturn() : null);
+                out.put("momentumAcceleration", r.momentumAcceleration());
+                out.put("trendPersistence", r.trendPersistence());
+                out.put("signal", r.signal() != null ? r.signal().name() : null);
+            }
+            case "volume_signal" -> {
+                int avgWindow = (int) Json.asDoublePrimitive(body.get("avgVolumeWindow"), 20);
+                // VolumeSignalEngine.evaluate() requires an EVEN divergenceWindow (it splits the
+                // window in half) - 5 would silently return null forever, never a real bug the
+                // caller could see from the outside. 4 is the smallest sensible even default.
+                int divWindow = (int) Json.asDoublePrimitive(body.get("divergenceWindow"), 4);
+                double breakoutMult = Json.asDoublePrimitive(body.get("volumeBreakoutMult"), 2.0);
+                var r = VolumeSignalEngine.evaluate(closes, volumesOf(bars), avgWindow, divWindow, breakoutMult);
+                if (r == null) return out;
+                out.put("relativeVolume", r.relativeVolume());
+                out.put("volumeBreakout", r.volumeBreakout());
+                out.put("priceChangePct", r.priceChangePct());
+                out.put("volumeChangePct", r.volumeChangePct());
+                out.put("bullishDivergence", r.bullishDivergence());
+                out.put("bearishDivergence", r.bearishDivergence());
+            }
+            default -> {
+                return null;
+            }
+        }
         return out;
     }
 

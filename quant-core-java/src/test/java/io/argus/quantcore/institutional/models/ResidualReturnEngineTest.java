@@ -57,4 +57,57 @@ class ResidualReturnEngineTest {
         double[] benchmarkReturns = new double[40];
         assertThat(ResidualReturnEngine.evaluate(symbolReturns, benchmarkReturns, 20, 10)).isNull();
     }
+
+    @Test
+    void idiosyncraticVolatilityIsCloseToZero_whenTheSymbolTracksTheBenchmarkWithNegligibleNoise() {
+        // Genuinely zero residuals (exact replication) would give the residual series zero
+        // variance, which RollingStatistics.zScore correctly refuses to Z-score (division by
+        // ~zero stddev) - a real, tiny amount of idiosyncratic noise is needed for this to be a
+        // meaningful "small but nonzero" case rather than a degenerate one.
+        java.util.Random rnd = new java.util.Random(99);
+        int n = 60;
+        double[] benchmarkReturns = new double[n];
+        double[] symbolReturns = new double[n];
+        for (int i = 0; i < n; i++) {
+            benchmarkReturns[i] = 0.001 * Math.sin(i);
+            symbolReturns[i] = benchmarkReturns[i] + rnd.nextGaussian() * 1e-6; // negligible idiosyncratic noise
+        }
+
+        var result = ResidualReturnEngine.evaluate(symbolReturns, benchmarkReturns, 20, 10);
+
+        assertThat(result).isNotNull();
+        assertThat(result.idiosyncraticVolatility()).isCloseTo(0.0, org.assertj.core.data.Offset.offset(1e-5));
+    }
+
+    @Test
+    void signalsBuyOnAnExtremeNegativeResidual_whenAThresholdIsSupplied() {
+        int n = 60;
+        double[] benchmarkReturns = new double[n];
+        double[] symbolReturns = new double[n];
+        for (int i = 0; i < n; i++) {
+            benchmarkReturns[i] = 0.001 * Math.sin(i);
+            symbolReturns[i] = benchmarkReturns[i];
+        }
+        symbolReturns[n - 1] = -0.20; // sharp, idiosyncratic single-day crash at the very end
+
+        var result = ResidualReturnEngine.evaluate(symbolReturns, benchmarkReturns, 20, 10, 2.0);
+
+        assertThat(result.residualMeanReversionSignal()).isEqualTo("BUY");
+    }
+
+    @Test
+    void theFourArgOverload_alwaysReadsNeutral_preservingExistingCallerBehavior() {
+        int n = 60;
+        double[] benchmarkReturns = new double[n];
+        double[] symbolReturns = new double[n];
+        for (int i = 0; i < n; i++) {
+            benchmarkReturns[i] = 0.001 * Math.sin(i);
+            symbolReturns[i] = benchmarkReturns[i];
+        }
+        symbolReturns[n - 1] = -0.20;
+
+        var result = ResidualReturnEngine.evaluate(symbolReturns, benchmarkReturns, 20, 10);
+
+        assertThat(result.residualMeanReversionSignal()).isEqualTo("NEUTRAL");
+    }
 }
