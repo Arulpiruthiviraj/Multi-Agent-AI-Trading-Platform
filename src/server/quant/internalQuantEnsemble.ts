@@ -99,6 +99,26 @@ function javaResultToVote(strategyId: string, result: Record<string, unknown>): 
 }
 
 /**
+ * Strategy-selection confluence guard (2026-09-11, tradingSafety.strategySelectionConfluenceGuardEnabledEnvVar's
+ * doc comment has the full reasoning) - pure decision function, extracted so QuantSignalAgent.ts's
+ * suppression check is unit-testable without standing up its full evaluateSymbol() dependency graph.
+ * Returns true only when: the guard is enabled, the ensemble genuinely disagreed with the picked
+ * side, AND the disagreeing side itself clears the exact same bar minQuantIndependentFamilies/
+ * minQuantIndependentEffectiveCount already use to let the ensemble stand in for a second agent.
+ * Never returns true for a null ensemble or a non-mismatch result - only ever suppresses, never
+ * decides what TO emit.
+ */
+export function shouldSuppressForConfluenceGuard(
+  guardEnabled: boolean,
+  ensemble: InternalEnsembleQualification | null,
+  minFamilies: number,
+  minEffectiveCount: number,
+): boolean {
+  if (!guardEnabled || !ensemble?.sideMismatch) return false;
+  return ensemble.familyCount >= minFamilies && ensemble.effectiveIndependentCount >= minEffectiveCount;
+}
+
+/**
  * Builds the combined TS+Java vote list and computes the qualification result. Returns null (never
  * fabricates) when the Java ensemble call itself fails or QUANT_JAVA_CORE_ENABLED is off - the
  * caller must treat null exactly like "not qualified", not as an error to surface to the trader.
@@ -140,6 +160,15 @@ export async function computeInternalEnsembleQualification(
   const ensemble = await quantCoreBridge.fetchInstitutionalEnsemble(votes);
   if (!ensemble) return null; // genuine Java-unavailable/error case - fail closed, unchanged
 
+  // 2026-09-11: family count for the ensemble's own resolved side is now computed unconditionally
+  // (previously hardcoded to 0/[] whenever sideMismatch was true, since nothing consumed it in
+  // that branch). Real callers now exist (strategySelectionConfluenceGuard below) that need a real
+  // family count for the DISAGREEING side too, not just the agreeing one - this is the same
+  // computation either way, just no longer skipped.
+  const familiesOnRawSide = new Set(
+    votes.filter((v) => v.side === ensemble.rawSide && ensemble.agreeingModelIds.includes(v.modelId)).map((v) => v.family),
+  );
+
   if (ensemble.rawSide !== ideaSide) {
     // Real, observable case (2026-09-10) - the broader ensemble disagrees with the side
     // bestStrategyIdea() already picked. Never treated as qualification (qualifiesAsIndependent
@@ -150,8 +179,8 @@ export async function computeInternalEnsembleQualification(
       qualifiesAsIndependent: false,
       rawSide: ensemble.rawSide,
       effectiveIndependentCount: ensemble.effectiveIndependentCount,
-      familyCount: 0,
-      agreeingFamilies: [],
+      familyCount: familiesOnRawSide.size,
+      agreeingFamilies: Array.from(familiesOnRawSide),
       totalVotes: ensemble.totalVotes,
       agreeingModelIds: ensemble.agreeingModelIds,
       dissentingModelIds: ensemble.dissentingModelIds,
@@ -159,20 +188,16 @@ export async function computeInternalEnsembleQualification(
     };
   }
 
-  const agreeingFamilies = new Set(
-    votes.filter((v) => v.side === ensemble.rawSide && ensemble.agreeingModelIds.includes(v.modelId)).map((v) => v.family),
-  );
-
   const qualifiesAsIndependent =
-    agreeingFamilies.size >= tradingSafety.minQuantIndependentFamilies
+    familiesOnRawSide.size >= tradingSafety.minQuantIndependentFamilies
     && ensemble.effectiveIndependentCount >= tradingSafety.minQuantIndependentEffectiveCount;
 
   return {
     qualifiesAsIndependent,
     rawSide: ensemble.rawSide,
     effectiveIndependentCount: ensemble.effectiveIndependentCount,
-    familyCount: agreeingFamilies.size,
-    agreeingFamilies: Array.from(agreeingFamilies),
+    familyCount: familiesOnRawSide.size,
+    agreeingFamilies: Array.from(familiesOnRawSide),
     totalVotes: ensemble.totalVotes,
     agreeingModelIds: ensemble.agreeingModelIds,
     dissentingModelIds: ensemble.dissentingModelIds,

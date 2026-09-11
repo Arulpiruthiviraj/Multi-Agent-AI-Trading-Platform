@@ -104,6 +104,27 @@ export interface TradingSafety {
    *  Grinold-Kahn breadth) for the same qualification. See quantIndependentQualificationEnabledEnvVar. */
   minQuantIndependentEffectiveCount: number;
   /**
+   * Strategy-selection confluence guard (2026-09-11, "ARGUS - Quant-First Architecture
+   * Transformation" mandate, Section 7 - explicit operator-approved scope). Default OFF.
+   * `bestStrategyIdea()` in StrategyEngine.ts picks the single highest-setupScore eligible
+   * strategy and discards every other evaluation's side - so when the broader, already-built
+   * correlation-adjusted ensemble (internalQuantEnsemble.ts's computeInternalEnsembleQualification,
+   * same QuantEnsembleEngine.java math as minQuantIndependentFamilies/minQuantIndependentEffectiveCount
+   * above) resolves to the OPPOSITE side from bestStrategyIdea()'s pick (`sideMismatch: true`), that
+   * disagreement was previously purely diagnostic (QUANT_CONFLUENCE_SIDE_MISMATCH logging only,
+   * 2026-09-10) - never affected the emitted idea. When this flag is enabled, QuantSignalAgent.ts
+   * additionally checks whether the DISAGREEING side itself clears the SAME independent-qualification
+   * bar (minQuantIndependentFamilies distinct families, minQuantIndependentEffectiveCount effective
+   * independent count) - not a new, separate threshold. If it does, the top-1 idea is NOT emitted
+   * this cycle (a NO_TRADE, code STRATEGY_SELECTION_CONFLUENCE_CONTRADICTED) rather than either (a)
+   * emitting a side the broader evidence actively disagrees with, or (b) silently flipping to the
+   * other side (which this deployment explicitly declined - see the Quant-First mandate discussion).
+   * This can only ever suppress an emission, never invent, flip a side, or lower any threshold -
+   * strictly more conservative than today's behavior, the opposite direction from every other
+   * override in this file.
+   */
+  strategySelectionConfluenceGuardEnabledEnvVar: string;
+  /**
    * A per-agent-per-bucket calibration champion (ChampionChallengerService.ts CHAMPION status for
    * versionType calibration:<agent>:<bucketLow>-<bucketHigh>) is only trusted by the MODERATE tier
    * when its cluster-corrected Wilson LOWER bound exceeds this value. 0.5 is literally chance for a
@@ -716,6 +737,9 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.quantIndependentQualificationEnabledEnvVar !== 'string' || !raw.quantIndependentQualificationEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: quantIndependentQualificationEnabledEnvVar');
   }
+  if (typeof raw.strategySelectionConfluenceGuardEnabledEnvVar !== 'string' || !raw.strategySelectionConfluenceGuardEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: strategySelectionConfluenceGuardEnabledEnvVar');
+  }
   return raw as unknown as TradingSafety;
 }
 
@@ -754,6 +778,11 @@ export function isJavaQuantVoteEnabled(): boolean {
 /** Off unless the operator has explicitly set this env var to 'true'. See quantIndependentQualificationEnabledEnvVar's doc comment above. */
 export function isQuantIndependentQualificationEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantIndependentQualificationEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See strategySelectionConfluenceGuardEnabledEnvVar's doc comment above. */
+export function isStrategySelectionConfluenceGuardEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.strategySelectionConfluenceGuardEnabledEnvVar);
 }
 
 /** Off unless the operator has explicitly set this env var to 'true'. See javaCoreEnsembleVoteMinConfidence's doc comment above. */

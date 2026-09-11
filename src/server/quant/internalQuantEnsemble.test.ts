@@ -48,6 +48,33 @@ describe('computeInternalEnsembleQualification', () => {
     expect(result!.rawSide).toBe('SELL');
   });
 
+  it('computes a real familyCount for the disagreeing side on sideMismatch (2026-09-11 fix - previously hardcoded to 0)', async () => {
+    const { quantCoreBridge } = await import('../services/QuantCoreBridge');
+    (quantCoreBridge.fetchResearchStrategy as any).mockImplementation(async (id: string) => {
+      if (id === 'rsi_mean_reversion') return { rsi: 8, fadeSignal: 'SELL' };
+      return null;
+    });
+    // Ensemble resolves SELL, disagreeing with the idea's BUY. Two distinct families
+    // (TREND_MOMENTUM via TREND_FOLLOWING, MEAN_REVERSION_FAMILY via rsi_mean_reversion) actually
+    // agree with SELL - the whole point of this fix is that this is no longer reported as 0.
+    (quantCoreBridge.fetchInstitutionalEnsemble as any).mockResolvedValue({
+      schemaVersion: 1, rawSide: 'SELL', totalVotes: 2, agreeingCount: 2, avgConfidenceOfAgreeing: 0.7,
+      effectiveIndependentCount: 1.9,
+      agreeingModelIds: ['TREND_FOLLOWING', 'rsi_mean_reversion'],
+      dissentingModelIds: [],
+    });
+    const { computeInternalEnsembleQualification } = await import('./internalQuantEnsemble');
+
+    const evaluations = [
+      { strategy: 'TREND_FOLLOWING', side: 'SELL', confidence: 0.7 } as any,
+    ];
+    const result = await computeInternalEnsembleQualification('AAPL', bars as any, evaluations, 'BUY');
+    expect(result).not.toBeNull();
+    expect(result!.sideMismatch).toBe(true);
+    expect(result!.familyCount).toBe(2);
+    expect(result!.agreeingFamilies.sort()).toEqual(['MEAN_REVERSION_FAMILY', 'TREND_MOMENTUM']);
+  });
+
   it('genuinely fails closed to null when the Java ensemble call itself returns nothing (unchanged)', async () => {
     const { quantCoreBridge } = await import('../services/QuantCoreBridge');
     (quantCoreBridge.fetchResearchStrategy as any).mockResolvedValue(null);
@@ -126,5 +153,42 @@ describe('computeInternalEnsembleQualification', () => {
     const callArg = (quantCoreBridge.fetchInstitutionalEnsemble as any).mock.calls[0][0];
     expect(callArg).toHaveLength(1);
     expect(callArg[0].modelId).toBe('TREND_FOLLOWING');
+  });
+});
+
+describe('shouldSuppressForConfluenceGuard (2026-09-11, "ARGUS - Quant-First Architecture Transformation" Section 7)', () => {
+  const mismatchEnsemble = (familyCount: number, effectiveIndependentCount: number) => ({
+    qualifiesAsIndependent: false, rawSide: 'SELL' as const, effectiveIndependentCount,
+    familyCount, agreeingFamilies: [], totalVotes: 2, agreeingModelIds: [], dissentingModelIds: [],
+    sideMismatch: true,
+  });
+
+  it('never suppresses when the guard flag is off, no matter how strong the disagreement', async () => {
+    const { shouldSuppressForConfluenceGuard } = await import('./internalQuantEnsemble');
+    expect(shouldSuppressForConfluenceGuard(false, mismatchEnsemble(5, 5), 3, 2.5)).toBe(false);
+  });
+
+  it('never suppresses when there is no ensemble result at all', async () => {
+    const { shouldSuppressForConfluenceGuard } = await import('./internalQuantEnsemble');
+    expect(shouldSuppressForConfluenceGuard(true, null, 3, 2.5)).toBe(false);
+  });
+
+  it('never suppresses when the ensemble agreed with the idea (sideMismatch false), even if enabled', async () => {
+    const { shouldSuppressForConfluenceGuard } = await import('./internalQuantEnsemble');
+    const agreeing = { ...mismatchEnsemble(5, 5), sideMismatch: false, qualifiesAsIndependent: true };
+    expect(shouldSuppressForConfluenceGuard(true, agreeing, 3, 2.5)).toBe(false);
+  });
+
+  it('does not suppress when the guard is on but the disagreement is weak (below the bar)', async () => {
+    const { shouldSuppressForConfluenceGuard } = await import('./internalQuantEnsemble');
+    expect(shouldSuppressForConfluenceGuard(true, mismatchEnsemble(1, 1.0), 3, 2.5)).toBe(false);
+  });
+
+  it('suppresses only when enabled, mismatched, AND the disagreement clears the exact same bar as independent qualification', async () => {
+    const { shouldSuppressForConfluenceGuard } = await import('./internalQuantEnsemble');
+    expect(shouldSuppressForConfluenceGuard(true, mismatchEnsemble(3, 2.5), 3, 2.5)).toBe(true);
+    // Family count alone is not enough without effective count, and vice versa.
+    expect(shouldSuppressForConfluenceGuard(true, mismatchEnsemble(3, 2.4), 3, 2.5)).toBe(false);
+    expect(shouldSuppressForConfluenceGuard(true, mismatchEnsemble(2, 3.0), 3, 2.5)).toBe(false);
   });
 });

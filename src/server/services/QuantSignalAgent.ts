@@ -51,8 +51,8 @@ import { analyzeContradictions, ContradictionAnalysisResult } from '../quant/ai/
 import { riskRewardRatio, expectedValue, MIN_SAMPLE_SIZE_FOR_KELLY } from '../quant/risk/ExpectedValue';
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
-import { tradingSafety, isQuantColdStartBootstrapEnabled, isQuantIndependentQualificationEnabled } from '../config/tradingSafety';
-import { computeInternalEnsembleQualification } from '../quant/internalQuantEnsemble';
+import { tradingSafety, isQuantColdStartBootstrapEnabled, isQuantIndependentQualificationEnabled, isStrategySelectionConfluenceGuardEnabled } from '../config/tradingSafety';
+import { computeInternalEnsembleQualification, shouldSuppressForConfluenceGuard } from '../quant/internalQuantEnsemble';
 import { isRuntimeFlagEnabled, resolveRuntimeNumber } from '../config/effectiveRuntimeConfig';
 import { deskIntelligence, rankEvaluationsForRegime, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 import { filterEvaluationsForStrategyFocus, normalizeStrategyFocus, selectEvaluationsForAdaptiveRegime } from '../config/strategyFocus';
@@ -564,15 +564,16 @@ export class QuantSignalAgent {
       // Java calls for every deployment that hasn't made this choice. Attached to evidence
       // regardless of outcome so real qualification/non-qualification history accumulates either
       // way; ChiefTraderAgent.ts is the only place this can actually change an approval.
-      const internalEnsemble = isQuantIndependentQualificationEnabled() && (idea.side === 'BUY' || idea.side === 'SELL')
+      const confluenceGuardOn = isStrategySelectionConfluenceGuardEnabled();
+      const internalEnsemble = (isQuantIndependentQualificationEnabled() || confluenceGuardOn) && (idea.side === 'BUY' || idea.side === 'SELL')
         ? await computeInternalEnsembleQualification(symbol, bars, strategyEvaluations, idea.side)
         : null;
       // 2026-09-10, real observability gap closed (see InternalEnsembleQualification.sideMismatch's
       // own doc comment): when the broader correlation-adjusted ensemble disagrees with
       // bestStrategyIdea()'s picked side, this used to be indistinguishable from "agreed but
-      // didn't clear the family/effective-count bar" - never affects which idea is emitted or any
-      // gate, purely diagnostic evidence for measuring whether top-1 strategy selection is
-      // discarding real, differently-directed confluence.
+      // didn't clear the family/effective-count bar" - purely diagnostic evidence for measuring
+      // whether top-1 strategy selection is discarding real, differently-directed confluence,
+      // UNLESS strategySelectionConfluenceGuardEnabledEnvVar is also on (see below).
       if (internalEnsemble?.sideMismatch) {
         observeSafe(() => {
           structuredLogger.info('quant_confluence_side_mismatch', {
@@ -582,10 +583,44 @@ export class QuantSignalAgent {
             traceId,
             reasoning: `bestStrategyIdea() picked ${idea.side}, but the broader correlation-adjusted ensemble `
               + `(${internalEnsemble.totalVotes} votes) resolved to ${internalEnsemble.rawSide} `
-              + `(effIndep ${internalEnsemble.effectiveIndependentCount.toFixed(2)}) - never affects the emitted idea or any gate, diagnostic only.`,
+              + `(effIndep ${internalEnsemble.effectiveIndependentCount.toFixed(2)}) - `
+              + `${confluenceGuardOn ? 'guard evaluated next' : 'diagnostic only, guard disabled'}.`,
           });
         });
       }
+      // Strategy-selection confluence guard (2026-09-11, tradingSafety.strategySelectionConfluenceGuardEnabledEnvVar's
+      // own doc comment has the full reasoning). Off by default. Only ever SUPPRESSES this cycle's
+      // emission - never flips idea.side, never lowers any threshold, never invents a trade. Reuses
+      // the exact same bar (minQuantIndependentFamilies/minQuantIndependentEffectiveCount) already
+      // used to let the internal ensemble stand in for a second agent - if the ensemble's DISAGREEING
+      // side is strong enough to have qualified as independent confirmation had it agreed, it's
+      // treated as strong enough to block a contradicted top-1 pick from emitting at all.
+      const confluenceGuardSuppresses = shouldSuppressForConfluenceGuard(
+        confluenceGuardOn, internalEnsemble, tradingSafety.minQuantIndependentFamilies, tradingSafety.minQuantIndependentEffectiveCount,
+      );
+      if (confluenceGuardSuppresses && internalEnsemble) {
+        eventBus.emit(EVENTS.DESK_NO_TRADE, {
+          traceId, symbol, code: 'STRATEGY_SELECTION_CONFLUENCE_CONTRADICTED',
+          reason: `bestStrategyIdea() picked ${idea.side} (${matchedStrategyEvaluation?.strategy ?? idea.strategy}), but the broader `
+            + `correlation-adjusted ensemble resolved to ${internalEnsemble.rawSide} across ${internalEnsemble.familyCount} `
+            + `distinct families (effIndep ${internalEnsemble.effectiveIndependentCount.toFixed(2)}) - suppressed, not emitted.`,
+        });
+        observeSafe(() => {
+          structuredLogger.info('strategy_selection_confluence_suppressed', {
+            category: 'DISCOVERY',
+            eventType: 'STRATEGY_SELECTION_CONFLUENCE_SUPPRESSED',
+            symbol,
+            traceId,
+            reasoning: `Suppressed ${idea.side} idea from ${matchedStrategyEvaluation?.strategy ?? idea.strategy} - `
+              + `contradicted by a ${internalEnsemble.rawSide} ensemble clearing the independent-qualification bar.`,
+          });
+        });
+      }
+      // Everything below (emitTradeIdea through notePipelineAgentSuccess) is skipped when the guard
+      // suppressed this cycle - emittedTradeIdea stays false, and QUANT_ASSESSMENT_COMPLETED /
+      // quant_assessments persistence below (outside this whole if/else) still runs unaffected, so
+      // this suppression remains fully visible to missed-opportunity forensics rather than vanishing.
+      if (!confluenceGuardSuppresses) {
       eventBus.emitTradeIdea({
         traceId, symbol, side: idea.side, confidence: idea.confidence,
         currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
@@ -641,6 +676,7 @@ export class QuantSignalAgent {
       });
       emittedTradeIdea = true;
       notePipelineAgentSuccess('QuantEngine');
+      }
       }
     }
 

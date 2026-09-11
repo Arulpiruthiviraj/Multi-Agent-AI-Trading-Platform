@@ -149,6 +149,7 @@
   "javaQuantVoteEnabledEnvVar": "ARGUS_JAVA_QUANT_VOTE_ENABLED",
   "javaCoreEnsembleVoteEnabledEnvVar": "ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED",
   "quantIndependentQualificationEnabledEnvVar": "ARGUS_QUANT_INDEPENDENT_QUALIFICATION_ENABLED",
+  "strategySelectionConfluenceGuardEnabledEnvVar": "ARGUS_STRATEGY_SELECTION_CONFLUENCE_GUARD_ENABLED",
   "quantJavaCoreBaseUrl": "http://127.0.0.1:8085",
   "quantJavaCoreRequestTimeoutMs": 100,
   "quantJavaCoreCircuitBreakerFailureThreshold": 3,
