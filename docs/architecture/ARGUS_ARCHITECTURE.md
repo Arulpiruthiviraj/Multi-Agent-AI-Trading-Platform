@@ -530,6 +530,30 @@ for the full evidence-based reasoning this overrides, and this file's own tests
 (`ChiefTraderAgent.quantIndependent.test.ts`, `internalQuantEnsemble.test.ts`) for the
 flag-off-is-byte-for-byte-unchanged proof.
 
+**2026-09-10, third and structurally distinct override — CORE-strategy Java ensemble
+(`CoreStrategyRunner` → `JavaCoreEnsemble` → `emitTradeIdea`):** unlike the two overrides above
+(which source from `JavaFactorComposite`'s SHADOW-status GARCH/HMM/factor-composite engines, or
+from a mixed TS-strategy + Java-RESEARCH-engine vote list), this one is Java's own 5 CORE-strategy
+ports (RangeReversion/PullbackContinuation/MeanReversion/TrendFollowing/MomentumBreakout, each
+computing its own features from canonical bars via `FeaturesToStrategyContextAdapter`, never fed
+TS's precomputed `StrategyContext`) combined through the same reused `QuantEnsembleEngine.java`
+math. This signal was already being called every `QuantSignalAgent` cycle for shadow-parity
+comparison (`QUANT_CORE_STRATEGY_PARITY_DIVERGENCE`, ~99 real observations at override time — see
+`docs/audits/ARGUS_JAVA_QUANT_PHASE2_PRELIMINARY_PARITY_2026-09-10.md`), short of this codebase's
+own documented multi-week soak precondition — disclosed directly before the override, same as the
+two above. `src/server/services/JavaCoreEnsembleVoteService.ts`'s `emitJavaCoreEnsembleVoteIfEligible()`
+casts one independent vote (agent `JavaCoreEnsemble`) into the unchanged ChiefTrader consensus,
+gated behind **four** independent checks — one more than the `JavaFactorComposite` precedent:
+`ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED` (off by default, on in this deployment's `.env`),
+`isLiveIdeaGenerationEnabled()`, the `JavaCoreEnsemble` Mission Control toggle, plus
+`ensemble.status === 'HEALTHY'` (Java's own data-sufficiency gate — `DEGRADED`/`UNAVAILABLE` never
+votes, never conflated with a directional `HOLD`) and `confidence >= javaCoreEnsembleVoteMinConfidence`
+(0.6, reusing `javaQuantVoteMinConfidence`'s reasoning, not a new invented number). No
+double-counting with `JavaFactorComposite`: different Java engine, different features, different
+flag — both can vote independently on the same symbol as two genuinely separate opinions. See
+`docs/audits/ARGUS_JAVA_QUANT_WIRING_IMPLEMENTATION.md`'s "Phase 3" section for the full evidence
+matrix, and `CLAUDE.md` § Java 26 Engine Authority for the equivalent operator-facing summary.
+
 **Unrelated but important discovery made while verifying this work:** the repo's root
 `.gitignore` had a bare `models/` pattern that was also silently matching
 `quant-core-java/src/{main,test}/java/io/argus/quantcore/institutional/models/` at any depth — the
