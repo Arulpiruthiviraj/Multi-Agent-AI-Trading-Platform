@@ -17,7 +17,8 @@
  *     Symbols a batch fails to return bars for are excluded (fail-closed), not assumed liquid.
  * Final candidate list is ranked by dollar volume descending and capped at broadUniverseMaxCandidates.
  */
-import { continuousIntelligence, isBroadUniverseEnabled, isMoversEnabled } from '../config/continuousIntelligence';
+import { continuousIntelligence, isBroadUniverseEnabled, isMoversEnabled, isNewsCatalystDiscoveryEnabled } from '../config/continuousIntelligence';
+import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
 import { networkEndpoints } from '../config/networkEndpoints';
 import { alpacaFetch } from '../core/alpacaTls';
 import { logErrorSafely } from '../core/SecretRedaction';
@@ -349,6 +350,9 @@ export function resetMarketUniverseScannerForTests(): void {
   moversCache = null;
   moversInFlight = false;
   lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
+  newsCatalystCache = null;
+  newsCatalystInFlight = false;
+  lastNewsCatalystStats = { ran: false, enabled: false, catalystsConsidered: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
   resetDiscoveryCircuitBreakersForTests();
 }
 
@@ -494,9 +498,123 @@ export function getLastMoverScanStats(): MoverScanStats {
   return lastMoverStats;
 }
 
+// ==========================================================================================
+// 2026-09-10 (postmarket-audit follow-up): real, confirmed gap. NewsCatalystStore already
+// computes a reviewed "genuine catalyst" bar per symbol (hasRealCatalystEvidence() - the exact
+// bar MarketDataWorker's own reactive discovery-lineage logging already trusts), but nothing
+// proactively fed those symbols INTO the discovery/scan universe - a real catalyst story only
+// ever became visible to discovery reactively, after some OTHER agent had already
+// independently tried to look the symbol up. A symbol with a real, high-impact catalyst but no
+// prior agent interest (confirmed live: SEI, 2026-09-10) was invisible to discovery entirely.
+// Default OFF (ARGUS_NEWS_CATALYST_DISCOVERY_ENABLED). Same liquidity/price/spread/ADV screen as
+// broadUniverse*/movers below - a catalyst story never bypasses those gates, and this never
+// emits TRADE_IDEA_GENERATED or calls placeOrder itself.
+// ==========================================================================================
+
+export interface NewsCatalystScanStats {
+  ran: boolean;
+  enabled: boolean;
+  catalystsConsidered: number;
+  screened: number;
+  candidates: number;
+  error: string | null;
+  at: string;
+}
+
+let newsCatalystCache: { fetchedAt: number; symbols: string[] } | null = null;
+let newsCatalystInFlight = false;
+let lastNewsCatalystStats: NewsCatalystScanStats = {
+  ran: false, enabled: false, catalystsConsidered: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(),
+};
+
+/** Full refresh: pull symbols with real, reviewed catalyst evidence out of the existing
+ *  in-process NewsCatalystStore, screen them through the exact same liquidity/ADV gates as
+ *  every other discovery source, cache the resulting candidate list. */
+export async function refreshNewsCatalystCache(): Promise<NewsCatalystScanStats> {
+  if (!isNewsCatalystDiscoveryEnabled()) {
+    lastNewsCatalystStats = { ran: false, enabled: false, catalystsConsidered: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString() };
+    return lastNewsCatalystStats;
+  }
+  if (newsCatalystInFlight) return lastNewsCatalystStats;
+  newsCatalystInFlight = true;
+  try {
+    const recent = listRecentNewsCatalysts(100);
+    const symbols = normalizeSymbols(
+      recent
+        .filter((c) => c.tradingBias !== 'NEUTRAL' && (c.catalystStrength === 'HIGH' || c.catalystStrength === 'MODERATE'))
+        .map((c) => c.symbol),
+    );
+    if (symbols.length === 0) {
+      newsCatalystCache = { fetchedAt: Date.now(), symbols: [] };
+      lastNewsCatalystStats = { ran: true, enabled: true, catalystsConsidered: recent.length, screened: 0, candidates: 0, error: null, at: new Date().toISOString() };
+      return lastNewsCatalystStats;
+    }
+
+    const screened = await screenAssets(symbols);
+    const screenedSymbols = new Set(screened.map((s) => s.symbol));
+    for (const symbol of symbols) {
+      if (!screenedSymbols.has(symbol)) {
+        logDiscoveryCandidateDecision({ symbol, source: 'NEWS', admitted: false, reason: 'NO_SNAPSHOT_DATA' });
+      }
+    }
+    const stage2: AlpacaSnapshot[] = [];
+    for (const s of screened) {
+      const result = evaluateScreen(s);
+      if (result.pass) {
+        stage2.push(s);
+      } else {
+        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'NEWS', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct });
+      }
+    }
+    const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
+    for (const s of stage2) {
+      const admitted = passesAdvScreen(s.symbol, advMap);
+      const rvol = computeRvol(s, advMap);
+      logDiscoveryCandidateDecision({
+        symbol: s.symbol, source: 'NEWS', admitted, reason: admitted ? null : 'ADV',
+        price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+        gapMover: isGapMover(s), gapPct: s.gapPct,
+        rvolMover: isRvolMover(rvol), rvol,
+      });
+    }
+    const passing = stage2
+      .filter((s) => passesAdvScreen(s.symbol, advMap))
+      .sort((a, b) => b.dollarVolume - a.dollarVolume)
+      .map((s) => s.symbol);
+    newsCatalystCache = { fetchedAt: Date.now(), symbols: passing };
+    lastNewsCatalystStats = {
+      ran: true, enabled: true, catalystsConsidered: recent.length, screened: screened.length, candidates: passing.length, error: null, at: new Date().toISOString(),
+    };
+    return lastNewsCatalystStats;
+  } catch (e: any) {
+    logErrorSafely('[MarketUniverseScanner] news-catalyst refresh failed', e);
+    lastNewsCatalystStats = {
+      ran: true, enabled: true, catalystsConsidered: 0, screened: 0, candidates: newsCatalystCache?.symbols.length || 0, error: e?.message || String(e), at: new Date().toISOString(),
+    };
+    return lastNewsCatalystStats;
+  } finally {
+    newsCatalystInFlight = false;
+  }
+}
+
+/** Synchronous read of whatever the last successful news-catalyst refresh produced. Empty until a refresh has run. */
+export function getCachedNewsCatalystSymbols(): string[] {
+  if (!isNewsCatalystDiscoveryEnabled()) return [];
+  const now = Date.now();
+  if (!newsCatalystCache || now - newsCatalystCache.fetchedAt > continuousIntelligence.newsCatalystDiscoveryCacheTtlMs) {
+    return newsCatalystCache?.symbols || [];
+  }
+  return newsCatalystCache.symbols;
+}
+
+export function getLastNewsCatalystScanStats(): NewsCatalystScanStats {
+  return lastNewsCatalystStats;
+}
+
 export class MarketUniverseScannerWorker {
   private intervalId: NodeJS.Timeout | null = null;
   private moversIntervalId: NodeJS.Timeout | null = null;
+  private newsCatalystIntervalId: NodeJS.Timeout | null = null;
 
   start(): void {
     if (!isBroadUniverseEnabled()) {
@@ -537,6 +655,15 @@ export class MarketUniverseScannerWorker {
       }, continuousIntelligence.moversCacheTtlMs);
       console.log('[MarketUniverseScanner] Market-movers refresh started.');
     }
+    if (!isNewsCatalystDiscoveryEnabled()) {
+      console.log('[MarketUniverseScanner] ARGUS_NEWS_CATALYST_DISCOVERY_ENABLED is not true - idle.');
+    } else if (!this.newsCatalystIntervalId) {
+      void refreshNewsCatalystCache();
+      this.newsCatalystIntervalId = setInterval(() => {
+        void refreshNewsCatalystCache();
+      }, continuousIntelligence.newsCatalystDiscoveryCacheTtlMs);
+      console.log('[MarketUniverseScanner] News-catalyst discovery refresh started.');
+    }
   }
 
   stop(): void {
@@ -547,6 +674,10 @@ export class MarketUniverseScannerWorker {
     if (this.moversIntervalId) {
       clearInterval(this.moversIntervalId);
       this.moversIntervalId = null;
+    }
+    if (this.newsCatalystIntervalId) {
+      clearInterval(this.newsCatalystIntervalId);
+      this.newsCatalystIntervalId = null;
     }
   }
 }

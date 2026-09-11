@@ -39,6 +39,12 @@ import type { RegimeResult } from '../quant/RegimeEngine';
 const QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR = 'QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED';
 const MIN_HISTORY_FOR_PARITY = 26; // matches SymbolState.java's MIN_HISTORY_FOR_INDICATORS
 const PARITY_COMPARE_INTERVAL_MS = 60_000; // per-symbol debounce - never compares every tick
+/** Periodic safety-net resync (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §6) - the
+ *  gap-triggered resync in onTick() handles the main case (a reported sequence mismatch), but this
+ *  catches anything a gap report could in principle miss (e.g. a dropped response whose own
+ *  gapDetected flag never made it back to this process). 30 min - not urgent given the reactive
+ *  path is primary; this is deliberately infrequent, not a tight polling loop. */
+const RESYNC_SAFETY_NET_INTERVAL_MS = 30 * 60_000;
 
 /** Exported read-only for the /api/v2/quant-core/health route (Phase 3E dashboard) - callers must
  *  never use this to gate anything beyond display; onSignal() re-checks it itself regardless. */
@@ -168,6 +174,43 @@ function barsToJavaPayload(bars: ResearchBar[]): Array<{ timestampMs: number; op
   return bars.map((b) => ({ timestampMs: b.timestamp, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume }));
 }
 
+/** Mirrors QuantCoreServer.java's assessmentToJson() exactly (CoreStrategyRunner.Assessment). */
+export interface CoreStrategyAssessment {
+  schemaVersion: number;
+  strategyId: string;
+  strategyVersion: string;
+  featureVersion: string;
+  symbol: string;
+  direction: 'BUY' | 'SELL' | 'DATA_UNAVAILABLE';
+  score: number | null;
+  confidence: number | null;
+  reason: string;
+  regime: string | null;
+  dataQuality: 'FRESH' | 'STALE' | 'INSUFFICIENT_HISTORY';
+  evaluationTimestampMs: number;
+  latencyMs: number;
+}
+
+/** Mirrors QuantCoreServer.java's ensembleDecisionToJson() exactly (CoreStrategyRunner.EnsembleDecision). */
+export interface CoreEnsembleDecision {
+  schemaVersion: number;
+  status: 'HEALTHY' | 'DEGRADED' | 'UNAVAILABLE';
+  direction: 'BUY' | 'SELL' | 'HOLD';
+  score: number;
+  confidence: number;
+  reason: string;
+  regime: string | null;
+  timestampMs: number;
+  featureVersion: string;
+  strategyVersion: string;
+  strategyCount: number;
+  agreeingCount: number;
+  effectiveIndependentCount: number;
+  contributingStrategies: string[];
+  contributingFamilies: string[];
+  assessments: CoreStrategyAssessment[];
+}
+
 interface RawJavaSignal {
   schemaVersion?: number;
   symbol?: unknown;
@@ -208,7 +251,17 @@ class CircuitBreaker {
 export class QuantCoreBridgeService {
   private listening = false;
   private readonly priceHistory: Record<string, number[]> = {};
+  /** Added 2026-09-10 alongside sequence numbering (see onTick/resyncSymbol below) - needed so a
+   *  resync can wholesale-replace Java's volumes CircularDoubleArray too, not just prices, leaving
+   *  no stale/empty buffer behind for SymbolState's windowed VWAP. */
+  private readonly volumeHistory: Record<string, number[]> = {};
+  /** Monotonic per-symbol counter, assigned here (the TS-side sender of record for this protocol),
+   *  not threaded back to MarketDataWorker.emitMarketData() - changing that shared EventBus payload
+   *  would touch every MARKET_DATA subscriber for a protocol only this bridge needs. Starts at 0 for
+   *  a never-before-seen symbol. docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §6. */
+  private readonly sequenceBySymbol: Record<string, number> = {};
   private readonly lastParityCompareAt: Record<string, number> = {};
+  private readonly lastResyncAt: Record<string, number> = {};
   /** Same PARITY_COMPARE_INTERVAL_MS throttle pattern as lastParityCompareAt above, kept in its
    *  own map (not shared with the tick-indicator comparison) so the two independent shadow checks
    *  never suppress one another's debounce window. */
@@ -247,12 +300,26 @@ export class QuantCoreBridgeService {
     if (!symbol || !Number.isFinite(data.price)) return;
 
     const timestampMs = Date.parse(data.timestamp) || Date.now();
-    this.trackLocalHistory(symbol, data.price);
+    this.trackLocalHistory(symbol, data.price, data.volume);
 
-    const ok = await this.forwardTick(symbol, data.price, data.volume, timestampMs);
-    if (!ok) return;
-
+    const sequence = this.nextSequence(symbol);
+    const gapDetected = await this.forwardTick(symbol, data.price, data.volume, timestampMs, sequence);
+    if (gapDetected === null) return; // forwardTick itself failed (network/breaker/non-2xx) - nothing more to do
     const now = Date.now();
+    if (gapDetected) {
+      // Java told us it saw a non-consecutive sequence - resync immediately rather than let the
+      // divergence persist until the next periodic safety-net resync. Fire-and-forget: a resync
+      // failure is no worse than the gap that triggered it, and must never block tick processing.
+      this.lastResyncAt[symbol] = now;
+      void this.resyncSymbol(symbol).catch(() => {});
+    } else {
+      const lastResync = this.lastResyncAt[symbol] ?? 0;
+      if (now - lastResync >= RESYNC_SAFETY_NET_INTERVAL_MS) {
+        this.lastResyncAt[symbol] = now;
+        void this.resyncSymbol(symbol).catch(() => {});
+      }
+    }
+
     const lastCompare = this.lastParityCompareAt[symbol] ?? 0;
     if (now - lastCompare >= PARITY_COMPARE_INTERVAL_MS) {
       this.lastParityCompareAt[symbol] = now;
@@ -260,7 +327,13 @@ export class QuantCoreBridgeService {
     }
   }
 
-  private trackLocalHistory(symbol: string, price: number): void {
+  private nextSequence(symbol: string): number {
+    const next = (this.sequenceBySymbol[symbol] ?? -1) + 1;
+    this.sequenceBySymbol[symbol] = next;
+    return next;
+  }
+
+  private trackLocalHistory(symbol: string, price: number, volume: number): void {
     const history = this.priceHistory[symbol] ?? (this.priceHistory[symbol] = []);
     history.push(price);
     // Must track tradingSafety.quantJavaCoreLocalHistoryCap == SymbolState.java's CircularDoubleArray
@@ -269,6 +342,11 @@ export class QuantCoreBridgeService {
     if (history.length > tradingSafety.quantJavaCoreLocalHistoryCap) {
       history.shift();
     }
+    const volumes = this.volumeHistory[symbol] ?? (this.volumeHistory[symbol] = []);
+    volumes.push(Number.isFinite(volume) ? volume : 0);
+    if (volumes.length > tradingSafety.quantJavaCoreLocalHistoryCap) {
+      volumes.shift();
+    }
   }
 
   /** Test-only. */
@@ -276,12 +354,52 @@ export class QuantCoreBridgeService {
     return this.priceHistory[symbol]?.length ?? 0;
   }
 
-  private async forwardTick(symbol: string, price: number, volume: number, timestampMs: number): Promise<boolean> {
+  /**
+   * Returns true if Java reported a sequence gap, false if the tick was applied cleanly, or null
+   * if the call itself failed (network/breaker/non-2xx) - three distinct outcomes, never collapsed
+   * into one boolean the way the pre-2026-09-10 version did.
+   */
+  private async forwardTick(symbol: string, price: number, volume: number, timestampMs: number, sequence: number): Promise<boolean | null> {
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/ticks`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ schemaVersion: 1, symbol, price, volume, timestampMs }),
+        body: JSON.stringify({ schemaVersion: 1, symbol, price, volume, timestampMs, sequence }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      const body = await res.json().catch(() => null) as { gapDetected?: boolean } | null;
+      return body?.gapDetected === true;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  /**
+   * Wholesale resynchronization of Java's SymbolState from this bridge's own local history -
+   * either reactively (Java reported a sequence gap) or as a periodic safety net (start(), and
+   * every RESYNC_INTERVAL_MS thereafter per active symbol - see start()/scheduleSafetyNetResync()
+   * below). Sends the current sequence counter as the new baseline so the very next ordinary tick
+   * lines up as sequence+1 with no follow-on gap report. Fail-closed like every other bridge call:
+   * a failed resync just means the next trigger (gap or periodic) tries again, never throws into a
+   * live tick handler.
+   */
+  async resyncSymbol(symbol: string): Promise<boolean> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return false;
+    const prices = this.priceHistory[symbol];
+    if (!prices || prices.length === 0) return false;
+    const volumes = this.volumeHistory[symbol] ?? [];
+    const sequence = this.sequenceBySymbol[symbol] ?? 0;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/ticks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, timestampMs: Date.now(), resync: { prices, volumes, sequence } }),
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
@@ -289,6 +407,14 @@ export class QuantCoreBridgeService {
         return false;
       }
       this.breaker.recordSuccess();
+      observeSafe(() => {
+        structuredLogger.info('quant_core_tick_resync_sent', {
+          category: 'OBSERVABILITY',
+          eventType: 'QUANT_CORE_TICK_RESYNC_SENT',
+          symbol,
+          reasoning: `Resynced Java state for ${symbol} from ${prices.length} canonical prices at sequence ${sequence}`,
+        });
+      });
       return true;
     } catch {
       this.breaker.recordFailure();
@@ -504,6 +630,68 @@ export class QuantCoreBridgeService {
       }
       this.breaker.recordSuccess();
       return (await res.json()) as Record<string, unknown>;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  /**
+   * 2026-09-10: real, bars-owning path for the 5 CORE strategies
+   * (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §0/§21) — POSTs raw bars (this
+   * bridge's own TS-fetched market data, the same role it already plays for
+   * fetchResearchStrategy/fetchInstitutionalFactors) to QuantCoreServer's
+   * /api/v1/quant/strategy/{strategyId}/{symbol}, where Java computes every feature itself via
+   * FeaturesToStrategyContextAdapter and runs the real strategy — never a TS-precomputed
+   * StrategyContext. Deliberately distinct from the older /api/v1/evaluate route
+   * (StrategyContextCodec-based), which only ever proved decision-logic parity given identical
+   * hand-built inputs. Fail-closed like every other method here: null on flag-off/breaker-open/
+   * non-2xx/thrown error, never fabricated.
+   */
+  async fetchCoreStrategyAssessment(strategyId: string, symbol: string, bars: ResearchBar[]): Promise<CoreStrategyAssessment | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/quant/strategy/${encodeURIComponent(strategyId)}/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ bars: barsToJavaPayload(bars) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as CoreStrategyAssessment;
+    } catch {
+      this.breaker.recordFailure();
+      return null;
+    }
+  }
+
+  /**
+   * Same real, bars-owning path as fetchCoreStrategyAssessment, but for all 5 CORE strategies
+   * combined through QuantCoreServer's own QuantEnsembleEngine.combine() call (the existing
+   * Kish/Grinold-Kahn correlation-adjusted math — never a second, duplicate combination system on
+   * this side). status (HEALTHY/DEGRADED/UNAVAILABLE) is reported separately from direction
+   * (BUY/SELL/HOLD) — a HOLD is a real evaluated outcome, UNAVAILABLE means nothing could be
+   * evaluated at all; callers must not conflate the two.
+   */
+  async fetchCoreEnsembleDecision(symbol: string, bars: ResearchBar[]): Promise<CoreEnsembleDecision | null> {
+    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/quant/ensemble/${encodeURIComponent(symbol)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ bars: barsToJavaPayload(bars) }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.breaker.recordFailure();
+        return null;
+      }
+      this.breaker.recordSuccess();
+      return (await res.json()) as CoreEnsembleDecision;
     } catch {
       this.breaker.recordFailure();
       return null;

@@ -59,6 +59,7 @@ import { KronosDashboard } from "./components/KronosDashboard";
 import ConnectionStatusDashboard from "./components/ConnectionStatusDashboard";
 import ConnectionHealthBadge from "./components/ConnectionHealthBadge";
 import JavaQuantCoreDashboard from "./components/JavaQuantCoreDashboard";
+import QuantEngineCatalog from "./components/QuantEngineCatalog";
 import ConfluenceCenter from "./components/ConfluenceCenter";
 import ConsensusShadowPanel from "./components/ConsensusShadowPanel";
 import DiagnosticCenter from "./components/DiagnosticCenter";
@@ -7985,6 +7986,7 @@ export default function App() {
                     <ConnectionHealthBadge />
                     <ConnectionStatusDashboard />
                     <JavaQuantCoreDashboard />
+                    <QuantEngineCatalog />
                     <ConfluenceCenter />
                     <ConsensusShadowPanel />
                     <BrokerManagement />

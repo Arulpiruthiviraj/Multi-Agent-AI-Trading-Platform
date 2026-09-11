@@ -25,7 +25,7 @@ describe('computeInternalEnsembleQualification', () => {
     expect(quantCoreBridge.fetchInstitutionalEnsemble).not.toHaveBeenCalled();
   });
 
-  it('returns null when the ensemble rawSide disagrees with the idea side (never confirms the wrong direction)', async () => {
+  it('never confirms the wrong direction when the ensemble rawSide disagrees with the idea side - but now returns a real, observable sideMismatch result instead of a bare null (2026-09-10 fix)', async () => {
     const { quantCoreBridge } = await import('../services/QuantCoreBridge');
     (quantCoreBridge.fetchResearchStrategy as any).mockResolvedValue(null);
     (quantCoreBridge.fetchInstitutionalEnsemble as any).mockResolvedValue({
@@ -37,6 +37,24 @@ describe('computeInternalEnsembleQualification', () => {
     const evaluations = [
       { strategy: 'TREND_FOLLOWING', side: 'BUY', confidence: 0.7 } as any,
     ];
+    const result = await computeInternalEnsembleQualification('AAPL', bars as any, evaluations, 'BUY');
+    // Real behavior change (2026-09-10): still never qualifies as independent (identical
+    // practical effect on ChiefTraderAgent.ts, which only ever checks qualifiesAsIndependent),
+    // but the disagreement is now a real, distinguishable, observable result rather than an
+    // indistinguishable-from-every-other-reason null.
+    expect(result).not.toBeNull();
+    expect(result!.qualifiesAsIndependent).toBe(false);
+    expect(result!.sideMismatch).toBe(true);
+    expect(result!.rawSide).toBe('SELL');
+  });
+
+  it('genuinely fails closed to null when the Java ensemble call itself returns nothing (unchanged)', async () => {
+    const { quantCoreBridge } = await import('../services/QuantCoreBridge');
+    (quantCoreBridge.fetchResearchStrategy as any).mockResolvedValue(null);
+    (quantCoreBridge.fetchInstitutionalEnsemble as any).mockResolvedValue(null);
+    const { computeInternalEnsembleQualification } = await import('./internalQuantEnsemble');
+
+    const evaluations = [{ strategy: 'TREND_FOLLOWING', side: 'BUY', confidence: 0.7 } as any];
     const result = await computeInternalEnsembleQualification('AAPL', bars as any, evaluations, 'BUY');
     expect(result).toBeNull();
   });

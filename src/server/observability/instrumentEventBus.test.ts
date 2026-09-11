@@ -55,4 +55,33 @@ describe('instrumentEventBus - generic wildcard bridge', () => {
     const parsed = JSON.parse(row.payload).payload;
     expect(parsed.agent).toBe('NewsAgent');
   });
+
+  // 2026-09-10 real fix (postmarket-audit follow-up): NewsEngine.ts's NEWS_ANALYZED event uses
+  // `symbols` (plural array), not `symbol` - confirmed live, the real cause of the SEI case
+  // (a genuinely analyzed article never surfacing in any symbol-indexed query since its
+  // observability_events row's symbol column was silently null).
+  it('populates the symbol column from a plural symbols array when no singular symbol field exists (NEWS_ANALYZED shape)', () => {
+    eventBus.publish(EVENTS.NEWS_ANALYZED, {
+      id: 'article-1',
+      clusterId: 'cluster-1',
+      symbols: ['SEI', 'XLE'],
+      impact: { impactScore: 70 },
+      credibility: 0.9,
+      category: 'EARNINGS',
+    });
+
+    expect(enqueueObservabilityEvent).toHaveBeenCalled();
+    const row = enqueueObservabilityEvent.mock.calls[0][0];
+    expect(row.symbol).toBe('SEI'); // first entry in the array - documented, honest limitation
+    const parsed = JSON.parse(row.payload).payload;
+    expect(parsed.symbol).toBe('SEI');
+  });
+
+  it('leaves the symbol column null (never fabricated) when an event has neither symbol nor symbols', () => {
+    eventBus.publish(EVENTS.NEWS_PIPELINE_TICK, { telemetryPulse: true, fetched: 3, analyzed: 2 });
+
+    expect(enqueueObservabilityEvent).toHaveBeenCalled();
+    const row = enqueueObservabilityEvent.mock.calls[0][0];
+    expect(row.symbol == null).toBe(true);
+  });
 });

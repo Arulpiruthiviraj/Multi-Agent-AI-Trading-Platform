@@ -29,6 +29,7 @@ export interface NetworkEndpoints {
     finnhubBaseUrl: string;
     fmpBaseUrl: string;
     polygonBaseUrl: string;
+    fredBaseUrl: string;
   };
   newsRss: {
     userAgent: string;
@@ -75,6 +76,7 @@ const REQUIRED_STRINGS = [
   'broker.alpaca.paperBaseUrl', 'broker.alpaca.liveBaseUrl', 'broker.alpaca.dataBaseUrl', 'broker.alpaca.dataStreamUrl',
   'broker.ibkr.gatewayUrlDefault', 'broker.coinbase.apiHost', 'broker.questrade.oauthTokenUrl',
   'marketData.alphaVantageBaseUrl', 'marketData.finnhubBaseUrl', 'marketData.fmpBaseUrl', 'marketData.polygonBaseUrl',
+  'marketData.fredBaseUrl',
   'newsRss.userAgent', 'newsRss.yahooFinance', 'newsRss.cnbc', 'newsRss.wsj',
   'aiLocal.ollamaDefault', 'aiLocal.chronosDefault', 'aiLocal.guardianMcpUrl', 'aiLocal.liteLlmGatewayDefault',
   'aiCloud.openAiChatCompletionsUrl', 'aiCloud.deepSeekChatCompletionsUrl', 'aiCloud.nvidiaBaseUrl',

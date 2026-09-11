@@ -32,6 +32,12 @@ const runtimes: Record<string, AgentRuntime> = {
   // shadow-tracking regardless of this toggle). The real gate is the inline
   // isPipelineAgentEnabled('JavaFactorComposite') check before its emitTradeIdea() call.
   JavaFactorComposite: { start: () => { /* gated inline in JavaQuantAdvisoryService.analyzeSymbol() */ }, stop: () => { /* same */ } },
+  // No independent worker (same shape as JavaFactorComposite above) - the shadow comparison that
+  // calls emitJavaCoreEnsembleVoteIfEligible() runs inside QuantSignalAgent's own existing cycle
+  // (owned/started by the QuantEngine entry above), not a separate timer. The real gate is the
+  // inline isPipelineAgentEnabled('JavaCoreEnsemble') check inside
+  // JavaCoreEnsembleVoteService.emitJavaCoreEnsembleVoteIfEligible() itself.
+  JavaCoreEnsemble: { start: () => { /* gated inline in emitJavaCoreEnsembleVoteIfEligible() */ }, stop: () => { /* same */ } },
 };
 
 let ideaWorkersArmed = false;

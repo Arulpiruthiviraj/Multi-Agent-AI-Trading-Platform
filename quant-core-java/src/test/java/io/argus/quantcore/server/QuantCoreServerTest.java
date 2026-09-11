@@ -108,6 +108,63 @@ class QuantCoreServerTest {
     }
 
     @Test
+    void tickWithNoSequenceNeverReportsAGap_backwardCompatible() throws Exception {
+        var res = post("/api/v1/ticks", Map.of("symbol", "NOSEQ", "timestampMs", 1.0, "price", 100.0));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("gapDetected")).isEqualTo(false);
+    }
+
+    @Test
+    void consecutiveSequencedTicksNeverReportAGap() throws Exception {
+        for (long seq = 0; seq < 5; seq++) {
+            var res = post("/api/v1/ticks", Map.of("symbol", "SEQOK", "timestampMs", (double) seq, "price", 100.0 + seq, "sequence", (double) seq));
+            Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+            assertThat(body.get("gapDetected")).isEqualTo(false);
+        }
+    }
+
+    @Test
+    void aSkippedSequenceIsReportedAsAGapButTheTickIsStillApplied() throws Exception {
+        post("/api/v1/ticks", Map.of("symbol", "SEQGAP", "timestampMs", 1.0, "price", 100.0, "sequence", 0.0));
+        var res = post("/api/v1/ticks", Map.of("symbol", "SEQGAP", "timestampMs", 2.0, "price", 101.0, "sequence", 7.0)); // skipped 1-6
+
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("gapDetected")).isEqualTo(true);
+    }
+
+    @Test
+    void resyncReplacesStateAndSubsequentConsecutiveSequenceDoesNotReportAGap() throws Exception {
+        // Seed some initial (soon-to-be-stale) state.
+        post("/api/v1/ticks", Map.of("symbol", "RESYNC", "timestampMs", 1.0, "price", 1.0, "sequence", 0.0));
+
+        List<Object> canonicalPrices = new ArrayList<>();
+        List<Object> canonicalVolumes = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            canonicalPrices.add((double) (100 + i));
+            canonicalVolumes.add(1000.0);
+        }
+        var resyncRes = post("/api/v1/ticks", Map.of(
+            "symbol", "RESYNC", "timestampMs", 100.0,
+            "resync", Map.of("prices", canonicalPrices, "volumes", canonicalVolumes, "sequence", 50.0)
+        ));
+        assertThat(resyncRes.statusCode()).isEqualTo(200);
+        Map<String, Object> resyncBody = Json.asObject(Json.parse(resyncRes.body()));
+        assertThat(resyncBody.get("resynced")).isEqualTo(true);
+
+        // Indicators should be immediately computable from the resync'd history.
+        var indicatorsRes = get("/api/v1/indicators/RESYNC");
+        Map<String, Object> indicatorsBody = Json.asObject(Json.parse(indicatorsRes.body()));
+        assertThat(indicatorsBody.get("insufficientHistory")).isEqualTo(false);
+
+        // The very next tick, continuing from sequence 50, must not report a gap.
+        var followUp = post("/api/v1/ticks", Map.of("symbol", "RESYNC", "timestampMs", 101.0, "price", 130.0, "sequence", 51.0));
+        Map<String, Object> followUpBody = Json.asObject(Json.parse(followUp.body()));
+        assertThat(followUpBody.get("gapDetected")).isEqualTo(false);
+    }
+
+    @Test
     void evaluateRejectsUnknownStrategyId() throws Exception {
         var res = post("/api/v1/evaluate", Map.of("strategyId", "NOT_REAL", "context", Map.of()));
         assertThat(res.statusCode()).isEqualTo(400);

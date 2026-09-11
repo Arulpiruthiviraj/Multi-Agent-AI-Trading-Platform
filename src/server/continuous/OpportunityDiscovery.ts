@@ -22,7 +22,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
-import { getCachedBroadUniverseSymbols, getCachedMoverSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+import { getCachedBroadUniverseSymbols, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
 import {
   getLastComposableScore,
   getLastSnapshotScore,
@@ -106,6 +106,11 @@ export function getOpportunityScanUniverse(): string[] {
     // MarketUniverseScanner.refreshMoversCache() - same evaluateOpportunityCandidate() gate below,
     // never a trade by itself.
     ...getCachedMoverSymbols().slice(0, continuousIntelligence.moversTopNPerScan),
+    // 2026-09-10 (postmarket-audit follow-up): real, reviewed-catalyst symbols from
+    // MarketUniverseScanner.refreshNewsCatalystCache() - already liquidity/ADV-screened the same
+    // way, closes the confirmed live gap where a genuine news catalyst (SEI) never became a
+    // discovery candidate because no agent had independently looked it up first.
+    ...getCachedNewsCatalystSymbols().slice(0, continuousIntelligence.newsCatalystDiscoveryTopNPerScan),
   ];
   if (isPennyStockEnabled()) {
     names.push(...continuousIntelligence.pennyWatchSymbols);

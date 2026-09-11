@@ -88,21 +88,89 @@ export class MacroEconomyAgent {
     }
   }
 
+  /**
+   * Free fallback macro provider (2026-09-10, real AlphaVantage-daily-cap-exhaustion finding:
+   * 160 real DATA_UNAVAILABLE HOLDs from MacroAgent in one session). FRED (Federal Reserve
+   * Economic Data) is the free, no-payment, authoritative U.S. government source these same
+   * indicators ultimately come from - not a lesser substitute for AlphaVantage's macro endpoint,
+   * arguably a more direct one. Fed Funds Rate (FEDFUNDS) and Unemployment (UNRATE) are already
+   * published as rates - single most-recent-observation fetch. CPI (CPIAUCSL) is published as an
+   * index level, not a rate, so inflation % is computed as a real year-over-year change (13
+   * monthly observations, (latest - 12mo_ago) / 12mo_ago * 100) - the standard definition of "the
+   * CPI inflation rate," not a shortcut. Any missing/short series fails closed to 'UNKNOWN' for
+   * that one field rather than fabricating a number. Only ever attempted after AlphaVantage has
+   * already given up - never the primary source.
+   */
+  private async fetchFredSeries(seriesId: string, limit: number): Promise<Array<{ date: string; value: number }>> {
+    const key = process.env.FRED_API_KEY;
+    if (!key) return [];
+    const url = `${networkEndpoints.marketData.fredBaseUrl}?series_id=${seriesId}&api_key=${key}&file_type=json&sort_order=desc&limit=${limit}`;
+    const response = await fetch(url);
+    if (!response.ok) return [];
+    const body = await response.json() as any;
+    const obs = Array.isArray(body?.observations) ? body.observations : [];
+    return obs
+      .map((o: any) => ({ date: o.date, value: Number(o.value) }))
+      .filter((o: { date: string; value: number }) => Number.isFinite(o.value));
+  }
+
+  private async tryFredFallback(): Promise<typeof UNKNOWN_MACRO | null> {
+    if (!process.env.FRED_API_KEY) return null;
+    try {
+      const [cpiObs, fedFundsObs, unrateObs] = await Promise.all([
+        this.fetchFredSeries('CPIAUCSL', 13),
+        this.fetchFredSeries('FEDFUNDS', 1),
+        this.fetchFredSeries('UNRATE', 1),
+      ]);
+
+      let inflation: string = 'UNKNOWN';
+      if (cpiObs.length >= 13) {
+        const latest = cpiObs[0].value;
+        const yearAgo = cpiObs[12].value;
+        if (yearAgo !== 0) {
+          inflation = (((latest - yearAgo) / yearAgo) * 100).toFixed(2);
+        }
+      }
+      const fedFundsRate = fedFundsObs[0] ? String(fedFundsObs[0].value) : 'UNKNOWN';
+      const unemployment = unrateObs[0] ? String(unrateObs[0].value) : 'UNKNOWN';
+
+      if (inflation === 'UNKNOWN' && fedFundsRate === 'UNKNOWN' && unemployment === 'UNKNOWN') {
+        return null;
+      }
+      const result = { inflation, fedFundsRate, unemployment };
+      // Cached under its own provider namespace, never conflated with AlphaVantage's cache row -
+      // a later AlphaVantage recovery must not be shadowed by a stale FRED fallback result.
+      await ExternalDataCache.set('fred', 'macro', null, result);
+      console.warn('[MacroAgent] AlphaVantage unavailable — served real macro data from FRED fallback.');
+      return result;
+    } catch (e) {
+      logErrorSafely('[MacroAgent] FRED fallback fetch failed:', e);
+      return null;
+    }
+  }
+
+  private async fetchMacroGiveUp(warnPrefix: string): Promise<typeof UNKNOWN_MACRO> {
+    const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
+    if (stale) {
+      console.warn(`[MacroAgent] ${warnPrefix} — serving cached macro data.`);
+      return stale;
+    }
+    const fred = await this.tryFredFallback();
+    if (fred) return fred;
+    return RATE_LIMITED_MACRO;
+  }
+
   private async fetchMacro() {
      if (!process.env.ALPHAVANTAGE_API_KEY) {
-        return UNKNOWN_MACRO;
+        const fred = await this.tryFredFallback();
+        return fred ?? UNKNOWN_MACRO;
      }
 
      const cached = await ExternalDataCache.getFresh<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null, MACRO_CACHE_MAX_AGE_MS);
      if (cached) return cached;
 
      if (await ExternalDataCache.isRateLimited('alphavantage', 'macro', null)) {
-        const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
-        if (stale) {
-          console.warn('[MacroAgent] AlphaVantage backoff active — serving cached macro data.');
-          return stale;
-        }
-        return RATE_LIMITED_MACRO;
+        return this.fetchMacroGiveUp('AlphaVantage backoff active');
      }
 
      try {
@@ -138,24 +206,14 @@ export class MacroEconomyAgent {
          const internalBudgetExhausted = !genuineExternalRateLimit && subResults.some(r => r?.__budgetExhausted);
 
          if (genuineExternalRateLimit) {
-            const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
-            if (stale) {
-              console.warn('[MacroAgent] AlphaVantage rate limit — serving cached macro data.');
-              return stale;
-            }
             console.warn('[MacroAgent] AlphaVantage rate limit hit - backing off for 24h.');
             await ExternalDataCache.markRateLimited('alphavantage', 'macro', null);
-            return RATE_LIMITED_MACRO;
+            return this.fetchMacroGiveUp('AlphaVantage rate limit');
          }
 
          if (internalBudgetExhausted) {
-            const stale = await ExternalDataCache.getStale<typeof UNKNOWN_MACRO>('alphavantage', 'macro', null);
-            if (stale) {
-              console.warn('[MacroAgent] Shared AlphaVantage daily budget exhausted this cycle — serving cached macro data.');
-              return stale;
-            }
             console.warn('[MacroAgent] Shared AlphaVantage daily budget exhausted this cycle — retrying next cycle (no 24h backoff; this was not AlphaVantage itself refusing the request).');
-            return RATE_LIMITED_MACRO;
+            return this.fetchMacroGiveUp('Shared AlphaVantage daily budget exhausted this cycle');
          }
 
          let inflation = "UNKNOWN";

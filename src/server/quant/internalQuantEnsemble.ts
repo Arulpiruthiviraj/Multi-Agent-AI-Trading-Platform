@@ -29,6 +29,18 @@ export interface InternalEnsembleQualification {
   totalVotes: number;
   agreeingModelIds: string[];
   dissentingModelIds: string[];
+  /**
+   * 2026-09-10 (real observability gap closed, see this module's exported
+   * computeInternalEnsembleQualification() doc comment): true when the broader correlation-
+   * adjusted ensemble's own resolved side disagrees with the side bestStrategyIdea() already
+   * picked for this idea (ensemble.rawSide !== ideaSide). Previously this case collapsed to a
+   * bare `null` return, indistinguishable from "agreed but didn't clear the family/effective-
+   * count bar" - real evidence about whether QuantEngine's top-1 strategy selection sometimes
+   * picks a side the broader evidence set disagrees with was structurally unobservable. Does
+   * NOT change qualifiesAsIndependent's meaning or any existing consumer's behavior -
+   * qualifiesAsIndependent is still (and must remain) false whenever sideMismatch is true.
+   */
+  sideMismatch: boolean;
 }
 
 /** Simple, honest, non-backtested confidence heuristics for each Java RESEARCH engine's own
@@ -126,7 +138,26 @@ export async function computeInternalEnsembleQualification(
   if (votes.length === 0) return null;
 
   const ensemble = await quantCoreBridge.fetchInstitutionalEnsemble(votes);
-  if (!ensemble || ensemble.rawSide !== ideaSide) return null;
+  if (!ensemble) return null; // genuine Java-unavailable/error case - fail closed, unchanged
+
+  if (ensemble.rawSide !== ideaSide) {
+    // Real, observable case (2026-09-10) - the broader ensemble disagrees with the side
+    // bestStrategyIdea() already picked. Never treated as qualification (qualifiesAsIndependent
+    // stays false, identical practical effect on ChiefTraderAgent.ts as the previous bare
+    // `null` return), but now distinguishable from "agreed, didn't clear the bar" for real
+    // research/observability instead of silently discarded.
+    return {
+      qualifiesAsIndependent: false,
+      rawSide: ensemble.rawSide,
+      effectiveIndependentCount: ensemble.effectiveIndependentCount,
+      familyCount: 0,
+      agreeingFamilies: [],
+      totalVotes: ensemble.totalVotes,
+      agreeingModelIds: ensemble.agreeingModelIds,
+      dissentingModelIds: ensemble.dissentingModelIds,
+      sideMismatch: true,
+    };
+  }
 
   const agreeingFamilies = new Set(
     votes.filter((v) => v.side === ensemble.rawSide && ensemble.agreeingModelIds.includes(v.modelId)).map((v) => v.family),
@@ -145,5 +176,6 @@ export async function computeInternalEnsembleQualification(
     totalVotes: ensemble.totalVotes,
     agreeingModelIds: ensemble.agreeingModelIds,
     dissentingModelIds: ensemble.dissentingModelIds,
+    sideMismatch: false,
   };
 }

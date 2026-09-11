@@ -79,6 +79,14 @@ public final class QuantCoreServer {
         // JavaQuantAdvisoryService.ts or QuantSignalAgent.ts calls this route yet. It only makes
         // these engines reachable for backtesting/research tooling instead of dead code.
         server.createContext("/api/v1/institutional/strategy/", this::handleInstitutionalStrategy);
+        // 2026-09-10: real, bars-owning path for the 5 CORE strategies (CoreStrategyRunner) -
+        // distinct from /api/v1/evaluate above, which decodes a pre-built StrategyContext a TS
+        // caller would have to construct. These two routes compute every feature in Java from raw
+        // bars - see FeaturesToStrategyContextAdapter's own header for why that distinction is
+        // load-bearing, not stylistic. Neither route emits a trade idea or calls ChiefTrader/
+        // RiskEngine/OMS - purely evidence-producing, matching every other route in this file.
+        server.createContext("/api/v1/quant/strategy/", this::handleCoreStrategyAssessment);
+        server.createContext("/api/v1/quant/ensemble/", this::handleCoreEnsembleDecision);
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
     }
 
@@ -108,6 +116,20 @@ public final class QuantCoreServer {
         ));
     }
 
+    /**
+     * 2026-09-10 (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §6): two request shapes
+     * on the same route, distinguished by the presence of "resync":
+     *   - Normal tick: {"symbol","price","volume"?,"timestampMs","sequence"?} - sequence is
+     *     OPTIONAL for backward compatibility (a caller not yet sending it never gets a false gap
+     *     report, matching the old no-sequence onTick() overload); once a caller does send it, a
+     *     mismatch vs. lastAppliedSequence+1 is reported back as "gapDetected":true in the response
+     *     so the TS bridge can react, rather than this route ever rejecting/dropping the tick.
+     *   - Resync: {"symbol","resync":{"prices":[...],"volumes":[...],"sequence":N},"timestampMs"} -
+     *     wholesale-replaces this symbol's state (SymbolState.resync/CircularDoubleArray.reset),
+     *     self-healing regardless of how diverged the prior state was, matching every other
+     *     resynchronization mechanism in this codebase's own established fail-closed-then-recover
+     *     pattern.
+     */
     private void handleTicks(HttpExchange exchange) throws IOException {
         if (!"POST".equals(exchange.getRequestMethod())) {
             sendJson(exchange, 405, Map.of("error", "method not allowed"));
@@ -116,24 +138,67 @@ public final class QuantCoreServer {
         try {
             Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
             String symbol = Json.asString(body.get("symbol"));
-            double price = Json.asDoublePrimitive(body.get("price"), Double.NaN);
-            Double volume = Json.asDouble(body.get("volume"));
             long timestampMs = (long) Json.asDoublePrimitive(body.get("timestampMs"), 0);
-
-            if (symbol == null || symbol.isBlank() || !Double.isFinite(price) || price <= 0) {
-                sendJson(exchange, 400, Map.of("ok", false, "error", "invalid symbol or price"));
+            if (symbol == null || symbol.isBlank()) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "invalid symbol"));
                 return;
             }
-            symbols.computeIfAbsent(symbol, s -> new SymbolState()).onTick(price, volume, timestampMs);
+
+            Object resyncRaw = body.get("resync");
+            if (resyncRaw != null) {
+                Map<String, Object> resync = Json.asObject(resyncRaw);
+                double[] resyncPrices = decodeDoubleArray(resync.get("prices"));
+                double[] resyncVolumes = decodeDoubleArray(resync.get("volumes"));
+                long sequence = (long) Json.asDoublePrimitive(resync.get("sequence"), -1);
+                symbols.computeIfAbsent(symbol, s -> new SymbolState()).resync(resyncPrices, resyncVolumes, sequence, timestampMs);
+                StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "TICK_RESYNC_APPLIED",
+                    "Resynchronized state for " + symbol + " from " + resyncPrices.length + " canonical prices",
+                    resolveTraceId(exchange), symbol, Map.of("sequence", (double) sequence, "priceCount", (double) resyncPrices.length));
+                sendJson(exchange, 200, Map.of("ok", true, "resynced", true));
+                return;
+            }
+
+            double price = Json.asDoublePrimitive(body.get("price"), Double.NaN);
+            Double volume = Json.asDouble(body.get("volume"));
+            if (!Double.isFinite(price) || price <= 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "invalid price"));
+                return;
+            }
+            SymbolState state = symbols.computeIfAbsent(symbol, s -> new SymbolState());
+            boolean gapDetected;
+            Object sequenceRaw = body.get("sequence");
+            if (sequenceRaw == null) {
+                state.onTick(price, volume, timestampMs);
+                gapDetected = false;
+            } else {
+                long sequence = (long) Json.asDoublePrimitive(sequenceRaw, -1);
+                gapDetected = state.onTick(price, volume, timestampMs, sequence);
+                if (gapDetected) {
+                    StructuredLogger.log(StructuredLogger.Level.WARN, "QuantCoreJava", "TICK_SEQUENCE_GAP_DETECTED",
+                        "Sequence gap detected for " + symbol + " - received sequence " + sequence + " was not the expected next value",
+                        resolveTraceId(exchange), symbol, Map.of("receivedSequence", (double) sequence));
+                }
+            }
             // DEBUG, not INFO - high-frequency tick ingestion would otherwise flood the log file
             // during 100+ symbol live streaming (this is the exact bug class TechnicalAgent's own
             // debounce fix guarded against on the TS side - see technicalSignalCooldownMs).
             StructuredLogger.log(StructuredLogger.Level.DEBUG, "QuantCoreJava", "TICK_INGESTED",
                 "Tick ingested for " + symbol, null, symbol, Map.of("price", price));
-            sendJson(exchange, 200, Map.of("ok", true));
+            sendJson(exchange, 200, Map.of("ok", true, "gapDetected", gapDetected));
         } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
             sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body"));
         }
+    }
+
+    private static double[] decodeDoubleArray(Object raw) {
+        if (!(raw instanceof List<?> rawList)) {
+            return new double[0];
+        }
+        double[] out = new double[rawList.size()];
+        for (int i = 0; i < rawList.size(); i++) {
+            out[i] = Json.asDoublePrimitive(rawList.get(i), Double.NaN);
+        }
+        return out;
     }
 
     private void handleIndicators(HttpExchange exchange) throws IOException {
@@ -199,6 +264,163 @@ public final class QuantCoreServer {
         } finally {
             TraceContext.clear();
         }
+    }
+
+    /**
+     * POST /api/v1/quant/strategy/{strategyId}/{symbol}. Body: {"bars":[{timestampMs,open,high,
+     * low,close,volume},...], "benchmarks"?: {"spy":{"bars":[...]}, "qqq":{...}, "iwm":{...},
+     * "sectorName":"...", "sectorEtf":"...", "sector":{"bars":[...]}}}. benchmarks is optional -
+     * only MOMENTUM_BREAKOUT reads marketContext among the 5 CORE strategies; omit it entirely for
+     * the other 4. Returns a CoreStrategyRunner.Assessment - real Java-computed features, real
+     * Java strategy decision logic, never a TS-supplied StrategyContext (see CoreStrategyRunner's
+     * own header for why that distinction matters).
+     */
+    private void handleCoreStrategyAssessment(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        String[] parts = path.substring("/api/v1/quant/strategy/".length()).split("/");
+        if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "path must be /api/v1/quant/strategy/{strategyId}/{symbol}"));
+            return;
+        }
+        String strategyId = parts[0];
+        String symbol = parts[1];
+        String traceId = resolveTraceId(exchange);
+        TraceContext.bind(traceId, symbol);
+        try {
+            if (!CoreStrategyRunner.isCoreStrategy(strategyId)) {
+                sendJson(exchange, 404, Map.of("ok", false, "error", "unknown or non-CORE strategyId: " + strategyId));
+                return;
+            }
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Bar[] bars = decodeBars(body.get("bars"));
+            if (bars == null || bars.length == 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "bars array is required"));
+                return;
+            }
+            FeaturesToStrategyContextAdapter.BenchmarkBars benchmarks = decodeBenchmarks(body.get("benchmarks"));
+            CoreStrategyRunner.Assessment assessment = CoreStrategyRunner.evaluate(strategyId, symbol, List.of(bars), benchmarks);
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "QUANT_STRATEGY_EVALUATED",
+                "Evaluated " + strategyId + " for " + symbol + " from " + bars.length + " Java-owned bars",
+                traceId, symbol, Map.of("strategyId", strategyId, "direction", assessment.direction(),
+                    "dataQuality", assessment.dataQuality().name()));
+            sendJson(exchange, 200, assessmentToJson(assessment));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    /**
+     * POST /api/v1/quant/ensemble/{symbol}. Same body shape as handleCoreStrategyAssessment.
+     * Runs all 5 CORE strategies from the same Java-computed bars and combines them via the
+     * EXISTING QuantEnsembleEngine (institutional/models) - never a second correlation system.
+     */
+    private void handleCoreEnsembleDecision(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of bars"));
+            return;
+        }
+        String path = exchange.getRequestURI().getPath();
+        String symbol = path.substring("/api/v1/quant/ensemble/".length());
+        if (symbol.isBlank()) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "path must be /api/v1/quant/ensemble/{symbol}"));
+            return;
+        }
+        String traceId = resolveTraceId(exchange);
+        TraceContext.bind(traceId, symbol);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Bar[] bars = decodeBars(body.get("bars"));
+            if (bars == null || bars.length == 0) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "bars array is required"));
+                return;
+            }
+            FeaturesToStrategyContextAdapter.BenchmarkBars benchmarks = decodeBenchmarks(body.get("benchmarks"));
+            CoreStrategyRunner.EnsembleDecision decision = CoreStrategyRunner.runEnsemble(symbol, List.of(bars), benchmarks);
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "QUANT_ENSEMBLE_COMPLETED",
+                "Combined " + decision.strategyCount() + " CORE strategies for " + symbol,
+                traceId, symbol, Map.of("status", decision.status().name(), "direction", decision.direction(),
+                    "effectiveIndependentCount", decision.effectiveIndependentCount()));
+            sendJson(exchange, 200, ensembleDecisionToJson(decision));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    private static FeaturesToStrategyContextAdapter.BenchmarkBars decodeBenchmarks(Object raw) {
+        if (raw == null) {
+            return null;
+        }
+        Map<String, Object> b = Json.asObject(raw);
+        return new FeaturesToStrategyContextAdapter.BenchmarkBars(
+            decodeBenchmarkInput(b.get("spy")),
+            decodeBenchmarkInput(b.get("qqq")),
+            decodeBenchmarkInput(b.get("iwm")),
+            Json.asString(b.get("sectorName")),
+            Json.asString(b.get("sectorEtf")),
+            decodeBenchmarkInput(b.get("sector"))
+        );
+    }
+
+    private static io.argus.quantcore.features.MarketContext.BenchmarkInput decodeBenchmarkInput(Object raw) {
+        if (raw == null) {
+            return io.argus.quantcore.features.MarketContext.BenchmarkInput.failed("not supplied");
+        }
+        Map<String, Object> b = Json.asObject(raw);
+        Bar[] bars = decodeBars(b.get("bars"));
+        return bars == null
+            ? io.argus.quantcore.features.MarketContext.BenchmarkInput.failed("not supplied")
+            : io.argus.quantcore.features.MarketContext.BenchmarkInput.ok(List.of(bars));
+    }
+
+    private static Map<String, Object> assessmentToJson(CoreStrategyRunner.Assessment a) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("strategyId", a.strategyId());
+        m.put("strategyVersion", a.strategyVersion());
+        m.put("featureVersion", a.featureVersion());
+        m.put("symbol", a.symbol());
+        m.put("direction", a.direction());
+        m.put("score", a.score() == null ? null : (double) a.score());
+        m.put("confidence", a.confidence());
+        m.put("reason", a.reason());
+        m.put("regime", a.regime());
+        m.put("dataQuality", a.dataQuality().name());
+        m.put("evaluationTimestampMs", (double) a.evaluationTimestampMs());
+        m.put("latencyMs", (double) a.latencyMs());
+        return m;
+    }
+
+    private static Map<String, Object> ensembleDecisionToJson(CoreStrategyRunner.EnsembleDecision d) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("status", d.status().name());
+        m.put("direction", d.direction());
+        m.put("score", d.score());
+        m.put("confidence", d.confidence());
+        m.put("reason", d.reason());
+        m.put("regime", d.regime());
+        m.put("timestampMs", (double) d.timestampMs());
+        m.put("featureVersion", d.featureVersion());
+        m.put("strategyVersion", d.strategyVersion());
+        m.put("strategyCount", (double) d.strategyCount());
+        m.put("agreeingCount", (double) d.agreeingCount());
+        m.put("effectiveIndependentCount", d.effectiveIndependentCount());
+        m.put("contributingStrategies", d.contributingStrategies());
+        m.put("contributingFamilies", d.contributingFamilies());
+        List<Object> assessments = new java.util.ArrayList<>();
+        for (CoreStrategyRunner.Assessment a : d.assessments()) {
+            assessments.add(assessmentToJson(a));
+        }
+        m.put("assessments", assessments);
+        return m;
     }
 
     /**

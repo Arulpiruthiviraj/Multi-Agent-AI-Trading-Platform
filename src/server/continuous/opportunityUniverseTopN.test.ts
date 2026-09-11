@@ -7,6 +7,7 @@ import { continuousIntelligence } from '../config/continuousIntelligence';
 vi.mock('./MarketUniverseScanner', () => ({
   getCachedBroadUniverseSymbols: () => ['BEST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH'],
   getCachedMoverSymbols: () => [],
+  getCachedNewsCatalystSymbols: () => [],
   marketUniverseScannerWorker: { start: vi.fn(), stop: vi.fn() },
 }));
 

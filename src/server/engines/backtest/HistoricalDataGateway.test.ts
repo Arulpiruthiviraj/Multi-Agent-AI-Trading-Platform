@@ -281,4 +281,94 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       registerHistoricalBarProvider(null);
     }
   });
+
+  // 2026-09-10 real fix: confirmed live that IBKR's historical-bar API returns empty for real,
+  // liquid US symbols on this account (same market-data-entitlement gap already found on the
+  // live streaming path) - this silently starved MissedOpportunityEvaluator forever (every
+  // record stayed PENDING). ensureBars() now falls back to Alpaca instead of failing closed
+  // immediately when IBKR itself has nothing to offer.
+  describe('IBKR -> Alpaca fallback (2026-09-10 fix)', () => {
+    afterEach(async () => {
+      const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+      registerHistoricalBarProvider(null);
+    });
+
+    it('falls back to a real Alpaca fetch when the registered IBKR provider returns empty bars', async () => {
+      const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+      historicalDataGateway.clearBarsRateLimitBackoff();
+      registerHistoricalBarProvider({ id: 'ibkr_gateway', fetchBars: async () => [] });
+
+      const now = Date.now();
+      const start = now - 90 * 86_400_000;
+      const alpacaBars = Array.from({ length: 70 }, (_, i) => ({
+        t: new Date(start + i * 86_400_000).toISOString(), o: 10, h: 11, l: 9, c: 10.5, v: 1000,
+      }));
+      const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ bars: alpacaBars }) }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await historicalDataGateway.ensureBars('IBKREMPTY', '1Day', start, now);
+
+      expect(fetchMock).toHaveBeenCalled(); // real Alpaca fallback fetch happened
+      const cached = await historicalDataGateway.getBars('IBKREMPTY', '1Day', start, now);
+      expect(cached.length).toBeGreaterThanOrEqual(60);
+    });
+
+    it('falls back to a real Alpaca fetch when the registered IBKR provider throws', async () => {
+      const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+      historicalDataGateway.clearBarsRateLimitBackoff();
+      registerHistoricalBarProvider({
+        id: 'ibkr_gateway',
+        fetchBars: async () => { throw new Error('IBKR market-data rejection: code=354 not subscribed'); },
+      });
+
+      const now = Date.now();
+      const start = now - 90 * 86_400_000;
+      const alpacaBars = Array.from({ length: 70 }, (_, i) => ({
+        t: new Date(start + i * 86_400_000).toISOString(), o: 20, h: 21, l: 19, c: 20.5, v: 500,
+      }));
+      const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ bars: alpacaBars }) }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await historicalDataGateway.ensureBars('IBKRTHROWS', '1Day', start, now);
+
+      expect(fetchMock).toHaveBeenCalled();
+      const cached = await historicalDataGateway.getBars('IBKRTHROWS', '1Day', start, now);
+      expect(cached.length).toBeGreaterThanOrEqual(60);
+    });
+
+    it('still never fabricates a bar - throws a real error when BOTH IBKR and the Alpaca fallback have nothing', async () => {
+      const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+      historicalDataGateway.clearBarsRateLimitBackoff();
+      registerHistoricalBarProvider({ id: 'ibkr_gateway', fetchBars: async () => [] });
+
+      const now = Date.now();
+      const start = now - 90 * 86_400_000;
+      const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ bars: [] }) }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(historicalDataGateway.ensureBars('NODATAANYWHERE', '1Day', start, now)).rejects.toThrow(
+        /No historical bars available/
+      );
+    });
+
+    it('prefers existing cached bars over a fresh Alpaca call when IBKR fails but SQLite already has some coverage', async () => {
+      const { registerHistoricalBarProvider } = await import('./historicalBarProvider');
+      historicalDataGateway.clearBarsRateLimitBackoff();
+      registerHistoricalBarProvider({ id: 'ibkr_gateway', fetchBars: async () => { throw new Error('IBKR down'); } });
+
+      const now = Date.now();
+      const start = now - 90 * 86_400_000;
+      // Seed just enough cached bars to clear tradingSafety.regimeMinBars via the existing
+      // cache-first check, before ensureBars() ever reaches the IBKR/Alpaca branches at all.
+      for (let i = 0; i < tradingSafety.regimeMinBars; i++) {
+        await seedRawBar('CACHEDENOUGH', '1Day', start + i * 86_400_000, 50 + i);
+      }
+      const fetchMock = vi.fn(async () => { throw new Error('must not be called - cache-first should short-circuit'); });
+      vi.stubGlobal('fetch', fetchMock);
+
+      await historicalDataGateway.ensureBars('CACHEDENOUGH', '1Day', start, now);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

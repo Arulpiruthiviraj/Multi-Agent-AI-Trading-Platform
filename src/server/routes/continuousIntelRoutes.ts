@@ -11,8 +11,8 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { getLastOpportunityScan } from '../continuous/OpportunityDiscovery';
 import { listCandidates } from '../continuous/candidateLifecycle';
 import { getLastSnapshotScanStats } from '../continuous/SnapshotScanner';
-import { getCachedBroadUniverseSymbols, getLastBroadUniverseStats, getCachedMoverSymbols, getLastMoverScanStats } from '../continuous/MarketUniverseScanner';
-import { isBroadUniverseEnabled, isMoversEnabled } from '../config/continuousIntelligence';
+import { getCachedBroadUniverseSymbols, getLastBroadUniverseStats, getCachedMoverSymbols, getLastMoverScanStats, getCachedNewsCatalystSymbols, getLastNewsCatalystScanStats } from '../continuous/MarketUniverseScanner';
+import { isBroadUniverseEnabled, isMoversEnabled, isNewsCatalystDiscoveryEnabled } from '../config/continuousIntelligence';
 import { getPipelineRateSnapshot } from '../core/pipelineRateLimit';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { learningRouter } from './learningRoutes';
@@ -207,6 +207,38 @@ continuousIntelRouter.get('/missed-opportunities', async (req, res) => {
   }
 });
 
+// Phase 2 (2026-09-10): real, persisted daily postmarket forensic report - see
+// PostMarketAnalysis.ts's own header for scope/safety contract (diagnostic-only, never emits
+// TRADE_IDEA_GENERATED). :date is YYYY-MM-DD; defaults to today (America/New_York) if omitted.
+continuousIntelRouter.get('/postmarket-report/:date?', async (req, res) => {
+  try {
+    const { getPostMarketReport } = await import('./../continuous/PostMarketAnalysis');
+    const date = req.params.date || new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York' }).format(new Date());
+    const report = await getPostMarketReport(date);
+    if (!report) {
+      res.status(404).json({ ok: false, error: `No postmarket report persisted yet for ${date}.` });
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Trade-to-Learning Feedback Loop request §9/§21 (2026-09-10): real multi-day rollup across
+// however many postmarket reports actually exist - never claims a blind spot is "recurring"
+// from a single day (see PostMarketAnalysis.ts's own computeMultiDayRollup() header).
+continuousIntelRouter.get('/postmarket-rollup', async (req, res) => {
+  try {
+    const { computeMultiDayRollup } = await import('./../continuous/PostMarketAnalysis');
+    const days = Math.min(90, Math.max(1, Number(req.query.days) || 20));
+    const rollup = await computeMultiDayRollup(days);
+    res.json({ ok: true, rollup });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 continuousIntelRouter.get('/status', (_req, res) => {
   const snap = getLastSnapshotScanStats();
   res.json({
@@ -254,6 +286,11 @@ continuousIntelRouter.get('/status', (_req, res) => {
       enabled: isMoversEnabled(),
       lastRefresh: getLastMoverScanStats(),
       cachedCandidateCount: getCachedMoverSymbols().length,
+    },
+    newsCatalystDiscovery: {
+      enabled: isNewsCatalystDiscoveryEnabled(),
+      lastRefresh: getLastNewsCatalystScanStats(),
+      cachedCandidateCount: getCachedNewsCatalystSymbols().length,
     },
   });
 });

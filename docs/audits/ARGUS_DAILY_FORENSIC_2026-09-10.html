@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ARGUS Daily Forensic Audit — 2026-09-10</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel2: #1c2129; --border: #2a3038;
+    --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff;
+    --green: #3fb950; --red: #f85149; --yellow: #d29922; --gray: #6e7681;
+  }
+  * { box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 0 0 60px; line-height: 1.55; }
+  header { background: linear-gradient(135deg, #161b22, #0d1117); border-bottom: 1px solid var(--border); padding: 28px 40px; }
+  header h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: 0.3px; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 20px; font-size: 11px; font-weight: 600; letter-spacing: 0.4px; margin-left: 8px; text-transform: uppercase; }
+  .badge.paused { background: rgba(210,153,34,0.18); color: var(--yellow); border: 1px solid rgba(210,153,34,0.4); }
+  .badge.readonly { background: rgba(88,166,255,0.15); color: var(--accent); border: 1px solid rgba(88,166,255,0.4); }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 40px; }
+  section { margin-bottom: 44px; }
+  h2 { font-size: 16px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 10px; margin-bottom: 18px; }
+  h3 { font-size: 14px; color: var(--text); margin: 20px 0 10px; }
+  p { color: #c9d1d9; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+  .tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 6px; }
+  .tile .value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .tile .value.zero { color: var(--red); }
+  .tile .value.ok { color: var(--green); }
+  .tile .value.warn { color: var(--yellow); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.4px; }
+  tr:hover td { background: var(--panel2); }
+  .tbl-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 4px 8px; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 12px; font-size: 10px; font-weight: 700; letter-spacing: 0.3px; }
+  .tag.high { background: rgba(63,185,80,0.15); color: var(--green); }
+  .tag.medium { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .tag.unknown { background: rgba(110,118,129,0.2); color: var(--gray); }
+  .funnel { display: flex; flex-direction: column; gap: 4px; }
+  .fstage { background: var(--panel); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 6px; padding: 10px 16px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+  .fstage.bottleneck { border-left-color: var(--red); background: rgba(248,81,73,0.07); }
+  .fstage .count { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  .fstage .count b { color: var(--text); font-size: 14px; }
+  .callout { background: rgba(88,166,255,0.08); border: 1px solid rgba(88,166,255,0.3); border-radius: 8px; padding: 14px 18px; margin: 14px 0; font-size: 13px; }
+  .callout.warn { background: rgba(210,153,34,0.08); border-color: rgba(210,153,34,0.35); }
+  .callout.crit { background: rgba(248,81,73,0.08); border-color: rgba(248,81,73,0.35); }
+  code { background: #0d1117; border: 1px solid var(--border); padding: 1px 6px; border-radius: 4px; font-size: 12px; color: #79c0ff; }
+  ul { color: #c9d1d9; }
+  footer { max-width: 1180px; margin: 0 auto; padding: 20px 40px; color: var(--muted); font-size: 12px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>ARGUS — Daily Forensic Audit
+    <span class="badge readonly">Read-only</span>
+    <span class="badge paused">Trading: PAUSED</span>
+  </h1>
+  <div class="sub">2026-09-10 · Evidence: direct SQL against data/argus.db, live /api/v2/runtime/health, git, surefire reports · No code modified, no restart performed for this audit, no flags changed</div>
+</header>
+
+<main>
+
+<section>
+  <h2>Executive Dashboard</h2>
+  <div class="grid">
+    <div class="tile"><div class="label">Trades Today</div><div class="value zero">0</div></div>
+    <div class="tile"><div class="label">Fills Today</div><div class="value zero">0</div></div>
+    <div class="tile"><div class="label">Consensus Rounds</div><div class="value">1,292</div></div>
+    <div class="tile"><div class="label">Approved Ideas</div><div class="value zero">0</div></div>
+    <div class="tile"><div class="label">Quant Ideas Emitted</div><div class="value ok">230</div></div>
+    <div class="tile"><div class="label">Quant-Independent Attempts</div><div class="value zero">0</div></div>
+    <div class="tile"><div class="label">Symbols Evaluated</div><div class="value warn">7</div></div>
+    <div class="tile"><div class="label">IBKR Data Errors (code 354)</div><div class="value zero">1,460</div></div>
+    <div class="tile"><div class="label">Unclean Shutdowns</div><div class="value zero">2</div></div>
+    <div class="tile"><div class="label">Watchdog Heartbeat</div><div class="value zero">~19h stale</div></div>
+    <div class="tile"><div class="label">TS Tests</div><div class="value ok">3,422 / 3,422</div></div>
+    <div class="tile"><div class="label">Java Tests</div><div class="value ok">801 / 801</div></div>
+  </div>
+  <div class="callout crit">
+    <b>Bottom line:</b> the full decision pipeline ran honestly on real data all day (data → discovery → 4 agents → QuantEngine → ChiefTrader), but <b>100% of 1,292 resolved consensus rounds were rejected on confidence &lt;75%</b>. RiskEngine/OMS/broker were never reached — not because they failed, but because nothing arrived. Separately, a real ~3-hour unexplained process outage and a dead watchdog are genuine reliability findings.
+  </div>
+</section>
+
+<section>
+  <h2>1 · Current System State <span class="tag high">HIGH</span></h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Field</th><th>Value</th></tr>
+    <tr><td>PID / Uptime</td><td>3364 / ~103s (fresh restart)</td></tr>
+    <tr><td>Phase</td><td>SAFE_MODE</td></tr>
+    <tr><td>Trading state</td><td><b style="color:var(--yellow)">TRADING_PAUSED</b> (autobot enabled, emergency-stop false)</td></tr>
+    <tr><td>Branch / HEAD</td><td>main / fc7d81cad575fecc01b0a87b378763390111a9d7</td></tr>
+    <tr><td>Working tree</td><td>54 changed/new uncommitted paths</td></tr>
+    <tr><td>Live readiness</td><td>LIVE_NO_GO</td></tr>
+    <tr><td>Broker</td><td>ibkr_gateway, account DUR959160 (paper), socket :4002, authenticated</td></tr>
+    <tr><td>Market data</td><td>connected, authenticated, 18/90 lines active</td></tr>
+    <tr><td>Java QuantCore</td><td>QUANT_HEALTHY, javaEnabled/javaConnected true, HTTP 200</td></tr>
+    <tr><td>AI provider health</td><td>1–2 of 10 healthy → AI_DEGRADED</td></tr>
+    <tr><td>Watchdog</td><td><b style="color:var(--red)">FAILED</b> — stale ~19h, process not running</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>2 · Recent Code Changes vs a8d2e5b <span class="tag high">HIGH</span></h2>
+  <p>6 commits since a8d2e5b — all Java <code>institutional/</code> RESEARCH-status engine additions (options/FX/commodities/futures/CDO/crypto/fixed-income/index/volatility), no live wiring. Plus 54 uncommitted paths from this session.</p>
+  <div class="tbl-wrap"><table>
+    <tr><th>Area</th><th>Classification</th></tr>
+    <tr><td>Java Phase 1 core-strategy wiring (CoreStrategyRunner, tick sequencing)</td><td>IMPLEMENTED, TESTED · <b style="color:var(--yellow)">UNUSED</b> on live spine (no production caller)</td></tr>
+    <tr><td>PositionAveragingEngine / SmartBetaFactorEngine</td><td>IMPLEMENTED, TESTED · RESEARCH · UNUSED</td></tr>
+    <tr><td>aiQuantAvailability.ts</td><td>IMPLEMENTED, TESTED · <b style="color:var(--green)">LIVE</b> (confirmed populating /runtime/health)</td></tr>
+    <tr><td>FRED/FMP fallback (FundamentalAgent/MacroAgent)</td><td>IMPLEMENTED, TESTED, deployed · <b style="color:var(--gray)">UNKNOWN — not yet exercised live</b> (0 evidence rows since restart)</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>3 · Today's Trading Session Timeline <span class="tag high">HIGH</span></h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Time (UTC)</th><th>Event</th><th>Actor</th><th>Detail</th></tr>
+    <tr><td>11:29:01</td><td>PAUSED→ENABLED</td><td>admin</td><td>Operator resume, fresh restart</td></tr>
+    <tr><td>12:02:39</td><td>ENABLED→PAUSED</td><td>gracefulShutdown</td><td>Process shutdown drain</td></tr>
+    <tr><td>12:07:44</td><td>PAUSED→ENABLED</td><td>admin</td><td>Resume after Java rebuild</td></tr>
+    <tr><td>14:38:31</td><td>ENABLED→PAUSED</td><td>MemoryTelemetryGuard</td><td>Node RSS 3,662.9MB CRITICAL</td></tr>
+    <tr><td>15:23:16</td><td>PAUSED→ENABLED</td><td>admin</td><td>Resume, RSS was 4,015.9MB pre-restart</td></tr>
+    <tr><td>17:54:35</td><td>ENABLED→PAUSED</td><td>MemoryTelemetryGuard</td><td>Node RSS 3,658.2MB CRITICAL</td></tr>
+    <tr><td>17:54 → ~20:54</td><td><b style="color:var(--red)">Process absent</b></td><td>—</td><td>~3h gap — no process found, connection refused; 2 UNCLEAN_SHUTDOWN_DETECTED logged</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>4 · Today's Decision Funnel <span class="tag high">HIGH counts</span></h2>
+  <div class="funnel">
+    <div class="fstage"><span>Market Data</span><span class="count">connected, 18/90 lines</span></div>
+    <div class="fstage"><span>Symbol Subscription</span><span class="count"><b>7</b> distinct symbols</span></div>
+    <div class="fstage"><span>Discovery</span><span class="count"><b>436</b> admitted / 21,655 filtered</span></div>
+    <div class="fstage"><span>Agent Signal</span><span class="count">Technical 218 · Kronos 808 · Fundamental 378 (100% HOLD) · Macro 324 (82% HOLD)</span></div>
+    <div class="fstage"><span>Quant Signal</span><span class="count"><b>230</b> / 1,893 assessments</span></div>
+    <div class="fstage"><span>Chief Trader</span><span class="count"><b>1,292</b> consensus rounds</span></div>
+    <div class="fstage bottleneck"><span><b>Consensus (BOTTLENECK)</b></span><span class="count"><b style="color:var(--red)">0</b> approved / 1,292 rejected — 100% confidence &lt;75%</span></div>
+    <div class="fstage"><span>Qualification</span><span class="count">0 attempts</span></div>
+    <div class="fstage"><span>Risk Engine</span><span class="count">0 — never reached</span></div>
+    <div class="fstage"><span>OMS</span><span class="count">0 — never reached</span></div>
+    <div class="fstage"><span>Paper Broker → Order → Fill → Position → P&amp;L</span><span class="count">all 0</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>5–6 · Rejection Classification &amp; QuantEngine <span class="tag high">HIGH</span></h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Category</th><th>Count</th></tr>
+    <tr><td>CONFIDENCE_BELOW_THRESHOLD</td><td>1,292 (100%)</td></tr>
+    <tr><td>Insufficient independent agents (primary reason)</td><td>0</td></tr>
+    <tr><td>Quant-independent qualification attempts</td><td>0</td></tr>
+  </table></div>
+  <p style="margin-top:14px">QuantEngine: 230 emissions (228 BUY / 2 SELL) from 1,893 assessments (12.1%); 297 discarded for stale data. JavaFactorComposite: 0 votes reaching ChiefTrader today. No evidence any of this session's new Java <code>CoreStrategyRunner</code> endpoints executed against live data — no production caller exists yet.</p>
+</section>
+
+<section>
+  <h2>7 · Did the Quant-Independent Bypass Matter Today?</h2>
+  <div class="callout"><b>NO EFFECT.</b> Zero mentions of QUANT_INDEPENDENT or effectiveIndependentCount anywhere today. Whether the flag were on or off, today's result is identical: 0 approvals, because no signal ever cleared its own qualification bar.</div>
+</section>
+
+<section>
+  <h2>9 · Missed Opportunities Today <span class="tag high">HIGH</span></h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Classification</th><th>Count</th></tr>
+    <tr><td>SUBSCRIPTION_MISS</td><td>8</td></tr>
+    <tr><td>CONSENSUS_REJECTION</td><td>5</td></tr>
+    <tr><td>AGENT_MISS</td><td>5</td></tr>
+  </table></div>
+  <div class="callout warn"><b>Anomaly (flagged, not fixed):</b> all 18 rows remain <code>evaluation_status: PENDING</code> hours after detection. The MFE/MAE evaluation step never completed for any of today's detections — cannot honestly report excursion figures. Symbols: AMZN, ASML, META, MRVL, NVDA, QQQ, SPY.</div>
+</section>
+
+<section>
+  <h2>10 · Premarket Today <span class="tag high">HIGH</span></h2>
+  <p>23 TradePlans created (3 PRIMARY, 5 BACKUP, 15 WATCHLIST). <b>100% ended INVALIDATED or stuck REVALIDATING</b> — zero survived the day in a durable, actionable state. Notably, <b>META was on the premarket radar at 0.63 confidence — direction SELL</b>, opposite whatever the actual outside-Argus move was; this is a directional-signal question, not a "never saw it" question.</p>
+</section>
+
+<section>
+  <h2>11–12 · Post-Market Learning <span class="tag high">HIGH — confirmed via source search</span></h2>
+  <div class="callout crit"><b>Confirmed gap:</b> no automatic post-market analysis pipeline exists anywhere in the codebase today (<code>grep -rln "postMarket|PostMarket|POST_MARKET" src/server</code> returns nothing). ReflectionEngine grades agents on a ~60s cycle, independent of market close — not a per-strategy outcome-attribution system.</div>
+</section>
+
+<section>
+  <h2>13–14 · AI Provider &amp; Safety Spine <span class="tag high">HIGH</span></h2>
+  <p>1,384 AI calls today, AI_DEGRADED (1–2/10 healthy). Traced directly: AI degradation routes to fail-closed HOLD/confidence-0, never to a relaxed threshold. Safety spine (ChiefTrader → RiskEngine → capital controls → OMS → paper broker) verified intact — JavaFactorComposite, QuantEngine, QuantEnsemble, and the new Java strategy dispatcher all still route through the unchanged <code>emitTradeIdea()</code> → consensus path. No bypass found.</p>
+</section>
+
+<section>
+  <h2>15 · Regression vs 2026-09-09</h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Finding</th><th>Yesterday</th><th>Today</th><th>Regression?</th></tr>
+    <tr><td>Operational instability</td><td>P0 unresolved</td><td>2 unclean shutdowns, ~3h gap, dead watchdog</td><td><b style="color:var(--red)">YES</b></td></tr>
+    <tr><td>Missed-opportunity evaluator</td><td>"Fixed"</td><td>Detection works; MFE/MAE evaluation stalled (0/18)</td><td><b style="color:var(--yellow)">Partial</b></td></tr>
+    <tr><td>Java quant strategies</td><td>Uncertified</td><td>6 more commits added, still 0 live wiring</td><td>No (scope grew)</td></tr>
+    <tr><td>Premarket</td><td>Timing limitations</td><td>Same; 0/23 plans durable today</td><td>No improvement</td></tr>
+    <tr><td>Quant bypass</td><td>Unproven</td><td>Still 0 real activations</td><td>No change</td></tr>
+    <tr><td>Data quality</td><td>15m/30m/1h ceiling noted</td><td>New: 1,460 IBKR code-354 entitlement errors</td><td><b style="color:var(--red)">New P1</b></td></tr>
+    <tr><td>RiskEngine / OMS</td><td>Protected</td><td>Unchanged, untouched, unreached today</td><td>No change</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>16 · Test Results <span class="tag high">HIGH — actually executed</span></h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Suite</th><th>Files</th><th>Tests</th><th>Pass</th><th>Fail</th><th>When</th></tr>
+    <tr><td>TypeScript</td><td>470</td><td>3,422</td><td style="color:var(--green)">3,422</td><td>0</td><td>This session, real run</td></tr>
+    <tr><td>Java</td><td>170</td><td>801</td><td style="color:var(--green)">801</td><td>0</td><td>Last built 2026-09-10T08:02, not re-run this pass — no Java source changed since</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>17–19 · Database Integrity, Data Quality, Stability</h2>
+  <ul>
+    <li><b>5 orphan FILLED trades</b> with no matching fill row — all historical (Jun/Aug 2026), not new today.</li>
+    <li>0 duplicate fills, 0 stuck PENDING trades — clean.</li>
+    <li><b>1,460 IBKR_MARKET_DATA_ERROR</b> (code 354, "not subscribed") for NVDA/AAPL/MSFT/TSLA/IWM — real account-level entitlement gap, not a code defect.</li>
+    <li>7-day stability baseline not computed this pass (flagged UNKNOWN, not asserted) — directionally, today's evidence (dead watchdog + new unexplained outage) points toward <b>less</b> stable, not more.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>20 · Zero-Trade Day — Cause Breakdown</h2>
+  <div class="tbl-wrap"><table>
+    <tr><th>Cause</th><th>Applies?</th></tr>
+    <tr><td><b>E. Two-agent/confidence rule rejected them</b></td><td><b style="color:var(--red)">YES — primary, 1,292/1,292 (100%)</b></td></tr>
+    <tr><td><b>J. Engine was paused / L. Operational failure</b></td><td><b style="color:var(--yellow)">YES — compounding</b> (666 evaluations abandoned mid-flight)</td></tr>
+    <tr><td>C. Agent data unavailable</td><td>Partial (Fundamental/Macro starved)</td></tr>
+    <tr><td>A, G, H, I</td><td>No — discovery worked, RiskEngine/OMS never reached, market connected throughout</td></tr>
+  </table></div>
+</section>
+
+<section>
+  <h2>21 · Final Assessment</h2>
+  <div class="grid">
+    <div class="tile"><div class="label">Safety</div><div class="value ok">5/5</div></div>
+    <div class="tile"><div class="label">Reliability</div><div class="value zero">2/5</div></div>
+    <div class="tile"><div class="label">Signal Generation</div><div class="value warn">3/5</div></div>
+    <div class="tile"><div class="label">Quant Engine</div><div class="value warn">3/5</div></div>
+    <div class="tile"><div class="label">Data Quality</div><div class="value zero">2/5</div></div>
+    <div class="tile"><div class="label">AI Resilience</div><div class="value ok">4/5</div></div>
+    <div class="tile"><div class="label">Premarket</div><div class="value zero">2/5</div></div>
+    <div class="tile"><div class="label">Postmarket</div><div class="value zero">1/5</div></div>
+    <div class="tile"><div class="label">Learning Loop</div><div class="value zero">2/5</div></div>
+    <div class="tile"><div class="label">Observability</div><div class="value ok">4/5</div></div>
+    <div class="tile"><div class="label">Paper Evidence</div><div class="value zero">1/5</div></div>
+  </div>
+
+  <h3>What went right today</h3>
+  <p>Full pipeline ran honestly on real data; no safety invariant bypassed; FRED/FMP fallback shipped clean; AI degradation handled fail-closed correctly.</p>
+  <h3>What went wrong today</h3>
+  <p>~3h unexplained process outage; watchdog dead ~19h; 1,460 real IBKR data-entitlement errors; missed-opportunity MFE/MAE evaluation stalled.</p>
+  <h3>What Argus missed, and why</h3>
+  <p>AMZN, ASML, META, MRVL, NVDA, QQQ, SPY per its own detector — all trace to the same ChiefTrader confidence bottleneck (agents' real historical accuracy ~45–58%, honestly calibrated below the 75% bar), not a detection failure.</p>
+  <h3>Most important change for tomorrow</h3>
+  <p>Restart the watchdog and find the root cause of the unexplained outage — it cannot be caught while the thing meant to catch it is itself dead.</p>
+  <h3>What must not change</h3>
+  <p>consensusApprovalThreshold, minIndependentAgreeingAgents, calibrateConfidence()'s honesty, RiskEngine, OMS — all correctly protected, none of today's evidence argues for loosening them.</p>
+</section>
+
+<section>
+  <h2>Next Actions</h2>
+  <h3>P0 — Safety</h3>
+  <p>None required — no bypass or safety-spine defect found today.</p>
+  <h3>P1 — Reliability / Data</h3>
+  <ol>
+    <li>Restart the watchdog (dead ~19h).</li>
+    <li>Investigate the 17:54→~20:54 UTC process-absence gap (2 unclean shutdowns logged).</li>
+    <li>Investigate the 1,460 IBKR code-354 market-data-entitlement errors.</li>
+    <li>Investigate why the missed-opportunity evaluator has not completed any of today's 18 MFE/MAE evaluations.</li>
+  </ol>
+  <h3>P2 — Strategy / Learning</h3>
+  <ol>
+    <li>Wire a live consumer to the new Java CoreStrategyRunner endpoints, or they stay permanently inert.</li>
+    <li>Build a real post-market outcome-attribution pipeline (confirmed: does not exist).</li>
+    <li>Let Quant-independent-qualification and JavaFactorComposite accumulate real shadow evidence before any tuning — 0 activations today gives no basis to adjust either.</li>
+  </ol>
+</section>
+
+</main>
+<footer>
+  Every number in this report was queried directly from data/argus.db, the live runtime/health endpoint, or git/surefire output during this pass. Where a query returned an unexpected shape, it is labeled UNKNOWN rather than inferred. Companion: <code>ARGUS_DAILY_FORENSIC_2026-09-10.md</code>.
+</footer>
+
+</body>
+</html>

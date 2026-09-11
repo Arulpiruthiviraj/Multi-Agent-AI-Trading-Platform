@@ -88,6 +88,13 @@ beforeEach(() => {
   waitForFreshMarketData.mockImplementation(async () => ({ ok: true, price: 100, alreadyFresh: true }));
   getFinceptMacroSnapshot.mockReset();
   getFinceptMacroSnapshot.mockImplementation(() => null);
+  // 2026-09-10 FRED fallback addition: isolate every pre-existing test from a real FRED_API_KEY
+  // that may be set in the developer's own .env (dotenv.config() does not clear a key already
+  // present) - none of the pre-existing tests below intend to exercise the new fallback path, and
+  // without this an "AlphaVantage not configured" test could silently make a real network call
+  // instead of reaching the plain UNKNOWN_MACRO HOLD it asserts on. The dedicated FRED fallback
+  // describe block below sets this explicitly per-test.
+  delete process.env.FRED_API_KEY;
 });
 
 describe('MacroEconomyAgent - AI output validation (Phase 5 hardening)', () => {
@@ -668,5 +675,154 @@ describe('MacroEconomyAgent - directional analysis is not tied to one specific p
     expect(idea.side).toBe('HOLD');
     expect(idea.confidence).toBe(0);
     expect(idea.reasoning).toContain('no LLM is configured');
+  });
+});
+
+// 2026-09-10 real fix: AlphaVantage's free tier (25 req/day) was confirmed live to be fully
+// exhausted every session (160 real DATA_UNAVAILABLE HOLDs from MacroAgent in one morning),
+// permanently starving MacroAgent's vote. FRED (Federal Reserve Economic Data - the free,
+// no-payment, authoritative U.S. government source these indicators actually come from) is used
+// as a real fallback ONLY when AlphaVantage has already given up - never the primary source.
+describe('MacroEconomyAgent - FRED fallback when AlphaVantage is exhausted (2026-09-10 fix)', () => {
+  let agent: any;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  function mockFredResponses() {
+    // 13 monthly CPIAUCSL observations, most-recent-first (sort_order=desc) - latest 310.0,
+    // 12-months-ago 300.0 -> real YoY inflation = (310-300)/300*100 = 3.33%.
+    const cpiValues = [310.0, 309, 308, 307, 306, 305, 304, 303, 302, 301, 300.5, 300.2, 300.0];
+    return vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+      const u = String(url);
+      if (u.includes('series_id=CPIAUCSL')) {
+        return { ok: true, json: async () => ({ observations: cpiValues.map((v, i) => ({ date: `2026-0${i + 1}-01`, value: String(v) })) }) } as any;
+      }
+      if (u.includes('series_id=FEDFUNDS')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '5.33' }] }) } as any;
+      }
+      if (u.includes('series_id=UNRATE')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '4.1' }] }) } as any;
+      }
+      throw new Error(`unexpected fetch URL in test: ${u}`);
+    });
+  }
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockResolvedValue(null); // force the real fetch path, not a cache hit
+    process.env.GEMINI_API_KEY = 'test-key';
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.65, reasoning: 'fred-sourced macro' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.FRED_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    fetchSpy?.mockRestore();
+  });
+
+  it('computes a real year-over-year CPI inflation rate from FRED and still emits a directional idea when AlphaVantage is not configured at all', async () => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    process.env.FRED_API_KEY = 'fred-test-key';
+    fetchSpy = mockFredResponses();
+    agent = new MacroEconomyAgent();
+
+    await agent.analyzeMacro();
+
+    expect(routeTask).toHaveBeenCalledTimes(1);
+    const promptArg = routeTask.mock.calls[0][1] as string;
+    expect(promptArg).toContain('3.33'); // real computed YoY CPI change reached the LLM prompt
+    expect(promptArg).toContain('5.33'); // real FEDFUNDS value
+    expect(promptArg).toContain('4.1'); // real UNRATE value
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+  });
+
+  it('serves real FRED macro data when AlphaVantage itself signals a genuine rate limit (the exact live failure mode)', async () => {
+    process.env.ALPHAVANTAGE_API_KEY = 'av-test-key';
+    process.env.FRED_API_KEY = 'fred-test-key';
+    vi.useFakeTimers();
+    const budgetMod = await import('./AlphaVantageBudget');
+    (budgetMod.AlphaVantageBudget.tryConsume as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    const fredMock = mockFredResponses();
+    fetchSpy = fredMock;
+    // All 3 AlphaVantage sub-calls return a genuine 429 before FRED is ever consulted.
+    fetchSpy.mockImplementation(async (url: any) => {
+      const u = String(url);
+      if (u.includes('alphavantage')) {
+        return { status: 429, json: async () => ({}) } as any;
+      }
+      if (u.includes('series_id=CPIAUCSL')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '310.0' }, ...Array.from({ length: 12 }, (_, i) => ({ date: `2026-0${i + 1}-01`, value: '300.0' }))] }) } as any;
+      }
+      if (u.includes('series_id=FEDFUNDS')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '5.33' }] }) } as any;
+      }
+      if (u.includes('series_id=UNRATE')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '4.1' }] }) } as any;
+      }
+      throw new Error(`unexpected fetch URL in test: ${u}`);
+    });
+    agent = new MacroEconomyAgent();
+
+    const p = agent.analyzeMacro();
+    await vi.advanceTimersByTimeAsync(10000);
+    await p;
+    vi.useRealTimers();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY'); // reached the LLM path via the FRED fallback, not the RATE_LIMITED HOLD
+  });
+
+  it('still fails closed to the honest RATE_LIMITED HOLD when both AlphaVantage AND the FRED fallback are unavailable', async () => {
+    process.env.ALPHAVANTAGE_API_KEY = 'av-test-key';
+    delete process.env.FRED_API_KEY; // no fallback configured either
+    vi.useFakeTimers();
+    const budgetMod = await import('./AlphaVantageBudget');
+    (budgetMod.AlphaVantageBudget.tryConsume as unknown as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({ status: 429, json: async () => ({}) } as any);
+    agent = new MacroEconomyAgent();
+
+    const p = agent.analyzeMacro();
+    await vi.advanceTimersByTimeAsync(10000);
+    await p;
+    vi.useRealTimers();
+
+    expect(routeTask).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.reasoning).toContain('AlphaVantage daily rate limit exhausted');
+  });
+
+  it('never fabricates an inflation figure from a short CPI series - fewer than 13 observations fails that one field closed to UNKNOWN rather than guessing', async () => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    process.env.FRED_API_KEY = 'fred-test-key';
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+      const u = String(url);
+      if (u.includes('series_id=CPIAUCSL')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '310.0' }] }) } as any; // only 1 observation, not 13
+      }
+      if (u.includes('series_id=FEDFUNDS')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '5.33' }] }) } as any;
+      }
+      if (u.includes('series_id=UNRATE')) {
+        return { ok: true, json: async () => ({ observations: [{ date: '2026-08-01', value: '4.1' }] }) } as any;
+      }
+      throw new Error(`unexpected fetch URL in test: ${u}`);
+    });
+    agent = new MacroEconomyAgent();
+
+    await agent.analyzeMacro();
+
+    // Matches the pre-existing AlphaVantage-path convention (data.inflation === 'UNKNOWN' is the
+    // caller's proxy for "not configured", same coarse check applied uniformly to both providers
+    // rather than a new, provider-specific carve-out) - a real, un-fabricated field that FRED
+    // genuinely couldn't compute (fewer than 13 CPI observations) still results in the honest
+    // "not configured" HOLD, not a partially-invented directional call.
+    expect(routeTask).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.reasoning).toContain('DATA_UNAVAILABLE');
   });
 });

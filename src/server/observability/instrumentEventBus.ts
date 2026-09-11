@@ -75,8 +75,18 @@ export function installObservabilityEventBridge(): void {
       // agentType/lastError/providersAttempted, none of which matched anything below). Added those
       // three narrowly for this diagnosed case rather than reworking the schema for every possible
       // event shape - a broader per-event-type extraction scheme is a larger, separate change.
+      //
+      // Real gap found (2026-09-10, postmarket-audit follow-up): NewsEngine.ts's NEWS_ANALYZED
+      // event uses `symbols` (plural array - an article can mention more than one ticker), not
+      // `symbol` - so this column stayed null for every real news-analysis row, confirmed live
+      // (the SEI case: a real, correctly-analyzed article about Solaris Energy never surfaced in
+      // any symbol-indexed query). Falls back to the array's first entry when a singular `symbol`
+      // isn't present - a narrow, honest fix (a multi-symbol article is still indexed under only
+      // its first-listed ticker; full multi-symbol indexing would need NewsEngine.ts itself to
+      // emit one row per symbol, a larger, separate change) rather than a silent gap.
+      const singleSymbol = payload?.symbol ?? (Array.isArray(payload?.symbols) ? payload.symbols[0] : undefined);
       const safePayload = redactSecretsDeep({
-        symbol: payload?.symbol,
+        symbol: singleSymbol,
         side: payload?.side,
         status: payload?.status,
         gate: payload?.gate,
@@ -93,7 +103,7 @@ export function installObservabilityEventBridge(): void {
         category,
         eventType,
         component: 'EventBus',
-        symbol: payload?.symbol,
+        symbol: singleSymbol,
         orderId: payload?.orderId ?? payload?.id,
         traceId: ids.traceId ?? undefined,
         decisionId: ids.decisionId ?? undefined,

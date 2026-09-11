@@ -63,6 +63,24 @@ export interface TradingSafety {
    */
   javaQuantVoteMinConfidence: number;
   /**
+   * 2026-09-10, explicit operator override of this codebase's own stated caution - a distinct
+   * signal source from javaQuantVoteMinConfidence above (that one gates JavaFactorComposite's
+   * 5-factor GARCH/HMM/factor-composite vote; this one gates a genuinely different Java engine -
+   * CoreStrategyRunner's 5 CORE-strategy ensemble - RangeReversion/PullbackContinuation/
+   * MeanReversion/TrendFollowing/MomentumBreakout, each computing its own features from canonical
+   * bars via FeaturesToStrategyContextAdapter, combined via the same QuantEnsembleEngine.java
+   * correlation-adjusted math). Real evidence base at the time this was enabled: ~99 shadow
+   * observations over ~4 hours (see docs/audits/ARGUS_JAVA_QUANT_PHASE2_PRELIMINARY_PARITY_2026-09-10.md)
+   * - well short of this deployment's own documented "multi-week clean-divergence soak"
+   * precondition. The operator was told this directly and chose to override it anyway - the same
+   * pattern as javaQuantVoteMinConfidence's own 2026-09-09 override. `CoreEnsembleDecision.confidence`
+   * must clear this floor, AND `status` must be HEALTHY (never DEGRADED/UNAVAILABLE), before
+   * JavaCoreEnsembleVoteService.ts calls emitTradeIdea.
+   */
+  javaCoreEnsembleVoteMinConfidence: number;
+  /** See javaCoreEnsembleVoteMinConfidence's own doc comment. */
+  javaCoreEnsembleVoteEnabledEnvVar: string;
+  /**
    * QuantEngine internal-ensemble independent qualification (2026-09-09, explicit operator
    * override). Default OFF. The 2026-09-09 QuantEngine Expansion design doc
    * (docs/audits/ARGUS_QUANTENGINE_EXPANSION_DESIGN_2026-09-09.md §16) recommended keeping the
@@ -149,6 +167,15 @@ export interface TradingSafety {
    * (alphaVantageDailyRequestBudget - this value); MacroAgent itself is exempt from that cap.
    */
   alphaVantageMacroReservedRequests: number;
+  /**
+   * Fallback fundamentals provider (2026-09-10, real AlphaVantage-daily-cap-exhaustion finding):
+   * Financial Modeling Prep's free tier, used by FundamentalAgent.fetchFundamentals() only when
+   * AlphaVantage itself is exhausted/rate-limited for the day - never the primary source, so this
+   * never competes with alphaVantageDailyRequestBudget's own accounting.
+   */
+  fmpDailyRequestBudget: number;
+  /** Guard against a wedged FMP budget-consumption lock, mirroring alphaVantageBudgetLockTimeoutMs. */
+  fmpBudgetLockTimeoutMs: number;
   /**
    * Phase 9D (Zero-Trade Root-Cause Resolution, 2026-08-27): real DB evidence showed MacroAgent's
    * alphavantage:macro:GLOBAL cache row had fetched_at=0 (never once successfully populated) with a
@@ -473,6 +500,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'minIndependentAgreeingAgents',
   'moderateMinConfidence',
   'javaQuantVoteMinConfidence',
+  'javaCoreEnsembleVoteMinConfidence',
   'minQuantIndependentFamilies',
   'minQuantIndependentEffectiveCount',
   'moderateCalibrationTrustMinWilsonLowerBound',
@@ -505,6 +533,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'alphaVantageDailyRequestBudget',
   'alphaVantageBudgetLockTimeoutMs',
   'alphaVantageMacroReservedRequests',
+  'fmpDailyRequestBudget',
+  'fmpBudgetLockTimeoutMs',
   'alphaVantageMacroSubcallDelayMs',
   'confluenceCoordinatorConfidenceThreshold',
   'confluenceCoordinatorCooldownMs',
@@ -680,6 +710,9 @@ function loadTradingSafety(): TradingSafety {
   if (typeof raw.javaQuantVoteEnabledEnvVar !== 'string' || !raw.javaQuantVoteEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: javaQuantVoteEnabledEnvVar');
   }
+  if (typeof raw.javaCoreEnsembleVoteEnabledEnvVar !== 'string' || !raw.javaCoreEnsembleVoteEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: javaCoreEnsembleVoteEnabledEnvVar');
+  }
   if (typeof raw.quantIndependentQualificationEnabledEnvVar !== 'string' || !raw.quantIndependentQualificationEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: quantIndependentQualificationEnabledEnvVar');
   }
@@ -721,6 +754,11 @@ export function isJavaQuantVoteEnabled(): boolean {
 /** Off unless the operator has explicitly set this env var to 'true'. See quantIndependentQualificationEnabledEnvVar's doc comment above. */
 export function isQuantIndependentQualificationEnabled(): boolean {
   return isRuntimeFlagEnabled(tradingSafety.quantIndependentQualificationEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See javaCoreEnsembleVoteMinConfidence's doc comment above. */
+export function isJavaCoreEnsembleVoteEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.javaCoreEnsembleVoteEnabledEnvVar);
 }
 
 export function portfolioRiskPctForLevel(riskLevel: string | undefined | null): number {

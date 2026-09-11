@@ -1491,6 +1491,28 @@ export const candidateRankings = sqliteTable('candidate_rankings', {
  * `evaluationStatus` starts PENDING; MFE/MAE are filled in later, explicitly retrospective, never
  * presented as advance knowledge. Works even when zero trades occur (the entire point).
  */
+/**
+ * Postmarket Analysis Phase 2 (2026-09-10). One row per real trading date - the persisted output
+ * of PostMarketAnalysis.ts's point-in-time reconstruction (real discovery-lineage +
+ * missed_opportunities + trade_plans + agent-level evidence, classified per symbol, with a
+ * per-symbol narrative and an honest "Would Argus Have Known?" assessment). `status` lets the
+ * scheduler distinguish a report that's still running from one that completed or failed, so a
+ * restart mid-run can safely retry rather than silently skip the day or duplicate a completed one.
+ */
+export const postmarketReports = sqliteTable('postmarket_reports', {
+  id: text('id').primaryKey(), // == tradingDate, e.g. '2026-09-10'
+  tradingDate: text('trading_date').notNull().unique(),
+  generatedAt: text('generated_at').notNull(),
+  argusCommit: text('argus_commit'),
+  totalSymbolsTouched: integer('total_symbols_touched').notNull(),
+  byClassificationJson: text('by_classification_json').notNull(),
+  findingsJson: text('findings_json').notNull(),
+  status: text('status').notNull(), // RUNNING | COMPLETED | FAILED
+  errorMessage: text('error_message'),
+}, (table) => ({
+  tradingDateIdx: index('idx_postmarket_reports_trading_date').on(table.tradingDate),
+}));
+
 export const missedOpportunities = sqliteTable('missed_opportunities', {
   id: text('id').primaryKey(),
   symbol: text('symbol').notNull(),

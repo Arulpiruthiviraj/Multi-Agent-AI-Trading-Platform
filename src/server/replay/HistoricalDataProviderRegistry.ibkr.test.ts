@@ -112,6 +112,13 @@ describe('HistoricalDataProviderRegistry — ibkr provider', () => {
   });
 
   it('converts a real reqHistoricalData failure into DATA_UNAVAILABLE, never a fabricated dataset', async () => {
+    // 2026-09-10 real fix: HistoricalDataGateway.ensureBars() now falls back to Alpaca when the
+    // IBKR provider itself fails (confirmed live: IBKR's historical-bar API was silently starving
+    // MissedOpportunityEvaluator on this account's real market-data-entitlement gap). The original
+    // IBKR error text ("timeout for AAPL") is therefore no longer what surfaces here - it's
+    // superseded by the fallback's own outcome (no ALPACA_API_KEY configured in this test env, so
+    // the fallback also correctly fails closed) - still a real DATA_UNAVAILABLE, still never a
+    // fabricated dataset, which is this test's actual contract.
     registerHistoricalBarProvider({
       id: 'ibkr_gateway',
       fetchBars: async () => { throw new Error('IBKR historicalData timeout for AAPL (1Day)'); },
@@ -119,7 +126,7 @@ describe('HistoricalDataProviderRegistry — ibkr provider', () => {
     const p = getHistoricalProvider('ibkr')!;
     const fetched = await p.fetch({ symbol: 'IBKRTEST5', startMs: Date.UTC(2024, 2, 1), endMs: Date.UTC(2024, 2, 5), frequency: '1Day' });
     expect('error' in fetched).toBe(true);
-    if ('error' in fetched) expect(fetched.error).toMatch(/timeout/);
+    if ('error' in fetched) expect(fetched.error).toMatch(/ALPACA_API_KEY/);
   });
 
   it('treats zero bars back from IBKR as DATA_UNAVAILABLE, not an empty-but-valid dataset', async () => {

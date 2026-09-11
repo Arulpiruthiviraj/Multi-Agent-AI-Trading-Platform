@@ -165,7 +165,20 @@ export class HistoricalDataGateway {
           return;
         }
         if (existing.length > 0) return;
-        throw new Error(`IBKR historical bars returned empty for ${symbol} (${timeframe})`);
+        // Real root cause (2026-09-10, missed-opportunity-evaluation forensic pass): confirmed
+        // live that IBKR's historical-bar API returns empty for many real, liquid US symbols on
+        // this account (same market-data-entitlement gap - code 354 "not subscribed" - already
+        // observed on the live streaming path), which silently starved
+        // MissedOpportunityEvaluator.evaluatePending() forever (every record stayed PENDING, 0/18
+        // evaluated across a full session with real elapsed time to spare). Previously this threw
+        // immediately with no fallback. Alpaca's REST bars endpoint is already a real, configured,
+        // independent data source (same credentials MarketDataWorker's live tick stream already
+        // uses) - falling through to it here, instead of failing closed immediately, is the same
+        // "primary provider unavailable -> try a real, already-configured alternative before
+        // giving up" pattern as this session's FundamentalAgent/MacroAgent AlphaVantage->FMP/FRED
+        // fallback. Still never fabricates a bar - if Alpaca also has nothing, the existing
+        // no-data throw below still fires.
+        console.warn(`[HistoricalDataGateway] IBKR historical bars empty for ${symbol} (${timeframe}) - falling back to Alpaca.`);
       } catch (e: any) {
         if (existing.length > 0) {
           console.warn(
@@ -173,7 +186,7 @@ export class HistoricalDataGateway {
           );
           return;
         }
-        throw e instanceof Error ? e : new Error(String(e));
+        console.warn(`[HistoricalDataGateway] IBKR hist failed for ${symbol} (${timeframe}) - falling back to Alpaca: ${e?.message || e}`);
       }
     }
 

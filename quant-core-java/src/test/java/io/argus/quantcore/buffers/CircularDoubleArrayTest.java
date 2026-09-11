@@ -74,4 +74,38 @@ class CircularDoubleArrayTest {
         org.junit.jupiter.api.Assertions.assertThrows(
             IllegalArgumentException.class, () -> new CircularDoubleArray(0));
     }
+
+    @Test
+    void resetWhollyReplacesPriorContents() {
+        CircularDoubleArray buf = new CircularDoubleArray(3);
+        buf.push(1.0);
+        buf.push(2.0);
+        buf.push(3.0);
+        buf.push(4.0); // wraps - buffer now holds 2,3,4
+
+        buf.reset(new double[]{100.0, 200.0});
+
+        assertThat(buf.size()).isEqualTo(2);
+        assertThat(buf.toArray()).containsExactly(100.0, 200.0);
+        assertThat(buf.get(0)).isEqualTo(200.0);
+    }
+
+    @Test
+    void resetKeepsOnlyTheMostRecentCapacityEntries_whenGivenMoreThanCapacity() {
+        CircularDoubleArray buf = new CircularDoubleArray(3);
+        buf.reset(new double[]{10.0, 20.0, 30.0, 40.0, 50.0});
+
+        assertThat(buf.size()).isEqualTo(3);
+        assertThat(buf.toArray()).containsExactly(30.0, 40.0, 50.0);
+    }
+
+    @Test
+    void resetToEmptyLeavesTheBufferEmpty() {
+        CircularDoubleArray buf = new CircularDoubleArray(3);
+        buf.push(1.0);
+        buf.reset(new double[0]);
+
+        assertThat(buf.size()).isZero();
+        assertThat(buf.toArray()).isEmpty();
+    }
 }

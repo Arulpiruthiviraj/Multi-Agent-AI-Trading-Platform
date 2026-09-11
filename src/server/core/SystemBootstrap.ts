@@ -48,6 +48,7 @@ import { confluenceCoordinator } from '../services/ConfluenceCoordinator';
 import { reflectionEngine } from '../services/ReflectionEngine';
 import { predictionOutcomeEvaluator } from '../services/PredictionOutcomeEvaluator';
 import { missedOpportunityEvaluator } from '../continuous/MissedOpportunityEvaluator';
+import { postMarketAnalysisWorker } from '../continuous/PostMarketAnalysis';
 import { trainingExampleBuilder } from '../services/TrainingExampleBuilder';
 import { systemMetricsWorker } from '../services/SystemMetricsWorker';
 import { marketRegimeAgent } from '../services/MarketRegimeAgent';
@@ -112,6 +113,9 @@ export class SystemBootstrap {
     // persisted PENDING forever - see MissedOpportunityEvaluator.ts's own header for the
     // live-verified finding (592/592 historical rows never evaluated).
     missedOpportunityEvaluator.start();
+    // Phase 2 (2026-09-10): real automatic daily postmarket forensic report - runs once per
+    // real trading day, after the regular session ends. See PostMarketAnalysis.ts's own header.
+    postMarketAnalysisWorker.start();
     trainingExampleBuilder.start();
     systemMetricsWorker.start();
     dbBackupService.start();
@@ -146,6 +150,7 @@ export class SystemBootstrap {
     reflectionEngine.stop();
     predictionOutcomeEvaluator.stop();
     missedOpportunityEvaluator.stop();
+    postMarketAnalysisWorker.stop();
     trainingExampleBuilder.stop();
     systemMetricsWorker.stop();
     dbBackupService.stop();

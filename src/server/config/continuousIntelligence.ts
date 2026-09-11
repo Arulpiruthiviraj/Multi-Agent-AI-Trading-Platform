@@ -108,6 +108,17 @@ export interface ContinuousIntelligenceConfig {
   moversCacheTtlMs: number;
   moversFetchTopNPerSide: number;
   moversTopNPerScan: number;
+  /** 2026-09-10 (postmarket-audit follow-up): real, confirmed gap - NewsEngine already computes a
+   *  reviewed "genuine catalyst" bar per symbol (NewsCatalystStore.hasRealCatalystEvidence(), the
+   *  same one MarketDataWorker's reactive discovery-lineage logging already uses), but nothing
+   *  proactively fed those symbols INTO the discovery/scan universe - it only ever logged a
+   *  lineage entry reactively, after some other agent had already independently tried to look the
+   *  symbol up. A symbol with a real, high-impact news catalyst but no prior agent interest (the
+   *  confirmed live SEI case) was invisible to discovery entirely. Same liquidity/price/spread/ADV
+   *  screen as broadUniverse and movers - a catalyst story never bypasses those gates. */
+  newsCatalystDiscoveryEnabledEnvVar: string;
+  newsCatalystDiscoveryCacheTtlMs: number;
+  newsCatalystDiscoveryTopNPerScan: number;
   /** Phase 4F: minimum gap before the same symbol can be classified as a missed opportunity again. */
   missedOpportunityDetectionCooldownMs: number;
   /** Phase 4F: retrospective evaluation window used for MFE/MAE (minutes). */
@@ -276,6 +287,9 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     moversCacheTtlMs: requireNumber(raw.moversCacheTtlMs, 'moversCacheTtlMs'),
     moversFetchTopNPerSide: requireNumber(raw.moversFetchTopNPerSide, 'moversFetchTopNPerSide'),
     moversTopNPerScan: requireNumber(raw.moversTopNPerScan, 'moversTopNPerScan'),
+    newsCatalystDiscoveryEnabledEnvVar: raw.newsCatalystDiscoveryEnabledEnvVar as string,
+    newsCatalystDiscoveryCacheTtlMs: requireNumber(raw.newsCatalystDiscoveryCacheTtlMs, 'newsCatalystDiscoveryCacheTtlMs'),
+    newsCatalystDiscoveryTopNPerScan: requireNumber(raw.newsCatalystDiscoveryTopNPerScan, 'newsCatalystDiscoveryTopNPerScan'),
     missedOpportunityDetectionCooldownMs: requireNumber(raw.missedOpportunityDetectionCooldownMs, 'missedOpportunityDetectionCooldownMs'),
     missedOpportunityEvaluationHorizonMinutes: requireNumber(raw.missedOpportunityEvaluationHorizonMinutes, 'missedOpportunityEvaluationHorizonMinutes'),
     missedOpportunityLookbackMs: requireNumber(raw.missedOpportunityLookbackMs, 'missedOpportunityLookbackMs'),
@@ -324,4 +338,8 @@ export function isBroadUniverseEnabled(): boolean {
 
 export function isMoversEnabled(): boolean {
   return isRuntimeFlagEnabled(continuousIntelligence.moversEnabledEnvVar);
+}
+
+export function isNewsCatalystDiscoveryEnabled(): boolean {
+  return isRuntimeFlagEnabled(continuousIntelligence.newsCatalystDiscoveryEnabledEnvVar);
 }

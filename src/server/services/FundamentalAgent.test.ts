@@ -62,6 +62,13 @@ beforeEach(() => {
   getLatestPriceAgeMs.mockImplementation(() => 0);
   waitForFreshMarketData.mockReset();
   waitForFreshMarketData.mockImplementation(async () => ({ ok: true, price: 100, alreadyFresh: true }));
+  // 2026-09-10 FMP fallback addition: isolate every pre-existing test from a real FMP_API_KEY that
+  // may be set in the developer's own .env (dotenv.config() does not clear a key already present)
+  // - none of the pre-existing tests below intend to exercise the new fallback path, and without
+  // this an "AlphaVantage not configured" test could silently make a real network call instead of
+  // reaching the plain UNKNOWN_FUNDAMENTALS HOLD it asserts on. The dedicated FMP fallback describe
+  // block below sets this explicitly per-test.
+  delete process.env.FMP_API_KEY;
 });
 
 describe('FundamentalAnalysisAgent - AI output validation (Phase 5 hardening)', () => {
@@ -576,5 +583,111 @@ describe('FundamentalAnalysisAgent - directional analysis is not tied to one spe
     expect(idea.side).toBe('HOLD');
     expect(idea.confidence).toBe(0);
     expect(idea.reasoning).toContain('no LLM is configured');
+  });
+});
+
+// 2026-09-10 real fix: AlphaVantage's free tier (25 req/day) was confirmed live to be fully
+// exhausted every session (228 real DATA_UNAVAILABLE HOLDs in one morning), permanently starving
+// FundamentalAgent's vote. Financial Modeling Prep's free tier (250 req/day, no payment) is used
+// as a real fallback ONLY when AlphaVantage has already given up - never the primary source.
+describe('FundamentalAnalysisAgent - FMP fallback when AlphaVantage is exhausted (2026-09-10 fix)', () => {
+  let agent: any;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    emitTradeIdea.mockClear();
+    routeTask.mockClear();
+    getFresh.mockReset();
+    getFresh.mockResolvedValue(null); // force the real fetch path, not a cache hit
+    process.env.GEMINI_API_KEY = 'test-key';
+    routeTask.mockResolvedValue({ content: JSON.stringify({ recommendation: 'BUY', confidence: 0.7, reasoning: 'fmp-sourced fundamentals' }), aiCallId: 'c', provider: 'gemini', latency: 100 });
+  });
+
+  afterEach(() => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    delete process.env.FMP_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    fetchSpy?.mockRestore();
+  });
+
+  it('serves real FMP fundamentals and still emits a directional idea when AlphaVantage is not configured at all', async () => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    process.env.FMP_API_KEY = 'fmp-test-key';
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+      const u = String(url);
+      if (u.includes('/ratios-ttm/')) {
+        return { ok: true, json: async () => ([{ peRatioTTM: 31.2, debtEquityRatioTTM: 1.1 }]) } as any;
+      }
+      if (u.includes('/income-statement-growth/')) {
+        return { ok: true, json: async () => ([{ growthEPS: 0.18 }]) } as any;
+      }
+      throw new Error(`unexpected fetch URL in test: ${u}`);
+    });
+    agent = new FundamentalAnalysisAgent();
+
+    await agent.analyzeFundamentals();
+
+    expect(routeTask).toHaveBeenCalledTimes(1);
+    const promptArg = routeTask.mock.calls[0][1] as string;
+    expect(promptArg).toContain('31.2'); // real FMP peRatio reached the LLM prompt, not a fabricated value
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY');
+  });
+
+  it('serves real FMP fundamentals when AlphaVantage itself signals a rate limit (the exact live failure mode)', async () => {
+    process.env.ALPHAVANTAGE_API_KEY = 'av-test-key';
+    process.env.FMP_API_KEY = 'fmp-test-key';
+    const { AlphaVantageBudget } = await import('./AlphaVantageBudget');
+    vi.spyOn(AlphaVantageBudget, 'tryConsume').mockResolvedValue(true);
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+      const u = String(url);
+      if (u.includes('alphavantage')) {
+        return { status: 429, json: async () => ({}) } as any;
+      }
+      if (u.includes('/ratios-ttm/')) {
+        return { ok: true, json: async () => ([{ peRatioTTM: 18.5, debtEquityRatioTTM: 0.4 }]) } as any;
+      }
+      if (u.includes('/income-statement-growth/')) {
+        return { ok: true, json: async () => ([{ growthEPS: 0.05 }]) } as any;
+      }
+      throw new Error(`unexpected fetch URL in test: ${u}`);
+    });
+    agent = new FundamentalAnalysisAgent();
+
+    await agent.analyzeFundamentals();
+
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('BUY'); // reached the LLM path via the FMP fallback, not the RATE_LIMITED HOLD
+    expect(routeTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('still fails closed to the honest RATE_LIMITED HOLD when both AlphaVantage AND the FMP fallback are unavailable', async () => {
+    process.env.ALPHAVANTAGE_API_KEY = 'av-test-key';
+    delete process.env.FMP_API_KEY; // no fallback configured either
+    const { AlphaVantageBudget } = await import('./AlphaVantageBudget');
+    vi.spyOn(AlphaVantageBudget, 'tryConsume').mockResolvedValue(true);
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({ status: 429, json: async () => ({}) } as any);
+    agent = new FundamentalAnalysisAgent();
+
+    await agent.analyzeFundamentals();
+
+    expect(routeTask).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.reasoning).toContain('AlphaVantage daily rate limit exhausted');
+  });
+
+  it('never fabricates a value FMP did not actually return - a response with no usable ratio fields does not become a fake fundamentals object', async () => {
+    delete process.env.ALPHAVANTAGE_API_KEY;
+    process.env.FMP_API_KEY = 'fmp-test-key';
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ([]) } as any); // empty array - no real data
+    agent = new FundamentalAnalysisAgent();
+
+    await agent.analyzeFundamentals();
+
+    expect(routeTask).not.toHaveBeenCalled();
+    const idea = emitTradeIdea.mock.calls[0][0];
+    expect(idea.side).toBe('HOLD');
+    expect(idea.reasoning).toContain('DATA_UNAVAILABLE');
   });
 });

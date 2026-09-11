@@ -9,6 +9,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { evaluateLiveReadiness } from '../core/liveReadinessEngine';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { getAIProviderHealthSnapshot, runAIProviderHealthCheckNow } from '../ai/AIProviderHealthCheck';
+import { computeAiAvailability, computeQuantAvailability, AiAvailabilityState } from '../core/aiQuantAvailability';
 import { getTradingReadinessSnapshot, renderTradingReadinessTree } from '../core/TradingReadinessGate';
 import { getTradingSessionReport, renderTradingSessionReport } from '../core/tradingSessionReport';
 import { allowsNewEntryIdeas } from '../core/sessionRecovery';
@@ -58,21 +59,28 @@ runtimeRouter.get('/health', async (_req, res) => {
   // Zero-Trade Forensic Audit follow-up: process-alive != decision-quality-healthy. This summary
   // deliberately sits next to (not folded into) `health` so "CLI is active" can never read as
   // "AI/decision layer is fine" - full per-provider detail lives at GET /api/v2/ai/providers/health.
+  // 2026-09-10 (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §10, Phase 6): reuses
+  // computeAiAvailability() rather than re-deriving healthy/total/statuses inline a second time -
+  // same shape this route already returned, plus a new formal 3-state label alongside it.
   let aiProviderHealth: { healthy: number; total: number; statuses: Record<string, number> } | undefined;
+  let aiAvailabilityState: AiAvailabilityState | undefined;
   try {
-    const snapshot = await getAIProviderHealthSnapshot();
-    const statuses: Record<string, number> = {};
-    for (const p of snapshot) statuses[p.status] = (statuses[p.status] ?? 0) + 1;
-    aiProviderHealth = { healthy: snapshot.filter(p => p.status === 'HEALTHY').length, total: snapshot.length, statuses };
+    const snap = await computeAiAvailability();
+    aiProviderHealth = { healthy: snap.healthyProviderCount, total: snap.registeredProviderCount, statuses: snap.statuses };
+    aiAvailabilityState = snap.state;
   } catch {
     aiProviderHealth = undefined;
+    aiAvailabilityState = undefined;
   }
+  const quantAvailability = await computeQuantAvailability();
   res.status(health.ok ? 200 : 503).json({
     ok: health.ok,
     health,
     activeBroker,
     ibkrPaths,
     aiProviderHealth,
+    aiAvailabilityState,
+    quantAvailability,
     live: evaluateLiveReadiness().result,
   });
 });

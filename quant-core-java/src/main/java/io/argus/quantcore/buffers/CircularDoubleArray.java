@@ -27,6 +27,23 @@ public final class CircularDoubleArray {
         }
     }
 
+    /**
+     * Wholesale replacement of the buffer's contents with {@code values} (oldest-to-newest,
+     * matching {@link #toArray()}'s own convention), keeping only the most recent {@code capacity}
+     * entries if more are supplied. Added 2026-09-10 for TS-to-Java market-data resynchronization
+     * (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §6) — lets a symbol's state be
+     * rebuilt from a canonical snapshot after a detected sequence gap or a process restart, instead
+     * of silently accumulating a permanently-diverged history one tick at a time.
+     */
+    public void reset(double[] values) {
+        writeIndex = 0;
+        count = 0;
+        int start = Math.max(0, values.length - buffer.length);
+        for (int i = start; i < values.length; i++) {
+            push(values[i]);
+        }
+    }
+
     /** indexBack = 0 is the most recently pushed value; 1 is the one before that, etc. */
     public double get(int indexBack) {
         if (indexBack < 0 || indexBack >= count) {

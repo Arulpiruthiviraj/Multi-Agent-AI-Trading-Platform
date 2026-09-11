@@ -11,6 +11,7 @@ import { EVENTS } from '../core/eventNames';
 import { AIRouter } from '../ai/AIRouter';
 import { ExternalDataCache, looksLikeRateLimitResponse, hashObject } from './ExternalDataCache';
 import { AlphaVantageBudget } from './AlphaVantageBudget';
+import { FmpBudget } from './FmpBudget';
 import { coerceEnum, normalizeConfidence01, coerceString, parseJsonFromLlmContent, TRADE_SIDE_VALUES } from '../ai/AIOutputValidator';
 import { logErrorSafely } from '../core/SecretRedaction';
 import { generateTraceId } from '../core/traceId';
@@ -91,55 +92,99 @@ export class FundamentalAnalysisAgent {
     }
   }
 
+  /**
+   * Free fallback fundamentals provider (2026-09-10, real AlphaVantage-daily-cap-exhaustion
+   * finding: 228 real DATA_UNAVAILABLE HOLDs from FundamentalAgent in one session, 2026-09-10
+   * morning). Financial Modeling Prep's free tier (250 req/day, no payment - see
+   * fmpDailyRequestBudget in config/tradingSafety.json) is only ever attempted AFTER AlphaVantage
+   * has already given up for this symbol (no stale cache, budget exhausted/rate-limited/absent) -
+   * never the primary source, never competes with AlphaVantageBudget's own accounting. Returns
+   * null (never a fabricated value) when FMP isn't configured, has no budget left, or its own
+   * response doesn't contain real data - the caller falls through to the existing honest
+   * RATE_LIMITED/UNKNOWN HOLD in that case exactly as before this fallback existed.
+   */
+  private async tryFmpFallback(symbol: string): Promise<typeof UNKNOWN_FUNDAMENTALS | null> {
+    if (!process.env.FMP_API_KEY) return null;
+    if (!(await FmpBudget.tryConsume(1))) return null;
+    try {
+      const response = await fetch(`${networkEndpoints.marketData.fmpBaseUrl}/ratios-ttm/${symbol}?apikey=${process.env.FMP_API_KEY}`);
+      if (!response.ok) return null;
+      const rows = await response.json() as any;
+      const row = Array.isArray(rows) ? rows[0] : null;
+      if (!row) return null;
+      const peRatio = row.peRatioTTM ?? row.priceEarningsRatioTTM ?? null;
+      const debtToEquity = row.debtEquityRatioTTM ?? row.debtToEquityTTM ?? null;
+      if (peRatio == null && debtToEquity == null) return null;
+
+      let epsGrowth = 'UNKNOWN';
+      try {
+        const growthRes = await fetch(`${networkEndpoints.marketData.fmpBaseUrl}/income-statement-growth/${symbol}?limit=1&apikey=${process.env.FMP_API_KEY}`);
+        if (growthRes.ok) {
+          const growthRows = await growthRes.json() as any;
+          const growthRow = Array.isArray(growthRows) ? growthRows[0] : null;
+          if (growthRow?.growthEPS != null) epsGrowth = String(growthRow.growthEPS);
+        }
+      } catch {
+        // Best-effort only - a missing growth figure does not invalidate the real peRatio/debtToEquity above.
+      }
+
+      const result = {
+        peRatio: peRatio ?? 'UNKNOWN',
+        epsGrowth,
+        debtToEquity: debtToEquity ?? 'UNKNOWN',
+      };
+      // Cached under its own provider namespace, never conflated with AlphaVantage's cache row -
+      // a later AlphaVantage recovery must not be shadowed by a stale FMP fallback result.
+      await ExternalDataCache.set('fmp', 'fundamentals', symbol, result);
+      console.warn(`[FundamentalAgent] AlphaVantage unavailable for ${symbol} — served real fundamentals from FMP fallback.`);
+      return result;
+    } catch (e) {
+      logErrorSafely('[FundamentalAgent] FMP fallback fetch failed:', e);
+      return null;
+    }
+  }
+
+  private async fetchFundamentalsGiveUp(symbol: string, warnPrefix: string): Promise<typeof UNKNOWN_FUNDAMENTALS> {
+    const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
+    if (stale) {
+      console.warn(`[FundamentalAgent] ${warnPrefix} for ${symbol} — serving cached fundamentals.`);
+      return stale;
+    }
+    const fmp = await this.tryFmpFallback(symbol);
+    if (fmp) return fmp;
+    return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
+  }
+
   private async fetchFundamentals(symbol: string) {
     if (!process.env.ALPHAVANTAGE_API_KEY) {
-      return UNKNOWN_FUNDAMENTALS;
+      const fmp = await this.tryFmpFallback(symbol);
+      return fmp ?? UNKNOWN_FUNDAMENTALS;
     }
 
     const cached = await ExternalDataCache.getFresh<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol, FUNDAMENTALS_CACHE_MAX_AGE_MS);
     if (cached) return cached;
 
     if (await ExternalDataCache.isRateLimited('alphavantage', 'fundamentals', symbol)) {
-      const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
-      if (stale) {
-        console.warn(`[FundamentalAgent] AlphaVantage backoff active for ${symbol} — serving cached fundamentals.`);
-        return stale;
-      }
-      return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
+      return this.fetchFundamentalsGiveUp(symbol, 'AlphaVantage backoff active');
     }
 
     if (!(await AlphaVantageBudget.tryConsume(1, undefined, 'FundamentalAgent'))) {
-      const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
-      if (stale) {
-        console.warn(`[FundamentalAgent] AlphaVantage daily budget exhausted — serving cached fundamentals for ${symbol}.`);
-        return stale;
-      }
-      return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
+      return this.fetchFundamentalsGiveUp(symbol, 'AlphaVantage daily budget exhausted');
     }
 
     try {
       const response = await fetch(`${networkEndpoints.marketData.alphaVantageBaseUrl}?function=OVERVIEW&symbol=${symbol}&apikey=${process.env.ALPHAVANTAGE_API_KEY}`);
       if (response.status === 429) {
-        const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
-        if (stale) {
-          console.warn(`[FundamentalAgent] AlphaVantage HTTP 429 for ${symbol} — serving cached fundamentals.`);
-          return stale;
-        }
         console.warn(`[FundamentalAgent] AlphaVantage rate limit hit for ${symbol} - backing off for 24h.`);
         await ExternalDataCache.markRateLimited('alphavantage', 'fundamentals', symbol);
-        return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
+        return this.fetchFundamentalsGiveUp(symbol, 'AlphaVantage HTTP 429');
       }
       const data = await response.json() as any;
 
       if (looksLikeRateLimitResponse(data)) {
-        const stale = await ExternalDataCache.getStale<typeof UNKNOWN_FUNDAMENTALS>('alphavantage', 'fundamentals', symbol);
-        if (stale) {
-          console.warn(`[FundamentalAgent] AlphaVantage rate-limit body for ${symbol} — serving cached fundamentals.`);
-          return stale;
-        }
         console.warn(`[FundamentalAgent] AlphaVantage rate limit hit for ${symbol} - backing off for 24h.`);
         await ExternalDataCache.markRateLimited('alphavantage', 'fundamentals', symbol);
-        return { peRatio: 'RATE_LIMITED', epsGrowth: 'RATE_LIMITED', debtToEquity: 'RATE_LIMITED' };
+        return this.fetchFundamentalsGiveUp(symbol, 'AlphaVantage rate-limit body');
       }
 
       if (data && data.PERatio) {
@@ -156,7 +201,8 @@ export class FundamentalAnalysisAgent {
       logErrorSafely('[FundamentalAgent] AlphaVantage fetch failed:', e);
     }
 
-    return UNKNOWN_FUNDAMENTALS;
+    const fmp = await this.tryFmpFallback(symbol);
+    return fmp ?? UNKNOWN_FUNDAMENTALS;
   }
 
   // currentPrice is optional here (a HOLD's price_validity relevance is moot either way), but

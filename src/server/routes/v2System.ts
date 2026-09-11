@@ -1954,6 +1954,109 @@ v2Router.get('/quant-core/parity', async (req, res) => {
 });
 
 // ==========================================================================================
+// 2026-09-10 (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md, frontend follow-up):
+// full quant-engine catalog + real wiring-state flags for the "how does Argus actually use the
+// quant engine" frontend view. Reuses loadEngineOwnershipRegistry() (config/modelRegistry.ts's
+// existing, validated, cached loader) rather than re-reading config/engineOwnership.json raw.
+// Categorization mirrors this session's own earlier one-off inventory pass (same 15-bucket
+// scheme by key prefix), now made a real, live, server-computed response instead of a one-time
+// script. Deliberately does NOT claim any RESEARCH-status engine is "in use" — status is
+// reported verbatim from the registry, honestly distinguishing dormant catalog entries from the
+// handful of genuinely wired paths (see the wiring block below).
+// ==========================================================================================
+function titleCaseEngineKey(key: string): string {
+  return key.split('_').map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+}
+
+const SESSION_STOCK_ETF_KEYS = new Set([
+  'rsi_mean_reversion', 'macd_crossover', 'bollinger_mean_reversion', 'vix_effective_ratio_filter',
+  'kama_crossover', 'keltner_channel_breakout', 'aroon_crossover', 'on_balance_volume',
+  'accumulation_distribution', 'money_flow_index', 'max_effect', 'fifty_two_week_high_momentum',
+  'gap_continuation', 'relative_strength_vs_benchmark', 'atr_breakout', 'parabolic_sar',
+  'williams_percent_r', 'risk_adjusted_momentum', 'three_moving_average_alignment',
+  'internal_bar_strength', 'residual_return',
+]);
+
+function categorizeQuantModel(key: string): string {
+  if (key.startsWith('option_') || ['black_scholes_pricing', 'delta_hedged_gamma_pnl', 'implied_correlation'].includes(key)) return 'Options';
+  if (key.startsWith('fx_') || ['min_variance_two_strategy_combiner', 'cross_sectional_quantile_basket', 'hodrick_prescott_filter'].includes(key)) return 'FX';
+  if (key.startsWith('commodity_')) return 'Commodities';
+  if (key.startsWith('futures_') || key === 'interest_rate_futures_hedge_ratio') return 'Futures';
+  if (key.startsWith('cdo_')) return 'Structured Products (CDO)';
+  if (key.startsWith('bond_') || ['cds_basis_arbitrage', 'swap_spread_arbitrage'].includes(key)) return 'Fixed Income';
+  if (key.startsWith('index_')) return 'Index';
+  if (key.startsWith('vix_') || key.startsWith('volatility_') || key === 'variance_swap') return 'Volatility';
+  if (key.startsWith('crypto_')) return 'Crypto';
+  if (key === 'position_averaging' || key === 'smart_beta_factor') return 'Stocks & ETFs (Retail Strategy Research)';
+  if (SESSION_STOCK_ETF_KEYS.has(key)) return 'Stocks & ETFs';
+  return 'Cross-Asset / Institutional Infrastructure';
+}
+
+v2Router.get('/quant-core/catalog', async (_req, res) => {
+  try {
+    const { loadEngineOwnershipRegistry } = await import('../config/modelRegistry');
+    const { isQuantJavaCoreEnabled } = await import('../config/tradingSafety');
+    const { isLiveIdeaEmissionEnabled } = await import('../services/QuantCoreBridge');
+    const { isJavaQuantVoteEnabled, isQuantIndependentQualificationEnabled } = await import('../config/tradingSafety');
+
+    const registry = loadEngineOwnershipRegistry();
+    const sectionLabels: Record<string, string> = {
+      indicators: 'Live TS Indicators',
+      strategies: 'Live TS CORE Strategies',
+      riskAndExecution: 'Architecture Spine',
+      backtesting: 'Backtesting Infrastructure',
+    };
+
+    type CatalogEngine = {
+      key: string; name: string; category: string; status: string | null;
+      owner: string; javaAvailable: boolean; httpEndpoint: string; liveConsumer: string;
+      javaAuthoritative: boolean; description: string;
+    };
+    const engines: CatalogEngine[] = [];
+
+    for (const section of ['indicators', 'strategies', 'quantModels', 'riskAndExecution', 'backtesting'] as const) {
+      const group = registry[section] || {};
+      for (const [key, entry] of Object.entries(group)) {
+        if (key.startsWith('$')) continue;
+        const category = section === 'quantModels' ? categorizeQuantModel(key) : sectionLabels[section];
+        engines.push({
+          key,
+          name: titleCaseEngineKey(key),
+          category,
+          status: entry.status ?? null,
+          owner: entry.owner ?? 'UNKNOWN',
+          javaAvailable: !!entry.javaAvailable,
+          httpEndpoint: (entry.httpEndpoint as string) ?? 'NONE',
+          liveConsumer: (entry.liveConsumer as string) ?? 'NONE',
+          javaAuthoritative: !!entry.javaAuthoritative,
+          description: (entry.javaLocation as string) ?? (entry.nodeLocation as string) ?? '',
+        });
+      }
+    }
+
+    const categoryCounts: Record<string, number> = {};
+    for (const e of engines) categoryCounts[e.category] = (categoryCounts[e.category] ?? 0) + 1;
+
+    res.json({
+      ok: true,
+      totalEngines: engines.length,
+      categoryCounts,
+      engines,
+      // Real wiring-state flags, not a static/fabricated diagram - the frontend's "flow" view
+      // reads these to honestly label which paths are actually live right now vs. dormant.
+      wiring: {
+        javaQuantCoreEnabled: isQuantJavaCoreEnabled(),
+        javaLiveIdeasEnabled: isLiveIdeaEmissionEnabled(),
+        javaFactorCompositeVoteEnabled: isJavaQuantVoteEnabled(),
+        quantIndependentQualificationEnabled: isQuantIndependentQualificationEnabled(),
+      },
+    });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ==========================================================================================
 // Phase 4B (Evidence-Aware Consensus, SHADOW MODE ONLY, 2026-08-26) — read-only legacy-vs-shadow
 // consensus divergence history. Same pattern as /confluence/recent and /quant-core/parity above:
 // ChiefTraderAgent.ts logs via structuredLogger (observability_events), never the EventBus, and

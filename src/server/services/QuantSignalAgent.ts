@@ -32,12 +32,13 @@ import { historicalDataGateway, Bar } from '../engines/backtest/HistoricalDataGa
 import { getRegisteredHistoricalBarProvider } from '../engines/backtest/historicalBarProvider';
 import { classifyRegime, RegimeResult } from '../quant/RegimeEngine';
 import { quantCoreBridge } from './QuantCoreBridge';
+import { emitJavaCoreEnsembleVoteIfEligible } from './JavaCoreEnsembleVoteService';
 import { getMarketContext, MarketContextResult } from '../quant/MarketContext';
 import { computeMomentumFeatures } from '../quant/indicators/momentum';
 import { computeVolumeFeatures } from '../quant/indicators/volume';
 import { computeSupportResistanceFeatures } from '../quant/indicators/supportResistance';
 import { computeSmcFeatures } from '../quant/indicators/smc';
-import { evaluateAll, bestStrategyIdea } from '../quant/strategies/StrategyEngine';
+import { evaluateAll, bestStrategyIdea, CORE_STRATEGIES } from '../quant/strategies/StrategyEngine';
 import { filterQuarantinedStrategies } from '../quant/strategies/StrategyEmissionEligibility';
 import { selectWithBoundedExploration } from '../quant/strategies/StrategyExplorationScheduler';
 import { resolvePaperTestingOverlay } from '../research/paperTestingOverlay';
@@ -285,6 +286,44 @@ export class QuantSignalAgent {
       ...(isMultiAssetEnabled() ? { assetClass: classifyAsset({ symbol, price: currentPrice }).assetClass } : {}),
     };
     const strategyEvaluations = evaluateAll(strategyContext);
+    // SHADOW-ONLY Java CORE-strategy ensemble comparison (docs/audits/
+    // ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md §21 Phase 2/3): compares TS's own best-of-the-
+    // 5-CORE-strategies pick against Java's real, bars-owning /api/v1/quant/ensemble/{symbol}
+    // result (Java computes its own features from these same bars via
+    // FeaturesToStrategyContextAdapter - never fed TS's precomputed strategyContext). Fire-and-
+    // forget, wrapped in try/catch exactly like the existing compareRegimeParity call two lines
+    // above - must add zero latency and can never affect the real emitted idea. Comparing only
+    // against the CORE subset of strategyEvaluations (not the 16 experimental strategies Java
+    // doesn't implement) keeps this an apples-to-apples check.
+    try {
+      void quantCoreBridge.fetchCoreEnsembleDecision(symbol, bars).then((javaEnsemble) => {
+        if (!javaEnsemble) return;
+        const coreIds = new Set(CORE_STRATEGIES.map((s) => s.id));
+        const tsBest = bestStrategyIdea(strategyEvaluations.filter((e) => coreIds.has(e.strategy)));
+        const tsSide = tsBest?.side ?? 'HOLD';
+        const agree = tsSide === javaEnsemble.direction;
+        observeSafe(() => {
+          structuredLogger.info('quant_core_strategy_parity_divergence', {
+            category: 'OBSERVABILITY',
+            eventType: 'QUANT_CORE_STRATEGY_PARITY_DIVERGENCE',
+            symbol,
+            reasoning: `TS best-of-CORE=${tsSide} (conf ${tsBest?.confidence ?? 'n/a'}) vs Java ensemble=${javaEnsemble.direction} `
+              + `(status ${javaEnsemble.status}, conf ${javaEnsemble.confidence.toFixed(2)}, effIndep ${javaEnsemble.effectiveIndependentCount.toFixed(2)}) - agree=${agree}`,
+          });
+        });
+        // 2026-09-10, explicit operator override (see JavaCoreEnsembleVoteService.ts's own header) -
+        // the real independent vote this shadow comparison feeds when eligible. Off by default
+        // (ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED); a no-op call when disabled. Wrapped defensively -
+        // a throw here must never break this cycle's real TS-side evaluation below.
+        try {
+          emitJavaCoreEnsembleVoteIfEligible(symbol, javaEnsemble, currentPrice);
+        } catch {
+          /* real vote path, but a failure here must never propagate into the surrounding evaluation */
+        }
+      }).catch(() => {});
+    } catch {
+      /* shadow diagnostics only - must never affect real evaluation */
+    }
     // Adaptive (default): all CORE evaluations stay in play; RegimeEngine + desk ranking pick the
     // highest-conviction setup. Manual Strategy Focus is a discretionary filter only.
     const { tradingEngine } = await import('../engines/TradingEngine');
@@ -528,6 +567,25 @@ export class QuantSignalAgent {
       const internalEnsemble = isQuantIndependentQualificationEnabled() && (idea.side === 'BUY' || idea.side === 'SELL')
         ? await computeInternalEnsembleQualification(symbol, bars, strategyEvaluations, idea.side)
         : null;
+      // 2026-09-10, real observability gap closed (see InternalEnsembleQualification.sideMismatch's
+      // own doc comment): when the broader correlation-adjusted ensemble disagrees with
+      // bestStrategyIdea()'s picked side, this used to be indistinguishable from "agreed but
+      // didn't clear the family/effective-count bar" - never affects which idea is emitted or any
+      // gate, purely diagnostic evidence for measuring whether top-1 strategy selection is
+      // discarding real, differently-directed confluence.
+      if (internalEnsemble?.sideMismatch) {
+        observeSafe(() => {
+          structuredLogger.info('quant_confluence_side_mismatch', {
+            category: 'OBSERVABILITY',
+            eventType: 'QUANT_CONFLUENCE_SIDE_MISMATCH',
+            symbol,
+            traceId,
+            reasoning: `bestStrategyIdea() picked ${idea.side}, but the broader correlation-adjusted ensemble `
+              + `(${internalEnsemble.totalVotes} votes) resolved to ${internalEnsemble.rawSide} `
+              + `(effIndep ${internalEnsemble.effectiveIndependentCount.toFixed(2)}) - never affects the emitted idea or any gate, diagnostic only.`,
+          });
+        });
+      }
       eventBus.emitTradeIdea({
         traceId, symbol, side: idea.side, confidence: idea.confidence,
         currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',

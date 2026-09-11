@@ -30,10 +30,57 @@ final class SymbolState {
 
     private long lastTimestampMs;
 
+    /**
+     * Sequence tracking added 2026-09-10 (docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md
+     * §6) — the confirmed, root-caused fix for the RSI/MACD shadow-parity divergence: the prior
+     * fire-and-forget POST /api/v1/ticks had no way for this class to know a tick had been dropped,
+     * so one lost HTTP call permanently diverged this buffer from TS's own price history (RSI/MACD's
+     * recursive smoothing never self-corrects the way a plain SMA would). -1 means "no sequence
+     * established yet" — the first tick with a sequence number initializes it rather than being
+     * treated as a gap.
+     */
+    private long lastAppliedSequence = -1;
+
+    /** No-sequence overload — kept for any caller (tests, etc.) that doesn't send one; never treated as a gap. */
     synchronized void onTick(double price, Double volume, long timestampMs) {
+        applyTick(price, volume, timestampMs);
+    }
+
+    /**
+     * Returns true if a gap was detected (the received sequence is not exactly
+     * lastAppliedSequence+1) — the caller (QuantCoreServer.handleTicks) reports this back to TS so
+     * the bridge can trigger a resync. The tick is still applied either way (never discarded) —
+     * detecting a gap does not mean refusing data, it means flagging that a resync is now needed.
+     */
+    synchronized boolean onTick(double price, Double volume, long timestampMs, long sequence) {
+        boolean gap = lastAppliedSequence >= 0 && sequence != lastAppliedSequence + 1;
+        lastAppliedSequence = sequence;
+        applyTick(price, volume, timestampMs);
+        return gap;
+    }
+
+    private void applyTick(double price, Double volume, long timestampMs) {
         prices.push(price);
         volumes.push(volume != null ? volume : 0.0);
         lastTimestampMs = timestampMs;
+    }
+
+    /**
+     * Wholesale state resynchronization from a canonical TS-supplied snapshot — the fix for a
+     * detected gap, a Java restart (this class has no persistence; a fresh instance starts with
+     * lastAppliedSequence=-1 and empty buffers until this is called), or a periodic safety-net
+     * resync. Replaces prices/volumes entirely (CircularDoubleArray.reset) rather than appending,
+     * so a resync is idempotent and self-healing regardless of how diverged the prior state was.
+     */
+    synchronized void resync(double[] priceHistory, double[] volumeHistory, long sequence, long timestampMs) {
+        prices.reset(priceHistory);
+        volumes.reset(volumeHistory != null ? volumeHistory : new double[0]);
+        lastAppliedSequence = sequence;
+        lastTimestampMs = timestampMs;
+    }
+
+    synchronized long lastAppliedSequence() {
+        return lastAppliedSequence;
     }
 
     synchronized IndicatorSnapshot snapshot(String symbol) {
@@ -66,7 +113,11 @@ final class SymbolState {
 
     private static Double windowedVwap(double[] prices, double[] volumes) {
         double sumPv = 0, sumV = 0;
-        for (int i = 0; i < prices.length; i++) {
+        // Defensive bound, not just prices.length: a resync() can in principle leave the two
+        // CircularDoubleArrays at different counts if a caller ever supplies mismatched-length
+        // price/volume histories - never index past the shorter one rather than throwing.
+        int n = Math.min(prices.length, volumes.length);
+        for (int i = 0; i < n; i++) {
             if (volumes[i] > 0) {
                 sumPv += prices[i] * volumes[i];
                 sumV += volumes[i];

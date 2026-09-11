@@ -45,6 +45,12 @@
       "label": "Java Quant Vote",
       "description": "One TRADE_IDEA_GENERATED per round-robin Java factor-composite analysis when the regime/volatility-adjusted advisory confidence clears javaQuantVoteMinConfidence and is not gated. Requires ARGUS_JAVA_QUANT_VOTE_ENABLED=true (2026-09-09, explicit operator override of this codebase's own documented shadow-tracking precondition - see JavaQuantAdvisoryService.ts's own header and docs/architecture/ARGUS_ARCHITECTURE.md's Java Quant Core section).",
       "requiresEnv": "ARGUS_JAVA_QUANT_VOTE_ENABLED"
+    },
+    {
+      "id": "JavaCoreEnsemble",
+      "label": "Java CORE-Strategy Ensemble Vote",
+      "description": "One TRADE_IDEA_GENERATED per QuantSignalAgent cycle from CoreStrategyRunner's real, canonical-bar-owning 5-CORE-strategy ensemble (RangeReversion/PullbackContinuation/MeanReversion/TrendFollowing/MomentumBreakout, correlation-adjusted via QuantEnsembleEngine.java) when status=HEALTHY, direction is not HOLD, and confidence clears javaCoreEnsembleVoteMinConfidence. Requires ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED=true (2026-09-10, explicit operator override of this codebase's own documented shadow-tracking precondition - see JavaCoreEnsembleVoteService.ts's own header). A distinct signal source from JavaFactorComposite above - different Java engine, different features, no double-counting.",
+      "requiresEnv": "ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED"
     }
   ],
   "alwaysOn": [

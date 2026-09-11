@@ -25,7 +25,8 @@
     "alphaVantageBaseUrl": "https://www.alphavantage.co/query",
     "finnhubBaseUrl": "https://finnhub.io/api/v1",
     "fmpBaseUrl": "https://financialmodelingprep.com/api/v3",
-    "polygonBaseUrl": "https://api.polygon.io/v2"
+    "polygonBaseUrl": "https://api.polygon.io/v2",
+    "fredBaseUrl": "https://api.stlouisfed.org/fred/series/observations"
   },
 
   "newsRss": {

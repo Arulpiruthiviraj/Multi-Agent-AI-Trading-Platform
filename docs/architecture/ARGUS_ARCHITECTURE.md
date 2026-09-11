@@ -549,6 +549,42 @@ array each call, feeding two different-length slices of the same tick stream int
 algorithms reliably diverges. Fixed by adding `tradingSafety.quantJavaCoreLocalHistoryCap` (200,
 matching Java's `CircularDoubleArray` capacity) so both sides compare over the same window length.
 
+### Target architecture — deterministic Quant authority (2026-09-10 ADR, pointer only)
+
+Full decision record, model classification, correlation/ensemble design, canonical-data protocol
+design, AI/Java failure matrices, and staged implementation plan:
+`docs/audits/ARGUS_JAVA_QUANT_AUTHORITY_ADR_2026-09-10.md`. Not repeated here — summary only:
+
+- **Verdict:** Java Quant Core should become *a* deterministic quantitative foundation alongside
+  TS's own `StrategyEngine.ts` — not the sole one. TS `StrategyEngine` stays permanently supported
+  (not a legacy shim) specifically because it has zero external-process dependency, which is a real
+  resilience property a Java-only design would give up for no offsetting benefit.
+- **New finding, not previously documented:** the already-ported, already-parity-verified
+  `io.argus.quantcore.features.*` package (`RegimeEngine.java`, `MarketContext.java`, etc.) is
+  **not connected** to `io.argus.quantcore.strategy.types.StrategyContext` (the type the 5 CORE
+  Java strategies actually consume) — two separate, disconnected record hierarchies for the same
+  concept, with zero adapter between them. This is the concrete, smaller-than-expected P0 (an
+  adapter class + a real shadow caller for `/api/v1/evaluate`), not a from-scratch FeatureEngine
+  build.
+- **Correlation/independence:** reuse `QuantEnsembleEngine.java`'s existing Kish/Grinold-Kahn
+  `effectiveIndependentCount()` math (already real, already live via `internalQuantEnsemble.ts`) —
+  do not build a second correlation system.
+- **AI dependency:** confirmed via direct source read that `TechnicalAgent` + `QuantSignalAgent`
+  (both zero-AI-dependency) already suffice to satisfy `minIndependentAgreeingAgents` without any
+  LLM call — `ChiefTraderAgent.ts:455-473`'s `hasAnyRoutableProvider()` check already skips the
+  debate (not a fabricated HOLD) on total AI outage. Gap found: partial AI degradation (some
+  providers up, the attempted one fails) still produces a real fail-closed HOLD via
+  `pushDebateFailClosed()` — backwards from total-outage handling, a named fix candidate.
+- **Open risk named directly, not silently accepted:** both 2026-09-09 overrides
+  (`JavaQuantAdvisoryService.emitJavaQuantVoteIfEligible()`, `isQuantIndependentQualificationEnabled`)
+  are live in production paper trading (`.env` confirmed: `ARGUS_JAVA_QUANT_VOTE_ENABLED=true`,
+  `ARGUS_QUANT_INDEPENDENT_QUALIFICATION_ENABLED=true`) ahead of the canonical tick-delivery fix
+  above — a real data-quality risk, not a safety-gate violation.
+- **A second, unresolved conflict found this pass:** this section's own 2026-08-26 "root cause...
+  fixed via history-window-length alignment" note may not fully explain the Forensic Audit's
+  2026-08-24→09-04 divergence figures (a window spanning both sides of that fix). See the ADR's §6
+  addendum for the recommended fresh, date-segmented measurement.
+
 ### Migration blueprint status (2026-08-20/21 proposal — mostly superseded by the above, kept for
 roadmap context)
 
