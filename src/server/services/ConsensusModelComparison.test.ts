@@ -64,6 +64,38 @@ describe('recordConsensusModelComparison', () => {
     }
   });
 
+  it('2026-09-11: populates rawSignalShadow fields when provided, and leaves them null when omitted', async () => {
+    const logSpy = vi.fn();
+    const { structuredLogger } = await import('../observability/StructuredLogger');
+    const restore = structuredLogger.info;
+    structuredLogger.info = logSpy as any;
+    try {
+      recordConsensusModelComparison({
+        traceId: 't5', symbol: 'QQQ', legacyDecision: 'SELL', legacyApproved: false, legacyConfidence: 0.24,
+        threshold: 0.75,
+        shadow: shadow({ finalDecision: 'HOLD', aggregateConfidence: 0.24, uncertainty: 0 }),
+        rawSignalShadow: shadow({ finalDecision: 'BUY', aggregateConfidence: 0.79, bullishEvidence: 0.79, uncertainty: 0 }),
+      });
+      const payload = logSpy.mock.calls[0][1];
+      expect(payload.rawSignalDecision).toBe('BUY');
+      expect(payload.rawSignalApproved).toBe(true);
+      expect(payload.rawSignalConfidence).toBe(0.79);
+      expect(payload.agreeWithRawSignal).toBe(false); // legacy rejected, raw-signal shadow would have approved BUY
+
+      logSpy.mockClear();
+      recordConsensusModelComparison({
+        traceId: 't6', symbol: 'AAPL', legacyDecision: 'HOLD', legacyApproved: false, legacyConfidence: 0.3,
+        threshold: 0.75, shadow: shadow({}),
+      });
+      const payload2 = logSpy.mock.calls[0][1];
+      expect(payload2.rawSignalDecision).toBeNull();
+      expect(payload2.rawSignalApproved).toBeNull();
+      expect(payload2.agreeWithRawSignal).toBeNull();
+    } finally {
+      structuredLogger.info = restore;
+    }
+  });
+
   it('never throws even if structuredLogger itself throws', async () => {
     const { structuredLogger } = await import('../observability/StructuredLogger');
     const restore = structuredLogger.info;

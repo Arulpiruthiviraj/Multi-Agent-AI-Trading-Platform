@@ -84,6 +84,26 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.confidence).toBeCloseTo(0.95, 5);
   });
 
+  it('2026-09-11 (full trading readiness remediation, Phase 1 item 2): surfaces the raw/historical/decision confidence decomposition per agent, not just one opaque number', async () => {
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+
+    await agent.evaluateConsensus('AAPL', 'calib-decomp-1');
+
+    const terminalCall = infoSpy.mock.calls.find(c => c[0] === 'consensus_terminal_reason' && (c[1] as any).traceId === 'calib-decomp-1');
+    expect(terminalCall).toBeDefined();
+    const participatingAgents = (terminalCall![1] as any).participatingAgents as Array<any>;
+    expect(participatingAgents.length).toBeGreaterThan(0);
+    for (const p of participatingAgents) {
+      // The mocked DB (this test file's shared mockDb) never returns a real calibration row, so
+      // every agent here has genuinely zero evaluated history - dataQuality must say so explicitly
+      // rather than silently presenting an unearned precise-looking number.
+      expect(p.calibrationDataQuality).toBe('NO_CALIBRATION_DATA');
+      expect(p.rawSignalStrength).toBeCloseTo(0.95, 5);
+      expect(p.historicalReliability).toBeNull();
+    }
+  });
+
   it('logs the collapsed interim-evaluation count the moment a symbol finally persists (telemetry-reconciliation fix, ARGUS_CURRENT_STATE_AND_FRIDAY_SESSION_FORENSIC_AUDIT.md §5/§18)', async () => {
     const infoSpy = vi.spyOn(structuredLogger, 'info');
 
@@ -308,35 +328,42 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(emitChiefApproval).toHaveBeenCalledTimes(1);
   });
 
-  it('does not approve when adversarial debate throws (fail-closed HOLD)', async () => {
+  it('2026-09-11 consensus fix: a debate that throws is fail-closed and excluded from evidence entirely - no fabricated ConsensusDebate HOLD vote', async () => {
     routeConsensus.mockRejectedValue(new Error('llm down'));
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
 
     await agent.reviewIdea({ traceId: 'df1', symbol: 'NVDA', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
     await agent.reviewIdea({ traceId: 'df1', symbol: 'NVDA', side: 'BUY', confidence: 0.55, agent: 'NewsAgent', reasoning: 'confirm' });
 
     const deadline = Date.now() + 2000;
     while (Date.now() < deadline) {
-      if (agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && i.side === 'HOLD')) break;
+      if (infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')) break;
       await new Promise(r => setTimeout(r, 20));
     }
 
-    expect(emitChiefApproval).not.toHaveBeenCalled();
-    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && i.side === 'HOLD')).toBe(true);
+    // The fail-closed debate is observable (logged) but never becomes a directional vote - the
+    // real bug this fixes: previously this exact path injected a confidence-0.8 hard-veto HOLD.
+    expect(infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')).toBe(true);
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
+    // TechnicalAgent + NewsAgent still independently qualify - the fail-closed exclusion removes
+    // the fabricated veto, it does not itself invent a new reason to reject or approve.
   });
 
-  it('does not approve when adversarial debate returns no verdict (fail-closed HOLD)', async () => {
+  it('2026-09-11 consensus fix: a debate that resolves with no usable verdict is fail-closed and excluded from evidence entirely', async () => {
     routeConsensus.mockResolvedValue({});
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
 
     await agent.reviewIdea({ traceId: 'df2', symbol: 'AMD', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
     await agent.reviewIdea({ traceId: 'df2', symbol: 'AMD', side: 'BUY', confidence: 0.55, agent: 'NewsAgent', reasoning: 'confirm' });
 
     const deadline = Date.now() + 2000;
     while (Date.now() < deadline) {
-      if (agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && i.side === 'HOLD')) break;
+      if (infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')) break;
       await new Promise(r => setTimeout(r, 20));
     }
 
-    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')).toBe(true);
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
   });
 
   // Zero-Trade Forensic Audit follow-up: a debate call that has no routable AI provider always
@@ -514,13 +541,15 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     let releaseCalibration!: () => void;
     const gate = new Promise<void>((resolve) => { releaseCalibration = resolve; });
     let calibrationCalls = 0;
-    const realCalibrate = agent.calibrateConfidence.bind(agent);
+    const realCalibrateDetailed = (agent as any).calibrateConfidenceDetailed.bind(agent);
     // evaluateConsensusSerialized calibrates every relevant idea concurrently (Promise.all), so
     // both calls in this pair start together - gate all of them open until released below.
-    vi.spyOn(agent, 'calibrateConfidence').mockImplementation(async (agentName: string, rawConfidence: number) => {
+    // 2026-09-11: evidence-building now calls calibrateConfidenceDetailed() directly (the fuller,
+    // decomposed lookup) rather than the thin calibrateConfidence() wrapper - gate on the real call.
+    vi.spyOn(agent as any, 'calibrateConfidenceDetailed').mockImplementation(async (agentName: string, rawConfidence: number) => {
       calibrationCalls += 1;
       await gate;
-      return realCalibrate(agentName, rawConfidence);
+      return realCalibrateDetailed(agentName, rawConfidence);
     });
 
     const evalPromise = agent.evaluateConsensus('AAPL', 'race-1');
@@ -585,7 +614,7 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(agent.getLastConsensusOutcome()?.independentAgreeingAgents).toBeLessThan(MIN_INDEPENDENT_AGREEING_AGENTS);
   });
 
-  it('a 0-successCount debate is fail-closed HOLD even if consensus_verdict is a truthy HOLD string', async () => {
+  it('2026-09-11 consensus fix: a 0-successCount debate (truthy HOLD string, zero real providers) is fail-closed and excluded - no longer hard-vetoes an otherwise-qualifying round', async () => {
     routeConsensus.mockResolvedValue({
       consensus_verdict: 'HOLD',
       successCount: 0,
@@ -595,17 +624,25 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
         { status: 'error', provider: 'gemini', error: 'fetch failed' },
       ],
     });
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
     await agent.reviewIdea({ traceId: 'z1', symbol: 'IWM', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
     await agent.reviewIdea({ traceId: 'z1', symbol: 'IWM', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'confirm' });
+    // Approval happens on a re-evaluation scheduled AFTER the fail-closed exclusion resolves, not
+    // synchronously with it - poll for the approval itself, not just the earlier log event.
     const deadline = Date.now() + 2000;
     while (Date.now() < deadline) {
-      if (agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && String(i.reasoning).includes('fail-closed'))) break;
+      if (emitChiefApproval.mock.calls.length > 0) break;
       await new Promise(r => setTimeout(r, 20));
     }
-    expect(emitChiefApproval).not.toHaveBeenCalled();
-    const debate = agent.recentIdeas.find((i: any) => i.agent === 'ConsensusDebate');
-    expect(debate.reasoning).not.toMatch(/Based on 3 models/i);
-    expect(debate.debateTelemetry.providers_succeeded).toBe(0);
+    // Real bug this fixes: before the fix, this exact scenario (0 of 3 providers succeeded, but a
+    // truthy consensus_verdict string) still hard-vetoed TechnicalAgent+KronosEngine's own
+    // otherwise-clearing 0.95/0.95 agreement down below 75%. The fail-closed HOLD is still
+    // observable (logged), but no longer contaminates the evidence pool - two strong independent
+    // agents now correctly approve on their own merits.
+    expect(infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')).toBe(true);
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].confidence).toBeCloseTo(0.95, 5);
   });
 
   it('does not start a second routeConsensus while a debate is already in flight for that symbol', async () => {

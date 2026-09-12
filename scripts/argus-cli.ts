@@ -154,28 +154,63 @@ async function waitForHealth(timeoutMs = 60_000, notPid?: number): Promise<boole
 }
 
 /**
+ * Real defect fixed (2026-09-12, live-reproduced double-engine incident): a probe result of
+ * "the fetch threw" was previously treated as unconditional proof that nothing is listening -
+ * indistinguishable from a genuine ECONNREFUSED (port closed) and a mere TimeoutError (the server
+ * is alive but momentarily slow/busy, confirmed live via this codebase's own recurring
+ * heartbeat-staleness pattern in data/logs/watchdog.log). waitForHealthGone() was concluding "the
+ * old process is confirmed gone" from a slow-but-alive server, clearing the pid file and letting
+ * startEngine() spawn a second real engine while the first was still actually holding port 3000 -
+ * the second became an untracked, unreachable-via-HTTP zombie (fully live: real IBKR/Ollama/broker
+ * connections) that only stopped when it later crashed on its own. `probeHealth()` now returns a
+ * real three-way result so callers can tell "confirmed nothing listening" apart from "unknown -
+ * treat as still possibly alive," matching Node's own documented fetch failure shapes:
+ * ECONNREFUSED (TypeError, cause.code === 'ECONNREFUSED') vs a timeout (TimeoutError).
+ */
+export type HealthProbeResult =
+  | { kind: 'answered'; pid: number | undefined }
+  | { kind: 'refused' }
+  | { kind: 'unknown' };
+
+export async function probeHealth(): Promise<HealthProbeResult> {
+  try {
+    const h = await fetchJson('/api/v2/runtime/health') as { ok?: boolean; health?: { pid?: number } };
+    return { kind: 'answered', pid: h.ok ? h.health?.pid : undefined };
+  } catch (e) {
+    if (e instanceof AuthRequiredError) throw e;
+    const cause = (e as { cause?: { code?: string } } | undefined)?.cause;
+    if (cause?.code === 'ECONNREFUSED') return { kind: 'refused' };
+    // Any other failure (TimeoutError, ECONNRESET mid-response, etc.) is NOT proof the process is
+    // gone - it may just be slow or momentarily busy. Never conflate "I couldn't confirm" with
+    // "confirmed absent".
+    return { kind: 'unknown' };
+  }
+}
+
+/**
  * DEF-26 support: poll until nothing answers /health, confirming a graceful shutdown request
  * actually completed rather than assuming a fixed delay was long enough (the previous restart()
- * used a blind 1500ms setTimeout with no confirmation at all).
+ * used a blind 1500ms setTimeout with no confirmation at all). Only a genuine ECONNREFUSED counts
+ * as "gone" - an ambiguous/timeout result keeps polling rather than declaring victory early (see
+ * probeHealth()'s doc comment for the live incident this closes).
  */
-async function waitForHealthGone(timeoutMs = 15_000): Promise<boolean> {
+export async function waitForHealthGone(timeoutMs = 15_000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    const pid = await currentlyAnsweringPid();
-    if (pid === undefined) return true;
+    const result = await probeHealth();
+    if (result.kind === 'refused') return true;
     await new Promise((r) => setTimeout(r, 300));
   }
   return false;
 }
 
-/** Best-effort read of whatever pid is currently answering /health, before a start/restart. */
+/** Best-effort read of whatever pid is currently answering /health, before a start/restart.
+ *  Returns undefined both when nothing answers AND when the probe was merely inconclusive - callers
+ *  that need to distinguish those two cases (see startEngine()'s pre-spawn guard) should call
+ *  probeHealth() directly instead. */
 async function currentlyAnsweringPid(): Promise<number | undefined> {
-  try {
-    const h = await fetchJson('/api/v2/runtime/health') as { ok?: boolean; health?: { pid?: number } };
-    return h.ok ? h.health?.pid : undefined;
-  } catch {
-    return undefined;
-  }
+  const result = await probeHealth();
+  return result.kind === 'answered' ? result.pid : undefined;
 }
 
 function parseFlags(argv: string[]) {
@@ -309,7 +344,26 @@ async function startEngine() {
   // Snapshot whatever is answering /health right now (should normally be nothing, since
   // isEngineProcessRunning() above returned false - but the whole point of this check is to
   // catch exactly the case where the pid file lies and something is still actually listening).
+  //
+  // Real defect fixed (2026-09-12, live-reproduced): this used to be recorded for a nicer
+  // post-failure message only - it never actually stopped the spawn below. Combined with
+  // waitForHealthGone()'s now-fixed slow-server-misread-as-gone bug (see probeHealth()'s doc
+  // comment), a restart during a busy moment could conclude the old process was gone, clear the
+  // pid file, and let startEngine() spawn a brand-new engine while the old one was still actually
+  // bound to the port - the new spawn then failed to bind, but kept running as a fully-live,
+  // untracked, unreachable-via-HTTP second engine (real IBKR/Ollama/broker connections; only
+  // stopped when it later crashed on its own). Refusing to spawn at all when something is already
+  // answering is the correct, safe behavior here - the operator-facing message already existed,
+  // it just needs to run BEFORE spawning a doomed duplicate, not after.
   const staleAnsweringPid = await currentlyAnsweringPid();
+  if (staleAnsweringPid !== undefined) {
+    console.log(JSON.stringify({
+      ok: false,
+      message: `Refusing to start a new engine: pid ${staleAnsweringPid} is already answering ${BASE}/health, even though this CLI's own pid file did not report it as running. Stop pid ${staleAnsweringPid} (or investigate why it is untracked) before starting a new one - spawning anyway would create a second, real, untracked engine process.`,
+      pid: staleAnsweringPid,
+    }, null, 2));
+    process.exit(1);
+  }
   const env = { ...process.env, ARGUS_HEADLESS: 'true', ARGUS_ENGINE: 'true' };
   const spawnSpec = buildEngineSpawnArgs(useProd, ROOT);
   const child = spawn(process.execPath, spawnSpec.args, { cwd: ROOT, env, detached: true, stdio: 'ignore' });
@@ -320,15 +374,11 @@ async function startEngine() {
   // model probes), past a 60s cap - repeatedly observed reporting a false "health check timed out"
   // moments before /health actually came up healthy. Default raised to 150s; still overridable.
   const startTimeoutMs = Number(process.env.ARGUS_CLI_START_TIMEOUT_MS || 150_000);
-  const ready = await waitForHealth(startTimeoutMs, staleAnsweringPid);
-  let message = ready ? 'Engine started' : 'Engine spawned but health check timed out';
+  // staleAnsweringPid is always undefined here (the guard above already exited otherwise) - this
+  // spawn is the only thing that can legitimately answer /health from this point forward.
+  const ready = await waitForHealth(startTimeoutMs);
+  const message = ready ? 'Engine started' : 'Engine spawned but health check timed out';
   let reportedPid = child.pid;
-  if (!ready && staleAnsweringPid !== undefined) {
-    // Distinguish "nothing ever answered" from "the same stale process from before this start
-    // attempt is still answering on this port" - the second case needs a manual investigation
-    // (find and stop the real listener), not a retry of the same start command.
-    message = `Engine spawn requested but pid ${staleAnsweringPid} (already answering on ${BASE} before this start attempt) is still the one responding - the new process did not take over the port. Stop pid ${staleAnsweringPid} manually, then retry.`;
-  }
   if (ready && !useProd) {
     // Originally written (2026-08-25) to reconcile the pid file when --dev mode spawned tsx's CLI
     // wrapper, which forked a separate real-engine child under a different pid. 2026-09-04: that
@@ -807,6 +857,24 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'multi-horizon-outcomes'() {
+    // 2026-09-12 (Research Memory Platform Phase 2): mean forward return / positive-return rate
+    // per (agent, strategy, horizon), from real prediction_outcome_horizons rows.
+    const res = await fetch(`${BASE}/api/v2/observability/multi-horizon-outcomes?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'strategy-catalog'() {
+    // 2026-09-11: every strategy id this codebase knows about (CORE + EXPERIMENTAL TS +
+    // JAVA_RESEARCH), family, live-eligibility right now, Node/Java ownership, lifecycle status.
+    const res = await fetch(`${BASE}/api/v2/observability/strategy-catalog?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    console.log(await res.text());
+  },
   async 'strategy-readiness'() {
     // Phase 10 continuation (2026-08-31): strategy activation matrix + real per-strategy edge
     // status. Which CORE strategies are implemented/enabled/reachable, and what real graded
@@ -1270,7 +1338,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

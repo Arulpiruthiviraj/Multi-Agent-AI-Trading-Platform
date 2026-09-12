@@ -437,6 +437,33 @@ export interface TradingSafety {
    */
   quantJavaCoreLocalHistoryCap: number;
   /**
+   * 2026-09-11 concurrency/backpressure fix (real, measured root cause - see
+   * QuantCoreBridge.ts's admitOrCoalesceTick() doc comment): forwardTick() previously had no
+   * concurrency ceiling at all, so a burst of MARKET_DATA ticks could fire unboundedly many
+   * simultaneous fetch() calls to Java - measured live at up to 3,326 concurrent in-flight
+   * requests (vs. ~8 under normal load), which starved the Node event loop badly enough that
+   * even the 100ms AbortSignal.timeout() budget was routinely missed by 1-3+ seconds, tripping
+   * the shared CircuitBreaker almost continuously (ticks + ticks_resync caused 99.6% of all
+   * breaker trips in the measured window) and collaterally blocking every other institutional/
+   * quant endpoint sharing that breaker (87.5% of quant/institutional ensemble attempts blocked).
+   * 20 is not an arbitrary number: continuousIntelligence.json's maxActiveSubscriptions (12) is
+   * the real ceiling on how many symbols can be actively ticking at once, plus
+   * maxConcurrentTemporaryDataRescues (6) for temporarily-rescued symbols = 18, with a small
+   * margin for ticks_resync sharing the same limit. Combined with per-symbol coalescing (at most
+   * one in-flight tick request per symbol - a newer tick for a symbol already in flight replaces
+   * the pending one rather than queuing a second request), this bounds concurrency near the real
+   * number of distinct ticking symbols instead of the raw tick arrival rate.
+   */
+  quantJavaCoreTickMaxConcurrency: number;
+  /**
+   * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2). Minimum real
+   * (wins+losses) sample size in agent_confidence_calibration before a per-agent/bucket
+   * calibrated estimate is trusted as empirical rather than classified INSUFFICIENT_CALIBRATION_DATA.
+   * Reuses researchSafety.json's own minPaperTrades/minOosTrades precedent (30) - the same "is this
+   * enough real evidence" bar already used elsewhere in this codebase, not a new invented number.
+   */
+  minCalibrationSampleSize: number;
+  /**
    * ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md Phase 8 - maximum |delta| applied
    * to agent_performance_stats.currentWeight in a single evaluateAgents() cycle, in either
    * direction (toward a computed target when evidence is LEARNING_ELIGIBLE, or toward the agent's
@@ -727,6 +754,12 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.quantJavaCoreLocalHistoryCap !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: quantJavaCoreLocalHistoryCap');
+  }
+  if (typeof raw.quantJavaCoreTickMaxConcurrency !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreTickMaxConcurrency');
+  }
+  if (typeof raw.minCalibrationSampleSize !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: minCalibrationSampleSize');
   }
   if (typeof raw.javaQuantVoteEnabledEnvVar !== 'string' || !raw.javaQuantVoteEnabledEnvVar) {
     throw new Error('config/tradingSafety.json missing string field: javaQuantVoteEnabledEnvVar');

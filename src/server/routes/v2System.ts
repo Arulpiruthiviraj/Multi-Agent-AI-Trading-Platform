@@ -1284,6 +1284,44 @@ v2Router.get('/portfolio/stress-test', async (req, res) => {
 });
 
 // ==========================================================================================
+// 2026-09-11 - live portfolio correlation/diversification snapshot. Reuses the already-existing,
+// already-safe runCorrelationResearch() (src/server/research/intelligence/CorrelationResearch.ts -
+// same returnCorrelation() RiskEngine gate #20 already relies on) - that capability was previously
+// reachable only via POST /api/research-intelligence/correlation with a caller-supplied symbol
+// list, never auto-wired to the account's actual real current holdings. This route closes that
+// gap: it reads real open portfolio positions (same holdings query /portfolio/risk-attribution
+// already uses) and real historical closes (same historicalDataGateway pattern
+// researchIntelligenceRoutes.ts's closesFor() already uses), then runs the SAME unmodified
+// research function - no new correlation math, no new clustering algorithm. Read-only; never
+// writes to portfolio/trades/fills, never touches RiskEngine/ChiefTraderAgent/OMS/BrokerManager.
+// ==========================================================================================
+v2Router.get('/portfolio/correlation', async (req, res) => {
+  try {
+    const holdings = await db.select().from(portfolio).all();
+    const openSymbols = Array.from(new Set(holdings.filter(h => (h.quantity || 0) !== 0).map(h => h.symbol)));
+
+    if (openSymbols.length < 2) {
+      return res.json({ ok: true, available: false, reason: `Need at least 2 open real positions to compute correlation; found ${openSymbols.length}.`, data: null });
+    }
+
+    const { runCorrelationResearch } = await import('../research/intelligence/CorrelationResearch');
+    const endMs = Date.now();
+    const startMs = endMs - 180 * 24 * 60 * 60 * 1000;
+    const closesBySymbol: Record<string, number[]> = {};
+    for (const symbol of openSymbols) {
+      await withTimeout(historicalDataGateway.ensureBars(symbol, '1Day', startMs, endMs), 5000, `ensureBars ${symbol} (portfolio-correlation)`);
+      const bars = await withTimeout(historicalDataGateway.getBars(symbol, '1Day', startMs, endMs), 5000, `getBars ${symbol} (portfolio-correlation)`);
+      closesBySymbol[symbol] = bars.map(b => b.close);
+    }
+
+    const result = runCorrelationResearch({ closesBySymbol });
+    res.json({ ok: true, available: true, ...result });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ==========================================================================================
 // Real P&L attribution by symbol, replacing StrategyProfitSunburst.tsx's fabricated hierarchy
 // (invented sub-strategies like "Whipsaw"/"Pairs Trading"/"Fee Drag" under fictional groups
 // "Momentum"/"Mean Reversion"/"Arbitrage" - none of which are real Argus strategies), whose

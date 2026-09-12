@@ -1,0 +1,10 @@
+{
+  "$comment": "Research Memory Platform Phase 2 (2026-09-12) - multi-horizon forward-outcome tracking (mandate section 13: '+1 bar / +5 bars / +20 bars / +60 bars ... Do not assume one universal horizon'). Deliberately SEPARATE from PredictionOutcomeEvaluator.ts / prediction_outcomes (the live WIN/LOSS grade that feeds agent_performance_stats.currentWeight and ChiefTrader weight learning) and from config/evaluationHorizons.json (per-agent/per-strategy resolved single grading horizon) - this is additive research telemetry only, never touches weight learning, RiskEngine, ChiefTraderAgent, or OMS. Horizons are real 1-minute bar offsets from prediction time, evaluated once enough real bars exist - never fabricated for a horizon with insufficient data (that horizon is simply retried next cycle, same honesty convention as PredictionOutcomeEvaluator.ts).",
+  "horizons": [
+    { "label": "1_BAR", "bars": 1 },
+    { "label": "5_BAR", "bars": 5 },
+    { "label": "20_BAR", "bars": 20 },
+    { "label": "60_BAR", "bars": 60 }
+  ],
+  "evaluationIntervalMs": 300000
+}

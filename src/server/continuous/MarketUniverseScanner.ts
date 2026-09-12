@@ -25,6 +25,7 @@ import { logErrorSafely } from '../core/SecretRedaction';
 import { recordPrediction } from '../services/ModelPerformanceTracker';
 import { withDiscoveryCircuitBreaker, resetDiscoveryCircuitBreakersForTests } from '../core/discoveryHttpCircuitBreaker';
 import { normalizeSymbols } from '../core/symbolNormalization';
+import { FmpBudget } from '../services/FmpBudget';
 import {
   logDiscoveryCandidateDecision,
   type DiscoveryRejectReason,
@@ -62,10 +63,29 @@ export interface BroadUniverseStats {
   candidates: number;
   error: string | null;
   at: string;
+  /** 2026-09-11 addition: cheap, aggregate stage-1 (price/dollar-volume/spread/no-snapshot-data)
+   *  rejection counts - computed from data this cycle already fetched, zero new API calls. Real
+   *  per-symbol stage-1 logging was deliberately not added (thousands of assets, refreshed every
+   *  15min, would be a genuine observability-volume cost) - this aggregate answers "how many
+   *  candidates never got past stage 1, and roughly why" without that cost. For a SPECIFIC
+   *  symbol's own stage-1/stage-2 outcome, use getBroadUniverseSymbolLookup() instead. */
+  stage1RejectionCounts: Record<ScreenRejectReason | 'NO_SNAPSHOT_DATA', number>;
+}
+
+/** Per-symbol result from the most recently completed broad-universe cycle (2026-09-11 addition) -
+ *  answers "was this specific symbol seen at all, and exactly where did it stop" without needing
+ *  full per-symbol logging for the whole thousands-of-assets universe. Cleared/replaced on every
+ *  refreshBroadUniverseCache() call; null for a symbol this cycle never touched at all (either not
+ *  in the tradable-assets universe, or the scan hasn't run since boot). */
+export interface BroadUniverseSymbolLookup {
+  inTradableAssetsUniverse: boolean;
+  stage1Result: ScreenRejectReason | 'NO_SNAPSHOT_DATA' | 'PASSED' | null;
+  stage2Result: 'ADMITTED' | 'RANK_CAP' | 'ADV_BELOW_FLOOR' | 'ADV_DATA_UNAVAILABLE' | null;
 }
 
 let assetsCache: { fetchedAt: number; symbols: string[] } | null = null;
 let snapshotCache: { fetchedAt: number; symbols: string[] } | null = null;
+let lastCycleSymbolLookup: Map<string, BroadUniverseSymbolLookup> | null = null;
 let inFlight = false;
 let lastStats: BroadUniverseStats = {
   ran: false,
@@ -75,7 +95,21 @@ let lastStats: BroadUniverseStats = {
   candidates: 0,
   error: null,
   at: new Date(0).toISOString(),
+  stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 },
 };
+
+/** Was `symbol` seen this session's most recent broad-universe cycle, and exactly where did it
+ *  stop? Returns null when the scan hasn't completed a cycle yet since boot - distinguish that
+ *  from a real "not in the tradable universe" answer, which IS a real cycle result. */
+export function getBroadUniverseSymbolLookup(symbol: string): BroadUniverseSymbolLookup | null {
+  if (!lastCycleSymbolLookup) return null;
+  const normalized = symbol.trim().toUpperCase();
+  return lastCycleSymbolLookup.get(normalized) ?? {
+    inTradableAssetsUniverse: assetsCache?.symbols.includes(normalized) ?? false,
+    stage1Result: null,
+    stage2Result: null,
+  };
+}
 
 function authHeaders(): Record<string, string> {
   return {
@@ -219,16 +253,49 @@ interface AlpacaBarsResponse {
 }
 
 /**
+ * Real single-symbol ADV fallback via Financial Modeling Prep's free tier (2026-09-11, real
+ * same-day finding: two genuine gap-movers, QRVO and ASO, were both correctly gap-flagged but
+ * rejected on ADV because Alpaca's free IEX-feed bars endpoint returned nothing usable for them in
+ * that batch - `advShares: null`, not a real low number. Same fallback discipline as
+ * FundamentalAgent.ts's tryFmpFallback(): only ever attempted AFTER the primary source (Alpaca)
+ * has already failed for this specific symbol, shares the SAME FmpBudget daily cap as
+ * FundamentalAgent (no separate carve-out - if broad-universe fallback usage starves
+ * FundamentalAgent's budget, that is a real, visible tradeoff via FmpBudget.remaining(), not
+ * something to hide behind a second budget), and returns null (never fabricated) on any failure.
+ */
+async function fetchAvgDailyVolumeSharesFmpFallback(symbol: string): Promise<number | null> {
+  if (!process.env.FMP_API_KEY) return null;
+  if (!(await FmpBudget.tryConsume(1))) return null;
+  try {
+    const days = continuousIntelligence.broadUniverseAdvLookbackDays;
+    const url = `${networkEndpoints.marketData.fmpBaseUrl}/historical-price-full/${symbol}?timeseries=${days}&apikey=${process.env.FMP_API_KEY}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!response.ok) return null;
+    const body = await response.json() as { historical?: Array<{ volume?: number }> };
+    const volumes = (body.historical ?? [])
+      .map((h) => h.volume)
+      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+    if (volumes.length === 0) return null;
+    return volumes.reduce((a, b) => a + b, 0) / volumes.length;
+  } catch (e) {
+    logErrorSafely('[MarketUniverseScanner] FMP ADV fallback failed', e);
+    return null;
+  }
+}
+
+/**
  * Real broadUniverseAdvLookbackDays-day average daily volume (shares) per symbol, via Alpaca's
  * batched multi-symbol bars endpoint. Only call this on an already-narrowed shortlist (stage-2
  * survivors), not the full tradable-assets list - same batching shape as screenAssets(). A batch
- * that fails, or a symbol with no bars in the response, is simply excluded from the returned map -
- * never assumed to pass, never a fabricated average.
+ * that fails, or a symbol with no bars in the response, falls through to a bounded, per-symbol FMP
+ * fallback (see fetchAvgDailyVolumeSharesFmpFallback) rather than being excluded outright - only a
+ * symbol both sources have no answer for is finally excluded (fail-closed), never assumed liquid.
  */
 export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<string, number>> {
   const batchSize = continuousIntelligence.broadUniverseSnapshotBatchSize;
   const days = continuousIntelligence.broadUniverseAdvLookbackDays;
   const out = new Map<string, number>();
+  const missing: string[] = [];
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
     const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/bars?symbols=${batch.join(',')}&timeframe=1Day&limit=${days}&adjustment=raw&feed=iex`;
@@ -236,15 +303,23 @@ export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<
       const raw = await fetchJson<AlpacaBarsResponse>(url, 15000);
       for (const symbol of batch) {
         const bars = raw.bars?.[symbol];
-        if (!Array.isArray(bars) || bars.length === 0) continue;
+        if (!Array.isArray(bars) || bars.length === 0) { missing.push(symbol); continue; }
         const volumes = bars
           .map((b) => b.v)
           .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0);
-        if (volumes.length === 0) continue;
+        if (volumes.length === 0) { missing.push(symbol); continue; }
         out.set(symbol, volumes.reduce((a, b) => a + b, 0) / volumes.length);
       }
     } catch (e) {
       logErrorSafely('[MarketUniverseScanner] ADV batch failed', e);
+      missing.push(...batch);
+    }
+  }
+  for (const symbol of missing) {
+    const fallback = await fetchAvgDailyVolumeSharesFmpFallback(symbol);
+    if (fallback != null) {
+      out.set(symbol, fallback);
+      console.warn(`[MarketUniverseScanner] ADV for ${symbol} unavailable from Alpaca — served from FMP fallback.`);
     }
   }
   return out;
@@ -255,10 +330,19 @@ function passesAdvScreen(symbol: string, advMap: Map<string, number>): boolean {
   return adv != null && adv >= continuousIntelligence.broadUniverseMinAvgDailyVolumeShares;
 }
 
+/** The two ADV rejection reasons genuinely mean different things (2026-09-11 fix) - a symbol with
+ *  a real, measured ADV below the floor is a confirmed-illiquid rejection; a symbol absent from
+ *  advMap entirely (both Alpaca and any FMP fallback had no answer) is a data-availability gap the
+ *  gate still correctly fails closed on, but should not be reported the same way. */
+function advRejectReason(symbol: string, advMap: Map<string, number>): 'ADV_BELOW_FLOOR' | 'ADV_DATA_UNAVAILABLE' {
+  return advMap.has(symbol) ? 'ADV_BELOW_FLOOR' : 'ADV_DATA_UNAVAILABLE';
+}
+
 /** Full refresh: fetch tradable assets, screen them, cache the resulting candidate symbol list. */
 export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
+  const emptyStage1Counts = (): Record<ScreenRejectReason | 'NO_SNAPSHOT_DATA', number> => ({ PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 });
   if (!isBroadUniverseEnabled()) {
-    lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString() };
+    lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString(), stage1RejectionCounts: emptyStage1Counts() };
     return lastStats;
   }
   if (inFlight) return lastStats;
@@ -270,8 +354,24 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
     // tradable-assets list is thousands of rows, and this stage runs only every
     // broadUniverseAssetsCacheTtlMs (24h), so per-symbol logging here would be a real
     // observability-volume cost for comparatively low decision value. Stage-2 (ADV, below) is
-    // already narrowed to price/volume/spread survivors and IS logged per-symbol.
-    const stage2 = screened.filter(passesScreen);
+    // already narrowed to price/volume/spread survivors and IS logged per-symbol. A cheap
+    // AGGREGATE of stage-1 outcomes (stage1RejectionCounts, below) and a per-symbol LOOKUP cache
+    // (lastCycleSymbolLookup, populated below) fill the real gap without that per-symbol cost.
+    const stage1Counts = emptyStage1Counts();
+    const screenedSet = new Set(screened.map((s) => s.symbol));
+    const symbolLookup = new Map<string, BroadUniverseSymbolLookup>();
+    for (const symbol of assets) {
+      if (!screenedSet.has(symbol)) {
+        stage1Counts.NO_SNAPSHOT_DATA++;
+        symbolLookup.set(symbol, { inTradableAssetsUniverse: true, stage1Result: 'NO_SNAPSHOT_DATA', stage2Result: null });
+      }
+    }
+    const stage2 = screened.filter((s) => {
+      const result = evaluateScreen(s);
+      if (!result.pass && result.reason) stage1Counts[result.reason]++;
+      symbolLookup.set(s.symbol, { inTradableAssetsUniverse: true, stage1Result: result.pass ? 'PASSED' : result.reason, stage2Result: null });
+      return result.pass;
+    });
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
     const advPassers = stage2.filter((s) => passesAdvScreen(s.symbol, advMap));
     const passing = advPassers
@@ -284,7 +384,9 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       // Distinguish an outright ADV-floor failure from a candidate that cleared every real
       // liquidity gate but still lost the final dollar-volume-desc rank cutoff
       // (broadUniverseMaxCandidates) - these are different, real reasons, not the same one.
-      const reason: DiscoveryRejectReason | null = admitted ? null : (passesAdvScreen(s.symbol, advMap) ? 'RANK_CAP' : 'ADV');
+      const stage2Result: BroadUniverseSymbolLookup['stage2Result'] = admitted ? 'ADMITTED' : (passesAdvScreen(s.symbol, advMap) ? 'RANK_CAP' : advRejectReason(s.symbol, advMap));
+      const reason: DiscoveryRejectReason | null = admitted ? null : (stage2Result as DiscoveryRejectReason);
+      symbolLookup.set(s.symbol, { inTradableAssetsUniverse: true, stage1Result: 'PASSED', stage2Result });
       const rvol = computeRvol(s, advMap);
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'BROAD_UNIVERSE', admitted, reason,
@@ -301,6 +403,7 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       }
     }
     snapshotCache = { fetchedAt: Date.now(), symbols: passing };
+    lastCycleSymbolLookup = symbolLookup;
     lastStats = {
       ran: true,
       enabled: true,
@@ -309,6 +412,7 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       candidates: passing.length,
       error: null,
       at: new Date().toISOString(),
+      stage1RejectionCounts: stage1Counts,
     };
     return lastStats;
   } catch (e: any) {
@@ -321,6 +425,7 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       candidates: snapshotCache?.symbols.length || 0,
       error: e?.message || String(e),
       at: new Date().toISOString(),
+      stage1RejectionCounts: emptyStage1Counts(),
     };
     return lastStats;
   } finally {
@@ -345,8 +450,9 @@ export function getLastBroadUniverseStats(): BroadUniverseStats {
 export function resetMarketUniverseScannerForTests(): void {
   assetsCache = null;
   snapshotCache = null;
+  lastCycleSymbolLookup = null;
   inFlight = false;
-  lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
+  lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(), stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 } };
   moversCache = null;
   moversInFlight = false;
   lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
@@ -446,7 +552,7 @@ export async function refreshMoversCache(): Promise<MoverScanStats> {
       const admitted = passesAdvScreen(s.symbol, advMap);
       const rvol = computeRvol(s, advMap);
       logDiscoveryCandidateDecision({
-        symbol: s.symbol, source: 'MARKET_MOVER', admitted, reason: admitted ? null : 'ADV',
+        symbol: s.symbol, source: 'MARKET_MOVER', admitted, reason: admitted ? null : advRejectReason(s.symbol, advMap),
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
         gapMover: isGapMover(s), gapPct: s.gapPct,
         rvolMover: isRvolMover(rvol), rvol,
@@ -571,7 +677,7 @@ export async function refreshNewsCatalystCache(): Promise<NewsCatalystScanStats>
       const admitted = passesAdvScreen(s.symbol, advMap);
       const rvol = computeRvol(s, advMap);
       logDiscoveryCandidateDecision({
-        symbol: s.symbol, source: 'NEWS', admitted, reason: admitted ? null : 'ADV',
+        symbol: s.symbol, source: 'NEWS', admitted, reason: admitted ? null : advRejectReason(s.symbol, advMap),
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
         gapMover: isGapMover(s), gapPct: s.gapPct,
         rvolMover: isRvolMover(rvol), rvol,

@@ -74,3 +74,38 @@ export function betaBinomialPosteriorMean(
 export function calibratedConfidenceForBucket(bucket: ConfidenceBucket, wins: number, losses: number): number {
   return betaBinomialPosteriorMean(wins, losses, bucketMidpoint(bucket));
 }
+
+/**
+ * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2 - "separate raw/calibrated/
+ * reliability semantics"). Real finding this fixes: calibratedConfidenceForBucket() above anchors
+ * its Beta-Binomial PRIOR on the bucket's own midpoint (e.g. 0.85 for every raw value in [0.8,0.9)),
+ * not on the specific raw confidence this exact round actually stated (0.82 and 0.89 both collapse
+ * to the same prior). That only matters when real sample size is thin - PRIOR_STRENGTH=10 is
+ * negligible against the real sample sizes this system has accumulated for its high-volume agents
+ * (KronosEngine's 0.8-0.9 bucket: n=7271; TechnicalAgent's 0.6-0.7 bucket: n=24404) - for those, the
+ * posterior is almost entirely data-driven either way, and the empirical finding stands regardless
+ * of which prior anchor is used: raw confidence in that range really does convert to real outcomes
+ * only ~45-48% of the time, a severe, well-supported overconfidence pattern, not a calibration
+ * artifact. Where this DOES matter is thin-sample buckets/agents, where discarding today's actual
+ * stated value in favor of a generic bucket-wide anchor was never justified - fixed here by
+ * anchoring the prior on the real raw signal instead.
+ */
+export function calibratedConfidenceForRawSignal(
+  rawConfidence: number,
+  wins: number,
+  losses: number,
+  priorStrength: number = PRIOR_STRENGTH,
+): number {
+  return betaBinomialPosteriorMean(wins, losses, Math.max(0, Math.min(1, rawConfidence)), priorStrength);
+}
+
+/**
+ * Explicit data-sufficiency check - reuses researchSafety.json's own minPaperTrades/minOosTrades
+ * precedent (30) for "is this enough real evidence to trust," rather than inventing a new
+ * unjustified constant. Below this, a calibrated estimate exists but is mostly prior (i.e. mostly
+ * today's own raw signal when calibratedConfidenceForRawSignal is used) - callers should classify
+ * this as INSUFFICIENT_CALIBRATION_DATA rather than presenting it as a precise empirical estimate.
+ */
+export function isCalibrationSampleSufficient(wins: number, losses: number, minSampleSize: number): boolean {
+  return wins + losses >= minSampleSize;
+}

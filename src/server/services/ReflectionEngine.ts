@@ -66,6 +66,12 @@ export class ReflectionEngine {
         // any future agent that starts carrying one); null/absent for agents that don't compute
         // one - never fabricated, never backfilled after the fact.
         regime: idea.regime ?? null,
+        // 2026-09-11 - strategy-level attribution (strategy-attribution gap). QuantEngine's own
+        // emitTradeIdea call (QuantSignalAgent.ts) already carries the real winning strategy id
+        // (e.g. 'MOMENTUM_BREAKOUT') nested in quantDetail.strategyEvaluation.strategy - it was
+        // just never read here. Null for every agent that doesn't carry this shape (never
+        // fabricated from agent name or reasoning text).
+        strategyId: idea.quantDetail?.strategyEvaluation?.strategy ?? null,
       });
     } catch (e) {
       console.error("[ReflectionEngine] Error logging prediction:", e);

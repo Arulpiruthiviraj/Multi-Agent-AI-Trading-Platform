@@ -156,6 +156,8 @@
   "quantJavaCoreCircuitBreakerCooldownMs": 30000,
   "quantJavaCoreDivergenceThresholdPct": 0.0001,
   "quantJavaCoreLocalHistoryCap": 200,
+  "quantJavaCoreTickMaxConcurrency": 20,
+  "minCalibrationSampleSize": 30,
   "tradingDaysPerYear": 252,
   "newsDecisiveSentimentThreshold": 0.6,
   "aiDecisionTemperature": 0.2,

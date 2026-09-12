@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { bucketFor, bucketMidpoint, betaBinomialPosteriorMean, calibratedConfidenceForBucket, CONFIDENCE_BUCKETS, PRIOR_STRENGTH } from './ConfidenceCalibration';
+import { bucketFor, bucketMidpoint, betaBinomialPosteriorMean, calibratedConfidenceForBucket, calibratedConfidenceForRawSignal, isCalibrationSampleSufficient, CONFIDENCE_BUCKETS, PRIOR_STRENGTH } from './ConfidenceCalibration';
 
 describe('bucketFor', () => {
   it('assigns confidence to the correct band', () => {
@@ -67,6 +67,46 @@ describe('betaBinomialPosteriorMean', () => {
     // the 0.85 prior than the large-N case, which should be almost exactly 0.30.
     expect(posteriorLargeN).toBeCloseTo(0.30, 1);
     expect(posteriorSmallN).toBeGreaterThan(posteriorLargeN);
+  });
+});
+
+describe('calibratedConfidenceForRawSignal (2026-09-11 full trading readiness remediation, Phase 1 item 2)', () => {
+  it('with zero real observations, anchors on the actual raw value, not a bucket-wide midpoint', () => {
+    // Two different real raw values in the same [0.8,0.9) bucket must NOT collapse to the same
+    // prior anymore - this is exactly the gap calibratedConfidenceForBucket() had.
+    expect(calibratedConfidenceForRawSignal(0.82, 0, 0)).toBeCloseTo(0.82, 5);
+    expect(calibratedConfidenceForRawSignal(0.89, 0, 0)).toBeCloseTo(0.89, 5);
+  });
+
+  it('a thin real sample barely moves the posterior away from THIS round\'s own raw value', () => {
+    const posterior = calibratedConfidenceForRawSignal(0.82, 0, 1); // one real loss, prior strength 10
+    expect(posterior).toBeGreaterThan(0.65);
+    expect(posterior).toBeLessThan(0.82);
+  });
+
+  it('real finding: KronosEngine\'s actual measured 0.8-0.9 bucket (n=7271, ~47.2% empirical) converges to the same real answer regardless of raw-value anchor - large samples dominate either prior', () => {
+    const wins = 3429, losses = 3842; // real production numbers
+    const anchoredOnRaw85 = calibratedConfidenceForRawSignal(0.85, wins, losses);
+    const anchoredOnRaw89 = calibratedConfidenceForRawSignal(0.89, wins, losses);
+    const anchoredOnBucketMid = calibratedConfidenceForBucket({ low: 0.8, high: 0.9 }, wins, losses);
+    // All three should land within a hair of the true empirical rate (0.4715) - the anchor choice
+    // is immaterial once real sample size this large exists, confirming this is a real
+    // overconfidence finding, not a calibration-methodology artifact.
+    expect(anchoredOnRaw85).toBeCloseTo(0.4715, 2);
+    expect(anchoredOnRaw89).toBeCloseTo(0.4715, 2);
+    expect(anchoredOnBucketMid).toBeCloseTo(0.4715, 2);
+  });
+});
+
+describe('isCalibrationSampleSufficient', () => {
+  it('reuses the researchSafety.json minPaperTrades/minOosTrades precedent (30) as the sufficiency bar', () => {
+    expect(isCalibrationSampleSufficient(20, 9, 30)).toBe(false); // n=29, just below the bar
+    expect(isCalibrationSampleSufficient(20, 10, 30)).toBe(true); // n=30, exactly at the bar
+    expect(isCalibrationSampleSufficient(10, 5, 30)).toBe(false); // n=15, thin
+  });
+
+  it('zero real observations is always insufficient', () => {
+    expect(isCalibrationSampleSufficient(0, 0, 30)).toBe(false);
   });
 });
 

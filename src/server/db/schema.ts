@@ -459,6 +459,15 @@ export const agentPredictions = sqliteTable('agent_predictions', {
   // later data, so there is no look-ahead. Null for historical rows written before this column
   // existed, and for agents this pass didn't wire regime capture into.
   regime: text('regime'),
+  // 2026-09-11 - strategy-level attribution. Every QuantEngine idea previously collapsed to the
+  // single agent_name 'QuantEngine' regardless of which underlying strategy
+  // (MOMENTUM_BREAKOUT/RANGE_REVERSION/etc, src/server/quant/strategies/types.ts's
+  // StrategyEvaluation.strategy) actually produced it, even though that real id was already
+  // present at emission time (QuantSignalAgent.ts's quantDetail.strategyEvaluation.strategy) -
+  // just never persisted. Populated only for agents that carry a real strategy identity at
+  // generation time; null for every other agent (TechnicalAgent, NewsEngine, FundamentalAgent,
+  // MacroAgent, KronosForecastAgent, ...) - never fabricated, never backfilled after the fact.
+  strategyId: text('strategy_id'),
 });
 
 export const agentPerformanceStats = sqliteTable('agent_performance_stats', {
@@ -1661,4 +1670,122 @@ export const researchAgentRuns = sqliteTable('research_agent_runs', {
   correlationIdx: index('idx_research_agent_runs_correlation').on(table.correlationId),
   strategyIdx: index('idx_research_agent_runs_strategy').on(table.strategyId, table.createdAt),
   triggerEventIdx: index('idx_research_agent_runs_trigger_event').on(table.triggerEventId),
+}));
+
+/**
+ * 2026-09-11 (Research Memory Platform, Phase 1 - persisted pre-registration). Confirmed real
+ * gap (audit): experimentLedger.ts's multiple-testing/DSR math is real and correct, but its
+ * ExperimentLedger was an in-memory singleton that evaporated on every process restart unless
+ * the operator happened to set ARGUS_WRITE_RESEARCH_PARQUET=true. These three tables give that
+ * logic - and a real, first-class pre-registration concept the codebase never had - a durable
+ * home, without duplicating anything: strategyId/versionId still points at learning_versions.id,
+ * datasetHash reuses the existing convention already used by strategy_engine_backtest_runs/
+ * replay_runs, never a second dataset-identity scheme.
+ *
+ * A hypothesis is pre-registered BEFORE its evidence is examined - preregisteredAt is set once,
+ * at insert, and never updated. Resolution (resolvedAt/resolvedStatus/resolvedEvidenceJson) is
+ * write-once at the application layer (see resolveHypothesis() in experimentLedger.ts, which
+ * refuses to overwrite an already-resolved row) rather than a full status-event table - a
+ * hypothesis has exactly one terminal resolution, not an evolving multi-step lifecycle the way a
+ * strategy version does (that already has learning_versions for exactly that reason).
+ */
+export const researchHypotheses = sqliteTable('research_hypotheses', {
+  id: text('id').primaryKey(),
+  statement: text('statement').notNull(),
+  strategyId: text('strategy_id'),
+  metric: text('metric'), // e.g. 'win_rate', 'expectancy', 'sharpe' - free text, not an enum (real hypotheses cite varied metrics)
+  expectedDirection: text('expected_direction'), // e.g. 'ABOVE_CHANCE', 'POSITIVE_EXPECTANCY' - free text
+  acceptanceCriteria: text('acceptance_criteria'), // free text describing what would confirm/reject, set at pre-registration
+  preregisteredAt: text('preregistered_at').notNull(),
+  createdBy: text('created_by'), // honest provenance - e.g. 'claude-sonnet-5' or an operator name; null if unknown
+  // Write-once resolution - all three are null until resolved exactly once.
+  resolvedAt: text('resolved_at'),
+  resolvedStatus: text('resolved_status'), // CONFIRMED | REJECTED | INCONCLUSIVE | ABANDONED
+  resolvedEvidenceJson: text('resolved_evidence_json'),
+}, (table) => ({
+  strategyIdx: index('idx_research_hypotheses_strategy').on(table.strategyId),
+}));
+
+/**
+ * Groups research_trials under one hypothesis test. status mirrors the mandate's own
+ * DRAFT/RUNNING/COMPLETED/FAILED/ABANDONED vocabulary. resultSummaryJson is set once, at
+ * completion, alongside completedAt - never revised in place; a corrected conclusion is a new
+ * experiment row, not a silent rewrite of this one's evidence.
+ */
+export const researchExperiments = sqliteTable('research_experiments', {
+  id: text('id').primaryKey(),
+  hypothesisId: text('hypothesis_id'),
+  strategyId: text('strategy_id'),
+  datasetHash: text('dataset_hash'),
+  label: text('label').notNull(),
+  status: text('status').notNull(), // DRAFT | RUNNING | COMPLETED | FAILED | ABANDONED
+  createdAt: text('created_at').notNull(),
+  completedAt: text('completed_at'),
+  resultSummaryJson: text('result_summary_json'),
+}, (table) => ({
+  hypothesisIdx: index('idx_research_experiments_hypothesis').on(table.hypothesisId),
+  strategyIdx: index('idx_research_experiments_strategy').on(table.strategyId),
+}));
+
+/**
+ * Durable mirror of experimentLedger.ts's TrialRecord (same fields, JSON-serialized where the
+ * in-memory shape is an object) - the in-memory ledger stays the fast, same-process read path for
+ * multiple-testing warnings (unchanged behavior, see experimentLedgerSnapshot()); this table is
+ * the cross-restart audit trail that previously only existed via an optional JSON file dump.
+ * Insert-only - a trial's outcome is a historical fact from the moment it was evaluated, never
+ * corrected in place.
+ */
+export const researchTrials = sqliteTable('research_trials', {
+  id: text('id').primaryKey(), // == TrialRecord.trialId
+  experimentId: text('experiment_id'),
+  strategyId: text('strategy_id').notNull(),
+  datasetHash: text('dataset_hash').notNull(),
+  parameterSetJson: text('parameter_set_json'),
+  evaluationTimestamp: text('evaluation_timestamp').notNull(),
+  inSampleMetricsJson: text('in_sample_metrics_json'),
+  outOfSampleMetricsJson: text('out_of_sample_metrics_json'),
+  rejectionReason: text('rejection_reason'),
+  selectionStatus: text('selection_status').notNull(), // ACCEPTED | REJECTED | OVERFIT_PRUNED
+  symbol: text('symbol'),
+  datasetPeriodStart: text('dataset_period_start'),
+  datasetPeriodEnd: text('dataset_period_end'),
+  executionModel: text('execution_model'),
+  transactionCostAssumptionsJson: text('transaction_cost_assumptions_json'),
+  slippageAssumptionsJson: text('slippage_assumptions_json'),
+  wfoConfigJson: text('wfo_config_json'),
+  oosConfigJson: text('oos_config_json'),
+  robustnessConfigJson: text('robustness_config_json'),
+  parentTrialId: text('parent_trial_id'),
+}, (table) => ({
+  experimentIdx: index('idx_research_trials_experiment').on(table.experimentId),
+  strategyIdx: index('idx_research_trials_strategy').on(table.strategyId, table.evaluationTimestamp),
+}));
+
+/**
+ * 2026-09-12 (Research Memory Platform Phase 2 - multi-horizon forward-outcome tracking, mandate
+ * §13). `prediction_outcomes` is structurally one row per (predictionId, sourceTable) - a single
+ * resolved evaluation horizon, real and correctly per-strategy-tuned (config/evaluationHorizons.json)
+ * but deliberately never multi-horizon by design (it feeds agent_performance_stats.currentWeight -
+ * one stable grading window per prediction is the correct behavior there, not a gap). This table
+ * is additive, separate telemetry answering a different question ("how did this same signal look
+ * at +1/+5/+20/+60 bars") - never read by weight learning, RiskEngine, ChiefTraderAgent, or OMS.
+ * config/multiHorizonOutcomeTracking.json owns the real horizon definitions - never a TS literal.
+ * A horizon with insufficient real bar data simply has no row yet (retried next cycle) rather than
+ * a fabricated value - same honesty convention prediction_outcomes itself already uses.
+ */
+export const predictionOutcomeHorizons = sqliteTable('prediction_outcome_horizons', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  predictionId: text('prediction_id').notNull(),
+  sourceTable: text('source_table').notNull(), // same convention as prediction_outcomes.sourceTable
+  symbol: text('symbol').notNull(),
+  horizonLabel: text('horizon_label').notNull(), // e.g. '1_BAR' | '5_BAR' | '20_BAR' | '60_BAR'
+  horizonBars: integer('horizon_bars').notNull(),
+  // Direction-adjusted (positive = favorable for the prediction's own side, same convention as
+  // prediction_outcomes.mfe/mae) - never the raw unsigned market return.
+  forwardReturn: real('forward_return').notNull(),
+  forwardDirection: text('forward_direction').notNull(), // UP | DOWN | FLAT (raw market direction, not side-adjusted)
+  evaluatedAt: text('evaluated_at').notNull(),
+}, (table) => ({
+  uniqueIdx: uniqueIndex('idx_prediction_outcome_horizons_unique').on(table.predictionId, table.sourceTable, table.horizonLabel),
+  predictionIdx: index('idx_prediction_outcome_horizons_prediction').on(table.predictionId, table.sourceTable),
 }));

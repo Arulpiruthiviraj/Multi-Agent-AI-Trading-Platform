@@ -28,6 +28,18 @@ interface StrategyPerformanceRow {
   winRatePct: number | null;
 }
 
+// 2026-09-12 - real strategy metadata (id/tier/family/live-eligibility/lifecycle), joined on
+// strategyId. Fetched separately from the P&L data above (GET /api/v2/observability/
+// strategy-catalog) and merged client-side - a failure here degrades to the pre-existing table
+// (no metadata columns) rather than breaking the P&L table this panel already relied on.
+interface StrategyCatalogRow {
+  strategyId: string;
+  tier: 'CORE' | 'EXPERIMENTAL' | 'JAVA_RESEARCH';
+  family: string | null;
+  liveEligible: boolean;
+  lifecycleStatus: string;
+}
+
 const DAY_OPTIONS = [7, 30, 90];
 
 const PIPELINE_STAGES = [
@@ -50,6 +62,7 @@ export default function StrategyPerformancePanel() {
   const [reason, setReason] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showPipeline, setShowPipeline] = useState(false);
+  const [catalogByStrategyId, setCatalogByStrategyId] = useState<Record<string, StrategyCatalogRow>>({});
 
   useEffect(() => {
     let cancelled = false;
@@ -67,6 +80,22 @@ export default function StrategyPerformancePanel() {
       .catch(e => { if (!cancelled) { setAvailable(false); setReason(e.message); setLoading(false); } });
     return () => { cancelled = true; };
   }, [days]);
+
+  // Separate, independent fetch - real strategy metadata is not time-window-scoped (no `days`
+  // dependency) and its failure must never block the P&L table above.
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/v2/observability/strategy-catalog')
+      .then(r => r.json())
+      .then(json => {
+        if (cancelled || !json.ok || !Array.isArray(json.rows)) return;
+        const byId: Record<string, StrategyCatalogRow> = {};
+        for (const row of json.rows as StrategyCatalogRow[]) byId[row.strategyId] = row;
+        setCatalogByStrategyId(byId);
+      })
+      .catch(() => { /* metadata is additive - table still renders without it */ });
+    return () => { cancelled = true; };
+  }, []);
 
   return (
     <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-6 flex flex-col gap-6">
@@ -138,6 +167,10 @@ export default function StrategyPerformancePanel() {
             <thead>
               <tr className="border-b border-slate-800 text-[10px] font-mono text-slate-500 uppercase tracking-wider">
                 <th className="pb-3 pl-2 font-medium">Strategy</th>
+                <th className="pb-3 font-medium text-center">Tier</th>
+                <th className="pb-3 font-medium text-center">Family</th>
+                <th className="pb-3 font-medium text-center">Live</th>
+                <th className="pb-3 font-medium text-center">Lifecycle</th>
                 <th className="pb-3 font-medium text-center">Trades</th>
                 <th className="pb-3 font-medium text-center">Win Rate</th>
                 <th className="pb-3 font-medium text-right">Realized P&amp;L</th>
@@ -146,9 +179,25 @@ export default function StrategyPerformancePanel() {
               </tr>
             </thead>
             <tbody>
-              {rows.map(r => (
+              {rows.map(r => {
+                const meta = catalogByStrategyId[r.quantStrategyId];
+                return (
                 <tr key={r.quantStrategyId} className="border-b border-slate-800/50">
                   <td className="py-3 pl-2 font-bold text-slate-200">{r.quantStrategyId}</td>
+                  <td className="py-3 text-center font-mono text-[10px]">
+                    {meta ? (
+                      <span className={
+                        meta.tier === 'CORE' ? 'text-indigo-300' : meta.tier === 'JAVA_RESEARCH' ? 'text-amber-300' : 'text-slate-400'
+                      }>{meta.tier}</span>
+                    ) : <span className="text-slate-600">—</span>}
+                  </td>
+                  <td className="py-3 text-center font-mono text-[10px] text-slate-400">{meta?.family ?? '—'}</td>
+                  <td className="py-3 text-center font-mono text-[10px]">
+                    {meta ? (
+                      <span className={meta.liveEligible ? 'text-emerald-400' : 'text-slate-600'}>{meta.liveEligible ? 'YES' : 'no'}</span>
+                    ) : <span className="text-slate-600">—</span>}
+                  </td>
+                  <td className="py-3 text-center font-mono text-[10px] text-slate-400">{meta?.lifecycleStatus ?? '—'}</td>
                   <td className="py-3 text-center font-mono text-slate-300">{r.tradesCount}</td>
                   <td className="py-3 text-center font-mono">
                     {r.winRatePct === null ? (
@@ -168,7 +217,8 @@ export default function StrategyPerformancePanel() {
                   </td>
                   <td className="py-3 text-right pr-2 font-mono text-[10px] text-slate-500">{r.lastActiveDate}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}

@@ -46,6 +46,7 @@ import { SystemValidationSuite } from "./components/SystemValidationSuite";
 import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
 import ReplayResearchPanel from "./components/ReplayResearchPanel";
 import HistoricalReplayLab from "./components/HistoricalReplayLab";
+import MultiHorizonOutcomesPanel from "./components/MultiHorizonOutcomesPanel";
 import { resumeAndConfirm } from "./lib/tradingSafetyActions";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
@@ -71,6 +72,7 @@ import MarketSentimentTrend from "./components/MarketSentimentTrend";
 import ChiefTraderAgent from "./components/ChiefTraderAgent";
 import ContextMemoryEngineering from "./components/ContextMemoryEngineering";
 import StrategySynergyMatrix from "./components/StrategySynergyMatrix";
+import PortfolioCorrelationPanel from "./components/PortfolioCorrelationPanel";
 import LiveBotTelemetryPanel from "./components/LiveBotTelemetryPanel";
 import ShadowPortfolioBenchmark from "./components/ShadowPortfolioBenchmark";
 import RiskAttributionTreemap from "./components/RiskAttributionTreemap";
@@ -4520,7 +4522,25 @@ export default function App() {
               )}
 
               {/* Analysis SWARM Output Results */}
-              {lastAnalysis && (
+              {/* Real bug fixed (2026-09-12): handleTriggerAnalysis() (the only real code path that
+                  ever calls setLastAnalysis with a non-null value) sets {gone, error, code} - the
+                  quarantine-stub shape, since GET /api/v1/signals is HTTP 410
+                  SIGNALS_PATH_QUARANTINED - never the rich {symbol, decision, compiled_signals, ...}
+                  shape this block below was written against. lastAnalysis && (...) was truthy for
+                  the stub too, so every trigger crashed on lastAnalysis.compiled_signals.map()
+                  reading undefined. Render an honest quarantine notice for that real shape instead
+                  of assuming the rich one. */}
+              {lastAnalysis?.gone && (
+                <div className="bg-[#1A1F2B] border border-amber-500/30 rounded-lg p-5 animate-fade-in" id="analysis-swarm-quarantined">
+                  <h3 className="text-sm font-bold text-amber-400 flex items-center gap-2 mb-2">
+                    <Layers size={16} />
+                    Signals Path Quarantined
+                  </h3>
+                  <p className="text-xs text-slate-400 font-mono">{lastAnalysis.error}</p>
+                  <p className="text-[10px] text-slate-600 font-mono mt-2">Code: {lastAnalysis.code}</p>
+                </div>
+              )}
+              {lastAnalysis && !lastAnalysis.gone && (
                 <div
                   className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 animate-fade-in"
                   id="analysis-swarm-results"
@@ -4657,7 +4677,7 @@ export default function App() {
                     className="grid grid-cols-1 md:grid-cols-2 gap-3"
                     id="swarm-votes-list"
                   >
-                    {lastAnalysis.compiled_signals.map(
+                    {(lastAnalysis.compiled_signals ?? []).map(
                       (sig: any, idx: number) => {
                         const ageName = sig.agent_id
                           .replace("agent_", "")
@@ -5482,6 +5502,8 @@ export default function App() {
                 </div>
               )}
             </div>
+
+            <PortfolioCorrelationPanel />
 
             {/* AUTOMATED TASK SCHEDULER */}
             <div className="bg-[#1A1F2B] border border-slate-800 rounded-lg p-5 mt-6">
@@ -7884,6 +7906,7 @@ export default function App() {
           <div className="animate-fade-in flex flex-col gap-6" id="evaluation-view">
             <HistoricalReplayLab />
             <AgentEvaluationDashboard />
+            <MultiHorizonOutcomesPanel />
             <ReplayResearchPanel />
           </div>
         )}

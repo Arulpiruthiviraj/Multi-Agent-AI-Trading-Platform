@@ -25,6 +25,25 @@ describe('computeInternalEnsembleQualification', () => {
     expect(quantCoreBridge.fetchInstitutionalEnsemble).not.toHaveBeenCalled();
   });
 
+  it('2026-09-11: logs a real EMPTY_VOTES outcome (never calls Java) when no evaluation has a recognized family - the "was it really 0 votes" question this P0 investigation needed to answer directly instead of reconstructing after the fact', async () => {
+    const { quantCoreBridge } = await import('../services/QuantCoreBridge');
+    (quantCoreBridge.fetchResearchStrategy as any).mockResolvedValue(null);
+    const { structuredLogger } = await import('../observability/StructuredLogger');
+    const logSpy = vi.fn();
+    const restore = structuredLogger.info;
+    structuredLogger.info = logSpy as any;
+    try {
+      const { computeInternalEnsembleQualification } = await import('./internalQuantEnsemble');
+      await computeInternalEnsembleQualification('AAPL', bars as any, [{ strategy: 'NOT_A_REAL_STRATEGY', side: 'BUY', confidence: 0.9 } as any], 'BUY');
+      const outcomeCall = logSpy.mock.calls.find((c) => c[0] === 'quant_ensemble_call_outcome');
+      expect(outcomeCall).toBeDefined();
+      expect(outcomeCall![1].reasoning).toContain('outcome=EMPTY_VOTES');
+      expect(quantCoreBridge.fetchInstitutionalEnsemble).not.toHaveBeenCalled();
+    } finally {
+      structuredLogger.info = restore;
+    }
+  });
+
   it('never confirms the wrong direction when the ensemble rawSide disagrees with the idea side - but now returns a real, observable sideMismatch result instead of a bare null (2026-09-10 fix)', async () => {
     const { quantCoreBridge } = await import('../services/QuantCoreBridge');
     (quantCoreBridge.fetchResearchStrategy as any).mockResolvedValue(null);

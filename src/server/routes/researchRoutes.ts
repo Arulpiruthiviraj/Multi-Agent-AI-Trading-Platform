@@ -28,7 +28,7 @@ import { tradingSafety } from '../config/tradingSafety';
 import { summarizeOrganicPaper } from '../research/organicPaper';
 import { runCanonicalCoreBacktest } from '../research/canonicalNextBarEngine';
 import { recordResearchRun, latestRunForStrategy } from '../research/researchRuns';
-import { recordExperimentTrial, experimentLedgerSnapshot } from '../research/experimentLedger';
+import { recordExperimentTrial, experimentLedgerSnapshot, listHypotheses, listExperiments, getExperimentWithTrials } from '../research/experimentLedger';
 import { runCoreWalkForward } from '../research/coreWalkForward';
 import { runCoreRobustness } from '../research/coreRobustness';
 import { reconcilePaperVsResearch } from '../research/paperReconciliation';
@@ -637,6 +637,42 @@ export function mountResearchRoutes(v2Router: Router): void {
 
   v2Router.get('/research/experiment-ledger', (_req, res) => {
     res.json({ ok: true, ...experimentLedgerSnapshot(), canPlaceOrders: false });
+  });
+
+  // 2026-09-11 (Research Memory Platform Phase 1) - read-only visibility into the durable,
+  // cross-restart research_hypotheses/research_experiments store, distinct from
+  // /research/experiment-ledger above (that one is the in-memory, current-process-only multiple-
+  // testing counter). Write access (registerHypothesis/createExperiment/resolveHypothesis/
+  // completeExperiment) stays programmatic-API-only for this pass - a formal pre-registration
+  // workflow with operator review is future work, not rushed into an unreviewed HTTP surface.
+  v2Router.get('/research/hypotheses', async (req, res) => {
+    try {
+      const strategyId = typeof req.query.strategyId === 'string' ? req.query.strategyId : undefined;
+      const rows = await listHypotheses(strategyId);
+      res.json({ ok: true, hypotheses: rows, canPlaceOrders: false, live: 'NO-GO' });
+    } catch (e: any) {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message, canPlaceOrders: false });
+    }
+  });
+
+  v2Router.get('/research/experiments', async (req, res) => {
+    try {
+      const strategyId = typeof req.query.strategyId === 'string' ? req.query.strategyId : undefined;
+      const rows = await listExperiments(strategyId);
+      res.json({ ok: true, experiments: rows, canPlaceOrders: false, live: 'NO-GO' });
+    } catch (e: any) {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message, canPlaceOrders: false });
+    }
+  });
+
+  v2Router.get('/research/experiments/:id', async (req, res) => {
+    try {
+      const result = await getExperimentWithTrials(req.params.id);
+      if (!result) return res.status(404).json({ ok: false, error: 'No experiment with this id.', canPlaceOrders: false });
+      res.json({ ok: true, ...result, canPlaceOrders: false, live: 'NO-GO' });
+    } catch (e: any) {
+      if (!res.headersSent) res.status(500).json({ ok: false, error: e.message, canPlaceOrders: false });
+    }
   });
 
   v2Router.get('/research/replay/providers', async (_req, res) => {

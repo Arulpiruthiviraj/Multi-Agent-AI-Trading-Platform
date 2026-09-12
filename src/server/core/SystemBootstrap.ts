@@ -47,6 +47,7 @@ import { chiefTrader } from '../services/ChiefTraderAgent';
 import { confluenceCoordinator } from '../services/ConfluenceCoordinator';
 import { reflectionEngine } from '../services/ReflectionEngine';
 import { predictionOutcomeEvaluator } from '../services/PredictionOutcomeEvaluator';
+import { multiHorizonOutcomeEvaluator } from '../services/MultiHorizonOutcomeEvaluator';
 import { missedOpportunityEvaluator } from '../continuous/MissedOpportunityEvaluator';
 import { postMarketAnalysisWorker } from '../continuous/PostMarketAnalysis';
 import { trainingExampleBuilder } from '../services/TrainingExampleBuilder';
@@ -109,6 +110,10 @@ export class SystemBootstrap {
     confluenceCoordinator.start();
     reflectionEngine.start();
     predictionOutcomeEvaluator.start();
+    // Research Memory Platform Phase 2 (2026-09-12): additive multi-horizon forward-outcome
+    // telemetry, separate from predictionOutcomeEvaluator's live single-horizon weight-learning
+    // grade above - see MultiHorizonOutcomeEvaluator.ts's own header for the full rationale.
+    multiHorizonOutcomeEvaluator.start();
     // Real defect fix (2026-09-09): closes the gap where missed-opportunity records were
     // persisted PENDING forever - see MissedOpportunityEvaluator.ts's own header for the
     // live-verified finding (592/592 historical rows never evaluated).
@@ -149,6 +154,7 @@ export class SystemBootstrap {
     stopAllIdeaAgents();
     reflectionEngine.stop();
     predictionOutcomeEvaluator.stop();
+    multiHorizonOutcomeEvaluator.stop();
     missedOpportunityEvaluator.stop();
     postMarketAnalysisWorker.stop();
     trainingExampleBuilder.stop();

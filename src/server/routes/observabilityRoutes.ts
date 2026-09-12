@@ -21,6 +21,8 @@ import { buildExplorationHealthReport, formatExplorationHealthReport } from '../
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observability/aiCostGovernorReport';
 import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
+import { buildStrategyCatalog, formatStrategyCatalog } from '../research/strategyCatalog';
+import { buildMultiHorizonSummaryReport, formatMultiHorizonSummaryReport } from '../research/multiHorizonOutcomeReport';
 
 export const observabilityRouter = Router();
 
@@ -172,6 +174,41 @@ observabilityRouter.get('/strategy-readiness', async (req, res) => {
     const rows = await buildStrategyReadinessReport();
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatStrategyReadinessReport(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-11: strategy metadata catalog (argus-cli strategy-catalog) - every strategy id this
+// codebase currently knows about (CORE + EXPERIMENTAL TS + JAVA_RESEARCH), its family, whether
+// it's live-eligible right now, Node/Java ownership where known, and lifecycle status. Purely
+// structural - no win-rate/N/return numbers (strategy-readiness/strategy-scorecard own that).
+observabilityRouter.get('/strategy-catalog', async (req, res) => {
+  try {
+    const rows = await buildStrategyCatalog();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatStrategyCatalog(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-12 (Research Memory Platform Phase 2, argus-cli multi-horizon-outcomes) - real
+// aggregate over prediction_outcome_horizons (MultiHorizonOutcomeEvaluator.ts): mean forward
+// return / positive-return rate per (agent, strategy, horizon). Purely additive research
+// telemetry - never read by weight learning, RiskEngine, or consensus.
+observabilityRouter.get('/multi-horizon-outcomes', async (req, res) => {
+  try {
+    const agentName = typeof req.query.agentName === 'string' ? req.query.agentName : undefined;
+    const rows = await buildMultiHorizonSummaryReport(agentName);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatMultiHorizonSummaryReport(rows));
       return;
     }
     res.json({ ok: true, rows });

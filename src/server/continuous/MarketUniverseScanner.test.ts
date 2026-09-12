@@ -17,6 +17,7 @@ import {
   refreshBroadUniverseCache,
   getCachedBroadUniverseSymbols,
   getLastBroadUniverseStats,
+  getBroadUniverseSymbolLookup,
   resetMarketUniverseScannerForTests,
   fetchTopMovers,
   refreshMoversCache,
@@ -140,6 +141,57 @@ describe('MarketUniverseScanner - fetchAvgDailyVolumeShares', () => {
     const advMap = await fetchAvgDailyVolumeShares(['AAA']);
     expect(advMap.size).toBe(0);
   });
+
+  describe('2026-09-11 FMP ADV fallback (real same-day finding: QRVO/ASO gap-movers rejected on ADV because Alpaca IEX bars returned nothing)', () => {
+    let fetchSpy: ReturnType<typeof vi.spyOn> | undefined;
+
+    afterEach(async () => {
+      delete process.env.FMP_API_KEY;
+      fetchSpy?.mockRestore();
+      const { FmpBudget } = await import('../services/FmpBudget');
+      await FmpBudget.resetForTests();
+    });
+
+    it('falls back to FMP for a symbol Alpaca returned no bars for, when FMP_API_KEY is configured', async () => {
+      process.env.FMP_API_KEY = 'fmp-test-key';
+      mockFetch.mockResolvedValueOnce(barsResponse({})); // Alpaca returns nothing for QRVO
+      fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
+        expect(String(url)).toContain('/historical-price-full/QRVO');
+        return { ok: true, json: async () => ({ historical: [{ volume: 900_000 }, { volume: 1_100_000 }] }) } as any;
+      });
+      const advMap = await fetchAvgDailyVolumeShares(['QRVO']);
+      expect(advMap.get('QRVO')).toBe(1_000_000);
+    });
+
+    it('stays excluded (fail-closed) when FMP_API_KEY is not configured - unchanged prior behavior', async () => {
+      delete process.env.FMP_API_KEY;
+      mockFetch.mockResolvedValueOnce(barsResponse({}));
+      fetchSpy = vi.spyOn(global, 'fetch');
+      const advMap = await fetchAvgDailyVolumeShares(['QRVO']);
+      expect(advMap.has('QRVO')).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('stays excluded when FMP itself also has no real data - never fabricates a volume', async () => {
+      process.env.FMP_API_KEY = 'fmp-test-key';
+      mockFetch.mockResolvedValueOnce(barsResponse({}));
+      fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ historical: [] }) } as any);
+      const advMap = await fetchAvgDailyVolumeShares(['QRVO']);
+      expect(advMap.has('QRVO')).toBe(false);
+    });
+
+    it('respects the shared FmpBudget cap - does not call FMP once the daily budget is exhausted', async () => {
+      process.env.FMP_API_KEY = 'fmp-test-key';
+      const { FmpBudget } = await import('../services/FmpBudget');
+      const remaining = await FmpBudget.remaining();
+      await FmpBudget.tryConsume(remaining); // exhaust it
+      mockFetch.mockResolvedValueOnce(barsResponse({}));
+      fetchSpy = vi.spyOn(global, 'fetch');
+      const advMap = await fetchAvgDailyVolumeShares(['QRVO']);
+      expect(advMap.has('QRVO')).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
@@ -219,7 +271,7 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
     const thinAdvRow = filteredRows.find((r) => r.symbol === 'THINADV');
     expect(thinAdvRow).toBeDefined();
     const thinAdvPayload = JSON.parse(thinAdvRow!.payload as string);
-    expect(thinAdvPayload.reason).toBe('ADV'); // real 20-day ADV (100k shares) below the floor - never a silent disappearance again
+    expect(thinAdvPayload.reason).toBe('ADV_BELOW_FLOOR'); // real 20-day ADV (100k shares) below the floor - never a silent disappearance again
   });
 
   it('Phase A: a candidate that clears every liquidity gate but still loses the final rank cap is logged as RANK_CAP, not ADV - a real, distinct reason', async () => {
@@ -299,6 +351,83 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
     } finally {
       (continuousIntelligence as any).broadUniverseMaxCandidates = originalCap;
     }
+  });
+
+  it('2026-09-11: logs ADV_DATA_UNAVAILABLE (not ADV_BELOW_FLOOR) when the ADV data source simply had no answer', async () => {
+    process.env[FLAG] = 'true';
+    delete process.env.FMP_API_KEY; // no fallback configured - stays genuinely unanswered
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'NODATA', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      NODATA: { latestTrade: { p: 100 }, dailyBar: { v: 200_000, c: 100 }, latestQuote: { bp: 99.9, ap: 100.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({})); // Alpaca returns nothing at all for NODATA
+    await refreshBroadUniverseCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(
+      and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_FILTERED'), eq(schema.observabilityEvents.symbol, 'NODATA')),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const payload = JSON.parse(rows[rows.length - 1].payload as string);
+    expect(payload.reason).toBe('ADV_DATA_UNAVAILABLE'); // distinguishable from a confirmed-illiquid ADV_BELOW_FLOOR rejection
+    expect(payload.advShares).toBeNull();
+  });
+
+  describe('2026-09-11: getBroadUniverseSymbolLookup - "was this symbol seen, and where did it stop"', () => {
+    it('returns null before any cycle has completed since boot', async () => {
+      expect(getBroadUniverseSymbolLookup('ANYTHING')).toBeNull();
+    });
+
+    it('reports the real per-symbol outcome after a real cycle: admitted, stage-1-filtered, and never-in-universe', async () => {
+      process.env[FLAG] = 'true';
+      mockFetch.mockResolvedValueOnce(jsonResponse([
+        { symbol: 'WINNER', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+        { symbol: 'PENNY', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+      ]));
+      mockFetch.mockResolvedValueOnce(jsonResponse({
+        WINNER: { latestTrade: { p: 55 }, dailyBar: { v: 5_000_000, c: 55 }, latestQuote: { bp: 54.9, ap: 55.1 } },
+        PENNY: { latestTrade: { p: 0.5 }, dailyBar: { v: 100, c: 0.5 }, latestQuote: { bp: 0.49, ap: 0.51 } },
+      }));
+      mockFetch.mockResolvedValueOnce(barsResponse({ WINNER: [5_000_000, 5_000_000] }));
+      await refreshBroadUniverseCache();
+
+      const winner = getBroadUniverseSymbolLookup('WINNER');
+      expect(winner).toEqual({ inTradableAssetsUniverse: true, stage1Result: 'PASSED', stage2Result: 'ADMITTED' });
+
+      const penny = getBroadUniverseSymbolLookup('PENNY');
+      expect(penny?.inTradableAssetsUniverse).toBe(true);
+      expect(penny?.stage1Result).toBe('PRICE'); // below broadUniverseMinPrice - real, distinguishable stage-1 reason
+      expect(penny?.stage2Result).toBeNull(); // never reached ADV - stage-1 already stopped it
+
+      const neverSeen = getBroadUniverseSymbolLookup('NEVERSEEN');
+      expect(neverSeen).toEqual({ inTradableAssetsUniverse: false, stage1Result: null, stage2Result: null });
+    });
+  });
+
+  it('2026-09-11: stage1RejectionCounts is a real, cheap aggregate of stage-1 outcomes (zero new API calls)', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'OK1', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+      { symbol: 'PENNYSTOCK', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+      { symbol: 'NOSNAPSHOT', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      OK1: { latestTrade: { p: 55 }, dailyBar: { v: 5_000_000, c: 55 }, latestQuote: { bp: 54.9, ap: 55.1 } },
+      PENNYSTOCK: { latestTrade: { p: 0.5 }, dailyBar: { v: 100, c: 0.5 }, latestQuote: { bp: 0.49, ap: 0.51 } },
+      // NOSNAPSHOT deliberately absent from the snapshot response.
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ OK1: [5_000_000, 5_000_000] }));
+    const stats = await refreshBroadUniverseCache();
+
+    expect(stats.stage1RejectionCounts.PRICE).toBe(1);
+    expect(stats.stage1RejectionCounts.NO_SNAPSHOT_DATA).toBe(1);
+    expect(stats.stage1RejectionCounts.DOLLAR_VOLUME).toBe(0);
+    expect(stats.stage1RejectionCounts.SPREAD).toBe(0);
   });
 });
 
@@ -539,7 +668,7 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
       and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_FILTERED'), eq(schema.observabilityEvents.symbol, 'THINADVMOVER')),
     );
     expect(rows.length).toBeGreaterThan(0);
-    expect(JSON.parse(rows[rows.length - 1].payload as string).reason).toBe('ADV');
+    expect(JSON.parse(rows[rows.length - 1].payload as string).reason).toBe('ADV_BELOW_FLOOR');
   });
 });
 

@@ -131,10 +131,15 @@ function classify(f: Pick<SymbolFinding, 'admitted' | 'filteredReasons' | 'hadNe
     if (reasons.has('PRICE')) {
       return { classification: 'CORRECT_NON_ACTION', rationale: `Filtered on PRICE (deliberate minimum-price/penny-stock screen) at price ${f.lastEvidence?.price}.` };
     }
-    if (reasons.has('ADV') && f.lastEvidence?.advShares == null) {
+    // 2026-09-11: the reason itself now distinguishes these two cases directly
+    // (DiscoveryRejectReason's ADV_DATA_UNAVAILABLE vs ADV_BELOW_FLOOR) - previously both
+    // collapsed into one 'ADV' reason and this had to infer the distinction indirectly via
+    // `advShares == null`. Kept as a fallback for any pre-2026-09-11 persisted row still using the
+    // old bare 'ADV' reason (advShares null check), so historical rows classify the same as before.
+    if (reasons.has('ADV_DATA_UNAVAILABLE') || (reasons.has('ADV') && f.lastEvidence?.advShares == null)) {
       return { classification: 'DATA_QUALITY_GAP', rationale: 'Filtered on ADV but advShares was null - the gate correctly failed closed on missing data; the data fetch itself is the real gap.' };
     }
-    if (reasons.has('ADV') || reasons.has('DOLLAR_VOLUME')) {
+    if (reasons.has('ADV_BELOW_FLOOR') || reasons.has('ADV') || reasons.has('DOLLAR_VOLUME')) {
       return { classification: 'LIQUIDITY_EXCLUDED', rationale: `Filtered on ${[...reasons].join('/')} with a real, measured value below the configured floor.` };
     }
     if (reasons.has('SPREAD')) {

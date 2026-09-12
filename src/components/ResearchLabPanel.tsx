@@ -8,6 +8,11 @@ export default function ResearchLabPanel() {
   const [status, setStatus] = useState<any>(null);
   const [promo, setPromo] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
+  // Research Memory Platform Phase 1 (2026-09-11) - real, persisted pre-registered hypotheses and
+  // the experiments testing them. Fetched independently of the VectorBT/promotion data above; a
+  // failure here never blocks the rest of this panel.
+  const [hypotheses, setHypotheses] = useState<any[] | null>(null);
+  const [experiments, setExperiments] = useState<any[] | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -19,6 +24,16 @@ export default function ResearchLabPanel() {
         setPromo(p);
       })
       .catch((e) => setError(e.message));
+
+    Promise.all([
+      fetch("/api/v2/research/hypotheses").then((r) => r.json()),
+      fetch("/api/v2/research/experiments").then((r) => r.json()),
+    ])
+      .then(([h, e]) => {
+        if (h.ok) setHypotheses(h.hypotheses);
+        if (e.ok) setExperiments(e.experiments);
+      })
+      .catch(() => { /* additive section - Research Lab's own status/promotion data still renders */ });
   }, []);
 
   if (error) {
@@ -94,6 +109,75 @@ export default function ResearchLabPanel() {
       <p className="text-[10px] font-mono text-slate-500 mt-4 uppercase tracking-widest">
         Dataset · Strategy · Backtest · Sweep · Walk-forward · Monte Carlo · Permutation · Sensitivity · Cost · Regime · Paper · Health
       </p>
+
+      <div className="mt-6 pt-4 border-t border-slate-800">
+        <div className="text-[10px] font-mono uppercase tracking-widest text-slate-500 mb-2">
+          Pre-Registered Hypotheses &amp; Experiments (Research Memory Platform)
+        </div>
+        <p className="text-[10px] text-slate-500 mb-3 max-w-2xl">
+          A hypothesis is frozen here BEFORE its evidence is examined - never redefined after
+          seeing a result. Empty is honest: nothing is backfilled from prior ad hoc analysis.
+        </p>
+        {!hypotheses ? (
+          <AwaitingSignal compact reason="Loading hypotheses..." />
+        ) : hypotheses.length === 0 ? (
+          <AwaitingSignal compact emptyResult reason="No hypotheses pre-registered yet." />
+        ) : (
+          <div className="overflow-x-auto mb-4">
+            <table className="w-full text-[10px] font-mono text-slate-300">
+              <thead>
+                <tr className="text-slate-500 uppercase">
+                  <th className="text-left py-1">Statement</th>
+                  <th className="text-left">Strategy</th>
+                  <th>Preregistered</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hypotheses.map((h: any) => (
+                  <tr key={h.id} className="border-t border-slate-800">
+                    <td className="py-1 text-left max-w-xs truncate" title={h.statement}>{h.statement}</td>
+                    <td className="text-left">{h.strategyId ?? '—'}</td>
+                    <td className="text-center">{h.preregisteredAt?.slice(0, 10) ?? '—'}</td>
+                    <td className={`text-center ${h.resolvedStatus ? (h.resolvedStatus === 'CONFIRMED' ? 'text-emerald-400' : h.resolvedStatus === 'REJECTED' ? 'text-rose-400' : 'text-amber-400') : 'text-slate-500'}`}>
+                      {h.resolvedStatus ?? 'PRE_REGISTERED'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {!experiments ? (
+          <AwaitingSignal compact reason="Loading experiments..." />
+        ) : experiments.length === 0 ? (
+          <AwaitingSignal compact emptyResult reason="No experiments recorded yet." />
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-[10px] font-mono text-slate-300">
+              <thead>
+                <tr className="text-slate-500 uppercase">
+                  <th className="text-left py-1">Label</th>
+                  <th className="text-left">Strategy</th>
+                  <th>Status</th>
+                  <th>Created</th>
+                </tr>
+              </thead>
+              <tbody>
+                {experiments.map((exp: any) => (
+                  <tr key={exp.id} className="border-t border-slate-800">
+                    <td className="py-1 text-left">{exp.label}</td>
+                    <td className="text-left">{exp.strategyId ?? '—'}</td>
+                    <td className="text-center">{exp.status}</td>
+                    <td className="text-center">{exp.createdAt?.slice(0, 10) ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

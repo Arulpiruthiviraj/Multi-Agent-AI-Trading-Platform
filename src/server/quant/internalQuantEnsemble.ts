@@ -19,6 +19,7 @@ import { tradingSafety } from '../config/tradingSafety';
 import type { StrategyEvaluation } from './strategies/types';
 import { familyForStrategyId, JAVA_RESEARCH_STRATEGY_IDS } from './strategyFamilies';
 import type { ResearchBar } from '../research/ohlcvTypes';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 export interface InternalEnsembleQualification {
   qualifiesAsIndependent: boolean;
@@ -155,7 +156,21 @@ export async function computeInternalEnsembleQualification(
     votes.push({ modelId: id, family, side: vote.side, confidence: vote.confidence });
   }
 
-  if (votes.length === 0) return null;
+  if (votes.length === 0) {
+    // 2026-09-11 observability addition - part of the same real-outcome-classification fix as
+    // QuantCoreBridge.fetchInstitutionalEnsemble()'s own EMPTY_VOTES/JAVA_DISABLED/etc split.
+    // Disproven as the Sept 10 cause directly (real vote data that day was non-empty) but logged
+    // for real, ongoing measurement rather than assumed never to matter.
+    observeSafe(() => {
+      structuredLogger.info('quant_ensemble_call_outcome', {
+        category: 'OBSERVABILITY',
+        eventType: 'QUANT_ENSEMBLE_CALL_OUTCOME',
+        symbol,
+        reasoning: 'votes=0 outcome=EMPTY_VOTES detail=no TS strategy or Java research vote had a recognized family',
+      });
+    });
+    return null;
+  }
 
   const ensemble = await quantCoreBridge.fetchInstitutionalEnsemble(votes);
   if (!ensemble) return null; // genuine Java-unavailable/error case - fail closed, unchanged

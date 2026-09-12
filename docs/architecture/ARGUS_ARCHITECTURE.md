@@ -1455,3 +1455,155 @@ an oversight to treat as already covered.
 full hostile-input battery this sprint required: "ignore previous instructions", fake system
 messages, fake JSON, role-like content, injection via title/body/source, delimiter-escape forgery,
 prompt extraction, and an end-to-end "compromised response" check confirming clamping still holds.
+
+## Research Memory Platform — Phase 1: persisted pre-registered Hypothesis/Experiment/Trial store (2026-09-11)
+
+**Mandate:** "ARGUS — Institutional Quant Research Memory, Telemetry & Continuous Learning
+Platform" (94 sections) asked for an immutable research event store covering strategy identity,
+signal provenance, drift detection, and — its own §37/§38 — a first-class, pre-registered
+`Experiment` entity so a hypothesis is frozen *before* its evidence is examined, never redefined
+after seeing results.
+
+**Audit before building (same discipline as StrategyRegistry/SignalBus/CorrelationEngine/
+FeatureEngine earlier in this same mandate arc):** a thorough audit found this codebase already
+covers most of the 94 sections more than a fresh read of the spec would suggest — `event_traces`/
+`consensus_evidence`/`agent_reasoning_logs` are genuinely insert-only and already power
+`getDecisionTrace()`'s 7-table reconstruction; `learning_versions` +
+`StrategyEmissionEligibility.ts` already give every strategy immutable identity/version/lifecycle;
+`StrategyEvaluation.conditionsMet/conditionsFailed` is already a real per-cycle condition trace,
+persisted in `quant_assessments` for every strategy on every symbol regardless of outcome, not
+just the winner; `strategySelectionReplay.ts` already reconstructs a real no-signal/eligibility
+taxonomy from that same data. Building new versions of any of those would have been exactly the
+"more logs, not research memory" outcome the mandate itself warns against.
+
+**The one genuine, confirmed gap:** `src/server/research/experimentLedger.ts` already had correct,
+real logic — per-trial provenance (`TrialRecord`), a real Deflated Sharpe Ratio (Bailey & Lopez de
+Prado), and multiple-testing awareness — but its `ExperimentLedger` was an in-memory singleton with
+no pre-registration concept at all, evaporating on every process restart unless an operator
+happened to set `ARGUS_WRITE_RESEARCH_PARQUET=true` for an optional JSON dump. This session's own
+pre-registered walk-forward validations (the H1/H2/H3-style "freeze the hypothesis before
+inspecting new results" discipline) only ever existed inside a conversation transcript or a dated
+audit doc — nothing in the schema could answer "which hypotheses were pre-registered, and when."
+
+**Fix — three new tables** (`src/server/db/schema.ts`, migration `drizzle/0063_fantastic_morg.sql`):
+
+- `research_hypotheses` — `statement`, optional `strategyId`/`metric`/`expectedDirection`/
+  `acceptanceCriteria`, `preregisteredAt` (set once, at insert, never updated — this is the
+  timestamp that later proves the hypothesis existed before its evidence was examined), and
+  write-once resolution fields (`resolvedAt`/`resolvedStatus`/`resolvedEvidenceJson`) enforced at
+  the application layer (`resolveHypothesis()` throws on a second resolution attempt) rather than a
+  full status-event table — a hypothesis has exactly one terminal resolution, not an evolving
+  multi-step lifecycle the way a strategy version does (which already has `learning_versions` for
+  exactly that reason).
+- `research_experiments` — groups trials under one hypothesis test (`hypothesisId` nullable — an
+  experiment need not be pre-registered), `status` (`DRAFT|RUNNING|COMPLETED|FAILED|ABANDONED`),
+  write-once completion (`completeExperiment()`, same enforcement pattern).
+- `research_trials` — durable mirror of `TrialRecord`, insert-only, linked to an experiment via a
+  nullable `experimentId` (a trial can still be recorded standalone, outside any formal experiment
+  — the pre-2026-09-11 default behavior, unchanged).
+
+Both new tables reuse existing identity, never invent a second one: `strategyId` still points at
+real strategy ids (`learning_versions`/`quant/strategies/`), `datasetHash` reuses the existing
+convention already used by `strategy_engine_backtest_runs`/`replay_runs`.
+
+**Hot-path isolation (mandate §77/§78):** `recordExperimentTrial()`'s existing synchronous
+signature and in-memory behavior are completely unchanged — the DB write
+(`experimentLedger.ts`'s `persistTrialToDb()`) is fire-and-forget, wrapped in try/catch, and never
+awaited by the caller, so a persistence hiccup can never block or fail a real backtest/walk-forward
+run. `experimentLedgerSnapshot()`'s multiple-testing warning is still computed from the in-memory
+ledger exactly as before — durable persistence is an additive audit trail, not a swap of the
+warning's live behavior.
+
+**New programmatic API** (`experimentLedger.ts`): `registerHypothesis()`, `resolveHypothesis()`,
+`createExperiment()`, `completeExperiment()`, `listHypotheses()`, `listExperiments()`,
+`listTrialsFromDb()`, `getExperimentWithTrials()` (composes hypothesis + experiment + its full
+durable trial history in one call — the research-lineage read this phase exists to make possible).
+
+**New read-only routes** (`src/server/routes/researchRoutes.ts`): `GET /api/v2/research/hypotheses`,
+`GET /api/v2/research/experiments`, `GET /api/v2/research/experiments/:id` — distinct from the
+pre-existing `GET /api/v2/research/experiment-ledger` (that one remains the in-memory,
+current-process-only multiple-testing counter, unchanged). Write access
+(`registerHypothesis`/`createExperiment`/`resolveHypothesis`/`completeExperiment`) stays
+programmatic-API-only this pass; a formal pre-registration workflow with operator review is
+deliberately deferred rather than rushed into an unreviewed HTTP write surface.
+
+**Explicitly not fabricated:** no historical hypothesis from this session's own prior forensic
+work (Kronos BUY/SELL asymmetry, Quant BUY 0.7–0.8, Quant SELL 0.6–0.7 tail risk) was backfilled
+into `research_hypotheses` — most of those were discovered in-sample, by inspecting the same data
+later used to test them, and retroactively labeling them "pre-registered" would be exactly the
+data-mining-bias-laundering this whole feature exists to prevent. The table starts empty and only
+ever records real pre-registrations made from this point forward.
+
+**Deliberately deferred to a later phase, not attempted in this pass:** multi-horizon forward-
+outcome tracking (mandate §13 — `prediction_outcomes` remains one row per prediction at one
+resolved horizon), a rolling-baseline drift detector (mandate §30–32 — only point-in-time
+calibration-floor and one-shot expectancy-divergence checks exist today), and a no-signal feature
+snapshot for every evaluation cycle (mandate §3/§10 — today's rich `snapshotFromStrategyContext()`
+is computed and persisted only when a signal actually fires). Each is a real, smaller extension of
+an already-built mechanism, not a new foundational entity, and the audit that produced this section
+recommended they follow the Experiment/Hypothesis table rather than precede it — a real drift
+detector's natural home is "did this experiment's live performance drift from what it was
+pre-registered to expect," which needed this table to exist first.
+
+**Tests:** `src/server/research/experimentLedger.persistence.test.ts` (6 tests — pre-registration
+timestamp, write-once resolution/completion enforcement, cross-restart-style composition via a
+fresh DB connection, null-experimentId standalone trials), `src/server/routes/
+researchRoutes.hypothesesExperiments.test.ts` (3 tests, real Express router + real DB, no mocks).
+Full existing `experimentLedger.test.ts` suite (backward-compatible 2-argument call site,
+per-trial provenance, DSR) and `replayWalkForward.test.ts`/`v2System.quantObservability.test.ts`
+(the two other real production call sites) verified unchanged.
+
+## Research Memory Platform — Phase 2: multi-horizon forward-outcome tracking (2026-09-12)
+
+**Gap closed** (deferred at the end of Phase 1 above, per the same audit's recommendation to
+build it after the Experiment/Hypothesis table rather than before): mandate §13 ("Do NOT assume
+one universal horizon... store +1 bar / +5 bars / +20 bars... where appropriate"). Before this,
+`prediction_outcomes` was structurally one row per `(predictionId, sourceTable)` — a single
+resolved evaluation horizon (real, and correctly per-strategy-tuned via
+`config/evaluationHorizons.json`, but genuinely single-horizon, since it feeds
+`agent_performance_stats.currentWeight` and one stable grading window per prediction is the
+*correct* behavior there, not a bug).
+
+**Fix — one new table, one new additive worker, deliberately separate from the live grading
+path:** `prediction_outcome_horizons` (`src/server/db/schema.ts`, migration
+`drizzle/0064_confused_leo.sql`) — `predictionId`/`sourceTable` (same convention as
+`prediction_outcomes`), `horizonLabel`/`horizonBars`, direction-adjusted `forwardReturn` (same
+sign convention as `prediction_outcomes.mfe`/`mae` — positive is always favorable for the
+prediction's own side), raw `forwardDirection`, unique on `(predictionId, sourceTable,
+horizonLabel)`. Real horizon definitions (`1_BAR`/`5_BAR`/`20_BAR`/`60_BAR` by default) live in
+`config/multiHorizonOutcomeTracking.json` — never a TypeScript literal, per this codebase's
+standing config rule.
+
+`src/server/services/MultiHorizonOutcomeEvaluator.ts` is a new, independent interval worker
+(own `start()`/`stop()`, wired into `SystemBootstrap.ts` immediately after
+`predictionOutcomeEvaluator` and covered by the same `gracefulShutdown.ts` → `system.stop()` path
+that already stops it — no separate DEF-27-style gap introduced). It reads the same
+`agent_predictions`/`kronos_predictions` sources `PredictionOutcomeEvaluator.ts` does, applies the
+same exclusions (skip `KronosEngine` rows inside `agent_predictions` — already graded once from
+`kronos_predictions`; skip Digital-Twin telemetry-pulse rows; only directional BUY/SELL), but
+computes its own independent set of fixed bar-offset forward returns from a single
+`historicalDataGateway.getBars()` call per prediction, using `onConflictDoNothing()` for the same
+idempotent-retry behavior. A horizon whose bars have not arrived yet is simply left unevaluated
+(no row) and retried next cycle — never a fabricated or interpolated value, same honesty
+convention `PredictionOutcomeEvaluator.ts` itself already uses.
+
+**Explicitly does not touch:** `PredictionOutcomeEvaluator.ts` (unmodified — the live single-
+horizon WIN/LOSS grade and its weight-learning consequences are completely untouched),
+`agent_performance_stats.currentWeight`, `ChiefTraderAgent`, `RiskEngine`, `OMS`. This is
+observational research telemetry only, on its own independent interval and its own table.
+
+**Read access:** `src/server/research/multiHorizonOutcomeReport.ts`'s `buildMultiHorizonSummaryReport()`
+(same JS-side full-table-read + `Map` grouping convention `agentEdgeAnalytics.ts` already uses,
+not a new query style) joins back to `agent_predictions`/`kronos_predictions` for real
+`agentName`/`strategyId` attribution (reusing the `agent_predictions.strategy_id` column from the
+strategy-attribution work earlier this session), grouped by `(agentName, strategyId,
+horizonLabel)` into `n`/`meanForwardReturn`/`positiveReturnRate`. Exposed at
+`GET /api/v2/observability/multi-horizon-outcomes` (`argus-cli multi-horizon-outcomes`).
+
+**Tests:** `src/server/services/MultiHorizonOutcomeEvaluator.test.ts` (7 tests — real `ohlcv_bars`
+rows, same convention as `PredictionOutcomeEvaluator.test.ts`: direction-adjusted forward returns,
+SELL sign-flip, HOLD exclusion, partial-horizon resume, insufficient-bars honesty, real
+`evaluatePending()` persistence + idempotency + HOLD/telemetry-pulse/KronosEngine-duplicate
+exclusion), `src/server/research/multiHorizonOutcomeReport.test.ts` (4 tests). Full existing
+`PredictionOutcomeEvaluator.test.ts` suite verified unchanged (9 tests, confirming the live
+single-horizon grading path was not touched by this addition).

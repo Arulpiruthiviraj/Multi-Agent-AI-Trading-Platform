@@ -16,15 +16,37 @@ import { tradingSafety } from '../config/tradingSafety';
 
 const HARD_VETO_AGENTS = new Set(agentWeightConfig.consensusHardVetoAgents);
 
+/**
+ * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2). Explicit decomposition of
+ * what used to be one opaque "confidence" number - see ChiefTraderAgent.calibrateConfidenceDetailed()
+ * for the full reasoning. Purely observational: nothing in aggregate()/netConfidenceFromVotes()
+ * reads this - it exists so a round's real per-agent calibration inputs are inspectable (logged via
+ * CONSENSUS_TERMINAL_REASON) instead of collapsing into the single `confidence` field below.
+ */
+export interface CalibrationDetail {
+  /** The agent's own stated confidence for this idea, untouched. */
+  rawSignalStrength: number;
+  /** Beta-Binomial posterior mean anchored on this round's own raw value (not a bucket-wide
+   *  midpoint) - null when zero real evaluated history exists yet for this agent/bucket. */
+  historicalReliability: number | null;
+  /** Real (wins+losses) backing historicalReliability. */
+  sampleSize: number;
+  dataQuality: 'SUFFICIENT_CALIBRATION_DATA' | 'INSUFFICIENT_CALIBRATION_DATA' | 'NO_CALIBRATION_DATA';
+  /** What actually feeds netConfidenceFromVotes below - equals historicalReliability when real
+   *  data exists (already a principled, sample-size-weighted blend by construction), else raw. */
+  decisionConfidence: number;
+}
+
 export interface Evidence {
   traceId: string;
   symbol: string;
   side: 'BUY' | 'SELL' | 'HOLD';
-  confidence: number; // 0-1
+  confidence: number; // 0-1 - this IS calibrationDetail.decisionConfidence when calibrationDetail is present
   agent: string;
   reasoning: string;
   currentPrice?: number;
   weight: number; // already resolved by the caller (agentPerformanceStats-backed or default)
+  calibrationDetail?: CalibrationDetail;
 }
 
 export interface AggregationResult {

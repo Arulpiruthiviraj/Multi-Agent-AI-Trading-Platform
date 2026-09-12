@@ -40,9 +40,9 @@ import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { db } from '../db';
 import { agentPerformanceStats, agentConfidenceCalibration } from '../db/schema';
 import { eq, and, desc } from 'drizzle-orm';
-import { EvidenceAggregator, Evidence, coalesceEvidenceByAgent } from './EvidenceAggregator';
+import { EvidenceAggregator, Evidence, CalibrationDetail, coalesceEvidenceByAgent } from './EvidenceAggregator';
 import { isConsensusIdeaFresh } from '../core/consensusIdeaFreshness';
-import { bucketFor } from './ConfidenceCalibration';
+import { bucketFor, isCalibrationSampleSufficient } from './ConfidenceCalibration';
 import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
 import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
 import { recordConsensusTransaction } from '../core/TransactionRegistry';
@@ -411,17 +411,43 @@ export class ChiefTraderAgent {
     };
   }
 
+  /**
+   * 2026-09-11 consensus fix (real bug, forensically confirmed - see the traceId
+   * trace_GLD_1789148825_bbcf worked example: Kronos raw 0.85 -> calibrated 0.472, a fail-closed
+   * ConsensusDebate HOLD at confidence 0.8 hard-vetoed the round down to 25.1%; excluding the
+   * fail-closed HOLD alone raises it to 47.2%, and combined with raw signal reaches 85%/approved).
+   *
+   * INVARIANT: a fail-closed debate outcome is never directional evidence, regardless of WHICH way
+   * it failed to close. Before this fix, only one of the three ways a debate can fail-close (no
+   * routable provider known in advance - see the noRoutableProviders check above, which already
+   * skips the call entirely and was already correct) actually avoided fabricating a vote. The other
+   * two - routeConsensus() throwing after being attempted, and routeConsensus() resolving with zero
+   * successful providers or no usable verdict - both funnel through this function, and this
+   * function used to call upsertIdea(), turning "the AI produced no answer" into a real, weighted,
+   * confidence-0.8 HOLD vote capable of hard-vetoing an otherwise-qualifying round. That is the
+   * same class of defect the noRoutableProviders comment above already named ("a guaranteed
+   * artifact of an external outage, not a real adversarial review") - it just wasn't applied
+   * consistently to every fail-closed path.
+   *
+   *   AI_RESULT (debate resolved with >=1 successful provider and a real verdict) -> may vote
+   *   AI_NOT_ROUTABLE / AI_TIMEOUT / AI_ERROR / AI_MALFORMED / any other FAIL_CLOSED outcome
+   *     -> never votes, never reaches ChiefTrader's evidence pool, whatever the specific reason
+   *
+   * An actual successfully-produced HOLD verdict (debateSuccessCount() >= 1, handled in the
+   * .then() branch above, not this function) remains real evidence exactly as before - only the
+   * "the model never produced an answer" case is excluded. Telemetry is still recorded (below) so
+   * a fail-closed debate stays observable - it just never becomes a vote.
+   */
   private pushDebateFailClosed(idea: { traceId: string, symbol: string, currentPrice?: number }, why: string, debateResult?: any): void {
     const telemetry = this.debateTelemetry(debateResult, 0, 'HOLD', tradingSafety.debateResultConfidence);
-    this.upsertIdea({
-      traceId: idea.traceId,
-      symbol: idea.symbol,
-      side: 'HOLD',
-      confidence: tradingSafety.debateResultConfidence,
-      currentPrice: idea.currentPrice,
-      reasoning: `Multi-Model Debate fail-closed HOLD (${why}). Adversarial debate did not produce a usable verdict.`,
-      agent: 'ConsensusDebate',
-      debateTelemetry: telemetry,
+    observeSafe(() => {
+      structuredLogger.info('ai_debate_fail_closed_excluded', {
+        category: 'CONSENSUS',
+        eventType: 'AI_DEBATE_FAIL_CLOSED_EXCLUDED',
+        traceId: idea.traceId,
+        symbol: idea.symbol,
+        reasoning: `why=${why} providersAttempted=${telemetry.providers_attempted} providersSucceeded=${telemetry.providers_succeeded} excludedFromConsensus=true`,
+      });
     });
   }
 
@@ -629,15 +655,66 @@ export class ChiefTraderAgent {
    * row just means literally zero real outcomes have ever been evaluated for this bucket).
    */
   private async calibrateConfidence(agentName: string, rawConfidence: number): Promise<number> {
+    return (await this.calibrateConfidenceDetailed(agentName, rawConfidence)).decisionConfidence;
+  }
+
+  /**
+   * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2 - explicit separation of
+   * rawSignalStrength / historicalReliability / decisionConfidence). historicalReliability and
+   * decisionConfidence still read the STORED `calibratedConfidence` column, exactly as the
+   * original calibrateConfidence() did - that value is not a raw live computation, it's the output
+   * of CalibrationCandidateBuilder.runCalibrationValidationCycle()'s own promotion mechanism, which
+   * has its own statistical-significance gate before ever overwriting the currently-active
+   * calibrated value (see that file's `currentActiveCalibratedConfidence` comparison). An earlier
+   * version of this change recomputed live via calibratedConfidenceForRawSignal() at read-time,
+   * anchored on this round's own raw value instead of the bucket midpoint - a real, well-justified
+   * improvement in isolation, but it silently bypassed that promotion safety net, which is real
+   * production behavior this pass does not have grounds to override. calibratedConfidenceForRawSignal()
+   * stays in ConfidenceCalibration.ts, tested, available for a future pass that either extends the
+   * promotion mechanism to use it or makes a deliberate, reviewed decision to bypass it - not
+   * wired into the live decision path here.
+   *
+   * What IS new and safe: rawSignalStrength/historicalReliability/sampleSize/dataQuality are now
+   * separately observable per agent per round (Evidence.calibrationDetail, surfaced in
+   * CONSENSUS_TERMINAL_REASON) instead of collapsing into one opaque number, and dataQuality makes
+   * the sample-size question explicit (isCalibrationSampleSufficient(), reusing researchSafety.json's
+   * minPaperTrades/minOosTrades=30 precedent) rather than silently trusting a thin-sample estimate.
+   * decisionConfidence's actual VALUE is unchanged from before this pass in every case.
+   */
+  private async calibrateConfidenceDetailed(agentName: string, rawConfidence: number): Promise<CalibrationDetail> {
     try {
       const bucket = bucketFor(rawConfidence);
       const rows = await db.select().from(agentConfidenceCalibration).where(
         and(eq(agentConfidenceCalibration.agentName, agentName), eq(agentConfidenceCalibration.bucketLow, bucket.low))
       );
-      return rows[0] ? rows[0].calibratedConfidence : rawConfidence;
+      const row = rows[0];
+      if (!row) {
+        return {
+          rawSignalStrength: rawConfidence,
+          historicalReliability: null,
+          sampleSize: 0,
+          dataQuality: 'NO_CALIBRATION_DATA',
+          decisionConfidence: rawConfidence,
+        };
+      }
+      const sampleSize = row.wins + row.losses;
+      const sufficient = isCalibrationSampleSufficient(row.wins, row.losses, tradingSafety.minCalibrationSampleSize);
+      return {
+        rawSignalStrength: rawConfidence,
+        historicalReliability: row.calibratedConfidence,
+        sampleSize,
+        dataQuality: sufficient ? 'SUFFICIENT_CALIBRATION_DATA' : 'INSUFFICIENT_CALIBRATION_DATA',
+        decisionConfidence: row.calibratedConfidence,
+      };
     } catch (e) {
       console.error('[ChiefTrader] Confidence calibration lookup failed - using raw confidence', e);
-      return rawConfidence;
+      return {
+        rawSignalStrength: rawConfidence,
+        historicalReliability: null,
+        sampleSize: 0,
+        dataQuality: 'NO_CALIBRATION_DATA',
+        decisionConfidence: rawConfidence,
+      };
     }
   }
 
@@ -673,7 +750,7 @@ export class ChiefTraderAgent {
     const riskExitIdeas = relevantIdeas.filter(i => this.isRiskExit(i));
     const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
       ...i,
-      confidence: await this.calibrateConfidence(i.agent, i.confidence),
+      ...(await this.calibrateConfidenceDetailed(i.agent, i.confidence).then(detail => ({ confidence: detail.decisionConfidence, calibrationDetail: detail }))),
       weight: this.resolveWeight(i.agent),
     }))));
 
@@ -883,7 +960,15 @@ export class ChiefTraderAgent {
         rawConfidence: result.confidence,
         finalConfidence: approvedConfidence,
         independentAgentCount: Array.from(new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent))).length,
-        participatingAgents: evidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence })),
+        participatingAgents: evidence.map(e => ({
+          agent: e.agent,
+          side: e.side,
+          confidence: e.confidence,
+          rawSignalStrength: e.calibrationDetail?.rawSignalStrength ?? null,
+          historicalReliability: e.calibrationDetail?.historicalReliability ?? null,
+          calibrationSampleSize: e.calibrationDetail?.sampleSize ?? null,
+          calibrationDataQuality: e.calibrationDetail?.dataQuality ?? null,
+        })),
         moderateReasonCode: moderateEligibility?.reasonCode,
       });
     });
@@ -937,10 +1022,24 @@ export class ChiefTraderAgent {
       const shadowWeights: Record<string, number> = {};
       for (const e of evidence) shadowWeights[e.agent] = e.weight;
       const shadow = computeShadowConsensus(shadowVotes, shadowWeights, CONSENSUS_APPROVAL_THRESHOLD);
+      // 2026-09-11 addition, SHADOW MODE ONLY, same non-invasive contract as `shadow` above: a
+      // second parallel variant using each agent's RAW, pre-calibration confidence
+      // (rawConfidenceByAgent, already computed above for the MODERATE-tier gate - not a new
+      // fetch) instead of the calibration-substituted value. Tests the "calibration-as-ceiling"
+      // hypothesis directly - does agent confidence, before being replaced by that agent's own
+      // historical accuracy, actually support approvals the live model's calibration ceiling
+      // blocks? Same computeShadowConsensus() math, same HOLD-does-not-dilute fix `shadow` already
+      // validated - only the confidence INPUT differs. Never reads or writes the real decision.
+      const rawSignalEvidence: Evidence[] = evidence.map(e => ({
+        ...e,
+        confidence: rawConfidenceByAgent.get(e.agent) ?? e.confidence,
+      }));
+      const rawSignalVotes = rawSignalEvidence.map(classifyVote);
+      const rawSignalShadow = computeShadowConsensus(rawSignalVotes, shadowWeights, CONSENSUS_APPROVAL_THRESHOLD);
       recordConsensusModelComparison({
         traceId, symbol,
         legacyDecision: approvedSide, legacyApproved: approved, legacyConfidence: approvedConfidence,
-        threshold: CONSENSUS_APPROVAL_THRESHOLD, shadow,
+        threshold: CONSENSUS_APPROVAL_THRESHOLD, shadow, rawSignalShadow,
       });
     } catch (e) {
       console.error('[ChiefTrader] Shadow consensus computation failed (does not affect the real decision)', e);
@@ -1089,7 +1188,7 @@ export class ChiefTraderAgent {
       if (relevantIdeas.length === 0) continue;
       const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
         ...i,
-        confidence: await this.calibrateConfidence(i.agent, i.confidence),
+        ...(await this.calibrateConfidenceDetailed(i.agent, i.confidence).then(detail => ({ confidence: detail.decisionConfidence, calibrationDetail: detail }))),
         weight: this.resolveWeight(i.agent),
       }))));
       const result = EvidenceAggregator.aggregate(evidence);

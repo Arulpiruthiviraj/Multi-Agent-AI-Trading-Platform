@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { QuantCoreBridgeService } from './QuantCoreBridge';
+import { tradingSafety } from '../config/tradingSafety';
 
 const LIVE_IDEAS_ENV = 'QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED';
 
@@ -76,6 +77,68 @@ describe('QuantCoreBridgeService - gating and tick forwarding (Phase 2)', () => 
     // Once the breaker opens, later ticks should short-circuit before calling fetch again -
     // so the total call count is bounded, not one-per-tick across all 5 emits.
     expect(fetchSpy.mock.calls.length).toBeLessThan(5);
+  });
+
+  it('2026-09-11 concurrency fix: bounds concurrent in-flight tick requests at quantJavaCoreTickMaxConcurrency, coalescing the rest', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    const resolvers: Array<() => void> = [];
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise((resolve) => {
+      resolvers.push(() => resolve(new Response('{"ok":true,"gapDetected":false}', { status: 200 })));
+    }));
+
+    const bridge = new QuantCoreBridgeService();
+    bridge.start();
+    const cap = tradingSafety.quantJavaCoreTickMaxConcurrency;
+    const extra = 10;
+    for (let i = 0; i < cap + extra; i++) {
+      eventBus.emit('MARKET_DATA', { symbol: `SYM${i}`, price: 100, volume: 10, timestamp: new Date().toISOString() });
+    }
+
+    const state = bridge.getTickConcurrencyStateForTests();
+    expect(state.inFlight).toBe(cap); // bounded at the real ceiling, not cap+extra
+    expect(state.pendingCount).toBe(extra); // the rest coalesced/waiting rather than piling up new requests
+    expect(fetchSpy.mock.calls.length).toBe(cap);
+
+    // Release everything so no dangling in-flight promises leak past this test.
+    for (const resolve of resolvers.splice(0)) resolve();
+    await new Promise((r) => setTimeout(r, 20));
+    for (const resolve of resolvers.splice(0)) resolve();
+    await new Promise((r) => setTimeout(r, 20));
+    bridge.stop();
+  });
+
+  it('2026-09-11 concurrency fix: coalesces multiple ticks for the same symbol into only the latest price while a request is in flight', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    let releaseFirst: (() => void) | null = null;
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(() => new Promise((resolve) => {
+      const respond = () => resolve(new Response('{"ok":true,"gapDetected":false}', { status: 200 }));
+      if (!releaseFirst) releaseFirst = respond; else respond();
+    }));
+
+    const bridge = new QuantCoreBridgeService();
+    bridge.start();
+    eventBus.emit('MARKET_DATA', { symbol: 'COAL', price: 100, volume: 1, timestamp: new Date().toISOString() });
+    eventBus.emit('MARKET_DATA', { symbol: 'COAL', price: 101, volume: 2, timestamp: new Date().toISOString() });
+    eventBus.emit('MARKET_DATA', { symbol: 'COAL', price: 102, volume: 3, timestamp: new Date().toISOString() });
+
+    // Only the first tick dispatches a real request while COAL already has one in flight -
+    // the other two coalesce into a single pending slot rather than each firing their own fetch.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // Local history still records every real tick, independent of network coalescing.
+    expect(bridge.getLocalHistoryLengthForTests('COAL')).toBe(3);
+
+    releaseFirst!();
+    await new Promise((r) => setTimeout(r, 20));
+    bridge.stop();
+
+    // The first tick's completion also fires the pre-existing safety-net resync (a real call
+    // this bridge already made before this fix, unrelated to coalescing) - filter to real tick
+    // sends (not resync sends) the same way the sequence-numbering test above does.
+    const tickCalls = fetchSpy.mock.calls.filter((c) => !JSON.parse((c[1] as RequestInit).body as string).resync);
+    // The coalesced follow-up dispatch carries the LATEST price (102), not the intermediate 101.
+    expect(tickCalls.length).toBe(2);
+    const secondBody = JSON.parse((tickCalls[1][1] as RequestInit).body as string);
+    expect(secondBody.price).toBe(102);
   });
 });
 
@@ -481,6 +544,71 @@ describe('QuantCoreBridgeService.fetchInstitutionalEnsemble - advisory-only, nev
     const bridge = new QuantCoreBridgeService();
     await expect(bridge.fetchInstitutionalEnsemble(votes)).resolves.toBeNull();
   });
+
+  describe('2026-09-11 real outcome classification (P0 investigation: 230/230 null on Sept 10 traced to a real process outage, not a code defect - this closes the observability gap that made that a multi-hour forensic reconstruction instead of a direct query)', () => {
+    let logSpy: ReturnType<typeof vi.fn>;
+    let restoreLogger: any;
+
+    beforeEach(async () => {
+      const { structuredLogger } = await import('../observability/StructuredLogger');
+      logSpy = vi.fn();
+      restoreLogger = structuredLogger.info;
+      structuredLogger.info = logSpy as any;
+    });
+
+    afterEach(async () => {
+      const { structuredLogger } = await import('../observability/StructuredLogger');
+      structuredLogger.info = restoreLogger;
+    });
+
+    function outcomeCalls() {
+      return logSpy.mock.calls.filter((c) => c[0] === 'quant_ensemble_call_outcome').map((c) => c[1].reasoning as string);
+    }
+
+    it('logs JAVA_DISABLED when the flag is off', async () => {
+      const bridge = new QuantCoreBridgeService();
+      await bridge.fetchInstitutionalEnsemble(votes);
+      expect(outcomeCalls().some((r) => r.includes('outcome=JAVA_DISABLED'))).toBe(true);
+    });
+
+    it('logs SUCCESS on a real 200 response', async () => {
+      process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+      const fakeResult = { schemaVersion: 1, rawSide: 'BUY', totalVotes: 2, agreeingCount: 2, avgConfidenceOfAgreeing: 0.7, effectiveIndependentCount: 1.6, agreeingModelIds: ['momentum', 'factor'], dissentingModelIds: [] };
+      fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+      const bridge = new QuantCoreBridgeService();
+      await bridge.fetchInstitutionalEnsemble(votes);
+      expect(outcomeCalls().some((r) => r.includes('outcome=SUCCESS'))).toBe(true);
+    });
+
+    it('logs HTTP_ERROR with the real status code on a non-2xx response - distinguishable from a network failure', async () => {
+      process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+      fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response('bad request', { status: 400 }));
+      const bridge = new QuantCoreBridgeService();
+      await bridge.fetchInstitutionalEnsemble(votes);
+      expect(outcomeCalls().some((r) => r.includes('outcome=HTTP_ERROR') && r.includes('detail=400'))).toBe(true);
+    });
+
+    it('logs NETWORK_ERROR_OR_TIMEOUT (not HTTP_ERROR) when fetch itself throws - the real Sept 10 candidate cause', async () => {
+      process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+      fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('The operation was aborted'));
+      const bridge = new QuantCoreBridgeService();
+      await bridge.fetchInstitutionalEnsemble(votes);
+      expect(outcomeCalls().some((r) => r.includes('outcome=NETWORK_ERROR_OR_TIMEOUT'))).toBe(true);
+    });
+
+    it('logs CIRCUIT_BREAKER_OPEN distinctly once the breaker has tripped - never conflated with a fresh failure', async () => {
+      process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+      const { tradingSafety } = await import('../config/tradingSafety');
+      fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+      const bridge = new QuantCoreBridgeService();
+      for (let i = 0; i < tradingSafety.quantJavaCoreCircuitBreakerFailureThreshold; i++) {
+        await bridge.fetchInstitutionalEnsemble(votes);
+      }
+      logSpy.mockClear();
+      await bridge.fetchInstitutionalEnsemble(votes);
+      expect(outcomeCalls().some((r) => r.includes('outcome=CIRCUIT_BREAKER_OPEN'))).toBe(true);
+    });
+  });
 });
 
 describe('QuantCoreBridgeService.fetchInstitutionalAdvisory - Dynamic Regime & Volatility Multiplier Layer, advisory-only', () => {
@@ -627,13 +755,15 @@ describe('QuantCoreBridgeService.compareRegimeParity() - shadow-only regime pari
     process.env.QUANT_JAVA_CORE_ENABLED = 'true';
     fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
     const bridge = new QuantCoreBridgeService();
-    // Trip the breaker via the tick-forwarding path (tradingSafety.quantJavaCoreCircuitBreakerFailureThreshold defaults to 3).
-    bridge.start();
-    for (let i = 0; i < 5; i++) {
-      eventBus.emit('MARKET_DATA', { symbol: 'AAPL', price: 100 + i, volume: 10, timestamp: new Date().toISOString() });
-      await new Promise((r) => setTimeout(r, 5));
+    // 2026-09-11 circuit-breaker domain isolation: compareRegimeParity() checks the
+    // INSTITUTIONAL_ANALYTICS domain breaker (same domain as fetchInstitutionalRegime/Volatility/
+    // Factors/Features/Correlation and fetchCoreStrategyAssessment), which is now isolated from the
+    // MARKET_TICK domain - tripping the breaker via ticks (the old approach) no longer affects this
+    // check, which is the intended fix (a tick storm must never block institutional analytics).
+    // Trip the same domain's breaker directly instead (threshold defaults to 3).
+    for (let i = 0; i < 3; i++) {
+      await bridge.fetchInstitutionalVolatility('AAPL', bars, 1);
     }
-    bridge.stop();
     fetchSpy.mockClear();
 
     await bridge.compareRegimeParity('AAPL', bars, tsRegime);
@@ -782,5 +912,84 @@ describe('QuantCoreBridgeService.onSignal() - Phase 3 validation gate', () => {
     const bridge = new QuantCoreBridgeService();
     bridge.onSignal({ symbol: 'AAPL', side: 'BUY', confidence: 0.8, strategyId: 'X', reasoning: '' } as any);
     expect(receivedIdeas).toHaveLength(0);
+  });
+});
+
+describe('QuantCoreBridgeService - circuit breaker domain isolation (2026-09-11)', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  const bars = Array.from({ length: 40 }, (_, i) => ({
+    timestamp: i, open: 100 + i, high: 101 + i, low: 99 + i, close: 100.5 + i, volume: 1000,
+  }));
+  const threshold = tradingSafety.quantJavaCoreCircuitBreakerFailureThreshold;
+
+  beforeEach(() => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('real finding this fix addresses: tripping the MARKET_TICK domain must not block QUANT_ENSEMBLE, QUANT_RESEARCH, or INSTITUTIONAL_ANALYTICS calls', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const bridge = new QuantCoreBridgeService();
+    bridge.start();
+    // Trip only the tick domain via a real MARKET_DATA burst - the exact mechanism that caused the
+    // original storm (forwardTick has no concurrency cap prior to the 2026-09-11 backpressure fix;
+    // here we just need >= threshold consecutive failures on the tick path specifically).
+    for (let i = 0; i < threshold + 2; i++) {
+      eventBus.emit('MARKET_DATA', { symbol: 'AAPL', price: 100 + i, volume: 10, timestamp: new Date().toISOString() });
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    bridge.stop();
+
+    const states = bridge.getBreakerStatesForTests();
+    expect(states.tick.isOpen).toBe(true); // the domain that actually failed
+    expect(states.research.isOpen).toBe(false);
+    expect(states.ensemble.isOpen).toBe(false);
+    expect(states.institutional.isOpen).toBe(false);
+
+    // And a real call into each of the other three domains must actually be attempted (not
+    // short-circuited), proving isolation end-to-end, not just breaker-state bookkeeping.
+    fetchSpy.mockClear();
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }));
+    await bridge.fetchInstitutionalVolatility('AAPL', bars);
+    await bridge.fetchInstitutionalEnsemble([{ modelId: 'x', family: 'TREND_MOMENTUM', side: 'BUY', confidence: 0.7 }]);
+    await bridge.fetchResearchStrategy('rsi_mean_reversion', 'AAPL', bars);
+    expect(fetchSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('real finding this fix addresses: tripping QUANT_RESEARCH (the 10-way fan-out inside computeInternalEnsembleQualification) must not block QUANT_ENSEMBLE', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const bridge = new QuantCoreBridgeService();
+    for (let i = 0; i < threshold; i++) {
+      await bridge.fetchResearchStrategy('rsi_mean_reversion', 'AAPL', bars);
+    }
+
+    const states = bridge.getBreakerStatesForTests();
+    expect(states.research.isOpen).toBe(true);
+    expect(states.ensemble.isOpen).toBe(false);
+
+    fetchSpy.mockClear();
+    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }));
+    const result = await bridge.fetchInstitutionalEnsemble([{ modelId: 'x', family: 'TREND_MOMENTUM', side: 'BUY', confidence: 0.7 }]);
+    expect(fetchSpy).toHaveBeenCalledTimes(1); // ensemble attempt actually made, not short-circuited
+    expect(result).not.toBeNull();
+  });
+
+  it('each domain still independently fails closed on its own repeated failures', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const bridge = new QuantCoreBridgeService();
+    for (let i = 0; i < threshold; i++) {
+      await bridge.fetchInstitutionalRegime('AAPL', bars);
+    }
+    const states = bridge.getBreakerStatesForTests();
+    expect(states.institutional.isOpen).toBe(true);
+
+    fetchSpy.mockClear();
+    const result = await bridge.fetchInstitutionalRegime('AAPL', bars);
+    expect(fetchSpy).not.toHaveBeenCalled(); // still open for its own domain
+    expect(result).toBeNull();
   });
 });

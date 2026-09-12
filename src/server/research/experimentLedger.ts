@@ -68,6 +68,10 @@ export interface RecordTrialDetail {
   oosConfig?: Record<string, unknown>;
   robustnessConfig?: Record<string, unknown>;
   parentTrialId?: string;
+  /** Links this trial to a pre-registered research_experiments row (see createExperiment()). Null
+   *  when a trial is run standalone, outside any formal experiment - the pre-2026-09-11 default
+   *  for every existing call site, unchanged. */
+  experimentId?: string;
 }
 
 const ledger: ExperimentLedger = { trials: 0, byStrategy: {}, lastDatasetHash: null, trialRecords: [] };
@@ -79,11 +83,51 @@ function persist(): void {
   writeFileSync(join(dir, 'experiment_ledger.json'), JSON.stringify(ledger, null, 2));
 }
 
+/**
+ * 2026-09-11 (Research Memory Platform Phase 1): durable, cross-restart mirror of a trial into
+ * research_trials. Fire-and-forget from recordExperimentTrial() by design (mandate's own Hot Path
+ * Isolation / Failure Policy sections: research telemetry is OPTIONAL_ANALYTICS, must never block
+ * or fail the caller's real backtest/walk-forward work) - exported so tests can await it directly
+ * instead of racing the fire-and-forget call. A DB failure here never throws into the caller and
+ * never touches the in-memory ledger, which remains the unconditional source of truth for the
+ * current process's own multiple-testing warning (experimentLedgerSnapshot() behavior unchanged).
+ */
+export async function persistTrialToDb(trial: TrialRecord, experimentId: string | null = null): Promise<void> {
+  try {
+    const { db } = await import('../db');
+    const { researchTrials } = await import('../db/schema');
+    await db.insert(researchTrials).values({
+      id: trial.trialId,
+      experimentId,
+      strategyId: trial.strategyId,
+      datasetHash: trial.datasetHash,
+      parameterSetJson: trial.parameterSet ? JSON.stringify(trial.parameterSet) : null,
+      evaluationTimestamp: trial.evaluationTimestamp,
+      inSampleMetricsJson: trial.inSampleMetrics ? JSON.stringify(trial.inSampleMetrics) : null,
+      outOfSampleMetricsJson: trial.outOfSampleMetrics ? JSON.stringify(trial.outOfSampleMetrics) : null,
+      rejectionReason: trial.rejectionReason,
+      selectionStatus: trial.selectionStatus,
+      symbol: trial.symbol,
+      datasetPeriodStart: trial.datasetPeriod?.start ?? null,
+      datasetPeriodEnd: trial.datasetPeriod?.end ?? null,
+      executionModel: trial.executionModel,
+      transactionCostAssumptionsJson: trial.transactionCostAssumptions ? JSON.stringify(trial.transactionCostAssumptions) : null,
+      slippageAssumptionsJson: trial.slippageAssumptions ? JSON.stringify(trial.slippageAssumptions) : null,
+      wfoConfigJson: trial.wfoConfig ? JSON.stringify(trial.wfoConfig) : null,
+      oosConfigJson: trial.oosConfig ? JSON.stringify(trial.oosConfig) : null,
+      robustnessConfigJson: trial.robustnessConfig ? JSON.stringify(trial.robustnessConfig) : null,
+      parentTrialId: trial.parentTrialId,
+    });
+  } catch (e) {
+    console.error('[experimentLedger] Failed to persist trial to research_trials (in-memory ledger unaffected):', e);
+  }
+}
+
 export function recordExperimentTrial(strategyId: string, datasetHash: string, detail?: RecordTrialDetail): ExperimentLedger {
   ledger.trials += 1;
   ledger.byStrategy[strategyId] = (ledger.byStrategy[strategyId] ?? 0) + 1;
   ledger.lastDatasetHash = datasetHash;
-  ledger.trialRecords.push({
+  const trial: TrialRecord = {
     trialId: crypto.randomUUID(),
     strategyId,
     datasetHash,
@@ -102,9 +146,233 @@ export function recordExperimentTrial(strategyId: string, datasetHash: string, d
     oosConfig: detail?.oosConfig ?? null,
     robustnessConfig: detail?.robustnessConfig ?? null,
     parentTrialId: detail?.parentTrialId ?? null,
-  });
+  };
+  ledger.trialRecords.push(trial);
   persist();
+  void persistTrialToDb(trial, detail?.experimentId ?? null);
   return { ...ledger, byStrategy: { ...ledger.byStrategy }, trialRecords: [...ledger.trialRecords] };
+}
+
+// ==========================================================
+// Research Memory Platform Phase 1 (2026-09-11) - persisted, first-class pre-registered
+// Hypothesis and Experiment entities. Confirmed real gap (audit): this codebase's pre-registered
+// walk-forward validations (H1/H2/H3-style: freeze the hypothesis BEFORE inspecting new results)
+// only ever existed inside a conversation transcript or a dated audit doc - nothing queryable.
+// These functions give that exact discipline a durable, queryable home, without inventing new
+// statistics: hypothesis confirmation still has to come from real evidence (a walk-forward run,
+// an experimentAuditTrail() query, a strategy-scorecard classification) supplied by the caller.
+// ==========================================================
+
+export interface RegisterHypothesisInput {
+  statement: string;
+  strategyId?: string;
+  /** e.g. 'win_rate', 'expectancy', 'sharpe' - free text, not an enum; real hypotheses cite varied metrics. */
+  metric?: string;
+  /** e.g. 'ABOVE_CHANCE', 'POSITIVE_EXPECTANCY' - free text, stated BEFORE evidence is examined. */
+  expectedDirection?: string;
+  /** What would confirm/reject this hypothesis - set now, not invented after seeing the result. */
+  acceptanceCriteria?: string;
+  /** Honest provenance - e.g. 'claude-sonnet-5' or an operator name. Never fabricated if unknown. */
+  createdBy?: string;
+}
+
+export interface ResearchHypothesisRecord {
+  id: string;
+  statement: string;
+  strategyId: string | null;
+  metric: string | null;
+  expectedDirection: string | null;
+  acceptanceCriteria: string | null;
+  preregisteredAt: string;
+  createdBy: string | null;
+  resolvedAt: string | null;
+  resolvedStatus: 'CONFIRMED' | 'REJECTED' | 'INCONCLUSIVE' | 'ABANDONED' | null;
+  resolvedEvidenceJson: string | null;
+}
+
+/** Pre-registers a hypothesis. preregisteredAt is stamped here, at insert, and never changed -
+ *  this is the timestamp that later proves the hypothesis existed before its evidence was examined. */
+export async function registerHypothesis(input: RegisterHypothesisInput): Promise<string> {
+  const { db } = await import('../db');
+  const { researchHypotheses } = await import('../db/schema');
+  const id = crypto.randomUUID();
+  await db.insert(researchHypotheses).values({
+    id,
+    statement: input.statement,
+    strategyId: input.strategyId ?? null,
+    metric: input.metric ?? null,
+    expectedDirection: input.expectedDirection ?? null,
+    acceptanceCriteria: input.acceptanceCriteria ?? null,
+    preregisteredAt: new Date().toISOString(),
+    createdBy: input.createdBy ?? null,
+  });
+  return id;
+}
+
+export interface ResolveHypothesisInput {
+  hypothesisId: string;
+  status: 'CONFIRMED' | 'REJECTED' | 'INCONCLUSIVE' | 'ABANDONED';
+  /** The real evidence (e.g. a walk-forward summary, a strategy-scorecard classification) that
+   *  produced this resolution - never a bare verdict with no supporting record. */
+  evidence: Record<string, unknown>;
+}
+
+/** Write-once: refuses to overwrite a hypothesis that has already been resolved. A revised
+ *  conclusion must register a new hypothesis, never silently rewrite this one's evidence -
+ *  same "corrections create new events, not silent rewrites" principle as the rest of this file. */
+export async function resolveHypothesis(input: ResolveHypothesisInput): Promise<void> {
+  const { db } = await import('../db');
+  const { researchHypotheses } = await import('../db/schema');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.select().from(researchHypotheses).where(eq(researchHypotheses.id, input.hypothesisId));
+  const row = rows[0];
+  if (!row) throw new Error(`resolveHypothesis: no hypothesis with id ${input.hypothesisId}`);
+  if (row.resolvedAt) {
+    throw new Error(`resolveHypothesis: hypothesis ${input.hypothesisId} was already resolved at ${row.resolvedAt} (${row.resolvedStatus}) - resolution is write-once; register a new hypothesis for a revised conclusion`);
+  }
+  await db.update(researchHypotheses).set({
+    resolvedAt: new Date().toISOString(),
+    resolvedStatus: input.status,
+    resolvedEvidenceJson: JSON.stringify(input.evidence),
+  }).where(eq(researchHypotheses.id, input.hypothesisId));
+}
+
+export async function listHypotheses(strategyId?: string): Promise<ResearchHypothesisRecord[]> {
+  const { db } = await import('../db');
+  const { researchHypotheses } = await import('../db/schema');
+  const { eq } = await import('drizzle-orm');
+  const rows = strategyId
+    ? await db.select().from(researchHypotheses).where(eq(researchHypotheses.strategyId, strategyId))
+    : await db.select().from(researchHypotheses);
+  return rows as ResearchHypothesisRecord[];
+}
+
+export interface CreateExperimentInput {
+  hypothesisId?: string;
+  strategyId?: string;
+  datasetHash?: string;
+  label: string;
+}
+
+export interface ResearchExperimentRecord {
+  id: string;
+  hypothesisId: string | null;
+  strategyId: string | null;
+  datasetHash: string | null;
+  label: string;
+  status: 'DRAFT' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'ABANDONED';
+  createdAt: string;
+  completedAt: string | null;
+  resultSummaryJson: string | null;
+}
+
+/** Groups subsequent recordExperimentTrial(..., { experimentId }) calls under one formal
+ *  experiment. Starts RUNNING - this function exists to register work about to happen, not work
+ *  already done. */
+export async function createExperiment(input: CreateExperimentInput): Promise<string> {
+  const { db } = await import('../db');
+  const { researchExperiments } = await import('../db/schema');
+  const id = crypto.randomUUID();
+  await db.insert(researchExperiments).values({
+    id,
+    hypothesisId: input.hypothesisId ?? null,
+    strategyId: input.strategyId ?? null,
+    datasetHash: input.datasetHash ?? null,
+    label: input.label,
+    status: 'RUNNING',
+    createdAt: new Date().toISOString(),
+  });
+  return id;
+}
+
+export interface CompleteExperimentInput {
+  experimentId: string;
+  status: 'COMPLETED' | 'FAILED' | 'ABANDONED';
+  resultSummary: Record<string, unknown>;
+}
+
+/** Write-once, same discipline as resolveHypothesis() - a completed experiment's recorded result
+ *  is never silently revised. */
+export async function completeExperiment(input: CompleteExperimentInput): Promise<void> {
+  const { db } = await import('../db');
+  const { researchExperiments } = await import('../db/schema');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.select().from(researchExperiments).where(eq(researchExperiments.id, input.experimentId));
+  const row = rows[0];
+  if (!row) throw new Error(`completeExperiment: no experiment with id ${input.experimentId}`);
+  if (row.completedAt) {
+    throw new Error(`completeExperiment: experiment ${input.experimentId} was already completed at ${row.completedAt} - completion is write-once`);
+  }
+  await db.update(researchExperiments).set({
+    status: input.status,
+    completedAt: new Date().toISOString(),
+    resultSummaryJson: JSON.stringify(input.resultSummary),
+  }).where(eq(researchExperiments.id, input.experimentId));
+}
+
+export async function listExperiments(strategyId?: string): Promise<ResearchExperimentRecord[]> {
+  const { db } = await import('../db');
+  const { researchExperiments } = await import('../db/schema');
+  const { eq } = await import('drizzle-orm');
+  const rows = strategyId
+    ? await db.select().from(researchExperiments).where(eq(researchExperiments.strategyId, strategyId))
+    : await db.select().from(researchExperiments);
+  return rows as ResearchExperimentRecord[];
+}
+
+/** Durable, cross-restart trial history from research_trials - unlike experimentAuditTrail()
+ *  (in-memory, current process only), this reflects every trial ever persisted, across restarts. */
+export async function listTrialsFromDb(experimentId: string): Promise<TrialRecord[]> {
+  const { db } = await import('../db');
+  const { researchTrials } = await import('../db/schema');
+  const { eq } = await import('drizzle-orm');
+  const rows = await db.select().from(researchTrials).where(eq(researchTrials.experimentId, experimentId));
+  return rows.map((r) => ({
+    trialId: r.id,
+    strategyId: r.strategyId,
+    datasetHash: r.datasetHash,
+    parameterSet: r.parameterSetJson ? JSON.parse(r.parameterSetJson) : null,
+    evaluationTimestamp: r.evaluationTimestamp,
+    inSampleMetrics: r.inSampleMetricsJson ? JSON.parse(r.inSampleMetricsJson) : null,
+    outOfSampleMetrics: r.outOfSampleMetricsJson ? JSON.parse(r.outOfSampleMetricsJson) : null,
+    rejectionReason: r.rejectionReason,
+    selectionStatus: r.selectionStatus as TrialSelectionStatus,
+    symbol: r.symbol,
+    datasetPeriod: r.datasetPeriodStart && r.datasetPeriodEnd ? { start: r.datasetPeriodStart, end: r.datasetPeriodEnd } : null,
+    executionModel: r.executionModel,
+    transactionCostAssumptions: r.transactionCostAssumptionsJson ? JSON.parse(r.transactionCostAssumptionsJson) : null,
+    slippageAssumptions: r.slippageAssumptionsJson ? JSON.parse(r.slippageAssumptionsJson) : null,
+    wfoConfig: r.wfoConfigJson ? JSON.parse(r.wfoConfigJson) : null,
+    oosConfig: r.oosConfigJson ? JSON.parse(r.oosConfigJson) : null,
+    robustnessConfig: r.robustnessConfigJson ? JSON.parse(r.robustnessConfigJson) : null,
+    parentTrialId: r.parentTrialId,
+  }));
+}
+
+/** Composes hypothesis + experiment + its full durable trial history into one query-friendly
+ *  view - the research-lineage read this whole phase exists to make possible. Returns null (never
+ *  a fabricated shape) when the experiment id doesn't exist. */
+export async function getExperimentWithTrials(experimentId: string): Promise<{
+  experiment: ResearchExperimentRecord;
+  hypothesis: ResearchHypothesisRecord | null;
+  trials: TrialRecord[];
+} | null> {
+  const { db } = await import('../db');
+  const { researchExperiments, researchHypotheses } = await import('../db/schema');
+  const { eq } = await import('drizzle-orm');
+
+  const experimentRows = await db.select().from(researchExperiments).where(eq(researchExperiments.id, experimentId));
+  const experiment = experimentRows[0] as ResearchExperimentRecord | undefined;
+  if (!experiment) return null;
+
+  let hypothesis: ResearchHypothesisRecord | null = null;
+  if (experiment.hypothesisId) {
+    const hypothesisRows = await db.select().from(researchHypotheses).where(eq(researchHypotheses.id, experiment.hypothesisId));
+    hypothesis = (hypothesisRows[0] as ResearchHypothesisRecord | undefined) ?? null;
+  }
+
+  const trials = await listTrialsFromDb(experimentId);
+  return { experiment, hypothesis, trials };
 }
 
 /** Vitest isolation: fileParallelism is false so this singleton survives across files. */

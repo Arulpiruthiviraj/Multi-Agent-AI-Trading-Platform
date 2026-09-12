@@ -121,6 +121,17 @@ export interface EnsembleModelVote {
   confidence: number;
 }
 
+/** 2026-09-11 observability addition - see fetchInstitutionalEnsemble()'s own doc comment for the
+ *  real investigation this closes. EMPTY_VOTES is logged by the CALLER (internalQuantEnsemble.ts),
+ *  not here, since that early return happens before this function is ever invoked. */
+export type EnsembleCallOutcome =
+  | 'SUCCESS'
+  | 'JAVA_DISABLED'
+  | 'CIRCUIT_BREAKER_OPEN'
+  | 'HTTP_ERROR'
+  | 'NETWORK_ERROR_OR_TIMEOUT'
+  | 'EMPTY_VOTES';
+
 export interface InstitutionalEnsembleResult {
   schemaVersion: number;
   rawSide: EnsembleSide;
@@ -246,6 +257,17 @@ class CircuitBreaker {
       this.openedAt = now;
     }
   }
+
+  /** 2026-09-11 observability addition (P0 breaker-source trace) - read-only state accessors so
+   *  every caller can log exactly what the shared breaker looked like immediately before/after its
+   *  own recordFailure()/recordSuccess() call, without changing the breaker's own decision logic. */
+  getFailureCount(): number {
+    return this.consecutiveFailures;
+  }
+
+  getOpenedAt(): number | null {
+    return this.openedAt;
+  }
 }
 
 export class QuantCoreBridgeService {
@@ -266,7 +288,39 @@ export class QuantCoreBridgeService {
    *  own map (not shared with the tick-indicator comparison) so the two independent shadow checks
    *  never suppress one another's debounce window. */
   private readonly lastRegimeParityCompareAt: Record<string, number> = {};
-  private readonly breaker = new CircuitBreaker();
+  /**
+   * 2026-09-11 circuit-breaker domain isolation (real, measured root cause - see the P0 breaker
+   * forensic trace this session: institutional/strategy/volume_signal timeouts were found still
+   * collaterally blocking healthy institutional/ensemble attempts even after the tick-concurrency
+   * storm was fixed, because every institutional-* method shared ONE breaker instance). Split into
+   * four domains so a failure in one never disables an unrelated healthy one:
+   *   MARKET_TICK          - forwardTick/resyncSymbol (onTick, resyncSymbol) - by far the highest
+   *                           call volume, the confirmed original storm source.
+   *   QUANT_RESEARCH        - fetchResearchStrategy - the 10-way concurrent fan-out inside
+   *                           computeInternalEnsembleQualification(), the confirmed residual
+   *                           collateral-damage source after the tick fix.
+   *   QUANT_ENSEMBLE         - fetchInstitutionalEnsemble/fetchInstitutionalAdvisory/
+   *                           fetchCoreEnsembleDecision - the actual qualification decision calls
+   *                           this whole investigation exists to keep available.
+   *   INSTITUTIONAL_ANALYTICS - fetchInstitutionalVolatility/Factors/Features/Correlation/Regime/
+   *                           fetchCoreStrategyAssessment - advisory-only context calls.
+   * Same threshold/cooldown config for all four (quantJavaCoreCircuitBreakerFailureThreshold/
+   * CooldownMs) - this is a scoping fix, not a sensitivity change.
+   */
+  private readonly tickBreaker = new CircuitBreaker();
+  private readonly researchBreaker = new CircuitBreaker();
+  private readonly ensembleBreaker = new CircuitBreaker();
+  private readonly institutionalBreaker = new CircuitBreaker();
+
+  /** Test-only. */
+  getBreakerStatesForTests(): Record<'tick' | 'research' | 'ensemble' | 'institutional', { isOpen: boolean; failureCount: number }> {
+    return {
+      tick: { isOpen: this.tickBreaker.isOpen(), failureCount: this.tickBreaker.getFailureCount() },
+      research: { isOpen: this.researchBreaker.isOpen(), failureCount: this.researchBreaker.getFailureCount() },
+      ensemble: { isOpen: this.ensembleBreaker.isOpen(), failureCount: this.ensembleBreaker.getFailureCount() },
+      institutional: { isOpen: this.institutionalBreaker.isOpen(), failureCount: this.institutionalBreaker.getFailureCount() },
+    };
+  }
   private readonly rsiEngine = new RSIEngine(14);
   private readonly macdEngine = new MACDEngine(12, 26, 9);
   /** Cached, non-blocking - refreshed by health(); read by the CLI/API route without a live network hop. */
@@ -276,10 +330,124 @@ export class QuantCoreBridgeService {
     detail: 'never checked',
   };
 
-  private readonly onMarketData = (data: { symbol: string; price: number; volume: number; timestamp: string }) => {
-    this.onTick(data).catch(() => {
-      /* fire-and-forget: never let a bridge failure surface into the live tick pipeline */
+  /**
+   * 2026-09-11 observability addition (P0 breaker-source trace - explicit operator request to
+   * "add outcome telemetry to every QuantCoreBridge method... logged at the exact point where
+   * recordFailure() happens" before touching the shared breaker's architecture). Purely additive:
+   * every caller's return contract, timing, and control flow is byte-for-byte unchanged - this
+   * only records what already happened. Distinguishes TIMEOUT (AbortSignal.timeout() firing)
+   * from a genuine NETWORK_ERROR (connection refused, DNS, etc.) since the two point at very
+   * different fixes (raise the budget vs. fix connectivity/concurrency).
+   */
+  private classifyFetchError(e: unknown): 'TIMEOUT' | 'NETWORK_ERROR' {
+    if (e instanceof Error && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'TIMEOUT';
+    return 'NETWORK_ERROR';
+  }
+
+  private logBridgeOutcome(params: {
+    endpoint: string;
+    symbol?: string;
+    result: 'SUCCESS' | 'HTTP_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR' | 'CIRCUIT_OPEN' | 'JAVA_DISABLED';
+    httpStatus?: number;
+    errorMessage?: string;
+    durationMs?: number;
+    breakerFailureCountBefore: number;
+    breakerFailureCountAfter: number;
+  }): void {
+    observeSafe(() => {
+      const parts = [`endpoint=${params.endpoint}`, `result=${params.result}`];
+      if (params.httpStatus !== undefined) parts.push(`httpStatus=${params.httpStatus}`);
+      if (params.errorMessage) parts.push(`error=${params.errorMessage.slice(0, 200)}`);
+      if (params.durationMs !== undefined) parts.push(`durationMs=${params.durationMs}`);
+      parts.push(`breakerFailuresBefore=${params.breakerFailureCountBefore}`);
+      parts.push(`breakerFailuresAfter=${params.breakerFailureCountAfter}`);
+      structuredLogger.info('quant_bridge_call_outcome', {
+        category: 'OBSERVABILITY',
+        eventType: 'QUANT_BRIDGE_CALL_OUTCOME',
+        symbol: params.symbol,
+        reasoning: parts.join(' '),
+      });
     });
+  }
+
+  /**
+   * 2026-09-11 concurrency/backpressure fix - real, measured root cause (see
+   * quantJavaCoreTickMaxConcurrency's own doc comment in tradingSafety.ts for the full evidence):
+   * forwardTick() previously fired one independent fetch() per MARKET_DATA tick with zero
+   * concurrency limit, zero backpressure, and zero per-symbol deduplication. A burst of ticks
+   * measured live at up to 3,326 simultaneous in-flight requests (vs. ~8 under normal load),
+   * which starved the Node event loop badly enough that the 100ms request timeout was routinely
+   * missed by 1-3+ seconds, tripping the shared CircuitBreaker almost continuously and
+   * collaterally blocking every other institutional/quant endpoint sharing it.
+   *
+   * pendingTickBySymbol holds, per symbol, only the LATEST price/volume/timestamp not yet sent -
+   * for live market data the newest state is what matters, not a backlog of stale intermediate
+   * prints, so a newer tick for a symbol that already has one queued (or already has one in
+   * flight) simply overwrites it rather than queuing a second request. activeTickSymbols +
+   * inFlightTickCount enforce two ceilings: never more than one in-flight forwardTick per symbol
+   * (preserves this bridge's own per-symbol ordering - sequence numbers are still assigned, and
+   * sent, strictly in order for a given symbol), and never more than
+   * quantJavaCoreTickMaxConcurrency in flight globally. A tick that gets coalesced away still has
+   * its price/volume recorded via trackLocalHistory() immediately (see admitOrCoalesceTick) -
+   * only the NETWORK dispatch is throttled, not this bridge's own in-memory bookkeeping.
+   *
+   * Coalescing intentionally causes forwardTick's sequence numbers to skip ahead for a
+   * high-frequency symbol under load - that is exactly the scenario the pre-existing
+   * gapDetected handling and periodic RESYNC_SAFETY_NET_INTERVAL_MS safety net already exist to
+   * repair (see onTick below), so this composes safely with the existing design rather than
+   * requiring a new repair mechanism.
+   */
+  private readonly pendingTickBySymbol = new Map<string, { price: number; volume: number; timestampMs: number }>();
+  private readonly activeTickSymbols = new Set<string>();
+  private inFlightTickCount = 0;
+
+  private admitOrCoalesceTick(data: { symbol: string; price: number; volume: number; timestamp: string }): void {
+    const symbol = String(data.symbol || '').toUpperCase();
+    if (!symbol || !Number.isFinite(data.price)) return;
+    const timestampMs = Date.parse(data.timestamp) || Date.now();
+
+    // Local history bookkeeping happens for every admitted tick regardless of whether it ends up
+    // dispatched or coalesced - coalescing throttles the NETWORK call, not what this bridge
+    // itself remembers about real observed prices/volumes.
+    this.trackLocalHistory(symbol, data.price, data.volume);
+
+    const tick = { price: data.price, volume: data.volume, timestampMs };
+    if (this.activeTickSymbols.has(symbol) || this.inFlightTickCount >= tradingSafety.quantJavaCoreTickMaxConcurrency) {
+      this.pendingTickBySymbol.set(symbol, tick);
+      return;
+    }
+    this.dispatchTick(symbol, tick);
+  }
+
+  private dispatchTick(symbol: string, tick: { price: number; volume: number; timestampMs: number }): void {
+    this.pendingTickBySymbol.delete(symbol);
+    this.activeTickSymbols.add(symbol);
+    this.inFlightTickCount++;
+    this.onTick(symbol, tick.price, tick.volume, tick.timestampMs)
+      .catch(() => {
+        /* fire-and-forget: never let a bridge failure surface into the live tick pipeline */
+      })
+      .finally(() => {
+        this.activeTickSymbols.delete(symbol);
+        this.inFlightTickCount--;
+        const next = this.pendingTickBySymbol.get(symbol);
+        if (next && this.inFlightTickCount < tradingSafety.quantJavaCoreTickMaxConcurrency) {
+          this.dispatchTick(symbol, next);
+        }
+      });
+  }
+
+  /** Test-only. */
+  getTickConcurrencyStateForTests(): { inFlight: number; pendingCount: number; activeSymbols: string[] } {
+    return {
+      inFlight: this.inFlightTickCount,
+      pendingCount: this.pendingTickBySymbol.size,
+      activeSymbols: Array.from(this.activeTickSymbols),
+    };
+  }
+
+  private readonly onMarketData = (data: { symbol: string; price: number; volume: number; timestamp: string }) => {
+    this.admitOrCoalesceTick(data);
   };
 
   start(): void {
@@ -294,16 +462,17 @@ export class QuantCoreBridgeService {
     this.listening = false;
   }
 
-  private async onTick(data: { symbol: string; price: number; volume: number; timestamp: string }): Promise<void> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return;
-    const symbol = String(data.symbol || '').toUpperCase();
-    if (!symbol || !Number.isFinite(data.price)) return;
-
-    const timestampMs = Date.parse(data.timestamp) || Date.now();
-    this.trackLocalHistory(symbol, data.price, data.volume);
+  /**
+   * Only called from dispatchTick() above, after admitOrCoalesceTick() has already validated the
+   * symbol/price and recorded local history - symbol/price are trusted here, and timestampMs is
+   * already resolved. Concurrency (at most one in-flight call per symbol, bounded globally by
+   * quantJavaCoreTickMaxConcurrency) is enforced by the caller, not here.
+   */
+  private async onTick(symbol: string, price: number, volume: number, timestampMs: number): Promise<void> {
+    if (!isQuantJavaCoreEnabled() || this.tickBreaker.isOpen()) return;
 
     const sequence = this.nextSequence(symbol);
-    const gapDetected = await this.forwardTick(symbol, data.price, data.volume, timestampMs, sequence);
+    const gapDetected = await this.forwardTick(symbol, price, volume, timestampMs, sequence);
     if (gapDetected === null) return; // forwardTick itself failed (network/breaker/non-2xx) - nothing more to do
     const now = Date.now();
     if (gapDetected) {
@@ -360,6 +529,8 @@ export class QuantCoreBridgeService {
    * into one boolean the way the pre-2026-09-10 version did.
    */
   private async forwardTick(symbol: string, price: number, volume: number, timestampMs: number, sequence: number): Promise<boolean | null> {
+    const startedAt = Date.now();
+    const before = this.tickBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/ticks`, {
         method: 'POST',
@@ -368,14 +539,17 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.tickBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'ticks', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.tickBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.tickBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'ticks', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       const body = await res.json().catch(() => null) as { gapDetected?: boolean } | null;
       return body?.gapDetected === true;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.tickBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'ticks', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.tickBreaker.getFailureCount() });
       return null;
     }
   }
@@ -390,11 +564,13 @@ export class QuantCoreBridgeService {
    * live tick handler.
    */
   async resyncSymbol(symbol: string): Promise<boolean> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return false;
+    if (!isQuantJavaCoreEnabled() || this.tickBreaker.isOpen()) return false;
     const prices = this.priceHistory[symbol];
     if (!prices || prices.length === 0) return false;
     const volumes = this.volumeHistory[symbol] ?? [];
     const sequence = this.sequenceBySymbol[symbol] ?? 0;
+    const startedAt = Date.now();
+    const before = this.tickBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/ticks`, {
         method: 'POST',
@@ -403,10 +579,12 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.tickBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'ticks_resync', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.tickBreaker.getFailureCount() });
         return false;
       }
-      this.breaker.recordSuccess();
+      this.tickBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'ticks_resync', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       observeSafe(() => {
         structuredLogger.info('quant_core_tick_resync_sent', {
           category: 'OBSERVABILITY',
@@ -416,8 +594,9 @@ export class QuantCoreBridgeService {
         });
       });
       return true;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.tickBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'ticks_resync', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.tickBreaker.getFailureCount() });
       return false;
     }
   }
@@ -475,7 +654,7 @@ export class QuantCoreBridgeService {
    * disabled flag, open breaker, non-2xx response, or network error is a silent no-op.
    */
   async compareRegimeParity(symbol: string, bars: ResearchBar[], tsRegime: RegimeResult): Promise<void> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return;
+    if (!isQuantJavaCoreEnabled() || this.institutionalBreaker.isOpen()) return;
 
     const now = Date.now();
     const lastCompare = this.lastRegimeParityCompareAt[symbol] ?? 0;
@@ -555,7 +734,13 @@ export class QuantCoreBridgeService {
    * flag returns null, never throws, never fabricates a result.
    */
   async fetchInstitutionalVolatility(symbol: string, bars: ResearchBar[], forecastStepsAhead = 1): Promise<InstitutionalVolatilityResult | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.institutionalBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'institutional/volatility', symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.institutionalBreaker.getFailureCount(), breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.institutionalBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/volatility/${encodeURIComponent(symbol)}`, {
         method: 'POST',
@@ -564,19 +749,28 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.institutionalBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'institutional/volatility', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.institutionalBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'institutional/volatility', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as InstitutionalVolatilityResult;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.institutionalBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'institutional/volatility', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
       return null;
     }
   }
 
   async fetchInstitutionalFactors(symbol: string, bars: ResearchBar[], opts?: { momentumDays?: number; smaWindow?: number; zScoreWindow?: number }): Promise<InstitutionalFactorsResult | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.institutionalBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'institutional/factors', symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.institutionalBreaker.getFailureCount(), breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.institutionalBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/factors/${encodeURIComponent(symbol)}`, {
         method: 'POST',
@@ -590,13 +784,16 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.institutionalBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'institutional/factors', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.institutionalBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'institutional/factors', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as InstitutionalFactorsResult;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.institutionalBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'institutional/factors', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
       return null;
     }
   }
@@ -616,7 +813,14 @@ export class QuantCoreBridgeService {
    * insufficient-data (HTTP 422)/unknown-strategyId (404), never fabricated.
    */
   async fetchResearchStrategy(strategyId: string, symbol: string, bars: ResearchBar[], params?: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    const endpoint = `institutional/strategy/${strategyId}`;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.researchBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint, symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.researchBreaker.getFailureCount(), breakerFailureCountAfter: this.researchBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.researchBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/strategy/${encodeURIComponent(strategyId)}/${encodeURIComponent(symbol)}`, {
         method: 'POST',
@@ -625,13 +829,16 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.researchBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint, symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.researchBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.researchBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint, symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as Record<string, unknown>;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.researchBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint, symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.researchBreaker.getFailureCount() });
       return null;
     }
   }
@@ -649,7 +856,14 @@ export class QuantCoreBridgeService {
    * non-2xx/thrown error, never fabricated.
    */
   async fetchCoreStrategyAssessment(strategyId: string, symbol: string, bars: ResearchBar[]): Promise<CoreStrategyAssessment | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    const endpoint = `quant/strategy/${strategyId}`;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.institutionalBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint, symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.institutionalBreaker.getFailureCount(), breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.institutionalBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/quant/strategy/${encodeURIComponent(strategyId)}/${encodeURIComponent(symbol)}`, {
         method: 'POST',
@@ -658,13 +872,16 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.institutionalBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint, symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.institutionalBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint, symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as CoreStrategyAssessment;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.institutionalBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint, symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
       return null;
     }
   }
@@ -678,7 +895,13 @@ export class QuantCoreBridgeService {
    * evaluated at all; callers must not conflate the two.
    */
   async fetchCoreEnsembleDecision(symbol: string, bars: ResearchBar[]): Promise<CoreEnsembleDecision | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.ensembleBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'quant/ensemble', symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.ensembleBreaker.getFailureCount(), breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.ensembleBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/quant/ensemble/${encodeURIComponent(symbol)}`, {
         method: 'POST',
@@ -687,19 +910,28 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.ensembleBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'quant/ensemble', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.ensembleBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'quant/ensemble', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as CoreEnsembleDecision;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.ensembleBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'quant/ensemble', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
       return null;
     }
   }
 
   async fetchInstitutionalFeatures(symbol: string, bars: ResearchBar[], asOfMs?: number): Promise<InstitutionalFeaturesResult | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.institutionalBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'institutional/features', symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.institutionalBreaker.getFailureCount(), breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.institutionalBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/features/${encodeURIComponent(symbol)}`, {
         method: 'POST',
@@ -708,20 +940,29 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.institutionalBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'institutional/features', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.institutionalBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'institutional/features', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as InstitutionalFeaturesResult;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.institutionalBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'institutional/features', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
       return null;
     }
   }
 
   /** CorrelationEngine (EwmaCovariance) - needs pre-computed simple returns per symbol, not raw bars (a correlation is inherently cross-symbol, unlike the single-symbol callers above). */
   async fetchInstitutionalCorrelation(symbols: string[], returnsByAsset: number[][], lambda?: number): Promise<InstitutionalCorrelationResult | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.institutionalBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'institutional/correlation', result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.institutionalBreaker.getFailureCount(), breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.institutionalBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/correlation`, {
         method: 'POST',
@@ -730,13 +971,16 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.institutionalBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'institutional/correlation', result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.institutionalBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'institutional/correlation', result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as InstitutionalCorrelationResult;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.institutionalBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'institutional/correlation', result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
       return null;
     }
   }
@@ -746,9 +990,39 @@ export class QuantCoreBridgeService {
    * directional votes (this function does not itself decide what counts as a "directional vote";
    * never force a non-directional signal like a raw volatility forecast into a fabricated
    * BUY/SELL here). Same fail-closed contract as every other institutional caller.
+   *
+   * 2026-09-11 observability addition (P0 "diagnose the Quant internal ensemble null path"
+   * investigation - real finding: Sept 10's 230/230 null rate traced to a real ~9.5h process
+   * outage that night, NOT votes.length===0 (disproven directly) and NOT a code defect in this
+   * handler (verified live: today's process answers the exact real Sept 10 payload shape
+   * correctly). What genuinely was missing is this: every failure mode - Java disabled, circuit
+   * breaker open, a real HTTP error, a timeout/network failure - collapsed into an
+   * indistinguishable bare `null`, making a future recurrence unanswerable without a manual
+   * multi-hour forensic reconstruction like this one. This block classifies and logs the REAL
+   * outcome of every call, still returning exactly the same `| null` contract every existing
+   * caller already handles - purely additive, no caller needs to change.
    */
   async fetchInstitutionalEnsemble(votes: EnsembleModelVote[], correlationMatrix?: number[][]): Promise<InstitutionalEnsembleResult | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    const logOutcome = (outcome: EnsembleCallOutcome, detail?: string) => {
+      observeSafe(() => {
+        structuredLogger.info('quant_ensemble_call_outcome', {
+          category: 'OBSERVABILITY',
+          eventType: 'QUANT_ENSEMBLE_CALL_OUTCOME',
+          reasoning: `votes=${votes.length} outcome=${outcome}${detail ? ` detail=${detail}` : ''}`,
+        });
+      });
+    };
+    if (!isQuantJavaCoreEnabled()) {
+      logOutcome('JAVA_DISABLED');
+      return null;
+    }
+    if (this.ensembleBreaker.isOpen()) {
+      logOutcome('CIRCUIT_BREAKER_OPEN');
+      this.logBridgeOutcome({ endpoint: 'institutional/ensemble', result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.ensembleBreaker.getFailureCount(), breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.ensembleBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/ensemble`, {
         method: 'POST',
@@ -757,13 +1031,19 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.ensembleBreaker.recordFailure();
+        logOutcome('HTTP_ERROR', String(res.status));
+        this.logBridgeOutcome({ endpoint: 'institutional/ensemble', result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.ensembleBreaker.recordSuccess();
+      logOutcome('SUCCESS');
+      this.logBridgeOutcome({ endpoint: 'institutional/ensemble', result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as InstitutionalEnsembleResult;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.ensembleBreaker.recordFailure();
+      logOutcome('NETWORK_ERROR_OR_TIMEOUT', e instanceof Error ? e.message : String(e));
+      this.logBridgeOutcome({ endpoint: 'institutional/ensemble', result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
       return null;
     }
   }
@@ -776,7 +1056,13 @@ export class QuantCoreBridgeService {
    * never fabricate one. Same fail-closed contract as every other institutional caller.
    */
   async fetchInstitutionalAdvisory(votes: EnsembleModelVote[], regime: HmmRegimeLabel, currentVolatility: number, correlationMatrix?: number[][]): Promise<InstitutionalAdvisoryResult | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.ensembleBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'institutional/advisory', result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.ensembleBreaker.getFailureCount(), breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.ensembleBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/advisory`, {
         method: 'POST',
@@ -785,19 +1071,28 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.ensembleBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'institutional/advisory', result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.ensembleBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'institutional/advisory', result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as InstitutionalAdvisoryResult;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.ensembleBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'institutional/advisory', result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
       return null;
     }
   }
 
   async fetchInstitutionalRegime(symbol: string, bars: ResearchBar[], realizedVolWindow = 10): Promise<InstitutionalRegimeResult | null> {
-    if (!isQuantJavaCoreEnabled() || this.breaker.isOpen()) return null;
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.institutionalBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'institutional/regime', symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.institutionalBreaker.getFailureCount(), breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.institutionalBreaker.getFailureCount();
     try {
       const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/regime/${encodeURIComponent(symbol)}`, {
         method: 'POST',
@@ -806,13 +1101,16 @@ export class QuantCoreBridgeService {
         signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
       });
       if (!res.ok) {
-        this.breaker.recordFailure();
+        this.institutionalBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'institutional/regime', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
         return null;
       }
-      this.breaker.recordSuccess();
+      this.institutionalBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'institutional/regime', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
       return (await res.json()) as InstitutionalRegimeResult;
-    } catch {
-      this.breaker.recordFailure();
+    } catch (e) {
+      this.institutionalBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'institutional/regime', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
       return null;
     }
   }
