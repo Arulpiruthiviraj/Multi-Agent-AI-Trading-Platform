@@ -37,8 +37,8 @@ No production behavior was modified to make this baseline look better than it is
 | 5 | Quant forensics | PARTIAL | Focused on `ForecastEngine.java`/`internalQuantEnsemble.ts` (tonight's new code) |
 | 6 | Calibration forensics | NOT COVERED this pass |
 | 7 | Backtest/research forensics | NOT COVERED this pass |
-| 8 | Broker/execution forensics | NOT COVERED this pass (beyond arrival_price, already verified earlier this session) |
-| 9 | Position lifecycle | NOT COVERED this pass |
+| 8 | Broker/execution forensics | PARTIAL | Fill-ledger/portfolio-sync non-atomicity and cancel/fill race traced with real code evidence (see "Phase 8/9" section below); order-ack timing, IBKR reconnect-during-submission, duplicate-fill-event ordering not traced |
+| 9 | Position lifecycle | PARTIAL | Same section — reconciliation's real detection/pause mechanism for both traced scenarios confirmed via direct code trace, not assumed from documentation |
 | 10 | AI/LLM forensics | PARTIAL | Fail-closed guarantee re-verified against existing tests; not re-traced at every call site |
 | 11 | News/external data security | NOT COVERED this pass (DEF-31 already covers NewsScoringEngine from a prior session) |
 | 12 | Database forensics | PARTIAL | Focused on tonight's 3 new migrations |
@@ -66,6 +66,58 @@ See table below, updated as the audit proceeds.
 | FD-1 | P2 | `forecastEngine.ts` (tonight's new code) | `QuantSignalAgent.ts`'s fire-and-forget `buildForecast()` call has no protection against two overlapping real idea-emissions for the same symbol before the first build finishes | Two concurrent calls for the identical (agent, strategy, symbol, direction, horizon) key would independently query the DB, independently call the Java bridge, and independently insert a `quant_forecasts` row - not corruption (both rows are real/valid), but duplicate work and unnecessary Java-bridge load, the same risk class as the unbounded-payload timeout found earlier tonight | Wasted computation under real high-frequency re-evaluation of the same symbol; no correctness or safety impact (never touches RiskEngine/OMS) | In-flight request coalescing (`inFlightForecastBuilds` map, `forecastRequestKey()`) - a second concurrent call for the same key awaits the first's result instead of starting a redundant build; the guard releases after completion so a later, non-overlapping call still runs a fresh build | `forecastEngine.test.ts`: "coalesces concurrent buildForecast calls..." (proves exactly 1 Java call + 1 persisted row for 2 concurrent identical calls, then a genuinely new build on a 3rd call after both resolve) + "does NOT coalesce two different real keys..." (proves distinct symbols are never accidentally merged) | 11/11 `forecastEngine.test.ts` tests green; full suite re-run pending |
 | FD-2 | P3 | `NewsEngine.ts` code comment (documentation only, no functional code) | A 2026-09-03 comment claiming "FundamentalAgent.ts has the identical latent structural bug... not fixed in this pass; a separately-scoped follow-up" was never updated after that exact fix shipped to `FundamentalAgent.ts` (and `MacroAgent.ts`) on 2026-09-06, three days later | Stale, factually incorrect comment - a future engineer or AI pass reading it could believe `FundamentalAgent`/`MacroAgent` still have the subscribe-then-immediate-read bug and waste effort "fixing" already-fixed code, or worse, mistakenly treat it as license to skip auditing those files at all | Documentation-only; verified via direct code inspection that both `FundamentalAgent.ts` and `MacroAgent.ts` already call `waitForFreshMarketData()` correctly (real fix present, real regression coverage exists from the 2026-09-06 pass) | Corrected the comment to state the real fix history accurately | N/A (comment-only change) | Verified via direct read of `FundamentalAgent.ts:279-297` and `MacroAgent.ts:296-297` - both confirmed to already have the real fix |
 | FD-3 | **P1** | `forecastEngine.ts` `mostRecentForecast()` (tonight's new code) | The query filtered only by `(symbol, agentName, direction, horizonLabel)` in SQL, fetched the 50 most recent rows across ALL strategies matching that broader key, and filtered by the requested `strategyId` in JavaScript AFTER that limit was applied | A real false negative: once 50+ forecasts for OTHER strategies (or the agent-level null-strategy case) had been built more recently under the identical broader key, `.find()` would return `undefined` and the function would report "no forecast exists" even though a real, valid, more-recent-for-the-requested-strategy row existed just outside the top-50 window | Directly affects `opportunitySnapshot.ts`'s live `modelForecast` display - a real forecast could silently disappear from the UI/API the moment enough other-strategy forecast volume accumulated, exactly the kind of "code exists, runtime lies" gap this whole session has tried to prevent. No safety/trading impact (read-only observability path, never reaches RiskEngine/OMS), but a genuine correctness defect in exactly the code this session shipped tonight | Moved the `strategyId` filter into the SQL `WHERE` clause (`eq()`/`isNull()` as appropriate) and reduced `limit(50)` to `limit(1)`, since the database now returns exactly the correct most-recent row for the exact requested key regardless of how much other-strategy volume exists | `forecastEngine.test.ts`: new test seeds 1 real forecast for `RARE_STRATEGY`, then 60 real forecasts for a different `CHATTY_STRATEGY` under the identical symbol/agent/direction/horizon, and proves `mostRecentForecast()` still finds the `RARE_STRATEGY` row (would have failed - returned null - against the pre-fix code) | 12/12 `forecastEngine.test.ts` tests green; full suite re-run pending |
+
+## Phase 8/9 — Broker/order/position lifecycle (2026-09-14, pass 2, per explicit operator priority)
+
+Traced (not assumed) two specific real-world race scenarios from the operator's own priority list,
+following actual code paths rather than trusting prior sessions' documented fixes at face value:
+
+**Scenario A — restart/crash between fill-ledger write and local portfolio sync.**
+`OrderManagement.recordFillProgress()` calls `insertIncrementalFill()` (the authoritative `fills`
+table write) and THEN, as a separate, non-atomic step, `syncLocalPortfolioAfterBuyFill()` /
+`syncLocalPortfolioAfterSellFill()` (the `portfolio` table write). No `db.transaction()` wraps
+these two calls — confirmed via a full-codebase grep that `db.transaction(` is not used anywhere
+in `src/server/services/` or `src/server/engines/`, so this would be a first-of-its-kind pattern to
+introduce, not an established one. **A crash landing between these two calls would leave `fills`
+correct and `portfolio` stale** - a real gap, not fabricated.
+
+**Scenario B — cancel/fill race.** `OrderManagement.cancelOrder()` reads `trades.status` once,
+calls `broker.cancelOrder()` (a real network round-trip with its own timing), and only then marks
+the local row `CANCELED`. A broker-side race (the order actually fills moments before or during
+the cancel call, while the broker's cancel API still reports success) would leave Argus's local
+state permanently `CANCELED` (a terminal status `followUpOpenOrders()` explicitly excludes from all
+future re-checks) while a real position may exist at the broker that Argus never accounted for.
+
+**Both scenarios are real, but neither is a fresh, undetected defect** - both are architecturally
+caught by `PortfolioReconciliation.ts`'s own real, working `MismatchDetail` taxonomy
+(`QUANTITY_DRIFT`, `FILLED_ORDER_MISSING_LOCALLY`), confirmed via direct code trace:
+- Line ~351: a broker-reported filled order with no matching local trade produces a real
+  `FILLED_ORDER_MISSING_LOCALLY` mismatch (this is P0.7's own documented invariant, "Operator ack
+  for FILLED_ORDER_MISSING_LOCALLY" - confirmed to be real, wired code, not just a CLAUDE.md claim).
+- Line ~409: `worstImpact >= SIGNIFICANT_MISMATCH_DOLLARS && tradingEngine.state.tradingState ===
+  'TRADING_ENABLED'` really calls `tradingEngine.setTradingState('TRADING_PAUSED', ...)` - and this
+  exact line's own comment (lines 392-397) documents that it was ITSELF the fix for a real, prior
+  defect (setting `emergencyStopActive` directly instead of `tradingState`, which RiskEngine's
+  `emergency_stop` gate does not read) - i.e., this exact safety net was already forensically
+  audited and fixed in an earlier session, and this pass's independent re-trace confirms it is
+  correctly wired today, not merely re-trusting the prior claim.
+
+**Conclusion for Phase 8/9 this pass:** Argus's architecture deliberately relies on periodic,
+threshold-gated, fail-closed reconciliation as the authoritative backstop for order/fill/position
+divergence, rather than attempting full transactional atomicity in every individual code path
+(consistent with the "never auto-flatten, never auto-resume, persist mismatches" philosophy already
+documented). This is a reasoned, working design, verified by real tracing this pass - not a defect
+to "fix" by retrofitting transactions everywhere. **One real, honest residual gap remains
+unverified**: `SIGNIFICANT_MISMATCH_DOLLARS`-gated pausing means a mismatch below that dollar
+threshold is recorded and alerted but does NOT pause trading - this is a deliberate materiality
+threshold, not obviously wrong, but its actual configured value and whether it's appropriate for a
+small-account paper deployment was not evaluated this pass (a legitimate candidate for the next
+audit, not a claimed defect).
+
+Coverage table above updated: Phase 8/9 is now PARTIAL (2 specific real scenarios traced with
+actual code evidence) rather than NOT COVERED - still not exhaustive (order-ack timing, IBKR
+reconnect-during-submission, and duplicate-fill-event ordering per the operator's fuller list were
+not traced this pass).
 
 ## Safety assessment
 
@@ -135,13 +187,20 @@ QUANT CORRECTNESS: unchanged this pass (Java untouched); FD-3 makes
         already-correct stored values reliably retrievable
 AI SAFETY: verified unchanged, not re-traced at every call site this pass
 EXECUTION: not touched this pass
-REMAINING DEFECTS: none known beyond what's listed above
+REMAINING DEFECTS: no additional defects identified WITHIN THE PHASES AND
+        CODE PATHS ACTUALLY AUDITED this pass (0/1/2/5/10/12/13/17-19,
+        each PARTIAL). This is not equivalent to "none known" system-wide -
+        phases 6-9, 11, 14-16 received zero fresh tracing this pass; prior
+        sessions' fixes in those areas (DEF-05/06/27/29/30 etc.) reduce
+        risk but do not constitute a second-pass review of the CURRENT
+        codebase after tonight's changes.
 REMAINING UNKNOWN / UNPROVEN ITEMS: phases 6-9, 11, 14-16 not covered
         this pass (see coverage table); quant alpha/profitability remain
         unproven (unchanged, expected, not a defect)
 FINAL STATUS: READY FOR PAPER WITH OPERATIONAL CAVEAT
         (the pre-existing AI-provider degradation caveat from the prior
         pass stands unchanged; nothing this pass found or fixed alters it)
+        Internal label: FORENSICALLY PARTIALLY VERIFIED - NOT DEFECT-FREE.
 ```
 
 **This was a real, bounded, honest first pass — not a claim of exhaustive 24-phase coverage.** Three real defects were found through actual code tracing (not superficial grepping) and fixed with regression tests, all in code shipped earlier tonight. The highest-value finding (FD-3) is exactly the class of subtle integration-boundary bug this audit exists to catch: the code compiled, the tests passed, the feature worked in every test scenario — and it still had a real false-negative lurking in a boundary condition (many concurrent strategies) that none of the original tests happened to exercise. Further passes covering the remaining phases (especially 8-9 broker/position-lifecycle, 15 resource/memory, and 16 startup/recovery, none of which were touched tonight) would be a reasonable next forensic audit, not a feature-development task.
