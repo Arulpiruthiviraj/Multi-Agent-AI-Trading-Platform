@@ -66,12 +66,17 @@ export class ReflectionEngine {
         // any future agent that starts carrying one); null/absent for agents that don't compute
         // one - never fabricated, never backfilled after the fact.
         regime: idea.regime ?? null,
-        // 2026-09-11 - strategy-level attribution (strategy-attribution gap). QuantEngine's own
-        // emitTradeIdea call (QuantSignalAgent.ts) already carries the real winning strategy id
-        // (e.g. 'MOMENTUM_BREAKOUT') nested in quantDetail.strategyEvaluation.strategy - it was
-        // just never read here. Null for every agent that doesn't carry this shape (never
-        // fabricated from agent name or reasoning text).
-        strategyId: idea.quantDetail?.strategyEvaluation?.strategy ?? null,
+        // 2026-09-11 - strategy-level attribution (strategy-attribution gap), corrected 2026-09-13
+        // (Master Transformation Mandate Part 7 audit): a live DB query found the original
+        // quantDetail.strategyEvaluation.strategy path was populated on ZERO real QuantEngine rows,
+        // because that field is deliberately nulled on the cold-start-bootstrap path - which is
+        // effectively every real QuantEngine idea today (CLAUDE.md: organic closed PAPER FILLED
+        // SELL P&L is 0). QuantSignalAgent.ts now emits a dedicated top-level `strategyId` that
+        // survives independent of EV-backing (see its own resolvedStrategyId comment). The old
+        // path is kept as a fallback only in case any other future caller still uses that shape.
+        // Null for every agent that doesn't carry either (never fabricated from agent name or
+        // reasoning text).
+        strategyId: idea.strategyId ?? idea.quantDetail?.strategyEvaluation?.strategy ?? null,
       });
     } catch (e) {
       console.error("[ReflectionEngine] Error logging prediction:", e);

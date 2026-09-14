@@ -52,7 +52,8 @@ import { riskRewardRatio, expectedValue, MIN_SAMPLE_SIZE_FOR_KELLY } from '../qu
 import { computeLiveStrategyWinRate } from '../quant/risk/LiveStrategyPerformance';
 import { MIN_BARS } from '../quant/RegimeEngine';
 import { tradingSafety, isQuantColdStartBootstrapEnabled, isQuantIndependentQualificationEnabled, isStrategySelectionConfluenceGuardEnabled } from '../config/tradingSafety';
-import { computeInternalEnsembleQualification, shouldSuppressForConfluenceGuard } from '../quant/internalQuantEnsemble';
+import { computeInternalEnsembleQualification, shouldSuppressForConfluenceGuard, resolveEnsembleEvidenceForForecast } from '../quant/internalQuantEnsemble';
+import { buildForecast } from '../research/forecastEngine';
 import { isRuntimeFlagEnabled, resolveRuntimeNumber } from '../config/effectiveRuntimeConfig';
 import { deskIntelligence, rankEvaluationsForRegime, newsAgentEmitsTradeIdeas } from '../config/deskIntelligence';
 import { filterEvaluationsForStrategyFocus, normalizeStrategyFocus, selectEvaluationsForAdaptiveRegime } from '../config/strategyFocus';
@@ -423,6 +424,21 @@ export class QuantSignalAgent {
     }
     let strategyIdea = bestStrategyIdea(explorationAdjusted);
     let matchedStrategyEvaluation = strategyIdea ? strategyEvaluations.find(e => e.strategy === strategyIdea!.strategy) ?? null : null;
+    // Real strategy-attribution bug found and fixed (Master Transformation Mandate Part 7 audit,
+    // 2026-09-13): captured BEFORE the cold-start-bootstrap branch below nulls
+    // matchedStrategyEvaluation and reassigns strategyIdea.strategy to the synthetic marker string
+    // 'COLD_START_BOOTSTRAP' - a live DB query this same pass found agent_predictions.strategy_id
+    // (added in an earlier session) is populated on ZERO of 6,249 real QuantEngine rows, because
+    // ReflectionEngine.ts's write of that column reads idea.quantDetail?.strategyEvaluation?.strategy,
+    // which is exactly the field this cold-start path nulls - and per CLAUDE.md's own ground truth
+    // (organic closed PAPER FILLED SELL P&L: 0), essentially every real QuantEngine idea today takes
+    // this cold-start path. Until now the real strategy name (e.g. 'TREND_FOLLOWING') survived only
+    // inside free-text reasoning ("Cold-start bootstrap: TREND_FOLLOWING is..."), which is exactly
+    // why agentEdgeAnalytics.ts/predictionIndependencePolicy.ts had to resort to a reasoning-text
+    // regex (secondaryGroupKey()) instead of a real column - the canonical identity never actually
+    // reached the structured data. This constant is the fix: the real strategy identity, captured
+    // once, independent of whether EV/stop/target end up backing the idea.
+    const resolvedStrategyId: string | null = matchedStrategyEvaluation?.strategy ?? null;
 
     // Phase 16F (ARGUS_PHASE16_READINESS_REPORT.md) - a strategy-sourced idea (real stop/target,
     // unlike the regime-only fallback below) must clear a real expected-value check before it's
@@ -624,6 +640,11 @@ export class QuantSignalAgent {
       eventBus.emitTradeIdea({
         traceId, symbol, side: idea.side, confidence: idea.confidence,
         currentPrice, reasoning: idea.reasoning, agent: 'QuantEngine',
+        // Real strategy identity - survives independent of whether this idea ended up EV-backed
+        // or cold-start-bootstrapped (see resolvedStrategyId's own comment above for why the
+        // previous quantDetail.strategyEvaluation.strategy path silently dropped this for the
+        // cold-start case, which is the overwhelming majority of real production volume today).
+        strategyId: resolvedStrategyId,
         quantDetail: {
           regime,
           internalEnsemble,
@@ -676,6 +697,25 @@ export class QuantSignalAgent {
       });
       emittedTradeIdea = true;
       notePipelineAgentSuccess('QuantEngine');
+      // Master Transformation Mandate Part 7/9 (2026-09-13): real strategy-diversity evidence,
+      // reusing internalEnsemble - already computed above for the confluence guard, never a second
+      // Java call - passed through to the Forecast Engine so effectiveIndependentCount/familyCount
+      // on a persisted forecast are the SAME canonical measurement ChiefTrader's own independent-
+      // qualification bar uses, never a duplicate or approximated algorithm.
+      // resolveEnsembleEvidenceForForecast() (internalQuantEnsemble.ts, independently unit tested)
+      // owns the sideMismatch-exclusion decision. Fire-and-forget: this is real telemetry/
+      // provenance, not a gate - it must never add latency or a new failure mode to the live
+      // idea-emission path it rides along with, and it only ever fires at real idea-emission
+      // cadence (bounded by this pipeline's own existing thresholds/cooldowns), never
+      // per-evaluation-cycle.
+      void buildForecast({
+        agentName: 'QuantEngine',
+        strategyId: resolvedStrategyId,
+        symbol,
+        direction: idea.side as 'BUY' | 'SELL',
+        regime: regime.regime,
+        ensembleEvidence: resolveEnsembleEvidenceForForecast(internalEnsemble),
+      }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
       }
       }
     }

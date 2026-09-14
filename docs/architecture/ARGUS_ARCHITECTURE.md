@@ -1607,3 +1607,341 @@ SELL sign-flip, HOLD exclusion, partial-horizon resume, insufficient-bars honest
 exclusion), `src/server/research/multiHorizonOutcomeReport.test.ts` (4 tests). Full existing
 `PredictionOutcomeEvaluator.test.ts` suite verified unchanged (9 tests, confirming the live
 single-horizon grading path was not touched by this addition).
+
+## ConsensusDebate P0.5 forensic measurement (2026-09-13)
+
+**The finding that motivated this:** a real, data-driven P0 funnel audit (live DB, 30-day window)
+found Argus's evaluation/idea-generation funnel is large and healthy (44,051 quant cycles, 908,691
+strategy evaluations, 104,889 total agent predictions) but only 58 of 9,856 consensus transactions
+(0.6%) were approved. Tracing why found `ConsensusDebate` (ChiefTraderAgent's adversarial AI
+second-opinion layer) participates in ~84% of consensus rounds, votes HOLD ~96% of the time, and
+disagrees with the eventual consensus ~91% of the time — and, critically, its HOLD vote is not
+just diluting the weighted average: `evaluateConsensusSerialized()`'s `debateSaidHold` branch is a
+**hard, categorical veto** that fires before the strong-agreement approval branch, regardless of
+weighted confidence or independent-agent count. `ConsensusDebate` had zero rows in
+`agent_predictions`/`agent_performance_stats` — its own predictive value had never been measured
+anywhere in this codebase, unlike every other agent (which goes through Wilson-interval
+calibration before its weight is trusted).
+
+**A confound found during the same audit, before any new code was written:** a separate, very
+recent fix (2026-09-11, landed by concurrent work on this repo) corrected a real bug where
+fail-closed debate outcomes (AI timeout/no-route/error) were being recorded as real 0.8-confidence
+HOLD votes capable of triggering the same hard veto — a guaranteed artifact of an external outage,
+not a real adversarial review. That fix had almost no runtime exposure before this measurement
+work began (the engine was down for ~36 hours immediately after it shipped), so the historical
+96%/91% figures are likely contaminated by the now-fixed defect and cannot yet be trusted as a
+measurement of genuine debate behavior. This is why the mandate's objective is OBSERVATION ONLY:
+measure cleanly from this point forward, not draw a conclusion from contaminated history.
+
+**Fix — real counterfactual capture, wired into the live decision path, never changing what
+ChiefTraderAgent actually decides:**
+
+- `consensus_debate_predictions` (`src/server/db/schema.ts`, migration
+  `drizzle/0065_silky_monster_badoon.sql`) — one row per debate involvement (valid vote or
+  fail-closed AI-reliability event). `baseConsensusSide`/`baseConsensusConfidence` are the REAL
+  counterfactual: `EvidenceAggregator.aggregate()` called a second time on the same evidence array
+  with ConsensusDebate's own row excluded — not a reimplemented approximation of the consensus
+  formula. `baseClearsThreshold`/`baseClearsIndependence` + the real final `withDebateApproved`
+  together define `vetoFired` (debate's HOLD was the reason — or a contributing reason — an
+  otherwise-qualifying round did not approve).
+- `src/server/services/ConsensusDebateForensics.ts` — pure `computeConsensusDebateCapture()` (unit
+  tested against the exact real weighted-vote formula, including confirming `ConsensusDebate` is
+  in `config/agentWeights.json`'s `consensusHardVetoAgents`, so its HOLD vote both hard-vetoes
+  *and* penalizes the weighted average) + `persistConsensusDebateCapture()` (best-effort, never
+  throws into the caller). Wired into `ChiefTraderAgent.ts`'s `evaluateConsensusSerialized()`
+  right after `approved`/`result` are fully resolved, and into `pushDebateFailClosed()` /
+  the `noRoutableProviders` skip branch via a new per-symbol `pendingDebateFailClosed` map so a
+  fail-closed event (which never becomes a vote) is still captured as real AI-reliability telemetry
+  the next time that symbol's consensus round evaluates.
+- `src/server/services/ConsensusDebateOutcomeEvaluator.ts` — new interval worker (wired into
+  `SystemBootstrap.ts`, covered by the existing `gracefulShutdown.ts` drain path) that grades
+  `baseConsensusSide` — "would the candidate ConsensusDebate vetoed have won or lost" — via the
+  EXISTING `evaluatePrediction()` (`PredictionOutcomeEvaluator.ts`, now accepting
+  `'consensus_debate_predictions'` as a `sourceTable`) and the EXISTING shared `prediction_outcomes`
+  table, rather than a fourth parallel grading mechanism. FAIL_CLOSED_* rows are never graded — an
+  AI reliability event is not a prediction.
+- `src/server/research/consensusDebateHealthReport.ts` — the central metric this whole measurement
+  exists to produce: **net economic value of vetoes** (sum of real forward returns across every
+  graded, vetoed candidate — negative means ConsensusDebate is blocking more value than it
+  protects; positive means it's net-protective), plus GOOD_VETO/BAD_VETO classification, veto
+  precision, confidence-bucket breakdown, and regime breakdown. Sample-size gate reuses the
+  existing, already-reviewed `researchSafety.json` `minOosTrades` (30) floor rather than inventing
+  a new number. Recommendation states match the mandate's own vocabulary:
+  `INSUFFICIENT_DATA | POSITIVE_INCREMENTAL_VALUE | NEUTRAL_INCREMENTAL_VALUE |
+  NEGATIVE_INCREMENTAL_VALUE`. Exposed at `GET /api/v2/observability/consensus-debate-health`
+  (`argus-cli consensus-debate-health`, optional `--hours=N`).
+
+**Explicitly deferred, not silently omitted:** grading `ConsensusDebate`'s own directional (BUY/SELL)
+calls for accuracy (rare — ~3.6% of participations in the initial audit; the HOLD-veto question is
+the one that matters at this system's actual usage pattern); a full chronological
+train/validation/OOS three-way split (the report accepts an optional `sinceIso` window so this can
+be added once real sample size exists — building it now, against near-zero data, would only
+produce three empty buckets); a frontend Consensus Debate Forensics page (the mandate's own
+priority order puts the measurement phase first — "only after P1–P7 work" for the frontend and
+P1-mandate work, and this phase's own explicit rule is OBSERVATION ONLY until real evidence exists).
+
+**Tests:** `ConsensusDebateForensics.test.ts` (7 tests, including one that reproduces the exact
+real weighted-vote arithmetic from a live audit sample and confirms it matches to 3 significant
+figures), `ConsensusDebateOutcomeEvaluator.test.ts` (4 tests, real `ohlcv_bars` + real grading),
+`consensusDebateHealthReport.test.ts` (5 tests, real DB), and a targeted wiring test,
+`ChiefTraderAgent.consensusDebateCapture.test.ts` (2 tests, proving a real debate HOLD veto
+triggers the capture call with correct evidence — using the same mocked-db/EventBus/AIRouter
+convention `ChiefTraderAgent.test.ts` already established, plus a spy on the capture function).
+
+## Real Opportunity Snapshot (Institutional Transformation Mandate, Part 8/9, 2026-09-13)
+
+A 32-part "master transformation mandate" (UniverseService, FeatureEngine, StrategyCorrelation
+Engine, QuantForecastEngine, AlphaOpportunityEngine, PortfolioConstructionEngine,
+CapitalAllocationEngine, intraday event loop, execution analytics, institutional frontend, …)
+arrived requesting Argus evolve into a full systematic-trading platform. Per the mandate's own
+Part 31 ("Implementation Discipline" — inspect existing implementation, identify reusable
+infrastructure, minimal compatible changes, one subsystem at a time) and this session's
+established audit-before-build discipline, most of the requested subsystems were already found,
+across this and earlier sessions, to either already exist (`StrategyRegistry` ≈
+`strategyCatalog.ts`, `FeatureEngine` ≈ Java `QuantitativeFeatureEngine`/`quant-core/catalog`,
+`CorrelationEngine` ≈ Java `correlation_engine` at RESEARCH status, Research Memory ≈ this
+document's own Phase 1/2 sections above, Missed Opportunity Engine ≈
+`MissedOpportunityDetector.ts`'s existing real taxonomy) or require genuinely new Java quant
+calculation work (expected-return/volatility/probability-of-profit modeling — CLAUDE.md's Java 26
+Engine Authority: "all new quant/indicator/strategy calculation work goes to Java") that must not
+be rushed into a TypeScript approximation.
+
+**What was genuinely missing and safely buildable now:** a real, evidence-ranked cross-sectional
+view composing already-real numbers — Part 8/9's intent — without inventing the expected-return
+model Part 7 would require. `src/server/research/opportunitySnapshot.ts` composes five already-real
+reports (recent `QuantEngine` ideas via `agent_predictions.strategy_id`, real historical edge via
+`agentEdgeAnalytics.ts`, real multi-horizon forward returns via `multiHorizonOutcomeReport.ts`, real
+strategy metadata via `strategyCatalog.ts`, real held-position status) into one ranked view, sorted
+by real evidence quality (`evidenceClassification`, then Wilson lower bound) — deliberately never a
+synthetic weighted "opportunity score," which the mandate's own Part 8 explicitly warns against
+("Not a fake score... every number must have provenance") absent a validated economic model.
+
+**A real correctness bug found and fixed while building this:** `agentEdgeAnalytics.ts` still
+groups by `secondaryGroupKey()` (reasoning-text regex), not yet by the real `strategy_id` column
+added earlier this session — and per this file's own Phase 1 note above, essentially every current
+`QuantEngine` idea is still `COLD_START_BOOTSTRAP`-sourced (zero organic closed trades exist yet),
+meaning a naive `strategyId` lookup into `agentEdgeAnalytics`'s rows would almost never match real
+production data. `opportunitySnapshot.ts`'s `lookupEdge()` checks both the plain and
+`__COLD_START_BOOTSTRAP`-suffixed variants (same pattern `strategyReadiness.ts` already
+established), surfacing which variant matched — never merging the two populations.
+
+Exposed at `GET /api/v2/observability/opportunity-snapshot` (`argus-cli opportunity-snapshot
+--limit=N`). **Tests:** `opportunitySnapshot.test.ts` (6 tests, including one specifically
+reproducing the `COLD_START_BOOTSTRAP` fallback against realistic production-shaped reasoning
+text).
+
+## Execution Quality / Slippage Tracking (Institutional Transformation Mandate, Part 16, 2026-09-13)
+
+CLAUDE.md's own Frontend Honesty table previously documented a genuine, structural gap: "no
+slippage field (proposal price not persisted)." Root cause was not missing intent but a mutable
+column — `trades.price` is deliberately overwritten by `OrderManagement.ts` as an order progresses
+(once at broker acceptance, again as fills resolve), so by the time a real fill existed to compare
+against, the original decision-time price had already been destroyed. This directly blocks the
+mandate's own Part 32 final-acceptance question #18, "Is execution destroying alpha?" — genuinely
+unanswerable without a stable arrival-price baseline.
+
+**Fix:** `trades.arrival_price` (schema.ts, migration `0066_wooden_power_man.sql`) is written once,
+at the same pre-broker-call insert that already computes `intendedPrice` (`OrderManagement.ts`'s
+`executeOrder()`), and is never touched by any later `.update(trades)` call — verified directly by
+a new regression test (`OrderManagement.lifecycle.test.ts`, "preserves arrival_price untouched
+through the full PARTIALLY_FILLED -> FILLED transition") that drives a real order through a full
+lifecycle with a broker-reported fill price deliberately different from the arrival price, and
+confirms `price` mutates while `arrival_price` does not.
+
+`src/server/research/executionQuality.ts` computes real slippage only where both a real
+`arrival_price` and a real matching `fills` row exist — legacy trades predating this column, and
+any order with no recorded fill, are excluded rather than estimated (never a fabricated number).
+Sign convention: positive always means "worse than the price the decision was made at" for either
+side (a BUY that filled above arrival, or a SELL that filled below), so the aggregate mean/median
+slippage-in-bps answers the mandate's Q18 as a single signed number. Also derives real
+submission-to-first-fill latency per order from the same real timestamps.
+
+Exposed at `GET /api/v2/observability/execution-quality` (`argus-cli execution-quality
+--limit=N`). **Tests:** `executionQuality.test.ts` (8 tests: BUY/SELL slippage sign, weighted-average
+multi-fill aggregation, exclusion of legacy no-arrival-price rows, exclusion of no-fill rows,
+summary statistics, `NO_DATA` formatting guard) plus the OMS-level regression test above. Runtime-
+verified 2026-09-13: correctly reports `NO_DATA` immediately post-restart (no trade in the database
+yet carries a real `arrival_price`, since this is a schema addition, not a backfill — exactly the
+honest behavior the Frontend Rule requires rather than fabricating historical slippage).
+
+## Quant Forecast Engine (Institutional Transformation Mandate Part 7, 2026-09-13)
+
+The first real, working, end-to-end statistical forecast layer. Per the mandate's own explicit
+scoping ("a dedicated Quant Forecast Engine pass... the smallest real, deterministic, testable
+Quant Forecast Engine"), this is deliberately a real historical-statistics estimator over Argus's
+own already-graded prediction outcomes, not a machine-learning model — the audit (below) found no
+existing Java engine for this, and this codebase does not yet have enough real per-strategy
+evidence volume to justify a more sophisticated model.
+
+**Audit findings before building:**
+- `quant-core-java/institutional/` has no existing forecast/expected-return engine (checked by
+  name and by content search). `VolatilityEngine.java`, `QuantEnsembleEngine.java` (correlation-
+  adjusted aggregation), `NormalDistribution.java` exist and are reused/left alone, not duplicated.
+- `prediction_outcomes` (`PredictionOutcomeEvaluator.ts`) has 81,736 real graded rows today — real,
+  substantial evidence volume. `prediction_outcome_horizons` (`MultiHorizonOutcomeEvaluator.ts`,
+  built earlier this same mandate pass) has zero rows — real infrastructure, genuinely idle,
+  needing elapsed time (matches the ledger's own prior finding for that part).
+- **A real, load-bearing bug was found and fixed as a direct prerequisite**: `agent_predictions.strategy_id`
+  (the canonical strategy-attribution column added in an earlier session) was populated on
+  **zero of 6,249** real live QuantEngine rows. Root cause: `ReflectionEngine.ts`'s write path read
+  `idea.quantDetail?.strategyEvaluation?.strategy`, which `QuantSignalAgent.ts`'s cold-start-
+  bootstrap branch (the path essentially every real QuantEngine idea takes today, per this file's
+  own "organic closed PAPER FILLED SELL P&L: 0" ground truth) deliberately nulls right after using
+  it to build reasoning text — so the real strategy identity (e.g. `TREND_FOLLOWING`) only ever
+  survived as free text ("Cold-start bootstrap: TREND_FOLLOWING is..."), never in the structured
+  column. This is exactly what the user's own review of this session flagged as needing to be a
+  tracked fix ("the canonical strategy identity needs to travel through the signal contract
+  itself"), found to be more severe than a deferred migration — it was a genuine bug in the
+  write path itself. **Fixed**: `QuantSignalAgent.ts` now captures `resolvedStrategyId` immediately
+  after strategy selection, before any branch nulls `matchedStrategyEvaluation`, and emits it as a
+  dedicated top-level `strategyId` field on the trade idea; `ReflectionEngine.ts` prefers that field.
+  This fixes attribution for all NEW predictions going forward; the 81,736 existing historical rows
+  were written before the fix and still rely on `secondaryGroupKey()` (reasoning-text regex) for
+  strategy grouping — a real, tracked follow-up to migrate once enough post-fix volume exists.
+
+**Architecture decision (Java 26 Engine Authority boundary):** the actual statistical computation
+(mean/median/trimmed-mean/dispersion/Wilson-interval probability-of-profit) is a decision-
+authoritative forecast calculation — it belongs in Java (rule 0/16), distinct from the existing
+TS-side `wilsonInterval()` (`effectiveSampleSize.ts`), which remains a diagnostic/observability
+tool for agent-calibration reporting, never this authoritative Forecast object. `ForecastEngine.java`
+(new, `quant-core-java/institutional/models/`) is pure and deterministic: given a real sample of
+historical forward returns and a transaction-cost assumption, computes every canonical-contract
+numeric field, returning `INSUFFICIENT_DATA` (all fields null, never a fabricated default) below
+`MIN_SAMPLE_SIZE` (20). "Profit" is defined net of transaction cost (`return > costBps`), not
+merely `return > 0`, per the mandate's own explicit definition. Exposed at
+`POST /api/v1/institutional/forecast` (`QuantCoreServer.java`), same request/response idiom as
+`handleInstitutionalEnsemble`. 12 JUnit tests with hand-verified numerical fixtures (symmetric
+1..20 sample for mean/median/trimmed-mean, hand-computed Wilson interval at p=0.5, net-of-cost
+profit definition, INSUFFICIENT_DATA boundary) plus adversarial cases (empty/null/single-element
+arrays, all-identical returns, an extreme 5000% outlier proving trimmed mean resists distortion
+raw mean does not, all-catastrophic-negative sample, 100%-profit Wilson boundary).
+
+`src/server/research/forecastEngine.ts` owns exactly the TypeScript side of rule 16
+("orchestrate, expose APIs, persist read models, coordinate services"): assembles a real,
+direction-oriented historical-return sample from `prediction_outcomes` (default horizon,
+`PRIMARY_EVAL_HORIZON`) or `prediction_outcome_horizons` (explicit horizon labels), grouped by
+agent and — when requested — real strategy id via `secondaryGroupKey()` (the same established
+mechanism `agentEdgeAnalytics.ts`/`opportunitySnapshot.ts` already use, for the reason above), calls
+`QuantCoreBridge.fetchForecast()`, and persists one immutable, versioned row to the new
+`quant_forecasts` table (migration `0067_regular_wong.sql`) — never overwritten, a changed model
+produces a new row with a new `modelVersion`. `MODEL_UNAVAILABLE` (Java disabled/unreachable/
+circuit-open) is tracked as a distinct status from `INSUFFICIENT_DATA` (Java reachable, real sample
+too thin) — both leave every numeric field null, never fabricated.
+
+**A second real reliability bug was found and fixed during live verification**: the first live CLI
+test (`argus-cli forecast --agent=TechnicalAgent --symbol=AAPL --direction=BUY`) returned
+`MODEL_UNAVAILABLE` despite Java being healthy — `observability_events` showed the real cause:
+`TIMEOUT` at 108ms against `quantJavaCoreRequestTimeoutMs`'s 100ms budget, because the unbounded
+query had assembled and serialized **all 57,504** real TechnicalAgent historical rows into one HTTP
+POST body. Fixed by capping the sample to the most recent `forecastEngineMaxSampleSize` (500,
+`config/tradingSafety.json` — not hardcoded in TS, per this codebase's own config rule)
+observations before ever calling Java — both a real reliability fix (matches the mandate's own
+"Java Bridge Reliability... do not repeat the previous unbounded-concurrency problem" instruction)
+and the statistically correct choice (recent, representative evidence over an unbounded
+stale-inclusive blend). Provenance reports both `sourceRowCount` (true total evidence found) and
+`sampleSizeSentToModel` (post-cap) so the real evidence volume is never understated. Re-verified
+live after the fix: the same CLI call now returns `status: "VALID"`, `sampleSize: 500`,
+`sourceRowCount: 57504` — a real forecast (`expectedReturn≈0.024%`, `probabilityOfProfit≈49%`,
+honestly near-coin-flip, consistent with this system's documented lack of established edge, not a
+sign of a bug).
+
+Integrated into `opportunitySnapshot.ts` (mandate item 24) as an additive `modelForecast` field —
+a bounded local DB read (`mostRecentForecast()`, no live Java call in that hot path, avoiding the
+same unbounded-concurrency risk class the bug above just demonstrated), clearly distinct from the
+existing `historicalEdge` field (OBSERVED/MEASURED real past outcomes vs. this MODEL FORECAST).
+
+Exposed at `POST /api/v2/observability/forecast` (build + persist) and
+`GET /api/v2/observability/forecast` (bounded read-only lookup); `argus-cli forecast --agent=
+--symbol= --direction= [--strategyId=] [--horizon=]`. **Tests:** `forecastEngine.test.ts` (7 tests:
+BUY/SELL return orientation, real strategy-id filtering via `secondaryGroupKey()`, `INSUFFICIENT_DATA`
+from a real thin Java response, explicit non-default horizon honestly finding zero rows today, the
+sample-cap regression, `mostRecentForecast()` null-when-absent) plus 2 new `opportunitySnapshot.test.ts`
+cases (null by default, populates from a real persisted row). Full suite green (489 files / 3578
+tests) after every change in this pass; `tsc --noEmit` clean; `mvn test` green (804 Java tests).
+
+### Real strategy-diversity evidence integration (Part 9, same day, second pass)
+
+Closed the one gap the Forecast Engine build above deliberately left open: `strategyCount`/
+`familyCount`/`effectiveIndependentCount` were persisted as honest nulls because
+`forecastEngine.ts` has no live market bars or strategy-evaluation context of its own to compute
+them, and must never approximate or duplicate `internalQuantEnsemble.ts`'s own canonical,
+correlation-adjusted measurement. **Audit finding:** `computeInternalEnsembleQualification()`
+(`internalQuantEnsemble.ts`) already runs, live, inside `QuantSignalAgent.ts`'s own idea-emission
+path (gated behind `isQuantIndependentQualificationEnabled()`/`isStrategySelectionConfluenceGuardEnabled()`,
+both flags this deployment already has on) — it is the SAME real evidence ChiefTrader's own
+independent-qualification bar already trusts, computed once per real emission, never per
+evaluation cycle. No second correlation system, no new independent-count algorithm, no duplicate
+strategy registry were created.
+
+`ForecastRequest` gained an optional `ensembleEvidence` field carrying exactly
+`{strategyCount, familyCount, effectiveIndependentCount}` — `forecastEngine.ts` only ever persists
+what a caller supplies, never computes it. `internalQuantEnsemble.ts` gained a new pure, exported
+`resolveEnsembleEvidenceForForecast()` (same "extract for independent unit-testability" pattern as
+the existing `shouldSuppressForConfluenceGuard()`) that returns `null` — not the raw ensemble
+result — whenever there is no ensemble for this cycle OR `sideMismatch` is true: a mismatched
+ensemble's family/independence counts describe the OPPOSING side the ensemble actually agreed
+with, so attaching them to an idea going the other direction would misrepresent contradicting
+evidence as support. `QuantSignalAgent.ts` calls `buildForecast()` fire-and-forget (`void ...catch(...)`,
+never awaited, never able to add latency or a new failure mode to the live decision path) exactly
+once per real emitted QuantEngine idea — riding along on that already-bounded, already-rate-limited
+real event, not a new unbounded call site.
+
+`opportunitySnapshot.ts`'s `modelForecast` field and its text-table formatter gained the same
+three fields (`EffIndep(fam)` column), rendering the literal string `UNKNOWN` — never a fabricated
+number — whenever a persisted forecast carries no real ensemble evidence.
+
+**Tests:** 4 new `internalQuantEnsemble.test.ts` cases for `resolveEnsembleEvidenceForForecast`
+(null on no-ensemble, null on sideMismatch, faithful passthrough, and an explicit
+correlated-strategies case proving `effectiveIndependentCount` is never inflated to equal raw
+`strategyCount`), 2 new `forecastEngine.test.ts` cases (persistence + read-back round-trip with
+real supplied evidence; null-propagation with none supplied), 2 new `opportunitySnapshot.test.ts`
+cases (display of real values; `UNKNOWN` display when absent). Full suite green (489 files / 3585
+tests) after this change; `tsc --noEmit` clean; build succeeds. No Java code changed this pass — the
+existing, already-deployed `ForecastEngine.java`/endpoint needed no modification, since this
+integration is entirely about what evidence TypeScript supplies to an unchanged Java contract.
+Live-verified: single fresh engine process, watchdog unchanged, Java process unchanged (correctly,
+since untouched), IBKR Gateway Socket `CONNECTED` (`DUR959160`, a real `DU*`-prefixed paper
+account), reconciliation `RECONCILIATION_MATCH` on every recent cycle, zero positions,
+`LIVE: NO-GO`, `argus-cli forecast`/`opportunity-snapshot`/`execution-quality` all respond
+correctly post-deploy. Observing a real live QuantEngine-triggered forecast with populated
+`ensembleEvidence` requires an actual QuantEngine idea to fire in real trading — not forced or
+fabricated for this verification pass, since Autobot was in its pre-existing, unrelated
+`TRADING_PAUSED` state; the wiring itself is proven by the round-trip persistence test instead.
+
+### Frontend: real Opportunity Snapshot panel (2026-09-13 late pass)
+
+`src/components/OpportunitySnapshotPanel.tsx` (new) — mounted in the existing `opportunities` tab
+below the pre-existing "Autonomous Opportunity Feed" (a different, raw `agent_predictions` view),
+reads the already-real, already-tested `GET /api/v2/observability/opportunity-snapshot`
+(`opportunitySnapshot.ts`). Follows the exact structural pattern of `MultiHorizonOutcomesPanel.tsx`
+(loading/error/empty states via `AwaitingSignal`, no fabricated placeholder rows). Displays real
+evidence classification, Wilson lower bound, the Part 7 forecast (expected return/probability of
+profit, `NO_FORECAST` when absent, the real status string — e.g. `INSUFFICIENT_DATA` — when not
+`VALID`), and the Part 9 diversity evidence (effective independent count/family count, rendering
+the literal `UNKNOWN` when a forecast carries none). Verified via `tsc --noEmit` and a successful
+Vite build; this codebase has no established React-component unit-test convention (CLAUDE.md's own
+documented UI-test-coverage gap), so verification followed the same discipline other panels in this
+codebase use — deployed and confirmed the backing API responds correctly live post-deploy; actual
+browser rendering was not visually confirmed in this session (no browser available), an honestly
+flagged residual gap for the next session with browser access.
+
+## Master Completion Ledger (2026-09-13)
+
+A permanent, continuously-updated per-part status ledger for the 32-part "ARGUS MASTER
+TRANSFORMATION MANDATE" now lives at [`docs/ARGUS_MASTER_COMPLETION_LEDGER.md`](../ARGUS_MASTER_COMPLETION_LEDGER.md)
+— a status-tracking document, not a second architecture reference (this file remains the one
+living architecture doc per CLAUDE.md). It records, per mandate part: status (from a fixed
+vocabulary — `COMPLETE_AND_VERIFIED` through `NOT_IMPLEMENTED`/`BLOCKED_BY_*`), what exists, what's
+runtime-wired, what's frontend-wired, what's tested, real production/paper evidence, blockers,
+dependencies, and next action. Initial pass (this date) found: Parts 18 (RiskEngine) and the
+process-level Parts 0/31 fully verified; Part 12 (intraday event loop) and Part 22 (missed
+opportunity taxonomy) proven at current scale but unproven at the mandate's target scale; the
+majority of parts partially implemented with real, named gaps; Part 6 (strategy diversity) scaffolded
+on an assumed rather than measured correlation matrix; Parts 7 (forecast engine) and 10 (portfolio
+construction) genuinely not implemented and correctly gated behind upstream evidence; Part 23
+(paper validation) blocked purely by calendar time. Also documents one deliberately deferred
+finding: `ChiefTraderAgent.ts`'s own debate prompt interpolates `idea.reasoning` (potentially
+LLM-originated free text) with no delimiter isolation of the kind DEF-31 added to
+`NewsScoringEngine.ts` — not fixed yet because any change to that prompt's wording risks shifting
+`ConsensusDebate`'s response distribution while Part 1's forensic telemetry is still accumulating
+clean evidence.

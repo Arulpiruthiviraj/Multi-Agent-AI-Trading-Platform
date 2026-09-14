@@ -47,6 +47,7 @@ import AgentEvaluationDashboard from "./components/AgentEvaluationDashboard";
 import ReplayResearchPanel from "./components/ReplayResearchPanel";
 import HistoricalReplayLab from "./components/HistoricalReplayLab";
 import MultiHorizonOutcomesPanel from "./components/MultiHorizonOutcomesPanel";
+import OpportunitySnapshotPanel from "./components/OpportunitySnapshotPanel";
 import { resumeAndConfirm } from "./lib/tradingSafetyActions";
 import { useWebSocket } from './context/WebSocketContext';
 import React, { useState, useEffect, useRef, useMemo } from "react";
@@ -6415,6 +6416,7 @@ export default function App() {
                  </div>
                )}
             </div>
+            <OpportunitySnapshotPanel />
           </div>
         )}
 

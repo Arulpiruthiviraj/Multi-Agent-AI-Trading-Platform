@@ -66,6 +66,7 @@ import { classifyConsensusTerminalReason, type ConsensusTerminalReasonCode } fro
 import { isQuantJavaCoreEnabled, isQuantIndependentQualificationEnabled } from '../config/tradingSafety';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { quantCoreBridge } from './QuantCoreBridge';
+import { persistConsensusDebateCapture } from './ConsensusDebateForensics';
 import {
   MIN_BARS_FOR_ANALYSIS as JAVA_ADVISORY_MIN_BARS,
   LOOKBACK_DAYS as JAVA_ADVISORY_LOOKBACK_DAYS,
@@ -194,6 +195,13 @@ export class ChiefTraderAgent {
 
     /** Debounced evaluateConsensus handles per symbol — co-eval window for multi-agent sync. */
     private consensusAggregationTimers: Map<string, NodeJS.Timeout> = new Map();
+
+    /** ConsensusDebate P0.5 forensic measurement (2026-09-13): records that this symbol's most
+     *  recent debate attempt fail-closed (no real vote cast), so the NEXT evaluateConsensusSerialized()
+     *  run for this symbol - which is what has the real evidence pool - can capture a
+     *  FAIL_CLOSED consensus_debate_predictions row. Read-and-cleared, never left stale across
+     *  unrelated later rounds. */
+    private pendingDebateFailClosed: Map<string, { status: 'FAIL_CLOSED_NO_ROUTE' | 'FAIL_CLOSED_ERROR' | 'FAIL_CLOSED_NO_VERDICT'; providersAttempted: number; providersSucceeded: number; providersFailed: number }> = new Map();
   
   // Dynamic weights based on historic performance
   private agentWeights: Record<string, number> = { ...defaultAgentWeights };
@@ -449,6 +457,16 @@ export class ChiefTraderAgent {
         reasoning: `why=${why} providersAttempted=${telemetry.providers_attempted} providersSucceeded=${telemetry.providers_succeeded} excludedFromConsensus=true`,
       });
     });
+    // ConsensusDebate P0.5 forensic measurement: real AI-reliability telemetry, never a vote (see
+    // this function's own doc comment above and consensus_debate_predictions' schema comment).
+    // 'routeConsensus threw' is the .catch() path (a real error); every other why= string here
+    // comes from the .then() path where the call completed but produced no usable verdict.
+    this.pendingDebateFailClosed.set(idea.symbol, {
+      status: why === 'routeConsensus threw' ? 'FAIL_CLOSED_ERROR' : 'FAIL_CLOSED_NO_VERDICT',
+      providersAttempted: telemetry.providers_attempted,
+      providersSucceeded: telemetry.providers_succeeded,
+      providersFailed: telemetry.providers_failed,
+    });
   }
 
   async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any }) {
@@ -497,6 +515,11 @@ export class ChiefTraderAgent {
        console.log(`[ChiefTrader] Debate cooldown active for ${idea.symbol} - not starting another provider fan-out.`);
     } else if (noRoutableProviders) {
        console.log(`[ChiefTrader] Skipping multi-model debate for ${idea.symbol} - no routable AI providers right now. Evaluating consensus on independent-agent evidence only (not injecting a fabricated fail-closed HOLD).`);
+       // ConsensusDebate P0.5 forensic measurement: a real AI-reliability event (no routable
+       // provider at all) - never a vote, same as pushDebateFailClosed's other two cases.
+       this.pendingDebateFailClosed.set(idea.symbol, {
+         status: 'FAIL_CLOSED_NO_ROUTE', providersAttempted: 0, providersSucceeded: 0, providersFailed: 0,
+       });
     } else if (wantsDebate) {
         console.log(`[ChiefTrader] Triggering multi-model debate for ${idea.symbol}`);
         this.beginDebate(idea.symbol);
@@ -924,6 +947,30 @@ export class ChiefTraderAgent {
       decisionTier,
       terminalReasonCode,
     };
+
+    // ConsensusDebate P0.5 forensic measurement (2026-09-13, OBSERVATION ONLY - never changes
+    // `approved`/`result` above, which are already fully resolved by this point). Captures either
+    // a real debate vote (ConsensusDebate present in `evidence`) or a fail-closed reliability event
+    // recorded earlier this same round by pushDebateFailClosed()/the noRoutableProviders branch -
+    // never both, and never fabricated when debate was not invoked at all this round.
+    {
+      const debateEvidence = evidence.find((e) => e.agent === 'ConsensusDebate');
+      const pendingFailClosed = this.pendingDebateFailClosed.get(symbol);
+      if (debateEvidence || pendingFailClosed) {
+        this.pendingDebateFailClosed.delete(symbol);
+        const regimeCarrier = evidence.find((e: any) => typeof e.regime === 'string');
+        void persistConsensusDebateCapture({
+          traceId,
+          symbol,
+          evidence,
+          result,
+          withDebateApproved: approved,
+          debateTelemetry: (debateEvidence as any)?.debateTelemetry,
+          failClosed: pendingFailClosed,
+          marketRegime: (regimeCarrier as any)?.regime ?? null,
+        }).catch((e) => console.error('[ChiefTrader] ConsensusDebate forensic capture failed', e));
+      }
+    }
 
     // Unconditional COMPLETED signal (unlike CHIEF_APPROVED_IDEA, which only fires on approval) -
     // lets live animation show the Chief Trader node finishing its evaluation even when the

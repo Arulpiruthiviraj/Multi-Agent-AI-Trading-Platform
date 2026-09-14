@@ -154,6 +154,7 @@
   "quantJavaCoreRequestTimeoutMs": 100,
   "quantJavaCoreCircuitBreakerFailureThreshold": 3,
   "quantJavaCoreCircuitBreakerCooldownMs": 30000,
+  "forecastEngineMaxSampleSize": 500,
   "quantJavaCoreDivergenceThresholdPct": 0.0001,
   "quantJavaCoreLocalHistoryCap": 200,
   "quantJavaCoreTickMaxConcurrency": 20,

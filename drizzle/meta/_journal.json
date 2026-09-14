@@ -456,6 +456,27 @@
       "when": 1789175281268,
       "tag": "0064_confused_leo",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "6",
+      "when": 1789332650930,
+      "tag": "0065_silky_monster_badoon",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "6",
+      "when": 1789336396666,
+      "tag": "0066_wooden_power_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "6",
+      "when": 1789338601481,
+      "tag": "0067_regular_wong",
+      "breakpoints": true
     }
   ]
 }

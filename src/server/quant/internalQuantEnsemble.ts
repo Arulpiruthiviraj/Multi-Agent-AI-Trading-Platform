@@ -109,6 +109,28 @@ function javaResultToVote(strategyId: string, result: Record<string, unknown>): 
  * Never returns true for a null ensemble or a non-mismatch result - only ever suppresses, never
  * decides what TO emit.
  */
+/**
+ * Master Transformation Mandate Part 7/9 (2026-09-13) - decides what real strategy-diversity
+ * evidence (if any) a forecast may honestly attach for this idea. Pure decision function, extracted
+ * so QuantSignalAgent.ts's forecast-build call is unit-testable without standing up its full
+ * evaluateSymbol() dependency graph (same rationale as shouldSuppressForConfluenceGuard above).
+ *
+ * Returns null (never fabricated) when: there is no ensemble result for this cycle, OR the
+ * ensemble's own resolved side disagrees with the idea's side (sideMismatch) - a mismatched
+ * ensemble's familyCount/effectiveIndependentCount describe the OPPOSING side's diversity, so
+ * attaching them to THIS idea's forecast would misrepresent contradicting evidence as support.
+ */
+export function resolveEnsembleEvidenceForForecast(
+  internalEnsemble: InternalEnsembleQualification | null,
+): { strategyCount: number; familyCount: number; effectiveIndependentCount: number } | null {
+  if (!internalEnsemble || internalEnsemble.sideMismatch) return null;
+  return {
+    strategyCount: internalEnsemble.totalVotes,
+    familyCount: internalEnsemble.familyCount,
+    effectiveIndependentCount: internalEnsemble.effectiveIndependentCount,
+  };
+}
+
 export function shouldSuppressForConfluenceGuard(
   guardEnabled: boolean,
   ensemble: InternalEnsembleQualification | null,

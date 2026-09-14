@@ -303,6 +303,16 @@ export const trades = sqliteTable('trades', {
   // Order-placing adapter id at submit time (alpaca | ibkr_gateway | ibkr_web | internal_paper | …).
   // OMS stamps from BrokerManager.getActiveBroker().id. Legacy rows backfilled to alpaca.
   brokerId: text('broker_id'),
+  // Execution Quality / Slippage Tracking (Master Transformation Mandate Part 16). The real gap
+  // CLAUDE.md's own Frontend Honesty table documented ("no slippage field - proposal price not
+  // persisted"): `price` above is intentionally mutable - OMS overwrites it at acceptedAt with the
+  // broker's ack/fill price (OrderManagement.ts), so the original decision-time price was
+  // structurally unrecoverable by the time a fill existed to compare against. `arrivalPrice` is
+  // written ONCE at insert (the same `intendedPrice` OMS already computes at proposal time) and is
+  // NEVER updated afterward by any later `.update(trades)` call - see executionQuality.ts for the
+  // real slippage/implementation-shortfall computation this enables. Null for legacy rows and for
+  // EXTERNAL_MANUAL inbound trades (no Argus-side proposal ever existed for those).
+  arrivalPrice: real('arrival_price'),
 }, (table) => ({
   // Hardening pass, Phase 2: real duplicate-order idempotency at the DB level, closing the
   // check-then-act race in OrderManagement.ts's own pre-insert lookup (two concurrent
@@ -900,7 +910,7 @@ export const riskGateResults = sqliteTable('risk_gate_results', {
 export const predictionOutcomes = sqliteTable('prediction_outcomes', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   predictionId: text('prediction_id').notNull(),
-  sourceTable: text('source_table').notNull(), // 'agent_predictions' | 'kronos_predictions'
+  sourceTable: text('source_table').notNull(), // 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions' | 'consensus_debate_predictions'
   symbol: text('symbol').notNull(),
   actualPrice: real('actual_price'),
   actualReturn: real('actual_return'),
@@ -1788,4 +1798,132 @@ export const predictionOutcomeHorizons = sqliteTable('prediction_outcome_horizon
 }, (table) => ({
   uniqueIdx: uniqueIndex('idx_prediction_outcome_horizons_unique').on(table.predictionId, table.sourceTable, table.horizonLabel),
   predictionIdx: index('idx_prediction_outcome_horizons_prediction').on(table.predictionId, table.sourceTable),
+}));
+
+/**
+ * 2026-09-13 (ConsensusDebate forensic measurement, P0.5). Real gap found: ChiefTraderAgent.ts's
+ * adversarial AI debate (agent 'ConsensusDebate') can HARD-VETO an otherwise-approvable consensus
+ * round (evaluateConsensusSerialized()'s `debateSaidHold` branch fires before the normal
+ * strong-agreement approval branch, regardless of weighted confidence or independent-agent count)
+ * - and its own predictive value had never been measured: zero rows in agent_predictions, zero in
+ * agent_performance_stats. A live audit (2026-09-13) found it votes HOLD ~96% of the time it
+ * participates and disagrees with the eventual consensus ~91% of the time, but that same audit
+ * also found a separate, very recently fixed bug (fail-closed timeouts/no-provider/errors used to
+ * be recorded as real 0.8-confidence HOLD votes) whose fix has had almost no runtime exposure yet -
+ * meaning the historical 96%/91% figures are likely contaminated by that now-fixed defect and
+ * cannot yet be trusted as a measurement of genuine debate behavior. This table starts capturing
+ * clean data from this point forward, going through the same real live decision code
+ * (EvidenceAggregator.aggregate(), called a second time excluding ConsensusDebate's own evidence
+ * row) rather than a reimplemented approximation - the base/counterfactual numbers are exactly
+ * what the real consensus math would have produced, computed at the real decision moment.
+ *
+ * Every debate attempt is captured, including fail-closed ones (debateStatus distinguishes them) -
+ * an AI failure must never contaminate calibration/accuracy statistics (only VALID_PREDICTION rows
+ * are eligible for outcome grading), but it is still real, useful reliability telemetry that
+ * previously only reached structuredLogger, never a queryable table.
+ *
+ * Outcome grading deliberately reuses the EXISTING prediction_outcomes table (sourceTable =
+ * 'consensus_debate_predictions', predictionId = this table's id, graded via the same real-bars
+ * evaluatePrediction() PredictionOutcomeEvaluator.ts already uses) rather than a third parallel
+ * grading mechanism - the question being graded is "did underlyingSide's real candidate go on to
+ * win or lose," which is exactly what evaluatePrediction() already answers honestly.
+ */
+export const consensusDebatePredictions = sqliteTable('consensus_debate_predictions', {
+  id: text('id').primaryKey(),
+  traceId: text('trace_id').notNull(),
+  symbol: text('symbol').notNull(),
+  createdAt: text('created_at').notNull(),
+  // VALID_PREDICTION | FAIL_CLOSED_NO_ROUTE | FAIL_CLOSED_ERROR | FAIL_CLOSED_NO_VERDICT -
+  // only VALID_PREDICTION is ever eligible for outcome grading/calibration.
+  debateStatus: text('debate_status').notNull(),
+  debateDirection: text('debate_direction'), // BUY | SELL | HOLD | null (null for fail-closed)
+  debateConfidence: real('debate_confidence'), // null for fail-closed
+  providersAttempted: integer('providers_attempted').notNull().default(0),
+  providersSucceeded: integer('providers_succeeded').notNull().default(0),
+  providersFailed: integer('providers_failed').notNull().default(0),
+  underlyingAgentCount: integer('underlying_agent_count').notNull(),
+  // [{agent, side, confidence, weight, agreed}] - the real evidence array minus ConsensusDebate,
+  // preserved so a later reviewer can see exactly what the "base case" was built from.
+  underlyingEvidenceJson: text('underlying_evidence_json').notNull(),
+  // Real counterfactual: EvidenceAggregator.aggregate() called on the SAME evidence array with
+  // ConsensusDebate's own row excluded - not a reimplemented approximation. This is also the side
+  // that gets outcome-graded (via prediction_outcomes) to answer "would the candidate have won or
+  // lost" - deliberately not a separate "underlyingSide" field; this IS what the non-debate agents
+  // collectively concluded.
+  baseConsensusSide: text('base_consensus_side').notNull(),
+  baseConsensusConfidence: real('base_consensus_confidence').notNull(),
+  baseClearsThreshold: integer('base_clears_threshold', { mode: 'boolean' }).notNull(),
+  baseClearsIndependence: integer('base_clears_independence', { mode: 'boolean' }).notNull(),
+  // The REAL outcome that actually happened (matches consensus_decisions for the same traceId).
+  withDebateConsensusSide: text('with_debate_consensus_side').notNull(),
+  withDebateConsensusConfidence: real('with_debate_consensus_confidence').notNull(),
+  withDebateApproved: integer('with_debate_approved', { mode: 'boolean' }).notNull(),
+  // True iff debateDirection === 'HOLD' AND the base case would have cleared both the confidence
+  // threshold and independence floor - i.e. debate's HOLD is the reason (or a contributing reason)
+  // this round did not approve. Never set for a directional (BUY/SELL) debate vote.
+  vetoFired: integer('veto_fired', { mode: 'boolean' }).notNull(),
+  marketRegime: text('market_regime'),
+}, (table) => ({
+  traceIdx: index('idx_consensus_debate_predictions_trace').on(table.traceId),
+  symbolIdx: index('idx_consensus_debate_predictions_symbol').on(table.symbol, table.createdAt),
+  statusIdx: index('idx_consensus_debate_predictions_status').on(table.debateStatus),
+}));
+
+/**
+ * ARGUS MASTER TRANSFORMATION MANDATE Part 7 (2026-09-13) - the Quant Forecast Engine's immutable,
+ * versioned forecast record. A row is written once and NEVER updated - a changed model/config
+ * produces a new row with a new modelVersion, per the mandate's own "do not overwrite historical
+ * forecasts when models change" rule (item 18). This is a real, deterministic statistical
+ * composition (src/server/research/forecastEngine.ts assembles the real historical-return sample;
+ * quant-core-java's ForecastEngine.java computes the authoritative statistics), never a fabricated
+ * number - every nullable field here is null, not a default, when the real underlying evidence was
+ * too thin to support it (see forecastStatus).
+ */
+export const quantForecasts = sqliteTable('quant_forecasts', {
+  forecastId: text('forecast_id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  createdAt: text('created_at').notNull(),
+  direction: text('direction').notNull(), // BUY | SELL - a forecast is always direction-specific, never mixed with the opposite side's history
+  horizonLabel: text('horizon_label').notNull(), // e.g. '1_BAR', 'EOD' - explicit, never silently mixed across horizons
+  // Real, canonical grouping key this sample was built from - a QuantEngine strategy id (once
+  // agent_predictions.strategy_id is populated - see the 2026-09-13 QuantSignalAgent.ts fix) or
+  // an agent name for agent-level (not strategy-level) forecasts. Never a fabricated aggregate.
+  agentName: text('agent_name').notNull(),
+  strategyId: text('strategy_id'),
+  regime: text('regime'),
+  // VALID | INSUFFICIENT_DATA | LOW_CONFIDENCE | STALE_DATA | DEGRADED_DATA | UNSUPPORTED_HORIZON
+  // | MODEL_UNAVAILABLE | CALIBRATION_UNAVAILABLE (mandate item 23) - a forecast is never forced
+  // when evidence is insufficient; VALID is the only status with real numeric fields populated.
+  forecastStatus: text('forecast_status').notNull(),
+  sampleSize: integer('sample_size').notNull(),
+  expectedReturn: real('expected_return'),
+  expectedReturnLower: real('expected_return_lower'),
+  expectedReturnUpper: real('expected_return_upper'),
+  medianReturn: real('median_return'),
+  trimmedMeanReturn: real('trimmed_mean_return'),
+  probabilityOfProfit: real('probability_of_profit'),
+  probabilityOfProfitLower: real('probability_of_profit_lower'),
+  probabilityOfProfitUpper: real('probability_of_profit_upper'),
+  // Symbol-level market volatility (VolatilityEngine.java, realized/GARCH-forecast) - a distinct
+  // concept from the return-sample's own stdev (uncertaintyStdevReturn below); null when no real
+  // bar series was supplied to compute it (this pass's caller may not always have one on hand).
+  volatility: real('volatility'),
+  // Dispersion of the historical-return sample itself - the mandate's own "uncertainty around
+  // expected return" (item 7), kept explicitly separate from expectedReturn.
+  uncertaintyStdevReturn: real('uncertainty_stdev_return'),
+  estimatedTransactionCostBps: real('estimated_transaction_cost_bps').notNull(),
+  netExpectedReturn: real('net_expected_return'),
+  // Strategy-aggregation fields (mandate item 9) - honestly null in this pass when the caller did
+  // not supply a real ensemble evaluation (internalQuantEnsemble.ts integration is a real, tracked
+  // follow-up, not fabricated here as a placeholder number).
+  strategyCount: integer('strategy_count'),
+  familyCount: integer('family_count'),
+  effectiveIndependentCount: real('effective_independent_count'),
+  modelVersion: text('model_version').notNull(),
+  // Exact query/sample description (which rows, which grouping key, which table) - the mandate's
+  // own "why did Argus forecast X" requirement (item 14), never reconstructed from vague logs.
+  provenanceJson: text('provenance_json').notNull(),
+}, (table) => ({
+  symbolIdx: index('idx_quant_forecasts_symbol').on(table.symbol, table.createdAt),
+  lookupIdx: index('idx_quant_forecasts_lookup').on(table.symbol, table.agentName, table.strategyId, table.direction, table.horizonLabel, table.createdAt),
 }));

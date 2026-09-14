@@ -165,6 +165,28 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     expect(executedPayload.status).toBe('FILLED');
   });
 
+  it('preserves arrival_price untouched through the full PARTIALLY_FILLED -> FILLED transition, even as price mutates (Execution Quality, Part 16)', async () => {
+    // Pass an explicit intendedPrice distinct from what the broker eventually reports as the
+    // averageFillPrice, so a real, observable divergence exists between the two columns.
+    await oms.executeOrder('NVDA', 'BUY', 10, 'test reasoning', 'lifecycle-arrival-price-1', undefined, undefined, null, null, null, null, 250);
+    const initialRow = (await db.select().from(schema.trades).where(eq(schema.trades.traceId, 'lifecycle-arrival-price-1')))[0];
+    // arrival_price is written once at the pre-broker-call insert and never touched again - already
+    // holds the real proposal price here, even though this stub broker's immediate ack (with no
+    // averageFillPrice of its own) has already mutated the separate, deliberately-volatile `price`
+    // column to 0 by this point - exactly the pre-existing volatility that made `price` alone
+    // useless for slippage and motivated adding arrival_price in the first place.
+    expect(initialRow.arrivalPrice).toBe(250);
+
+    ordersResponse = [{ id: initialRow.brokerOrderId, symbol: 'NVDA', side: 'BUY', type: 'MARKET', status: 'FILLED', quantity: 10, filledQuantity: 10, averageFillPrice: 253.5, createdAt: new Date(), updatedAt: new Date() }];
+    await ageOrder(initialRow.id, FOLLOWUP_MIN_AGE_MS_PLUS_MARGIN());
+    await oms.followUpOpenOrders();
+
+    const finalRow = (await db.select().from(schema.trades).where(eq(schema.trades.id, initialRow.id)))[0];
+    expect(finalRow.status).toBe('FILLED');
+    expect(finalRow.price).toBe(253.5); // mutated to the real fill price, as designed
+    expect(finalRow.arrivalPrice).toBe(250); // untouched - this is exactly what makes real slippage computable
+  });
+
   it('excludes already-terminal orders from follow-up scanning (real DB filtering, not just in-process logic)', async () => {
     await oms.executeOrder('GOOG', 'BUY', 5, 'test reasoning', 'lifecycle-terminal-1');
     const row = (await db.select().from(schema.trades).where(eq(schema.trades.traceId, 'lifecycle-terminal-1')))[0];

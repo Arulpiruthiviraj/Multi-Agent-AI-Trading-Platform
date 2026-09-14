@@ -48,6 +48,7 @@ import { confluenceCoordinator } from '../services/ConfluenceCoordinator';
 import { reflectionEngine } from '../services/ReflectionEngine';
 import { predictionOutcomeEvaluator } from '../services/PredictionOutcomeEvaluator';
 import { multiHorizonOutcomeEvaluator } from '../services/MultiHorizonOutcomeEvaluator';
+import { consensusDebateOutcomeEvaluator } from '../services/ConsensusDebateOutcomeEvaluator';
 import { missedOpportunityEvaluator } from '../continuous/MissedOpportunityEvaluator';
 import { postMarketAnalysisWorker } from '../continuous/PostMarketAnalysis';
 import { trainingExampleBuilder } from '../services/TrainingExampleBuilder';
@@ -114,6 +115,9 @@ export class SystemBootstrap {
     // telemetry, separate from predictionOutcomeEvaluator's live single-horizon weight-learning
     // grade above - see MultiHorizonOutcomeEvaluator.ts's own header for the full rationale.
     multiHorizonOutcomeEvaluator.start();
+    // ConsensusDebate P0.5 forensic measurement (2026-09-13): grades consensus_debate_predictions
+    // rows against real forward price action - see ConsensusDebateOutcomeEvaluator.ts's own header.
+    consensusDebateOutcomeEvaluator.start();
     // Real defect fix (2026-09-09): closes the gap where missed-opportunity records were
     // persisted PENDING forever - see MissedOpportunityEvaluator.ts's own header for the
     // live-verified finding (592/592 historical rows never evaluated).
@@ -155,6 +159,7 @@ export class SystemBootstrap {
     reflectionEngine.stop();
     predictionOutcomeEvaluator.stop();
     multiHorizonOutcomeEvaluator.stop();
+    consensusDebateOutcomeEvaluator.stop();
     missedOpportunityEvaluator.stop();
     postMarketAnalysisWorker.stop();
     trainingExampleBuilder.stop();

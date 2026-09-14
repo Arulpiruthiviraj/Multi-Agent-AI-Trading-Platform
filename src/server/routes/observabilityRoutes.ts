@@ -23,6 +23,10 @@ import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observ
 import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
 import { buildStrategyCatalog, formatStrategyCatalog } from '../research/strategyCatalog';
 import { buildMultiHorizonSummaryReport, formatMultiHorizonSummaryReport } from '../research/multiHorizonOutcomeReport';
+import { buildConsensusDebateHealthReport, formatConsensusDebateHealthReport } from '../research/consensusDebateHealthReport';
+import { buildOpportunitySnapshot, formatOpportunitySnapshot } from '../research/opportunitySnapshot';
+import { buildExecutionQualityReport, summarizeExecutionQuality, formatExecutionQualityReport } from '../research/executionQuality';
+import { buildForecast, mostRecentForecast, PRIMARY_EVAL_HORIZON_LABEL } from '../research/forecastEngine';
 
 export const observabilityRouter = Router();
 
@@ -97,6 +101,110 @@ observabilityRouter.get('/consensus-report', async (req, res) => {
       return;
     }
     res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-13 (ConsensusDebate P0.5 forensic measurement, argus-cli consensus-debate-health) -
+// real HOLD-veto good/bad classification + net economic value of ConsensusDebate's vetoes.
+// OBSERVATION ONLY - never changes production behavior. Optional ?hours= windows the report;
+// omit for all-time (the table starts empty as of 2026-09-13, so all-time is usually what's wanted
+// until real sample size accumulates).
+observabilityRouter.get('/consensus-debate-health', async (req, res) => {
+  try {
+    const hoursParam = req.query.hours;
+    const sinceIso = typeof hoursParam === 'string'
+      ? new Date(Date.now() - Math.min(parseFloat(hoursParam) || 720, 24 * 365) * 60 * 60 * 1000).toISOString()
+      : undefined;
+    const report = await buildConsensusDebateHealthReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatConsensusDebateHealthReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-13 (Institutional Transformation Mandate, Part 8/9 - argus-cli opportunity-snapshot).
+// Pure composition of five already-real reports (recent QuantEngine ideas, real historical edge,
+// real multi-horizon forward returns, real strategy catalog metadata, real held-positions check) -
+// ranked by real evidence quality, never a fabricated expected-return score. See
+// opportunitySnapshot.ts's own header for the full rationale.
+observabilityRouter.get('/opportunity-snapshot', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(String(req.query.limit || '20'), 10) || 20, 100);
+    const rows = await buildOpportunitySnapshot(limit);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatOpportunitySnapshot(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-13 (Institutional Transformation Mandate Part 16, argus-cli execution-quality) - real
+// slippage: trades.arrival_price (written once at order insert, never overwritten) vs the real
+// matching fills row(s). Answers Part 32's own Q18 ("is execution destroying alpha") with real
+// evidence instead of leaving it permanently unanswerable. See executionQuality.ts's own header.
+observabilityRouter.get('/execution-quality', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(String(req.query.limit || '500'), 10) || 500, 2000);
+    const rows = await buildExecutionQualityReport(limit);
+    const summary = summarizeExecutionQuality(rows);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatExecutionQualityReport(rows, summary));
+      return;
+    }
+    res.json({ ok: true, summary, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-13 (Institutional Transformation Mandate Part 7, argus-cli forecast) - computes and
+// persists one real, immutable forecast (forecastEngine.ts) from Argus's own already-graded
+// historical outcomes via the authoritative Java statistical engine. POST because this has a real
+// side effect (a new quant_forecasts row + a real Java call) - not a passive read. Body:
+// {agentName, symbol, direction, strategyId?, horizonLabel?, regime?}.
+observabilityRouter.post('/forecast', async (req, res) => {
+  try {
+    const { agentName, symbol, direction, strategyId, horizonLabel, regime } = req.body ?? {};
+    if (typeof agentName !== 'string' || typeof symbol !== 'string' || (direction !== 'BUY' && direction !== 'SELL')) {
+      res.status(400).json({ ok: false, error: 'agentName (string), symbol (string), and direction ("BUY"|"SELL") are required' });
+      return;
+    }
+    const forecast = await buildForecast({
+      agentName, symbol, direction,
+      strategyId: typeof strategyId === 'string' ? strategyId : null,
+      horizonLabel: typeof horizonLabel === 'string' ? horizonLabel : undefined,
+      regime: typeof regime === 'string' ? regime : null,
+    });
+    res.json({ ok: true, forecast });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Real, already-persisted forecast for a symbol - read-only, no live Java call (mandate item 24's
+// "safe, bounded" integration point for other read models such as opportunitySnapshot.ts).
+observabilityRouter.get('/forecast', async (req, res) => {
+  try {
+    const symbol = String(req.query.symbol || '');
+    const agentName = String(req.query.agentName || '');
+    const direction = req.query.direction === 'SELL' ? 'SELL' : 'BUY';
+    const strategyId = typeof req.query.strategyId === 'string' ? req.query.strategyId : null;
+    const horizonLabel = typeof req.query.horizonLabel === 'string' ? req.query.horizonLabel : PRIMARY_EVAL_HORIZON_LABEL;
+    if (!symbol || !agentName) {
+      res.status(400).json({ ok: false, error: 'symbol and agentName query params are required' });
+      return;
+    }
+    const forecast = await mostRecentForecast(symbol, agentName, strategyId, direction, horizonLabel);
+    res.json({ ok: true, forecast });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }

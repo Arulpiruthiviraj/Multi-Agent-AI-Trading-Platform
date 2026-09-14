@@ -51,8 +51,10 @@ export interface EvaluatedOutcome {
   // this same real bars-based evaluation logic rather than a second mechanism. 'news_predictions'
   // (Phase F6) is News's own ACTIVE_OBSERVE-mode prediction ledger (src/server/news/) - it never
   // emits TRADE_IDEA_GENERATED, so it is never captured by ReflectionEngine's agent_predictions
-  // listener; this evaluator reads it directly instead.
-  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions';
+  // listener; this evaluator reads it directly instead. 'consensus_debate_predictions'
+  // (ConsensusDebate P0.5 forensic measurement, 2026-09-13) grades baseConsensusSide - "would the
+  // candidate ConsensusDebate voted on have won or lost" - via ConsensusDebateOutcomeEvaluator.ts.
+  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions' | 'consensus_debate_predictions';
   symbol: string;
   actualPrice: number;
   actualReturn: number;
@@ -70,7 +72,7 @@ export interface EvaluatedOutcome {
  */
 export async function evaluatePrediction(
   predictionId: string,
-  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions',
+  sourceTable: 'agent_predictions' | 'kronos_predictions' | 'transactions' | 'news_predictions' | 'consensus_debate_predictions',
   symbol: string,
   side: string,
   predictionTimeMs: number,

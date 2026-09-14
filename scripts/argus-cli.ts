@@ -797,6 +797,67 @@ const commands: Record<string, () => Promise<void>> = {
     // routing snapshot, never a new live probe burning real provider quota just for this report.
     console.log(JSON.stringify(await fetchJson('/api/v2/observability/provider-health-matrix'), null, 2));
   },
+  async 'opportunity-snapshot'() {
+    // 2026-09-13 (Institutional Transformation Mandate Part 8/9): real evidence-ranked recent
+    // QuantEngine ideas - no fabricated expected-return score. Pass --limit=N (default 20).
+    const limitArg = process.argv.slice(3).find((a) => a.startsWith('--limit='));
+    const url = limitArg
+      ? `/api/v2/observability/opportunity-snapshot?format=text&limit=${encodeURIComponent(limitArg.slice('--limit='.length))}`
+      : `/api/v2/observability/opportunity-snapshot?format=text`;
+    const res = await fetch(`${BASE}${url}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 15_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'execution-quality'() {
+    // 2026-09-13 (Institutional Transformation Mandate Part 16): real slippage - trades.arrival_price
+    // (written once at order insert, never overwritten) vs real matching fills. Pass --limit=N.
+    const limitArg = process.argv.slice(3).find((a) => a.startsWith('--limit='));
+    const url = limitArg
+      ? `/api/v2/observability/execution-quality?format=text&limit=${encodeURIComponent(limitArg.slice('--limit='.length))}`
+      : `/api/v2/observability/execution-quality?format=text`;
+    const res = await fetch(`${BASE}${url}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 15_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'forecast'() {
+    // 2026-09-13 (Institutional Transformation Mandate Part 7): builds and persists one real
+    // forecast. Required: --agent=<name> --symbol=<SYM> --direction=BUY|SELL. Optional:
+    // --strategyId=<id> --horizon=<label>.
+    const args = process.argv.slice(3);
+    const getArg = (name: string) => args.find((a) => a.startsWith(`--${name}=`))?.slice(name.length + 3);
+    const agentName = getArg('agent');
+    const symbol = getArg('symbol');
+    const direction = getArg('direction');
+    if (!agentName || !symbol || (direction !== 'BUY' && direction !== 'SELL')) {
+      console.error('Usage: argus-cli forecast --agent=QuantEngine --symbol=AAPL --direction=BUY [--strategyId=MOMENTUM_BREAKOUT] [--horizon=1_BAR]');
+      process.exitCode = 1;
+      return;
+    }
+    const res = await fetch(`${BASE}/api/v2/observability/forecast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...cliAuthHeaders() },
+      body: JSON.stringify({ agentName, symbol, direction, strategyId: getArg('strategyId'), horizonLabel: getArg('horizon') }),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 15_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'consensus-debate-health'() {
+    // 2026-09-13 (ConsensusDebate P0.5 forensic measurement): real HOLD-veto good/bad
+    // classification + net economic value. Pass --hours=N to window; omit for all-time.
+    const hoursArg = process.argv.slice(3).find((a) => a.startsWith('--hours='));
+    const url = hoursArg
+      ? `/api/v2/observability/consensus-debate-health?format=text&hours=${encodeURIComponent(hoursArg.slice('--hours='.length))}`
+      : `/api/v2/observability/consensus-debate-health?format=text`;
+    const res = await fetch(`${BASE}${url}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'consensus-report'() {
     // Phase 9 (2026-08-27): the aggregated "why no trade" dashboard, built from real
     // CONSENSUS_TERMINAL_REASON rows + risk_assessments/trades/fills. Pass --hours=N to widen
@@ -1338,7 +1399,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

@@ -405,7 +405,7 @@ Phone layout (`src/components/mobile/`, width <768 or Mobile toggle): **6** tabs
 | DigitalTwinVisualizer | Node/edge glow from **real WebSocket events only** |
 | AgentWorkflowTheater | Educational motion; looping scenes are architecture, not ticks |
 | Sentiment trend | `-1` to `+1`, not 0–100 |
-| Execution quality | Submit-to-fill latency; **no slippage field** (proposal price not persisted) |
+| Execution quality | Submit-to-fill latency. Real slippage exists as of 2026-09-13 (`trades.arrival_price`, written once at order insert and never overwritten, vs real matching `fills` rows — `src/server/research/executionQuality.ts`, `GET /api/v2/observability/execution-quality`, `argus-cli execution-quality`). Legacy trades predating this column, and any order with no matching fill, are excluded rather than estimated — `NO_DATA` until real fills with a real arrival price accumulate. |
 | Execute override | Full RiskEngine; never OMS-direct |
 | Arena performance widgets | `AwaitingSignal` — not RNG win rates |
 | MultiAgentDialogueGraph / some Agent Network charts | Fabricated/mock series — do not cite as live accuracy |

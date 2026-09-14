@@ -26,6 +26,7 @@ Start here. Forensic docs live under `docs/`. The live-path **contract** remains
 | [`ARGUS_CONFIGURATION_ARCHITECTURE.md`](../ARGUS_CONFIGURATION_ARCHITECTURE.md) | Config layers / overlays |
 | [`ARGUS_CONFIGURATION_SECURITY.md`](../ARGUS_CONFIGURATION_SECURITY.md) | Secrets / auth / overlays |
 | [`docs/architecture/ARGUS_ARCHITECTURE.md`](architecture/ARGUS_ARCHITECTURE.md) | The one living architecture reference — system overview, ChiefTrader consensus, RiskEngine gates (25, current), Java Quant Core, LangGraph Research Service, Premarket/Session-Aware Trading Architecture |
+| [`docs/ARGUS_MASTER_COMPLETION_LEDGER.md`](ARGUS_MASTER_COMPLETION_LEDGER.md) | Per-part status of the 32-part institutional transformation mandate (forecast engine, portfolio construction, attribution, etc.) — real audited state, not aspirational; updated every session as work lands |
 | [`docs/operations/DEVOPS_LIFECYCLE.md`](operations/DEVOPS_LIFECYCLE.md) | `argus.sh` / `npm run dev` process lifecycle |
 | [`docs/operations/IBKR_GATEWAY_SETUP.md`](operations/IBKR_GATEWAY_SETUP.md) | IB Gateway socket/web_api setup + troubleshooting |
 | [`docs/operations/CAMPAIGN_MANAGEMENT.md`](operations/CAMPAIGN_MANAGEMENT.md) | Daily Goal Campaign operations summary |

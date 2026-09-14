@@ -279,6 +279,9 @@ export class OrderManagementService {
         side,
         quantity,
         price: (typeof intendedPrice === 'number' && Number.isFinite(intendedPrice) && intendedPrice > 0) ? intendedPrice : 0,
+        // Execution Quality (Part 16) - the one-time, never-overwritten arrival price. Same guard
+        // as `price` above, but this column is never touched by the later acceptedAt/fill updates.
+        arrivalPrice: (typeof intendedPrice === 'number' && Number.isFinite(intendedPrice) && intendedPrice > 0) ? intendedPrice : null,
         status: "PENDING",
         timestamp: submittedAt,
         reasoning,

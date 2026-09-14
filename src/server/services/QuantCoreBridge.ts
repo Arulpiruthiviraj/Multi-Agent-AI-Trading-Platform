@@ -52,6 +52,30 @@ export function isLiveIdeaEmissionEnabled(): boolean {
   return isQuantJavaCoreEnabled() && String(process.env[QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED_ENV_VAR] || '').toLowerCase() === 'true';
 }
 
+/**
+ * ARGUS MASTER TRANSFORMATION MANDATE Part 7 - raw response shape from
+ * /api/v1/institutional/forecast (ForecastEngine.java). Null numeric fields are real - meaning
+ * the real historical-return sample was too small (status INSUFFICIENT_DATA), never a fabricated
+ * default. src/server/research/forecastEngine.ts composes this with real historical-outcome
+ * retrieval and provenance into the persisted, immutable quant_forecasts row.
+ */
+export interface InstitutionalForecastResult {
+  schemaVersion: number;
+  status: 'VALID' | 'INSUFFICIENT_DATA';
+  sampleSize: number;
+  meanReturn: number | null;
+  medianReturn: number | null;
+  trimmedMeanReturn: number | null;
+  stdevReturn: number | null;
+  meanReturnLower: number | null;
+  meanReturnUpper: number | null;
+  probabilityOfProfit: number | null;
+  probabilityOfProfitLower: number | null;
+  probabilityOfProfitUpper: number | null;
+  transactionCostBps: number;
+  netExpectedReturn: number | null;
+}
+
 export interface InstitutionalVolatilityResult {
   schemaVersion: number;
   symbol: string;
@@ -759,6 +783,46 @@ export class QuantCoreBridgeService {
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/volatility', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+  }
+
+  /**
+   * ARGUS MASTER TRANSFORMATION MANDATE Part 7 - calls the authoritative Quant Forecast Engine
+   * computation (ForecastEngine.java). This bridge method takes no market bars - the caller
+   * (forecastEngine.ts) supplies a real, already-assembled sample of historical forward returns
+   * from Argus's own graded-outcome database; this is a statistics-over-a-sample call, not a
+   * bars-driven indicator computation, so it reuses the institutionalBreaker domain (same
+   * failure-isolation boundary as every other /institutional/* endpoint) rather than a new one.
+   * Fail-closed like every other method here: null on flag-off/breaker-open/non-2xx/thrown error,
+   * never fabricated - forecastEngine.ts must treat a null return the same as INSUFFICIENT_DATA.
+   */
+  async fetchForecast(symbol: string, historicalReturns: number[], transactionCostBps: number): Promise<InstitutionalForecastResult | null> {
+    if (!isQuantJavaCoreEnabled()) return null;
+    if (this.institutionalBreaker.isOpen()) {
+      this.logBridgeOutcome({ endpoint: 'institutional/forecast', symbol, result: 'CIRCUIT_OPEN', breakerFailureCountBefore: this.institutionalBreaker.getFailureCount(), breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+      return null;
+    }
+    const startedAt = Date.now();
+    const before = this.institutionalBreaker.getFailureCount();
+    try {
+      const res = await fetch(`${tradingSafety.quantJavaCoreBaseUrl}/api/v1/institutional/forecast`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Trace-Id': generateTraceId(symbol), 'X-Symbol': symbol },
+        body: JSON.stringify({ historicalReturns, transactionCostBps }),
+        signal: AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs),
+      });
+      if (!res.ok) {
+        this.institutionalBreaker.recordFailure();
+        this.logBridgeOutcome({ endpoint: 'institutional/forecast', symbol, result: 'HTTP_ERROR', httpStatus: res.status, durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
+        return null;
+      }
+      this.institutionalBreaker.recordSuccess();
+      this.logBridgeOutcome({ endpoint: 'institutional/forecast', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
+      return (await res.json()) as InstitutionalForecastResult;
+    } catch (e) {
+      this.institutionalBreaker.recordFailure();
+      this.logBridgeOutcome({ endpoint: 'institutional/forecast', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
       return null;
     }
   }

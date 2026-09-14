@@ -211,3 +211,39 @@ describe('shouldSuppressForConfluenceGuard (2026-09-11, "ARGUS - Quant-First Arc
     expect(shouldSuppressForConfluenceGuard(true, mismatchEnsemble(2, 3.0), 3, 2.5)).toBe(false);
   });
 });
+
+describe('resolveEnsembleEvidenceForForecast (Master Transformation Mandate Part 7/9, 2026-09-13)', () => {
+  const agreeingEnsemble = (totalVotes: number, familyCount: number, effectiveIndependentCount: number) => ({
+    qualifiesAsIndependent: true, rawSide: 'BUY' as const, effectiveIndependentCount,
+    familyCount, agreeingFamilies: [], totalVotes, agreeingModelIds: [], dissentingModelIds: [],
+    sideMismatch: false,
+  });
+
+  it('returns null (never fabricated) when there is no ensemble result at all', async () => {
+    const { resolveEnsembleEvidenceForForecast } = await import('./internalQuantEnsemble');
+    expect(resolveEnsembleEvidenceForForecast(null)).toBeNull();
+  });
+
+  it('returns null when the ensemble disagreed with the idea (sideMismatch) - its diversity describes the OPPOSING side, not support for this forecast', async () => {
+    const { resolveEnsembleEvidenceForForecast } = await import('./internalQuantEnsemble');
+    const mismatched = { ...agreeingEnsemble(7, 4, 3.2), sideMismatch: true };
+    expect(resolveEnsembleEvidenceForForecast(mismatched)).toBeNull();
+  });
+
+  it('passes through the real, already-measured counts faithfully when the ensemble agreed - never a duplicate or approximated algorithm', async () => {
+    const { resolveEnsembleEvidenceForForecast } = await import('./internalQuantEnsemble');
+    const result = resolveEnsembleEvidenceForForecast(agreeingEnsemble(7, 4, 3.2));
+    expect(result).toEqual({ strategyCount: 7, familyCount: 4, effectiveIndependentCount: 3.2 });
+  });
+
+  it('never inflates effectiveIndependentCount to equal raw strategyCount - correlated strategies must not masquerade as fully independent', async () => {
+    const { resolveEnsembleEvidenceForForecast } = await import('./internalQuantEnsemble');
+    // 20 real votes, but heavily correlated (same-family) - effectiveIndependentCount stays low,
+    // exactly what QuantEnsembleEngine.java's correlation-adjusted math is FOR. This function must
+    // never touch or recompute either number - only ever pass through what it was given.
+    const result = resolveEnsembleEvidenceForForecast(agreeingEnsemble(20, 1, 2.1));
+    expect(result!.strategyCount).toBe(20);
+    expect(result!.effectiveIndependentCount).toBe(2.1);
+    expect(result!.effectiveIndependentCount).toBeLessThan(result!.strategyCount);
+  });
+});

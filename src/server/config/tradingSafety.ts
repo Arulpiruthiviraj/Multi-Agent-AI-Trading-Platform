@@ -420,6 +420,13 @@ export interface TradingSafety {
   quantJavaCoreCircuitBreakerFailureThreshold: number;
   /** Cooldown before the circuit breaker allows another attempt after opening. */
   quantJavaCoreCircuitBreakerCooldownMs: number;
+  /** Real bug found and fixed 2026-09-13 (Master Transformation Mandate Part 7): an unbounded
+   *  historical-return sample (57,504 real rows for one agent) blew through
+   *  quantJavaCoreRequestTimeoutMs every time it was serialized into one HTTP POST body.
+   *  forecastEngine.ts caps to the most recent N observations before ever calling Java - both a
+   *  reliability fix and the statistically correct choice (recent, representative evidence over an
+   *  unbounded stale-inclusive blend). */
+  forecastEngineMaxSampleSize: number;
   /** ParityComparator.ts flags a shadow divergence when |ts - java| / |ts| exceeds this fraction
    *  (0.0001 = 0.01%, matching the migration blueprint's own stated threshold). */
   quantJavaCoreDivergenceThresholdPct: number;
@@ -748,6 +755,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.quantJavaCoreCircuitBreakerCooldownMs !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: quantJavaCoreCircuitBreakerCooldownMs');
+  }
+  if (typeof raw.forecastEngineMaxSampleSize !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: forecastEngineMaxSampleSize');
   }
   if (typeof raw.quantJavaCoreDivergenceThresholdPct !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: quantJavaCoreDivergenceThresholdPct');

@@ -6,6 +6,7 @@ import io.argus.quantcore.backtest.engine.Bar;
 import io.argus.quantcore.institutional.math.AugmentedDickeyFuller;
 import io.argus.quantcore.institutional.math.OrnsteinUhlenbeckEstimator;
 import io.argus.quantcore.institutional.models.FactorAlphaEngine;
+import io.argus.quantcore.institutional.models.ForecastEngine;
 import io.argus.quantcore.institutional.models.GarchEngine;
 import io.argus.quantcore.institutional.models.HmmRegimeEngine;
 import io.argus.quantcore.institutional.models.StatArbEngine;
@@ -72,6 +73,11 @@ public final class QuantCoreServer {
         server.createContext("/api/v1/institutional/features/", this::handleInstitutionalFeatures);
         server.createContext("/api/v1/institutional/correlation", this::handleInstitutionalCorrelation);
         server.createContext("/api/v1/institutional/ensemble", this::handleInstitutionalEnsemble);
+        // ARGUS MASTER TRANSFORMATION MANDATE Part 7 (2026-09-13): the authoritative Quant
+        // Forecast Engine computation - see ForecastEngine.java's own header for why this is not a
+        // duplicate of the existing TS-side wilsonInterval()/effectiveSampleSize.ts (different
+        // purpose: this is the decision-authoritative forecast, that stays a diagnostic tool).
+        server.createContext("/api/v1/institutional/forecast", this::handleInstitutionalForecast);
         server.createContext("/api/v1/institutional/advisory", this::handleInstitutionalAdvisory);
         // 2026-09-09: HTTP-exposes 10 previously-endpoint-less RESEARCH-status engines (real,
         // unit-tested Java classes that already existed - see config/engineOwnership.json).
@@ -852,6 +858,68 @@ public final class QuantCoreServer {
         } finally {
             TraceContext.clear();
         }
+    }
+
+    /**
+     * ARGUS MASTER TRANSFORMATION MANDATE Part 7 - the Quant Forecast Engine's HTTP entry point.
+     * TS (forecastEngine.ts) owns assembling the real historical forward-return sample from
+     * Argus's own already-graded prediction-outcome database; this endpoint owns turning that
+     * sample into the authoritative statistical forecast (ForecastEngine.java). Body:
+     * {"historicalReturns": number[], "transactionCostBps": number (optional, default 0)}.
+     */
+    private void handleInstitutionalForecast(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            sendJson(exchange, 405, Map.of("error", "method not allowed - POST a JSON body of historicalReturns"));
+            return;
+        }
+        String traceId = resolveTraceId(exchange);
+        try {
+            Map<String, Object> body = Json.asObject(Json.parse(readBody(exchange)));
+            Object rawReturns = body.get("historicalReturns");
+            if (!(rawReturns instanceof java.util.List<?> returnsList)) {
+                sendJson(exchange, 400, Map.of("ok", false, "error", "a historicalReturns array is required (may be empty)"));
+                return;
+            }
+            double[] historicalReturns = new double[returnsList.size()];
+            for (int i = 0; i < returnsList.size(); i++) {
+                double v = Json.asDoublePrimitive(returnsList.get(i), Double.NaN);
+                if (!Double.isFinite(v)) {
+                    sendJson(exchange, 400, Map.of("ok", false, "error", "historicalReturns[" + i + "] is not a finite number"));
+                    return;
+                }
+                historicalReturns[i] = v;
+            }
+            double transactionCostBps = Json.asDoublePrimitive(body.get("transactionCostBps"), 0);
+
+            ForecastEngine.ForecastResult result = ForecastEngine.compute(historicalReturns, transactionCostBps);
+            StructuredLogger.log(StructuredLogger.Level.INFO, "QuantCoreJava", "INSTITUTIONAL_FORECAST_COMPUTED",
+                "Computed forecast from " + historicalReturns.length + " historical returns", traceId, null,
+                Map.of("status", result.status().name(), "sampleSize", (double) result.sampleSize()));
+            sendJson(exchange, 200, forecastResultToJson(result));
+        } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
+            sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body: " + e.getMessage()));
+        } finally {
+            TraceContext.clear();
+        }
+    }
+
+    private static Map<String, Object> forecastResultToJson(ForecastEngine.ForecastResult r) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("schemaVersion", 1.0);
+        m.put("status", r.status().name());
+        m.put("sampleSize", (double) r.sampleSize());
+        m.put("meanReturn", r.meanReturn());
+        m.put("medianReturn", r.medianReturn());
+        m.put("trimmedMeanReturn", r.trimmedMeanReturn());
+        m.put("stdevReturn", r.stdevReturn());
+        m.put("meanReturnLower", r.meanReturnLower());
+        m.put("meanReturnUpper", r.meanReturnUpper());
+        m.put("probabilityOfProfit", r.probabilityOfProfit());
+        m.put("probabilityOfProfitLower", r.probabilityOfProfitLower());
+        m.put("probabilityOfProfitUpper", r.probabilityOfProfitUpper());
+        m.put("transactionCostBps", r.transactionCostBps());
+        m.put("netExpectedReturn", r.netExpectedReturn());
+        return m;
     }
 
     private static Map<String, Object> ensembleResultToJson(QuantEnsembleEngine.EnsembleResult r) {
