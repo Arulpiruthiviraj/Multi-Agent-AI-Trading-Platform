@@ -823,6 +823,19 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'daily-attribution'() {
+    // 2026-09-14 (Institutional Transformation Mandate Part 21): real realized P&L by real
+    // trading date + strategy id, organic PAPER only. Pass --since=YYYY-MM-DD to window.
+    const sinceArg = process.argv.slice(3).find((a) => a.startsWith('--since='));
+    const url = sinceArg
+      ? `/api/v2/observability/daily-attribution?format=text&sinceDate=${encodeURIComponent(sinceArg.slice('--since='.length))}`
+      : `/api/v2/observability/daily-attribution?format=text`;
+    const res = await fetch(`${BASE}${url}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 15_000)),
+    });
+    console.log(await res.text());
+  },
   async 'forecast'() {
     // 2026-09-13 (Institutional Transformation Mandate Part 7): builds and persists one real
     // forecast. Required: --agent=<name> --symbol=<SYM> --direction=BUY|SELL. Optional:
@@ -1399,7 +1412,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

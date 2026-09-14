@@ -27,6 +27,7 @@ import { buildConsensusDebateHealthReport, formatConsensusDebateHealthReport } f
 import { buildOpportunitySnapshot, formatOpportunitySnapshot } from '../research/opportunitySnapshot';
 import { buildExecutionQualityReport, summarizeExecutionQuality, formatExecutionQualityReport } from '../research/executionQuality';
 import { buildForecast, mostRecentForecast, PRIMARY_EVAL_HORIZON_LABEL } from '../research/forecastEngine';
+import { buildDailyAttributionReport, summarizeDailyAttribution, formatDailyAttributionReport } from '../research/dailyAttributionReport';
 
 export const observabilityRouter = Router();
 
@@ -205,6 +206,26 @@ observabilityRouter.get('/forecast', async (req, res) => {
     }
     const forecast = await mostRecentForecast(symbol, agentName, strategyId, direction, horizonLabel);
     res.json({ ok: true, forecast });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-14 (Institutional Transformation Mandate Part 21, argus-cli daily-attribution) - real
+// realized P&L by real NY trading date + real strategy id, from organic PAPER FILLED SELL trades
+// only (never blended with REPLAY/BACKTEST/SIMULATION/LIVE) - see dailyAttributionReport.ts's own
+// header for why this composes trades.* directly rather than the campaign-only
+// daily_strategy_performance table. Optional ?sinceDate=YYYY-MM-DD (NY trading-date string).
+observabilityRouter.get('/daily-attribution', async (req, res) => {
+  try {
+    const sinceDate = typeof req.query.sinceDate === 'string' ? req.query.sinceDate : undefined;
+    const rows = await buildDailyAttributionReport(sinceDate);
+    const summary = summarizeDailyAttribution(rows);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatDailyAttributionReport(rows, summary));
+      return;
+    }
+    res.json({ ok: true, summary, rows });
   } catch (e: any) {
     if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
   }
