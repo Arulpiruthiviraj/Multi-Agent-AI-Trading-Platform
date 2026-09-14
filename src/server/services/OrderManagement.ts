@@ -833,11 +833,20 @@ export class OrderManagementService {
       // computed honestly - the pre-trade entry-price snapshot only exists inside executeOrder()'s
       // own call stack. Left null (never fabricated) rather than guessed from current position data,
       // which may have already changed by the time this follow-up runs.
-      await db.update(trades).set({
+      // CAS guard: only write if the row is still in the exact status this cycle observed it in.
+      // Without this, a concurrent cancelOrder() (or another follow-up cycle) that changed the row
+      // between our read and this write would get silently clobbered by a now-stale broker snapshot
+      // - the fill ledger/portfolio sync above already happened and stays correct either way, but
+      // trades.status itself must never regress onto data we no longer know is current.
+      const updateResult = await db.update(trades).set({
         status: match.status,
         price: fillPrice || row.price,
         filledAt,
-      }).where(eq(trades.id, row.id));
+      }).where(and(eq(trades.id, row.id), eq(trades.status, row.status)));
+      if (updateResult.changes === 0) {
+        console.warn(`[OMS] follow-up: skipped stale status write for order ${row.id} - status changed concurrently since this cycle read it.`);
+        return;
+      }
 
       // Unconditional, matching executeOrder()'s own finalization contract - this is only ever
       // called when followUpOpenOrders() already detected a real change (a status transition or
@@ -888,7 +897,18 @@ export class OrderManagementService {
     }
     if (!cancelled) return { ok: false, reason: 'Broker declined to cancel the order (it may already have filled).' };
 
-    await db.update(trades).set({ status: 'CANCELED' }).where(eq(trades.id, orderId));
+    // CAS guard: the broker round-trip above is slow enough for a concurrent followUpOpenOrders()
+    // cycle to have already recorded a real fill (and synced the portfolio) for this exact order in
+    // the meantime. row.status is a stale pre-broker-call snapshot - only commit CANCELED if the row
+    // is still in that same status; otherwise a real, already-recorded fill would be silently
+    // overwritten back to CANCELED even though fills/portfolio already reflect it as filled.
+    const cancelUpdateResult = await db.update(trades)
+      .set({ status: 'CANCELED' })
+      .where(and(eq(trades.id, orderId), eq(trades.status, row.status)));
+    if (cancelUpdateResult.changes === 0) {
+      console.warn(`[OMS] cancelOrder: broker confirmed cancellation for order ${orderId} but local status changed concurrently (likely a real fill) - refusing to overwrite. Not reporting CANCELED.`);
+      return { ok: false, reason: 'Order status changed concurrently during cancellation (likely filled) - not overwriting a newer status. Re-check the order.' };
+    }
     eventBus.emitOrderExecution({
       traceId: row.traceId,
       transactionId: row.transactionId,

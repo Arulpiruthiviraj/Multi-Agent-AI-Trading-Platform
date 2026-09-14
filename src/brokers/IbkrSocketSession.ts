@@ -120,6 +120,19 @@ type TrackedOrder = {
    * order placed without one (e.g. a manually-triggered order path that doesn't pass clientOrderId).
    */
   clientOrderId: string | null;
+  /**
+   * Fill-accounting race fix (2026-09-14 forensic audit pass 3, item 3): orderStatus.filled is IB's
+   * own CUMULATIVE running total; execDetails.shares is a PER-EXECUTION increment. IB gives no
+   * ordering guarantee between the two event streams for the same real fill, so a naive shared
+   * `filledQuantity += shares` on execDetails on top of orderStatus's already-cumulative overwrite
+   * double-counts whenever orderStatus lands first (verified: IbkrSocketSession.fillAccounting.test.ts).
+   * execDetailsCumulative tracks a running total from the execDetails stream alone; seenExecutionIds
+   * (IB's own Execution.execId, genuinely unique per fill) prevents the same execution being summed
+   * twice within that stream on a duplicate redelivery. filledQuantity is then always the MAX of
+   * both independently-maintained cumulative tracks, never a cross-stream sum.
+   */
+  execDetailsCumulative: number;
+  seenExecutionIds: Set<string>;
 };
 
 /** IB's own order-status vocabulary -> Argus's Order.status enum. Shared by the live orderStatus
@@ -424,9 +437,12 @@ export class IbkrSocketSession {
         const row = this.trackedOrders.get(orderId);
         if (!row) return;
         const filledQty = Number(filled) || 0;
-        row.filledQuantity = filledQty;
+        // Math.max, not a blind overwrite: guards against both a stale/out-of-order orderStatus
+        // event regressing a higher value already established, and (see TrackedOrder's own doc
+        // comment) cross-stream double-counting against the independently-tracked execDetails sum.
+        row.filledQuantity = Math.max(row.filledQuantity, filledQty);
         if (Number(avgFillPrice) > 0) row.averageFillPrice = Number(avgFillPrice);
-        row.status = mapIbkrStatusToTrackedStatus(String(status || ''), filledQty, row.quantity);
+        row.status = mapIbkrStatusToTrackedStatus(String(status || ''), row.filledQuantity, row.quantity);
         row.updatedAt = new Date();
         // Refresh positions after fills so PortfolioMonitor / recon see IB state promptly.
         if (row.status === 'FILLED' || row.status === 'PARTIALLY_FILLED') {
@@ -474,6 +490,12 @@ export class IbkrSocketSession {
           createdAt: new Date(),
           updatedAt: new Date(),
           clientOrderId,
+          // Rehydrated from openOrder.filledQuantity, which mirrors orderStatus.filled's cumulative
+          // semantics - seed execDetailsCumulative at the same value so a subsequent execDetails for
+          // shares already reflected here doesn't get re-added on top (see TrackedOrder's own doc
+          // comment on this field).
+          execDetailsCumulative: filledQuantity,
+          seenExecutionIds: new Set<string>(),
         };
         this.trackedOrders.set(orderId, rehydrated);
         if (clientOrderId) this.clientOrderIdIndex.set(clientOrderId, orderId);
@@ -494,6 +516,9 @@ export class IbkrSocketSession {
         const shares = Number((execution as any)?.shares) || 0;
         const price = Number((execution as any)?.price) || 0;
         const execClientOrderId: string | null = (execution as any)?.orderRef || null;
+        // IB's own genuinely-unique per-execution identifier (Execution.execId) - see
+        // TrackedOrder.seenExecutionIds' doc comment for why this exists.
+        const execId: string | null = (execution as any)?.execId || null;
         let row = this.trackedOrders.get(orderId);
         if (!row) {
           // Crash-recovery case reqOpenOrders() alone cannot cover: an order that fully filled and
@@ -518,6 +543,8 @@ export class IbkrSocketSession {
             createdAt: new Date(),
             updatedAt: new Date(),
             clientOrderId: execClientOrderId,
+            execDetailsCumulative: 0,
+            seenExecutionIds: new Set<string>(),
           };
           this.trackedOrders.set(orderId, row);
           if (execClientOrderId) this.clientOrderIdIndex.set(execClientOrderId, orderId);
@@ -529,18 +556,28 @@ export class IbkrSocketSession {
           row.clientOrderId = execClientOrderId;
           this.clientOrderIdIndex.set(execClientOrderId, orderId);
         }
+        // Duplicate redelivery of the same real execution (WS replay / reconnect) - a real broker
+        // execution must increase the authoritative fill quantity exactly once regardless of replay.
+        // Only skippable when execId is actually present; some IB order types/vintages omit it (a
+        // known, honestly-documented residual gap - see DEF-30), in which case this dedup layer
+        // can't apply but the cross-stream Math.max reconciliation below still holds.
+        if (execId && row.seenExecutionIds.has(execId)) return;
+        if (execId) row.seenExecutionIds.add(execId);
         if (shares > 0) {
-          const prevFilled = row.filledQuantity;
-          const newFilled = prevFilled + shares;
+          const prevExecCum = row.execDetailsCumulative;
+          const newExecCum = prevExecCum + shares;
           if (price > 0) {
             row.averageFillPrice =
-              prevFilled > 0
-                ? (row.averageFillPrice * prevFilled + price * shares) / newFilled
+              prevExecCum > 0
+                ? (row.averageFillPrice * prevExecCum + price * shares) / newExecCum
                 : price;
           }
-          row.filledQuantity = newFilled;
-          row.quantity = Math.max(row.quantity, newFilled);
-          if (newFilled + 1e-9 >= row.quantity) row.status = 'FILLED';
+          row.execDetailsCumulative = newExecCum;
+          // Math.max against orderStatus's own independently-tracked cumulative value - see
+          // TrackedOrder.execDetailsCumulative's doc comment. Never a cross-stream sum.
+          row.filledQuantity = Math.max(row.filledQuantity, newExecCum);
+          row.quantity = Math.max(row.quantity, row.filledQuantity);
+          if (row.filledQuantity + 1e-9 >= row.quantity) row.status = 'FILLED';
           else row.status = 'PARTIALLY_FILLED';
           row.updatedAt = new Date();
         }
@@ -658,6 +695,8 @@ export class IbkrSocketSession {
       createdAt: new Date(),
       updatedAt: new Date(),
       clientOrderId: opts.clientOrderId || null,
+      execDetailsCumulative: 0,
+      seenExecutionIds: new Set<string>(),
     });
     if (opts.clientOrderId) {
       this.clientOrderIdIndex.set(opts.clientOrderId, orderId);

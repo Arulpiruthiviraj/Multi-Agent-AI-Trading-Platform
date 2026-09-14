@@ -198,10 +198,12 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     // If the terminal exclusion filter were broken, this different broker-reported status would
     // get applied, flipping the trades row to CANCELED.
     ordersResponse = [{ id: row.brokerOrderId, symbol: 'GOOG', side: 'BUY', type: 'MARKET', status: 'CANCELED', quantity: 5, filledQuantity: 0, createdAt: new Date(), updatedAt: new Date() }];
+    const placeOrderCallsBeforeFollowUp = placeOrderCallCount;
     await oms.followUpOpenOrders();
 
     const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, row.id)))[0];
     expect(after.status).toBe('FILLED'); // untouched - already terminal, never re-queried
+    expect(placeOrderCallCount).toBe(placeOrderCallsBeforeFollowUp); // never a blind retry, even on a terminal row
   });
 
   it('gives up (logs once, leaves last-known status) when the broker no longer reports the order after max follow-up age', async () => {
@@ -215,11 +217,17 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     ordersResponse = [];
     await ageOrder(row.id, 31 * 60 * 1000);
 
+    const placeOrderCallsBeforeFollowUp = placeOrderCallCount;
     await oms.followUpOpenOrders();
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Giving up follow-up'));
 
     const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, row.id)))[0];
     expect(after.status).toBe('PARTIALLY_FILLED');
+    // Forensic audit invariant (2026-09-14, docs/ARGUS_FULL_DEFECT_AUDIT.md): "unknown broker
+    // state -> pause/reconcile, never blind retry" - explicitly proven, not just documented.
+    // followUpOpenOrders() must NEVER call broker.placeOrder() again for an order it cannot
+    // locate, no matter how stale - a real second submission here would be a duplicate real order.
+    expect(placeOrderCallCount).toBe(placeOrderCallsBeforeFollowUp);
 
     warnSpy.mockRestore();
   });
@@ -276,6 +284,69 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     expect(after.status).not.toBe('CANCELED'); // never marked cancelled on a real broker refusal
   });
 
+  it('cancelOrder() never overwrites a real fill that lands concurrently during the broker round-trip (cancel/fill race, CAS guard)', async () => {
+    // Reproduces the exact race: cancelOrder() reads row.status, then makes a slow broker call.
+    // If a concurrent followUpOpenOrders() cycle records a real fill (and writes trades.status)
+    // while that broker call is still in flight, cancelOrder()'s own final write must not clobber
+    // it back to CANCELED using its now-stale snapshot.
+    await oms.executeOrder('TSLA', 'BUY', 3, 'test reasoning', 'lifecycle-cancel-race-1');
+    const row = (await db.select().from(schema.trades).where(eq(schema.trades.traceId, 'lifecycle-cancel-race-1')))[0];
+    expect(row.status).toBe('PARTIALLY_FILLED');
+
+    cancelOrderSpy = vi.fn(async () => {
+      // Simulate a real fill committing via a concurrent follow-up cycle while this broker
+      // cancellation call is still in flight, i.e. AFTER cancelOrder()'s own stale pre-call read.
+      await db.update(schema.trades).set({ status: 'FILLED', filledAt: new Date().toISOString() }).where(eq(schema.trades.id, row.id));
+      return true;
+    });
+    const broker = stubBroker();
+    BrokerManager.getInstance().registerBroker(broker);
+    await BrokerManager.getInstance().setActiveBroker('lifecycle-stub', {});
+
+    const result = await oms.cancelOrder(row.id);
+    expect(result.ok).toBe(false);
+    expect(result.reason).toMatch(/changed concurrently/i);
+
+    const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, row.id)))[0];
+    expect(after.status).toBe('FILLED'); // the real, concurrently-recorded fill survives - never clobbered to CANCELED
+  });
+
+  it('followUpOpenOrders() never overwrites a real concurrent cancellation with a stale broker snapshot (CAS guard, symmetric case)', async () => {
+    // Symmetric to the test above: applyFollowUpUpdate()'s own trades.status write must not
+    // clobber a CANCELED status that a concurrent cancelOrder() call committed in the gap between
+    // this cycle's DB read and its own write (recordFillProgress() has a real await in between).
+    await oms.executeOrder('SPOT', 'BUY', 4, 'test reasoning', 'lifecycle-followup-race-1');
+    const row = (await db.select().from(schema.trades).where(eq(schema.trades.traceId, 'lifecycle-followup-race-1')))[0];
+    expect(row.status).toBe('PARTIALLY_FILLED');
+    await ageOrder(row.id, runtimeIntervals.omsFollowUpMinAgeMs + 1000);
+
+    ordersResponse = [{
+      id: row.brokerOrderId, symbol: 'SPOT', side: 'BUY', type: 'MARKET',
+      status: 'FILLED', quantity: 4, filledQuantity: 4, averageFillPrice: 100,
+      createdAt: new Date(), updatedAt: new Date(),
+    }];
+
+    const originalRecordFillProgress = (oms as any).recordFillProgress.bind(oms);
+    (oms as any).recordFillProgress = async (...args: any[]) => {
+      const result = await originalRecordFillProgress(...args);
+      // Simulate a concurrent cancelOrder() committing CANCELED right after this cycle's own
+      // fill-recording step but before its trades.status write below executes.
+      await db.update(schema.trades).set({ status: 'CANCELED' }).where(eq(schema.trades.id, args[0]));
+      return result;
+    };
+    try {
+      await oms.followUpOpenOrders();
+    } finally {
+      (oms as any).recordFillProgress = originalRecordFillProgress;
+    }
+
+    const after = (await db.select().from(schema.trades).where(eq(schema.trades.id, row.id)))[0];
+    expect(after.status).toBe('CANCELED'); // the real, concurrently-committed cancellation survives - never clobbered back to FILLED
+
+    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, row.id));
+    expect(fillRows.length).toBeGreaterThan(0); // the fill ledger/portfolio sync itself already happened and is correct either way
+  });
+
   it('reconcileInboundBrokerOrders tags unrecognized fills as SOURCE: EXTERNAL_MANUAL and does not record a RiskEngine fill', async () => {
     ordersResponse = [{
       id: 'broker-inbound-1',
@@ -329,8 +400,11 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
       createdAt: new Date(oldIso),
       updatedAt: new Date(),
     }];
+    const placeOrderCallsBeforeFollowUp = placeOrderCallCount;
     await oms.followUpOpenOrders();
     expect(cancelOrderSpy).toHaveBeenCalledWith('broker-orphan-1');
+    // Orphan recovery is CANCEL, never a fresh order for the un-filled remainder.
+    expect(placeOrderCallCount).toBe(placeOrderCallsBeforeFollowUp);
   });
 });
 

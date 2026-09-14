@@ -36,7 +36,13 @@ describe('PRE_EXISTING_RECONCILED acknowledgements', () => {
     delete process.env.ARGUS_DB_PATH;
   });
 
-  it('unacked FILLED orphan still flags FILLED_ORDER_MISSING_LOCALLY', async () => {
+  // Forensic audit pass 3, FD-7 (2026-09-14): FILLED_ORDER_MISSING_LOCALLY (like its
+  // OPEN_ORDER_MISSING_* siblings) now requires the same fault to persist across
+  // reconPauseConsecutiveMismatchCycles (2) CONSECUTIVE reconcile() cycles before being flagged -
+  // a single cycle is a one-off fetch miss, not yet a confirmed drift. Every test below that
+  // asserts a FILLED_ORDER_MISSING_LOCALLY flag now calls reconcile() twice; acked-order tests are
+  // unaffected (acknowledged orders are excluded before the debounce check even runs).
+  it('unacked FILLED orphan still flags FILLED_ORDER_MISSING_LOCALLY once the fault persists across 2 consecutive cycles', async () => {
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     const broker = BrokerManager.getInstance().getActiveBroker();
     const originalOrders = broker.orders.bind(broker);
@@ -56,7 +62,8 @@ describe('PRE_EXISTING_RECONCILED acknowledgements', () => {
       },
     ];
 
-    await portfolioReconciliationWorker.reconcile();
+    await portfolioReconciliationWorker.reconcile(); // cycle 1 - deferred, not yet flagged
+    await portfolioReconciliationWorker.reconcile(); // cycle 2 - confirmed
     const events = await db.select().from(schema.reconciliationEvents);
     const last = events[events.length - 1];
     const mismatches = JSON.parse(last.mismatches);
@@ -154,7 +161,8 @@ describe('PRE_EXISTING_RECONCILED acknowledgements', () => {
       },
     ];
 
-    await portfolioReconciliationWorker.reconcile();
+    await portfolioReconciliationWorker.reconcile(); // cycle 1 - NVDA fault deferred, not yet flagged
+    await portfolioReconciliationWorker.reconcile(); // cycle 2 - NVDA fault confirmed
     const events = await db.select().from(schema.reconciliationEvents);
     const last = events[events.length - 1];
     const mismatches = JSON.parse(last.mismatches);
@@ -166,7 +174,7 @@ describe('PRE_EXISTING_RECONCILED acknowledgements', () => {
     (broker as any).portfolio = originalPortfolio;
   });
 
-  it('revoke restores FILLED_ORDER_MISSING_LOCALLY for that id', async () => {
+  it('revoke restores FILLED_ORDER_MISSING_LOCALLY for that id once the fault persists across 2 consecutive cycles', async () => {
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     const broker = BrokerManager.getInstance().getActiveBroker();
     await revokeAcknowledgement({
@@ -196,7 +204,8 @@ describe('PRE_EXISTING_RECONCILED acknowledgements', () => {
       },
     ];
 
-    await portfolioReconciliationWorker.reconcile();
+    await portfolioReconciliationWorker.reconcile(); // cycle 1 - deferred, not yet flagged
+    await portfolioReconciliationWorker.reconcile(); // cycle 2 - confirmed
     const events = await db.select().from(schema.reconciliationEvents);
     const last = events[events.length - 1];
     const mismatches = JSON.parse(last.mismatches);

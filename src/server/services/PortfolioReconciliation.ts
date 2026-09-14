@@ -305,7 +305,10 @@ export class PortfolioReconciliationWorker {
           lastUpdated: new Date().toISOString()
         }).where(eq(portfolio.symbol, local.symbol));
       }
-      pruneResolvedFaults(this.consecutiveFaults, liveFaultKeys);
+      // pruneResolvedFaults() moved to after the open-order reconciliation block below (2026-09-14)
+      // so both sections' fault keys share one prune pass - calling it here too would incorrectly
+      // delete the open-order section's own in-progress fault counters (not yet seen this cycle),
+      // since those keys are only added to liveFaultKeys further down.
 
       // Phase 1, item 4 - open-order reconciliation. Previously only positions were checked;
       // real broker orders and real cash/buying-power were entirely unreconciled (confirmed by
@@ -323,9 +326,31 @@ export class PortfolioReconciliationWorker {
         // Operator-reviewed pre-existing fills: skip pause impact only for identical brokerOrderIds.
         const acknowledgedOrderIds = await getActiveAcknowledgedOrderIds(broker.name);
 
+        // Debounce (2026-09-14 forensic audit, per explicit operator instruction to trace
+        // "reconciliation racing active order processing"): unlike the position-level
+        // MISSING_LOCALLY/MISSING_REMOTELY checks above (which use confirmConsecutiveFault +
+        // PAUSE_CONSECUTIVE_CYCLES specifically because of a real prior incident, the GLD/NVDA
+        // flap - see portfolioReconcileCompare.ts's own doc comment), this open-order section had
+        // NO such protection: it pushed a mismatch on the very first occurrence. That is a routine,
+        // expected race, not a rare edge case - followUpOpenOrders() (OMS's own periodic
+        // broker.orders() poll) and this reconcile() cycle are two independent, uncoordinated
+        // timers; an order transitioning to terminal at the broker moments before OMS's own
+        // follow-up loop has processed that fill locally will, on this specific reconcile() cycle,
+        // show as terminal in `brokerOrders` (fetched first, line ~318) while `localTrades`
+        // (fetched second, line ~320, so it is NOT stale relative to the broker read - the race is
+        // the other direction: OMS hasn't caught up yet) still shows it as open, producing an
+        // OPEN_ORDER_MISSING_REMOTELY that was never a real drift, just OMS's own follow-up loop
+        // not yet having run. Same fix as the position-level checks: require the identical fault
+        // to persist across PAUSE_CONSECUTIVE_CYCLES consecutive cycles before treating it as real.
         for (const bo of openBrokerOrders) {
           const local = openLocalTrades.find(t => t.brokerOrderId === bo.id);
           if (!local) {
+            const faultKey = discrepancyFaultKey('OPEN_ORDER_MISSING_LOCALLY', bo.id);
+            liveFaultKeys.add(faultKey);
+            if (!confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+              console.warn(`[PortfolioReconciliation] ${bo.symbol} order ${bo.id} OPEN_ORDER_MISSING_LOCALLY deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) - not flagging on a one-off fetch miss.`);
+              continue;
+            }
             const impact = (bo.price || bo.averageFillPrice || 0) * bo.quantity;
             mismatches.push({ symbol: bo.symbol, type: 'OPEN_ORDER_MISSING_LOCALLY', localQty: 0, remoteQty: bo.quantity, approxDollarImpact: impact });
             console.warn(`[PortfolioReconciliation] Broker reports an open order for ${bo.symbol} (${bo.id}) with no matching local trades row - possible order placed outside Argus.`);
@@ -335,6 +360,12 @@ export class PortfolioReconciliationWorker {
           if (!lt.brokerOrderId) continue; // already-crashed rows are OrderManagement.reconcileStaleOrders()'s territory, not this check's
           const remote = openBrokerOrders.find(o => o.id === lt.brokerOrderId);
           if (!remote) {
+            const faultKey = discrepancyFaultKey('OPEN_ORDER_MISSING_REMOTELY', lt.brokerOrderId);
+            liveFaultKeys.add(faultKey);
+            if (!confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+              console.warn(`[PortfolioReconciliation] ${lt.symbol} order ${lt.brokerOrderId} OPEN_ORDER_MISSING_REMOTELY deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) - not flagging on a one-off follow-up-lag miss.`);
+              continue;
+            }
             const impact = (lt.price || 0) * lt.quantity;
             mismatches.push({ symbol: lt.symbol, type: 'OPEN_ORDER_MISSING_REMOTELY', localQty: lt.quantity, remoteQty: 0, approxDollarImpact: impact });
             console.warn(`[PortfolioReconciliation] Local trades row ${lt.id} (${lt.symbol}) is still non-terminal (${lt.status}) but ${broker.name} no longer reports order ${lt.brokerOrderId} as open.`);
@@ -347,6 +378,12 @@ export class PortfolioReconciliationWorker {
             console.log(`[PortfolioReconciliation] FILLED order ${bo.id} (${bo.symbol}) is PRE_EXISTING_RECONCILED — excluded from pause impact (not organic paper).`);
             continue;
           }
+          const faultKey = discrepancyFaultKey('FILLED_ORDER_MISSING_LOCALLY', bo.id);
+          liveFaultKeys.add(faultKey);
+          if (!confirmConsecutiveFault(this.consecutiveFaults, faultKey, PAUSE_CONSECUTIVE_CYCLES)) {
+            console.warn(`[PortfolioReconciliation] ${bo.symbol} order ${bo.id} FILLED_ORDER_MISSING_LOCALLY deferred (${this.consecutiveFaults.get(faultKey)}/${PAUSE_CONSECUTIVE_CYCLES}) - not flagging on a one-off fetch miss.`);
+            continue;
+          }
           const impact = (bo.averageFillPrice || bo.price || 0) * (bo.filledQuantity || bo.quantity || 0);
           mismatches.push({ symbol: bo.symbol, type: 'FILLED_ORDER_MISSING_LOCALLY', localQty: 0, remoteQty: bo.filledQuantity || bo.quantity, approxDollarImpact: impact });
           console.warn(`[PortfolioReconciliation] Broker reports FILLED order ${bo.id} for ${bo.symbol} with no matching local trades.brokerOrderId.`);
@@ -354,6 +391,7 @@ export class PortfolioReconciliationWorker {
       } catch (e) {
         console.error('[PortfolioReconciliation] Open-order reconciliation failed', e);
       }
+      pruneResolvedFaults(this.consecutiveFaults, liveFaultKeys);
 
       // Phase 1, item 4 - account-level consistency check. Not a comparison against a separate
       // local ledger (none exists, by design - see the constants' own comment above), but a real

@@ -4,7 +4,7 @@ import { eq } from 'drizzle-orm';
   import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { incMetric } from '../observability/ObservabilityMetrics';
 
-function isUniqueConstraint(err: unknown): boolean {
+export function isUniqueConstraint(err: unknown): boolean {
   const e = err as { code?: string; message?: string };
   return e?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(String(e?.message || ''));
 }

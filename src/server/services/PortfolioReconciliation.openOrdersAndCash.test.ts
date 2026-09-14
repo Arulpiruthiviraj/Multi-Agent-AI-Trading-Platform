@@ -43,7 +43,13 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
     delete process.env.ARGUS_DB_PATH;
   });
 
-  it('a real broker open order with no matching local trades row is flagged as OPEN_ORDER_MISSING_LOCALLY', async () => {
+  // Debounce added 2026-09-14 (forensic audit, "reconciliation racing active order processing"):
+  // these three mismatch types now require the SAME fault to persist across
+  // reconPauseConsecutiveMismatchCycles (2) CONSECUTIVE reconcile() cycles before being flagged -
+  // matching the pre-existing position-level MISSING_LOCALLY/MISSING_REMOTELY protection (added
+  // for the real GLD/NVDA flap incident). A single reconcile() call is a one-off fetch miss /
+  // OMS-follow-up-lag, not yet a confirmed drift.
+  it('a real broker open order with no matching local trades row is flagged as OPEN_ORDER_MISSING_LOCALLY only after it persists across 2 consecutive cycles, never on the first', async () => {
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     const broker = BrokerManager.getInstance().getActiveBroker();
     const originalOrders = broker.orders.bind(broker);
@@ -53,17 +59,49 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
     ];
 
     await portfolioReconciliationWorker.reconcile();
+    let events = await db.select().from(schema.reconciliationEvents);
+    let last = events[events.length - 1];
+    let mismatches = last.mismatches ? JSON.parse(last.mismatches) : [];
+    expect(mismatches.some((m: any) => m.symbol === 'ORPHAN' && m.type === 'OPEN_ORDER_MISSING_LOCALLY')).toBe(false); // NOT on the first cycle
 
-    const events = await db.select().from(schema.reconciliationEvents);
-    const last = events[events.length - 1];
+    await portfolioReconciliationWorker.reconcile();
+    events = await db.select().from(schema.reconciliationEvents);
+    last = events[events.length - 1];
     expect(last.matches).toBe(false);
-    const mismatches = JSON.parse(last.mismatches);
-    expect(mismatches.some((m: any) => m.symbol === 'ORPHAN' && m.type === 'OPEN_ORDER_MISSING_LOCALLY')).toBe(true);
+    mismatches = JSON.parse(last.mismatches);
+    expect(mismatches.some((m: any) => m.symbol === 'ORPHAN' && m.type === 'OPEN_ORDER_MISSING_LOCALLY')).toBe(true); // confirmed on the second consecutive cycle
 
     (broker as any).orders = originalOrders;
   });
 
-  it('a local non-terminal trades row whose brokerOrderId the broker no longer reports is flagged as OPEN_ORDER_MISSING_REMOTELY', async () => {
+  it('a one-cycle-only OPEN_ORDER_MISSING_LOCALLY blip (resolved by the next cycle) is never flagged at all', async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const broker = BrokerManager.getInstance().getActiveBroker();
+    const originalOrders = broker.orders.bind(broker);
+    (broker as any).orders = async () => [
+      ...(await originalOrders()),
+      { id: 'phantom-order-transient-1', symbol: 'TRANSIENT', side: 'BUY', type: 'MARKET', status: 'PENDING', quantity: 10, filledQuantity: 0, price: 100, createdAt: new Date(), updatedAt: new Date() },
+    ];
+    await portfolioReconciliationWorker.reconcile(); // fault count = 1
+
+    (broker as any).orders = originalOrders; // the transient order is gone - broker "caught up" by cycle 2
+    await portfolioReconciliationWorker.reconcile(); // fault does not recur - counter pruned
+
+    (broker as any).orders = async () => [
+      ...(await originalOrders()),
+      { id: 'phantom-order-transient-1', symbol: 'TRANSIENT', side: 'BUY', type: 'MARKET', status: 'PENDING', quantity: 10, filledQuantity: 0, price: 100, createdAt: new Date(), updatedAt: new Date() },
+    ];
+    await portfolioReconciliationWorker.reconcile(); // fault count = 1 again (reset, not 2/carried-over)
+
+    const events = await db.select().from(schema.reconciliationEvents);
+    const last = events[events.length - 1];
+    const mismatches = last.mismatches ? JSON.parse(last.mismatches) : [];
+    expect(mismatches.some((m: any) => m.symbol === 'TRANSIENT' && m.type === 'OPEN_ORDER_MISSING_LOCALLY')).toBe(false);
+
+    (broker as any).orders = originalOrders;
+  });
+
+  it('a local non-terminal trades row whose brokerOrderId the broker no longer reports is flagged as OPEN_ORDER_MISSING_REMOTELY only after 2 consecutive cycles, never on the first (the real "reconciliation racing OMS follow-up" scenario)', async () => {
     await db.insert(schema.trades).values({
       id: 'ghost-local-1', symbol: 'GHOSTCO', side: 'BUY', quantity: 5, price: 50, status: 'PENDING',
       timestamp: new Date().toISOString(), reasoning: 'test', traceId: 'trace-ghost-1',
@@ -72,11 +110,16 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
     });
 
     await portfolioReconciliationWorker.reconcile();
+    let events = await db.select().from(schema.reconciliationEvents);
+    let last = events[events.length - 1];
+    let mismatches = last.mismatches ? JSON.parse(last.mismatches) : [];
+    expect(mismatches.some((m: any) => m.symbol === 'GHOSTCO' && m.type === 'OPEN_ORDER_MISSING_REMOTELY')).toBe(false); // NOT on the first cycle - this is exactly the race a genuine OMS-follow-up-lag would produce
 
-    const events = await db.select().from(schema.reconciliationEvents);
-    const last = events[events.length - 1];
-    const mismatches = JSON.parse(last.mismatches);
-    expect(mismatches.some((m: any) => m.symbol === 'GHOSTCO' && m.type === 'OPEN_ORDER_MISSING_REMOTELY')).toBe(true);
+    await portfolioReconciliationWorker.reconcile();
+    events = await db.select().from(schema.reconciliationEvents);
+    last = events[events.length - 1];
+    mismatches = JSON.parse(last.mismatches);
+    expect(mismatches.some((m: any) => m.symbol === 'GHOSTCO' && m.type === 'OPEN_ORDER_MISSING_REMOTELY')).toBe(true); // confirmed on the second
   });
 
   it('a broker reporting a non-finite equity/cash value is flagged ACCOUNT_INCONSISTENCY and pauses trading', async () => {
@@ -137,7 +180,7 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
     (broker as any).portfolio = originalPortfolio;
   });
 
-  it('a broker FILLED order with no matching local trades.brokerOrderId is flagged FILLED_ORDER_MISSING_LOCALLY', async () => {
+  it('a broker FILLED order with no matching local trades.brokerOrderId is flagged FILLED_ORDER_MISSING_LOCALLY only after 2 consecutive cycles, never on the first', async () => {
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     const broker = BrokerManager.getInstance().getActiveBroker();
     const originalOrders = broker.orders.bind(broker);
@@ -147,12 +190,17 @@ describe('PortfolioReconciliationWorker - open orders and account consistency (P
     ];
 
     await portfolioReconciliationWorker.reconcile();
+    let events = await db.select().from(schema.reconciliationEvents);
+    let last = events[events.length - 1];
+    let mismatches = last.mismatches ? JSON.parse(last.mismatches) : [];
+    expect(mismatches.some((m: any) => m.symbol === 'FILLGAP' && m.type === 'FILLED_ORDER_MISSING_LOCALLY')).toBe(false); // NOT on the first cycle
 
-    const events = await db.select().from(schema.reconciliationEvents);
-    const last = events[events.length - 1];
+    await portfolioReconciliationWorker.reconcile();
+    events = await db.select().from(schema.reconciliationEvents);
+    last = events[events.length - 1];
     expect(last.matches).toBe(false);
-    const mismatches = JSON.parse(last.mismatches);
-    expect(mismatches.some((m: any) => m.symbol === 'FILLGAP' && m.type === 'FILLED_ORDER_MISSING_LOCALLY')).toBe(true);
+    mismatches = JSON.parse(last.mismatches);
+    expect(mismatches.some((m: any) => m.symbol === 'FILLGAP' && m.type === 'FILLED_ORDER_MISSING_LOCALLY')).toBe(true); // confirmed on the second consecutive cycle
 
     (broker as any).orders = originalOrders;
   });
