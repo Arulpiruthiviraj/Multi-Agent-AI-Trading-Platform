@@ -37,7 +37,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomes, predictionOutcomeHorizons, quantForecasts } from '../db/schema';
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, isNull } from 'drizzle-orm';
 import { secondaryGroupKey } from './predictionIndependencePolicy';
 import { quantCoreBridge, type InstitutionalForecastResult } from '../services/QuantCoreBridge';
 import { buildExecutionQualityReport, summarizeExecutionQuality } from './executionQuality';
@@ -215,11 +215,43 @@ async function resolveTransactionCostBps(): Promise<{ bps: number; source: 'REAL
 }
 
 /**
+ * Forensic audit fix (2026-09-14, docs/ARGUS_FULL_DEFECT_AUDIT.md): QuantSignalAgent.ts's
+ * fire-and-forget buildForecast() call has no cooldown of its own - if the same symbol qualifies
+ * for a real emitted idea in two back-to-back evaluation cycles before the first forecast build
+ * finishes (a real possibility; a Java call plus several DB reads can take up to the ~100ms bridge
+ * timeout, well within this pipeline's own real evaluation cadence), two fully independent builds
+ * would run concurrently for the identical (agent, strategy, symbol, direction, horizon) key -
+ * duplicate DB reads, a duplicate Java call, and two near-simultaneous quant_forecasts rows. Not a
+ * correctness bug (both rows would be real and valid; quant_forecasts intentionally allows many
+ * rows over time) but genuine wasted work and unnecessary Java-bridge load - exactly the risk
+ * class already found once tonight (the unbounded-payload timeout). In-flight request coalescing
+ * (a standard, safe pattern) makes the second concurrent call for the same key simply await the
+ * first's result instead of starting a redundant build - correct for fire-and-forget telemetry,
+ * never used for anything decision-critical.
+ */
+const inFlightForecastBuilds = new Map<string, Promise<Forecast>>();
+
+function forecastRequestKey(req: ForecastRequest): string {
+  return `${req.agentName}|${req.strategyId ?? ''}|${req.symbol}|${req.direction}|${req.horizonLabel ?? PRIMARY_EVAL_HORIZON_LABEL}`;
+}
+
+export async function buildForecast(req: ForecastRequest): Promise<Forecast> {
+  const key = forecastRequestKey(req);
+  const existing = inFlightForecastBuilds.get(key);
+  if (existing) return existing;
+  const promise = buildForecastUncoalesced(req).finally(() => {
+    inFlightForecastBuilds.delete(key);
+  });
+  inFlightForecastBuilds.set(key, promise);
+  return promise;
+}
+
+/**
  * Builds and persists one immutable forecast row. Never overwrites a prior forecast for the same
  * (symbol, agent, strategy, direction, horizon) - each call is a new row with its own
  * forecastId/timestamp, per the mandate's own "do not overwrite historical forecasts" rule.
  */
-export async function buildForecast(req: ForecastRequest): Promise<Forecast> {
+async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast> {
   const horizon = req.horizonLabel ?? PRIMARY_EVAL_HORIZON_LABEL;
   const isPrimary = horizon === PRIMARY_EVAL_HORIZON_LABEL;
 
@@ -335,17 +367,27 @@ export async function buildForecast(req: ForecastRequest): Promise<Forecast> {
  *  bounded way for other read models (e.g. opportunitySnapshot.ts) to reference a forecast
  *  without adding a live network call to their own hot path (mandate item 24). */
 export async function mostRecentForecast(symbol: string, agentName: string, strategyId: string | null, direction: 'BUY' | 'SELL', horizonLabel = PRIMARY_EVAL_HORIZON_LABEL): Promise<Forecast | null> {
+  // Forensic audit fix (2026-09-14, docs/ARGUS_FULL_DEFECT_AUDIT.md, FD-3): strategyId used to be
+  // filtered in JS AFTER fetching only the 50 most recent rows for the broader
+  // (symbol, agentName, direction, horizonLabel) key - a real false-negative once enough OTHER
+  // strategies (or the agent-level null-strategy case) had built more recent forecasts under the
+  // same key than this one, `.find()` would return undefined and this function would incorrectly
+  // report "no forecast" even though a real, valid, more-recent-for-THIS-strategy row exists just
+  // outside that window. Filtering strategyId in SQL makes the database return the genuinely most
+  // recent row for the exact requested key - correct regardless of how many other strategies are
+  // also emitting forecasts under the same broader key.
   const rows = await db.select().from(quantForecasts)
     .where(and(
       eq(quantForecasts.symbol, symbol),
       eq(quantForecasts.agentName, agentName),
       eq(quantForecasts.direction, direction),
       eq(quantForecasts.horizonLabel, horizonLabel),
+      strategyId ? eq(quantForecasts.strategyId, strategyId) : isNull(quantForecasts.strategyId),
     ))
     .orderBy(desc(quantForecasts.createdAt))
-    .limit(50)
+    .limit(1)
     .all();
-  const row = strategyId ? rows.find((r) => r.strategyId === strategyId) : rows.find((r) => r.strategyId === null);
+  const row = rows[0];
   if (!row) return null;
   return {
     forecastId: row.forecastId, symbol: row.symbol, timestamp: row.createdAt,

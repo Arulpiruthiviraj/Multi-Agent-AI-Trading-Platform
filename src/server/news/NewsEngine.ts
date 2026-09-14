@@ -341,8 +341,14 @@ export class NewsEngine {
                 // requestTemporaryDataRescue() path every other rescue caller uses, class
                 // NEWS_CATALYST) instead of a raw subscribe()+immediate-read. Fire-and-forget so a
                 // slow/denied wait for one symbol never blocks this loop's other symbols/articles.
-                // FundamentalAgent.ts has the identical latent structural bug at its own matching
-                // comment - not fixed in this pass; a separately-scoped follow-up.
+                // FundamentalAgent.ts had the identical latent structural bug at its own matching
+                // comment - fixed 2026-09-06 (docs/audits/ARGUS_CURRENT_STATE_AND_PAPER_READINESS_AUDIT.md
+                // §26/§30 finding R3, confirmed live: FundamentalAgent had become the dominant
+                // MISSING_PRICE source once this fix shipped here). MacroAgent.ts received the same
+                // fix. Corrected 2026-09-14 (forensic defect audit,
+                // docs/ARGUS_FULL_DEFECT_AUDIT.md) - this comment previously claimed the fix was
+                // still outstanding, which was stale by that point and could have misled a future
+                // pass into re-doing already-completed work.
                 void (async () => {
                   try {
                     const outcome = await waitForFreshMarketData(ticker, {

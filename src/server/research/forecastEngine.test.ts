@@ -242,6 +242,84 @@ describe('forecastEngine (Institutional Transformation Mandate Part 7)', () => {
     expect(forecast.effectiveIndependentCount).toBeNull();
   });
 
+  it('coalesces concurrent buildForecast calls for the identical key into a single Java call and a single persisted row (forensic audit fix, 2026-09-14)', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    let fetchCallCount = 0;
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      fetchCallCount++;
+      // Simulate real latency so the two calls below genuinely overlap in time.
+      await new Promise((r) => setTimeout(r, 30));
+      return new Response(JSON.stringify({
+        schemaVersion: 1, status: 'VALID', sampleSize: 0, meanReturn: 0.001, medianReturn: 0.001,
+        trimmedMeanReturn: 0.001, stdevReturn: 0, meanReturnLower: 0.001, meanReturnUpper: 0.001,
+        probabilityOfProfit: 1, probabilityOfProfitLower: 0.9, probabilityOfProfitUpper: 1,
+        transactionCostBps: 0, netExpectedReturn: 0.001,
+      }), { status: 200 });
+    });
+
+    const req = { agentName: 'CoalesceTestAgent', symbol: 'FCCOALESCE', direction: 'BUY' as const };
+    const [first, second] = await Promise.all([mod.buildForecast(req), mod.buildForecast(req)]);
+
+    expect(fetchCallCount).toBe(1); // NOT 2 - the second call must not trigger a redundant Java call
+    expect(first.forecastId).toBe(second.forecastId); // same coalesced result, not two separate builds
+
+    const persisted = await db.select().from(schema.quantForecasts).where(
+      (await import('drizzle-orm')).eq(schema.quantForecasts.symbol, 'FCCOALESCE'),
+    );
+    expect(persisted).toHaveLength(1); // exactly one row, not two near-duplicate ones
+
+    // A THIRD call after both in-flight calls have resolved must start a genuinely new build
+    // (the in-flight guard must release itself, never permanently dedupe a key).
+    const third = await mod.buildForecast(req);
+    expect(fetchCallCount).toBe(2);
+    expect(third.forecastId).not.toBe(first.forecastId);
+  });
+
+  it('does NOT coalesce two different real keys (different symbol) - each gets its own real Java call', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    let fetchCallCount = 0;
+    fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () => {
+      fetchCallCount++;
+      await new Promise((r) => setTimeout(r, 20));
+      return new Response(JSON.stringify({
+        schemaVersion: 1, status: 'INSUFFICIENT_DATA', sampleSize: 0, meanReturn: null, medianReturn: null,
+        trimmedMeanReturn: null, stdevReturn: null, meanReturnLower: null, meanReturnUpper: null,
+        probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null,
+        transactionCostBps: 0, netExpectedReturn: null,
+      }), { status: 200 });
+    });
+
+    await Promise.all([
+      mod.buildForecast({ agentName: 'DistinctKeyAgent', symbol: 'FCDISTINCT1', direction: 'BUY' }),
+      mod.buildForecast({ agentName: 'DistinctKeyAgent', symbol: 'FCDISTINCT2', direction: 'BUY' }),
+    ]);
+    expect(fetchCallCount).toBe(2);
+  });
+
+  it('mostRecentForecast finds the real forecast for the requested strategy even when 60+ other-strategy forecasts were built more recently under the same symbol/agent/direction/horizon (forensic audit fix, FD-3)', async () => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      schemaVersion: 1, status: 'INSUFFICIENT_DATA', sampleSize: 0, meanReturn: null, medianReturn: null,
+      trimmedMeanReturn: null, stdevReturn: null, meanReturnLower: null, meanReturnUpper: null,
+      probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null,
+      transactionCostBps: 0, netExpectedReturn: null,
+    }), { status: 200 }));
+
+    // Real forecast for the strategy we'll actually ask about, built first (oldest).
+    const target = await mod.buildForecast({ agentName: 'QuantEngine', strategyId: 'RARE_STRATEGY', symbol: 'FCMANYROWS', direction: 'BUY' });
+
+    // 60 real forecasts for a DIFFERENT strategy under the identical (symbol, agent, direction,
+    // horizon) key, all built after the target - previously enough to push it out of a top-50 window.
+    for (let i = 0; i < 60; i++) {
+      await mod.buildForecast({ agentName: 'QuantEngine', strategyId: 'CHATTY_STRATEGY', symbol: 'FCMANYROWS', direction: 'BUY' });
+    }
+
+    const found = await mod.mostRecentForecast('FCMANYROWS', 'QuantEngine', 'RARE_STRATEGY', 'BUY');
+    expect(found).not.toBeNull();
+    expect(found!.forecastId).toBe(target.forecastId);
+    expect(found!.strategyId).toBe('RARE_STRATEGY');
+  });
+
   it('mostRecentForecast returns null (never fabricates) when no forecast has ever been persisted for that key', async () => {
     const result = await mod.mostRecentForecast('FCNEVER', 'QuantEngine', null, 'BUY');
     expect(result).toBeNull();
