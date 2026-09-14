@@ -656,7 +656,7 @@ export class OrderManagementService {
       console.error('[OMS] inbound recovery: failed to read trades', e);
       return;
     }
-    const byBrokerId = new Set(local.map((t: any) => t.brokerOrderId).filter(Boolean));
+    const byBrokerIdRow = new Map(local.filter((t: any) => t.brokerOrderId).map((t: any) => [t.brokerOrderId, t]));
     const byClientId = new Set(local.map((t: any) => t.id));
     const unknownPendingWarned = this.unknownPendingOrderWarned;
 
@@ -664,7 +664,25 @@ export class OrderManagementService {
       const created = o.createdAt instanceof Date ? o.createdAt.getTime() : Date.parse(String(o.createdAt || 0));
       if (Number.isFinite(created) && created < cutoff) continue;
       const filledQty = o.filledQuantity ?? 0;
-      if (byBrokerId.has(o.id)) continue;
+      const knownRow = byBrokerIdRow.get(o.id);
+      if (knownRow) {
+        // FD-8 (2026-09-14 forensic audit, Phase 8 broker-submission-ambiguity): a broker order
+        // already known locally by id must still be re-checked against its CURRENT broker-side
+        // status, not unconditionally skipped. Real gap this closes: a locally-TERMINAL row (e.g.
+        // CANCELED via cancelOrphanedOpenOrder()'s own orphan-timeout path) that the broker has
+        // since genuinely filled (a real cancel/fill race at the exchange, not an Argus-internal
+        // bug) was previously never corrected - followUpOpenOrders() excludes terminal rows from
+        // its own WHERE clause, and this function's old unconditional `continue` here was the only
+        // other periodic re-check, so nothing ever looked again. Same condition shape as
+        // followUpOpenOrders()'s own comparison; applyFollowUpUpdate() is the same CAS-protected,
+        // already-idempotent write path (FD-4) used everywhere else, so a call here for a row that
+        // genuinely has not changed is a safe, cheap no-op (recordFillProgress's own cumulative-
+        // watermark dedup prevents a duplicate fills row).
+        if (o.status !== knownRow.status || filledQty > 0) {
+          await this.applyFollowUpUpdate(knownRow, o);
+        }
+        continue;
+      }
       if (o.clientOrderId && byClientId.has(o.clientOrderId)) {
         const row = local.find((t: any) => t.id === o.clientOrderId);
         if (row) await this.applyFollowUpUpdate(row, o);
@@ -766,8 +784,10 @@ export class OrderManagementService {
       return;
     }
     if (typeof broker.getOrderByClientOrderId !== 'function') {
-      // Honest degradation - not every broker adapter supports lookup-by-client-order-id (only
-      // AlpacaBroker does today). Never fabricates a reconciliation result it can't actually check.
+      // Honest degradation - not every broker adapter supports lookup-by-client-order-id.
+      // AlpacaBroker and IBGatewaySocketAdapter (DEF-30, 2026-09-09) both implement it; a future
+      // adapter that doesn't is the only case this branch still exists for. Never fabricates a
+      // reconciliation result it can't actually check.
       return;
     }
 

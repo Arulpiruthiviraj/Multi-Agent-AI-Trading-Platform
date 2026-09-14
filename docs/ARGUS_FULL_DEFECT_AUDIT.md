@@ -70,6 +70,8 @@ See table below, updated as the audit proceeds.
 | FD-5 | **P1** | `IbkrSocketSession.ts` `orderStatus` / `execDetails` handlers | IB's `orderStatus.filled` is a CUMULATIVE running total (correctly overwritten); IB's `execDetails.shares` is a PER-EXECUTION increment (correctly accumulated) - but both handlers wrote the same shared `TrackedOrder.filledQuantity` field, and IB gives no ordering guarantee between the two independent event streams for the same real fill | If `orderStatus` (cumulative) lands before `execDetails` (incremental) for the same fill - a real, ordinary live-trading interleaving, not a crash-recovery-only edge case - `execDetails` adds its shares again on top of the already-cumulative value, double-counting `filledQuantity` | Downstream: `fillLedger.ts`'s cumulative-watermark dedup (`insertIncrementalFill`) trusts `filledQuantity` as ground truth: a corrupted (doubled, and compounding across multiple fills) cumulative value would propagate into the real `fills` ledger and `trades` quantity, a genuine order-lifecycle correctness defect, not merely cosmetic | `TrackedOrder` gained `execDetailsCumulative` (a running total tracked independently from the `execDetails` stream alone) and `seenExecutionIds` (dedup by IB's own unique `Execution.execId` - the real broker-execution-identifier dedup this pass set out to verify). `orderStatus` now writes via `Math.max` (also fixes a related stale-event regression risk); `execDetails` accumulates onto its own independent track, then reconciles into the shared field via `Math.max` - never a cross-stream sum, structurally eliminating the race regardless of event ordering | New `IbkrSocketSession.fillAccounting.test.ts` (3 tests): reproduced the exact double-count (20 instead of 10 for one fill; 30 instead of 20 across two fills) against the pre-fix code, and the ordering-dependence itself (reversed event order was correct pre-fix, proving a genuine race not a deterministic bug); all 3 pass post-fix with exact correct quantities | 32/32 `src/brokers/__tests__/` suite green (including pre-existing crash-recovery weighted-average tests, unchanged behavior); full repo suite re-run pending |
 | FD-6 | **P1** | `localPortfolioSync.ts` `syncLocalPortfolioAfterBuyFill()` / `syncLocalPortfolioAfterSellFill()` | Both functions read a `portfolio` row, compute a new quantity/average-price via arithmetic on that snapshot, then write unconditionally with no CAS guard and no mutex between concurrent invocations for the same symbol | Two fills for the SAME symbol landing close together (a BUY add racing a SELL trim, or two independently-approved orders on the same symbol - nothing in the architecture serializes fill-processing across different orders) silently lose one delta via last-write-wins (understating or overstating the real position); for a symbol with NO existing local row yet, the second concurrent `INSERT` throws an uncaught primary-key collision (`portfolio.symbol` is the PK) that the prior code's outer catch swallowed, silently dropping that fill's portfolio effect entirely until the next reconciliation tick | `portfolio.quantity` is exactly the local exposure figure RiskEngine's concentration/correlation/notional gates read before approving a NEW order - a silently wrong (understated) local quantity here is the precise mechanism by which "the system acts on incorrect state before reconciliation catches it" (the operator's own stated invariant) could actually happen: a new order sized/approved against an understated local position, while real broker exposure is higher | Optimistic-concurrency retry loop on both functions: each write is a CAS (`WHERE symbol = ? AND quantity = <value just read>`, also matching `averagePrice` on the BUY path), and the INSERT-race case retries as an UPDATE against the row a concurrent writer just created instead of throwing past the outer catch. **Amended after a real full-suite run caught a second gap this same pass** (see write-up below): the original outer `catch` treated ANY exception, not just the two expected retryable cases, as immediately fatal with no retry - `isRetryableTransientError()` now lets a real transient error (`SQLITE_BUSY`/`SQLITE_LOCKED`, exactly what `busy_timeout=5000` in `src/server/db/index.ts` already anticipates as a real possibility under contention) retry with a short backoff instead of giving up on attempt 1. **Amended a second time after the operator's own explicit N-writer testing requirement found a THIRD gap** (mathematical, not environmental): optimistic-concurrency CAS resolves at most one competing writer per fully-synchronized contention round, so `MAX_SYNC_ATTEMPTS=8` (its post-first-amendment value) measurably failed a real 10-concurrent-writer test; raised 8→25 for real headroom above any realistic simultaneous-fill count | `localPortfolioSync.test.ts`: 4 two-writer tests (concurrent BUY+BUY on a brand-new symbol proving the INSERT-collision retry, concurrent BUY+BUY on an existing symbol, concurrent SELL+SELL, concurrent BUY+SELL mixed-direction - all real `Promise.all` races, no mocked timing) PLUS a full "FD-6 hardening - N-writer contention invariant" block added after the operator's explicit instruction: 2/5/10-concurrent-writer sum-correctness (3 trials each), 10-writer mixed BUY/SELL with both a positive and negative net outcome, a fill-sync racing a real reconciliation-style absolute writer (single, 10 trials, and a 5-writer burst, 5 trials) proving the CAS retry never double-applies or reapplies against stale data, a REAL (not simulated) `SQLITE_BUSY` via a genuine second-connection write lock, direct `isRetryableTransientError()` unit tests, and a restart/recovery replay-idempotency test tying FD-6 to the already-verified `insertIncrementalFill` cumulative-watermark dedup. Also stress-tested with 800+ combined ad hoc Promise.all race iterations across several harnesses before the N-writer suite existed (repeated isolated file runs, injected background DB noise, a full `src/server/services/` 92-file directory run) with zero reproduction of the first full-suite failure's specific "wrong total with success" symptom | 19/19 `localPortfolioSync.test.ts` tests green (5x repeated isolated runs after both hardenings). **First full-suite run: 4 failures** (transient-error gap) → hardened → **second full-suite run: clean, 491/491 files, 3604/3604 tests** → classified `FIXED / PARTIALLY VERIFIED` per the operator's explicit 2-writer-is-insufficient instruction → N-writer suite added → **N=10 concurrent-writer tests failed on first run** (attempt-budget gap) → hardened → third full-suite run's result is authoritative for final status - see the Final response block |
 | FD-7 | **P1** | `PortfolioReconciliation.ts` open-order reconciliation section (`OPEN_ORDER_MISSING_LOCALLY` / `OPEN_ORDER_MISSING_REMOTELY` / `FILLED_ORDER_MISSING_LOCALLY`) | Unlike the sibling position-level `MISSING_LOCALLY`/`MISSING_REMOTELY` checks (which use `confirmConsecutiveFault` + a 2-consecutive-cycle debounce specifically because of a real prior incident, the GLD/NVDA flap), these three mismatch types pushed into `mismatches` on the very FIRST occurrence, no fresh re-read, no debounce | `followUpOpenOrders()` (OMS's own periodic `broker.orders()` poll) and `PortfolioReconciliation.reconcile()` (a separate periodic cycle) are two independent, uncoordinated timers hitting the broker at different moments - an order transitioning to terminal at the broker moments before OMS's own follow-up loop has processed that fill locally will, on that reconcile() cycle, show as terminal in the broker snapshot while the local `trades` row (read fresh, but before OMS caught up) still shows it as open, producing a real, routine (not rare) `OPEN_ORDER_MISSING_REMOTELY` that was never an actual drift | If this crosses `SIGNIFICANT_MISMATCH_DOLLARS` it triggers real `TRADING_PAUSED` off a single transient timing race between two uncoordinated pollers - a false-positive kill-switch trigger during completely ordinary operation (an order simply filling), not a rare edge case. Confirmed via the EXISTING (pre-fix) test suite in `PortfolioReconciliation.openOrdersAndCash.test.ts`, which explicitly asserted single-cycle firing as the then-current contract for all three types | Extended the exact same `confirmConsecutiveFault`/`PAUSE_CONSECUTIVE_CYCLES`/`pruneResolvedFaults` pattern already used for the position-level checks to all three open-order mismatch types, keyed by broker order id (not symbol, since multiple orders per symbol are possible). Moved the single `pruneResolvedFaults()` call from immediately after the position-level loops to after the open-order loops too, accumulating one combined `liveFaultKeys` set across both sections (calling it twice with different key sets would have wrongly deleted the other section's in-progress counters) | `PortfolioReconciliation.openOrdersAndCash.test.ts`: the 3 existing tests (which asserted single-cycle firing) were updated to assert NO mismatch on cycle 1 and confirmation on cycle 2, matching the position-level tests' own established pattern; one new test added proving a one-cycle-only blip (resolved by cycle 2) is never flagged at all, mirroring `portfolioReconcileCompare.test.ts`'s existing "resets a symbol that matched on the next cycle" test for the position-level debounce. **A first full-suite run after this fix caught 3 further real regressions this initial search missed**: `ReconciliationAcknowledgements.test.ts` (a sibling file exercising the SAME `FILLED_ORDER_MISSING_LOCALLY` path via a shared `portfolioReconciliationWorker` singleton, not found by an incomplete initial grep) had 3 of its 4 tests also asserting single-cycle firing - updated the same way (2 reconcile() calls before asserting), verified the acked-order test (which never reaches the debounce check) was correctly unaffected. A third file, `reconciliationOperatorSnapshot.test.ts`, matched the same grep but only tests a pure fixture-string parser with no `reconcile()` call at all - confirmed unaffected, no change needed | 7/7 `PortfolioReconciliation.openOrdersAndCash.test.ts` + 4/4 `ReconciliationAcknowledgements.test.ts` tests green; full reconciliation test surface (7 files, 27 tests) green, no regressions in any sibling reconciliation test file |
+| FD-8 | **P1** | `OrderManagement.ts` `reconcileInboundBrokerOrders()` | The loop unconditionally `continue`d the moment a broker order's id was already known to any local `trades` row (`byBrokerId.has(o.id)`), regardless of whether the broker's CURRENT status differs from the stale local one | A local row already marked TERMINAL (e.g. `CANCELED` via `cancelOrphanedOpenOrder()`'s own orphan-timeout path) is excluded from `followUpOpenOrders()`'s WHERE clause forever, and this function's own unconditional skip meant NOTHING ever re-checked it again. Concrete real scenario (operator's own listed case #4, "original ACK arrives after retry decision," generalized): a genuine cancel/fill race at the exchange - Argus gives up and cancels an unresponsive order, but the order actually fills at the broker moments later | `trades.status` permanently, incorrectly shows `CANCELED` for an order that actually filled - invisible to attribution/execution-quality reporting (both filter on FILLED). The broker's real position would still eventually surface via `PortfolioReconciliation`'s independent position-level `MISSING_LOCALLY` check (a real safety net), but the order-level audit trail stays permanently wrong, and the fill is never recorded in `fills` at all | Replaced the unconditional skip with a lookup of the matching local row; if the broker's current status or fill quantity differs from the stale local record, calls the same CAS-protected `applyFollowUpUpdate()` (FD-4) already used everywhere else in this file - a genuinely-unchanged row is still a safe no-op (recordFillProgress's own cumulative-watermark dedup prevents any duplicate fill row) | `OrderManagement.unrecognizedBrokerOrder.test.ts`: 2 new tests - one reproduces the exact gap (a locally-CANCELED row whose broker-side status is actually FILLED gets corrected, with a real fill row recorded), one proves a genuinely-unchanged already-known order is a true no-op (no spurious rewrite, no duplicate fill row). The first test failed against the pre-fix code exactly as predicted (`CANCELED` instead of `FILLED`) before the fix, passed after | 24/24 tests green across all 3 `OrderManagement` crash-recovery-related test files, no regressions |
+| FD-9 | **P1** | `AlpacaBroker.ts` `placeOrder()` / `fetchAlpaca()` | `placeOrder()`'s POST `/v2/orders` call was marked `idempotentRetrySafe: true` whenever a `clientOrderId` was supplied, causing `fetchAlpaca()` to automatically retry the SAME order-creation POST on a timeout or network error - on the code's own comment's claim that "Alpaca deduplicates real order submissions on this field." That claim was never verified | Checked directly against Alpaca's own official documentation this pass (`docs.alpaca.markets/reference/postorder` and `docs.alpaca.markets/docs/orders-at-alpaca`, fetched and read, not assumed): **neither document any deduplication or idempotency guarantee for `client_order_id`** - both describe it only as a caller-supplied identifier with no stated behavior for a duplicate submission. This is exactly the operator's own explicit warning made concrete: "A unique database constraint is useful, but it does not by itself prove broker-side idempotency" | If a timeout/network error occurs AFTER the order actually reached and was accepted by Alpaca but BEFORE the response reached Argus, the internal retry would submit a SECOND, functionally identical order-creation POST with no confirmed guarantee against it becoming a real second order - exactly "a network/broker failure turning one intended paper order into two broker orders," the operator's own named highest-value question, and a genuine (if currently dormant, since IBKR not Alpaca is this deployment's active broker) gap in that invariant | Removed the retry for this specific call: order placement is never internally retried on timeout/network error regardless of `clientOrderId`, matching IBKR's own no-retry submission path exactly. A timeout/network error now throws, `OrderManagement.executeOrder()`'s existing, already-tested UNKNOWN→PAUSE→RECONCILE handling takes over, and `reconcileStaleOrders()`'s real `getOrderByClientOrderId()` lookup (Alpaca does implement this - a READ, carrying no duplication risk) resolves the ambiguity on the next cycle. Every OTHER `idempotentRetrySafe: true` site in this file (3 GETs, 2 DELETEs) is untouched and correctly still retried - GETs have no side effects, and a redundant DELETE against an already-cancelled/closed resource is a standard, harmless REST no-op, unlike a POST that can create a brand-new resource twice | `AlpacaBroker.reliability.test.ts`: the existing test asserting the OLD (now-removed) retry-on-clientOrderId behavior was rewritten to assert the corrected behavior (never retried, regardless of clientOrderId - matching the sibling no-clientOrderId test exactly), plus one new test confirming a genuinely successful single-attempt placeOrder still works normally and still sends `client_order_id` in the payload (kept as real defense-in-depth even without a documented guarantee) | 13/13 `AlpacaBroker.reliability.test.ts` tests green; full `src/brokers/` suite (15 files, 126 tests) green, no regressions |
 
 ## Phase 8/9 — Broker/order/position lifecycle (2026-09-14, pass 2, per explicit operator priority)
 
@@ -592,6 +594,109 @@ clean fifth full-suite run (492/492 files, 3619/3619 tests) that nothing else wa
 the same discipline FD-6 required — a fix is not "done" until proven against the real, full test
 surface, not just the tests it was designed to satisfy.
 
+## Phase 8 — Broker submission ambiguity, 14-scenario adversarial pass (2026-09-14, per explicit operator scenario list)
+
+Operator's framing, verbatim: *"Can a broker/network failure cause Argus to submit an unintended
+second order, believe an order doesn't exist when it does, or make a risk decision using stale
+exposure?"* And: *"pay particular attention to whether the idempotency key actually survives every
+retry/recovery path. A unique database constraint is useful, but it does not by itself prove
+broker-side idempotency."* Each of the 14 named scenarios traced against the real submission
+pipeline (`executeOrder()` → `activeBroker.placeOrder()` → poll/follow-up → crash-recovery →
+reconciliation), resolved to one of **SAFE SUCCESS**, **UNKNOWN → PAUSE + RECONCILE**, or a real
+defect, never a blind retry:
+
+| # | Scenario | Resolution |
+|---|---|---|
+| 1 | IBKR accepts order → ACK lost → local timeout | **SAFE SUCCESS path.** `brokerOrderId` is a locally-allocated id set synchronously regardless of IB's real receipt, so the row is `followUpOpenOrders()`'s territory (poll `broker.orders()`, i.e. `trackedOrders`). If truly never received, the row stays PENDING until `FOLLOWUP_MAX_AGE_MS`, then `cancelOrphanedOpenOrder()` → real cancel attempt → fresh re-query → **UNKNOWN → PAUSE** if still unresolved. CONTROL VERIFIED (existing tests). |
+| 2 | Local timeout → reconnect → broker order already exists | **SAFE SUCCESS.** `IbkrSocketSession.reconnectDuringSubmission.test.ts` (new this leg, 2 tests): `placeOrder` called exactly once across the full disconnect/reconnect cycle; rehydration (`reqOpenOrders`/`reqExecutions`, DEF-30) correctly recovers the order via `clientOrderId`/`orderRef` matching, including the harder case of a full fill that dropped out of open orders entirely before reconnect. |
+| 3 | Local timeout → retry attempted | **NO ISSUE FOUND.** `followUpOpenOrders()` never calls `placeOrder()` - proven via explicit call-count assertions across 5 tests (3 pre-existing + 2 new this leg). |
+| 4 | Original ACK arrives after retry decision | **DEFECT FOUND AND FIXED (FD-8).** Generalized to "a late broker-side status change arrives after a local terminal determination" - see the defects table. The narrower literal case (a genuine retry decision racing an ACK) does not arise since #3 confirms no retry decision is ever made. |
+| 5 | Duplicate client_order_id | **NO ISSUE FOUND.** Real DB unique constraint (`idx_trades_trace_id_unique`) + pre-check, proven under genuine concurrency (`OrderManagement.lifecycle.test.ts`'s first test, a real `Promise.all` race). |
+| 6 | Broker rejects original but local system thinks it is UNKNOWN | **DESIGN TRADEOFF, fail-closed correctly.** Only reachable if `placeOrder()` throws while the broker's real answer was a clean rejection (broker-adapter-dependent HTTP/socket error shaping). Errs toward the SAFE side: a false UNKNOWN→PAUSE on a genuinely-clean rejection is an over-cautious false-positive pause, never an unsafe false-negative. `reconcileStaleOrders()`'s active lookup later confirms the true REJECTED state honestly (existing test). |
+| 7 | Network disconnect immediately after TCP write | **SAFE SUCCESS path.** The `placeOrder()` throw handler (line ~473) treats this as UNKNOWN, never REJECTED, and pauses - `reconcileStaleOrders()` (active `getOrderByClientOrderId` lookup) and `reconcileInboundBrokerOrders()` (clientId correlation) both independently resolve it once the broker is reachable again. CONTROL VERIFIED (existing "dangerous real scenario" test). |
+| 8 | Process crash immediately after submission but before local persistence | **Structurally impossible as scoped** - the local PENDING row is inserted BEFORE the broker call (`executeOrder()`'s own explicit ordering, with its own comment explaining why). The real equivalent (crash after local insert, before the broker call ever executes) is CONTROL VERIFIED: `reconcileStaleOrders()` confirms genuine non-receipt and honestly marks REJECTED. |
+| 9 | Process crash after persistence but before broker acknowledgement | **SAFE SUCCESS path, CONTROL VERIFIED.** The exact "dangerous real scenario" `OrderManagement.crashRecovery.test.ts` test: a row locally REJECTED-looking (broker call in flight when the crash happened) that the broker actually filled is corrected to FILLED via `reconcileStaleOrders()`'s active lookup, never left wrong. |
+| 10 | Broker acknowledgement arrives twice | **CONTROL VERIFIED, with a real test gap closed this leg.** A duplicate `openOrder` echo is a safe no-op (existing coverage). A duplicate `execDetails` redelivery of the identical execution was PROTECTED by FD-5's `seenExecutionIds` dedup but had no test proving the literal redelivery case specifically (only the cross-stream double-count case was tested) - 2 new tests added this leg (`IbkrSocketSession.fillAccounting.test.ts`) prove both that an exact redelivery does not double-count AND that two genuinely different executions are not over-suppressed. |
+| 11 | Order exists at broker but local DB has no corresponding order | **CONTROL VERIFIED.** `reconcileInboundBrokerOrders()`'s unrecognized-order branch: real pause, no fabricated trade row, no auto-cancel (existing tests). |
+| 12 | Local order exists but broker has no order | **CONTROL VERIFIED (FD-7-hardened).** `OPEN_ORDER_MISSING_REMOTELY` at the reconciliation layer, now correctly debounced (2 consecutive cycles) rather than firing on a routine timing gap; `followUpOpenOrders()`'s own "give up" path is observability-only by design, with the reconciliation layer as the actual safety-triggering layer. |
+| 13 | Partial fill occurs during any of the above | **Covered by FD-5 (fill-accounting correctness) + FD-6 (portfolio-sync race, N-writer stress-tested) + FD-8 (stale-terminal re-check).** No new gap found specific to partial fills beyond what these already close. |
+| 14 | Cancel arrives while the submission/recovery path is resolving | **FIXED (FD-4) and CONTROL VERIFIED.** The cancel/fill race at the local state-machine level, closed earlier this pass with a symmetric CAS guard. |
+
+**DEFECT (FD-9) found and fixed — the single most significant finding of this leg, found only
+because the operator's own instruction insisted on checking rather than trusting the unique-
+constraint argument.** `AlpacaBroker.ts`'s order-placement retry (`idempotentRetrySafe: true`
+whenever a `clientOrderId` was supplied) rested entirely on an unverified claim that Alpaca
+deduplicates order submissions by `client_order_id`. Checked directly against Alpaca's own official
+documentation this pass (fetched and read, not assumed) - **no such guarantee is documented
+anywhere**. This is not a hypothetical: a timeout occurring after the order genuinely reached and
+was accepted by Alpaca, but before the response reached Argus, would have triggered an automatic
+retry with no confirmed protection against a second real order. Fixed by removing the retry for
+this specific call - order placement is now never internally retried on timeout/network error for
+either broker adapter, relying instead on the same already-tested UNKNOWN→PAUSE→RECONCILE
+machinery used everywhere else in this codebase. IBKR (the currently active broker in this
+deployment) never had this exposure to begin with - its `placeStockOrder()` is a single,
+non-retrying fire-and-forget call, confirmed via direct trace. Alpaca is not the active broker
+right now, so this specific risk was dormant, not live, in tonight's paper session - but it was
+real, reachable code, exactly the class of gap this audit exists to find before it matters.
+
+**Answering the operator's own framing directly, with the evidence above:** *"A network/broker
+failure cannot turn one intended paper order into two broker orders, and an ambiguous broker state
+always resolves to reconciliation rather than retry."* — **True for the currently active broker
+(IBKR), CONTROL VERIFIED across all 14 scenarios. Was FALSE (unverified, and shown to be
+undocumented) for the Alpaca adapter before FD-9's fix; TRUE now, verified the same way.** No
+scenario in the list was found to resolve to a blind retry after fixes; every ambiguous-state path
+resolves to either a real broker-side lookup (`reconcileStaleOrders`), a correlation-based recovery
+(`reconcileInboundBrokerOrders`, now FD-8-hardened to re-check known orders too), or a fail-closed
+pause pending operator review.
+
+## Phase 15 — Resource exhaustion, sampling pass (2026-09-14, per explicit operator category list)
+
+**Honest scope note up front:** the operator asked for every long-lived structure to be proven
+`BOUNDED | TTL | EVICTION | EXPLICIT LIFECYCLE | PERSISTENT_BY_DESIGN` across 13 named categories.
+This was a targeted, evidence-based SAMPLING pass on the highest-risk candidates, not an exhaustive
+file-by-file audit of every collection in the codebase - that would be a multi-session effort on its
+own. What follows is real, traced evidence for what WAS checked; the "not covered this pass" list at
+the end is exactly that, not a claim of cleanliness.
+
+**Key recalibration made partway through this pass, worth stating explicitly:** the highest-risk
+category is NOT "any `Map`/`Set`/array that grows," but specifically structures keyed by an
+identifier with no natural real-world bound (a `traceId`, `orderId`, `articleId` - unique per
+event, unbounded over a long enough process lifetime) versus structures keyed by something the real
+world already bounds (`symbol`, `providerId` - at most a few thousand distinct values, trivial
+absolute memory footprint even with zero eviction). Several early candidates that looked concerning
+by pattern-matching alone (many per-symbol `Map`s in `ChiefTraderAgent.ts`/`MarketDataWorker.ts`)
+turned out to be low-risk once this distinction was applied - a symbol-keyed `Map` that only ever
+`.set()`s (replacing, not accumulating) per key is naturally bounded to symbol-universe size even
+with no explicit eviction logic at all.
+
+**Checked, with real findings (not assumed):**
+
+| Structure | File | Classification | Evidence |
+|---|---|---|---|
+| `reservedNotionalByTraceId` | `PendingCapitalReservations.ts` | **EXPLICIT LIFECYCLE** | Keyed by `traceId` (genuinely unbounded identifier) - the one real candidate this pass found matching the highest-risk pattern. Already found and fixed by a PRIOR session's audit (2026-09-07, documented in the code's own comment): a real leak existed where a risk-rejected or crashed evaluation never released its reservation. Verified the fix is still intact - `persistThenPublishAssessment()`'s `if (!result.approved)` branch and the outer `catch` block (which routes through the same function) both release; `OMS.executeOrder()` releases on every one of its 4 own exit paths. |
+| `seenIds` / `seenFingerprints` | `NewsDeduplicator.ts` | **BOUNDED** | Explicit `maxSeenCache = 10000` with a full-clear (not LRU, self-documented as "naive") once exceeded. Never grows past ~10,001 entries per Set. |
+| `recent` (candidate registry) | `recentCandidateRegistry.ts` | **BOUNDED (implicit)** | Keyed by `symbol.toUpperCase()`, `.set()` overwrites per symbol rather than accumulating - bounded to the real tradable-symbol universe regardless of the absence of explicit TTL eviction of stale entries. |
+| `priceHistory` / `volumeHistory` | `QuantCoreBridge.ts` | **BOUNDED (explicit circular buffer)** | `trackLocalHistory()` caps each symbol's array at `tradingSafety.quantJavaCoreLocalHistoryCap` (200) via `.shift()`, deliberately matching the Java-side `SymbolState.java` `CircularDoubleArray` capacity - a real, previously-proven parity requirement, not an arbitrary number. |
+| Per-symbol `Map`s (`lastDebateStartedAt`, `pendingDebates`, `consensusAggregationTimers` incl. live `NodeJS.Timeout`s, `pendingDebateFailClosed`, `consensusQueues`) | `ChiefTraderAgent.ts` | **BOUNDED (implicit, by symbol universe)** | All keyed by `symbol`; `pendingDebates` and `pendingDebateFailClosed` have explicit `.delete()` paths, `consensusAggregationTimers` clears its own timer before replacing, `consensusQueues` naturally stays bounded since `.set()` replaces the prior promise per key rather than accumulating. |
+| `activeStreams` / `dynamicMomentumScores` / `tickCounts` / `subscribedAtMs` / `marketDataErrors` | `MarketDataWorker.ts` | **EXPLICIT LIFECYCLE** | `unsubscribe()` deletes all five on every real unsubscribe path. |
+| `latestPrices` / `latestPriceTimestamps` / `latestAskPrices` / `latestAskTimestamps` / `lastTick` | `MarketDataWorker.ts` | **BOUNDED (implicit, NOT evicted on unsubscribe)** | These five are deliberately NOT cleared by `unsubscribe()` (plausibly intentional - last-known-price stays useful for a held position whose active stream got rotated out by the subscription-capacity system) - flagged as worth a deliberate design confirmation from the operator rather than silently assumed correct, but bounded regardless by the real symbol universe's small absolute size. |
+| `waitForConsensusCompleted()`'s `eventBus.on`/`off` pair | `manualTradeCoEvaluation.ts` | **EXPLICIT LIFECYCLE** | All three exit paths (timeout, consensus-completed, consensus-rejected) route through one `cleanup()` that removes both listeners and clears the timer - no leaked listener on any path, including the timeout case. |
+
+**Not covered this pass (genuinely, not "checked and found clean"):** Java bridge queues beyond
+`QuantCoreBridge`'s own price/volume history (its actual HTTP request/response handling, timeout,
+and circuit-breaker state were not re-examined here); telemetry buffers (`SystemMetricsWorker`'s own
+2s-interval sampling, previously flagged in this session's own git history as inconclusive without
+live CPU profiling); frontend WebSocket subscription/listener lifecycle
+(`WebSocketContext.tsx`, located but not traced this pass); database connection lifetime beyond the
+single-writer SQLite pattern already documented elsewhere in this file; orphaned async operations
+generally (only the two specific patterns above - capital reservations and manual-trade consensus
+waiting - were traced end-to-end); the other ~15 files with module-level `Map`/`Set` declarations
+found by the initial grep but not individually traced (`AIRouter.ts`, `NewsProviderManager.ts`,
+`RiskEngine.ts`'s `closesCache`, `KronosPredictionCache.ts`, `StrategyRegistry.ts`, and others) -
+these are plausibly fine by the same symbol/provider-keyed reasoning that resolved the checked
+cases, but that is an inference from pattern, not a traced fact, and is recorded as such rather than
+silently assumed.
+
 ## Safety assessment
 
 - **Can any path bypass RiskEngine?** Not touched this pass or by FD-4/5/6; unchanged from prior sessions' extensive verification (RiskEngine remains the sole gate before OMS in every code path).
@@ -633,92 +738,95 @@ surface, not just the tests it was designed to satisfy.
 ARGUS FULL DEFECT AUDIT COMPLETE (Passes 1-3 cumulative - partial coverage, see table above)
 P0 FOUND: 0
 P0 FIXED: 0
-P1 FOUND: 5 (FD-3, FD-4, FD-5, FD-6, FD-7)
-P1 FIXED: 5 (FD-3, FD-4, FD-5, FD-6, FD-7)
+P1 FOUND: 7 (FD-3, FD-4, FD-5, FD-6, FD-7, FD-8, FD-9)
+P1 FIXED: 7 (FD-3, FD-4, FD-5, FD-6, FD-7, FD-8, FD-9)
 P2 FOUND: 1 (FD-1)
 P2 FIXED: 1 (FD-1)
 P3 FOUND: 1 (FD-2)
 P3 FIXED: 1 (FD-2)
-REGRESSION TESTS ADDED: 27 new tests total (2 FD-1, 1 FD-3, 2 FD-4, 3
-        FD-5, 16 FD-6 [4 two-writer + 12 N-writer/contention-invariant],
-        3 FD-7 [1 new debounce test + 2 new reconnect-during-submission
-        tests]; FD-2 is comment-only) PLUS 9 existing tests updated to
-        match corrected behavior (3 FD-6 pre-existing localPortfolioSync
-        tests were already counted as part of the file, not re-counted
-        here; 6 FD-7: 3 in PortfolioReconciliation.openOrdersAndCash.
-        test.ts + 3 in ReconciliationAcknowledgements.test.ts - the
-        latter found only via a full-suite run, not the initial targeted
-        search, and fixed the same way). FD-6 alone required TWO rounds
-        of hardening after its own regression tests exposed two further
-        real, distinct concurrency gaps under real full-suite load and
-        real N-way contention - see its dedicated write-up and
-        chronology above.
-TS: 492 files / 3619 tests green (fifth and final full-suite run this
-        pass, post-FD-7 - the count is exactly the pre-FD-7 third run's
-        3616 plus FD-7's 3 genuinely new tests, confirming nothing else
-        moved). A fourth run in between was interrupted by a session
+REGRESSION TESTS ADDED: 32 new tests total (2 FD-1, 1 FD-3, 2 FD-4, 3
+        FD-5, 16 FD-6, 3 FD-7, 2 FD-8, 3 FD-9 [1 rewritten in place + 2
+        genuinely new: fillAccounting duplicate-execId coverage + a
+        successful-placeOrder confirmation]; FD-2 is comment-only) PLUS
+        9 existing tests updated for FD-7's corrected behavior (3
+        openOrdersAndCash.test.ts + 3 ReconciliationAcknowledgements.
+        test.ts, the latter found only via a full-suite run) and 1
+        existing test rewritten for FD-9 (asserted the old, now-removed
+        retry behavior). FD-6 alone required TWO rounds of hardening
+        after its own regression tests exposed two further real,
+        distinct concurrency gaps under real full-suite load and real
+        N-way contention - see its dedicated write-up and chronology.
+TS: 492 files / 3624 tests green (sixth and final full-suite run this
+        pass, post-FD-8/FD-9 - the count is exactly the fifth run's 3619
+        plus 5 genuinely new tests, confirming nothing else moved). A
+        fourth run earlier in this pass was interrupted by a session
         infrastructure event (truncated log, no test-failure output,
         exit code 4) and re-run clean rather than trusted as a real
-        result - see the FD-7 write-up's own note on the intervening
-        ReconciliationAcknowledgements.test.ts regressions that run
-        caught and fixed.
+        result - see FD-7's own write-up for that chronology.
 JAVA: 804 tests green (unchanged - no Java touched this session)
 TYPECHECK: clean
 BUILD: succeeds
-SAFETY: RiskEngine/OMS/BrokerManager/order-placement untouched across all
-        3 passes. FD-4/5/6/7 touch trades.status / TrackedOrder.
-        filledQuantity / portfolio.quantity / reconciliation mismatch
-        debounce bookkeeping, never order placement. FD-6 is the one
-        defect this audit found with a plausible (if narrow-window,
-        pre-fix) path to RiskEngine consulting a genuinely wrong local-
-        exposure number before approving a new order. FD-7 is the one
-        defect found with a plausible path to a false-positive
-        TRADING_PAUSED kill-switch trigger from completely ordinary
-        operation (not stale exposure feeding an order, but an
-        unwarranted pause). Both now closed.
-RELIABILITY: 6 real concurrency defects found and fixed across the 3
-        passes (FD-1 duplicate Java calls, FD-4 cancel/fill status race,
-        FD-5 IBKR fill double-count, FD-6 x2 - lost portfolio updates and,
-        found only via the operator's own N-writer stress requirement,
-        an insufficient CAS retry budget under real 10-way contention -
-        FD-7 missing debounce protection on reconciliation's open-order
-        checks, allowing a routine fill-timing race to false-positive).
-DATA INTEGRITY: FD-3 (forecast lookup false negative) and FD-4 (order
-        status self-contradiction vs its own fills ledger) both real,
-        both closed.
+SAFETY: RiskEngine/OMS/BrokerManager untouched across all 3 passes,
+        including FD-8/FD-9 (both touch broker-adapter/OMS reconciliation
+        bookkeeping, never the risk-gate ladder or order-placement
+        decision itself). FD-6 is the one defect this audit found with a
+        plausible (if narrow-window, pre-fix) path to RiskEngine
+        consulting a genuinely wrong local-exposure number. FD-7 is the
+        one defect found with a plausible path to a false-positive
+        TRADING_PAUSED. FD-9 is the one defect found with a plausible
+        (if currently dormant, since IBKR not Alpaca is the active
+        broker) path to a genuine DUPLICATE real order - the closest any
+        finding this session came to the single most severe failure mode
+        this whole audit exists to prevent. All four now closed.
+RELIABILITY: 8 real concurrency/state-integrity defects found and fixed
+        across the 3 passes (FD-1 duplicate Java calls, FD-4 cancel/fill
+        status race, FD-5 IBKR fill double-count, FD-6 x2, FD-7 missing
+        reconciliation debounce, FD-8 stale-terminal-order re-check gap,
+        FD-9 unverified broker-side idempotency assumption behind an
+        internal retry).
+DATA INTEGRITY: FD-3, FD-4, and FD-8 all real order/forecast-record
+        integrity defects, all closed.
 QUANT CORRECTNESS: unchanged (Java untouched this session); FD-3 makes
         already-correct stored values reliably retrievable.
 AI SAFETY: verified unchanged, not re-traced at every call site this pass.
-EXECUTION: FD-4/FD-5/FD-7 traced and fixed real order-lifecycle/fill-
-        accounting/reconciliation gaps; reconnect-during-submission and
-        late-acknowledgement specifically traced and tested this leg
-        (NO ISSUE FOUND, IbkrSocketSession.reconnectDuringSubmission.
-        test.ts). Extended-hours/LIMIT-order-specific paths and Alpaca-
-        specific order-ack behavior not traced this session (IBKR, the
-        active broker, was).
+EXECUTION: all 14 operator-specified broker-submission-ambiguity
+        scenarios traced against the real pipeline this leg (see Phase 8
+        section) - resolved to SAFE SUCCESS, UNKNOWN→PAUSE+RECONCILE, or
+        a fixed defect in every case; zero scenarios resolve to a blind
+        retry. Extended-hours/LIMIT-order-specific paths not traced this
+        session.
+RESOURCE EXHAUSTION: a scoped sampling pass (Phase 15, not exhaustive) -
+        see that section for the full checked-list and the explicit
+        "not covered this pass" list. One real leak found in this
+        category was already fixed by a PRIOR session's audit
+        (PendingCapitalReservations, 2026-09-07) and verified still
+        intact; no NEW resource-exhaustion defect found this pass among
+        the structures actually checked.
 REMAINING DEFECTS: no additional defects identified WITHIN THE PHASES AND
         CODE PATHS ACTUALLY AUDITED across all 3 passes (0/1/2/3/4/5/8/9/
-        10/12/13/17-19, each PARTIAL to varying depth - see coverage
-        table). This is not equivalent to "none known" system-wide -
-        phases 6/7/11/14/15/16 received zero fresh tracing this session;
+        10/12/13/15[partial]/17-19, each PARTIAL to varying depth - see
+        coverage table). This is not equivalent to "none known"
+        system-wide - phases 6/7/11/14/16 received zero fresh tracing
+        this session, and phase 15 was a sampling pass, not exhaustive;
         prior sessions' fixes in overlapping areas (DEF-05/06/27/29/30
         etc.) reduce risk but do not constitute a fresh review of the
         CURRENT codebase.
 REMAINING UNKNOWN / UNPROVEN ITEMS: (1) whether IB Gateway's real-world
         callback delivery has ever dropped a message without a detectable
-        disconnect (Pass 3, order ack/timeout) - not measured. (2) IB
-        order types/vintages that omit Execution.execId entirely cannot
-        use FD-5's same-stream redelivery dedup layer, though the
-        cross-stream Math.max reconciliation still holds regardless. (3)
-        broker-API position-reporting lag vs. a just-landed fill can
-        silently, transiently overwrite portfolio.quantity (real, not
-        fixed this pass, deliberately not over-engineered) - though
-        traced and CONTROL VERIFIED that this specific staleness cannot
-        by itself trigger reconciliation's pause/zero-out mechanism
-        (gated by a real, tested 2-consecutive-cycle / ~5-10 minute
-        debounce, now shared by FD-7's fix too); whether real lag could
-        ever exceed that window is not live-measured. (4) phases 6/7/11/
-        14/15/16 not covered this session. (5) quant alpha/profitability
+        disconnect - not measured. (2) IB order types/vintages that omit
+        Execution.execId entirely cannot use FD-5's same-stream
+        redelivery dedup layer, though the cross-stream Math.max
+        reconciliation still holds regardless. (3) broker-API position-
+        reporting lag vs. a just-landed fill can silently, transiently
+        overwrite portfolio.quantity (real, not fixed this pass,
+        deliberately not over-engineered) - though traced and CONTROL
+        VERIFIED that this specific staleness cannot by itself trigger
+        reconciliation's pause/zero-out mechanism (a real, tested
+        2-consecutive-cycle / ~5-10 minute debounce, now shared by FD-7's
+        fix too); whether real lag could ever exceed that window is not
+        live-measured. (4) phases 6/7/11/14/16 not covered this session;
+        phase 15 covered by sampling only, with an explicit list of
+        structures not individually traced. (5) quant alpha/profitability
         remain unproven (unchanged, expected, not a defect).
 FINAL STATUS: READY FOR PAPER WITH OPERATIONAL CAVEAT
         (the pre-existing AI-provider degradation caveat from pass 1
@@ -726,4 +834,4 @@ FINAL STATUS: READY FOR PAPER WITH OPERATIONAL CAVEAT
         Internal label: FORENSICALLY PARTIALLY VERIFIED - NOT DEFECT-FREE.
 ```
 
-**This was a real, bounded, honest three-pass audit — not a claim of exhaustive 24-phase coverage.** Seven real defects (FD-1 through FD-7) were found through actual code tracing and adversarial testing (not superficial grepping, and not stopping at "looks fixed") and fixed with regression tests. FD-6 is the standout example of why this audit insisted on adversarial verification over checklist completion: its first fix looked correct by inspection and passed in isolation, a full-suite run then disproved that, root-causing the failure surfaced a real transient-error-handling gap, fixing that produced a clean full-suite run — and rather than stopping there, testing the stated invariant properly (2/5/10 writers, not just 2) surfaced a SECOND, entirely different real gap (an arithmetically insufficient retry budget) that the two-writer tests structurally could not have found. Only after both were fixed and re-verified against three separate full-suite runs was FD-6 classified FIXED / VERIFIED, with the original failure's exact mechanism honestly recorded as non-reproduced rather than definitively explained. FD-7, found immediately after in the very next investigation leg, is further evidence this pass's rigor was warranted, not excessive: it was a real, previously-unnoticed asymmetry between two structurally similar reconciliation checks (one debounced after a real prior incident, one never extended to match), reachable during completely ordinary operation, with a real path to an unwarranted `TRADING_PAUSED`. Further passes covering the remaining phases (especially 6/7 calibration/backtest, 11 news/external-data security beyond DEF-31, 14 observability, 15 resource/memory, 16 startup/recovery beyond DEF-25/26/27/28/29) would be a reasonable next forensic audit, not a feature-development task.
+**This was a real, bounded, honest three-pass audit — not a claim of exhaustive 24-phase coverage.** Nine real defects (FD-1 through FD-9) were found through actual code tracing and adversarial testing (not superficial grepping, and not stopping at "looks fixed") and fixed with regression tests. FD-6 is the standout example of why this audit insisted on adversarial verification over checklist completion: its first fix looked correct by inspection and passed in isolation, a full-suite run then disproved that, root-causing the failure surfaced a real transient-error-handling gap, fixing that produced a clean full-suite run — and rather than stopping there, testing the stated invariant properly (2/5/10 writers, not just 2) surfaced a SECOND, entirely different real gap that the two-writer tests structurally could not have found. FD-7 was a real, previously-unnoticed asymmetry between two structurally similar reconciliation checks, reachable during completely ordinary operation. **FD-9 is the single highest-value finding of the entire audit**: found only because the operator's own instruction explicitly refused to accept a unique-database-constraint argument as proof of broker-side idempotency and insisted on checking the actual claim - which turned out, on checking Alpaca's own official documentation directly, to be undocumented and unverified. That is exactly the class of gap that produces a genuine duplicate real order, the single most severe failure mode a trading system's execution layer can have, and it was sitting in shipped, reachable code. Further passes covering the remaining phases (especially 6/7 calibration/backtest, 11 news/external-data security beyond DEF-31, 14 observability, 15 resource/memory beyond this pass's sampling coverage, 16 startup/recovery beyond DEF-25/26/27/28/29) would be a reasonable next forensic audit, not a feature-development task. The operator's own stated next priority after this forensic work concludes is portfolio construction (see the roadmap discussion in this session) - a large, separate feature effort, not a continuation of this audit.

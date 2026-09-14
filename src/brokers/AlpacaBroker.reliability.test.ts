@@ -105,13 +105,39 @@ describe('AlpacaBroker reliability (Phase 1)', () => {
     expect(calls).toBe(1);
   });
 
-  it('placeOrder() WITH a clientOrderId is retry-safe and sends Alpaca a real client_order_id for dedup', async () => {
+  // FD-9 (2026-09-14 forensic audit, Phase 8 broker-submission-ambiguity): this test previously
+  // asserted the OPPOSITE of what it now asserts - that a clientOrderId made placeOrder() retry-
+  // safe on a network error, on the claim that Alpaca deduplicates by client_order_id. That claim
+  // was checked directly against Alpaca's own API reference and orders documentation this pass:
+  // neither documents any such guarantee. Order placement is now NEVER internally retried on a
+  // network/timeout error regardless of clientOrderId - identical treatment to the no-clientOrderId
+  // case above. client_order_id is still sent in the payload (harmless, and real defense-in-depth
+  // if Alpaca's API happens to dedupe in practice), but Argus's own retry logic no longer depends
+  // on an unverified assumption about the broker's behavior.
+  it('placeOrder() WITH a clientOrderId is still NEVER retried on a network error - broker-side client_order_id deduplication is not a documented Alpaca guarantee', async () => {
     let calls = 0;
     let capturedBody: any = null;
     vi.stubGlobal('fetch', vi.fn(async (_url: string, options: any) => {
       calls++;
       capturedBody = JSON.parse(options.body);
-      if (calls < 2) throw new Error('ECONNRESET');
+      throw new Error('ECONNRESET');
+    }));
+
+    const result = await runAndAdvance(
+      broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 1, clientOrderId: 'my-idempotency-key' })
+        .then(() => null).catch((e: any) => e)
+    );
+    expect(result).toBeInstanceOf(AlpacaRequestError);
+    expect(calls).toBe(1); // never retried - a lost response could mean the order actually reached Alpaca
+    expect(capturedBody.client_order_id).toBe('my-idempotency-key'); // still sent - harmless, real defense-in-depth
+  });
+
+  it('placeOrder() WITH a clientOrderId still succeeds normally (single attempt) when the request genuinely succeeds', async () => {
+    let calls = 0;
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, options: any) => {
+      calls++;
+      const body = JSON.parse(options.body);
+      expect(body.client_order_id).toBe('my-idempotency-key');
       return {
         ok: true, status: 200, headers: new Headers(),
         json: async () => ({ id: 'order-1', client_order_id: 'my-idempotency-key', symbol: 'AAPL', side: 'buy', order_type: 'market', status: 'accepted', qty: '1', filled_qty: '0', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }),
@@ -121,8 +147,7 @@ describe('AlpacaBroker reliability (Phase 1)', () => {
     const result = await runAndAdvance(
       broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 1, clientOrderId: 'my-idempotency-key' })
     );
-    expect(calls).toBe(2); // retried once after the network error, same idempotency key both times
-    expect(capturedBody.client_order_id).toBe('my-idempotency-key');
+    expect(calls).toBe(1);
     expect(result.clientOrderId).toBe('my-idempotency-key');
   });
 

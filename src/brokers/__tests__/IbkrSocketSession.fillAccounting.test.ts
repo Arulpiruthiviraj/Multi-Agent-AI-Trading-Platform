@@ -159,4 +159,56 @@ describe('IbkrSocketSession fill accounting - orderStatus/execDetails double-cou
     // Correct final value is 20 (two real 10-share fills). The defect compounds across fills.
     expect(tracked?.filledQuantity).toBe(20);
   });
+
+  // Phase 8 broker-submission-ambiguity audit (2026-09-14, scenario #10: "broker acknowledgement
+  // arrives twice"). Distinct from the double-count race above (two DIFFERENT event types
+  // describing the SAME real fill): this is IB literally redelivering the identical execDetails
+  // event for the identical execution (a real, documented possibility over a socket API - a
+  // reconnect replay, or IB's own retry of an unacknowledged push). seenExecutionIds (added as
+  // part of the same FD-5 fix, keyed on IB's own genuinely-unique Execution.execId) exists
+  // specifically for this case, but had no direct test proving it - the existing tests above never
+  // set execId at all. Proves the real invariant: the same broker execution increases filledQuantity
+  // exactly once, regardless of how many times it is redelivered.
+  it('a literal duplicate execDetails redelivery (identical execId) does not double-count, even with no intervening orderStatus event', async () => {
+    const { IbkrSocketSession } = await import('../IbkrSocketSession');
+    const session = new IbkrSocketSession();
+    await connectSuccessfully(session as any);
+
+    const orderId = session.placeStockOrder({
+      symbol: 'GOOGL',
+      side: 'BUY',
+      quantity: 10,
+      type: 'MARKET',
+      clientOrderId: 'dup-exec-order-1',
+    });
+
+    const execution = { orderId, shares: 10, price: 175.0, side: 'BOT', execId: 'exec-dup-1' };
+    lastFakeIb!.emit('execDetails', 1, { symbol: 'GOOGL' }, execution);
+    // Real redelivery: the exact same execution, same execId, arrives again (reconnect replay).
+    lastFakeIb!.emit('execDetails', 1, { symbol: 'GOOGL' }, execution);
+    lastFakeIb!.emit('execDetails', 1, { symbol: 'GOOGL' }, execution);
+
+    const tracked = session.getTrackedOrder(orderId);
+    expect(tracked?.filledQuantity).toBe(10); // the real 10 shares, exactly once - not 20 or 30
+  });
+
+  it('two DIFFERENT real executions (different execId) on the same order both count, proving execId dedup does not over-suppress genuine fills', async () => {
+    const { IbkrSocketSession } = await import('../IbkrSocketSession');
+    const session = new IbkrSocketSession();
+    await connectSuccessfully(session as any);
+
+    const orderId = session.placeStockOrder({
+      symbol: 'AMZN',
+      side: 'BUY',
+      quantity: 20,
+      type: 'MARKET',
+      clientOrderId: 'dup-exec-order-2',
+    });
+
+    lastFakeIb!.emit('execDetails', 1, { symbol: 'AMZN' }, { orderId, shares: 10, price: 140.0, side: 'BOT', execId: 'exec-a' });
+    lastFakeIb!.emit('execDetails', 1, { symbol: 'AMZN' }, { orderId, shares: 10, price: 141.0, side: 'BOT', execId: 'exec-b' });
+
+    const tracked = session.getTrackedOrder(orderId);
+    expect(tracked?.filledQuantity).toBe(20); // two genuinely different executions, both counted
+  });
 });

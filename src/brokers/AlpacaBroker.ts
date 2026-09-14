@@ -334,22 +334,36 @@ export class AlpacaBroker implements BrokerPlugin {
     if (orderData.extendedHours && payload.type === 'limit') {
       payload.extended_hours = true;
     }
-    // Phase 1 - when the caller supplies a real idempotency key, pass it through as Alpaca's own
-    // `client_order_id` and mark this specific POST safe to retry on timeout/network error: Alpaca
-    // deduplicates real order submissions on this field, so a retried submission with the SAME key
-    // can never create a second real order, even if the first attempt actually reached Alpaca and
-    // only the response was lost. Never retried when no key is supplied - that case has no way to
-    // know if a bare retry would duplicate a real order.
-    let idempotentRetrySafe = false;
+    // FD-9 (2026-09-14 forensic audit, Phase 8 broker-submission-ambiguity): this POST previously
+    // passed `idempotentRetrySafe: true` whenever a clientOrderId was supplied, on the claim that
+    // "Alpaca deduplicates real order submissions on this field, so a retried submission... can
+    // never create a second real order." That claim was never actually verified - checked directly
+    // against Alpaca's own API reference (docs.alpaca.markets/reference/postorder) and orders guide
+    // (docs.alpaca.markets/docs/orders-at-alpaca) this pass: NEITHER document any deduplication or
+    // idempotency guarantee for `client_order_id`; both explicitly describe it only as a
+    // caller-supplied identifier, with no stated behavior for a duplicate submission. A DB unique
+    // constraint on Argus's own side (which does exist and is real) says nothing about what the
+    // BROKER does with two separate HTTP requests carrying the same key - exactly the gap the
+    // operator's own review flagged. Order placement is therefore never internally retried on
+    // timeout/network error, same as the other broker adapter (IBKR) already behaves: a definite
+    // HTTP 4xx/5xx was already never retried (line ~216, unrelated to this flag), and now a
+    // timeout/network failure is treated identically - it throws, `trades.status` stays PENDING
+    // with submitOutcome=UNKNOWN (OrderManagement.executeOrder()'s own existing, already-tested
+    // handling), trading pauses, and `reconcileStaleOrders()`'s real `getOrderByClientOrderId()`
+    // lookup (Alpaca does implement this one - a READ, carrying no duplication risk regardless of
+    // this same open question) resolves the ambiguity on the next cycle. Every OTHER
+    // `idempotentRetrySafe: true` call site in this file (GET /v2/account, /v2/positions,
+    // /v2/orders, and the DELETE cancel/close-position calls) is unaffected and correctly retried -
+    // GETs have no side effects, and re-issuing a DELETE against an already-cancelled/closed
+    // resource is a standard, harmless REST no-op regardless of this same unresolved question,
+    // unlike a POST that can create a brand-new resource twice.
     if (orderData.clientOrderId) {
       payload.client_order_id = orderData.clientOrderId;
-      idempotentRetrySafe = true;
     }
 
     const res = await this.fetchAlpaca('/v2/orders', {
       method: 'POST',
       body: JSON.stringify(payload),
-      idempotentRetrySafe,
     });
     
     return {

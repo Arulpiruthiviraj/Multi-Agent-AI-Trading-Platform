@@ -112,4 +112,63 @@ describe('OrderManagementService.reconcileInboundBrokerOrders - unrecognized ope
 
     expect(tradingEngine.state.tradingState).toBe('TRADING_ENABLED'); // not paused - this order was recognized
   });
+
+  // Phase 8 broker-submission-ambiguity audit (2026-09-14, per explicit operator scenario list,
+  // #4 "original ACK arrives after retry decision" generalized to "a genuine late broker-side
+  // status change arrives after Argus already made a local terminal determination"). Traced gap:
+  // followUpOpenOrders() excludes terminal local rows from its WHERE clause; this function's own
+  // loop previously `continue`d unconditionally the moment `byBrokerId.has(o.id)` was true,
+  // regardless of whether the broker's CURRENT status differs from the stale local one. Concrete
+  // real scenario: an order sits unresponsive past FOLLOWUP_MAX_AGE_MS, cancelOrphanedOpenOrder()
+  // issues a real cancel and, finding the order still not-yet-filled at that exact moment, marks it
+  // CANCELED - but the order then genuinely fills at the exchange microseconds/seconds later (a
+  // real cancel/fill race, not an Argus-internal bug). Nothing previously re-checked this order's
+  // status again: it is terminal (excluded from followUpOpenOrders) AND "already recognized by ID"
+  // (skipped here). The result: trades.status permanently, incorrectly says CANCELED for an order
+  // that actually filled - invisible to attribution/execution-quality reporting (both filter on
+  // FILLED), though the broker's own real position would still eventually surface via
+  // PortfolioReconciliation's independent position-level MISSING_LOCALLY check (a real but
+  // materially weaker safety net than catching it at the order level).
+  it('a broker order already known locally (by id) but whose CURRENT status has since diverged from the stale local status is corrected, not silently skipped forever', async () => {
+    await db.insert(schema.trades).values({
+      id: 'stale-terminal-order', symbol: 'NVDA', side: 'BUY', quantity: 3, price: 0, status: 'CANCELED',
+      timestamp: new Date().toISOString(), reasoning: 'test: marked CANCELED by the orphan-timeout path',
+      traceId: 'trace-stale-terminal', requestId: 'stale-terminal-order',
+      submittedAt: new Date().toISOString(), brokerOrderId: 'broker-stale-1',
+    });
+    // The broker's REAL current status: it actually filled, moments after Argus's own CANCELED
+    // determination - the genuine cancel/fill race this test exists to prove is handled.
+    brokerOrdersResponse = [{
+      id: 'broker-stale-1', symbol: 'NVDA', side: 'BUY', type: 'MARKET', status: 'FILLED',
+      quantity: 3, filledQuantity: 3, averageFillPrice: 450, createdAt: new Date(), updatedAt: new Date(),
+    }];
+
+    await oms.reconcileInboundBrokerOrders();
+
+    const rows = await db.select().from(schema.trades).where(eq(schema.trades.id, 'stale-terminal-order'));
+    expect(rows[0]?.status).toBe('FILLED'); // corrected, not left permanently wrong
+    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, 'stale-terminal-order'));
+    expect(fillRows.length).toBeGreaterThan(0); // the real fill is recorded, not silently lost
+  });
+
+  it('a broker order already known locally whose status genuinely still matches is a true no-op (no spurious re-write, no duplicate fill row)', async () => {
+    await db.insert(schema.trades).values({
+      id: 'stable-order', symbol: 'MSFT', side: 'BUY', quantity: 4, price: 300, status: 'FILLED',
+      timestamp: new Date().toISOString(), reasoning: 'test', traceId: 'trace-stable', requestId: 'stable-order',
+      submittedAt: new Date().toISOString(), brokerOrderId: 'broker-stable-1', filledAt: new Date().toISOString(),
+    });
+    await db.insert(schema.fills).values({
+      orderId: 'stable-order', brokerFillId: 'stable-order:4', quantity: 4, price: 300,
+      filledAt: new Date().toISOString(), cumulativeQuantity: 4,
+    });
+    brokerOrdersResponse = [{
+      id: 'broker-stable-1', symbol: 'MSFT', side: 'BUY', type: 'MARKET', status: 'FILLED',
+      quantity: 4, filledQuantity: 4, averageFillPrice: 300, createdAt: new Date(), updatedAt: new Date(),
+    }];
+
+    await oms.reconcileInboundBrokerOrders();
+
+    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, 'stable-order'));
+    expect(fillRows.length).toBe(1); // still exactly one fill row - no duplicate from the re-check
+  });
 });
