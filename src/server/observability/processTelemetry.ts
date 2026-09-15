@@ -7,6 +7,7 @@ import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { observabilityConfig } from '../config/observability';
 import { recordProcessTelemetrySample } from './ObservabilityMetrics';
 import { structuredLogger, observeSafe } from './StructuredLogger';
+import { scheduleBaselineHeapSnapshot, stopHeapSnapshotScheduler, maybeCaptureHeapSnapshotForMemoryLevel } from './heapSnapshotCapture';
 
 let timer: NodeJS.Timeout | null = null;
 let histogram: ReturnType<typeof monitorEventLoopDelay> | null = null;
@@ -143,6 +144,11 @@ export async function sampleAndPersistMemoryTelemetry(): Promise<void> {
   if (level === 'CRITICAL') {
     await applyMemoryCriticalFailSafe(nodeRssMb, sidecarCommittedMb);
   }
+
+  // P1 memory-leak investigation (2026-09-14) - strictly AFTER the fail-safe pause above, never
+  // before/instead of it. Purely additive diagnostic capture; see heapSnapshotCapture.ts's own
+  // header for the full trigger/safety scoping. A broken capture must never affect this sampler.
+  maybeCaptureHeapSnapshotForMemoryLevel(level);
 }
 
 /**
@@ -177,7 +183,17 @@ export function startProcessTelemetry(): void {
     timer = setInterval(() => {
       try {
         const mem = process.memoryUsage();
+        // All read from the SAME histogram, before reset() - Node's monitorEventLoopDelay()
+        // already tracks these internally (C++ implementation), so reading percentiles/max costs
+        // nothing beyond the mean this already computed (2026-09-14 overnight remediation,
+        // mandate section 11: "must itself be cheap" - this satisfies that by construction, not
+        // by adding a second, heavier data structure).
         const delayMs = histogram ? histogram.mean / 1e6 : null;
+        const isFiniteMs = (ns: number) => Number.isFinite(ns) ? ns / 1e6 : null;
+        const p50Ms = histogram ? isFiniteMs(histogram.percentile(50)) : null;
+        const p95Ms = histogram ? isFiniteMs(histogram.percentile(95)) : null;
+        const p99Ms = histogram ? isFiniteMs(histogram.percentile(99)) : null;
+        const maxMs = histogram ? isFiniteMs(histogram.max) : null;
         histogram?.reset();
         recordProcessTelemetrySample({
           ts: Date.now(),
@@ -186,6 +202,10 @@ export function startProcessTelemetry(): void {
           heapTotal: mem.heapTotal,
           external: mem.external,
           arrayBuffers: mem.arrayBuffers,
+          eventLoopDelayP50Ms: p50Ms,
+          eventLoopDelayP95Ms: p95Ms,
+          eventLoopDelayP99Ms: p99Ms,
+          eventLoopDelayMaxMs: maxMs,
           eventLoopDelayMs: delayMs != null && Number.isFinite(delayMs) ? delayMs : null,
         });
       } catch {
@@ -206,6 +226,8 @@ export function startProcessTelemetry(): void {
   } catch {
     /* fail-open */
   }
+
+  scheduleBaselineHeapSnapshot();
 }
 
 export function stopProcessTelemetry(): void {
@@ -220,6 +242,7 @@ export function stopProcessTelemetry(): void {
     }
     histogram?.disable();
     histogram = null;
+    stopHeapSnapshotScheduler();
   } catch {
     /* fail-open */
   }

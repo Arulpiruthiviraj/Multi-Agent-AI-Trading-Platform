@@ -18,9 +18,11 @@
  */
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomeHorizons } from '../db/schema';
+import { and, eq, inArray, isNull, ne, notLike, or, asc, sql } from 'drizzle-orm';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { multiHorizonOutcomeTracking, type MultiHorizonDefinition } from '../config/multiHorizonOutcomeTracking';
 import { TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
+import { createSingleFlightGuard, type SingleFlightGuard, type SingleFlightIntervalMetrics } from '../core/singleFlightInterval';
 
 export interface MultiHorizonOutcomeResult {
   horizonLabel: string;
@@ -87,16 +89,32 @@ export async function evaluateMultiHorizonOutcomesForPrediction(
   return results;
 }
 
+export interface MultiHorizonOutcomeEvaluatorCycleStats {
+  rowsFetched: number;
+  rowsProcessed: number;
+  rowsWritten: number;
+  batches: number;
+  bailedOnWallClock: boolean;
+  /** True backlog size (COUNT(*) against the same pending condition, not just this cycle's bounded
+   *  fetch window) - see PredictionOutcomeEvaluator.ts's identical field for the full rationale. */
+  rowsRemaining: number;
+}
+
+const EMPTY_CYCLE_STATS: MultiHorizonOutcomeEvaluatorCycleStats = {
+  rowsFetched: 0, rowsProcessed: 0, rowsWritten: 0, batches: 0, bailedOnWallClock: false, rowsRemaining: 0,
+};
+
 export class MultiHorizonOutcomeEvaluator {
   private intervalId: NodeJS.Timeout | null = null;
+  // P1-A remediation (2026-09-14) - see PredictionOutcomeEvaluator.ts's identical comment: the
+  // guard is intrinsic to evaluatePending() itself, protecting every caller, not just the timer.
+  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[MultiHorizonOutcomeEvaluator] Cycle failed', e));
+  private lastCycleStats: MultiHorizonOutcomeEvaluatorCycleStats = EMPTY_CYCLE_STATS;
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(
-      () => this.evaluatePending().catch((e) => console.error('[MultiHorizonOutcomeEvaluator] Cycle failed', e)),
-      multiHorizonOutcomeTracking.evaluationIntervalMs,
-    );
-    this.evaluatePending().catch((e) => console.error('[MultiHorizonOutcomeEvaluator] Initial cycle failed', e));
+    this.intervalId = setInterval(() => { void this.evaluatePending(); }, multiHorizonOutcomeTracking.evaluationIntervalMs);
+    void this.evaluatePending();
   }
 
   stop() {
@@ -106,76 +124,175 @@ export class MultiHorizonOutcomeEvaluator {
     }
   }
 
-  async evaluatePending() {
+  getMetrics(): SingleFlightIntervalMetrics & { lastCycle: MultiHorizonOutcomeEvaluatorCycleStats } {
+    return { ...this.guard.getMetrics(), lastCycle: this.lastCycleStats };
+  }
+
+  async evaluatePending(): Promise<void> {
+    await this.guard.run(() => this.runCycle());
+  }
+
+  private async runCycle(): Promise<void> {
+    const cycleStart = Date.now();
     const allLabels = multiHorizonOutcomeTracking.horizons.map((h) => h.label);
-    const existingRows = await db.select().from(predictionOutcomeHorizons).all();
-    const doneLabelsByKey = new Map<string, Set<string>>();
-    for (const row of existingRows) {
-      const key = `${row.sourceTable}:${row.predictionId}`;
-      if (!doneLabelsByKey.has(key)) doneLabelsByKey.set(key, new Set());
-      doneLabelsByKey.get(key)!.add(row.horizonLabel);
-    }
+    // horizons are sorted ascending by bars (multiHorizonOutcomeTracking.ts) - the largest label is
+    // the last one. A prediction is only "fully done" once every horizon has a row, but bars for
+    // every smaller horizon always arrive no later than bars for the largest one (they share one
+    // fetch window sized to the largest missing horizon - see evaluateMultiHorizonOutcomesForPrediction
+    // above), so "missing the largest label" is a correct, SQL-pushable proxy for "still needs work"
+    // - never a false negative that would skip a row that actually still has pending horizons.
+    const largestLabel = allLabels[allLabels.length - 1];
+    const batchSize = multiHorizonOutcomeTracking.batchSize;
+    const maxWallClockMs = multiHorizonOutcomeTracking.maxCycleWallClockMs;
+    const stats: MultiHorizonOutcomeEvaluatorCycleStats = { rowsFetched: 0, rowsProcessed: 0, rowsWritten: 0, batches: 0, bailedOnWallClock: false, rowsRemaining: 0 };
+    const outOfTime = () => Date.now() - cycleStart > maxWallClockMs;
 
-    const predictions = await db.select().from(agentPredictions).all();
-    for (const p of predictions) {
-      // Same exclusions as PredictionOutcomeEvaluator.ts, for the same reasons: KronosEngine's own
-      // forecasts are evaluated once, cleanly, from kronos_predictions below; a Digital Twin
-      // telemetry-pulse row must never be graded against real market data.
-      if (p.agentName === 'KronosEngine') continue;
-      if (p.traceId && p.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX)) continue;
-      if (p.prediction !== 'BUY' && p.prediction !== 'SELL') continue;
+    // P1-A remediation (2026-09-14) - see PredictionOutcomeEvaluator.ts's identical rationale
+    // comment for why this is a bounded anti-join (never a monotonic watermark) and why the
+    // always-skipped categories (KronosEngine rows here, HOLD predictions, telemetry-pulse rows)
+    // must be excluded in SQL, not just in the loop body below - otherwise they permanently occupy
+    // batch slots on every future cycle since this evaluator never writes a row for them.
+    const agentJoinCondition = and(
+      eq(predictionOutcomeHorizons.predictionId, agentPredictions.id),
+      eq(predictionOutcomeHorizons.sourceTable, 'agent_predictions'),
+      eq(predictionOutcomeHorizons.horizonLabel, largestLabel),
+    );
+    const agentPendingCondition = and(
+      isNull(predictionOutcomeHorizons.id),
+      ne(agentPredictions.agentName, 'KronosEngine'),
+      or(eq(agentPredictions.prediction, 'BUY'), eq(agentPredictions.prediction, 'SELL')),
+      or(isNull(agentPredictions.traceId), notLike(agentPredictions.traceId, `${TELEMETRY_PULSE_TRACE_PREFIX}%`)),
+    );
+    const pendingAgent = await db
+      .select({ p: agentPredictions })
+      .from(agentPredictions)
+      .leftJoin(predictionOutcomeHorizons, agentJoinCondition)
+      .where(agentPendingCondition)
+      .orderBy(asc(agentPredictions.timestamp))
+      .limit(batchSize);
+    stats.rowsFetched += pendingAgent.length;
+    stats.batches += 1;
+    const [{ count: agentRemainingCount }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(agentPredictions)
+      .leftJoin(predictionOutcomeHorizons, agentJoinCondition)
+      .where(agentPendingCondition);
+    stats.rowsRemaining += agentRemainingCount;
 
-      const key = `agent_predictions:${p.id}`;
-      const done = doneLabelsByKey.get(key) ?? new Set<string>();
-      if (done.size === allLabels.length) continue; // every horizon already recorded
+    if (pendingAgent.length > 0) {
+      // A prediction in this batch may already have SOME (not all) horizons recorded - fetch just
+      // this bounded batch's own horizon rows (a small IN-clause query, not the full growing
+      // predictionOutcomeHorizons table) to build the per-prediction "already done" set.
+      const batchIds = pendingAgent.map(({ p }) => p.id);
+      const existingHorizonRows = await db
+        .select()
+        .from(predictionOutcomeHorizons)
+        .where(and(
+          eq(predictionOutcomeHorizons.sourceTable, 'agent_predictions'),
+          inArray(predictionOutcomeHorizons.predictionId, batchIds),
+        ));
+      const doneLabelsByPredictionId = new Map<string, Set<string>>();
+      for (const row of existingHorizonRows) {
+        if (!doneLabelsByPredictionId.has(row.predictionId)) doneLabelsByPredictionId.set(row.predictionId, new Set());
+        doneLabelsByPredictionId.get(row.predictionId)!.add(row.horizonLabel);
+      }
 
-      const predTime = new Date(p.timestamp).getTime();
-      const results = await evaluateMultiHorizonOutcomesForPrediction(p.symbol, p.prediction, predTime, done);
-      for (const r of results) {
-        try {
-          await db.insert(predictionOutcomeHorizons).values({
-            predictionId: p.id,
-            sourceTable: 'agent_predictions',
-            symbol: p.symbol,
-            horizonLabel: r.horizonLabel,
-            horizonBars: r.horizonBars,
-            forwardReturn: r.forwardReturn,
-            forwardDirection: r.forwardDirection,
-            evaluatedAt: new Date().toISOString(),
-          }).onConflictDoNothing();
-        } catch (e) {
-          console.error('[MultiHorizonOutcomeEvaluator] Failed to persist horizon outcome', e);
+      for (const { p } of pendingAgent) {
+        if (outOfTime()) { stats.bailedOnWallClock = true; break; }
+        stats.rowsProcessed += 1;
+        const done = doneLabelsByPredictionId.get(p.id) ?? new Set<string>();
+        const predTime = new Date(p.timestamp).getTime();
+        const results = await evaluateMultiHorizonOutcomesForPrediction(p.symbol, p.prediction, predTime, done);
+        for (const r of results) {
+          try {
+            await db.insert(predictionOutcomeHorizons).values({
+              predictionId: p.id,
+              sourceTable: 'agent_predictions',
+              symbol: p.symbol,
+              horizonLabel: r.horizonLabel,
+              horizonBars: r.horizonBars,
+              forwardReturn: r.forwardReturn,
+              forwardDirection: r.forwardDirection,
+              evaluatedAt: new Date().toISOString(),
+            }).onConflictDoNothing();
+            stats.rowsWritten += 1;
+          } catch (e) {
+            console.error('[MultiHorizonOutcomeEvaluator] Failed to persist horizon outcome', e);
+          }
         }
       }
     }
 
-    const kronosRows = await db.select().from(kronosPredictions).all();
-    for (const k of kronosRows) {
-      if (k.prediction !== 'BUY' && k.prediction !== 'SELL') continue;
-      const idStr = String(k.id);
-      const key = `kronos_predictions:${idStr}`;
-      const done = doneLabelsByKey.get(key) ?? new Set<string>();
-      if (done.size === allLabels.length) continue;
+    if (!outOfTime()) {
+      const kronosJoinCondition = and(
+        eq(predictionOutcomeHorizons.predictionId, kronosPredictions.id),
+        eq(predictionOutcomeHorizons.sourceTable, 'kronos_predictions'),
+        eq(predictionOutcomeHorizons.horizonLabel, largestLabel),
+      );
+      const kronosPendingCondition = and(
+        isNull(predictionOutcomeHorizons.id),
+        or(eq(kronosPredictions.prediction, 'BUY'), eq(kronosPredictions.prediction, 'SELL')),
+      );
+      const pendingKronos = await db
+        .select({ k: kronosPredictions })
+        .from(kronosPredictions)
+        .leftJoin(predictionOutcomeHorizons, kronosJoinCondition)
+        .where(kronosPendingCondition)
+        .orderBy(asc(kronosPredictions.timestamp))
+        .limit(batchSize);
+      stats.rowsFetched += pendingKronos.length;
+      stats.batches += 1;
+      const [{ count: kronosRemainingCount }] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(kronosPredictions)
+        .leftJoin(predictionOutcomeHorizons, kronosJoinCondition)
+        .where(kronosPendingCondition);
+      stats.rowsRemaining += kronosRemainingCount;
 
-      const predTime = new Date(k.timestamp).getTime();
-      const results = await evaluateMultiHorizonOutcomesForPrediction(k.symbol, k.prediction, predTime, done);
-      for (const r of results) {
-        try {
-          await db.insert(predictionOutcomeHorizons).values({
-            predictionId: idStr,
-            sourceTable: 'kronos_predictions',
-            symbol: k.symbol,
-            horizonLabel: r.horizonLabel,
-            horizonBars: r.horizonBars,
-            forwardReturn: r.forwardReturn,
-            forwardDirection: r.forwardDirection,
-            evaluatedAt: new Date().toISOString(),
-          }).onConflictDoNothing();
-        } catch (e) {
-          console.error('[MultiHorizonOutcomeEvaluator] Failed to persist horizon outcome', e);
+      if (pendingKronos.length > 0) {
+        const batchIds = pendingKronos.map(({ k }) => String(k.id));
+        const existingHorizonRows = await db
+          .select()
+          .from(predictionOutcomeHorizons)
+          .where(and(
+            eq(predictionOutcomeHorizons.sourceTable, 'kronos_predictions'),
+            inArray(predictionOutcomeHorizons.predictionId, batchIds),
+          ));
+        const doneLabelsByPredictionId = new Map<string, Set<string>>();
+        for (const row of existingHorizonRows) {
+          if (!doneLabelsByPredictionId.has(row.predictionId)) doneLabelsByPredictionId.set(row.predictionId, new Set());
+          doneLabelsByPredictionId.get(row.predictionId)!.add(row.horizonLabel);
+        }
+
+        for (const { k } of pendingKronos) {
+          if (outOfTime()) { stats.bailedOnWallClock = true; break; }
+          stats.rowsProcessed += 1;
+          const idStr = String(k.id);
+          const done = doneLabelsByPredictionId.get(idStr) ?? new Set<string>();
+          const predTime = new Date(k.timestamp).getTime();
+          const results = await evaluateMultiHorizonOutcomesForPrediction(k.symbol, k.prediction, predTime, done);
+          for (const r of results) {
+            try {
+              await db.insert(predictionOutcomeHorizons).values({
+                predictionId: idStr,
+                sourceTable: 'kronos_predictions',
+                symbol: k.symbol,
+                horizonLabel: r.horizonLabel,
+                horizonBars: r.horizonBars,
+                forwardReturn: r.forwardReturn,
+                forwardDirection: r.forwardDirection,
+                evaluatedAt: new Date().toISOString(),
+              }).onConflictDoNothing();
+              stats.rowsWritten += 1;
+            } catch (e) {
+              console.error('[MultiHorizonOutcomeEvaluator] Failed to persist horizon outcome', e);
+            }
+          }
         }
       }
     }
+
+    this.lastCycleStats = stats;
   }
 }
 

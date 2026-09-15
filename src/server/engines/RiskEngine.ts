@@ -16,14 +16,14 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { db } from '../db';
 import * as schema from '../db/schema';
-import { desc, isNotNull, and, eq, gte, like, or } from 'drizzle-orm';
+import { desc, isNotNull, isNull, and, eq, gte, like, or } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { historicalDataGateway } from './backtest/HistoricalDataGateway';
 import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizing';
 import { runWithObservabilityContext } from '../observability/ObservabilityContext';
-import { getTradingDateStr, TRADING_TIMEZONE } from '../core/TradingCalendar';
+import { getTradingDateStr, getTradingDayStartMs, TRADING_TIMEZONE } from '../core/TradingCalendar';
 import { evaluateExtendedHoursExecutionPolicy, isExtendedHoursSession } from '../risk/ExtendedHoursExecutionPolicy';
 import { getCachedAvgDailyVolumeShares } from '../risk/ExtendedHoursLiquidityCache';
 import { applyRestrictedLiveCaps } from './RestrictedLiveMode';
@@ -304,13 +304,34 @@ export class RiskEngine {
             // instead of pulling every trade ever recorded (across all history, not just this run)
             // into JS on every single risk evaluation - a real, measured contributor to a replay
             // slowing down over a long run (grows with total accumulated trades table size, not
-            // just this run's length). The live (non-replay) branch is untouched - same full fetch,
-            // same JS filter - to avoid any live-path behavior change.
+            // just this run's length).
+            //
+            // Real gap found and fixed (2026-09-15, post-forensic-audit remediation): the live
+            // (non-replay) branch used to fetch the ENTIRE `trades` table, unfiltered, on EVERY
+            // single live risk evaluation - the same unbounded-query-against-a-growing-table
+            // pattern P1-A already fixed in the outcome evaluators, left unfixed here. Bounded
+            // here by determining what evaluateSameSymbolCooldown/evaluatePostLossCooldown/
+            // evaluateDailyTradeLimit (OvertradingGuards.ts) actually need - not an arbitrary
+            // LIMIT, which could silently drop a row one of those gates still needs: all three
+            // only ever look at eventMs(row) = filledAt || timestamp within, at most,
+            // max(sameSymbolCooldownMs, postLossCooldownMs) before the start of the CURRENT
+            // trading day (daily_trade_limit's own "today" is the true outer bound - a cooldown
+            // window is always <= 15min and therefore always inside "today" except right at the
+            // exchange-midnight boundary, which the extra lookback subtraction below covers).
+            // The WHERE clause mirrors eventMs()'s own filledAt-else-timestamp preference exactly
+            // (a filled trade's filledAt is never earlier than its timestamp, so this cannot
+            // exclude a row eventMs() would have used) - never a single-column approximation.
+            const overtradingLookbackMs = Math.max(tradingSafety.sameSymbolCooldownMs, tradingSafety.postLossCooldownMs);
+            const overtradingWindowStartIso = new Date(getTradingDayStartMs(new Date(nowMs)) - overtradingLookbackMs).toISOString();
+            const overtradingWindowFilter = or(
+                and(isNotNull(schema.trades.filledAt), gte(schema.trades.filledAt, overtradingWindowStartIso)),
+                and(isNull(schema.trades.filledAt), gte(schema.trades.timestamp, overtradingWindowStartIso)),
+            );
             const tradeRows = replay
                 ? await db.select().from(schema.trades).where(
                     or(like(schema.trades.traceId, `%${replay.replayId}%`), like(schema.trades.reasoning, `%${replay.replayId}%`)),
                   )
-                : (await db.select().from(schema.trades)).filter((t: any) => t.executionEnvironment !== 'REPLAY' && t.executionEnvironment !== 'BACKTEST' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix));
+                : (await db.select().from(schema.trades).where(overtradingWindowFilter)).filter((t: any) => t.executionEnvironment !== 'REPLAY' && t.executionEnvironment !== 'BACKTEST' && !String(t.traceId || '').startsWith(replaySafety.replayTracePrefix));
             const sameSymbol = evaluateSameSymbolCooldown({ side: proposal.side, symbol: proposal.symbol, nowMs, trades: tradeRows });
             recordGate(sameSymbol.gate, sameSymbol.passed, sameSymbol.detail);
             const postLoss = evaluatePostLossCooldown({ side: proposal.side, nowMs, trades: tradeRows });

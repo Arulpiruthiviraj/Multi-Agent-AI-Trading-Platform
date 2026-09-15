@@ -102,6 +102,37 @@ export function allowsNewEntryIdeas(): boolean {
   return !holdNewEntryIdeas;
 }
 
+export interface RestartSafetyDecision {
+  shouldForcePause: boolean;
+  reason: string;
+}
+
+/**
+ * P1 restart-safety hardening (2026-09-14 forensic audit finding, item #26): loadInterruptedSessionMarker()
+ * above already holds new BUY-side ideas after an unclean shutdown, but the persisted `tradingState`
+ * itself was restored as-is (TradingEngine.ts's `initialize()`) - a persisted TRADING_ENABLED survived
+ * an unclean restart with no additional check, unlike the explicit "require reactivation" discipline
+ * this codebase's own EMERGENCY_STOP comment describes as the intent. This closes that specific gap:
+ * pure decision function (no I/O, no tradingEngine import) so it's unit-testable without booting the
+ * app - this file only decides; the caller (ArgusCoreBoot.ts) is the one that actually applies the
+ * transition, preserving the existing "only TradingEngine.ts's own mutator writes trading state"
+ * boundary (architecture.protection.test.ts) rather than this file becoming a second writer. Never
+ * touches a TRADING_PAUSED or EMERGENCY_STOP state (nothing to force-downgrade there), and never
+ * runs on a clean shutdown (interruptedSession=false) - a healthy restart's persisted
+ * TRADING_ENABLED is restored exactly as before, unchanged.
+ */
+export function evaluateRestartSafety(interruptedSession: boolean, currentTradingState: string): RestartSafetyDecision {
+  if (interruptedSession && currentTradingState === 'TRADING_ENABLED') {
+    return {
+      shouldForcePause: true,
+      reason: 'Unclean prior shutdown detected - a persisted TRADING_ENABLED state requires explicit '
+        + 'operator reactivation before resuming, the same discipline already applied to new BUY-side '
+        + 'idea generation via the reconciliation-gated entry hold above.',
+    };
+  }
+  return { shouldForcePause: false, reason: '' };
+}
+
 let exitHandlerInstalled = false;
 
 export function beginRuntimeSession(): void {

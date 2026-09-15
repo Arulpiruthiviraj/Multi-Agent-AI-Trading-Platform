@@ -1945,3 +1945,212 @@ LLM-originated free text) with no delimiter isolation of the kind DEF-31 added t
 `NewsScoringEngine.ts` — not fixed yet because any change to that prompt's wording risks shifting
 `ConsensusDebate`'s response distribution while Part 1's forensic telemetry is still accumulating
 clean evidence.
+
+## Heap-snapshot capture — P1 memory-leak investigation (2026-09-14)
+
+Real, live-observed incident: durable memory telemetry (`processTelemetry.ts`'s 5-minute
+`sampleAndPersistMemoryTelemetry()`, persisted to `observability_events` as
+`MEMORY_TELEMETRY_SAMPLE`) showed sustained, approximately linear RSS growth over a 112-minute
+session — 788.5MB → 4,014.9MB (~28.9MB/min, ~1.7GB/hour), with `heapUsed` tracking `rss` closely
+(473.2MB → 3,657.8MB) — a real JS-heap object-retention signature, not a native/socket leak or a
+one-off spike. `MemoryTelemetryGuard` correctly paused trading (`TRADING_PAUSED`, existing
+mechanism, no second kill switch) at the configured CRITICAL threshold (3,584MB RSS). A controlled
+restart reduced RSS to 804.9MB; the retaining allocation was not identified by static code review
+(`ChiefTraderAgent.ts`'s per-symbol Maps, `AIRouter.ts`'s provider Maps, `QuantCoreBridge.ts`'s
+capped price/volume history, `MarketDataWorker.ts`'s per-symbol Maps — all checked, all properly
+bounded).
+
+`src/server/observability/heapSnapshotCapture.ts` (explicit operator authorization, scoped exactly
+as specified): one baseline snapshot `heapSnapshotBaselineDelayMs` after boot, one snapshot at the
+first WARNING/CRITICAL memory-telemetry crossing, one optional follow-up if still elevated after
+`heapSnapshotFollowUpDelayMs`, a hard `heapSnapshotMaxPerProcessLifetime` cap (default 3) and
+`heapSnapshotCooldownMs` gate regardless of how many times the level flaps, disk-bounded (oldest
+`.heapsnapshot` files pruned before writing a new one, by both file count and total size). All
+thresholds in `config/observability.json`, none hardcoded (this file's own standing rule). Wired
+into the EXISTING `processTelemetry.ts` memory-sample interval — no new `setInterval` worker, so no
+new `gracefulShutdown.ts` stop-order entry was needed; the one-shot baseline timer is `unref()`'d
+and cleared via `stopHeapSnapshotScheduler()` (called from the existing `stopProcessTelemetry()`).
+
+**Never gates or delays `applyMemoryCriticalFailSafe()`'s own `TRADING_PAUSED` intervention** —
+called strictly after it in `sampleAndPersistMemoryTelemetry()`, and is otherwise fully
+independent: it never imports or touches `tradingEngine`/`RiskEngine`/OMS. **Honesty, not a claim
+this is free**: `v8.writeHeapSnapshot()` performs a real, synchronous V8 heap walk — it blocks the
+event loop for its duration (inherent to how V8 produces a consistent snapshot, not an
+implementation choice this module could avoid). This is an infrequent (capped, cooldown-gated),
+*measured* (every capture's wall-clock duration is logged via `HEAP_SNAPSHOT_CAPTURED`/
+`HEAP_SNAPSHOT_FAILED`) pause, never a non-blocking one. Fail-open throughout: a capture failure is
+logged, never thrown, never crashes the process. Test-isolated the same way as
+`ARGUS_TEST_ALLOW_CHRONOS`/`OLLAMA`/`OPENALICE` (`vitest.setup.ts`): disabled by default in tests
+via `ARGUS_DISABLE_HEAP_SNAPSHOTS`, so an unrelated test that happens to drive a fake
+WARNING/CRITICAL memory sample doesn't write a real file (confirmed live during this same change —
+it did, a real ~500ms/13MB capture, before the guard was added). Root cause of the underlying leak
+remains **UNKNOWN** — this closes the "what tool finds it" gap, not the leak itself.
+
+**A second, distinct P1 (call it P1-B, tracked separately from the still-unresolved P1-A memory-leak
+root cause above) — CONFIRMED, not suspected: this same mechanism froze the trading process and it
+was externally killed.** The first live WARNING-level capture (pid 27000, 2026-09-14T20:17:52Z) was
+followed by the engine's event loop going unresponsive for ~6 minutes (external watchdog: heartbeat
+staleness climbing continuously from 20:18:28Z, `FROZEN_CONFIRMED` + force-kill at 20:24:10Z,
+restart, then this codebase's own new restart-safety guard — see below — correctly forced
+`TRADING_PAUSED`). The process being killed by the external watchdog is a directly observed fact.
+
+**Likely mechanism** (well-supported by timing plus a 2.04GB completed output file plus the missing
+completion log, but not proven to the precision of an exact duration-vs-size formula):
+`v8.writeHeapSnapshot()` is a real, synchronous, unavoidably-blocking V8 heap walk; serializing
+~2.04GB is consistent with a multi-minute block, consistent with the observed freeze window. Do not
+claim more precision than this — "the snapshot caused the freeze" is reasonable given the timing;
+"2.04GB takes exactly N minutes" is not established.
+
+**The baseline measurements do not license the conclusion "baseline capture is safe."** 8.8–11.8s
+at ~600MB on two occasions shows baseline capture was safe under that specific, low, tested
+condition — not that it is intrinsically or generally event-loop-safe at arbitrary heap sizes. Two
+low-memory data points do not extrapolate to a multi-GB heap. Elevated-level (WARNING/CRITICAL-
+triggered) capture is disabled (`heapSnapshotEnabled=false`); baseline-only capture remains enabled
+as a narrowly-scoped exception proven only at the condition actually tested, not a general safety
+claim about the mechanism.
+
+**The eventual redesign is not "make the same call async."** `v8.writeHeapSnapshot()` blocks the
+calling thread's own event loop regardless of how the call is scheduled (`Promise`, `setImmediate`,
+same-process wrapper) — none of that changes what the call itself does. A `worker_thread` has its
+own separate V8 heap; it cannot snapshot the *main* thread's heap just by being asked from within
+the same process. A real fix requires the trading-critical process to never be the one whose heap
+gets synchronously walked — genuine process-level separation between the trading-critical process
+and any research/forensic process that needs deep heap introspection, matching the general rule this
+incident establishes: **a trading-critical process may not run any operation that synchronously
+blocks its event loop for an unbounded or poorly-characterized duration; expensive
+diagnostics/analytics belong in a separate research/forensic process, not inside the trading
+process itself.**
+
+Both completed files (`data/heap-snapshots/`, gitignored) are preserved as genuine forensic evidence
+for a future proper offline analysis (e.g. Chrome DevTools' heap-snapshot comparison) — disk usage
+from these should be monitored, not left unbounded. See `config/observability.json`'s own comment
+for the full incident record.
+
+## Overnight safety-first remediation (2026-09-14, second pass) — P1-A investigation + a second real event-loop blocker found
+
+Real, bounded, O(1)-memory offline analysis of the preserved 2.04GB incident snapshot
+(`scripts/forensic/analyze_heap_snapshot.mjs`/`sample_heap_snapshot_strings.mjs` — new, permanent,
+OFFLINE-FORENSIC-classified tooling; runs only against `.heapsnapshot` files on disk, never
+imported by the application, never runs inside the trading process). Verified live under a hard
+`--max-old-space-size=512` cap, completed in ~11s: **30,377,433 nodes, 92,056,473 edges**. `string`
+nodes dominate — 18,271,808 of them, 59.5% of total self_size. A bounded content sample shows the
+dominant recurring shape is `trace_<SYMBOL>_<epochMs>_<hash>` — exactly `generateTraceId()`'s
+format — interleaved with ISO-8601 timestamps, UUIDs, and full agent-reasoning text blobs. The
+leading hypothesis this pointed at, `EventStore.ts`'s in-memory ring (`recentEvents`/`tradeTraces`,
+described elsewhere in this document as "capped"), was checked directly and **ruled out by
+evidence**: `eventStoreMaxRecentEvents: 200` and `eventStoreMaxTraces: 500` are both small and
+correctly enforced (verified by reading the real eviction logic) — far too small to explain 18M+
+retained strings. **The actual retaining owner remains unidentified** — this specific finding
+requires either a full retainer/dominator-path analysis (needs the 92M-edge array cross-referenced
+against nodes, a substantially larger undertaking than safely completable on a 16GB host with only
+~5GB free RAM alongside the live engine) or a live, isolated reproduction harness. See
+`docs/audits/ARGUS_MASTER_REMEDIATION_BASELINE.md`'s "Overnight Safety-First Remediation" section
+for the full evidence matrix.
+
+**A second, real, previously-undiscovered event-loop blocker was found and fixed in the same pass**:
+`DbBackupService.ts` performed a synchronous `fs.copyFileSync()` of the entire live database file
+(measured at **4.08GB** during this same audit) — and did so on **every engine boot**, not only on
+its documented 24-hour interval (`start()` calls `runBackup()` immediately). This is the same risk
+class as the P1-B heap-snapshot incident, and had been firing on every restart throughout this
+entire session. Unlike `v8.writeHeapSnapshot()`, `fs.copyFile`'s async form is a genuine fix (real
+libuv-threadpool I/O, not a synchronous call hidden behind a `Promise`) — converted, with the
+existing `DbBackupService.test.ts` updated to `await` the now-async `runBackup()`. The
+`sqliteDb.pragma('wal_checkpoint(TRUNCATE)')` call in the same function remains genuinely
+synchronous (better-sqlite3 has no async API) — a smaller, harder-to-eliminate residual risk,
+honestly left as-is, not silently ignored.
+
+## Synthetic Market Session Simulator (`src/server/replay/synthetic/`, 2026-09-14 mandate) — isolation hardening + certification findings
+
+An isolated harness (OFFLINE-FORENSIC classification, same posture as `scripts/forensic/`) that
+feeds a deterministic synthetic market session through the REAL production decision pipeline
+(`eventBus.emitMarketData()` → real TechnicalAgent/KronosForecastAgent/QuantSignalAgent → real
+ChiefTraderAgent → real RiskEngine → real OMS → an isolated `HistoricalReplayBroker`, installed via
+the same `ActiveReplaySession`/`setActiveReplaySession()` seam `src/server/replay/`'s Historical
+Evaluation (MODE B) already uses) to answer "if the market were opening right now, how would Argus
+actually behave?" — never a special simulation-only decision path. Core files:
+`SyntheticSessionEngine.ts` (orchestrator), `SyntheticMarketClock.ts` (real-time-accelerated clock,
+extends `ReplayClock`), `SyntheticMarketDataEngine.ts`/`SyntheticScenario.ts` (deterministic seeded
+price-path generator + named scenario profiles), `CertificationGate.ts` (the mandatory post-change
+certification described below), `DecisionTimeline.ts` (real-EventBus-sourced behavioral log). CLI:
+`npm run sim:market-open -- --scenario=<id> | --certify`.
+
+**Isolation architecture (Step 1, post-incident hardening).** A real production-database pollution
+incident occurred during initial smoke-testing (a top-level, non-dynamic import transitively opened
+`src/server/db/index.ts` before the harness's own isolation env vars were set — fixed, and detailed
+in this doc's own commit history / `docs/audits/`). The durable fix is two-layered: (1)
+`src/server/db/syntheticSimulationDbGuard.ts`'s `assertSyntheticSimulationNotOpeningProductionDb()`
+is a pure, independently unit-tested function called from `db/index.ts` itself, immediately before
+`new Database(dbPath)` — it throws FATAL if `SYNTHETIC_SIMULATION=true` and the resolved DB path
+equals the resolved production path, so a future import-ordering mistake fails LOUDLY before any
+connection opens, rather than being merely detected afterward. (2) `scripts/sim/marketOpen.ts` is a
+thin PARENT process with **zero Argus-module imports** — it computes the isolated DB path (via the
+pure `src/server/replay/syntheticSimulationPaths.ts`, shared with `SyntheticSessionEngine` so the
+two processes can never disagree on the formula) and spawns a CHILD Node process
+(`scripts/sim/marketOpenChild.ts`) with every isolation env var (`SYNTHETIC_SIMULATION`,
+`ARGUS_DB_PATH`, `PAPER_TRADING_ONLY`, …) set via `child_process.spawn`'s `env` option AT SPAWN TIME
+— i.e. before the child's own module graph, including its first import statement, ever executes.
+This closes the import-ordering bug class structurally rather than by convention: even a
+hypothetical future static top-level import of a db-touching module in the child would still see the
+correct isolated `ARGUS_DB_PATH` already in `process.env`.
+
+**Two further real root causes found and fixed while validating the certification (Step 2).** Both
+are instances of the same underlying mechanism: `EncryptionService.ts` calls `dotenv.config()` as a
+module-load side effect, and since `dotenv` only fills environment keys that are not already set,
+any isolation env var the harness had not explicitly forced leaked in from this deployment's real
+`.env`. (1) `ARGUS_OPPORTUNITY_LOOP_ENABLED`/`ARGUS_BROAD_UNIVERSE_ENABLED`/`ARGUS_MARKET_MOVERS_ENABLED`
+are all `true` in this deployment's real `.env`, so `bootArgusCore()`'s unconditional
+`opportunityDiscoveryWorker.start()` ran a REAL Alpaca discovery scan within moments of boot inside
+what was meant to be a fully isolated, deterministic, no-real-network-dependency session — and its
+real `subscribe()` calls competed with (and evicted) the synthetic session's own symbols from
+`MarketDataWorker.activeStreams`, since `cacheObservedQuote()` (the method the harness feeds
+synthetic prices through) deliberately never increments `tickCounts`/`dynamicMomentumScores`,
+making every synthetic symbol look permanently "cold" to the real eviction ranking. Fixed by forcing
+all three flags `false` in the isolated environment (both in the child's spawn-time `env` and inside
+`prepareIsolatedEnvironment()`, matching the same "an isolated simulation must never depend on real
+external market data" principle already applied to FundamentalAgent/MacroAgent/NewsEngine's own real
+network calls) — this is NOT reproducible in live production, where every genuinely live-streamed
+symbol's activity bookkeeping is real. (2) A second, larger effect of the same leak:
+`ARGUS_ACTIVE_BROKER=ibkr_gateway` (this deployment's real active broker) caused
+`BrokerManager.resolveBootBrokerSelection()` to select IBKR Gateway for the isolated session too
+(since its own fresh, isolated `settings` row has no persisted `selectedBroker`), which made
+`MarketDataWorker.subscribe()` route through its `ibkr_gateway` branch — and since no real IB
+Gateway process is reachable from an isolated simulation, every subscribe call threw and, in its own
+catch block, immediately deleted the symbol it had just added. `QuantSignalAgent.getActiveSymbols()`
+was therefore permanently empty for the entire duration of every certification run to date, and
+QuantSignalAgent never evaluated a single symbol. Fixed by forcing `ARGUS_ACTIVE_BROKER=internal_paper`
+in the isolated environment — safe because order placement is already, separately, unconditionally
+redirected to the session's own `HistoricalReplayBroker` via `ActiveReplaySession`; this only affects
+`MarketDataWorker`'s internal quote-backend bookkeeping. Both fixes were verified empirically (zero
+"no actively-tracked symbols" cycles, real `MOMENTUM_BREAKOUT`/`TREND_FOLLOWING` strategy
+evaluations, and continuous per-bar `MARKET_DATA` coverage for every universe symbol across a full
+240-bar session) and left the production database provably untouched (`settings` row count and
+`ohlcv_bars` synthetic-row count re-verified at 1 and 0 respectively after every run).
+
+**A real latent clock race was also found and fixed** while validating a longer (240-bar) session:
+`SyntheticMarketClock` is always constructed with `speedMultiplier: 1`, and a separate `reset()` call
+placed BEFORE the main loop left a small but real window in which further setup work could elapse
+enough real wall-clock time for the clock's own 1:1 auto-drift to carry `now()` past the session's
+first bar timestamp — so that bar's own `advance()` call (routed through `setTime()`'s
+backward-move guard) would then throw. Fixed by moving the `reset()` call to the loop's own first
+iteration (`i === 0`), closing the gap entirely instead of narrowing it.
+
+**Certification result (Step 3/4) — `VALIDATED_CONVERGENCE_CONTROL` scenario.** A single, narrowly-
+purposed scenario (not one of the mandate's 15 named scenarios) engineered for genuine multi-agent
+convergence — an opening structural breakout (gap + volume/volatility pop) followed by a long
+(240-bar, enough for `TREND_FOLLOWING`'s own SMA200-ordering condition to actually be evaluable),
+low-noise, volume-confirmed uptrend — run with **zero changes** to `minIndependentAgreeingAgents`,
+`consensusApprovalThreshold`, or any calibration logic. Test A (`QUIET_OPEN`): **PASS**,
+`zeroTradeReason=NO_CONSENSUS`. Test B: **FAIL**, blocked at `CONSENSUS`, but with a materially
+different and more valuable diagnostic than the scenario this superseded (`TRENDING_BULL_GAP_AND_GO`,
+which failed on raw confidence/independence alone): two genuinely independent real agents
+(`JavaCoreEnsemble`'s CORE-strategy ensemble and `KronosForecastAgent`'s Chronos forecast) agreed on
+SPY (both SELL, ~65% combined confidence), clearing `minIndependentAgreeingAgents` and reaching
+MODERATE-tier consideration — and were then correctly rejected by `MODERATE_REJECT_UNTRUSTED_CALIBRATION`
+(`src/server/continuous/ModerateTierEvaluator.ts`): neither agent has a statistically-validated
+calibration champion for its confidence bucket, because a fresh, from-scratch isolated database has
+zero historical graded predictions to validate one from. Per that evaluator's own test suite, this is
+"the honest real-data default" for any brand-new deployment or isolated session, not a bug. This
+means a single-session, from-scratch synthetic simulation may be structurally unable to ever clear
+MODERATE-tier calibration trust regardless of scenario quality — a genuine architecture/research
+finding (not a defect to route around), left exactly as the operator mandate required: the system was
+not modified to force a pass.

@@ -168,6 +168,15 @@ export class PortfolioMonitorWorker {
     }
   }
 
+  /** Synthetic Market Session Simulator (2026-09-14 mandate): a manual trigger for the SAME real
+   *  reviewPortfolio() the timer calls - see QuantSignalAgent.triggerNow()'s identical rationale
+   *  comment. Lets a simulation harness give exit logic (take-profit/stop/trailing/thesis
+   *  invalidation) a real chance to fire without waiting on runtimeIntervals.portfolioMonitorMs's
+   *  real setInterval. */
+  async triggerNow(): Promise<void> {
+    await this.reviewPortfolio();
+  }
+
   async reviewPortfolio() {
     if (this.isReviewing) {
       console.warn("[PortfolioWorker] Previous review cycle still running - skipping this tick instead of overlapping.");

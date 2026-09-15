@@ -27,6 +27,41 @@ describe('MarketDataCrossChecker.runCheck', () => {
     expect(emitSpy).not.toHaveBeenCalledWith('MARKET_DATA_SOURCE_DISCREPANCY', expect.anything());
   });
 
+  it('real gap found and fixed (2026-09-15): concurrent runCheck() calls coalesce (single-flight), never double-fetch the same symbol set in overlap', async () => {
+    let getQuoteCalls = 0;
+    let resolveFirstQuote: (() => void) | null = null;
+    const source = {
+      health: async () => 'Healthy',
+      getQuote: async (_symbol: string) => {
+        getQuoteCalls += 1;
+        // Block the first call until the test explicitly releases it, simulating a slow Questrade
+        // round-trip that outlasts a second concurrently-fired tick.
+        if (getQuoteCalls === 1) {
+          await new Promise<void>((resolve) => { resolveFirstQuote = resolve; });
+        }
+        return { last: 150 };
+      },
+    };
+    const checker = new MarketDataCrossChecker(() => source, () => ['AAPL'], () => 150);
+
+    const first = checker.runCheck();
+    // Let the async chain (health() then the first getQuote() call) actually progress before
+    // firing the second call and releasing the first - otherwise both calls would start before
+    // either reaches getQuote(), which wouldn't exercise the in-flight coalescing this test is for.
+    while (getQuoteCalls < 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    // Second call fires while the first is still awaiting its slow getQuote() - must coalesce
+    // (skip), not run a second, fully independent pass over the same symbol set.
+    const second = checker.runCheck();
+
+    resolveFirstQuote!();
+    await Promise.all([first, second]);
+
+    expect(getQuoteCalls).toBe(1); // not 2 - the overlapping call was coalesced, not double-fetched
+    expect(checker.getGuardMetrics().totalSkippedInFlight).toBeGreaterThanOrEqual(1);
+  });
+
   it('idles when the source reports Offline health', async () => {
     const source = { health: vi.fn(async () => 'Offline'), getQuote: vi.fn() };
     const checker = new MarketDataCrossChecker(() => source, () => ['AAPL'], () => 150);

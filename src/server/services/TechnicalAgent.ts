@@ -44,6 +44,7 @@ import { evaluateTechnicalSignals } from './technicalSignal';
 import { classifyLightweightRegime, encodeRegime } from '../research/lightweightRegimeClassifier';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { performance } from 'node:perf_hooks';
+import { getActiveReplaySession } from '../replay/ReplayContext';
 
 export class TechnicalProposerAgent {
   // Tick-driven via MARKET_DATA (MarketDataWorker WebSocket), not a standalone 60s timer.
@@ -69,6 +70,33 @@ export class TechnicalProposerAgent {
   private lastEmittedAt: Record<string, Partial<Record<'momentumBreakout' | 'meanReversion' | 'overbought', number>>> = {};
   private readonly onMarketData = (data: { symbol: string, price: number, volume: number, timestamp: string }) => this.analyzeTick(data);
   private listening = false;
+  /**
+   * Real gap found and fixed (2026-09-14, Synthetic Market Session Simulator certification):
+   * technicalEvaluationCooldownMs/technicalSignalCooldownMs exist to prevent exactly the real,
+   * previously-crashed production incident documented above this class's own priceHistory field
+   * (543 TRADE_IDEA_GENERATED / 15,183 AI_CALL rows in 60 real seconds) - a genuine, necessary
+   * real-wall-clock throttle for LIVE tick-rate MARKET_DATA. The Synthetic Market Session Simulator
+   * (src/server/replay/synthetic/) deliberately drives this SAME live class via real
+   * eventBus.emitMarketData() calls (unlike src/server/replay/'s Historical Evaluation, which
+   * reconstructs ChiefTrader's vote-math directly and never touches this class at all - see this
+   * file's own comment on checkStrategies below), but paces bar delivery in a small fraction of
+   * real wall-clock time per simulated bar. Date.now()-based cooldowns therefore only allow ONE
+   * real evaluation across an entire synthetic session regardless of how many simulated minutes of
+   * genuine opportunity pass - a harness-fidelity gap, not a bug in the cooldown itself, and exactly
+   * what checkStrategies's own pre-existing comment already anticipated ("replay's own research-
+   * clock cadence is a different concept and must not be wall-clock-debounced"). Mirrors the SAME
+   * getActiveReplaySession()-based redirection RiskEngine.ts/BrokerManager.ts/OrderManagement.ts
+   * already use: when a replay-shaped session (Historical Evaluation OR this synthetic simulator)
+   * is active, cooldown timestamps are measured against that session's own clock instead of real
+   * Date.now() - live/production behavior (no active session) is completely unchanged. Only used
+   * for the cooldown/debounce comparison itself, never for TECHNICAL_ANALYSIS_STARTED/COMPLETED's
+   * own timestamps or latencyMs, which must stay real wall-clock telemetry regardless.
+   */
+  private debounceNowMs(): number {
+    const replay = getActiveReplaySession();
+    return replay ? replay.clock.now() : Date.now();
+  }
+
   private onConfluenceNudge = (payload: any) => {
     const symbol = typeof payload?.symbol === 'string' ? payload.symbol.toUpperCase() : '';
     if (!symbol || !this.priceHistory[symbol]) return;
@@ -162,7 +190,7 @@ export class TechnicalProposerAgent {
     }
 
     if (history.length === quantThresholds.technicalHistoryBars) {
-      const now = Date.now();
+      const now = this.debounceNowMs();
       const last = this.lastEvaluatedAt[data.symbol] ?? 0;
       if (now - last < quantThresholds.technicalEvaluationCooldownMs) return;
       this.lastEvaluatedAt[data.symbol] = now;
@@ -205,6 +233,9 @@ export class TechnicalProposerAgent {
     const currentPrice = prices[prices.length - 1];
     const traceId = generateTraceId(symbol);
     const startedAt = Date.now();
+    // Separate from startedAt (real wall-clock telemetry, unchanged) - see debounceNowMs()'s own
+    // doc comment for why the emission-debounce timestamp specifically needs to be replay-aware.
+    const debounceAt = this.debounceNowMs();
 
     // Real STARTED/COMPLETED bracket for live animation (previously only Kronos had one) -
     // TechnicalAgent's computation is synchronous and fast, but the pair still lets the UI show
@@ -247,7 +278,7 @@ export class TechnicalProposerAgent {
     eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd, bbUpper, bbLower });
     eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_COMPLETED, { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd, bbUpper, bbLower });
 
-    if (momentumBreakout && this.shouldEmitSignal(symbol, 'momentumBreakout', rsi, macdHistogram, startedAt)) {
+    if (momentumBreakout && this.shouldEmitSignal(symbol, 'momentumBreakout', rsi, macdHistogram, debounceAt)) {
       eventBus.emitTradeIdea({
         traceId,
         symbol,
@@ -260,7 +291,7 @@ export class TechnicalProposerAgent {
         indicatorsSnapshot: { rsi, sma20, sma50, macd, macdSignal, bbUpper, bbLower },
         regime,
       });
-      this.markEmitted(symbol, 'momentumBreakout', startedAt);
+      this.markEmitted(symbol, 'momentumBreakout', debounceAt);
       // Real bug found and fixed this pass: notePipelineAgentSuccess was only called after this
       // Momentum Breakout branch, not the Mean Reversion / Overbought branches below - a real,
       // successful SELL (overbought) or BUY (mean-reversion) signal still left the pipeline health
@@ -269,7 +300,7 @@ export class TechnicalProposerAgent {
       notePipelineAgentSuccess('TechnicalAgent');
     }
 
-    if (meanReversion && this.shouldEmitSignal(symbol, 'meanReversion', rsi, macdHistogram, startedAt)) {
+    if (meanReversion && this.shouldEmitSignal(symbol, 'meanReversion', rsi, macdHistogram, debounceAt)) {
       eventBus.emitTradeIdea({
         traceId,
         symbol,
@@ -282,11 +313,11 @@ export class TechnicalProposerAgent {
         indicatorsSnapshot: { rsi, sma20, sma50, macd, bbUpper, bbLower },
         regime,
       });
-      this.markEmitted(symbol, 'meanReversion', startedAt);
+      this.markEmitted(symbol, 'meanReversion', debounceAt);
       notePipelineAgentSuccess('TechnicalAgent');
     }
 
-    if (overbought && this.shouldEmitSignal(symbol, 'overbought', rsi, macdHistogram, startedAt)) {
+    if (overbought && this.shouldEmitSignal(symbol, 'overbought', rsi, macdHistogram, debounceAt)) {
       eventBus.emitTradeIdea({
         traceId,
         symbol,
@@ -299,7 +330,7 @@ export class TechnicalProposerAgent {
         indicatorsSnapshot: { rsi, sma20, sma50, macd, bbUpper, bbLower },
         regime,
       });
-      this.markEmitted(symbol, 'overbought', startedAt);
+      this.markEmitted(symbol, 'overbought', debounceAt);
       notePipelineAgentSuccess('TechnicalAgent');
     }
 

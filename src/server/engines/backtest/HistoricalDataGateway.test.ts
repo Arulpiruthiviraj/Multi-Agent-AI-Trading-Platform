@@ -371,4 +371,54 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
   });
+
+  describe('memoryBars bounded eviction (P1-A remediation Patch B, 2026-09-14 - real, standalone defect: the cache had no active eviction path, growing without bound as distinct symbol/timeframe/hour-bucket keys were queried)', () => {
+    it('never grows past historicalBarsMemoryCacheMaxEntries even when many more distinct keys are queried', async () => {
+      const max = tradingSafety.historicalBarsMemoryCacheMaxEntries;
+      const extra = 200; // comfortably more than the configured cap, to prove real eviction occurs
+      for (let i = 0; i < max + extra; i++) {
+        // Each i gets a distinct symbol -> distinct memoryKey (symbol|timeframe|hourBucket) -
+        // ohlcv_bars is empty for all of these, so getBars() always takes the cache-miss path and
+        // calls cacheSet() every time, exactly like production evaluating many distinct
+        // symbol/hour combinations across a wide real timestamp spread.
+        await historicalDataGateway.getBars(`EVICT${i}`, '1Min', 0, 60_000);
+      }
+      expect(historicalDataGateway.getMemoryBarsCacheSize()).toBeLessThanOrEqual(max);
+      // Not merely "small by coincidence" - prove the bound is actually being enforced, not that
+      // fewer than max distinct keys happened to be queried.
+      expect(historicalDataGateway.getMemoryBarsCacheSize()).toBeGreaterThan(0);
+    });
+
+    it('evicts the least-recently-used entry, not simply the oldest-inserted one', async () => {
+      const max = tradingSafety.historicalBarsMemoryCacheMaxEntries;
+      // Fill the cache with a fresh, uniquely-prefixed batch so this test is independent of
+      // whatever the previous test already left cached.
+      for (let i = 0; i < max; i++) {
+        await historicalDataGateway.getBars(`LRU${i}`, '1Min', 0, 60_000);
+      }
+      // Touch the very first key again (a cache HIT - well within its 60s TTL) - this should move
+      // it to the most-recently-used end, so it survives the eviction the next new key triggers.
+      await historicalDataGateway.getBars('LRU0', '1Min', 0, 60_000);
+      // One brand-new key pushes the cache one over the cap, forcing exactly one eviction. Since
+      // LRU0 was just re-touched (MRU), LRU1 - the next-oldest untouched key - is the one that
+      // must actually be evicted (proving real LRU, not FIFO-by-insertion-order, which would have
+      // evicted LRU0 first since it was the oldest-INSERTED key).
+      await historicalDataGateway.getBars('LRU_NEW_KEY', '1Min', 0, 60_000);
+      expect(historicalDataGateway.getMemoryBarsCacheSize()).toBeLessThanOrEqual(max);
+
+      // db.select() is the observable seam that distinguishes a cache HIT (never queries SQLite)
+      // from a MISS (always does). getBars() itself never calls fetch/network for either case -
+      // it's a pure local-DB path - so this spy is the correct signal, not a fetch stub.
+      const { db: dbModule } = await import('../../db');
+      const selectSpy = vi.spyOn(dbModule, 'select');
+
+      await historicalDataGateway.getBars('LRU0', '1Min', 0, 60_000); // still cached -> HIT
+      expect(selectSpy).not.toHaveBeenCalled();
+
+      await historicalDataGateway.getBars('LRU1', '1Min', 0, 60_000); // was evicted -> real MISS
+      expect(selectSpy).toHaveBeenCalledTimes(1);
+
+      selectSpy.mockRestore();
+    });
+  });
 });

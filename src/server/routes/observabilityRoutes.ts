@@ -18,6 +18,9 @@ import { buildStrategyProfitabilityReport, formatStrategyProfitabilityReport } f
 import { buildRescueOutcomeReport, formatRescueOutcomeReport } from '../observability/rescueOutcomeReport';
 import { buildStrategyScorecard, formatStrategyScorecard } from '../research/strategyScorecard';
 import { buildExplorationHealthReport, formatExplorationHealthReport } from '../observability/explorationHealthReport';
+import { guardHeavyReport, HeavyReportRefusedError } from '../observability/heavyReportGuard';
+import { buildRecertificationReview, formatRecertificationReview } from '../quant/strategies/StrategyRecertification';
+import { buildStrategyScoreNormalizationComparison, formatStrategyScoreNormalizationComparison } from '../research/strategyScoreNormalizationComparison';
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observability/aiCostGovernorReport';
 import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
@@ -283,14 +286,19 @@ observabilityRouter.get('/calibration-maturity', async (req, res) => {
 // agent-edge / strategy-edge / agent-combination / trading-eligibility report (argus-cli agent-edge).
 observabilityRouter.get('/agent-edge', async (req, res) => {
   try {
-    const report = await buildAgentEdgeDiscoveryReport();
+    const report = await guardHeavyReport('agent-edge', buildAgentEdgeDiscoveryReport);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatAgentEdgeDiscoveryReport(report));
       return;
     }
     res.json({ ok: true, report });
   } catch (e: any) {
-    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -354,14 +362,19 @@ observabilityRouter.get('/multi-horizon-outcomes', async (req, res) => {
 // computation over potentially tens of thousands of real rows, not a hang.
 observabilityRouter.get('/strategy-fairness', async (req, res) => {
   try {
-    const rows = await buildStrategyFairnessReport();
+    const rows = await guardHeavyReport('strategy-fairness', buildStrategyFairnessReport);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatStrategyFairnessReport(rows));
       return;
     }
     res.json({ ok: true, rows });
   } catch (e: any) {
-    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 
@@ -408,14 +421,61 @@ observabilityRouter.get('/rescue-outcomes', async (req, res) => {
 // classifications unless replay verdicts are supplied out of band.
 observabilityRouter.get('/strategy-scorecard', async (req, res) => {
   try {
-    const rows = await buildStrategyScorecard([]);
+    const rows = await guardHeavyReport('strategy-scorecard', () => buildStrategyScorecard([]));
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatStrategyScorecard(rows));
       return;
     }
     res.json({ ok: true, rows });
   } catch (e: any) {
-    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Strategy lifecycle re-certification review (2026-09-14, item #9 / mandate Phase 11). Review
+// only - never auto-reinstates a RETIRED/DEGRADED strategy (see StrategyRecertification.ts's own
+// header). argus-cli strategy-recertification.
+observabilityRouter.get('/strategy-recertification', async (req, res) => {
+  try {
+    const rows = await guardHeavyReport('strategy-recertification', buildRecertificationReview);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatRecertificationReview(rows));
+      return;
+    }
+    res.json({ ok: true, rows });
+  } catch (e: any) {
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Raw-vs-normalized strategy score comparison (2026-09-14, item #7 / mandate Phase 10). Read-only
+// research signal - never flips quantThresholds.strategyScoreNormalizationEnabled itself. See
+// strategyScoreNormalizationComparison.ts's own header for the method and its honest limitations.
+observabilityRouter.get('/strategy-score-normalization-comparison', async (req, res) => {
+  try {
+    const report = await guardHeavyReport('strategy-score-normalization-comparison', buildStrategyScoreNormalizationComparison);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatStrategyScoreNormalizationComparison(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (res.headersSent) return;
+    if (e instanceof HeavyReportRefusedError) {
+      res.status(429).json({ ok: false, refused: true, code: e.code, error: e.message });
+      return;
+    }
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
 

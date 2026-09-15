@@ -40,6 +40,7 @@ import * as schema from './schema';
 import path from 'path';
 import fs from 'fs';
 import { resolveDbDir } from './resolveDbDir';
+import { assertSyntheticSimulationNotOpeningProductionDb } from './syntheticSimulationDbGuard';
 
 // ARGUS_DB_PATH lets integration tests (or anything else) point at an isolated SQLite file
 // instead of the real data/argus.db - see CLAUDE.md's warning about a second connection to the
@@ -49,6 +50,26 @@ if (!fs.existsSync(dbDir)) {
   fs.mkdirSync(dbDir, { recursive: true });
 }
 const dbPath = process.env.ARGUS_DB_PATH || path.join(dbDir, 'argus.db');
+
+// Mechanical isolation guard (2026-09-14, Synthetic Market Session Simulator hardening - a real
+// production-database pollution incident happened before this existed: a simulator module chain
+// imported `db` before its own isolation setup had a chance to set ARGUS_DB_PATH, so this file
+// opened the live data/argus.db instead of an isolated one). SYNTHETIC_SIMULATION=true is a flag
+// ONLY a synthetic simulation session ever sets (never true in live/paper/test operation - grep
+// confirms no other caller sets it) - if that flag is set but dbPath still resolves to the real
+// production database, isolation was not actually established and this must fail LOUDLY and
+// IMMEDIATELY, before a connection is ever opened, rather than being merely detected afterward.
+// This is defense in depth alongside SyntheticSimulationSafety.ts's own pre-flight check and the
+// child-process env-at-spawn-time architecture in scripts/sim/marketOpen.ts - any ONE of the three
+// failing to catch a future mistake still leaves the other two standing between a bug and the live
+// database. Logic lives in a pure, separately unit-tested function (syntheticSimulationDbGuard.ts)
+// so it can be proven correct without any test ever risking opening this real file.
+assertSyntheticSimulationNotOpeningProductionDb(
+  process.env.SYNTHETIC_SIMULATION === 'true',
+  dbPath,
+  path.join(dbDir, 'argus.db'),
+);
+
 const sqlite = new Database(dbPath);
 sqlite.pragma('journal_mode = WAL');
 sqlite.pragma('busy_timeout = 5000');

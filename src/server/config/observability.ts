@@ -40,6 +40,22 @@ export interface ObservabilityConfig {
    *  PyTorch process - see config/observability.json's comment for the measured evidence. */
   memoryTelemetryWarningCommittedMb: number;
   memoryTelemetryCriticalCommittedMb: number;
+  /** P1 memory-leak investigation (2026-09-14) - see config/observability.json's own comment for
+   *  the full rationale and the explicit safety scoping (baseline + one first-crossing snapshot +
+   *  one optional follow-up, hard lifetime cap, disk-bounded, never gates the existing
+   *  TRADING_PAUSED intervention). */
+  heapSnapshotEnabled: boolean;
+  heapSnapshotDir: string;
+  heapSnapshotBaselineDelayMs: number;
+  heapSnapshotCooldownMs: number;
+  heapSnapshotFollowUpDelayMs: number;
+  heapSnapshotMaxPerProcessLifetime: number;
+  heapSnapshotMaxFilesOnDisk: number;
+  heapSnapshotMaxTotalMb: number;
+  /** Trading/research-plane isolation (2026-09-14, item #25) - see config/observability.json's own
+   *  comment. Bounds how long a caller waits on a heavy report, not the underlying synchronous
+   *  SQLite work itself. */
+  heavyReportTimeoutMs: number;
   marketDataPersist: boolean;
   maxPayloadChars: number;
   promptHashLength: number;
@@ -60,6 +76,9 @@ const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'memoryTelemetryWarningCommittedMb', 'memoryTelemetryCriticalCommittedMb',
   'maxPayloadChars', 'promptHashLength',
   'legacyJsonlMaxBytes', 'legacyJsonlMaxBackups',
+  'heapSnapshotBaselineDelayMs', 'heapSnapshotCooldownMs', 'heapSnapshotFollowUpDelayMs',
+  'heapSnapshotMaxPerProcessLifetime', 'heapSnapshotMaxFilesOnDisk', 'heapSnapshotMaxTotalMb',
+  'heavyReportTimeoutMs',
 ];
 
 function loadObservabilityConfig(): ObservabilityConfig {
@@ -80,6 +99,12 @@ function loadObservabilityConfig(): ObservabilityConfig {
   }
   if (!Array.isArray(raw.safetyCategories) || raw.safetyCategories.length === 0) {
     throw new Error('config/observability.json missing safetyCategories');
+  }
+  if (typeof raw.heapSnapshotEnabled !== 'boolean') {
+    throw new Error('config/observability.json missing boolean field: heapSnapshotEnabled');
+  }
+  if (typeof raw.heapSnapshotDir !== 'string' || raw.heapSnapshotDir.length === 0) {
+    throw new Error('config/observability.json missing string field: heapSnapshotDir');
   }
   return raw;
 }

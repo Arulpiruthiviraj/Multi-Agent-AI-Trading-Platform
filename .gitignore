@@ -17,6 +17,7 @@ data/*.db-wal
 data/audit_trail.jsonl
 data/shadow_portfolio.json
 data/backups/
+data/heap-snapshots/
 data/ohlcv_export.json
 data/research/
 data/replays/

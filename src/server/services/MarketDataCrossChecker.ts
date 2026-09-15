@@ -28,6 +28,7 @@ import { BrokerManager } from '../../brokers/BrokerManager';
 import { marketDataWorker } from './MarketDataWorker';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { quantThresholds } from '../config/quantThresholds';
+import { createSingleFlightGuard, type SingleFlightGuard } from '../core/singleFlightInterval';
 
 const CHECK_INTERVAL_MS = runtimeIntervals.marketDataCrossCheckMs;
 export const DIVERGENCE_THRESHOLD_PCT = quantThresholds.priceSourceDivergencePct;
@@ -43,6 +44,15 @@ interface QuestradeLikeQuoteSource {
 
 export class MarketDataCrossChecker {
   private intervalId: NodeJS.Timeout | null = null;
+  // Real gap found and fixed (2026-09-15, post-forensic-audit timer sweep): runCheck() sequentially
+  // awaits a real Questrade REST call per active symbol, so its own duration scales with active-
+  // symbol count and Questrade latency - with no guard, a slow cycle overlapping the next tick
+  // doubled outbound Questrade calls for the same symbol set. Not a P1-A-class danger (no growing
+  // table, no unbounded memory), but a real, avoidable API-quota/rate-limit waste - same reusable
+  // guard every other periodic worker in this codebase already uses.
+  private readonly guard: SingleFlightGuard = createSingleFlightGuard(
+    (e) => console.error('[MarketDataCrossChecker] check failed', e),
+  );
 
   constructor(
     private readonly getQuestradeSource: () => QuestradeLikeQuoteSource | undefined = () =>
@@ -65,7 +75,17 @@ export class MarketDataCrossChecker {
     }
   }
 
+  getGuardMetrics() {
+    return this.guard.getMetrics();
+  }
+
+  /** Public entry point - coalesces against any other in-flight call through the SAME guard
+   *  instance (timer-driven or a future manual "check now" caller), not just the timer path. */
   async runCheck(): Promise<void> {
+    await this.guard.run(() => this.runCheckInternal());
+  }
+
+  private async runCheckInternal(): Promise<void> {
     const questrade = this.getQuestradeSource();
     if (!questrade || typeof questrade.getQuote !== 'function') return;
 

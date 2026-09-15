@@ -970,6 +970,27 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'strategy-recertification'() {
+    // Strategy lifecycle re-certification review (2026-09-14, item #9 / mandate Phase 11). Real
+    // gap closed: a RETIRED/DEGRADED strategy's evidence can drift materially with nothing ever
+    // re-checking it. Review only - never auto-reinstates; see StrategyRecertification.ts's own
+    // header for the full rationale.
+    const res = await fetch(`${BASE}/api/v2/observability/strategy-recertification?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 30_000)),
+    });
+    console.log(await res.text());
+  },
+  async 'strategy-score-normalization-comparison'() {
+    // Raw-vs-normalized strategy score comparison (2026-09-14, item #7 / mandate Phase 10).
+    // Read-only research signal only - never flips the production flag. See
+    // strategyScoreNormalizationComparison.ts's own header for the method and its honest limits.
+    const res = await fetch(`${BASE}/api/v2/observability/strategy-score-normalization-comparison?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 60_000)),
+    });
+    console.log(await res.text());
+  },
   async 'strategy-profitability'() {
     // Phase 13 (2026-08-31 real-edge audit): real net-P&L per strategy from real closed
     // round-trip fills - never estimated. Separate from strategy-fairness/strategy-readiness:
@@ -1412,7 +1433,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

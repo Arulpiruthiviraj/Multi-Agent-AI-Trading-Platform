@@ -27,6 +27,15 @@ export const SIGNIFICANT_MISMATCH_DOLLARS = tradingSafety.reconSignificantMismat
 const ACCOUNT_CONSISTENCY_TOLERANCE_PCT = tradingSafety.reconAccountConsistencyTolerancePct;
 const ACCOUNT_CONSISTENCY_TOLERANCE_FLOOR_DOLLARS = tradingSafety.reconAccountConsistencyToleranceFloorDollars;
 const PAUSE_CONSECUTIVE_CYCLES = tradingSafety.reconPauseConsecutiveMismatchCycles;
+// Real gap found and fixed (2026-09-15, post-audit remediation): the previous behavior on a
+// broker.portfolio() throw (network error, auth failure, broker outage) was to log and swallow -
+// syncState unconditionally returned to READY in finally, and the next attempt was an ordinary,
+// un-escalated 5-minute-tick blind retry. This directly contradicted the documented invariant
+// "UNKNOWN broker state -> PAUSE + RECONCILE, never blind retry." Reuses the SAME consecutive-
+// cycle debounce FD-7 already established for symbol-level mismatches (never pause on one
+// transient blip), applied here to "cannot verify positions at all," which is a strictly more
+// serious condition than any single symbol mismatch - so it is held to the same, not a laxer, bar.
+const SYNC_FAILURE_FAULT_KEY = discrepancyFaultKey('SYNC_FAILURE', '__BROKER__');
 
 interface MismatchDetail {
   symbol: string;
@@ -115,6 +124,9 @@ export class PortfolioReconciliationWorker {
       // Broker fetch FIRST, then a fresh local read. Comparing a T0 snapshot taken before
       // broker.portfolio() returns is what made concurrent hydrates look like MISSING_LOCALLY.
       const brokerPortfolio = await broker.portfolio();
+      // A successful fetch proves the broker is reachable again - clear any accumulated
+      // SYNC_FAILURE streak so a past outage doesn't count toward a future, unrelated one.
+      this.consecutiveFaults.delete(SYNC_FAILURE_FAULT_KEY);
 
       const remotePositions = brokerPortfolio.positions || [];
       // Raw SQL inside a better-sqlite3 transaction (same writer connection) — drizzle's
@@ -509,7 +521,47 @@ export class PortfolioReconciliationWorker {
 
       console.log(`[PortfolioReconciliation] Sync complete. ${mismatches.length} mismatch(es).`);
     } catch (e) {
-       console.error("[PortfolioReconciliation] Error during sync:", e);
+      console.error("[PortfolioReconciliation] Error during sync:", e);
+      const message = e instanceof Error ? e.message : String(e);
+      const failureCount = (this.consecutiveFaults.get(SYNC_FAILURE_FAULT_KEY) ?? 0) + 1;
+      this.consecutiveFaults.set(SYNC_FAILURE_FAULT_KEY, failureCount);
+      const escalated = failureCount >= PAUSE_CONSECUTIVE_CYCLES;
+      const warmupActive = isReconciliationWarmupActive();
+      let pausedNow = false;
+      if (escalated && !warmupActive && tradingEngine.state.tradingState === 'TRADING_ENABLED') {
+        await tradingEngine.setTradingState('TRADING_PAUSED', {
+          reason: `Portfolio reconciliation could not sync with the broker for ${failureCount} consecutive cycles (${message}) - unknown position state, trading paused pending manual review.`,
+          actor: 'system:PortfolioReconciliation',
+        });
+        pausedNow = true;
+        console.error(`[PortfolioReconciliation] SYNC_FAILURE escalated after ${failureCount} consecutive cycles - trading paused (tradingState=TRADING_PAUSED).`);
+      } else if (escalated && warmupActive) {
+        console.warn(`[PortfolioReconciliation] SYNC_FAILURE reached the pause threshold (${failureCount}/${PAUSE_CONSECUTIVE_CYCLES}) but boot warmup is active - pause suppressed until sync stabilizes.`);
+      } else {
+        console.warn(`[PortfolioReconciliation] SYNC_FAILURE deferred (${failureCount}/${PAUSE_CONSECUTIVE_CYCLES}) - not pausing on a one-off broker error.`);
+      }
+      eventBus.publish(EVENTS.RECONCILIATION_SYNC_FAILED, {
+        timestamp: new Date().toISOString(),
+        error: message,
+        consecutiveFailures: failureCount,
+        pauseThreshold: PAUSE_CONSECUTIVE_CYCLES,
+        tradingPaused: pausedNow,
+      });
+      // Best-effort history row, matching the success path's own persistence - never let a
+      // logging failure mask the real error already logged above.
+      try {
+        const brokerName = brokerManager.getActiveBroker()?.name ?? 'unknown';
+        await db.insert(reconciliationEvents).values({
+          checkedAt: new Date().toISOString(),
+          broker: brokerName,
+          matches: false,
+          mismatches: JSON.stringify([{ type: 'SYNC_FAILURE', error: message, consecutiveFailures: failureCount }]),
+          worstImpactDollars: null,
+          actionTaken: pausedNow ? 'SYNC_FAILURE_TRADING_PAUSED' : 'SYNC_FAILURE_DEFERRED',
+        });
+      } catch (persistErr) {
+        console.error('[PortfolioReconciliation] Failed to persist SYNC_FAILURE reconciliation history', persistErr);
+      }
     } finally {
       brokerManager.endBrokerSync();
       this.isReconciling = false;

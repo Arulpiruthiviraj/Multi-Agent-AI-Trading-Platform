@@ -21,6 +21,7 @@
  */
 import { db } from '../db';
 import { agentPredictions, kronosPredictions, predictionOutcomes, newsPredictions } from '../db/schema';
+import { and, eq, isNull, ne, notLike, or, asc, sql } from 'drizzle-orm';
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { tradingSafety } from '../config/tradingSafety';
 import { resolveEvaluationDueMs } from '../news/NewsPredictionEvaluation';
@@ -29,6 +30,7 @@ import type { ExpectedHorizon } from '../news/NewsIntelligence';
 import { TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
 import { evaluationHorizons } from '../config/evaluationHorizons';
 import { evaluateTrendFollowingExit } from './TrendFollowingExitEvaluator';
+import { createSingleFlightGuard, type SingleFlightGuard, type SingleFlightIntervalMetrics } from '../core/singleFlightInterval';
 
 export const EVALUATION_HORIZON_MS = tradingSafety.evaluationHorizonMs;
 // Kronos-specific horizon (M5, ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md) - see tradingSafety.ts's
@@ -136,13 +138,36 @@ export async function evaluatePrediction(
   };
 }
 
+export interface PredictionOutcomeEvaluatorCycleStats {
+  rowsFetched: number;
+  rowsProcessed: number;
+  rowsWritten: number;
+  batches: number;
+  bailedOnWallClock: boolean;
+  /** True backlog size (a COUNT(*) against the same pending condition, not just this cycle's
+   *  bounded fetch window) - operator correctness audit (2026-09-14): "rowsRemaining actually
+   *  reflects backlog rather than just the current query window." Summed across all three source
+   *  tables (agent_predictions + kronos_predictions + news_predictions). */
+  rowsRemaining: number;
+}
+
+const EMPTY_CYCLE_STATS: PredictionOutcomeEvaluatorCycleStats = {
+  rowsFetched: 0, rowsProcessed: 0, rowsWritten: 0, batches: 0, bailedOnWallClock: false, rowsRemaining: 0,
+};
+
 export class PredictionOutcomeEvaluator {
   private intervalId: NodeJS.Timeout | null = null;
+  // P1-A remediation (2026-09-14): the guard lives on evaluatePending() itself, not on the timer -
+  // see singleFlightInterval.ts's own doc comment for why. This protects the timer-driven cycle
+  // AND any future direct/manual caller (an ops "re-run now" route, a test) uniformly, rather than
+  // only the specific call path start() happens to use today.
+  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[PredictionOutcomeEvaluator] Cycle failed', e));
+  private lastCycleStats: PredictionOutcomeEvaluatorCycleStats = EMPTY_CYCLE_STATS;
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(() => this.evaluatePending().catch(e => console.error('[PredictionOutcomeEvaluator] Cycle failed', e)), tradingSafety.predictionOutcomeIntervalMs);
-    this.evaluatePending().catch(e => console.error('[PredictionOutcomeEvaluator] Initial cycle failed', e));
+    this.intervalId = setInterval(() => { void this.evaluatePending(); }, tradingSafety.predictionOutcomeIntervalMs);
+    void this.evaluatePending();
   }
 
   stop() {
@@ -152,26 +177,73 @@ export class PredictionOutcomeEvaluator {
     }
   }
 
-  async evaluatePending() {
-    const now = Date.now();
-    const existing = await db.select().from(predictionOutcomes).all();
-    const evaluatedKeys = new Set(existing.map(o => `${o.sourceTable}:${o.predictionId}`));
+  /** P1-A remediation observability (2026-09-14): overlap/coalescing + last-cycle row counts, for
+   *  the same class of "is this evaluator actually bounded" question the forensic harness answers
+   *  offline - exposed here so it can be checked live too (GET /api/v2/observability/metrics or a
+   *  future dedicated route), not just measured after the fact. */
+  getMetrics(): SingleFlightIntervalMetrics & { lastCycle: PredictionOutcomeEvaluatorCycleStats } {
+    return { ...this.guard.getMetrics(), lastCycle: this.lastCycleStats };
+  }
 
-    const predictions = await db.select().from(agentPredictions).all();
-    for (const p of predictions) {
-      // KronosEngine's own forecasts are already evaluated once, cleanly, from kronos_predictions
-      // below - this table also carries a KronosMetrics dual-write (kept for KronosDashboardData's
-      // trajectory chart) and, for ideas that clear the bar, a second ReflectionEngine-authored row.
-      // Evaluating those too would grade the same underlying forecast 2-3x (ARGUS_PREDICTIVE_EDGE_
-      // FORENSIC_AUDIT.md finding M1) - skip them here rather than fix it downstream in every
-      // consumer.
-      if (p.agentName === 'KronosEngine') continue;
-      // Real defect fixed (2026-08-26 self-improvement loop audit): never grade a Digital Twin
-      // telemetry-pulse row (UI demo animation) against real market data - see
-      // ReflectionEngine.ts's identical fix for the write-side of this same gap.
-      if (p.traceId && p.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX)) continue;
-      const key = `agent_predictions:${p.id}`;
-      if (evaluatedKeys.has(key)) continue;
+  /** Public entry point - single-flight guarded, safe to call concurrently from anywhere. */
+  async evaluatePending(): Promise<void> {
+    await this.guard.run(() => this.runCycle());
+  }
+
+  private async runCycle(): Promise<void> {
+    const now = Date.now();
+    const cycleStart = Date.now();
+    const batchSize = tradingSafety.predictionOutcomeBatchSize;
+    const maxWallClockMs = tradingSafety.predictionOutcomeMaxCycleWallClockMs;
+    const stats: PredictionOutcomeEvaluatorCycleStats = { rowsFetched: 0, rowsProcessed: 0, rowsWritten: 0, batches: 0, bailedOnWallClock: false, rowsRemaining: 0 };
+    const outOfTime = () => Date.now() - cycleStart > maxWallClockMs;
+
+    // Bounded anti-join, oldest-first: a row stops being a candidate the moment it actually has a
+    // prediction_outcomes row (P0.4-style unique index on (predictionId, sourceTable) already
+    // backs this). Deliberately NOT a monotonic id/timestamp watermark - the exit-aware
+    // walk-forward path below can legitimately leave a row "not yet evaluated" for a long
+    // configured window, and a watermark that had already advanced past it would silently never
+    // retry it. KronosEngine rows and telemetry-pulse rows are excluded here (not just skipped in
+    // the loop below) because this evaluator NEVER writes an outcome for them - leaving them in the
+    // anti-join would mean they permanently occupy batch slots on every future cycle instead of
+    // freeing bounded capacity for rows that actually need evaluation.
+    const agentPendingCondition = and(
+      isNull(predictionOutcomes.id),
+      ne(agentPredictions.agentName, 'KronosEngine'),
+      // SQL three-valued logic: `traceId NOT LIKE 'x'` evaluates to NULL (excluded, not included)
+      // when traceId itself is NULL - the common case, since most predictions carry no traceId.
+      // Must explicitly allow the NULL case through, or every traceId-less row is silently
+      // dropped from the anti-join - caught by this file's own test suite before this shipped.
+      or(isNull(agentPredictions.traceId), notLike(agentPredictions.traceId, `${TELEMETRY_PULSE_TRACE_PREFIX}%`)),
+    );
+    const pendingAgent = await db
+      .select({ p: agentPredictions })
+      .from(agentPredictions)
+      .leftJoin(predictionOutcomes, and(
+        eq(predictionOutcomes.predictionId, agentPredictions.id),
+        eq(predictionOutcomes.sourceTable, 'agent_predictions'),
+      ))
+      .where(agentPendingCondition)
+      .orderBy(asc(agentPredictions.timestamp))
+      .limit(batchSize);
+    stats.rowsFetched += pendingAgent.length;
+    stats.batches += 1;
+    // Real backlog size, not just this cycle's bounded window - operator correctness audit
+    // requirement. Same WHERE/JOIN, no LIMIT; the index added alongside this fix
+    // (idx_agent_predictions_timestamp) keeps this cheap even as the table grows.
+    const [{ count: agentRemainingCount }] = await db
+      .select({ count: sql<number>`count(*)` })
+      .from(agentPredictions)
+      .leftJoin(predictionOutcomes, and(
+        eq(predictionOutcomes.predictionId, agentPredictions.id),
+        eq(predictionOutcomes.sourceTable, 'agent_predictions'),
+      ))
+      .where(agentPendingCondition);
+    stats.rowsRemaining += agentRemainingCount;
+
+    for (const { p } of pendingAgent) {
+      if (outOfTime()) { stats.bailedOnWallClock = true; break; }
+      stats.rowsProcessed += 1;
       const predTime = new Date(p.timestamp).getTime();
       // Evaluation-horizon-mismatch remediation (2026-09-04): resolved per agent/strategy instead
       // of the previous blind universal EVALUATION_HORIZON_MS - see predictionIndependencePolicy.ts's
@@ -213,6 +285,7 @@ export class PredictionOutcomeEvaluator {
         };
         try {
           await db.insert(predictionOutcomes).values(mapped).onConflictDoNothing();
+          stats.rowsWritten += 1;
         } catch (e) {
           console.error('[PredictionOutcomeEvaluator] Failed to persist exit-aware outcome', e);
         }
@@ -223,28 +296,53 @@ export class PredictionOutcomeEvaluator {
       if (result) {
         try {
           await db.insert(predictionOutcomes).values(result).onConflictDoNothing();
+          stats.rowsWritten += 1;
         } catch (e) {
           console.error('[PredictionOutcomeEvaluator] Failed to persist outcome', e);
         }
       }
     }
 
-    const kronosRows = await db.select().from(kronosPredictions).all();
-    for (const k of kronosRows) {
-      const idStr = String(k.id);
-      const key = `kronos_predictions:${idStr}`;
-      if (evaluatedKeys.has(key)) continue;
-      const predTime = new Date(k.timestamp).getTime();
-      // Kronos's own forecast horizon is tick-based, not wall-clock - grade it over a shorter,
-      // deliberate window instead of the generic 60-minute EVALUATION_HORIZON_MS (M5).
-      if (now - predTime < KRONOS_EVALUATION_HORIZON_MS) continue;
+    // kronos_predictions: same bounded anti-join pattern - no always-skipped category here (unlike
+    // the agent_predictions loop above), so no extra exclusion filters are needed.
+    if (!outOfTime()) {
+      const kronosJoinCondition = and(
+        eq(predictionOutcomes.predictionId, kronosPredictions.id),
+        eq(predictionOutcomes.sourceTable, 'kronos_predictions'),
+      );
+      const pendingKronos = await db
+        .select({ k: kronosPredictions })
+        .from(kronosPredictions)
+        .leftJoin(predictionOutcomes, kronosJoinCondition)
+        .where(isNull(predictionOutcomes.id))
+        .orderBy(asc(kronosPredictions.timestamp))
+        .limit(batchSize);
+      stats.rowsFetched += pendingKronos.length;
+      stats.batches += 1;
+      const [{ count: kronosRemainingCount }] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(kronosPredictions)
+        .leftJoin(predictionOutcomes, kronosJoinCondition)
+        .where(isNull(predictionOutcomes.id));
+      stats.rowsRemaining += kronosRemainingCount;
 
-      const result = await evaluatePrediction(idStr, 'kronos_predictions', k.symbol, k.prediction, predTime, KRONOS_EVALUATION_HORIZON_MS);
-      if (result) {
-        try {
-          await db.insert(predictionOutcomes).values(result).onConflictDoNothing();
-        } catch (e) {
-          console.error('[PredictionOutcomeEvaluator] Failed to persist outcome', e);
+      for (const { k } of pendingKronos) {
+        if (outOfTime()) { stats.bailedOnWallClock = true; break; }
+        stats.rowsProcessed += 1;
+        const idStr = String(k.id);
+        const predTime = new Date(k.timestamp).getTime();
+        // Kronos's own forecast horizon is tick-based, not wall-clock - grade it over a shorter,
+        // deliberate window instead of the generic 60-minute EVALUATION_HORIZON_MS (M5).
+        if (now - predTime < KRONOS_EVALUATION_HORIZON_MS) continue;
+
+        const result = await evaluatePrediction(idStr, 'kronos_predictions', k.symbol, k.prediction, predTime, KRONOS_EVALUATION_HORIZON_MS);
+        if (result) {
+          try {
+            await db.insert(predictionOutcomes).values(result).onConflictDoNothing();
+            stats.rowsWritten += 1;
+          } catch (e) {
+            console.error('[PredictionOutcomeEvaluator] Failed to persist outcome', e);
+          }
         }
       }
     }
@@ -252,25 +350,49 @@ export class PredictionOutcomeEvaluator {
     // Phase F6: News's own ACTIVE_OBSERVE-mode predictions (never TRADE_IDEA_GENERATED, so never
     // seen by ReflectionEngine's agent_predictions listener). Direction is BULLISH/BEARISH, not
     // BUY/SELL - mapped here so evaluatePrediction's existing BUY/SELL contract stays untouched
-    // for its other two callers.
-    const newsRows = await db.select().from(newsPredictions).all();
-    for (const n of newsRows) {
-      const key = `news_predictions:${n.id}`;
-      if (evaluatedKeys.has(key)) continue;
-      const predTime = new Date(n.createdAt).getTime();
-      const horizonMs = resolveEvaluationDueMs(n.expectedHorizon as ExpectedHorizon, newsHorizonDurations());
-      if (now - predTime < horizonMs) continue;
+    // for its other two callers. Same bounded anti-join pattern; no always-skipped category here.
+    if (!outOfTime()) {
+      const newsJoinCondition = and(
+        eq(predictionOutcomes.predictionId, newsPredictions.id),
+        eq(predictionOutcomes.sourceTable, 'news_predictions'),
+      );
+      const pendingNews = await db
+        .select({ n: newsPredictions })
+        .from(newsPredictions)
+        .leftJoin(predictionOutcomes, newsJoinCondition)
+        .where(isNull(predictionOutcomes.id))
+        .orderBy(asc(newsPredictions.createdAt))
+        .limit(batchSize);
+      stats.rowsFetched += pendingNews.length;
+      stats.batches += 1;
+      const [{ count: newsRemainingCount }] = await db
+        .select({ count: sql<number>`count(*)` })
+        .from(newsPredictions)
+        .leftJoin(predictionOutcomes, newsJoinCondition)
+        .where(isNull(predictionOutcomes.id));
+      stats.rowsRemaining += newsRemainingCount;
 
-      const side = n.direction === 'BULLISH' ? 'BUY' : n.direction === 'BEARISH' ? 'SELL' : 'HOLD';
-      const result = await evaluatePrediction(n.id, 'news_predictions', n.symbol, side, predTime, horizonMs);
-      if (result) {
-        try {
-          await db.insert(predictionOutcomes).values(result).onConflictDoNothing();
-        } catch (e) {
-          console.error('[PredictionOutcomeEvaluator] Failed to persist outcome', e);
+      for (const { n } of pendingNews) {
+        if (outOfTime()) { stats.bailedOnWallClock = true; break; }
+        stats.rowsProcessed += 1;
+        const predTime = new Date(n.createdAt).getTime();
+        const horizonMs = resolveEvaluationDueMs(n.expectedHorizon as ExpectedHorizon, newsHorizonDurations());
+        if (now - predTime < horizonMs) continue;
+
+        const side = n.direction === 'BULLISH' ? 'BUY' : n.direction === 'BEARISH' ? 'SELL' : 'HOLD';
+        const result = await evaluatePrediction(n.id, 'news_predictions', n.symbol, side, predTime, horizonMs);
+        if (result) {
+          try {
+            await db.insert(predictionOutcomes).values(result).onConflictDoNothing();
+            stats.rowsWritten += 1;
+          } catch (e) {
+            console.error('[PredictionOutcomeEvaluator] Failed to persist outcome', e);
+          }
         }
       }
     }
+
+    this.lastCycleStats = stats;
   }
 }
 

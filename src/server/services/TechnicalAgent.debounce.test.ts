@@ -3,6 +3,7 @@ import { technicalAgent } from './TechnicalAgent';
 import { quantThresholds } from '../config/quantThresholds';
 import { eventBus } from '../core/EventBus';
 import { tradingEngine } from '../engines/TradingEngine';
+import { setActiveReplaySession, type ActiveReplaySession } from '../replay/ReplayContext';
 
 /**
  * ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M3: a still-true, unchanged signal state used
@@ -170,6 +171,94 @@ describe('TechnicalAgent.analyzeTick integration - debounce prevents duplicate e
 
       // Without the debounce this would have re-emitted on every one of those 10 re-evaluations.
       expect(afterRepeatedEvalCount).toBeLessThanOrEqual(firstCount + 1);
+    } finally {
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
+      tradingEngine.state.enabled = originalEnabled;
+      tradingEngine.state.tradingState = originalTradingState;
+    }
+  });
+});
+
+/**
+ * Real gap found and fixed (2026-09-14, Synthetic Market Session Simulator certification):
+ * technicalEvaluationCooldownMs is a genuine, necessary real-wall-clock throttle for LIVE tick-rate
+ * MARKET_DATA (see the crash incident documented on TechnicalProposerAgent's own priceHistory
+ * field). A replay-shaped session (Historical Evaluation, or the Synthetic Market Session Simulator)
+ * drives this same live class via real MARKET_DATA events but paces delivery far faster than real
+ * time, so a Date.now()-based cooldown would only ever allow ONE evaluation per session regardless
+ * of how many simulated minutes of genuine opportunity pass. debounceNowMs() fixes this by reading
+ * the active replay session's own clock when one is installed - these tests prove both halves: the
+ * redirection actually happens, and live behavior (no active session) is unchanged.
+ */
+describe('TechnicalAgent debounce is replay-clock-aware when a replay session is active', () => {
+  const agent = technicalAgent as any;
+  const SYMBOL = 'RPDBG';
+
+  afterEach(() => {
+    setActiveReplaySession(null);
+    delete agent.priceHistory[SYMBOL];
+    delete agent.lastEvaluatedAt[SYMBOL];
+    delete agent.previousIndicators[SYMBOL];
+    delete agent.lastEmittedAt[SYMBOL];
+  });
+
+  function fakeReplaySession(nowFn: () => number): ActiveReplaySession {
+    return { clock: { now: nowFn } } as unknown as ActiveReplaySession;
+  }
+
+  it('debounceNowMs() reads the active replay session clock instead of Date.now() when one is installed', () => {
+    setActiveReplaySession(fakeReplaySession(() => 123456789));
+    expect(agent.debounceNowMs()).toBe(123456789);
+  });
+
+  it('debounceNowMs() falls back to real Date.now() when no replay session is active - live behavior unchanged', () => {
+    setActiveReplaySession(null);
+    const before = Date.now();
+    const value = agent.debounceNowMs();
+    const after = Date.now();
+    expect(value).toBeGreaterThanOrEqual(before);
+    expect(value).toBeLessThanOrEqual(after);
+  });
+
+  it('analyzeTick re-evaluates on simulated-clock elapsed time even when almost no real wall-clock time has passed', () => {
+    const originalEnabled = tradingEngine.state.enabled;
+    const originalTradingState = tradingEngine.state.tradingState;
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+
+    // Simulated clock starts far in the future of technicalEvaluationCooldownMs so the very first
+    // warmup-completing tick's "last - 0" comparison isn't accidentally always-pass for an unrelated
+    // reason - then advances in large simulated jumps between ticks, far exceeding
+    // technicalEvaluationCooldownMs each time, while real wall-clock time barely moves at all.
+    let simulatedNowMs = quantThresholds.technicalEvaluationCooldownMs * 100;
+    setActiveReplaySession(fakeReplaySession(() => simulatedNowMs));
+
+    const emitted: any[] = [];
+    const listener = (idea: any) => emitted.push(idea);
+    eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
+    try {
+      const bars = quantThresholds.technicalHistoryBars;
+      let p = 100;
+      let i = 0;
+      for (; i < bars; i++) {
+        p += (i % 3 === 2) ? -1.15 : 1.0;
+        agent.analyzeTick({ symbol: SYMBOL, price: p, volume: 1, timestamp: new Date().toISOString() });
+      }
+      const firstCount = emitted.filter((e) => e.symbol === SYMBOL).length;
+      expect(firstCount).toBe(1); // the fixture genuinely fires once, same as the plain-Date.now() case above
+
+      // Advance the SIMULATED clock well past technicalEvaluationCooldownMs (real wall-clock time:
+      // effectively zero) and re-run the identical oscillation so the signal state stays "still
+      // true" - checkStrategies must genuinely re-run here, proving the gate is keyed off the
+      // replay session's clock, not real elapsed milliseconds.
+      for (let j = 0; j < 5; j++, i++) {
+        simulatedNowMs += quantThresholds.technicalEvaluationCooldownMs + 1;
+        p += (i % 3 === 2) ? -1.15 : 1.0;
+        agent.analyzeTick({ symbol: SYMBOL, price: p, volume: 1, timestamp: new Date().toISOString() });
+      }
+      // lastEvaluatedAt must have actually advanced to the simulated clock's value, proving
+      // checkStrategies re-ran on simulated time rather than staying stuck at its first value.
+      expect(agent.lastEvaluatedAt[SYMBOL]).toBe(simulatedNowMs);
     } finally {
       eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
       tradingEngine.state.enabled = originalEnabled;

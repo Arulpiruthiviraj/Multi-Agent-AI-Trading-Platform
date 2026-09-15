@@ -12,6 +12,11 @@ export interface MultiHorizonDefinition {
 export interface MultiHorizonOutcomeTrackingConfig {
   horizons: MultiHorizonDefinition[];
   evaluationIntervalMs: number;
+  /** P1-A remediation (2026-09-14) - see PredictionOutcomeEvaluator's predictionOutcomeBatchSize
+   *  doc comment (tradingSafety.ts) for the full rationale; same bounded-anti-join pattern here. */
+  batchSize: number;
+  /** Safety valve - see tradingSafety.ts's predictionOutcomeMaxCycleWallClockMs doc comment. */
+  maxCycleWallClockMs: number;
 }
 
 function loadMultiHorizonOutcomeTracking(): MultiHorizonOutcomeTrackingConfig {
@@ -47,7 +52,17 @@ function loadMultiHorizonOutcomeTracking(): MultiHorizonOutcomeTrackingConfig {
     throw new Error('config/multiHorizonOutcomeTracking.json missing positive-number field: evaluationIntervalMs');
   }
 
-  return { horizons, evaluationIntervalMs };
+  const batchSize = raw.batchSize;
+  if (typeof batchSize !== 'number' || !(batchSize > 0) || !Number.isInteger(batchSize)) {
+    throw new Error('config/multiHorizonOutcomeTracking.json missing positive-integer field: batchSize');
+  }
+
+  const maxCycleWallClockMs = raw.maxCycleWallClockMs;
+  if (typeof maxCycleWallClockMs !== 'number' || !(maxCycleWallClockMs > 0)) {
+    throw new Error('config/multiHorizonOutcomeTracking.json missing positive-number field: maxCycleWallClockMs');
+  }
+
+  return { horizons, evaluationIntervalMs, batchSize, maxCycleWallClockMs };
 }
 
 export const multiHorizonOutcomeTracking: MultiHorizonOutcomeTrackingConfig = loadMultiHorizonOutcomeTracking();

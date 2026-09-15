@@ -478,7 +478,14 @@ export const agentPredictions = sqliteTable('agent_predictions', {
   // generation time; null for every other agent (TechnicalAgent, NewsEngine, FundamentalAgent,
   // MacroAgent, KronosForecastAgent, ...) - never fabricated, never backfilled after the fact.
   strategyId: text('strategy_id'),
-});
+}, (table) => ({
+  // P1-A remediation (2026-09-14) - PredictionOutcomeEvaluator/MultiHorizonOutcomeEvaluator's
+  // bounded anti-join query (ORDER BY timestamp ASC LIMIT batchSize, filtered by absence of a
+  // matching prediction_outcomes/prediction_outcome_horizons row) needs this to actually stay
+  // cheap at scale - without it, "bounded to batchSize rows returned" still costs a full-table
+  // scan+sort every cycle on a 100K+ row table before the LIMIT is even applied.
+  timestampIdx: index('idx_agent_predictions_timestamp').on(table.timestamp),
+}));
 
 export const agentPerformanceStats = sqliteTable('agent_performance_stats', {
   agentName: text('agent_name').primaryKey(),
@@ -641,7 +648,11 @@ export const newsPredictions = sqliteTable('news_predictions', {
   /** ACTIVE | STAGED_FOR_OPEN | EXPIRED | CONSUMED — overnight priming for next RTH open. */
   stagingStatus: text('staging_status').default('ACTIVE'),
   expiresAt: text('expires_at'),
-});
+}, (table) => ({
+  // P1-A remediation (2026-09-14) - see agentPredictions' identical timestampIdx doc comment
+  // (PredictionOutcomeEvaluator's third bounded anti-join loop orders by createdAt here).
+  createdAtIdx: index('idx_news_predictions_created_at').on(table.createdAt),
+}));
 
 export const newsProviders = sqliteTable('news_providers', {
   id: text('id').primaryKey(),
@@ -694,7 +705,10 @@ export const kronosPredictions = sqliteTable('kronos_predictions', {
   inputRealizedVolatility: real('input_realized_volatility'),
   inputMeanAbsReturn: real('input_mean_abs_return'),
   inputRangeRatio: real('input_range_ratio'),
-});
+}, (table) => ({
+  // P1-A remediation (2026-09-14) - see agentPredictions' identical timestampIdx doc comment.
+  timestampIdx: index('idx_kronos_predictions_timestamp').on(table.timestamp),
+}));
 
 // Per-agent AI provider routing overrides (Phase 6). AIRouter.setAgentRoute() already existed and
 // routeTask() already checks it, but nothing ever called it - AIProviderManagement.tsx's "Agent

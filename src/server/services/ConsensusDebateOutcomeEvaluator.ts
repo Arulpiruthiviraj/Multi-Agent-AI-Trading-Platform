@@ -24,19 +24,20 @@ import { consensusDebatePredictions, predictionOutcomes } from '../db/schema';
 import { eq } from 'drizzle-orm';
 import { evaluatePrediction } from './PredictionOutcomeEvaluator';
 import { tradingSafety } from '../config/tradingSafety';
+import { createSingleFlightGuard, type SingleFlightGuard, type SingleFlightIntervalMetrics } from '../core/singleFlightInterval';
 
 const CONSENSUS_DEBATE_SOURCE_TABLE = 'consensus_debate_predictions';
 
 export class ConsensusDebateOutcomeEvaluator {
   private intervalId: NodeJS.Timeout | null = null;
+  // P1-A remediation (2026-09-14) - see PredictionOutcomeEvaluator.ts's identical comment: the
+  // guard is intrinsic to evaluatePending() itself, protecting every caller, not just the timer.
+  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[ConsensusDebateOutcomeEvaluator] Cycle failed', e));
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(
-      () => this.evaluatePending().catch((e) => console.error('[ConsensusDebateOutcomeEvaluator] Cycle failed', e)),
-      tradingSafety.predictionOutcomeIntervalMs,
-    );
-    this.evaluatePending().catch((e) => console.error('[ConsensusDebateOutcomeEvaluator] Initial cycle failed', e));
+    this.intervalId = setInterval(() => { void this.evaluatePending(); }, tradingSafety.predictionOutcomeIntervalMs);
+    void this.evaluatePending();
   }
 
   stop() {
@@ -46,7 +47,19 @@ export class ConsensusDebateOutcomeEvaluator {
     }
   }
 
-  async evaluatePending() {
+  /** P1-A remediation observability (2026-09-14) - same overlap/coalescing guard as
+   *  PredictionOutcomeEvaluator/MultiHorizonOutcomeEvaluator, applied uniformly across the
+   *  "outcome evaluator" family since every one of them runs on a timer with no natural bound on
+   *  how long a cycle can take. */
+  getMetrics(): SingleFlightIntervalMetrics {
+    return this.guard.getMetrics();
+  }
+
+  async evaluatePending(): Promise<void> {
+    await this.guard.run(() => this.runCycle());
+  }
+
+  private async runCycle(): Promise<void> {
     const now = Date.now();
     const existing = await db.select().from(predictionOutcomes)
       .where(eq(predictionOutcomes.sourceTable, CONSENSUS_DEBATE_SOURCE_TABLE));

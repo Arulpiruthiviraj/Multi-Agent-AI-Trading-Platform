@@ -28,6 +28,7 @@ import { db } from '../db';
 import * as schema from '../db/schema';
 import { EncryptionService } from '../core/EncryptionService';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { createSingleFlightGuard } from '../core/singleFlightInterval';
 
 export type AIProviderHealthStatus =
   | 'HEALTHY'
@@ -75,6 +76,13 @@ interface TrackerEntry {
 
 const tracker = new Map<string, TrackerEntry>();
 let intervalId: ReturnType<typeof setInterval> | null = null;
+// Real gap found and fixed (2026-09-15, post-forensic-audit timer sweep): each tick() runs a REAL
+// paid auth+chat-completion probe against EVERY configured provider (Promise.all over
+// checkProviderHealth calls). With no guard, a slow/hung provider on one tick could still be
+// in-flight when the next 180s tick fires, doubling real API spend to every OTHER (already-healthy)
+// provider too, and racing two concurrent read-modify-writes of the same tracker Map entries
+// (consecutiveFailures etc). Same reusable guard every other periodic worker already uses.
+const tickGuard = createSingleFlightGuard((e) => console.error('[AIProviderHealthCheck] tick failed', e));
 
 function emptyEntry(): TrackerEntry {
   return {
@@ -258,8 +266,13 @@ export async function getAIProviderHealthSnapshot(): Promise<AIProviderHealthRec
  *  one immediate check (the "startup" tier) before scheduling the periodic tier. */
 export function startAIProviderHealthMonitor(): void {
   if (intervalId) return;
-  void tick();
-  intervalId = setInterval(() => { void tick(); }, runtimeIntervals.aiProviderHealthCheckMs);
+  void tickGuard.run(tick);
+  intervalId = setInterval(() => { void tickGuard.run(tick); }, runtimeIntervals.aiProviderHealthCheckMs);
+}
+
+/** Test/ops observability for the single-flight coalescing above. */
+export function getAIProviderHealthTickGuardMetrics() {
+  return tickGuard.getMetrics();
 }
 
 export function stopAIProviderHealthMonitor(): void {

@@ -55,8 +55,49 @@ export class HistoricalDataGateway {
   /** Shared across symbols so one 429 stops an idea-storm of ensureBars fan-out. */
   private rateLimitedUntilMs = 0;
   private consecutiveRateLimits = 0;
-  /** Short-lived in-process cache keyed by symbol|timeframe|bucketed window. */
+  /**
+   * Short-lived in-process cache keyed by symbol|timeframe|bucketed window.
+   *
+   * Bounded-eviction fix (2026-09-14, P1-A remediation Patch B - a real, standalone defect found
+   * while investigating P1-A, tracked separately since it was not the proven cause of the RSS
+   * growth reproduced there): this Map was SET on every getBars() call (hit or miss) but only
+   * DELETED by persistBars() after a successful fetch actually wrote new bars for that exact
+   * window. A window that never gets a successful fetch (no data for a synthetic/delisted symbol,
+   * or simply a window nothing ever re-queries) had no active eviction path at all beyond a lazy
+   * expiresAt check that only fires if the SAME key is read again - unlikely across the wide
+   * timestamp spread real prediction history covers. Confirmed via an isolated harness: 108K
+   * predictions grew this map to 36,922 entries with zero shrinkage across repeated cycles.
+   * cacheGet()/cacheSet() below enforce a real LRU bound (historicalBarsMemoryCacheMaxEntries) -
+   * see that config field's own doc comment for how the bound was chosen.
+   */
   private memoryBars = new Map<string, { bars: Bar[]; expiresAt: number }>();
+
+  private cacheGet(key: string): { bars: Bar[]; expiresAt: number } | undefined {
+    const hit = this.memoryBars.get(key);
+    if (!hit) return undefined;
+    // Move to the end (most-recently-used) so eviction below correctly drops the LEAST recently
+    // used entry, not just the least recently INSERTED one.
+    this.memoryBars.delete(key);
+    this.memoryBars.set(key, hit);
+    return hit;
+  }
+
+  private cacheSet(key: string, value: { bars: Bar[]; expiresAt: number }): void {
+    this.memoryBars.delete(key); // re-inserting moves it to the MRU end even on an overwrite
+    this.memoryBars.set(key, value);
+    const maxEntries = tradingSafety.historicalBarsMemoryCacheMaxEntries;
+    while (this.memoryBars.size > maxEntries) {
+      const oldestKey = this.memoryBars.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.memoryBars.delete(oldestKey);
+    }
+  }
+
+  /** Test/ops helper - real cache size, for the same offline-forensic measurement pattern used
+   *  throughout this remediation (never called from a hot path). */
+  getMemoryBarsCacheSize(): number {
+    return this.memoryBars.size;
+  }
   /** Alpaca pacing: ≥400ms between REST bar requests (~150/min ceiling). */
   private lastAlpacaFetchAtMs = 0;
   private alpacaPaceChain: Promise<void> = Promise.resolve();
@@ -436,7 +477,7 @@ export class HistoricalDataGateway {
   /** Real, ordered, point-in-time bars for a symbol/timeframe/range. No fabrication. */
   async getBars(symbol: string, timeframe: string, startMs: number, endMs: number): Promise<Bar[]> {
     const key = this.memoryKey(symbol, timeframe, startMs, endMs);
-    const hit = this.memoryBars.get(key);
+    const hit = this.cacheGet(key);
     if (hit && hit.expiresAt > Date.now()) {
       return hit.bars;
     }
@@ -449,7 +490,7 @@ export class HistoricalDataGateway {
       ))
       .orderBy(asc(schema.ohlcvBars.timestamp));
     const bars = rows.map(r => ({ timestamp: r.timestamp, open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume }));
-    this.memoryBars.set(key, { bars, expiresAt: Date.now() + 60_000 });
+    this.cacheSet(key, { bars, expiresAt: Date.now() + 60_000 });
     return bars;
   }
 }

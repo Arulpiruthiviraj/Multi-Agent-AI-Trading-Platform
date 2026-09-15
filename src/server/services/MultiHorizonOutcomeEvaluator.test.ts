@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -130,5 +130,93 @@ describe('MultiHorizonOutcomeEvaluator (Research Memory Platform Phase 2)', () =
     const rowsAfter = await db.select().from(schema.predictionOutcomeHorizons);
     const buyRowsAfter = rowsAfter.filter((r: any) => r.predictionId === 'mh-buy');
     expect(buyRowsAfter.length).toBe(multiHorizonOutcomeTracking.horizons.length);
+  });
+
+  describe('P1-A remediation (2026-09-14): overlap guard + bounded queries', () => {
+    it('coalesces concurrent direct calls to evaluatePending()', async () => {
+      const before = multiHorizonOutcomeEvaluator.getMetrics();
+      await Promise.all([
+        multiHorizonOutcomeEvaluator.evaluatePending(),
+        multiHorizonOutcomeEvaluator.evaluatePending(),
+        multiHorizonOutcomeEvaluator.evaluatePending(),
+      ]);
+      const after = multiHorizonOutcomeEvaluator.getMetrics();
+      expect(after.totalRun - before.totalRun).toBe(1);
+      expect(after.totalSkippedInFlight - before.totalSkippedInFlight).toBe(2);
+    });
+
+    it('bounds rowsFetched to multiHorizonOutcomeTracking.batchSize even when far more predictions are pending', async () => {
+      const batchSize = multiHorizonOutcomeTracking.batchSize;
+      const extra = 25;
+      // Deliberately a LATE timestamp (not PRED_TIME, which every other fixture in this file
+      // shares) - the bounded query is ORDER BY timestamp ASC, so if these rows sorted before
+      // other tests' PRED_TIME-based fixtures they would starve them out of the same-sized batch
+      // (this exact ordering coupling was caught by the partial-horizon test below during review).
+      const rows = [];
+      for (let i = 0; i < batchSize + extra; i++) {
+        rows.push({
+          id: `mh-batch-bound-${i}`,
+          agentName: 'TechnicalAgent',
+          symbol: 'NOBARSYMBOL', // no real bar history - evaluateMultiHorizonOutcomesForPrediction() returns [] fast
+          prediction: 'BUY',
+          confidence: 0.7,
+          reasoning: 'batch-bound test row',
+          timestamp: new Date(Date.now() + i).toISOString(),
+        });
+      }
+      const CHUNK = 500;
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        await db.insert(schema.agentPredictions).values(rows.slice(i, i + CHUNK));
+      }
+
+      await multiHorizonOutcomeEvaluator.evaluatePending();
+      const stats = multiHorizonOutcomeEvaluator.getMetrics().lastCycle;
+      expect(stats.rowsFetched).toBeLessThanOrEqual(batchSize * 2); // agent_predictions + kronos_predictions batches
+      expect(stats.batches).toBeGreaterThanOrEqual(1);
+    });
+
+    it('a prediction with only its LARGEST horizon still missing remains a candidate on the next cycle (proves the largest-label anti-join proxy never masks a genuinely incomplete row)', async () => {
+      // Bars sufficient for every horizon except the largest (60_BAR needs 61+ bars; give exactly
+      // 21 so 1_BAR/5_BAR/20_BAR complete this cycle but 60_BAR is honestly left pending, never
+      // fabricated - same "insufficient real bars -> retry later" contract evaluateMultiHorizon
+      // OutcomesForPrediction() already documents.
+      const closes = Array.from({ length: 21 }, (_, i) => 100 + i * 0.1);
+      await seedBars('PARTIALHZN', closes, PRED_TIME);
+      await db.insert(schema.agentPredictions).values({
+        id: 'mh-partial', agentName: 'TechnicalAgent', symbol: 'PARTIALHZN', prediction: 'BUY',
+        confidence: 0.8, reasoning: 'partial horizon test', timestamp: new Date(PRED_TIME).toISOString(),
+      });
+
+      await multiHorizonOutcomeEvaluator.evaluatePending();
+      const rowsAfterCycle1 = await db.select().from(schema.predictionOutcomeHorizons)
+        .where((await import('drizzle-orm')).eq(schema.predictionOutcomeHorizons.predictionId, 'mh-partial'));
+      const labelsDone = rowsAfterCycle1.map((r: any) => r.horizonLabel).sort();
+      const largestLabel = multiHorizonOutcomeTracking.horizons[multiHorizonOutcomeTracking.horizons.length - 1].label;
+      expect(labelsDone).not.toContain(largestLabel); // honestly still missing, not fabricated
+      expect(labelsDone.length).toBeGreaterThan(0); // but the smaller horizons DID complete
+
+      // More bars arrive (enough for the largest horizon too - needs bars[60], i.e. 61+ total) -
+      // the row must still be picked up on the NEXT cycle, proving it was not silently dropped by
+      // the bounded anti-join. HistoricalDataGateway.getBars() caches this exact
+      // symbol/timeframe/window for 60s (same cache Patch B bounded) - cycle 1 and cycle 2 request
+      // the identical window (both have the same maxBars=60 among their "missing" horizons), so
+      // without advancing the clock cycle 2 would read cycle 1's stale cached (too-few-bars)
+      // result instead of the fresh DB rows just inserted. Jumping >60s matches production reality
+      // anyway - cycles are 300s apart (multiHorizonOutcomeTracking.evaluationIntervalMs).
+      const moreCloses = Array.from({ length: 40 }, (_, i) => 100 + (21 + i) * 0.1); // total 21+40=61 bars
+      await seedBars('PARTIALHZN', moreCloses, PRED_TIME + 21 * 60000);
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      vi.setSystemTime(Date.now() + 65_000);
+      try {
+        await multiHorizonOutcomeEvaluator.evaluatePending();
+      } finally {
+        vi.useRealTimers();
+      }
+      const rowsAfterCycle2 = await db.select().from(schema.predictionOutcomeHorizons)
+        .where((await import('drizzle-orm')).eq(schema.predictionOutcomeHorizons.predictionId, 'mh-partial'));
+      const labelsDoneAfter = rowsAfterCycle2.map((r: any) => r.horizonLabel);
+      expect(labelsDoneAfter).toContain(largestLabel);
+      expect(labelsDoneAfter.length).toBe(multiHorizonOutcomeTracking.horizons.length);
+    });
   });
 });

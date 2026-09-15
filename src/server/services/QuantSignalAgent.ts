@@ -171,6 +171,16 @@ export class QuantSignalAgent {
     }
   }
 
+  /** Synthetic Market Session Simulator (2026-09-14 mandate, Phase 7): a manual trigger for the
+   *  SAME real runCycle() the timer calls - timer-driven agents have no clock injection, so a
+   *  simulator running on an accelerated synthetic clock cannot wait on a real setInterval. This
+   *  is not a parallel decision path; it is the existing private cycle, exposed for an explicit
+   *  caller, exactly the way PredictionOutcomeEvaluator.evaluatePending() already is both
+   *  timer-driven and directly callable. */
+  async triggerNow(): Promise<void> {
+    await this.runCycle();
+  }
+
   private symbolConcurrency(): number {
     const n = tradingSafety.quantMaxConcurrentSymbols;
     if (!Number.isFinite(n) || n < 1) return 1;

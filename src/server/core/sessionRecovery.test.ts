@@ -11,6 +11,7 @@ import {
   markCleanShutdown,
   startSessionRecoveryListeners,
   forceHoldNewEntryIdeasForTests,
+  evaluateRestartSafety,
 } from './sessionRecovery';
 import { eventBus } from './EventBus';
 import { EVENTS } from './eventNames';
@@ -121,5 +122,32 @@ describe('sessionRecovery interrupted session', () => {
     expect(loadInterruptedSessionMarker()).toBe(false);
     expect(warnSpy).not.toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+});
+
+describe('evaluateRestartSafety (P1 restart-safety hardening, 2026-09-14, item #26)', () => {
+  it('forces a pause when the prior shutdown was unclean AND the persisted state was TRADING_ENABLED', () => {
+    const decision = evaluateRestartSafety(true, 'TRADING_ENABLED');
+    expect(decision.shouldForcePause).toBe(true);
+    expect(decision.reason).toContain('explicit operator reactivation');
+  });
+
+  it('does not force a pause on a clean restart, even if the persisted state was TRADING_ENABLED', () => {
+    const decision = evaluateRestartSafety(false, 'TRADING_ENABLED');
+    expect(decision.shouldForcePause).toBe(false);
+  });
+
+  it('does not force a pause on an unclean restart if the persisted state was already TRADING_PAUSED', () => {
+    const decision = evaluateRestartSafety(true, 'TRADING_PAUSED');
+    expect(decision.shouldForcePause).toBe(false);
+  });
+
+  it('does not force a pause on an unclean restart if the persisted state was EMERGENCY_STOP (nothing to downgrade)', () => {
+    const decision = evaluateRestartSafety(true, 'EMERGENCY_STOP');
+    expect(decision.shouldForcePause).toBe(false);
+  });
+
+  it('is a pure function - same inputs always produce the same decision, no I/O', () => {
+    expect(evaluateRestartSafety(true, 'TRADING_ENABLED')).toEqual(evaluateRestartSafety(true, 'TRADING_ENABLED'));
   });
 });

@@ -19,6 +19,7 @@
     "start:engine:prod": "node scripts/argus-engine-prod.mjs",
     "argus-cli": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argus-cli.ts",
     "argus:watchdog": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/argusWatchdog.ts",
+    "sim:market-open": "node --use-system-ca ./node_modules/tsx/dist/cli.mjs scripts/sim/marketOpen.ts",
     "argus": "bash ./argus",
     "argus:ecosystem": "bash ./argus.sh",
     "stop": "bash ./argus stop",

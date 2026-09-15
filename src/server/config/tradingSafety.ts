@@ -248,6 +248,24 @@ export interface TradingSafety {
    */
   quantMaxConcurrentSymbols: number;
   predictionOutcomeIntervalMs: number;
+  /**
+   * P1-A remediation (2026-09-14): PredictionOutcomeEvaluator.evaluatePending() previously fetched
+   * ALL agent_predictions/kronos_predictions/news_predictions/prediction_outcomes rows every cycle
+   * (unbounded .all()) on a bare setInterval with no overlap guard - reproduced in an isolated
+   * harness as sustained, GC-unrecoverable RSS growth that scaled with concurrent invocation count
+   * (docs/audits/ARGUS_MASTER_REMEDIATION_BASELINE.md P1-A section). Bounds each cycle to at most
+   * this many NOT-YET-EVALUATED rows per source table (oldest-first via a bounded anti-join query,
+   * not a monotonic id/timestamp watermark - a watermark risks silently skipping a prediction whose
+   * evaluation was retried/delayed, e.g. the exit-aware walk-forward path, which the anti-join does
+   * not, since a row only stops being a candidate once it actually has a prediction_outcomes row).
+   */
+  predictionOutcomeBatchSize: number;
+  /** Safety valve, not a target: a batch bails out early (processing fewer than batchSize rows,
+   *  finishing the remainder next cycle) if a cycle's per-row work runs long - e.g. a real Alpaca
+   *  ensureBars() network round-trip on a cache miss, unlike the fast local-DB getBars() path this
+   *  was measured against. Kept safely under predictionOutcomeIntervalMs so a cycle self-bounds
+   *  well before the next tick, rather than relying solely on the overlap guard. */
+  predictionOutcomeMaxCycleWallClockMs: number;
   alertingCooldownMs: number;
   trainingExampleIntervalMs: number;
   marketRegimeIntervalMs: number;
@@ -272,6 +290,19 @@ export interface TradingSafety {
   manualTradeCoEvalTimeoutMs: number;
   /** Skip Alpaca fetch when cached bars cover at least this fraction of expected trading days. */
   quantBarsCacheMinCoverageRatio: number;
+  /**
+   * P1-A remediation Patch B (2026-09-14): bound on HistoricalDataGateway.memoryBars, a real,
+   * standalone unbounded-Map defect found while investigating P1-A (not the proven cause of the
+   * reproduced RSS growth there - that was Patch A's evaluator overlap - but a real leak/bounded-
+   * cache defect in its own right, since the Map had no active eviction beyond a lazy TTL check
+   * that only fires if the SAME key is ever read again). Sized generously above legitimate
+   * same-cycle working-set needs: one bounded evaluator batch (predictionOutcomeBatchSize /
+   * multiHorizonOutcomeTracking.batchSize, both 2000) touches at most a few thousand distinct
+   * symbol|timeframe|hourBucket keys per cycle even in the worst case of every row being a unique
+   * symbol/hour; 5000 gives real headroom above that without picking a bound merely because it
+   * makes a memory graph look good.
+   */
+  historicalBarsMemoryCacheMaxEntries: number;
   quantBarsRateLimitBaseBackoffMs: number;
   quantBarsRateLimitMaxBackoffMs: number;
   /** Idea-agent lastTickAt older than this is reported as enabled+dead. */
@@ -606,6 +637,8 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'quantCycleIntervalMs',
   'quantMaxConcurrentSymbols',
   'predictionOutcomeIntervalMs',
+  'predictionOutcomeBatchSize',
+  'predictionOutcomeMaxCycleWallClockMs',
   'alertingCooldownMs',
   'trainingExampleIntervalMs',
   'marketRegimeIntervalMs',
@@ -621,6 +654,7 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'consensusAggregationWindowMs',
   'manualTradeCoEvalTimeoutMs',
   'quantBarsCacheMinCoverageRatio',
+  'historicalBarsMemoryCacheMaxEntries',
   'quantBarsRateLimitBaseBackoffMs',
   'quantBarsRateLimitMaxBackoffMs',
   'pipelineAgentDeadAfterMs',

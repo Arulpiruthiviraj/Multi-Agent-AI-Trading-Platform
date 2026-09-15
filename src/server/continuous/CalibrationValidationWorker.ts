@@ -8,11 +8,22 @@
  */
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { runCalibrationValidationCycle } from './CalibrationCandidateBuilder';
+import { createSingleFlightGuard, type SingleFlightGuard } from '../core/singleFlightInterval';
 
 class CalibrationValidationWorker {
   private intervalId: NodeJS.Timeout | null = null;
   private lastRunAt: string | null = null;
   private lastRunCount: number = 0;
+  // Real gap found and fixed (2026-09-15, post-forensic-audit timer sweep): runOnce() calls
+  // runCalibrationValidationCycle(), which iterates every tracked (agent, bucket) pair and, per
+  // pair, calls ChampionChallengerService.createShadowVersion()/promoteToCandidate() - an overlap
+  // (a slow cycle outlasting the 900s interval) could create two concurrent shadow versions for
+  // the SAME versionType, an avoidable ambiguity in the learning_versions ledger. Not a live-
+  // decision-affecting risk (this worker never touches agent_confidence_calibration - see this
+  // file's own header), but cheap, defensive, and consistent with every other periodic worker.
+  private readonly guard: SingleFlightGuard = createSingleFlightGuard(
+    (e) => console.error('[CalibrationValidationWorker] cycle failed', e),
+  );
 
   start(): void {
     if (this.intervalId) return;
@@ -28,14 +39,16 @@ class CalibrationValidationWorker {
     }
   }
 
-  private async runOnce(): Promise<void> {
-    try {
+  async runOnce(): Promise<void> {
+    await this.guard.run(async () => {
       const results = await runCalibrationValidationCycle();
       this.lastRunAt = new Date().toISOString();
       this.lastRunCount = results.length;
-    } catch (e) {
-      console.error('[CalibrationValidationWorker] cycle failed', e);
-    }
+    });
+  }
+
+  getGuardMetrics() {
+    return this.guard.getMetrics();
   }
 
   getStatus(): { lastRunAt: string | null; lastRunCount: number; running: boolean } {

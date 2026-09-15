@@ -22,6 +22,9 @@ import {
   getAIProviderHealthSnapshot,
   runAIProviderHealthCheckNow,
   resetAIProviderHealthTrackerForTests,
+  startAIProviderHealthMonitor,
+  stopAIProviderHealthMonitor,
+  getAIProviderHealthTickGuardMetrics,
 } from './AIProviderHealthCheck';
 
 function fakeProvider(overrides: Partial<AIProvider> = {}): AIProvider {
@@ -264,5 +267,49 @@ describe('AIProviderHealthCheck', () => {
     expect(snapshot.find(r => r.providerId === 'p1')!.status).toBe('HEALTHY');
     // p2 was never checked this call - still UNKNOWN (configured+registered, no check run yet).
     expect(snapshot.find(r => r.providerId === 'p2')!.status).toBe('UNKNOWN');
+  });
+
+  it('real gap found and fixed (2026-09-15): the periodic tick() coalesces (single-flight) - a timer fire while the previous tick is still in flight does not re-check every provider a second time', async () => {
+    let authCalls = 0;
+    let resolveFirstAuth: (() => void) | null = null;
+    const provider = fakeProvider({
+      authenticate: async () => {
+        authCalls += 1;
+        if (authCalls === 1) {
+          await new Promise<void>((resolve) => { resolveFirstAuth = resolve; });
+        }
+        return true;
+      },
+    });
+    AIRouter.getInstance().registerProvider('p1', provider);
+    dbRows.current = [dbRow()];
+
+    vi.useFakeTimers();
+    try {
+      startAIProviderHealthMonitor(); // the immediate first tick fires synchronously and blocks on authenticate()
+      // Let the immediate tick's microtasks run far enough to reach authenticate() and block -
+      // plain microtask yields (never faked by vi.useFakeTimers(), unlike setImmediate/setTimeout).
+      for (let i = 0; i < 50 && authCalls < 1; i++) {
+        await Promise.resolve();
+      }
+      expect(authCalls).toBe(1);
+
+      // Advance fake time past a full interval WHILE the first tick is still in flight - the real
+      // setInterval callback fires again here; without the fix this would start a second, fully
+      // independent authenticate() call for the same provider.
+      const { runtimeIntervals } = await import('../config/runtimeIntervals');
+      await vi.advanceTimersByTimeAsync(runtimeIntervals.aiProviderHealthCheckMs + 1000);
+
+      resolveFirstAuth!();
+      for (let i = 0; i < 50 && getAIProviderHealthTickGuardMetrics().currentlyRunning; i++) {
+        await Promise.resolve();
+      }
+
+      expect(authCalls).toBe(1); // the overlapping timer fire was coalesced, not a second real check
+      expect(getAIProviderHealthTickGuardMetrics().totalSkippedInFlight).toBeGreaterThanOrEqual(1);
+    } finally {
+      stopAIProviderHealthMonitor();
+      vi.useRealTimers();
+    }
   });
 });

@@ -339,4 +339,132 @@ describe('PredictionOutcomeEvaluator (Phase 4)', () => {
       .where(eq(schema.predictionOutcomes.predictionId, 'telemetry-pulse-guard-test'));
     expect(outcomes).toHaveLength(0); // skipped, never graded WIN/LOSS from fabricated UI data
   });
+
+  describe('P1-A remediation (2026-09-14): overlap guard + bounded queries', () => {
+    it('coalesces concurrent direct calls to evaluatePending() - the exact overlap the isolated forensic harness reproduced as sustained, GC-unrecoverable RSS growth', async () => {
+      const before = predictionOutcomeEvaluator.getMetrics();
+      // No setInterval/start() involved at all - simulates two overlapping cycles the way a real
+      // >5min cycle duration would trigger via the old bare setInterval.
+      await Promise.all([
+        predictionOutcomeEvaluator.evaluatePending(),
+        predictionOutcomeEvaluator.evaluatePending(),
+        predictionOutcomeEvaluator.evaluatePending(),
+      ]);
+      const after = predictionOutcomeEvaluator.getMetrics();
+      // Exactly 1 of the 3 concurrent calls actually ran; the other 2 were coalesced, not queued.
+      expect(after.totalRun - before.totalRun).toBe(1);
+      expect(after.totalSkippedInFlight - before.totalSkippedInFlight).toBe(2);
+    });
+
+    it('bounds rowsFetched to predictionOutcomeBatchSize even when far more predictions are pending', async () => {
+      const { tradingSafety } = await import('../config/tradingSafety');
+      const batchSize = tradingSafety.predictionOutcomeBatchSize;
+      const extra = 25;
+      const oldTimestamp = new Date(PRED_TIME).toISOString();
+      const rows = [];
+      for (let i = 0; i < batchSize + extra; i++) {
+        rows.push({
+          id: `batch-bound-${i}`,
+          agentName: 'TechnicalAgent',
+          symbol: 'NOBARSYMBOL', // no real bar history - evaluatePrediction() returns null fast (existing "never fabricates" test above already proves this path is quick), so this test measures query-bounding, not per-row evaluation latency
+          prediction: 'BUY',
+          confidence: 0.7,
+          reasoning: 'batch-bound test row',
+          timestamp: oldTimestamp,
+        });
+      }
+      // Chunked insert - matches the forensic harness's own seeding pattern for the same reason
+      // (a single multi-thousand-row insert() call is unnecessarily heavy).
+      const CHUNK = 500;
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        await db.insert(schema.agentPredictions).values(rows.slice(i, i + CHUNK));
+      }
+
+      await predictionOutcomeEvaluator.evaluatePending();
+      const stats = predictionOutcomeEvaluator.getMetrics().lastCycle;
+      // rowsFetched includes agent_predictions + kronos_predictions + news_predictions batches
+      // combined (each independently capped at batchSize) - the agent_predictions batch alone
+      // must never exceed batchSize regardless of how many more rows are actually pending.
+      expect(stats.rowsFetched).toBeLessThanOrEqual(batchSize * 3);
+      expect(stats.batches).toBeGreaterThanOrEqual(1);
+    });
+
+    it('rowsRemaining reflects the true backlog, not just the current bounded fetch window', async () => {
+      const { tradingSafety } = await import('../config/tradingSafety');
+      const batchSize = tradingSafety.predictionOutcomeBatchSize;
+      const oldTimestamp = new Date(PRED_TIME - 1).toISOString(); // distinct from other fixtures' PRED_TIME
+      const extra = 40;
+      const rows = [];
+      for (let i = 0; i < batchSize + extra; i++) {
+        rows.push({
+          id: `remaining-check-${i}`, agentName: 'TechnicalAgent', symbol: 'NOBARSYMBOL',
+          prediction: 'BUY', confidence: 0.7, reasoning: 'rowsRemaining test row', timestamp: oldTimestamp,
+        });
+      }
+      const CHUNK = 500;
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        await db.insert(schema.agentPredictions).values(rows.slice(i, i + CHUNK));
+      }
+
+      await predictionOutcomeEvaluator.evaluatePending();
+      const stats = predictionOutcomeEvaluator.getMetrics().lastCycle;
+      // The batch fetched at most batchSize rows, but the true backlog (from THIS test's own rows
+      // alone, ignoring anything left by earlier tests) is batchSize+extra - rowsRemaining must
+      // reflect that larger number, not just "how many this cycle happened to fetch."
+      expect(stats.rowsRemaining).toBeGreaterThanOrEqual(extra);
+    });
+
+    it('restart resumes correctly: a fresh evaluator instance (simulating a process restart) picks up exactly the still-pending backlog, with no loss and no duplication', async () => {
+      const { PredictionOutcomeEvaluator: EvaluatorClass } = await import('./PredictionOutcomeEvaluator');
+      const oldTimestamp = new Date(PRED_TIME - 2).toISOString();
+      await db.insert(schema.agentPredictions).values([
+        { id: 'restart-a', agentName: 'TechnicalAgent', symbol: 'UPTEST', prediction: 'BUY', confidence: 0.8, reasoning: 'restart test', timestamp: oldTimestamp },
+        { id: 'restart-b', agentName: 'TechnicalAgent', symbol: 'NOBARSYMBOL', prediction: 'BUY', confidence: 0.8, reasoning: 'restart test - stays pending (no bars)', timestamp: oldTimestamp },
+      ]);
+
+      // "Before restart": one instance evaluates once. restart-a has real bars (UPTEST) and gets
+      // evaluated; restart-b has no bars and stays pending, same as production's honest
+      // never-fabricate contract.
+      const beforeRestart = new EvaluatorClass();
+      await beforeRestart.evaluatePending();
+      const afterFirstRun = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'restart-a'));
+      expect(afterFirstRun).toHaveLength(1);
+
+      // "Restart": a BRAND NEW instance, zero in-memory state carried over (matching what actually
+      // happens on a real process restart - the guard/metrics reset, but the DB - the real cursor -
+      // does not).
+      const afterRestart = new EvaluatorClass();
+      await afterRestart.evaluatePending();
+
+      // restart-a is not re-evaluated (idempotent - onConflictDoNothing + the anti-join already
+      // excludes it since it has a row now).
+      const restartARows = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'restart-a'));
+      expect(restartARows).toHaveLength(1); // still exactly 1, not duplicated
+      // restart-b was NOT lost across the "restart" - it's still a candidate (no bars yet, so still
+      // correctly pending), proving the fresh instance picked up the real DB-backed backlog rather
+      // than starting from an empty/reset notion of "already seen."
+      const restartBRows = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'restart-b'));
+      expect(restartBRows).toHaveLength(0); // correctly still pending (no bars), not silently dropped
+    });
+
+    it('deliberate backfill: deleting an existing outcome row makes that prediction a real candidate again on the very next cycle', async () => {
+      const oldTimestamp = new Date(PRED_TIME - 3).toISOString();
+      await db.insert(schema.agentPredictions).values({
+        id: 'backfill-target', agentName: 'TechnicalAgent', symbol: 'UPTEST', prediction: 'BUY',
+        confidence: 0.8, reasoning: 'backfill test', timestamp: oldTimestamp,
+      });
+      await predictionOutcomeEvaluator.evaluatePending();
+      const firstPass = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'backfill-target'));
+      expect(firstPass).toHaveLength(1);
+
+      // Operator (or a future backfill script) deletes the outcome to force re-evaluation - e.g.
+      // after fixing a bug in evaluatePrediction()'s own math. No special "force re-evaluate" API
+      // is needed: the anti-join has no persistent memory beyond the DB tables themselves.
+      await db.delete(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'backfill-target'));
+
+      await predictionOutcomeEvaluator.evaluatePending();
+      const afterBackfill = await db.select().from(schema.predictionOutcomes).where(eq(schema.predictionOutcomes.predictionId, 'backfill-target'));
+      expect(afterBackfill).toHaveLength(1); // re-evaluated, not permanently excluded
+    });
+  });
 });

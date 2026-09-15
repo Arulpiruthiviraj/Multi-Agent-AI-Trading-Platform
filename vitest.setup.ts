@@ -73,6 +73,16 @@ if (process.env.ARGUS_TEST_ALLOW_EXTENDED_HOURS !== 'true') {
   process.env.EXTENDED_HOURS_EXECUTION_ENABLED = 'false';
 }
 
+// P1 memory-leak investigation (2026-09-14): processTelemetry.memory.test.ts deliberately drives
+// fake WARNING/CRITICAL memory samples to exercise the existing TRADING_PAUSED fail-safe - without
+// this, every such run would also write a real .heapsnapshot file to disk (confirmed live: it did,
+// a real ~500ms capture, before this guard was added). Same opt-in idiom as
+// ARGUS_TEST_ALLOW_CHRONOS/OLLAMA/OPENALICE above. heapSnapshotCapture.test.ts exercises capture
+// directly via its own node:v8/node:fs mocks and is unaffected by this flag either way.
+if (process.env.ARGUS_TEST_ALLOW_HEAP_SNAPSHOTS !== 'true') {
+  process.env.ARGUS_DISABLE_HEAP_SNAPSHOTS = 'true';
+}
+
 afterAll(() => {
   for (const suffix of ['', '-shm', '-wal']) {
     try { fs.unlinkSync(defaultDbPath + suffix); } catch { /* best-effort cleanup - may never have been created */ }

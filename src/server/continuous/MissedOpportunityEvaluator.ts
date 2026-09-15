@@ -21,17 +21,18 @@ import {
   evaluateAgainstPriceSeries,
   persistEvaluation,
 } from './MissedOpportunityDetector';
+import { createSingleFlightGuard, type SingleFlightGuard, type SingleFlightIntervalMetrics } from '../core/singleFlightInterval';
 
 export class MissedOpportunityEvaluator {
   private intervalId: NodeJS.Timeout | null = null;
+  // P1-A remediation (2026-09-14) - see PredictionOutcomeEvaluator.ts's identical comment: the
+  // guard is intrinsic to evaluatePending() itself, protecting every caller, not just the timer.
+  private guard: SingleFlightGuard = createSingleFlightGuard((e) => console.error('[MissedOpportunityEvaluator] Cycle failed', e));
 
   start() {
     if (this.intervalId) return;
-    this.intervalId = setInterval(
-      () => this.evaluatePending().catch((e) => console.error('[MissedOpportunityEvaluator] Cycle failed', e)),
-      continuousIntelligence.missedOpportunityEvaluationIntervalMs,
-    );
-    this.evaluatePending().catch((e) => console.error('[MissedOpportunityEvaluator] Initial cycle failed', e));
+    this.intervalId = setInterval(() => { void this.evaluatePending(); }, continuousIntelligence.missedOpportunityEvaluationIntervalMs);
+    void this.evaluatePending();
   }
 
   stop() {
@@ -41,7 +42,18 @@ export class MissedOpportunityEvaluator {
     }
   }
 
+  /** P1-A remediation observability (2026-09-14) - see ConsensusDebateOutcomeEvaluator.ts's
+   *  identical comment: this evaluator's own query was already properly bounded/filtered, but the
+   *  bare-setInterval overlap risk was structurally the same across every evaluator in this family. */
+  getMetrics(): SingleFlightIntervalMetrics {
+    return this.guard.getMetrics();
+  }
+
   async evaluatePending(now: Date = new Date()): Promise<void> {
+    await this.guard.run(() => this.runCycle(now));
+  }
+
+  private async runCycle(now: Date): Promise<void> {
     const nowMs = now.getTime();
     // A record is only due once its own evaluation window has actually elapsed - reusing a single
     // global cutoff (rather than per-record) is safe today because every live caller passes the

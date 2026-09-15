@@ -42,14 +42,16 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
 
   // Runs BEFORE the destructive drill below, which permanently closes the shared sqliteDb
   // connection to accurately simulate the file becoming inaccessible (see that test's comment).
-  it('prunes backups older than the retention window, keeps recent ones', () => {
+  it('prunes backups older than the retention window, keeps recent ones', async () => {
     const service = new DbBackupService();
     const oldFile = path.join(backupDir, 'argus_2020-01-01.db');
     fs.writeFileSync(oldFile, 'irrelevant content - only mtime matters for pruning');
     const oldTime = Date.now() - 40 * 24 * 60 * 60 * 1000; // 40 days ago, beyond the 30-day retention window
     fs.utimesSync(oldFile, oldTime / 1000, oldTime / 1000);
 
-    service.runBackup(); // real call also runs pruning as a side effect
+    // Event-loop-safety fix (2026-09-14): runBackup() is now async (real fs.promises I/O,
+    // no longer a synchronous multi-GB blocking copy on the live process) - must be awaited.
+    await service.runBackup(); // real call also runs pruning as a side effect
 
     expect(fs.existsSync(oldFile)).toBe(false); // pruned
     const stamp = new Date().toISOString().slice(0, 10);
@@ -65,7 +67,7 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
 
     const service = new DbBackupService();
     const start = Date.now();
-    service.runBackup();
+    await service.runBackup();
     const backupDurationMs = Date.now() - start;
 
     const stamp = new Date().toISOString().slice(0, 10);

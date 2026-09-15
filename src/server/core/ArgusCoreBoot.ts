@@ -78,9 +78,9 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   // Durable EventStore listeners must attach before idea agents emit (decision lifecycle → event_traces).
   await import('./EventStore');
 
-  const { loadInterruptedSessionMarker, beginRuntimeSession, startSessionRecoveryListeners } =
+  const { loadInterruptedSessionMarker, beginRuntimeSession, startSessionRecoveryListeners, evaluateRestartSafety } =
     await import('./sessionRecovery');
-  loadInterruptedSessionMarker();
+  const interruptedSession = loadInterruptedSessionMarker();
   startSessionRecoveryListeners();
 
   await AIRouter.getInstance().initialize();
@@ -101,6 +101,16 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   await tradingEngine.initialize();
+
+  // P1 restart-safety hardening (2026-09-14, item #26) - see sessionRecovery.ts's own doc comment
+  // on evaluateRestartSafety() for the full rationale. Strictly after tradingEngine.initialize()
+  // (so state.tradingState reflects the just-restored persisted value) and strictly before
+  // beginRuntimeSession() writes this process's own fresh marker.
+  const restartSafety = evaluateRestartSafety(interruptedSession, tradingEngine.state.tradingState);
+  if (restartSafety.shouldForcePause) {
+    await tradingEngine.setTradingState('TRADING_PAUSED', { reason: restartSafety.reason, actor: 'RestartSafetyGuard' });
+  }
+
   beginRuntimeSession();
 
   alertingService.start();

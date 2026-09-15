@@ -58,3 +58,28 @@ export function getTradingTimeHHMM(date: Date = new Date()): string {
 export function getTimeHHMMInZone(date: Date, timeZone: string): string {
   return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
 }
+
+/**
+ * Returns the real epoch-ms instant of local midnight (America/New_York) for the trading day
+ * `date` falls on - i.e. the start of what getTradingDateStr(date) reports. Added 2026-09-15
+ * (RiskEngine unbounded-query remediation) so RiskEngine.ts's live overtrading-guard query can
+ * bound its WHERE clause by real DST-correct trading-day start instead of fetching the entire
+ * `trades` table. Deliberately implemented as a binary search against the already-proven,
+ * DST-correct getTradingDateStr() (1-second resolution, well within any cooldown-window
+ * granularity this feeds) rather than a second, independent DST offset calculation that could
+ * silently drift out of sync with it - one source of truth for "what day is this" in this zone.
+ */
+export function getTradingDayStartMs(date: Date = new Date()): number {
+  const targetDateStr = getTradingDateStr(date);
+  let lo = date.getTime() - 26 * 60 * 60 * 1000; // always still the prior trading day, even across a DST fall-back
+  let hi = date.getTime();
+  while (hi - lo > 1000) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (getTradingDateStr(new Date(mid)) === targetDateStr) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return hi;
+}

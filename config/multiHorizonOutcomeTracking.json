@@ -6,5 +6,7 @@
     { "label": "20_BAR", "bars": 20 },
     { "label": "60_BAR", "bars": 60 }
   ],
-  "evaluationIntervalMs": 300000
+  "evaluationIntervalMs": 300000,
+  "batchSize": 2000,
+  "maxCycleWallClockMs": 120000
 }

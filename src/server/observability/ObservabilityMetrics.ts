@@ -53,7 +53,18 @@ export interface ProcessTelemetrySample {
   heapTotal: number;
   external: number;
   arrayBuffers: number;
+  /** Mean event-loop delay over this sampling window - kept for backward compatibility with
+   *  existing readers; see eventLoopDelayP50/P95/P99/MaxMs below (added 2026-09-14 overnight
+   *  remediation, mandate section 11/28) for the fuller, equally cheap picture. A single mean can
+   *  hide a real tail-latency problem (e.g. mostly-fast with rare multi-second stalls averaging
+   *  out to a small mean) - percentiles/max come from the SAME already-running
+   *  monitorEventLoopDelay() histogram (Node's own C++ implementation already tracks them; reading
+   *  a few more properties off the same object costs nothing extra). */
   eventLoopDelayMs: number | null;
+  eventLoopDelayP50Ms: number | null;
+  eventLoopDelayP95Ms: number | null;
+  eventLoopDelayP99Ms: number | null;
+  eventLoopDelayMaxMs: number | null;
   soakEvidence: 'CALENDAR_EVIDENCE_REQUIRED';
 }
 
