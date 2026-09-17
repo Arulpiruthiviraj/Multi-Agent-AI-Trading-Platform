@@ -798,7 +798,20 @@ export class ChiefTraderAgent {
     let reason = "";
     let approvedSide = result.side;
     let approvedConfidence = result.confidence;
-    let approvedPrice = result.currentPrice;
+    // Prefer the triggering idea's own currentPrice over EvidenceAggregator.aggregate()'s bestPrice,
+    // which picks whichever agreeing evidence happens to sit first in array order - not necessarily
+    // the freshest observation (2026-09-15 finding: a consensus combining a fresh TechnicalAgent tick
+    // with an older, cooldown-throttled KronosEngine forecast picked Kronos's stale price purely
+    // because it appeared first in `evidence`, understating a real BUY's notional by ~5% for
+    // RiskEngine's own capital/sizing gates - real, evidenced via a synthetic certification run, not
+    // synthetic-only: EvidenceAggregator.ts is the same code path every real paper/live consensus
+    // uses). Same fallback-order precedent the risk-exit branch below already applies
+    // (`exitIdea.currentPrice ?? result.currentPrice`) - this is that same correctness principle
+    // applied to the main approval path, not a new pattern.
+    const triggeringIdeaPrice = relevantIdeas.find(i => i.traceId === traceId)?.currentPrice;
+    let approvedPrice = (typeof triggeringIdeaPrice === 'number' && Number.isFinite(triggeringIdeaPrice) && triggeringIdeaPrice > 0)
+      ? triggeringIdeaPrice
+      : result.currentPrice;
     let approvedEvidence = evidence;
     let approvedAgreed = agentsAgreed;
     // Phase 7E/7H (MODERATE consensus tier). Stays 'STRONG' - and moderateEligibility stays null -

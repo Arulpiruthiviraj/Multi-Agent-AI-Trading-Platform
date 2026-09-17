@@ -16,13 +16,22 @@ import {
   blendedHotSwapScore,
 } from './OpportunityDiscovery';
 import * as SnapshotScanner from './SnapshotScanner';
+import * as MarketUniverseScanner from './MarketUniverseScanner';
+import { resetBroadUniverseAllocatorForTests } from './BroadUniverseSubscriptionAllocator';
 
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
+
+/** getCachedBroadUniverseCandidatesWithVolume() shape - descending dollar volume in array order,
+ *  matching the real cache's own dollar-volume-sorted admission list. */
+function withVolume(symbols: string[], startingVolume = 100_000_000): { symbol: string; dollarVolume: number }[] {
+  return symbols.map((symbol, i) => ({ symbol, dollarVolume: startingVolume - i * 1000 }));
+}
 
 afterEach(() => {
   delete process.env[FLAG_O];
   resetOpportunityScanForTests();
   SnapshotScanner.resetSnapshotScannerForTests();
+  resetBroadUniverseAllocatorForTests();
   vi.restoreAllMocks();
 });
 
@@ -136,6 +145,80 @@ describe('OpportunityDiscovery', () => {
     // converges toward the broad-universe discovery system's own real ranking too.
     const { getRecentCandidates } = await import('../core/recentCandidateRegistry');
     expect(getRecentCandidates(300000)).toContain('AMD');
+  });
+
+  it('2026-09-16 regression: when momentum rotation is on and slots remain empty after its own picks, tops up subscribe requests from the broad-universe ADV-gated admission list (previously: admitted symbols never got a subscribe request at all)', async () => {
+    process.env[FLAG_O] = 'true';
+    expect(continuousIntelligence.momentumRotationEnabled).toBe(true);
+    // Isolate the scenario: momentum's own static universe (seed/watch/momentum-scan lists) is
+    // emptied for this test so the only source of a top-up candidate is the mocked broad-universe
+    // admission list below - proves the fix wires that specific, previously-disconnected path,
+    // not just that "some" symbol happens to fill a slot.
+    const originalSeed = continuousIntelligence.seedSymbols;
+    const originalWatch = continuousIntelligence.watchUniverseSymbols;
+    const originalMomentumScan = continuousIntelligence.momentumScanUniverseSymbols;
+    (continuousIntelligence as any).seedSymbols = [];
+    (continuousIntelligence as any).watchUniverseSymbols = [];
+    (continuousIntelligence as any).momentumScanUniverseSymbols = [];
+    try {
+      // Only 3 of the (much larger) real cap active -> plenty of empty slots, same shape as the
+      // real live gap (19 active of 90 IBKR cap).
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['SPY', 'QQQ', 'GLD']);
+      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue([]);
+      vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(0);
+      // Momentum's own universe has exactly one pick - real production shape: a small, static,
+      // curated list, not the broad-universe admission list.
+      vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+        { symbol: 'AAPL', intradayPctChange: 2, rangeExpansion: 0.01, relativeVolume: 1.5, momentumScore: 3 },
+      ]);
+      vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s) => (s === 'AAPL' ? 3 : null));
+      // A symbol that cleared the ADV gate today (real shape: AMZN-class case) but is NOT in
+      // momentum's own static universe at all.
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['AMZN']));
+
+      const subs: Array<{ symbol?: string; reason?: string }> = [];
+      const onSub = (p: { symbol?: string; reason?: string }) => subs.push(p);
+      eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+      const stats = await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+      eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+      expect(stats.ideasEmitted).toBe(0); // still never a trade idea
+      const symbols = subs.map((s) => s.symbol);
+      expect(symbols).toContain('AAPL'); // momentum's own pick, unaffected
+      expect(symbols).toContain('AMZN'); // the real gap this fix closes
+      const amznSub = subs.find((s) => s.symbol === 'AMZN');
+      expect(amznSub?.reason).toBe('BROAD_UNIVERSE_TOPUP');
+    } finally {
+      (continuousIntelligence as any).seedSymbols = originalSeed;
+      (continuousIntelligence as any).watchUniverseSymbols = originalWatch;
+      (continuousIntelligence as any).momentumScanUniverseSymbols = originalMomentumScan;
+    }
+  });
+
+  it('2026-09-16 regression: the broad-universe top-up never runs when momentum rotation already filled every empty slot', async () => {
+    process.env[FLAG_O] = 'true';
+    const cap = continuousIntelligence.maxActiveSubscriptions;
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+      Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
+    );
+    vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+      Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
+    );
+    vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(0.5);
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+      { symbol: 'AMD', intradayPctChange: 6, rangeExpansion: 0.02, relativeVolume: 2.5, momentumScore: 6 },
+    ]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s) => (s === 'AMD' ? 6 : null));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['AMZN']));
+
+    const subs: Array<{ symbol?: string; reason?: string }> = [];
+    const onSub = (p: { symbol?: string; reason?: string }) => subs.push(p);
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+    await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+    eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+    expect(subs).toHaveLength(1); // only the single hot-swap slot, no top-up capacity to spend
+    expect(subs[0].symbol).toBe('AMD');
   });
 });
 

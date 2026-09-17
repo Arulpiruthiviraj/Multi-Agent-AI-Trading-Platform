@@ -84,6 +84,16 @@ export function installObservabilityEventBridge(): void {
       // isn't present - a narrow, honest fix (a multi-symbol article is still indexed under only
       // its first-listed ticker; full multi-symbol indexing would need NewsEngine.ts itself to
       // emit one row per symbol, a larger, separate change) rather than a silent gap.
+      //
+      // Real gap found (2026-09-16, universe/subscription starvation investigation): the same
+      // fixed-whitelist problem, third confirmed instance. WATCHLIST_SUBSCRIBE_REQUESTED's real
+      // payload (OpportunityDiscovery.ts) carries `reason` (SNAPSHOT_HOT_SWAP /
+      // SEED_UNIVERSE_EXPANSION / BROAD_UNIVERSE_TOPUP), `source`, and `momentumScore` - none of
+      // which were in this whitelist, so every persisted row silently collapsed to `{symbol}` only.
+      // Confirmed live: 5,126 real WATCHLIST_SUBSCRIBE_REQUESTED rows today, 100% missing `reason` -
+      // which made it impossible to measure, from stored data alone, whether the new
+      // BROAD_UNIVERSE_TOPUP fix was actually firing or how often, exactly the observability this
+      // investigation needed. Added narrowly, same pattern as the two gaps above.
       const singleSymbol = payload?.symbol ?? (Array.isArray(payload?.symbols) ? payload.symbols[0] : undefined);
       const safePayload = redactSecretsDeep({
         symbol: singleSymbol,
@@ -98,6 +108,9 @@ export function installObservabilityEventBridge(): void {
         agentType: payload?.agentType,
         lastError: payload?.lastError,
         providersAttempted: payload?.providersAttempted,
+        reason: payload?.reason,
+        source: payload?.source,
+        momentumScore: payload?.momentumScore,
       });
       logStructured(level, eventType, {
         category,

@@ -104,7 +104,16 @@ export class SystemBootstrap {
     // reached the code that checks it). Starting it here unconditionally is safe because the
     // worker's own start() re-checks the flag and returns immediately when it's off.
     opportunityDiscoveryWorker.start();
-    newsEngine.start(); // clustering for news_veto; NewsAgent ideas gated separately
+    // ARGUS_NEWS_ENGINE_ENABLED='false' (isolated synthetic simulation only - see
+    // SyntheticSessionEngine.ts's prepareIsolatedEnvironment()) must stop this call too, not just
+    // ArgusCoreBoot.ts's own newsEngine.start() - this is a genuinely SECOND, independent call site
+    // (SystemBootstrap runs on Autobot/system.start, which a synthetic session also triggers via its
+    // seeded autoBotEnabled:true settings row) that a first pass of this fix missed, letting the real
+    // RSS/LLM pipeline start here even after ArgusCoreBoot's own call was correctly skipped (found via
+    // a real same-seed determinism re-check still showing NEWS_ANALYSIS_STARTED events, 2026-09-15).
+    if (process.env.ARGUS_NEWS_ENGINE_ENABLED !== 'false') {
+      newsEngine.start(); // clustering for news_veto; NewsAgent ideas gated separately
+    }
     // Agent Confluence Architecture Audit (2026-08-25): listens for TRADE_IDEA_GENERATED, never
     // emits one itself. Internally gated by tradingSafety.confluenceCoordinatorEnabled and
     // isLiveIdeaGenerationEnabled() — safe to start unconditionally here, same as chiefTrader.

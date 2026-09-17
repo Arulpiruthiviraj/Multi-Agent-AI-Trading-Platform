@@ -163,11 +163,24 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
-    const { newsEngine } = await import('../news/NewsEngine');
-    newsEngine.start();
-    console.log(
-      '[NewsEngine] Started at boot (independent of Autobot / market clock). 24/7 ingest + adaptive cadence; TRADE_IDEA_GENERATED stays desk/Autobot-gated; orders still RiskEngine market_hours gated.',
-    );
+    // ARGUS_NEWS_ENGINE_ENABLED default (unset) preserves production's unconditional start exactly
+    // as before - this flag exists solely so an isolated synthetic simulation can force it off (see
+    // SyntheticSessionEngine.ts's prepareIsolatedEnvironment()) without a real RSS/paid-news-API/LLM
+    // background loop running against a deterministic, seeded session that was never supposed to
+    // depend on live external data (2026-09-15, Rule 2 determinism fix - the real NewsEngine's RSS
+    // clustering/LLM scoring was the confirmed root cause of news_clusters/agent_predictions varying
+    // across two same-seed synthetic runs; see the diagnostic in ARGUS_SYNTHETIC_CERTIFICATION_2026-09-15.md).
+    if (process.env.ARGUS_NEWS_ENGINE_ENABLED !== 'false') {
+      const { newsEngine } = await import('../news/NewsEngine');
+      newsEngine.start();
+      console.log(
+        '[NewsEngine] Started at boot (independent of Autobot / market clock). 24/7 ingest + adaptive cadence; TRADE_IDEA_GENERATED stays desk/Autobot-gated; orders still RiskEngine market_hours gated.',
+      );
+    } else {
+      console.log(
+        '[NewsEngine] Boot start skipped (ARGUS_NEWS_ENGINE_ENABLED=false) - isolated synthetic simulation; real RSS/LLM ingest never starts for this process.',
+      );
+    }
   } catch (e: any) {
     console.warn(`[NewsEngine] Boot start failed: ${e.message}`);
   }

@@ -63,6 +63,10 @@ describe('ReflectionEngine - real confidence calibration computation', () => {
     // below the 0.85 stated/prior confidence by the real 30% observed accuracy, not all the way
     // to 0.30 either, since n=10 real observations only partially outweighs the prior.
     expect(row.calibratedConfidence).toBeCloseTo(0.575, 3);
+    // Explicit provenance (2026-09-15, calibrationMethodComparison.ts follow-up): this write path
+    // IS the raw, uncorrected method - proves ReflectionEngine states that as a fact on the row
+    // itself, not merely relying on the column default to happen to be correct.
+    expect(row.calibrationMethod).toBe('RAW_BETA_BINOMIAL');
   });
 
   it('keeps separate buckets separate for the same agent', async () => {

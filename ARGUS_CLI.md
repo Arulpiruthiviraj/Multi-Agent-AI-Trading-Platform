@@ -83,6 +83,39 @@ The browser UI is optional. The engine can continue running without Vite or Reac
 
 ---
 
+## 1a. Start AND enable trading in one step
+
+`start` alone only boots the engine — `tradingState` stays whatever it already was (normally
+`TRADING_PAUSED` after a restart; this is intentional fail-closed behavior, not a bug — see
+`CLAUDE.md`'s "Do not ack-and-resume blindly" rule). To boot the engine and enable trading for the
+day in one command (2026-09-15):
+
+```bash
+npm run argus-cli -- start --enable-trading
+./argus start --enable-trading
+```
+
+This does **not** skip or weaken anything: after a successful health check, it makes the exact same
+`POST /api/v1/system/resume` call `argus-cli resume` already makes, so every existing server-side
+safety check (reconciliation, restart safety) still applies. If that check refuses, the engine keeps
+running but trading stays wherever it already was — this flag never forces a bypass. Pass
+`--reason="..."` to record why in the resume audit trail (defaults to a generic auto-resume reason).
+
+The equivalent two-step form (always available, and what `--enable-trading` does under the hood):
+
+```bash
+npm run argus-cli -- start
+npm run argus-cli -- resume --reason="Operator confirmed start of today's session"
+```
+
+To pause trading again without stopping the engine:
+
+```bash
+npm run argus-cli -- pause --reason="..."
+```
+
+---
+
 ## 2. Check engine status
 
 ```bash

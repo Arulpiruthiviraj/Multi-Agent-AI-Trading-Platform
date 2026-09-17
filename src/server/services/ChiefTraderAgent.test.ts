@@ -84,6 +84,36 @@ describe('ChiefTraderAgent.evaluateConsensus', () => {
     expect(approval.confidence).toBeCloseTo(0.95, 5);
   });
 
+  it('2026-09-15 regression: uses the triggering idea\'s own currentPrice, not whichever agreeing agent happens to sit first in evidence array order (a real synthetic-certification finding - a consensus combining a fresh TechnicalAgent tick with an older, cooldown-throttled KronosEngine price picked the stale Kronos price purely by array position, understating RiskEngine\'s real notional by ~5%)', async () => {
+    agent.recentIdeas = [
+      // Deliberately first in array order, but STALE - this is the trap the old
+      // agreeing.find(...) picked by accident.
+      { traceId: 'stale-kronos', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'stale forecast', currentPrice: 246.79 },
+      // The idea that actually triggers this evaluation cycle (traceId matches the
+      // evaluateConsensus() call below) - its own fresh price must win.
+      { traceId: 'fresh-technical', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'fresh oversold read', currentPrice: 259.89 },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'fresh-technical');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.currentPrice).toBe(259.89);
+  });
+
+  it('2026-09-15 regression: falls back to EvidenceAggregator\'s own bestPrice when the triggering idea itself carries no valid currentPrice', async () => {
+    agent.recentIdeas = [
+      { traceId: 'other', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'fallback source', currentPrice: 246.79 },
+      { traceId: 'no-price', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'no price this time' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'no-price');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.currentPrice).toBe(246.79);
+  });
+
   it('2026-09-11 (full trading readiness remediation, Phase 1 item 2): surfaces the raw/historical/decision confidence decomposition per agent, not just one opaque number', async () => {
     const infoSpy = vi.spyOn(structuredLogger, 'info');
     agent.recentIdeas = buyPair('AAPL', 0.95);

@@ -71,9 +71,12 @@ Watchdog (2026-09-08, detached auto-restart supervisor for the engine):
   watchdog-status   Show whether the watchdog is running and its pid
 
 Trading:
-  enable            Enable Autobot
+  enable            Enable Autobot (gates new BUY idea generation only)
   disable           Disable Autobot
   kill-switch       Trigger emergency trading stop
+  resume            Resume tradingState (POST /api/v1/system/resume) - same path
+                    "start --enable-trading" chains onto a fresh boot
+  pause             Pause tradingState without stopping the engine
 
 Portfolio:
   positions         Show current positions
@@ -118,7 +121,7 @@ EOF
 
 argus_help_start() {
   cat <<'EOF'
-Usage: argus start [cli|web] [--dev|--prod]
+Usage: argus start [cli|web] [--dev|--prod] [--enable-trading] [--reason="..."]
 
   cli   (default) Headless API-only engine, no browser UI - npm run argus-cli's own
         start lifecycle (scripts/argus-engine.ts). This is what "argus start" has
@@ -129,6 +132,13 @@ Usage: argus start [cli|web] [--dev|--prod]
         it the same way: "argus stop web" / "argus restart web".
 
   --dev/--prod apply to cli mode only (web mode is always the dev ecosystem).
+
+  --enable-trading (2026-09-15, cli mode only): after a successful boot, also calls the
+        same POST /api/v1/system/resume route "argus resume" uses - one command to start
+        today's session AND enable trading. Does not skip or weaken any server-side safety
+        check (reconciliation/restart safety still apply); if resume is refused, the engine
+        keeps running but trading stays wherever it already was - never a forced bypass.
+        Pass --reason="..." to record why in the resume audit trail.
 
 Does not spawn a second engine if one is already running.
 EOF
@@ -183,7 +193,16 @@ EOF
 
 argus_help_trading() {
   cat <<'EOF'
-Usage: argus enable | disable | kill-switch
+Usage: argus enable | disable | kill-switch | resume [--reason="..."] | pause [--reason="..."]
+
+  enable/disable   Autobot on/off - gates new BUY idea generation only. SELL/exits still
+                    require tradingState=TRADING_ENABLED regardless of this flag.
+  kill-switch      Trigger emergency trading stop (TRADING_PAUSED + EMERGENCY_STOP).
+  resume           The real tradingState resume path (POST /api/v1/system/resume) - distinct
+                    from enable/disable. Same operator-resume mechanism "argus start
+                    --enable-trading" chains onto a fresh boot; still applies every existing
+                    safety check server-side (reconciliation, restart safety).
+  pause            Pause tradingState without stopping the engine.
 
 Delegates to Argus Application over HTTP.
 Does not bypass RiskEngine, kill-switch, or LIVE safety.
@@ -301,31 +320,38 @@ argus_cmd_start() {
   # was silently a no-op. Removed rather than fixed in place, since "argus start web" is now the
   # real, working way to get the web UI - see ARGUS_SHELL_CLI.md.
   local mode="dev"
+  # 2026-09-15: --enable-trading and --reason=... are forwarded as-is (not consumed here) so the
+  # underlying `npm run argus-cli -- start` sees them exactly as if invoked directly - see that
+  # file's own parseFlags()/resumeReasonFromArgv() for what they do. This shell layer stays a thin
+  # passthrough, not a second place that reimplements the flag's meaning.
+  local extra_args=()
   for a in "$@"; do
     case "$a" in
       --prod) mode="prod" ;;
       --dev) mode="dev" ;;
+      --enable-trading) extra_args+=("$a") ;;
+      --reason=*) extra_args+=("$a") ;;
     esac
   done
 
   # Already running? Prefer TS CLI (PID + health) — do not duplicate spawn.
   if argus_has_flag --json "$@"; then
     if [[ "$mode" == "prod" ]]; then
-      argus_npm_cli start --prod --headless
+      argus_npm_cli start --prod --headless "${extra_args[@]}"
     else
-      argus_npm_cli start --headless
+      argus_npm_cli start --headless "${extra_args[@]}"
     fi
     return $?
   fi
 
   local out
   if [[ "$mode" == "prod" ]]; then
-    out="$(argus_npm_cli start --prod --headless 2>&1)" || {
+    out="$(argus_npm_cli start --prod --headless "${extra_args[@]}" 2>&1)" || {
       echo "$out"
       return "$ARGUS_EXIT_FAIL"
     }
   else
-    out="$(argus_npm_cli start --headless 2>&1)" || {
+    out="$(argus_npm_cli start --headless "${extra_args[@]}" 2>&1)" || {
       echo "$out"
       return "$ARGUS_EXIT_FAIL"
     }

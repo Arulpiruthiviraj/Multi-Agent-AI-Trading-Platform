@@ -53,8 +53,10 @@
  */
 import { readFileSync, existsSync, mkdirSync, appendFileSync, writeFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { isPidAlive, readEnginePid } from '../src/server/app/enginePid';
+import { assertNotProductionRuntimePath } from '../src/server/core/productionRuntimePathGuard';
 import {
   initialStateMachine,
   nextState,
@@ -130,6 +132,15 @@ function readSessionFile(): SessionFileShape | null {
 }
 
 function writeWatchdogHeartbeat(state: string): void {
+  // Mechanical backstop (2026-09-15, P1) - see productionRuntimePathGuard.ts's own header for the
+  // real incident history this class of check closes (a different file, same shape of gap, found
+  // live this same day). Deliberately called BEFORE the try/catch below, not inside it - that
+  // catch exists so a real filesystem failure never crashes the watchdog's own job, but a real
+  // isolation violation must never be silently swallowed the same way. This script has no
+  // test-only override for this path today because it is meant to run as a standalone process,
+  // never imported - the isMainModule guard at the bottom of this file is the primary fix for
+  // that; this call is defense in depth in case that ever changes.
+  assertNotProductionRuntimePath(WATCHDOG_HEARTBEAT_PATH, 'watchdog heartbeat file', join(ROOT, 'data', 'logs', '.argus_watchdog_heartbeat.json'));
   try {
     mkdirSync(dirname(WATCHDOG_HEARTBEAT_PATH), { recursive: true });
     writeFileSync(WATCHDOG_HEARTBEAT_PATH, JSON.stringify({
@@ -256,4 +267,14 @@ async function main(): Promise<void> {
   }
 }
 
-main();
+// Real bug found and fixed (2026-09-15, P1 isolation pass - the same fix argus-cli.ts already
+// needed for the identical reason): this used to call main() unconditionally at module load, with
+// no guard distinguishing "invoked as `tsx argusWatchdog.ts`" from "imported for its exported pure
+// functions". No test currently imports this file directly, so this was a LATENT risk, not yet a
+// triggered incident - but a future test importing anything from this module (even just a type)
+// would have started a real, infinite, file-writing/engine-restarting polling loop as a side
+// effect of module load. Guarded the same way argus-cli.ts's own entry point already is.
+const isMainModule = process.argv[1] != null && fileURLToPath(import.meta.url) === process.argv[1];
+if (isMainModule) {
+  main();
+}

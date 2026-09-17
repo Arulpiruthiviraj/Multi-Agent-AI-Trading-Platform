@@ -107,5 +107,22 @@ describe('SyntheticSimulationSafety (Phase 1: isolation boundary + safety assert
       };
       expect(() => assertActiveSessionIsSynthetic(brokerThatDoesNotRefuseLive)).toThrow(/did not throw/);
     });
+
+    it('does not disable placeOrder() on the real broker instance it just verified (regression, 2026-09-15: CERTIFIED_BULLISH_ENTRY_EXIT found a real RiskEngine-approved order thrown "LIVE refused" purely because this same safety proof had run against the session\'s broker earlier - HistoricalReplayBroker.liveTrading() previously set a permanent liveRefused flag as a side effect of being called, poisoning every subsequent placeOrder() on that instance for the rest of the session)', async () => {
+      const broker = new HistoricalReplayBroker({
+        initialCash: 100000,
+        costs: { commissionPerShare: 0, commissionMinimum: 0, spreadBps: 0, slippageBps: 0 } as any,
+        timezone: 'America/New_York',
+        extendedHours: false,
+        shortSelling: false,
+        fractional: false,
+      });
+      expect(() => assertActiveSessionIsSynthetic(broker)).not.toThrow();
+
+      broker.clockNowMs = Date.UTC(2024, 0, 2, 14, 30, 0); // a real RTH timestamp so the session-fill gate passes
+      broker.nextFillPrice.set('AAPL', 100);
+      const order = await broker.placeOrder({ symbol: 'AAPL', side: 'BUY', type: 'MARKET', quantity: 1 });
+      expect(order.status).toBe('FILLED');
+    });
   });
 });

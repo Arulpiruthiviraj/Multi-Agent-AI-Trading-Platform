@@ -243,6 +243,10 @@ export class ReflectionEngine {
           const calibratedConfidence = calibratedConfidenceForBucket({ low, high }, wins, losses);
           await db.insert(agentConfidenceCalibration).values({
             agentName, bucketLow: low, bucketHigh: high, wins, losses, calibratedConfidence,
+            // Explicit, not merely the column default (2026-09-15, calibrationMethodComparison.ts's
+            // own header) - this write path IS the raw, uncorrected method; state it as a fact at
+            // the call site rather than only implying it via schema default.
+            calibrationMethod: 'RAW_BETA_BINOMIAL',
             provider: 'ALL', lastEvaluated: new Date().toISOString(),
           }).onConflictDoUpdate({
             target: [agentConfidenceCalibration.agentName, agentConfidenceCalibration.bucketLow, agentConfidenceCalibration.provider],
@@ -262,6 +266,7 @@ export class ReflectionEngine {
             const calibratedConfidence = calibratedConfidenceForBucket({ low, high }, wins, losses);
             await db.insert(agentConfidenceCalibration).values({
               agentName, bucketLow: low, bucketHigh: high, wins, losses, calibratedConfidence,
+              calibrationMethod: 'RAW_BETA_BINOMIAL',
               provider, lastEvaluated: new Date().toISOString(),
             }).onConflictDoUpdate({
               target: [agentConfidenceCalibration.agentName, agentConfidenceCalibration.bucketLow, agentConfidenceCalibration.provider],

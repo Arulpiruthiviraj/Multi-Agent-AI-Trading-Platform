@@ -588,6 +588,33 @@ Soak floors (`config/researchSafety.json`): `minPaperTrades` 30, `minPaperSessio
 7. Do not set `tradingMode: LIVE` without confirmation phrase **and** LIVE_READY (it is not).
 8. Do not treat VectorBT / Research Lab green / parquet as fills.
 
+## Standing instruction for autonomous Claude sessions: start today's session near market open
+
+**Added 2026-09-15, operator-authorized standing directive** — read this every session, not just
+once. If it is around 9:00 AM America/New_York (i.e. shortly before the 9:30 RTH open) on a trading
+day and Argus's real production engine is not already running, autonomously start it and enable
+trading via the normal CLI, exactly as the Phase I safety pattern established on 2026-09-15 did:
+
+1. Check whether the engine is already up (`npm run argus-cli -- status`, or a plain `GET /health`).
+   If it is, do nothing — do not restart a running trading session as a side effect of routine work.
+2. If it is not running, start it via `npm run argus-cli -- start --enable-trading` (or the
+   equivalent two-step `start` then `resume` — see `ARGUS_CLI.md` § 1a). This is the same real CLI
+   path an operator would use; never a shortcut, never a raw DB write to `trading_state`.
+3. `--enable-trading` still goes through the real `/api/v1/system/resume` route, which still applies
+   every existing safety check (reconciliation, restart safety). **If that check refuses, leave it
+   refused** — do not investigate ways around it, do not touch `trading_state` directly, do not
+   weaken reconciliation. Report the refusal plainly and move on to other work.
+4. This starts the REAL production engine against the REAL production database
+   (`data/argus.db`) and the REAL configured broker. `PAPER_TRADING_ONLY`/`LIVE_NO_GO` govern it
+   exactly as they govern any other engine start — this directive never implies arming LIVE.
+5. Once today's session is confirmed running (whether trading ends up enabled or left paused by a
+   safety check), continue with whatever development/research/simulator work is otherwise planned —
+   but see "Hard working rules" and the Synthetic Market Session Simulator section for the
+   isolation this requires: never point simulator/dev work at `data/argus.db`, never restart or stop
+   the now-running production engine as a side effect of dev work, and be mindful that any real
+   Chronos/Java Quant Core services shared with the running production engine are real, shared,
+   finite-capacity dependencies, not exclusively yours to load-test during market hours.
+
 ## Pre-market checklist (America/New_York)
 
 - [ ] Process up (`npm run dev` or `dev:server-only`); Chronos `:8008` healthy if Kronos enabled; Ollama optional
@@ -659,6 +686,13 @@ npm run argus-cli -- <cmd>    # scripts/argus-cli.ts — HTTP client (+ start/st
                               # wrapper-free tsx-loader spawn as engine `start` — survives its
                               # launching terminal closing. Prefer this over a bare
                               # `npm run argus:watchdog` (which stays foreground/terminal-tied).
+                              # `start --enable-trading` (2026-09-15): boots the engine, then makes
+                              # the same POST /api/v1/system/resume call `resume` already makes —
+                              # one step for "start today's session and enable trading." Does not
+                              # skip any server-side safety check (reconciliation/restart safety
+                              # still apply); if resume is refused, the engine keeps running but
+                              # stays NOT trading, never a forced bypass. `resume`/`pause` remain
+                              # available standalone with `--reason="..."`. See ARGUS_CLI.md § 1a.
                               # See ARGUS_CLI.md / ARGUS_HEADLESS_RUNTIME_ARCHITECTURE.md
 npm run build            # Vite SPA + esbuild → dist/server.cjs
 npm run start            # node dist/server.cjs

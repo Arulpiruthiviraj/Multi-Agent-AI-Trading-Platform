@@ -62,12 +62,13 @@ Legacy full-ecosystem DevOps script remains at [`argus.sh`](argus.sh) (`npm run 
 |---------|----------------|
 | `help` / `--help` / `-h` | Local help |
 | `version` / `--version` | package.json + API URL |
-| `start [cli\|web] [--dev\|--prod]` | `cli` (default): `argus-cli start` → engine PID spawn, headless, no browser UI. `web`: delegates to `./argus.sh start` (full dev ecosystem, browser UI) |
+| `start [cli\|web] [--dev\|--prod] [--enable-trading] [--reason="..."]` | `cli` (default): `argus-cli start` → engine PID spawn, headless, no browser UI. `web`: delegates to `./argus.sh start` (full dev ecosystem, browser UI). `--enable-trading` (2026-09-15, `cli` mode only): after a successful boot, also calls the same resume route `argus resume` uses — see below |
 | `stop [cli\|web]` / `restart [cli\|web]` | `cli` (default): `argus-cli` + SIGTERM graceful path. `web`: `./argus.sh stop`/`restart` — a separate process lifecycle from `cli` mode, since `argus.sh` tracks its own PID (`.argus_dev.pid`), not the engine's |
 | `status [--json]` | `GET /api/v2/runtime/status` |
 | `health [--json]` | `GET /api/v2/runtime/health` |
 | `ready [--json]` | `GET /api/v2/live-readiness` |
-| `enable` / `disable` | runtime trading enable/disable |
+| `enable` / `disable` | Autobot on/off — gates new BUY idea generation only, not the `tradingState` machine |
+| `resume [--reason="..."]` / `pause [--reason="..."]` | (2026-09-15) The real `tradingState` resume/pause path (`POST /api/v1/system/resume` \| `/pause`) — distinct from `enable`/`disable`. Still applies every existing server-side safety check (reconciliation, restart safety); never a forced bypass |
 | `kill-switch` | existing emergency-stop API |
 | `watchdog-start` / `watchdog-stop` / `watchdog-restart` / `watchdog-status` | detached external liveness supervisor (`scripts/argusWatchdog.ts`) — restarts the engine on a confirmed unexpected death; never resumes trading itself |
 | `positions` / `trades` / `orders` | runtime portfolio APIs |
@@ -83,9 +84,11 @@ Legacy full-ecosystem DevOps script remains at [`argus.sh`](argus.sh) (`npm run 
 ```bash
 ./argus start           # same as: ./argus start cli — headless, API only
 ./argus start web       # full dev ecosystem with the browser UI (./argus.sh start)
+./argus start --enable-trading --reason="Start of day"   # boot + enable trading in one step
 ./argus login          # required when AUTH_PASSWORD is set on the engine
 ./argus status
 ./argus enable
+./argus resume --reason="Operator confirmed reconciliation clean"
 ./argus positions
 ./argus replay run --capital 2000 --start 2025-01-01 --end 2025-12-31
 ./argus doctor
@@ -193,7 +196,9 @@ Checks bash/node/npm, `node_modules`, `.env` presence (not contents), build arti
 - No RiskEngine / OMS / BrokerManager imports in Bash or `argus-cli.ts`
 - No direct `placeOrder`
 - No direct DB mutation for trading controls
-- Autobot / kill-switch go through Argus Application APIs
+- Autobot / kill-switch / resume / pause go through Argus Application APIs
+- `start --enable-trading` chains the same resume API call onto a fresh boot — it does not add a
+  second, weaker path; a server-side safety refusal (e.g. reconciliation) is reported, never bypassed
 - LIVE refusals are displayed, never overridden
 
 > **One Core. One Trading Brain. One OMS. The shell CLI controls Argus — it does not become Argus.**

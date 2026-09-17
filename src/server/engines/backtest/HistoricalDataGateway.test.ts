@@ -220,6 +220,48 @@ describe('HistoricalDataGateway.checkForUnadjustedCorporateActions', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('refuses a real Alpaca fetch during a synthetic simulation session and never calls fetch (regression, 2026-09-15: a synthetic CERTIFIED_BULLISH_ENTRY_EXIT run\'s own isolated DB was found holding 275 real live-fetched SPY 1Day bars, meaning JavaCoreEnsemble had been evaluating real market history instead of the synthetic scenario on every certification run)', async () => {
+    historicalDataGateway.clearBarsRateLimitBackoff();
+    const fetchMock = vi.fn(async () => {
+      throw new Error('fetch must not be called during a synthetic simulation session');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.SYNTHETIC_SIMULATION = 'true';
+    try {
+      const now = Date.now();
+      await expect(
+        historicalDataGateway.ensureBars('SYNTHNODATA', '1Day', now - 86_400_000, now),
+      ).rejects.toThrow(/refuses a real network fetch/);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.SYNTHETIC_SIMULATION;
+    }
+  });
+
+  it('returns normally under SYNTHETIC_SIMULATION when the cache already has sufficient bars, still without calling fetch', async () => {
+    historicalDataGateway.clearBarsRateLimitBackoff();
+    const fetchMock = vi.fn(async () => {
+      throw new Error('fetch must not be called when cache is already sufficient');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    process.env.SYNTHETIC_SIMULATION = 'true';
+    try {
+      const now = Date.now();
+      const start = now - tradingSafety.regimeMinBars * 86_400_000;
+      for (let i = 0; i < tradingSafety.regimeMinBars; i++) {
+        const ts = start + i * 86_400_000;
+        await db.insert(schema.ohlcvBars).values({
+          id: `SYNTHCACHED:1Day:${ts}`, symbol: 'SYNTHCACHED', timeframe: '1Day', timestamp: ts,
+          open: 10, high: 11, low: 9, close: 10.5, volume: 1000, source: 'synthetic_simulation',
+        }).onConflictDoNothing();
+      }
+      await historicalDataGateway.ensureBars('SYNTHCACHED', '1Day', start, now);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.SYNTHETIC_SIMULATION;
+    }
+  });
+
   it('skips Alpaca when SQLite already has regimeMinBars coverage (cache-first)', async () => {
     historicalDataGateway.clearBarsRateLimitBackoff();
     const fetchMock = vi.fn(async () => {

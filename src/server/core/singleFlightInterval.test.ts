@@ -42,6 +42,45 @@ describe('createSingleFlightGuard (protects ANY caller, not just a timer)', () =
     await Promise.all([ev.evaluatePending(), ev.evaluatePending(), ev.evaluatePending()]);
     expect(ev.workDone).toBe(1);
   });
+
+  it('real re-audit (2026-09-15): a thrown fn() releases the guard - no permanently stuck in-flight state, at the primitive level (not just the wrapper)', async () => {
+    const guard = createSingleFlightGuard(() => {}); // swallow the error report, we only care about the guard's own state
+    await expect(guard.run(async () => { throw new Error('boom'); })).resolves.toBeUndefined(); // run() itself never rejects - the guard always resolves, error goes to onError
+
+    // The guard must be immediately available again - not stuck "running forever" because fn threw.
+    let secondRan = false;
+    await guard.run(async () => { secondRan = true; });
+    expect(secondRan).toBe(true);
+
+    const m = guard.getMetrics();
+    expect(m.totalErrors).toBe(1); // the throwing call
+    expect(m.totalRun).toBe(1); // only the second, successful call - totalRun/totalErrors are mutually exclusive per-call counters
+    expect(m.currentlyRunning).toBe(false);
+  });
+
+  it('real re-audit (2026-09-15): concurrent calls during a throwing run still coalesce correctly, and the guard recovers for the NEXT call after that', async () => {
+    const guard = createSingleFlightGuard(() => {});
+    let releaseFirst: (() => void) | null = null;
+    const first = guard.run(async () => {
+      await new Promise<void>((resolve) => { releaseFirst = resolve; });
+      throw new Error('boom');
+    });
+    // Fires while the first call is still in flight - must coalesce (skip), not queue behind it.
+    const second = guard.run(async () => { throw new Error('should never run - coalesced away'); });
+
+    releaseFirst!();
+    await Promise.all([first, second]);
+
+    const afterThrow = guard.getMetrics();
+    expect(afterThrow.totalErrors).toBe(1); // only the first call's throw counted - the second was skipped, not run
+    expect(afterThrow.totalSkippedInFlight).toBe(1);
+    expect(afterThrow.currentlyRunning).toBe(false);
+
+    // A genuinely later call (no overlap) must run normally - the guard was not left stuck.
+    let thirdRan = false;
+    await guard.run(async () => { thirdRan = true; });
+    expect(thirdRan).toBe(true);
+  });
 });
 
 describe('startSingleFlightInterval (P1-A overlap-guard regression coverage)', () => {

@@ -22,7 +22,8 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
-import { getCachedBroadUniverseSymbols, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+import { getCachedBroadUniverseCandidatesWithVolume, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+import { selectBroadUniverseCandidates } from './BroadUniverseSubscriptionAllocator';
 import {
   getLastComposableScore,
   getLastSnapshotScore,
@@ -97,11 +98,22 @@ export function setOpportunityScanInFlightForTests(value: boolean): void {
 }
 
 export function getOpportunityScanUniverse(): string[] {
+  // 2026-09-16 subscription-starvation fix: previously `.slice(0, broadUniverseTopNPerScan)` on a
+  // list re-sorted by raw dollar volume every call - see BroadUniverseSubscriptionAllocator.ts's own
+  // header for the real evidence (five legitimate, liquid movers ranked #99-#622 of 1,418, never once
+  // inside the old window). selectBroadUniverseCandidates() replaces the raw slice with a
+  // deterministic, aging-aware selection that still favors liquidity but guarantees an eligible
+  // candidate cannot be skipped forever. Same admitted-candidate pool, same final cap
+  // (broadUniverseTopNPerScan) - only the selection rule inside that cap changed.
+  const broadUniverseSelected = selectBroadUniverseCandidates(
+    getCachedBroadUniverseCandidatesWithVolume(),
+    continuousIntelligence.broadUniverseTopNPerScan,
+  ).map((r) => r.symbol);
   const names = [
     ...continuousIntelligence.seedSymbols,
     ...continuousIntelligence.watchUniverseSymbols,
     ...continuousIntelligence.momentumScanUniverseSymbols,
-    ...getCachedBroadUniverseSymbols().slice(0, continuousIntelligence.broadUniverseTopNPerScan),
+    ...broadUniverseSelected,
     // Phase 17 (2026-09-01): real Alpaca top-gainers/losers, already liquidity/ADV-screened by
     // MarketUniverseScanner.refreshMoversCache() - same evaluateOpportunityCandidate() gate below,
     // never a trade by itself.
@@ -355,6 +367,35 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
         .map((r) => r.symbol);
     }
 
+    // Real gap found live (2026-09-16, post-SIP-ADV-fix universe-construction follow-up): when
+    // momentumRotationEnabled is true, toRequest above is sourced entirely from
+    // getTopMomentumCandidates() -> SnapshotScanner.ts's getSnapshotScanUniverse(), which only ever
+    // scans continuousIntelligence.seedSymbols/watchUniverseSymbols/campaignOpeningSurgeSymbols/
+    // momentumScanUniverseSymbols - a small, static, curated list. It never reads
+    // getCachedBroadUniverseSymbols() (the ADV-gated broad-universe discovery admission list feeding
+    // `shortlist` above), even though that list is already computed this same cycle. Confirmed live:
+    // the SIP ADV fix took broad-universe admission from 17 to 192 symbols same-day, but 0 of those
+    // 192 ever received a subscribe request, because admission to `shortlist` was never connected to
+    // `toRequest` while momentum rotation is on - only used for the candidate ledger (upsertCandidate
+    // below). This top-up spends only genuinely LEFTOVER empty capacity momentum rotation's own
+    // top-N (snapshotTopCandidates) picks didn't claim - it never reorders or competes with momentum
+    // rotation's own picks, never touches momentumHotSwap's own slot math above, and is a no-op
+    // whenever momentum rotation already used every available slot this cycle (e.g. already at cap).
+    const topUpFromBroadUniverse = new Set<string>();
+    if (continuousIntelligence.momentumRotationEnabled) {
+      const alreadyRequested = new Set(toRequest);
+      const capForCycle = emptySlots > 0 ? Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots) : 0;
+      const remaining = Math.max(0, capForCycle - toRequest.length);
+      if (remaining > 0) {
+        const topUp = shortlist
+          .filter((row) => !active.has(row.symbol) && !alreadyRequested.has(row.symbol))
+          .slice(0, remaining)
+          .map((r) => r.symbol);
+        for (const symbol of topUp) topUpFromBroadUniverse.add(symbol);
+        toRequest = toRequest.concat(topUp);
+      }
+    }
+
     for (const row of shortlist) {
       upsertCandidate({
         symbol: row.symbol,
@@ -369,7 +410,9 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       eventBus.emit(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, {
         symbol,
         source: 'OpportunityDiscovery',
-        reason: momentumHotSwap ? 'SNAPSHOT_HOT_SWAP' : 'SEED_UNIVERSE_EXPANSION',
+        reason: topUpFromBroadUniverse.has(symbol)
+          ? 'BROAD_UNIVERSE_TOPUP'
+          : (momentumHotSwap ? 'SNAPSHOT_HOT_SWAP' : 'SEED_UNIVERSE_EXPANSION'),
         momentumScore: score,
         honesty: 'Subscribe request only — not a trade idea and not an order.',
       });

@@ -48,6 +48,7 @@ describe('seedSyntheticCalibrationHistory', () => {
     expect(results[0].effectiveN).not.toBeNull();
     expect(results[0].wilsonLower).not.toBeNull();
     expect(results[0].wilsonLower!).toBeGreaterThan(0.5); // genuinely above chance, not just present
+    expect(results[0].seededObservationCount).toBe(25); // real provenance count (2026-09-15 addition), not undefined/0
 
     // Never faked directly - the champion must be readable through the SAME real
     // getChampion() lookup ModerateTierEvaluator.ts's isAgentBucketCalibrationTrustworthy() uses.

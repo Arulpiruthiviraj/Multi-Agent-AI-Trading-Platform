@@ -74,7 +74,15 @@ describe('opportunity loop', () => {
     expect(stats.ran).toBe(true);
     expect(stats.ideasEmitted).toBe(0);
     expect(stats.momentumHotSwap).toBe(false);
-    expect(stats.subscribeRequested).toBeLessThanOrEqual(continuousIntelligence.momentumHotSwapSlotsPerCycle);
+    // 2026-09-16 update (post-SIP-ADV-fix subscription-gap fix): when momentum rotation finds
+    // nothing (mocked empty above) but real empty slots and real shortlisted candidates exist,
+    // OpportunityDiscovery now tops up the remaining capacity from the shortlist instead of
+    // leaving it idle - the exact "admitted symbols never enqueued" gap that fix closed. The old
+    // `<= momentumHotSwapSlotsPerCycle` (1) bound encoded the previous, wasteful behavior; the
+    // real invariant is that the request stays bounded by the real per-cycle cap, not that it
+    // stays near-zero merely because momentum's own narrow candidate pool found nothing.
+    expect(stats.subscribeRequested).toBeGreaterThan(continuousIntelligence.momentumHotSwapSlotsPerCycle);
+    expect(stats.subscribeRequested).toBeLessThanOrEqual(continuousIntelligence.maxNewSubscriptionsPerCycle);
     expect(ideas).toHaveLength(0);
     const expectedUniverse = new Set([
       ...continuousIntelligence.seedSymbols,

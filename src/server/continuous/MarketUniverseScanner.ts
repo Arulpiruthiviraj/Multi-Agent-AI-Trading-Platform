@@ -84,7 +84,11 @@ export interface BroadUniverseSymbolLookup {
 }
 
 let assetsCache: { fetchedAt: number; symbols: string[] } | null = null;
-let snapshotCache: { fetchedAt: number; symbols: string[] } | null = null;
+// 2026-09-16 (subscription-starvation fix): dollarVolumeBySymbol carries real, already-fetched
+// dollar volume alongside the admitted symbol list - previously discarded at the `.map((s) =>
+// s.symbol)` step, forcing any downstream consumer needing volume (the new
+// BroadUniverseSubscriptionAllocator) to either re-fetch it or fall back to raw insertion order.
+let snapshotCache: { fetchedAt: number; symbols: string[]; dollarVolumeBySymbol: Record<string, number> } | null = null;
 let lastCycleSymbolLookup: Map<string, BroadUniverseSymbolLookup> | null = null;
 let inFlight = false;
 let lastStats: BroadUniverseStats = {
@@ -152,6 +156,59 @@ export async function fetchTradableAssets(): Promise<string[]> {
 }
 
 /**
+ * Real data-integrity defect found and fixed live (2026-09-16, subscription-ranking/gapPct
+ * provenance audit): `gapPct = (price - dailyBar.o) / dailyBar.o` had only an `openPrice > 0`
+ * guard - any tiny-but-positive value (a stale or erroneous print on a thin name) passed through
+ * unvalidated. Confirmed live: RETO 985%, MEDS 394%, PDYNW 356%, QCLS 342%, DLXY 315% - physically
+ * implausible for ordinary single-session equity moves, with nothing catching them. The corrupted
+ * value then fed directly into isGapMover() classification and recordDiscoveryOutcomeProbe()'s
+ * persisted shadow-prediction row.
+ *
+ * Fix mirrors SnapshotScanner.ts's own already-validated reference-price pattern (that file
+ * requires a real, positive prevDailyBar.c before computing anything at all - see its
+ * parseRawSnapshot()) rather than inventing a new validation scheme: when `prevDailyBar.c` is
+ * available, cross-validate `dailyBar.o` against it. A ratio outside
+ * [1/gapPctMaxPlausibleOpenToPrevCloseRatio, gapPctMaxPlausibleOpenToPrevCloseRatio] is treated as
+ * data-quality-suspect and gapPct is reported UNKNOWN (null) rather than computed from a
+ * questionable reference price - never silently substituted. The bound itself
+ * (gapPctMaxPlausibleOpenToPrevCloseRatio, config/continuousIntelligence.json) is derived from a
+ * documented market-data invariant, not tuned to any specific day's observations: it is wide enough
+ * to comfortably admit real, legitimate extreme moves (even severe binary-catalyst biotech gaps
+ * rarely exceed 300-400%) and common US-equity reverse-split ratios (1-for-10 is common; 1-for-20+
+ * is rare but real), while excluding the two-to-three-orders-of-magnitude anomalies actually
+ * observed live. When `prevDailyBar.c` is unavailable, a much weaker, purely absolute floor
+ * (openPrice must exceed an unambiguous near-zero threshold) is the only guard - deliberately more
+ * permissive, since there is less information to cross-validate against, consistent with "when
+ * reference data is questionable, report UNKNOWN rather than silently guessing."
+ *
+ * Legitimate extreme gaps are explicitly preserved, not discarded - this function never caps
+ * |gapPct| itself once the reference price passes validation. See
+ * MarketUniverseScanner.gapPctValidation.test.ts for the full matrix (normal/extreme/legitimate
+ * gaps preserved; stale/zero/negative/missing/wildly-inconsistent opens rejected to UNKNOWN).
+ */
+export function computeValidatedGapPct(
+  price: number,
+  openPrice: unknown,
+  prevClose: unknown,
+): number | null {
+  if (typeof openPrice !== 'number' || !Number.isFinite(openPrice) || openPrice <= 0) return null;
+
+  const hasPrevClose = typeof prevClose === 'number' && Number.isFinite(prevClose) && prevClose > 0;
+  if (!hasPrevClose) {
+    // Weaker fallback: no cross-validation data available. Reject only an unambiguous data-glitch
+    // signature (a fraction of a hundredth of a cent), never a real, plausible price.
+    if (openPrice < continuousIntelligence.gapPctMinAbsoluteOpenPrice) return null;
+    return (price - openPrice) / openPrice;
+  }
+
+  const ratio = openPrice / (prevClose as number);
+  const maxRatio = continuousIntelligence.gapPctMaxPlausibleOpenToPrevCloseRatio;
+  if (ratio > maxRatio || ratio < 1 / maxRatio) return null; // data-quality-suspect, report UNKNOWN
+
+  return (price - openPrice) / openPrice;
+}
+
+/**
  * Batched snapshot screen: price range, dollar-volume floor, spread ceiling. Returns symbols
  * ranked by dollar volume descending, capped at broadUniverseMaxCandidates. Never throws for a
  * single bad batch - a failed batch is just excluded, not fatal to the whole screen.
@@ -171,15 +228,14 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
         const bid = snap?.latestQuote?.bp;
         const ask = snap?.latestQuote?.ap;
         const openPrice = snap?.dailyBar?.o;
+        const prevClose = snap?.prevDailyBar?.c;
         if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) continue;
         if (typeof volume !== 'number' || !Number.isFinite(volume) || volume <= 0) continue;
         const dollarVolume = price * volume;
         const spreadBps = (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0)
           ? ((ask - bid) / ((ask + bid) / 2)) * 10000
           : null;
-        const gapPct = (typeof openPrice === 'number' && Number.isFinite(openPrice) && openPrice > 0)
-          ? (price - openPrice) / openPrice
-          : null;
+        const gapPct = computeValidatedGapPct(price, openPrice, prevClose);
         results.push({ symbol, price, dollarVolume, spreadBps, gapPct, volume });
       }
     } catch (e) {
@@ -290,6 +346,24 @@ async function fetchAvgDailyVolumeSharesFmpFallback(symbol: string): Promise<num
  * that fails, or a symbol with no bars in the response, falls through to a bounded, per-symbol FMP
  * fallback (see fetchAvgDailyVolumeSharesFmpFallback) rather than being excluded outright - only a
  * symbol both sources have no answer for is finally excluded (fail-closed), never assumed liquid.
+ *
+ * Real defect found live (2026-09-16, universe-construction forensic audit): this previously read
+ * `feed=iex` - IEX-reported volume only, not total consolidated market volume. A direct, same-day
+ * comparison against `feed=sip` for 16 representative liquid names (SPY/QQQ/AAPL/MSFT/NVDA/AMD/
+ * TSLA/META/INTC/AMZN/GOOGL/AVGO/JPM/XLF/XLE/GLD) found IEX volume consistently only ~1.5%-10%
+ * (averaging ~4%) of SIP consolidated volume - e.g. TSLA showed 414,123 IEX shares vs 19,014,661 SIP
+ * shares for the same partial trading day. Against the unchanged `broadUniverseMinAvgDailyVolumeShares`
+ * floor (500,000), this made the floor effectively require tens of millions of shares of TRUE
+ * consolidated volume to clear - excluding 750 of 1,085 scanned symbols that day via the ADV gate
+ * (106 ADV_BELOW_FLOOR + 644 ADV_DATA_UNAVAILABLE), including mega-caps like TSLA and INTC. This is
+ * NOT the same real-time top-of-book IEX feed this codebase intentionally and correctly uses
+ * elsewhere (screenAssets()'s own snapshot call two functions up stays on `feed=iex` - unrelated
+ * live-quote use case, unchanged here) - this is specifically the historical-daily-bars ADV
+ * calculation, where `feed=sip` is available on the existing account/credentials (verified live: a
+ * direct sip-feed bars call for all 16 symbols returned HTTP 200 with real data, no new entitlement
+ * needed) and correctly reflects true market liquidity instead of one venue's narrow slice of it.
+ * Never fabricates volume - a genuine SIP API failure still falls through to the same FMP fallback
+ * and fail-closed exclusion this function already had.
  */
 export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<string, number>> {
   const batchSize = continuousIntelligence.broadUniverseSnapshotBatchSize;
@@ -298,7 +372,7 @@ export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<
   const missing: string[] = [];
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
-    const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/bars?symbols=${batch.join(',')}&timeframe=1Day&limit=${days}&adjustment=raw&feed=iex`;
+    const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/bars?symbols=${batch.join(',')}&timeframe=1Day&limit=${days}&adjustment=raw&feed=sip`;
     try {
       const raw = await fetchJson<AlpacaBarsResponse>(url, 15000);
       for (const symbol of batch) {
@@ -374,10 +448,12 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
     });
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
     const advPassers = stage2.filter((s) => passesAdvScreen(s.symbol, advMap));
-    const passing = advPassers
+    const passingRows = advPassers
       .sort((a, b) => b.dollarVolume - a.dollarVolume)
-      .slice(0, continuousIntelligence.broadUniverseMaxCandidates)
-      .map((s) => s.symbol);
+      .slice(0, continuousIntelligence.broadUniverseMaxCandidates);
+    const passing = passingRows.map((s) => s.symbol);
+    const passingDollarVolume: Record<string, number> = {};
+    for (const s of passingRows) passingDollarVolume[s.symbol] = s.dollarVolume;
     const passingSet = new Set(passing);
     for (const s of stage2) {
       const admitted = passingSet.has(s.symbol);
@@ -402,7 +478,7 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
         await recordDiscoveryOutcomeProbe(s.symbol, s.gapPct);
       }
     }
-    snapshotCache = { fetchedAt: Date.now(), symbols: passing };
+    snapshotCache = { fetchedAt: Date.now(), symbols: passing, dollarVolumeBySymbol: passingDollarVolume };
     lastCycleSymbolLookup = symbolLookup;
     lastStats = {
       ran: true,
@@ -441,6 +517,18 @@ export function getCachedBroadUniverseSymbols(): string[] {
     return snapshotCache?.symbols || [];
   }
   return snapshotCache.symbols;
+}
+
+/** Same admitted list as getCachedBroadUniverseSymbols(), paired with each symbol's real, already-
+ *  fetched dollar volume - added 2026-09-16 for BroadUniverseSubscriptionAllocator.ts, which needs
+ *  real liquidity data (not just symbol names) to compute a fair, non-random selection. Never a new
+ *  API call - the same data the ADV admission decision itself already used. */
+export function getCachedBroadUniverseCandidatesWithVolume(): { symbol: string; dollarVolume: number }[] {
+  if (!isBroadUniverseEnabled() || !snapshotCache) return [];
+  return snapshotCache.symbols.map((symbol) => ({
+    symbol,
+    dollarVolume: snapshotCache!.dollarVolumeBySymbol[symbol] ?? 0,
+  }));
 }
 
 export function getLastBroadUniverseStats(): BroadUniverseStats {

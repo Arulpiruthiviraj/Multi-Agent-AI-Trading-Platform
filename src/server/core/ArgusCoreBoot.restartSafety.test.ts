@@ -101,5 +101,27 @@ describe('ArgusCoreBoot - restart safety end-to-end', () => {
     // And explicit reactivation remains necessary - TRADING_PAUSED does not resolve itself; only
     // an explicit resume call (already covered elsewhere - TradingEngine.setTradingState()) can.
     expect(tradingEngine.state.tradingState).not.toBe('TRADING_ENABLED');
+
+    // Real gap found and closed (2026-09-15, post-audit remediation): the prior version of this
+    // test proved only the PAUSE half of restart safety. The entry-idea-hold half
+    // (allowsNewEntryIdeas()/isLiveIdeaGenerationEnabled(), consumed by 15+ real idea-generation
+    // call sites - TechnicalAgent, QuantSignalAgent, ChiefTraderAgent, etc.) was previously proven
+    // correct only at the unit level (sessionRecovery.test.ts), never composed into the SAME real
+    // bootArgusCore() call this test already exercises. Both halves now proven end-to-end, on the
+    // exact same boot, in one place.
+    const { allowsNewEntryIdeas } = await import('./sessionRecovery');
+    expect(allowsNewEntryIdeas()).toBe(false); // still held - no reconciliation match has happened yet on THIS boot
+
+    // Fire the real RECONCILIATION_MATCH event the real PortfolioReconciliation worker emits on a
+    // genuine clean sync - sessionRecovery.ts's own real subscribed handler (wired during THIS same
+    // bootArgusCore() call) must release the hold, exactly as it would in a real running process.
+    const { eventBus } = await import('./EventBus');
+    const { EVENTS } = await import('./eventNames');
+    eventBus.publish(EVENTS.RECONCILIATION_MATCH, { timestamp: new Date().toISOString(), broker: 'test' });
+
+    expect(allowsNewEntryIdeas()).toBe(true); // released by the real event, not called directly
+    // Releasing the entry hold must NEVER touch tradingState - the PAUSE from the unclean shutdown
+    // above stays in effect; only an explicit operator reactivation (proven above) can clear it.
+    expect(tradingEngine.state.tradingState).toBe('TRADING_PAUSED');
   }, 120_000);
 });

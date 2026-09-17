@@ -54,6 +54,10 @@ export interface CalibrationSeedResult {
   effectiveN: number | null;
   wilsonLower: number | null;
   reason: string;
+  /** Real count of synthetic prediction+outcome rows inserted for this pair (== WIN_COUNT +
+   *  LOSS_COUNT below) - surfaced so a certification report can disclose exactly how much
+   *  synthetic evidence was involved, not just that some was. */
+  seededObservationCount: number;
 }
 
 const SEED_SYMBOL = 'SEEDCAL';
@@ -144,6 +148,7 @@ export async function seedSyntheticCalibrationHistory(specs: CalibrationSeedSpec
       effectiveN: champion?.sampleSize ?? cycleResult?.effectiveN ?? null,
       wilsonLower,
       reason: cycleResult?.reason ?? 'No calibration validation cycle result for this pair.',
+      seededObservationCount: TOTAL,
     });
   }
   return out;

@@ -2154,3 +2154,110 @@ means a single-session, from-scratch synthetic simulation may be structurally un
 MODERATE-tier calibration trust regardless of scenario quality — a genuine architecture/research
 finding (not a defect to route around), left exactly as the operator mandate required: the system was
 not modified to force a pass.
+
+**Correction + follow-up (2026-09-15, Rule 5 diagnostic pass) — supersedes the paragraph above.**
+The "two genuinely independent real agents... agreed on SPY" claim above silently included
+`CalibrationHistorySeeder`'s 25 synthetic seed rows (symbol `SEEDCAL`) in its counts, and separately,
+the simulator was found to never start the two real backing services (`KronosForecastAgent`'s local
+Chronos on `:8008`, `JavaCoreEnsembleVoteService`'s Java Quant Core HTTP server on `:8085`) that
+`KronosEngine`/`JavaCoreEnsemble` need to produce a REAL prediction — both agents were correctly,
+honestly failing closed (`KRONOS_UNAVAILABLE`; zero `QUANT_CORE_STRATEGY_PARITY_DIVERGENCE` events),
+not disagreeing on timing. After manually starting both real services and re-running Test B (same
+seed/scenario), genuine three-independent-family data became available for the first time: real,
+repeated, contemporaneous (~1-second co-occurrence) convergence WAS found —
+`JavaCoreEnsemble`+`TechnicalAgent` on SPY SELL, `KronosEngine`+`TechnicalAgent` on QQQ SELL, dozens
+of times, `MODERATE_TIER_EVALUATED` events confirming `independentAgentCount: 2` with both real
+agent names listed. The system still correctly declines to trade — not because no shared view
+exists, but because (1) the weighted STRONG-tier confidence tops out near 0.65-0.66, short of 0.75
+(traced to `config/agentWeights.json`'s `unlistedAgentWeight: 1.0` outweighting `TechnicalAgent`'s
+listed `0.25`, combined with `JavaCoreEnsemble`'s own confidence staying a flat, unvarying 0.65 for
+the entire 240-minute session - flagged as a real, separate, not-yet-investigated candidate finding)
+and (2) MODERATE-tier's calibration-trust gate correctly refuses every case because this pass's
+operator-authorized calibration seeding covered only `JavaCoreEnsemble`/`KronosEngine`, never
+`TechnicalAgent` - the calibration system working exactly as designed, not a defect. This is a
+materially different and more precise finding than "different reaction horizons" - contemporaneous
+multi-agent consensus is empirically confirmed to work; the blockers are two already-documented,
+intentional safety gates operating correctly on real data. See
+`docs/audits/ARGUS_SYNTHETIC_CERTIFICATION_2026-09-15.md`'s "Rule 5 follow-up" section for the full
+evidence trace. Open, not yet fixed: the simulator does not yet start Chronos/Java Quant Core itself
+(a real completeness gap, distinct from and in addition to the determinism fix below).
+
+**End-to-end determinism fix (2026-09-15 follow-up).** A same-seed QUIET_OPEN run executed twice
+showed identical seeded-price-path output (`ohlcv_bars`, TechnicalAgent analysis-cycle count) but
+different `news_clusters`/agent-prediction counts — root cause: the real `NewsEngine` (live RSS +
+paid news APIs + LLM) and real `FundamentalAgent`/`MacroAgent` (AlphaVantage + AIRouter) run on
+their own real-time schedules from `ArgusCoreBoot`/`SystemBootstrap` regardless of the harness's own
+deterministic `SyntheticNewsGenerator` provider (which only ever covered gate 14's read, never
+stopped the separate real background loop). Fixed via a new `ARGUS_NEWS_ENGINE_ENABLED` flag gating
+**both** of `newsEngine.start()`'s two independent call sites (`ArgusCoreBoot.ts` and
+`SystemBootstrap.ts` — the harness's first fix pass found only the first, and a same-seed re-check
+caught the second still firing), forced `'false'` only inside `prepareIsolatedEnvironment()`
+(zero behavior change for any real deployment), plus an explicit in-process
+`setPipelineAgentEnabled('FundamentalAgent'/'MacroAgent', false)` in `SyntheticSessionEngine.run()`
+(no synthetic/deterministic equivalent exists for a real AI-provider call, so the honest fix is to
+not run them in a synthetic session rather than fabricate one). Verified via two same-seed QUIET_OPEN
+reruns: `news_clusters` and non-TechnicalAgent predictions are now identically zero across both runs
+(previously 86 vs 76, and 12 vs 13 respectively). A smaller, separate, honestly-disclosed residual
+remains — TechnicalAgent's own idea count still differed by one (10 vs 11) between the two otherwise-
+identical runs, with a real-time-dependent `MarketDataWorker.requestTemporaryDataRescue` timing
+interaction as the leading unconfirmed candidate — left open for a future pass rather than patched
+without a confirmed root cause. See `docs/audits/ARGUS_SYNTHETIC_CERTIFICATION_2026-09-15.md`'s own
+"Determinism fix" section for the full before/after evidence table.
+
+## Post-audit critical remediation (2026-09-15)
+
+Full detail: `docs/audits/ARGUS_COMPLETE_IMPLEMENTATION_AUDIT_2026-09-14.md` (the forensic audit) and
+`docs/audits/ARGUS_REMAINING_WORK_CLOSURE_2026-09-15.md` (this pass's closure report). Two real,
+previously-unreported live-path defects were found and fixed: (1) `PortfolioReconciliation.ts` did
+not pause trading on an unknown/failed broker sync state (`broker.portfolio()` throwing) — only a
+confirmed, measured position mismatch did; fixed by reusing FD-7's own consecutive-cycle debounce,
+escalating to a real `TRADING_PAUSED` (verified to block new orders at RiskEngine's `emergency_stop`
+gate) after 2 consecutive failures, with a new `RECONCILIATION_SYNC_FAILED` event. (2) `RiskEngine.ts`
+fetched the entire `trades` table, unfiltered, on every live risk evaluation for gates 3/4/5 (same
+unbounded-query class P1-A already fixed elsewhere, left open here) — fixed with a semantics-
+preserving bound (`getTradingDayStartMs()`, new in `TradingCalendar.ts`) rather than an arbitrary
+LIMIT. Also fixed: three unguarded periodic timers (`MarketDataCrossChecker`, `AIProviderHealthCheck`,
+`CalibrationValidationWorker`) now use the same `createSingleFlightGuard` primitive every other
+periodic worker already uses; a stale `config/observability.json` comment overstating baseline heap-
+snapshot capture's current safety; explicit calibration-seeding provenance fields
+(`CertificationResult.calibrationProvenance`) on the Synthetic Market Session Simulator's
+certification contract; and a real structural bug in the `VALIDATED_CONVERGENCE_CONTROL` scenario
+(volatility too low relative to drift, pinning RSI at 85-97 and causing agents to correctly read an
+over-extended monotonic ramp as a SELL/mean-reversion setup) — fixed, though genuine same-symbol
+same-side 2-agent convergence remains an open, now well-diagnosed research finding, not forced.
+Full suite: 507 files / 3748 tests passing after this pass, zero regressions.
+
+## Test/production runtime-file isolation guard (2026-09-15, P1 - same day, later pass)
+
+**Real incident, not hypothetical.** Running the full test suite while today's real paper-trading
+engine was live produced a genuine `UNCLEAN_SHUTDOWN_DETECTED` log line naming that exact live PID -
+`sessionRecovery.ts`'s default session-marker path (`data/.argus_runtime_session.json`) is the
+identical file the live engine's own 15-second heartbeat writes to, and two test files
+(`ArgusRuntime.test.ts`, `ArgusEngineRuntime.test.ts`) booted the real core without isolating it.
+This is the SECOND occurrence of this exact incident shape - `enginePid.ts`'s own header already
+documented a first one (2026-08-25, `data/.argus_engine.pid`), "fixed" both times by an opt-in
+`*PathForTests()`/`*_PATH` override a caller has to remember to set. Two incidents of the identical
+shape is a pattern, not a coincidence, and the fix belongs at the mechanism level.
+
+**`src/server/core/productionRuntimePathGuard.ts`** (+ `.test.ts`, `.integration.test.ts`) - a
+shared, fail-LOUD mechanical backstop, the session/PID-file equivalent of
+`syntheticSimulationDbGuard.ts`'s existing DB-side guard. `assertNotProductionRuntimePath()` throws
+immediately whenever a process running under test/simulation conditions (`VITEST=true`,
+`NODE_ENV=test`, or `SYNTHETIC_SIMULATION=true`) resolves a runtime-identity file path to the exact
+real production path - called at the actual I/O call sites in `sessionRecovery.ts` (`read()`/
+`write()`) and `enginePid.ts` (`resolveEnginePidPath()`, the single choke point every read/write/
+clear call already goes through), not merely documented as a convention. Verified via a real,
+mocked-fs integration test that a call with no isolation override throws AND performs zero real
+writes, while a properly-isolated call succeeds normally. `scripts/argusWatchdog.ts` separately
+gained the same `isMainModule` guard `argus-cli.ts` already had (it previously called `main()`
+unconditionally at module load - a latent, not-yet-triggered risk, since no test currently imports
+it, but the identical shape of gap) plus a defense-in-depth path-guard call on its own heartbeat
+write.
+
+**Re-running the full suite with the guard active found, and safely surfaced, exactly the same two
+real test files** - this time as fast, informative, zero-production-impact test failures naming the
+resolved path, instead of a silent file touch. Both fixed with the same `setSessionRecoveryPathForTests()`
+pattern `ArgusCoreBoot.test.ts` already established. Full suite re-certified clean after the fix -
+see `docs/audits/ARGUS_CALIBRATION_METHOD_COMPARISON_2026-09-15.md`'s "Process note" section for the
+original incident's own real-time verification (live PID/heartbeat/trading-state all confirmed
+unaffected throughout).

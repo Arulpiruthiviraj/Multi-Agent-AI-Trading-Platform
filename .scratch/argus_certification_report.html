@@ -1,0 +1,503 @@
+<title>Argus Certification Report</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root{
+    --bg:#f4f6f7; --surface:#ffffff; --surface-2:#eef1f2; --border:#dde3e6;
+    --text:#151b1e; --text-dim:#4d5a5f; --text-faint:#7c8a8f;
+    --accent:#b6791a; --accent-ink:#7a4f0c;
+    --good:#1f7a52; --good-bg:#e5f3ec;
+    --warn:#946308; --warn-bg:#fbf0da;
+    --neutral:#5b666b; --neutral-bg:#e9edee;
+    --bad:#a3372c; --bad-bg:#fbe9e6;
+    --code-bg:#0f1416; --code-text:#dfe6e8;
+    --font-head:'IBM Plex Sans',system-ui,sans-serif;
+    --font-body:'IBM Plex Serif',Georgia,serif;
+    --font-mono:'IBM Plex Mono',ui-monospace,'SF Mono',Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0f1416; --surface:#161d21; --surface-2:#1c2428; --border:#2a343a;
+      --text:#e8edef; --text-dim:#a9b6bb; --text-faint:#7c8a8f;
+      --accent:#f0a83c; --accent-ink:#ffcf8a;
+      --good:#57c692; --good-bg:#12271f;
+      --warn:#f0a83c; --warn-bg:#2a2210;
+      --neutral:#9aa8ad; --neutral-bg:#20282c;
+      --bad:#ef7a6c; --bad-bg:#2c1714;
+      --code-bg:#0a0e10; --code-text:#d7e0e2;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0f1416; --surface:#161d21; --surface-2:#1c2428; --border:#2a343a;
+    --text:#e8edef; --text-dim:#a9b6bb; --text-faint:#7c8a8f;
+    --accent:#f0a83c; --accent-ink:#ffcf8a;
+    --good:#57c692; --good-bg:#12271f;
+    --warn:#f0a83c; --warn-bg:#2a2210;
+    --neutral:#9aa8ad; --neutral-bg:#20282c;
+    --bad:#ef7a6c; --bad-bg:#2c1714;
+    --code-bg:#0a0e10; --code-text:#d7e0e2;
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg); color:var(--text); margin:0;
+    font-family:var(--font-body); font-size:16px; line-height:1.55;
+    padding:0 16px;
+  }
+  main{max-width:640px; margin:0 auto; padding-block:0 64px;}
+  h1,h2,h3,h4{font-family:var(--font-head); text-wrap:balance; margin:0;}
+  p{margin:0 0 0.9em 0; max-width:68ch;}
+  a{color:var(--accent-ink);}
+  code, .mono{font-family:var(--font-mono); font-size:0.92em;}
+  code{background:var(--surface-2); padding:0.1em 0.35em; border-radius:4px; border:1px solid var(--border);}
+  pre{
+    background:var(--code-bg); color:var(--code-text); border-radius:10px;
+    padding:14px 16px; overflow-x:auto; font-family:var(--font-mono);
+    font-size:0.82rem; line-height:1.6; margin:0 0 1em 0;
+    -webkit-font-smoothing:antialiased;
+  }
+  pre code{background:none; border:none; padding:0; color:inherit;}
+  .tabular{font-variant-numeric:tabular-nums;}
+
+  /* ---------- topbar ---------- */
+  .topbar{
+    position:sticky; top:0; z-index:10;
+    background:color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter:blur(8px);
+    border-bottom:1px solid var(--border);
+    padding:10px 16px;
+  }
+  .topbar-inner{max-width:640px; margin:0 auto; display:flex; align-items:baseline; gap:10px; justify-content:space-between;}
+  .topbar-mark{font-family:var(--font-head); font-weight:700; letter-spacing:0.02em; font-size:0.95rem;}
+  .topbar-mark span{color:var(--accent-ink);}
+  .topbar-date{font-family:var(--font-mono); font-size:0.72rem; color:var(--text-faint);}
+
+  /* ---------- hero ---------- */
+  .hero{padding-block:28px 8px;}
+  .hero-eyebrow{
+    font-family:var(--font-mono); font-size:0.72rem; letter-spacing:0.08em; text-transform:uppercase;
+    color:var(--accent-ink); margin-bottom:10px; display:block;
+  }
+  h1{font-size:1.7rem; font-weight:700; line-height:1.15; margin-bottom:10px;}
+  .dek{font-family:var(--font-body); color:var(--text-dim); font-size:1.02rem; max-width:60ch;}
+
+  .status-grid{
+    display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:18px;
+  }
+  @media (max-width:420px){ .status-grid{grid-template-columns:1fr;} }
+  .status-card{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    padding:13px 14px;
+  }
+  .status-card .label{
+    font-family:var(--font-mono); font-size:0.68rem; letter-spacing:0.05em; text-transform:uppercase;
+    color:var(--text-faint); display:block; margin-bottom:6px;
+  }
+  .status-card .value{font-family:var(--font-head); font-weight:600; font-size:1.02rem;}
+  .pill{
+    display:inline-flex; align-items:center; gap:5px; font-family:var(--font-mono);
+    font-size:0.72rem; font-weight:600; letter-spacing:0.03em; padding:2px 9px 3px;
+    border-radius:999px; text-transform:uppercase; white-space:nowrap;
+  }
+  .pill::before{content:''; width:6px; height:6px; border-radius:50%; background:currentColor;}
+  .pill-pass{background:var(--good-bg); color:var(--good);}
+  .pill-warn{background:var(--warn-bg); color:var(--warn);}
+  .pill-neutral{background:var(--neutral-bg); color:var(--neutral);}
+  .pill-bad{background:var(--bad-bg); color:var(--bad);}
+
+  /* ---------- section shell ---------- */
+  section{padding-block:30px;}
+  section + section{border-top:1px solid var(--border);}
+  h2{font-size:1.2rem; font-weight:700; margin-bottom:4px;}
+  .section-note{color:var(--text-faint); font-family:var(--font-mono); font-size:0.78rem; margin-bottom:16px; display:block;}
+
+  /* ---------- trade proof ledger ---------- */
+  .ledger{
+    position:relative; margin-top:18px; padding-left:22px;
+  }
+  .ledger::before{
+    content:''; position:absolute; left:6px; top:6px; bottom:6px; width:2px;
+    background:linear-gradient(var(--good), var(--accent) 55%, var(--bad));
+  }
+  .ledger-step{position:relative; padding-bottom:20px;}
+  .ledger-step:last-child{padding-bottom:0;}
+  .ledger-step::before{
+    content:''; position:absolute; left:-22px; top:3px; width:11px; height:11px;
+    border-radius:50%; background:var(--surface); border:2px solid var(--accent);
+  }
+  .ledger-step.good::before{border-color:var(--good);}
+  .ledger-step.bad::before{border-color:var(--bad);}
+  .ledger-tag{
+    font-family:var(--font-mono); font-size:0.68rem; letter-spacing:0.06em; text-transform:uppercase;
+    color:var(--text-faint); display:block; margin-bottom:3px;
+  }
+  .ledger-main{font-family:var(--font-head); font-weight:600; font-size:1rem; margin-bottom:2px;}
+  .ledger-detail{color:var(--text-dim); font-size:0.92rem;}
+  .ledger-detail .mono{color:var(--text);}
+  .pnl-box{
+    margin-top:16px; background:var(--bad-bg); border:1px solid color-mix(in srgb, var(--bad) 35%, transparent);
+    border-radius:10px; padding:14px 16px;
+  }
+  .pnl-box .pnl-label{font-family:var(--font-mono); font-size:0.72rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--bad); display:block; margin-bottom:4px;}
+  .pnl-box .pnl-value{font-family:var(--font-mono); font-weight:600; font-size:1.4rem; color:var(--bad);}
+  .pnl-box .pnl-note{color:var(--text-dim); font-size:0.88rem; margin-top:6px;}
+  .repro-note{
+    margin-top:14px; font-size:0.88rem; color:var(--text-dim);
+    background:var(--surface-2); border-radius:8px; padding:10px 12px; border:1px solid var(--border);
+  }
+
+  /* ---------- defect cards ---------- */
+  .defect-card{
+    background:var(--surface); border:1px solid var(--border); border-left:3px solid var(--accent);
+    border-radius:0 12px 12px 0; padding:16px 16px 14px; margin-bottom:14px;
+  }
+  .defect-card:last-child{margin-bottom:0;}
+  .defect-rank{
+    font-family:var(--font-mono); font-size:0.68rem; color:var(--accent-ink); letter-spacing:0.05em;
+    text-transform:uppercase; display:block; margin-bottom:4px;
+  }
+  .defect-card h3{font-size:1rem; font-weight:700; margin-bottom:8px; font-family:var(--font-head);}
+  .defect-card p{font-size:0.94rem; color:var(--text-dim); margin-bottom:8px;}
+  .defect-card p:last-child{margin-bottom:0;}
+  .defect-card strong{color:var(--text);}
+  .kv-row{display:flex; gap:8px; font-size:0.85rem; margin-bottom:5px;}
+  .kv-row .k{font-family:var(--font-mono); color:var(--text-faint); flex:0 0 auto; min-width:78px;}
+  .kv-row .v{color:var(--text-dim);}
+
+  /* ---------- tables ---------- */
+  .table-wrap{overflow-x:auto; border:1px solid var(--border); border-radius:12px;}
+  table{border-collapse:collapse; width:100%; min-width:520px; font-size:0.86rem;}
+  th, td{text-align:left; padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:top;}
+  th{font-family:var(--font-head); font-weight:600; background:var(--surface-2); font-size:0.78rem; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-dim);}
+  tr:last-child td{border-bottom:none;}
+  td.mono{font-family:var(--font-mono); font-size:0.82rem;}
+
+  /* ---------- test grid ---------- */
+  .test-grid{display:flex; flex-direction:column; gap:8px; margin-top:16px;}
+  .test-row{
+    display:flex; align-items:center; justify-content:space-between; gap:12px;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:10px 13px;
+  }
+  .test-row .name{font-family:var(--font-head); font-weight:500; font-size:0.9rem;}
+  .test-row .detail{display:block; font-size:0.78rem; color:var(--text-faint); margin-top:1px; font-family:var(--font-body);}
+
+  /* ---------- production status ---------- */
+  .dl-grid{display:grid; grid-template-columns:1fr; gap:0; margin-top:14px; border:1px solid var(--border); border-radius:12px; overflow:hidden;}
+  .dl-row{display:flex; justify-content:space-between; gap:12px; padding:10px 14px; font-size:0.88rem;}
+  .dl-row:nth-child(odd){background:var(--surface);}
+  .dl-row:nth-child(even){background:var(--surface-2);}
+  .dl-row dt{color:var(--text-faint); font-family:var(--font-mono); font-size:0.78rem;}
+  .dl-row dd{margin:0; font-family:var(--font-mono); font-weight:500; text-align:right;}
+
+  /* ---------- archive / details ---------- */
+  .archive-intro{color:var(--text-dim); font-size:0.92rem; margin-bottom:16px;}
+  details{
+    background:var(--surface); border:1px solid var(--border); border-radius:12px;
+    margin-bottom:10px; overflow:hidden;
+  }
+  details[open]{padding-bottom:4px;}
+  summary{
+    cursor:pointer; padding:14px 16px; font-family:var(--font-head); font-weight:600;
+    font-size:0.95rem; list-style:none; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  summary::-webkit-details-marker{display:none;}
+  summary::after{
+    content:'+'; font-family:var(--font-mono); font-size:1.1rem; color:var(--text-faint); flex:0 0 auto;
+    transition:transform 0.15s ease;
+  }
+  details[open] summary::after{content:'\2212';}
+  summary .summary-sub{display:block; font-family:var(--font-body); font-weight:400; font-size:0.82rem; color:var(--text-faint); margin-top:3px;}
+  .archive-body{padding:0 16px 16px;}
+  .archive-body h4{font-size:0.92rem; font-weight:700; margin:16px 0 6px; font-family:var(--font-head);}
+  .archive-body h4:first-child{margin-top:0;}
+  .archive-body p{font-size:0.9rem; color:var(--text-dim); margin-bottom:0.8em;}
+  .archive-body strong{color:var(--text);}
+  .archive-body ul, .archive-body ol{padding-left:1.2em; font-size:0.9rem; color:var(--text-dim); margin:0 0 0.8em;}
+  .archive-body li{margin-bottom:0.35em;}
+  .archive-body .table-wrap{margin-bottom:0.9em;}
+  .archive-body table{font-size:0.78rem; min-width:460px;}
+
+  footer{padding-block:32px 12px; color:var(--text-faint); font-size:0.78rem; font-family:var(--font-mono);}
+  footer a{color:var(--text-faint);}
+
+  [hidden]{display:none!important;}
+</style>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <span class="topbar-mark">ARGUS <span>/ Certification</span></span>
+    <span class="topbar-date">2026-09-15 → 09-16</span>
+  </div>
+</div>
+
+<main>
+
+  <section class="hero">
+    <span class="hero-eyebrow">Synthetic market certification · engineering audit</span>
+    <h1>Argus Synthetic Certification Report</h1>
+    <p class="dek">A multi-pass audit of whether Argus's real trading pipeline can recognize a legitimate opportunity and carry it, unforced, through the complete BUY → SELL lifecycle in an isolated synthetic market. Three real defects were found and fixed along the way; the complete lifecycle is now proven twice, deterministically.</p>
+
+    <div class="status-grid">
+      <div class="status-card">
+        <span class="label">Full certification</span>
+        <span class="value"><span class="pill pill-warn">Partial</span></span>
+      </div>
+      <div class="status-card">
+        <span class="label">Paper-trading readiness</span>
+        <span class="value"><span class="pill pill-pass">Ready</span></span>
+      </div>
+      <div class="status-card">
+        <span class="label">Real-money readiness</span>
+        <span class="value"><span class="pill pill-bad">No</span></span>
+      </div>
+      <div class="status-card">
+        <span class="label">Live alpha validation</span>
+        <span class="value"><span class="pill pill-neutral">Not established</span></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="trade-proof">
+    <h2>Complete trade proof</h2>
+    <span class="section-note">Simulated / synthetic — not live profit. Seed 271828, scenario CERTIFIED_BULLISH_ENTRY_EXIT, 400-minute session.</span>
+
+    <div class="ledger">
+      <div class="ledger-step good">
+        <span class="ledger-tag">Entry idea → consensus</span>
+        <div class="ledger-main">Kronos + TechnicalAgent independent agreement</div>
+        <div class="ledger-detail">MODERATE-tier consensus, <span class="mono tabular">73.9%</span> confidence — TechnicalAgent read an oversold Bollinger-band breach, Kronos forecast a BUY over 5 steps.</div>
+      </div>
+      <div class="ledger-step good">
+        <span class="ledger-tag">RiskEngine → OMS</span>
+        <div class="ledger-main">Approved and submitted</div>
+        <div class="ledger-detail">"Approved based on 2.0% portfolio risk cap and available BP." All 25 gates recorded, none skipped dishonestly.</div>
+      </div>
+      <div class="ledger-step good">
+        <span class="ledger-tag">Broker fill</span>
+        <div class="ledger-main">BUY <span class="mono tabular">12</span> AAPL @ <span class="mono tabular">$237.022128</span></div>
+        <div class="ledger-detail">Arrival <span class="mono tabular">$236.88</span> — HistoricalReplayBroker, <code>execution_environment=REPLAY</code>. Fill price shown to be exactly NEXT_BAR_OPEN + the disclosed spread/slippage cost model, not a mystery gap.</div>
+      </div>
+      <div class="ledger-step">
+        <span class="ledger-tag">Position</span>
+        <div class="ledger-main">12 shares AAPL open</div>
+        <div class="ledger-detail">Held through the scenario's real, continued market reversal.</div>
+      </div>
+      <div class="ledger-step">
+        <span class="ledger-tag">Exit signal</span>
+        <div class="ledger-main">Real, pre-existing risk-exit mechanism</div>
+        <div class="ledger-detail"><code>[Risk Exit] EXIT_CODE=HARD_STOP</code> — hard stop hit (−5.36%, threshold −5%). Preserving capital. Not fabricated for this test — the same stop-loss path that already existed in PortfolioMonitor/RiskAgent.</div>
+      </div>
+      <div class="ledger-step bad">
+        <span class="ledger-tag">Exit fill</span>
+        <div class="ledger-main">SELL <span class="mono tabular">12</span> AAPL @ <span class="mono tabular">$224.454592</span></div>
+        <div class="ledger-detail">Arrival <span class="mono tabular">$224.32</span>.</div>
+      </div>
+      <div class="ledger-step bad">
+        <span class="ledger-tag">Final state</span>
+        <div class="ledger-main">Flat</div>
+        <div class="ledger-detail">Portfolio row empty — fully closed. Quantities reconcile: 12 in, 12 out.</div>
+      </div>
+    </div>
+
+    <div class="pnl-box">
+      <span class="pnl-label">Realized P&amp;L</span>
+      <span class="pnl-value mono tabular">&minus;$150.81</span>
+      <div class="pnl-note">A real loss — the stop-loss correctly protected capital on a trade that turned against it. Not cherry-picked: independently reproduced on seed 20260915 (BUY @ $238.05 → HARD_STOP → SELL @ $225.72 → P&amp;L &minus;$148.05).</div>
+    </div>
+
+    <div class="repro-note">Reproduced <strong>deterministically</strong> on an exact-seed rerun: identical timestamps, identical reasoning text, identical confidence, identical hard-stop trigger. Market-data event counts matched exactly (1197/1197 bars, 52/52 ideas).</div>
+  </section>
+
+  <section class="defects">
+    <h2>Defects found and fixed</h2>
+    <span class="section-note">All three real, all regression-tested pre/post, each proven by reverting the fix and watching the exact original failure reproduce. Ranked by consequence, not discovery order.</span>
+
+    <div class="defect-card">
+      <span class="defect-rank">Defect 1 of 3 — most consequential</span>
+      <h3>Stale-price selection in consensus math</h3>
+      <p><strong>What broke:</strong> when two agents with different evaluation cadences (a fast tick-driven agent and a slower, cooldown-throttled one like Kronos) agreed in the same consensus round, the system picked whichever agent's price happened to sit first in an internal list — not the fresh, triggering agent's price. In the reproducing case the stale price was <strong>143 simulated minutes old</strong>.</p>
+      <p><strong>Why it mattered:</strong> this fed directly into RiskEngine's own capital and notional-sizing math — a real risk-decision-quality defect, not a cosmetic logging inaccuracy. It understated one real trade's notional by roughly 5%. This is general production consensus code, not synthetic-only.</p>
+      <p><strong>Fix:</strong> the approval path now prefers the triggering idea's own price, falling back to the old behavior only when that price is missing — the same fallback pattern an adjacent code path already used safely. No threshold, weight, or vote-counting change.</p>
+      <div class="kv-row"><span class="k">Reproduced</span><span class="v">"expected 246.79 to be 259.89" — before the fix</span></div>
+      <div class="kv-row"><span class="k">Regression tests</span><span class="v">2 new cases, both directions verified</span></div>
+    </div>
+
+    <div class="defect-card">
+      <span class="defect-rank">Defect 2 of 3</span>
+      <h3>Synthetic sessions silently reading real market data</h3>
+      <p><strong>What broke:</strong> the Java quant ensemble's data path had no isolation guard on its real-network fallback. Every synthetic certification run this whole effort made a live Alpaca API call and evaluated real, historical SPY/QQQ/AAPL daily price history instead of the synthetic scenario — never touching production's own database, but silently contaminating every synthetic run's evidence.</p>
+      <p><strong>Why it mattered:</strong> it explains why that agent voted the same bearish direction on every seed regardless of the programmed scenario, and it invalidated every earlier finding in this report that depended on its output — marked <strong>PRE-FIX / INVALID</strong> below rather than quietly carried forward.</p>
+      <p><strong>Fix:</strong> the real-network fallback now refuses to fire during a synthetic session and fails loudly instead of silently substituting real data — the same "disable, don't fabricate a stand-in" principle already used elsewhere in this codebase.</p>
+      <div class="kv-row"><span class="k">Regression tests</span><span class="v">2 new cases, both directions verified</span></div>
+      <div class="kv-row"><span class="k">Safety impact</span><span class="v">None — production database was never touched</span></div>
+    </div>
+
+    <div class="defect-card">
+      <span class="defect-rank">Defect 3 of 3 — found while building new coverage, not a leftover</span>
+      <h3>Duplicate market events could double-fill an order</h3>
+      <p><strong>What broke:</strong> while adding the ability for a partially-filled synthetic order to keep filling as later market bars arrive, an adversarial test — calling that new completion step twice without the clock actually advancing, simulating a duplicate tick — showed it filling <strong>300 shares against a single bar's own 100-share volume cap</strong>. Each call independently recomputed the cap with no memory of already having consumed it once.</p>
+      <p><strong>Why it mattered:</strong> this is exactly the "duplicate market event" failure class flagged as an open risk in this report's own remaining-work list — reproduced on the very first real attempt to exercise it, not a defect that sat undiscovered.</p>
+      <p><strong>Fix:</strong> each order now remembers which bar it last advanced on; a repeat call at the same bar is a true no-op, and a genuinely new bar still fills normally.</p>
+      <div class="kv-row"><span class="k">Reproduced</span><span class="v">300 filled against a 100-share single-bar cap — before the fix</span></div>
+      <div class="kv-row"><span class="k">Regression tests</span><span class="v">Both directions verified, plus the full entry-through-exit lifecycle proven around it</span></div>
+    </div>
+  </section>
+
+  <section class="seeds">
+    <h2>Multi-seed classification</h2>
+    <span class="section-note">Five independently-seeded runs, after both fixes. Zero engineering failures.</span>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Seed</th><th>Result</th><th>Detail</th></tr></thead>
+        <tbody>
+          <tr><td class="mono">12345</td><td><span class="pill pill-neutral">No trade</span></td><td>Every consensus attempt correctly below the independence floor.</td></tr>
+          <tr><td class="mono">271828</td><td><span class="pill pill-pass">Complete</span></td><td>BUY → HARD_STOP exit → P&amp;L &minus;$150.81. Reproduced deterministically.</td></tr>
+          <tr><td class="mono">424242</td><td><span class="pill pill-neutral">Rejected</span></td><td>SELL correctly refused — no existing position to sell.</td></tr>
+          <tr><td class="mono">8675309</td><td><span class="pill pill-neutral">Rejected</span></td><td>RiskEngine-approved BUY the broker safely refused at a session-boundary edge case.</td></tr>
+          <tr><td class="mono">20260915</td><td><span class="pill pill-pass">Complete</span></td><td>BUY → HARD_STOP exit → P&amp;L &minus;$148.05.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tests">
+    <h2>Test results</h2>
+    <span class="section-note">517 files / 3,800 tests passing · TypeScript clean · production build succeeds</span>
+    <div class="test-grid">
+      <div class="test-row"><div><span class="name">Full test suite</span><span class="detail">517 files, 3,800 tests, 0 failures</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">TypeScript</span><span class="detail">tsc --noEmit clean</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Production build</span><span class="detail">dist/server.cjs, 2.8&nbsp;MB, fixes confirmed present</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Deterministic replay</span><span class="detail">Decision-critical chain byte-identical on repeat</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Broker disconnect</span><span class="detail">Pause-and-never-retry proven on the real synthetic broker</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Restart mid-position</span><span class="detail">Real BUY → restart → recovery → exit → correct P&amp;L</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Reconciliation</span><span class="detail">Position-recovery path, twice-proven</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Idempotency</span><span class="detail">Duplicate-order &amp; cancel/fill race guards</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Event loop</span><span class="detail">p50 75ms · p95 114ms · p99 142ms · max 225ms</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Memory</span><span class="detail">No leak signal; safety mechanisms reconfirmed intact</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Partial-fill (via synthetic broker)</span><span class="detail">Full entry-through-exit lifecycle now proven, real broker</span></div><span class="pill pill-pass">Pass</span></div>
+      <div class="test-row"><div><span class="name">Adversarial matrix</span><span class="detail">3 of 20 fault-injection scenarios built</span></div><span class="pill pill-neutral">3 / 20</span></div>
+    </div>
+  </section>
+
+  <section class="production">
+    <h2>Production status</h2>
+    <span class="section-note">Independently reconfirmed at the end of every pass — never touched by any run in this report.</span>
+    <div class="dl-grid">
+      <div class="dl-row"><dt>Process</dt><dd>PID 10504, unrestarted</dd></div>
+      <div class="dl-row"><dt>Trading state</dt><dd>TRADING_ENABLED</dd></div>
+      <div class="dl-row"><dt>Paper trading only</dt><dd>true</dd></div>
+      <div class="dl-row"><dt>Live readiness</dt><dd>LIVE_NO_GO</dd></div>
+      <div class="dl-row"><dt>Broker</dt><dd>ibkr_gateway · connected</dd></div>
+      <div class="dl-row"><dt>Reconciliation</dt><dd>clean</dd></div>
+      <div class="dl-row"><dt>Watchdog</dt><dd>ready</dd></div>
+      <div class="dl-row"><dt>Open positions / orders</dt><dd>0 / 0</dd></div>
+    </div>
+    <p style="margin-top:14px; font-size:0.88rem; color:var(--text-dim);">If tomorrow's live paper session produces zero trades, that is not itself a failure — the correct response is to read the real decision chain and find the first blocking stage, never to lower a threshold because the count is zero. No trade was manufactured anywhere in this report to make it look more active, and this report's two synthetic losses are not evidence of negative alpha any more than a win would have been evidence of positive alpha.</p>
+  </section>
+
+  <section class="archive">
+    <h2>Full chronological record</h2>
+    <p class="archive-intro">This report was built across several same-day passes as an internal engineering log — later findings sometimes correct or supersede earlier ones. Everything below is preserved for audit value; the sections above this point are the current, authoritative state. Tap any entry to expand it.</p>
+
+    <details>
+      <summary>Phase 1 — Initial synthetic certification (Test A / Test B)<span class="summary-sub">Marked PRE-FIX / INVALID — ran before the data-isolation defect was found</span></summary>
+      <div class="archive-body">
+        <h4>Test A — no-edge safety control</h4>
+        <p><strong>Verdict: pass.</strong> Scenario QUIET_OPEN, calibration seeding off. Zero trades, with a real, legible, non-threshold-related reason (no idea ever reached independent multi-agent agreement) — the correct, expected outcome for a no-edge scenario.</p>
+        <h4>Test B — controlled tradeable scenario</h4>
+        <p><strong>Verdict: fail</strong> (did not complete the full entry → fill → position → exit → P&amp;L lifecycle). 37 real ideas were generated. A real scenario bug was found and fixed along the way: the original volatility profile was too low relative to its drift, pinning RSI at 85–97 for the whole session — agents correctly read an over-extended ramp as overbought, which was not a bug in the agents. Raised the volatility multiplier; confirmed post-fix that TechnicalAgent genuinely fired healthy momentum BUY ideas with RSI in the 65–70 band.</p>
+        <p>Consensus still never triggered at those exact BUY moments — no second independent agent's vote landed in the same debate window as TechnicalAgent's own read.</p>
+        <h4>Rule 5 follow-up — a real diagnostic correction</h4>
+        <p>A direct re-check found the earlier "37 ideas" accounting had conflated 25 synthetic calibration-seed rows with real session predictions. The actual run had <strong>zero</strong> real JavaCoreEnsemble predictions and <strong>zero</strong> real KronosEngine predictions that run — the local Chronos AI service and the Java Quant Core HTTP server were simply never running alongside the simulator. Both agents behaved exactly as designed when their backing service is down (fail-closed, not fabricated) — a simulator-completeness gap, not an agent defect.</p>
+        <p>Starting both real backing services and re-running gave, for the first time, genuine three-independent-family data: real convergence occurred (JavaCoreEnsemble + TechnicalAgent on SPY SELL; KronosEngine + TechnicalAgent on QQQ SELL, both repeatedly, within about a second of each other). The system still correctly declined to trade, for two real reasons: the weighted confidence never cleared the 0.75 STRONG bar (capped near JavaCoreEnsemble's own flat 0.65), and the newly-converging agent's calibration bucket wasn't yet trusted — both intentional, already-documented safety mechanisms operating correctly on real data.</p>
+        <h4>Seeded vs. unseeded certification</h4>
+        <p>Re-run with zero synthetic calibration history (the same "brand-new deployment" state a real production instance starts from): real independent agents converged and reached <strong>0.7397</strong> raw confidence — within 0.01 of the STRONG bar — with the calibration-trust gate the only reason nothing traded. A zero-history deployment cannot yet pass MODERATE-tier trust by design, regardless of how well its agents agree; that gap only closes with real elapsed calibration history, not a threshold change.</p>
+        <h4>Confidence-ceiling audit</h4>
+        <p>Source-level audit found no hardcoded confidence literal anywhere in the Java ensemble's dispatch path — the flat 0.65 reading was, at the time, believed to be a genuine reflection of an unchanging setup on that symbol. <strong>This conclusion is later superseded</strong> once the data-isolation defect was found: the setup being read was never the synthetic scenario at all.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Determinism fix — real root causes found and fixed<span class="summary-sub">NewsEngine/AI-provider isolation closed; one smaller nondeterminism left open</span></summary>
+      <div class="archive-body">
+        <p>A same-seed run executed twice showed identical bar/analysis-cycle counts but different news-cluster and prediction counts. Root cause: the real NewsEngine and FundamentalAgent/MacroAgent ran on their own real-time schedules independent of the synthetic session's own deterministic providers — a separate, redundant, real-network background loop kept writing non-deterministic rows alongside the correct synthetic path.</p>
+        <p>Fixed at two independent call sites (a first pass found and fixed only one; a same-seed re-check caught the second) plus explicitly disabling FundamentalAgent/MacroAgent during synthetic sessions, since they make real AI-provider calls with no synthetic equivalent — the honest fix is to not run them, not fabricate a deterministic stand-in.</p>
+        <p>Verified before/after: news clusters and non-TechnicalAgent predictions dropped to zero and stayed zero, deterministically, across repeat runs.</p>
+        <p><strong>One smaller issue was found and left open, stated plainly:</strong> the indicator math itself was proven fully deterministic to the byte across 240 compared analysis cycles — the remaining divergence is confined entirely to which exact cycle "wins" a signal-emission decision when a condition is satisfied on multiple consecutive bars, a suspected real async/event-loop scheduling-order effect, not yet confirmed or fixed.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>The "LIVE refused" defect — root-caused and fixed<span class="summary-sub">The reason no synthetic order had ever completed a fill, all mandate long</span></summary>
+      <div class="archive-body">
+        <p>A seeded run reached, for the first time, a genuine consensus approval, a genuine RiskEngine approval, and a real order-submission attempt — the deepest the pipeline had reached yet — but the order came back stuck, with the broker reporting <code>Error: LIVE refused</code>.</p>
+        <p><strong>Root cause, traced to source:</strong> the synthetic broker's own safety self-check — which proves a synthetic session's broker is structurally incapable of a real order by calling its "go live" method and confirming it throws — was calling that method on the <em>same broker instance</em> the session then used for every real order for the rest of the run. The safety check's own proof call was permanently poisoning the exact broker it had just certified. Every synthetic session this entire mandate had run was structurally incapable of ever completing a fill, no matter how far a scenario otherwise progressed.</p>
+        <p>The poisoning flag added no real protection it didn't already have — the "go live" method already unconditionally threw on every single call, with or without it. Removed the flag; the "cannot go live" guarantee is unchanged and still holds on every call.</p>
+        <p>Reproduced directly both ways: reverting only the fix reproduces the exact original failure; restoring it passes. Two post-fix reruns showed zero recurrences, reaching only legitimate downstream rejections instead.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Major finding — synthetic sessions were reading real market data<span class="summary-sub">The isolation defect that invalidated everything before it</span></summary>
+      <div class="archive-body">
+        <p>Prompted by one striking pattern: the Java quant ensemble voted the same bearish direction on literally every one of roughly 500 votes across 6 seeds of a scenario that was about 68% genuine sustained uptrend by design. That pattern turned out not to be organic — it was a real, undisclosed isolation defect.</p>
+        <p><strong>Root cause:</strong> the Java-ensemble evaluation path computed its data window from the real wall clock and always requested daily-scale bars — a timeframe the synthetic engine never writes at all (it only ever writes minute-scale synthetic bars). Direct query of a completed session's own isolated database confirmed both halves at once: <span class="mono">275 real daily SPY rows dated Aug 2025–Sep 2026</span> sitting alongside <span class="mono">240 genuine synthetic minute rows</span> for the same symbol in the same database.</p>
+        <p>Because the evaluation path's local cache was insufficient, it fell through to a real, live historical-data API call using this process's real credentials — credentials that were never stripped from the synthetic session's environment. Because every synthetic run gets a brand-new, empty database, this happened on <strong>every single run this entire mandate</strong>. This never touched production's own database — the real data landed only in that run's own isolated file — but it silently invalidated every finding upstream of it in this report that depended on that agent's output.</p>
+        <p>TechnicalAgent was never affected — it reads from a separate, correctly-isolated live-tick path, which is exactly why its readings tracked the synthetic scenario's real shape while the Java ensemble's never did.</p>
+        <p><strong>Fix:</strong> the real-network fallback now refuses to fire specifically during a synthetic session and fails loudly instead of silently substituting real data. Scoped narrowly so it doesn't also break the ordinary test suite, which legitimately exercises the same code path against mocked data.</p>
+        <p><strong>Effect, observed directly:</strong> rerunning post-fix immediately changed the picture. One rerun: the contaminated agent's vote count dropped from 88–92 per run to zero — correctly silenced. Another rerun, same scenario, same fix: produced the mandate's actual objective for the first time — a genuine independent-agent agreement, a genuine RiskEngine approval, and a real filled order. <strong>Honest limitation at the time:</strong> that particular fill happened late enough in the session that no exit could fire before the session ended — the entry half was proven; the exit half was not yet.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Final certification pass — the stale-price defect and the first complete lifecycle<span class="summary-sub">Second defect found while verifying the first fill's price honestly</span></summary>
+      <div class="archive-body">
+        <p>While tracing exactly how the first post-fix fill's price was calculated — per an explicit instruction not to call a fill "realistic" without showing the actual math — the trade's recorded arrival price didn't match the triggering idea's own price, confirmed byte-exact against the real bar the idea came from. That mismatch led directly to the stale-price consensus defect described above.</p>
+        <h4>Scenario timing, redesigned from real evidence</h4>
+        <p>Two sequential findings drove a real scenario-timing fix, not a guess: first, the genuine entry kept firing from a late-session reversal phase rather than an early one, because the original mid-session consolidation never gave the technical read an early dip to trigger on — so a real, bounded early pullback was added. Second, two further runs showed the entry <em>still</em> firing from the late reversal phase regardless — the forecasting agent needed more sustained trend data than a brief dip provides. In the process, a real mechanical detail was found: any simulated time past a scenario's last defined phase silently falls through to a flat, uninformative default, which is why an earlier attempt to simply run a longer session without extending that phase's own boundary produced a misleading result. The actual fix was extending the reversal phase itself so a late-firing entry has real continued-reversal room afterward — not a fabricated exit rule, the same pre-existing mechanism, just given room to matter.</p>
+        <h4>Fill-price mechanics, shown exactly</h4>
+        <p>Solved backward from the recorded fill price: the broker's own reference price for both the entry and the exit fill matched the recorded arrival price exactly, with the entry/exit prices differing only by the small, fully disclosed spread-and-slippage cost model — not a mystery gap. Concluded precisely: this fill is genuinely next-bar-open pricing plus a small, configured cost model, demonstrated rather than merely asserted, and it explicitly does not model order-book depth, liquidity, or latency.</p>
+        <h4>What remained open at the end of this pass</h4>
+        <ul>
+          <li>Only 2 of 5 seeds produced the complete lifecycle that pass — reported exactly as observed, not rounded up.</li>
+          <li>The full 20-item adversarial fault-injection matrix (broker disconnects, partial fills, restarts, duplicate/out-of-order events, and more) — none built yet; each needs new fault-injection mechanics the synthetic broker didn't have.</li>
+          <li>Restart-mid-position and broker-disconnect handling — not yet tested against the real synthetic broker specifically.</li>
+          <li>Deeper event-loop and memory instrumentation beyond coarse RSS sampling — not yet added.</li>
+        </ul>
+        <p>Explicit operator correction carried into every section since: readiness was split into three separate claims rather than one blanket "ready" line — paper-trading engineering readiness, real-money readiness, and live-alpha validation are not the same question and must never be collapsed into each other. And the status vocabulary was tightened so a missing test only ever reads as <code>NOT CERTIFIED</code> or <code>NOT IMPLEMENTED</code>, never as an ordinary <code>FAIL</code> — that word is reserved for an actual demonstrated defect, and none of the outstanding items are one.</p>
+      </div>
+    </details>
+
+    <details>
+      <summary>Final autonomous pass — closing the highest-value remaining gaps<span class="summary-sub">Restart-mid-position and broker-disconnect proven; zero new defects found</span></summary>
+      <div class="archive-body">
+        <p>The most recent pass closed real, previously-disclosed coverage gaps with genuine integration tests against the actual synthetic broker — not stand-ins — and surfaced instrumentation the engine already computed but had never printed.</p>
+        <ul>
+          <li><strong>Restart-mid-position</strong>, previously the single largest named gap: a real BUY placed through the actual synthetic broker, local state deliberately cleared to simulate a restart's real failure mode, recovery run through the unmodified production reconciliation code, then a real exit against the recovered position — no duplicate entry, correct recovered quantity and price, no duplicate exit, correct realized P&amp;L.</li>
+          <li><strong>Broker disconnect / unknown state</strong>: a real broker call made to throw mid-submission (a genuine disconnect simulation). Proved directly, not by inspection, that the order stays pending rather than being fabricated as filled or rejected, that trading actually pauses, and that no blind retry occurs.</li>
+          <li><strong>Event-loop and memory instrumentation</strong>, already computed by the engine but never printed, now surfaced: over a full 400-simulated-minute run, event-loop delay stayed at p50 75&nbsp;ms / p95 114&nbsp;ms / p99 142&nbsp;ms / max 225&nbsp;ms with no runaway pattern in either that or memory — read honestly as a batch-simulation workload's own numbers, not a live-latency claim.</li>
+          <li>The two existing memory-safety mechanisms from an earlier incident (an overlap guard against concurrent evaluator runs, and a bounded, cooldown-gated heap-snapshot capture that never delays the real trading-pause safety response) were reconfirmed intact by direct source inspection, untouched.</li>
+          <li>One previously-ambiguous seed was cleanly reclassified under the corrected scenario as a legitimate rejection rather than an open question.</li>
+        </ul>
+        <p><strong>Zero new defects were found this pass.</strong> The two defects described above remain the only real engineering defects this entire certification effort uncovered. No production safety boundary was touched, and no consensus, calibration, weighting, threshold, or risk parameter was changed at any point.</p>
+        <p>Production's canonical headless-startup command was confirmed directly from the project's own documentation rather than re-executed — restarting an already-running, already-healthy production process purely to re-demonstrate a command already proven safe earlier the same day would have been an unnecessary disruption, reserved for when it's actually required.</p>
+      </div>
+    </details>
+
+    <details open>
+      <summary>Partial-fill completion pass — the last open item, closed<span class="summary-sub">One new defect found while building it, fixed in the same pass</span></summary>
+      <div class="archive-body">
+        <p>This pass built the one piece of real engineering scope the previous pass had explicitly deferred: a partially-filled synthetic order previously froze at its first-bar quantity forever — no real broker behaves that way. The synthetic broker now lets a resting order keep filling as later bars bring more liquidity, using the exact same pricing, cash, and position-update logic its very first fill already used — wired into every real synthetic session, not just callable from a test.</p>
+        <p>Adversarially testing that new mechanism surfaced defect 3 of 3, above, on the first real attempt — found and fixed in the same pass, not carried forward as a known gap.</p>
+        <p><strong>Full lifecycle proven through the real broker</strong>: a BUY capped at 100 of 300 shares on bar one completes the remaining 200 on bar two; the order-management layer's own pre-existing fill-aggregation logic (already proven correct against a stand-in broker in an earlier pass) correctly records the second increment without re-counting the first or inventing a third; the resulting position reflects the full, correctly-averaged 300 shares; a clean subsequent sale exits it with a real, correctly-computed gain and a fully flat final state. A companion case proves the honest failure mode too: an order that never gets a chance to complete stays truthfully partially filled forever, never silently marked done.</p>
+        <p>Before building anything new, the existing test suite was surveyed rather than assumed empty — several other items on the remaining-work list turned out to already have real, thorough coverage at the general order-management and reconciliation layer (mismatch detection and pause escalation, hostile AI-output handling, concurrent-evaluator prevention, memory-pressure pause), just not exercised through the synthetic broker specifically. Full suite: 517 files, 3,800 tests, all passing. Production reconfirmed untouched throughout.</p>
+      </div>
+    </details>
+
+  </section>
+
+  <footer>
+    Source: <span class="mono">docs/audits/ARGUS_SYNTHETIC_CERTIFICATION_2026-09-15.md</span> — this page mirrors that report's final state.
+  </footer>
+
+</main>

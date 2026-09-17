@@ -604,6 +604,71 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     });
   });
 
+  describe('subscribe() rollback on a real IBKR bridge failure (2026-09-15, post-simulator-audit coverage gap closed)', () => {
+    // Real gap found and closed: this rollback path (activeStreams.add() immediately undone if
+    // ibkrBridge.subscribe() throws) is real production logic - live-relevant whenever IB Gateway
+    // is unreachable (DEF-28's own documented reconnect-with-backoff scenario), not merely a
+    // simulator artifact - but had zero direct test coverage before this. Correct, intentional
+    // fail-closed behavior (activeStreams must only ever contain symbols genuinely receiving
+    // quotes), verified here rather than left implicit.
+    it('a throwing ibkrBridge.subscribe() rolls the symbol back out of activeStreams - never left in a "subscribed but no real quote source" state', () => {
+      worker.setBrokerQuoteContext({
+        backend: 'ibkr_gateway',
+        hardCapOverride: 90,
+        ibkrBridge: {
+          subscribe: () => { throw new Error('IBKR socket session is not connected.'); },
+          unsubscribe: () => {},
+          clear: () => {},
+        },
+      });
+
+      worker.subscribe('AAPL');
+
+      expect(worker.getActiveSymbols()).not.toContain('AAPL');
+      expect(worker.getTickCount('AAPL')).toBe(0);
+    });
+
+    it('a later successful subscribe() (bridge recovered) for the SAME symbol succeeds normally - the earlier rollback does not permanently poison it', () => {
+      let shouldFail = true;
+      worker.setBrokerQuoteContext({
+        backend: 'ibkr_gateway',
+        hardCapOverride: 90,
+        ibkrBridge: {
+          subscribe: () => { if (shouldFail) throw new Error('IBKR socket session is not connected.'); },
+          unsubscribe: () => {},
+          clear: () => {},
+        },
+      });
+
+      worker.subscribe('MSFT');
+      expect(worker.getActiveSymbols()).not.toContain('MSFT');
+
+      shouldFail = false; // gateway reconnected
+      worker.subscribe('MSFT');
+      expect(worker.getActiveSymbols()).toContain('MSFT');
+    });
+
+    it('a rollback for one symbol does not affect other already-successfully-subscribed symbols', () => {
+      worker.setBrokerQuoteContext({
+        backend: 'ibkr_gateway',
+        hardCapOverride: 90,
+        ibkrBridge: {
+          subscribe: (ticker: string) => { if (ticker === 'FAILME') throw new Error('rejected'); },
+          unsubscribe: () => {},
+          clear: () => {},
+        },
+      });
+
+      worker.subscribe('AAPL');
+      worker.subscribe('FAILME');
+      worker.subscribe('MSFT');
+
+      expect(worker.getActiveSymbols()).toContain('AAPL');
+      expect(worker.getActiveSymbols()).toContain('MSFT');
+      expect(worker.getActiveSymbols()).not.toContain('FAILME');
+    });
+  });
+
   // Phase 13 (2026-08-31 strategy-starvation remediation): requestTemporaryDataRescue() - a
   // bounded, single-use eviction-immunity grant so a strategy's real idea on a symbol outside the
   // actively-streamed set gets one genuine chance at live data on its next evaluation cycle,

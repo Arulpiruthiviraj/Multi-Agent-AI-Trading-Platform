@@ -276,7 +276,7 @@ export class TechnicalProposerAgent {
     const regime = encodeRegime(classifyLightweightRegime(prices));
 
     eventBus.emitCalculation(traceId, 'TechnicalEngine', symbol, { rsi, sma20, sma50, currentPrice, macd, bbUpper, bbLower });
-    eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_COMPLETED, { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd, bbUpper, bbLower });
+    eventBus.emit(EVENTS.TECHNICAL_ANALYSIS_COMPLETED, { traceId, symbol, latencyMs: Date.now() - startedAt, rsi, sma20, sma50, currentPrice, macd, macdSignal, bbUpper, bbLower });
 
     if (momentumBreakout && this.shouldEmitSignal(symbol, 'momentumBreakout', rsi, macdHistogram, debounceAt)) {
       eventBus.emitTradeIdea({

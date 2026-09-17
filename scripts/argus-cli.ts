@@ -213,12 +213,39 @@ async function currentlyAnsweringPid(): Promise<number | undefined> {
   return result.kind === 'answered' ? result.pid : undefined;
 }
 
-function parseFlags(argv: string[]) {
+export function parseFlags(argv: string[]) {
   return {
     headless: argv.includes('--headless') || argv.includes('-H'),
     prod: argv.includes('--prod'),
     dev: argv.includes('--dev'),
+    // 2026-09-15: lets `start` chain the same, already-safe resumeTrading() operator-resume path
+    // (see that function's own doc comment) onto a successful boot, instead of requiring a
+    // separate `argus-cli resume` call every morning. Does NOT bypass anything resumeTrading()
+    // itself already checks (reconciliation/gates still apply server-side) - this flag only
+    // decides whether `start` calls it at all. Never implied by --prod/--dev/--headless.
+    enableTrading: argv.includes('--enable-trading'),
   };
+}
+
+export function resumeReasonFromArgv(argv: string[], fallback: string): string {
+  const reasonArg = argv.find((a) => a.startsWith('--reason='));
+  return reasonArg ? reasonArg.slice('--reason='.length) : fallback;
+}
+
+/**
+ * The real tradingState resume path (POST /api/v1/system/resume), distinct from /autobot/toggle
+ * (which only gates new BUY idea generation, not the tradingState machine itself). Shared by the
+ * `resume` command and `start --enable-trading` so there is exactly one place this call is made,
+ * not two copies that could drift. Still fully operator-controlled: this function is only ever
+ * invoked because a human ran `argus-cli resume` or explicitly passed `--enable-trading` - never
+ * implicitly, never on a timer inside this file. The server side still applies every existing
+ * safety check (reconciliation, restart safety, etc.) on this same path regardless of caller.
+ */
+async function resumeTrading(reason: string): Promise<unknown> {
+  return fetchJson('/api/v1/system/resume', {
+    method: 'POST',
+    body: JSON.stringify({ reason }),
+  });
 }
 
 function parseReplayArgs(argv: string[]) {
@@ -400,6 +427,28 @@ async function startEngine() {
     message,
   }, null, 2));
   if (!ready) process.exit(1);
+  // --enable-trading (2026-09-15): chains the same resumeTrading() operator-resume path a separate
+  // `argus-cli resume` call would use, right after a successful boot - for exactly the case this
+  // was added for (starting today's session and enabling it in one step). This does NOT weaken or
+  // skip anything: resumeTrading() hits the real /api/v1/system/resume route, which still applies
+  // every existing server-side safety check (reconciliation, restart safety, etc.) exactly as it
+  // would for a standalone `resume` call. If that check refuses (e.g. a real reconciliation
+  // mismatch), this reports the failure below and leaves the engine running but NOT trading -
+  // it never falls back to a bypass. Printed BEFORE the health report so that report reflects the
+  // post-resume tradingState, not the pre-resume one.
+  if (flags.enableTrading) {
+    const reason = resumeReasonFromArgv(process.argv.slice(3), 'Auto-resume via argus-cli start --enable-trading');
+    try {
+      const resumeResult = await resumeTrading(reason);
+      console.log(JSON.stringify({ enableTrading: true, resumeResult }, null, 2));
+    } catch (e: any) {
+      console.error(JSON.stringify({
+        enableTrading: true,
+        ok: false,
+        message: `Engine started but resume failed: ${e.message || e}. Trading remains whatever state it was already in - not forced.`,
+      }, null, 2));
+    }
+  }
   // "make sure everything is working fine" - print the same broker/AI-provider/Kronos/
   // QuantCoreBridge picture `argus-cli health` gives, right here, instead of requiring a separate
   // manual follow-up command to see it.
@@ -741,16 +790,12 @@ const commands: Record<string, () => Promise<void>> = {
   },
   async resume() {
     // Full-remediation pass (2026-09-04, docs/audits/ARGUS_FULL_PAPER_TRADING_REMEDIATION_2026-09-04.md
-    // §28 Paper-Trading Resume Safety): the real tradingState resume path, distinct from
-    // /autobot/toggle (which only gates new BUY idea generation, not the tradingState machine
-    // itself). Operator-controlled by design - never called automatically by anything in this
-    // codebase. Pass --reason="..." to record why; defaults to a generic operator-resume reason.
-    const reasonArg = process.argv.slice(3).find((a) => a.startsWith('--reason='));
-    const reason = reasonArg ? reasonArg.slice('--reason='.length) : 'Operator resume via argus-cli';
-    console.log(JSON.stringify(await fetchJson('/api/v1/system/resume', {
-      method: 'POST',
-      body: JSON.stringify({ reason }),
-    }), null, 2));
+    // §28 Paper-Trading Resume Safety): the real tradingState resume path - see resumeTrading()'s
+    // own doc comment. Operator-controlled by design (this command, or `start --enable-trading`,
+    // both explicit human/authorized-caller actions - never called automatically on a timer by
+    // anything in this codebase). Pass --reason="..." to record why; defaults to a generic reason.
+    const reason = resumeReasonFromArgv(process.argv.slice(3), 'Operator resume via argus-cli');
+    console.log(JSON.stringify(await resumeTrading(reason), null, 2));
   },
   async pause() {
     const reasonArg = process.argv.slice(3).find((a) => a.startsWith('--reason='));
@@ -1429,7 +1474,7 @@ const commands: Record<string, () => Promise<void>> = {
     const groups: Array<[string, string[]]> = [
       ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
-      ['Trading state / portfolio', ['positions', 'portfolio']],
+      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],

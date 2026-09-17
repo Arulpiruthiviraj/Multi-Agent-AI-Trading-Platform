@@ -94,7 +94,7 @@ case "$cmd" in
     fi
     argus_npm_cli session-report
     ;;
-  enable|disable|kill-switch)
+  enable|disable|kill-switch|resume|pause)
     if argus_wants_help "$@"; then argus_help_trading; exit 0; fi
     argus_npm_cli "$cmd" "$@"
     ;;

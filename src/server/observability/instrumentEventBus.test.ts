@@ -84,4 +84,27 @@ describe('instrumentEventBus - generic wildcard bridge', () => {
     const row = enqueueObservabilityEvent.mock.calls[0][0];
     expect(row.symbol == null).toBe(true);
   });
+
+  // 2026-09-16 real fix (universe/subscription starvation investigation, third confirmed instance
+  // of this same fixed-whitelist gap): WATCHLIST_SUBSCRIBE_REQUESTED's real payload
+  // (OpportunityDiscovery.ts) carries `reason`/`source`/`momentumScore` - none of which were in the
+  // extraction whitelist, so all 5,126 real rows logged today persisted with only `{symbol}`,
+  // silently dropping the exact field (`reason: 'BROAD_UNIVERSE_TOPUP'`) this investigation needed
+  // to measure whether the new broad-universe subscription top-up fix was actually firing.
+  it('persists reason/source/momentumScore for WATCHLIST_SUBSCRIBE_REQUESTED instead of silently dropping them to {symbol} only', () => {
+    eventBus.publish(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, {
+      symbol: 'AMZN',
+      source: 'OpportunityDiscovery',
+      reason: 'BROAD_UNIVERSE_TOPUP',
+      momentumScore: undefined,
+      honesty: 'Subscribe request only — not a trade idea and not an order.',
+    });
+
+    expect(enqueueObservabilityEvent).toHaveBeenCalled();
+    const row = enqueueObservabilityEvent.mock.calls[0][0];
+    expect(row.symbol).toBe('AMZN');
+    const parsed = JSON.parse(row.payload).payload;
+    expect(parsed.reason).toBe('BROAD_UNIVERSE_TOPUP');
+    expect(parsed.source).toBe('OpportunityDiscovery');
+  });
 });

@@ -45,6 +45,20 @@ export interface CertificationResult {
     agentName: string; bucketLow: number; bucketHigh: number;
     championEstablished: boolean; effectiveN: number | null; wilsonLower: number | null;
   }[];
+  /** Explicit provenance summary (operator-requested field names, 2026-09-15) - a flattened,
+   *  directly-answer-the-question view of calibrationSeedDetails above, so a consumer never has to
+   *  derive "how many agents/buckets/observations were involved" by hand from the detail array. */
+  calibrationProvenance: {
+    seeded: boolean;
+    seededObservationCount: number;
+    affectedAgents: readonly string[];
+    affectedBuckets: readonly string[];
+    /** Always false - CalibrationHistorySeeder.ts only ever writes to the session's own isolated
+     *  DB (verified: zero production-reachable callers - see that file's own header). Present as an
+     *  explicit field, not merely an inference, so a certification consumer never has to trust an
+     *  absence of evidence for something this safety-relevant. */
+    productionCalibrationModified: false;
+  };
   wallClockDurationMs: number;
   eventLoop: { p50: number | null; p95: number | null; p99: number | null; max: number | null };
   memory: { rssStartMb: number | null; rssPeakMb: number | null; rssEndMb: number | null; heapStartMb: number | null; heapEndMb: number | null };
@@ -164,6 +178,13 @@ export function evaluateCertification(result: SyntheticSessionResult, requireTra
       agentName: r.agentName, bucketLow: r.bucketLow, bucketHigh: r.bucketHigh,
       championEstablished: r.championEstablished, effectiveN: r.effectiveN, wilsonLower: r.wilsonLower,
     })),
+    calibrationProvenance: {
+      seeded: result.calibrationSeedResults.length > 0,
+      seededObservationCount: result.calibrationSeedResults.reduce((sum, r) => sum + r.seededObservationCount, 0),
+      affectedAgents: [...new Set(result.calibrationSeedResults.map((r) => r.agentName))],
+      affectedBuckets: [...new Set(result.calibrationSeedResults.map((r) => `${r.bucketLow}-${r.bucketHigh}`))],
+      productionCalibrationModified: false,
+    },
     wallClockDurationMs: result.wallClockDurationMs,
     eventLoop: { p50: result.eventLoopP50Ms, p95: result.eventLoopP95Ms, p99: result.eventLoopP99Ms, max: result.eventLoopMaxMs },
     memory: {
@@ -198,6 +219,10 @@ export function renderCertificationReport(cert: CertificationResult): string {
         ` (effectiveN=${d.effectiveN ?? 'n/a'}, wilsonLower=${d.wilsonLower?.toFixed(4) ?? 'n/a'})`,
       );
     }
+    lines.push(`    seededObservationCount=${cert.calibrationProvenance.seededObservationCount}`);
+    lines.push(`    affectedAgents=[${cert.calibrationProvenance.affectedAgents.join(', ')}]`);
+    lines.push(`    affectedBuckets=[${cert.calibrationProvenance.affectedBuckets.join(', ')}]`);
+    lines.push(`    productionCalibrationModified=${cert.calibrationProvenance.productionCalibrationModified}`);
   }
   lines.push('');
   lines.push('Decision pipeline:');

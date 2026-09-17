@@ -15,6 +15,13 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   private cash: number;
   private _positions = new Map<string, Position>();
   private _orders = new Map<string, Order>();
+  /** Orders currently PARTIALLY_FILLED with a real remainder still to fill - see
+   *  advanceWorkingOrders()'s own doc comment for the full multi-bar completion mechanism.
+   *  lastAdvancedAtMs guards against a duplicate/repeated call for the SAME bar double- or
+   *  triple-consuming that one bar's volume cap (found live, 2026-09-16: two advanceWorkingOrders()
+   *  calls at an unchanged clockNowMs filled 300 shares against a 100-share single-bar cap before
+   *  this guard existed - a real duplicate-market-event class of bug, not a hypothetical one). */
+  private _workingOrders = new Map<string, { symbol: string; side: 'BUY' | 'SELL'; remainingQty: number; filledSoFar: number; totalNotionalFilled: number; lastAdvancedAtMs: number | null }>();
   private realizedPnl = 0;
   private feesPaid = 0;
   private slippagePaid = 0;
@@ -27,7 +34,6 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   shortSelling = false;
   fractional = false;
   costs: ReplayCostProfile;
-  liveRefused = false;
   /** Fraction of the fill bar's volume a single order may consume. null/undefined disables the cap entirely (unbounded, matching pre-existing behavior). */
   maxVolumeParticipationPct: number | null;
 
@@ -66,8 +72,19 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   async initialize() {}
   async validateCredentials() { return true; }
   paperTrading() {}
+  /**
+   * Unconditionally, statelessly throws on every call - this broker can never enter LIVE mode.
+   * Deliberately has NO persistent side effect (no "poison flag" on this instance): the isolation
+   * self-check (SyntheticSimulationSafety.ts's assertActiveSessionIsSynthetic()) legitimately calls
+   * this method on the SAME broker instance the session goes on to place real replay orders
+   * through, purely to prove the throw - not to actually arm live mode. A one-way stateful flag
+   * here previously made that legitimate proof call permanently break every subsequent placeOrder()
+   * on the same instance (found 2026-09-15, CERTIFIED_BULLISH_ENTRY_EXIT: a real RiskEngine-approved
+   * order threw "LIVE refused" even though liveTrading() was never meant to be armed). The
+   * unconditional throw alone already makes going live impossible on every call, with or without
+   * memory of a prior call.
+   */
   liveTrading() {
-    this.liveRefused = true;
     throw new Error('HistoricalReplayBroker refuses LIVE. Replay is SIMULATION ONLY.');
   }
   getCapabilities(): BrokerCapabilities {
@@ -135,7 +152,6 @@ export class HistoricalReplayBroker implements BrokerPlugin {
   }
 
   async placeOrder(orderData: Partial<Order>): Promise<Order> {
-    if (this.liveRefused) throw new Error('LIVE refused');
     const session = classifyMarketSession(this.clockNowMs, this.timezone, this.extendedHours);
     if (!sessionAllowsFills(session, this.extendedHours)) {
       const rejected: Order = {
@@ -274,7 +290,107 @@ export class HistoricalReplayBroker implements BrokerPlugin {
       updatedAt: new Date(this.clockNowMs),
     };
     this._orders.set(filled.id, filled);
+    // Multi-bar partial-fill completion (2026-09-16, certification follow-up). Previously a
+    // PARTIALLY_FILLED order here was permanently stuck at its first-bar filled quantity forever -
+    // a real, disclosed simulator limitation (config/replaySafety.json's own
+    // partialFillModelDescription already said so), unlike a real broker (or this codebase's own
+    // production-path Alpaca/IBKR adapters) which naturally keeps filling a resting order as more
+    // liquidity becomes available. Registering the remainder here lets advanceWorkingOrders() (see
+    // below) top it up on later bars using the exact same volume-cap/pricing/cash/position logic
+    // this method already uses - never a different, parallel fill model.
+    if (isPartial) {
+      this._workingOrders.set(filled.id, {
+        symbol: orderData.symbol!,
+        side: orderData.side!,
+        remainingQty: requestedQty - qty,
+        filledSoFar: qty,
+        totalNotionalFilled: priced.fill * qty,
+        // The order's OWN entry fill already consumed this bar (clockNowMs) - record it so an
+        // advanceWorkingOrders() call still at this same bar (a duplicate event, or a caller that
+        // advances before the clock genuinely moves) correctly no-ops instead of consuming the same
+        // bar's volume a second time.
+        lastAdvancedAtMs: this.clockNowMs,
+      });
+    }
     return filled;
+  }
+
+  /**
+   * Advances every still-open PARTIALLY_FILLED order by whatever additional quantity the CURRENT
+   * bar's volume cap and cash/position constraints allow - the real multi-bar completion mechanism
+   * `placeOrder()`'s own header comment above now points to. Callers (the synthetic session engine,
+   * per-bar; or a test driving the broker directly) call this once per bar, exactly the same way a
+   * real broker's own resting-order matching engine would revisit a working order as new liquidity
+   * arrives. Never fills more than the cap in a single call - a still-insufficient bar simply leaves
+   * the order PARTIALLY_FILLED for the next call, the same honest "no more liquidity yet" outcome
+   * the original single-shot fill already produced, just no longer permanently final. Reuses the
+   * SAME weighted-average-price, cash, and position-update math `placeOrder()` uses for the initial
+   * fill - never a second, parallel accounting path.
+   */
+  advanceWorkingOrders(): void {
+    for (const [orderId, w] of this._workingOrders) {
+      if (!(w.remainingQty > 0)) { this._workingOrders.delete(orderId); continue; }
+      // Duplicate-event guard: this exact bar (clockNowMs unchanged since the last successful
+      // advance/entry-fill for this order) has already had its volume consumed for this order -
+      // a repeated call here must no-op, never fill the same bar's cap a second time.
+      if (w.lastAdvancedAtMs === this.clockNowMs) continue;
+      const capQty = this.applyVolumeParticipationCap(w.symbol, w.remainingQty);
+      if (!(capQty > 0)) continue; // no additional liquidity this bar - try again next advance
+      const raw = this.nextFillPrice.get(w.symbol);
+      if (typeof raw !== 'number' || !(raw > 0)) continue; // no fresh price this bar - try again next advance
+      const priced = this.applyFillPrice(raw);
+
+      let actualQty = 0;
+      if (w.side === 'BUY') {
+        const commission = this.costs.commissionPerShare * capQty;
+        const notional = priced.fill * capQty;
+        if (this.cash < notional + commission) continue; // insufficient cash this bar - try again next advance
+        this.cash -= notional + commission;
+        this.feesPaid += commission;
+        this.slippagePaid += priced.slippage * capQty;
+        actualQty = capQty;
+        const existing = this._positions.get(w.symbol);
+        if (existing) {
+          const newQty = existing.quantity + actualQty;
+          existing.entryPrice = (existing.entryPrice * existing.quantity + priced.fill * actualQty) / newQty;
+          existing.quantity = newQty;
+          existing.currentPrice = priced.fill;
+          existing.marketValue = newQty * priced.fill;
+        } else {
+          this._positions.set(w.symbol, {
+            symbol: w.symbol, quantity: actualQty, entryPrice: priced.fill, currentPrice: priced.fill,
+            marketValue: notional, unrealizedPnl: 0, unrealizedPnlPercent: 0,
+          });
+        }
+      } else {
+        const existing = this._positions.get(w.symbol);
+        actualQty = Math.min(capQty, existing?.quantity ?? 0);
+        if (!(actualQty > 0)) continue; // no remaining position to sell this bar - try again next advance
+        const commission = this.costs.commissionPerShare * actualQty;
+        const proceeds = priced.fill * actualQty;
+        this.cash += proceeds - commission;
+        this.feesPaid += commission;
+        this.slippagePaid += priced.slippage * actualQty;
+        this.realizedPnl += (priced.fill - existing!.entryPrice) * actualQty - commission;
+        existing!.quantity -= actualQty;
+        if (existing!.quantity <= 0) this._positions.delete(w.symbol);
+        else { existing!.marketValue = existing!.quantity * priced.fill; existing!.currentPrice = priced.fill; }
+      }
+
+      w.remainingQty -= actualQty;
+      w.filledSoFar += actualQty;
+      w.totalNotionalFilled += priced.fill * actualQty;
+      w.lastAdvancedAtMs = this.clockNowMs;
+      const order = this._orders.get(orderId);
+      if (order) {
+        order.filledQuantity = w.filledSoFar;
+        order.averageFillPrice = w.totalNotionalFilled / w.filledSoFar;
+        order.price = order.averageFillPrice;
+        order.status = w.remainingQty > 0 ? 'PARTIALLY_FILLED' : 'FILLED';
+        order.updatedAt = new Date(this.clockNowMs);
+      }
+      if (!(w.remainingQty > 0)) this._workingOrders.delete(orderId);
+    }
   }
 
   async modifyOrder() { throw new Error('Replay modifyOrder unsupported'); }

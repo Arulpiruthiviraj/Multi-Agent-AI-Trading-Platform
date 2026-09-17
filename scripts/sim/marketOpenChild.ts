@@ -96,7 +96,10 @@ async function runOneScenario(spec: ScenarioRunSpec): Promise<ChildResultMessage
   }
 
   console.log(`\nWall-clock duration: ${(result.wallClockDurationMs / 1000).toFixed(1)}s`);
-  console.log(`Memory samples: ${result.memorySamples.length} (RSS ${result.memorySamples[0]?.rssMb}MB -> ${result.memorySamples[result.memorySamples.length - 1]?.rssMb}MB)`);
+  console.log(`Memory samples: ${result.memorySamples.length} (RSS ${result.memorySamples[0]?.rssMb}MB -> ${result.memorySamples[result.memorySamples.length - 1]?.rssMb}MB, heapUsed ${result.memorySamples[0]?.heapUsedMb}MB -> ${result.memorySamples[result.memorySamples.length - 1]?.heapUsedMb}MB)`);
+  // Event-loop delay histogram (perf_hooks.monitorEventLoopDelay, already computed by the engine but
+  // never previously surfaced to the CLI) - 2026-09-16 certification mandate Section 4/22.
+  console.log(`Event-loop delay: p50=${result.eventLoopP50Ms.toFixed(2)}ms p95=${result.eventLoopP95Ms.toFixed(2)}ms p99=${result.eventLoopP99Ms.toFixed(2)}ms max=${result.eventLoopMaxMs.toFixed(2)}ms`);
   return { type: 'SIMULATION_RESULT', certification: null, tradeObserved: null, zeroTradeReason: null, firstBlockingStage: null, calibrationSeeded: result.calibrationSeedResults.length > 0 };
 }
 

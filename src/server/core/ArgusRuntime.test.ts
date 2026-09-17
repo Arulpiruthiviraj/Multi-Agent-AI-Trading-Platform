@@ -5,10 +5,20 @@ import { existsSync, unlinkSync } from 'node:fs';
 
 describe('ArgusRuntime lifecycle', () => {
   let tmpDb: string;
+  let tmpSessionPath: string;
 
   beforeEach(async () => {
     tmpDb = path.join(os.tmpdir(), `argus_runtime_${Date.now()}_${process.pid}.db`);
     process.env.ARGUS_DB_PATH = tmpDb;
+    // P1 isolation fix (2026-09-15) - this test boots the real core (via ArgusRuntime.initialize())
+    // without going through ArgusCoreBoot.test.ts's own beforeAll, so it never isolated
+    // sessionRecovery's file path - a real, confirmed incident (see
+    // productionRuntimePathGuard.ts's own header): running this test while a real engine was live
+    // silently touched the real data/.argus_runtime_session.json file. Same fix pattern
+    // ArgusCoreBoot.test.ts already established.
+    tmpSessionPath = path.join(os.tmpdir(), `argus_runtime_session_${Date.now()}_${process.pid}.json`);
+    const { setSessionRecoveryPathForTests } = await import('./sessionRecovery');
+    setSessionRecoveryPathForTests(tmpSessionPath);
     const { resetArgusCoreBootedForTests } = await import('./ArgusCoreBoot');
     resetArgusCoreBootedForTests();
     const { argusRuntime } = await import('./ArgusRuntime');
@@ -38,12 +48,17 @@ describe('ArgusRuntime lifecycle', () => {
     expect(argusRuntime.getSnapshot().phase).toMatch(/SAFE_MODE|STOPPING|STOPPED/);
   }, 60_000);
 
-  afterEach(() => {
+  afterEach(async () => {
     if (existsSync(tmpDb)) {
       try { unlinkSync(tmpDb); } catch { /* ignore */ }
       try { unlinkSync(`${tmpDb}-wal`); } catch { /* ignore */ }
       try { unlinkSync(`${tmpDb}-shm`); } catch { /* ignore */ }
     }
     delete process.env.ARGUS_DB_PATH;
+    const { resetSessionRecoveryForTests } = await import('./sessionRecovery');
+    resetSessionRecoveryForTests();
+    if (existsSync(tmpSessionPath)) {
+      try { unlinkSync(tmpSessionPath); } catch { /* ignore */ }
+    }
   });
 });

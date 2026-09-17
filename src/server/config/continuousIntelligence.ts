@@ -62,6 +62,15 @@ export interface ContinuousIntelligenceConfig {
   /** Phase C (Universal Discovery Expansion): minimum absolute intraday gap-vs-open to tag a
    *  candidate gapMover:true in the Discovery Lineage Ledger - observability only. */
   gapMoverMinAbsPct: number;
+  /** 2026-09-16 gapPct data-integrity fix: when a real prevDailyBar.c is available, dailyBar.o is
+   *  rejected as data-quality-suspect (gapPct reported UNKNOWN) if the open/prevClose ratio falls
+   *  outside [1/this, this]. See MarketUniverseScanner.computeValidatedGapPct()'s own header for the
+   *  full reasoning - wide enough to admit real extreme gaps and common reverse-split ratios, narrow
+   *  enough to exclude the corrupted values actually observed live (RETO 985%, MEDS 394%, etc). */
+  gapPctMaxPlausibleOpenToPrevCloseRatio: number;
+  /** 2026-09-16: weaker fallback guard when no prevDailyBar.c exists to cross-validate against - an
+   *  unambiguous near-zero floor, never a bound on plausible real prices. */
+  gapPctMinAbsoluteOpenPrice: number;
   /** Phase 27 (Universal Discovery Expansion follow-up): minimum today's-volume / ADV ratio to tag
    *  a candidate rvolMover:true in the Discovery Lineage Ledger - observability only. */
   rvolMoverMinRatio: number;
@@ -98,6 +107,14 @@ export interface ContinuousIntelligenceConfig {
   broadUniverseAdvLookbackDays: number;
   broadUniverseMinAvgDailyVolumeShares: number;
   broadUniverseTopNPerScan: number;
+  /** 2026-09-16 subscription-starvation fix: number of consecutive cycles an eligible-but-unselected
+   *  broad-universe candidate can be skipped before its aging bonus guarantees selection over even
+   *  the highest-liquidity-rank competitor. See BroadUniverseSubscriptionAllocator.ts's own header
+   *  for the full mechanism and the real starvation evidence that motivated it. */
+  broadUniverseFairnessWindowCycles: number;
+  /** 2026-09-16: bounds the allocator's own in-memory tracking map, same cap/evict pattern as
+   *  candidateLifecycle.ts's maxCandidateRecords - never unbounded. */
+  broadUniverseAllocatorMaxTrackedRecords: number;
   /** Phase 17 (2026-09-01): real Alpaca top-gainers/losers screener as an additional discovery
    *  source, gated separately from the liquidity-only broad universe. Same real Alpaca API/creds,
    *  no scraping, no new external dependency. Results still pass through the exact same
@@ -263,6 +280,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     moverPriorityScoreBonus: requireNonNegativeNumber(raw.moverPriorityScoreBonus, 'moverPriorityScoreBonus'),
     composableRankingHotSwapWeight: requireNonNegativeNumber(raw.composableRankingHotSwapWeight, 'composableRankingHotSwapWeight'),
     gapMoverMinAbsPct: requireNonNegativeNumber(raw.gapMoverMinAbsPct, 'gapMoverMinAbsPct'),
+    gapPctMaxPlausibleOpenToPrevCloseRatio: requireNumber(raw.gapPctMaxPlausibleOpenToPrevCloseRatio, 'gapPctMaxPlausibleOpenToPrevCloseRatio'),
+    gapPctMinAbsoluteOpenPrice: requireNonNegativeNumber(raw.gapPctMinAbsoluteOpenPrice, 'gapPctMinAbsoluteOpenPrice'),
     rvolMoverMinRatio: requireNonNegativeNumber(raw.rvolMoverMinRatio, 'rvolMoverMinRatio'),
     minDynamicDwellMs: requireNumber(raw.minDynamicDwellMs, 'minDynamicDwellMs'),
     minDynamicDwellTicks: requireNumber(raw.minDynamicDwellTicks, 'minDynamicDwellTicks'),
@@ -283,6 +302,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     broadUniverseAdvLookbackDays: requireNumber(raw.broadUniverseAdvLookbackDays, 'broadUniverseAdvLookbackDays'),
     broadUniverseMinAvgDailyVolumeShares: requireNumber(raw.broadUniverseMinAvgDailyVolumeShares, 'broadUniverseMinAvgDailyVolumeShares'),
     broadUniverseTopNPerScan: requireNumber(raw.broadUniverseTopNPerScan, 'broadUniverseTopNPerScan'),
+    broadUniverseFairnessWindowCycles: requireNumber(raw.broadUniverseFairnessWindowCycles, 'broadUniverseFairnessWindowCycles'),
+    broadUniverseAllocatorMaxTrackedRecords: requireNumber(raw.broadUniverseAllocatorMaxTrackedRecords, 'broadUniverseAllocatorMaxTrackedRecords'),
     moversEnabledEnvVar: raw.moversEnabledEnvVar,
     moversCacheTtlMs: requireNumber(raw.moversCacheTtlMs, 'moversCacheTtlMs'),
     moversFetchTopNPerSide: requireNumber(raw.moversFetchTopNPerSide, 'moversFetchTopNPerSide'),

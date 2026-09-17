@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from '
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { assertNotProductionRuntimePath } from '../core/productionRuntimePathGuard';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,7 +26,15 @@ const DEFAULT_ENGINE_PID_PATH = join(process.cwd(), 'data', '.argus_engine.pid')
  */
 export function resolveEnginePidPath(): string {
   const override = process.env.ARGUS_ENGINE_PID_PATH?.trim();
-  return override || DEFAULT_ENGINE_PID_PATH;
+  const resolved = override || DEFAULT_ENGINE_PID_PATH;
+  // Mechanical backstop (2026-09-15, P1 - see productionRuntimePathGuard.ts's own header for the
+  // real incident history this closes): this file's own comment above already documents ONE past
+  // incident of a test silently touching this exact default path. Checking here, at the single
+  // choke point every read/write/clear call already goes through, means the fix covers every
+  // caller automatically rather than relying on each one remembering to set
+  // ARGUS_ENGINE_PID_PATH - the same opt-in pattern that already failed to prevent that incident.
+  assertNotProductionRuntimePath(resolved, 'engine PID file', DEFAULT_ENGINE_PID_PATH);
+  return resolved;
 }
 
 export function ensureDataDir(): void {

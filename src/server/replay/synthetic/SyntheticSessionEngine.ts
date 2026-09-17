@@ -213,6 +213,18 @@ export class SyntheticSessionEngine {
     // isolated session actually reach the safe default this deployment's real .env was overriding.
     process.env.ARGUS_ACTIVE_BROKER = 'internal_paper';
 
+    // Determinism fix (2026-09-15, Rule 2 of the follow-up mandate - real finding, not a guess):
+    // a same-seed QUIET_OPEN run compared twice showed identical ohlcv_bars/TechnicalAgent counts
+    // (the genuinely synthetic, seeded path) but DIFFERENT news_clusters/total agent_predictions/
+    // CHIEF_CONSENSUS_COMPLETED counts (86 vs 76 news_clusters; 12 vs 13 predictions) - because
+    // ArgusCoreBoot.ts's newsEngine.start() runs unconditionally and independently polls real RSS
+    // feeds + paid news APIs + an LLM on its own real-time schedule, regardless of whether this
+    // engine "wires in" SyntheticNewsGenerator's deterministic provider for gate 14. That provider
+    // (see buildSyntheticNewsProvider() below) already gives gate 14 news_veto a fully deterministic,
+    // scenario-defined view - this flag only stops the SEPARATE, redundant real-network background
+    // loop from also running and writing its own non-deterministic news_clusters rows alongside it.
+    process.env.ARGUS_NEWS_ENGINE_ENABLED = 'false';
+
     assertSyntheticSimulationIsolation({ dbPath: this.dbPath, sessionMarkerPath: this.sessionMarkerPath });
   }
 
@@ -245,6 +257,26 @@ export class SyntheticSessionEngine {
     const { bootArgusCore } = await import('../../core/ArgusCoreBoot');
     await bootArgusCore();
     await sleep(1500); // let boot's own async settle (matches every other harness this session)
+
+    // Determinism fix continued (2026-09-15, Rule 2): FundamentalAgent/MacroAgent are real,
+    // network-dependent idea agents (AlphaVantage market data + AIRouter LLM calls to whichever real
+    // provider is currently healthy) - unlike TechnicalAgent (deterministic RSI/MACD/BB) or
+    // KronosForecastAgent (a local, session-controlled :8008 service), there is no synthetic/isolated
+    // equivalent data source for these two today, and building a fabricated deterministic stand-in
+    // for a real AI call would be exactly the kind of invented evidence this simulator must not
+    // produce. Per the explicit instruction that "external AI providers are not consulted unless
+    // explicitly running a separate integration test," this engine disables both agents in-process
+    // for the duration of the session rather than let their real, rate-limited, non-deterministic
+    // output silently vary CHIEF_CONSENSUS_COMPLETED/TRADE_IDEA_GENERATED counts across same-seed
+    // runs (confirmed root cause of part of the 12-vs-13 prediction-count drift found in the
+    // 2026-09-15 determinism check). This is in-memory-only (pipelineAgentGate.ts), never touches
+    // config/pipelineAgents.json defaults, and is reset on process exit - production behavior when
+    // Autobot arms these agents is completely unaffected.
+    {
+      const { setPipelineAgentEnabled } = await import('../../core/pipelineAgentGate');
+      setPipelineAgentEnabled('FundamentalAgent', false);
+      setPipelineAgentEnabled('MacroAgent', false);
+    }
 
     // Explicit, disclosed methodology change (2026-09-14, operator-authorized) - see
     // CalibrationHistorySeeder.ts's own header for the full disclosure. Runs BEFORE the main loop
@@ -421,6 +453,14 @@ export class SyntheticSessionEngine {
           eventBus.emitMarketData(symbol, previousBar.close, previousBar.volume, new Date(t).toISOString());
         }
       }
+
+      // Multi-bar partial-fill completion (2026-09-16, certification follow-up): once per bar, after
+      // this bar's own price/volume are loaded above, give any still-open PARTIALLY_FILLED order a
+      // real chance to progress using this bar's own liquidity - the same real mechanism a resting
+      // order at a genuine broker would receive. A no-op every bar with no working orders (the
+      // overwhelming common case); see HistoricalReplayBroker.advanceWorkingOrders()'s own doc
+      // comment for the full mechanism and its duplicate-bar guard.
+      this.broker.advanceWorkingOrders();
 
       if (i > 0 && i % QUANT_TRIGGER_EVERY_BARS === 0) {
         await quantSignalAgent.triggerNow().catch(() => { /* never fail the session on one agent's cycle error - matches production's own per-worker error isolation */ });

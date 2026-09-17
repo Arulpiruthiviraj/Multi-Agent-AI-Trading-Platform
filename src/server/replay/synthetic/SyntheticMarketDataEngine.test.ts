@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { SyntheticRandom } from './SyntheticRandom';
 import { SyntheticMarketDataEngine, defaultSyntheticUniverse } from './SyntheticMarketDataEngine';
-import { QUIET_OPEN, TRENDING_BULL_GAP_AND_GO, NEWS_SHOCK, EXTREME_NOISE } from './SyntheticScenario';
+import { QUIET_OPEN, TRENDING_BULL_GAP_AND_GO, NEWS_SHOCK, EXTREME_NOISE, TRENDING_BEAR, SIDEWAYS, HIGH_VOLATILITY_OPEN, getScenario } from './SyntheticScenario';
 
 const START = new Date('2026-09-15T13:30:00.000Z').getTime(); // 09:30 ET
 const END = START + 90 * 60_000;
@@ -128,5 +128,82 @@ describe('SyntheticMarketDataEngine (deterministic dynamic bar generation)', () 
     expect(defaultSyntheticUniverse(5)).toHaveLength(5);
     expect(defaultSyntheticUniverse(3).map((s) => s.symbol)).toEqual(['SPY', 'QQQ', 'AAPL']);
     expect(defaultSyntheticUniverse(999).length).toBeLessThanOrEqual(10); // capped, does not fabricate extra symbols
+  });
+});
+
+/**
+ * 2026-09-16 synthetic-coverage follow-up: three new scenario profiles (TRENDING_BEAR, SIDEWAYS,
+ * HIGH_VOLATILITY_OPEN) added to close real, disclosed gaps found by the same-day coverage audit
+ * (docs/audits/ARGUS_SYNTHETIC_COVERAGE_AND_TODAY_REVERSE_ENGINEERING_2026-09-16.md - "6 of ~70
+ * named scenarios" had dedicated implementations). This suite proves structural correctness
+ * (registry resolution, valid segments, deterministic and internally-consistent generated bars) -
+ * the same tier of proof SyntheticMarketDataEngine's own existing tests above establish for
+ * QUIET_OPEN/TRENDING_BULL_GAP_AND_GO/etc. It does NOT run a full multi-agent
+ * SyntheticSessionEngine pass (real ChiefTrader/RiskEngine/OMS observation) - that is a materially
+ * larger, separate undertaking honestly left as remaining backlog, not claimed here.
+ */
+describe('New scenario profiles (2026-09-16 coverage follow-up): TRENDING_BEAR / SIDEWAYS / HIGH_VOLATILITY_OPEN', () => {
+  it('all three resolve via the real scenario registry (getScenario), not just as standalone exports', () => {
+    expect(getScenario('TRENDING_BEAR')).toBe(TRENDING_BEAR);
+    expect(getScenario('SIDEWAYS')).toBe(SIDEWAYS);
+    expect(getScenario('HIGH_VOLATILITY_OPEN')).toBe(HIGH_VOLATILITY_OPEN);
+  });
+
+  it('every segment across all three scenarios is chronologically ordered and non-overlapping', () => {
+    for (const scenario of [TRENDING_BEAR, SIDEWAYS, HIGH_VOLATILITY_OPEN]) {
+      for (let i = 1; i < scenario.segments.length; i++) {
+        expect(scenario.segments[i].fromOffsetMs).toBe(scenario.segments[i - 1].toOffsetMs);
+        expect(scenario.segments[i].toOffsetMs).toBeGreaterThan(scenario.segments[i].fromOffsetMs);
+      }
+    }
+  });
+
+  it('TRENDING_BEAR: same seed produces byte-identical bars (determinism, same guarantee as every other scenario)', () => {
+    const universe = defaultSyntheticUniverse(2);
+    const engineA = new SyntheticMarketDataEngine(new SyntheticRandom(2026), universe, TRENDING_BEAR);
+    const engineB = new SyntheticMarketDataEngine(new SyntheticRandom(2026), universe, TRENDING_BEAR);
+    expect(Object.fromEntries(engineA.generateSession(START, END))).toEqual(Object.fromEntries(engineB.generateSession(START, END)));
+  });
+
+  it('TRENDING_BEAR: real net negative drift over the session - the short-side mirror actually moves down, not just configured to', () => {
+    const universe = defaultSyntheticUniverse(1);
+    const engine = new SyntheticMarketDataEngine(new SyntheticRandom(11), universe, TRENDING_BEAR);
+    const bars = engine.generateSession(START, END).get('SPY')!;
+    expect(bars[bars.length - 1].close).toBeLessThan(bars[0].open);
+  });
+
+  it('SIDEWAYS: net move stays much smaller than TRENDING_BEAR/TRENDING_BULL_GAP_AND_GO over the same window - a real range, not a hidden trend', () => {
+    const universe = defaultSyntheticUniverse(1);
+    const sidewaysBars = new SyntheticMarketDataEngine(new SyntheticRandom(33), universe, SIDEWAYS).generateSession(START, END).get('SPY')!;
+    const bearBars = new SyntheticMarketDataEngine(new SyntheticRandom(33), universe, TRENDING_BEAR).generateSession(START, END).get('SPY')!;
+    const sidewaysNetMovePct = Math.abs(sidewaysBars[sidewaysBars.length - 1].close - sidewaysBars[0].open) / sidewaysBars[0].open;
+    const bearNetMovePct = Math.abs(bearBars[bearBars.length - 1].close - bearBars[0].open) / bearBars[0].open;
+    expect(sidewaysNetMovePct).toBeLessThan(bearNetMovePct);
+  });
+
+  it('HIGH_VOLATILITY_OPEN: produces real, valid OHLC ordering under elevated volatility (no NaN/negative price from the higher volatilityMultiplier)', () => {
+    const universe = defaultSyntheticUniverse(3);
+    const engine = new SyntheticMarketDataEngine(new SyntheticRandom(77), universe, HIGH_VOLATILITY_OPEN);
+    for (const bars of engine.generateSession(START, END).values()) {
+      for (const bar of bars) {
+        expect(Number.isFinite(bar.close)).toBe(true);
+        expect(bar.close).toBeGreaterThan(0);
+        expect(bar.high).toBeGreaterThanOrEqual(Math.max(bar.open, bar.close));
+        expect(bar.low).toBeLessThanOrEqual(Math.min(bar.open, bar.close));
+      }
+    }
+  });
+
+  it('HIGH_VOLATILITY_OPEN: genuinely higher bar-to-bar variance than QUIET_OPEN, proving the volatilityMultiplier actually takes effect', () => {
+    const universe = defaultSyntheticUniverse(1);
+    const quietBars = new SyntheticMarketDataEngine(new SyntheticRandom(5), universe, QUIET_OPEN).generateSession(START, END).get('SPY')!;
+    const volatileBars = new SyntheticMarketDataEngine(new SyntheticRandom(5), universe, HIGH_VOLATILITY_OPEN).generateSession(START, END).get('SPY')!;
+    const stepStddev = (bars: typeof quietBars) => {
+      const steps = bars.slice(1).map((b, i) => (b.close - bars[i].close) / bars[i].close);
+      const mean = steps.reduce((a, b) => a + b, 0) / steps.length;
+      const variance = steps.reduce((a, b) => a + (b - mean) ** 2, 0) / steps.length;
+      return Math.sqrt(variance);
+    };
+    expect(stepStddev(volatileBars)).toBeGreaterThan(stepStddev(quietBars));
   });
 });

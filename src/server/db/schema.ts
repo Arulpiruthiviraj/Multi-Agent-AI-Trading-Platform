@@ -537,6 +537,19 @@ export const agentConfidenceCalibration = sqliteTable('agent_confidence_calibrat
   // calibrationMaturity) still reads and keeps reading unchanged - a real provider id here is an
   // ADDITIONAL row alongside it, never a replacement.
   provider: text('provider').notNull().default('ALL'),
+  // Explicit provenance (2026-09-15, calibration-method-comparison follow-up to the live-session
+  // forensic investigation of the same date): makes it an explicit, queryable fact - not an
+  // implicit assumption a reader has to already know - which statistical method produced `wins`/
+  // `losses`/`calibratedConfidence` on this row. Every row ReflectionEngine.ts writes today is
+  // genuinely 'RAW_BETA_BINOMIAL' (uncorrected row counts; see calibrationMethodComparison.ts's
+  // own header for the real finding this closes: a SEPARATE, already-built, effective-N-aware
+  // method exists in CalibrationCandidateBuilder.ts but has never written here). The default
+  // keeps every existing and yet-to-be-written ReflectionEngine row accurate with zero code
+  // change required elsewhere; ReflectionEngine.ts's own insert now also states it explicitly
+  // rather than relying on the default alone. NOT YET APPLIED to production (data/argus.db) -
+  // see docs/audits/ARGUS_CALIBRATION_METHOD_COMPARISON_2026-09-15.md for why this stays a
+  // reviewed, isolated-dev-tested migration until an explicit promotion decision is made.
+  calibrationMethod: text('calibration_method').notNull().default('RAW_BETA_BINOMIAL'),
 }, (table) => ({
   agentBucketIdx: uniqueIndex('idx_agent_confidence_calibration_bucket').on(table.agentName, table.bucketLow, table.provider),
 }));

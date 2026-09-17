@@ -129,6 +129,14 @@ describe('MarketUniverseScanner - fetchAvgDailyVolumeShares', () => {
     expect(advMap.get('AAA')).toBe(500_000);
   });
 
+  it('2026-09-16 regression: requests consolidated (sip) volume, not the narrow single-venue (iex) feed, so a liquid stock is not measured at a tiny fraction of its true volume', async () => {
+    mockFetch.mockResolvedValueOnce(barsResponse({ AAA: [1_000_000] }));
+    await fetchAvgDailyVolumeShares(['AAA']);
+    const requestedUrl = String(mockFetch.mock.calls[0][0]);
+    expect(requestedUrl).toContain('feed=sip');
+    expect(requestedUrl).not.toContain('feed=iex');
+  });
+
   it('excludes a symbol with no bars in the response rather than assuming it passes', async () => {
     mockFetch.mockResolvedValueOnce(barsResponse({ AAA: [500_000] }));
     const advMap = await fetchAvgDailyVolumeShares(['AAA', 'MISSING']);

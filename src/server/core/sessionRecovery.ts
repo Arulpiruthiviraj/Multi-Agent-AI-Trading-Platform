@@ -8,6 +8,7 @@ import { dirname, join } from 'node:path';
 import { eventBus } from './EventBus';
 import { EVENTS } from './eventNames';
 import { structuredLogger } from '../observability/StructuredLogger';
+import { assertNotProductionRuntimePath } from './productionRuntimePathGuard';
 
 export interface RuntimeSessionFile {
   pid: number;
@@ -53,11 +54,13 @@ export function resetSessionRecoveryForTests(): void {
 }
 
 function write(row: RuntimeSessionFile): void {
+  assertNotProductionRuntimePath(filePath, 'sessionRecovery runtime session file', DEFAULT_PATH);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, JSON.stringify(row, null, 2), 'utf8');
 }
 
 function read(): RuntimeSessionFile | null {
+  assertNotProductionRuntimePath(filePath, 'sessionRecovery runtime session file', DEFAULT_PATH);
   try {
     const raw = JSON.parse(readFileSync(filePath, 'utf8')) as RuntimeSessionFile;
     if (!raw || typeof raw.cleanShutdown !== 'boolean') return null;

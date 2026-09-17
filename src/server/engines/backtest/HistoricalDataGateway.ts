@@ -196,6 +196,36 @@ export class HistoricalDataGateway {
       return;
     }
 
+    // Isolation fix (2026-09-15, same-day follow-up to the synthetic certification mandate): a
+    // synthetic simulation session's own isolated DB starts with zero bars for any timeframe the
+    // simulator itself doesn't write - the simulator only ever writes '1Min'/source=
+    // 'synthetic_simulation' bars, never '1Day' - so every real caller of this class that requests
+    // '1Day' bars (QuantSignalAgent, at TIMEFRAME='1Day') found "insufficient" cache on every single
+    // synthetic run and fell through to a REAL, live Alpaca REST fetch below, using this process's
+    // real ALPACA_API_KEY/ALPACA_SECRET_KEY (never stripped from a synthetic child's env - it only
+    // strips LIVE_ARM and forces a handful of discovery-loop flags off, see marketOpen.ts's
+    // buildChildEnv()). Confirmed live: an isolated CERTIFIED_BULLISH_ENTRY_EXIT run's own temp DB
+    // held 275 real 'alpaca' '1Day' SPY bars (Aug 2025-Sep 2026) fetched live during that exact run,
+    // and JavaCoreEnsemble's regime/vote output was reading THAT real data, not the synthetic
+    // scenario at all - explaining why it read BEARISH_TREND/SIDEWAYS_RANGE identically across every
+    // seed regardless of scenario. This never touched production (data/argus.db is untouched; the
+    // isolated DB's own temp file is what received the real fetch), but it silently violated "no
+    // real network reliance" for a claimed-deterministic simulation and silently invalidated every
+    // JavaCoreEnsemble-sourced finding from every synthetic certification run before this fix. Fail
+    // closed and loud instead of silently substituting real data for synthetic: same principle
+    // already applied to NewsEngine/FundamentalAgent/MacroAgent for this same reason (see
+    // SyntheticSessionEngine's own determinism-fix history) - "the honest fix is to not run against
+    // real data during synthetic sessions, not to fabricate a stand-in." Scoped narrowly to
+    // SYNTHETIC_SIMULATION specifically (not the broader isIsolationRequiredContext(), which also
+    // covers NODE_ENV=test/VITEST=true and would wrongly break every existing Vitest test in this
+    // file that legitimately exercises this fetch path against a mocked fetch).
+    if (process.env.SYNTHETIC_SIMULATION === 'true') {
+      if (existing.length > 0) return;
+      throw new Error(
+        `HistoricalDataGateway refuses a real network fetch for ${symbol} (${timeframe}) during a synthetic simulation session (SYNTHETIC_SIMULATION=true) - no real Alpaca/IBKR historical-bar call is made. The synthetic session must provide its own bars for any timeframe a caller needs, or that caller must not run during synthetic sessions.`,
+      );
+    }
+
     const provider = getRegisteredHistoricalBarProvider();
     if (provider?.id === 'ibkr_gateway') {
       try {
