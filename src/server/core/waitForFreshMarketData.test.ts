@@ -6,8 +6,11 @@ const { requestTemporaryDataRescue, getLatestPrice, getLatestPriceAgeMs } = vi.h
   getLatestPriceAgeMs: vi.fn(),
 }));
 vi.mock('../services/MarketDataWorker', () => ({
-  marketDataWorker: { requestTemporaryDataRescue, getLatestPrice, getLatestPriceAgeMs },
+  marketDataWorker: { requestTemporaryDataRescue, getLatestPrice, getLatestPriceAgeMs,
+    getQuoteBackend: () => 'ibkr_gateway', getActiveSlots: () => [], getMarketDataError: () => null },
 }));
+const { logInfo } = vi.hoisted(() => ({ logInfo: vi.fn() }));
+vi.mock('../observability/StructuredLogger', () => ({ observeSafe: (fn: () => void) => fn(), structuredLogger: { info: logInfo } }));
 
 import { waitForFreshMarketData, resetWaitForFreshMarketDataForTests } from './waitForFreshMarketData';
 
@@ -17,6 +20,7 @@ describe('waitForFreshMarketData (NewsEngine price-race fix, Sept-2 audit remedi
     requestTemporaryDataRescue.mockReset();
     getLatestPrice.mockReset();
     getLatestPriceAgeMs.mockReset();
+    logInfo.mockClear();
     resetWaitForFreshMarketDataForTests();
   });
 
@@ -58,6 +62,10 @@ describe('waitForFreshMarketData (NewsEngine price-race fix, Sept-2 audit remedi
     await vi.advanceTimersByTimeAsync(20_000);
     const outcome = await promise;
     expect(outcome).toEqual({ ok: false, reason: 'TIMEOUT' });
+    expect(logInfo).toHaveBeenCalledWith('fresh_price_wait_outcome', expect.objectContaining({
+      eventType: 'FRESH_PRICE_WAIT_OUTCOME', symbol: 'ZZZZ', outcome: { ok: false, reason: 'TIMEOUT' },
+      price: null, lastQuoteAtMs: null, subscription: null,
+    }));
   });
 
   // Case 4: only a stale tick exists - must be rejected, never treated as fresh.
@@ -80,10 +88,20 @@ describe('waitForFreshMarketData (NewsEngine price-race fix, Sept-2 audit remedi
 
     const outcome = await waitForFreshMarketData('XYZ', { requestClass: 'NEWS_CATALYST', reason: 'test' });
     expect(outcome).toEqual({ ok: false, reason: 'RESCUE_DENIED', deniedReason: 'RESCUE_CAPACITY_FULL' });
-    expect(getLatestPrice).not.toHaveBeenCalled();
+    expect(getLatestPrice).toHaveBeenCalledTimes(1); // terminal telemetry only; no polling
   });
 
   // Case 6: duplicate/concurrent requests for the same symbol share one in-flight wait.
+  it('retries after an immediate capacity denial instead of permanently caching the denial', async () => {
+    requestTemporaryDataRescue.mockReturnValueOnce({ granted: false, deniedReason: 'RESCUE_CAPACITY_FULL' });
+    requestTemporaryDataRescue.mockReturnValueOnce({ granted: true });
+    getLatestPrice.mockReturnValue(100);
+    getLatestPriceAgeMs.mockReturnValue(0);
+    expect(await waitForFreshMarketData('AAPL', { requestClass: 'NEWS_CATALYST', reason: 'first' })).toMatchObject({ ok: false });
+    expect(await waitForFreshMarketData('AAPL', { requestClass: 'NEWS_CATALYST', reason: 'retry' })).toMatchObject({ ok: true, price: 100 });
+    expect(requestTemporaryDataRescue).toHaveBeenCalledTimes(2);
+  });
+
   it('deduplicates concurrent waits for the same symbol into a single in-flight request', async () => {
     requestTemporaryDataRescue.mockReturnValue({ granted: true, symbol: 'NVDA', alreadySubscribed: true, evictedSymbol: null });
     getLatestPrice.mockReturnValue(180.0);

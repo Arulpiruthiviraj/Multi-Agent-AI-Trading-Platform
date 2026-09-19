@@ -34,6 +34,14 @@ describe('SyntheticRandom (deterministic seeded PRNG)', () => {
 });
 
 describe('SyntheticMarketDataEngine (deterministic dynamic bar generation)', () => {
+  it('executes the outage scenario with missing bars and deterministic recovery, never interpolated prices', () => {
+    const generate = () => new SyntheticMarketDataEngine(new SyntheticRandom(12345), defaultSyntheticUniverse(1), getScenario('DATA_INTERRUPTION')).generateSession(START, END).get('SPY')!;
+    const bars = generate();
+    expect(bars).toEqual(generate());
+    expect(bars).toHaveLength(80);
+    expect(bars.some(b => b.timestamp >= START + 30 * 60_000 && b.timestamp < START + 40 * 60_000)).toBe(false);
+    expect(bars.some(b => b.timestamp === START + 40 * 60_000)).toBe(true);
+  });
   it('the same seed + scenario produces byte-identical bars - reproducibility for debugging/regression', () => {
     const universe = defaultSyntheticUniverse(3);
     const engineA = new SyntheticMarketDataEngine(new SyntheticRandom(42), universe, QUIET_OPEN);

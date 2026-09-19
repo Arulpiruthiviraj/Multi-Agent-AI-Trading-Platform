@@ -42,6 +42,8 @@ import { isJavaCoreEnsembleVoteEnabled, tradingSafety } from '../config/tradingS
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import type { CoreEnsembleDecision } from './QuantCoreBridge';
+import { marketDataWorker } from './MarketDataWorker';
+import { evaluateQuoteFreshness } from '../core/marketDataQuality';
 
 export interface JavaCoreEnsembleVoteResult {
   emitted: boolean;
@@ -53,7 +55,8 @@ export interface JavaCoreEnsembleVoteResult {
     | 'NOT_HEALTHY'
     | 'HOLD_DIRECTION'
     | 'BELOW_MIN_CONFIDENCE'
-    | 'INVALID_PRICE';
+    | 'INVALID_PRICE'
+    | 'MARKET_DATA_UNAVAILABLE';
 }
 
 /**
@@ -80,12 +83,23 @@ export function emitJavaCoreEnsembleVoteIfEligible(
   }
 
   const traceId = generateTraceId(symbol);
+  // The caller's price comes from historical bars, which cannot prove current freshness.
+  // Recheck when the asynchronous Java response arrives, using the existing risk threshold.
+  const livePrice = marketDataWorker.getLatestPrice(symbol);
+  const freshness = evaluateQuoteFreshness({ priceAgeMs: marketDataWorker.getLatestPriceAgeMs(symbol) });
+  if (!freshness.passed || livePrice === null || !Number.isFinite(livePrice) || livePrice <= 0) {
+    eventBus.emit('DESK_NO_TRADE', {
+      traceId, symbol, agent: 'JavaCoreEnsemble', code: 'STALE_MARKET_DATA',
+      reason: !freshness.passed ? freshness.reason : 'No valid observed quote price',
+    });
+    return { emitted: false, reason: 'MARKET_DATA_UNAVAILABLE' };
+  }
   eventBus.emitTradeIdea({
     traceId,
     symbol,
     side: ensemble.direction,
     confidence: ensemble.confidence,
-    currentPrice,
+    currentPrice: livePrice,
     reasoning: `[Java CORE Ensemble, regime=${ensemble.regime ?? 'unknown'}] ${ensemble.reason} `
       + `(${ensemble.agreeingCount}/${ensemble.strategyCount} strategies agree, `
       + `effIndep=${ensemble.effectiveIndependentCount.toFixed(2)}, families=${ensemble.contributingFamilies.join(',')})`,

@@ -15,6 +15,7 @@ import { classifyTradeEnvironment, type ExecutionEnvironment } from '../research
 import { getAIProviderHealthSnapshot } from '../ai/AIProviderHealthCheck';
 import { argusRuntime } from './ArgusRuntime';
 import { classifyMarketSession } from '../replay/marketSession';
+import { getMarketDataReadiness } from './marketDataReadiness';
 
 export interface TradingSessionReport {
   generatedAt: string;
@@ -110,7 +111,16 @@ export async function getTradingSessionReport(overrides: TradingSessionReportOve
   }
 
   const countType = (t: string) => eventRows.filter((r) => r.eventType === t).length;
-  const missingPrice = eventRows.filter((r) => r.eventType === 'TRADE_IDEA_REJECTED' && r.payload?.includes('MISSING_PRICE')).length;
+  const missingPricePayloads = eventRows.filter((r) => r.eventType === 'TRADE_IDEA_REJECTED').flatMap((r) => {
+    try {
+      const p = JSON.parse(r.payload ?? '{}');
+      return p.reason === 'MISSING_PRICE' ? [p] : [];
+    } catch { return []; }
+  });
+  const missingPrice = missingPricePayloads.length;
+  const missingPriceSymbols = new Set(missingPricePayloads
+    .map((p) => typeof p.symbol === 'string' ? p.symbol.trim().toUpperCase() : '')
+    .filter(Boolean)).size;
 
   let tradeRows: any[] = [];
   let riskRows: any[] = [];
@@ -174,10 +184,10 @@ export async function getTradingSessionReport(overrides: TradingSessionReportOve
         const s = classifyMarketSession(Date.now(), TRADING_TIMEZONE, true);
         return s === 'REGULAR' ? 'RTH' : s;
       })(),
-      marketDataReady: health?.marketDataConnected === true,
+      marketDataReady: getMarketDataReadiness().ready,
       activeSymbols: overrides.activeSymbols ?? 0,
       maxSymbols: overrides.maxSymbols ?? 90,
-      candidateSymbolsMissingPrice: missingPrice,
+      candidateSymbolsMissingPrice: missingPriceSymbols,
     },
     decisionPipeline: {
       ideasGenerated: countType('TRADE_IDEA_GENERATED'),

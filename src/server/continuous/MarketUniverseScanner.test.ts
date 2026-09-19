@@ -38,7 +38,19 @@ function jsonResponse(body: unknown, ok = true, status = 200) {
   return { ok, status, json: async () => body, headers: { get: () => null } } as any;
 }
 
+function datedSnapshot(price: number, open: number, volume: number) {
+  const now = Date.parse('2026-09-17T15:00:00Z');
+  vi.spyOn(Date, 'now').mockReturnValue(now);
+  return {
+    latestTrade: { p: price, t: '2026-09-17T14:59:00Z' },
+    dailyBar: { o: open, c: price, v: volume, h: Math.max(price, open), l: Math.min(price, open), t: '2026-09-17T04:00:00Z' },
+    prevDailyBar: { c: open, t: '2026-09-16T04:00:00Z' },
+    latestQuote: { bp: price - .1, ap: price + .1 },
+  };
+}
+
 afterEach(() => {
+  vi.restoreAllMocks();
   delete process.env[FLAG];
   delete process.env[MOVERS_FLAG];
   mockFetch.mockReset();
@@ -319,7 +331,7 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
       { symbol: 'BROADPROBE', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
     ]));
     mockFetch.mockResolvedValueOnce(jsonResponse({
-      BROADPROBE: { latestTrade: { p: 55 }, dailyBar: { o: 50, v: 5_000_000, c: 55 }, latestQuote: { bp: 54.9, ap: 55.1 } }, // real +10% gap
+      BROADPROBE: datedSnapshot(55, 50, 5_000_000),
     }));
     mockFetch.mockResolvedValueOnce(barsResponse({ BROADPROBE: [5_000_000, 5_000_000] }));
     await refreshBroadUniverseCache();
@@ -539,7 +551,7 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'BIGGAPPER', percent_change: 25 }]));
     mockFetch.mockResolvedValueOnce(jsonResponse({
       // Opened at 50, now trading at 60 - a real +20% intraday gap, well above the 5% default threshold.
-      BIGGAPPER: { latestTrade: { p: 60 }, dailyBar: { o: 50, v: 2_000_000, c: 60 }, latestQuote: { bp: 59.9, ap: 60.1 } },
+      BIGGAPPER: datedSnapshot(60, 50, 2_000_000),
     }));
     mockFetch.mockResolvedValueOnce(barsResponse({ BIGGAPPER: [2_000_000, 2_000_000] }));
     await refreshMoversCache();
@@ -561,7 +573,7 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     process.env[MOVERS_FLAG] = 'true';
     mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'OUTCOMEPROBE', percent_change: 15 }]));
     mockFetch.mockResolvedValueOnce(jsonResponse({
-      OUTCOMEPROBE: { latestTrade: { p: 115 }, dailyBar: { o: 100, v: 2_000_000, c: 115 }, latestQuote: { bp: 114.9, ap: 115.1 } }, // +15% real gap
+      OUTCOMEPROBE: datedSnapshot(115, 100, 2_000_000),
     }));
     mockFetch.mockResolvedValueOnce(barsResponse({ OUTCOMEPROBE: [2_000_000, 2_000_000] }));
     await refreshMoversCache();
@@ -591,6 +603,26 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     const { eq } = await import('drizzle-orm');
     const rows = await db.select().from(schema.agentPredictions).where(eq(schema.agentPredictions.symbol, 'NOGAPDATA'));
     expect(rows).toHaveLength(0); // no real direction signal - never guessed
+  });
+
+  it('quarantines a stale reference and persists provenance without creating a shadow prediction', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    const snapshot = datedSnapshot(115, 100, 2_000_000);
+    snapshot.dailyBar.t = '2026-09-16T04:00:00Z';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'STALEGAP' }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ STALEGAP: snapshot }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ STALEGAP: [2_000_000, 2_000_000] }));
+    await refreshMoversCache();
+    await flushObservabilityStore();
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq } = await import('drizzle-orm');
+    expect(await db.select().from(schema.agentPredictions).where(eq(schema.agentPredictions.symbol, 'STALEGAP'))).toHaveLength(0);
+    const rows = await db.select().from(schema.observabilityEvents).where(eq(schema.observabilityEvents.symbol, 'STALEGAP'));
+    const payload = JSON.parse(rows.at(-1)!.payload!);
+    expect(payload.gapPct).toBeNull();
+    expect(payload.gapEvidence.reason).toBe('STALE_OR_INCONSISTENT_REFERENCE_TIMESTAMP');
+    expect(payload.gapEvidence.openTimestamp).toBe(snapshot.dailyBar.t);
   });
 
   it('Phase C: a small, real intraday move below the reviewed gap threshold is never tagged a gap mover', async () => {

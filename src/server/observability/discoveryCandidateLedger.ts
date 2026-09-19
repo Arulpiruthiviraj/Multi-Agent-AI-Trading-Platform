@@ -45,6 +45,7 @@ export function logDiscoveryCandidateDecision(input: {
    *  fetched for the liquidity screen, never a new API call or a bypass of that screen. */
   gapMover?: boolean;
   gapPct?: number | null;
+  gapEvidence?: import('../continuous/discoveryGapEvidence').DiscoveryGapEvidence & { reason: string };
   /** True when this candidate's real today's-volume/ADV ratio clears
    *  continuousIntelligence.rvolMoverMinRatio - observability only, computed from data already
    *  fetched for the liquidity/ADV screens, never a new API call. */
@@ -64,6 +65,7 @@ export function logDiscoveryCandidateDecision(input: {
       advShares: input.advShares ?? null,
       gapMover: input.gapMover ?? false,
       gapPct: input.gapPct ?? null,
+      gapEvidence: input.gapEvidence ?? null,
       rvolMover: input.rvolMover ?? false,
       rvol: input.rvol ?? null,
     });

@@ -19,6 +19,9 @@ import { getPipelineAgentSnapshot } from './pipelineAgentSnapshot';
 import { getAIProviderHealthSnapshot, type AIProviderHealthRecord } from '../ai/AIProviderHealthCheck';
 import { db } from '../db';
 import * as schema from '../db/schema';
+import { getMarketDataReadiness } from './marketDataReadiness';
+import { classifyMarketSession } from '../replay/marketSession';
+import { TRADING_TIMEZONE } from './TradingCalendar';
 
 export interface ReadinessNode {
   id: string;
@@ -101,14 +104,15 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   nodes.push({ id: 'database', label: 'Database', ready: dbCheck.ready, detail: dbCheck.detail });
   if (!dbCheck.ready) reasons.push('Database unreachable');
 
-  const marketDataConnected = health?.marketDataConnected === true;
+  let marketData = { ready: false, detail: 'quote evidence unavailable' };
+  try { marketData = getMarketDataReadiness(); } catch { /* fail closed */ }
   nodes.push({
     id: 'marketData',
     label: 'Market Data',
-    ready: marketDataConnected,
-    detail: marketDataConnected ? 'connected' : 'disconnected',
+    ready: marketData.ready,
+    detail: marketData.detail,
   });
-  if (!marketDataConnected) reasons.push('Market data disconnected');
+  if (!marketData.ready) reasons.push(`Market data not ready: ${marketData.detail}`);
 
   const brokerCheck = checkBroker(health?.brokerId ?? null);
   nodes.push({ id: 'broker', label: 'Broker', ready: brokerCheck.ready, detail: brokerCheck.detail });
@@ -130,13 +134,15 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   // "disabled by config": counted toward tradingReady, distinctly labeled, never silently folded
   // into "RUNNING".
   const technical = pipeline?.togglable.find((a) => a.id === 'TechnicalAgent');
+  const outsideRegularSession = classifyMarketSession(Date.now(), TRADING_TIMEZONE, true) !== 'REGULAR';
   const technicalWaitingForData = technical?.healthLabel === 'IDLE_WAITING_FOR_MARKET_DATA';
-  const technicalReady = technical?.healthy === true || technicalWaitingForData;
+  const technicalIdleExpected = technicalWaitingForData && outsideRegularSession;
+  const technicalReady = technical?.healthy === true || technicalIdleExpected;
   nodes.push({
     id: 'technicalEngine',
     label: 'Technical Engine',
     ready: technicalReady,
-    notApplicable: technicalWaitingForData,
+    notApplicable: technicalIdleExpected,
     detail: technical?.healthLabel ?? 'UNKNOWN',
   });
   if (!technicalReady) reasons.push('Technical engine not running');
@@ -145,12 +151,13 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   // Quant is additive/default-off (CLAUDE.md) - not being enabled is not a failure.
   const quantApplicable = quant?.available === true;
   const quantWaitingForData = quant?.healthLabel === 'IDLE_WAITING_FOR_MARKET_DATA';
-  const quantReady = !quantApplicable || quant?.healthy === true || quantWaitingForData;
+  const quantIdleExpected = quantWaitingForData && outsideRegularSession;
+  const quantReady = !quantApplicable || quant?.healthy === true || quantIdleExpected;
   nodes.push({
     id: 'quantEngine',
     label: 'Quant Engine',
     ready: quantReady,
-    notApplicable: !quantApplicable || quantWaitingForData,
+    notApplicable: !quantApplicable || quantIdleExpected,
     detail: !quantApplicable ? 'disabled by config (QUANT_ENGINE_ENABLED not set - optional)' : (quant?.healthLabel ?? 'UNKNOWN'),
   });
   if (quantApplicable && !quantReady) reasons.push('Quant engine enabled but not running');

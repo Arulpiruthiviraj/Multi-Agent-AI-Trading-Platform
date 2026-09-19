@@ -34,6 +34,7 @@
 import { marketDataWorker } from '../services/MarketDataWorker';
 import type { RescueRequestClass } from '../services/MarketDataWorker';
 import { tradingSafety } from '../config/tradingSafety';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 
 export type WaitForFreshPriceOutcome =
   | { ok: true; price: number; alreadyFresh: boolean }
@@ -85,9 +86,7 @@ export async function waitForFreshMarketData(
   opts: { requestClass: RescueRequestClass; reason: string; traceId?: string },
 ): Promise<WaitForFreshPriceOutcome> {
   const existing = inFlight.get(symbol);
-  if (existing) return existing;
-
-  const task = (async (): Promise<WaitForFreshPriceOutcome> => {
+  const task = existing ?? (async (): Promise<WaitForFreshPriceOutcome> => {
     try {
       const rescue = marketDataWorker.requestTemporaryDataRescue(symbol, opts.reason, {
         requestClass: opts.requestClass,
@@ -102,13 +101,27 @@ export async function waitForFreshMarketData(
       // never a fabricated price and never an unhandled rejection surfacing at a call site that
       // didn't wrap this in its own try/catch.
       return { ok: false, reason: 'ERROR', detail: e?.message || String(e) };
-    } finally {
-      inFlight.delete(symbol);
     }
   })();
 
-  inFlight.set(symbol, task);
-  return task;
+  if (!existing) inFlight.set(symbol, task);
+  const outcome = await task;
+  // Clean up after registering AND settling the task. Synchronous rescue denial
+  // previously deleted before set(), caching that denial forever for this symbol.
+  if (inFlight.get(symbol) === task) inFlight.delete(symbol);
+  observeSafe(() => {
+    const ageMs = marketDataWorker.getLatestPriceAgeMs(symbol);
+    structuredLogger.info('fresh_price_wait_outcome', {
+      category: 'MARKET_DATA', eventType: 'FRESH_PRICE_WAIT_OUTCOME',
+      symbol, traceId: opts.traceId, requestClass: opts.requestClass,
+      outcome, backend: marketDataWorker.getQuoteBackend(),
+      price: marketDataWorker.getLatestPrice(symbol), quoteAgeMs: ageMs,
+      lastQuoteAtMs: ageMs === null ? null : Date.now() - ageMs,
+      subscription: marketDataWorker.getActiveSlots().find(s => s.symbol === symbol) ?? null,
+      brokerError: marketDataWorker.getMarketDataError(symbol),
+    });
+  });
+  return outcome;
 }
 
 /** Test-only: clear in-flight dedup state between tests. */

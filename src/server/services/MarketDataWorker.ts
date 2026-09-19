@@ -211,12 +211,32 @@ export class MarketDataWorker {
     ibkrBridge?: IbkrQuoteBridge | null;
   }): void {
     const prevBackend = this.quoteBackend;
+    const changingBackend = prevBackend !== opts.backend;
+    const previousSymbols = changingBackend ? Array.from(this.activeStreams) : [];
+    if (changingBackend) {
+      // One backend owns the allocation. An old Alpaca socket must never apply its
+      // symbol-limit recovery to IBKR's larger subscription set.
+      this.clearReconnectTimer();
+      this.tearDownSocket();
+      if (prevBackend === 'ibkr_gateway') {
+        for (const symbol of previousSymbols) {
+          try { this.ibkrBridge?.unsubscribe(symbol); } catch { /* disconnected */ }
+        }
+      }
+      this.activeStreams.clear();
+      this.subscribedAtMs.clear();
+      this.tickCounts.clear();
+      this.marketDataErrors.clear();
+    }
     if (prevBackend === 'ibkr_gateway' && opts.backend !== 'ibkr_gateway') {
       try { this.ibkrBridge?.clear(); } catch { /* ignore */ }
     }
     this.quoteBackend = opts.backend;
     this.hardCapOverride = opts.hardCapOverride ?? null;
     this.ibkrBridge = opts.ibkrBridge ?? null;
+    if (changingBackend) {
+      for (const symbol of previousSymbols.slice(0, this.effectiveStreamingCap())) this.subscribe(symbol);
+    }
     console.log(
       `[MarketDataWorker] Quote backend=${this.quoteBackend} hardCap=${this.effectiveStreamingCap()}` +
         (this.ibkrBridge ? ' (IB Gateway reqMktData bridge on)' : ''),
@@ -751,6 +771,10 @@ export class MarketDataWorker {
 
   start() {
     this.ensureWatchlistListener();
+    if (this.quoteBackend === 'ibkr_gateway') {
+      for (const symbol of defaultSubscribeSymbols(this.effectiveStreamingCap())) this.subscribe(symbol);
+      return;
+    }
     if (!isMarketDataWebSocketAuthorized()) {
       console.warn(
         '[MarketDataWorker] Refusing Alpaca IEX WebSocket — not authorized for this process '
@@ -774,6 +798,7 @@ export class MarketDataWorker {
     this.clearReconnectTimer();
     this.reconnectBackoff.reset();
     this.tearDownSocket();
+    if (this.quoteBackend === 'ibkr_gateway') return this.getFeedStatus();
     if (!isMarketDataWebSocketAuthorized()) {
       this.lastError = 'MARKET_DATA_WS_NOT_AUTHORIZED';
       return this.getFeedStatus();
@@ -979,6 +1004,7 @@ export class MarketDataWorker {
    * on the wire, resubscribe core — do not enter a rapid reconnect loop with the oversized set.
    */
   private recoverFromSymbolLimitExceeded(socket: WebSocket | null): void {
+    if (this.quoteBackend !== 'alpaca') return;
     if (this.symbolLimitRecoveryInFlight) return;
     this.symbolLimitRecoveryInFlight = true;
     this.suppressReconnectUntilMs = Date.now() + 15_000;
@@ -1090,6 +1116,7 @@ export class MarketDataWorker {
   }
 
   private connectAlpaca() {
+    if (this.quoteBackend !== 'alpaca') return;
     if (!isMarketDataWebSocketAuthorized()) {
       this.lastError = 'MARKET_DATA_WS_NOT_AUTHORIZED';
       return;

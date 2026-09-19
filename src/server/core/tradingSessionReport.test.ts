@@ -87,6 +87,19 @@ describe('tradingSessionReport', () => {
     expect(report.decisionPipeline.chiefTraderApproved).toBe(1);
   });
 
+  it('distinguishes repeated missing-price events from distinct symbols and ignores reason substrings', async () => {
+    setTableRows(schema.eventTraces, [
+      { eventType: 'TRADE_IDEA_REJECTED', payload: '{"reason":"MISSING_PRICE","symbol":"SPY"}' },
+      { eventType: 'TRADE_IDEA_REJECTED', payload: '{"reason":"MISSING_PRICE","symbol":"SPY"}' },
+      { eventType: 'TRADE_IDEA_REJECTED', payload: '{"reason":"MISSING_PRICE","symbol":"QQQ"}' },
+      { eventType: 'TRADE_IDEA_REJECTED', payload: '{"reason":"OTHER","detail":"MISSING_PRICE"}' },
+      { eventType: 'TRADE_IDEA_REJECTED', payload: 'invalid MISSING_PRICE' },
+    ]);
+    const report = await getTradingSessionReport();
+    expect(report.decisionPipeline.missingPrice).toBe(3);
+    expect(report.market.candidateSymbolsMissingPrice).toBe(2);
+  });
+
   it('never counts a REPLAY-tagged trade as organic execution - the whole point of the executionContextBreakdown separation', async () => {
     const todayIso = new Date().toISOString();
     setTableRows(schema.trades, [

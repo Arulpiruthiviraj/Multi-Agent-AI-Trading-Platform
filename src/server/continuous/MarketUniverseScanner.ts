@@ -26,6 +26,8 @@ import { recordPrediction } from '../services/ModelPerformanceTracker';
 import { withDiscoveryCircuitBreaker, resetDiscoveryCircuitBreakersForTests } from '../core/discoveryHttpCircuitBreaker';
 import { normalizeSymbols } from '../core/symbolNormalization';
 import { FmpBudget } from '../services/FmpBudget';
+import { validateDiscoveryGap, type DiscoveryGapEvidence } from './discoveryGapEvidence';
+export { validateDiscoveryGap } from './discoveryGapEvidence';
 import {
   logDiscoveryCandidateDecision,
   type DiscoveryRejectReason,
@@ -49,6 +51,7 @@ interface AlpacaSnapshot {
    *  the SAME already-fetched Alpaca snapshot response (dailyBar.o) - zero new API call, zero new
    *  cost. Null when the response carries no real open price to compute it from. */
   gapPct: number | null;
+  gapEvidence: DiscoveryGapEvidence & { reason: string };
   /** Phase 27 (2026-09-02): raw today's-session share volume from the SAME already-fetched
    *  dailyBar.v used to compute dollarVolume above - kept separately so it can later be divided by
    *  the real ADV (fetched only for stage-2 survivors) to get a relative-volume ratio. */
@@ -156,59 +159,6 @@ export async function fetchTradableAssets(): Promise<string[]> {
 }
 
 /**
- * Real data-integrity defect found and fixed live (2026-09-16, subscription-ranking/gapPct
- * provenance audit): `gapPct = (price - dailyBar.o) / dailyBar.o` had only an `openPrice > 0`
- * guard - any tiny-but-positive value (a stale or erroneous print on a thin name) passed through
- * unvalidated. Confirmed live: RETO 985%, MEDS 394%, PDYNW 356%, QCLS 342%, DLXY 315% - physically
- * implausible for ordinary single-session equity moves, with nothing catching them. The corrupted
- * value then fed directly into isGapMover() classification and recordDiscoveryOutcomeProbe()'s
- * persisted shadow-prediction row.
- *
- * Fix mirrors SnapshotScanner.ts's own already-validated reference-price pattern (that file
- * requires a real, positive prevDailyBar.c before computing anything at all - see its
- * parseRawSnapshot()) rather than inventing a new validation scheme: when `prevDailyBar.c` is
- * available, cross-validate `dailyBar.o` against it. A ratio outside
- * [1/gapPctMaxPlausibleOpenToPrevCloseRatio, gapPctMaxPlausibleOpenToPrevCloseRatio] is treated as
- * data-quality-suspect and gapPct is reported UNKNOWN (null) rather than computed from a
- * questionable reference price - never silently substituted. The bound itself
- * (gapPctMaxPlausibleOpenToPrevCloseRatio, config/continuousIntelligence.json) is derived from a
- * documented market-data invariant, not tuned to any specific day's observations: it is wide enough
- * to comfortably admit real, legitimate extreme moves (even severe binary-catalyst biotech gaps
- * rarely exceed 300-400%) and common US-equity reverse-split ratios (1-for-10 is common; 1-for-20+
- * is rare but real), while excluding the two-to-three-orders-of-magnitude anomalies actually
- * observed live. When `prevDailyBar.c` is unavailable, a much weaker, purely absolute floor
- * (openPrice must exceed an unambiguous near-zero threshold) is the only guard - deliberately more
- * permissive, since there is less information to cross-validate against, consistent with "when
- * reference data is questionable, report UNKNOWN rather than silently guessing."
- *
- * Legitimate extreme gaps are explicitly preserved, not discarded - this function never caps
- * |gapPct| itself once the reference price passes validation. See
- * MarketUniverseScanner.gapPctValidation.test.ts for the full matrix (normal/extreme/legitimate
- * gaps preserved; stale/zero/negative/missing/wildly-inconsistent opens rejected to UNKNOWN).
- */
-export function computeValidatedGapPct(
-  price: number,
-  openPrice: unknown,
-  prevClose: unknown,
-): number | null {
-  if (typeof openPrice !== 'number' || !Number.isFinite(openPrice) || openPrice <= 0) return null;
-
-  const hasPrevClose = typeof prevClose === 'number' && Number.isFinite(prevClose) && prevClose > 0;
-  if (!hasPrevClose) {
-    // Weaker fallback: no cross-validation data available. Reject only an unambiguous data-glitch
-    // signature (a fraction of a hundredth of a cent), never a real, plausible price.
-    if (openPrice < continuousIntelligence.gapPctMinAbsoluteOpenPrice) return null;
-    return (price - openPrice) / openPrice;
-  }
-
-  const ratio = openPrice / (prevClose as number);
-  const maxRatio = continuousIntelligence.gapPctMaxPlausibleOpenToPrevCloseRatio;
-  if (ratio > maxRatio || ratio < 1 / maxRatio) return null; // data-quality-suspect, report UNKNOWN
-
-  return (price - openPrice) / openPrice;
-}
-
-/**
  * Batched snapshot screen: price range, dollar-volume floor, spread ceiling. Returns symbols
  * ranked by dollar volume descending, capped at broadUniverseMaxCandidates. Never throws for a
  * single bad batch - a failed batch is just excluded, not fatal to the whole screen.
@@ -235,8 +185,18 @@ export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]>
         const spreadBps = (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0)
           ? ((ask - bid) / ((ask + bid) / 2)) * 10000
           : null;
-        const gapPct = computeValidatedGapPct(price, openPrice, prevClose);
-        results.push({ symbol, price, dollarVolume, spreadBps, gapPct, volume });
+        const evidence: DiscoveryGapEvidence = {
+          source: 'ALPACA_IEX_SNAPSHOT', price, open: openPrice ?? null,
+          previousClose: prevClose ?? null,
+          priceTimestamp: (snap?.latestTrade?.p != null ? snap?.latestTrade?.t : snap?.dailyBar?.t) ?? null,
+          openTimestamp: snap?.dailyBar?.t ?? null,
+          previousCloseTimestamp: snap?.prevDailyBar?.t ?? null,
+          high: snap?.dailyBar?.h ?? null, low: snap?.dailyBar?.l ?? null,
+          corporateActionState: 'UNKNOWN',
+        };
+        const validated = validateDiscoveryGap(evidence);
+        results.push({ symbol, price, dollarVolume, spreadBps, gapPct: validated.gapPct,
+          gapEvidence: { ...evidence, reason: validated.reason }, volume });
       }
     } catch (e) {
       logErrorSafely('[MarketUniverseScanner] snapshot batch failed', e);
@@ -467,7 +427,7 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'BROAD_UNIVERSE', admitted, reason,
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
-        gapMover: isGapMover(s), gapPct: s.gapPct,
+        gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence,
         rvolMover: isRvolMover(rvol), rvol,
       });
       // Phase 27 (2026-09-02): extends Phase 5 (Discovery -> Outcome Learning) to the broad-universe
@@ -632,7 +592,7 @@ export async function refreshMoversCache(): Promise<MoverScanStats> {
       if (result.pass) {
         stage2.push(s);
       } else {
-        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'MARKET_MOVER', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct });
+        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'MARKET_MOVER', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence });
       }
     }
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
@@ -642,7 +602,7 @@ export async function refreshMoversCache(): Promise<MoverScanStats> {
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'MARKET_MOVER', admitted, reason: admitted ? null : advRejectReason(s.symbol, advMap),
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
-        gapMover: isGapMover(s), gapPct: s.gapPct,
+        gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence,
         rvolMover: isRvolMover(rvol), rvol,
       });
       // Phase 5 (Discovery -> Outcome Learning, 2026-09-02 forensic-audit follow-up): for an
@@ -757,7 +717,7 @@ export async function refreshNewsCatalystCache(): Promise<NewsCatalystScanStats>
       if (result.pass) {
         stage2.push(s);
       } else {
-        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'NEWS', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct });
+        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'NEWS', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence });
       }
     }
     const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
@@ -767,7 +727,7 @@ export async function refreshNewsCatalystCache(): Promise<NewsCatalystScanStats>
       logDiscoveryCandidateDecision({
         symbol: s.symbol, source: 'NEWS', admitted, reason: admitted ? null : advRejectReason(s.symbol, advMap),
         price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
-        gapMover: isGapMover(s), gapPct: s.gapPct,
+        gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence,
         rvolMover: isRvolMover(rvol), rvol,
       });
     }

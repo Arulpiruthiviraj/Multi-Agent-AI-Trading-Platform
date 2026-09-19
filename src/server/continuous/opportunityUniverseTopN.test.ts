@@ -1,11 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
 import { continuousIntelligence } from '../config/continuousIntelligence';
 
-// getCachedBroadUniverseSymbols() is already ranked by real dollar volume descending (see
-// MarketUniverseScanner.test.ts) - this test only needs to prove getOpportunityScanUniverse()
-// takes the real top-N off that ranked list rather than folding in the whole cached set.
+// The first allocator cycle favors liquidity while keeping the configured cap.
+// Subsequent-cycle aging/fairness is covered in BroadUniverseSubscriptionAllocator.test.ts.
 vi.mock('./MarketUniverseScanner', () => ({
   getCachedBroadUniverseSymbols: () => ['BEST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH'],
+  getCachedBroadUniverseCandidatesWithVolume: () => ['BEST', 'SECOND', 'THIRD', 'FOURTH', 'FIFTH']
+    .map((symbol, i) => ({ symbol, dollarVolume: (5 - i) * 1_000_000 })),
   getCachedMoverSymbols: () => [],
   getCachedNewsCatalystSymbols: () => [],
   marketUniverseScannerWorker: { start: vi.fn(), stop: vi.fn() },

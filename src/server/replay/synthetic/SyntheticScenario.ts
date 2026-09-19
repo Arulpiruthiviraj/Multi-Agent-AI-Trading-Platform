@@ -316,7 +316,19 @@ export const HIGH_VOLATILITY_OPEN: ScenarioProfile = {
   events: [],
 };
 
+/** Missing-data diagnostic: a ten-minute outage followed by genuine generated bars.
+ * No interpolation, cached-price refresh, forced signal, or forced order.
+ */
+export const DATA_INTERRUPTION: ScenarioProfile = {
+  id: 'DATA_INTERRUPTION',
+  description: 'Quiet session with a ten-minute feed outage at minute 30, then data recovery.',
+  expectedToBeTradeable: false,
+  segments: [...QUIET_OPEN.segments],
+  events: [{ type: 'DATA_INTERRUPTION', atOffsetMs: 30 * MIN, interruptionBars: 10 }],
+};
+
 export const SCENARIOS: Record<string, ScenarioProfile> = {
+  DATA_INTERRUPTION,
   QUIET_OPEN,
   EXTREME_NOISE,
   TRENDING_BULL_GAP_AND_GO,

@@ -92,6 +92,35 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     sendMessage(ws, { T: 'success', msg: 'authenticated' });
   }
 
+  it('hands existing lines to IBKR and ignores the retired Alpaca socket limit errors', () => {
+    const oldSocket = instances[0];
+    authenticate(oldSocket);
+    const existing = worker.getActiveSymbols();
+    const bridge = { subscribe: vi.fn(), unsubscribe: vi.fn(), clear: vi.fn(), isConnected: () => true };
+    worker.setBrokerQuoteContext({ backend: 'ibkr_gateway', hardCapOverride: 90, ibkrBridge: bridge });
+    expect(oldSocket.readyState).toBe(MockWebSocket.CLOSED);
+    expect(bridge.subscribe.mock.calls.map(c => c[0])).toEqual(existing);
+    worker.subscribe('NEWCO');
+    sendMessage(oldSocket, { T: 'error', msg: 'symbol limit exceeded', code: 405 });
+    expect(worker.getActiveSymbols()).toContain('NEWCO');
+    expect(bridge.unsubscribe).not.toHaveBeenCalled();
+    worker.start();
+    worker.reconnect();
+    expect(instances).toHaveLength(1);
+    expect(worker.getEffectiveStreamingCap()).toBe(90);
+  });
+
+  it('cancels old IBKR lines before returning ownership to Alpaca', () => {
+    const bridge = { subscribe: vi.fn(), unsubscribe: vi.fn(), clear: vi.fn() };
+    worker.setBrokerQuoteContext({ backend: 'ibkr_gateway', hardCapOverride: 90, ibkrBridge: bridge });
+    worker.subscribe('NEWCO');
+    worker.setBrokerQuoteContext({ backend: 'alpaca' });
+    expect(bridge.unsubscribe).toHaveBeenCalledWith('NEWCO');
+    expect(bridge.clear).toHaveBeenCalledOnce();
+    worker.start();
+    expect(instances).toHaveLength(2);
+  });
+
   /** Advance past minDynamicDwellMs so prune can evict freshly subscribed dynamics. */
   async function expireDynamicDwell() {
     const { continuousIntelligence } = await import('../config/continuousIntelligence');
