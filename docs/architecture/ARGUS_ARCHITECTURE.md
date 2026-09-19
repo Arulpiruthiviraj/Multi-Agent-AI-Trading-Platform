@@ -554,6 +554,19 @@ flag — both can vote independently on the same symbol as two genuinely separat
 `docs/audits/ARGUS_JAVA_QUANT_WIRING_IMPLEMENTATION.md`'s "Phase 3" section for the full evidence
 matrix, and `CLAUDE.md` § Java 26 Engine Authority for the equivalent operator-facing summary.
 
+**2026-09-18 quote-freshness correction:** `JavaCoreEnsembleVoteService` also checks the
+latest observed quote and its age when the asynchronous Java result arrives, using the existing
+`evaluateQuoteFreshness` threshold. A historical bar close cannot establish current freshness.
+Missing/stale quotes emit `DESK_NO_TRADE` / `STALE_MARKET_DATA` and no trade idea. Eligible ideas
+carry the observed quote price. This adds no execution authority or threshold relaxation.
+
+`marketDataReadiness.ts` supplies the same read-only feed evidence to `pipeline-ready` and
+`session-report`: connectivity alone is insufficient; at least one active symbol must have a
+valid, fresh observed price. Its counts describe partial feed coverage, not readiness of every
+candidate. Each candidate still faces its own freshness checks. A never-ticked Technical/Quant
+agent is not excused as an expected idle state during the regular session. Outside that session,
+idle can be expected, while absent fresh quotes still prevent a feed-ready claim.
+
 **Unrelated but important discovery made while verifying this work:** the repo's root
 `.gitignore` had a bare `models/` pattern that was also silently matching
 `quant-core-java/src/{main,test}/java/io/argus/quantcore/institutional/models/` at any depth — the

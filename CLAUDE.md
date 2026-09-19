@@ -28,6 +28,8 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 ## Ground truth (do not inflate)
 
+**2026-09-18 quote-evidence correction:** paper pipeline readiness and the session report require at least one valid, fresh quote from the active feed; a connected socket or occupied subscription slots alone are insufficient. This is partial feed availability, not certification of every candidate. During regular market hours, an enabled Technical/Quant worker waiting for its first data is not a passing readiness check. `JavaCoreEnsembleVoteService` rechecks the observed quote and existing freshness limit when an asynchronous Java result arrives; a historical bar close cannot authorize an idea with an invented current price. Consensus, independent risk, and OMS retain their existing authority.
+
 | Source | Use for |
 |---|---|
 | This file | Live path, 25 gates, AI routing, traces, soak, defects, working rules |

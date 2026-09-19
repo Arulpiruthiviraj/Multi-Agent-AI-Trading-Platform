@@ -125,14 +125,15 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
     pipeline = null;
   }
   // Pre-market/market-open readiness fix (2026-08-25): IDLE_WAITING_FOR_MARKET_DATA is the
-  // documented, expected state before ~50 ticks have arrived (CLAUDE.md "Technical after ~50
+  // documented, expected state outside the regular session before ~50 ticks have arrived (CLAUDE.md "Technical after ~50
   // ticks") or before Alpaca's clock opens - it is not a failure, exactly as `market_hours`
   // (RiskEngine gate 12) is *expected* to fail pre-open per the pre-market checklist. Before this
   // fix, `tradingReady` was false on every single pre-market check with reason "Technical engine
   // not running", even though nothing was actually broken - confirmed live via ./argus
   // session-report during PRE_MARKET. Treated the same way QuantEngine already treats
   // "disabled by config": counted toward tradingReady, distinctly labeled, never silently folded
-  // into "RUNNING".
+  // into "RUNNING". During the regular session a waiting agent is not ready; feed-level
+  // quote evidence above independently prevents an empty connected socket from passing.
   const technical = pipeline?.togglable.find((a) => a.id === 'TechnicalAgent');
   const outsideRegularSession = classifyMarketSession(Date.now(), TRADING_TIMEZONE, true) !== 'REGULAR';
   const technicalWaitingForData = technical?.healthLabel === 'IDLE_WAITING_FOR_MARKET_DATA';

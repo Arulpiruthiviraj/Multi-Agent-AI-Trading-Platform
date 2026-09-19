@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { tradingEngine } from '../engines/TradingEngine';
@@ -6,6 +6,7 @@ import { setPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { tradingSafety } from '../config/tradingSafety';
 import { emitJavaCoreEnsembleVoteIfEligible } from './JavaCoreEnsembleVoteService';
 import type { CoreEnsembleDecision } from './QuantCoreBridge';
+import { marketDataWorker } from './MarketDataWorker';
 
 describe('emitJavaCoreEnsembleVoteIfEligible (2026-09-10, explicit operator override)', () => {
   const FLAG = 'ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED';
@@ -32,6 +33,8 @@ describe('emitJavaCoreEnsembleVoteIfEligible (2026-09-10, explicit operator over
   }
 
   beforeEach(() => {
+    vi.spyOn(marketDataWorker, 'getLatestPrice').mockReturnValue(190);
+    vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(0);
     process.env[FLAG] = 'true';
     tradingEngine.state.enabled = true;
     tradingEngine.state.tradingState = 'TRADING_ENABLED';
@@ -39,6 +42,7 @@ describe('emitJavaCoreEnsembleVoteIfEligible (2026-09-10, explicit operator over
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     delete process.env[FLAG];
     setPipelineAgentEnabled('JavaCoreEnsemble', true); // restore default for other test files
   });
@@ -103,6 +107,7 @@ describe('emitJavaCoreEnsembleVoteIfEligible (2026-09-10, explicit operator over
   });
 
   it('emits a real SELL vote with the SELL direction and confidence carried through unchanged', () => {
+    vi.mocked(marketDataWorker.getLatestPrice).mockReturnValue(410);
     const ideas: any[] = [];
     const onIdea = (p: any) => ideas.push(p);
     eventBus.subscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
@@ -113,5 +118,27 @@ describe('emitJavaCoreEnsembleVoteIfEligible (2026-09-10, explicit operator over
     } finally {
       eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
     }
+  });
+
+  it.each([null, -1, Number.NaN, tradingSafety.stalePriceThresholdMs + 1])(
+    'does not emit from historical price when current quote age is %s', (age) => {
+      vi.mocked(marketDataWorker.getLatestPriceAgeMs).mockReturnValue(age);
+      const emit = vi.spyOn(eventBus, 'emitTradeIdea');
+      expect(emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 190))
+        .toEqual({ emitted: false, reason: 'MARKET_DATA_UNAVAILABLE' });
+      expect(emit).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([null, 0, Number.NaN, Number.POSITIVE_INFINITY])('rejects invalid observed price %s', (price) => {
+    vi.mocked(marketDataWorker.getLatestPrice).mockReturnValue(price);
+    expect(emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 190).emitted).toBe(false);
+  });
+
+  it('uses the fresh observed price rather than the historical close supplied by the caller', () => {
+    vi.mocked(marketDataWorker.getLatestPrice).mockReturnValue(191.25);
+    const emit = vi.spyOn(eventBus, 'emitTradeIdea');
+    expect(emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 180).emitted).toBe(true);
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ currentPrice: 191.25 }));
   });
 });

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 /**
  * Trading Readiness Gate - proves "process alive" and "trading ready" are structurally distinct,
@@ -6,6 +6,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
  * combination (all healthy, AI layer down, market data down, etc.) is directly testable.
  */
 const { health } = vi.hoisted(() => ({ health: vi.fn() }));
+const { getMarketDataReadiness } = vi.hoisted(() => ({ getMarketDataReadiness: vi.fn() }));
+vi.mock('./marketDataReadiness', () => ({ getMarketDataReadiness }));
 const { getPipelineAgentSnapshot } = vi.hoisted(() => ({ getPipelineAgentSnapshot: vi.fn() }));
 const { getAIProviderHealthSnapshot } = vi.hoisted(() => ({ getAIProviderHealthSnapshot: vi.fn() }));
 const { dbSelectResult } = vi.hoisted(() => ({ dbSelectResult: { value: Promise.resolve([{}]) } }));
@@ -20,6 +22,7 @@ vi.mock('../db', () => ({
 import { getTradingReadinessSnapshot, renderTradingReadinessTree } from './TradingReadinessGate';
 
 function healthyDefaults() {
+  getMarketDataReadiness.mockReturnValue({ ready: true, detail: 'connected; 1/1 active symbols have a valid fresh quote' });
   health.mockReturnValue({
     ok: true,
     pid: 12345,
@@ -42,11 +45,14 @@ function healthyDefaults() {
 
 describe('TradingReadinessGate', () => {
   beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-18T15:00:00Z'));
     health.mockReset();
     getPipelineAgentSnapshot.mockReset();
     getAIProviderHealthSnapshot.mockReset();
     healthyDefaults();
   });
+  afterEach(() => vi.useRealTimers());
 
   it('reports tradingReady=true when every dependency (including at least one healthy AI provider) is healthy', async () => {
     const snapshot = await getTradingReadinessSnapshot();
@@ -75,6 +81,7 @@ describe('TradingReadinessGate', () => {
   });
 
   it('reports tradingReady=false when market data is disconnected even though the process is alive', async () => {
+    getMarketDataReadiness.mockReturnValue({ ready: false, detail: 'disconnected' });
     health.mockReturnValue({ ok: true, pid: 1, uptimeMs: 1000, marketDataConnected: false, brokerId: 'ibkr_gateway' });
 
     const snapshot = await getTradingReadinessSnapshot();
@@ -137,6 +144,7 @@ describe('TradingReadinessGate', () => {
   });
 
   it('does not report tradingReady=false purely because Technical/Quant are IDLE_WAITING_FOR_MARKET_DATA pre-market (2026-08-25 fix)', async () => {
+    vi.setSystemTime(new Date('2026-09-18T12:00:00Z'));
     // Confirmed live: before this fix, every single pre-market ./argus pipeline-ready check
     // reported tradingReady=false with reason "Technical engine not running", even though
     // IDLE_WAITING_FOR_MARKET_DATA is the documented, expected pre-market/warmup state
@@ -185,5 +193,23 @@ describe('TradingReadinessGate', () => {
     expect(tree).toContain('TRADING READY');
     expect(tree).toContain('Gemini');
     expect(tree).toContain('OpenAI');
+  });
+
+  it('reports no usable market data despite a connected socket and healthy AI', async () => {
+    getMarketDataReadiness.mockReturnValue({ ready: false, detail: 'connected; 0/90 active symbols have a valid fresh quote' });
+    const result = await getTradingReadinessSnapshot();
+    expect(result.tradingReady).toBe(false);
+    expect(result.nodes.find(n => n.id === 'marketData')).toMatchObject({ ready: false });
+    expect(result.reasons.join(' ')).toContain('0/90');
+  });
+
+  it('does not excuse a never-ticked TechnicalAgent during the regular session', async () => {
+    getPipelineAgentSnapshot.mockReturnValue({ togglable: [
+      { id: 'TechnicalAgent', healthy: false, healthLabel: 'IDLE_WAITING_FOR_MARKET_DATA', available: true },
+      { id: 'QuantEngine', healthy: true, healthLabel: 'RUNNING', available: true },
+    ] });
+    const result = await getTradingReadinessSnapshot();
+    expect(result.tradingReady).toBe(false);
+    expect(result.nodes.find(n => n.id === 'technicalEngine')).toMatchObject({ ready: false, notApplicable: false });
   });
 });

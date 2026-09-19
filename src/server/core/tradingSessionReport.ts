@@ -166,6 +166,8 @@ export async function getTradingSessionReport(overrides: TradingSessionReportOve
 
   let health: ReturnType<typeof argusRuntime.health> | null = null;
   try { health = argusRuntime.health(); } catch { health = null; }
+  let marketDataReady = false;
+  try { marketDataReady = getMarketDataReadiness().ready; } catch { /* unavailable is not ready */ }
 
   let aiCallSuccessRatePct: number | null = null;
   try {
@@ -184,7 +186,7 @@ export async function getTradingSessionReport(overrides: TradingSessionReportOve
         const s = classifyMarketSession(Date.now(), TRADING_TIMEZONE, true);
         return s === 'REGULAR' ? 'RTH' : s;
       })(),
-      marketDataReady: getMarketDataReadiness().ready,
+      marketDataReady,
       activeSymbols: overrides.activeSymbols ?? 0,
       maxSymbols: overrides.maxSymbols ?? 90,
       candidateSymbolsMissingPrice: missingPriceSymbols,

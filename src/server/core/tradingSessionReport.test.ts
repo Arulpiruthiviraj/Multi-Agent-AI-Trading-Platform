@@ -26,6 +26,8 @@ const { mockDb, setTableRows, resetTableRows } = vi.hoisted(() => {
 });
 
 const { health } = vi.hoisted(() => ({ health: vi.fn() }));
+const { getMarketDataReadiness } = vi.hoisted(() => ({ getMarketDataReadiness: vi.fn() }));
+vi.mock('./marketDataReadiness', () => ({ getMarketDataReadiness }));
 const { getAIProviderHealthSnapshot } = vi.hoisted(() => ({ getAIProviderHealthSnapshot: vi.fn() }));
 
 vi.mock('../db', () => ({ db: mockDb }));
@@ -37,6 +39,7 @@ import { getTradingSessionReport, renderTradingSessionReport, type TradingSessio
 
 describe('tradingSessionReport', () => {
   beforeEach(() => {
+    getMarketDataReadiness.mockReturnValue({ ready: true });
     resetTableRows();
     setTableRows(schema.eventTraces, []);
     setTableRows(schema.trades, []);
@@ -55,6 +58,13 @@ describe('tradingSessionReport', () => {
     expect(report.execution.fills).toBe(0);
     expect(report.ai.healthyProviders).toBe(1);
     expect(report.ai.degradedProviders).toBe(1);
+  });
+
+  it('reports connected-but-quote-starved market data as degraded', async () => {
+    getMarketDataReadiness.mockReturnValue({ ready: false });
+    const report = await getTradingSessionReport({ activeSymbols: 90, maxSymbols: 90 });
+    expect(report.market.marketDataReady).toBe(false);
+    expect(renderTradingSessionReport(report)).toContain('Market Data: DEGRADED');
   });
 
   it('reports the real broker-aware streaming cap when the route passes maxSymbols, instead of always showing the hardcoded 90 (2026-08-25 fix)', async () => {
