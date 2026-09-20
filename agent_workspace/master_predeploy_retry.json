@@ -1,0 +1,18 @@
+{
+  "capturedAt": "2026-09-20T13:28:58.986Z",
+  "/api/v1/system/reconciliation/status": {
+    "error": "TypeError: fetch failed"
+  },
+  "/api/v2/runtime/market/status": {
+    "error": "TypeError: fetch failed"
+  },
+  "/api/v2/continuous-intelligence/status": {
+    "error": "TypeError: fetch failed"
+  },
+  "/api/v1/portfolio": {
+    "error": "TypeError: fetch failed"
+  },
+  "/api/v1/orders": {
+    "error": "TypeError: fetch failed"
+  }
+}
