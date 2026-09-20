@@ -41,6 +41,15 @@ function baseCtx(overrides: Partial<PitRiskContext> = {}): PitRiskContext {
 }
 
 describe('evaluatePitRisk — live RiskEngine gate ladder on simulated state', () => {
+  it('forwards each point-in-time holding mark and rejects stale exposure evidence', async () => {
+    const mark = { price: 400, priceAgeMs: 0, source: 'POINT_IN_TIME_BAR' };
+    const context = baseCtx({ existingPositions: [{ symbol: 'MSFT', quantity: 95, averagePrice: 10, mark }] });
+    const fresh = await evaluatePitRisk(context);
+    expect(fresh.gateResults.find(g => g.gate === 'sector_concentration')?.detail.sectorValue).toBe(38000);
+    const stale = await evaluatePitRisk({ ...context, existingPositions: [{ ...context.existingPositions[0], mark: { ...mark, priceAgeMs: tradingSafety.stalePriceThresholdMs + 1 } }] });
+    expect(stale.approved).toBe(false);
+    expect(stale.gateResults.find(g => g.gate === 'sector_concentration')?.detail.reason).toBe('HOLDING_VALUATION_UNAVAILABLE');
+  });
   it('approves a well-sized weekday BUY with valid equity', async () => {
     const r = await evaluatePitRisk(baseCtx());
     expect(r.approved).toBe(true);

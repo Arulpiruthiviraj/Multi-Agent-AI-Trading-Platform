@@ -40,6 +40,10 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
     this.session.setMarketDataErrorHandler(handler);
   }
 
+  setMarketDataSubscriptionHandler(handler: ((symbol: string) => void) | null): void {
+    this.session.setMarketDataSubscriptionHandler(handler);
+  }
+
   getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
     return this.session.getMarketDataError(symbol);
   }

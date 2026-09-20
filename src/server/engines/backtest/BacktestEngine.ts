@@ -326,7 +326,15 @@ export class BacktestEngine {
           .map(t => t.realizedPnl as number)
           .reverse();
         const pitNews = await historicalDataGateway.getPitNewsAsOf(evt.symbol, evt.timestamp);
-        const existingPositions = Object.values(positions).map(p => ({ symbol: p.symbol, quantity: p.quantity, averagePrice: p.entryPrice }));
+        const existingPositions = Object.values(positions).map(p => {
+          const bars = barsBySymbol[p.symbol] ?? [];
+          let mark: typeof bars[number] | undefined;
+          for (let i = bars.length - 1; i >= 0; i--) {
+            if (bars[i].timestamp <= clock.now()) { mark = bars[i]; break; }
+          }
+          return { symbol: p.symbol, quantity: p.quantity, averagePrice: p.entryPrice,
+            mark: { price: mark?.close ?? null, priceAgeMs: mark ? clock.now() - mark.timestamp : null, source: 'POINT_IN_TIME_BAR' } };
+        });
         const prevBarTs = visibleBars.length >= 2
           ? visibleBars[visibleBars.length - 2].timestamp
           : evt.timestamp - tradingSafety.evaluationHorizonMs;

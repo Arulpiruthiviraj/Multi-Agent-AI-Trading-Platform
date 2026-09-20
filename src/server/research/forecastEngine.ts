@@ -43,7 +43,7 @@ import { quantCoreBridge, type InstitutionalForecastResult } from '../services/Q
 import { buildExecutionQualityReport, summarizeExecutionQuality } from './executionQuality';
 import { tradingSafety } from '../config/tradingSafety';
 
-export const FORECAST_MODEL_VERSION = 'forecast-v1-2026-09-13';
+export const FORECAST_MODEL_VERSION = 'forecast-v2-gross-only-2026-09-19';
 export const PRIMARY_EVAL_HORIZON_LABEL = 'PRIMARY_EVAL_HORIZON';
 
 export type ForecastStatus =
@@ -113,7 +113,7 @@ export interface Forecast {
   /** Dispersion of the historical-return sample itself (mandate item 7's "uncertainty around
    *  expected return", deliberately distinct from expectedReturn). */
   uncertainty: number | null;
-  estimatedTransactionCostBps: number;
+  estimatedTransactionCostBps: number | null;
   netExpectedReturn: number | null;
   /** Real strategy-diversity evidence from EnsembleEvidence (internalQuantEnsemble.ts) when the
    *  caller supplied one for this cycle; null when it did not - never independently computed or
@@ -132,7 +132,10 @@ export interface Forecast {
     sourceRowCount: number;
     /** The real, most-recent-first-capped count actually sent to ForecastEngine.java. */
     sampleSizeSentToModel: number;
-    transactionCostSource: 'REAL_EXECUTION_QUALITY' | 'NONE_ASSUMED_ZERO';
+    transactionCostSource: 'REAL_EXECUTION_QUALITY' | 'NONE_ASSUMED_ZERO' | 'UNKNOWN_TOTAL_COST';
+    measuredSlippageBps?: number | null;
+    executionEvidenceClass?: 'PAPER_ORGANIC';
+    readCostStatus?: 'UNKNOWN_TOTAL_COST';
   };
 }
 
@@ -201,17 +204,18 @@ async function collectExplicitHorizonReturns(agentName: string, strategyId: stri
   return out;
 }
 
-async function resolveTransactionCostBps(): Promise<{ bps: number; source: 'REAL_EXECUTION_QUALITY' | 'NONE_ASSUMED_ZERO' }> {
+async function resolveTransactionCostBps(): Promise<{ bps: null; source: 'UNKNOWN_TOTAL_COST'; measuredSlippageBps: number | null }> {
   try {
-    const rows = await buildExecutionQualityReport(500);
+    const rows = await buildExecutionQualityReport(500, 'PAPER_ORGANIC');
     const summary = summarizeExecutionQuality(rows);
     if (summary.n > 0 && summary.meanSlippageBps !== null) {
-      return { bps: Math.max(0, summary.meanSlippageBps), source: 'REAL_EXECUTION_QUALITY' };
+      // Arrival slippage is measured; commissions/financing/round-trip total costs are not.
+      return { bps: null, source: 'UNKNOWN_TOTAL_COST', measuredSlippageBps: summary.meanSlippageBps };
     }
   } catch {
-    /* fall through to the honest zero-assumption default below */
+    /* unavailable evidence remains unknown */
   }
-  return { bps: 0, source: 'NONE_ASSUMED_ZERO' };
+  return { bps: null, source: 'UNKNOWN_TOTAL_COST', measuredSlippageBps: null };
 }
 
 /**
@@ -259,7 +263,7 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
     ? await collectPrimaryHorizonReturns(req.agentName, req.strategyId ?? null, req.direction)
     : await collectExplicitHorizonReturns(req.agentName, req.strategyId ?? null, req.direction, horizon);
 
-  const { bps: transactionCostBps, source: transactionCostSource } = await resolveTransactionCostBps();
+  const { bps: transactionCostBps, source: transactionCostSource, measuredSlippageBps } = await resolveTransactionCostBps();
 
   const groupingKey = req.strategyId ? `${req.agentName}/${req.strategyId}` : req.agentName;
   const forecastId = crypto.randomUUID();
@@ -273,7 +277,7 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
   const javaResult: InstitutionalForecastResult | null = await quantCoreBridge.fetchForecast(
     req.symbol,
     cappedReturns,
-    transactionCostBps,
+    0, // Gross-return statistics only; cost-derived Java outputs are not used without total costs.
   );
 
   const provenance = {
@@ -282,6 +286,8 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
     sourceRowCount: returns.length,
     sampleSizeSentToModel: cappedReturns.length,
     transactionCostSource,
+    measuredSlippageBps,
+    executionEvidenceClass: 'PAPER_ORGANIC' as const,
   };
 
   // Real strategy-diversity evidence, when the caller genuinely has one for this cycle - never
@@ -317,9 +323,9 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
       status, sampleSize: javaResult.sampleSize,
       expectedReturn: javaResult.meanReturn, expectedReturnLower: javaResult.meanReturnLower, expectedReturnUpper: javaResult.meanReturnUpper,
       medianReturn: javaResult.medianReturn, trimmedMeanReturn: javaResult.trimmedMeanReturn,
-      probabilityOfProfit: javaResult.probabilityOfProfit, probabilityOfProfitLower: javaResult.probabilityOfProfitLower, probabilityOfProfitUpper: javaResult.probabilityOfProfitUpper,
+      probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null,
       volatility: null, uncertainty: javaResult.stdevReturn,
-      estimatedTransactionCostBps: transactionCostBps, netExpectedReturn: javaResult.netExpectedReturn,
+      estimatedTransactionCostBps: transactionCostBps, netExpectedReturn: null,
       strategyCount, familyCount, effectiveIndependentCount,
       modelVersion: FORECAST_MODEL_VERSION, featureSnapshotId: null, strategySnapshotId: null,
       provenance,
@@ -396,11 +402,12 @@ export async function mostRecentForecast(symbol: string, agentName: string, stra
     status: row.forecastStatus as ForecastStatus, sampleSize: row.sampleSize,
     expectedReturn: row.expectedReturn, expectedReturnLower: row.expectedReturnLower, expectedReturnUpper: row.expectedReturnUpper,
     medianReturn: row.medianReturn, trimmedMeanReturn: row.trimmedMeanReturn,
-    probabilityOfProfit: row.probabilityOfProfit, probabilityOfProfitLower: row.probabilityOfProfitLower, probabilityOfProfitUpper: row.probabilityOfProfitUpper,
+    // Legacy slippage-only/assumed-zero rows are preserved, but not presented as net evidence.
+    probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null,
     volatility: row.volatility, uncertainty: row.uncertaintyStdevReturn,
-    estimatedTransactionCostBps: row.estimatedTransactionCostBps, netExpectedReturn: row.netExpectedReturn,
+    estimatedTransactionCostBps: null, netExpectedReturn: null,
     strategyCount: row.strategyCount, familyCount: row.familyCount, effectiveIndependentCount: row.effectiveIndependentCount,
     modelVersion: row.modelVersion, featureSnapshotId: null, strategySnapshotId: null,
-    provenance: JSON.parse(row.provenanceJson),
+    provenance: { ...JSON.parse(row.provenanceJson), readCostStatus: 'UNKNOWN_TOTAL_COST' },
   };
 }

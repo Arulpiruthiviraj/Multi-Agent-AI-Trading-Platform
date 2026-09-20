@@ -109,17 +109,47 @@ describe('executionQuality (Institutional Transformation Mandate Part 16)', () =
     expect(rows.some((r) => r.orderId === 'order-nofill-1')).toBe(false);
   });
 
-  it('summarizeExecutionQuality computes a real mean/median across all included rows', async () => {
+  it('does not treat unattributed PAPER or unknown legacy fills as organic paper evidence', async () => {
     const rows = await mod.buildExecutionQualityReport();
     const summary = mod.summarizeExecutionQuality(rows);
-    expect(summary.n).toBe(rows.length);
-    expect(summary.n).toBeGreaterThanOrEqual(3);
-    expect(summary.meanSlippageBps).not.toBeNull();
-    expect(summary.positiveSlippageCount + summary.negativeSlippageCount).toBeLessThanOrEqual(summary.n);
+    expect(summary.n).toBe(0);
+    expect(summary.excludedRowCount).toBe(rows.length);
+    expect(summary.meanSlippageBps).toBeNull();
+    expect(rows.find(r => r.orderId === 'order-buy-1')?.evidenceClass).toBe('PAPER_UNATTRIBUTED');
   });
 
   it('formatExecutionQualityReport renders a readable text table with NO_DATA guard', () => {
     const emptySummary = mod.summarizeExecutionQuality([]);
     expect(mod.formatExecutionQualityReport([], emptySummary)).toContain('NO_DATA');
+  });
+
+  it('separates organic, manual, replay and live evidence before applying the query limit', async () => {
+    for (const [id, env, brokerId, agent, fillPrice, timestamp] of [
+      ['organic', 'PAPER', 'ibkr_gateway', 'QuantEngine', 100.1, '2026-01-01T00:00:00Z'],
+      ['manual', 'PAPER', 'ibkr_gateway', 'ManualOverride', 150, '2030-01-01T00:00:00Z'],
+      ['replay', 'REPLAY', 'historical_replay', 'QuantEngine', 190, '2030-01-02T00:00:00Z'],
+      ['live', 'LIVE', 'ibkr_gateway', 'QuantEngine', 160, '2030-01-03T00:00:00Z'],
+      ['backtest', 'BACKTEST', 'research', 'QuantEngine', 180, '2030-01-04T00:00:00Z'],
+      ['simulation', 'PAPER', 'internal_paper', 'QuantEngine', 170, '2030-01-05T00:00:00Z'],
+    ] as const) {
+      const tx = `quality-${id}`;
+      await db.insert(schema.consensusDecisions).values({ transactionId: tx, symbol: 'AAPL', side: 'BUY', weightedConfidence: .8, threshold: .75, approved: true, createdAt: timestamp });
+      await db.insert(schema.consensusEvidence).values({ transactionId: tx, agent, side: 'BUY', confidence: .8, weight: 1, agreed: true });
+      await db.insert(schema.trades).values({ id: tx, transactionId: tx, traceId: `trace-AAPL-${id}`, symbol: 'AAPL', side: 'BUY', quantity: 1, price: fillPrice, arrivalPrice: 100, status: 'FILLED', timestamp, executionEnvironment: env, brokerId });
+      await db.insert(schema.fills).values({ orderId: tx, quantity: 1, price: fillPrice, cumulativeQuantity: 1, filledAt: timestamp });
+    }
+    const scoped = await mod.buildExecutionQualityReport(1, 'PAPER_ORGANIC');
+    expect(scoped.map(r => r.orderId)).toEqual(['quality-organic']);
+    expect(scoped[0].evidenceClass).toBe('PAPER_ORGANIC');
+    const all = await mod.buildExecutionQualityReport();
+    expect(all.find(r => r.orderId === 'quality-manual')?.evidenceClass).toBe('PAPER_MANUAL');
+    expect(all.find(r => r.orderId === 'quality-replay')?.evidenceClass).toBe('REPLAY');
+    expect(all.find(r => r.orderId === 'quality-live')?.evidenceClass).toBe('LIVE');
+    expect(all.find(r => r.orderId === 'quality-backtest')?.evidenceClass).toBe('BACKTEST');
+    expect(all.find(r => r.orderId === 'quality-simulation')?.evidenceClass).toBe('SIMULATION');
+    const summary = mod.summarizeExecutionQuality(all);
+    expect(summary.n, JSON.stringify(all.map(r => [r.orderId, r.evidenceClass]))).toBe(1);
+    expect(summary.meanSlippageBps).toBeCloseTo(10);
+    expect(mod.summarizeExecutionQuality(all, 'REPLAY').meanSlippageBps).toBeCloseTo(9000);
   });
 });

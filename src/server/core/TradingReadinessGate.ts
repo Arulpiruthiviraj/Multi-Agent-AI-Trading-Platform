@@ -50,19 +50,6 @@ async function checkDatabase(): Promise<{ ready: boolean; detail: string }> {
   }
 }
 
-/**
- * Post-remediation-audit fix: this file previously imported BrokerManager directly
- * (architecture.protection.test.ts's BrokerManager allowlist correctly caught this as an
- * unreviewed import). It only ever needed a read-only "is a broker active" signal, which
- * ArgusRuntime.health() (an already-allowlisted BrokerManager consumer) already exposes as
- * `brokerId` - reusing that removes the need for a second direct importer entirely rather than
- * expanding the allowlist for a diagnostic-only read.
- */
-function checkBroker(brokerId: string | null): { ready: boolean; detail: string } {
-  if (!brokerId) return { ready: false, detail: 'no active broker' };
-  return { ready: true, detail: brokerId };
-}
-
 function aiProviderLayerNode(providers: AIProviderHealthRecord[]): ReadinessNode {
   const children: ReadinessNode[] = providers.map((p) => ({
     id: p.providerId,
@@ -114,9 +101,12 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   });
   if (!marketData.ready) reasons.push(`Market data not ready: ${marketData.detail}`);
 
-  const brokerCheck = checkBroker(health?.brokerId ?? null);
+  let brokerCheck = { ready: false, detail: 'no active broker / connection evidence unavailable' };
+  if (health?.brokerId) {
+    try { brokerCheck = await argusRuntime.brokerReadiness(); } catch { /* fail closed */ }
+  }
   nodes.push({ id: 'broker', label: 'Broker', ready: brokerCheck.ready, detail: brokerCheck.detail });
-  if (!brokerCheck.ready) reasons.push('Broker unavailable');
+  if (!brokerCheck.ready) reasons.push(`Broker unavailable: ${brokerCheck.detail}`);
 
   let pipeline: ReturnType<typeof getPipelineAgentSnapshot> | null = null;
   try {

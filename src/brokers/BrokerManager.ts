@@ -503,6 +503,7 @@ export class BrokerManager {
       if (broker.id === 'ibkr_gateway' && broker instanceof IBGatewaySocketAdapter) {
         const cfg = loadIbkrConnection();
         broker.setQuoteSink((symbol, price) => marketDataWorker.ingestIbkrQuote(symbol, price));
+        broker.setMarketDataSubscriptionHandler((symbol) => marketDataWorker.recordMarketDataSubscription(symbol));
         // 2026-09-04 opportunity-capture remediation: a rejected reqMktData request (e.g. missing
         // market-data-line permissions for that symbol/exchange) used to vanish silently — the
         // symbol stayed in MarketDataWorker's "active" bookkeeping forever with zero real ticks,
@@ -528,6 +529,7 @@ export class BrokerManager {
             clear: () => {
               broker.setQuoteSink(null);
               broker.setMarketDataErrorHandler(null);
+              broker.setMarketDataSubscriptionHandler(null);
             },
             isConnected: () => broker.isMarketDataSessionConnected(),
           },

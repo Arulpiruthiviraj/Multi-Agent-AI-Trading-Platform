@@ -401,3 +401,87 @@ Reliability requirements: bounded queues and DB queries; generation-aware idempo
 **STRATEGY PROMOTION READY:** sufficient effective sample size and OOS/robustness evidence, uncertainty and dependence assessed, capacity/costs measured, organic paper attribution and explicit review. Unit tests and raw win rate alone cannot qualify.
 
 **LIVE-CANDIDATE READY:** a future review package would additionally need all production safety, capital, operational, regulatory and statistical criteria independently satisfied. This audit does not grant it; LIVE remains NO-GO.
+
+### Closing verification and September 19 continuation
+
+- Full suite: `node node_modules/vitest/vitest.mjs run` completed with **521 files / 3,868 tests passed**, exit 0, 717 seconds. Exact log: `agent_workspace/ultimate_audit_full.log`.
+- Final typecheck: `node node_modules/typescript/bin/tsc --noEmit`, exit 0.
+- Final production build: `npm.cmd run build`, native exit 0; Vite and server esbuild completed. Existing chunk-size/dynamic-import warnings remain. PowerShell's earlier stderr handling produced a misleading command exit; the final run explicitly propagated `$LASTEXITCODE`.
+- `git diff --check` passed; no commit/push was made by this agent. External commit `51a6674` subsequently captured the working tree; do not attribute that commit to an agent action.
+- Before deployment: paper-only, paused, empty local portfolio/order ledger, reconciliation matched with zero mismatches/orphans; watchdog 20892 healthy. Engine 13680 was gracefully stopped and confirmed gone. Replacement PID 21404 subsequently ran: persisted Java logs and watchdog recovery at 02:30Z establish startup, but no complete post-deployment quote/readiness capture was obtained before the session interruption.
+- At September 19 11:28Z, no Node engine/watchdog process remained, API port 3000 and Gateway port 4002 were closed, and the watchdog's last heartbeat was 02:31:54Z. The cause of that later shutdown is **INSUFFICIENT DATA**; it must not be labelled a crash, a successful deployment, or a data-entitlement failure without evidence. A new plain CLI start (without enable-trading) was initiated to restore supervised diagnostics, preserving pause. Final current runtime verification follows below.
+
+**September 19 11:32Z runtime result:** plain CLI start completed. Process command-line classification confirms exactly one engine **3388** and one watchdog **27988**; watchdog heartbeat HEALTHY at 11:31:57Z. Engine PAPER_ONLY, TRADING_PAUSED, LIVE_NO_GO. Java `/health` 200 UP; Chronos `/health` 200 with chronos-t5-mini and FinBERT loaded. Gateway socket **OFFLINE**, port 4002 closed, authenticated false, account/server time absent, zero active broker lines and zero MarketDataWorker slots. The user was asked to log into Gateway Paper Trading; no response was yet received at this verification point.
+
+Deployed `session-report` now reports **Market Data DEGRADED**, Session CLOSED, 0/90 active symbols and all September 19 funnel counts zero (one reconciliation match). `pipeline-ready` reports market data FAIL, AI FAIL, trading readiness FAIL; Technical/Quant first-data waiting is N/A outside RTH. Thus the new readiness behavior is verified in the running process for unavailable data. No positive Java vote or organic execution was induced merely to validate deployment.
+
+**Additional verified reporting defect / P1:** the broker summary and reconciliation endpoint say sync READY/matched while the adapter's connection snapshot is unauthenticated/OFFLINE. Cached or empty reconciliation state is not proof of an active reconciled broker. Follow-up: join connection/authentication/fresh broker snapshot evidence into broker readiness; add disconnected-with-empty-cache regression coverage. No broker or reconciliation implementation was altered in this audit. Overall paper status remains **NOT READY** regardless of that misleading individual green check.
+
+Current AI provider snapshot is 0/10 healthy (nine PROVIDER_UNAVAILABLE, Ollama TIMEOUT), despite the Ollama companion process health reporting READY. This is a new-day task/health snapshot, not a replacement for September 18's 54/1,040 persisted call distribution. Current blockers: Gateway paper login/listening socket; verified current subscriptions/quote evidence after connection; AI task availability; unproven independent calibrated opportunity and positive-control lifecycle; identified subscription-reconnect, holding-valuation, environment-partition and certification defects. No thresholds were lowered and no resume/order was requested.
+
+
+## Master-mandate continuation: September 19 evidence and implementation
+
+This section is a new snapshot, not a rewrite of the September 18 findings above. Local date September 19 is Saturday; UTC evidence window is **2026-09-19 04:00:00Z to 2026-09-20 01:58:00.299Z**. Read-only transaction/extractor: `agent_workspace/master_day_read.cjs`; fixed output: `master_day_snapshot.json`. API snapshot: `master_runtime_snapshot.json` at 01:57:24Z. The running engine remained PID 3388, PAPER, TRADING_PAUSED; watchdog 27988.
+
+### Current causal evidence
+
+- **VERIFIED:** no persisted idea-generated or consensus-start events in this window; zero terminal consensus records, risk assessments, trades and fills. Zero missing-price rejections do not prove data availability when no ideas were emitted.
+- **VERIFIED:** 8,863 `DESK_NO_TRADE` events, all `EXPECTED_VALUE_TOO_LOW`. These are repeated upstream desk abstentions, not 8,863 completed consensus rounds or unique candidates. Their payload says that a strategy must clear live EV/minimum risk-reward and a regime-only fallback is not a trade. The existing session report groups these under a broad no-trade label; retain the denominator distinction.
+- **VERIFIED:** 4,800 subscription-request events, 155 opportunity scans and 173 reconciliation-match events. These are event counts, not unique streaming lines or opportunities.
+- **VERIFIED:** Gateway socket 4002 authenticated with paper-only enabled, 90/90 allocated lines. Runtime slot telemetry has **0/90 with received ticks**, **88 error 10089** (additional API market-data subscription required), and **2 error 200** (`BRK.B`, `SQ`: no security definition). The entitlement errors are actual broker responses after the user's acknowledgement/login; a signed acknowledgement alone has not established usable data for these requests. Stored error timestamps precede the snapshot; deployment verification must recheck freshly issued requests.
+- **VERIFIED:** broker portfolio positions empty, local order ledger empty, latest reconciliation 01:55:05Z matched with zero mismatches and no unacknowledged filled orphans. No resume/order was requested.
+- **PARTIALLY VERIFIED:** Java bridge connected on a direct health query but the aggregate health sample timed out. Chronos and Ollama companion health READY; task-provider health 1/10. These are different checks, not proof every inference/consensus task succeeds.
+
+The historical September 18 distribution remains **20 rounds: 18 insufficient-independence, 2 AGENT_HOLD; zero approvals/risk/orders/fills**. It must not be relabelled as today's activity. Neither snapshot implicates OMS/Risk rejection as the cause of zero trades. Required evidence/data refusal is correct; failed data delivery and misleading evidence aggregation are engineering/data defects.
+
+### Implemented changes and boundaries
+
+1. **P1 subscription recovery:** preserve bounded desired subscriptions across IB socket generations; reissue once after authenticated reconnect through existing SDK pacing; reject stale connection completion; cancellation by symbol or latest request handle while offline removes intent; explicit teardown stops retry and clears ownership. Reissued requests clear obsolete worker quote/error caches. Tests cover cap, deduplication, cancellation, old-ID ticks and interrupted connection probes.
+2. **P0 BUY valuation correctness:** sector/correlation exposure uses each relevant holding's own sourced fresh price. Missing/invalid/stale required marks fail closed. RiskEngine supplies current feed/replay cache marks; PIT backtest supplies bars visible at its clock. SELL shared sizing remains unconstrained by BUY exposure math and downstream held-quantity clamps remain authoritative. Replay cache age does not certify underlying historical-bar age.
+3. **P0 evidence integrity:** execution-quality cohorts explicitly separate organic/manual/unattributed PAPER, REPLAY, BACKTEST, SIMULATION, LIVE and UNKNOWN. Scope is applied before LIMIT. A regression exposed SQL-builder qualifier stripping inside correlated subqueries; explicit outer-table references prevent attribution to another transaction. Gateway/Web IDs now map to the actual OMS environment; no historical fill was relabelled.
+4. **P0 forecast honesty:** total transaction costs, net expectancy and profit probabilities remain UNKNOWN/null when commissions/other total costs are missing. Observed organic-paper slippage is recorded separately. Java still owns gross-return calculations. Migration 0070 transactionally preserves all historical forecast values and indexes while making cost nullable; reads suppress unsupported legacy net fields without rewriting rows. Model contract version advanced to `forecast-v2-gross-only-2026-09-19`.
+5. **P1 broker diagnostic:** readiness requires synchronized manager state, authenticated connection where exposed, and healthy adapter status with bounded timeout. Selected broker identity alone cannot turn the check green. Cached reconciliation freshness itself remains a separate follow-up; this diagnostic is not a new execution gate.
+
+No consensus, independence, calibration or risk thresholds were lowered. No live enablement, promotion, synthetic production fills, forced paper orders, commit or push occurred.
+
+### Answers to the economic mandate
+
+| Question | Evidence-backed answer |
+|---|---|
+| Credible positive edge; contributing strategies | **UNPROVEN.** No strategy can be named as a demonstrated source of net organic paper alpha from this evidence. |
+| Effective sample size | Earlier fixed audit: PULLBACK_CONTINUATION raw 2,720/effective 50, TREND_CONTINUATION 134/8, RANGE_REVERSION 779/12; classified NO_EDGE. These are prediction-history counts, not independent completed trades. |
+| Survives costs, OOS, walk-forward and regimes | Not established. Five baseline strategies not promotable; all failed the required walk-forward checks. One 42-trade OOS pass is insufficient when robustness fails. Full realized cost data is absent. |
+| Organic paper evidence | No September 19 fills; no demonstrated organic closed-paper profitability. Historical three PAPER fills lack complete strategy/net P&L attribution and include manual activity. |
+| Largest current funnel loss | Data coverage: zero received-tick lines among 90 allocated. Today's repeated desk events stop upstream of idea/consensus. Event counts cannot reconstruct unique candidate attrition where lineage is absent. |
+| Correct refusals | Missing/stale data, uncalibrated or insufficient independent evidence, no supported expectancy and paused/closed-session restrictions. |
+| Defects versus architecture weakness | Verified defects above; weaknesses remain fragmented lineage, unsupported cost estimates in older evidence, incomplete quantitative positive-control certification, and incomplete research/promotion evidence. |
+| Operates with all external AI/Chronos absent | Quantitative generation is source-supported; full autonomous quant-only approval-to-reconciled-execution is **UNPROVEN**. Do not replace unavailable evidence with artificial votes. |
+| Market-data coverage sufficient | **No**, zero observed tick-bearing slots in this snapshot. Allocator occupancy does not answer coverage. |
+| Strategy selection optimal | **UNPROVEN**; no valid cost-aware comparative OOS evidence establishes optimal selection. |
+| Consensus mathematically appropriate | Independence/calibration protections are necessary; optimal decision policy and profit interpretation are unproven. Confidence is not probability, and correlated variants are not independent votes. |
+| Portfolio adequate | Existing risk/sizing infrastructure is useful; corrected mark valuation was necessary. Forecast/covariance/cost inputs do not yet justify enabling advanced optimization. |
+| Execution preserving alpha | Unanswerable from no organic execution sample and incomplete total costs. Cohort-isolated slippage now supports future measurement. |
+| P&L attribution correct | Partial infrastructure; existing historical missing strategy/cost/closed-trade evidence prevents complete economic attribution. |
+| Highest-value changes | Restore valid data, preserve lifecycle state, value holdings correctly, isolate evidence, complete real-pipeline certification, then validate strategies with costs and OOS. |
+| Preserve | Single engine, independent RiskEngine, OMS boundary, reconciliation, paper-only, fail-closed data/approval checks and unmodified thresholds. |
+| Economic progress versus complexity | Repairs remove provable correctness/evidence defects. They do **not** establish more net profits. No advanced optimization or extra agents were added. |
+
+### Precise next engineering sequence
+
+**P0/first 30 days:** complete these regression/build/runtime checks; fresh API entitlement and contract verification; strengthen certification around flat quantities, actual partial fills and reconciliation; audit reconciliation freshness; enforce source/environment manifests and complete fee/commission attribution. Acceptance: no unknown/stale data presented as usable, no mixed evidence, no fabricated profitable control.
+
+**P1/first 30 days:** verify first/last fresh quotes and fair bounded subscriptions during an eligible session; deterministic independent-evidence positive/negative controls through real Risk/OMS/replay; causal candidate IDs across discovery, data and terminal decisions. Acceptance is observed correct execution or explicit legitimate refusal, not an order quota.
+
+**P2/days 31-60:** strategy-version/data-split manifests; realistic total costs; purged walk-forward, OOS, regime, dependence, sensitivity and multiple-testing checks; reviewed shadow-to-paper promotion. Reject strategies whose evidence fails.
+
+**P3/days 61-90:** execution timing/shortfall, USD attribution and exposure-aware allocation after the inputs are reliable; measure queue/loop latency and memory before setting SLOs. **P4** capacity/impact, more advanced portfolio methods and short research follow only when validated inputs justify them.
+
+Economic unit contract: expected net dollar value is **notional USD ? expected gross return fraction ? estimated total dollar costs**, with uncertainty represented explicitly. Shares alone times a return fraction is not dollars. Unknown costs or unsupported expectancy cannot justify an optimized position. Existing gates remain authoritative.
+
+Final tests, synthetic execution and deployment evidence are appended below when completed.
+
+
+**Account-side follow-up:** error 10089 specifically means the user's subscription does not support API data, per [IBKR's current error-code documentation](https://www.interactivebrokers.com/docs/tws-api/doc/error-handling/error-codes). Verify the subscription entitlement for the actual paper username or its live-to-paper data sharing; [IBKR's third-party FAQ](https://www.interactivebrokers.com/docs/third-party-integrations/general-third-party-frequently-asked-questions) distinguishes per-username subscriptions and sharing. The API acknowledgement is already enabled according to the user's screenshot. This audit did not purchase subscriptions or alter subscriber classification. Resolve the required exchanges with IBKR rather than guessing paid packages.
+
+**Current synthetic rerun:** `node node_modules/tsx/dist/cli.mjs scripts/sim/marketOpen.ts --certify --seed=12345 --speed=60`, exit 1. QUIET_OPEN existing gate PASS (no trade/NO_CONSENSUS); VALIDATED_CONVERGENCE_CONTROL FAIL at CONSENSUS, no trade. Test B disclosed seeded synthetic calibration in its isolated temporary database, never production. Overall FAIL; no complete execution certification and no alpha claim. Log: `agent_workspace/master_certification.log`. The previously documented limitations of the certification gate remain unresolved.

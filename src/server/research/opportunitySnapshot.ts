@@ -189,7 +189,7 @@ export function formatOpportunitySnapshot(rows: OpportunitySnapshotRow[]): strin
   for (const r of rows) {
     const forecastCol = !r.modelForecast ? 'NO_FORECAST'
       : r.modelForecast.status !== 'VALID' ? r.modelForecast.status
-      : `${((r.modelForecast.expectedReturn ?? 0) * 100).toFixed(2)}%/${((r.modelForecast.probabilityOfProfit ?? 0) * 100).toFixed(0)}%`;
+      : `${r.modelForecast.expectedReturn === null ? 'UNKNOWN' : `${(r.modelForecast.expectedReturn * 100).toFixed(2)}%`}/${r.modelForecast.probabilityOfProfit === null ? 'UNKNOWN' : `${(r.modelForecast.probabilityOfProfit * 100).toFixed(0)}%`}`;
     // Real strategy-diversity evidence (Part 7/9) - UNKNOWN, never a fabricated count, when the
     // forecast carries none (ad hoc call, or an ensemble that disagreed with this idea's side).
     const diversityCol = !r.modelForecast || r.modelForecast.effectiveIndependentCount === null

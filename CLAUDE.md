@@ -28,6 +28,9 @@ TradingAgents (https://github.com/TauricResearch/TradingAgents, Apache-2.0) is *
 
 ## Ground truth (do not inflate)
 
+**2026-09-19 implementation update (deployment evidence in the dated audit):** IB Gateway desired subscriptions survive transport reconnect under the existing line cap and SDK pacing; explicit teardown cancels intent. Reissued requests invalidate prior quote/error caches. Broker readiness requires synchronization plus authenticated healthy transport, rather than a selected adapter name. BUY exposure uses each holding's observed fresh mark; missing required marks fail closed, while SELL exits retain their existing held-quantity clamp. Execution-quality summaries partition organic/manual/unattributed paper, replay, backtest, simulation, live and unknown evidence. Gateway/Web adapter IDs are stamped correctly without reclassifying historical rows. Forecast total cost, net expected return and profit probability remain null until supported total-cost evidence exists; measured organic-paper slippage alone is not a total-cost estimate. These changes do not establish alpha, certify a strategy, or authorize resume/live trading.
+
+
 **2026-09-18 quote-evidence correction:** paper pipeline readiness and the session report require at least one valid, fresh quote from the active feed; a connected socket or occupied subscription slots alone are insufficient. This is partial feed availability, not certification of every candidate. During regular market hours, an enabled Technical/Quant worker waiting for its first data is not a passing readiness check. `JavaCoreEnsembleVoteService` rechecks the observed quote and existing freshness limit when an asynchronous Java result arrives; a historical bar close cannot authorize an idea with an invented current price. Consensus, independent risk, and OMS retain their existing authority.
 
 | Source | Use for |

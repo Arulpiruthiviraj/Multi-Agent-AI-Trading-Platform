@@ -247,6 +247,19 @@ export class MarketDataWorker {
     return this.quoteBackend;
   }
 
+  /** A real reissued request starts a new quote generation; prior errors/ticks are not evidence. */
+  recordMarketDataSubscription(symbol: string): void {
+    const key = quoteKey(symbol);
+    if (!key || this.quoteBackend !== 'ibkr_gateway') return;
+    this.marketDataErrors.delete(key);
+    this.latestPrices.delete(key);
+    this.latestPriceTimestamps.delete(key);
+    this.latestAskPrices.delete(key);
+    this.latestAskTimestamps.delete(key);
+    this.tickCounts.set(key, 0);
+    this.lastTick.delete(key);
+  }
+
   getLatestPrice(symbol: string): number | null {
     const key = quoteKey(symbol);
     if (!key) return null;

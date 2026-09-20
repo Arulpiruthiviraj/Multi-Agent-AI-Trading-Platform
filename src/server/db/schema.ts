@@ -1938,7 +1938,7 @@ export const quantForecasts = sqliteTable('quant_forecasts', {
   // Dispersion of the historical-return sample itself - the mandate's own "uncertainty around
   // expected return" (item 7), kept explicitly separate from expectedReturn.
   uncertaintyStdevReturn: real('uncertainty_stdev_return'),
-  estimatedTransactionCostBps: real('estimated_transaction_cost_bps').notNull(),
+  estimatedTransactionCostBps: real('estimated_transaction_cost_bps'),
   netExpectedReturn: real('net_expected_return'),
   // Strategy-aggregation fields (mandate item 9) - honestly null in this pass when the caller did
   // not supply a real ensemble evaluation (internalQuantEnsemble.ts integration is a real, tracked

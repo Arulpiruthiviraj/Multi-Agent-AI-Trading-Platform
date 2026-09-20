@@ -24,6 +24,7 @@
 import { tradingSafety } from '../config/tradingSafety';
 import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { evaluateQuoteFreshness } from '../core/marketDataQuality';
 
 export const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = tradingSafety.maxSingleSymbolConcentrationPct;
 export const MAX_SECTOR_CONCENTRATION_PCT = tradingSafety.maxSectorConcentrationPct;
@@ -76,6 +77,8 @@ export function returnCorrelation(closesA: number[], closesB: number[]): number 
 export interface ExistingPosition {
   symbol: string;
   quantity: number;
+  /** Observed mark in the caller's own clock/data context. Entry cost is not a current mark. */
+  mark?: { price: number | null; priceAgeMs: number | null; source: string };
 }
 
 export interface SizingContext {
@@ -186,6 +189,33 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
   }
 
   if (ctx.side === 'BUY') {
+    // ACTIVE Node sizing authority (engineOwnership.position_sizing; no Java counterpart).
+    // Value each holding at its own observed mark, never at the proposed symbol's price.
+    // The proposal's existing price_validity/data_freshness gates cover same-symbol holdings.
+    const valueHoldings = (positions: ExistingPosition[]) => {
+      const valuations = positions.map(p => {
+        const mark = p.symbol === ctx.symbol
+          ? { price: ctx.currentPrice, priceAgeMs: null, source: 'PROPOSAL_PRICE' }
+          : p.mark;
+        const freshness = p.symbol === ctx.symbol ? null : evaluateQuoteFreshness({ priceAgeMs: mark?.priceAgeMs ?? null });
+        const reason = !Number.isFinite(p.quantity) || p.quantity < 0 ? 'INVALID_HOLDING_QUANTITY'
+          : !mark || !isPositiveFiniteMoney(mark.price) ? 'MISSING_OR_INVALID_HOLDING_PRICE'
+          : !mark.source?.trim() ? 'UNKNOWN_HOLDING_PRICE_SOURCE'
+          : freshness && !freshness.passed ? 'STALE_OR_UNKNOWN_HOLDING_PRICE'
+          : null;
+        return {
+          symbol: p.symbol, quantity: p.quantity, price: mark?.price ?? null,
+          priceAgeMs: mark?.priceAgeMs ?? null, source: mark?.source ?? null,
+          value: reason ? null : p.quantity * mark!.price!, reason,
+        };
+      });
+      const unavailable = valuations.filter(v => v.reason !== null);
+      return {
+        value: unavailable.length ? null : valuations.reduce((sum, v) => sum + v.value!, 0),
+        valuations,
+        unavailableSymbols: unavailable.map(v => v.symbol),
+      };
+    };
     const existingPosition = ctx.existingPositions.find(p => p.symbol === ctx.symbol);
     const existingValue = existingPosition ? existingPosition.quantity * ctx.currentPrice : 0;
     const maxPositionValue = ctx.accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
@@ -208,16 +238,19 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
 
     const proposalSector = getSector(ctx.symbol);
     if (proposalSector) {
-      const sectorValue = ctx.existingPositions.reduce((sum, p) => getSector(p.symbol) === proposalSector ? sum + p.quantity * ctx.currentPrice : sum, 0);
+      const sectorMarks = valueHoldings(ctx.existingPositions.filter(p => getSector(p.symbol) === proposalSector));
+      const sectorValue = sectorMarks.value;
       const maxSectorValue = ctx.accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
-      const remainingSectorRoom = Math.max(0, maxSectorValue - sectorValue);
+      const remainingSectorRoom = sectorValue === null ? 0 : Math.max(0, maxSectorValue - sectorValue);
       const maxSharesBySector = Math.floor(remainingSectorRoom / ctx.currentPrice);
       const beforeSector = maxQuantity;
       maxQuantity = Math.min(maxQuantity, maxSharesBySector);
       const sectorFail = maxSharesBySector <= 0;
       record('sector_concentration', !sectorFail, {
-        status: sectorFail ? 'FAIL' : (beforeSector !== maxQuantity ? 'CLAMPED' : 'PASS'),
+        status: sectorValue === null ? 'UNKNOWN' : sectorFail ? 'FAIL' : (beforeSector !== maxQuantity ? 'CLAMPED' : 'PASS'),
         sector: proposalSector, sectorValue, maxSectorValue, capPct: MAX_SECTOR_CONCENTRATION_PCT,
+        holdingValuations: sectorMarks.valuations, unavailableSymbols: sectorMarks.unavailableSymbols,
+        ...(sectorValue === null ? { reason: 'HOLDING_VALUATION_UNAVAILABLE' } : {}),
         boundQuantity: beforeSector !== maxQuantity ? maxQuantity : null,
       });
       if (sectorFail) maxQuantity = 0;
@@ -231,23 +264,27 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     if (ctx.existingPositions.length > 0) {
       const proposalCloses = await ctx.getRecentCloses(ctx.symbol);
       if (proposalCloses) {
-        let correlatedValue = 0;
+        const correlatedPositions: ExistingPosition[] = [];
         for (const p of ctx.existingPositions) {
-          if (p.symbol === ctx.symbol) { correlatedValue += p.quantity * ctx.currentPrice; continue; }
+          if (p.symbol === ctx.symbol) { correlatedPositions.push(p); continue; }
           const otherCloses = await ctx.getRecentCloses(p.symbol);
           if (!otherCloses) continue;
           const corr = returnCorrelation(proposalCloses, otherCloses);
-          if (corr !== null && corr > CORRELATION_THRESHOLD) correlatedValue += p.quantity * ctx.currentPrice;
+          if (corr !== null && corr > CORRELATION_THRESHOLD) correlatedPositions.push(p);
         }
+        const correlatedMarks = valueHoldings(correlatedPositions);
+        const correlatedValue = correlatedMarks.value;
         const maxCorrelatedValue = ctx.accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
-        const remainingCorrelatedRoom = Math.max(0, maxCorrelatedValue - correlatedValue);
+        const remainingCorrelatedRoom = correlatedValue === null ? 0 : Math.max(0, maxCorrelatedValue - correlatedValue);
         const maxSharesByCorrelation = Math.floor(remainingCorrelatedRoom / ctx.currentPrice);
         const beforeCorr = maxQuantity;
         maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
         const corrFail = maxSharesByCorrelation <= 0;
         record('correlation_exposure', !corrFail, {
-          status: corrFail ? 'FAIL' : (beforeCorr !== maxQuantity ? 'CLAMPED' : 'PASS'),
+          status: correlatedValue === null ? 'UNKNOWN' : corrFail ? 'FAIL' : (beforeCorr !== maxQuantity ? 'CLAMPED' : 'PASS'),
           correlatedValue, maxCorrelatedValue, capPct: MAX_CORRELATED_EXPOSURE_PCT,
+          holdingValuations: correlatedMarks.valuations, unavailableSymbols: correlatedMarks.unavailableSymbols,
+          ...(correlatedValue === null ? { reason: 'HOLDING_VALUATION_UNAVAILABLE' } : {}),
           boundQuantity: beforeCorr !== maxQuantity ? maxQuantity : null,
         });
         if (corrFail) maxQuantity = 0;

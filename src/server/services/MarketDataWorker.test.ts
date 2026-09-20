@@ -529,6 +529,18 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
   // recordMarketDataError()/getActiveSlots() make that failure visible without changing what gets
   // subscribed or evicted.
   describe('recordMarketDataError() (IBKR reqMktData rejection surfacing)', () => {
+    it('invalidates old quotes and errors when the broker issues a new subscription generation', () => {
+      worker.setBrokerQuoteContext({ backend: 'ibkr_gateway', hardCapOverride: 90 });
+      worker.ingestIbkrQuote('AAPL', 100);
+      worker.recordMarketDataError('AAPL', 354, 'old generation rejected');
+      worker.recordMarketDataSubscription('AAPL');
+      expect(worker.getLatestPrice('AAPL')).toBeNull();
+      expect(worker.getLatestPriceAgeMs('AAPL')).toBeNull();
+      expect(worker.getMarketDataError('AAPL')).toBeNull();
+      expect(worker.getTickCount('AAPL')).toBe(0);
+      worker.ingestIbkrQuote('AAPL', 101);
+      expect(worker.getLatestPrice('AAPL')).toBe(101);
+    });
     it('is null for a symbol with no recorded error', () => {
       expect(worker.getMarketDataError('NVDA')).toBeNull();
     });

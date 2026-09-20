@@ -2274,3 +2274,16 @@ pattern `ArgusCoreBoot.test.ts` already established. Full suite re-certified cle
 see `docs/audits/ARGUS_CALIBRATION_METHOD_COMPARISON_2026-09-15.md`'s "Process note" section for the
 original incident's own real-time verification (live PID/heartbeat/trading-state all confirmed
 unaffected throughout).
+
+
+## September 19, 2026 correctness update: recovery, valuation and evidence
+
+Implemented source behavior (runtime deployment is separately recorded in `docs/audits/ARGUS_ZERO_TRADE_2026-09-18.md`):
+
+- `IbkrSocketSession` keeps bounded desired symbol ownership across socket generations, restores subscriptions once on authenticated managed-account receipt, and uses the existing IBApi scheduler. Request-ID tick routing remains generation-specific. Cancellation while disconnected removes ownership; explicit adapter teardown clears intent and stops reconnect. `BrokerManager` notifies `MarketDataWorker` when a replacement request has actually been issued, invalidating prior generation quotes/errors. The maximum line count and SDK pacing are unchanged.
+- `ArgusRuntime.brokerReadiness()` checks broker synchronization, connection authentication where available, and bounded adapter health. `TradingReadinessGate` consumes that diagnostic without importing another broker authority. This does not turn cached reconciliation into fresh broker evidence or bypass reconciliation gates.
+- Existing Node-owned `PositionSizing` values relevant BUY holdings at their own fresh, sourced marks. RiskEngine supplies feed/replay-cache marks; BacktestEngine supplies the most recent bar visible to its synthetic clock. PIT risk forwards provenance. Missing or stale required marks prevent increased exposure. SELL exits retain existing risk and held-quantity constraints. Replay cache age is not proof of underlying bar age.
+- `executionQuality` partitions persisted evidence before query limits: organic paper needs affirmative consensus attribution and a recognized broker; manual, unattributed paper, replay, simulation, backtest, live and unknown remain separate. Explicit outer SQL column qualification protects correlated attribution subqueries. OMS environment stamping recognizes `ibkr_gateway` and `ibkr_web`; it does not retroactively relabel history.
+- Forecast contract `forecast-v2-gross-only-2026-09-19` reports Java gross-return statistics where available. Measured organic-paper arrival-to-fill slippage is provenance, not commissions/financing/total cost. Total cost, net expected return and probability of profit remain null. Migration 0070 makes cost nullable and preserves every historical row/index transactionally. Read views suppress unsupported legacy cost-derived fields while preserving their stored provenance. Existing historical probability examples above describe older outputs, not currently justified profit probabilities.
+
+The next economic validation requires measured total USD costs, environment-separated strategy attribution, out-of-sample and robustness evidence, and a supervised paper lifecycle only when legitimate approval occurs. Passing software tests does not establish positive net expectancy.

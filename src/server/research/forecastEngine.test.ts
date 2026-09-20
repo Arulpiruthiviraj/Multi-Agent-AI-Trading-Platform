@@ -88,6 +88,10 @@ describe('forecastEngine (Institutional Transformation Mandate Part 7)', () => {
     expect(forecast.status).toBe('VALID');
     expect(forecast.direction).toBe('SELL');
     expect(forecast.expectedReturn).toBe(-0.01);
+    expect(forecast.estimatedTransactionCostBps).toBeNull();
+    expect(forecast.netExpectedReturn).toBeNull();
+    expect(forecast.probabilityOfProfit).toBeNull();
+    expect(forecast.provenance.transactionCostSource).toBe('UNKNOWN_TOTAL_COST');
     expect(forecast.sampleSize).toBe(25);
     expect(forecast.modelVersion).toBe(mod.FORECAST_MODEL_VERSION);
     expect(forecast.provenance.sourceRowCount).toBe(25);
@@ -99,6 +103,8 @@ describe('forecastEngine (Institutional Transformation Mandate Part 7)', () => {
     expect(persisted).toHaveLength(1);
     expect(persisted[0].forecastStatus).toBe('VALID');
     expect(persisted[0].sampleSize).toBe(25);
+    expect(persisted[0].estimatedTransactionCostBps).toBeNull();
+    expect(persisted[0].netExpectedReturn).toBeNull();
 
     const readBack = await mod.mostRecentForecast('FCORIENT', 'TechnicalAgent', null, 'SELL');
     expect(readBack?.forecastId).toBe(forecast.forecastId);
@@ -323,5 +329,17 @@ describe('forecastEngine (Institutional Transformation Mandate Part 7)', () => {
   it('mostRecentForecast returns null (never fabricates) when no forecast has ever been persisted for that key', async () => {
     const result = await mod.mostRecentForecast('FCNEVER', 'QuantEngine', null, 'BUY');
     expect(result).toBeNull();
+  });
+
+  it('does not expose legacy zero-cost profit estimates and preserves the historical row', async () => {
+    const forecast = await mod.buildForecast({ agentName: 'LegacyCost', symbol: 'FCLEGACY', direction: 'BUY' });
+    sqliteDb.prepare('UPDATE quant_forecasts SET estimated_transaction_cost_bps=0, net_expected_return=0.25, probability_of_profit=0.9 WHERE forecast_id=?').run(forecast.forecastId);
+    const before = sqliteDb.prepare('SELECT * FROM quant_forecasts WHERE forecast_id=?').get(forecast.forecastId);
+    const read = await mod.mostRecentForecast('FCLEGACY', 'LegacyCost', null, 'BUY');
+    expect(read?.estimatedTransactionCostBps).toBeNull();
+    expect(read?.netExpectedReturn).toBeNull();
+    expect(read?.probabilityOfProfit).toBeNull();
+    expect(read?.provenance.readCostStatus).toBe('UNKNOWN_TOTAL_COST');
+    expect(sqliteDb.prepare('SELECT * FROM quant_forecasts WHERE forecast_id=?').get(forecast.forecastId)).toEqual(before);
   });
 });

@@ -115,11 +115,11 @@ export function resolveOmsExecutionEnvironment(opts: {
   const id = String(opts.brokerId || '');
   if (id === 'historical_replay') return 'REPLAY';
   if (mode === 'LIVE') {
-    if (id === 'alpaca' || id === 'ibkr' || id === 'coinbase') return 'LIVE';
+    if (id === 'alpaca' || id === 'ibkr' || id === 'ibkr_gateway' || id === 'ibkr_web' || id === 'coinbase') return 'LIVE';
     return 'UNKNOWN';
   }
   if (id === 'internal_paper') return 'PAPER';
-  if (mode === 'PAPER' && (id === 'alpaca' || id === 'ibkr' || id === 'coinbase' || id === 'questrade')) {
+  if (mode === 'PAPER' && (id === 'alpaca' || id === 'ibkr' || id === 'ibkr_gateway' || id === 'ibkr_web' || id === 'coinbase' || id === 'questrade')) {
     return 'PAPER';
   }
   return 'UNKNOWN';

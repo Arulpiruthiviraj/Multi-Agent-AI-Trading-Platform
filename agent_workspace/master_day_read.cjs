@@ -1,0 +1,11 @@
+const fs=require('node:fs');const Database=require('better-sqlite3');
+const db=new Database('data/argus.db',{readonly:true,fileMustExist:true});const start=Date.parse('2026-09-19T04:00:00Z'),end=Date.now();db.exec('BEGIN');
+const out={start:new Date(start).toISOString(),cutoff:new Date(end).toISOString()};
+out.events=db.prepare('SELECT event_type,count(*) n FROM event_traces WHERE timestamp>=? AND timestamp<? GROUP BY event_type').all(start,end);
+out.observability=db.prepare('SELECT event_type,count(*) n,count(DISTINCT symbol) symbols FROM observability_events WHERE ts>=? AND ts<? GROUP BY event_type').all(start,end);
+out.terminals=db.prepare("SELECT payload FROM observability_events WHERE ts>=? AND ts<? AND event_type='CONSENSUS_TERMINAL_REASON'").all(start,end).map(r=>JSON.parse(r.payload));
+out.execution={};for(const [t,c] of [['risk_assessments','created_at'],['trades','timestamp'],['fills','filled_at']])out.execution[t]=db.prepare(`SELECT count(*) n FROM ${t} WHERE ${c}>=? AND ${c}<?`).get(out.start,out.cutoff).n;
+out.migration=db.prepare('SELECT * FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1').get();
+db.close();fs.writeFileSync('agent_workspace/master_day_snapshot.json',JSON.stringify(out,null,2));console.log(JSON.stringify({start:out.start,cutoff:out.cutoff,execution:out.execution,terminals:out.terminals.length,events:out.events},null,2));
+const runtime=JSON.parse(fs.readFileSync('agent_workspace/master_runtime_snapshot.json','utf8'));const slots=runtime['/api/v2/continuous-intelligence/status'].body.activeSlots;
+console.log(JSON.stringify({errors:slots.filter(s=>s.marketDataError?.code===200).map(s=>({symbol:s.symbol,error:s.marketDataError})),sample:slots.find(s=>s.marketDataError?.code===10089)},null,2));

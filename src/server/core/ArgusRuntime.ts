@@ -187,6 +187,30 @@ export class ArgusRuntime {
     };
   }
 
+  /** Read-only diagnostic: selection/sync state alone cannot prove a broker session is usable. */
+  async brokerReadiness(): Promise<{ ready: boolean; detail: string }> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const manager = BrokerManager.getInstance();
+      const broker = manager.getActiveBroker();
+      if (!broker) return { ready: false, detail: 'no active broker' };
+      if (!manager.isReadyForReconciliation()) return { ready: false, detail: `${broker.id}: broker state not synchronized` };
+      const snapshot = (broker as typeof broker & { getConnectionSnapshot?: () => Record<string, unknown> }).getConnectionSnapshot?.();
+      if (snapshot && ('authenticated' in snapshot || broker.id === 'ibkr_gateway') && snapshot.authenticated !== true) {
+        return { ready: false, detail: `${broker.id}: session not authenticated` };
+      }
+      const status = await Promise.race([
+        broker.health(),
+        new Promise<string>(resolve => { timer = setTimeout(() => resolve('TIMEOUT'), 2500); }),
+      ]);
+      return { ready: status.toUpperCase() === 'HEALTHY', detail: `${broker.id}: ${status}` };
+    } catch {
+      return { ready: false, detail: 'broker connection evidence unavailable' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   health(): ArgusRuntimeHealth {
     const feed = marketDataWorker.getFeedStatus();
     let brokerId: string | null = null;

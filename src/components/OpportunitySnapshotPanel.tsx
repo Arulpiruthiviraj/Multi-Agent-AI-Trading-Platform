@@ -123,7 +123,7 @@ export default function OpportunitySnapshotPanel() {
                   ? 'NO_FORECAST'
                   : f.status !== 'VALID'
                     ? f.status
-                    : `${((f.expectedReturn ?? 0) * 100).toFixed(2)}% / ${((f.probabilityOfProfit ?? 0) * 100).toFixed(0)}%`;
+                    : `${f.expectedReturn === null ? 'UNKNOWN' : `${(f.expectedReturn * 100).toFixed(2)}%`} / ${f.probabilityOfProfit === null ? 'UNKNOWN' : `${(f.probabilityOfProfit * 100).toFixed(0)}%`}`;
                 const diversityLabel = !f || f.effectiveIndependentCount === null
                   ? 'UNKNOWN'
                   : `${f.effectiveIndependentCount.toFixed(1)} (${f.familyCount ?? '?'})`;

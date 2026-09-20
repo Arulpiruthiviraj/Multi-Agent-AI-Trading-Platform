@@ -42,7 +42,7 @@ export interface PitRiskContext {
   recentClosedPnlsNewestFirst: number[];
   buyTimestampsMs: number[];
   maxOrdersPerMinute: number;
-  existingPositions: Array<{ symbol: string; quantity: number; averagePrice?: number }>;
+  existingPositions: Array<{ symbol: string; quantity: number; averagePrice?: number; mark?: import('../PositionSizing').ExistingPosition['mark'] }>;
   maxTradeSizeDollar: number;
   maxPortfolioRiskPct: number;
   maxOpenPositions: number;
@@ -150,7 +150,7 @@ export async function evaluatePitRisk(ctx: PitRiskContext): Promise<PitRiskResul
       buyingPower: ctx.buyingPower,
       maxTradeSizeDollar: ctx.maxTradeSizeDollar,
       maxPortfolioRiskPct: ctx.maxPortfolioRiskPct,
-      existingPositions: ctx.existingPositions.map(p => ({ symbol: p.symbol, quantity: p.quantity })),
+      existingPositions: ctx.existingPositions,
       maxOpenPositions: ctx.maxOpenPositions,
       getRecentCloses: ctx.getRecentCloses,
       sizingMode: ctx.sizingMode,

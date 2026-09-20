@@ -1,0 +1,2734 @@
+{
+  "capturedAt": "2026-09-20T01:57:24.086Z",
+  "/api/v1/system/reconciliation/status": {
+    "http": 200,
+    "body": {
+      "tradingState": "TRADING_PAUSED",
+      "emergencyStopActive": false,
+      "broker": {
+        "name": "IBKR Gateway (Socket)",
+        "syncState": "READY",
+        "readyForReconciliation": true
+      },
+      "latest": {
+        "id": 4479,
+        "checkedAt": "2026-09-20T01:55:05.390Z",
+        "broker": "IBKR Gateway (Socket)",
+        "matches": true,
+        "mismatchCount": 0,
+        "actionTaken": null
+      },
+      "lastPause": null,
+      "acknowledgements": {
+        "count": 0,
+        "note": "PRE_EXISTING_RECONCILED rows exclude FILLED_ORDER_MISSING_LOCALLY pause impact only. Not organic paper. Not a resume."
+      },
+      "unackedFilledOrphans": [],
+      "ordersError": null,
+      "note": "This GET does not change tradingState. Acknowledge is POST /api/v1/system/reconciliation/acknowledge. Resume is POST /api/v1/system/resume."
+    }
+  },
+  "/api/v2/runtime/market/status": {
+    "http": 200,
+    "body": {
+      "ok": true,
+      "feed": {
+        "connected": true,
+        "readyState": null,
+        "authenticated": false,
+        "lastError": null,
+        "symbols": [
+          "SPY",
+          "QQQ",
+          "NVDA",
+          "AAPL",
+          "MSFT",
+          "TSLA",
+          "IWM",
+          "GLD",
+          "AMD",
+          "META",
+          "GM",
+          "ACN",
+          "ZM",
+          "HD",
+          "COIN",
+          "IBM",
+          "NFLX",
+          "F",
+          "DIA",
+          "SMH",
+          "XLF",
+          "XLE",
+          "XLK",
+          "TQQQ",
+          "SQQQ",
+          "AMZN",
+          "GOOGL",
+          "GOOG",
+          "AVGO",
+          "BRK.B",
+          "JPM",
+          "V",
+          "UNH",
+          "XOM",
+          "MA",
+          "LLY",
+          "JNJ",
+          "WMT",
+          "PG",
+          "COST",
+          "ABBV",
+          "ORCL",
+          "BAC",
+          "CRM",
+          "KO",
+          "MRK",
+          "PEP",
+          "CVX",
+          "TMO",
+          "CSCO",
+          "MCD",
+          "ADBE",
+          "LIN",
+          "ABT",
+          "WFC",
+          "TXN",
+          "DIS",
+          "QCOM",
+          "GE",
+          "CAT",
+          "INTU",
+          "VZ",
+          "AMAT",
+          "NOW",
+          "ISRG",
+          "CMCSA",
+          "UBER",
+          "PFE",
+          "NKE",
+          "SBUX",
+          "GS",
+          "MS",
+          "BLK",
+          "SCHW",
+          "AXP",
+          "BKNG",
+          "PLTR",
+          "SHOP",
+          "SQ",
+          "PYPL",
+          "MU",
+          "ARM",
+          "CRWD",
+          "PANW",
+          "SNOW",
+          "DDOG",
+          "NET",
+          "MARA",
+          "RIOT",
+          "SOXL"
+        ],
+        "streamingCap": 90
+      },
+      "live": "NO-GO"
+    }
+  },
+  "/api/v2/continuous-intelligence/status": {
+    "http": 200,
+    "body": {
+      "ok": true,
+      "live": "NO-GO",
+      "opportunityLoopEnabled": true,
+      "opportunityIdeasEnabled": true,
+      "portfolioIntelEnabled": true,
+      "tradePlanIdeasEnabled": true,
+      "tradePlanBuilderAgentEnabled": true,
+      "extendedHoursExecutionEnabled": true,
+      "honesty": "Continuous intelligence, not continuous trading. OpportunityDiscovery never emits TRADE_IDEA_GENERATED. Planner cap is MarketDataWorker.getEffectiveStreamingCap(): Alpaca/default uses maxActiveSubscriptions=12; ibkr_gateway raises hardCapOverride to ibkrConnection.maxMarketDataLines (90). When emptySlots>0, Discovery fills up to maxNewSubscriptionsPerCycle (20) per scan. OpportunityScreener ideas need ARGUS_OPPORTUNITY_IDEAS_ENABLED (one vote — consensus 0.75/min-2 unchanged). Missed-opportunity detection (Phase 4F) is diagnostic-only: it classifies where a PROMOTE-recommended candidate stalled in the funnel using existing telemetry, and never emits a trade idea or affects sizing/consensus.",
+      "entryConsensusUnchanged": true,
+      "consensusNote": "ChiefTrader min-agents and 0.75 bar are unchanged. Risk-exit SELL from PortfolioManager still skips entry quorum and still hits RiskEngine/OMS.",
+      "maxActiveSubscriptions": 12,
+      "activeSymbols": [
+        "SPY",
+        "QQQ",
+        "NVDA",
+        "AAPL",
+        "MSFT",
+        "TSLA",
+        "IWM",
+        "GLD",
+        "AMD",
+        "META",
+        "GM",
+        "ACN",
+        "ZM",
+        "HD",
+        "COIN",
+        "IBM",
+        "NFLX",
+        "F",
+        "DIA",
+        "SMH",
+        "XLF",
+        "XLE",
+        "XLK",
+        "TQQQ",
+        "SQQQ",
+        "AMZN",
+        "GOOGL",
+        "GOOG",
+        "AVGO",
+        "BRK.B",
+        "JPM",
+        "V",
+        "UNH",
+        "XOM",
+        "MA",
+        "LLY",
+        "JNJ",
+        "WMT",
+        "PG",
+        "COST",
+        "ABBV",
+        "ORCL",
+        "BAC",
+        "CRM",
+        "KO",
+        "MRK",
+        "PEP",
+        "CVX",
+        "TMO",
+        "CSCO",
+        "MCD",
+        "ADBE",
+        "LIN",
+        "ABT",
+        "WFC",
+        "TXN",
+        "DIS",
+        "QCOM",
+        "GE",
+        "CAT",
+        "INTU",
+        "VZ",
+        "AMAT",
+        "NOW",
+        "ISRG",
+        "CMCSA",
+        "UBER",
+        "PFE",
+        "NKE",
+        "SBUX",
+        "GS",
+        "MS",
+        "BLK",
+        "SCHW",
+        "AXP",
+        "BKNG",
+        "PLTR",
+        "SHOP",
+        "SQ",
+        "PYPL",
+        "MU",
+        "ARM",
+        "CRWD",
+        "PANW",
+        "SNOW",
+        "DDOG",
+        "NET",
+        "MARA",
+        "RIOT",
+        "SOXL"
+      ],
+      "activeSlots": [
+        {
+          "slot": 1,
+          "symbol": "GLD",
+          "type": "ANCHOR",
+          "score": 11.000151540090629,
+          "dwellAgeMs": 46736723,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.GLD ARCA/TOP/ALL",
+            "atMs": 1789822708329
+          }
+        },
+        {
+          "slot": 2,
+          "symbol": "QQQ",
+          "type": "ANCHOR",
+          "score": 18.210792615651943,
+          "dwellAgeMs": 46736729,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.QQQ NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822707833
+          }
+        },
+        {
+          "slot": 3,
+          "symbol": "SPY",
+          "type": "ANCHOR",
+          "score": 12.793754723650425,
+          "dwellAgeMs": 46736731,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SPY ARCA/TOP/ALL",
+            "atMs": 1789822707785
+          }
+        },
+        {
+          "slot": 4,
+          "symbol": "AAPL",
+          "type": "DYNAMIC",
+          "score": 19.351072481565076,
+          "dwellAgeMs": 46736727,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.AAPL NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822708118
+          }
+        },
+        {
+          "slot": 5,
+          "symbol": "ABBV",
+          "type": "DYNAMIC",
+          "score": 22.809851274731678,
+          "dwellAgeMs": 46303173,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ABBV NYSE/TOP/ALL",
+            "atMs": 1789823142973
+          }
+        },
+        {
+          "slot": 6,
+          "symbol": "ABT",
+          "type": "DYNAMIC",
+          "score": 12.2279444790342,
+          "dwellAgeMs": 45966289,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ABT NYSE/TOP/ALL",
+            "atMs": 1789823479232
+          }
+        },
+        {
+          "slot": 7,
+          "symbol": "ACN",
+          "type": "DYNAMIC",
+          "score": 45.17323381449108,
+          "dwellAgeMs": 46655554,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ACN NYSE/TOP/ALL",
+            "atMs": 1789822789620
+          }
+        },
+        {
+          "slot": 8,
+          "symbol": "ADBE",
+          "type": "DYNAMIC",
+          "score": 16.348453292774792,
+          "dwellAgeMs": 45966290,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ADBE NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823478999
+          }
+        },
+        {
+          "slot": 9,
+          "symbol": "AMAT",
+          "type": "DYNAMIC",
+          "score": 24.020015033050083,
+          "dwellAgeMs": 45966279,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.AMAT NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823480276
+          }
+        },
+        {
+          "slot": 10,
+          "symbol": "AMD",
+          "type": "DYNAMIC",
+          "score": 14.832666041553722,
+          "dwellAgeMs": 46736722,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.AMD NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822708527
+          }
+        },
+        {
+          "slot": 11,
+          "symbol": "AMZN",
+          "type": "DYNAMIC",
+          "score": 16.729005144457783,
+          "dwellAgeMs": 46655539,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.AMZN NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822791126
+          }
+        },
+        {
+          "slot": 12,
+          "symbol": "ARM",
+          "type": "DYNAMIC",
+          "score": 10.753167873917207,
+          "dwellAgeMs": 45630031,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ARM NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823817434
+          }
+        },
+        {
+          "slot": 13,
+          "symbol": "AVGO",
+          "type": "DYNAMIC",
+          "score": 29.258298930543813,
+          "dwellAgeMs": 46655536,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.AVGO NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822792248
+          }
+        },
+        {
+          "slot": 14,
+          "symbol": "AXP",
+          "type": "DYNAMIC",
+          "score": 19.442543558070177,
+          "dwellAgeMs": 45630038,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.AXP NYSE/TOP/ALL",
+            "atMs": 1789823816393
+          }
+        },
+        {
+          "slot": 15,
+          "symbol": "BAC",
+          "type": "DYNAMIC",
+          "score": 12.11854294951787,
+          "dwellAgeMs": 46303171,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.BAC NYSE/TOP/ALL",
+            "atMs": 1789823143260
+          }
+        },
+        {
+          "slot": 16,
+          "symbol": "BKNG",
+          "type": "DYNAMIC",
+          "score": 13.793471776177018,
+          "dwellAgeMs": 45630037,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.BKNG NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823816393
+          }
+        },
+        {
+          "slot": 17,
+          "symbol": "BLK",
+          "type": "DYNAMIC",
+          "score": 13.883939220056757,
+          "dwellAgeMs": 45630039,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.BLK NYSE/TOP/ALL",
+            "atMs": 1789823816346
+          }
+        },
+        {
+          "slot": 18,
+          "symbol": "BRK.B",
+          "type": "DYNAMIC",
+          "score": 15.114664328145016,
+          "dwellAgeMs": 46303188,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 200,
+            "message": "No security definition has been found for the request",
+            "atMs": 1789823142105
+          }
+        },
+        {
+          "slot": 19,
+          "symbol": "CAT",
+          "type": "DYNAMIC",
+          "score": 13.962716121877392,
+          "dwellAgeMs": 45966282,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.CAT NYSE/TOP/ALL",
+            "atMs": 1789823479776
+          }
+        },
+        {
+          "slot": 20,
+          "symbol": "CMCSA",
+          "type": "DYNAMIC",
+          "score": 13.439489185371546,
+          "dwellAgeMs": 45966275,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.CMCSA NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823480278
+          }
+        },
+        {
+          "slot": 21,
+          "symbol": "COIN",
+          "type": "DYNAMIC",
+          "score": 38.75527672051995,
+          "dwellAgeMs": 46655551,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.COIN NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822789837
+          }
+        },
+        {
+          "slot": 22,
+          "symbol": "COST",
+          "type": "DYNAMIC",
+          "score": 14.862362966706788,
+          "dwellAgeMs": 46303174,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.COST NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823142972
+          }
+        },
+        {
+          "slot": 23,
+          "symbol": "CRM",
+          "type": "DYNAMIC",
+          "score": 13.703778216861043,
+          "dwellAgeMs": 46303170,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.CRM NYSE/TOP/ALL",
+            "atMs": 1789823143471
+          }
+        },
+        {
+          "slot": 24,
+          "symbol": "CRWD",
+          "type": "DYNAMIC",
+          "score": 17.85174821949789,
+          "dwellAgeMs": 45630030,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.CRWD NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823817435
+          }
+        },
+        {
+          "slot": 25,
+          "symbol": "CSCO",
+          "type": "DYNAMIC",
+          "score": 12.085054447259868,
+          "dwellAgeMs": 45966293,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.CSCO NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823478999
+          }
+        },
+        {
+          "slot": 26,
+          "symbol": "CVX",
+          "type": "DYNAMIC",
+          "score": 19.01445264658655,
+          "dwellAgeMs": 46303166,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.CVX NYSE/TOP/ALL",
+            "atMs": 1789823143473
+          }
+        },
+        {
+          "slot": 27,
+          "symbol": "DDOG",
+          "type": "DYNAMIC",
+          "score": 13.978669171545237,
+          "dwellAgeMs": 45630028,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.DDOG NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823817435
+          }
+        },
+        {
+          "slot": 28,
+          "symbol": "DIA",
+          "type": "DYNAMIC",
+          "score": 16.432546376938095,
+          "dwellAgeMs": 46655548,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.DIA ARCA/TOP/ALL",
+            "atMs": 1789822790405
+          }
+        },
+        {
+          "slot": 29,
+          "symbol": "DIS",
+          "type": "DYNAMIC",
+          "score": 19.158438794201214,
+          "dwellAgeMs": 45966285,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.DIS NYSE/TOP/ALL",
+            "atMs": 1789823479585
+          }
+        },
+        {
+          "slot": 30,
+          "symbol": "F",
+          "type": "DYNAMIC",
+          "score": 30.824052976363845,
+          "dwellAgeMs": 46655549,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.F NYSE/TOP/ALL",
+            "atMs": 1789822790241
+          }
+        },
+        {
+          "slot": 31,
+          "symbol": "GE",
+          "type": "DYNAMIC",
+          "score": 8.56655486846802,
+          "dwellAgeMs": 45966283,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.GE NYSE/TOP/ALL",
+            "atMs": 1789823479776
+          }
+        },
+        {
+          "slot": 32,
+          "symbol": "GM",
+          "type": "DYNAMIC",
+          "score": 46.962123881240046,
+          "dwellAgeMs": 46655556,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.GM NYSE/TOP/ALL",
+            "atMs": 1789822789620
+          }
+        },
+        {
+          "slot": 33,
+          "symbol": "GOOG",
+          "type": "DYNAMIC",
+          "score": 15.590675994728366,
+          "dwellAgeMs": 46655537,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.GOOG NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822792244
+          }
+        },
+        {
+          "slot": 34,
+          "symbol": "GOOGL",
+          "type": "DYNAMIC",
+          "score": 26.719155351100472,
+          "dwellAgeMs": 46655538,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.GOOGL NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822791127
+          }
+        },
+        {
+          "slot": 35,
+          "symbol": "GS",
+          "type": "DYNAMIC",
+          "score": 11.401215430981585,
+          "dwellAgeMs": 45630041,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.GS NYSE/TOP/ALL",
+            "atMs": 1789823816007
+          }
+        },
+        {
+          "slot": 36,
+          "symbol": "HD",
+          "type": "DYNAMIC",
+          "score": 39.60281291939326,
+          "dwellAgeMs": 46655552,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.HD NYSE/TOP/ALL",
+            "atMs": 1789822789620
+          }
+        },
+        {
+          "slot": 37,
+          "symbol": "IBM",
+          "type": "DYNAMIC",
+          "score": 32.68722860109338,
+          "dwellAgeMs": 46655550,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.IBM NYSE/TOP/ALL",
+            "atMs": 1789822790083
+          }
+        },
+        {
+          "slot": 38,
+          "symbol": "INTU",
+          "type": "DYNAMIC",
+          "score": 15.87054101547604,
+          "dwellAgeMs": 45966281,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.INTU NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823480080
+          }
+        },
+        {
+          "slot": 39,
+          "symbol": "ISRG",
+          "type": "DYNAMIC",
+          "score": 14.09096449920049,
+          "dwellAgeMs": 45966277,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ISRG NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823480279
+          }
+        },
+        {
+          "slot": 40,
+          "symbol": "IWM",
+          "type": "DYNAMIC",
+          "score": 17.716471448550227,
+          "dwellAgeMs": 46736724,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.IWM ARCA/TOP/ALL",
+            "atMs": 1789822708327
+          }
+        },
+        {
+          "slot": 41,
+          "symbol": "JNJ",
+          "type": "DYNAMIC",
+          "score": 14.92261893206359,
+          "dwellAgeMs": 46303178,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.JNJ NYSE/TOP/ALL",
+            "atMs": 1789823142676
+          }
+        },
+        {
+          "slot": 42,
+          "symbol": "JPM",
+          "type": "DYNAMIC",
+          "score": 13.83397129608188,
+          "dwellAgeMs": 46303186,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.JPM NYSE/TOP/ALL",
+            "atMs": 1789823142105
+          }
+        },
+        {
+          "slot": 43,
+          "symbol": "KO",
+          "type": "DYNAMIC",
+          "score": 15.283518481487182,
+          "dwellAgeMs": 46303169,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.KO NYSE/TOP/ALL",
+            "atMs": 1789823143472
+          }
+        },
+        {
+          "slot": 44,
+          "symbol": "LIN",
+          "type": "DYNAMIC",
+          "score": 9.526282951945053,
+          "dwellAgeMs": 45966290,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.LIN NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823478999
+          }
+        },
+        {
+          "slot": 45,
+          "symbol": "LLY",
+          "type": "DYNAMIC",
+          "score": 16.54853135081233,
+          "dwellAgeMs": 46303179,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.LLY NYSE/TOP/ALL",
+            "atMs": 1789823142472
+          }
+        },
+        {
+          "slot": 46,
+          "symbol": "MA",
+          "type": "DYNAMIC",
+          "score": 15.74818033202869,
+          "dwellAgeMs": 46303181,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.MA NYSE/TOP/ALL",
+            "atMs": 1789823142471
+          }
+        },
+        {
+          "slot": 47,
+          "symbol": "MARA",
+          "type": "DYNAMIC",
+          "score": 19.03670452730404,
+          "dwellAgeMs": 43946052,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.MARA NASDAQ.SCM/TOP/ALL",
+            "atMs": 1789825499564
+          }
+        },
+        {
+          "slot": 48,
+          "symbol": "MCD",
+          "type": "DYNAMIC",
+          "score": 21.59240611555362,
+          "dwellAgeMs": 45966291,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.MCD NYSE/TOP/ALL",
+            "atMs": 1789823478999
+          }
+        },
+        {
+          "slot": 49,
+          "symbol": "META",
+          "type": "DYNAMIC",
+          "score": 19.357765657987844,
+          "dwellAgeMs": 46736721,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.META NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822708572
+          }
+        },
+        {
+          "slot": 50,
+          "symbol": "MRK",
+          "type": "DYNAMIC",
+          "score": 9.226656436045342,
+          "dwellAgeMs": 46303168,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.MRK NYSE/TOP/ALL",
+            "atMs": 1789823143473
+          }
+        },
+        {
+          "slot": 51,
+          "symbol": "MS",
+          "type": "DYNAMIC",
+          "score": 13.073470894548143,
+          "dwellAgeMs": 45630040,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.MS NYSE/TOP/ALL",
+            "atMs": 1789823816007
+          }
+        },
+        {
+          "slot": 52,
+          "symbol": "MSFT",
+          "type": "DYNAMIC",
+          "score": 18.977730916186967,
+          "dwellAgeMs": 46736726,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.MSFT NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822708119
+          }
+        },
+        {
+          "slot": 53,
+          "symbol": "MU",
+          "type": "DYNAMIC",
+          "score": 25.601291218951353,
+          "dwellAgeMs": 45630033,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.MU NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823816847
+          }
+        },
+        {
+          "slot": 54,
+          "symbol": "NET",
+          "type": "DYNAMIC",
+          "score": 16.71906687501175,
+          "dwellAgeMs": 45630027,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.NET NYSE/TOP/ALL",
+            "atMs": 1789823817437
+          }
+        },
+        {
+          "slot": 55,
+          "symbol": "NFLX",
+          "type": "DYNAMIC",
+          "score": 32.297517010577884,
+          "dwellAgeMs": 46655549,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.NFLX NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822790083
+          }
+        },
+        {
+          "slot": 56,
+          "symbol": "NKE",
+          "type": "DYNAMIC",
+          "score": 15.169349303234595,
+          "dwellAgeMs": 45630044,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.NKE NYSE/TOP/ALL",
+            "atMs": 1789823816007
+          }
+        },
+        {
+          "slot": 57,
+          "symbol": "NOW",
+          "type": "DYNAMIC",
+          "score": 20.980104932932736,
+          "dwellAgeMs": 45966278,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.NOW NYSE/TOP/ALL",
+            "atMs": 1789823480277
+          }
+        },
+        {
+          "slot": 58,
+          "symbol": "NVDA",
+          "type": "DYNAMIC",
+          "score": 16.09083288441916,
+          "dwellAgeMs": 46736728,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.NVDA NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822708026
+          }
+        },
+        {
+          "slot": 59,
+          "symbol": "ORCL",
+          "type": "DYNAMIC",
+          "score": 18.071588669035723,
+          "dwellAgeMs": 46303172,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ORCL NYSE/TOP/ALL",
+            "atMs": 1789823143176
+          }
+        },
+        {
+          "slot": 60,
+          "symbol": "PANW",
+          "type": "DYNAMIC",
+          "score": 15.600791807899467,
+          "dwellAgeMs": 45630030,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.PANW NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823817436
+          }
+        },
+        {
+          "slot": 61,
+          "symbol": "PEP",
+          "type": "DYNAMIC",
+          "score": 16.74882342543777,
+          "dwellAgeMs": 46303167,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.PEP NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823143473
+          }
+        },
+        {
+          "slot": 62,
+          "symbol": "PFE",
+          "type": "DYNAMIC",
+          "score": 18.268532694916605,
+          "dwellAgeMs": 45966272,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.PFE NYSE/TOP/ALL",
+            "atMs": 1789823480279
+          }
+        },
+        {
+          "slot": 63,
+          "symbol": "PG",
+          "type": "DYNAMIC",
+          "score": 15.021418808052578,
+          "dwellAgeMs": 46303176,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.PG NYSE/TOP/ALL",
+            "atMs": 1789823142926
+          }
+        },
+        {
+          "slot": 64,
+          "symbol": "PLTR",
+          "type": "DYNAMIC",
+          "score": 13.952669740846224,
+          "dwellAgeMs": 45630036,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.PLTR NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823816596
+          }
+        },
+        {
+          "slot": 65,
+          "symbol": "PYPL",
+          "type": "DYNAMIC",
+          "score": 26.984016674951654,
+          "dwellAgeMs": 45630034,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.PYPL NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823816846
+          }
+        },
+        {
+          "slot": 66,
+          "symbol": "QCOM",
+          "type": "DYNAMIC",
+          "score": 23.844398169366354,
+          "dwellAgeMs": 45966284,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.QCOM NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823479731
+          }
+        },
+        {
+          "slot": 67,
+          "symbol": "RIOT",
+          "type": "DYNAMIC",
+          "score": 9.90492557995717,
+          "dwellAgeMs": 42920741,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.RIOT NASDAQ.SCM/TOP/ALL",
+            "atMs": 1789826525159
+          }
+        },
+        {
+          "slot": 68,
+          "symbol": "SBUX",
+          "type": "DYNAMIC",
+          "score": 15.378707917410733,
+          "dwellAgeMs": 45630042,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SBUX NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823816007
+          }
+        },
+        {
+          "slot": 69,
+          "symbol": "SCHW",
+          "type": "DYNAMIC",
+          "score": 16.03565310524794,
+          "dwellAgeMs": 45630038,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SCHW NYSE/TOP/ALL",
+            "atMs": 1789823816392
+          }
+        },
+        {
+          "slot": 70,
+          "symbol": "SHOP",
+          "type": "DYNAMIC",
+          "score": 19.715312159614353,
+          "dwellAgeMs": 45630035,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SHOP NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823816642
+          }
+        },
+        {
+          "slot": 71,
+          "symbol": "SMH",
+          "type": "DYNAMIC",
+          "score": 14.668988256077247,
+          "dwellAgeMs": 46655547,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SMH NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822790406
+          }
+        },
+        {
+          "slot": 72,
+          "symbol": "SNOW",
+          "type": "DYNAMIC",
+          "score": 11.652588097953982,
+          "dwellAgeMs": 45630029,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SNOW NYSE/TOP/ALL",
+            "atMs": 1789823817436
+          }
+        },
+        {
+          "slot": 73,
+          "symbol": "SOXL",
+          "type": "DYNAMIC",
+          "score": 3.9909559284552545,
+          "dwellAgeMs": 215334,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SOXL ARCA/TOP/ALL",
+            "atMs": 1789869230778
+          }
+        },
+        {
+          "slot": 74,
+          "symbol": "SQ",
+          "type": "DYNAMIC",
+          "score": 14.664789478632892,
+          "dwellAgeMs": 45630035,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 200,
+            "message": "No security definition has been found for the request",
+            "atMs": 1789823816568
+          }
+        },
+        {
+          "slot": 75,
+          "symbol": "SQQQ",
+          "type": "DYNAMIC",
+          "score": 11.983168942476516,
+          "dwellAgeMs": 46655540,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.SQQQ NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822791077
+          }
+        },
+        {
+          "slot": 76,
+          "symbol": "TMO",
+          "type": "DYNAMIC",
+          "score": 21.446621714699567,
+          "dwellAgeMs": 46303165,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.TMO NYSE/TOP/ALL",
+            "atMs": 1789823143474
+          }
+        },
+        {
+          "slot": 77,
+          "symbol": "TQQQ",
+          "type": "DYNAMIC",
+          "score": 20.286789871676177,
+          "dwellAgeMs": 46655541,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.TQQQ NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822790923
+          }
+        },
+        {
+          "slot": 78,
+          "symbol": "TSLA",
+          "type": "DYNAMIC",
+          "score": 15.275419496873926,
+          "dwellAgeMs": 46736725,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.TSLA NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822708278
+          }
+        },
+        {
+          "slot": 79,
+          "symbol": "TXN",
+          "type": "DYNAMIC",
+          "score": 13.251741604115741,
+          "dwellAgeMs": 45966286,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.TXN NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823479481
+          }
+        },
+        {
+          "slot": 80,
+          "symbol": "UBER",
+          "type": "DYNAMIC",
+          "score": 9.692593136574317,
+          "dwellAgeMs": 45966274,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.UBER NYSE/TOP/ALL",
+            "atMs": 1789823480278
+          }
+        },
+        {
+          "slot": 81,
+          "symbol": "UNH",
+          "type": "DYNAMIC",
+          "score": 10.747836967270992,
+          "dwellAgeMs": 46303183,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.UNH NYSE/TOP/ALL",
+            "atMs": 1789823142109
+          }
+        },
+        {
+          "slot": 82,
+          "symbol": "V",
+          "type": "DYNAMIC",
+          "score": 14.494757201924063,
+          "dwellAgeMs": 46303184,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.V NYSE/TOP/ALL",
+            "atMs": 1789823142109
+          }
+        },
+        {
+          "slot": 83,
+          "symbol": "VZ",
+          "type": "DYNAMIC",
+          "score": 11.21511119950329,
+          "dwellAgeMs": 45966280,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.VZ NYSE/TOP/ALL",
+            "atMs": 1789823480082
+          }
+        },
+        {
+          "slot": 84,
+          "symbol": "WFC",
+          "type": "DYNAMIC",
+          "score": 13.266356085735826,
+          "dwellAgeMs": 45966287,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.WFC NYSE/TOP/ALL",
+            "atMs": 1789823479277
+          }
+        },
+        {
+          "slot": 85,
+          "symbol": "WMT",
+          "type": "DYNAMIC",
+          "score": 19.783520776335788,
+          "dwellAgeMs": 46303177,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.WMT NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789823142762
+          }
+        },
+        {
+          "slot": 86,
+          "symbol": "XLE",
+          "type": "DYNAMIC",
+          "score": 9.611728971296468,
+          "dwellAgeMs": 46655545,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.XLE ARCA/TOP/ALL",
+            "atMs": 1789822790624
+          }
+        },
+        {
+          "slot": 87,
+          "symbol": "XLF",
+          "type": "DYNAMIC",
+          "score": 16.03018909373412,
+          "dwellAgeMs": 46655546,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.XLF ARCA/TOP/ALL",
+            "atMs": 1789822790577
+          }
+        },
+        {
+          "slot": 88,
+          "symbol": "XLK",
+          "type": "DYNAMIC",
+          "score": 14.144371695266376,
+          "dwellAgeMs": 46655544,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.XLK ARCA/TOP/ALL",
+            "atMs": 1789822790626
+          }
+        },
+        {
+          "slot": 89,
+          "symbol": "XOM",
+          "type": "DYNAMIC",
+          "score": 14.237932811844207,
+          "dwellAgeMs": 46303182,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.XOM NYSE/TOP/ALL",
+            "atMs": 1789823142425
+          }
+        },
+        {
+          "slot": 90,
+          "symbol": "ZM",
+          "type": "DYNAMIC",
+          "score": 42.99188949743905,
+          "dwellAgeMs": 46655553,
+          "tickCount": 0,
+          "marketDataError": {
+            "code": 10089,
+            "message": "Requested market data requires additional subscription for API. See link in 'Market Data Connections' dialog for more details.Delayed market data is available.ZM NASDAQ.NMS/TOP/ALL",
+            "atMs": 1789822789620
+          }
+        }
+      ],
+      "lastScan": {
+        "scannedCount": 122,
+        "topMovers": [
+          "MARA",
+          "COIN",
+          "HOOD",
+          "RIOT",
+          "SOXL",
+          "LRCX",
+          "AMAT",
+          "GM",
+          "ACN",
+          "QCOM",
+          "NFLX",
+          "KLAC"
+        ],
+        "top": [
+          {
+            "symbol": "MARA",
+            "momentumScore": 7.262801967208218,
+            "intradayPctChange": 13.648068669527897,
+            "relativeVolume": 1.4612999631324601
+          },
+          {
+            "symbol": "COIN",
+            "momentumScore": 6.507483073110016,
+            "intradayPctChange": 11.698091515290868,
+            "relativeVolume": 2.1937274590074787
+          },
+          {
+            "symbol": "HOOD",
+            "momentumScore": 4.951084711028102,
+            "intradayPctChange": 9.134790528233152,
+            "relativeVolume": 1.2783806621438176
+          },
+          {
+            "symbol": "RIOT",
+            "momentumScore": 4.710272644047054,
+            "intradayPctChange": 8.521818597212695,
+            "relativeVolume": 1.4952111514690218
+          },
+          {
+            "symbol": "SOXL",
+            "momentumScore": 3.9909559284552545,
+            "intradayPctChange": 7.820401046207497,
+            "relativeVolume": 0.26848389476889434
+          },
+          {
+            "symbol": "LRCX",
+            "momentumScore": 3.7331228557285527,
+            "intradayPctChange": 6.912117102892264,
+            "relativeVolume": 0.9226905149176098
+          },
+          {
+            "symbol": "AMAT",
+            "momentumScore": 3.6657261727087413,
+            "intradayPctChange": 6.500665044995387,
+            "relativeVolume": 1.384645500703493
+          },
+          {
+            "symbol": "GM",
+            "momentumScore": 3.4341703396074736,
+            "intradayPctChange": -5.091202955437556,
+            "relativeVolume": 2.9610852749409924
+          },
+          {
+            "symbol": "ACN",
+            "momentumScore": 3.2410575281219556,
+            "intradayPctChange": -4.769538024911976,
+            "relativeVolume": 2.8525289990727294
+          },
+          {
+            "symbol": "QCOM",
+            "momentumScore": 3.238447650926204,
+            "intradayPctChange": -5.635072094995757,
+            "relativeVolume": 1.4017653413904865
+          },
+          {
+            "symbol": "NFLX",
+            "momentumScore": 2.927047082661168,
+            "intradayPctChange": -4.654714475431601,
+            "relativeVolume": 1.9979911515589603
+          },
+          {
+            "symbol": "KLAC",
+            "momentumScore": 2.689595603737658,
+            "intradayPctChange": 4.786446300574601,
+            "relativeVolume": 0.9879081781678567
+          }
+        ],
+        "latencyMs": 427,
+        "lastHttpStatus": 200,
+        "timestamp": "2026-09-20T01:53:10.832Z",
+        "rth": false,
+        "error": null
+      },
+      "lastOpportunityScan": {
+        "ran": true,
+        "skippedOverlap": false,
+        "enabled": true,
+        "scanned": 122,
+        "rejected": 0,
+        "shortlisted": 122,
+        "subscribeRequested": 1,
+        "ideasEmitted": 0,
+        "rejectedReasons": {},
+        "shortlist": [
+          {
+            "symbol": "SPY",
+            "assetClass": "ETF",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "QQQ",
+            "assetClass": "ETF",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "NVDA",
+            "assetClass": "LARGE_CAP",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "AAPL",
+            "assetClass": "LARGE_CAP",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MSFT",
+            "assetClass": "LARGE_CAP",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "TSLA",
+            "assetClass": "LARGE_CAP",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "IWM",
+            "assetClass": "ETF",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "GLD",
+            "assetClass": "ETF",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "AMD",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "META",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "DIA",
+            "assetClass": "ETF",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SMH",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "XLF",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "XLE",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "XLK",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SOXL",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "TQQQ",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SQQQ",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "AMZN",
+            "assetClass": "LARGE_CAP",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "GOOGL",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "GOOG",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "AVGO",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "BRK.B",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "JPM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "V",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "UNH",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "XOM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MA",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "LLY",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "JNJ",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "WMT",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "PG",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "HD",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "COST",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "ABBV",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "ORCL",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "BAC",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "CRM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "KO",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MRK",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "PEP",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "CVX",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "TMO",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "ACN",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "CSCO",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MCD",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "ADBE",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "LIN",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "ABT",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "WFC",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "TXN",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "IBM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "DIS",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "QCOM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "GE",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "CAT",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "INTU",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "VZ",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "AMAT",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "NOW",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "ISRG",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "CMCSA",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "UBER",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "PFE",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "BA",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "NKE",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SBUX",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "GS",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MS",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "BLK",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SCHW",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "AXP",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "BKNG",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "PLTR",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "COIN",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SHOP",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SQ",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "PYPL",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "NFLX",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MU",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "INTC",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "ARM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "CRWD",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "PANW",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "SNOW",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "DDOG",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "NET",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MDB",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "TEAM",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "ZM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "ROKU",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "SNAP",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "PINS",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "RBLX",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "SOFI",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "HOOD",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "MARA",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "RIOT",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "AAL",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "UAL",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "DAL",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "F",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "GM",
+            "assetClass": "UNKNOWN",
+            "reason": "already_subscribed"
+          },
+          {
+            "symbol": "RIVN",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "NIO",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "LCID",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "PATH",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "AI",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "S",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "OKTA",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "TTD",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "ABNB",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "MRVL",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "KLAC",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "LRCX",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "ASML",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "TSM",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "DELL",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "HPE",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "CSX",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "UNP",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          },
+          {
+            "symbol": "FDX",
+            "assetClass": "UNKNOWN",
+            "reason": "watch_candidate"
+          }
+        ],
+        "momentumHotSwap": true,
+        "momentumRanked": 8,
+        "rth": false,
+        "at": "2026-09-20T01:53:48.835Z",
+        "honesty": "Continuous intelligence, not continuous trading. OpportunityDiscovery never emits TRADE_IDEA_GENERATED. Planner cap is MarketDataWorker.getEffectiveStreamingCap(): Alpaca/default uses maxActiveSubscriptions=12; ibkr_gateway raises hardCapOverride to ibkrConnection.maxMarketDataLines (90). When emptySlots>0, Discovery fills up to maxNewSubscriptionsPerCycle (20) per scan. OpportunityScreener ideas need ARGUS_OPPORTUNITY_IDEAS_ENABLED (one vote — consensus 0.75/min-2 unchanged). Missed-opportunity detection (Phase 4F) is diagnostic-only: it classifies where a PROMOTE-recommended candidate stalled in the funnel using existing telemetry, and never emits a trade idea or affects sizing/consensus."
+      },
+      "candidates": [
+        {
+          "symbol": "AMAT",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "NOW",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "ISRG",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "CMCSA",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "UBER",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "PFE",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "BA",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "NKE",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "SBUX",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "GS",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "MS",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "BLK",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "SCHW",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "AXP",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "BKNG",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "PLTR",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "COIN",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "SHOP",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "SQ",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "PYPL",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "NFLX",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "MU",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "INTC",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "ARM",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "CRWD",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "PANW",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "SNOW",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "DDOG",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "NET",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "MDB",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "TEAM",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "ZM",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "ROKU",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "SNAP",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "PINS",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "RBLX",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "SOFI",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "HOOD",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "MARA",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "RIOT",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "AAL",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "UAL",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "DAL",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "F",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "GM",
+          "state": "WATCHING",
+          "assetClass": "UNKNOWN",
+          "reason": "already_subscribed",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "RIVN",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "NIO",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "LCID",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "PATH",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "AI",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "S",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "OKTA",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "TTD",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "ABNB",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "MRVL",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "KLAC",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "LRCX",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "ASML",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "TSM",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "DELL",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "HPE",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "CSX",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "UNP",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        },
+        {
+          "symbol": "FDX",
+          "state": "DISCOVERED",
+          "assetClass": "UNKNOWN",
+          "reason": "watch_candidate",
+          "updatedAt": 1789869228833,
+          "lastIdeaAt": null
+        }
+      ],
+      "pipelineRate": {
+        "ideasInWindow": 0,
+        "aiCallsInWindow": 0,
+        "maxTradeIdeasPerMinute": 120,
+        "maxAiCallsPerMinute": 90,
+        "ideasDropped": 0,
+        "aiDropped": 0,
+        "windowMs": 60000
+      },
+      "ideasEmittedByScanner": 0,
+      "broadUniverse": {
+        "enabled": true,
+        "lastRefresh": {
+          "ran": true,
+          "enabled": true,
+          "assetsFetched": 8508,
+          "screened": 8449,
+          "candidates": 0,
+          "error": null,
+          "at": "2026-09-20T01:48:28.596Z",
+          "stage1RejectionCounts": {
+            "PRICE": 1975,
+            "DOLLAR_VOLUME": 5411,
+            "SPREAD": 632,
+            "NO_SNAPSHOT_DATA": 59
+          }
+        },
+        "cachedCandidateCount": 0
+      },
+      "movers": {
+        "enabled": true,
+        "lastRefresh": {
+          "ran": true,
+          "enabled": true,
+          "gainersFetched": 50,
+          "losersFetched": 50,
+          "screened": 99,
+          "candidates": 0,
+          "error": null,
+          "at": "2026-09-20T01:55:06.349Z"
+        },
+        "cachedCandidateCount": 0
+      },
+      "newsCatalystDiscovery": {
+        "enabled": false,
+        "lastRefresh": {
+          "ran": false,
+          "enabled": false,
+          "catalystsConsidered": 0,
+          "screened": 0,
+          "candidates": 0,
+          "error": null,
+          "at": "1970-01-01T00:00:00.000Z"
+        },
+        "cachedCandidateCount": 0
+      }
+    }
+  },
+  "/api/v1/portfolio": {
+    "http": 200,
+    "body": {
+      "available": true,
+      "cash": 1000482.85,
+      "buying_power": 3337511.97,
+      "equity": 1001253.59,
+      "positions": [],
+      "peakValuation": 1001253.59,
+      "drawdown": 0,
+      "activeBrokerId": "ibkr_gateway",
+      "activeBrokerName": "IBKR Gateway (Socket)",
+      "viewing": "Interactive Brokers Paper (Gateway) (DUR959160)"
+    }
+  },
+  "/api/v1/orders": {
+    "http": 200,
+    "body": {
+      "orders": [],
+      "note": "Trade ledger alias; OMS has no separate orders table."
+    }
+  }
+}

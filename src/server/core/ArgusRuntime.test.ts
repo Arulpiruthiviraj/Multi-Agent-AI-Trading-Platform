@@ -1,9 +1,34 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import { existsSync, unlinkSync } from 'node:fs';
 
 describe('ArgusRuntime lifecycle', () => {
+  it('does not call a selected, synchronized but unauthenticated Gateway ready', async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const { argusRuntime } = await import('./ArgusRuntime');
+    const manager = BrokerManager.getInstance();
+    const health = vi.fn(async () => 'Healthy');
+    vi.spyOn(manager, 'isReadyForReconciliation').mockReturnValue(true);
+    vi.spyOn(manager, 'getActiveBroker').mockReturnValue({ id: 'ibkr_gateway', getConnectionSnapshot: () => ({ authenticated: false }), health } as any);
+    expect(await argusRuntime.brokerReadiness()).toEqual({ ready: false, detail: 'ibkr_gateway: session not authenticated' });
+    expect(health).not.toHaveBeenCalled();
+  });
+
+  it('requires actual broker health as well as authenticated synchronized state', async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const { argusRuntime } = await import('./ArgusRuntime');
+    const manager = BrokerManager.getInstance();
+    const health = vi.fn(async () => 'Offline');
+    vi.spyOn(manager, 'isReadyForReconciliation').mockReturnValue(true);
+    vi.spyOn(manager, 'getActiveBroker').mockReturnValue({ id: 'ibkr_gateway', getConnectionSnapshot: () => ({ authenticated: true }), health } as any);
+    expect((await argusRuntime.brokerReadiness()).ready).toBe(false);
+    health.mockResolvedValue('Healthy');
+    expect((await argusRuntime.brokerReadiness()).ready).toBe(true);
+    // Web wrapper exposes mode/id only; its health method owns authentication evidence.
+    vi.spyOn(manager, 'getActiveBroker').mockReturnValue({ id: 'ibkr_web', getConnectionSnapshot: () => ({ mode: 'web' }), health } as any);
+    expect((await argusRuntime.brokerReadiness()).ready).toBe(true);
+  });
   let tmpDb: string;
   let tmpSessionPath: string;
 
@@ -49,6 +74,7 @@ describe('ArgusRuntime lifecycle', () => {
   }, 60_000);
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (existsSync(tmpDb)) {
       try { unlinkSync(tmpDb); } catch { /* ignore */ }
       try { unlinkSync(`${tmpDb}-wal`); } catch { /* ignore */ }

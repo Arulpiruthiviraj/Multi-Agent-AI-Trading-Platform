@@ -192,6 +192,11 @@ describe('Phase 21 evidence-path invariants', () => {
   });
 
   it('OMS environment stamp does not invent PAPER for unknown brokers', () => {
+    for (const brokerId of ['ibkr_gateway', 'ibkr_web']) {
+      expect(resolveOmsExecutionEnvironment({ brokerId, tradingMode: 'Paper' })).toBe('PAPER');
+      expect(resolveOmsExecutionEnvironment({ brokerId, tradingMode: 'LIVE' })).toBe('LIVE');
+      expect(resolveOmsExecutionEnvironment({ brokerId })).toBe('UNKNOWN');
+    }
     expect(resolveOmsExecutionEnvironment({ brokerId: 'internal_paper', tradingMode: 'Paper' })).toBe('PAPER');
     expect(resolveOmsExecutionEnvironment({ brokerId: 'lifecycle-stub', tradingMode: 'Paper' })).toBe('UNKNOWN');
     expect(resolveOmsExecutionEnvironment({ brokerId: 'internal_paper', tradingMode: 'LIVE' })).toBe('UNKNOWN');

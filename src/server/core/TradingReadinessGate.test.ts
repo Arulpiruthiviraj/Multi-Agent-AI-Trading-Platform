@@ -6,13 +6,14 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
  * combination (all healthy, AI layer down, market data down, etc.) is directly testable.
  */
 const { health } = vi.hoisted(() => ({ health: vi.fn() }));
+const { brokerReadiness } = vi.hoisted(() => ({ brokerReadiness: vi.fn() }));
 const { getMarketDataReadiness } = vi.hoisted(() => ({ getMarketDataReadiness: vi.fn() }));
 vi.mock('./marketDataReadiness', () => ({ getMarketDataReadiness }));
 const { getPipelineAgentSnapshot } = vi.hoisted(() => ({ getPipelineAgentSnapshot: vi.fn() }));
 const { getAIProviderHealthSnapshot } = vi.hoisted(() => ({ getAIProviderHealthSnapshot: vi.fn() }));
 const { dbSelectResult } = vi.hoisted(() => ({ dbSelectResult: { value: Promise.resolve([{}]) } }));
 
-vi.mock('./ArgusRuntime', () => ({ argusRuntime: { health } }));
+vi.mock('./ArgusRuntime', () => ({ argusRuntime: { health, brokerReadiness } }));
 vi.mock('./pipelineAgentSnapshot', () => ({ getPipelineAgentSnapshot }));
 vi.mock('../ai/AIProviderHealthCheck', () => ({ getAIProviderHealthSnapshot }));
 vi.mock('../db', () => ({
@@ -22,6 +23,7 @@ vi.mock('../db', () => ({
 import { getTradingReadinessSnapshot, renderTradingReadinessTree } from './TradingReadinessGate';
 
 function healthyDefaults() {
+  brokerReadiness.mockResolvedValue({ ready: true, detail: 'ibkr_gateway: Healthy' });
   getMarketDataReadiness.mockReturnValue({ ready: true, detail: 'connected; 1/1 active symbols have a valid fresh quote' });
   health.mockReturnValue({
     ok: true,
@@ -44,6 +46,12 @@ function healthyDefaults() {
 }
 
 describe('TradingReadinessGate', () => {
+  it('fails broker readiness when sync/selection exist but the session is offline', async () => {
+    brokerReadiness.mockResolvedValue({ ready: false, detail: 'ibkr_gateway: session not authenticated' });
+    const result = await getTradingReadinessSnapshot();
+    expect(result.nodes.find(n => n.id === 'broker')).toMatchObject({ ready: false });
+    expect(result.tradingReady).toBe(false);
+  });
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-09-18T15:00:00Z'));

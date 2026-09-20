@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { calculatePositionSizing, returnCorrelation, getSector, SizingContext } from './PositionSizing';
+import { tradingSafety } from '../config/tradingSafety';
 
 function baseCtx(overrides: Partial<SizingContext> = {}): SizingContext {
   return {
@@ -18,6 +19,48 @@ function baseCtx(overrides: Partial<SizingContext> = {}): SizingContext {
 }
 
 describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizing math', () => {
+  it('uses the distinct holding price for cross-sector correlated exposure', async () => {
+    const closes = Array.from({ length: 30 }, (_, i) => 100 + i);
+    const result = await calculatePositionSizing(baseCtx({ maxTradeSizeDollar: 100000,
+      existingPositions: [{ symbol: 'JPM', quantity: 120, mark: { price: 400, priceAgeMs: 0, source: 'ibkr_gateway' } }],
+      getRecentCloses: async () => closes,
+    }));
+    expect(result.gates.find(g => g.gate === 'correlation_exposure')?.detail.correlatedValue).toBe(48000);
+    expect(result.maxQuantity).toBe(Math.min(200, Math.floor((100000 * tradingSafety.maxCorrelatedExposurePct - 48000) / 100)));
+  });
+
+  it.each([null, 0, NaN, Infinity])('rejects an invalid required holding price %s', async price => {
+    const result = await calculatePositionSizing(baseCtx({ existingPositions: [
+      { symbol: 'MSFT', quantity: 1, mark: { price, priceAgeMs: 0, source: 'ibkr_gateway' } },
+    ] }));
+    expect(result.maxQuantity).toBe(0);
+    expect(result.gates.find(g => g.gate === 'sector_concentration')?.detail.reason).toBe('HOLDING_VALUATION_UNAVAILABLE');
+  });
+  it('values another sector holding at its own observed price, not the proposed price', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      currentPrice: 100, maxTradeSizeDollar: 100000,
+      existingPositions: [{ symbol: 'MSFT', quantity: 95, mark: { price: 400, priceAgeMs: 0, source: 'ibkr_gateway' } }],
+    }));
+    const sector = result.gates.find(g => g.gate === 'sector_concentration')!;
+    expect(sector.detail.sectorValue).toBe(38000);
+    expect(result.maxQuantity).toBe(Math.min(200, Math.floor((100000 * tradingSafety.maxSectorConcentrationPct - 38000) / 100)));
+  });
+
+  it.each([null, -1, NaN, tradingSafety.stalePriceThresholdMs + 1])('fails a required holding valuation with unavailable/stale age %s', async age => {
+    const result = await calculatePositionSizing(baseCtx({ existingPositions: [
+      { symbol: 'MSFT', quantity: 1, mark: { price: 400, priceAgeMs: age, source: 'ibkr_gateway' } },
+    ] }));
+    expect(result.maxQuantity).toBe(0);
+    expect(result.gates.find(g => g.gate === 'sector_concentration')?.detail.reason).toBe('HOLDING_VALUATION_UNAVAILABLE');
+  });
+
+  it('does not use missing holding marks to block a protective SELL', async () => {
+    const result = await calculatePositionSizing(baseCtx({ side: 'SELL', existingPositions: [
+      { symbol: 'AAPL', quantity: 4 }, { symbol: 'MSFT', quantity: 1 },
+    ] }));
+    // Shared sizing leaves exits unconstrained; RiskEngine clamps to the held quantity.
+    expect(result.maxQuantity).toBe(Number.MAX_SAFE_INTEGER);
+  });
   it('caps size by the order-notional (maxTradeSizeDollar) limit when it is the binding constraint', async () => {
     const result = await calculatePositionSizing(baseCtx({ maxTradeSizeDollar: 1000, currentPrice: 100 }));
     expect(result.maxQuantity).toBe(10); // 1000/100
@@ -79,7 +122,7 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     const closesB = Array.from({ length: 30 }, (_, i) => 50 + i * 0.5); // moves in lockstep with A
     const result = await calculatePositionSizing(baseCtx({
       symbol: 'AAPL', currentPrice: 100, accountEquity: 100000, maxTradeSizeDollar: 1000000, buyingPower: 1000000,
-      existingPositions: [{ symbol: 'MSFT', quantity: 490 }], // 490*100 = 49000, close to the 50000 cap
+      existingPositions: [{ symbol: 'MSFT', quantity: 490, mark: { price: 100, priceAgeMs: 0, source: 'test_quote' } }], // 490*100 = 49000
       getRecentCloses: async (sym) => (sym === 'AAPL' ? closesA : sym === 'MSFT' ? closesB : null),
     }));
     const gate = result.gates.find(g => g.gate === 'correlation_exposure');
@@ -98,7 +141,7 @@ describe('calculatePositionSizing - real, shared RiskEngine/BacktestEngine sizin
     }
     const result = await calculatePositionSizing(baseCtx({
       symbol: 'AAPL', currentPrice: 100, accountEquity: 100000, maxTradeSizeDollar: 1000000, buyingPower: 1000000,
-      existingPositions: [{ symbol: 'MSFT', quantity: 490 }],
+      existingPositions: [{ symbol: 'MSFT', quantity: 490, mark: { price: 100, priceAgeMs: 0, source: 'test_quote' } }],
       getRecentCloses: async (sym) => (sym === 'AAPL' ? closesA : sym === 'MSFT' ? closesB : null),
     }));
     const gate = result.gates.find(g => g.gate === 'correlation_exposure');

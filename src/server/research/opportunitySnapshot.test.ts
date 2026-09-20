@@ -114,13 +114,15 @@ describe('opportunitySnapshot (Institutional Transformation Mandate Part 8/9)', 
     expect(row.modelForecast).not.toBeNull();
     expect(row.modelForecast!.status).toBe('VALID');
     expect(row.modelForecast!.expectedReturn).toBeCloseTo(0.008, 5);
-    expect(row.modelForecast!.probabilityOfProfit).toBeCloseTo(0.62, 5);
+    expect(row.modelForecast!.probabilityOfProfit).toBeNull();
+    expect(row.modelForecast!.netExpectedReturn).toBeNull();
     // Real strategy-diversity evidence (Part 7/9 integration) - never inflated, never fabricated.
     expect(row.modelForecast!.strategyCount).toBe(7);
     expect(row.modelForecast!.familyCount).toBe(3);
     expect(row.modelForecast!.effectiveIndependentCount).toBe(2.6);
 
     const text = mod.formatOpportunitySnapshot(rows);
+    expect(text).toContain('0.80%/UNKNOWN');
     expect(text).toContain('2.6(3)'); // effectiveIndependentCount(familyCount) rendered in the text table
   });
 

@@ -20,6 +20,7 @@ import { desc, isNotNull, isNull, and, eq, gte, like, or } from 'drizzle-orm';
 import { BrokerManager } from '../../brokers/BrokerManager';
 import { tradingEngine } from './TradingEngine';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { getReplayQuote, getReplayQuoteAgeMs } from '../replay/HistoricalReplayMarketDataContext';
 import { historicalDataGateway } from './backtest/HistoricalDataGateway';
 import { calculatePositionSizing, CORRELATION_MIN_OVERLAP } from './PositionSizing';
 import { runWithObservabilityContext } from '../observability/ObservabilityContext';
@@ -670,7 +671,14 @@ export class RiskEngine {
                         maxTradeSizeDollar,
                     }),
                     maxPortfolioRiskPct,
-                    existingPositions: portfolio.positions.map((p: any) => ({ symbol: p.symbol, quantity: p.quantity })),
+                    existingPositions: portfolio.positions.map((p: any) => ({
+                        symbol: p.symbol, quantity: p.quantity,
+                        mark: proposal.side === 'BUY' && p.symbol !== proposal.symbol ? {
+                            price: replay ? getReplayQuote(p.symbol) : marketDataWorker.getLatestPrice(p.symbol),
+                            priceAgeMs: replay ? getReplayQuoteAgeMs(p.symbol, nowMs) : marketDataWorker.getLatestPriceAgeMs(p.symbol),
+                            source: replay ? 'REPLAY_QUOTE' : marketDataWorker.getQuoteBackend(),
+                        } : undefined,
+                    })),
                     maxOpenPositions: maxOpenPositionsForSizing,
                     getRecentCloses,
                     sizingMode,

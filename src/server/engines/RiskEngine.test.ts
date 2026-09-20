@@ -59,6 +59,8 @@ const { mockTradingEngine } = vi.hoisted(() => ({
 
 const { mockMarketDataWorker } = vi.hoisted(() => ({
   mockMarketDataWorker: {
+    getLatestPrice: vi.fn(() => 100 as number | null),
+    getQuoteBackend: vi.fn(() => 'ibkr_gateway'),
     getLatestPriceAgeMs: vi.fn(() => null as number | null),
     getLatestSpreadBps: vi.fn(() => null as number | null),
   },

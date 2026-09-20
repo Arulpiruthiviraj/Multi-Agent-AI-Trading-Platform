@@ -184,6 +184,12 @@ export class IbkrSocketSession {
    */
   private marketDataErrorHandler: ((symbol: string, code: number, message: string) => void) | null = null;
   private marketDataErrors = new Map<string, { code: number; message: string; atMs: number }>();
+  /** Desired allocation survives transport loss; request IDs belong to one socket only. */
+  private desiredMarketData = new Set<string>();
+  /** One latest request handle per desired symbol, retained while disconnected. */
+  private desiredRequestHandles = new Map<string, number>();
+  private connectionGeneration = 0;
+  private marketDataSubscriptionHandler: ((symbol: string) => void) | null = null;
   private nextHistReqId = 50_000;
   /** Serialize historical requests — IB paces hist data; avoid storms. */
   private histChain: Promise<unknown> = Promise.resolve();
@@ -252,6 +258,10 @@ export class IbkrSocketSession {
     this.marketDataErrorHandler = handler;
   }
 
+  setMarketDataSubscriptionHandler(handler: ((symbol: string) => void) | null): void {
+    this.marketDataSubscriptionHandler = handler;
+  }
+
   /** Most recent market-data error recorded for `symbol`, if any (cleared on a fresh subscribe). */
   getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
     return this.marketDataErrors.get(symbol.toUpperCase()) ?? null;
@@ -291,10 +301,13 @@ export class IbkrSocketSession {
     this.autoReconnectArmed = true;
     this.clearReconnectTimer(); // an explicit connect() attempt supersedes any pending auto-retry
     this.openOrdersRehydrationComplete = false;
-    await this.disconnect();
+    const disconnected = this.disconnect(true);
+    const generation = this.connectionGeneration;
+    await disconnected;
 
     const ports = ibkrSocketPortCandidates(this.cfg, preferLive);
     const openPort = await findFirstOpenTcpPort(this.cfg.host, ports, 1500);
+    if (generation !== this.connectionGeneration || !this.autoReconnectArmed) return false;
     if (openPort == null) {
       console.warn(
         `[IBKR Socket] IB Gateway not detected on ${this.cfg.host}:${ports.join('/')}. ` +
@@ -324,14 +337,16 @@ export class IbkrSocketSession {
       };
 
       const timer = setTimeout(() => {
+        if (this.ib !== ib) { finish(false); return; }
         console.warn(`[IBKR Socket] Connect timeout after ${timeoutMs}ms on ${this.cfg.host}:${openPort}`);
-        void this.disconnect().finally(() => {
+        void this.disconnect(true).finally(() => {
           finish(false);
           this.scheduleReconnect('connect timeout');
         });
       }, timeoutMs);
 
       ib.on(EventName.connected, () => {
+        if (this.ib !== ib) return;
         this.connected = true;
         ib.reqIds();
         ib.reqCurrentTime();
@@ -339,7 +354,10 @@ export class IbkrSocketSession {
       });
 
       ib.on(EventName.disconnected, () => {
+        if (this.ib !== ib) return;
         this.connected = false;
+        this.activeMktData.clear();
+        this.symbolToTicker.clear();
         // Covers a connection that was UP and then dropped (Gateway closed, forced logout, network
         // hiccup) - the finish(false) paths below only cover a connection attempt that never
         // succeeded in the first place. A no-op when this fires as part of an intentional
@@ -348,9 +366,10 @@ export class IbkrSocketSession {
       });
 
       ib.on(EventName.error, (err, code, reqId) => {
+        if (this.ib !== ib) return;
         if (!settled && code === ErrorCode.CONNECT_FAIL) {
           console.warn(`[IBKR Socket] error code=${code} reqId=${reqId}: ${err?.message || err}`);
-          void this.disconnect().finally(() => {
+          void this.disconnect(true).finally(() => {
             finish(false);
             this.scheduleReconnect('connect failed');
           });
@@ -374,6 +393,7 @@ export class IbkrSocketSession {
       });
 
       ib.on(EventName.managedAccounts, (accountsList: string) => {
+        if (this.ib !== ib || !this.connected) return;
         const accounts = String(accountsList || '')
           .split(',')
           .map((a) => a.trim())
@@ -406,6 +426,12 @@ export class IbkrSocketSession {
             console.error(`[IBKR Socket] order-lifecycle rehydration request failed: ${e?.message || e}`);
           }
           this.reconnectBackoff.reset();
+          // IBApi's existing global request scheduler paces these alongside other requests.
+          // Deduplication in subscribeMarketData makes repeated managedAccounts events harmless.
+          for (const symbol of this.desiredMarketData) {
+            try { this.subscribeMarketData(symbol); }
+            catch (e) { console.warn(`[IBKR Socket] Could not restore ${symbol}: ${String(e)}`); }
+          }
           finish(true);
         }
       });
@@ -614,10 +640,18 @@ export class IbkrSocketSession {
     }
   }
 
-  async disconnect(): Promise<void> {
+  async disconnect(preserveSubscriptions = false): Promise<void> {
+    this.connectionGeneration++;
+    if (!preserveSubscriptions) {
+      this.stopAutoReconnect();
+      this.desiredMarketData.clear();
+      this.desiredRequestHandles.clear();
+    }
     const ib = this.ib;
     this.ib = null;
     this.connected = false;
+    this.accountId = null;
+    this.serverTime = null;
     this.openOrdersRehydrationComplete = false;
     this.activeMktData.clear();
     this.symbolToTicker.clear();
@@ -870,35 +904,42 @@ export class IbkrSocketSession {
     const sym = symbol.toUpperCase();
     const existing = this.symbolToTicker.get(sym);
     if (existing != null) return existing;
-    if (this.activeMktData.size >= this.cfg.maxMarketDataLines) {
+    if (!this.desiredMarketData.has(sym) && this.desiredMarketData.size >= this.cfg.maxMarketDataLines) {
       throw new Error(`IBKR market-data line cap reached (${this.cfg.maxMarketDataLines}).`);
     }
     const tickerId = this.marketDataTicker++;
-    this.marketDataErrors.delete(sym);
     this.ib.reqMktData(tickerId, this.stockContract(sym), '', false, false);
+    this.marketDataErrors.delete(sym);
+    this.desiredRequestHandles.set(sym, tickerId);
+    this.desiredMarketData.add(sym);
     this.activeMktData.set(tickerId, sym);
     this.symbolToTicker.set(sym, tickerId);
+    try { this.marketDataSubscriptionHandler?.(sym); } catch { /* observer only */ }
     return tickerId;
   }
 
   cancelMarketData(tickerId: number): void {
-    if (!this.ib) return;
-    const sym = this.activeMktData.get(tickerId);
+    const sym = this.activeMktData.get(tickerId)
+      ?? [...this.desiredRequestHandles].find(([, id]) => id === tickerId)?.[0];
     try {
-      this.ib.cancelMktData(tickerId);
+      this.ib?.cancelMktData(tickerId);
     } catch {
       /* ignore */
     }
     this.activeMktData.delete(tickerId);
     if (sym) {
+      this.desiredMarketData.delete(sym);
+      this.desiredRequestHandles.delete(sym);
       this.symbolToTicker.delete(sym);
       this.marketDataErrors.delete(sym);
     }
   }
 
   cancelMarketDataBySymbol(symbol: string): void {
+    this.desiredMarketData.delete(symbol.toUpperCase());
     const tickerId = this.symbolToTicker.get(symbol.toUpperCase());
     if (tickerId != null) this.cancelMarketData(tickerId);
+    this.desiredRequestHandles.delete(symbol.toUpperCase());
   }
 
   activeMarketDataCount(): number {

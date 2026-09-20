@@ -1,0 +1,231 @@
+{
+  "start": "2026-09-19T04:00:00.000Z",
+  "cutoff": "2026-09-20T01:58:00.299Z",
+  "events": [
+    {
+      "event_type": "CAMPAIGN_EFFORT_TELEMETRY",
+      "n": 1269
+    },
+    {
+      "event_type": "CAMPAIGN_OPENING_SURGE",
+      "n": 1
+    },
+    {
+      "event_type": "CAMPAIGN_PROGRESS_UPDATED",
+      "n": 842
+    },
+    {
+      "event_type": "DESK_NO_TRADE",
+      "n": 8863
+    },
+    {
+      "event_type": "MODEL_FALLBACK",
+      "n": 23
+    },
+    {
+      "event_type": "OPPORTUNITY_SCAN_COMPLETED",
+      "n": 155
+    },
+    {
+      "event_type": "RECONCILIATION_MATCH",
+      "n": 173
+    },
+    {
+      "event_type": "SESSION_LIFECYCLE_STATE_CHANGED",
+      "n": 1
+    },
+    {
+      "event_type": "WATCHLIST_SUBSCRIBE_REQUESTED",
+      "n": 4800
+    }
+  ],
+  "observability": [
+    {
+      "event_type": null,
+      "n": 173,
+      "symbols": 0
+    },
+    {
+      "event_type": "AI_CALL",
+      "n": 1413,
+      "symbols": 0
+    },
+    {
+      "event_type": "AI_COST_GOVERNOR_SHADOW_COMPARISON",
+      "n": 4919,
+      "symbols": 0
+    },
+    {
+      "event_type": "AI_PROVIDERS_EXHAUSTED",
+      "n": 129,
+      "symbols": 0
+    },
+    {
+      "event_type": "CAMPAIGN_EFFORT_TELEMETRY",
+      "n": 1269,
+      "symbols": 0
+    },
+    {
+      "event_type": "CAMPAIGN_OPENING_SURGE",
+      "n": 1,
+      "symbols": 0
+    },
+    {
+      "event_type": "CAMPAIGN_PROGRESS_UPDATED",
+      "n": 842,
+      "symbols": 0
+    },
+    {
+      "event_type": "DESK_NO_TRADE",
+      "n": 8863,
+      "symbols": 61
+    },
+    {
+      "event_type": "DISCOVERY_CANDIDATE_FILTERED",
+      "n": 41667,
+      "symbols": 531
+    },
+    {
+      "event_type": "IBKR_MARKET_DATA_ERROR",
+      "n": 202,
+      "symbols": 94
+    },
+    {
+      "event_type": "KRONOS_STATUS_CHANGE",
+      "n": 4,
+      "symbols": 0
+    },
+    {
+      "event_type": "MARKET_REGIME_DETECTED",
+      "n": 92,
+      "symbols": 0
+    },
+    {
+      "event_type": "MEMORY_TELEMETRY_SAMPLE",
+      "n": 172,
+      "symbols": 0
+    },
+    {
+      "event_type": "MODEL_FALLBACK",
+      "n": 23,
+      "symbols": 0
+    },
+    {
+      "event_type": "MODEL_HEALTH",
+      "n": 4,
+      "symbols": 0
+    },
+    {
+      "event_type": "NEWS_PIPELINE_TICK",
+      "n": 173,
+      "symbols": 0
+    },
+    {
+      "event_type": "OPPORTUNITY_SCAN_COMPLETED",
+      "n": 155,
+      "symbols": 0
+    },
+    {
+      "event_type": "QUANT_ADVISORY_ANALYSIS_COMPLETED",
+      "n": 560,
+      "symbols": 92
+    },
+    {
+      "event_type": "QUANT_ADVISORY_BARS_FAILED",
+      "n": 6,
+      "symbols": 1
+    },
+    {
+      "event_type": "QUANT_ADVISORY_PAYLOAD_STREAMED",
+      "n": 920,
+      "symbols": 92
+    },
+    {
+      "event_type": "QUANT_ASSESSMENT_COMPLETED",
+      "n": 13609,
+      "symbols": 93
+    },
+    {
+      "event_type": "QUANT_BRIDGE_CALL_OUTCOME",
+      "n": 16362,
+      "symbols": 93
+    },
+    {
+      "event_type": "QUANT_CORE_STRATEGY_PARITY_DIVERGENCE",
+      "n": 1509,
+      "symbols": 34
+    },
+    {
+      "event_type": "RECONCILIATION_MATCH",
+      "n": 173,
+      "symbols": 0
+    },
+    {
+      "event_type": "SESSION_LIFECYCLE_STATE_CHANGED",
+      "n": 1,
+      "symbols": 0
+    },
+    {
+      "event_type": "STRATEGY_EXPLORATION_PROMOTED",
+      "n": 2,
+      "symbols": 2
+    },
+    {
+      "event_type": "SUBSCRIPTION_ALREADY_ACTIVE",
+      "n": 888,
+      "symbols": 14
+    },
+    {
+      "event_type": "SUBSCRIPTION_EVICTED",
+      "n": 112,
+      "symbols": 5
+    },
+    {
+      "event_type": "SUBSCRIPTION_NOT_PROMOTED",
+      "n": 96,
+      "symbols": 2
+    },
+    {
+      "event_type": "SUBSCRIPTION_PROMOTED",
+      "n": 256,
+      "symbols": 13
+    },
+    {
+      "event_type": "SYSTEM_METRICS",
+      "n": 22996,
+      "symbols": 0
+    },
+    {
+      "event_type": "UI_UPDATE",
+      "n": 1413,
+      "symbols": 0
+    },
+    {
+      "event_type": "UNCLEAN_SHUTDOWN_DETECTED",
+      "n": 1,
+      "symbols": 0
+    },
+    {
+      "event_type": "WATCHLIST_SUBSCRIBE_REQUESTED",
+      "n": 4800,
+      "symbols": 94
+    }
+  ],
+  "terminals": [],
+  "execution": {
+    "risk_assessments": 0,
+    "trades": 0,
+    "fills": 0
+  },
+  "migration": {
+    "id": null,
+    "hash": "dae7775104858211a1d8800f903775d4bad5a95ce498d227480b499527dae20e",
+    "created_at": 1789483200000
+  },
+  "deskNoTrade": [
+    {
+      "code": "EXPECTED_VALUE_TOO_LOW",
+      "n": 8863
+    }
+  ]
+}
