@@ -15,6 +15,7 @@ import {
 } from '@stoqey/ib';
 import type { Contract } from '@stoqey/ib';
 import { loadIbkrConnection, ibkrSocketPortCandidates, type IbkrConnectionConfig } from '../server/config/ibkrConnection';
+import { continuousIntelligence } from '../server/config/continuousIntelligence';
 import { findFirstOpenTcpPort } from './ibkrTcpProbe';
 import type { Bar } from '../server/engines/backtest/HistoricalDataGateway';
 import { ReconnectBackoff } from '../server/core/reconnectBackoff';
@@ -80,25 +81,46 @@ export function buildIbkrOrder(orderId: number, opts: {
 }
 
 /**
- * Per-symbol subscription lifecycle state (2026-09-20, Sept-18 rejection-desync remediation).
+ * Per-symbol subscription lifecycle state (2026-09-20 Sept-18 rejection-desync remediation;
+ * 2026-09-21 Phase 2 acknowledgement-evidence hardening).
  *
- * Real, verified defect: `symbolToTicker` was set optimistically the instant `reqMktData()` was
- * called, before IBKR's response was known, and was only ever cleared by an explicit
+ * Real, verified Sept-18 defect: `symbolToTicker` was set optimistically the instant `reqMktData()`
+ * was called, before IBKR's response was known, and was only ever cleared by an explicit
  * unsubscribe/teardown - never by a rejection. `subscribeMarketData()`'s early-return-if-already-
  * tracked guard then meant a symbol IBKR explicitly rejected (354/10089) was never retried again
  * without an external trigger (confirmed live: 32 symbols starved 15:27-19:38 UTC on 2026-09-18,
  * ~4h11m, until an operator manually forced a resubscribe). `desiredMarketData` (the symbol is
  * still wanted) and this record's `state` (what IBKR most recently told us, or didn't) are
  * deliberately two separate concepts - a REJECTED_RETRYABLE symbol stays fully DESIRED the whole
- * time, exactly as the audit's own remediation task required.
+ * time, exactly as that remediation required.
+ *
+ * Real, verified Phase 2 defect in the Sept-18 fix itself (post-fix adversarial audit,
+ * 2026-09-21): the fix's own confirmation-timeout path treated 60s of silence (no tick, no error)
+ * as equivalent to an explicit rejection, moving the symbol into RETRY_WAIT via a synthetic
+ * errorCode=-1. Runtime verification of that fix happened to run at 2026-09-20 20:28 America/
+ * New_York (confirmed: Sunday evening, fully closed market) - silence during a closed or thin
+ * market is NOT evidence of a broker rejection. `ACKNOWLEDGED` is new: IBKR's own `marketDataType`
+ * (fires "when the user has live-data permission for that instrument") and `tickReqParams`
+ * ("returned immediately after a market-data request" for an entitled user) callbacks are real,
+ * request-level evidence the request was accepted - stronger than waiting for a price to change,
+ * and available well before market open. Neither callback is treated as proof of a FRESH live
+ * price - `ACTIVE` still requires a genuine tick (field 1/2/4).
  */
 type SubscriptionLifecycleState =
   | 'IDLE'
   | 'REQUESTING'
+  | 'ACKNOWLEDGED'
   | 'ACTIVE'
   | 'REJECTED_RETRYABLE'
   | 'REJECTED_NONRETRYABLE'
   | 'RETRY_WAIT';
+
+/** 2026-09-21 Phase 2: an ARGUS-internal observation, never an IBKR-issued error code. Kept
+ *  strictly separate from lastErrorCode/lastErrorMessage (broker-issued codes only, e.g. 354/10089)
+ *  - the exact separation the post-fix audit required after finding errorCode=-1 stored beside real
+ *  broker codes. NO_ACKNOWLEDGEMENT is diagnostic only; it never by itself moves state out of
+ *  REQUESTING or starts a retry-backoff countdown. */
+type InternalFailureKind = 'NO_ACKNOWLEDGEMENT';
 
 interface SubscriptionRecord {
   symbol: string;
@@ -107,19 +129,52 @@ interface SubscriptionRecord {
   lastRequestAt: number | null;
   lastSuccessAt: number | null;
   lastErrorAt: number | null;
+  /** Broker-issued IBKR error code ONLY (e.g. 354, 10089, 200, 10197) - never a synthetic/internal
+   *  value. See lastInternalFailureKind for ARGUS-generated conditions. */
   lastErrorCode: number | null;
   lastErrorMessage: string | null;
   retryCount: number;
   nextRetryAt: number | null;
   generation: number;
+  /** 2026-09-21 Phase 2: set when IBKR's marketDataType or tickReqParams callback fired for this
+   *  request - real, request-level evidence distinct from (and weaker than) a live tick. */
+  lastAcknowledgedAt: number | null;
+  acknowledgementKind: 'MARKET_DATA_TYPE' | 'TICK_REQ_PARAMS' | null;
+  /** IBKR's own reported data type for this request: 1=real-time, 2=frozen, 3=delayed,
+   *  4=delayed-frozen. Recorded honestly, never used to satisfy live-freshness requirements. */
+  marketDataType: number | null;
+  /** ARGUS-internal observation only - see InternalFailureKind's own doc comment. */
+  lastInternalFailureKind: InternalFailureKind | null;
 }
 
-/** Fields carried by the three new subscription-lifecycle observability events - see
+/** Fields carried by the subscription-lifecycle observability events - see
  *  setSubscriptionLifecycleHandler()'s own doc comment. */
 export type SubscriptionLifecycleEvent =
   | { kind: 'REJECTED'; symbol: string; tickerId: number; errorCode: number; requestType: 'STREAMING'; retryCount: number; nextRetryAt: number | null; generation: number }
   | { kind: 'RETRY'; symbol: string; previousErrorCode: number | null; retryCount: number; newTickerId: number; generation: number }
-  | { kind: 'RECOVERED'; symbol: string; tickerId: number; generation: number };
+  | { kind: 'RECOVERED'; symbol: string; tickerId: number; generation: number }
+  /** 2026-09-21 Phase 2: real request-level evidence received - never per-tick, fires once per
+   *  transition into ACKNOWLEDGED. */
+  | { kind: 'ACKNOWLEDGED'; symbol: string; tickerId: number; acknowledgementKind: 'MARKET_DATA_TYPE' | 'TICK_REQ_PARAMS'; marketDataType: number | null; generation: number }
+  /** 2026-09-21 Phase 2: diagnostic only - fires once when a REQUESTING symbol has produced zero
+   *  evidence (no tick, no error, no acknowledgement) for marketDataConfirmationTimeoutMs. Never
+   *  implies rejection; never changes state. */
+  | { kind: 'NO_ACKNOWLEDGEMENT'; symbol: string; tickerId: number; generation: number }
+  /** 2026-09-21 Phase 2: a bounded, low-frequency self-healing reissue for a symbol stuck with
+   *  zero acknowledgement - distinct from RETRY (which only ever follows a confirmed rejection). */
+  | { kind: 'REPROBE'; symbol: string; newTickerId: number; generation: number }
+  /** 2026-09-21 Phase 2: account-wide entitlement circuit breaker state transition - see
+   *  getAccountEntitlementState()'s own doc comment. */
+  | { kind: 'ACCOUNT_ENTITLEMENT_STATE_CHANGED'; state: AccountEntitlementState; canarySymbolsAffected: readonly string[]; generation: number };
+
+/**
+ * 2026-09-21 Phase 2: account/session-level entitlement health, inferred ONLY from multiple
+ * independent canary (continuousIntelligence.protectedSymbols) symbols receiving the same
+ * retryable entitlement error (354/10089) within entitlementDegradedWindowMs - never from one
+ * symbol's own error. See markSubscriptionRejected()'s canary-tracking logic and
+ * sweepSubscriptionRetries()'s DEGRADED_ENTITLEMENT suppression of ordinary per-symbol retries.
+ */
+export type AccountEntitlementState = 'NORMAL' | 'DEGRADED_ENTITLEMENT' | 'PROBING' | 'RECOVERED';
 
 export type IbkrSocketConnectionInfo = {
   adapter: 'IB_GATEWAY_SOCKET';
@@ -262,6 +317,16 @@ export class IbkrSocketSession {
   private subscriptionLifecycleHandler: ((event: SubscriptionLifecycleEvent) => void) | null = null;
   private subscriptionSweepTimer: NodeJS.Timeout | null = null;
   /**
+   * 2026-09-21 Phase 2: account-wide entitlement circuit breaker. `canarySymbols` reuses
+   * `continuousIntelligence.protectedSymbols` (real, existing config - SPY/QQQ/GLD in this
+   * deployment) rather than a new hardcoded list, per the remediation task's own instruction.
+   * `canaryErrorTimestamps` tracks only the most recent retryable-error time per canary; a symbol
+   * ages out of consideration once its own timestamp falls outside entitlementDegradedWindowMs.
+   */
+  private readonly canarySymbols = new Set(continuousIntelligence.protectedSymbols.map((s) => s.toUpperCase()));
+  private canaryErrorTimestamps = new Map<string, number>();
+  private entitlementState: AccountEntitlementState = 'NORMAL';
+  /**
    * Real asymmetry found and fixed (2026-09-06, post-implementation forensic audit): this session
    * had no reconnect-with-backoff of any kind, unlike MarketDataWorker.ts's Alpaca WebSocket path
    * (which already uses this SAME ReconnectBackoff utility). If IB Gateway Desktop was down at
@@ -356,6 +421,17 @@ export class IbkrSocketSession {
     return this.subscriptionState.get(symbol.toUpperCase()) ?? null;
   }
 
+  /** 2026-09-21 Phase 2: diagnostics-only snapshot of the account-wide entitlement circuit
+   *  breaker. Never mutates anything - pure read of state maintained by markSubscriptionRejected()/
+   *  markSubscriptionRecovered(). */
+  getAccountEntitlementState(): { state: AccountEntitlementState; canarySymbols: readonly string[]; degradedCanaries: readonly string[] } {
+    const now = Date.now();
+    const degradedCanaries = [...this.canaryErrorTimestamps.entries()]
+      .filter(([, atMs]) => now - atMs < this.cfg.entitlementDegradedWindowMs)
+      .map(([sym]) => sym);
+    return { state: this.entitlementState, canarySymbols: [...this.canarySymbols], degradedCanaries };
+  }
+
   /** Most recent market-data error recorded for `symbol`, if any (cleared on a fresh subscribe). */
   getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
     return this.marketDataErrors.get(symbol.toUpperCase()) ?? null;
@@ -423,12 +499,109 @@ export class IbkrSocketSession {
       retryCount,
       nextRetryAt,
       generation: this.connectionGeneration,
+      lastAcknowledgedAt: prev?.lastAcknowledgedAt ?? null,
+      acknowledgementKind: prev?.acknowledgementKind ?? null,
+      marketDataType: prev?.marketDataType ?? null,
+      lastInternalFailureKind: null,
     };
     this.subscriptionState.set(symbol, next);
     this.emitSubscriptionLifecycle({
       kind: 'REJECTED', symbol, tickerId, errorCode: code, requestType: 'STREAMING',
       retryCount, nextRetryAt, generation: this.connectionGeneration,
     });
+    // 2026-09-21 Phase 2: account-wide entitlement circuit breaker. Only a retryable code from a
+    // CANARY symbol counts as evidence - a non-canary symbol's own rejection never, by itself,
+    // implies an account-wide condition (required behavior: "no account-wide circuit breaker" for
+    // a single uncommon symbol's own error).
+    if (this.cfg.marketDataRejectionRetryableCodes.includes(code) && this.canarySymbols.has(symbol)) {
+      this.canaryErrorTimestamps.set(symbol, Date.now());
+      this.recomputeEntitlementState();
+    }
+  }
+
+  /**
+   * 2026-09-21 Phase 2: recomputes entitlementState purely from canaryErrorTimestamps (evidence)
+   * and current subscription states (for PROBING detection) - never mutated from anywhere else, so
+   * there is exactly one place this transitions. NORMAL -> DEGRADED_ENTITLEMENT requires
+   * `entitlementDegradedCanaryThreshold` DISTINCT canaries with a retryable error inside
+   * `entitlementDegradedWindowMs` - never one symbol alone.
+   */
+  private recomputeEntitlementState(): void {
+    const now = Date.now();
+    const recentDegradedCanaries = [...this.canaryErrorTimestamps.entries()]
+      .filter(([, atMs]) => now - atMs < this.cfg.entitlementDegradedWindowMs)
+      .map(([sym]) => sym);
+    const prevState = this.entitlementState;
+    if (prevState === 'NORMAL' || prevState === 'RECOVERED') {
+      if (recentDegradedCanaries.length >= this.cfg.entitlementDegradedCanaryThreshold) {
+        this.entitlementState = 'DEGRADED_ENTITLEMENT';
+      }
+    } else if (prevState === 'DEGRADED_ENTITLEMENT' || prevState === 'PROBING') {
+      // A fresh canary error while a probe was outstanding demotes PROBING back to DEGRADED_ENTITLEMENT -
+      // real evidence the condition has not actually cleared.
+      if (recentDegradedCanaries.length >= this.cfg.entitlementDegradedCanaryThreshold) {
+        this.entitlementState = 'DEGRADED_ENTITLEMENT';
+      }
+    }
+    if (this.entitlementState !== prevState) {
+      this.emitSubscriptionLifecycle({
+        kind: 'ACCOUNT_ENTITLEMENT_STATE_CHANGED', state: this.entitlementState,
+        canarySymbolsAffected: recentDegradedCanaries, generation: this.connectionGeneration,
+      });
+    }
+  }
+
+  /**
+   * 2026-09-21 Phase 2: canary-driven recovery. Only a canary reaching a real live tick (ACTIVE) -
+   * the strongest available evidence - clears the canary's own error timestamp and, if no other
+   * canary is still within its error window, advances entitlementState toward RECOVERED and
+   * triggers gradual resubscription of symbols the circuit breaker had suppressed. A canary merely
+   * being ACKNOWLEDGED (no tick yet) while DEGRADED is weaker evidence and only advances the state
+   * to PROBING - required behavior #17's evidence hierarchy ("request acknowledgement... + actual
+   * live tick when available" - a tick is the stronger rung, PROBING is the weaker one alone).
+   */
+  private onCanaryEvidence(symbol: string, strength: 'ACKNOWLEDGED' | 'ACTIVE'): void {
+    if (!this.canarySymbols.has(symbol)) return;
+    if (strength === 'ACTIVE') {
+      this.canaryErrorTimestamps.delete(symbol);
+      const now = Date.now();
+      const stillDegraded = [...this.canaryErrorTimestamps.values()].some((atMs) => now - atMs < this.cfg.entitlementDegradedWindowMs);
+      if ((this.entitlementState === 'DEGRADED_ENTITLEMENT' || this.entitlementState === 'PROBING') && !stillDegraded) {
+        this.entitlementState = 'RECOVERED';
+        this.emitSubscriptionLifecycle({
+          kind: 'ACCOUNT_ENTITLEMENT_STATE_CHANGED', state: 'RECOVERED', canarySymbolsAffected: [], generation: this.connectionGeneration,
+        });
+        this.beginGradualRecoveryResubscription();
+        this.entitlementState = 'NORMAL';
+        this.emitSubscriptionLifecycle({
+          kind: 'ACCOUNT_ENTITLEMENT_STATE_CHANGED', state: 'NORMAL', canarySymbolsAffected: [], generation: this.connectionGeneration,
+        });
+      }
+    } else if (strength === 'ACKNOWLEDGED' && this.entitlementState === 'DEGRADED_ENTITLEMENT') {
+      this.entitlementState = 'PROBING';
+      this.emitSubscriptionLifecycle({
+        kind: 'ACCOUNT_ENTITLEMENT_STATE_CHANGED', state: 'PROBING', canarySymbolsAffected: [], generation: this.connectionGeneration,
+      });
+    }
+  }
+
+  /**
+   * 2026-09-21 Phase 2: once entitlement recovery is confirmed, non-canary symbols the circuit
+   * breaker had suppressed (still RETRY_WAIT, past their own nextRetryAt) get resubscribed a
+   * bounded few at a time per call - reusing continuousIntelligence.maxNewSubscriptionsPerCycle
+   * (an existing, reviewed config value) rather than inventing a new "no thundering herd" number.
+   * The sweep's own per-tick cadence naturally staggers the remainder across subsequent ticks.
+   */
+  private beginGradualRecoveryResubscription(): void {
+    const now = Date.now();
+    let started = 0;
+    const cap = continuousIntelligence.maxNewSubscriptionsPerCycle;
+    for (const [sym, record] of this.subscriptionState) {
+      if (started >= cap) break;
+      if (!this.desiredMarketData.has(sym)) continue;
+      if (record.state !== 'RETRY_WAIT' || record.nextRetryAt == null || now < record.nextRetryAt) continue;
+      try { this.subscribeMarketData(sym); started++; } catch { /* capacity/connection - try next sweep */ }
+    }
   }
 
   /**
@@ -455,10 +628,43 @@ export class IbkrSocketSession {
       retryCount: 0,
       nextRetryAt: null,
       generation: this.connectionGeneration,
+      lastAcknowledgedAt: record?.lastAcknowledgedAt ?? now,
+      acknowledgementKind: record?.acknowledgementKind ?? null,
+      marketDataType: record?.marketDataType ?? null,
+      lastInternalFailureKind: null,
     });
     if (!wasActive) {
       this.emitSubscriptionLifecycle({ kind: 'RECOVERED', symbol, tickerId, generation: this.connectionGeneration });
     }
+    this.onCanaryEvidence(symbol, 'ACTIVE');
+  }
+
+  /**
+   * 2026-09-21 Phase 2 core fix: real, request-level evidence that IBKR accepted this request -
+   * IBKR's own marketDataType ("signals that now API starts to tick with the following market
+   * data") and tickReqParams ("returned immediately after a market-data request" for an entitled
+   * user) callbacks. Deliberately does NOT mark the subscription ACTIVE or satisfy freshness - only
+   * a genuine tick (markSubscriptionRecovered) proves that. Promotes REQUESTING -> ACKNOWLEDGED
+   * only; a symbol already ACTIVE or already ACKNOWLEDGED just has its evidence refreshed in place
+   * (no downgrade, no duplicate lifecycle event for the same symbol's repeated acks).
+   */
+  private markSubscriptionAcknowledged(symbol: string, tickerId: number, kind: 'MARKET_DATA_TYPE' | 'TICK_REQ_PARAMS', marketDataType: number | null): void {
+    const record = this.subscriptionState.get(symbol);
+    if (!record || record.tickerId !== tickerId) return; // stale/superseded ticker - ignore, same guard style as tickPrice
+    const now = Date.now();
+    const wasUnacknowledged = record.state === 'REQUESTING';
+    this.subscriptionState.set(symbol, {
+      ...record,
+      state: record.state === 'REQUESTING' ? 'ACKNOWLEDGED' : record.state,
+      lastAcknowledgedAt: now,
+      acknowledgementKind: kind,
+      marketDataType: marketDataType ?? record.marketDataType,
+      lastInternalFailureKind: null, // real evidence arrived - any prior "no evidence yet" flag is now moot
+    });
+    if (wasUnacknowledged) {
+      this.emitSubscriptionLifecycle({ kind: 'ACKNOWLEDGED', symbol, tickerId, acknowledgementKind: kind, marketDataType, generation: this.connectionGeneration });
+    }
+    this.onCanaryEvidence(symbol, 'ACKNOWLEDGED');
   }
 
   private emitSubscriptionLifecycle(event: SubscriptionLifecycleEvent): void {
@@ -825,6 +1031,24 @@ export class IbkrSocketSession {
         }
       });
 
+      // 2026-09-21 Phase 2: real IBKR request-level acknowledgement callbacks - confirmed present
+      // in the installed @stoqey/ib client (node_modules/@stoqey/ib/dist/api/api.d.ts:1255,2055)
+      // with these exact signatures, not assumed from another language's SDK. marketDataType fires
+      // "when the user has live-data permission for that instrument" per IBKR's own docs; frozen/
+      // delayed/delayed-frozen (2/3/4) are recorded honestly and never treated as live entitlement.
+      // Neither callback marks the subscription ACTIVE or satisfies freshness - see
+      // markSubscriptionAcknowledged()'s own doc comment.
+      ib.on(EventName.marketDataType, (tickerId: number, marketDataType: number) => {
+        const symbol = this.activeMktData.get(tickerId);
+        if (!symbol) return;
+        this.markSubscriptionAcknowledged(symbol, tickerId, 'MARKET_DATA_TYPE', marketDataType);
+      });
+      ib.on(EventName.tickReqParams, (tickerId: number) => {
+        const symbol = this.activeMktData.get(tickerId);
+        if (!symbol) return;
+        this.markSubscriptionAcknowledged(symbol, tickerId, 'TICK_REQ_PARAMS', null);
+      });
+
       try {
         ib.connect();
       } catch (e: any) {
@@ -857,6 +1081,12 @@ export class IbkrSocketSession {
       this.desiredMarketData.clear();
       this.desiredRequestHandles.clear();
       this.subscriptionState.clear();
+      // 2026-09-21 Phase 2: entitlement state is preserved across an ordinary transport reconnect
+      // (preserveSubscriptions=true) - a dropped socket does not fix an account-side entitlement
+      // condition, so resetting it there would silently re-arm ordinary per-symbol retries under
+      // real DEGRADED_ENTITLEMENT. Only a full, explicit teardown clears it.
+      this.canaryErrorTimestamps.clear();
+      this.entitlementState = 'NORMAL';
     }
     const ib = this.ib;
     this.ib = null;
@@ -1193,7 +1423,15 @@ export class IbkrSocketSession {
       && record.nextRetryAt != null && Date.now() < record.nextRetryAt) {
       return record.tickerId ?? -1; // cooldown still active - no request sent, nothing to return meaningfully
     }
-    if (!this.desiredMarketData.has(sym) && this.desiredMarketData.size >= this.cfg.maxMarketDataLines) {
+    // 2026-09-21 Phase 2: capacity is measured against currently-active/requesting broker lines
+    // (activeMktData - cleared on rejection), never desiredMarketData (which a rejected-but-still-
+    // wanted symbol legitimately keeps occupying forever). This is the real fix for "90 rejected
+    // desired symbols permanently block a 91st candidate" - a rejected symbol holds no real IBKR
+    // line once markSubscriptionRejected() has cleared activeMktData for it, so it must not count
+    // against the cap either. activeMktData.size already excludes REJECTED_RETRYABLE/RETRY_WAIT
+    // symbols by construction (both mark* methods delete from it) and already includes
+    // REQUESTING/ACKNOWLEDGED/ACTIVE symbols (the only ones actually holding a live IBKR reqId).
+    if (this.activeMktData.size >= this.cfg.maxMarketDataLines) {
       throw new Error(`IBKR market-data line cap reached (${this.cfg.maxMarketDataLines}).`);
     }
     const isRetry = !!record && (record.state === 'REJECTED_RETRYABLE' || record.state === 'RETRY_WAIT');
@@ -1217,6 +1455,10 @@ export class IbkrSocketSession {
       retryCount: record?.retryCount ?? 0,
       nextRetryAt: null,
       generation: this.connectionGeneration,
+      lastAcknowledgedAt: null,
+      acknowledgementKind: null,
+      marketDataType: null,
+      lastInternalFailureKind: null,
     });
     if (isRetry) {
       this.emitSubscriptionLifecycle({
@@ -1229,12 +1471,26 @@ export class IbkrSocketSession {
   }
 
   /**
-   * 2026-09-20 remediation: periodic sweep, one shared timer (not one per symbol). Handles two
-   * cases the error-driven path above cannot: (1) a cooldown that has expired - issue exactly one
-   * retry; (2) a request that got neither a tick nor an explicit error within
-   * `marketDataConfirmationTimeoutMs` - the Sept 18 incident's actual dominant failure mode was
-   * IBKR going silent (no error at all) for hours after the first rejection, not repeated explicit
-   * rejections, so a purely error-triggered retry would not have fixed that specific shape.
+   * 2026-09-21 Phase 2 rewrite (post-adversarial-audit of the 2026-09-20 fix). Periodic sweep, one
+   * shared timer. Three cases, deliberately kept separate:
+   *
+   * (1) REQUESTING with zero evidence (no tick, no error, no acknowledgement) for
+   *     marketDataConfirmationTimeoutMs: flag NO_ACKNOWLEDGEMENT for diagnostics ONLY - never a
+   *     state transition, never a retry-backoff countdown. This is the core correction: the
+   *     Sept-20 fix's own confirmation-timeout path treated this exact condition as a rejection
+   *     (synthetic errorCode=-1), which produced false RETRY_WAIT transitions on a closed Sunday
+   *     market and would do the same for any legitimately-quiet illiquid symbol during real RTH.
+   * (2) REQUESTING, already flagged NO_ACKNOWLEDGEMENT, and now past the much longer, much less
+   *     aggressive marketDataUnconfirmedReprobeMs: a bounded, low-frequency self-healing reissue
+   *     (REPROBE) - the genuine replacement self-healing mechanism for "IBKR never even
+   *     acknowledged this," suppressed for non-canary symbols while entitlementState is
+   *     DEGRADED_ENTITLEMENT (required behavior: no independent per-symbol retry storm once an
+   *     account-wide condition is suspected - only canaries keep probing).
+   * (3) RETRY_WAIT / REJECTED_RETRYABLE past nextRetryAt (an EXPLICIT confirmed 354/10089
+   *     rejection): unchanged Sept-18 fix behavior for canaries and for every symbol while
+   *     entitlementState is NORMAL/RECOVERED/PROBING; suppressed for NON-canary symbols while
+   *     DEGRADED_ENTITLEMENT (desired intent preserved, nextRetryAt left untouched so the schedule
+   *     resumes exactly where it left off once entitlement recovers - never reset, never advanced).
    */
   private sweepSubscriptionRetries(): void {
     if (!this.ib || !this.connected) return;
@@ -1242,30 +1498,65 @@ export class IbkrSocketSession {
     for (const sym of this.subscriptionState.keys()) {
       if (!this.desiredMarketData.has(sym)) continue; // desire withdrawn - never retry (required behavior D)
       const record = this.subscriptionState.get(sym)!;
-      if (record.state === 'REQUESTING' && record.lastRequestAt != null && now - record.lastRequestAt >= this.cfg.marketDataConfirmationTimeoutMs) {
-        // A non-retryable error (200 contract-resolution, 10197 competing-session, or any other
-        // code this task leaves untouched) must NOT be swept into this fix's retry logic just
-        // because the request also went stale - those codes keep their own existing, separate
-        // (out-of-scope) behavior. Only apply the confirmation-timeout path when either no error at
-        // all was recorded (the actual Sept 18 shape - IBKR went silent, no error, no tick) or the
-        // last recorded error is itself one of the retryable codes.
-        const lastError = this.marketDataErrors.get(sym);
-        const nonRetryableErrorRecorded = !!lastError && !this.cfg.marketDataRejectionRetryableCodes.includes(lastError.code);
-        if (!nonRetryableErrorRecorded) {
-          // Neither a tick nor an error arrived - treat exactly like an explicit rejection so the
-          // same bounded backoff applies, using a reserved pseudo-code so this is never confused
-          // with a real IBKR-issued error in observability/diagnostics.
-          const tickerId = this.symbolToTicker.get(sym);
+      const isCanary = this.canarySymbols.has(sym);
+      const suppressedByEntitlement = this.entitlementState === 'DEGRADED_ENTITLEMENT' && !isCanary;
+
+      if (record.state === 'REQUESTING') {
+        const sinceRequest = record.lastRequestAt != null ? now - record.lastRequestAt : 0;
+        if (record.lastInternalFailureKind === 'NO_ACKNOWLEDGEMENT') {
+          // Case (2): already flagged - eligible for the slow reprobe once its own window elapses.
+          if (!suppressedByEntitlement && record.lastRequestAt != null && now - record.lastRequestAt >= this.cfg.marketDataUnconfirmedReprobeMs) {
+            this.reprobeUnconfirmedSubscription(sym);
+          }
+          continue;
+        }
+        // Case (1): first time this request has gone quiet this long - flag it, never reject it.
+        if (record.lastRequestAt != null && sinceRequest >= this.cfg.marketDataConfirmationTimeoutMs) {
+          const tickerId = record.tickerId;
+          this.subscriptionState.set(sym, { ...record, lastInternalFailureKind: 'NO_ACKNOWLEDGEMENT' });
           if (tickerId != null) {
-            this.markSubscriptionRejected(sym, tickerId, -1, 'No tick or error received within confirmation timeout (silent non-response).');
+            this.emitSubscriptionLifecycle({ kind: 'NO_ACKNOWLEDGEMENT', symbol: sym, tickerId, generation: this.connectionGeneration });
           }
         }
         continue;
       }
+      // Case (3): unchanged Sept-18 explicit-rejection retry, now entitlement-aware.
       if ((record.state === 'REJECTED_RETRYABLE' || record.state === 'RETRY_WAIT') && record.nextRetryAt != null && now >= record.nextRetryAt) {
+        if (suppressedByEntitlement) continue; // desired preserved, nextRetryAt untouched - resumes on recovery
         try { this.subscribeMarketData(sym); } catch (e) { console.warn(`[IBKR Socket] Subscription retry failed for ${sym}: ${String(e)}`); }
       }
     }
+  }
+
+  /**
+   * 2026-09-21 Phase 2: the bounded, low-frequency self-healing reissue for case (2) above.
+   * Deliberately does NOT touch retryCount/nextRetryAt (those remain reserved for the explicit-
+   * rejection backoff schedule) and does NOT emit 'RETRY' (reserved for that same schedule) - a
+   * distinct 'REPROBE' event keeps the two mechanisms observably separate, matching the adversarial
+   * audit's own distinction between "confirmed rejection" and "still unconfirmed."
+   */
+  private reprobeUnconfirmedSubscription(symbol: string): void {
+    if (!this.ib) return;
+    const oldTickerId = this.symbolToTicker.get(symbol);
+    if (oldTickerId != null) {
+      try { this.ib.cancelMktData(oldTickerId); } catch { /* best-effort - IBKR may already consider it gone */ }
+      this.activeMktData.delete(oldTickerId);
+      this.symbolToTicker.delete(symbol);
+    }
+    const newTickerId = this.marketDataTicker++;
+    this.ib.reqMktData(newTickerId, this.stockContract(symbol), '', false, false);
+    this.activeMktData.set(newTickerId, symbol);
+    this.symbolToTicker.set(symbol, newTickerId);
+    const prev = this.subscriptionState.get(symbol);
+    this.subscriptionState.set(symbol, {
+      symbol, tickerId: newTickerId, state: 'REQUESTING', lastRequestAt: Date.now(),
+      lastSuccessAt: prev?.lastSuccessAt ?? null, lastErrorAt: prev?.lastErrorAt ?? null,
+      lastErrorCode: prev?.lastErrorCode ?? null, lastErrorMessage: prev?.lastErrorMessage ?? null,
+      retryCount: prev?.retryCount ?? 0, nextRetryAt: prev?.nextRetryAt ?? null, generation: this.connectionGeneration,
+      lastAcknowledgedAt: prev?.lastAcknowledgedAt ?? null, acknowledgementKind: prev?.acknowledgementKind ?? null,
+      marketDataType: prev?.marketDataType ?? null, lastInternalFailureKind: null,
+    });
+    this.emitSubscriptionLifecycle({ kind: 'REPROBE', symbol, newTickerId, generation: this.connectionGeneration });
   }
 
   private startSubscriptionSweep(): void {

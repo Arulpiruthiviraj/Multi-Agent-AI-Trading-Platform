@@ -16,5 +16,9 @@
   "marketDataRejectionRetryableCodes": [354, 10089],
   "marketDataRejectionRetryBackoffMs": [60000, 120000, 300000, 600000, 900000],
   "marketDataConfirmationTimeoutMs": 60000,
-  "marketDataSubscriptionSweepIntervalMs": 30000
+  "marketDataSubscriptionSweepIntervalMs": 30000,
+  "_lifecycleHardeningComment": "2026-09-21 Phase 2 (post-adversarial-audit): marketDataConfirmationTimeoutMs above no longer causes a rejection - silence alone (no tick, no error, no IBKR acknowledgement callback) is real evidence of nothing, not evidence of failure, and is never allowed to trigger RETRY_WAIT. It now only flags an honest NO_ACKNOWLEDGEMENT diagnostic. marketDataUnconfirmedReprobeMs governs the much slower, bounded self-healing reissue for a symbol that stays unacknowledged (distinct from - and far less aggressive than - the explicit-rejection retry schedule above, since an unconfirmed request is weaker evidence of a real problem than an explicit 354/10089). The entitlement* keys govern the account-wide circuit breaker: only a genuine cluster of independent canary (protected-symbol) entitlement errors suppresses ordinary per-symbol retries, never a single symbol's own error.",
+  "marketDataUnconfirmedReprobeMs": 300000,
+  "entitlementDegradedCanaryThreshold": 2,
+  "entitlementDegradedWindowMs": 120000
 }

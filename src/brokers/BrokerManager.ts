@@ -574,13 +574,55 @@ export class BrokerManager {
               newTickerId: event.newTickerId,
               generation: event.generation,
             });
-          } else {
+          } else if (event.kind === 'RECOVERED') {
             structuredLogger.info(`IBKR market-data subscription recovered for ${event.symbol}`, {
               category: 'MARKET_DATA',
               eventType: 'IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED',
               component: 'BrokerManager',
               symbol: event.symbol,
               tickerId: event.tickerId,
+              generation: event.generation,
+            });
+          } else if (event.kind === 'ACKNOWLEDGED') {
+            // 2026-09-21 Phase 2: real IBKR request-level acknowledgement (marketDataType/
+            // tickReqParams) - distinct eventType so this is never conflated with a live tick.
+            structuredLogger.info(`IBKR market-data subscription acknowledged for ${event.symbol} (${event.acknowledgementKind}${event.marketDataType != null ? `, marketDataType=${event.marketDataType}` : ''})`, {
+              category: 'MARKET_DATA',
+              eventType: 'IBKR_MARKET_DATA_SUBSCRIPTION_ACKNOWLEDGED',
+              component: 'BrokerManager',
+              symbol: event.symbol,
+              tickerId: event.tickerId,
+              acknowledgementKind: event.acknowledgementKind,
+              marketDataType: event.marketDataType,
+              generation: event.generation,
+            });
+          } else if (event.kind === 'NO_ACKNOWLEDGEMENT') {
+            // 2026-09-21 Phase 2: diagnostic only - never implies rejection. See
+            // IbkrSocketSession.ts's sweepSubscriptionRetries() doc comment.
+            structuredLogger.info(`IBKR market-data subscription unconfirmed (no tick/error/acknowledgement yet) for ${event.symbol}`, {
+              category: 'MARKET_DATA',
+              eventType: 'IBKR_MARKET_DATA_NO_ACKNOWLEDGEMENT',
+              component: 'BrokerManager',
+              symbol: event.symbol,
+              tickerId: event.tickerId,
+              generation: event.generation,
+            });
+          } else if (event.kind === 'REPROBE') {
+            structuredLogger.info(`IBKR market-data subscription reprobe (bounded, low-frequency, distinct from a confirmed-rejection retry) for ${event.symbol}`, {
+              category: 'MARKET_DATA',
+              eventType: 'IBKR_MARKET_DATA_REPROBE',
+              component: 'BrokerManager',
+              symbol: event.symbol,
+              newTickerId: event.newTickerId,
+              generation: event.generation,
+            });
+          } else {
+            structuredLogger.warn(`IBKR account-wide entitlement state changed: ${event.state}`, {
+              category: 'MARKET_DATA',
+              eventType: 'IBKR_ACCOUNT_ENTITLEMENT_STATE_CHANGED',
+              component: 'BrokerManager',
+              entitlementState: event.state,
+              canarySymbolsAffected: event.canarySymbolsAffected,
               generation: event.generation,
             });
           }
@@ -600,6 +642,11 @@ export class BrokerManager {
               broker.setSubscriptionLifecycleHandler(null);
             },
             isConnected: () => broker.isMarketDataSessionConnected(),
+            // 2026-09-21 Phase 2: pull-based diagnostics bridge - the unified subscription-
+            // lifecycle view (marketDataDiagnosticsReport.ts) needs to ask "what does IBKR's own
+            // real lifecycle record say right now", not just react to push events.
+            getSubscriptionState: (sym) => broker.getSubscriptionState(sym),
+            getAccountEntitlementState: () => broker.getAccountEntitlementState(),
           },
         });
         // Quant / HistoricalDataGateway: IB reqHistoricalData — no Alpaca REST while gateway is active.

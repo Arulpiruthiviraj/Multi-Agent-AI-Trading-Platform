@@ -227,13 +227,19 @@ describe('IBKR subscription rejection-retry (Sept 18 desync remediation)', () =>
     expect(received).toHaveLength(0);
   });
 
-  it('15. 90/90 capacity rules remain respected during retries', async () => {
+  it('15. 90/90 capacity is measured against active broker lines, not desired intent - a rejected symbol releases its line for a new candidate (Phase 2 fix)', async () => {
     const s = session({ maxMarketDataLines: 1 } as any); const socket = await connect(s);
     const tickerId = s.subscribeMarketData('AAPL');
-    expect(() => s.subscribeMarketData('MSFT')).toThrow(/cap/);
+    expect(() => s.subscribeMarketData('MSFT')).toThrow(/cap/); // AAPL holds the only active line
     socket.emit(EventName.error, new Error('x'), 10089, tickerId);
-    // AAPL is still desired (counts toward the cap) even while rejected - MSFT still can't fit.
-    expect(() => s.subscribeMarketData('MSFT')).toThrow(/cap/);
+    // AAPL is REJECTED (RETRY_WAIT) - it no longer holds a real IBKR line, so MSFT can now acquire
+    // the freed capacity. AAPL remains fully DESIRED (still in the retry schedule) - desired intent
+    // and active broker-line occupancy are deliberately two different things (Phase 2 remediation:
+    // the pre-fix behavior let a rejected symbol block a 91st candidate forever).
+    expect(() => s.subscribeMarketData('MSFT')).not.toThrow();
+    expect(s.getSubscriptionState('AAPL')?.state).toBe('RETRY_WAIT'); // still desired, still tracked
+    // With MSFT now holding the only line, a third symbol is correctly capped again.
+    expect(() => s.subscribeMarketData('NVDA')).toThrow(/cap/);
   });
 
   it('16. delayed tick fields 66-69 remain isolated and do not mark the subscription ACTIVE/healthy', async () => {
@@ -257,37 +263,54 @@ describe('IBKR subscription rejection-retry (Sept 18 desync remediation)', () =>
     expect(s.getSubscriptionState('AAPL')?.state).toBe('RETRY_WAIT');
   });
 
-  it('17 / historical regression: silent non-response (no error at all) is also retried via the confirmation timeout, reproducing and fixing the exact Sept 18 shape', async () => {
-    // Sept 18 shape: ONE initial rejection, then IBKR goes completely silent for hours (no further
-    // errors) while discovery/rescue kept requesting the same symbol. The pre-fix implementation
-    // early-returned forever. This test reproduces that exact silence (no second error emitted at
-    // all) and proves the confirmation-timeout path retries anyway.
+  it('17 (Phase 2 rewrite, supersedes the pre-audit version): silent non-response is NEVER treated as a rejection - it is flagged NO_ACKNOWLEDGEMENT and self-heals via the slow REPROBE path, never RETRY_WAIT, never a fake error code', async () => {
+    // 2026-09-21 post-fix adversarial audit finding: the ORIGINAL Sept-18 remediation treated 60s
+    // of silence identically to an explicit rejection (synthetic errorCode=-1 -> RETRY_WAIT). Real
+    // runtime verification of that fix happened to run on a fully closed Sunday market, where
+    // silence is expected, not evidence of failure - this test proves the corrected behavior.
     const s = session(); const socket = await connect(s);
     const tickerId = s.subscribeMarketData('XOM');
     socket.emit(EventName.error, new Error('additional subscription required'), 10089, tickerId);
     expect(socket.reqMktData).toHaveBeenCalledTimes(1);
+    expect(s.getSubscriptionState('XOM')?.state).toBe('RETRY_WAIT'); // real, explicit error - unchanged Sept-18 behavior
 
     // Cooldown expires; sweep retries. This time IBKR is totally silent - no tick, no error at all.
     await vi.advanceTimersByTimeAsync(BACKOFF[0] + 1_000);
     expect(socket.reqMktData).toHaveBeenCalledTimes(2);
+    expect(s.getSubscriptionState('XOM')?.state).toBe('REQUESTING');
 
-    // Discovery/rescue keeps calling subscribeMarketData every cycle (as it did on 9/18) - must
-    // remain a no-op while REQUESTING and within the confirmation timeout.
+    // Discovery/rescue keeps calling subscribeMarketData every cycle - must remain a no-op while
+    // REQUESTING (an existing ticker mapping already exists).
     for (let i = 0; i < 10; i++) s.subscribeMarketData('XOM');
     expect(socket.reqMktData).toHaveBeenCalledTimes(2);
 
-    // Confirmation timeout (60s) elapses with neither a tick nor an error - the historical failure
-    // mode. The fixed implementation must classify this as needing retry too, with increased backoff.
+    // Confirmation timeout (60s) elapses with neither a tick nor an error. This must NEVER become a
+    // rejection: state stays REQUESTING, retryCount is untouched, only an honest diagnostic flag is set.
     await vi.advanceTimersByTimeAsync(60_000 + 5_000);
     const stateAfterTimeout = s.getSubscriptionState('XOM');
-    expect(stateAfterTimeout?.state).toBe('RETRY_WAIT');
-    expect(stateAfterTimeout?.retryCount).toBe(2); // increased backoff, not stuck forever
+    expect(stateAfterTimeout?.state).toBe('REQUESTING');
+    expect(stateAfterTimeout?.lastInternalFailureKind).toBe('NO_ACKNOWLEDGEMENT');
+    // lastErrorCode still legitimately holds the real prior 10089 (a real broker code is never
+    // cleared just because a later request went quiet) - the point is it was NEVER overwritten
+    // with a synthetic/internal value (e.g. -1) the way the pre-Phase-2 implementation did.
+    expect(stateAfterTimeout?.lastErrorCode).toBe(10089);
+    expect(stateAfterTimeout?.retryCount).toBe(1); // unchanged from the one real 10089 above - silence never increments it
+    expect(socket.reqMktData).toHaveBeenCalledTimes(2); // still no new request from silence alone
 
-    // Second cooldown (backoff[1]=120s) expires -> exactly one more fresh request.
-    await vi.advanceTimersByTimeAsync(BACKOFF[1] + 1_000);
+    // Well past the much slower, much less aggressive reprobe window - a bounded self-healing
+    // reissue fires (REPROBE, distinct from RETRY), still landing in REQUESTING, not RETRY_WAIT.
+    await vi.advanceTimersByTimeAsync(loadIbkrConnection().marketDataUnconfirmedReprobeMs + 1_000);
     expect(socket.reqMktData).toHaveBeenCalledTimes(3);
+    const reprobed = s.getSubscriptionState('XOM');
+    // Still REQUESTING (never RETRY_WAIT) and the explicit-rejection retry counter is still
+    // untouched by any of this silence/reprobe activity - the two load-bearing guarantees. Whether
+    // lastInternalFailureKind has already been re-flagged by a later sweep tick (a second period of
+    // silence since the reprobe's own fresh request) is a real, legitimate possibility depending on
+    // exact sweep-tick/advance-window alignment, not asserted here to avoid a timing-fragile test.
+    expect(reprobed?.state).toBe('REQUESTING');
+    expect(reprobed?.retryCount).toBe(1); // reprobe never touches the explicit-rejection retry counter
 
-    // Real data finally arrives - full recovery, backoff resets.
+    // Real data finally arrives on the reprobed ticker - full recovery.
     const finalTickerId = socket.reqMktData.mock.calls[2][0];
     socket.emit('tickPrice', finalTickerId, 4, 105.0);
     const recovered = s.getSubscriptionState('XOM');

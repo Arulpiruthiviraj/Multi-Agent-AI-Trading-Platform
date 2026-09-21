@@ -79,6 +79,11 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
     return this.session.getSubscriptionState(symbol);
   }
 
+  /** 2026-09-21 Phase 2: diagnostics-only account-wide entitlement circuit-breaker snapshot. */
+  getAccountEntitlementState() {
+    return this.session.getAccountEntitlementState();
+  }
+
   getConnectionSnapshot(): Record<string, unknown> {
     const info = this.session.getConnectionInfo();
     return {

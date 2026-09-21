@@ -96,6 +96,10 @@ type IbkrQuoteBridge = {
    * (weaker) activeStreams-based guess below.
    */
   isConnected?(): boolean;
+  /** 2026-09-21 Phase 2: pull-based diagnostics only - never used for any decision/allocation
+   *  logic. Optional so non-IBKR backends/existing test bridges keep working unmodified. */
+  getSubscriptionState?(symbol: string): unknown;
+  getAccountEntitlementState?(): unknown;
 };
 
 function coreStreamingSet(): Set<string> {
@@ -580,6 +584,17 @@ export class MarketDataWorker {
 
   getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
     return this.marketDataErrors.get(quoteKey(symbol)) ?? null;
+  }
+
+  /** 2026-09-21 Phase 2: pull-based diagnostics only - returns null when the active backend has no
+   *  subscription-lifecycle concept (e.g. Alpaca) or the bridge doesn't expose it. Never used for
+   *  allocation/eviction decisions - see marketDataDiagnosticsReport.ts for the one real consumer. */
+  getIbkrSubscriptionState(symbol: string): unknown | null {
+    return this.ibkrBridge?.getSubscriptionState?.(symbol) ?? null;
+  }
+
+  getIbkrAccountEntitlementState(): unknown | null {
+    return this.ibkrBridge?.getAccountEntitlementState?.() ?? null;
   }
 
   /**

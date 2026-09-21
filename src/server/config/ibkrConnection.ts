@@ -27,13 +27,29 @@ export interface IbkrConnectionConfig {
   /** Per-symbol retry delay schedule after a retryable rejection, indexed by retryCount (capped at
    *  the last entry) - same "cap at last schedule slot" pattern as ReconnectBackoff. */
   marketDataRejectionRetryBackoffMs: number[];
-  /** How long to wait for either a live tick or an explicit error after issuing reqMktData before
-   *  treating the request as needing retry too - the Sept 18 incident's dominant failure mode was
-   *  IBKR going silent (no tick, no error) for hours, not repeated explicit rejections. */
+  /** 2026-09-21 Phase 2 remediation: how long to wait with zero evidence (no tick, no error, no
+   *  IBKR acknowledgement callback) before flagging an honest NO_ACKNOWLEDGEMENT diagnostic.
+   *  Historically (pre-Phase-2) this same value triggered a synthetic rejection (errorCode -1) -
+   *  a real adversarial-audit finding: 60s of silence during a closed market or on an illiquid
+   *  symbol is not evidence of a broker rejection. This value now only gates a diagnostic flag,
+   *  never a state transition into RETRY_WAIT. */
   marketDataConfirmationTimeoutMs: number;
-  /** Cadence of the periodic sweep that checks for expired retry cooldowns / confirmation timeouts.
+  /** Cadence of the periodic sweep that checks for expired retry cooldowns / unconfirmed reprobes.
    *  One shared timer, not one per symbol - avoids per-symbol timer/generation bookkeeping. */
   marketDataSubscriptionSweepIntervalMs: number;
+  /** 2026-09-21 Phase 2: bounded, far-slower-than-explicit-rejection reissue for a symbol that has
+   *  been REQUESTING with zero acknowledgement (no marketDataType/tickReqParams callback) for this
+   *  long - the genuine self-healing mechanism for the "IBKR never even acknowledges the request"
+   *  shape, distinct from and much less aggressive than marketDataRejectionRetryBackoffMs (which is
+   *  reserved for an explicit, confirmed broker rejection). */
+  marketDataUnconfirmedReprobeMs: number;
+  /** 2026-09-21 Phase 2: number of DISTINCT canary (continuousIntelligence.protectedSymbols)
+   *  symbols that must independently receive a retryable entitlement error (354/10089) within
+   *  entitlementDegradedWindowMs before the account-wide circuit breaker engages. Never triggered
+   *  by one symbol alone. */
+  entitlementDegradedCanaryThreshold: number;
+  /** 2026-09-21 Phase 2: clustering window for the canary threshold above. */
+  entitlementDegradedWindowMs: number;
 }
 
 function assertMode(v: unknown): IbkrConnectionMode {
@@ -91,6 +107,15 @@ export function loadIbkrConnection(): IbkrConnectionConfig {
     marketDataSubscriptionSweepIntervalMs: typeof raw.marketDataSubscriptionSweepIntervalMs === 'number' && raw.marketDataSubscriptionSweepIntervalMs > 0
       ? raw.marketDataSubscriptionSweepIntervalMs
       : 30000,
+    marketDataUnconfirmedReprobeMs: typeof raw.marketDataUnconfirmedReprobeMs === 'number' && raw.marketDataUnconfirmedReprobeMs > 0
+      ? raw.marketDataUnconfirmedReprobeMs
+      : 300000,
+    entitlementDegradedCanaryThreshold: typeof raw.entitlementDegradedCanaryThreshold === 'number' && raw.entitlementDegradedCanaryThreshold >= 2
+      ? raw.entitlementDegradedCanaryThreshold
+      : 2,
+    entitlementDegradedWindowMs: typeof raw.entitlementDegradedWindowMs === 'number' && raw.entitlementDegradedWindowMs > 0
+      ? raw.entitlementDegradedWindowMs
+      : 120000,
   };
 }
 

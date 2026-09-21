@@ -58,6 +58,13 @@ export interface CertificationResult {
      *  explicit field, not merely an inference, so a certification consumer never has to trust an
      *  absence of evidence for something this safety-relevant. */
     productionCalibrationModified: false;
+    /** 2026-09-21, Synthetic Certification Framework Hardening Phase 1 close-out (explicit operator
+     *  requirement): a PASS achieved via seeded calibration proves the pipeline operates correctly
+     *  ONCE calibration prerequisites are satisfied - it does NOT prove any agent has organically
+     *  earned calibration trust from real paper-trading history. These three tags exist so a future
+     *  reader of a persisted/exported certification report cannot mistake "CHAMPION established" for
+     *  an organic track record. Empty when calibrationSeeded is false (nothing to disclose). */
+    provenanceLabels: readonly ('SYNTHETIC_SEEDED' | 'NON_ORGANIC' | 'CERTIFICATION_FIXTURE_ONLY')[];
   };
   wallClockDurationMs: number;
   eventLoop: { p50: number | null; p95: number | null; p99: number | null; max: number | null };
@@ -184,6 +191,9 @@ export function evaluateCertification(result: SyntheticSessionResult, requireTra
       affectedAgents: [...new Set(result.calibrationSeedResults.map((r) => r.agentName))],
       affectedBuckets: [...new Set(result.calibrationSeedResults.map((r) => `${r.bucketLow}-${r.bucketHigh}`))],
       productionCalibrationModified: false,
+      provenanceLabels: result.calibrationSeedResults.length > 0
+        ? (['SYNTHETIC_SEEDED', 'NON_ORGANIC', 'CERTIFICATION_FIXTURE_ONLY'] as const)
+        : [],
     },
     wallClockDurationMs: result.wallClockDurationMs,
     eventLoop: { p50: result.eventLoopP50Ms, p95: result.eventLoopP95Ms, p99: result.eventLoopP99Ms, max: result.eventLoopMaxMs },
@@ -222,6 +232,11 @@ export function renderCertificationReport(cert: CertificationResult): string {
     lines.push(`    seededObservationCount=${cert.calibrationProvenance.seededObservationCount}`);
     lines.push(`    affectedAgents=[${cert.calibrationProvenance.affectedAgents.join(', ')}]`);
     lines.push(`    affectedBuckets=[${cert.calibrationProvenance.affectedBuckets.join(', ')}]`);
+    lines.push('');
+    lines.push('    Calibration provenance:');
+    for (const label of cert.calibrationProvenance.provenanceLabels) lines.push(`      ${label}`);
+    lines.push('    PROVES:     pipeline operates correctly when calibration prerequisites are satisfied.');
+    lines.push('    DOES NOT PROVE: these agents have organically earned calibration trust.');
     lines.push(`    productionCalibrationModified=${cert.calibrationProvenance.productionCalibrationModified}`);
   }
   lines.push('');
