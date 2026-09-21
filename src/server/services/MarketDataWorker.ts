@@ -31,6 +31,8 @@ import { notePipelineAgentTick } from '../core/pipelineAgentHealth';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { logDiscoveryCandidateDecision } from '../observability/discoveryCandidateLedger';
 import { hasRealCatalystEvidence } from './NewsCatalystStore';
+import { getCachedIbkrContractResolution } from '../../brokers/ibkrContractResolution';
+import { summarizeMarketDataLines, type MarketDataLineSummary, type ReadinessTriState } from '../core/marketDataLineState';
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
@@ -175,6 +177,12 @@ export class MarketDataWorker {
    *  change subscription/eviction behavior, only makes an otherwise-silent per-symbol data-line
    *  rejection visible on getActiveSlots()/the /capacity endpoint. */
   private marketDataErrors: Map<string, { code: number; message: string; atMs: number }> = new Map();
+  /** 2026-09-20 remediation (part D): IBKR delayed ticks (field 66-69), set via
+   *  recordDelayedQuote() (BrokerManager wires IbkrSocketSession's setDelayedTickHandler here).
+   *  Deliberately a SEPARATE store from the live quote cache this worker exposes via
+   *  getLatestPrice()/ingestIbkrQuote() — RiskEngine/PositionSizing/OMS/ChiefTrader must never read
+   *  from this map. Diagnostics/research only; see getDelayedQuote()'s own doc comment. */
+  private delayedQuotes: Map<string, Map<number, { price: number; atMs: number }>> = new Map();
   private disconnectedAt: number | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectBackoff = new ReconnectBackoff();
@@ -575,6 +583,58 @@ export class MarketDataWorker {
   }
 
   /**
+   * 2026-09-20 remediation (part D). Records an IBKR delayed tick for DIAGNOSTIC/RESEARCH use
+   * only. This method must never be called from, and this data must never be read by, any live
+   * decision path — no ChiefTrader evidence, no RiskEngine/PositionSizing pricing, no OMS. Callers
+   * that need a value must explicitly read `getDelayedQuote()` and check `isLive: false`/`dataMode`
+   * themselves; nothing wires this into `getLatestPrice()`.
+   *
+   * 2026-09-20 observability follow-up: tracked per IB tick field (66=bid/67=ask/68=last/69=close)
+   * rather than one overwriting "latest tick" slot — the delayed-data observability task needs to
+   * report bid/ask/last/close independently (a later ask tick must not erase an earlier bid tick
+   * for diagnostic purposes), matching how a real Level-1 quote has multiple concurrent fields.
+   */
+  recordDelayedQuote(symbol: string, field: number, price: number): void {
+    const sym = quoteKey(symbol);
+    if (!sym) return;
+    let byField = this.delayedQuotes.get(sym);
+    if (!byField) {
+      byField = new Map();
+      this.delayedQuotes.set(sym, byField);
+    }
+    byField.set(field, { price, atMs: this.wallMs() });
+  }
+
+  /** Diagnostics-only accessor — see recordDelayedQuote()'s doc comment. `isLive` is always
+   *  `false` and `dataMode` is always `'DELAYED'`, spelled out explicitly so a caller cannot
+   *  mistake this for a live quote shape by accident. `null` per-field means that field has never
+   *  been observed — never fabricated from another field. */
+  getDelayedQuote(symbol: string): {
+    bid: { price: number; atMs: number; ageMs: number } | null;
+    ask: { price: number; atMs: number; ageMs: number } | null;
+    last: { price: number; atMs: number; ageMs: number } | null;
+    close: { price: number; atMs: number; ageMs: number } | null;
+    latestAtMs: number | null;
+    latestAgeMs: number | null;
+    dataMode: 'DELAYED';
+    isLive: false;
+  } | null {
+    const byField = this.delayedQuotes.get(quoteKey(symbol));
+    if (!byField || byField.size === 0) return null;
+    const now = this.wallMs();
+    const withAge = (f: number) => {
+      const r = byField.get(f);
+      return r ? { price: r.price, atMs: r.atMs, ageMs: Math.max(0, now - r.atMs) } : null;
+    };
+    const latestAtMs = Math.max(...Array.from(byField.values()).map((r) => r.atMs));
+    return {
+      bid: withAge(66), ask: withAge(67), last: withAge(68), close: withAge(69),
+      latestAtMs, latestAgeMs: Math.max(0, now - latestAtMs),
+      dataMode: 'DELAYED', isLive: false,
+    };
+  }
+
+  /**
    * Operator/forensic view of the streamed set (anchors first, then dynamics). Cap is whatever
    * getEffectiveStreamingCap() currently reports (12 Alpaca-safe default, ~90 under IBKR Gateway's
    * hardCapOverride) — not a fixed 12. Does not emit events or mutate subscriptions.
@@ -606,6 +666,32 @@ export class MarketDataWorker {
         marketDataError: this.marketDataErrors.get(symbol) ?? null,
       };
     });
+  }
+
+  /**
+   * 2026-09-20 forensic-audit remediation (part C). Honest allocation-vs-entitlement-vs-reception
+   * reporting: "90/90 active symbols" (allocatedLines) must never be read as "90 usable symbols" -
+   * see marketDataLineState.ts's own header. Pure aggregation over already-real per-symbol state
+   * this worker already tracks (tickCounts, marketDataErrors, latest price age) plus the IBKR
+   * contract-resolution cache (ibkrContractResolution.ts) - no new tracking mechanism, no I/O.
+   */
+  getMarketDataLineSummary(): MarketDataLineSummary {
+    const lines = Array.from(this.activeStreams).map((symbol) => {
+      const resolution = getCachedIbkrContractResolution(symbol);
+      const contractResolution: ReadinessTriState =
+        resolution == null ? 'UNKNOWN' : resolution.status === 'RESOLVED' ? 'YES' : 'NO';
+      return {
+        symbol,
+        contractResolution,
+        input: {
+          subscribedAtMs: this.subscribedAtMs.get(symbol) ?? null,
+          tickCount: this.tickCounts.get(symbol) ?? 0,
+          latestPriceAgeMs: this.getLatestPriceAgeMs(symbol),
+          marketDataError: this.marketDataErrors.get(symbol) ?? null,
+        },
+      };
+    });
+    return summarizeMarketDataLines(lines);
   }
 
   private isWithinDynamicDwell(symbol: string): boolean {

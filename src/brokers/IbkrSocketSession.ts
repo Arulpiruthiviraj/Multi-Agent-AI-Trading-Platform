@@ -18,6 +18,11 @@ import { loadIbkrConnection, ibkrSocketPortCandidates, type IbkrConnectionConfig
 import { findFirstOpenTcpPort } from './ibkrTcpProbe';
 import type { Bar } from '../server/engines/backtest/HistoricalDataGateway';
 import { ReconnectBackoff } from '../server/core/reconnectBackoff';
+import {
+  resolveIbkrContract,
+  getCachedIbkrContractResolution,
+  type ContractResolutionOutcome,
+} from './ibkrContractResolution';
 
 /**
  * Pure order-object construction, extracted from placeStockOrder() (2026-09-05, Extended-Hours
@@ -73,6 +78,48 @@ export function buildIbkrOrder(orderId: number, opts: {
   }
   return order;
 }
+
+/**
+ * Per-symbol subscription lifecycle state (2026-09-20, Sept-18 rejection-desync remediation).
+ *
+ * Real, verified defect: `symbolToTicker` was set optimistically the instant `reqMktData()` was
+ * called, before IBKR's response was known, and was only ever cleared by an explicit
+ * unsubscribe/teardown - never by a rejection. `subscribeMarketData()`'s early-return-if-already-
+ * tracked guard then meant a symbol IBKR explicitly rejected (354/10089) was never retried again
+ * without an external trigger (confirmed live: 32 symbols starved 15:27-19:38 UTC on 2026-09-18,
+ * ~4h11m, until an operator manually forced a resubscribe). `desiredMarketData` (the symbol is
+ * still wanted) and this record's `state` (what IBKR most recently told us, or didn't) are
+ * deliberately two separate concepts - a REJECTED_RETRYABLE symbol stays fully DESIRED the whole
+ * time, exactly as the audit's own remediation task required.
+ */
+type SubscriptionLifecycleState =
+  | 'IDLE'
+  | 'REQUESTING'
+  | 'ACTIVE'
+  | 'REJECTED_RETRYABLE'
+  | 'REJECTED_NONRETRYABLE'
+  | 'RETRY_WAIT';
+
+interface SubscriptionRecord {
+  symbol: string;
+  tickerId: number | null;
+  state: SubscriptionLifecycleState;
+  lastRequestAt: number | null;
+  lastSuccessAt: number | null;
+  lastErrorAt: number | null;
+  lastErrorCode: number | null;
+  lastErrorMessage: string | null;
+  retryCount: number;
+  nextRetryAt: number | null;
+  generation: number;
+}
+
+/** Fields carried by the three new subscription-lifecycle observability events - see
+ *  setSubscriptionLifecycleHandler()'s own doc comment. */
+export type SubscriptionLifecycleEvent =
+  | { kind: 'REJECTED'; symbol: string; tickerId: number; errorCode: number; requestType: 'STREAMING'; retryCount: number; nextRetryAt: number | null; generation: number }
+  | { kind: 'RETRY'; symbol: string; previousErrorCode: number | null; retryCount: number; newTickerId: number; generation: number }
+  | { kind: 'RECOVERED'; symbol: string; tickerId: number; generation: number };
 
 export type IbkrSocketConnectionInfo = {
   adapter: 'IB_GATEWAY_SOCKET';
@@ -193,6 +240,27 @@ export class IbkrSocketSession {
   private nextHistReqId = 50_000;
   /** Serialize historical requests — IB paces hist data; avoid storms. */
   private histChain: Promise<unknown> = Promise.resolve();
+  /** Separate ID space from market-data/historical reqIds - see resolveContract(). */
+  private nextContractReqId = 900_000;
+  /** 2026-09-20 forensic-audit remediation (part B): reqHistoricalData errors previously only
+   *  rejected the caller's Promise - invisible to the same IBKR_MARKET_DATA_ERROR observability
+   *  path streaming errors use. This is the historical-specific sibling of
+   *  marketDataErrorHandler/setMarketDataErrorHandler above. */
+  private historicalDataErrorHandler: ((detail: {
+    symbol: string; reqId: number; code: number; message: string;
+    durationStr: string; barSize: string; whatToShow: string;
+  }) => void) | null = null;
+  /** 2026-09-20 forensic-audit remediation (part D): IBKR delayed tick fields (66-69) - see
+   *  tickPrice handler below. Deliberately separate from tickHandler (the live-quote sink
+   *  MarketDataWorker/RiskEngine/OMS ultimately consume) - delayed data must never silently enter
+   *  the live trading path. Diagnostics/research only. */
+  private delayedTickHandler: ((symbol: string, field: number, price: number) => void) | null = null;
+  /** 2026-09-20 remediation: per-symbol subscription lifecycle - see SubscriptionRecord's own doc
+   *  comment. Keyed by uppercased symbol; entries are removed on explicit cancel (desire withdrawn)
+   *  and left in place across a transport disconnect (matching desiredMarketData's own survival). */
+  private subscriptionState = new Map<string, SubscriptionRecord>();
+  private subscriptionLifecycleHandler: ((event: SubscriptionLifecycleEvent) => void) | null = null;
+  private subscriptionSweepTimer: NodeJS.Timeout | null = null;
   /**
    * Real asymmetry found and fixed (2026-09-06, post-implementation forensic audit): this session
    * had no reconnect-with-backoff of any kind, unlike MarketDataWorker.ts's Alpaca WebSocket path
@@ -262,6 +330,32 @@ export class IbkrSocketSession {
     this.marketDataSubscriptionHandler = handler;
   }
 
+  /** 2026-09-20 remediation (part B): fires for a reqHistoricalData rejection - see
+   *  historicalDataErrorHandler's own field doc comment. */
+  setHistoricalDataErrorHandler(handler: ((detail: {
+    symbol: string; reqId: number; code: number; message: string;
+    durationStr: string; barSize: string; whatToShow: string;
+  }) => void) | null): void {
+    this.historicalDataErrorHandler = handler;
+  }
+
+  /** 2026-09-20 remediation (part D): fires for an IBKR delayed tick (field 66-69) - diagnostics
+   *  only, NEVER routed to setTickHandler's live sink. See tickPrice handler for field mapping. */
+  setDelayedTickHandler(handler: ((symbol: string, field: number, price: number) => void) | null): void {
+    this.delayedTickHandler = handler;
+  }
+
+  /** 2026-09-20 remediation: fires on a retryable rejection, an actual retry request, and recovery
+   *  (real data received again) - never per-tick, never high-cardinality. */
+  setSubscriptionLifecycleHandler(handler: ((event: SubscriptionLifecycleEvent) => void) | null): void {
+    this.subscriptionLifecycleHandler = handler;
+  }
+
+  /** Diagnostics-only snapshot of a symbol's subscription lifecycle record, if tracked. */
+  getSubscriptionState(symbol: string): Readonly<SubscriptionRecord> | null {
+    return this.subscriptionState.get(symbol.toUpperCase()) ?? null;
+  }
+
   /** Most recent market-data error recorded for `symbol`, if any (cleared on a fresh subscribe). */
   getMarketDataError(symbol: string): { code: number; message: string; atMs: number } | null {
     return this.marketDataErrors.get(symbol.toUpperCase()) ?? null;
@@ -275,6 +369,101 @@ export class IbkrSocketSession {
     this.marketDataErrors.set(symbol, record);
     try {
       this.marketDataErrorHandler?.(symbol, code, message);
+    } catch {
+      /* never let a downstream sink break the socket session */
+    }
+    // 2026-09-20 remediation (part A): IBKR error 200 ("No security definition has been found for
+    // the request") is specifically a contract-resolution failure, not an entitlement error - real,
+    // confirmed live for BRK.B/SQ. Kick off real IBKR verification in the background so a FUTURE
+    // subscribe/order attempt for this symbol can either use the now-qualified contract or refuse
+    // cleanly (stockContract()) instead of repeating the same unverified guess forever. Never
+    // blocks the current call; never retries the subscription itself; never touches OMS/RiskEngine.
+    // Deliberately NOT folded into the retryable-rejection state machine below - a contract-
+    // resolution failure and a data-entitlement failure are different problems with different fixes.
+    if (code === 200 && this.ib) {
+      void this.resolveContract(symbol).catch(() => { /* best-effort background enrichment only */ });
+    }
+    // 10197 ("competing session") and any other code: unchanged, existing behavior only
+    // (marketDataErrors/marketDataErrorHandler above) - never reclassified as an entitlement
+    // rejection, never enters the retry state machine below.
+    if (this.cfg.marketDataRejectionRetryableCodes.includes(code) && reqId === this.symbolToTicker.get(symbol)) {
+      this.markSubscriptionRejected(symbol, reqId, code, message);
+    }
+  }
+
+  /**
+   * 2026-09-20 remediation, core fix: a retryable rejection (354/10089) clears ONLY the local
+   * "currently active" belief for this symbol (`activeMktData`/`symbolToTicker` for the rejected
+   * reqId) - `desiredMarketData` is never touched here, so the symbol stays fully desired. This is
+   * the exact behavior the Sept 18 incident needed: `subscribeMarketData()`'s early-return guard
+   * checks `symbolToTicker`, so clearing it here is what lets a later retry actually issue a new
+   * `reqMktData()` instead of silently believing the old, rejected request was still good.
+   */
+  private markSubscriptionRejected(symbol: string, tickerId: number, code: number, message: string): void {
+    this.activeMktData.delete(tickerId);
+    this.symbolToTicker.delete(symbol);
+    const prev = this.subscriptionState.get(symbol);
+    const retryCount = (prev?.retryCount ?? 0) + 1;
+    const backoffSchedule = this.cfg.marketDataRejectionRetryBackoffMs;
+    const delay = backoffSchedule[Math.min(retryCount - 1, backoffSchedule.length - 1)]!;
+    const nextRetryAt = Date.now() + delay;
+    const next: SubscriptionRecord = {
+      symbol,
+      tickerId: null,
+      // RETRY_WAIT, not REJECTED_RETRYABLE: nextRetryAt is computed synchronously right here, so the
+      // symbol is immediately in an active cooldown, not merely "classified as retryable pending a
+      // decision." REJECTED_RETRYABLE remains a valid state for a future caller that wants to
+      // represent that intermediate moment explicitly.
+      state: 'RETRY_WAIT',
+      lastRequestAt: prev?.lastRequestAt ?? null,
+      lastSuccessAt: prev?.lastSuccessAt ?? null,
+      lastErrorAt: Date.now(),
+      lastErrorCode: code,
+      lastErrorMessage: message,
+      retryCount,
+      nextRetryAt,
+      generation: this.connectionGeneration,
+    };
+    this.subscriptionState.set(symbol, next);
+    this.emitSubscriptionLifecycle({
+      kind: 'REJECTED', symbol, tickerId, errorCode: code, requestType: 'STREAMING',
+      retryCount, nextRetryAt, generation: this.connectionGeneration,
+    });
+  }
+
+  /**
+   * 2026-09-20 remediation: proof of success is real data, not a request that merely didn't throw
+   * (required behavior #6). Called on every live tick, but only mutates state / emits the RECOVERED
+   * event on an actual state TRANSITION into ACTIVE - never logs per-tick (would be exactly the
+   * high-cardinality noise this task explicitly says not to produce). Resets retryCount/backoff so
+   * a symbol that starts erroring again later gets the full retry schedule from the start, not a
+   * stale elevated backoff from a previous, now-irrelevant episode.
+   */
+  private markSubscriptionRecovered(symbol: string, tickerId: number): void {
+    const record = this.subscriptionState.get(symbol);
+    const wasActive = record?.state === 'ACTIVE';
+    const now = Date.now();
+    this.subscriptionState.set(symbol, {
+      symbol,
+      tickerId,
+      state: 'ACTIVE',
+      lastRequestAt: record?.lastRequestAt ?? now,
+      lastSuccessAt: now,
+      lastErrorAt: record?.lastErrorAt ?? null,
+      lastErrorCode: record?.lastErrorCode ?? null,
+      lastErrorMessage: record?.lastErrorMessage ?? null,
+      retryCount: 0,
+      nextRetryAt: null,
+      generation: this.connectionGeneration,
+    });
+    if (!wasActive) {
+      this.emitSubscriptionLifecycle({ kind: 'RECOVERED', symbol, tickerId, generation: this.connectionGeneration });
+    }
+  }
+
+  private emitSubscriptionLifecycle(event: SubscriptionLifecycleEvent): void {
+    try {
+      this.subscriptionLifecycleHandler?.(event);
     } catch {
       /* never let a downstream sink break the socket session */
     }
@@ -428,10 +617,15 @@ export class IbkrSocketSession {
           this.reconnectBackoff.reset();
           // IBApi's existing global request scheduler paces these alongside other requests.
           // Deduplication in subscribeMarketData makes repeated managedAccounts events harmless.
+          // A stale rejection-cooldown from a prior connection generation is bypassed automatically
+          // (subscribeMarketData's cooldown check is generation-scoped) - every desired symbol gets
+          // a genuine fresh reqMktData here.
           for (const symbol of this.desiredMarketData) {
             try { this.subscribeMarketData(symbol); }
             catch (e) { console.warn(`[IBKR Socket] Could not restore ${symbol}: ${String(e)}`); }
           }
+          // 2026-09-20 remediation: start the bounded-retry sweep once we have a working session.
+          this.startSubscriptionSweep();
           finish(true);
         }
       });
@@ -611,11 +805,24 @@ export class IbkrSocketSession {
 
       ib.on(EventName.tickPrice, (tickerId: number, field: number, price: number) => {
         if (!(price > 0)) return;
-        // IB tickType: BID=1, ASK=2, LAST=4
-        if (field !== 4 && field !== 1 && field !== 2) return;
         const symbol = this.activeMktData.get(tickerId);
-        if (!symbol || !this.tickHandler) return;
-        this.tickHandler(symbol, price);
+        if (!symbol) return;
+        // IB tickType: BID=1, ASK=2, LAST=4 (real-time/live).
+        if (field === 4 || field === 1 || field === 2) {
+          this.markSubscriptionRecovered(symbol, tickerId);
+          this.tickHandler?.(symbol, price);
+          return;
+        }
+        // 2026-09-20 remediation (part D): DELAYED_BID=66, DELAYED_ASK=67, DELAYED_LAST=68,
+        // DELAYED_CLOSE=69 - previously silently dropped by the field guard above even when IBKR
+        // was actually sending usable delayed data (every observed IBKR_MARKET_DATA_ERROR message
+        // in this deployment states "Delayed market data is available"). Routed to a SEPARATE
+        // handler, never tickHandler - delayed data must never silently enter the live trading
+        // path (MarketDataWorker's live quote cache, RiskEngine, PositionSizing, OMS). See
+        // setDelayedTickHandler's own doc comment.
+        if (field === 66 || field === 67 || field === 68 || field === 69) {
+          this.delayedTickHandler?.(symbol, field, price);
+        }
       });
 
       try {
@@ -642,10 +849,14 @@ export class IbkrSocketSession {
 
   async disconnect(preserveSubscriptions = false): Promise<void> {
     this.connectionGeneration++;
+    // 2026-09-20 remediation: the sweep timer belongs to a live session - always stop it here
+    // (reconnect's own managedAccounts handler restarts it once a new session is actually up).
+    this.stopSubscriptionSweep();
     if (!preserveSubscriptions) {
       this.stopAutoReconnect();
       this.desiredMarketData.clear();
       this.desiredRequestHandles.clear();
+      this.subscriptionState.clear();
     }
     const ib = this.ib;
     this.ib = null;
@@ -685,13 +896,59 @@ export class IbkrSocketSession {
     return id;
   }
 
+  /**
+   * 2026-09-20 forensic-audit remediation (part A). Consults `ibkrContractResolution.ts`'s cache
+   * first: a symbol that has never been through explicit resolution (the overwhelming majority -
+   * SMART routing already resolves plain STK contracts correctly for them, confirmed live) gets
+   * byte-for-byte the same default contract as before this change - zero behavior change for the
+   * working case. A symbol IBKR has already told us it cannot uniquely resolve (AMBIGUOUS /
+   * NOT_FOUND from a real `reqContractDetails` call, e.g. the confirmed 200-error cases BRK.B/SQ)
+   * throws here instead of silently sending a contract IBKR already rejected - callers must never
+   * place an order or subscribe for a different security on a failed resolution.
+   */
   stockContract(symbol: string): Contract {
+    const sym = symbol.toUpperCase();
+    const resolution = getCachedIbkrContractResolution(sym);
+    if (resolution?.status === 'RESOLVED') {
+      const c = resolution.contract;
+      return {
+        symbol: c.symbol,
+        secType: SecType.STK,
+        exchange: c.exchange as any,
+        ...(c.primaryExchange ? { primaryExch: c.primaryExchange } : {}),
+        currency: c.currency,
+        ...(c.conId ? { conId: c.conId } : {}),
+      };
+    }
+    if (resolution?.status === 'AMBIGUOUS' || resolution?.status === 'NOT_FOUND') {
+      throw new Error(
+        `IBKR contract for ${sym} could not be uniquely resolved (${resolution.status}) - refusing to `
+        + `subscribe or place an order under an unverified contract guess.`,
+      );
+    }
     return {
-      symbol: symbol.toUpperCase(),
+      symbol: sym,
       secType: SecType.STK,
       exchange: 'SMART',
       currency: 'USD',
     };
+  }
+
+  /** Explicit IBKR contract qualification via reqContractDetails - see ibkrContractResolution.ts.
+   *  Safe to call repeatedly (cached); callers should treat a non-RESOLVED outcome as this symbol
+   *  remaining on the existing default-contract path (or refusing, per stockContract() above) -
+   *  this method never mutates trading state and never places an order. */
+  async resolveContract(symbol: string): Promise<ContractResolutionOutcome> {
+    if (!this.ib) {
+      return { status: 'ERROR', symbol: symbol.toUpperCase(), message: 'IBKR socket session is not connected.', resolvedAt: Date.now() };
+    }
+    return resolveIbkrContract(this.ib, symbol, () => this.allocateContractReqId());
+  }
+
+  private allocateContractReqId(): number {
+    const id = this.nextContractReqId;
+    this.nextContractReqId += 1;
+    return id;
   }
 
   placeStockOrder(opts: {
@@ -871,6 +1128,17 @@ export class IbkrSocketSession {
 
       const onErr = (err: Error, code: ErrorCode, id: number) => {
         if (id !== reqId) return;
+        // 2026-09-20 remediation (part B): previously this rejection was the ONLY trace of a
+        // historical-data error - invisible to the IBKR_MARKET_DATA_ERROR observability path
+        // streaming (reqMktData) errors use, so a caller could not distinguish "streaming
+        // entitlement failure" from "historical entitlement/data failure" from persisted evidence
+        // alone. Surfaced as its own, clearly-labeled event before rejecting.
+        try {
+          this.historicalDataErrorHandler?.({
+            symbol: symbol.toUpperCase(), reqId, code: Number(code), message: String(err?.message ?? err ?? ''),
+            durationStr, barSize: String(barSize), whatToShow: String(WhatToShow.TRADES),
+          });
+        } catch { /* never let a downstream sink break the socket session */ }
         finish(() => reject(new Error(`IBKR historicalData error code=${code}: ${err?.message || err}`)));
       };
 
@@ -896,7 +1164,16 @@ export class IbkrSocketSession {
     });
   }
 
-  /** Level-1 quotes — sinks via setTickHandler into MarketDataWorker/EventBus when bound. */
+  /**
+   * Level-1 quotes — sinks via setTickHandler into MarketDataWorker/EventBus when bound.
+   *
+   * 2026-09-20 remediation: a symbol currently in `RETRY_WAIT`/`REJECTED_RETRYABLE` cooldown is a
+   * safe, idempotent no-op here (no new `reqMktData`, no throw) - this is what makes repeated calls
+   * from discovery/rescue/rotation cycles during a cooldown harmless (required: "multiple rescue
+   * cycles during cooldown -> still exactly zero extra requests"). Once the cooldown has expired,
+   * this issues exactly one genuinely new `reqMktData` with a fresh ticker id - the old, rejected
+   * ticker id is never reused (already cleared by markSubscriptionRejected()).
+   */
   subscribeMarketData(symbol: string): number {
     if (!this.ib || !this.connected) {
       throw new Error('IBKR socket session is not connected.');
@@ -904,9 +1181,22 @@ export class IbkrSocketSession {
     const sym = symbol.toUpperCase();
     const existing = this.symbolToTicker.get(sym);
     if (existing != null) return existing;
+
+    const record = this.subscriptionState.get(sym);
+    // Cooldown only applies within the SAME connection generation it was computed under. A real
+    // transport disconnect/reconnect (connectionGeneration bumped in disconnect()) is a fresh
+    // opportunity independent of an entitlement-rejection backoff calibrated for the old
+    // connection - required scenario C ("disconnect before retry -> reconnect -> one valid reissue
+    // path only") needs the reissue to actually happen, not wait out a stale cooldown.
+    if (record && record.generation === this.connectionGeneration
+      && (record.state === 'REJECTED_RETRYABLE' || record.state === 'RETRY_WAIT')
+      && record.nextRetryAt != null && Date.now() < record.nextRetryAt) {
+      return record.tickerId ?? -1; // cooldown still active - no request sent, nothing to return meaningfully
+    }
     if (!this.desiredMarketData.has(sym) && this.desiredMarketData.size >= this.cfg.maxMarketDataLines) {
       throw new Error(`IBKR market-data line cap reached (${this.cfg.maxMarketDataLines}).`);
     }
+    const isRetry = !!record && (record.state === 'REJECTED_RETRYABLE' || record.state === 'RETRY_WAIT');
     const tickerId = this.marketDataTicker++;
     this.ib.reqMktData(tickerId, this.stockContract(sym), '', false, false);
     this.marketDataErrors.delete(sym);
@@ -914,8 +1204,81 @@ export class IbkrSocketSession {
     this.desiredMarketData.add(sym);
     this.activeMktData.set(tickerId, sym);
     this.symbolToTicker.set(sym, tickerId);
+    const now = Date.now();
+    this.subscriptionState.set(sym, {
+      symbol: sym,
+      tickerId,
+      state: 'REQUESTING',
+      lastRequestAt: now,
+      lastSuccessAt: record?.lastSuccessAt ?? null,
+      lastErrorAt: record?.lastErrorAt ?? null,
+      lastErrorCode: record?.lastErrorCode ?? null,
+      lastErrorMessage: record?.lastErrorMessage ?? null,
+      retryCount: record?.retryCount ?? 0,
+      nextRetryAt: null,
+      generation: this.connectionGeneration,
+    });
+    if (isRetry) {
+      this.emitSubscriptionLifecycle({
+        kind: 'RETRY', symbol: sym, previousErrorCode: record!.lastErrorCode,
+        retryCount: record!.retryCount, newTickerId: tickerId, generation: this.connectionGeneration,
+      });
+    }
     try { this.marketDataSubscriptionHandler?.(sym); } catch { /* observer only */ }
     return tickerId;
+  }
+
+  /**
+   * 2026-09-20 remediation: periodic sweep, one shared timer (not one per symbol). Handles two
+   * cases the error-driven path above cannot: (1) a cooldown that has expired - issue exactly one
+   * retry; (2) a request that got neither a tick nor an explicit error within
+   * `marketDataConfirmationTimeoutMs` - the Sept 18 incident's actual dominant failure mode was
+   * IBKR going silent (no error at all) for hours after the first rejection, not repeated explicit
+   * rejections, so a purely error-triggered retry would not have fixed that specific shape.
+   */
+  private sweepSubscriptionRetries(): void {
+    if (!this.ib || !this.connected) return;
+    const now = Date.now();
+    for (const sym of this.subscriptionState.keys()) {
+      if (!this.desiredMarketData.has(sym)) continue; // desire withdrawn - never retry (required behavior D)
+      const record = this.subscriptionState.get(sym)!;
+      if (record.state === 'REQUESTING' && record.lastRequestAt != null && now - record.lastRequestAt >= this.cfg.marketDataConfirmationTimeoutMs) {
+        // A non-retryable error (200 contract-resolution, 10197 competing-session, or any other
+        // code this task leaves untouched) must NOT be swept into this fix's retry logic just
+        // because the request also went stale - those codes keep their own existing, separate
+        // (out-of-scope) behavior. Only apply the confirmation-timeout path when either no error at
+        // all was recorded (the actual Sept 18 shape - IBKR went silent, no error, no tick) or the
+        // last recorded error is itself one of the retryable codes.
+        const lastError = this.marketDataErrors.get(sym);
+        const nonRetryableErrorRecorded = !!lastError && !this.cfg.marketDataRejectionRetryableCodes.includes(lastError.code);
+        if (!nonRetryableErrorRecorded) {
+          // Neither a tick nor an error arrived - treat exactly like an explicit rejection so the
+          // same bounded backoff applies, using a reserved pseudo-code so this is never confused
+          // with a real IBKR-issued error in observability/diagnostics.
+          const tickerId = this.symbolToTicker.get(sym);
+          if (tickerId != null) {
+            this.markSubscriptionRejected(sym, tickerId, -1, 'No tick or error received within confirmation timeout (silent non-response).');
+          }
+        }
+        continue;
+      }
+      if ((record.state === 'REJECTED_RETRYABLE' || record.state === 'RETRY_WAIT') && record.nextRetryAt != null && now >= record.nextRetryAt) {
+        try { this.subscribeMarketData(sym); } catch (e) { console.warn(`[IBKR Socket] Subscription retry failed for ${sym}: ${String(e)}`); }
+      }
+    }
+  }
+
+  private startSubscriptionSweep(): void {
+    this.stopSubscriptionSweep();
+    this.subscriptionSweepTimer = setInterval(() => this.sweepSubscriptionRetries(), this.cfg.marketDataSubscriptionSweepIntervalMs);
+    if (typeof this.subscriptionSweepTimer.unref === 'function') this.subscriptionSweepTimer.unref();
+  }
+
+  private stopSubscriptionSweep(): void {
+    if (this.subscriptionSweepTimer) {
+      clearInterval(this.subscriptionSweepTimer);
+      this.subscriptionSweepTimer = null;
+    }
   }
 
   cancelMarketData(tickerId: number): void {
@@ -932,14 +1295,25 @@ export class IbkrSocketSession {
       this.desiredRequestHandles.delete(sym);
       this.symbolToTicker.delete(sym);
       this.marketDataErrors.delete(sym);
+      // 2026-09-20 remediation: desire withdrawn -> no retry (required behavior D). The sweep's own
+      // `desiredMarketData.has()` guard already makes this safe without this line, but clearing it
+      // here avoids an unbounded number of stale entries accumulating for long-rotated-out symbols.
+      this.subscriptionState.delete(sym);
     }
   }
 
   cancelMarketDataBySymbol(symbol: string): void {
-    this.desiredMarketData.delete(symbol.toUpperCase());
-    const tickerId = this.symbolToTicker.get(symbol.toUpperCase());
+    const sym = symbol.toUpperCase();
+    this.desiredMarketData.delete(sym);
+    this.subscriptionState.delete(sym);
+    // 2026-09-20 remediation: a rejected (RETRY_WAIT) symbol has no live ticker mapping to cancel
+    // (markSubscriptionRejected already cleared it) - clear the lingering error record directly
+    // here too, rather than only as cancelMarketData()'s side effect, so a fully-withdrawn desire
+    // never leaves stale error state behind regardless of which lifecycle state it was in.
+    this.marketDataErrors.delete(sym);
+    const tickerId = this.symbolToTicker.get(sym);
     if (tickerId != null) this.cancelMarketData(tickerId);
-    this.desiredRequestHandles.delete(symbol.toUpperCase());
+    this.desiredRequestHandles.delete(sym);
   }
 
   activeMarketDataCount(): number {

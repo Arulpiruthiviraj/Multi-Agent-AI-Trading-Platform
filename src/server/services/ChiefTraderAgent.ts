@@ -67,6 +67,7 @@ import { isQuantJavaCoreEnabled, isQuantIndependentQualificationEnabled } from '
 import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
 import { quantCoreBridge } from './QuantCoreBridge';
 import { persistConsensusDebateCapture } from './ConsensusDebateForensics';
+import { resolveIndependentEvidenceGroup } from './evidenceIndependence';
 import {
   MIN_BARS_FOR_ANALYSIS as JAVA_ADVISORY_MIN_BARS,
   LOOKBACK_DAYS as JAVA_ADVISORY_LOOKBACK_DAYS,
@@ -824,8 +825,18 @@ export class ChiefTraderAgent {
     // classification can reuse these exact same computed values instead of recomputing them - no
     // behavioral change, same expressions, same scope of use (still only meaningful/used in the
     // non-risk-exit path).
-    const uniqueIndependent = new Set(
+    // 2026-09-20 forensic-audit remediation: agent IDENTITY is not the same thing as evidence
+    // INDEPENDENCE. Two structurally-correlated producers (QuantEngine + JavaCoreEnsemble - see
+    // evidenceIndependence.ts's header for the source-verified lineage: both recompute the
+    // identical 5 CORE strategies over the identical bars, just in different languages) previously
+    // satisfied this floor as "2 independent agents" purely by having different name strings. This
+    // was NOT changed to make approval harder or easier as a goal - it makes the EXISTING
+    // MIN_INDEPENDENT_AGREEING_AGENTS requirement measure what it always claimed to measure.
+    const rawAgreeingAgentNames = new Set(
       result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
+    );
+    const uniqueIndependent = new Set(
+      Array.from(rawAgreeingAgentNames).map(resolveIndependentEvidenceGroup)
     );
     const enoughIndependentVoices = uniqueIndependent.size >= MIN_INDEPENDENT_AGREEING_AGENTS;
     // 2026-09-09, explicit operator override - see this function's own doc comment on
@@ -890,7 +901,7 @@ export class ChiefTraderAgent {
           }
         }
       } else if (!enoughIndependentVoices && !quantIndependentEligible) {
-        reason = `[NO TRADE] Only ${uniqueIndependent.size} independent agent(s) agreed on ${result.side} (need ${MIN_INDEPENDENT_AGREEING_AGENTS}). A single voice is not confirmation.`;
+        reason = `[NO TRADE] Only ${uniqueIndependent.size} independent evidence group(s) agreed on ${result.side} (need ${MIN_INDEPENDENT_AGREEING_AGENTS}) from producers [${Array.from(rawAgreeingAgentNames).join(', ') || 'none'}] resolving to groups [${Array.from(uniqueIndependent).join(', ') || 'none'}]. A single voice is not confirmation, and structurally-correlated producers (e.g. QuantEngine + JavaCoreEnsemble) count once.`;
       } else if (debateSaidHold) {
         reason = `[NO TRADE] Adversarial debate verdict was HOLD - the thesis did not survive a search for reasons not to trade.`;
       } else if (bearSaidHold) {
@@ -943,15 +954,12 @@ export class ChiefTraderAgent {
       });
     }
 
-    const independentAgreeing = new Set(
-      result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
-    );
     this.lastConsensusOutcome = {
       at: new Date().toISOString(),
       symbol,
       approved,
       side: approvedSide,
-      independentAgreeingAgents: independentAgreeing.size,
+      independentAgreeingAgents: uniqueIndependent.size,
       requiredAgents: MIN_INDEPENDENT_AGREEING_AGENTS,
       confidence: approvedConfidence,
       threshold: CONSENSUS_APPROVAL_THRESHOLD,
@@ -1019,7 +1027,15 @@ export class ChiefTraderAgent {
         approved,
         rawConfidence: result.confidence,
         finalConfidence: approvedConfidence,
-        independentAgentCount: Array.from(new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent))).length,
+        // 2026-09-20: independentAgentCount is the RAW distinct-producer-name count (kept for
+        // backward-compat with existing forensic queries) - it is NOT the value that gates
+        // approval. independentEvidenceGroupCount (evidenceIndependence.ts) is: structurally
+        // correlated producers (QuantEngine + JavaCoreEnsemble) collapse to one group there.
+        independentAgentCount: rawAgreeingAgentNames.size,
+        independentEvidenceGroupCount: uniqueIndependent.size,
+        requiredIndependentEvidenceGroups: MIN_INDEPENDENT_AGREEING_AGENTS,
+        evidenceGroups: Array.from(rawAgreeingAgentNames).map(agent => ({ agent, group: resolveIndependentEvidenceGroup(agent) })),
+        quantIndependentQualificationContributed: decisionTier === 'QUANT_INDEPENDENT',
         participatingAgents: evidence.map(e => ({
           agent: e.agent,
           side: e.side,
@@ -1045,7 +1061,8 @@ export class ChiefTraderAgent {
           decisionTier,
           rawConsensus: result.confidence,
           calibratedConsensus: approvedConfidence,
-          independentAgentCount: Array.from(new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent))).length,
+          independentAgentCount: rawAgreeingAgentNames.size,
+          independentEvidenceGroupCount: uniqueIndependent.size,
           participatingAgents: evidence.map(e => e.agent),
           moderateReasonCode: explain.reasonCode,
           moderateReason: explain.reason,
@@ -1260,7 +1277,7 @@ export class ChiefTraderAgent {
         weightedConfidence: result.confidence,
         threshold: CONSENSUS_APPROVAL_THRESHOLD,
         approved: false,
-        reasoning: `No consensus reached before the evaluation window closed. Best side: ${result.side} at ${(result.confidence * 100).toFixed(1)}% (threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%). Independent agreeing agents: ${new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)).size}.`,
+        reasoning: `No consensus reached before the evaluation window closed. Best side: ${result.side} at ${(result.confidence * 100).toFixed(1)}% (threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%). Independent evidence groups: ${new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => resolveIndependentEvidenceGroup(e.agent))).size}.`,
         debateUsed: evidence.some(e => e.agent === 'ConsensusDebate'),
         evidence: evidence.map(e => ({
           sourceTraceId: e.traceId,

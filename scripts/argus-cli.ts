@@ -1079,6 +1079,20 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'market-data-diagnostics'() {
+    // 2026-09-20 (delayed-data observability follow-up): read-only live in-memory market-data
+    // diagnostics - allocated/receiving/fresh/stale/error line counts plus per-symbol live quote,
+    // delayed quote (bid/ask/last/close, each independently tracked), latest IBKR error, and
+    // contract-resolution state. Never mutates any store. Optional --symbols=AAPL,MSFT filters to
+    // specific symbols; omit for every currently-allocated symbol.
+    const symbolsArg = process.argv.slice(3).find((a) => a.startsWith('--symbols='));
+    const qs = symbolsArg ? `&symbols=${encodeURIComponent(symbolsArg.slice('--symbols='.length))}` : '';
+    const res = await fetch(`${BASE}/api/v2/observability/market-data-diagnostics?format=text${qs}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'ai-cost-governor'() {
     // Project A (2026-09-02): current policy, per-(agent,provider) real graded-outcome quality
     // ledger, and recent shadow-mode decisions. Off by default (config/aiCostGovernor.json);
@@ -1478,7 +1492,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

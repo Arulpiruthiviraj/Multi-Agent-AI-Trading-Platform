@@ -579,6 +579,73 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     });
   });
 
+  describe('recordDelayedQuote() / getDelayedQuote() (2026-09-20 remediation, part D + observability follow-up)', () => {
+    it('is null for a symbol with no recorded delayed tick', () => {
+      expect(worker.getDelayedQuote('AAPL')).toBeNull();
+    });
+
+    it('records and returns a delayed quote with explicit non-live provenance, case-insensitively', () => {
+      worker.recordDelayedQuote('nvda', 68, 100.5);
+      const q = worker.getDelayedQuote('NVDA');
+      expect(q).not.toBeNull();
+      expect(q?.last).toMatchObject({ price: 100.5 });
+      expect(q?.bid).toBeNull();
+      expect(q).toMatchObject({ dataMode: 'DELAYED', isLive: false });
+      expect(typeof q?.latestAgeMs).toBe('number');
+    });
+
+    it('tracks bid/ask/last/close independently - a later field does not erase an earlier one', () => {
+      worker.recordDelayedQuote('SPY', 66, 550.1); // bid
+      worker.recordDelayedQuote('SPY', 67, 550.2); // ask
+      worker.recordDelayedQuote('SPY', 68, 550.15); // last
+      worker.recordDelayedQuote('SPY', 69, 549.9); // close
+      const q = worker.getDelayedQuote('SPY');
+      expect(q?.bid).toMatchObject({ price: 550.1 });
+      expect(q?.ask).toMatchObject({ price: 550.2 });
+      expect(q?.last).toMatchObject({ price: 550.15 });
+      expect(q?.close).toMatchObject({ price: 549.9 });
+    });
+
+    it('never influences getLatestPrice()/getLatestPriceAgeMs() - the live decision path must never see delayed data', () => {
+      worker.recordDelayedQuote('AAPL', 68, 999.99);
+      expect(worker.getLatestPrice('AAPL')).toBeNull();
+      expect(worker.getLatestPriceAgeMs('AAPL')).toBeNull();
+      // Confirm the two stores are genuinely independent: a real live quote is unaffected by a
+      // delayed one recorded for the same symbol, and vice versa.
+      worker.ingestIbkrQuote('AAPL', 191.5);
+      expect(worker.getLatestPrice('AAPL')).toBe(191.5);
+      expect(worker.getDelayedQuote('AAPL')?.last).toMatchObject({ price: 999.99 });
+    });
+  });
+
+  describe('getMarketDataLineSummary() (2026-09-20 remediation, part C — allocation vs entitlement vs reception)', () => {
+    it('distinguishes allocated lines from lines actually receiving fresh data - "N/N active" must never imply N usable symbols', () => {
+      worker.subscribe('AAPL', { momentumScore: 0.5 });
+      worker.subscribe('MSFT', { momentumScore: 0.5 });
+      worker.subscribe('SPY', { momentumScore: 0.5 });
+      worker.recordMarketDataError('AAPL', 10089, 'additional subscription required');
+      worker.recordMarketDataError('MSFT', 200, 'no security definition');
+      worker.ingestIbkrQuote('SPY', 550);
+
+      const summary = worker.getMarketDataLineSummary();
+      expect(summary.allocatedLines).toBe(3);
+      expect(summary.errorLines).toBe(2);
+      expect(summary.entitlementFailures).toBe(1); // AAPL (10089)
+      expect(summary.contractFailures).toBe(1); // MSFT (200)
+      expect(summary.receivingLines).toBe(1); // SPY
+      expect(summary.bySymbol.SPY.state).toBe('RECEIVING_FRESH');
+      expect(summary.bySymbol.AAPL.state).toBe('ERROR');
+    });
+
+    it('a symbol with zero allocated lines summarizes to all zeros, never a fabricated count', () => {
+      const summary = worker.getMarketDataLineSummary();
+      expect(summary.allocatedLines).toBe(0);
+      expect(summary.receivingLines).toBe(0);
+      expect(summary.entitlementFailures).toBe(0);
+      expect(summary.contractFailures).toBe(0);
+    });
+  });
+
   it('WATCHLIST_SUBSCRIBE_REQUESTED expands the IEX set without placing an order', () => {
     const handler = subscribeSpy.mock.calls.find((c: unknown[]) => c[0] === 'WATCHLIST_SUBSCRIBE_REQUESTED')?.[1] as ((p: { symbol?: string }) => void) | undefined;
     expect(handler).toBeTypeOf('function');

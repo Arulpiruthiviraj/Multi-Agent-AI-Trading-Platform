@@ -48,6 +48,37 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
     return this.session.getMarketDataError(symbol);
   }
 
+  /** 2026-09-20 remediation (part B): surfaces a real reqHistoricalData rejection, distinct from
+   *  the streaming path above. Read-only observability wiring only. */
+  setHistoricalDataErrorHandler(handler: ((detail: {
+    symbol: string; reqId: number; code: number; message: string;
+    durationStr: string; barSize: string; whatToShow: string;
+  }) => void) | null): void {
+    this.session.setHistoricalDataErrorHandler(handler);
+  }
+
+  /** 2026-09-20 remediation (part D): surfaces an IBKR delayed tick (field 66-69). Diagnostics
+   *  only - never routed through setQuoteSink's live sink. */
+  setDelayedTickHandler(handler: ((symbol: string, field: number, price: number) => void) | null): void {
+    this.session.setDelayedTickHandler(handler);
+  }
+
+  /** 2026-09-20 remediation (part A): explicit contract qualification via reqContractDetails. */
+  resolveContract(symbol: string) {
+    return this.session.resolveContract(symbol);
+  }
+
+  /** 2026-09-20 remediation (Sept 18 rejection-desync fix): fires on a retryable rejection, an
+   *  actual retry request, and recovery - never per-tick. */
+  setSubscriptionLifecycleHandler(handler: Parameters<IbkrSocketSession['setSubscriptionLifecycleHandler']>[0]): void {
+    this.session.setSubscriptionLifecycleHandler(handler);
+  }
+
+  /** Diagnostics-only per-symbol subscription lifecycle snapshot. */
+  getSubscriptionState(symbol: string) {
+    return this.session.getSubscriptionState(symbol);
+  }
+
   getConnectionSnapshot(): Record<string, unknown> {
     const info = this.session.getConnectionInfo();
     return {

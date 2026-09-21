@@ -20,6 +20,20 @@ export interface IbkrConnectionConfig {
   preferredAccountId: string | null;
   webApiGatewayUrlDefault: string;
   openBrowserOnWebApiStartup: boolean;
+  /** 2026-09-20 remediation: IBKR error codes eligible for bounded subscription retry (entitlement-
+   *  class rejections only - 354/10089). Never includes 200 (contract-resolution) or 10197
+   *  (competing-session) - those keep their own existing, separate handling. */
+  marketDataRejectionRetryableCodes: number[];
+  /** Per-symbol retry delay schedule after a retryable rejection, indexed by retryCount (capped at
+   *  the last entry) - same "cap at last schedule slot" pattern as ReconnectBackoff. */
+  marketDataRejectionRetryBackoffMs: number[];
+  /** How long to wait for either a live tick or an explicit error after issuing reqMktData before
+   *  treating the request as needing retry too - the Sept 18 incident's dominant failure mode was
+   *  IBKR going silent (no tick, no error) for hours, not repeated explicit rejections. */
+  marketDataConfirmationTimeoutMs: number;
+  /** Cadence of the periodic sweep that checks for expired retry cooldowns / confirmation timeouts.
+   *  One shared timer, not one per symbol - avoids per-symbol timer/generation bookkeeping. */
+  marketDataSubscriptionSweepIntervalMs: number;
 }
 
 function assertMode(v: unknown): IbkrConnectionMode {
@@ -65,6 +79,18 @@ export function loadIbkrConnection(): IbkrConnectionConfig {
       (typeof raw.webApiGatewayUrlDefault === 'string' && raw.webApiGatewayUrlDefault)
       || 'https://localhost:5000/v1/api',
     openBrowserOnWebApiStartup: raw.openBrowserOnWebApiStartup === true,
+    marketDataRejectionRetryableCodes: Array.isArray(raw.marketDataRejectionRetryableCodes) && raw.marketDataRejectionRetryableCodes.every((n) => typeof n === 'number')
+      ? raw.marketDataRejectionRetryableCodes as number[]
+      : [354, 10089],
+    marketDataRejectionRetryBackoffMs: Array.isArray(raw.marketDataRejectionRetryBackoffMs) && raw.marketDataRejectionRetryBackoffMs.length > 0 && raw.marketDataRejectionRetryBackoffMs.every((n) => typeof n === 'number' && n > 0)
+      ? raw.marketDataRejectionRetryBackoffMs as number[]
+      : [60000, 120000, 300000, 600000, 900000],
+    marketDataConfirmationTimeoutMs: typeof raw.marketDataConfirmationTimeoutMs === 'number' && raw.marketDataConfirmationTimeoutMs > 0
+      ? raw.marketDataConfirmationTimeoutMs
+      : 60000,
+    marketDataSubscriptionSweepIntervalMs: typeof raw.marketDataSubscriptionSweepIntervalMs === 'number' && raw.marketDataSubscriptionSweepIntervalMs > 0
+      ? raw.marketDataSubscriptionSweepIntervalMs
+      : 30000,
   };
 }
 

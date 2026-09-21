@@ -22,6 +22,12 @@ export interface WhyNoTradeReport {
   rawConfidence: number | null;
   finalConfidence: number | null;
   independentAgentCount: number | null;
+  // 2026-09-20: distinct from independentAgentCount (raw distinct producer names) - structurally
+  // correlated producers (e.g. QuantEngine + JavaCoreEnsemble, see evidenceIndependence.ts) collapse
+  // to one group here. This is the value that actually gates MIN_INDEPENDENT_AGREEING_AGENTS.
+  // Null for historical rows recorded before this field existed - never backfilled/guessed.
+  independentEvidenceGroupCount: number | null;
+  evidenceGroups: Array<{ agent: string; group: string }>;
   participatingAgents: Array<{ agent: string; side: string; confidence: number }>;
   risk: {
     reached: boolean;
@@ -56,6 +62,8 @@ export async function buildWhyNoTradeReport(symbol?: string): Promise<WhyNoTrade
       rawConfidence: null,
       finalConfidence: null,
       independentAgentCount: null,
+      independentEvidenceGroupCount: null,
+      evidenceGroups: [],
       participatingAgents: [],
       risk: { reached: false, approved: null, rejectionGate: null, gateResults: [] },
     };
@@ -89,6 +97,8 @@ export async function buildWhyNoTradeReport(symbol?: string): Promise<WhyNoTrade
     rawConfidence: typeof payload.rawConfidence === 'number' ? payload.rawConfidence : null,
     finalConfidence: typeof payload.finalConfidence === 'number' ? payload.finalConfidence : null,
     independentAgentCount: typeof payload.independentAgentCount === 'number' ? payload.independentAgentCount : null,
+    independentEvidenceGroupCount: typeof payload.independentEvidenceGroupCount === 'number' ? payload.independentEvidenceGroupCount : null,
+    evidenceGroups: Array.isArray(payload.evidenceGroups) ? payload.evidenceGroups : [],
     participatingAgents: Array.isArray(payload.participatingAgents) ? payload.participatingAgents : [],
     risk: {
       reached: !!riskRow,
@@ -119,7 +129,13 @@ export function formatWhyNoTradeReport(r: WhyNoTradeReport): string {
     lines.push(`${a.agent}: ${a.side} ${typeof a.confidence === 'number' ? a.confidence.toFixed(3) : a.confidence}`);
   }
   lines.push('');
-  lines.push(`Independent agreement: ${r.independentAgentCount ?? 0}`);
+  lines.push(`Independent agreement: ${r.independentAgentCount ?? 0} raw producer(s) -> ${r.independentEvidenceGroupCount ?? 'N/A (pre-fix row)'} independent evidence group(s)`);
+  if (r.evidenceGroups.length > 0) {
+    const merged = r.evidenceGroups.filter((g, i, arr) => arr.some((o, j) => j !== i && o.group === g.group));
+    if (merged.length > 0) {
+      lines.push(`  Merged as correlated: ${merged.map(g => `${g.agent}->${g.group}`).join(', ')}`);
+    }
+  }
   lines.push(`Decision tier: ${r.decisionTier ?? 'N/A'}`);
   lines.push(`Consensus: ${r.approved ? 'PASS' : 'FAIL'} (${r.terminalReasonCode ?? 'UNKNOWN'})`);
   lines.push(`Raw confidence: ${r.rawConfidence ?? 'N/A'}   Final confidence: ${r.finalConfidence ?? 'N/A'}`);

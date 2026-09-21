@@ -518,7 +518,72 @@ export class BrokerManager {
             component: 'BrokerManager',
             symbol,
             code,
+            requestType: 'STREAMING',
           });
+        });
+        // 2026-09-20 remediation (part B): reqHistoricalData errors previously only rejected the
+        // caller's Promise - invisible to the observability path above. Deliberately a distinct
+        // eventType (IBKR_HISTORICAL_DATA_ERROR, requestType: 'HISTORICAL') so a query can never
+        // conflate a streaming entitlement failure with a historical-data one.
+        broker.setHistoricalDataErrorHandler((detail) => {
+          structuredLogger.warn(`IBKR historical-data rejection for ${detail.symbol}: code=${detail.code} ${detail.message}`, {
+            category: 'MARKET_DATA',
+            eventType: 'IBKR_HISTORICAL_DATA_ERROR',
+            component: 'BrokerManager',
+            symbol: detail.symbol,
+            code: detail.code,
+            requestType: 'HISTORICAL',
+            reqId: detail.reqId,
+            durationStr: detail.durationStr,
+            barSize: detail.barSize,
+            whatToShow: detail.whatToShow,
+          });
+        });
+        // 2026-09-20 remediation (part D): IBKR delayed ticks (field 66-69) - diagnostics store
+        // only, NEVER routed through setQuoteSink's live sink (MarketDataWorker.ingestIbkrQuote
+        // feeds RiskEngine/PositionSizing/OMS pricing - delayed data must never silently reach it).
+        broker.setDelayedTickHandler((symbol, field, price) => {
+          marketDataWorker.recordDelayedQuote(symbol, field, price);
+        });
+        // 2026-09-20 remediation (Sept 18 rejection-desync fix): bounded per-symbol subscription
+        // retry lifecycle. Never per-tick - REJECTED/RETRY fire once per state transition,
+        // RECOVERED fires once when real data resumes. See IbkrSocketSession.ts's
+        // SubscriptionRecord/markSubscriptionRejected/markSubscriptionRecovered doc comments.
+        broker.setSubscriptionLifecycleHandler((event) => {
+          if (event.kind === 'REJECTED') {
+            structuredLogger.warn(`IBKR market-data subscription rejected for ${event.symbol}: code=${event.errorCode}, retry #${event.retryCount} at ${event.nextRetryAt ? new Date(event.nextRetryAt).toISOString() : 'n/a'}`, {
+              category: 'MARKET_DATA',
+              eventType: 'IBKR_MARKET_DATA_SUBSCRIPTION_REJECTED',
+              component: 'BrokerManager',
+              symbol: event.symbol,
+              tickerId: event.tickerId,
+              errorCode: event.errorCode,
+              requestType: event.requestType,
+              retryCount: event.retryCount,
+              nextRetryAt: event.nextRetryAt,
+              generation: event.generation,
+            });
+          } else if (event.kind === 'RETRY') {
+            structuredLogger.info(`IBKR market-data subscription retry #${event.retryCount} for ${event.symbol}`, {
+              category: 'MARKET_DATA',
+              eventType: 'IBKR_MARKET_DATA_SUBSCRIPTION_RETRY',
+              component: 'BrokerManager',
+              symbol: event.symbol,
+              previousErrorCode: event.previousErrorCode,
+              retryCount: event.retryCount,
+              newTickerId: event.newTickerId,
+              generation: event.generation,
+            });
+          } else {
+            structuredLogger.info(`IBKR market-data subscription recovered for ${event.symbol}`, {
+              category: 'MARKET_DATA',
+              eventType: 'IBKR_MARKET_DATA_SUBSCRIPTION_RECOVERED',
+              component: 'BrokerManager',
+              symbol: event.symbol,
+              tickerId: event.tickerId,
+              generation: event.generation,
+            });
+          }
         });
         marketDataWorker.setBrokerQuoteContext({
           backend: 'ibkr_gateway',
@@ -530,6 +595,9 @@ export class BrokerManager {
               broker.setQuoteSink(null);
               broker.setMarketDataErrorHandler(null);
               broker.setMarketDataSubscriptionHandler(null);
+              broker.setHistoricalDataErrorHandler(null);
+              broker.setDelayedTickHandler(null);
+              broker.setSubscriptionLifecycleHandler(null);
             },
             isConnected: () => broker.isMarketDataSessionConnected(),
           },

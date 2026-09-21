@@ -55,6 +55,7 @@
   },
   "_javaQuantScoreCandidateLimitComment": "Session-Aware Trading Architecture Phase 3 follow-up (2026-09-05): javaQuantScore (ComposableRanking.ts) is now actually wired to a live caller - SnapshotScanner's once-per-trading-day PRE_MARKET plan-building cycle only (never the ~30s RTH ranking loop, which would multiply Java HTTP + bar-fetch cost by every cycle for no evidence-backed benefit yet). Bounded to this many top-momentum candidates (by the SAME deterministic pre-score already computed, before Java is ever called) - matches DEFAULT_TRADE_PLAN_THRESHOLDS' total tier capacity (primaryCount 3 + backupCount 5 + watchlistCount 15 = 23) rounded down, since a symbol outside that range cannot receive a TradePlan tier anyway. Zero cost when QUANT_JAVA_CORE_ENABLED is off (isQuantJavaCoreEnabled() gate checked first).",
   "javaQuantScoreCandidateLimit": 20,
+  "_momentumScanUniverseSymbolsComment": "2026-09-20 forensic-audit remediation: 'SQ' corrected to 'XYZ' - Block Inc. has traded under ticker XYZ on NYSE since its 2023 rename; the stale 'SQ' symbol was confirmed live to produce real IBKR error 200 ('No security definition has been found for the request'), not an entitlement failure.",
   "momentumScanUniverseSymbols": [
     "SPY", "QQQ", "IWM", "DIA", "GLD", "SMH", "XLF", "XLE", "XLK", "SOXL", "TQQQ", "SQQQ",
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "GOOGL", "GOOG", "TSLA", "AVGO", "BRK.B",
@@ -63,7 +64,7 @@
     "TMO", "ACN", "CSCO", "MCD", "ADBE", "LIN", "ABT", "WFC", "TXN", "IBM",
     "DIS", "QCOM", "GE", "CAT", "INTU", "VZ", "AMAT", "NOW", "ISRG", "CMCSA",
     "UBER", "PFE", "BA", "NKE", "SBUX", "GS", "MS", "BLK", "SCHW", "AXP",
-    "BKNG", "PLTR", "COIN", "SHOP", "SQ", "PYPL", "NFLX", "MU", "INTC", "ARM",
+    "BKNG", "PLTR", "COIN", "SHOP", "XYZ", "PYPL", "NFLX", "MU", "INTC", "ARM",
     "CRWD", "PANW", "SNOW", "DDOG", "NET", "MDB", "TEAM", "ZM", "ROKU", "SNAP",
     "PINS", "RBLX", "SOFI", "HOOD", "MARA", "RIOT", "AAL", "UAL", "DAL", "F",
     "GM", "RIVN", "NIO", "LCID", "PATH", "AI", "S", "OKTA", "TTD", "ABNB",

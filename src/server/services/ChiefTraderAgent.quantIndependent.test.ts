@@ -76,7 +76,9 @@ describe('ChiefTraderAgent - QuantEngine internal-ensemble independent qualifica
 
     expect(capturedApprovals).toHaveLength(0);
     expect(capturedNoTrades).toHaveLength(1);
-    expect(capturedNoTrades[0].reason).toMatch(/Only 1 independent agent\(s\)/);
+    // 2026-09-20: wording updated from "independent agent(s)" to "independent evidence group(s)"
+    // (evidenceIndependence.ts remediation) - same underlying rejection, more accurate label.
+    expect(capturedNoTrades[0].reason).toMatch(/Only 1 independent evidence group\(s\)/);
     expect(capturedNoTrades[0].reason).not.toMatch(/QUANT_INDEPENDENT/);
   });
 
@@ -106,7 +108,7 @@ describe('ChiefTraderAgent - QuantEngine internal-ensemble independent qualifica
 
     expect(capturedApprovals).toHaveLength(0);
     expect(capturedNoTrades).toHaveLength(1);
-    expect(capturedNoTrades[0].reason).toMatch(/Only 1 independent agent\(s\)/);
+    expect(capturedNoTrades[0].reason).toMatch(/Only 1 independent evidence group\(s\)/);
   });
 
   it('enabled: a normal 2-agent STRONG approval is completely unaffected (byte-for-byte same tier/reason)', async () => {

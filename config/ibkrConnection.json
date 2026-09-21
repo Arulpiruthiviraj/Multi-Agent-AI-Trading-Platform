@@ -11,5 +11,10 @@
   "maxMarketDataLines": 90,
   "preferredAccountId": "DUR959160",
   "webApiGatewayUrlDefault": "https://localhost:5000/v1/api",
-  "openBrowserOnWebApiStartup": false
+  "openBrowserOnWebApiStartup": false,
+  "_marketDataRejectionComment": "2026-09-20 remediation for the Sept 18 rejection-triggered subscription desync (docs/audits): a reqMktData rejected with 354/10089 previously left the symbol permanently marked locally as already-subscribed, so it was never retried without an explicit external trigger. These keys govern the bounded per-symbol retry/backoff that replaces that silent-forever behavior. Deliberately a slower, coarser schedule than networkReconnectBackoffMs (transport reconnect) - an entitlement rejection is a different, slower-changing condition than a dropped socket.",
+  "marketDataRejectionRetryableCodes": [354, 10089],
+  "marketDataRejectionRetryBackoffMs": [60000, 120000, 300000, 600000, 900000],
+  "marketDataConfirmationTimeoutMs": 60000,
+  "marketDataSubscriptionSweepIntervalMs": 30000
 }

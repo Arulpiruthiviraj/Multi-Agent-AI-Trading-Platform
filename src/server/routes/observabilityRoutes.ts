@@ -31,6 +31,7 @@ import { buildOpportunitySnapshot, formatOpportunitySnapshot } from '../research
 import { buildExecutionQualityReport, summarizeExecutionQuality, formatExecutionQualityReport } from '../research/executionQuality';
 import { buildForecast, mostRecentForecast, PRIMARY_EVAL_HORIZON_LABEL } from '../research/forecastEngine';
 import { buildDailyAttributionReport, summarizeDailyAttribution, formatDailyAttributionReport } from '../research/dailyAttributionReport';
+import { buildMarketDataDiagnosticsReport, formatMarketDataDiagnosticsReport } from '../observability/marketDataDiagnosticsReport';
 
 export const observabilityRouter = Router();
 
@@ -563,6 +564,26 @@ observabilityRouter.get('/discovery-lineage', async (req, res) => {
     const report = await buildDiscoveryLineageReport(symbol, sinceIso);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatDiscoveryLineageReport(report));
+      return;
+    }
+    res.json({ ok: true, ...report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-20 (delayed-data observability follow-up, argus-cli market-data-diagnostics): read-only
+// live in-memory market-data diagnostics - same "no new tracking, just read what already exists"
+// pattern as /rescue-occupants above. Purposely NOT per-tick logging (would be noisy/expensive per
+// the operator's own explicit preference) - this is a pull-based snapshot instead. Optional
+// ?symbols=AAPL,MSFT filters to specific symbols; omit for every currently-allocated symbol.
+observabilityRouter.get('/market-data-diagnostics', (req, res) => {
+  try {
+    const symbolsParam = typeof req.query.symbols === 'string' ? req.query.symbols : undefined;
+    const symbols = symbolsParam ? symbolsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined;
+    const report = buildMarketDataDiagnosticsReport(symbols);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatMarketDataDiagnosticsReport(report));
       return;
     }
     res.json({ ok: true, ...report });

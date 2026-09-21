@@ -18,29 +18,55 @@ export interface CalibrationSeedSpec {
 }
 
 /**
- * The (agent, bucket) pairs found, by direct inspection of real synthetic-run agent_predictions/
- * kronos_predictions rows, to be the ones ChiefTrader's real MODERATE-tier calibration-trust check
- * needed for a genuine multi-agent convergence - see CalibrationHistorySeeder.ts's own header for
- * the full disclosure this represents. JavaCoreEnsemble/KronosEngine pair found 2026-09-14
- * (VALIDATED_CONVERGENCE_CONTROL's original SPY SELL convergence). TechnicalAgent 0.6-0.7 added
- * 2026-09-15 (autonomous end-to-end certification mandate) after direct inspection of real
- * CERTIFIED_BULLISH_ENTRY_EXIT/VALIDATED_CONVERGENCE_CONTROL runs showed KronosEngine+TechnicalAgent
- * as the most consistent real 2-independent-agent convergence pairing (not JavaCoreEnsemble+Kronos
- * every time) - unseeded, TechnicalAgent's own bucket was the other missing piece of trust in that
- * exact convergence.
+ * 2026-09-21, Synthetic Certification Framework Hardening Phase 1 - root-cause fix.
+ *
+ * The list this replaced was a REACTIVE, hand-curated set of specific (agent, bucket) pairs, each
+ * added only after a specific historical run was observed to land there (JavaCoreEnsemble/
+ * KronosEngine 0.6-0.7/0.8-0.9 from the original 2026-09-14 SPY SELL convergence; TechnicalAgent
+ * 0.6-0.7 and 0-0.6 added 2026-09-15 after two more specific observed runs). That approach is
+ * structurally incomplete: the synthetic engine's own randomness (seed, symbol mix, which of the
+ * plausible independent-evidence producers actually agree on a given cycle) can legitimately land a
+ * genuinely-independent, genuinely-agreeing agent's RAW confidence in a bucket nobody happened to
+ * observe before. Real, confirmed evidence this was still failing as of 2026-09-20: QQQ reached
+ * 64.5% consensus confidence with `MODERATE_REJECT_UNTRUSTED_CALIBRATION` even with the 5-pair list
+ * above already seeded (agent_workspace/master_certification.log, session sess_9972ec81..., trace
+ * trace_QQQ_1789869646_3de1) - the reactive list simply didn't cover whichever bucket that run's
+ * actual agreeing agent(s) landed in. Confirmed structurally: the 5-pair list never covered the
+ * 0.7-0.8 bucket AT ALL, for any agent, and never covered 0.9-1.0 either.
+ *
+ * Fix: seed EVERY canonical confidence bucket (mirrors, does not import - this file is deliberately
+ * import-free from src/server - src/server/services/ConfidenceCalibration.ts's own CONFIDENCE_BUCKETS,
+ * the actual source of truth ModerateTierEvaluator.ts's bucketFor() partitions against) for EVERY
+ * agent name capable of independently agreeing in a synthetic run (the idea-generating agents active
+ * in SyntheticSessionEngine minus the ones deliberately disabled there - FundamentalAgent/
+ * MacroAgent/NewsEngine - plus ConsensusDebate, which is excluded from agreeingAgents entirely by
+ * ChiefTraderAgent.ts itself and therefore never needs a seed). This is still the SAME disclosed,
+ * authorized methodology (CalibrationHistorySeeder.ts, isolated-DB-only, real
+ * runCalibrationValidationCycle() computing a genuine champion or not) - only the COVERAGE is wider,
+ * not the mechanism. Never injects a vote, never touches independence or threshold logic: a
+ * genuinely-independent agreement can still fail here if the real algorithm doesn't produce a
+ * champion (e.g. a future win/loss recipe change) - this only removes "nobody happened to seed this
+ * exact bucket yet" as a source of failure.
  */
-export const DEFAULT_CALIBRATION_SEEDS: CalibrationSeedSpec[] = [
-  { agentName: 'JavaCoreEnsemble', bucketLow: 0.6, bucketHigh: 0.7 },
-  { agentName: 'KronosEngine', bucketLow: 0.8, bucketHigh: 0.9 },
-  { agentName: 'TechnicalAgent', bucketLow: 0.6, bucketHigh: 0.7 },
-  // 2026-09-15, same certification mandate, same-day follow-up: a real CERTIFIED_BULLISH_ENTRY_EXIT
-  // run showed TechnicalAgent's actual confidence landing in the 0-0.6 bucket (0.576-0.582) for the
-  // specific BUY-side convergence this scenario produces, not the 0.6-0.7 bucket seeded above -
-  // real evidence, not a guess (see the seed's own real run trace). Adding coverage for the bucket
-  // TechnicalAgent actually lands in, same disclosed mechanism, never a fabricated vote.
-  { agentName: 'TechnicalAgent', bucketLow: 0, bucketHigh: 0.6 },
-  { agentName: 'OpportunityScreener', bucketLow: 0, bucketHigh: 0.6 },
+const CANONICAL_CONFIDENCE_BUCKETS: Array<{ bucketLow: number; bucketHigh: number }> = [
+  { bucketLow: 0, bucketHigh: 0.6 },
+  { bucketLow: 0.6, bucketHigh: 0.7 },
+  { bucketLow: 0.7, bucketHigh: 0.8 },
+  { bucketLow: 0.8, bucketHigh: 0.9 },
+  { bucketLow: 0.9, bucketHigh: 1.0 },
 ];
+
+/** Agent names capable of independently emitting TRADE_IDEA_GENERATED in a synthetic run today -
+ *  see SyntheticSessionEngine.ts's own disabling of FundamentalAgent/MacroAgent/NewsEngine, and
+ *  ChiefTraderAgent.ts's own agreeingAgents filter (`e.agent !== 'ConsensusDebate'`, which is why
+ *  ConsensusDebate is deliberately absent from this list - it never needs a calibration seed). */
+const CALIBRATION_ELIGIBLE_AGENTS: string[] = [
+  'TechnicalAgent', 'QuantEngine', 'JavaCoreEnsemble', 'JavaFactorComposite', 'KronosEngine', 'OpportunityScreener',
+];
+
+export const DEFAULT_CALIBRATION_SEEDS: CalibrationSeedSpec[] = CALIBRATION_ELIGIBLE_AGENTS.flatMap(
+  (agentName) => CANONICAL_CONFIDENCE_BUCKETS.map((b) => ({ agentName, ...b })),
+);
 
 export interface ScenarioRunSpec {
   simulationId: string;
