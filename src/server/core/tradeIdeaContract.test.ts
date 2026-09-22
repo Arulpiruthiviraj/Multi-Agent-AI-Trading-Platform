@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 import { gateTradeIdea } from './tradeIdeaContract';
 import { eventBus } from './EventBus';
 import { EVENTS } from './eventNames';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { seedRuntimeOverrideCacheForTests, resetRuntimeConfigCacheForTests } from '../config/effectiveRuntimeConfig';
 
 describe('gateTradeIdea — stop emitting garbage symbols / missing prices', () => {
   it('rejects garbled LLM symbols like Toast Stock (not specified...)', () => {
@@ -41,6 +42,63 @@ describe('gateTradeIdea — stop emitting garbage symbols / missing prices', () 
       expect(gated.idea.symbol).toBe('AAPL');
       expect(gated.idea.currentPrice).toBe(188.42);
     }
+  });
+
+  // Crypto Expansion Phase 2 (2026-09-21): gateTradeIdea migrated from looksLikeListedTicker()
+  // (equity-only) to validateInstrumentSymbol() (additive). This exercises the required matrix
+  // directly - no live caller emits a crypto idea yet, so this proves capability, not current
+  // production behavior.
+  describe('Crypto Expansion Phase 2', () => {
+    // CRYPTO is disabled by default (ARGUS_TRADEABLE_ASSET_CLASSES defaults to EQUITY-only) -
+    // explicitly opt it in for this block, which specifically tests the crypto validation path.
+    beforeAll(() => seedRuntimeOverrideCacheForTests('ARGUS_TRADEABLE_ASSET_CLASSES', 'EQUITY,CRYPTO'));
+    afterAll(() => resetRuntimeConfigCacheForTests());
+
+    it('BRK.B (equity with a dot suffix) is unaffected', () => {
+      marketDataWorker.cacheObservedQuote('BRK.B', 410);
+      const gated = gateTradeIdea({ symbol: 'brk.b', side: 'BUY', confidence: 0.8, agent: 'FundamentalAgent' });
+      expect(gated.ok).toBe(true);
+      if (gated.ok) expect(gated.idea.symbol).toBe('BRK.B');
+    });
+
+    it('accepts a registered crypto instrument (BTC-USD) with an explicit currentPrice', () => {
+      const gated = gateTradeIdea({ symbol: 'btc-usd', side: 'BUY', confidence: 0.8, agent: 'QuantSignalAgent', currentPrice: 60000 });
+      expect(gated.ok).toBe(true);
+      if (gated.ok) {
+        expect(gated.idea.symbol).toBe('BTC-USD');
+        expect(gated.idea.currentPrice).toBe(60000);
+      }
+    });
+
+    it('accepts a registered crypto instrument (ETH-USD) with an explicit currentPrice', () => {
+      const gated = gateTradeIdea({ symbol: 'eth-usd', side: 'BUY', confidence: 0.8, agent: 'QuantSignalAgent', currentPrice: 2500 });
+      expect(gated.ok).toBe(true);
+      if (gated.ok) expect(gated.idea.symbol).toBe('ETH-USD');
+    });
+
+    it('rejects provider-notation crypto symbols - canonical symbols only', () => {
+      const gated = gateTradeIdea({ symbol: 'BTC/USD', side: 'BUY', confidence: 0.8, agent: 'QuantSignalAgent', currentPrice: 60000 });
+      expect(gated.ok).toBe(false);
+      if (gated.ok === false) expect(gated.reason).toBe('INVALID_SYMBOL');
+    });
+
+    it('rejects BTCUSD (no canonical registry entry without the hyphen)', () => {
+      const gated = gateTradeIdea({ symbol: 'BTCUSD', side: 'BUY', confidence: 0.8, agent: 'QuantSignalAgent', currentPrice: 60000 });
+      expect(gated.ok).toBe(false);
+      if (gated.ok === false) expect(gated.reason).toBe('INVALID_SYMBOL');
+    });
+
+    it('rejects an unregistered crypto-shaped symbol (DOG-FAKE) - a hyphen alone never passes', () => {
+      const gated = gateTradeIdea({ symbol: 'DOG-FAKE', side: 'BUY', confidence: 0.8, agent: 'QuantSignalAgent', currentPrice: 1 });
+      expect(gated.ok).toBe(false);
+      if (gated.ok === false) expect(gated.reason).toBe('INVALID_SYMBOL');
+    });
+
+    it('a registered crypto symbol with no price attached and no cached tick still fails MISSING_PRICE (no market data path exists yet)', () => {
+      const gated = gateTradeIdea({ symbol: 'BTC-USD', side: 'BUY', confidence: 0.8, agent: 'QuantSignalAgent' });
+      expect(gated.ok).toBe(false);
+      if (gated.ok === false) expect(gated.reason).toBe('MISSING_PRICE');
+    });
   });
 });
 

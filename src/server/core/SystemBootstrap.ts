@@ -38,6 +38,7 @@ import { opportunityDiscoveryWorker } from '../continuous/OpportunityDiscovery';
 import { advancedQuantEngines } from '../engines/AdvancedQuantEngines';
 import { db } from '../db';
 import { marketDataWorker } from '../services/MarketDataWorker';
+import { cryptoMarketDataIngestionWorker } from '../services/CryptoMarketDataIngestion';
 import { authorizeMarketDataWebSocket } from './marketDataWsOwnership';
 import { portfolioMonitor } from '../services/PortfolioMonitor';
 import { oms } from '../services/OrderManagement'; 
@@ -104,6 +105,10 @@ export class SystemBootstrap {
     // reached the code that checks it). Starting it here unconditionally is safe because the
     // worker's own start() re-checks the flag and returns immediately when it's off.
     opportunityDiscoveryWorker.start();
+    // Crypto Expansion Phase 4 (2026-09-21). No-ops unless
+    // ARGUS_CRYPTO_MARKET_DATA_INGESTION_ENABLED=true (default false) - same safe-unconditional-
+    // call pattern as opportunityDiscoveryWorker above (its own start() re-checks the flag).
+    cryptoMarketDataIngestionWorker.start();
     // ARGUS_NEWS_ENGINE_ENABLED='false' (isolated synthetic simulation only - see
     // SyntheticSessionEngine.ts's prepareIsolatedEnvironment()) must stop this call too, not just
     // ArgusCoreBoot.ts's own newsEngine.start() - this is a genuinely SECOND, independent call site

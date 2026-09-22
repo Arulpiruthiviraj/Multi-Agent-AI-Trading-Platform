@@ -7,12 +7,19 @@ import { replaySafety } from '../replay/replaySafety';
 export type ExecutionEnvironment = 'BACKTEST' | 'REPLAY' | 'SIMULATION' | 'PAPER' | 'LIVE' | 'UNKNOWN';
 
 /**
- * risk_assessments has no executionEnvironment/brokerId column to classify by, so a
- * replay-originated row is only identifiable by its trace_id prefix (FullArgusReplayEngine.ts
- * mints every replay traceId as `${replaySafety.replayTracePrefix}${replayId}-...`). Real defect
- * found 2026-09-01: observability reports that query risk_assessments/trades/fills by time window
- * alone (consensusPipelineReport.ts, rescueOutcomeReport.ts) counted historical-replay rows as if
- * they were organic activity whenever a replay run shared the production DB.
+ * risk_assessments has no executionEnvironment/brokerId column to classify by. A
+ * replay-originated row is identifiable by its trace_id prefix (FullArgusReplayEngine.ts mints
+ * every replay traceId as `${replaySafety.replayTracePrefix}${replayId}-...`). Real defect found
+ * 2026-09-01: observability reports that query risk_assessments/trades/fills by time window alone
+ * (consensusPipelineReport.ts, rescueOutcomeReport.ts) counted historical-replay rows as if they
+ * were organic activity whenever a replay run shared the production DB.
+ *
+ * PAPER/LIVE rows on this table are classified via the reasoning-text executionEnvironment=
+ * stamp below, not a column - RiskEngine.ts's persistAssessment() started stamping its own
+ * persisted reasoning this way on 2026-09-21 (forensic audit defect fix: previously RiskEngine's
+ * reasoning never carried this stamp, so every real risk_assessments row fell through to UNKNOWN
+ * and tradingSessionReport.ts undercounted real risk evaluations). Rows persisted before that fix
+ * remain UNKNOWN - this is not retroactively fixable from reasoning text alone.
  */
 export function isReplayTraceId(traceId?: string | null): boolean {
   return !!traceId && traceId.startsWith(replaySafety.replayTracePrefix);
@@ -106,7 +113,11 @@ export function isOrganicPaperFill(row: {
   return classifyTradeEnvironment(row) === 'PAPER';
 }
 
-/** OMS-only. Unknown adapters stay UNKNOWN so they cannot inflate organic paper. */
+/**
+ * Shared by OMS (trades.executionEnvironment column) and RiskEngine.ts (reasoning-text stamp on
+ * risk_assessments, which has no such column - see classifyTradeEnvironment's doc comment above).
+ * Unknown adapters stay UNKNOWN so they cannot inflate organic paper.
+ */
 export function resolveOmsExecutionEnvironment(opts: {
   brokerId?: string | null;
   tradingMode?: string | null;

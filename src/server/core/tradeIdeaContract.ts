@@ -2,8 +2,15 @@
  * Fail-closed contract for TRADE_IDEA_GENERATED.
  * Garbage/non-tradable symbols and missing live prices must not reach ChiefTrader.
  * RiskEngine price_validity stays fail-closed if anything slips through.
+ *
+ * Crypto Expansion Phase 2 (2026-09-21): migrated from looksLikeListedTicker() (equity-only) to
+ * validateInstrumentSymbol() (equity path unchanged + registry-only CRYPTO branch). This is the
+ * DEF-24 pre-ChiefTrader idea gate - the other real remaining blocker Phase 1 explicitly left
+ * unmigrated. No caller in this codebase emits a crypto TRADE_IDEA_GENERATED event yet, so this
+ * is a real but currently-unexercised capability change, not a behavior change for any live idea
+ * source today.
  */
-import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { validateInstrumentSymbol } from './InstrumentRegistry';
 
 export type TradeIdeaRejectReason =
   | 'INVALID_SYMBOL'
@@ -46,7 +53,8 @@ function coercePositivePrice(raw: unknown): number | null {
 }
 
 export function gateTradeIdea(idea: any): GatedTradeIdea | RejectedTradeIdea {
-  const ticker = looksLikeListedTicker(idea?.symbol);
+  const validation = validateInstrumentSymbol(idea?.symbol);
+  const ticker = validation.valid ? validation.canonicalSymbol! : null;
   if (!ticker) {
     return { ok: false, reason: 'INVALID_SYMBOL', symbol: idea?.symbol, currentPrice: idea?.currentPrice };
   }

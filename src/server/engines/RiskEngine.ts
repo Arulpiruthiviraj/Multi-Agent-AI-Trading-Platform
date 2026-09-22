@@ -44,11 +44,15 @@ import {
   evaluateSameSymbolCooldown,
 } from '../risk/OvertradingGuards';
 import { clusterCoversSymbol, newsImpactOnVetoScale } from '../news/newsClusterMatch';
-import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 import { evaluateQuoteFreshness } from '../core/marketDataQuality';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { performance } from 'node:perf_hooks';
 import { getActiveReplaySession, replayVisibleBars } from '../replay/ReplayContext';
+import { resolveOmsExecutionEnvironment, stampExecutionEnvironment, type ExecutionEnvironment } from '../research/organicPaper';
+import { validateInstrumentSymbol } from '../core/InstrumentRegistry';
+import { getCryptoInstrument } from '../config/cryptoInstruments';
+import { getCryptoTradingDateStr, getCryptoTradingDayStartMs } from '../crypto/CryptoSessionClock';
+import { evaluateCryptoVenueAvailability } from '../risk/CryptoVenueAvailability';
 import { classifyMarketSession, sessionAllowsFills } from '../replay/marketSession';
 import { replaySafety } from '../replay/replaySafety';
 import { newsVisibleAt } from '../replay/HistoricalNewsProvider';
@@ -322,8 +326,18 @@ export class RiskEngine {
             // The WHERE clause mirrors eventMs()'s own filledAt-else-timestamp preference exactly
             // (a filled trade's filledAt is never earlier than its timestamp, so this cannot
             // exclude a row eventMs() would have used) - never a single-column approximation.
+            // Crypto Expansion Phase 3 (2026-09-21): a CRYPTO proposal's daily_trade_limit (gate 5)
+            // must count within the crypto UTC trading day, not the equity America/New_York one -
+            // see CryptoSessionClock.ts. UTC day-start always falls at or before NY day-start in
+            // absolute time (NY is UTC-4/UTC-5), so this only ever WIDENS the query window for a
+            // crypto proposal, never narrows it - the original unbounded-query-fix's safety
+            // property (still bounded, never a full-table scan) is preserved. Equity proposals
+            // (getCryptoInstrument returns null) take the exact original expression, unchanged.
+            const proposalIsCrypto = !!getCryptoInstrument(proposal.symbol);
+            const dayStartMsForProposal = proposalIsCrypto ? getCryptoTradingDayStartMs(new Date(nowMs)) : getTradingDayStartMs(new Date(nowMs));
+            const todayDateStrForProposal = proposalIsCrypto ? getCryptoTradingDateStr(new Date(nowMs)) : getTradingDateStr(new Date(nowMs));
             const overtradingLookbackMs = Math.max(tradingSafety.sameSymbolCooldownMs, tradingSafety.postLossCooldownMs);
-            const overtradingWindowStartIso = new Date(getTradingDayStartMs(new Date(nowMs)) - overtradingLookbackMs).toISOString();
+            const overtradingWindowStartIso = new Date(dayStartMsForProposal - overtradingLookbackMs).toISOString();
             const overtradingWindowFilter = or(
                 and(isNotNull(schema.trades.filledAt), gte(schema.trades.filledAt, overtradingWindowStartIso)),
                 and(isNull(schema.trades.filledAt), gte(schema.trades.timestamp, overtradingWindowStartIso)),
@@ -337,7 +351,16 @@ export class RiskEngine {
             recordGate(sameSymbol.gate, sameSymbol.passed, sameSymbol.detail);
             const postLoss = evaluatePostLossCooldown({ side: proposal.side, nowMs, trades: tradeRows });
             recordGate(postLoss.gate, postLoss.passed, postLoss.detail);
-            const dailyTrades = evaluateDailyTradeLimit({ side: proposal.side, nowMs, trades: tradeRows });
+            // Crypto Expansion Phase 3: a crypto proposal's daily count only considers crypto
+            // trades (and vice versa) - a mixed equity+crypto portfolio must not let one asset
+            // class's activity count against the other's daily limit. Today this is a no-op for
+            // the equity path (no crypto trade can exist yet - no paper crypto broker), but is
+            // correct in advance of one existing.
+            const dailyTradeLimitRows = tradeRows.filter((t: any) => !!getCryptoInstrument(t.symbol) === proposalIsCrypto);
+            const dailyTrades = evaluateDailyTradeLimit({
+                side: proposal.side, nowMs, trades: dailyTradeLimitRows,
+                dateStrFor: proposalIsCrypto ? getCryptoTradingDateStr : undefined,
+            });
             recordGate(dailyTrades.gate, dailyTrades.passed, dailyTrades.detail);
             // duplicate_signal rows use wall-clock createdAt. Replay nowMs is historical (bar T),
             // so `gte(createdAt, T-60s)` would match years of live/prior assessments and false-block
@@ -565,12 +588,30 @@ export class RiskEngine {
                 ? classifyMarketSession(nowMs, TRADING_TIMEZONE, true)
                 : ('CLOSED' as const);
             const extendedHoursAllowsFills = extendedHoursEnabled && sessionAllowsFills(liveSessionForExtendedHours, true);
-            const marketHoursPassed = marketClock === 'open' || marketClock === 'unconfigured' || extendedHoursAllowsFills;
-            recordGate('market_hours', marketHoursPassed, {
-                marketClock, skipped: marketClock === 'unconfigured', replay: !!replay, dailyBarSessionAssumed: isDailyFrequency,
-                extendedHoursEnabled, extendedHoursSession: extendedHoursEnabled ? liveSessionForExtendedHours : undefined,
-            });
-            const marketHoursReason = marketClock === 'unavailable'
+            // Crypto Expansion Phase 3 (2026-09-21): a CRYPTO proposal does not go through the
+            // equity Alpaca-clock/session concept at all - crypto venues don't close. Real
+            // infrastructure readiness (instrument enabled, real non-stale price observation, a
+            // paper-capable broker) gates it instead. See CryptoVenueAvailability.ts's own header
+            // comment for why PAPER_BROKER_AVAILABLE is honestly false until Phase 13.
+            const cryptoVenueResult = proposalIsCrypto
+                ? evaluateCryptoVenueAvailability({
+                    instrument: getCryptoInstrument(proposal.symbol),
+                    priceAgeMs: replay ? 0 : marketDataWorker.getLatestPriceAgeMs(proposal.symbol),
+                    staleThresholdMs: STALE_PRICE_THRESHOLD_MS,
+                  })
+                : null;
+            const marketHoursPassed = proposalIsCrypto
+                ? !!cryptoVenueResult?.passed
+                : (marketClock === 'open' || marketClock === 'unconfigured' || extendedHoursAllowsFills);
+            recordGate('market_hours', marketHoursPassed, proposalIsCrypto
+                ? { assetClass: 'CRYPTO', ...cryptoVenueResult!.detail, reasonCode: cryptoVenueResult!.reasonCode }
+                : {
+                    marketClock, skipped: marketClock === 'unconfigured', replay: !!replay, dailyBarSessionAssumed: isDailyFrequency,
+                    extendedHoursEnabled, extendedHoursSession: extendedHoursEnabled ? liveSessionForExtendedHours : undefined,
+                  });
+            const marketHoursReason = proposalIsCrypto
+                ? `CRYPTO_VENUE_UNAVAILABLE: ${cryptoVenueResult?.reasonCode} (instrument enabled=${cryptoVenueResult?.detail.instrumentEnabled}, data source available=${cryptoVenueResult?.detail.dataSourceAvailable}, paper broker available=${cryptoVenueResult?.detail.paperBrokerAvailable}).`
+                : marketClock === 'unavailable'
                 ? 'Alpaca market clock unavailable (HTTP/network failure). Fail-closed: new trades blocked until the clock can be read.'
                 : 'Market is currently closed (Alpaca clock).';
 
@@ -611,7 +652,13 @@ export class RiskEngine {
 
             // 4. Position Sizing Math - using actual buying power and portfolio value
             const currentPrice = proposal.currentPrice;
-            const tickerOk = !!looksLikeListedTicker(proposal.symbol);
+            // Crypto Expansion Phase 1 (2026-09-21): validateInstrumentSymbol() additively covers
+            // the existing equity path (byte-for-byte looksLikeListedTicker() behavior) plus a
+            // canonical-registry-only CRYPTO branch (config/cryptoInstruments.json) - an
+            // unregistered crypto-shaped string (e.g. DOG-FAKE) still fails this gate exactly like
+            // before. See core/InstrumentRegistry.ts's header comment for the full rationale.
+            const instrumentValidation = validateInstrumentSymbol(proposal.symbol);
+            const tickerOk = instrumentValidation.valid;
             const priceNumericOk = typeof currentPrice === 'number' && Number.isFinite(currentPrice) && currentPrice > 0;
             const priceValid = tickerOk && priceNumericOk;
             const priceValidityReasonCode = !tickerOk
@@ -632,6 +679,7 @@ export class RiskEngine {
             recordGate('price_validity', priceValid, {
               currentPrice,
               reasonCode: priceValidityReasonCode,
+              assetClass: instrumentValidation.assetClass,
             });
             const priceValidityReason = priceValid
               ? 'OK'
@@ -659,6 +707,10 @@ export class RiskEngine {
                 const sizingMode = (settings[0]?.positionSizingMode as 'FIXED_DOLLAR' | 'PERCENT_OF_EQUITY') || 'FIXED_DOLLAR';
                 const percentOfEquityPct = settings[0]?.percentOfEquityPct ?? 2;
 
+                // Crypto Expansion Phase 1 (2026-09-21): null for every non-registered (i.e.
+                // every current real) symbol - see quantityStep/minimumQuantity/minimumNotional
+                // below.
+                const cryptoInstrumentForSizing = getCryptoInstrument(proposal.symbol);
                 const sizingResult = await calculatePositionSizing({
                     side: proposal.side,
                     symbol: proposal.symbol,
@@ -684,6 +736,12 @@ export class RiskEngine {
                     sizingMode,
                     percentOfEquityPct,
                     failClosedUnknownInputs: tradingEngine.state.tradingMode === 'LIVE' && !replay,
+                    // Crypto Expansion Phase 1 (2026-09-21): undefined for every equity symbol
+                    // (not in the crypto registry) - PositionSizing.ts then falls back to its own
+                    // step=1 default, so this is a strict no-op for every existing caller.
+                    quantityStep: cryptoInstrumentForSizing?.quantityStep,
+                    minimumQuantity: cryptoInstrumentForSizing?.minimumQuantity,
+                    minimumNotional: cryptoInstrumentForSizing?.minimumNotional,
                 });
                 maxQuantity = sizingResult.maxQuantity;
                 for (const g of sizingResult.gates) recordGate(g.gate, g.passed, g.detail);
@@ -746,7 +804,13 @@ export class RiskEngine {
                 });
 
                 const dailyCap = resolveDailyBuyNotionalCap(tradingEngine.state.tradingMode);
-                const alreadyToday = sumDailyBuyNotional(allTrades || []);
+                // Crypto Expansion Phase 3: same asset-class scoping as daily_trade_limit above -
+                // a crypto proposal's daily buy notional only counts crypto BUYs, using the UTC
+                // day boundary; equity behavior (the default todayNy param) is unchanged.
+                const dailyNotionalRows = (allTrades || []).filter((t: any) => !!getCryptoInstrument(t.symbol) === proposalIsCrypto);
+                const alreadyToday = proposalIsCrypto
+                    ? sumDailyBuyNotional(dailyNotionalRows, getCryptoTradingDateStr(new Date(nowMs)))
+                    : sumDailyBuyNotional(dailyNotionalRows);
                 const dailyGuard = evaluateDailyBuyNotional({
                     cap: dailyCap,
                     side: proposal.side,
@@ -915,6 +979,35 @@ export class RiskEngine {
         });
     }
 
+        /**
+         * risk_assessments has no executionEnvironment/brokerId column (see organicPaper.ts's
+         * classifyTradeEnvironment doc comment), so tradingSessionReport.ts's environment
+         * classification for these rows fell through to reasoning-text sniffing only - and
+         * RiskEngine's own reasoning strings (e.g. "Approved based on...") never carried an
+         * executionEnvironment= stamp the way OMS's trades.reasoning already does. Real defect
+         * found 2026-09-21 forensic audit: a genuine organic PAPER fill's risk assessment
+         * classified as UNKNOWN, so the session report showed "Risk Evaluations: 0" for a symbol
+         * RiskEngine had in fact fully evaluated (confirmed via the real RISK_ASSESSMENT_STARTED /
+         * RISK_GATE_EVALUATED trace events - RiskEngine was never bypassed). Fix: stamp the
+         * persisted reasoning with the same resolveOmsExecutionEnvironment() logic OMS already
+         * uses, reused here (not forked) since it's a pure broker-id/trading-mode mapping with no
+         * OMS-specific state. Text-only; does not touch approved/maxQuantity/rejectionGate or any
+         * gate logic.
+         */
+    private resolveAssessmentEnvironment(): ExecutionEnvironment {
+        try {
+            if (getActiveReplaySession()) return 'REPLAY';
+        } catch { /* ignore */ }
+        let brokerId = '';
+        try {
+            brokerId = BrokerManager.getInstance().getActiveBroker()?.id ?? '';
+        } catch {
+            brokerId = '';
+        }
+        if (brokerId === 'historical_replay') return 'REPLAY';
+        return resolveOmsExecutionEnvironment({ brokerId, tradingMode: tradingEngine.state.tradingMode });
+    }
+
     private async persistAssessment(proposal: any, result: { approved: boolean, maxQuantity: number, reasoning: string, rejectionGate: string | null, accountEquity?: number, buyingPower?: number, gateResults: GateResult[] }): Promise<boolean> {
         try {
             await db.insert(schema.riskAssessments).values({
@@ -927,7 +1020,7 @@ export class RiskEngine {
                 rejectionGate: result.rejectionGate,
                 accountEquity: result.accountEquity,
                 buyingPower: result.buyingPower,
-                reasoning: result.reasoning,
+                reasoning: stampExecutionEnvironment(result.reasoning || '', this.resolveAssessmentEnvironment()),
                 createdAt: new Date().toISOString(),
             });
             if (result.gateResults.length > 0) {

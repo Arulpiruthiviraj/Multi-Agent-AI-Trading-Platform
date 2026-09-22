@@ -865,6 +865,18 @@
       "safetyLocked": true,
       "applyMode": "RESTART_REQUIRED",
       "description": "Secret."
+    },
+    {
+      "key": "ARGUS_TRADEABLE_ASSET_CLASSES",
+      "category": "MULTI-ASSET",
+      "label": "Tradeable asset classes",
+      "type": "string",
+      "default": "EQUITY",
+      "overridable": true,
+      "secret": false,
+      "safetyLocked": false,
+      "applyMode": "HOT_RELOAD",
+      "description": "Crypto Expansion mandate (2026-09-22). Comma-separated list of asset classes ARGUS will treat as valid trade-idea symbols - read live on every validateInstrumentSymbol() call (core/InstrumentRegistry.ts), no restart needed. Accepted values: 'EQUITY' (default - preserves every existing behavior exactly), 'CRYPTO', or 'EQUITY,CRYPTO' (both). Any other token is ignored. An asset class left out is treated as fully untradeable: a symbol from a disabled class fails validateInstrumentSymbol() the same way an unregistered/malformed symbol already does (fail-closed, not a new rejection reason) - so e.g. 'CRYPTO' alone stops every equity idea from validating, and the default 'EQUITY' alone keeps crypto BTC-USD/ETH-USD ideas from validating even though Phase 1-13 registered them, until an operator explicitly opts in here."
     }
   ]
 }

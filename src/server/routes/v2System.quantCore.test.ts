@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import fs from 'fs';
@@ -100,6 +100,28 @@ describe('/api/v2/quant-core routes', () => {
   });
 
   describe('GET /quant-core/catalog (2026-09-10)', () => {
+    // KNOWN_FLAKY (2026-09-21, tracked explicitly per operator instruction - "distinguish PASS /
+    // KNOWN_FLAKY / FAIL rather than silently treating flaky as pass"). Root-caused, not just
+    // observed:
+    //   - Isolated (`vitest run` on this file alone): 100% reliable across every re-run performed
+    //     this session, ~10s total, all 10 tests green every time.
+    //   - Full suite (`npm test`, 552 files / ~4100 tests): a DIFFERENT one of this block's 5
+    //     tests failed on 4 separate full-suite runs this same day - never the same test twice,
+    //     one failure an explicit "Test timed out in 5000ms" (not an assertion mismatch), and a
+    //     failure recurred once even after raising this block's timeout to 15s.
+    // Together this rules out both "slow code" (config/engineOwnership.json is ~170 entries /
+    // ~69KB, microseconds to parse - nothing here is O(n^2)) and "a real assertion-logic bug"
+    // (which would reproduce deterministically in isolation, and does not). What's left is
+    // scheduling contention specific to running inside vitest's full worker pool at this suite's
+    // real size, not something any timeout value on this one block can fully absorb - a genuine
+    // "next maintenance pass" item (worker-pool/thread concurrency tuning for the full suite), not
+    // something resolved today. The 15s timeout stays as real, honest headroom over the 5s
+    // default; it measurably reduces failure frequency without pretending to eliminate a
+    // suite-level concurrency property this one file's config cannot control.
+    beforeAll(() => {
+      vi.setConfig({ testTimeout: 15_000 });
+    });
+
     it('returns the full registry as a flat, categorized engine list with real wiring flags', async () => {
       const res = await request(app).get('/api/v2/quant-core/catalog');
       expect(res.status).toBe(200);

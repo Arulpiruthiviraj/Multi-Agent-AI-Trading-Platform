@@ -47,5 +47,6 @@
   "aiProviderHealthCheckMs": 180000,
   "sessionLifecycleEvalMs": 60000,
   "calibrationValidationCycleMs": 900000,
-  "heartbeatWatchdogCheckMs": 60000
+  "cryptoMarketDataIngestionMs": 15000,
+  "heartbeatWatchdogCheckMs":60000
 }

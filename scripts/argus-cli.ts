@@ -81,6 +81,22 @@ async function fetchJson(path: string, init?: RequestInit) {
 }
 
 /**
+ * Real bug found and fixed (2026-09-22, CLI hardening pass): commands that read a positional
+ * argument via a raw `process.argv[N]` index (e.g. `trade-plan [date]`, `ranking [SYMBOL]`) had no
+ * way to tell a real positional value apart from a bare `--flag` token typed out of habit - every
+ * command in this file already always prints JSON, so `--json` is meaningless to them, but typing it
+ * anyway (as documented for `health`) got silently consumed as the positional value instead of being
+ * ignored. Reproduced live: `argus trade-plan --json` returned `planDate: "--json"` instead of
+ * defaulting to today. `cliArgs()` is `process.argv.slice(3)` with bare `--*` tokens filtered out;
+ * every positional-index command below reads from it instead of `process.argv` directly. The
+ * `--key=value` style commands (`--reason=`, `--limit=`, etc., via `.find(a => a.startsWith(...))`)
+ * were never affected by this bug and are unchanged.
+ */
+function cliArgs(): string[] {
+  return process.argv.slice(3).filter((a) => !a.startsWith('--'));
+}
+
+/**
  * Real, live-reproduced defect (2026-08-25 readiness audit): this previously checked only
  * `h.ok`, which trivially returns true if ANY process - old or new - already answers on the
  * configured port. Observed directly: `restart` failed to signal a stale/mismatched-PID-file
@@ -104,8 +120,24 @@ async function fetchJson(path: string, init?: RequestInit) {
  * successful `argus-cli start` (so starting no longer requires a manual follow-up `health` call to
  * see the same picture this session already needed to reconstruct by hand).
  */
-async function printFullHealthReport(): Promise<void> {
-  console.log(JSON.stringify(await fetchJson('/api/v2/runtime/health'), null, 2));
+/**
+ * Real bug found and fixed (2026-09-22, CLI hardening pass): a caller asking for `--json` (both
+ * scripts/cli/common.sh's argus_cmd_health() and its PowerShell port, argus.ps1, branch on exactly
+ * this flag expecting pure-JSON output) got the SAME combined JSON+human-readable-sections report
+ * either way, because this function never checked for the flag at all - `JSON.parse()`-ing the
+ * result then threw on the trailing "QuantCoreBridge: ..."/"Companion services: ..." lines,
+ * silently breaking the pretty-printed `argus health` path in both shells (reproduced live in both
+ * before this fix). `jsonOnly` restores the intended distinction: the health() command below now
+ * passes it through when `--json` is present; the no-args call from a successful start/restart
+ * (which always wants the full human-readable picture) is unaffected by default.
+ */
+async function printFullHealthReport(jsonOnly = false): Promise<void> {
+  const health = await fetchJson('/api/v2/runtime/health');
+  if (jsonOnly) {
+    console.log(JSON.stringify(health, null, 2));
+    return;
+  }
+  console.log(JSON.stringify(health, null, 2));
   const qc = await fetchJson('/api/v2/quant-core/health') as { enabled: boolean; connected: boolean; detail?: string };
   const label = !qc.enabled ? 'DISABLED' : qc.connected ? 'CONNECTED' : 'DISCONNECTED';
   console.log(`QuantCoreBridge: ${label}${qc.detail ? ` (${qc.detail})` : ''}`);
@@ -783,7 +815,7 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(await fetchJson('/api/v2/runtime/status'), null, 2));
   },
   async health() {
-    return printFullHealthReport();
+    return printFullHealthReport(process.argv.slice(3).includes('--json'));
   },
   async ready() {
     console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));
@@ -1175,7 +1207,10 @@ const commands: Record<string, () => Promise<void>> = {
    * session-report/trading-audit for that.
    */
   async research() {
+    // `sub` intentionally reads raw argv (not cliArgs()) so `--help`/`-h` are still recognized as
+    // the subcommand itself; only the positional args AFTER it are flag-filtered.
     const [sub, ...rest] = process.argv.slice(3);
+    const restArgs = rest.filter((a) => !a.startsWith('--'));
     const usage = () => {
       console.log([
         'Usage: argus research <subcommand> [args]',
@@ -1198,29 +1233,29 @@ const commands: Record<string, () => Promise<void>> = {
         console.log(JSON.stringify(await fetchJson(`${base}/audit`), null, 2));
         return;
       case 'regime':
-        if (!rest[0]) return usage();
-        console.log(JSON.stringify(await fetchJson(`${base}/regime`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        if (!restArgs[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/regime`, { method: 'POST', body: JSON.stringify({ symbol: restArgs[0] }) }), null, 2));
         return;
       case 'multi-factor':
-        if (!rest[0]) return usage();
-        console.log(JSON.stringify(await fetchJson(`${base}/multi-factor`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        if (!restArgs[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/multi-factor`, { method: 'POST', body: JSON.stringify({ symbol: restArgs[0] }) }), null, 2));
         return;
       case 'trade-setup':
-        if (!rest[0]) return usage();
-        console.log(JSON.stringify(await fetchJson(`${base}/trade-setup`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        if (!restArgs[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/trade-setup`, { method: 'POST', body: JSON.stringify({ symbol: restArgs[0] }) }), null, 2));
         return;
       case 'drawdown':
-        if (!rest[0]) return usage();
-        console.log(JSON.stringify(await fetchJson(`${base}/drawdown`, { method: 'POST', body: JSON.stringify({ symbol: rest[0] }) }), null, 2));
+        if (!restArgs[0]) return usage();
+        console.log(JSON.stringify(await fetchJson(`${base}/drawdown`, { method: 'POST', body: JSON.stringify({ symbol: restArgs[0] }) }), null, 2));
         return;
       case 'correlation': {
-        if (!rest[0]) return usage();
-        const symbols = rest[0].split(',').map((s) => s.trim()).filter(Boolean);
+        if (!restArgs[0]) return usage();
+        const symbols = restArgs[0].split(',').map((s) => s.trim()).filter(Boolean);
         console.log(JSON.stringify(await fetchJson(`${base}/correlation`, { method: 'POST', body: JSON.stringify({ symbols }) }), null, 2));
         return;
       }
       case 'risk-reward': {
-        const [symbol, entry, stop, target, strategyId] = rest;
+        const [symbol, entry, stop, target, strategyId] = restArgs;
         if (!symbol || entry === undefined || stop === undefined || target === undefined) return usage();
         console.log(JSON.stringify(await fetchJson(`${base}/risk-reward`, {
           method: 'POST',
@@ -1232,11 +1267,11 @@ const commands: Record<string, () => Promise<void>> = {
         console.log(JSON.stringify(await fetchJson(`${base}/macro`), null, 2));
         return;
       case 'strategy': {
-        if (!rest[0]) return usage();
-        const universe = rest[0].split(',').map((s) => s.trim()).filter(Boolean);
+        if (!restArgs[0]) return usage();
+        const universe = restArgs[0].split(',').map((s) => s.trim()).filter(Boolean);
         console.log(JSON.stringify(await fetchJson(`${base}/strategy-generation`, {
           method: 'POST',
-          body: JSON.stringify({ universe, timeframe: rest[1], targetRegime: rest[2] }),
+          body: JSON.stringify({ universe, timeframe: restArgs[1], targetRegime: restArgs[2] }),
         }), null, 2));
         return;
       }
@@ -1253,7 +1288,7 @@ const commands: Record<string, () => Promise<void>> = {
    * Usage: argus funnel <traceId>
    */
   async funnel() {
-    const traceId = process.argv[3];
+    const traceId = cliArgs()[0];
     if (!traceId) {
       console.log('Usage: argus funnel <traceId>');
       return;
@@ -1267,7 +1302,7 @@ const commands: Record<string, () => Promise<void>> = {
    * it" requirement. Usage: argus consensus-shadow [limit]
    */
   async 'consensus-shadow'() {
-    const limit = process.argv[3] || '50';
+    const limit = cliArgs()[0] || '50';
     console.log(JSON.stringify(await fetchJson(`/api/v2/consensus/shadow-comparison?limit=${encodeURIComponent(limit)}`), null, 2));
   },
   /**
@@ -1276,7 +1311,7 @@ const commands: Record<string, () => Promise<void>> = {
    *   argus ranking <SYMBOL>        - one symbol's persisted ranking history across cycles
    */
   async ranking() {
-    const arg = process.argv[3];
+    const arg = cliArgs()[0];
     if (!arg) {
       console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/ranking/latest'), null, 2));
       return;
@@ -1289,7 +1324,7 @@ const commands: Record<string, () => Promise<void>> = {
    *   argus subscription-queue decisions - recent promotion/eviction decisions with reasons
    */
   async 'subscription-queue'() {
-    const sub = process.argv[3];
+    const sub = cliArgs()[0];
     if (sub === 'decisions') {
       console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/subscription-decisions'), null, 2));
       return;
@@ -1302,8 +1337,8 @@ const commands: Record<string, () => Promise<void>> = {
    *   argus trade-plan [YYYY-MM-DD] <planId>         - revalidation history for one plan
    */
   async 'trade-plan'() {
-    const planDate = process.argv[3] || new Date().toISOString().slice(0, 10);
-    const planId = process.argv[4];
+    const [planDateArg, planId] = cliArgs();
+    const planDate = planDateArg || new Date().toISOString().slice(0, 10);
     if (planId) {
       console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/trade-plans/${encodeURIComponent(planDate)}/${encodeURIComponent(planId)}/revalidations`), null, 2));
       return;
@@ -1316,7 +1351,7 @@ const commands: Record<string, () => Promise<void>> = {
    *   (default lookback 24h if sinceMs omitted)
    */
   async 'missed-opportunities'() {
-    const sinceMs = process.argv[3];
+    const sinceMs = cliArgs()[0];
     const qs = sinceMs ? `?sinceMs=${encodeURIComponent(sinceMs)}` : '';
     console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/missed-opportunities${qs}`), null, 2));
   },
@@ -1328,31 +1363,31 @@ const commands: Record<string, () => Promise<void>> = {
    *   argus learning rollbacks <versionType>           - rollback event history
    */
   async learning() {
-    const sub = process.argv[3];
+    const [sub, arg1, arg2] = cliArgs();
     if (sub === 'observations') {
-      const sinceMs = process.argv[4];
+      const sinceMs = arg1;
       const qs = sinceMs ? `?sinceMs=${encodeURIComponent(sinceMs)}` : '';
       console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/observations${qs}`), null, 2));
       return;
     }
     if (sub === 'versions') {
-      const versionType = process.argv[4];
+      const versionType = arg1;
       console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/versions/${encodeURIComponent(versionType)}`), null, 2));
       return;
     }
     if (sub === 'promotions') {
-      const versionType = process.argv[4];
-      const versionId = process.argv[5];
+      const versionType = arg1;
+      const versionId = arg2;
       console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/versions/${encodeURIComponent(versionType)}/${encodeURIComponent(versionId)}/promotions`), null, 2));
       return;
     }
     if (sub === 'rollbacks') {
-      const versionType = process.argv[4];
+      const versionType = arg1;
       console.log(JSON.stringify(await fetchJson(`/api/v2/continuous-intelligence/learning/versions/${encodeURIComponent(versionType)}/rollbacks`), null, 2));
       return;
     }
     if (sub === 'calibration') {
-      const calSub = process.argv[4];
+      const calSub = arg1;
       if (calSub === 'worker-status') {
         console.log(JSON.stringify(await fetchJson('/api/v2/continuous-intelligence/learning/calibration/worker-status'), null, 2));
         return;
@@ -1471,8 +1506,8 @@ const commands: Record<string, () => Promise<void>> = {
     console.log(JSON.stringify(status, null, 2));
   },
   async replay() {
-    const sub = process.argv[3];
-    if (!sub || sub === 'run' || sub.startsWith('--')) return replayCommands.run();
+    const sub = cliArgs()[0];
+    if (!sub || sub === 'run') return replayCommands.run();
     const handler = replayCommands[sub];
     if (!handler) throw new Error(`Unknown replay subcommand: ${sub}`);
     return handler();

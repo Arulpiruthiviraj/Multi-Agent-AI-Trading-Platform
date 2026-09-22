@@ -94,17 +94,23 @@ export function evaluateDailyTradeLimit(input: {
   nowMs: number;
   trades: OvertradeRow[];
   maxDailyTrades?: number;
+  /** Crypto Expansion Phase 3 (2026-09-21): override the day-boundary function used to compute
+   *  "today" (default getTradingDateStr, America/New_York) - RiskEngine.ts passes
+   *  getCryptoTradingDateStr (UTC) for a proposal whose symbol is a registered crypto instrument.
+   *  Omitted = today's exact existing equity behavior. */
+  dateStrFor?: (d: Date) => string;
 }): OvertradeGate {
   const maxDailyTrades = input.maxDailyTrades ?? tradingSafety.maxDailyTrades;
   if (input.side !== 'BUY' || maxDailyTrades <= 0) {
     return { gate: 'daily_trade_limit', passed: true, detail: { skipped: true, maxDailyTrades }, reason: 'n/a' };
   }
-  const today = getTradingDateStr(new Date(input.nowMs));
+  const dateStrFor = input.dateStrFor ?? getTradingDateStr;
+  const today = dateStrFor(new Date(input.nowMs));
   const count = input.trades.filter((t) => {
     if (!filled(t)) return false;
     const ms = eventMs(t);
     if (!ms) return false;
-    return getTradingDateStr(new Date(ms)) === today;
+    return dateStrFor(new Date(ms)) === today;
   }).length;
   const passed = count < maxDailyTrades;
   return {

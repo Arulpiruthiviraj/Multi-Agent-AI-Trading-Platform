@@ -210,6 +210,17 @@ export async function bootArgusCore(): Promise<ArgusCoreBootResult> {
   }
 
   try {
+    // Crypto Expansion Phase 4 (2026-09-21). No-ops unless
+    // ARGUS_CRYPTO_MARKET_DATA_INGESTION_ENABLED=true (default false) - own start() re-checks the
+    // flag, same pattern as opportunityDiscoveryWorker above. Independent of Autobot, matching
+    // MarketDataWorker's own boot lifecycle (RiskEngine gate 13/12 still require a fresh tick).
+    const { cryptoMarketDataIngestionWorker } = await import('../services/CryptoMarketDataIngestion');
+    cryptoMarketDataIngestionWorker.start();
+  } catch (e: any) {
+    console.warn(`[CryptoMarketDataIngestion] Boot start failed: ${e.message}`);
+  }
+
+  try {
     const { opportunityScreenerWorker } = await import('../continuous/OpportunityScreener');
     opportunityScreenerWorker.start();
   } catch (e: any) {

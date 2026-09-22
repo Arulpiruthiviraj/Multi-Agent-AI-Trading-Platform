@@ -295,3 +295,102 @@ describe('getSector', () => {
     expect(getSector('SPY')).toBeNull();
   });
 });
+
+// Crypto Expansion Phase 1 (2026-09-21). quantityStep/minimumQuantity/minimumNotional are new,
+// optional SizingContext fields - every test above this point omits them and must therefore
+// observe byte-identical behavior to before this phase (proven by the full pre-existing suite
+// above staying green unmodified). These tests instead exercise the new fractional path directly.
+describe('calculatePositionSizing - Crypto Expansion Phase 1 fractional sizing', () => {
+  it('equity regression: identical whole-share outputs with no quantityStep supplied', async () => {
+    const a = await calculatePositionSizing(baseCtx({ maxTradeSizeDollar: 3000, currentPrice: 250, buyingPower: 100000 }));
+    expect(a.maxQuantity).toBe(12); // 3000/250
+    const b = await calculatePositionSizing(baseCtx({ maxTradeSizeDollar: 3000, currentPrice: 251, buyingPower: 100000 }));
+    expect(b.maxQuantity).toBe(11); // floor(3000/251)
+  });
+
+  it('BTC-USD example: produces a non-zero fractional quantity, not zero', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      symbol: 'BTC-USD', currentPrice: 60000, maxTradeSizeDollar: 3000, buyingPower: 100000,
+      quantityStep: 0.00000001, minimumQuantity: 0.0001, minimumNotional: 10,
+    }));
+    // raw = 3000/60000 = 0.05 exactly representable at 8 decimals.
+    expect(result.maxQuantity).toBe(0.05);
+    expect(result.maxQuantity).toBeGreaterThan(0);
+  });
+
+  it('ETH-USD example: fractional quantity survives the full sizing path (concentration/sector/correlation all pass through)', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      symbol: 'ETH-USD', currentPrice: 2500, maxTradeSizeDollar: 1000, buyingPower: 100000,
+      quantityStep: 0.000001, minimumQuantity: 0.001, minimumNotional: 10,
+    }));
+    expect(result.maxQuantity).toBe(0.4); // 1000/2500
+    expect(result.maxQuantity).toBeGreaterThan(0);
+  });
+
+  it('non-exact step rounding: floors to the instrument step, never up', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      symbol: 'BTC-USD', currentPrice: 61237, maxTradeSizeDollar: 1000, buyingPower: 100000,
+      quantityStep: 0.00000001, minimumQuantity: 0.0001, minimumNotional: 10,
+    }));
+    // raw = 1000/61237 = 0.016331... - must floor at 8 decimals, never round up.
+    expect(result.maxQuantity).toBeLessThanOrEqual(1000 / 61237);
+    expect(result.maxQuantity).toBeGreaterThan(0);
+  });
+
+  it('critical invariant: finalQuantity * price never exceeds approved notional, across many price/step combinations', async () => {
+    const cases = [
+      { price: 60000, step: 0.00000001, notional: 3000 },
+      { price: 2500, step: 0.000001, notional: 1000 },
+      { price: 123.45, step: 0.00000001, notional: 777 },
+      { price: 1, step: 0.000001, notional: 50 },
+    ];
+    for (const c of cases) {
+      const result = await calculatePositionSizing(baseCtx({
+        symbol: 'BTC-USD', currentPrice: c.price, maxTradeSizeDollar: c.notional, buyingPower: 1_000_000,
+        quantityStep: c.step, minimumQuantity: 0.00000001, minimumNotional: 0.01,
+      }));
+      expect(result.maxQuantity * c.price).toBeLessThanOrEqual(c.notional + 1e-6);
+    }
+  });
+
+  it('minimum notional: rejects (size 0) rather than rounding up to meet the venue minimum', async () => {
+    // Risk-approved capital permits $4; instrument minimum notional = $10 -> reject, don't inflate to $10.
+    const result = await calculatePositionSizing(baseCtx({
+      symbol: 'BTC-USD', currentPrice: 60000, maxTradeSizeDollar: 4, buyingPower: 100000,
+      quantityStep: 0.00000001, minimumQuantity: 0.0001, minimumNotional: 10,
+    }));
+    expect(result.maxQuantity).toBe(0);
+    const gate = result.gates.find(g => g.gate === 'sufficient_size');
+    expect(gate?.passed).toBe(false);
+    expect(gate?.detail.reason).toBe('SIZE_REJECTED_MIN_NOTIONAL');
+  });
+
+  it('minimum quantity: rejects (size 0) rather than rounding up to meet the venue minimum', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      symbol: 'BTC-USD', currentPrice: 60000, maxTradeSizeDollar: 3000, buyingPower: 100000,
+      quantityStep: 0.00000001, minimumQuantity: 0.1, minimumNotional: 10, // 3000/60000=0.05 < 0.1 minimum
+    }));
+    expect(result.maxQuantity).toBe(0);
+    const gate = result.gates.find(g => g.gate === 'sufficient_size');
+    expect(gate?.passed).toBe(false);
+    expect(gate?.detail.reason).toBe('SIZE_REJECTED_MIN_QUANTITY');
+  });
+
+  it('minimum notional/quantity never applies to SELL - exits are never blocked by venue minimums', async () => {
+    const result = await calculatePositionSizing(baseCtx({
+      side: 'SELL', symbol: 'BTC-USD', currentPrice: 60000,
+      existingPositions: [{ symbol: 'BTC-USD', quantity: 0.00005, mark: { price: 60000, priceAgeMs: 0, source: 'alpaca' } }],
+      quantityStep: 0.00000001, minimumQuantity: 0.0001, minimumNotional: 10,
+    }));
+    // Shared sizing leaves exits unconstrained (RiskEngine clamps to held quantity) - same as the
+    // pre-existing equity SELL test above, now also proven true with crypto minimums supplied.
+    expect(result.maxQuantity).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it('no minimums supplied (equity default): a small fractional-looking result is not rejected by the new logic', async () => {
+    const result = await calculatePositionSizing(baseCtx({ maxTradeSizeDollar: 50, currentPrice: 100, buyingPower: 100000 }));
+    expect(result.maxQuantity).toBe(0); // floor(50/100)=0 at step=1, same as always - not the new min-notional path
+    const gate = result.gates.find(g => g.gate === 'sufficient_size');
+    expect(gate?.detail.reason).toBeUndefined();
+  });
+});

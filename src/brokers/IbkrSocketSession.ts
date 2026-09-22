@@ -322,6 +322,21 @@ export class IbkrSocketSession {
    * deployment) rather than a new hardcoded list, per the remediation task's own instruction.
    * `canaryErrorTimestamps` tracks only the most recent retryable-error time per canary; a symbol
    * ages out of consideration once its own timestamp falls outside entitlementDegradedWindowMs.
+   *
+   * Second-pass hardening (2026-09-21): explicit-error evidence alone left a real gap - if IBKR
+   * never sends an error at all for the canaries either (total silence, no ack, no tick, no error -
+   * a real, plausible account/connectivity failure shape, distinct from but no less real than an
+   * explicit 354/10089), the circuit breaker never engaged, and every non-canary symbol kept
+   * reprobing independently on its own marketDataUnconfirmedReprobeMs timer forever - the same
+   * class of unbounded-request problem the breaker exists to prevent, just triggered by silence
+   * instead of an error. Silent evidence is deliberately NOT tracked as a decaying timestamp the
+   * way an error is: a reprobe cycle is minutes long (far longer than entitlementDegradedWindowMs),
+   * so a fixed-window timestamp would flicker the canary in and out of "degraded" between reprobe
+   * attempts even though the underlying silence never actually resolved. Instead,
+   * recentDegradedCanaries() reads each canary's CURRENT subscriptionState.lastInternalFailureKind
+   * live - it is already exactly "silent right now, yes/no" with no decay needed, and it
+   * self-clears the instant real evidence (an ack or a tick) arrives, via the same
+   * markSubscriptionAcknowledged()/markSubscriptionRecovered() paths that already reset it.
    */
   private readonly canarySymbols = new Set(continuousIntelligence.protectedSymbols.map((s) => s.toUpperCase()));
   private canaryErrorTimestamps = new Map<string, number>();
@@ -425,11 +440,22 @@ export class IbkrSocketSession {
    *  breaker. Never mutates anything - pure read of state maintained by markSubscriptionRejected()/
    *  markSubscriptionRecovered(). */
   getAccountEntitlementState(): { state: AccountEntitlementState; canarySymbols: readonly string[]; degradedCanaries: readonly string[] } {
+    return { state: this.entitlementState, canarySymbols: [...this.canarySymbols], degradedCanaries: this.recentDegradedCanaries() };
+  }
+
+  /** Union of canaries currently showing EITHER a recent explicit retryable error (within
+   *  entitlementDegradedWindowMs) OR live, right-now sustained silence (NO_ACKNOWLEDGEMENT) - the
+   *  single source of truth both recomputeEntitlementState() and getAccountEntitlementState() read
+   *  from, so the two can never disagree. A canary matching both is counted once (Set dedup). */
+  private recentDegradedCanaries(): string[] {
     const now = Date.now();
-    const degradedCanaries = [...this.canaryErrorTimestamps.entries()]
+    const errored = [...this.canaryErrorTimestamps.entries()]
       .filter(([, atMs]) => now - atMs < this.cfg.entitlementDegradedWindowMs)
       .map(([sym]) => sym);
-    return { state: this.entitlementState, canarySymbols: [...this.canarySymbols], degradedCanaries };
+    const silent = [...this.canarySymbols].filter(
+      (sym) => this.subscriptionState.get(sym)?.lastInternalFailureKind === 'NO_ACKNOWLEDGEMENT',
+    );
+    return [...new Set([...errored, ...silent])];
   }
 
   /** Most recent market-data error recorded for `symbol`, if any (cleared on a fresh subscribe). */
@@ -520,17 +546,14 @@ export class IbkrSocketSession {
   }
 
   /**
-   * 2026-09-21 Phase 2: recomputes entitlementState purely from canaryErrorTimestamps (evidence)
-   * and current subscription states (for PROBING detection) - never mutated from anywhere else, so
-   * there is exactly one place this transitions. NORMAL -> DEGRADED_ENTITLEMENT requires
-   * `entitlementDegradedCanaryThreshold` DISTINCT canaries with a retryable error inside
-   * `entitlementDegradedWindowMs` - never one symbol alone.
+   * 2026-09-21 Phase 2: recomputes entitlementState purely from recentDegradedCanaries() (the
+   * canaryErrorTimestamps + live-silent-state union) - never mutated from anywhere else, so there
+   * is exactly one place this transitions. NORMAL -> DEGRADED_ENTITLEMENT requires
+   * `entitlementDegradedCanaryThreshold` DISTINCT canaries with EITHER a recent retryable error OR
+   * currently-sustained silence - never one symbol alone.
    */
   private recomputeEntitlementState(): void {
-    const now = Date.now();
-    const recentDegradedCanaries = [...this.canaryErrorTimestamps.entries()]
-      .filter(([, atMs]) => now - atMs < this.cfg.entitlementDegradedWindowMs)
-      .map(([sym]) => sym);
+    const recentDegradedCanaries = this.recentDegradedCanaries();
     const prevState = this.entitlementState;
     if (prevState === 'NORMAL' || prevState === 'RECOVERED') {
       if (recentDegradedCanaries.length >= this.cfg.entitlementDegradedCanaryThreshold) {
@@ -564,8 +587,11 @@ export class IbkrSocketSession {
     if (!this.canarySymbols.has(symbol)) return;
     if (strength === 'ACTIVE') {
       this.canaryErrorTimestamps.delete(symbol);
-      const now = Date.now();
-      const stillDegraded = [...this.canaryErrorTimestamps.values()].some((atMs) => now - atMs < this.cfg.entitlementDegradedWindowMs);
+      // No canarySilentTimestamps to clear - silence is read live from subscriptionState, and
+      // markSubscriptionRecovered() (the caller here) has already reset lastInternalFailureKind to
+      // null for this symbol before this method runs, so recentDegradedCanaries() already reflects
+      // the clearance.
+      const stillDegraded = this.recentDegradedCanaries().length > 0;
       if ((this.entitlementState === 'DEGRADED_ENTITLEMENT' || this.entitlementState === 'PROBING') && !stillDegraded) {
         this.entitlementState = 'RECOVERED';
         this.emitSubscriptionLifecycle({
@@ -1517,6 +1543,13 @@ export class IbkrSocketSession {
           if (tickerId != null) {
             this.emitSubscriptionLifecycle({ kind: 'NO_ACKNOWLEDGEMENT', symbol: sym, tickerId, generation: this.connectionGeneration });
           }
+          // 2026-09-21 second-pass hardening: sustained silence on a CANARY is also real evidence
+          // for the account-wide breaker (see the canarySymbols field's own doc comment on why this
+          // is read live rather than as a decaying timestamp) - closes the gap where a totally-
+          // silent (no error, no ack) account-wide condition never engaged the breaker, leaving
+          // every non-canary symbol reprobing independently forever. subscriptionState already
+          // reflects the flag (set two lines above) before this recompute reads it.
+          if (isCanary) this.recomputeEntitlementState();
         }
         continue;
       }

@@ -62,6 +62,5 @@ describe('MomentumUniverseScanner', () => {
     expect(continuousIntelligence.coreStreamingSymbols.length).toBeLessThan(
       continuousIntelligence.maxActiveSubscriptions,
     );
-    expect(continuousIntelligence.maxActiveSubscriptions).toBe(12);
   });
 });

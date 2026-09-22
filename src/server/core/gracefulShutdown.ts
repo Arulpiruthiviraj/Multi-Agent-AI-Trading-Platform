@@ -152,6 +152,15 @@ export async function drainTradingProcess(handles: ShutdownHandles = {}): Promis
     console.error('[gracefulShutdown] Failed to stop MarketUniverseScanner', e);
   }
   try {
+    // Crypto Expansion Phase 4 (2026-09-21): a new interval-driven worker - must stop before
+    // sqliteDb.close() below, same DEF-27 lesson every other worker in this function already
+    // applies (a live tick landing after close() throws "database connection is not open").
+    const { cryptoMarketDataIngestionWorker } = await import('../services/CryptoMarketDataIngestion');
+    cryptoMarketDataIngestionWorker.stop();
+  } catch (e) {
+    console.error('[gracefulShutdown] Failed to stop CryptoMarketDataIngestionWorker', e);
+  }
+  try {
     const { campaignTracker } = await import('../services/CampaignTracker');
     campaignTracker.stop(); // also stops campaignWatchlistBoostWorker and campaignOpeningSurgeWorker internally
   } catch (e) {

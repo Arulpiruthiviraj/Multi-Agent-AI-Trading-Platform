@@ -25,6 +25,7 @@ import { tradingSafety } from '../config/tradingSafety';
 import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { evaluateQuoteFreshness } from '../core/marketDataQuality';
+import { quantizeQuantityDown } from './QuantityQuantization';
 
 export const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = tradingSafety.maxSingleSymbolConcentrationPct;
 export const MAX_SECTOR_CONCENTRATION_PCT = tradingSafety.maxSectorConcentrationPct;
@@ -105,6 +106,19 @@ export interface SizingContext {
    * right point-in-time source (live: Alpaca-backed cache; backtest: bars already visible up to
    * the simulated clock, never a future bar). */
   getRecentCloses: (symbol: string) => Promise<number[] | null>;
+  /** Crypto Expansion Phase 1 (2026-09-21). Smallest tradable quantity increment - every quantity
+   * this module computes is rounded DOWN to this step (see QuantityQuantization.ts). Omitted (the
+   * default) means step=1, i.e. today's exact whole-share equity behavior - unchanged for every
+   * existing caller that doesn't pass this. Callers derive it from the instrument registry
+   * (config/cryptoInstruments.ts) for registered crypto symbols only. */
+  quantityStep?: number;
+  /** Below this quantity, BUY sizing is rejected (maxQuantity=0) rather than rounded up to meet
+   * it. Omitted = no minimum-quantity floor (today's exact equity behavior). BUY only - SELL/exit
+   * sizing is never capped by this module (see the SELL branch below). */
+  minimumQuantity?: number;
+  /** Below this notional (maxQuantity * currentPrice), BUY sizing is rejected rather than
+   * increased to meet it. Omitted = no minimum-notional floor. BUY only. */
+  minimumNotional?: number;
 }
 
 export interface SizingGateResult {
@@ -137,6 +151,9 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
 
   const riskPerShare = ctx.currentPrice * STOP_LOSS_ASSUMPTION_PCT;
   const maxRiskAmount = ctx.accountEquity * ctx.maxPortfolioRiskPct;
+  // Crypto Expansion Phase 1 (2026-09-21): shared by both BUY blocks below (notional/risk/BP, and
+  // concentration/sector/correlation). Omitted -> step=1 -> exact existing equity behavior.
+  const quantityStep = ctx.quantityStep ?? 1;
 
   // E2B - the order-notional cap's dollar figure depends on sizingMode. FIXED_DOLLAR (default,
   // unchanged behavior) uses maxTradeSizeDollar verbatim; PERCENT_OF_EQUITY derives it from
@@ -160,9 +177,9 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     // explicit "SELL frees capital and never consumes allocation" rule for the identical reason.
     // The real cap for a SELL is how many shares are actually held, applied by the caller
     // (RiskEngine.ts clamps to existingPosition.quantity) - this module imposes none for SELL.
-    const maxSharesByRisk = Math.floor(maxRiskAmount / riskPerShare);
-    const maxSharesByCapital = Math.floor(effectiveNotionalCapDollar / ctx.currentPrice);
-    const maxSharesByBuyingPower = Math.floor(ctx.buyingPower / ctx.currentPrice);
+    const maxSharesByRisk = quantizeQuantityDown(maxRiskAmount / riskPerShare, quantityStep);
+    const maxSharesByCapital = quantizeQuantityDown(effectiveNotionalCapDollar / ctx.currentPrice, quantityStep);
+    const maxSharesByBuyingPower = quantizeQuantityDown(ctx.buyingPower / ctx.currentPrice, quantityStep);
 
     const orderNotionalIsBinding = maxSharesByCapital <= maxSharesByRisk && maxSharesByCapital <= maxSharesByBuyingPower;
     // Real bug found and fixed this pass: this gate's passed/status only ever looked at
@@ -220,7 +237,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     const existingValue = existingPosition ? existingPosition.quantity * ctx.currentPrice : 0;
     const maxPositionValue = ctx.accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
     const remainingRoom = Math.max(0, maxPositionValue - existingValue);
-    const maxSharesByConcentration = Math.floor(remainingRoom / ctx.currentPrice);
+    const maxSharesByConcentration = quantizeQuantityDown(remainingRoom / ctx.currentPrice, quantityStep);
     const beforeConcentration = maxQuantity;
     maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
     const concentrationFail = maxSharesByConcentration <= 0;
@@ -242,7 +259,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
       const sectorValue = sectorMarks.value;
       const maxSectorValue = ctx.accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
       const remainingSectorRoom = sectorValue === null ? 0 : Math.max(0, maxSectorValue - sectorValue);
-      const maxSharesBySector = Math.floor(remainingSectorRoom / ctx.currentPrice);
+      const maxSharesBySector = quantizeQuantityDown(remainingSectorRoom / ctx.currentPrice, quantityStep);
       const beforeSector = maxQuantity;
       maxQuantity = Math.min(maxQuantity, maxSharesBySector);
       const sectorFail = maxSharesBySector <= 0;
@@ -276,7 +293,7 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
         const correlatedValue = correlatedMarks.value;
         const maxCorrelatedValue = ctx.accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
         const remainingCorrelatedRoom = correlatedValue === null ? 0 : Math.max(0, maxCorrelatedValue - correlatedValue);
-        const maxSharesByCorrelation = Math.floor(remainingCorrelatedRoom / ctx.currentPrice);
+        const maxSharesByCorrelation = quantizeQuantityDown(remainingCorrelatedRoom / ctx.currentPrice, quantityStep);
         const beforeCorr = maxQuantity;
         maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
         const corrFail = maxSharesByCorrelation <= 0;
@@ -318,8 +335,27 @@ export async function calculatePositionSizing(ctx: SizingContext): Promise<Sizin
     }
   }
 
+  // Crypto Expansion Phase 1 (2026-09-21): venue/instrument minimums. BUY only, mirroring every
+  // other cap in this file - SELL/exit sizing is never capped by this module. A calculated
+  // quantity below the minimum is REJECTED, never rounded up to meet it - rounding up would risk
+  // exceeding RiskEngine-approved notional/risk, which this module must never do.
+  let minSizeRejectionReason: 'SIZE_REJECTED_MIN_QUANTITY' | 'SIZE_REJECTED_MIN_NOTIONAL' | null = null;
+  if (ctx.side === 'BUY' && maxQuantity > 0) {
+    const belowMinQuantity = ctx.minimumQuantity !== undefined && maxQuantity < ctx.minimumQuantity;
+    const belowMinNotional = ctx.minimumNotional !== undefined && maxQuantity * ctx.currentPrice < ctx.minimumNotional;
+    if (belowMinQuantity || belowMinNotional) {
+      // Notional checked first when both fail: it's the more informative reason for a caller
+      // sizing a small dollar amount against a coin with plenty of quantity precision.
+      minSizeRejectionReason = belowMinNotional ? 'SIZE_REJECTED_MIN_NOTIONAL' : 'SIZE_REJECTED_MIN_QUANTITY';
+      maxQuantity = 0;
+    }
+  }
+
   const sufficientSizePassed = maxQuantity > 0;
-  record('sufficient_size', sufficientSizePassed, { maxQuantity, buyingPower: ctx.buyingPower });
+  record('sufficient_size', sufficientSizePassed, {
+    maxQuantity, buyingPower: ctx.buyingPower,
+    ...(minSizeRejectionReason ? { reason: minSizeRejectionReason, minimumQuantity: ctx.minimumQuantity ?? null, minimumNotional: ctx.minimumNotional ?? null } : {}),
+  });
 
   observeSafe(() => {
     structuredLogger.debug('position_sizing', {

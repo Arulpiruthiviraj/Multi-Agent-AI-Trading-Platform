@@ -25,6 +25,13 @@ import io.argus.quantcore.institutional.models.MeanReversionZScoreEngine;
 import io.argus.quantcore.institutional.models.StochasticOscillatorEngine;
 import io.argus.quantcore.institutional.models.TimeSeriesMomentumEngine;
 import io.argus.quantcore.institutional.models.VolumeSignalEngine;
+import io.argus.quantcore.institutional.models.CryptoFeatureEngine;
+import io.argus.quantcore.institutional.models.CryptoRegimeEngine;
+import io.argus.quantcore.institutional.models.BtcTan2025VolAdjustedMomentumStrategy;
+import io.argus.quantcore.institutional.models.BtcAdaptiveVolatilityMomentumStrategy;
+import io.argus.quantcore.institutional.models.BtcDonchianBreakoutStrategy;
+import io.argus.quantcore.institutional.models.BtcTan2025BollingerMeanReversionStrategy;
+import io.argus.quantcore.institutional.models.BtcAdaptiveBollingerMeanReversionStrategy;
 import io.argus.quantcore.institutional.features.FeaturePipeline;
 import io.argus.quantcore.institutional.features.FeatureSnapshot;
 import io.argus.quantcore.features.RegimeEngine;
@@ -1193,6 +1200,18 @@ public final class QuantCoreServer {
      * strategyId matches config/engineOwnership.json's quantModels keys exactly - one dispatcher,
      * not ten near-duplicate handlers, since every one of these engines already takes plain
      * double[] arrays (no institutional-specific request/response shape needed).
+     *
+     * 2026-09-21 real bug found and fixed (ARGUS Crypto V2 live-data verification): the JDK's
+     * built-in HttpServer decodes a URL-encoded slash (%2F) in the request path BEFORE
+     * getPath() returns it, so a crypto symbol like "BTC/USD" - correctly percent-encoded by the
+     * TypeScript client as strategyId/BTC%2FUSD - arrived here as the literal string
+     * ".../crypto_feature/BTC/USD", which an unlimited split("/") turned into 3 segments
+     * (["crypto_feature","BTC","USD"]) instead of 2, always failing the parts.length!=2 check.
+     * split("/", 2) fixes this the correct way: only the FIRST slash after strategyId is a
+     * delimiter, and everything after it - including any further slashes - is the symbol.
+     * strategyId itself is always a simple identifier (no slashes), so this is unambiguous and
+     * does not change behavior for any existing equity symbol (which never contains a slash).
+     * Confirmed live: crypto_feature/BTC/USD returned 400 before this fix, 200 after.
      */
     private void handleInstitutionalStrategy(HttpExchange exchange) throws IOException {
         if (!"POST".equals(exchange.getRequestMethod())) {
@@ -1200,7 +1219,7 @@ public final class QuantCoreServer {
             return;
         }
         String path = exchange.getRequestURI().getPath();
-        String[] parts = path.replaceFirst("^/api/v1/institutional/strategy/", "").split("/");
+        String[] parts = path.replaceFirst("^/api/v1/institutional/strategy/", "").split("/", 2);
         if (parts.length != 2 || parts[0].isBlank() || parts[1].isBlank()) {
             sendJson(exchange, 400, Map.of("ok", false, "error", "path must be /institutional/strategy/{strategyId}/{symbol}"));
             return;
@@ -1367,6 +1386,81 @@ public final class QuantCoreServer {
                 out.put("volumeChangePct", r.volumeChangePct());
                 out.put("bullishDivergence", r.bullishDivergence());
                 out.put("bearishDivergence", r.bearishDivergence());
+            }
+            case "btc_tan2025_vol_adjusted_momentum" -> {
+                var r = new BtcTan2025VolAdjustedMomentumStrategy().evaluate(closes);
+                if (!r.sufficientData()) return out;
+                out.put("position", r.position().name());
+                out.put("evidence", java.util.List.of(r.evidence()));
+                out.put("diagnostics", r.diagnostics());
+            }
+            case "btc_adaptive_volatility_momentum" -> {
+                int momentumWindow = (int) Json.asDoublePrimitive(body.get("momentumWindowDays"), 30);
+                int volWindow = (int) Json.asDoublePrimitive(body.get("volatilityWindowDays"), 60);
+                double volThreshold = Json.asDoublePrimitive(body.get("volatilityPercentileThreshold"), 80.0);
+                int periodsPerYear = (int) Json.asDoublePrimitive(body.get("periodsPerYear"), 365);
+                var params = new BtcAdaptiveVolatilityMomentumStrategy.Parameters(momentumWindow, volWindow, volThreshold, periodsPerYear);
+                var r = new BtcAdaptiveVolatilityMomentumStrategy(params).evaluate(closes);
+                if (!r.sufficientData()) return out;
+                out.put("position", r.position().name());
+                out.put("evidence", java.util.List.of(r.evidence()));
+                out.put("diagnostics", r.diagnostics());
+            }
+            case "btc_tan2025_bollinger_mean_reversion" -> {
+                var r = new BtcTan2025BollingerMeanReversionStrategy().evaluate(closes);
+                if (!r.sufficientData()) return out;
+                out.put("position", r.position().name());
+                out.put("evidence", java.util.List.of(r.evidence()));
+                out.put("diagnostics", r.diagnostics());
+            }
+            case "btc_adaptive_bollinger_mean_reversion" -> {
+                int window = (int) Json.asDoublePrimitive(body.get("window"), 20);
+                double multiplier = Json.asDoublePrimitive(body.get("stdDevMultiplier"), 2.0);
+                var params = new BtcAdaptiveBollingerMeanReversionStrategy.Parameters(window, multiplier);
+                var r = new BtcAdaptiveBollingerMeanReversionStrategy(params).evaluate(closes);
+                if (!r.sufficientData()) return out;
+                out.put("position", r.position().name());
+                out.put("evidence", java.util.List.of(r.evidence()));
+                out.put("diagnostics", r.diagnostics());
+            }
+            case "btc_donchian_breakout" -> {
+                int donchianPeriod = (int) Json.asDoublePrimitive(body.get("donchianPeriod"), BtcDonchianBreakoutStrategy.DEFAULT_PARAMETERS.donchianPeriod());
+                int adxPeriod = (int) Json.asDoublePrimitive(body.get("adxPeriod"), BtcDonchianBreakoutStrategy.DEFAULT_PARAMETERS.adxPeriod());
+                int volumeAvgWindow = (int) Json.asDoublePrimitive(body.get("volumeAvgWindow"), BtcDonchianBreakoutStrategy.DEFAULT_PARAMETERS.volumeAvgWindow());
+                int volumeDivergenceWindow = (int) Json.asDoublePrimitive(body.get("volumeDivergenceWindow"), BtcDonchianBreakoutStrategy.DEFAULT_PARAMETERS.volumeDivergenceWindow());
+                double volumeBreakoutMultiplier = Json.asDoublePrimitive(body.get("volumeBreakoutMultiplier"), BtcDonchianBreakoutStrategy.DEFAULT_PARAMETERS.volumeBreakoutMultiplier());
+                var params = new BtcDonchianBreakoutStrategy.Parameters(donchianPeriod, adxPeriod, volumeAvgWindow, volumeDivergenceWindow, volumeBreakoutMultiplier);
+                var r = new BtcDonchianBreakoutStrategy(params).evaluate(highsOf(bars), lowsOf(bars), closes, volumesOf(bars));
+                if (!r.sufficientData()) return out;
+                out.put("position", r.position().name());
+                out.put("evidence", java.util.List.of(r.evidence()));
+                out.put("diagnostics", r.diagnostics());
+            }
+            case "crypto_feature" -> {
+                var snapshot = CryptoFeatureEngine.compute(closes, highsOf(bars), lowsOf(bars));
+                if (!snapshot.sufficientData()) return out;
+                out.put("lastClose", snapshot.lastClose());
+                out.put("return1Bar", snapshot.return1Bar());
+                out.put("return5Bar", snapshot.return5Bar());
+                out.put("return20Bar", snapshot.return20Bar());
+                out.put("ema9", snapshot.ema9());
+                out.put("ema20", snapshot.ema20());
+                out.put("ema20SlopePct", snapshot.ema20SlopePct());
+                out.put("atr14", snapshot.atr14());
+                out.put("atrPercent", snapshot.atrPercent());
+                out.put("realizedVolatility", snapshot.realizedVolatility());
+                out.put("rsi14", snapshot.rsi14());
+                out.put("bollingerUpper", snapshot.bollingerUpper());
+                out.put("bollingerLower", snapshot.bollingerLower());
+                out.put("bollingerZScore", snapshot.bollingerZScore());
+            }
+            case "crypto_regime" -> {
+                var snapshot = CryptoFeatureEngine.compute(closes, highsOf(bars), lowsOf(bars));
+                if (!snapshot.sufficientData()) return out;
+                var result = CryptoRegimeEngine.classify(snapshot);
+                out.put("regime", result.regime().name());
+                out.put("regimeConfidence", result.regimeConfidence());
+                out.put("evidence", java.util.List.of(result.evidence()));
             }
             default -> {
                 return null;

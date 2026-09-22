@@ -40,6 +40,7 @@ import { IBGatewaySocketAdapter } from './IBGatewaySocketAdapter';
 import { CoinbaseBroker } from './CoinbaseBroker';
 import { BrokerPlugin } from './BrokerAdapter';
 import { InternalPaperBroker } from './InternalPaperBroker';
+import { CryptoPaperBroker } from './CryptoPaperBroker';
 import { AlpacaBroker } from './AlpacaBroker';
 import { db } from '../server/db';
 import * as schema from '../server/db/schema';
@@ -51,6 +52,7 @@ import { EVENTS } from '../server/core/eventNames';
 import { getActiveReplaySession } from '../server/replay/ReplayContext';
 import { logErrorSafely } from '../server/core/SecretRedaction';
 import { structuredLogger } from '../server/observability/StructuredLogger';
+import { getCryptoInstrument } from '../server/config/cryptoInstruments';
 
 // placeOrder() throws 'Not implemented' on every one of these - confirmed non-functional stubs,
 // not partial implementations. Never allow them to become the active (order-placing) broker.
@@ -66,6 +68,9 @@ export class BrokerManager {
   private brokers: Map<string, BrokerPlugin> = new Map();
   private paperTickFromMarketData = false;
   private syncState: BrokerSyncState = 'READY';
+  /** Crypto Expansion Phase 13 (2026-09-22). ARGUS_CRYPTO_ACTIVE_BROKER - see
+   *  resolveCryptoBrokerSelection()'s own doc comment for accepted values and fallback semantics. */
+  private cryptoBrokerId: string | null = null;
 
   private constructor() {
      // Default active broker is InternalPaperBroker, seeded with
@@ -112,13 +117,20 @@ export class BrokerManager {
          const ibkrGateway = new IBGatewaySocketAdapter();
          const ibkrWeb = new InteractiveBrokersWebApiAdapter();
          const coinbase = new CoinbaseBroker();
-         
+         // Crypto Expansion Phase 13 (2026-09-22) - always registered (so it's a valid
+         // ARGUS_CRYPTO_ACTIVE_BROKER target and shows up in broker listings), but never eligible
+         // to become the common activeBroker above (see getBrokerForSymbol()'s own doc comment -
+         // it only ever accepts BTC-USD/ETH-USD, so selecting it as the general active broker
+         // would reject every equity order).
+         const cryptoPaper = new CryptoPaperBroker();
+
          this.brokers.set(internalPaper.id, internalPaper);
          this.brokers.set(alpaca.id, alpaca);
          this.brokers.set(questrade.id, questrade);
          this.brokers.set(ibkrGateway.id, ibkrGateway);
          this.brokers.set(ibkrWeb.id, ibkrWeb);
          this.brokers.set(coinbase.id, coinbase);
+         this.brokers.set(cryptoPaper.id, cryptoPaper);
          
          // Initialize plugins
          for (const broker of this.brokers.values()) {
@@ -242,6 +254,24 @@ export class BrokerManager {
          // never on boot.
          await this.applyMarketDataBinding(this.activeBroker);
 
+         // Crypto Expansion Phase 13 (2026-09-22). Independent of the common activeBroker
+         // resolution above - see resolveCryptoBrokerSelection()'s doc comment.
+         this.cryptoBrokerId = BrokerManager.resolveCryptoBrokerSelection({
+             envCryptoBroker: process.env.ARGUS_CRYPTO_ACTIVE_BROKER,
+             registeredBrokerIds: new Set(this.brokers.keys()),
+         });
+         if (this.cryptoBrokerId) {
+             const cryptoBroker = this.brokers.get(this.cryptoBrokerId);
+             if (cryptoBroker && !cryptoBroker.getCapabilities().crypto) {
+                 console.warn(`[BrokerManager] ARGUS_CRYPTO_ACTIVE_BROKER='${this.cryptoBrokerId}' does not report crypto capability - crypto orders will fall back to the common active broker (which will correctly reject them; see gate 12 PAPER_BROKER_UNAVAILABLE).`);
+                 this.cryptoBrokerId = null;
+             } else {
+                 console.log(`[BrokerManager] Crypto-specific broker: '${cryptoBroker?.name}' (ARGUS_CRYPTO_ACTIVE_BROKER).`);
+             }
+         } else {
+             console.log('[BrokerManager] No ARGUS_CRYPTO_ACTIVE_BROKER configured - crypto orders fall back to the common active broker (which does not support crypto execution; this is the correct, fail-closed default for an unconfigured deployment).');
+         }
+
          console.log(`[BrokerManager] Initialized with Active Broker: ${this.activeBroker.name}`);
          this.syncState = 'READY';
      } catch (e) {
@@ -253,6 +283,60 @@ export class BrokerManager {
 
   public registerBroker(broker: BrokerPlugin) {
     this.brokers.set(broker.id, broker);
+  }
+
+  /**
+   * Crypto Expansion Phase 13 (2026-09-22). Pure resolution logic, unit-testable independent of
+   * the real DB/adapter side effects initialize() carries (same extraction pattern as
+   * resolveBootBrokerSelection() above).
+   *
+   * ARGUS_CRYPTO_ACTIVE_BROKER accepts one broker id: currently only 'crypto_paper' is a real
+   * crypto-capable broker in this codebase (CoinbaseBroker exists and reports crypto:true but is
+   * LIVE-only by design - see its own header - so it is deliberately NOT a valid target here; a
+   * future real crypto paper/live adapter would be added the same way). Unset/blank/unregistered/
+   * non-crypto-capable -> null, meaning "no dedicated crypto broker - fall back to the common
+   * active broker" (which will correctly reject a crypto order via gate 12
+   * PAPER_BROKER_UNAVAILABLE, the safe default for an unconfigured deployment - crypto execution
+   * stays off until an operator explicitly opts in).
+   */
+  public static resolveCryptoBrokerSelection(opts: {
+    envCryptoBroker?: string | null;
+    registeredBrokerIds: Set<string>;
+  }): string | null {
+    const id = opts.envCryptoBroker?.trim();
+    if (!id) return null;
+    if (id === 'coinbase') {
+      console.warn("[BrokerManager] ARGUS_CRYPTO_ACTIVE_BROKER='coinbase' is refused - CoinbaseBroker is LIVE-only by design (placeOrder() refuses in paper - no sandbox) and must never become this deployment's PAPER crypto path. Falling back to the common active broker.");
+      return null;
+    }
+    if (!opts.registeredBrokerIds.has(id)) return null;
+    return id;
+  }
+
+  /**
+   * Crypto Expansion Phase 13 (2026-09-22). The routing seam CryptoVenueAvailability.ts (RiskEngine
+   * gate 12) and a future OMS crypto-order path both use: a registered CRYPTO instrument (per
+   * config/cryptoInstruments.json) routes to the configured crypto-specific broker if one exists
+   * (ARGUS_CRYPTO_ACTIVE_BROKER), otherwise falls through to the common getActiveBroker() exactly
+   * as every equity order already does - "if not provided, uses common broker" (explicit operator
+   * instruction). Equity symbols are completely unaffected - this is purely additive routing for
+   * crypto-registered symbols only.
+   */
+  public getBrokerForSymbol(symbol: string): BrokerPlugin {
+    if (this.cryptoBrokerId) {
+      const instrument = getCryptoInstrument(symbol);
+      if (instrument) {
+        const cryptoBroker = this.brokers.get(this.cryptoBrokerId);
+        if (cryptoBroker) return cryptoBroker;
+      }
+    }
+    return this.getActiveBroker();
+  }
+
+  /** Real signal for CryptoVenueAvailability.ts's PAPER_BROKER_AVAILABLE check - true only when a
+   *  crypto-capable broker is actually configured and registered, never a guess. */
+  public getCryptoBrokerId(): string | null {
+    return this.cryptoBrokerId;
   }
 
   /**

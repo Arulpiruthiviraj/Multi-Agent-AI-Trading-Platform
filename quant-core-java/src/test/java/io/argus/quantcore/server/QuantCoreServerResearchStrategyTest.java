@@ -170,4 +170,76 @@ class QuantCoreServerResearchStrategyTest {
         var res = client.send(req, HttpResponse.BodyHandlers.ofString());
         assertThat(res.statusCode()).isEqualTo(405);
     }
+
+    @Test
+    void evaluatesBtcTan2025VolAdjustedMomentumEndToEnd() throws Exception {
+        var res = post("/api/v1/institutional/strategy/btc_tan2025_vol_adjusted_momentum/SYN-BTC-USD", Map.of("bars", risingBars(150)));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body).containsKeys("position", "evidence", "diagnostics");
+        assertThat(body.get("position")).isEqualTo("LONG"); // steady rising bars -> positive momentum, low vol
+    }
+
+    @Test
+    void evaluatesBtcAdaptiveVolatilityMomentumWithCallerSuppliedParametersEndToEnd() throws Exception {
+        Map<String, Object> reqBody = Map.of("bars", risingBars(150), "volatilityPercentileThreshold", -1.0);
+        var res = post("/api/v1/institutional/strategy/btc_adaptive_volatility_momentum/SYN-BTC-USD", reqBody);
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        // An unreachable negative percentile threshold must force FLAT regardless of momentum.
+        assertThat(body.get("position")).isEqualTo("FLAT");
+    }
+
+    @Test
+    void evaluatesBtcTan2025BollingerMeanReversionEndToEnd() throws Exception {
+        var res = post("/api/v1/institutional/strategy/btc_tan2025_bollinger_mean_reversion/SYN-BTC-USD", Map.of("bars", risingBars(60)));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body).containsKeys("position", "evidence", "diagnostics");
+    }
+
+    @Test
+    void evaluatesBtcAdaptiveBollingerMeanReversionWithCallerSuppliedParametersEndToEnd() throws Exception {
+        Map<String, Object> reqBody = Map.of("bars", risingBars(60), "window", 10.0, "stdDevMultiplier", 1.5);
+        var res = post("/api/v1/institutional/strategy/btc_adaptive_bollinger_mean_reversion/SYN-BTC-USD", reqBody);
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body).containsKeys("position", "evidence", "diagnostics");
+    }
+
+    @Test
+    void evaluatesCryptoFeatureEndToEnd() throws Exception {
+        var res = post("/api/v1/institutional/strategy/crypto_feature/SYN-BTC-USD", Map.of("bars", risingBars(30)));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body).containsKeys("return20Bar", "ema20SlopePct", "atr14", "rsi14", "bollingerZScore");
+    }
+
+    @Test
+    void evaluatesCryptoRegimeEndToEnd() throws Exception {
+        var res = post("/api/v1/institutional/strategy/crypto_regime/SYN-BTC-USD", Map.of("bars", risingBars(30)));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body).containsKeys("regime", "regimeConfidence", "evidence");
+        assertThat(body.get("regime")).isEqualTo("TRENDING_BULL"); // steady rising bars
+    }
+
+    @Test
+    void returns422ForBtcMomentumWithInsufficientHistoryRatherThanFabricating() throws Exception {
+        var res = post("/api/v1/institutional/strategy/btc_tan2025_vol_adjusted_momentum/SYN-BTC-USD", Map.of("bars", risingBars(5)));
+        assertThat(res.statusCode()).isEqualTo(422);
+    }
+
+    @Test
+    void handlesASymbolContainingAPercentEncodedSlashLikeARealCryptoPair() throws Exception {
+        // 2026-09-21 real bug regression: "BTC/USD" percent-encoded as "BTC%2FUSD" (exactly what
+        // encodeURIComponent() produces client-side) used to decode back to a literal slash before
+        // path parsing, splitting into 3 segments instead of 2 and always failing with 400. This
+        // reproduces the exact client encoding rather than embedding a literal slash in the test URL.
+        var res = post("/api/v1/institutional/strategy/crypto_feature/BTC%2FUSD", Map.of("bars", risingBars(30)));
+        assertThat(res.statusCode()).isEqualTo(200);
+        Map<String, Object> body = Json.asObject(Json.parse(res.body()));
+        assertThat(body.get("symbol")).isEqualTo("BTC/USD");
+        assertThat(body).containsKey("return20Bar");
+    }
 }

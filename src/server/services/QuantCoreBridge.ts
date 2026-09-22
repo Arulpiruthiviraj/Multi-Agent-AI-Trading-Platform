@@ -26,7 +26,7 @@
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { generateTraceId } from '../core/traceId';
-import { looksLikeListedTicker } from '../ai/AIOutputValidator';
+import { validateInstrumentSymbol } from '../core/InstrumentRegistry';
 import { tradingSafety, isQuantJavaCoreEnabled } from '../config/tradingSafety';
 import { RSIEngine } from '../engines/RSIEngine';
 import { MACDEngine } from '../engines/MACDEngine';
@@ -1187,7 +1187,14 @@ export class QuantCoreBridgeService {
   onSignal(raw: RawJavaSignal): void {
     if (!isLiveIdeaEmissionEnabled()) return;
 
-    const symbol = looksLikeListedTicker(raw.symbol);
+    // Crypto Expansion Phase 2 (2026-09-21): additive instrument-aware validation (equity path
+    // unchanged) - the real path a future Java crypto strategy's live vote would need to clear to
+    // reach ChiefTrader, mirroring the existing JavaFactorComposite/JavaCoreEnsemble equity vote
+    // wiring. No Java crypto engine calls onSignal() yet (they're all RESEARCH-status, reached
+    // only via fetchResearchStrategy() - a separate, request/response-only path this function does
+    // not gate), so this is unexercised capability, not a behavior change for any live signal today.
+    const validation = validateInstrumentSymbol(raw.symbol);
+    const symbol = validation.valid ? validation.canonicalSymbol : null;
     if (!symbol) return;
 
     const side = raw.side === 'BUY' || raw.side === 'SELL' ? raw.side : null;

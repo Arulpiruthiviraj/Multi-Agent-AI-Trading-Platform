@@ -248,6 +248,62 @@ describe('BrokerManager.setActiveBroker paper + IBKR preflight', () => {
     expect(result).toEqual({ selectedName: 'Simulation Mode', selectionSource: 'default' });
   });
 
+  // Crypto Expansion Phase 13 (2026-09-22)
+  it('resolveCryptoBrokerSelection: unset env -> null (fall back to common broker)', () => {
+    const result = BrokerManager.resolveCryptoBrokerSelection({
+      envCryptoBroker: undefined,
+      registeredBrokerIds: new Set(['crypto_paper', 'alpaca']),
+    });
+    expect(result).toBeNull();
+  });
+
+  it('resolveCryptoBrokerSelection: a registered crypto broker id resolves to itself', () => {
+    const result = BrokerManager.resolveCryptoBrokerSelection({
+      envCryptoBroker: 'crypto_paper',
+      registeredBrokerIds: new Set(['crypto_paper', 'alpaca']),
+    });
+    expect(result).toBe('crypto_paper');
+  });
+
+  it('resolveCryptoBrokerSelection: an unregistered id -> null, never a dangling reference', () => {
+    const result = BrokerManager.resolveCryptoBrokerSelection({
+      envCryptoBroker: 'some_future_broker',
+      registeredBrokerIds: new Set(['crypto_paper', 'alpaca']),
+    });
+    expect(result).toBeNull();
+  });
+
+  it('resolveCryptoBrokerSelection: "coinbase" is always refused - LIVE-only broker must never become the paper crypto path', () => {
+    const result = BrokerManager.resolveCryptoBrokerSelection({
+      envCryptoBroker: 'coinbase',
+      registeredBrokerIds: new Set(['coinbase', 'alpaca']),
+    });
+    expect(result).toBeNull();
+  });
+
+  it('getBrokerForSymbol: routes a registered crypto symbol to the configured crypto broker when one exists', () => {
+    const manager = BrokerManager.getInstance();
+    const cryptoBroker = fakeBroker('crypto_paper', { crypto: true });
+    manager.registerBroker(cryptoBroker);
+    (manager as any).cryptoBrokerId = 'crypto_paper';
+    expect(manager.getBrokerForSymbol('BTC-USD')).toBe(cryptoBroker);
+  });
+
+  it('getBrokerForSymbol: falls back to the common active broker for an equity symbol even when a crypto broker is configured', () => {
+    const manager = BrokerManager.getInstance();
+    const cryptoBroker = fakeBroker('crypto_paper', { crypto: true });
+    manager.registerBroker(cryptoBroker);
+    (manager as any).cryptoBrokerId = 'crypto_paper';
+    expect(manager.getBrokerForSymbol('AAPL')).not.toBe(cryptoBroker);
+    expect(manager.getBrokerForSymbol('AAPL')).toBe(manager.getActiveBroker());
+  });
+
+  it('getBrokerForSymbol: falls back to the common active broker for a crypto symbol when no crypto broker is configured', () => {
+    const manager = BrokerManager.getInstance();
+    (manager as any).cryptoBrokerId = null;
+    expect(manager.getBrokerForSymbol('BTC-USD')).toBe(manager.getActiveBroker());
+  });
+
   it('refuses IBKR Gateway switch when socket ports are closed', async () => {
     const probe = await import('./ibkrTcpProbe');
     const spy = vi.spyOn(probe, 'findFirstOpenTcpPort').mockResolvedValue(null);

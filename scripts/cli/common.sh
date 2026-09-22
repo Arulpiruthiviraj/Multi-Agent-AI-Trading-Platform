@@ -460,8 +460,15 @@ argus_cmd_health() {
     argus_npm_cli health
     return $?
   fi
+  # Real bug found and fixed (2026-09-22, CLI hardening pass, reproduced live): `argus health`
+  # (no --json) used to call `argus_npm_cli health` without forcing --json on the underlying
+  # call. printFullHealthReport() mixes JSON with human-readable "QuantCoreBridge: ..." /
+  # "Companion services: ..." lines by design when --json is absent (see its own doc comment in
+  # scripts/argus-cli.ts) - the node -e JSON.parse() below always threw on that trailing content,
+  # silently breaking this exact pretty-print path. Forcing --json here guarantees a clean,
+  # parseable payload regardless of what the wrapper's own caller passed.
   local raw
-  if ! raw="$(argus_npm_cli health 2>&1)"; then
+  if ! raw="$(argus_npm_cli health --json 2>&1)"; then
     if echo "$raw" | grep -qiE 'unauthorized|401|forbidden|403'; then
       echo "✖ API unauthorized (run: argus login — or unset AUTH_PASSWORD for localhost-only mode)" >&2
       echo "$raw" >&2

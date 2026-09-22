@@ -85,6 +85,120 @@ runtimeRouter.get('/health', async (_req, res) => {
   });
 });
 
+/**
+ * Component-health view (2026-09-21, operator-requested follow-up to the IBKR->Alpaca migration
+ * and AI-provider forensics): a single blended "AI degraded -> trading degraded" signal hides
+ * that QuantEngine, RiskEngine, OMS, and Alpaca connectivity are all independently fine when only
+ * the AI layer is down (confirmed live this session: 0/10 AI providers healthy, yet KronosEngine/
+ * TechnicalAgent/QuantEngine kept producing real, independently-evaluated evidence). This route
+ * disaggregates each component using ONLY already-computed, real signals this codebase already
+ * tracks elsewhere - no new health check invented, no network call made just to answer this
+ * request. RiskEngine/OMS have no separate "connection" to fail (always-in-process, synchronous
+ * components); their status here means "the hosting process is up and the kill switch is not
+ * tripped," not a deep self-test - stated explicitly so this is never over-read as more than it
+ * is. Crypto Research reports structural wiring (credentials present + Java bridge connected),
+ * not a live-network-call-per-request status. Crypto Execution is unconditionally NOT_ENABLED -
+ * see docs/architecture/ARGUS_ARCHITECTURE.md's 2026-09-21 section for why that is a deliberate,
+ * documented stop, not a placeholder.
+ */
+runtimeRouter.get('/component-health', async (req, res) => {
+  try {
+    const health = argusRuntime.health();
+    const aiSnap = await computeAiAvailability();
+    const quantAvailability = await computeQuantAvailability();
+
+    let brokerId: string | null = null;
+    let brokerName: string | null = null;
+    try {
+      const active = BrokerManager.getInstance().getActiveBroker();
+      brokerId = active.id;
+      brokerName = active.name;
+    } catch {
+      brokerId = null;
+      brokerName = null;
+    }
+
+    let reconciliationMatches: boolean | null = null;
+    try {
+      const { db } = await import('../db');
+      const schema = await import('../db/schema');
+      const { desc } = await import('drizzle-orm');
+      const recent = await db.select().from(schema.reconciliationEvents)
+        .orderBy(desc(schema.reconciliationEvents.id))
+        .limit(1);
+      reconciliationMatches = recent[0] ? recent[0].matches === true : null;
+    } catch {
+      reconciliationMatches = null;
+    }
+
+    const processUp = health.ok && health.coreBooted && health.pipelineRunning;
+    const killSwitchClear = !health.emergencyStopActive;
+
+    const alpacaPaperHealthy = brokerId === 'alpaca'
+      && health.marketDataConnected
+      && health.marketDataAuthenticated
+      && (reconciliationMatches ?? true); // no recon row yet is not itself a failure
+
+    const cryptoCredentialsPresent = !!(process.env.ALPACA_API_KEY && process.env.ALPACA_SECRET_KEY);
+    const cryptoResearchWired = cryptoCredentialsPresent && quantAvailability.javaConnected;
+
+    type ComponentStatus = 'HEALTHY' | 'DEGRADED' | 'UNAVAILABLE' | 'NOT_ENABLED' | 'UNKNOWN';
+    const components: Array<{ component: string; status: ComponentStatus; detail: string }> = [
+      {
+        component: 'Market Data',
+        status: (health.marketDataConnected && health.marketDataAuthenticated) ? 'HEALTHY' : 'UNAVAILABLE',
+        detail: `backend=${brokerId ?? 'unknown'} connected=${health.marketDataConnected} authenticated=${health.marketDataAuthenticated} readyState=${health.marketDataReadyState}`,
+      },
+      {
+        component: 'QuantEngine',
+        status: quantAvailability.state === 'QUANT_HEALTHY' ? 'HEALTHY' : quantAvailability.state === 'QUANT_UNAVAILABLE' ? 'UNAVAILABLE' : 'DEGRADED',
+        detail: `javaEnabled=${quantAvailability.javaEnabled} javaConnected=${quantAvailability.javaConnected} - independent of AI provider status`,
+      },
+      {
+        component: 'RiskEngine',
+        status: processUp && killSwitchClear ? 'HEALTHY' : 'UNAVAILABLE',
+        detail: 'process-up + kill-switch-clear signal only, not a deep self-test - RiskEngine is always-in-process',
+      },
+      {
+        component: 'OMS',
+        status: processUp && killSwitchClear ? 'HEALTHY' : 'UNAVAILABLE',
+        detail: 'process-up + kill-switch-clear signal only, not a deep self-test - OMS is always-in-process',
+      },
+      {
+        component: 'Alpaca Paper',
+        status: brokerId === null ? 'UNKNOWN' : alpacaPaperHealthy ? 'HEALTHY' : brokerId === 'alpaca' ? 'DEGRADED' : 'NOT_ENABLED',
+        detail: `activeBroker=${brokerName ?? 'unknown'} reconciliationMatches=${reconciliationMatches ?? 'no data yet'}`,
+      },
+      {
+        component: 'AI Providers',
+        status: aiSnap.state === 'AI_HEALTHY' ? 'HEALTHY' : aiSnap.state === 'AI_UNAVAILABLE' ? 'UNAVAILABLE' : 'DEGRADED',
+        detail: `${aiSnap.healthyProviderCount}/${aiSnap.registeredProviderCount} healthy - has no effect on QuantEngine's ability to evaluate candidates`,
+      },
+      {
+        component: 'Crypto Research',
+        status: cryptoResearchWired ? 'HEALTHY' : 'DEGRADED',
+        detail: `credentialsPresent=${cryptoCredentialsPresent} javaConnected=${quantAvailability.javaConnected} - real BTC/USD, ETH/USD data + Java feature/regime/strategy evaluation, unwired from any trading decision`,
+      },
+      {
+        component: 'Crypto Execution',
+        status: 'NOT_ENABLED',
+        detail: 'deliberate architectural stop: OMS/RiskEngine gate 21 assume whole-share sizing, gate 12 is RTH-shaped - see ARGUS_ARCHITECTURE.md 2026-09-21',
+      },
+    ];
+
+    if (req.query.format === 'text') {
+      const width = Math.max(...components.map((c) => c.component.length)) + 2;
+      const lines = ['COMPONENT HEALTH', '-'.repeat(40)];
+      for (const c of components) lines.push(`${c.component.padEnd(width)}${c.status}`);
+      res.type('text/plain').send(lines.join('\n'));
+      return;
+    }
+    res.json({ ok: true, components, live: 'NO-GO' });
+  } catch (e: unknown) {
+    res.status(500).json({ ok: false, error: e instanceof Error ? e.message : String(e) });
+  }
+});
+
 /** Full per-provider AI health detail (CONFIG + AUTH + RUNTIME tiers). Never returns a raw key. */
 runtimeRouter.get('/ai/providers/health', async (_req, res) => {
   try {

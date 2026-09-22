@@ -409,7 +409,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     for (const core of continuousIntelligence.coreStreamingSymbols) {
       worker.subscribe(core);
     }
-    const extras = ['MSFT', 'TSLA', 'AMD', 'META', 'NVDA', 'AAPL', 'IWM', 'AMZN', 'NFLX'];
+    const extras = ['MSFT', 'TSLA', 'AMD', 'META', 'NVDA', 'AAPL', 'IWM', 'AMZN', 'NFLX', 'GOOGL', 'GOOG', 'AVGO', 'DIA', 'SMH', 'XLF', 'XLE', 'XLK'];
     for (const s of extras) worker.subscribe(s, { momentumScore: 1 });
     expect(worker.getActiveSymbols().length).toBe(continuousIntelligence.maxActiveSubscriptions);
     await expireDynamicDwell();
@@ -436,7 +436,7 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     worker.subscribe('ZZAA'); // score defaults to 0
     worker.subscribe('COIN', { momentumScore: 5.4 });
     worker.subscribe('MRVL', { momentumScore: 3.6 });
-    const fillers = ['ZZAB', 'ZZAC', 'ZZAD', 'ZZAE', 'ZZAF', 'ZZAG'];
+    const fillers = ['ZZAB', 'ZZAC', 'ZZAD', 'ZZAE', 'ZZAF', 'ZZAG', 'ZZAH', 'ZZAI', 'ZZAJ', 'ZZAK', 'ZZAL', 'ZZAM', 'ZZAN', 'ZZAO'];
     for (const s of fillers) {
       if (worker.getActiveSymbols().length >= continuousIntelligence.maxActiveSubscriptions) break;
       worker.subscribe(s, { momentumScore: 2.0 });

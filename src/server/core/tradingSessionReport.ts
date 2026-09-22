@@ -33,6 +33,12 @@ export interface TradingSessionReport {
     missingPrice: number;
     consensusRoundsStarted: number;
     chiefTraderApproved: number;
+    /** Count of DESK_NO_TRADE events (e.g. QuantSignalAgent's STALE_MARKET_DATA /
+     *  EXPECTED_VALUE_TOO_LOW / INSUFFICIENT_EVIDENCE no-trade decisions) - these fire BEFORE
+     *  ChiefTrader consensus, not as a result of it. A real ChiefTrader-level rejection requires
+     *  consensusRoundsStarted > 0 for that idea; do not read this field as "consensus rejected
+     *  this many ideas" (2026-09-21 trade-audit finding: the rendered label previously implied
+     *  that and was corrected in the same change - see renderTradingSessionReport()). */
     consensusRejected: number;
   };
   execution: {
@@ -240,7 +246,10 @@ export function renderTradingSessionReport(r: TradingSessionReport): string {
   lines.push(`  Missing Price: ${r.decisionPipeline.missingPrice}`);
   lines.push(`  Consensus Rounds Started: ${r.decisionPipeline.consensusRoundsStarted}`);
   lines.push(`  ChiefTrader Approved: ${r.decisionPipeline.chiefTraderApproved}`);
-  lines.push(`  Consensus Rejected (no-trade): ${r.decisionPipeline.consensusRejected}`);
+  // Pre-consensus DESK_NO_TRADE events (e.g. stale market data) - not the result of a
+  // ChiefTrader debate. Labeled explicitly as pre-consensus so this number is never read as
+  // "consensus rejected N ideas" when consensusRoundsStarted may be 0.
+  lines.push(`  Desk No-Trade Events (pre-consensus, e.g. stale data): ${r.decisionPipeline.consensusRejected}`);
   lines.push('');
   lines.push('Execution (organic PAPER/LIVE only - see breakdown below for replay/backtest):');
   lines.push(`  Risk Evaluations: ${r.execution.riskEvaluations}`);

@@ -182,6 +182,139 @@ describe('IBKR account-wide entitlement circuit breaker (canary-driven)', () => 
     expect(spyRecord?.state).toBe('RETRY_WAIT'); // not falsely ACTIVE
     expect(spyRecord?.nextRetryAt).not.toBeNull(); // still on the SAME bounded backoff schedule as any other symbol
   });
+
+  it('second-pass hardening: TOTAL SILENCE (no error, no ack) on 2+ canaries also engages DEGRADED_ENTITLEMENT and suppresses non-canary reprobing - not just explicit-error clusters', async () => {
+    const s = session(); const socket = await connect(s);
+    s.subscribeMarketData('SPY');
+    s.subscribeMarketData('QQQ');
+    const obscureTicker = s.subscribeMarketData('OBSCURE');
+    // Nobody errors, nobody acknowledges - pure silence for everyone, including the canaries.
+    await vi.advanceTimersByTimeAsync(65_000); // past marketDataConfirmationTimeoutMs for all three
+    expect(s.getSubscriptionState('SPY')?.lastInternalFailureKind).toBe('NO_ACKNOWLEDGEMENT');
+    expect(s.getSubscriptionState('QQQ')?.lastInternalFailureKind).toBe('NO_ACKNOWLEDGEMENT');
+    const acctState = s.getAccountEntitlementState();
+    expect(acctState.state).toBe('DEGRADED_ENTITLEMENT');
+    expect([...acctState.degradedCanaries].sort()).toEqual(['QQQ', 'SPY']);
+
+    // OBSCURE (non-canary) must NOT reprobe while degraded, even once its own reprobe window elapses.
+    const before = socket.reqMktData.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(loadIbkrConnection().marketDataUnconfirmedReprobeMs + 5_000);
+    // Some of those calls are the CANARIES' own reprobes (never suppressed) - verify OBSCURE
+    // specifically never got a fresh ticker id (still tracking its original one).
+    const obscureRecord = s.getSubscriptionState('OBSCURE');
+    expect(obscureRecord?.tickerId).toBe(obscureTicker); // never reissued while suppressed
+    expect(socket.reqMktData.mock.calls.length).toBeGreaterThan(before); // canaries DID reprobe
+  });
+
+  it('a single canary going silent alone (only 1, below the 2-canary threshold) does not engage the breaker', async () => {
+    const s = session(); const socket = await connect(s);
+    s.subscribeMarketData('SPY');
+    s.subscribeMarketData('OBSCURE');
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(s.getSubscriptionState('SPY')?.lastInternalFailureKind).toBe('NO_ACKNOWLEDGEMENT');
+    expect(s.getAccountEntitlementState().state).toBe('NORMAL'); // real evidence threshold (2 canaries) not met
+  });
+
+  it('a silently-degraded canary recovering via a real tick clears its own silent evidence and, once no other canary is degraded, settles back to NORMAL', async () => {
+    const s = session(); const socket = await connect(s);
+    s.subscribeMarketData('SPY');
+    s.subscribeMarketData('QQQ');
+    await vi.advanceTimersByTimeAsync(65_000);
+    expect(s.getAccountEntitlementState().state).toBe('DEGRADED_ENTITLEMENT');
+
+    const spyRecord = s.getSubscriptionState('SPY');
+    socket.emit('tickPrice', spyRecord!.tickerId, 4, 500.0);
+    expect(s.getSubscriptionState('SPY')?.lastInternalFailureKind).toBeNull(); // cleared by the real tick
+    expect(s.getAccountEntitlementState().state).toBe('DEGRADED_ENTITLEMENT'); // QQQ still silent
+
+    const qqqRecord = s.getSubscriptionState('QQQ');
+    socket.emit('tickPrice', qqqRecord!.tickerId, 4, 480.0);
+    expect(s.getAccountEntitlementState().state).toBe('NORMAL');
+  });
+});
+
+describe('IBKR broker-line lease capacity (concurrency guarantee)', () => {
+  it('90 simultaneously-REQUESTING (unacknowledged, no tick) subscriptions fully occupy the cap - a 91st is rejected even though none of the 90 has delivered any evidence yet', async () => {
+    const s = session({ maxMarketDataLines: 90 } as any); const socket = await connect(s);
+    for (let i = 0; i < 90; i++) {
+      expect(() => s.subscribeMarketData(`SYM${i}`)).not.toThrow();
+    }
+    // All 90 are still bare REQUESTING - no acknowledgement, no tick, no error for any of them.
+    for (let i = 0; i < 90; i++) {
+      expect(s.getSubscriptionState(`SYM${i}`)?.state).toBe('REQUESTING');
+    }
+    // The lease was taken synchronously at request time, not deferred to acknowledgement/reception -
+    // a 91st candidate must be rejected regardless.
+    expect(() => s.subscribeMarketData('SYM90')).toThrow(/cap/);
+    // Acknowledging some of the 90 (still no tick) does not change lease accounting either way -
+    // ACKNOWLEDGED still holds the same line REQUESTING did.
+    const t0 = s.getSubscriptionState('SYM0')?.tickerId;
+    socket.emit(EventName.marketDataType, t0, 1);
+    expect(s.getSubscriptionState('SYM0')?.state).toBe('ACKNOWLEDGED');
+    expect(() => s.subscribeMarketData('SYM90')).toThrow(/cap/);
+  });
+
+  it('max observed simultaneous broker-line leases never exceeds the configured cap across a mixed REQUESTING/ACKNOWLEDGED/ACTIVE population', async () => {
+    const cap = 5;
+    const s = session({ maxMarketDataLines: cap } as any); const socket = await connect(s);
+    const symbols = ['A', 'B', 'C', 'D', 'E'];
+    const tickerIds = symbols.map((sym) => s.subscribeMarketData(sym));
+    socket.emit(EventName.marketDataType, tickerIds[0], 1); // A -> ACKNOWLEDGED
+    socket.emit('tickPrice', tickerIds[1], 4, 100.0); // B -> ACTIVE
+    // C, D, E remain bare REQUESTING. Mixed-state population, all still leasing a line.
+    let maxObservedLeases = 0;
+    for (const sym of symbols) {
+      const st = s.getSubscriptionState(sym)?.state;
+      expect(['REQUESTING', 'ACKNOWLEDGED', 'ACTIVE']).toContain(st);
+    }
+    maxObservedLeases = symbols.filter((sym) => {
+      const st = s.getSubscriptionState(sym)?.state;
+      return st === 'REQUESTING' || st === 'ACKNOWLEDGED' || st === 'ACTIVE';
+    }).length;
+    expect(maxObservedLeases).toBe(cap);
+    expect(maxObservedLeases).toBeLessThanOrEqual(cap);
+    expect(() => s.subscribeMarketData('F')).toThrow(/cap/);
+  });
+});
+
+describe('IBKR acknowledgement conservativeness (locked down)', () => {
+  it('marketDataType=2 (frozen) and =3 (delayed) are recorded honestly and NEVER imply live entitlement, live readiness, or trading-ready freshness', async () => {
+    const s = session(); const socket = await connect(s);
+    const frozenTicker = s.subscribeMarketData('FROZEN');
+    socket.emit(EventName.marketDataType, frozenTicker, 2);
+    const frozenState = s.getSubscriptionState('FROZEN');
+    expect(frozenState?.state).toBe('ACKNOWLEDGED'); // acknowledged, never ACTIVE
+    expect(frozenState?.marketDataType).toBe(2); // recorded honestly, not reinterpreted as live
+
+    const delayedTicker = s.subscribeMarketData('DELAYED');
+    socket.emit(EventName.marketDataType, delayedTicker, 3);
+    const delayedState = s.getSubscriptionState('DELAYED');
+    expect(delayedState?.state).toBe('ACKNOWLEDGED');
+    expect(delayedState?.marketDataType).toBe(3);
+  });
+
+  it('ACKNOWLEDGED (any marketDataType, any acknowledgementKind) never satisfies the live-tick sink - only tickPrice fields 1/2/4 ever reach it', async () => {
+    const s = session(); const socket = await connect(s);
+    const live: any[] = [];
+    s.setTickHandler((symbol, price) => live.push({ symbol, price }));
+    const tickerId = s.subscribeMarketData('AAPL');
+    socket.emit(EventName.marketDataType, tickerId, 1); // real-time entitlement acknowledged
+    socket.emit(EventName.tickReqParams, tickerId, 0.01, '1', 3);
+    expect(live).toHaveLength(0); // acknowledgement alone never produces a live-sink callback
+    expect(s.getSubscriptionState('AAPL')?.state).toBe('ACKNOWLEDGED');
+  });
+
+  it('an entitlement-DEGRADED account state is never itself sufficient evidence to mark any symbol FRESH/ACTIVE - only a real tick does', async () => {
+    const s = session(); const socket = await connect(s);
+    s.subscribeMarketData('SPY');
+    s.subscribeMarketData('QQQ');
+    socket.emit(EventName.error, new Error('x'), 10089, s.getSubscriptionState('SPY')!.tickerId!);
+    socket.emit(EventName.error, new Error('x'), 10089, s.getSubscriptionState('QQQ')!.tickerId!);
+    expect(s.getAccountEntitlementState().state).toBe('DEGRADED_ENTITLEMENT');
+    // Neither canary is ACTIVE just because the account state exists - only a real tick proves that.
+    expect(s.getSubscriptionState('SPY')?.state).toBe('RETRY_WAIT');
+    expect(s.getSubscriptionState('QQQ')?.state).toBe('RETRY_WAIT');
+  });
 });
 
 describe('IBKR unified diagnostics snapshot', () => {

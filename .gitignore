@@ -21,6 +21,7 @@ data/heap-snapshots/
 data/ohlcv_export.json
 data/research/
 data/replays/
+data/argus-synthetic/
 data/*_launch.lock
 data/logs/
 data/.argus_engine.pid

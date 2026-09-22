@@ -63,6 +63,9 @@ export interface RuntimeIntervals {
   calibrationValidationCycleMs: number;
   /** heartbeatWatchdog.ts (R2 remediation) check cadence. */
   heartbeatWatchdogCheckMs: number;
+  /** Crypto Expansion Phase 4 (2026-09-21): CryptoMarketDataIngestion.ts poll cadence (REST, no
+   *  crypto WebSocket stream exists yet - see AlpacaCryptoMarketData.ts). */
+  cryptoMarketDataIngestionMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -78,7 +81,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
   'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
-  'heartbeatWatchdogCheckMs',
+  'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {
