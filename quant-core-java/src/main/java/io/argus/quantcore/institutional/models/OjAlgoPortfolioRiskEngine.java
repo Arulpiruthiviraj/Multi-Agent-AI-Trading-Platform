@@ -1,7 +1,9 @@
 package io.argus.quantcore.institutional.models;
 
 import org.ojalgo.matrix.MatrixR064;
-import org.ojalgo.structure.Factory2D;
+
+import static io.argus.quantcore.institutional.models.OjAlgoMatrixSupport.toColumnVector;
+import static io.argus.quantcore.institutional.models.OjAlgoMatrixSupport.toMatrix;
 
 /**
  * Multi-Library Java Quant Decision Intelligence Integration (2026-09-23), Phase 4: ojAlgo as a
@@ -84,24 +86,5 @@ public final class OjAlgoPortfolioRiskEngine {
     private static double portfolioVariance(MatrixR064 sigma, MatrixR064 w) {
         MatrixR064 result = w.transpose().multiply(sigma).multiply(w);
         return result.doubleValue(0, 0);
-    }
-
-    private static MatrixR064 toMatrix(double[][] values) {
-        int n = values.length;
-        Factory2D.Builder<MatrixR064> builder = MatrixR064.FACTORY.newDenseBuilder(n, n);
-        for (int i = 0; i < n; i++) {
-            for (int j = 0; j < n; j++) {
-                builder.set(i, j, values[i][j]);
-            }
-        }
-        return builder.build();
-    }
-
-    private static MatrixR064 toColumnVector(double[] values) {
-        Factory2D.Builder<MatrixR064> builder = MatrixR064.FACTORY.newDenseBuilder(values.length, 1);
-        for (int i = 0; i < values.length; i++) {
-            builder.set(i, 0, values[i]);
-        }
-        return builder.build();
     }
 }
