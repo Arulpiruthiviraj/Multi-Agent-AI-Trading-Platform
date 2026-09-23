@@ -32,6 +32,8 @@ import io.argus.quantcore.institutional.models.BtcAdaptiveVolatilityMomentumStra
 import io.argus.quantcore.institutional.models.BtcDonchianBreakoutStrategy;
 import io.argus.quantcore.institutional.models.BtcTan2025BollingerMeanReversionStrategy;
 import io.argus.quantcore.institutional.models.BtcAdaptiveBollingerMeanReversionStrategy;
+import io.argus.quantcore.institutional.models.Ta4jTechnicalParityEngine;
+import io.argus.quantcore.institutional.models.OjAlgoPortfolioRiskEngine;
 import io.argus.quantcore.institutional.features.FeaturePipeline;
 import io.argus.quantcore.institutional.features.FeatureSnapshot;
 import io.argus.quantcore.features.RegimeEngine;
@@ -210,6 +212,18 @@ public final class QuantCoreServer {
         double[] out = new double[rawList.size()];
         for (int i = 0; i < rawList.size(); i++) {
             out[i] = Json.asDoublePrimitive(rawList.get(i), Double.NaN);
+        }
+        return out;
+    }
+
+    /** Same decode convention as {@link #decodeDoubleArray}, one level deeper - a JSON array of arrays. */
+    private static double[][] decodeDoubleMatrix(Object raw) {
+        if (!(raw instanceof List<?> rawRows)) {
+            return new double[0][0];
+        }
+        double[][] out = new double[rawRows.size()][];
+        for (int i = 0; i < rawRows.size(); i++) {
+            out[i] = decodeDoubleArray(rawRows.get(i));
         }
         return out;
     }
@@ -1345,6 +1359,60 @@ public final class QuantCoreServer {
                 out.put("extremeOverbought", r.extremeOverbought());
                 out.put("extremeOversold", r.extremeOversold());
                 out.put("fadeSignal", r.fadeSignal());
+            }
+            // Multi-Library Java Quant Decision Intelligence Integration (2026-09-23), Phase 3:
+            // ta4j-vs-Argus indicator parity check only - see Ta4jTechnicalParityEngine's own doc
+            // comment. Never a signal, never a vote, RESEARCH status, zero live/shadow consumer.
+            case "ta4j_technical_parity" -> {
+                int rsiPeriod = (int) Json.asDoublePrimitive(body.get("rsiPeriod"), 14);
+                int smaEmaPeriod = (int) Json.asDoublePrimitive(body.get("smaEmaPeriod"), 20);
+                var r = Ta4jTechnicalParityEngine.evaluate(closes, rsiPeriod, smaEmaPeriod);
+                if (r == null) return out;
+                out.put("rsiArgus", r.rsi().argusValue());
+                out.put("rsiTa4j", r.rsi().ta4jValue());
+                out.put("rsiAbsDiff", r.rsi().absoluteDifference());
+                out.put("macdArgus", r.macd().argusValue());
+                out.put("macdTa4j", r.macd().ta4jValue());
+                out.put("macdAbsDiff", r.macd().absoluteDifference());
+                out.put("macdSignalArgus", r.macdSignal().argusValue());
+                out.put("macdSignalTa4j", r.macdSignal().ta4jValue());
+                out.put("macdSignalAbsDiff", r.macdSignal().absoluteDifference());
+                out.put("macdHistogramArgus", r.macdHistogram().argusValue());
+                out.put("macdHistogramTa4j", r.macdHistogram().ta4jValue());
+                out.put("macdHistogramAbsDiff", r.macdHistogram().absoluteDifference());
+                out.put("smaArgus", r.sma().argusValue());
+                out.put("smaTa4j", r.sma().ta4jValue());
+                out.put("smaAbsDiff", r.sma().absoluteDifference());
+                out.put("emaArgus", r.ema().argusValue());
+                out.put("emaTa4j", r.ema().ta4jValue());
+                out.put("emaAbsDiff", r.ema().absoluteDifference());
+                out.put("bollingerUpperArgus", r.bollingerUpper().argusValue());
+                out.put("bollingerUpperTa4j", r.bollingerUpper().ta4jValue());
+                out.put("bollingerUpperAbsDiff", r.bollingerUpper().absoluteDifference());
+                out.put("bollingerLowerArgus", r.bollingerLower().argusValue());
+                out.put("bollingerLowerTa4j", r.bollingerLower().ta4jValue());
+                out.put("bollingerLowerAbsDiff", r.bollingerLower().absoluteDifference());
+            }
+            // Multi-Library Java Quant Decision Intelligence Integration (2026-09-23), Phase 4:
+            // ojAlgo portfolio-risk evidence - advisory only, PositionSizing (TypeScript) remains
+            // authoritative over real order quantity. This strategyId is portfolio-level, not
+            // per-symbol: `closes`/`bars` are unused (the endpoint's bars-required contract still
+            // applies, so callers pass a minimal 1-bar array); real inputs are `covariance`
+            // (n x n JSON array of arrays) and `weights` (length n) in the request body.
+            case "ojalgo_portfolio_risk" -> {
+                double[][] covariance = decodeDoubleMatrix(body.get("covariance"));
+                double[] weights = decodeDoubleArray(body.get("weights"));
+                int candidateIndex = (int) Json.asDoublePrimitive(body.get("candidateIndex"), -1);
+                double candidateWeightDelta = Json.asDoublePrimitive(body.get("candidateWeightDelta"), 0.0);
+                double maxWeightPct = Json.asDoublePrimitive(body.get("maxWeightPct"), 0.20);
+                var r = OjAlgoPortfolioRiskEngine.evaluate(covariance, weights, candidateIndex, candidateWeightDelta, maxWeightPct);
+                if (r == null) return out;
+                out.put("currentPortfolioVariance", r.currentPortfolioVariance());
+                out.put("proposedPortfolioVariance", r.proposedPortfolioVariance());
+                out.put("marginalRiskContributionPct", r.marginalRiskContributionPct());
+                out.put("candidateWeightBefore", r.candidateWeightBefore());
+                out.put("candidateWeightAfter", r.candidateWeightAfter());
+                out.put("exceedsMaxWeight", r.exceedsMaxWeight());
             }
             case "stochastic_oscillator" -> {
                 int period = (int) Json.asDoublePrimitive(body.get("period"), 14);

@@ -53,6 +53,37 @@
       <artifactId>sqlite-jdbc</artifactId>
       <version>3.47.1.0</version>
     </dependency>
+    <!-- Multi-Library Java Quant Decision Intelligence Integration (2026-09-23), Phase 0/1
+         research (versions/Java-floors/licenses/deps verified live against Maven Central
+         maven-metadata.xml and each project's own pom.xml at its release tag, not assumed):
+         - ta4j: independent, separately-authored TA-indicator implementation - used ONLY for
+           parity-checking against Argus's own hand-rolled indicator math (the same class of bug
+           the 2026-09-22 MACDEngine defect was), never a new capability. Requires Java 25+
+           (confirmed real/enforced via that project's own Maven Enforcer rule) - Argus already
+           targets Java 26 (maven.compiler.release above), so no conflict.
+         - ojAlgo: zero production dependencies (matches this module's own "no heavy frameworks"
+           posture almost exactly), real LP/QP/MIP solvers + matrix/linear-algebra layer - a
+           genuine capability Argus's hand-rolled MeanVarianceOptimizer/RiskParityOptimizer don't
+           have (a real, tested numerical solver instead of custom optimization code). Java 11
+           floor, comfortably under Argus's Java 26.
+         finmath-lib and OpenGamma Strata were researched in the same pass and deliberately NOT
+         added here: finmath-lib pulls in jblas, a native/JNI-backed linear-algebra library with
+         real cross-platform loading risk, worth an isolated test before committing (not yet
+         done); Strata is a full OTC-derivatives/rates/FX pricing and market-risk platform - its
+         domain (swaps, bonds, FX options, curve construction) has essentially zero overlap with
+         Argus's actual equity trading capabilities, and Argus's own NOT_SUPPORTED list already
+         excludes options and CAD FX. Deferred with reasoning, not silently dropped - see
+         docs/architecture/ARGUS_ARCHITECTURE.md's dated entry for this integration pass. -->
+    <dependency>
+      <groupId>org.ta4j</groupId>
+      <artifactId>ta4j-core</artifactId>
+      <version>0.25.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.ojalgo</groupId>
+      <artifactId>ojalgo</artifactId>
+      <version>57.3.1</version>
+    </dependency>
   </dependencies>
 
   <build>
