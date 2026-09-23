@@ -506,6 +506,28 @@ strategy HTTP contract (a minimal 1-bar array satisfies it). Advisory only — h
 Verified (TEST VERIFIED, `OjAlgoPortfolioRiskEngineTest`) against a hand-computable diagonal-
 covariance closed-form case, agreeing to `1e-9`.
 
+**Execution-semantics validation (2026-09-23, operator-directed correction: "framework available" is
+not "validated"):** `Ta4jNextOpenExecutionParityTest.java` (`quant-core-java/src/test/java/io/argus/
+quantcore/backtest/`) proves, on a hand-designed deterministic fixture, that ta4j's own built-in
+`TradeOnNextOpenModel` fills at exactly bar T+1's open when a signal fires at bar T — byte-for-byte
+the same entry/exit timing rule as Argus's real canonical research engine
+(`src/server/research/canonicalNextBarEngine.ts`'s `applyNextBarLongFills`: `exec = signalIndex + 1`,
+fill price = `bars[exec].open`). A second assertion confirms the two structurally different cost
+mechanisms (Argus: spread/slippage baked into the fill price plus a separate per-share commission;
+ta4j: a `CostModel` fee applied to the trade) reconcile to the same net PnL when fed the same raw
+fill prices — hand-computed and verified (`103 → 103.103` buy, `106 → 105.894` sell, net PnL
+`278.1` for an illustrative cost configuration). A second test proves the fill index is never equal
+to the signal index itself (no look-ahead in this dimension).
+
+**Scope, stated honestly — this validates 2 of the operator's 11 named dimensions (entry/exit timing,
+cost-model reconciliation), not all of them.** Explicitly NOT validated and not claimed to be:
+stop/target gap-through behavior (ta4j's `StopLimitExecutionModel` is a structurally different
+ratio-trigger/partial-fill/pending-order-lifecycle model, not Argus's simple all-or-nothing
+`bar.low <= stop` check — needs its own separate, carefully-configured comparison), partial fills,
+warmup, look-ahead prevention beyond this one timing check, session/timezone boundaries, or
+corporate actions. These remain open, named follow-up work, not silently assumed correct by this
+test passing.
+
 **What was explicitly NOT done this pass (honest scope boundary, not a defect):** no evidence-family/
 independence metadata layer, no SHADOW-mode runtime wiring, no confidence normalization, no
 cross-library golden-vector regression suite beyond the two test files above, no finmath-lib/Strata
