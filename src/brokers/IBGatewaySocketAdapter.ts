@@ -63,6 +63,12 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
     this.session.setDelayedTickHandler(handler);
   }
 
+  /** 2026-09-23 spread forensic follow-up: real live BID(1)/ASK(2)/LAST(4) field-typed ticks,
+   *  alongside setQuoteSink's live sink - see IbkrSocketSession.bidAskTickHandler's doc comment. */
+  setBidAskTickHandler(handler: ((symbol: string, field: number, price: number) => void) | null): void {
+    this.session.setBidAskTickHandler(handler);
+  }
+
   /** 2026-09-20 remediation (part A): explicit contract qualification via reqContractDetails. */
   resolveContract(symbol: string) {
     return this.session.resolveContract(symbol);

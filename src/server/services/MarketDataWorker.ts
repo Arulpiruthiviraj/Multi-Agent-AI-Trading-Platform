@@ -787,6 +787,22 @@ export class MarketDataWorker {
     this.latestPriceTimestamps.set(sym, observedAtMs);
   }
 
+  /**
+   * 2026-09-23 spread forensic follow-up: real IBKR ASK(2) tick -> latestAskPrices/
+   * latestAskTimestamps, the exact same store the Alpaca "q" message path already populates from
+   * msg.ap. Additive only - never touches latestPrices/ingestIbkrQuote's existing behavior for
+   * BID/LAST. BID(1) ticks already reach latestPrices via the existing tickHandler->ingestIbkrQuote
+   * path, so only ASK needs a new write target here; this method is a no-op for any other field
+   * (real, but out of scope for this fix - kept a no-op rather than silently doing nothing wrong).
+   */
+  ingestIbkrBidAsk(symbol: string, field: number, price: number): void {
+    if (field !== 2) return; // ASK only - see this method's own doc comment
+    const sym = quoteKey(symbol);
+    if (!sym || !Number.isFinite(price) || price <= 0) return;
+    this.latestAskPrices.set(sym, price);
+    this.latestAskTimestamps.set(sym, Date.now());
+  }
+
   /** IB Gateway Level-1 tick → same cache + EventBus path as Alpaca IEX (OMS/RiskEngine unchanged). */
   ingestIbkrQuote(symbol: string, price: number): void {
     const sym = quoteKey(symbol);

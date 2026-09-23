@@ -310,6 +310,21 @@ export class IbkrSocketSession {
    *  MarketDataWorker/RiskEngine/OMS ultimately consume) - delayed data must never silently enter
    *  the live trading path. Diagnostics/research only. */
   private delayedTickHandler: ((symbol: string, field: number, price: number) => void) | null = null;
+  /**
+   * Extended-hours spread forensic follow-up (2026-09-23): the tickPrice handler below already
+   * receives real, discrete live BID(1)/ASK(2)/LAST(4) ticks from IBKR (see its own comment) but
+   * historically collapsed all three into tickHandler's single (symbol, price) shape before this
+   * ever reached MarketDataWorker - meaning MarketDataWorker.latestAskPrices, the sole real source
+   * a genuine bid/ask spread anywhere in this codebase (see its own doc comment), could never be
+   * populated while quoteBackend === 'ibkr_gateway', for any symbol, under any condition. This is
+   * a second, additive sink alongside tickHandler (never a replacement) carrying the field type
+   * through so the ASK side can finally reach the same latestAskPrices/latestAskTimestamps store
+   * the Alpaca "q" message path already writes to - closing the actual gap RiskEngine's gate 25
+   * (extended_hours_execution_policy) depends on, without touching what tickHandler/latestPrices
+   * already do for BID/LAST (out of scope for this fix - a broader, pre-existing "IBKR live price
+   * oscillates between literal bid/ask/last ticks" question, deliberately not addressed here).
+   */
+  private bidAskTickHandler: ((symbol: string, field: number, price: number) => void) | null = null;
   /** 2026-09-20 remediation: per-symbol subscription lifecycle - see SubscriptionRecord's own doc
    *  comment. Keyed by uppercased symbol; entries are removed on explicit cancel (desire withdrawn)
    *  and left in place across a transport disconnect (matching desiredMarketData's own survival). */
@@ -423,6 +438,12 @@ export class IbkrSocketSession {
    *  only, NEVER routed to setTickHandler's live sink. See tickPrice handler for field mapping. */
   setDelayedTickHandler(handler: ((symbol: string, field: number, price: number) => void) | null): void {
     this.delayedTickHandler = handler;
+  }
+
+  /** 2026-09-23 spread forensic follow-up: fires for a real live BID(1)/ASK(2)/LAST(4) tick,
+   *  alongside (never instead of) tickHandler - see bidAskTickHandler's own field doc comment. */
+  setBidAskTickHandler(handler: ((symbol: string, field: number, price: number) => void) | null): void {
+    this.bidAskTickHandler = handler;
   }
 
   /** 2026-09-20 remediation: fires on a retryable rejection, an actual retry request, and recovery
@@ -1043,6 +1064,7 @@ export class IbkrSocketSession {
         if (field === 4 || field === 1 || field === 2) {
           this.markSubscriptionRecovered(symbol, tickerId);
           this.tickHandler?.(symbol, price);
+          this.bidAskTickHandler?.(symbol, field, price);
           return;
         }
         // 2026-09-20 remediation (part D): DELAYED_BID=66, DELAYED_ASK=67, DELAYED_LAST=68,

@@ -1058,6 +1058,18 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'extended-hours-spread'() {
+    // 2026-09-23 (operator-directed follow-up to the TSLA gate-25 forensic pass): quote
+    // availability / bid-ask completeness / stale-quote rate / gate-25 rejection-reason counts,
+    // by symbol. Pass --hours=N (default 168 = 7 days).
+    const hoursArg = process.argv.slice(3).find((a) => a.startsWith('--hours='));
+    const hours = hoursArg ? hoursArg.slice('--hours='.length) : '168';
+    const res = await fetch(`${BASE}/api/v2/observability/extended-hours-spread?format=text&hours=${encodeURIComponent(hours)}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'why-no-trade'() {
     // Phase 9 (2026-08-31): single-candidate explainer. Pass --symbol=NVDA to check a specific
     // symbol's most recent evaluation; omitted, shows the most recent evaluation of any symbol.

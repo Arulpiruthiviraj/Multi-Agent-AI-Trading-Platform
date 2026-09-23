@@ -587,6 +587,11 @@ export class BrokerManager {
       if (broker.id === 'ibkr_gateway' && broker instanceof IBGatewaySocketAdapter) {
         const cfg = loadIbkrConnection();
         broker.setQuoteSink((symbol, price) => marketDataWorker.ingestIbkrQuote(symbol, price));
+        // 2026-09-23 spread forensic follow-up: real IBKR live BID/ASK ticks were already arriving
+        // and already correctly field-typed at the socket layer, but were discarded before ever
+        // reaching MarketDataWorker's ask-price store - see IbkrSocketSession.bidAskTickHandler's
+        // doc comment. Additive only; setQuoteSink's existing behavior above is unchanged.
+        broker.setBidAskTickHandler((symbol, field, price) => marketDataWorker.ingestIbkrBidAsk(symbol, field, price));
         broker.setMarketDataSubscriptionHandler((symbol) => marketDataWorker.recordMarketDataSubscription(symbol));
         // 2026-09-04 opportunity-capture remediation: a rejected reqMktData request (e.g. missing
         // market-data-line permissions for that symbol/exchange) used to vanish silently — the
@@ -719,6 +724,7 @@ export class BrokerManager {
             unsubscribe: (sym) => broker.cancelMarketDataBySymbol(sym),
             clear: () => {
               broker.setQuoteSink(null);
+              broker.setBidAskTickHandler(null);
               broker.setMarketDataErrorHandler(null);
               broker.setMarketDataSubscriptionHandler(null);
               broker.setHistoricalDataErrorHandler(null);

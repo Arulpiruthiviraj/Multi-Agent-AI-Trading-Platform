@@ -9,6 +9,7 @@ import { desc, eq } from 'drizzle-orm';
 import { buildProviderHealthMatrix } from '../observability/providerHealthMatrix';
 import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../observability/consensusPipelineReport';
 import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observability/tradingFunnelReport';
+import { buildExtendedHoursSpreadReport, formatExtendedHoursSpreadReport } from '../observability/extendedHoursSpreadReport';
 import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
 import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
 import { buildAgentEdgeDiscoveryReport, formatAgentEdgeDiscoveryReport } from '../observability/agentEdgeDiscoveryReport';
@@ -266,6 +267,24 @@ observabilityRouter.get('/trading-funnel', async (req, res) => {
     const report = await buildTradingFunnelReport(sinceIso);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatTradingFunnelReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-23 (operator-directed follow-up to the TSLA gate-25 forensic pass): read-only extended-
+// hours spread/quote availability report (argus-cli extended-hours-spread). No RiskEngine/OMS
+// change - composes already-persisted risk_gate_results rows only, same pattern as trading-funnel.
+observabilityRouter.get('/extended-hours-spread', async (req, res) => {
+  try {
+    const hours = Math.min(parseFloat(String(req.query.hours || '168')) || 168, 24 * 90);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const report = await buildExtendedHoursSpreadReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatExtendedHoursSpreadReport(report));
       return;
     }
     res.json({ ok: true, report });
