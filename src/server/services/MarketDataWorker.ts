@@ -248,6 +248,19 @@ export class MarketDataWorker {
     this.ibkrBridge = opts.ibkrBridge ?? null;
     if (changingBackend) {
       for (const symbol of previousSymbols.slice(0, this.effectiveStreamingCap())) this.subscribe(symbol);
+      // Real defect found and fixed (2026-09-22, live-reproduced): subscribe()'s Alpaca branch
+      // only ws.send()s to an ALREADY-OPEN socket - it never opens one. tearDownSocket() above
+      // always nulls this.ws, so every symbol resubscribed here just now landed in activeStreams
+      // bookkeeping (SUBSCRIPTION_ACTIVE in diagnostics) with no real connection ever established
+      // whenever this.ws had never been created in the first place - true any time the engine
+      // booted with ibkr_gateway as the persisted active broker, since start() skips
+      // connectAlpaca() entirely for that backend. A later runtime switch back to 'alpaca' (e.g.
+      // via POST /api/v1/brokers/active) silently left the feed dead: marketDataConnected stayed
+      // false, readyState stayed null, and zero ticks could ever arrive despite trading being
+      // enabled. reconnect() already contains the exact authorization/API-key checks this needs
+      // and is a documented no-op for the ibkr_gateway backend, so reuse it here rather than
+      // duplicating that logic.
+      if (opts.backend !== 'ibkr_gateway') this.reconnect();
     }
     console.log(
       `[MarketDataWorker] Quote backend=${this.quoteBackend} hardCap=${this.effectiveStreamingCap()}` +

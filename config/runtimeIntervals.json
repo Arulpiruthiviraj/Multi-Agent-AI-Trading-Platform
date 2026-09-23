@@ -48,5 +48,7 @@
   "sessionLifecycleEvalMs": 60000,
   "calibrationValidationCycleMs": 900000,
   "cryptoMarketDataIngestionMs": 15000,
-  "heartbeatWatchdogCheckMs":60000
+  "heartbeatWatchdogCheckMs":60000,
+  "candidateRankingsRetentionDays": 14,
+  "candidateRankingsRetentionSweepMs": 3600000
 }

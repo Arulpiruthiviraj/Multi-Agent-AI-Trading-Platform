@@ -74,13 +74,20 @@ const {
 
 const { emitOrderExecution } = vi.hoisted(() => ({ emitOrderExecution: vi.fn() }));
 
-const { mockBrokerHolder } = vi.hoisted(() => ({ mockBrokerHolder: { broker: null as any } }));
+const { mockBrokerHolder } = vi.hoisted(() => ({ mockBrokerHolder: { broker: null as any, byId: {} as Record<string, any> } }));
 const { setTradingState } = vi.hoisted(() => ({ setTradingState: vi.fn(async () => {}) }));
 
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), emitOrderExecution } }));
 vi.mock('../../brokers/BrokerManager', () => ({
-  BrokerManager: { getInstance: () => ({ getActiveBroker: () => mockBrokerHolder.broker }) },
+  BrokerManager: {
+    getInstance: () => ({
+      getActiveBroker: () => mockBrokerHolder.broker,
+      // resolveOrderBroker()'s registered-broker lookup for SELL orders whose position was
+      // opened on a different (non-active) broker - see OrderManagement.ts's doc comment.
+      getBroker: (id: string) => mockBrokerHolder.byId[id],
+    }),
+  },
 }));
 vi.mock('../engines/TradingEngine', () => ({
   tradingEngine: { setTradingState },
@@ -402,5 +409,73 @@ describe('OrderManagementService.executeOrder', () => {
       if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
       else process.env.PAPER_TRADING_ONLY = prev;
     }
+  });
+
+  // Real defect fixed 2026-09-22 (operator-reported): SELL used to always route to whichever
+  // broker was currently active, even when the position was opened on a DIFFERENT broker (the
+  // active broker was switched mid-session). resolveOrderBroker() now looks up portfolio.
+  // brokerSource and routes a SELL back to the originating broker via BrokerManager.getBroker().
+  describe('SELL routes to the broker that opened the position, not whichever is active', () => {
+    beforeEach(() => {
+      mockBrokerHolder.byId = {};
+    });
+
+    it('routes a SELL to the originating broker when a different broker is now active', async () => {
+      setPortfolioRows([{ symbol: 'AAPL', quantity: 10, averagePrice: 100, brokerSource: 'alpaca' }]);
+      const ibkrPlaceOrder = vi.fn(); // must never be called for this SELL
+      const alpacaPlaceOrder = vi.fn(async () => ({ id: 'alpaca-sell-1', status: 'FILLED', averageFillPrice: 120 }));
+      const alpacaBroker = { id: 'alpaca', name: 'Alpaca', placeOrder: alpacaPlaceOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+      const ibkrBroker = { id: 'ibkr_gateway', name: 'IBKR Gateway (Socket)', placeOrder: ibkrPlaceOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+      mockBrokerHolder.byId = { alpaca: alpacaBroker, ibkr_gateway: ibkrBroker };
+      // IBKR is the CURRENTLY ACTIVE broker - AAPL was bought on Alpaca before the switch.
+      mockBrokerHolder.broker = ibkrBroker;
+
+      await oms.executeOrder('AAPL', 'SELL', 10, 'reasoning', 'multi-broker-sell-trace');
+
+      expect(alpacaPlaceOrder).toHaveBeenCalled();
+      expect(ibkrPlaceOrder).not.toHaveBeenCalled();
+      expect(getFinalTradeRow().brokerId).toBe('alpaca');
+    });
+
+    it('uses the active broker for a BUY regardless of any other position brokerSource', async () => {
+      setPortfolioRows([{ symbol: 'MSFT', quantity: 3, averagePrice: 300, brokerSource: 'alpaca' }]);
+      const ibkrPlaceOrder = vi.fn(async () => ({ id: 'ibkr-buy-1', status: 'FILLED', averageFillPrice: 400 }));
+      const alpacaPlaceOrder = vi.fn();
+      const ibkrBroker = { id: 'ibkr_gateway', name: 'IBKR Gateway (Socket)', placeOrder: ibkrPlaceOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+      mockBrokerHolder.byId = { alpaca: { id: 'alpaca', name: 'Alpaca', placeOrder: alpacaPlaceOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) }, ibkr_gateway: ibkrBroker };
+      mockBrokerHolder.broker = ibkrBroker;
+
+      await oms.executeOrder('AAPL', 'BUY', 5, 'reasoning', 'multi-broker-buy-trace');
+
+      expect(ibkrPlaceOrder).toHaveBeenCalled();
+      expect(alpacaPlaceOrder).not.toHaveBeenCalled();
+      expect(getFinalTradeRow().brokerId).toBe('ibkr_gateway');
+    });
+
+    it('falls back to the active broker when the recorded originating broker is not registered', async () => {
+      setPortfolioRows([{ symbol: 'GLD', quantity: 2, averagePrice: 380, brokerSource: 'some_removed_broker' }]);
+      const activePlaceOrder = vi.fn(async () => ({ id: 'fallback-sell-1', status: 'FILLED', averageFillPrice: 390 }));
+      const activeBroker = { id: 'alpaca', name: 'Alpaca', placeOrder: activePlaceOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+      mockBrokerHolder.byId = { alpaca: activeBroker };
+      mockBrokerHolder.broker = activeBroker;
+
+      await oms.executeOrder('GLD', 'SELL', 2, 'reasoning', 'unregistered-origin-sell-trace');
+
+      expect(activePlaceOrder).toHaveBeenCalled();
+      expect(getFinalTradeRow().brokerId).toBe('alpaca');
+    });
+
+    it('falls back to the active broker when the position has no recorded brokerSource (legacy row)', async () => {
+      setPortfolioRows([{ symbol: 'NVDA', quantity: 1, averagePrice: 500 }]); // no brokerSource field
+      const activePlaceOrder = vi.fn(async () => ({ id: 'legacy-sell-1', status: 'FILLED', averageFillPrice: 510 }));
+      const activeBroker = { id: 'ibkr_gateway', name: 'IBKR Gateway (Socket)', placeOrder: activePlaceOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
+      mockBrokerHolder.byId = { ibkr_gateway: activeBroker };
+      mockBrokerHolder.broker = activeBroker;
+
+      await oms.executeOrder('NVDA', 'SELL', 1, 'reasoning', 'legacy-row-sell-trace');
+
+      expect(activePlaceOrder).toHaveBeenCalled();
+      expect(getFinalTradeRow().brokerId).toBe('ibkr_gateway');
+    });
   });
 });

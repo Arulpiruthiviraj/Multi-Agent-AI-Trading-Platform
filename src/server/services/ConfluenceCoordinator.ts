@@ -16,14 +16,36 @@
  * ChiefTraderAgent.ts/EvidenceAggregator.ts. It only asks agents that were already going to
  * evaluate that symbol eventually (on their own timer) to do so sooner, using the exact same
  * on-demand entry points manualTradeCoEvaluation.ts already uses for operator CONFIRM BUY/SELL
- * (quantSignalAgent.evaluateSymbol / kronosForecastAgent.evaluateOnDemand) — not a new bypass.
+ * (technicalAgent.evaluateOnDemand / quantSignalAgent.evaluateSymbol /
+ * kronosForecastAgent.evaluateOnDemand) — not a new bypass.
  *
- * Independence is structural, not a promise: both on-demand methods take only a symbol string.
- * Neither receives TechnicalAgent's side, confidence, or reasoning, so there is nothing here for
- * them to copy, no score to boost, and no vote to share — each still computes entirely from its
- * own data (real bars/regime for Quant, its own rolling price history + local Chronos for Kronos).
- * Every idea either agent produces still goes through the unchanged TRADE_IDEA_GENERATED ->
- * ChiefTrader -> RiskEngine -> OMS spine like any other. No broker, OMS, or RiskEngine import here.
+ * Independence is structural, not a promise: all three on-demand methods take only a symbol
+ * string. None receives the triggering idea's side, confidence, or reasoning, so there is
+ * nothing here for them to copy, no score to boost, and no vote to share — each still computes
+ * entirely from its own data (real tick/bar history for Technical, real bars/regime for Quant,
+ * its own rolling price history + local Chronos for Kronos). Every idea any agent produces still
+ * goes through the unchanged TRADE_IDEA_GENERATED -> ChiefTrader -> RiskEngine -> OMS spine like
+ * any other. No broker, OMS, or RiskEngine import here.
+ *
+ * 2026-09-22 (symmetric trigger, CLI runtime forensics targeted follow-up): the 2026-08-25 audit's
+ * fix was itself asymmetric by construction — it only ever triggered off a TechnicalAgent idea,
+ * because TechnicalAgent was that day's real evidence-starved agent (10,626 rows, only 38/39
+ * co-occurrences with Quant/Kronos). Live evidence one month later showed the roles had reversed:
+ * KronosEngine now evaluates ~5x more often than TechnicalAgent (3,816 vs 787 in a real 6h
+ * window), and because this module's trigger check was hardcoded to `idea.agent ===
+ * 'TechnicalAgent'`, a strong Kronos-only signal never pulled in a second independent voice at
+ * all — 78.8% of consensus rounds in that window carried only one independent evidence group.
+ * TRIGGER_ELIGIBLE_AGENTS generalizes the SAME mechanism (deterministic/local, zero-marginal-cost,
+ * matching the principle this file already used to justify Quant+Kronos over paid NewsAgent) to
+ * all three agents symmetrically: whichever of the three fires a qualifying signal now fans out to
+ * the OTHER two (never itself — evaluateOnDemand-ing the same agent that just produced the
+ * triggering idea would be redundant, not independent). The existing per-symbol cooldown Map is
+ * reused unchanged and is keyed by symbol, not by (symbol, triggering agent) — so this does not
+ * create an evaluation storm: whichever qualifying signal for a symbol arrives first within a
+ * cooldown window is the one that fans out, exactly as before, just from a broader eligible set.
+ * Fundamental/MacroAgent's existing moderate-confidence-gated fan-out is unchanged in its own
+ * logic and was already source-agnostic in intent ("this symbol was worth a look") — it now
+ * actually receives that opportunity from all three trigger sources instead of only one.
  * ==========================================================
  */
 import { eventBus } from '../core/EventBus';
@@ -31,12 +53,17 @@ import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { tradingSafety } from '../config/tradingSafety';
+import { technicalAgent } from './TechnicalAgent';
 import { quantSignalAgent } from './QuantSignalAgent';
 import { kronosForecastAgent } from './KronosForecastAgent';
 import { fundamentalAgent } from './FundamentalAgent';
 import { macroAgent } from './MacroAgent';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { recordCandidate } from '../core/recentCandidateRegistry';
+
+/** Deterministic/local, zero-marginal-cost agents eligible to both trigger AND be triggered by
+ *  this module — see the 2026-09-22 header note above for why these three and not NewsAgent. */
+const TRIGGER_ELIGIBLE_AGENTS = new Set(['TechnicalAgent', 'QuantEngine', 'KronosEngine']);
 
 type TradeIdeaPayload = {
   traceId?: string;
@@ -79,7 +106,7 @@ export class ConfluenceCoordinator {
   private async maybeTrigger(idea: TradeIdeaPayload): Promise<void> {
     if (!tradingSafety.confluenceCoordinatorEnabled) return;
     if (isTelemetryPulsePayload(idea)) return;
-    if (idea.agent !== 'TechnicalAgent') return;
+    if (!idea.agent || !TRIGGER_ELIGIBLE_AGENTS.has(idea.agent)) return;
     if (idea.side !== 'BUY' && idea.side !== 'SELL') return;
     if (typeof idea.confidence !== 'number' || idea.confidence < tradingSafety.confluenceCoordinatorConfidenceThreshold) return;
     if (!isLiveIdeaGenerationEnabled()) return;
@@ -104,32 +131,55 @@ export class ConfluenceCoordinator {
 
     const jobs: Array<Promise<void>> = [];
 
-    if (isPipelineAgentEnabled('QuantEngine') && quantSignalAgent.isEnabledPublic()) {
-      triggered.push('QuantEngine');
-      jobs.push(
-        quantSignalAgent.evaluateSymbol(symbol).then(
-          () => undefined,
-          (e: unknown) => {
-            console.warn(`[ConfluenceCoordinator] QuantEngine on-demand evaluation failed for ${symbol}`, e);
-          },
-        ),
-      );
-    } else {
-      skipped.push('QuantEngine:disabled');
+    // 2026-09-22: fan out to the OTHER two deterministic/local agents, never back to whichever
+    // one produced the triggering idea (that agent will naturally re-evaluate this symbol on its
+    // own normal cadence - re-triggering it here would be redundant, not independent evidence).
+    if (idea.agent !== 'TechnicalAgent') {
+      if (isPipelineAgentEnabled('TechnicalAgent')) {
+        triggered.push('TechnicalAgent');
+        jobs.push(
+          technicalAgent.evaluateOnDemand(symbol).then(
+            () => undefined,
+            (e: unknown) => {
+              console.warn(`[ConfluenceCoordinator] TechnicalAgent on-demand evaluation failed for ${symbol}`, e);
+            },
+          ),
+        );
+      } else {
+        skipped.push('TechnicalAgent:disabled');
+      }
     }
 
-    if (isPipelineAgentEnabled('KronosEngine')) {
-      triggered.push('KronosEngine');
-      jobs.push(
-        kronosForecastAgent.evaluateOnDemand(symbol).then(
-          () => undefined,
-          (e: unknown) => {
-            console.warn(`[ConfluenceCoordinator] KronosEngine on-demand evaluation failed for ${symbol}`, e);
-          },
-        ),
-      );
-    } else {
-      skipped.push('KronosEngine:disabled');
+    if (idea.agent !== 'QuantEngine') {
+      if (isPipelineAgentEnabled('QuantEngine') && quantSignalAgent.isEnabledPublic()) {
+        triggered.push('QuantEngine');
+        jobs.push(
+          quantSignalAgent.evaluateSymbol(symbol).then(
+            () => undefined,
+            (e: unknown) => {
+              console.warn(`[ConfluenceCoordinator] QuantEngine on-demand evaluation failed for ${symbol}`, e);
+            },
+          ),
+        );
+      } else {
+        skipped.push('QuantEngine:disabled');
+      }
+    }
+
+    if (idea.agent !== 'KronosEngine') {
+      if (isPipelineAgentEnabled('KronosEngine')) {
+        triggered.push('KronosEngine');
+        jobs.push(
+          kronosForecastAgent.evaluateOnDemand(symbol).then(
+            () => undefined,
+            (e: unknown) => {
+              console.warn(`[ConfluenceCoordinator] KronosEngine on-demand evaluation failed for ${symbol}`, e);
+            },
+          ),
+        );
+      } else {
+        skipped.push('KronosEngine:disabled');
+      }
     }
 
     // Phase 9 (same-candidate convergence): Fundamental/MacroAgent are wired here too, but gated

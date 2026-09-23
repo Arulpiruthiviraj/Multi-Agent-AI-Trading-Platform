@@ -33,10 +33,11 @@ const { fakeEventBus, listeners } = vi.hoisted(() => {
 });
 
 const { ideaGenEnabled } = vi.hoisted(() => ({ ideaGenEnabled: { value: true } }));
-const { evaluateSymbol, isEnabledPublic, evaluateOnDemand } = vi.hoisted(() => ({
+const { evaluateSymbol, isEnabledPublic, evaluateOnDemand, technicalEvaluateOnDemand } = vi.hoisted(() => ({
   evaluateSymbol: vi.fn().mockResolvedValue({ regime: {} }),
   isEnabledPublic: vi.fn().mockReturnValue(true),
   evaluateOnDemand: vi.fn().mockResolvedValue({ status: 'forecasted' }),
+  technicalEvaluateOnDemand: vi.fn().mockResolvedValue({ status: 'emitted', emitted: true }),
 }));
 const { fundamentalEvaluateSymbol, macroEvaluateSymbol } = vi.hoisted(() => ({
   fundamentalEvaluateSymbol: vi.fn().mockResolvedValue(undefined),
@@ -46,6 +47,9 @@ const { fundamentalEvaluateSymbol, macroEvaluateSymbol } = vi.hoisted(() => ({
 vi.mock('../db', () => ({ db: mockDb }));
 vi.mock('../core/EventBus', () => ({ eventBus: fakeEventBus }));
 vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
+vi.mock('./TechnicalAgent', () => ({
+  technicalAgent: { evaluateOnDemand: technicalEvaluateOnDemand },
+}));
 vi.mock('./QuantSignalAgent', () => ({
   quantSignalAgent: { evaluateSymbol, isEnabledPublic },
 }));
@@ -77,6 +81,14 @@ function technicalIdea(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function kronosIdea(overrides: Record<string, unknown> = {}) {
+  return { ...technicalIdea({ agent: 'KronosEngine', traceId: 'k1' }), ...overrides };
+}
+
+function quantIdea(overrides: Record<string, unknown> = {}) {
+  return { ...technicalIdea({ agent: 'QuantEngine', traceId: 'q1' }), ...overrides };
+}
+
 async function flush() {
   await new Promise((r) => setTimeout(r, 0));
   await new Promise((r) => setTimeout(r, 0));
@@ -90,7 +102,9 @@ describe('ConfluenceCoordinator', () => {
     evaluateSymbol.mockClear().mockResolvedValue({ regime: {} });
     isEnabledPublic.mockClear().mockReturnValue(true);
     evaluateOnDemand.mockClear().mockResolvedValue({ status: 'forecasted' });
+    technicalEvaluateOnDemand.mockClear().mockResolvedValue({ status: 'emitted', emitted: true });
     ideaGenEnabled.value = true;
+    setPipelineAgentEnabled('TechnicalAgent', true);
     setPipelineAgentEnabled('QuantEngine', true);
     setPipelineAgentEnabled('KronosEngine', true);
     coordinator = new ConfluenceCoordinator();
@@ -103,11 +117,71 @@ describe('ConfluenceCoordinator', () => {
     expect(tradingSafety.disagreementPenalty).toBe(0.5);
   });
 
-  it('confluence increases: a qualifying TechnicalAgent BUY triggers both QuantEngine and KronosEngine on-demand', async () => {
+  it('confluence increases: a qualifying TechnicalAgent BUY triggers both QuantEngine and KronosEngine on-demand (never re-triggers itself)', async () => {
     fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea());
     await flush();
     expect(evaluateSymbol).toHaveBeenCalledTimes(1);
     expect(evaluateOnDemand).toHaveBeenCalledTimes(1);
+    expect(technicalEvaluateOnDemand).not.toHaveBeenCalled();
+  });
+
+  // 2026-09-22 symmetric-trigger fix: live evidence showed KronosEngine evaluates ~5x more often
+  // than TechnicalAgent, but the OLD hardcoded `idea.agent === 'TechnicalAgent'` check meant a
+  // strong Kronos-only signal never pulled in a second independent voice at all. These two tests
+  // prove the fix without re-litigating independence: each on-demand call still receives only the
+  // symbol (asserted below), and the triggering agent is never re-called on itself.
+  it('symmetric trigger: a qualifying KronosEngine signal triggers TechnicalAgent and QuantEngine on-demand, never re-triggers KronosEngine', async () => {
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', kronosIdea());
+    await flush();
+    expect(technicalEvaluateOnDemand).toHaveBeenCalledWith('AAPL');
+    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL');
+    expect(evaluateOnDemand).not.toHaveBeenCalled();
+  });
+
+  it('symmetric trigger: a qualifying QuantEngine signal triggers TechnicalAgent and KronosEngine on-demand, never re-triggers QuantEngine', async () => {
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', quantIdea());
+    await flush();
+    expect(technicalEvaluateOnDemand).toHaveBeenCalledWith('AAPL');
+    expect(evaluateOnDemand).toHaveBeenCalledWith('AAPL');
+    expect(evaluateSymbol).not.toHaveBeenCalled();
+  });
+
+  it('symmetric trigger respects per-agent Mission Control disable for TechnicalAgent too', async () => {
+    setPipelineAgentEnabled('TechnicalAgent', false);
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', kronosIdea());
+    await flush();
+    expect(technicalEvaluateOnDemand).not.toHaveBeenCalled();
+    expect(evaluateSymbol).toHaveBeenCalledWith('AAPL');
+  });
+
+  // 2026-09-22 (operator review of the symmetric-trigger fix): symmetric triggering opens a real
+  // feedback-loop shape that didn't exist when only TechnicalAgent could trigger - a fanned-out
+  // agent's own on-demand evaluation can itself emit a fresh TRADE_IDEA_GENERATED (that IS the
+  // point of evaluateOnDemand), and since that agent is now ALSO trigger-eligible, the coordinator
+  // would see its own fan-out's output arrive back through the same listener. This proves the
+  // episode stays bounded STRUCTURALLY (the per-symbol cooldown is set synchronously at the top of
+  // maybeTrigger, before any fan-out job is even created, so a re-entrant emission from a fan-out
+  // job - sync or async - can never observe a clear cooldown for that symbol) rather than resting
+  // on "60 seconds happens to be long enough". Guards against a future cooldown-value change
+  // silently reopening this exact loop.
+  it('bounded episode: a fanned-out agent emitting its own idea as a side effect of evaluateOnDemand does not cause a second fan-out for the same symbol', async () => {
+    // Simulate TechnicalAgent's real evaluateOnDemand() behavior: on a real fire, it emits its own
+    // TRADE_IDEA_GENERATED back onto the SAME event bus this coordinator listens on.
+    technicalEvaluateOnDemand.mockImplementation(async () => {
+      fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ traceId: 're-entrant', symbol: 'AAPL' }));
+      return { status: 'emitted', emitted: true };
+    });
+
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', kronosIdea()); // originating idea: KronosEngine, AAPL
+    await flush();
+    await flush(); // extra tick: let the re-entrant emission's own async handler fully settle too
+
+    // One episode, one bounded fan-out: each fan-out target called exactly once, not twice, even
+    // though a real TRADE_IDEA_GENERATED for AAPL from a now-trigger-eligible agent (TechnicalAgent)
+    // was emitted mid-episode.
+    expect(technicalEvaluateOnDemand).toHaveBeenCalledTimes(1);
+    expect(evaluateSymbol).toHaveBeenCalledTimes(1); // QuantEngine - the other fan-out target
+    expect(evaluateOnDemand).not.toHaveBeenCalled(); // KronosEngine - never re-triggers itself
   });
 
   it('Phase 9: a high-confidence (>= moderateMinConfidence) TechnicalAgent signal ALSO triggers Fundamental/MacroAgent on-demand, not just Quant/Kronos', async () => {
@@ -148,11 +222,20 @@ describe('ConfluenceCoordinator', () => {
     expect(evaluateOnDemand.mock.calls[0]).toHaveLength(1);
   });
 
-  it('ignores ideas from any agent other than TechnicalAgent', async () => {
-    fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ agent: 'QuantEngine' }));
+  it('symmetric trigger also stays independent: a Kronos-triggered TechnicalAgent on-demand call receives ONLY the symbol', async () => {
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', kronosIdea({ confidence: 0.93, side: 'SELL', reasoning: 'do not leak this' }));
+    await flush();
+    expect(technicalEvaluateOnDemand).toHaveBeenCalledWith('AAPL');
+    expect(technicalEvaluateOnDemand.mock.calls[0]).toHaveLength(1);
+  });
+
+  it('ignores ideas from agents outside the trigger-eligible set (e.g. a paid-API-cost agent, or an unlabeled payload)', async () => {
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ agent: 'NewsAgent' }));
+    fakeEventBus.emit('TRADE_IDEA_GENERATED', technicalIdea({ agent: undefined }));
     await flush();
     expect(evaluateSymbol).not.toHaveBeenCalled();
     expect(evaluateOnDemand).not.toHaveBeenCalled();
+    expect(technicalEvaluateOnDemand).not.toHaveBeenCalled();
   });
 
   it('ignores HOLD ideas and below-threshold confidence', async () => {

@@ -8,10 +8,27 @@ function risingTrendPrices(n: number, start = 100): number[] {
   // A pure monotonic uptrend pins RSI near 100 (fails the momentum rule's rsi<70 condition).
   // Verified empirically (scratch script against the real evaluateTechnicalSignals): two up-ticks
   // per one larger down-tick lands RSI ~66-67, inside the 50-70 "healthy uptrend" band the
-  // momentum-breakout rule targets, while keeping sma20>sma50 and MACD bullish.
+  // momentum-breakout rule targets, while keeping sma20>sma50.
+  //
+  // 2026-09-22 (MACDEngine seeding-bug fix): a constant-rate trend running for the FULL window
+  // no longer clears `macd.macd > macd.signal` under the corrected (now properly SMA-seeded) EMA
+  // math - and it shouldn't: MACD's histogram is a measure of trend ACCELERATION, and a trend
+  // running at a genuinely constant rate for long enough lets the signal line (itself an EMA of
+  // the MACD line) fully catch up, converging the histogram back toward zero. Real MACD
+  // crossovers fire near a trend's ONSET, not deep into an already-mature, constant-velocity
+  // move - the OLD (buggy) single-value EMA seed happened to leave enough residual bias at this
+  // fixture's original all-trend shape to fire regardless, which is exactly the kind of
+  // coincidental pass this fix was meant to stop relying on. Fixture now models a flat period
+  // followed by a fresh uptrend, measured shortly after onset (15 bars in) - the shape MACD is
+  // actually designed to detect. Re-verified via a direct sweep against the real (fixed) engine:
+  // trendBars in [12,15,18,25] all cleanly fire BUY with confidence in [0.82, 0.87] and RSI in
+  // [66,70]; 15 was chosen as a comfortably-interior, non-knife-edge value from that range.
+  const trendBars = 15;
+  const flatBars = Math.max(0, n - trendBars);
   const prices: number[] = [];
-  let p = start;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < flatBars; i++) prices.push(start + Math.sin(i / 7) * 0.3);
+  let p = prices.length > 0 ? prices[prices.length - 1] : start;
+  for (let i = 0; i < trendBars; i++) {
     p += (i % 3 === 2) ? -0.9 : 1.0;
     prices.push(p);
   }

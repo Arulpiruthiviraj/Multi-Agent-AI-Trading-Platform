@@ -61,6 +61,13 @@ describe('Architecture protection: BrokerManager access is allowlisted', () => {
     'src/server/services/PortfolioReconciliation.ts',
     // Read-only local↔broker portfolio compare after first organic PAPER fill (no placeOrder).
     'src/server/services/FirstFillForensicCheckpoint.ts',
+    // Real gap found and fixed (2026-09-22, CLI forensics pass): Crypto Expansion Phase 13 added
+    // this file's BrokerManager import (a single read-only BrokerManager.getInstance().
+    // getCryptoBrokerId() !== null check, feeding RiskEngine gate 12's crypto venue-availability
+    // detail) but never added it to this allowlist - a real drift between reviewed intent and
+    // this enforced test, caught by re-running the full suite rather than by CI at the time.
+    // Read-only, no placeOrder/setActiveBroker call.
+    'src/server/risk/CryptoVenueAvailability.ts',
   ]);
 
   it('no file outside the reviewed allowlist imports BrokerManager', () => {

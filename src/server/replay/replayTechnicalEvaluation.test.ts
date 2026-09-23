@@ -47,9 +47,15 @@ function sharpSpikePrices(n: number, start = 100): number[] {
 
 describe('evaluateReplayTechnical (delegates to technicalSignal.ts - no reimplemented drift)', () => {
   it('matches evaluateTechnicalSignals exactly for a firing momentum breakout', () => {
+    // 2026-09-22 (MACDEngine seeding-bug fix, see technicalSignal.test.ts's risingTrendPrices for
+    // the full explanation): a constant-rate trend running the whole window no longer clears
+    // `macd > signal` under the corrected math - MACD's histogram measures trend ACCELERATION,
+    // and a long-mature constant-velocity trend lets the signal line fully catch up. Flat-then-
+    // onset (measured 15 bars into a fresh uptrend) is the shape a real crossover actually needs.
     const closes: number[] = [];
-    let p = 100;
-    for (let i = 0; i < 60; i++) { p += (i % 3 === 2) ? -0.9 : 1.0; closes.push(p); }
+    for (let i = 0; i < 45; i++) closes.push(100 + Math.sin(i / 7) * 0.3);
+    let p = closes[closes.length - 1];
+    for (let i = 0; i < 15; i++) { p += (i % 3 === 2) ? -0.9 : 1.0; closes.push(p); }
     const bars = barsFromCloses(closes);
     const replay = evaluateReplayTechnical(bars);
     const live = evaluateTechnicalSignals(closes);

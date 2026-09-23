@@ -296,7 +296,11 @@ describe('Phase 21 evidence-path invariants', () => {
     const schema = readFileSync(join(ROOT, 'src/server/db/schema.ts'), 'utf8');
     expect(schema).toMatch(/executionEnvironment: text\('execution_environment'\)/);
     const oms = readFileSync(join(ROOT, 'src/server/services/OrderManagement.ts'), 'utf8');
-    expect(oms).toMatch(/executionEnvironment: this\.resolveFillEnvironment\(\)/);
+    // 2026-09-22 multi-broker SELL-routing fix: resolveFillEnvironment() now takes an explicit
+    // broker id (the order's resolved broker, which may differ from the currently-active one for
+    // a SELL) instead of always reading BrokerManager.getActiveBroker() internally - still the
+    // real helper, not a hardcoded/fabricated value, so this stays a real invariant check.
+    expect(oms).toMatch(/executionEnvironment: this\.resolveFillEnvironment\(orderBroker\.id\)/);
   });
 
   it('OMS does not treat a placeOrder throw as a definitive REJECTED', () => {

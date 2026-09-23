@@ -66,6 +66,16 @@ export interface RuntimeIntervals {
   /** Crypto Expansion Phase 4 (2026-09-21): CryptoMarketDataIngestion.ts poll cadence (REST, no
    *  crypto WebSocket stream exists yet - see AlpacaCryptoMarketData.ts). */
   cryptoMarketDataIngestionMs: number;
+  /** Real defect fixed 2026-09-22 (CLI forensics pass, live-database-verified): candidate_rankings
+   *  had no retention policy at all - 1.38M+ rows accumulated since this table's introduction with
+   *  zero pruning anywhere in the codebase (unlike observability_events, which has a real
+   *  sweepObservabilityRetention() on retentionDays=14). This is the operationalRetention.ts sweep's
+   *  cutoff, mirroring that same pattern for this table specifically - a rolling ranking-cycle
+   *  snapshot with no long-term audit-trail requirement (distinct from trades/fills/risk_assessments/
+   *  event_traces, which stay unpruned by design as the permanent decision record). */
+  candidateRankingsRetentionDays: number;
+  /** Sweep cadence for the above - mirrors observability.json's retentionSweepMs pattern. */
+  candidateRankingsRetentionSweepMs: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -82,6 +92,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
   'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
   'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
+  'candidateRankingsRetentionDays', 'candidateRankingsRetentionSweepMs',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

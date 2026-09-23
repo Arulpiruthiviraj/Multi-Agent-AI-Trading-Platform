@@ -498,6 +498,13 @@
       "when": 1789822800000,
       "tag": "0070_nullable_forecast_cost",
       "breakpoints": true
+    },
+    {
+      "idx": 71,
+      "version": "6",
+      "when": 1790098588314,
+      "tag": "0071_wealthy_shard",
+      "breakpoints": true
     }
   ]
 }

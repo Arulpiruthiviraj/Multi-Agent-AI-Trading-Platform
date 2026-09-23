@@ -146,14 +146,28 @@ describe('TechnicalAgent.analyzeTick integration - debounce prevents duplicate e
     const listener = (idea: any) => emitted.push(idea);
     eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
     try {
-      // Known-good momentumBreakout fixture (see technicalSignal.test.ts's risingTrendPrices): RSI
-      // settles ~66, inside the 50-70 momentum band, with MACD bullish - a pure uniform ramp pins
-      // RSI near 100 and never actually fires the rule (confirmed the hard way while writing this).
+      // Known-good momentumBreakout fixture (see technicalSignal.test.ts's risingTrendPrices for
+      // the full explanation, including the 2026-09-22 MACDEngine seeding-bug fix rationale): RSI
+      // settles ~66, inside the 50-70 momentum band. A pure uniform ramp pins RSI near 100 and
+      // never fires the rule at all; a constant-rate trend run for the FULL window (no flat
+      // lead-in) lets the MACD histogram decay back toward zero as the signal line catches up -
+      // fragile/flickering right at this test's checkpoints under the corrected (properly
+      // SMA-seeded) EMA math. Flat lead-in + a SHORT (10-bar) trend onset keeps the histogram
+      // robustly positive at both the bar-50 and bar-60 checkpoints (empirically swept against
+      // the real evaluateTechnicalSignals: histogram +0.29 at bar 50, +0.26 at bar 60, comfortably
+      // clear of the flickering zone larger onset windows fall into as the trend matures).
       const bars = quantThresholds.technicalHistoryBars;
+      const trendBars = 10;
+      const flatBars = Math.max(0, bars - trendBars);
       let p = 100;
       let i = 0;
-      for (; i < bars; i++) {
-        p += (i % 3 === 2) ? -1.15 : 1.0;
+      for (; i < flatBars; i++) {
+        p = 100 + Math.sin(i / 7) * 0.3;
+        agent.analyzeTick({ symbol: SYMBOL, price: p, volume: 1, timestamp: new Date().toISOString() });
+      }
+      let trendTick = 0;
+      for (; i < bars; i++, trendTick++) {
+        p += (trendTick % 3 === 2) ? -1.15 : 1.0;
         agent.analyzeTick({ symbol: SYMBOL, price: p, volume: 1, timestamp: new Date().toISOString() });
       }
       const firstCount = emitted.filter((e) => e.symbol === SYMBOL).length;
@@ -162,9 +176,9 @@ describe('TechnicalAgent.analyzeTick integration - debounce prevents duplicate e
       // Force the evaluation cooldown to have elapsed (so checkStrategies genuinely re-runs) many
       // times in a row, continuing the identical oscillation pattern so the signal state stays
       // "still true" rather than reverting to a flat ramp that would itself be a state transition.
-      for (let j = 0; j < 10; j++, i++) {
+      for (let j = 0; j < 10; j++, i++, trendTick++) {
         agent.lastEvaluatedAt[SYMBOL] = Date.now() - quantThresholds.technicalEvaluationCooldownMs - 1;
-        p += (i % 3 === 2) ? -1.15 : 1.0;
+        p += (trendTick % 3 === 2) ? -1.15 : 1.0;
         agent.analyzeTick({ symbol: SYMBOL, price: p, volume: 1, timestamp: new Date().toISOString() });
       }
       const afterRepeatedEvalCount = emitted.filter((e) => e.symbol === SYMBOL).length;

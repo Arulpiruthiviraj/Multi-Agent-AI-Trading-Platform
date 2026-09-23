@@ -41,7 +41,7 @@ import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { db } from '../db';
-import { trades, settings, brokerConnections } from '../db/schema';
+import { trades, settings, brokerConnections, portfolio } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
@@ -128,18 +128,22 @@ export class OrderManagementService {
     });
   }
 
-  private resolveFillEnvironment() {
+  /** @param brokerId - explicit override (the resolved order broker, e.g. from resolveOrderBroker());
+   *  defaults to whichever broker is currently active for every non-order caller. */
+  private resolveFillEnvironment(brokerId?: string) {
     try {
       if (getActiveReplaySession()) return 'REPLAY';
     } catch { /* ignore */ }
-    let brokerId = '';
-    try {
-      brokerId = BrokerManager.getInstance().getActiveBroker().id;
-    } catch {
-      brokerId = '';
+    let resolvedBrokerId = brokerId;
+    if (resolvedBrokerId === undefined) {
+      try {
+        resolvedBrokerId = BrokerManager.getInstance().getActiveBroker().id;
+      } catch {
+        resolvedBrokerId = '';
+      }
     }
-    if (brokerId === 'historical_replay') return 'REPLAY';
-    return resolveOmsExecutionEnvironment({ brokerId, tradingMode: readTradingMode() });
+    if (resolvedBrokerId === 'historical_replay') return 'REPLAY';
+    return resolveOmsExecutionEnvironment({ brokerId: resolvedBrokerId, tradingMode: readTradingMode() });
   }
 
   /** Adapter id stamped onto trades.broker_id at submit (fail-closed empty → omit / unknown). */
@@ -148,6 +152,42 @@ export class OrderManagementService {
       return BrokerManager.getInstance().getActiveBroker().id || '';
     } catch {
       return '';
+    }
+  }
+
+  /**
+   * Real defect fixed (2026-09-22, operator-reported): every order - BUY and SELL alike - used
+   * to resolve BrokerManager.getActiveBroker() unconditionally. A position bought via one broker
+   * (e.g. Alpaca) while a DIFFERENT broker was later made active (e.g. IB Gateway) would have its
+   * closing SELL routed to that other broker's account - which never received the original fill
+   * and has no knowledge of the position at all. BUY orders are unchanged (there is no existing
+   * position to be inconsistent with - whichever broker is active opens it, and `portfolio.
+   * brokerSource` already records that choice via syncLocalPortfolioAfterBuyFill/
+   * PortfolioReconciliation). For SELL, this looks up the position's own recorded brokerSource and
+   * routes there instead, via BrokerManager.getBroker(id) (a read-only lookup of a registered
+   * broker instance that never disturbs which one is "active" - the same method
+   * MarketDataCrossChecker already uses for this exact reason). Falls back to the active broker,
+   * loudly, when the position has no recorded brokerSource (legacy rows predating this column) or
+   * when the recorded broker id is no longer a registered adapter in this deployment - never a
+   * silent no-op, since a wrong fallback here means a real order goes to the wrong account.
+   */
+  private async resolveOrderBroker(symbol: string, side: string): Promise<BrokerPlugin> {
+    const activeBroker = BrokerManager.getInstance().getActiveBroker();
+    if (side !== 'SELL') return activeBroker;
+    try {
+      const rows = await db.select({ brokerSource: portfolio.brokerSource }).from(portfolio).where(eq(portfolio.symbol, symbol)).limit(1);
+      const originBrokerId = rows[0]?.brokerSource;
+      if (!originBrokerId || originBrokerId === activeBroker.id) return activeBroker;
+      const originBroker = BrokerManager.getInstance().getBroker(originBrokerId);
+      if (originBroker) {
+        console.log(`[OMS] Routing SELL ${symbol} to originating broker '${originBrokerId}' (position opened there) instead of the currently-active broker '${activeBroker.id}'.`);
+        return originBroker;
+      }
+      console.warn(`[OMS] Position ${symbol} was opened on broker '${originBrokerId}' but that broker is not registered in this deployment - falling back to active broker '${activeBroker.id}'. This SELL will fail if the active broker does not actually hold this position.`);
+      return activeBroker;
+    } catch (e) {
+      console.warn(`[OMS] Failed to resolve originating broker for SELL ${symbol} - falling back to active broker '${activeBroker.id}'`, e);
+      return activeBroker;
     }
   }
 
@@ -245,7 +285,13 @@ export class OrderManagementService {
   }
 
   async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any, transactionId?: string, quantStrategyId?: string | null, quantStopPrice?: number | null, quantTargetPrice?: number | null, quantInvalidationJson?: string | null, intendedPrice?: number | null) {
-    reasoning = stampExecutionEnvironment(reasoning || '', this.resolveFillEnvironment());
+    // See resolveOrderBroker()'s doc comment: SELL must close on the broker that opened the
+    // position, not whichever broker happens to be active right now. Resolved once, up front, and
+    // reused for every downstream use that used to independently call getActiveBroker() for this
+    // same order (the initial trades row, environment classification, and the actual placeOrder
+    // call all need to agree on the same broker).
+    const orderBroker = await this.resolveOrderBroker(symbol, side);
+    reasoning = stampExecutionEnvironment(reasoning || '', this.resolveFillEnvironment(orderBroker.id));
     // Idempotency: refuse to place a second real order for a traceId that already has one.
     // Guards against any future duplicate RISK_ASSESSMENT_COMPLETED emission for the same trade.
     try {
@@ -300,8 +346,8 @@ export class OrderManagementService {
         quantStopPrice: quantStopPrice ?? null,
         quantTargetPrice: quantTargetPrice ?? null,
         quantInvalidationJson: quantInvalidationJson ?? null,
-        executionEnvironment: this.resolveFillEnvironment(),
-        brokerId: this.resolveActiveBrokerId() || null,
+        executionEnvironment: this.resolveFillEnvironment(orderBroker.id),
+        brokerId: orderBroker.id || null,
       } as any);
     } catch (e: any) {
       const isDuplicate = e?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /UNIQUE constraint failed/i.test(String(e?.message || ''));
@@ -326,7 +372,7 @@ export class OrderManagementService {
     let filledAt: string | null = null;
 
     try {
-      const activeBroker = BrokerManager.getInstance().getActiveBroker();
+      const activeBroker = orderBroker;
       console.log(`[OMS] Submitting order to ${activeBroker.name}: ${side} ${quantity}x ${symbol}`);
 
       // Historical replay broker is always paper-sim — never LIVE. Do not depend on settings
@@ -527,7 +573,7 @@ export class OrderManagementService {
         price: fillPrice,
         status,
         profitLoss,
-        executionEnvironment: this.resolveFillEnvironment(),
+        executionEnvironment: this.resolveFillEnvironment(orderBroker.id),
       });
 
       console.log(`[OMS] Order ${orderId} finalized with status: ${status}.`);
@@ -557,39 +603,61 @@ export class OrderManagementService {
     const due = openTrades.filter(t => t.submittedAt && (now - new Date(t.submittedAt).getTime()) >= FOLLOWUP_MIN_AGE_MS);
     if (due.length === 0) return;
 
-    let broker;
+    let activeBroker: BrokerPlugin;
     try {
-      broker = BrokerManager.getInstance().getActiveBroker();
+      activeBroker = BrokerManager.getInstance().getActiveBroker();
     } catch (e) {
       console.error('[OMS] follow-up: no active broker', e);
       return;
     }
 
-    let brokerOrders: Order[];
-    try {
-      brokerOrders = await broker.orders();
-    } catch (e) {
-      console.error('[OMS] follow-up: broker.orders() failed', e);
-      return;
+    // Real defect fixed alongside resolveOrderBroker() (2026-09-22): this used to poll only the
+    // currently-active broker's orders() for EVERY open trade row, regardless of which broker each
+    // one was actually placed on. An order placed on a broker that is no longer active (e.g. a SELL
+    // correctly routed back to Alpaca via resolveOrderBroker() while IB Gateway is now active)
+    // would never match anything in the active broker's order list and would silently "give up"
+    // after FOLLOWUP_MAX_AGE_MS without ever checking the broker it was actually placed on. Group
+    // by trades.broker_id (falling back to the active broker for legacy rows with no stamped id)
+    // and poll each broker exactly once per cycle.
+    const dueByBroker = new Map<string, { broker: BrokerPlugin; rows: any[] }>();
+    for (const row of due) {
+      const brokerId: string = row.brokerId || activeBroker.id;
+      let entry = dueByBroker.get(brokerId);
+      if (!entry) {
+        const resolved = brokerId === activeBroker.id ? activeBroker : (BrokerManager.getInstance().getBroker(brokerId) || activeBroker);
+        entry = { broker: resolved, rows: [] };
+        dueByBroker.set(brokerId, entry);
+      }
+      entry.rows.push(row);
     }
 
-    for (const row of due) {
-      const age = now - new Date(row.submittedAt).getTime();
-      const match = brokerOrders.find(o => o.id === row.brokerOrderId);
-
-      if (!match) {
-        if (age > FOLLOWUP_MAX_AGE_MS && !this.followUpWarned.has(row.id)) {
-          console.warn(`[OMS] Giving up follow-up for order ${row.id}: broker no longer reports order ${row.brokerOrderId}. Last known status stays ${row.status}.`);
-          this.followUpWarned.add(row.id);
-        }
+    for (const { broker, rows } of dueByBroker.values()) {
+      let brokerOrders: Order[];
+      try {
+        brokerOrders = await broker.orders();
+      } catch (e) {
+        console.error(`[OMS] follow-up: broker.orders() failed for '${broker.id}'`, e);
         continue;
       }
 
-      if (match.status !== row.status || (match.filledQuantity ?? 0) > 0) {
-        await this.applyFollowUpUpdate(row, match);
-      }
-      if (age > FOLLOWUP_MAX_AGE_MS && !isTerminalOrderStatus(match.status)) {
-        await this.cancelOrphanedOpenOrder(row, match, broker);
+      for (const row of rows) {
+        const age = now - new Date(row.submittedAt).getTime();
+        const match = brokerOrders.find(o => o.id === row.brokerOrderId);
+
+        if (!match) {
+          if (age > FOLLOWUP_MAX_AGE_MS && !this.followUpWarned.has(row.id)) {
+            console.warn(`[OMS] Giving up follow-up for order ${row.id}: broker '${broker.id}' no longer reports order ${row.brokerOrderId}. Last known status stays ${row.status}.`);
+            this.followUpWarned.add(row.id);
+          }
+          continue;
+        }
+
+        if (match.status !== row.status || (match.filledQuantity ?? 0) > 0) {
+          await this.applyFollowUpUpdate(row, match);
+        }
+        if (age > FOLLOWUP_MAX_AGE_MS && !isTerminalOrderStatus(match.status)) {
+          await this.cancelOrphanedOpenOrder(row, match, broker);
+        }
       }
     }
   }

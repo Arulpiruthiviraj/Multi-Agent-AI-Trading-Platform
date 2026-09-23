@@ -62,6 +62,7 @@ import { dbBackupService } from '../services/DbBackupService';
 import { tracingService } from '../services/TracingService';
 import { installObservabilityEventBridge } from '../observability/instrumentEventBus';
 import { startObservabilityRetentionSweep, stopObservabilityRetentionSweep } from '../observability/ObservabilityStore';
+import { startOperationalRetentionSweep, stopOperationalRetentionSweep } from '../db/operationalRetention';
 import { startProcessTelemetry, stopProcessTelemetry } from '../observability/processTelemetry';
 import { transactionLifecycleTracker } from '../services/TransactionLifecycleTracker';
 import { marketDataCrossChecker } from '../services/MarketDataCrossChecker';
@@ -90,6 +91,7 @@ export class SystemBootstrap {
     tracingService;
     installObservabilityEventBridge();
     startObservabilityRetentionSweep();
+    startOperationalRetentionSweep();
     startProcessTelemetry();
     advancedQuantEngines.start();
     
@@ -181,6 +183,7 @@ export class SystemBootstrap {
     dbBackupService.stop();
     marketDataCrossChecker.stop();
     stopObservabilityRetentionSweep();
+    stopOperationalRetentionSweep();
     stopProcessTelemetry();
 
     this.isRunning = false;

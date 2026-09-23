@@ -217,6 +217,31 @@ export class ChiefTraderAgent {
     this.manualSideExpectations.set(sym, { side, expiresAt: Date.now() + Math.max(1000, ttlMs) });
   }
 
+  /**
+   * Real defect found and fixed (2026-09-22, CLI runtime forensics targeted follow-up, Part B -
+   * P1-A heap-growth investigation). `lastDebateStartedAt` was set on every debate start and had
+   * NO delete/eviction anywhere in this file (verified by grep) - unlike every sibling per-symbol
+   * Map in this class (manualSideExpectations, pendingDebates, consensusAggregationTimers), all of
+   * which explicitly delete their own entries. Proven, source-verified unbounded growth: one
+   * entry per distinct symbol that has ever triggered a debate, retained for the life of the
+   * process. Explicitly NOT claimed as the P1-A incident's root cause - that incident's own heap
+   * snapshot showed full traceId-shaped strings (`trace_<SYMBOL>_<epochMs>_<hash>`) dominating,
+   * not bare symbol strings, and a real discovery universe is bounded in the low thousands of
+   * distinct tickers (nowhere near the 18.27M string count the P1-A snapshot found) - but a real,
+   * smaller-scale instance of the same unbounded-Map class of bug, fixed on its own merits.
+   * Opportunistic sweep on every set (amortized, no new timer) - only removes entries already far
+   * past the point they could still affect the cooldown check above (10x the real cooldown - a
+   * generous margin, never touches anything that could still be "cooling").
+   */
+  private recordDebateStarted(symbol: string): void {
+    const now = Date.now();
+    this.lastDebateStartedAt.set(symbol, now);
+    const staleBeforeMs = now - tradingSafety.consensusDebateCooldownMs * 10;
+    for (const [sym, startedAt] of this.lastDebateStartedAt) {
+      if (startedAt < staleBeforeMs) this.lastDebateStartedAt.delete(sym);
+    }
+  }
+
   private consumeManualSideMismatch(symbol: string, approvedSide: string): string | null {
     const lock = this.manualSideExpectations.get(symbol);
     if (!lock) return null;
@@ -524,7 +549,7 @@ export class ChiefTraderAgent {
     } else if (wantsDebate) {
         console.log(`[ChiefTrader] Triggering multi-model debate for ${idea.symbol}`);
         this.beginDebate(idea.symbol);
-        this.lastDebateStartedAt.set(idea.symbol, Date.now());
+        this.recordDebateStarted(idea.symbol);
 
         const learnedRulesText = await loadDebateLearnedRulesText();
         const javaInstitutionalContext = await loadJavaInstitutionalDebateContext(idea.symbol);

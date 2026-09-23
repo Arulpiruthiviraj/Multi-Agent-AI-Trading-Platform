@@ -589,7 +589,24 @@ export const eventTraces = sqliteTable('event_traces', {
   // above) - transactionId is populated once TransactionRegistry has minted one (from
   // CHIEF_APPROVED_IDEA onward). See TRANSACTION_OBSERVATORY_ARCHITECTURE.md Phase 0.
   transactionId: text('transaction_id'),
-});
+}, (table) => ({
+  // Real defect found and fixed (2026-09-22, CLI forensics pass): this table had ZERO indexes
+  // beyond the primary key despite 500K+ rows (unbounded - no retention policy exists for it,
+  // unlike observability_events) and three real query sites filtering by exactly these columns
+  // (queryTraces.ts, v2System.ts's /traces/:id and /traces/by-transaction/:id, systemRoutes.ts's
+  // /traces search) - every one of them was a full table scan. Live-measured: even the bare
+  // /health liveness route (near-zero real work) took 13+ seconds to respond under this
+  // deployment's real production load, consistent with synchronous better-sqlite3 work
+  // (full-table-scan-class queries block Node's single event loop for their entire duration)
+  // blocking every concurrent request, including the watchdog's own heartbeat write - a direct,
+  // plausible contributor to this deployment's long-standing chronic CONFIRMED_DEAD/restart
+  // pattern (data/logs/watchdog.log). Not proven to be the SOLE cause (heap growth is a separate,
+  // already-tracked open lead - see memory), but this is a genuine, safe, unambiguous fix
+  // regardless: an indexed lookup on a foreign-key-shaped column is correct schema design.
+  correlationIdx: index('idx_event_traces_correlation').on(table.correlationId, table.timestamp),
+  tradeIdx: index('idx_event_traces_trade').on(table.tradeId, table.timestamp),
+  transactionIdx: index('idx_event_traces_transaction').on(table.transactionId, table.timestamp),
+}));
 
 export const memoryRules = sqliteTable('memory_rules', {
   id: integer('id').primaryKey({ autoIncrement: true }),

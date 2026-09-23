@@ -25,7 +25,39 @@ import { NON_LIVE_OPENING_TRADE_ENVS } from './omsEntryPrice';
 
 export class ReflectionEngine {
   private intervalId: NodeJS.Timeout | null = null;
-  
+  /**
+   * Real defect found and fixed (2026-09-23, P1-A memory-leak root-cause investigation - offline
+   * analysis of the two .heapsnapshot files already preserved from the 2026-09-14 incident,
+   * never touching any live process). Walked the retainer chain of the incident's dominant
+   * trace-id-shaped string population by hand (V8 heap snapshot nodes/edges flat arrays): string
+   * -> object property `traceId` -> Object (exact field-for-field shape of an agent_predictions
+   * row: id/agentName/symbol/prediction/confidence/reasoning/timestamp/traceId/aiCallId/provider/
+   * latencyMs/regime/strategyId) -> array element -> a single Array already holding 108,262+ such
+   * rows in just the smaller of the two preserved snapshots.
+   *
+   * Root cause: `start()` below drives evaluateAgents() from a plain `setInterval` with NO
+   * re-entrancy guard, and evaluateAgents() does THREE unbounded full-table scans every cycle
+   * (trades, agent_predictions - currently 146,058+ rows, kronos_predictions - currently 25,416+
+   * rows), holding all of them alive simultaneously across several more `await`s (insert loops)
+   * for the cycle's whole duration. Both tables grow every cycle, so each cycle gets slower over
+   * time - a self-reinforcing trend. Once a cycle ever takes longer than
+   * runtimeIntervals.reflectionEngineMs (60s), `setInterval` fires again with nothing to stop a
+   * second evaluateAgents() from starting - its OWN full copies of both tables now alive
+   * alongside the first, uncollectable until both finish. Repeated over enough overlapping cycles
+   * across real uptime, this is a well-evidenced, plausible mechanism for the incident's actual
+   * scale (a 2.04GB snapshot dominated by ~18.27M trace-id-shaped strings).
+   *
+   * Fix: the same `inFlight` boolean re-entrancy guard already used elsewhere in this codebase
+   * for an identical periodic-worker shape (PostMarketAnalysis.ts's tick()) - a skipped cycle
+   * simply waits for the next tick, exactly like every other guarded worker in this codebase.
+   * Deliberately NOT changing the queries themselves (bounding/windowing agent_predictions or
+   * kronos_predictions) in this pass - that would be a real, separate change to calibration
+   * semantics (what evidence counts) needing its own dedicated review, not a drop-in part of
+   * closing a concurrency gap. This guard alone eliminates the COMPOUNDING/unbounded growth
+   * mechanism regardless of how long any single cycle takes.
+   */
+  private inFlight = false;
+
   constructor() {
     eventBus.on('TRADE_IDEA_GENERATED', (idea) => this.logPrediction(idea));
   }
@@ -97,6 +129,8 @@ export class ReflectionEngine {
   }
 
   async evaluateAgents() {
+    if (this.inFlight) return;
+    this.inFlight = true;
     console.log("[ReflectionEngine] Measuring AI performance based on real outcomes...");
     try {
       // Real defect fixed (2026-08-26 self-improvement loop audit): this previously read ALL
@@ -373,6 +407,8 @@ export class ReflectionEngine {
       await this.generateCalibrationInsightRules(agentEvidenceSummaries);
     } catch (e) {
       console.error("[ReflectionEngine] Error evaluating agents:", e);
+    } finally {
+      this.inFlight = false;
     }
   }
 
