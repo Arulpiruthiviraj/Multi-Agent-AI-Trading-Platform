@@ -900,6 +900,22 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'trade-economic-attribution'() {
+    // 2026-09-23 (Argus World-Class Open-Source Quant Expansion roadmap, Priority #2): real
+    // gross/net P&L + canonical cost breakdown per trade leg. Pass --limit=N and/or --scope=X
+    // (PAPER_ORGANIC|PAPER_MANUAL|PAPER_UNATTRIBUTED|REPLAY|BACKTEST|SIMULATION|LIVE|UNKNOWN).
+    const args = process.argv.slice(3);
+    const limitArg = args.find((a) => a.startsWith('--limit='));
+    const scopeArg = args.find((a) => a.startsWith('--scope='));
+    const params = new URLSearchParams({ format: 'text' });
+    if (limitArg) params.set('limit', limitArg.slice('--limit='.length));
+    if (scopeArg) params.set('scope', scopeArg.slice('--scope='.length));
+    const res = await fetch(`${BASE}/api/v2/observability/trade-economic-attribution?${params}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 15_000)),
+    });
+    console.log(await res.text());
+  },
   async 'daily-attribution'() {
     // 2026-09-14 (Institutional Transformation Mandate Part 21): real realized P&L by real
     // trading date + strategy id, organic PAPER only. Pass --since=YYYY-MM-DD to window.
@@ -1527,7 +1543,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

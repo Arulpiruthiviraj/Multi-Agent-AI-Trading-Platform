@@ -505,6 +505,20 @@
       "when": 1790098588314,
       "tag": "0071_wealthy_shard",
       "breakpoints": true
+    },
+    {
+      "idx": 72,
+      "version": "6",
+      "when": 1790185000000,
+      "tag": "0072_trades_commission",
+      "breakpoints": true
+    },
+    {
+      "idx": 73,
+      "version": "6",
+      "when": 1790200000000,
+      "tag": "0073_forecast_cost_quality",
+      "breakpoints": true
     }
   ]
 }

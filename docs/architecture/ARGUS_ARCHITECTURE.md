@@ -2588,3 +2588,145 @@ Per explicit operator direction ("pursue the ownership/lifecycle of those traceI
 **Tests:** `ReflectionEngine.reentrancy.test.ts` (3 new, real-DB integration harness) — a second concurrent call while one is in flight is a genuine no-op; `inFlight` correctly resets after both a successful and a failed (thrown) cycle. Full existing `ReflectionEngine.*.test.ts` suites (25 tests, 6 files) pass unmodified. Full regression: 566/566 TS files, 4261/4261 tests green; `tsc --noEmit` clean; build clean. Safe restart performed, zero data loss, trading resumed.
 
 **Explicitly NOT claimed:** that this is *proven* to be the entirety of P1-A's cause — it is a well-evidenced, source-verified, structurally-sound root-cause candidate found via legitimate forensic analysis of real incident data, not a live reproduction of the original incident. Memory (`project_argus_p1a_memory_leak_open.md`) updated to reflect this finding while keeping the file's own standing rule intact: don't declare P1-A fully closed without further real-world confirmation over elapsed uptime.
+
+## Canonical Cost Model + Trade Economic Attribution (2026-09-23, roadmap Priority #2)
+
+Operator-directed Priority #2 of the "Argus World-Class Open-Source Quant Expansion" program,
+explicitly sequenced before ojAlgo portfolio optimization, VaR/ES, or any new model/oracle work:
+"build economic truth first," and explicitly **not** touching consensus, model weights, or
+promotion. Audit found substantial real infrastructure already in place — `executionQuality.ts`
+(2026-09-13) already computes real, sign-consistent arrival-vs-fill slippage from `trades.arrival_price`
+(written once at insert, never overwritten) and an already-real, SQL-classified evidence taxonomy
+(`PAPER_ORGANIC`/`PAPER_MANUAL`/`PAPER_UNATTRIBUTED`/`REPLAY`/`BACKTEST`/`SIMULATION`/`LIVE`/`UNKNOWN`)
+that already keeps research and PAPER evidence from being mixed — but its own header explicitly
+documented commission/total-cost as unmeasured ("Slippage only; commissions and total costs
+unknown"), and no per-trade gross/net P&L attribution existed anywhere.
+
+**`src/server/research/canonicalCostModel.ts`** (new) — the shared cost vocabulary: `CostQuality`
+(`MEASURED`/`ESTIMATED`/`PARTIAL`/`UNAVAILABLE`), `worstCostQuality()` (a combined cost's quality is
+always the WORST of its components, never silently upgraded), and `classifyCommission()`. Real
+schema addition: `trades.commission` (nullable real, migration `0072_trades_commission.sql`) — no
+current broker adapter populates it yet (confirmed by source grep: neither `AlpacaBroker.ts` nor
+`IbkrSocketSession.ts` parses or discards any commission field today), so it exists as real,
+ready infrastructure for a future capture pass (IBKR's TWS API has a real `commissionReport`
+callback event, currently unwired) rather than being retrofitted later. One narrow, source-verified
+exception to "commission unknown": Alpaca's own documented fee schedule charges **zero** commission
+on US equity orders — classified `MEASURED, $0`, a verified fact about that specific broker/asset
+class, never extended to Alpaca crypto (which does carry real fees) or to any other broker with no
+reported commission (which stays honestly `UNAVAILABLE`, never assumed zero).
+
+**`src/server/research/tradeEconomicAttribution.ts`** (new) — the closed-loop, per-trade record:
+gross P&L (`trades.profit_loss`, real, SELL legs only), the canonical cost breakdown, a net-P&L
+figure, strategy family (reuses `strategyFamilies.familyForStrategyId()` — the existing classifier
+for strategy ids, distinct from `evidenceFamilyTaxonomy.ts`'s agent-name classifier added earlier
+this same roadmap pass), evidence class (reused from `executionQuality.ts`, never reclassified),
+and decision-vs-fill timestamps.
+
+**Honest, explicitly-documented scope limitation on net P&L (the roadmap's own "never pretend
+estimated cost is observed cost" instruction applied to a real structural constraint, not glossed
+over):** Argus prices positions by real broker-reported AVERAGE COST BASIS
+(`resolvePreTradeEntryPrice()` in `OrderManagement.ts`), not FIFO/LIFO lot tracking — there is no
+durable foreign key from a SELL's `trades` row back to the specific BUY row(s) that opened the
+position, especially for a position built from multiple partial buys. `netPnlAfterExitLegCostOnly`
+therefore nets out ONLY the SELL leg's own slippage+commission against the real gross P&L — it
+deliberately does **not** attempt to also subtract the original BUY leg's own execution cost, since
+there is no reliable, non-heuristic way to attribute it in an average-cost-basis system. The field
+name states precisely what is and is not included rather than presenting a synthesized "complete"
+round-trip figure the data cannot actually support. A future FIFO/lot-tracking layer could close this
+gap properly; it was not built as a shortcut inside this pass.
+
+Exposed at `GET /api/v2/observability/trade-economic-attribution` (optional `?scope=`/`?limit=`,
+`argus-cli trade-economic-attribution --scope=X --limit=N`), mirroring `execution-quality`'s own
+route/CLI shape exactly.
+
+**Tests:** `canonicalCostModel.test.ts` (10, pure unit — commission classification including the
+verified Alpaca-equity-zero-commission fact and its crypto exception, worst-quality combination,
+total-cost null-propagation), `tradeEconomicAttribution.test.ts` (6, real-DB integration harness —
+SELL-leg net P&L on a MEASURED-commission broker, UNAVAILABLE net P&L on an unmeasured-commission
+broker, BUY-leg-has-no-P&L-yet, empty-input formatting). Full regression: 443 tests across the
+`src/server/research/` suite plus `OrderManagement.test.ts`/`OrderManagement.lifecycle.test.ts`
+green (including the full pre-existing `executionQuality.test.ts` suite unmodified — proving zero
+change to already-real slippage classification); `tsc --noEmit` clean.
+
+**What was explicitly NOT done this pass, per the operator's own sequencing (real backlog, not an
+oversight):** no cost-quality-driven gating of anything (this is observability infrastructure only —
+still fully additive, nothing reads these new fields anywhere near ChiefTrader/RiskEngine/OMS); no
+net-expectancy plumbing on `ForecastEngine`'s gross-only contract (roadmap item #5, a distinct,
+separately-scoped follow-up); no IBKR commission-capture wiring (the schema column exists, nothing
+populates it yet); no spread-component measurement (only slippage and commission are covered —
+real bid/ask spread capture at decision time is a further, not-yet-built piece); no daily/strategy-
+level cost rollup beyond what `dailyStrategyPerformance`/`CampaignTracker.ts` already track
+separately (unification of research vs. PAPER cost vocabulary at that rollup layer remains open).
+
+## Net-Expectancy Plumbing (2026-09-23, roadmap Priority #5)
+
+Operator-directed Priority #5, immediately following Priority #2 (canonical cost model): connect
+real cost evidence into the existing gross-only forecast contract, explicitly SHADOW/observability
+only — "do not let ChiefTrader, RiskEngine, PositionSizing, or OMS consume the new fields yet."
+
+**Extended the existing contract rather than creating a parallel one**, per explicit instruction:
+`Forecast.estimatedTransactionCostBps`/`netExpectedReturn` already existed in both the TypeScript
+interface and the `quant_forecasts` schema (Master Transformation Mandate Part 7, 2026-09-13) but
+were **always null** — `resolveTransactionCostBps()` unconditionally returned `UNKNOWN_TOTAL_COST`
+even though real measured slippage was available, because commission was never measured at all
+until Priority #2 landed. `provenance.transactionCostSource` already had `'REAL_EXECUTION_QUALITY'`
+as a declared-but-never-reached type value — confirming the original contract was designed for
+exactly this extension, not a new one.
+
+**`resolveExpectedCost()`** (renamed from `resolveTransactionCostBps()`) now sources from
+`tradeEconomicAttribution.ts`'s real per-leg cost breakdown (slippage + honestly-classified
+commission, Priority #2) instead of `executionQuality.ts`'s slippage-only summary. Reports a real,
+usable bps figure (`costQuality: 'MEASURED'`) only once at least `researchSafety.minOosTrades` (30
+— the same reviewed "trustworthy sample" floor already used elsewhere in this research module
+family, not a newly-invented number) real MEASURED-cost trade legs exist; `UNAVAILABLE`/null
+otherwise — never an `ESTIMATED` guess dressed up as real.
+
+**Cost semantics honestly scoped to what `expectedReturn` actually measures:** `expectedReturn`
+(from `prediction_outcomes.actualReturn`) is a ONE-WAY forward price return referenced from a
+prediction's own timestamp to a horizon — not a realized round-trip trade. The cost netted against
+it is therefore the mean cost of ONE trade leg, deliberately never doubled to simulate an entry+exit
+round trip `expectedReturn` was never measuring. No BUY-leg-to-SELL-leg cost linkage is invented
+anywhere in this module — that same limitation is already documented, not worked around, in
+`tradeEconomicAttribution.ts`'s own header (Priority #2).
+
+**New fields** (additive, `Forecast` interface + `quant_forecasts` schema, migration
+`0073_forecast_cost_quality.sql`): `costQuality: CostQuality` (reused from `canonicalCostModel.ts`
+— never a second enum), `netReturnAvailable: boolean` (a single explicit gate so a future consumer
+never has to infer "is net return real" from a null-check), and `provenance.costSampleSize` (folded
+into the existing `provenance` bag rather than a new parallel top-level field — the roadmap's own
+"costProvenance" concept, satisfied by extending what already exists). Model version bumped to
+`forecast-v3-net-expectancy-2026-09-23` (from `forecast-v2-gross-only-2026-09-19`) since this is the
+first version where these two fields can ever be genuinely non-null.
+
+**A real, separate bug found and fixed while wiring this:** `mostRecentForecast()`'s read path
+unconditionally forced `estimatedTransactionCostBps`/`netExpectedReturn` to `null` regardless of
+what was actually persisted — harmless before this pass (every real row genuinely had them null
+anyway, since the write path never populated them), but a real defect once the write path could
+produce genuine values: every read would have silently destroyed correctly-computed net-expectancy
+evidence. Fixed to return exactly what was persisted; legacy rows (written before migration `0073`,
+where `cost_quality`/`cost_sample_size` are `NULL`) correctly read back as `costQuality: 'UNAVAILABLE'`.
+
+**Tests:** `forecastEngine.test.ts` gained a real end-to-end test (30 real `PAPER_ORGANIC` SELL legs
+on Alpaca — the verified $0-commission equity broker — each with known 50bps slippage, plus a real
+gross-return sample and a mocked Java response) proving genuine gross→cost→net propagation through
+an actual `buildForecast()` call and a round-trip through persistence and `mostRecentForecast()`
+(`0.02 - 0.005 = 0.015`, hand-verified), plus two backward-compatibility tests (a genuinely
+legacy-shaped row reads as `UNAVAILABLE`/never crashes; a real `MEASURED` row reads back faithfully
+instead of being suppressed — the actual bug just described). One pre-existing test
+(`does not expose legacy zero-cost profit estimates`) was rewritten: its old assertion encoded the
+now-incorrect blanket-suppression behavior; replaced with a test of what the read path genuinely
+still guarantees (never fabricating `probabilityOfProfit`, which this module still does not compute
+at all — a distinct, unrelated, not-yet-built piece — and never mutating the historical row on
+read). `opportunitySnapshot.test.ts`'s existing forecast-integration test and `opportunitySnapshot.ts`
+itself were updated identically (the read-path fix applies there too — `modelForecast` gained the
+same `costQuality`/`netReturnAvailable` fields). Full regression: 432 tests across `src/server/research/`
++ `QuantSignalAgent.test.ts` + route wiring green; `tsc --noEmit` clean. `QuantSignalAgent.ts`'s
+real production call site (`void buildForecast({...})`, fire-and-forget) and the `POST /forecast`
+route (pure passthrough) both confirmed unaffected — neither accesses the new or changed fields.
+
+**What was explicitly NOT done this pass, per the operator's own sequencing:** no consumption of
+these fields anywhere near ChiefTrader/RiskEngine/PositionSizing/OMS (still pure research
+observability); `probabilityOfProfit` remains uncomputed (a distinct, pre-existing gap, not this
+roadmap item's scope); no spread-component measurement beyond what Priority #2 already covers; no
+IBKR commission capture (still the named follow-up from Priority #2). Next per the operator's stated
+order: ojAlgo constrained portfolio optimization, then VaR/ES, then the PIT research warehouse.

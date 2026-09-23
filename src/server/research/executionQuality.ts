@@ -80,6 +80,18 @@ export interface ExecutionQualityRow {
   quantStrategyId: string | null;
   executionEnvironment: string | null;
   evidenceClass: ExecutionEvidenceClass;
+  /** Order-placing adapter id (alpaca | ibkr_gateway | ...) - additive field (canonicalCostModel.ts,
+   *  roadmap item #2) reusing the same trades.broker_id this query already selects. */
+  brokerId: string | null;
+  /** Real broker-reported commission for this trade leg, when known - additive field
+   *  (canonicalCostModel.ts). Null does not mean zero; see that module's classifyCommission(). */
+  rawCommission: number | null;
+  /** trades.profit_loss - real gross P&L, SELL legs only (already net of the position's real
+   *  average cost basis per resolvePreTradeEntryPrice(), NOT net of commission/slippage on either
+   *  leg). Null for BUY legs. Additive field for tradeEconomicAttribution.ts. */
+  grossPnl: number | null;
+  /** trades.timestamp - the decision-time record, for latency/attribution purposes. */
+  decisionTimestamp: string;
 }
 
 export interface ExecutionQualitySummary {
@@ -153,6 +165,10 @@ export async function buildExecutionQualityReport(limit = 500, scope?: Execution
       quantStrategyId: t.quantStrategyId,
       executionEnvironment: t.executionEnvironment,
       evidenceClass: t.evidenceClass,
+      brokerId: t.brokerId,
+      rawCommission: t.commission ?? null,
+      grossPnl: t.profitLoss ?? null,
+      decisionTimestamp: t.timestamp,
     });
   }
   return rows;

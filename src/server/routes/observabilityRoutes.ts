@@ -29,6 +29,7 @@ import { buildMultiHorizonSummaryReport, formatMultiHorizonSummaryReport } from 
 import { buildConsensusDebateHealthReport, formatConsensusDebateHealthReport } from '../research/consensusDebateHealthReport';
 import { buildOpportunitySnapshot, formatOpportunitySnapshot } from '../research/opportunitySnapshot';
 import { buildExecutionQualityReport, summarizeExecutionQuality, formatExecutionQualityReport } from '../research/executionQuality';
+import { buildTradeEconomicAttributionReport, summarizeTradeEconomicAttribution, formatTradeEconomicAttributionReport } from '../research/tradeEconomicAttribution';
 import { buildForecast, mostRecentForecast, PRIMARY_EVAL_HORIZON_LABEL } from '../research/forecastEngine';
 import { buildDailyAttributionReport, summarizeDailyAttribution, formatDailyAttributionReport } from '../research/dailyAttributionReport';
 import { buildMarketDataDiagnosticsReport, formatMarketDataDiagnosticsReport } from '../observability/marketDataDiagnosticsReport';
@@ -163,6 +164,27 @@ observabilityRouter.get('/execution-quality', async (req, res) => {
     const summary = summarizeExecutionQuality(rows);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatExecutionQualityReport(rows, summary));
+      return;
+    }
+    res.json({ ok: true, summary, rows });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// 2026-09-23 (Argus World-Class Open-Source Quant Expansion roadmap, Priority #2, argus-cli
+// trade-economic-attribution) - real gross/net P&L + canonical cost breakdown per trade leg,
+// composed from executionQuality.ts's real slippage evidence and canonicalCostModel.ts's honest
+// commission classification. Read-only, additive; see tradeEconomicAttribution.ts's own header
+// for the documented net-P&L scope limitation (exit-leg cost only, no FIFO entry-cost heuristic).
+observabilityRouter.get('/trade-economic-attribution', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(String(req.query.limit || '500'), 10) || 500, 2000);
+    const scopeParam = typeof req.query.scope === 'string' ? req.query.scope : undefined;
+    const rows = await buildTradeEconomicAttributionReport(limit, scopeParam as any);
+    const summary = summarizeTradeEconomicAttribution(rows, (scopeParam as any) ?? 'PAPER_ORGANIC');
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatTradeEconomicAttributionReport(rows, summary));
       return;
     }
     res.json({ ok: true, summary, rows });

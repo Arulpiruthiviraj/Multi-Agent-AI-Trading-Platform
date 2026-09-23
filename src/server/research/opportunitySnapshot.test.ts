@@ -104,9 +104,15 @@ describe('opportunitySnapshot (Institutional Transformation Mandate Part 8/9)', 
       forecastId: 'opp-forecast-1', symbol: 'OPPAAPL', createdAt: new Date().toISOString(),
       direction: 'BUY', horizonLabel: 'PRIMARY_EVAL_HORIZON', agentName: 'QuantEngine', strategyId: 'MOMENTUM_BREAKOUT',
       forecastStatus: 'VALID', sampleSize: 25, expectedReturn: 0.008, probabilityOfProfit: 0.62,
-      estimatedTransactionCostBps: 5, netExpectedReturn: 0.0075, modelVersion: 'test-v1',
+      // Net-Expectancy Plumbing (roadmap Priority #5): estimatedTransactionCostBps/netExpectedReturn
+      // are real MEASURED numbers here, matching costQuality - what buildForecastUncoalesced() itself
+      // always writes consistently. mostRecentForecast() now reads these back faithfully (a real bug
+      // fix - it previously suppressed them to null unconditionally, which would have silently
+      // discarded genuine net-expectancy evidence once the write path could ever produce it).
+      estimatedTransactionCostBps: 5, netExpectedReturn: 0.0075, costQuality: 'MEASURED', costSampleSize: 42,
+      modelVersion: 'test-v1',
       strategyCount: 7, familyCount: 3, effectiveIndependentCount: 2.6,
-      provenanceJson: JSON.stringify({ sourceTable: 'prediction_outcomes', groupingKey: 'QuantEngine/MOMENTUM_BREAKOUT', sourceRowCount: 25, transactionCostSource: 'NONE_ASSUMED_ZERO' }),
+      provenanceJson: JSON.stringify({ sourceTable: 'prediction_outcomes', groupingKey: 'QuantEngine/MOMENTUM_BREAKOUT', sourceRowCount: 25, transactionCostSource: 'REAL_EXECUTION_QUALITY' }),
     });
 
     const rows = await mod.buildOpportunitySnapshot();
@@ -114,8 +120,10 @@ describe('opportunitySnapshot (Institutional Transformation Mandate Part 8/9)', 
     expect(row.modelForecast).not.toBeNull();
     expect(row.modelForecast!.status).toBe('VALID');
     expect(row.modelForecast!.expectedReturn).toBeCloseTo(0.008, 5);
-    expect(row.modelForecast!.probabilityOfProfit).toBeNull();
-    expect(row.modelForecast!.netExpectedReturn).toBeNull();
+    expect(row.modelForecast!.probabilityOfProfit).toBeNull(); // not yet computed by this module - unchanged, unrelated to this roadmap item
+    expect(row.modelForecast!.netExpectedReturn).toBeCloseTo(0.0075, 5);
+    expect(row.modelForecast!.costQuality).toBe('MEASURED');
+    expect(row.modelForecast!.netReturnAvailable).toBe(true);
     // Real strategy-diversity evidence (Part 7/9 integration) - never inflated, never fabricated.
     expect(row.modelForecast!.strategyCount).toBe(7);
     expect(row.modelForecast!.familyCount).toBe(3);

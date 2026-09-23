@@ -71,6 +71,11 @@ export interface OpportunitySnapshotRow {
     expectedReturn: number | null;
     probabilityOfProfit: number | null;
     netExpectedReturn: number | null;
+    /** Real cost-quality label (canonicalCostModel.ts, Net-Expectancy Plumbing roadmap Priority #5)
+     *  for netExpectedReturn/estimatedTransactionCostBps - MEASURED only once real PAPER_ORGANIC
+     *  cost evidence clears researchSafety.minOosTrades; UNAVAILABLE otherwise, never guessed. */
+    costQuality: Forecast['costQuality'];
+    netReturnAvailable: boolean;
     sampleSize: number;
     /** Real strategy-diversity evidence (Part 7/9 integration, internalQuantEnsemble.ts) - null
      *  when the forecast was built without a real ensemble result for that cycle (e.g. an ad hoc
@@ -156,6 +161,7 @@ export async function buildOpportunitySnapshot(limit = 20): Promise<OpportunityS
         forecastId: forecast.forecastId, timestamp: forecast.timestamp, status: forecast.status,
         expectedReturn: forecast.expectedReturn, probabilityOfProfit: forecast.probabilityOfProfit,
         netExpectedReturn: forecast.netExpectedReturn, sampleSize: forecast.sampleSize,
+        costQuality: forecast.costQuality, netReturnAvailable: forecast.netReturnAvailable,
         strategyCount: forecast.strategyCount, familyCount: forecast.familyCount,
         effectiveIndependentCount: forecast.effectiveIndependentCount,
       } : null,

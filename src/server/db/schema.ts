@@ -313,6 +313,16 @@ export const trades = sqliteTable('trades', {
   // real slippage/implementation-shortfall computation this enables. Null for legacy rows and for
   // EXTERNAL_MANUAL inbound trades (no Argus-side proposal ever existed for those).
   arrivalPrice: real('arrival_price'),
+  // Canonical Cost Model / Economic Attribution (2026-09-23, roadmap item #2). Real commission
+  // charged on THIS specific trade leg (BUY-open or SELL-close are separate rows), when a broker
+  // adapter actually reports one. Null does NOT mean "zero" - see canonicalCostModel.ts's
+  // classifyCommission() for the one narrow, verified exception (Alpaca US-equity orders are
+  // genuinely commission-free by that broker's own documented fee schedule, so that specific case
+  // is classified MEASURED=0, never guessed). No current broker adapter populates this column yet
+  // (confirmed by source grep at the time this column was added) - it exists so real capture (e.g.
+  // IBKR's TWS API commissionReport callback) has somewhere real to write once built, rather than
+  // being retrofitted later.
+  commission: real('commission'),
 }, (table) => ({
   // Hardening pass, Phase 2: real duplicate-order idempotency at the DB level, closing the
   // check-then-act race in OrderManagement.ts's own pre-insert lookup (two concurrent
@@ -1957,6 +1967,16 @@ export const quantForecasts = sqliteTable('quant_forecasts', {
   uncertaintyStdevReturn: real('uncertainty_stdev_return'),
   estimatedTransactionCostBps: real('estimated_transaction_cost_bps'),
   netExpectedReturn: real('net_expected_return'),
+  // Net-Expectancy Plumbing (2026-09-23, World-Class Open-Source Quant Expansion roadmap Priority
+  // #5). Real cost-quality label (canonicalCostModel.ts's CostQuality: MEASURED/ESTIMATED/PARTIAL/
+  // UNAVAILABLE) for the estimatedTransactionCostBps/netExpectedReturn figures above - so a reader
+  // can never mistake an UNAVAILABLE-quality null for "zero cost" versus a real MEASURED figure.
+  // Null for every forecast row written before this column existed (no backfill - honest, not
+  // guessed). costSampleSize is the real number of MEASURED-cost trade legs
+  // (tradeEconomicAttribution.ts) the bps figure was computed from - null when costQuality is not
+  // MEASURED.
+  costQuality: text('cost_quality'),
+  costSampleSize: integer('cost_sample_size'),
   // Strategy-aggregation fields (mandate item 9) - honestly null in this pass when the caller did
   // not supply a real ensemble evaluation (internalQuantEnsemble.ts integration is a real, tracked
   // follow-up, not fabricated here as a placeholder number).

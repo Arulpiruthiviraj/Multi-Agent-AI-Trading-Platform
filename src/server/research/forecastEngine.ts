@@ -40,10 +40,34 @@ import { agentPredictions, kronosPredictions, predictionOutcomes, predictionOutc
 import { eq, and, desc, isNull } from 'drizzle-orm';
 import { secondaryGroupKey } from './predictionIndependencePolicy';
 import { quantCoreBridge, type InstitutionalForecastResult } from '../services/QuantCoreBridge';
-import { buildExecutionQualityReport, summarizeExecutionQuality } from './executionQuality';
+import { buildTradeEconomicAttributionReport, summarizeTradeEconomicAttribution } from './tradeEconomicAttribution';
+import type { CostQuality } from './canonicalCostModel';
 import { tradingSafety } from '../config/tradingSafety';
+import { researchSafety } from '../config/researchSafety';
 
-export const FORECAST_MODEL_VERSION = 'forecast-v2-gross-only-2026-09-19';
+/**
+ * Net-Expectancy Plumbing (2026-09-23, Argus World-Class Open-Source Quant Expansion roadmap,
+ * Priority #5 - operator-directed, explicitly sequenced after Priority #2's canonical cost model
+ * and explicitly SHADOW/observability-only: "do not let ChiefTrader, RiskEngine, PositionSizing,
+ * or OMS consume the new fields yet"). Model version bumped from 'forecast-v2-gross-only-2026-09-19'
+ * because this is the first version where estimatedTransactionCostBps/netExpectedReturn can ever be
+ * real, non-null values - the field NAMES are unchanged (extends the existing contract, per explicit
+ * operator instruction, rather than adding a parallel `expectedCost` field with an overlapping
+ * meaning), but what previously ALWAYS read UNKNOWN_TOTAL_COST/null can now genuinely read
+ * REAL_EXECUTION_QUALITY/a real number once enough measured-cost trade legs exist
+ * (tradeEconomicAttribution.ts, Priority #2).
+ *
+ * Cost source: `tradeEconomicAttribution.ts`'s real per-leg cost breakdown (slippage + honestly-
+ * classified commission), NOT `executionQuality.ts`'s slippage-only summary this module used
+ * before - the same real evidence, now cost-complete rather than slippage-only. `expectedReturn`
+ * itself (from `prediction_outcomes.actualReturn`) is a ONE-WAY forward price return referenced
+ * from a prediction's own timestamp to a horizon - not a realized round-trip trade - so the cost
+ * netted against it is deliberately the mean cost of ONE trade leg, never doubled to simulate an
+ * entry+exit round trip that `expectedReturn` was never measuring in the first place. No BUY-leg-
+ * to-SELL-leg cost linkage is invented anywhere in this module (that limitation is documented, not
+ * worked around, in `tradeEconomicAttribution.ts`'s own header).
+ */
+export const FORECAST_MODEL_VERSION = 'forecast-v3-net-expectancy-2026-09-23';
 export const PRIMARY_EVAL_HORIZON_LABEL = 'PRIMARY_EVAL_HORIZON';
 
 export type ForecastStatus =
@@ -113,8 +137,23 @@ export interface Forecast {
   /** Dispersion of the historical-return sample itself (mandate item 7's "uncertainty around
    *  expected return", deliberately distinct from expectedReturn). */
   uncertainty: number | null;
+  /** The real, measured mean per-leg cost (slippage + honestly-classified commission, in bps) this
+   *  forecast's net figure was netted against - null whenever costQuality is not MEASURED. This IS
+   *  the "expectedCost" concept from the roadmap's Priority #5 spec, expressed in the units this
+   *  field has always been named for (extends the existing contract rather than adding a second,
+   *  overlapping `expectedCost` field). */
   estimatedTransactionCostBps: number | null;
+  /** expectedReturn minus estimatedTransactionCostBps (converted to the same fractional-return
+   *  scale) - null whenever either side is unavailable. Never computed from an ESTIMATED/PARTIAL
+   *  cost figure presented as if it were real; only ever populated when costQuality is MEASURED. */
   netExpectedReturn: number | null;
+  /** Real cost-quality label (canonicalCostModel.ts) for estimatedTransactionCostBps/netExpectedReturn.
+   *  UNAVAILABLE (not a fabricated ESTIMATED) whenever fewer than researchSafety.minOosTrades real
+   *  measured-cost trade legs exist yet. */
+  costQuality: CostQuality;
+  /** True iff netExpectedReturn is a real, non-null number - a single, explicit boolean gate so a
+   *  future consumer never has to infer "is net return real" from a null-check on a nested field. */
+  netReturnAvailable: boolean;
   /** Real strategy-diversity evidence from EnsembleEvidence (internalQuantEnsemble.ts) when the
    *  caller supplied one for this cycle; null when it did not - never independently computed or
    *  approximated by this module (see EnsembleEvidence's own doc comment for why). */
@@ -136,6 +175,10 @@ export interface Forecast {
     measuredSlippageBps?: number | null;
     executionEvidenceClass?: 'PAPER_ORGANIC';
     readCostStatus?: 'UNKNOWN_TOTAL_COST';
+    /** Real count of MEASURED-cost trade legs estimatedTransactionCostBps was computed from - the
+     *  roadmap's own "costProvenance" concept, folded into this existing provenance bag rather than
+     *  a new parallel top-level field (see this file's own header comment for the reasoning). */
+    costSampleSize: number;
   };
 }
 
@@ -204,18 +247,45 @@ async function collectExplicitHorizonReturns(agentName: string, strategyId: stri
   return out;
 }
 
-async function resolveTransactionCostBps(): Promise<{ bps: null; source: 'UNKNOWN_TOTAL_COST'; measuredSlippageBps: number | null }> {
+interface ExpectedCostResolution {
+  bps: number | null;
+  source: 'REAL_EXECUTION_QUALITY' | 'UNKNOWN_TOTAL_COST';
+  costQuality: CostQuality;
+  measuredSlippageBps: number | null;
+  costSampleSize: number;
+}
+
+/**
+ * Net-Expectancy Plumbing (roadmap Priority #5). Reuses tradeEconomicAttribution.ts's real
+ * per-leg cost breakdown (Priority #2) - slippage AND honestly-classified commission, not just
+ * slippage as this function's predecessor did. Only reports a real, usable bps figure
+ * (costQuality: 'MEASURED') once at least researchSafety.minOosTrades real MEASURED-cost trade
+ * legs exist - the same reviewed "trustworthy sample" floor already used elsewhere in this
+ * research module family (agentDependenceAnalysis.ts), not a newly-invented number. Below that
+ * floor, or with zero measured-cost evidence at all, this returns UNAVAILABLE/null - never an
+ * ESTIMATED guess dressed up as real.
+ */
+async function resolveExpectedCost(): Promise<ExpectedCostResolution> {
   try {
-    const rows = await buildExecutionQualityReport(500, 'PAPER_ORGANIC');
-    const summary = summarizeExecutionQuality(rows);
-    if (summary.n > 0 && summary.meanSlippageBps !== null) {
-      // Arrival slippage is measured; commissions/financing/round-trip total costs are not.
-      return { bps: null, source: 'UNKNOWN_TOTAL_COST', measuredSlippageBps: summary.meanSlippageBps };
+    const rows = await buildTradeEconomicAttributionReport(500, 'PAPER_ORGANIC');
+    const summary = summarizeTradeEconomicAttribution(rows, 'PAPER_ORGANIC');
+    const measuredSlippageBps = rows.length > 0
+      ? rows.reduce((s, r) => s + r.cost.slippageBps, 0) / rows.length
+      : null;
+    if (summary.meanTotalCostBps !== null && summary.costMeasuredN >= researchSafety.minOosTrades) {
+      return {
+        bps: summary.meanTotalCostBps,
+        source: 'REAL_EXECUTION_QUALITY',
+        costQuality: 'MEASURED',
+        measuredSlippageBps,
+        costSampleSize: summary.costMeasuredN,
+      };
     }
+    return { bps: null, source: 'UNKNOWN_TOTAL_COST', costQuality: 'UNAVAILABLE', measuredSlippageBps, costSampleSize: summary.costMeasuredN };
   } catch {
     /* unavailable evidence remains unknown */
   }
-  return { bps: null, source: 'UNKNOWN_TOTAL_COST', measuredSlippageBps: null };
+  return { bps: null, source: 'UNKNOWN_TOTAL_COST', costQuality: 'UNAVAILABLE', measuredSlippageBps: null, costSampleSize: 0 };
 }
 
 /**
@@ -263,7 +333,7 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
     ? await collectPrimaryHorizonReturns(req.agentName, req.strategyId ?? null, req.direction)
     : await collectExplicitHorizonReturns(req.agentName, req.strategyId ?? null, req.direction, horizon);
 
-  const { bps: transactionCostBps, source: transactionCostSource, measuredSlippageBps } = await resolveTransactionCostBps();
+  const { bps: transactionCostBps, source: transactionCostSource, costQuality, measuredSlippageBps, costSampleSize } = await resolveExpectedCost();
 
   const groupingKey = req.strategyId ? `${req.agentName}/${req.strategyId}` : req.agentName;
   const forecastId = crypto.randomUUID();
@@ -288,6 +358,7 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
     transactionCostSource,
     measuredSlippageBps,
     executionEvidenceClass: 'PAPER_ORGANIC' as const,
+    costSampleSize,
   };
 
   // Real strategy-diversity evidence, when the caller genuinely has one for this cycle - never
@@ -311,12 +382,21 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
       probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null,
       volatility: null, uncertainty: null,
       estimatedTransactionCostBps: transactionCostBps, netExpectedReturn: null,
+      costQuality, netReturnAvailable: false,
       strategyCount, familyCount, effectiveIndependentCount,
       modelVersion: FORECAST_MODEL_VERSION, featureSnapshotId: null, strategySnapshotId: null,
       provenance,
     };
   } else {
     const status: ForecastStatus = javaResult.status === 'VALID' ? 'VALID' : 'INSUFFICIENT_DATA';
+    // Net-Expectancy Plumbing (roadmap Priority #5): only ever computed when BOTH a real gross
+    // expectedReturn (status VALID) AND a real MEASURED cost figure exist - never nets an
+    // ESTIMATED/PARTIAL/UNAVAILABLE cost against a real return and presents the result as if it
+    // were trustworthy. expectedReturn is a fractional return (e.g. 0.01 = 1%); bps/10000 converts
+    // the cost onto the same scale before subtracting.
+    const netExpectedReturn = (status === 'VALID' && javaResult.meanReturn !== null && costQuality === 'MEASURED' && transactionCostBps !== null)
+      ? javaResult.meanReturn - (transactionCostBps / 10000)
+      : null;
     forecast = {
       forecastId, symbol: req.symbol, timestamp, direction: req.direction, horizon,
       agentName: req.agentName, strategyId: req.strategyId ?? null, regime: req.regime ?? null,
@@ -325,7 +405,8 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
       medianReturn: javaResult.medianReturn, trimmedMeanReturn: javaResult.trimmedMeanReturn,
       probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null,
       volatility: null, uncertainty: javaResult.stdevReturn,
-      estimatedTransactionCostBps: transactionCostBps, netExpectedReturn: null,
+      estimatedTransactionCostBps: transactionCostBps, netExpectedReturn,
+      costQuality, netReturnAvailable: netExpectedReturn !== null,
       strategyCount, familyCount, effectiveIndependentCount,
       modelVersion: FORECAST_MODEL_VERSION, featureSnapshotId: null, strategySnapshotId: null,
       provenance,
@@ -356,6 +437,8 @@ async function buildForecastUncoalesced(req: ForecastRequest): Promise<Forecast>
       uncertaintyStdevReturn: forecast.uncertainty,
       estimatedTransactionCostBps: forecast.estimatedTransactionCostBps,
       netExpectedReturn: forecast.netExpectedReturn,
+      costQuality: forecast.costQuality,
+      costSampleSize: forecast.provenance.costSampleSize,
       strategyCount: forecast.strategyCount,
       familyCount: forecast.familyCount,
       effectiveIndependentCount: forecast.effectiveIndependentCount,
@@ -402,12 +485,20 @@ export async function mostRecentForecast(symbol: string, agentName: string, stra
     status: row.forecastStatus as ForecastStatus, sampleSize: row.sampleSize,
     expectedReturn: row.expectedReturn, expectedReturnLower: row.expectedReturnLower, expectedReturnUpper: row.expectedReturnUpper,
     medianReturn: row.medianReturn, trimmedMeanReturn: row.trimmedMeanReturn,
-    // Legacy slippage-only/assumed-zero rows are preserved, but not presented as net evidence.
     probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null,
     volatility: row.volatility, uncertainty: row.uncertaintyStdevReturn,
-    estimatedTransactionCostBps: null, netExpectedReturn: null,
+    // Net-Expectancy Plumbing (roadmap Priority #5) fix: this read path previously forced these
+    // two fields to null unconditionally - harmless before this pass (every persisted row genuinely
+    // had them null anyway), but a real bug once buildForecast() can persist real, non-null values -
+    // reading them back as null would silently destroy correctly-computed net-expectancy evidence
+    // on every read. Now returns exactly what was persisted.
+    estimatedTransactionCostBps: row.estimatedTransactionCostBps, netExpectedReturn: row.netExpectedReturn,
+    // Legacy rows written before migration 0073 have no real costQuality column value - UNAVAILABLE
+    // is the honest default (matches what resolveExpectedCost() would have returned then), never MEASURED.
+    costQuality: (row.costQuality as CostQuality | null) ?? 'UNAVAILABLE',
+    netReturnAvailable: row.netExpectedReturn !== null,
     strategyCount: row.strategyCount, familyCount: row.familyCount, effectiveIndependentCount: row.effectiveIndependentCount,
     modelVersion: row.modelVersion, featureSnapshotId: null, strategySnapshotId: null,
-    provenance: { ...JSON.parse(row.provenanceJson), readCostStatus: 'UNKNOWN_TOTAL_COST' },
+    provenance: { ...JSON.parse(row.provenanceJson), costSampleSize: row.costSampleSize ?? 0 },
   };
 }
