@@ -264,6 +264,14 @@ interface ExpectedCostResolution {
  * research module family (agentDependenceAnalysis.ts), not a newly-invented number. Below that
  * floor, or with zero measured-cost evidence at all, this returns UNAVAILABLE/null - never an
  * ESTIMATED guess dressed up as real.
+ *
+ * Operator review note (2026-09-23): reusing minOosTrades here conceptually couples two distinct
+ * ideas - minimum OOS *trade* evidence (what that constant was originally reviewed for) and minimum
+ * *cost-estimation* sample evidence (what it gates here). Deliberate reuse, not an oversight - there
+ * isn't yet enough real data volume to justify calibrating a separate threshold. Flagged as a real,
+ * named candidate for its own reviewed `researchSafety.json` constant (e.g. `minCostEstimationTrades`)
+ * once enough real PAPER_ORGANIC cost evidence exists to inform that choice with actual data rather
+ * than another guess.
  */
 async function resolveExpectedCost(): Promise<ExpectedCostResolution> {
   try {
