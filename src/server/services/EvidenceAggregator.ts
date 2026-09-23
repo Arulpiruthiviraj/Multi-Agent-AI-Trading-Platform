@@ -37,6 +37,27 @@ export interface CalibrationDetail {
   decisionConfidence: number;
 }
 
+/**
+ * Probability/uncertainty contract (Evidence-family/independence roadmap item #1, 2026-09-23) -
+ * foundation only. Optional, additive field: no current producer populates it, and
+ * netConfidenceFromVotes()/EvidenceAggregator.aggregate() do not read it anywhere in this file -
+ * confidence-weighted voting math is completely unchanged. This defines the SHAPE a future
+ * evidence producer could populate once a real, validated distributional model exists (e.g.
+ * ForecastEngine.java's own expectedReturn/probabilityOfProfit output), so ChiefTrader has
+ * somewhere real to read from when that work is undertaken, rather than each future producer
+ * inventing its own ad hoc shape. Wiring this into confidence/approval math is a separate,
+ * dedicated, separately-reviewed change - this is infrastructure, not a decision-path change.
+ */
+export interface ProbabilisticEnvelope {
+  expectedReturnPct: number | null;
+  downsideProbability: number | null;
+  expectedShortfallPct: number | null;
+  regimeProbability: Record<string, number> | null;
+  outOfDistributionProbability: number | null;
+  /** Free-text identifier of the model that produced this envelope, e.g. 'ForecastEngine.java v1'. */
+  modelSource: string;
+}
+
 export interface Evidence {
   traceId: string;
   symbol: string;
@@ -47,6 +68,7 @@ export interface Evidence {
   currentPrice?: number;
   weight: number; // already resolved by the caller (agentPerformanceStats-backed or default)
   calibrationDetail?: CalibrationDetail;
+  probabilisticEnvelope?: ProbabilisticEnvelope;
 }
 
 export interface AggregationResult {

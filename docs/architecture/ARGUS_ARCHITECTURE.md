@@ -451,6 +451,118 @@ live database.
 | Position sizing / capital allocation / RiskEngine gates | `PositionSizing.ts`, `CapitalAllocation.ts`, `RiskEngine.ts` | none | TS (live, protected spine) | TS | **DO NOT MIGRATE** — control-plane, not quant-domain |
 | GARCH / HMM regime / OLS / ADF / OU / EWMA covariance / StatArb / multi-factor alpha (institutional layer) | none | `institutional/math/*`, `institutional/models/*`, `institutional/features/*`, `institutional/data/*` | Neither — isolated, zero live wiring | Java (no TS equivalent) | JAVA_ONLY research module; **not** a port of anything above |
 
+### Multi-Library Java Quant Decision Intelligence Integration (2026-09-23, in progress)
+
+Operator-dispatched mandate to strengthen `quant-core-java/` with external, independently-authored
+open-source Java quant libraries as an additional evidence source — never a replacement for the
+protected spine, never a second order-execution path. Full mandate text and phase structure are in
+the dispatching conversation, not reproduced here; this section records what was actually built,
+labeled by verification level, not the mandate's aspirational scope.
+
+**Phase 0 (library research — SOURCE VERIFIED, checked live against Maven Central
+`maven-metadata.xml` and each project's own `pom.xml` at its release tag, not training-data
+assumptions):**
+
+| Library | Version | Java floor | License | Verdict |
+|---|---|---|---|---|
+| ta4j | 0.25.0 | 25+ (real, Maven-Enforcer-checked) | MIT | Added — independent indicator-parity reference only |
+| ojAlgo | 57.3.1 | 11 | MIT | Added — zero production dependencies, real matrix/LP/QP/MIP capability |
+| finmath-lib | (researched, not added) | 11 | Apache-2.0 | Deferred — pulls in `jblas`, a native/JNI-backed dependency with real cross-platform loading risk, not isolation-tested |
+| OpenGamma Strata | (researched, not added) | unverified | Apache-2.0 | Deferred — OTC-derivatives/rates/FX pricing domain, near-zero overlap with Argus's equity trading scope (matches the existing `NOT_SUPPORTED` list already excluding options/CAD FX) |
+
+Both added dependencies (`quant-core-java/pom.xml`) resolve with a lean, non-conflicting transitive
+tree (`mvn dependency:tree`, TEST VERIFIED): ta4j pulls `slf4j-api`/`commons-math3`/`gson`; ojAlgo
+pulls nothing. No Java-runtime change was required (Argus already targets Java 26 via
+`maven.compiler.release`).
+
+**Phase 2/3 — `Ta4jTechnicalParityEngine.java`** (`institutional/models/`, strategyId
+`ta4j_technical_parity`, `config/engineOwnership.json` status `RESEARCH`): wraps ta4j's own
+`RSIIndicator`/`MACDIndicator`/`SMAIndicator`/`EMAIndicator`/Bollinger indicators solely to compare
+against Argus's existing, TS-ported `indicators.RSI`/`MACD`/`MovingAverages`/`Bollinger` — the same
+class of bug the 2026-09-22 `MACDEngine` EMA-seeding defect was (found by comparing two
+independently-authored implementations, not by re-reading one harder). Never emits a signal or
+confidence value; returns raw `(argusValue, ta4jValue, absoluteDifference)` triples per indicator.
+
+Real finding (TEST VERIFIED, `Ta4jTechnicalParityEngineTest`, and a one-off diagnostic run captured
+here for the record): on a 120-bar synthetic series, RSI agrees to within ~0.04 (both sides
+implement the same Wilder warmup convention, so this is a meaningful parity check, not a coincidence
+— a real RSI divergence beyond floating-point epsilon would be a defect signal). EMA/MACD/Bollinger
+diverge more at the 27-bar minimum (EMA ~0.93, MACD ~3.3) because Argus's EMA deliberately seeds with
+the raw first price (a preserved TS quirk — see `MovingAverages.java`'s own doc comment) while ta4j
+seeds with a period-SMA; that divergence decays exponentially and was ~8e-5/~0.003 by 120 bars. This
+is a real, explained `WARMUP_DIFFERENCE`, not a defect in either implementation — Argus was **not**
+changed to match ta4j, per the mandate's own explicit rule against doing so.
+
+**Phase 4 — `OjAlgoPortfolioRiskEngine.java`** (`institutional/models/`, strategyId
+`ojalgo_portfolio_risk`, `RESEARCH` status): real dense-matrix portfolio variance
+(`w^T · Σ · w`) and per-symbol marginal risk contribution (`RC_i = w_i · (Σw)_i`, the standard
+Qian (2006) risk-budgeting decomposition where `ΣRC_i` equals total portfolio variance exactly) via
+ojAlgo's `MatrixR064` transpose/multiply — a genuine capability gap (this module had no previously
+tested, general matrix-algebra implementation). Portfolio-level, not per-symbol: covariance/weights
+are request-body fields; `closes`/`bars` are unused but still required by the shared institutional-
+strategy HTTP contract (a minimal 1-bar array satisfies it). Advisory only — has no authority over
+`PositionSizing.ts` or RiskEngine gate 17 (`symbol_concentration`); can only flag a caller-supplied
+`maxWeightPct` bound. Does not implement ojAlgo's LP/QP/MIP solver (a larger, distinct follow-up).
+Verified (TEST VERIFIED, `OjAlgoPortfolioRiskEngineTest`) against a hand-computable diagonal-
+covariance closed-form case, agreeing to `1e-9`.
+
+**What was explicitly NOT done this pass (honest scope boundary, not a defect):** no evidence-family/
+independence metadata layer, no SHADOW-mode runtime wiring, no confidence normalization, no
+cross-library golden-vector regression suite beyond the two test files above, no finmath-lib/Strata
+implementation, no promotion-ladder integration, no decision-path wiring of any kind. Both new
+engines have **zero HTTP consumers** (`liveConsumer: NONE` in `config/engineOwnership.json`, matching
+~30 other `RESEARCH`-status engines already in this file) — they exist, compile, pass their own
+tests, and are reachable via `POST /api/v1/institutional/strategy/{id}/{symbol}` for manual/research
+use, but nothing in the live or shadow decision path calls them. Full Java suite green after this
+change (TEST VERIFIED: 897 tests, 0 failures, 0 errors, `mvn -o test`, exit 0). No TypeScript files
+were touched — this is a pure Java-module addition, so no TS regression was required and none was run.
+
+### Evidence-family / methodology-family / data-dependency taxonomy (2026-09-23, roadmap item #1)
+
+Operator-directed Priority #1 of the "Argus World-Class Open-Source Quant Expansion" program: build
+the evidence-family/independence model before adding more decision sources. Audit found this was
+**already partially real and live**, not greenfield: `evidenceIndependence.ts`'s
+`resolveIndependentEvidenceGroup()` (2026-09-20 forensic-audit remediation) already collapses
+`QuantEngine`/`JavaCoreEnsemble` into one independent-evidence group inside the actual live
+`ChiefTraderAgent.ts` approval math (`uniqueIndependent`/`enoughIndependentVoices`) — grouping only
+where source-verified structural overlap exists, fail-closed otherwise. This work extends that
+mechanism additively rather than replacing it.
+
+`src/server/services/evidenceFamilyTaxonomy.ts` (new) adds a richer, purely-observational
+classification layer — `methodologyFamily`/`dataDependency`/`currentlyLive` per agent, reusing
+(never recomputing) `resolveIndependentEvidenceGroup()` for the actual independence value. Covers
+every currently-live evidence producer (`TechnicalAgent`, `NewsAgent`, `FundamentalAgent`,
+`MacroAgent`, `KronosEngine`, `QuantEngine`, `JavaCoreEnsemble`, `JavaFactorComposite`,
+`OpportunityScreener`, `TradePlanBuilder`, `PortfolioManager`, `ConsensusDebate`) plus two
+explicitly-not-live placeholder entries (`Ta4jTechnicalParity`/`OjAlgoPortfolioRisk` — proposed
+future names, not constants referenced anywhere else; nothing emits under either name today) so
+that IF either research engine is ever wired to vote, its independence classification is already
+decided and reviewed rather than retrofitted the day it's turned on. An unrecognized agent name
+returns `UNCLASSIFIED`/`UNKNOWN`/`currentlyLive: false` rather than a guessed family — same
+fail-closed convention as `evidenceIndependence.ts`.
+
+Wired into `ChiefTraderAgent.ts`'s existing unconditional `CONSENSUS_TERMINAL_REASON` structured
+log (`observability_events`) as a new, additive `evidenceFamilies` field alongside the pre-existing
+`evidenceGroups` — **never read by any approval/confidence math**, verified by the regression suite
+(`evidenceFamilyTaxonomy.test.ts`, 5 tests; the existing `ChiefTraderAgent.evidenceIndependence.test.ts`
+suite passes unmodified, proving zero change to live consensus behavior).
+
+**Probability/uncertainty contract — foundation only, not wired.** `EvidenceAggregator.ts` gained an
+optional `ProbabilisticEnvelope` field on `Evidence` (`expectedReturnPct`/`downsideProbability`/
+`expectedShortfallPct`/`regimeProbability`/`outOfDistributionProbability`/`modelSource`) — no
+current producer populates it, and neither `netConfidenceFromVotes()` nor `EvidenceAggregator.aggregate()`
+read it. This defines the shape a future evidence producer (e.g. `ForecastEngine.java`'s own
+expected-return/probability-of-profit output) could populate once a validated distributional model
+exists, so ChiefTrader has somewhere real to read from when that work is undertaken. **Deliberately
+not wired into confidence or approval math in this pass** — per the operator's own explicit
+sequencing correction, actually consuming distributions in ChiefTrader is separate, larger,
+higher-risk work that comes after the data/cost/validation foundations below, not alongside this
+observability-only piece.
+
+Full regression: targeted suite (23 tests, `evidenceFamilyTaxonomy.test.ts` +
+`ChiefTraderAgent.evidenceIndependence.test.ts` + `EvidenceAggregator.test.ts`) green;
+`tsc --noEmit` clean.
+
 ### JMIG-001 — the feature-computation pipeline: ported, parity-verified, shadow-wiring started
 
 This was the one gap identified by the 2026-08-21 status audit and the migration blueprint's

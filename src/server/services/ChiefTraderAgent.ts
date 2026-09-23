@@ -68,6 +68,7 @@ import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway
 import { quantCoreBridge } from './QuantCoreBridge';
 import { persistConsensusDebateCapture } from './ConsensusDebateForensics';
 import { resolveIndependentEvidenceGroup } from './evidenceIndependence';
+import { classifyEvidenceFamily } from './evidenceFamilyTaxonomy';
 import {
   MIN_BARS_FOR_ANALYSIS as JAVA_ADVISORY_MIN_BARS,
   LOOKBACK_DAYS as JAVA_ADVISORY_LOOKBACK_DAYS,
@@ -1060,6 +1061,10 @@ export class ChiefTraderAgent {
         independentEvidenceGroupCount: uniqueIndependent.size,
         requiredIndependentEvidenceGroups: MIN_INDEPENDENT_AGREEING_AGENTS,
         evidenceGroups: Array.from(rawAgreeingAgentNames).map(agent => ({ agent, group: resolveIndependentEvidenceGroup(agent) })),
+        // 2026-09-23 (Evidence-family/independence roadmap item #1): purely observational
+        // methodology-family/data-dependency classification per agreeing agent - never read by
+        // approval math, additive only. See evidenceFamilyTaxonomy.ts's own doc comment.
+        evidenceFamilies: Array.from(rawAgreeingAgentNames).map(agent => classifyEvidenceFamily(agent)),
         quantIndependentQualificationContributed: decisionTier === 'QUANT_INDEPENDENT',
         participatingAgents: evidence.map(e => ({
           agent: e.agent,
