@@ -51,7 +51,17 @@ function cliAuthHeaders(): Record<string, string> {
 }
 
 async function fetchJson(path: string, init?: RequestInit) {
-  const timeoutMs = Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000);
+  // CLI/control-plane hardening (2026-09-23, real bug found and reproduced live): 10s was too
+  // short for genuinely-healthy-but-momentarily-busy aggregation endpoints (status/health, which
+  // fan out over pipeline agents, IBKR paths, and up to 10 AI-provider health checks) - a real
+  // `status` call against a live, correctly-running engine timed out repeatedly with the
+  // uninformative "The operation was aborted due to timeout", indistinguishable from a genuine
+  // hang. Raised to a still-bounded, still-overridable default that comfortably covers that real,
+  // observed case without becoming an unbounded wait - this is a plain HTTP client timeout guard
+  // against one already-alive server, not the ecosystem-level boot-readiness state model (that
+  // false-negative class of bug is fixed separately, in argus.sh/argus-ecosystem-status.ts's own
+  // STARTING/FAILED classification - simply raising a number is not treated as a fix there).
+  const timeoutMs = Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 20_000);
   const signal = init?.signal ?? AbortSignal.timeout(timeoutMs);
   const res = await fetch(`${BASE}${path}`, {
     ...init,
@@ -232,6 +242,30 @@ export async function waitForHealthGone(timeoutMs = 15_000): Promise<boolean> {
     const result = await probeHealth();
     if (result.kind === 'refused') return true;
     await new Promise((r) => setTimeout(r, 300));
+  }
+  return false;
+}
+
+/**
+ * CLI/control-plane hardening (2026-09-23), headless/engine-daemon counterpart to argus.sh's own
+ * `wait-ready` action. Blocks until the API genuinely answers /health, or a real bounded timeout
+ * elapses - never treats "still starting" as a failure, and never exits nonzero purely because
+ * boot is slow. `probeHealth()`'s existing three-way result (answered/refused/unknown) already
+ * distinguishes a real problem from "can't confirm yet" - this just polls it until "answered" or
+ * time runs out, with periodic progress so a caller watching this command sees it actively working.
+ */
+export async function waitForHealthReady(timeoutMs = 240_000, onProgress?: (waitedMs: number) => void): Promise<boolean> {
+  const start = Date.now();
+  let lastReport = 0;
+  while (Date.now() - start < timeoutMs) {
+    const result = await probeHealth();
+    if (result.kind === 'answered') return true;
+    const waited = Date.now() - start;
+    if (onProgress && waited - lastReport >= 15_000) {
+      onProgress(waited);
+      lastReport = waited;
+    }
+    await new Promise((r) => setTimeout(r, 3_000));
   }
   return false;
 }
@@ -820,6 +854,31 @@ const commands: Record<string, () => Promise<void>> = {
   async ready() {
     console.log(JSON.stringify(await fetchJson('/api/v2/live-readiness'), null, 2));
   },
+  async 'wait-ready'() {
+    // CLI/control-plane hardening (2026-09-23) - headless/engine-daemon counterpart to argus.sh's
+    // ecosystem-mode `wait-ready`. Blocks until the API genuinely answers /health, printing
+    // progress rather than sitting silent, with a real bounded timeout (never nonzero purely for
+    // a slow-but-legitimate boot). Override with --timeout-ms=N (default 240000, matching
+    // ARGUS_CLI_START_TIMEOUT_MS's own real-world-observed 65-150s+ boot time headroom).
+    const timeoutArg = process.argv.slice(3).find((a) => a.startsWith('--timeout-ms='));
+    const timeoutMs = timeoutArg ? Number(timeoutArg.slice('--timeout-ms='.length)) : 240_000;
+    console.log(`Waiting for Argus API to become ready (up to ${Math.round(timeoutMs / 1000)}s; override with --timeout-ms=N)...`);
+    const ready = await waitForHealthReady(timeoutMs, (waitedMs) => {
+      console.log(`  ...still waiting (${Math.round(waitedMs / 1000)}s elapsed).`);
+    });
+    if (ready) {
+      console.log('');
+      console.log('ARGUS READY');
+      console.log('');
+      console.log(`API: ${BASE}`);
+      console.log('UI:  ' + BASE + '  (Vite is mounted as Express middleware on the same port when web UI is enabled - no separate UI port exists in this deployment)');
+      return;
+    }
+    console.log('');
+    console.log(`Argus API did not become ready within ${Math.round(timeoutMs / 1000)}s.`);
+    console.log('This may be a genuine failure, or a slower-than-usual boot. Check the engine log, or run: npm run argus-cli -- status');
+    process.exitCode = 1;
+  },
   async resume() {
     // Full-remediation pass (2026-09-04, docs/audits/ARGUS_FULL_PAPER_TRADING_REMEDIATION_2026-09-04.md
     // §28 Paper-Trading Resume Safety): the real tradingState resume path - see resumeTrading()'s
@@ -975,6 +1034,17 @@ const commands: Record<string, () => Promise<void>> = {
       signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
     });
     console.log(await res.text());
+  },
+  async 'risk-recent'() {
+    // 2026-09-23 (operator-directed RiskEngine forensic) - real, existing, read-only route
+    // (v2Runtime.ts's GET /risk/recent-assessments): every persisted risk_assessments row plus
+    // its full risk_gate_results breakdown (every gate recorded even after the first failure, per
+    // CLAUDE.md's own "every gate recorded" rule) - never a synthesized/assumed pass. Pass --limit=N.
+    const limitArg = process.argv.slice(3).find((a) => a.startsWith('--limit='));
+    const url = limitArg
+      ? `/api/v2/runtime/risk/recent-assessments?limit=${encodeURIComponent(limitArg.slice('--limit='.length))}`
+      : '/api/v2/runtime/risk/recent-assessments';
+    console.log(JSON.stringify(await fetchJson(url), null, 2));
   },
   async 'trading-funnel'() {
     // Phase 9 (2026-08-31): the single authoritative trading-funnel dashboard - candidateLifecycle
@@ -1537,7 +1607,7 @@ const commands: Record<string, () => Promise<void>> = {
   async help() {
     console.log('Argus CLI - HTTP client only. Never imports RiskEngine/OMS/BrokerManager directly.\n');
     const groups: Array<[string, string[]]> = [
-      ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'config']],
+      ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
       ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],

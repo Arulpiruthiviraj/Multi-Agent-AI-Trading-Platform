@@ -108,6 +108,7 @@ describe('consensusPipelineReport', () => {
     expect(report.riskApproved).toBe(1);
     expect(report.ordersPlaced).toBe(1);
     expect(report.fillsRecorded).toBe(1);
+    expect(report.topRiskGateRejections).toEqual([{ gateName: 'data_freshness', count: 1 }]);
   });
 
   it('excludes HISTORICAL_REPLAY-tagged risk_assessments/trades/fills from the organic counts (real defect found 2026-09-01: a replay run sharing this DB was being counted as live paper activity)', async () => {
@@ -142,6 +143,27 @@ describe('consensusPipelineReport', () => {
     expect(report.riskApproved).toBe(1);
     expect(report.ordersPlaced).toBe(1);
     expect(report.fillsRecorded).toBe(1);
+  });
+
+  it('aggregates topRiskGateRejections by real rejectionGate, most-frequent first, excluding approved rows and replay-tagged trace ids (2026-09-23, operator-directed RiskEngine forensic follow-up). Placed after every test with an unbounded-forward sinceIso so its own rows never leak into an earlier assertion.', async () => {
+    const sinceIso = '2026-09-23T00:00:00.000Z';
+    // Two real rejections at extended_hours_execution_policy (the exact real gate this feature
+    // was built to surface, per the operator's own live-traced TSLA example), one at data_freshness,
+    // one real approval (must be excluded - an approval is not a rejection), and one replay-tagged
+    // rejection (must be excluded regardless of gate, per organicPaper.ts's isReplayTraceId()).
+    await db.insert(schema.riskAssessments).values([
+      { traceId: 'trace-eh-1', symbol: 'TSLA', side: 'BUY', approved: false, rejectionGate: 'extended_hours_execution_policy', maxQuantity: 0, createdAt: '2026-09-23T09:17:10.000Z' },
+      { traceId: 'trace-eh-2', symbol: 'TSLA', side: 'BUY', approved: false, rejectionGate: 'extended_hours_execution_policy', maxQuantity: 0, createdAt: '2026-09-23T09:20:00.000Z' },
+      { traceId: 'trace-df-1', symbol: 'MSFT', side: 'BUY', approved: false, rejectionGate: 'data_freshness', maxQuantity: 0, createdAt: '2026-09-23T10:00:00.000Z' },
+      { traceId: 'trace-approved-1', symbol: 'AAPL', side: 'BUY', approved: true, maxQuantity: 5, createdAt: '2026-09-23T10:05:00.000Z' },
+      { traceId: 'replay-xyz-1712000000000-NVDA-SELL-x', symbol: 'NVDA', side: 'SELL', approved: false, rejectionGate: 'extended_hours_execution_policy', maxQuantity: 0, createdAt: '2026-09-23T10:10:00.000Z' },
+    ]);
+
+    const report = await mod.buildConsensusPipelineReport(sinceIso);
+    expect(report.topRiskGateRejections).toEqual([
+      { gateName: 'extended_hours_execution_policy', count: 2 },
+      { gateName: 'data_freshness', count: 1 },
+    ]);
   });
 
   it('formatConsensusPipelineReport renders a readable CLI text block', async () => {

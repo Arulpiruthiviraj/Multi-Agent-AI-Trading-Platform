@@ -16,7 +16,32 @@ export MSYS2_ARG_CONV_EXCL="*"
 LOG_DIR="$ROOT_DIR/logs"
 DEV_LOG="$LOG_DIR/argus-dev.log"
 PID_FILE="$ROOT_DIR/.argus_dev.pid"
+# CLI/control-plane hardening (2026-09-23): real launch timestamp, written once when action_start_impl
+# spawns the orchestrator, read back by run_ecosystem_status()/wait_for_ecosystem()/action_wait_ready()
+# (even from a LATER, separate `./argus.sh status` invocation) to compute real elapsed boot time -
+# the missing piece that let a legitimately-still-booting ecosystem be misreported as FAILED.
+LAUNCH_TS_FILE="$ROOT_DIR/.argus_dev_launch_ts"
 mkdir -p "$LOG_DIR"
+
+# Real seconds since the tracked launcher was started, or empty if unknown (no launch tracked, or
+# the tracked launcher pid is no longer alive - a stale timestamp from a dead process must not
+# silently grant "still within grace" leniency to a totally different, later problem).
+boot_elapsed_seconds() {
+  [ -f "$LAUNCH_TS_FILE" ] || { echo ""; return; }
+  local launch_ts now
+  launch_ts="$(cat "$LAUNCH_TS_FILE" 2>/dev/null || true)"
+  [ -n "$launch_ts" ] || { echo ""; return; }
+  if [ -f "$PID_FILE" ]; then
+    local tracked_pid
+    tracked_pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [ -n "$tracked_pid" ] && ! kill -0 "$tracked_pid" 2>/dev/null; then
+      echo ""
+      return
+    fi
+  fi
+  now="$(date +%s)"
+  echo "$((now - launch_ts))"
+}
 
 # port:label — kept as parallel arrays for portability (no assoc arrays on bash 3.2/macOS)
 # IB Gateway Desktop TCP :4002 is probed in status via argus-ecosystem-status.ts but is NOT
@@ -178,6 +203,7 @@ command_works() {
 run_ecosystem_status() {
   local status_mode="${1:-live}"
   local after_start="${2:-false}"
+  local boot_elapsed="${3:-}"
   echo ""
   echo "============================================================"
   echo "  ECOSYSTEM SERVICE STATUS"
@@ -186,6 +212,13 @@ run_ecosystem_status() {
     local status_extra=()
     if [ "$after_start" = "true" ]; then
       status_extra+=(--after-start)
+    fi
+    # CLI/control-plane hardening (2026-09-23): real elapsed seconds since THIS script requested
+    # the ecosystem launch (see LAUNCH_TS below) - lets argus-ecosystem-status.ts distinguish
+    # "genuinely still within the real, documented companion-boot budget" from "actually failed,"
+    # instead of a fixed timeout with no time awareness at all.
+    if [ -n "$boot_elapsed" ]; then
+      status_extra+=(--boot-elapsed-seconds="$boot_elapsed")
     fi
     if ! (cd "$ROOT_DIR" && NPM_CONFIG_LOGLEVEL=error npx --yes tsx scripts/argus-ecosystem-status.ts --mode "$status_mode" "${status_extra[@]}"); then
       echo "  (status script failed — showing port summary below)"
@@ -272,7 +305,12 @@ wait_for_ecosystem() {
     waited=$((waited + 2))
   done
   if ! port_in_use 3000; then
-    echo "  Argus (port 3000) is not listening yet — check $DEV_LOG"
+    # Real fix (2026-09-23): companions (Chronos/OpenAlice) can legitimately take up to 180s each
+    # before server.ts is even spawned (devWithOpenAlice.ts's own documented wait budgets) - this
+    # 90s interactive window not yet seeing port 3000 is expected, not evidence of failure. The
+    # status report right after this (run_ecosystem_status, given real elapsed time) is what
+    # actually decides STARTING vs FAILED now, not this message.
+    echo "  Argus (port 3000) is not listening yet after ${timeout}s - this is normal if Chronos/OpenAlice are still starting (each can take up to 180s). Still booting; see the status report below."
   fi
   try_fix_ollama || true
   # Chronos first model load can exceed 90s; give companions a short settle window.
@@ -338,7 +376,7 @@ print_header() {
 
 action_status() {
   print_header
-  run_ecosystem_status "live"
+  run_ecosystem_status "live" "false" "$(boot_elapsed_seconds)"
 }
 
 action_start_impl() {
@@ -370,6 +408,7 @@ action_start_impl() {
 
   echo "  Booting dev orchestrator (npm run dev) — logging to $DEV_LOG"
   : > "$DEV_LOG"
+  date +%s > "$LAUNCH_TS_FILE"
   nohup npm run dev >> "$DEV_LOG" 2>&1 &
   local pid=$!
   echo "$pid" > "$PID_FILE"
@@ -387,7 +426,75 @@ action_start_impl() {
 action_start() {
   print_header
   action_start_impl || return 1
-  run_ecosystem_status "live" "true"
+  # CLI/control-plane hardening (2026-09-23): real elapsed time since launch, passed through so the
+  # status report can tell "still within the real documented boot budget" apart from "actually
+  # failed" - this is the fix for the reproduced false-negative (Argus/companions reported FAILED
+  # immediately after the old fixed 90s wait, even though the real engine went on to become healthy
+  # seconds later).
+  run_ecosystem_status "live" "true" "$(boot_elapsed_seconds)"
+}
+
+# Blocks until Argus's own API is genuinely ready, or a real bounded timeout elapses - never exits
+# nonzero purely because boot is slow; only when the timeout is reached with no positive result.
+# Progress is printed periodically (not silent) so an operator watching this command can see it is
+# actively polling, not hung. Override the bound with ARGUS_WAIT_READY_TIMEOUT (seconds).
+action_wait_ready() {
+  print_header
+  local timeout="${ARGUS_WAIT_READY_TIMEOUT:-240}" waited=0 interval=3 next_report=15
+  echo "  Waiting for Argus API to become ready (up to ${timeout}s; override with ARGUS_WAIT_READY_TIMEOUT)..."
+  while [ "$waited" -lt "$timeout" ]; do
+    if port_in_use 3000; then
+      local health
+      health="$(check_node_health)"
+      if [ "$health" = "200" ]; then
+        echo ""
+        echo "ARGUS READY"
+        echo ""
+        echo "API: http://127.0.0.1:3000"
+        echo "UI:  http://127.0.0.1:3000  (Vite is mounted as Express middleware on the same port - no separate UI port exists in this deployment)"
+        return 0
+      fi
+    fi
+    if [ "$waited" -ge "$next_report" ]; then
+      local stage
+      stage="$(tail -n 1 "$DEV_LOG" 2>/dev/null | sed 's/^/    last log line: /')"
+      echo "  ...still waiting (${waited}s elapsed)."
+      [ -n "$stage" ] && echo "$stage"
+      next_report=$((next_report + 15))
+    fi
+    sleep "$interval"
+    waited=$((waited + interval))
+  done
+  echo ""
+  echo "  Argus API did not become ready within ${timeout}s."
+  echo "  This may be a genuine failure, or a slower-than-usual boot (first-run model downloads,"
+  echo "  a cold Maven build for Java Quant Core, etc). Check:"
+  echo "    tail -f $DEV_LOG"
+  echo "    ./argus.sh status"
+  return 1
+}
+
+# Prints (and, if a browser opener is available, opens) the single Argus URL. There is no separate
+# Vite dev-server port in this deployment (server.ts mounts Vite as Express middleware on the SAME
+# port - middlewareMode: true) - this command deliberately reports one URL, not a UI port that
+# never binds.
+action_open_ui() {
+  print_header
+  if ! port_in_use 3000 || [ "$(check_node_health)" != "200" ]; then
+    echo "  Argus is not ready yet on port 3000. Run ./argus.sh wait-ready first, or ./argus.sh start."
+    return 1
+  fi
+  local url="http://127.0.0.1:3000"
+  echo "  Argus: $url"
+  if is_windows; then
+    cmd.exe /c start "" "$url" >/dev/null 2>&1 || true
+  elif command -v open >/dev/null 2>&1; then
+    open "$url" >/dev/null 2>&1 || true
+  elif command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$url" >/dev/null 2>&1 || true
+  else
+    echo "  (no browser opener found on this platform - open the URL above manually)"
+  fi
 }
 
 action_stop_impl() {
@@ -411,6 +518,7 @@ action_stop_impl() {
     fi
     rm -f "$PID_FILE"
   fi
+  rm -f "$LAUNCH_TS_FILE"
 
   sleep 1
   local still_busy=0
@@ -447,7 +555,7 @@ action_restart() {
     echo "  Proceeding anyway — start will re-check ports."
   fi
   action_start_impl || return 1
-  run_ecosystem_status "live" "true"
+  run_ecosystem_status "live" "true" "$(boot_elapsed_seconds)"
 }
 
 action_nuke() {
@@ -498,21 +606,25 @@ show_menu() {
   echo "  3) Restart ecosystem"
   echo "  4) Service health & status"
   echo "  5) Nuke stale/zombie processes"
-  echo "  6) Exit"
+  echo "  6) Wait until ready"
+  echo "  7) Open UI"
+  echo "  8) Exit"
   echo ""
 }
 
 run_interactive() {
   while true; do
     show_menu
-    read -r -p "  Select an option [1-6]: " choice
+    read -r -p "  Select an option [1-8]: " choice
     case "$choice" in
       1) action_start ;;
       2) action_stop ;;
       3) action_restart ;;
       4) action_status ;;
       5) action_nuke ;;
-      6) echo "  Exiting."; exit 0 ;;
+      6) action_wait_ready ;;
+      7) action_open_ui ;;
+      8) echo "  Exiting."; exit 0 ;;
       *) echo "  Invalid option: $choice" ;;
     esac
     echo ""
@@ -526,10 +638,12 @@ main() {
     stop) action_stop ;;
     restart) action_restart ;;
     status) action_status ;;
+    wait-ready) action_wait_ready ;;
+    ui|open-ui) action_open_ui ;;
     nuke) action_nuke ;;
     "") run_interactive ;;
     *)
-      echo "Usage: $0 [start|stop|restart|status|nuke]"
+      echo "Usage: $0 [start|stop|restart|status|wait-ready|ui|nuke]"
       echo "Run with no arguments for the interactive menu."
       exit 1
       ;;

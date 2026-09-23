@@ -31,6 +31,14 @@ export interface ConsensusPipelineReport {
   /** Directional (BUY/SELL) vote count per agent, within the window - the per-agent participation
    *  breakdown requested during the Phase 9 zero-trade audit. */
   directionalVotesByAgent: Record<string, number>;
+  /** RiskEngine-gate-level rejection breakdown (2026-09-23, operator-directed forensic follow-up):
+   *  distinct from topTerminalReasons above, which is ChiefTrader's own terminal classification
+   *  (e.g. CONFIDENCE_BELOW_STRONG) - this counts, per real non-replay risk_assessments row that
+   *  reached RiskEngine and was rejected, WHICH of the 25 gates was the recorded first-failure
+   *  (RiskEngine.ts's own reported rejectionGate). Answers "is one gate systematically overblocking,
+   *  or are risk rejections genuinely diverse" - a real, previously-unanswerable question, since no
+   *  prior report aggregated risk_assessments.rejectionGate at all. */
+  topRiskGateRejections: Array<{ gateName: string; count: number }>;
 }
 
 export async function buildConsensusPipelineReport(sinceIso: string): Promise<ConsensusPipelineReport> {
@@ -103,6 +111,15 @@ export async function buildConsensusPipelineReport(sinceIso: string): Promise<Co
     .map(([code, count]) => ({ code, count }))
     .sort((a, b) => b.count - a.count);
 
+  const riskGateRejectionCounts = new Map<string, number>();
+  for (const r of riskRows) {
+    if (r.approved || !r.rejectionGate) continue;
+    riskGateRejectionCounts.set(r.rejectionGate, (riskGateRejectionCounts.get(r.rejectionGate) ?? 0) + 1);
+  }
+  const topRiskGateRejections = Array.from(riskGateRejectionCounts.entries())
+    .map(([gateName, count]) => ({ gateName, count }))
+    .sort((a, b) => b.count - a.count);
+
   return {
     windowSinceIso: sinceIso,
     evaluations: parsed.length,
@@ -120,6 +137,7 @@ export async function buildConsensusPipelineReport(sinceIso: string): Promise<Co
     fillsRecorded: fillRows.length,
     topTerminalReasons,
     directionalVotesByAgent,
+    topRiskGateRejections,
   };
 }
 
@@ -152,6 +170,12 @@ export function formatConsensusPipelineReport(r: ConsensusPipelineReport): strin
     'TOP NO-TRADE REASONS',
     '--------------------',
     ...r.topTerminalReasons.map((t) => `${t.code.padEnd(28)}${t.count}`),
+    '',
+    'TOP RISKENGINE BLOCKING GATES (real, non-replay rejections only)',
+    '------------------------------------------------------------------',
+    ...(r.topRiskGateRejections.length > 0
+      ? r.topRiskGateRejections.map((t) => `${t.gateName.padEnd(32)}${t.count}`)
+      : ['(no RiskEngine rejections in this window)']),
   ];
   return lines.join('\n');
 }

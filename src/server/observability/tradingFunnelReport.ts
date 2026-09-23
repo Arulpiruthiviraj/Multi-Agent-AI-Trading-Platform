@@ -73,6 +73,12 @@ export function formatTradingFunnelReport(r: TradingFunnelReport): string {
     '----------------------',
     ...c.topTerminalReasons.map((t) => `${t.code.padEnd(32)}${t.count}`),
     '',
+    'TOP RISKENGINE BLOCKING GATES (real, non-replay rejections only)',
+    '------------------------------------------------------------------',
+    ...(c.topRiskGateRejections.length > 0
+      ? c.topRiskGateRejections.map((t) => `${t.gateName.padEnd(32)}${t.count}`)
+      : ['(no RiskEngine rejections in this window)']),
+    '',
     'PROVIDER HEALTH',
     '-----------------',
     ...r.providers.map((p) => {
