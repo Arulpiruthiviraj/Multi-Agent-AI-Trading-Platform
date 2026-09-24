@@ -7,6 +7,18 @@ import { tradingSafety } from '../config/tradingSafety';
 import { emitJavaCoreEnsembleVoteIfEligible } from './JavaCoreEnsembleVoteService';
 import type { CoreEnsembleDecision } from './QuantCoreBridge';
 import { marketDataWorker } from './MarketDataWorker';
+import {
+  setObservabilityPersistForTests,
+  resetObservabilityStoreForTests,
+  flushObservabilityStore,
+  type ObservabilityEventRow,
+} from '../observability/ObservabilityStore';
+import { emitQuantEvidenceObservability } from '../observability/quantEvidenceEmitter';
+
+vi.mock('../observability/quantEvidenceEmitter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../observability/quantEvidenceEmitter')>();
+  return { ...actual, emitQuantEvidenceObservability: vi.fn(actual.emitQuantEvidenceObservability) };
+});
 
 describe('emitJavaCoreEnsembleVoteIfEligible (2026-09-10, explicit operator override)', () => {
   const FLAG = 'ARGUS_JAVA_CORE_ENSEMBLE_VOTE_ENABLED';
@@ -140,5 +152,98 @@ describe('emitJavaCoreEnsembleVoteIfEligible (2026-09-10, explicit operator over
     const emit = vi.spyOn(eventBus, 'emitTradeIdea');
     expect(emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 180).emitted).toBe(true);
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ currentPrice: 191.25 }));
+  });
+
+  describe('QuantEvidence observability (Milestone B.1, 2026-09-23)', () => {
+    let captured: ObservabilityEventRow[];
+
+    beforeEach(() => {
+      captured = [];
+      resetObservabilityStoreForTests();
+      setObservabilityPersistForTests(async (batch) => { captured.push(...batch); });
+    });
+
+    afterEach(async () => {
+      await flushObservabilityStore();
+      setObservabilityPersistForTests(null);
+      resetObservabilityStoreForTests();
+    });
+
+    it('emits a real QUANT_EVIDENCE_PRODUCED row on a vote-eligible path, with correct payload shape', async () => {
+      const result = emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 190);
+      expect(result).toEqual({ emitted: true, reason: 'EMITTED' });
+      await flushObservabilityStore();
+
+      const row = captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED');
+      expect(row).toBeDefined();
+      const payload = JSON.parse(row!.payload as string);
+      expect(payload.producer).toBe('JavaCoreEnsemble');
+      expect(payload.methodologyFamily).toBe('TECHNICAL_ENSEMBLE');
+      expect(payload.direction).toBe('BUY');
+      expect(payload.confidence).toEqual({ value: 0.65, provenance: 'REAL_VALUE' });
+      expect(row!.symbol).toBe('AAPL');
+    });
+
+    it('still emits QUANT_EVIDENCE_PRODUCED even when the vote itself does not fire (e.g. HOLD direction) - the observability leaf reflects every evaluated decision, not only successful votes', async () => {
+      const result = emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble({ direction: 'HOLD' }), 190);
+      expect(result).toEqual({ emitted: false, reason: 'HOLD_DIRECTION' });
+      await flushObservabilityStore();
+
+      const row = captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED');
+      expect(row).toBeDefined();
+      expect(JSON.parse(row!.payload as string).direction).toBe('HOLD');
+    });
+
+    it('does NOT emit QUANT_EVIDENCE_PRODUCED when the JavaCoreEnsemble Mission Control toggle is off (AGENT_DISABLED is never bypassed for observability)', async () => {
+      setPipelineAgentEnabled('JavaCoreEnsemble', false);
+      const result = emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 190);
+      expect(result).toEqual({ emitted: false, reason: 'AGENT_DISABLED' });
+      await flushObservabilityStore();
+
+      expect(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED')).toBeUndefined();
+    });
+
+    it('leaves unsupported fields honestly NULL_NOT_SUPPORTED / NOT_YET_CALIBRATED in the emitted event - never silently filled', async () => {
+      emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 190);
+      await flushObservabilityStore();
+
+      const payload = JSON.parse(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED')!.payload as string);
+      expect(payload.predictedReturn).toEqual({ value: null, provenance: 'NULL_NOT_SUPPORTED' });
+      expect(payload.probabilityUp).toEqual({ value: null, provenance: 'NULL_NOT_SUPPORTED' });
+      expect(payload.calibrationSampleSize).toEqual({ value: null, provenance: 'NOT_YET_CALIBRATED' });
+      expect(payload.calibrationStatus).toBe('NOT_YET_CALIBRATED');
+      expect(payload.dataFreshness).toEqual({ value: null, provenance: 'NULL_NOT_SUPPORTED' });
+    });
+
+    it('suppresses the event (no QUANT_EVIDENCE_PRODUCED row, no throw) when the mapped evidence contains a non-finite number', async () => {
+      // Exercise the real emitter directly (not the mocked wrapper) with a NaN-poisoned evidence
+      // object built from the same real adapter, proving suppression end-to-end.
+      const { mapJavaCoreEnsembleToQuantEvidence } = await import('../quant/quantEvidenceAdapters');
+      const { emitQuantEvidenceObservability: realEmit } = await vi.importActual<typeof import('../observability/quantEvidenceEmitter')>('../observability/quantEvidenceEmitter');
+      const evidence = mapJavaCoreEnsembleToQuantEvidence(ensemble());
+      const poisoned = { ...evidence, confidence: { value: Number.NaN, provenance: 'REAL_VALUE' as const } };
+      expect(() => realEmit('AAPL', poisoned as any)).not.toThrow();
+      await flushObservabilityStore();
+
+      expect(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED')).toBeUndefined();
+      const warnRow = captured.find((r) => r.eventType === 'QUANT_EVIDENCE_VALIDATION_FAILED');
+      expect(warnRow).toBeDefined();
+    });
+
+    it('does NOT prevent the vote decision from completing normally when the observability path throws (the single most important guarantee of this milestone)', () => {
+      vi.mocked(emitQuantEvidenceObservability).mockImplementationOnce(() => {
+        throw new Error('forced observability failure');
+      });
+      const ideas: any[] = [];
+      const onIdea = (p: any) => ideas.push(p);
+      eventBus.subscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+      try {
+        expect(() => emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 190)).not.toThrow();
+        const result = emitJavaCoreEnsembleVoteIfEligible('AAPL', ensemble(), 190);
+        expect(result).toEqual({ emitted: true, reason: 'EMITTED' });
+      } finally {
+        eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+      }
+    });
   });
 });

@@ -10,6 +10,18 @@ import { tradingEngine } from '../engines/TradingEngine';
 import { setPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { tradingSafety } from '../config/tradingSafety';
 import type { QuantAdvisoryPayload } from './QuantAdvisoryPayload';
+import {
+  setObservabilityPersistForTests,
+  resetObservabilityStoreForTests,
+  flushObservabilityStore,
+  type ObservabilityEventRow,
+} from '../observability/ObservabilityStore';
+import { emitQuantEvidenceObservability } from '../observability/quantEvidenceEmitter';
+
+vi.mock('../observability/quantEvidenceEmitter', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../observability/quantEvidenceEmitter')>();
+  return { ...actual, emitQuantEvidenceObservability: vi.fn(actual.emitQuantEvidenceObservability) };
+});
 
 vi.mock('../engines/backtest/HistoricalDataGateway', () => ({
   historicalDataGateway: {
@@ -284,5 +296,93 @@ describe('emitJavaQuantVoteIfEligible (2026-09-09, explicit operator override)',
     } finally {
       eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
     }
+  });
+
+  describe('QuantEvidence observability (Milestone B.1, 2026-09-23)', () => {
+    let captured: ObservabilityEventRow[];
+
+    beforeEach(() => {
+      captured = [];
+      resetObservabilityStoreForTests();
+      setObservabilityPersistForTests(async (batch) => { captured.push(...batch); });
+    });
+
+    afterEach(async () => {
+      await flushObservabilityStore();
+      setObservabilityPersistForTests(null);
+      resetObservabilityStoreForTests();
+    });
+
+    it('emits a real QUANT_EVIDENCE_PRODUCED row on a vote-eligible path, with correct payload shape', async () => {
+      const result = emitJavaQuantVoteIfEligible('AAPL', advisory(), 190);
+      expect(result).toEqual({ emitted: true, reason: 'EMITTED' });
+      await flushObservabilityStore();
+
+      const row = captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED');
+      expect(row).toBeDefined();
+      const payload = JSON.parse(row!.payload as string);
+      expect(payload.producer).toBe('JavaFactorComposite');
+      expect(payload.methodologyFamily).toBe('FACTOR_MODEL');
+      expect(payload.direction).toBe('BUY');
+      expect(payload.confidence).toEqual({ value: 0.65, provenance: 'REAL_VALUE' });
+      expect(row!.symbol).toBe('AAPL');
+    });
+
+    it('still emits QUANT_EVIDENCE_PRODUCED even when the vote itself does not fire (e.g. ADVISORY_GATED) - reflects every evaluated decision, not only successful votes', async () => {
+      const result = emitJavaQuantVoteIfEligible('AAPL', advisory({ gated: true }), 190);
+      expect(result).toEqual({ emitted: false, reason: 'ADVISORY_GATED' });
+      await flushObservabilityStore();
+
+      expect(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED')).toBeDefined();
+    });
+
+    it('does NOT emit QUANT_EVIDENCE_PRODUCED when the JavaFactorComposite Mission Control toggle is off (AGENT_DISABLED is never bypassed for observability) - confirms the disabled agent still does not vote AND does not produce evidence', async () => {
+      setPipelineAgentEnabled('JavaFactorComposite', false);
+      const result = emitJavaQuantVoteIfEligible('AAPL', advisory(), 190);
+      expect(result).toEqual({ emitted: false, reason: 'AGENT_DISABLED' });
+      await flushObservabilityStore();
+
+      expect(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED')).toBeUndefined();
+    });
+
+    it('leaves unsupported fields honestly NULL_NOT_SUPPORTED / NOT_YET_CALIBRATED in the emitted event - never silently filled', async () => {
+      emitJavaQuantVoteIfEligible('AAPL', advisory(), 190);
+      await flushObservabilityStore();
+
+      const payload = JSON.parse(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED')!.payload as string);
+      expect(payload.predictedReturn).toEqual({ value: null, provenance: 'NULL_NOT_SUPPORTED' });
+      expect(payload.normalizedScore).toEqual({ value: null, provenance: 'NULL_NOT_SUPPORTED' });
+      expect(payload.estimatedTransactionCostBps).toEqual({ value: null, provenance: 'NULL_NOT_SUPPORTED' });
+      expect(payload.costQuality).toBe('NOT_APPLICABLE');
+      expect(payload.calibrationStatus).toBe('NOT_YET_CALIBRATED');
+    });
+
+    it('suppresses the event (no QUANT_EVIDENCE_PRODUCED row, no throw) when the mapped evidence contains a non-finite number', async () => {
+      const { mapJavaFactorCompositeToQuantEvidence } = await import('../quant/quantEvidenceAdapters');
+      const { emitQuantEvidenceObservability: realEmit } = await vi.importActual<typeof import('../observability/quantEvidenceEmitter')>('../observability/quantEvidenceEmitter');
+      const evidence = mapJavaFactorCompositeToQuantEvidence(advisory());
+      const poisoned = { ...evidence, rawScore: { value: Number.POSITIVE_INFINITY, provenance: 'REAL_VALUE' as const } };
+      expect(() => realEmit('AAPL', poisoned as any)).not.toThrow();
+      await flushObservabilityStore();
+
+      expect(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_PRODUCED')).toBeUndefined();
+      expect(captured.find((r) => r.eventType === 'QUANT_EVIDENCE_VALIDATION_FAILED')).toBeDefined();
+    });
+
+    it('does NOT prevent the vote decision from completing normally when the observability path throws (the single most important guarantee of this milestone)', () => {
+      vi.mocked(emitQuantEvidenceObservability).mockImplementationOnce(() => {
+        throw new Error('forced observability failure');
+      });
+      const ideas: any[] = [];
+      const onIdea = (p: any) => ideas.push(p);
+      eventBus.subscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+      try {
+        expect(() => emitJavaQuantVoteIfEligible('AAPL', advisory(), 190)).not.toThrow();
+        const result = emitJavaQuantVoteIfEligible('AAPL', advisory(), 190);
+        expect(result).toEqual({ emitted: true, reason: 'EMITTED' });
+      } finally {
+        eventBus.unsubscribe(EVENTS.TRADE_IDEA_GENERATED, onIdea);
+      }
+    });
   });
 });

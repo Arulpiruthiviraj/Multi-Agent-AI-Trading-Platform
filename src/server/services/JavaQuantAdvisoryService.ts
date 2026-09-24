@@ -44,6 +44,8 @@ import { quantCoreBridge, type EnsembleModelVote, type EnsembleSide } from './Qu
 import { buildQuantAdvisoryPayload, type QuantAdvisoryPayload } from './QuantAdvisoryPayload';
 import { recordPrediction } from './ModelPerformanceTracker';
 import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { emitQuantEvidenceObservability } from '../observability/quantEvidenceEmitter';
+import { mapJavaFactorCompositeToQuantEvidence } from '../quant/quantEvidenceAdapters';
 import type { ResearchBar } from '../research/ohlcvTypes';
 
 // Reasoned (not fabricated) mapping from FactorAlphaEngine's composite Z-score-like output into an
@@ -222,6 +224,16 @@ export function emitJavaQuantVoteIfEligible(
 ): JavaQuantVoteResult {
   if (!isJavaQuantVoteEnabled()) return { emitted: false, reason: 'FLAG_OFF' };
   if (!isPipelineAgentEnabled('JavaFactorComposite')) return { emitted: false, reason: 'AGENT_DISABLED' };
+
+  // Milestone B.1 (2026-09-23): observability-only leaf, same placement rationale as
+  // JavaCoreEnsembleVoteService.ts's own call site (see its comment) - emitted once the feature is
+  // on and the agent is not disabled, regardless of whether the advisory goes on to clear
+  // IDEA_GENERATION_GATED / ADVISORY_GATED / NEUTRAL_SIDE / BELOW_MIN_CONFIDENCE / INVALID_PRICE.
+  // Wrapped in observeSafe; never affects the vote decision below.
+  observeSafe(() => {
+    emitQuantEvidenceObservability(symbol, mapJavaFactorCompositeToQuantEvidence(advisory));
+  });
+
   if (!isLiveIdeaGenerationEnabled()) return { emitted: false, reason: 'IDEA_GENERATION_GATED' };
   if (advisory.gated) return { emitted: false, reason: 'ADVISORY_GATED' };
   if (advisory.rawSide === 'NEUTRAL') return { emitted: false, reason: 'NEUTRAL_SIDE' };

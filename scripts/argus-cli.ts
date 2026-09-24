@@ -1058,6 +1058,19 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'quant-evidence'() {
+    // Milestone B.1 (2026-09-23): per-producer QuantEvidence observability view (JavaFactorComposite
+    // / JavaCoreEnsemble) - count, latest direction/confidence/regime, % supported (REAL_VALUE/
+    // DERIVED) vs unsupported (NULL_NOT_SUPPORTED/NOT_YET_CALIBRATED) fields, calibration state.
+    // Pass --hours=N (default 24).
+    const hoursArg = process.argv.slice(3).find((a) => a.startsWith('--hours='));
+    const hours = hoursArg ? hoursArg.slice('--hours='.length) : '24';
+    const res = await fetch(`${BASE}/api/v2/observability/quant-evidence?format=text&hours=${encodeURIComponent(hours)}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'extended-hours-spread'() {
     // 2026-09-23 (operator-directed follow-up to the TSLA gate-25 forensic pass): quote
     // availability / bid-ask completeness / stale-quote rate / gate-25 rejection-reason counts,
@@ -1625,7 +1638,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

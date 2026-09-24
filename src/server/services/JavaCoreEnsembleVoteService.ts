@@ -44,6 +44,9 @@ import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import type { CoreEnsembleDecision } from './QuantCoreBridge';
 import { marketDataWorker } from './MarketDataWorker';
 import { evaluateQuoteFreshness } from '../core/marketDataQuality';
+import { observeSafe } from '../observability/StructuredLogger';
+import { emitQuantEvidenceObservability } from '../observability/quantEvidenceEmitter';
+import { mapJavaCoreEnsembleToQuantEvidence } from '../quant/quantEvidenceAdapters';
 
 export interface JavaCoreEnsembleVoteResult {
   emitted: boolean;
@@ -72,6 +75,19 @@ export function emitJavaCoreEnsembleVoteIfEligible(
 ): JavaCoreEnsembleVoteResult {
   if (!isJavaCoreEnsembleVoteEnabled()) return { emitted: false, reason: 'FLAG_OFF' };
   if (!isPipelineAgentEnabled('JavaCoreEnsemble')) return { emitted: false, reason: 'AGENT_DISABLED' };
+
+  // Milestone B.1 (2026-09-23): observability-only leaf. Emitted once the feature is on and the
+  // agent is not disabled - i.e. for every case where Java actually produced a full ensemble
+  // decision worth recording, regardless of whether it goes on to clear the remaining vote-
+  // eligibility gates below (IDEA_GENERATION_GATED / NOT_HEALTHY / HOLD_DIRECTION /
+  // BELOW_MIN_CONFIDENCE / INVALID_PRICE / MARKET_DATA_UNAVAILABLE are all still evaluated
+  // decisions, valuable for comparing producer output quality). Never gates or reorders the vote
+  // decision itself - wrapped in observeSafe (fail-open, matches every other instrumentation site
+  // on this live path) so a thrown mapping/validation error can never propagate back here.
+  observeSafe(() => {
+    emitQuantEvidenceObservability(symbol, mapJavaCoreEnsembleToQuantEvidence(ensemble));
+  });
+
   if (!isLiveIdeaGenerationEnabled()) return { emitted: false, reason: 'IDEA_GENERATION_GATED' };
   if (ensemble.status !== 'HEALTHY') return { emitted: false, reason: 'NOT_HEALTHY' };
   if (ensemble.direction === 'HOLD') return { emitted: false, reason: 'HOLD_DIRECTION' };

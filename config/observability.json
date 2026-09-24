@@ -85,6 +85,8 @@
     "SYSTEM_ANOMALY": { "category": "SYSTEM", "defaultLevel": "ERROR" },
     "MEMORY_TELEMETRY_SAMPLE": { "category": "SYSTEM", "defaultLevel": "INFO" },
     "DESK_NO_TRADE": { "category": "AGENT", "defaultLevel": "INFO" },
-    "TRADE_LIFECYCLE": { "category": "ORDER", "defaultLevel": "INFO" }
+    "TRADE_LIFECYCLE": { "category": "ORDER", "defaultLevel": "INFO" },
+    "QUANT_EVIDENCE_PRODUCED": { "category": "AGENT", "defaultLevel": "INFO", "sampled": false },
+    "QUANT_EVIDENCE_VALIDATION_FAILED": { "category": "AGENT", "defaultLevel": "WARN", "sampled": false }
   }
 }

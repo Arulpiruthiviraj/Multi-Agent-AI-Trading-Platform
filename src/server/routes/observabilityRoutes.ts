@@ -9,6 +9,7 @@ import { desc, eq } from 'drizzle-orm';
 import { buildProviderHealthMatrix } from '../observability/providerHealthMatrix';
 import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../observability/consensusPipelineReport';
 import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observability/tradingFunnelReport';
+import { buildQuantEvidenceReport, formatQuantEvidenceReport } from '../observability/quantEvidenceReport';
 import { buildExtendedHoursSpreadReport, formatExtendedHoursSpreadReport } from '../observability/extendedHoursSpreadReport';
 import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
 import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
@@ -267,6 +268,24 @@ observabilityRouter.get('/trading-funnel', async (req, res) => {
     const report = await buildTradingFunnelReport(sinceIso);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatTradingFunnelReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Milestone B.1 (2026-09-23): read-only QuantEvidence observability view (argus-cli quant-evidence)
+// - composes already-persisted QUANT_EVIDENCE_PRODUCED / QUANT_EVIDENCE_VALIDATION_FAILED rows
+// only, same pattern as trading-funnel. No consensus/RiskEngine/OMS involvement.
+observabilityRouter.get('/quant-evidence', async (req, res) => {
+  try {
+    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const report = await buildQuantEvidenceReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatQuantEvidenceReport(report));
       return;
     }
     res.json({ ok: true, report });
