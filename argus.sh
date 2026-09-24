@@ -497,6 +497,65 @@ action_open_ui() {
   fi
 }
 
+# Read-only diagnostic dump. Mirrors argus.ps1's 'doctor' command (parity requirement — keep both
+# aligned) rather than inventing new probes: node/npm presence, node_modules, .env, a production
+# build artifact, and Argus's own /api/v2/runtime/health (matching argus-cli.ts's `health` command).
+action_doctor() {
+  print_header
+  echo "  ARGUS DOCTOR"
+  echo ""
+  local warn=0
+  if command -v node >/dev/null 2>&1; then
+    echo "  OK  Node $(node -v)"
+  else
+    echo "  X   Node missing"
+    warn=1
+  fi
+  if command -v npm >/dev/null 2>&1; then
+    echo "  OK  npm $(npm -v)"
+  else
+    echo "  X   npm missing"
+    warn=1
+  fi
+  if [ -d "$ROOT_DIR/node_modules" ]; then
+    echo "  OK  Dependencies installed (node_modules present)"
+  else
+    echo "  X   Dependencies missing (run npm install)"
+    warn=1
+  fi
+  if [ -f "$ROOT_DIR/.env" ]; then
+    echo "  OK  Configuration found (.env present; secrets not printed)"
+  else
+    echo "  !   .env not found (copy from .env.example)"
+    warn=1
+  fi
+  if [ -f "$ROOT_DIR/dist/server.cjs" ]; then
+    echo "  OK  Build artifact present (dist/server.cjs)"
+  else
+    echo "  !   Production build artifact missing (optional for dev)"
+    warn=1
+  fi
+  local api_url="${ARGUS_API_URL:-http://127.0.0.1:3000}"
+  local code
+  code="$(curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 2 "$api_url/api/v2/runtime/health" 2>/dev/null)"
+  if [ "$code" = "200" ]; then
+    echo "  OK  API reachable / runtime health OK"
+  elif [ "$code" = "401" ] || [ "$code" = "403" ]; then
+    echo "  !   API requires auth at $api_url (run: ./argus.sh login)"
+    warn=1
+  else
+    echo "  !   API not reachable at $api_url"
+    warn=1
+  fi
+  echo ""
+  if [ "$warn" -eq 1 ]; then
+    echo "  Doctor finished with warnings."
+    return 1
+  fi
+  echo "  Doctor finished clean."
+  return 0
+}
+
 action_stop_impl() {
   echo "  Stopping ecosystem — freeing ports: ${PORTS[*]}"
   local port
@@ -608,14 +667,15 @@ show_menu() {
   echo "  5) Nuke stale/zombie processes"
   echo "  6) Wait until ready"
   echo "  7) Open UI"
-  echo "  8) Exit"
+  echo "  8) Doctor (diagnostics)"
+  echo "  9) Exit"
   echo ""
 }
 
 run_interactive() {
   while true; do
     show_menu
-    read -r -p "  Select an option [1-8]: " choice
+    read -r -p "  Select an option [1-9]: " choice
     case "$choice" in
       1) action_start ;;
       2) action_stop ;;
@@ -624,7 +684,8 @@ run_interactive() {
       5) action_nuke ;;
       6) action_wait_ready ;;
       7) action_open_ui ;;
-      8) echo "  Exiting."; exit 0 ;;
+      8) action_doctor ;;
+      9) echo "  Exiting."; exit 0 ;;
       *) echo "  Invalid option: $choice" ;;
     esac
     echo ""
@@ -640,10 +701,11 @@ main() {
     status) action_status ;;
     wait-ready) action_wait_ready ;;
     ui|open-ui) action_open_ui ;;
+    doctor) action_doctor ;;
     nuke) action_nuke ;;
     "") run_interactive ;;
     *)
-      echo "Usage: $0 [start|stop|restart|status|wait-ready|ui|nuke]"
+      echo "Usage: $0 [start|stop|restart|status|wait-ready|ui|doctor|nuke]"
       echo "Run with no arguments for the interactive menu."
       exit 1
       ;;

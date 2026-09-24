@@ -273,6 +273,8 @@ Engine:
   pipeline-ready    Process-alive vs trading-pipeline-ready (DB/market data/broker/AI providers)
   session-report    Pre-market/market-open counters (alias: trading-audit)
   doctor            Environment + API reachability diagnostics
+  wait-ready        Block until the API genuinely answers /health (forwarded to argus-cli.ts)
+  ui / open-ui      Print (and try to open) the Argus URL once it is ready
   nuke              Force-kill stale/zombie Argus processes (no services started after)
 
 Watchdog:
@@ -303,6 +305,37 @@ Note (web UI): this PowerShell port covers the headless/API control plane only. 
 ecosystem with the browser UI (argus.sh's process-lifecycle/port-management logic) is bash-specific
 - run it via Git Bash / WSL: ./argus.sh start
 '@ | Write-Host
+}
+
+# Parity with argus.sh's action_open_ui (Batch 3): there is no separate Vite dev-server port in
+# this deployment (server.ts mounts Vite as Express middleware on the SAME port, middlewareMode:
+# true), so this reports/opens the single Argus URL, not a UI port that never binds. Works
+# regardless of which launcher started the engine (argus.sh ecosystem or this script's own
+# headless `start`), since both ultimately serve the same server.ts on $ARGUS_API_URL.
+function Invoke-OpenUi {
+    Write-Host ""
+    Write-Host "============================================================"
+    Write-Host "  ARGUS ECOSYSTEM CONTROL"
+    Write-Host "============================================================"
+    $url = $env:ARGUS_API_URL
+    $ready = $false
+    try {
+        $null = Invoke-RestMethod -Uri "$url/health" -TimeoutSec 3 -ErrorAction Stop
+        $ready = $true
+    } catch {
+        $ready = $false
+    }
+    if (-not $ready) {
+        Write-Host "  Argus is not ready yet at $url. Run .\argus.ps1 wait-ready first, or .\argus.ps1 start." -ForegroundColor Yellow
+        return $ExitNotReady
+    }
+    Write-Host "  Argus: $url"
+    try {
+        Start-Process $url | Out-Null
+    } catch {
+        Write-Host "  (could not open a browser automatically - open the URL above manually)" -ForegroundColor Yellow
+    }
+    return $ExitOk
 }
 
 # ---------------------------------------------------------------------------
@@ -391,6 +424,8 @@ switch ($cmd) {
         & npm.cmd run build
         exit $LASTEXITCODE
     }
+    'ui' { exit (Invoke-OpenUi) }
+    'open-ui' { exit (Invoke-OpenUi) }
     'doctor' {
         if (Test-WantsHelp $rest) { Write-Host "Usage: .\argus.ps1 doctor"; exit $ExitOk }
         Write-Host "ARGUS DOCTOR"

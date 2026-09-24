@@ -759,16 +759,40 @@ async function main() {
     console.log('[dev] QUANT_JAVA_CORE_ENABLED is not true - not starting Java Quant Core (default off, opt-in shadow bridge).');
   }
 
-  const [, guardianMcpUrl] = await Promise.all([
-    skipChronos ? Promise.resolve() : startChronosAndWait(),
-    skipOpenAlice ? Promise.resolve(null) : startOpenAliceGuardian(),
-    javaQuantCoreEnabled ? startJavaQuantCoreAndWait() : Promise.resolve(),
-  ]);
+  // Batch 3 fix (2026-09-23): Chronos and Java Quant Core were previously awaited here, in the
+  // same Promise.all as OpenAlice, before server.ts was ever spawned - up to 180s (Chronos
+  // first-model-load) + 60s (Java Quant Core / mvn build) of Argus's own HTTP/UI being
+  // unreachable for zero benefit, directly contradicting this file's own header claim ("Starts
+  // ... companions so Kronos is not left KRONOS_UNAVAILABLE" implies best-effort, not a hard
+  // gate) and this repo's ecosystem-status tooling, which already treats a still-warming
+  // companion as STARTING/OPTIONAL_UNAVAILABLE rather than requiring it before Argus is up.
+  // Proven safe to detach: neither startChronosAndWait() nor startJavaQuantCoreAndWaitUnsafe()
+  // feeds any value into childEnv below (LOCAL_AI_SERVICE_PORT/URL are fixed from process.env;
+  // quantJavaCoreBaseUrl is a fixed :8085 constant in config/tradingSafety.json, not derived from
+  // this wait) - their own code paths already say "the Node app will keep probing" /
+  // "Kronos tab will keep probing" regardless of outcome, proving the live app already tolerates
+  // and retries an unready companion at any point in its lifetime, not just at boot. OpenAlice
+  // stays awaited below: its result (guardianMcpUrl) and openAliceLaunchError are genuinely read
+  // into childEnv before the child process spawns (env can't be updated after spawn), a real
+  // ordering dependency the other two don't have.
+  if (!skipChronos) {
+    startChronosAndWait().catch((e) => console.warn(`[dev] Chronos/Kronos startup failed unexpectedly (${e?.message || e}). Continuing without it.`));
+  }
+  if (javaQuantCoreEnabled) {
+    startJavaQuantCoreAndWait().catch((e) => console.warn(`[dev] Java Quant Core startup failed unexpectedly (${e?.message || e}). Continuing without it.`));
+  }
 
+  const guardianMcpUrl = skipOpenAlice ? null : await startOpenAliceGuardian();
+
+  // IBKR Client Portal Gateway probe/launch is also detached for the same reason: it feeds no
+  // childEnv value (see startTradingPlatform below) and its own consumer (BrokerManager /
+  // IBGatewaySocketAdapter) already tolerates a not-yet-authenticated Gateway at any point after
+  // boot, not only before it - waitForPort's up-to-45s wait here bought Argus's own API/UI
+  // nothing.
   if (process.env.ARGUS_SKIP_IBKR === 'true') {
     console.log('[dev] ARGUS_SKIP_IBKR=true - not probing/starting IBKR.');
   } else {
-    await probeIbkrDesktopGateway();
+    probeIbkrDesktopGateway().catch((e) => console.warn(`[dev] IBKR Gateway probe failed unexpectedly (${e?.message || e}). Continuing without it.`));
   }
 
   const childEnv: NodeJS.ProcessEnv = {
