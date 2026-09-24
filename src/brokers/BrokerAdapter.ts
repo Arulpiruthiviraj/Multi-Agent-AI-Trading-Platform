@@ -62,6 +62,13 @@ export interface Order {
    *  (BrokerCapabilities.extendedHoursOrders === false) simply ignores it and the order behaves
    *  exactly as it always has, matching every other optional field on this interface. */
   extendedHours?: boolean;
+  /** Canonical Cost Model / Economic Attribution (Priority 13, 2026-09-23). Real, broker-reported
+   *  aggregate commission for THIS order so far, when the adapter actually has one (e.g. IBKR's
+   *  commissionReport, attributed via execId - see IbkrSocketSession.getAggregateCommissionForOrder()).
+   *  Undefined means "this adapter has no real commission evidence for this order yet" - never a
+   *  zero default. An adapter that doesn't support real commission reporting simply omits this
+   *  field, exactly like every other optional field on this interface. */
+  commission?: number;
 }
 
 export interface Position {

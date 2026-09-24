@@ -10,6 +10,7 @@ function row(overrides: Partial<ExecutionQualityRow> = {}): ExecutionQualityRow 
     submittedAt: null, firstFillAt: null, submissionToFirstFillMs: null,
     quantStrategyId: null, executionEnvironment: 'PAPER', evidenceClass: 'PAPER_ORGANIC',
     brokerId: 'alpaca', rawCommission: null, grossPnl: null, decisionTimestamp: '2026-09-23T00:00:00Z',
+    traceId: null, regime: null, hadPartialFill: false,
     ...overrides,
   };
 }

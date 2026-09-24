@@ -16,9 +16,51 @@
  * Real provenance only: rows with no `arrivalPrice` (legacy trades predating this column,
  * EXTERNAL_MANUAL inbound orders with no Argus-side proposal) or no matching `fills` row are
  * excluded, never backfilled with a guess.
+ *
+ * Priority 14 completeness audit (2026-09-23) against the full execution-quality field list this
+ * codebase was asked to support, per-field:
+ *   - decision/arrival/submitted price: ALREADY COMPLETE - `arrivalPrice` (see the module's own
+ *     doc comment - written once at proposal time, never overwritten).
+ *   - fill price / slippage / implementation shortfall: ALREADY COMPLETE - `avgFillPrice`,
+ *     `slippagePerShare`, `slippageBps`; combined with real commission (canonicalCostModel.ts's
+ *     `totalCostBps`) this IS the implementation-shortfall figure in bps when MEASURED - no
+ *     separate duplicate field added on purpose (would be a second source of truth for the same
+ *     number).
+ *   - fill latency: ALREADY COMPLETE - `submissionToFirstFillMs`.
+ *   - partial fill rate: FIXED (this pass) - `hadPartialFill` per row, `partialFillRate` in the
+ *     summary, derived from real multi-row `fills` evidence already joined here.
+ *   - cancel rate: FIXED (this pass) - `computeCancelRate()`, a real `trades.status='CANCELED'`
+ *     count over ALL attempted orders (deliberately a separate query - the FILLED/PARTIALLY_FILLED
+ *     filter above would wrongly exclude every canceled order from the denominator).
+ *   - replace rate: GENUINELY UNSUPPORTED, NOT FABRICATED - this OMS has no order-replace/modify
+ *     capability anywhere in the order-placement path (only outright cancelOrder()), so there is
+ *     no real "replace" event to count. `computeCancelRate()`'s `replaceRateSupported: false`
+ *     states this explicitly rather than silently reporting 0.
+ *   - regime: FIXED (this pass) - `regime` per row, joined from `agent_predictions.regime` by the
+ *     shared `traceId` (real, no-look-ahead label captured by the idea agent at generation time).
+ *   - traceId/decisionId: FIXED (this pass) - `traceId` per row (trades.traceId, the same string
+ *     CLAUDE.md documents as the canonical decisionId/correlationId), joinable to
+ *     `getDecisionTrace(traceId)` for the full 7-table trace.
+ *   - orderId / strategy / evidence family / symbol / broker: ALREADY COMPLETE - `orderId`,
+ *     `quantStrategyId` (+ `strategyFamily` one layer up in tradeEconomicAttribution.ts),
+ *     `evidenceClass`, `symbol`, `brokerId`.
+ *   - VWAP: GENUINELY UNAVAILABLE, NOT FABRICATED - this codebase has no real VWAP feed (Alpaca
+ *     IEX top-of-book has no volume-weighted trade tape; no other market-data provider integrated
+ *     here computes one). Deliberately not added as a formula-derived estimate presented as
+ *     observed VWAP.
+ *   - spread context: PARTIALLY AVAILABLE, NOT WIRED HERE - a real bid/ask spread (`spreadBps`) is
+ *     computed transiently by RiskEngine's gate 25 (`ExtendedHoursExecutionPolicy.ts`) but only
+ *     for extended-hours orders (off by default) and is not persisted as a durable per-trade
+ *     column anywhere - there is nothing to join for the common RTH case without either extending
+ *     that gate to persist for every order (a RiskEngine change, out of this pass's protected-file
+ *     scope) or inventing a number. Left honestly unimplemented rather than estimated.
+ *   - volume/liquidity context: PARTIALLY AVAILABLE, NOT WIRED HERE - `candidate_rankings.
+ *     liquidityScore` and `ExtendedHoursLiquidityCache`'s real ADV data exist for the discovery/
+ *     extended-hours paths but are not captured per-trade at order time for the general case,
+ *     same honest gap as spread context above.
  */
 import { db } from '../db';
-import { trades, fills } from '../db/schema';
+import { trades, fills, agentPredictions } from '../db/schema';
 import { and, isNotNull, inArray, desc, sql, getTableColumns } from 'drizzle-orm';
 
 export const EXECUTION_EVIDENCE_CLASSES = ['PAPER_ORGANIC', 'PAPER_MANUAL', 'PAPER_UNATTRIBUTED', 'REPLAY', 'BACKTEST', 'SIMULATION', 'LIVE', 'UNKNOWN'] as const;
@@ -92,6 +134,24 @@ export interface ExecutionQualityRow {
   grossPnl: number | null;
   /** trades.timestamp - the decision-time record, for latency/attribution purposes. */
   decisionTimestamp: string;
+  /** trades.traceId - CLAUDE.md's canonical decisionId/correlationId (generateTraceId(), Part 4).
+   *  Additive field (Priority 14 completeness audit, 2026-09-23) so a caller can join this row
+   *  back to `event_traces`/`agent_reasoning_logs`/`risk_assessments`/`transaction_traces` via
+   *  getDecisionTrace(traceId) without a second query against `trades`. Null only for the rare
+   *  EXTERNAL_MANUAL/legacy row that never had one. */
+  traceId: string | null;
+  /** Real deterministic regime label (RegimeEngine.classifyRegime output) captured AT GENERATION
+   *  TIME by whichever idea agent produced this trade's traceId, joined from
+   *  `agent_predictions.regime` (same real, no-look-ahead column documented in schema.ts - see
+   *  ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md). Null when no
+   *  agent_predictions row for this traceId carries a regime label (older rows, or an agent this
+   *  codebase hasn't wired regime capture into) - never inferred or backfilled from later price
+   *  data. Additive field, Priority 14. */
+  regime: string | null;
+  /** True when this order's fills arrived in more than one increment (a real partial fill
+   *  occurred before the order finished) - derived directly from the real `fills` rows already
+   *  joined above, never a guess. Additive field, Priority 14. */
+  hadPartialFill: boolean;
 }
 
 export interface ExecutionQualitySummary {
@@ -104,6 +164,51 @@ export interface ExecutionQualitySummary {
   meanSubmissionToFirstFillMs: number | null;
   positiveSlippageCount: number; // worse than arrival
   negativeSlippageCount: number; // better than arrival
+  /** Real fraction of rows whose fills arrived in more than one increment - Priority 14. Null
+   *  when n=0 (never a fabricated 0%). */
+  partialFillRate: number | null;
+}
+
+export interface ExecutionQualityCancelStats {
+  evidenceClass: ExecutionEvidenceClass;
+  /** Total attempted orders in scope (any terminal or non-terminal status) within the lookback
+   *  window - unlike buildExecutionQualityReport() this deliberately does NOT filter to
+   *  FILLED/PARTIALLY_FILLED, since a cancel-rate denominator must include orders that never
+   *  filled at all. */
+  totalOrders: number;
+  canceledOrders: number;
+  /** Real `trades.status = 'CANCELED'` count / totalOrders. Null when totalOrders=0. This
+   *  codebase's OMS (OrderManagement.ts's cancelOrder()) only ever cancels an order outright -
+   *  there is no order-replace/modify capability anywhere in the order-placement path, so a
+   *  "replace rate" is NOT_SUPPORTED (no underlying data, not merely unmeasured) rather than
+   *  fabricated as 0. */
+  cancelRate: number | null;
+  replaceRateSupported: false;
+}
+
+/**
+ * Real cancel-rate stats (Priority 14 completeness audit, 2026-09-23) - deliberately a separate
+ * query from buildExecutionQualityReport() because that function's own row-inclusion filter
+ * (FILLED/PARTIALLY_FILLED with a real arrival+fill match) is correct for slippage but would
+ * silently exclude every CANCELED/REJECTED/still-PENDING order from a cancel-rate denominator.
+ */
+export async function computeCancelRate(scope: ExecutionEvidenceClass, limit = 2000): Promise<ExecutionQualityCancelStats> {
+  const boundedLimit = Number.isFinite(limit) ? Math.min(5000, Math.max(1, Math.floor(limit))) : 2000;
+  const rows = await db.select({ status: trades.status, evidenceClass })
+    .from(trades)
+    .where(sql`${evidenceClass} = ${scope}`)
+    .orderBy(desc(trades.timestamp))
+    .limit(boundedLimit)
+    .all();
+  const totalOrders = rows.length;
+  const canceledOrders = rows.filter((r) => r.status === 'CANCELED').length;
+  return {
+    evidenceClass: scope,
+    totalOrders,
+    canceledOrders,
+    cancelRate: totalOrders > 0 ? canceledOrders / totalOrders : null,
+    replaceRateSupported: false,
+  };
 }
 
 export async function buildExecutionQualityReport(limit = 500, scope?: ExecutionEvidenceClass): Promise<ExecutionQualityRow[]> {
@@ -124,6 +229,21 @@ export async function buildExecutionQualityReport(limit = 500, scope?: Execution
     const list = fillsByOrder.get(f.orderId) ?? [];
     list.push(f);
     fillsByOrder.set(f.orderId, list);
+  }
+
+  // Real regime join (Priority 14 completeness audit) - only ever reads a regime label an idea
+  // agent already persisted at generation time under the SAME traceId this trade carries. No
+  // regime is ever computed here or backfilled from later data.
+  const traceIds = tradeRows.map((t) => t.traceId).filter((v): v is string => !!v);
+  const regimeByTraceId = new Map<string, string>();
+  if (traceIds.length > 0) {
+    const regimeRows = await db.select({ traceId: agentPredictions.traceId, regime: agentPredictions.regime, timestamp: agentPredictions.timestamp })
+      .from(agentPredictions)
+      .where(and(inArray(agentPredictions.traceId, traceIds), isNotNull(agentPredictions.regime)))
+      .all();
+    for (const r of regimeRows) {
+      if (r.traceId && r.regime && !regimeByTraceId.has(r.traceId)) regimeByTraceId.set(r.traceId, r.regime);
+    }
   }
 
   const rows: ExecutionQualityRow[] = [];
@@ -169,6 +289,9 @@ export async function buildExecutionQualityReport(limit = 500, scope?: Execution
       rawCommission: t.commission ?? null,
       grossPnl: t.profitLoss ?? null,
       decisionTimestamp: t.timestamp,
+      traceId: t.traceId ?? null,
+      regime: t.traceId ? (regimeByTraceId.get(t.traceId) ?? null) : null,
+      hadPartialFill: orderFills.length > 1,
     });
   }
   return rows;
@@ -182,6 +305,7 @@ export function summarizeExecutionQuality(allRows: ExecutionQualityRow[], scope:
       ...attribution,
       n: 0, meanSlippageBps: null, medianSlippageBps: null, meanSlippagePerShare: null,
       meanSubmissionToFirstFillMs: null, positiveSlippageCount: 0, negativeSlippageCount: 0,
+      partialFillRate: null,
     };
   }
   const bpsValues = rows.map((r) => r.slippageBps).sort((a, b) => a - b);
@@ -200,6 +324,7 @@ export function summarizeExecutionQuality(allRows: ExecutionQualityRow[], scope:
     meanSubmissionToFirstFillMs: latencies.length > 0 ? latencies.reduce((s, v) => s + v, 0) / latencies.length : null,
     positiveSlippageCount: rows.filter((r) => r.slippagePerShare > 0).length,
     negativeSlippageCount: rows.filter((r) => r.slippagePerShare < 0).length,
+    partialFillRate: rows.filter((r) => r.hadPartialFill).length / rows.length,
   };
 }
 

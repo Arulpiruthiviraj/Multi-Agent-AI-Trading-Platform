@@ -222,6 +222,10 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       averageFillPrice: o.averageFillPrice > 0 ? o.averageFillPrice : undefined,
       createdAt: o.createdAt,
       updatedAt: o.updatedAt,
+      // Real commission attribution (Priority 13, 2026-09-23) - undefined (not 0) when IB has not
+      // yet reported commission for any execution of this order. See
+      // IbkrSocketSession.getAggregateCommissionForOrder()'s own doc comment.
+      commission: this.session.getAggregateCommissionForOrder(o.id) ?? undefined,
     }));
   }
 
@@ -312,6 +316,7 @@ export class IBGatewaySocketAdapter implements BrokerPlugin {
       averageFillPrice: tracked.averageFillPrice || undefined,
       createdAt: tracked.createdAt,
       updatedAt: tracked.updatedAt,
+      commission: this.session.getAggregateCommissionForOrder(tracked.id) ?? undefined,
     };
   }
 

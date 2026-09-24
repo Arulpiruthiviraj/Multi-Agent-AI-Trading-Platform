@@ -22,6 +22,9 @@
 import { buildExecutionQualityReport, type ExecutionQualityRow, type ExecutionEvidenceClass } from './executionQuality';
 import { buildTradeCostBreakdown, type TradeCostBreakdown, type CostQuality } from './canonicalCostModel';
 import { familyForStrategyId, type QuantFamilyId } from '../quant/strategyFamilies';
+import { db } from '../db';
+import { quantForecasts } from '../db/schema';
+import { and, eq, lte, desc } from 'drizzle-orm';
 
 export interface TradeEconomicAttributionRow {
   orderId: string;
@@ -47,9 +50,75 @@ export interface TradeEconomicAttributionRow {
   decisionTimestamp: string;
   fillTimestamp: string | null;
   submissionToFirstFillMs: number | null;
+
+  // Priority 15 completeness audit (2026-09-23) additive fields - see attributeRow() for
+  // real-data provenance of each.
+  /** CLAUDE.md's canonical decisionId/correlationId - joinable to getDecisionTrace(traceId). */
+  traceId: string | null;
+  /** Real deterministic regime label at generation time, joined by traceId from
+   *  agent_predictions.regime (see executionQuality.ts's own doc comment) - null when no agent
+   *  left one for this traceId. */
+  regime: string | null;
+  /** Real, exact algebraic re-derivation from already-known values (grossPnl, avgFillPrice,
+   *  filledQuantity - all real broker/OMS figures, nothing new estimated): the SELL leg's
+   *  proceeds-relative realized return, i.e. grossPnl / (avgFillPrice*qty - grossPnl). Null for
+   *  BUY legs, or when grossPnl is null, or when the implied entry value is not positive
+   *  (degenerate/zero-cost-basis edge case - never divide into a misleading number). */
+  realizedReturnPct: number | null;
+  /** Most recent real quant_forecasts row for this symbol/strategy/direction with createdAt at or
+   *  before this leg's own decisionTimestamp (no look-ahead) - null when no matching forecast was
+   *  ever persisted. Only attempted when strategyId is known; this codebase's forecast key
+   *  requires a real strategy/agent grouping, not a guessed one. */
+  forecast: {
+    forecastId: string;
+    modelVersion: string;
+    /** BUY | SELL - the forecast's own predicted direction. */
+    predictedDirection: string;
+    /** True when predictedDirection matches this trade leg's own side - the "predicted vs actual
+     *  direction" field. Always defined together with `forecast` (a forecast implies a direction
+     *  to compare). */
+    directionMatched: boolean;
+    netExpectedReturn: number | null;
+    costQuality: string | null;
+  } | null;
 }
 
-function attributeRow(row: ExecutionQualityRow): TradeEconomicAttributionRow {
+/**
+ * Real, most-recent, no-look-ahead forecast lookup for one trade leg (Priority 15). Deliberately
+ * separate from forecastEngine.ts's own mostRecentForecast() - that function requires a real
+ * agentName (e.g. 'QuantEngine', 'TechnicalAgent') which this row does not carry, only
+ * strategyId. Only attempted when strategyId is known - a strategy-less forecast lookup would
+ * have no honest grouping key to match against.
+ */
+async function findForecastForLeg(row: ExecutionQualityRow): Promise<TradeEconomicAttributionRow['forecast']> {
+  if (!row.quantStrategyId) return null;
+  try {
+    const rows = await db.select().from(quantForecasts)
+      .where(and(
+        eq(quantForecasts.symbol, row.symbol),
+        eq(quantForecasts.strategyId, row.quantStrategyId),
+        lte(quantForecasts.createdAt, row.decisionTimestamp),
+      ))
+      .orderBy(desc(quantForecasts.createdAt))
+      .limit(1)
+      .all();
+    const f = rows[0];
+    if (!f) return null;
+    return {
+      forecastId: f.forecastId,
+      modelVersion: f.modelVersion,
+      predictedDirection: f.direction,
+      directionMatched: f.direction === row.side,
+      netExpectedReturn: f.netExpectedReturn,
+      costQuality: f.costQuality,
+    };
+  } catch (e) {
+    console.error(`[tradeEconomicAttribution] Forecast lookup failed for order ${row.orderId} - leaving forecast null (not a fabrication)`, e);
+    return null;
+  }
+}
+
+async function attributeRow(row: ExecutionQualityRow): Promise<TradeEconomicAttributionRow> {
   const cost = buildTradeCostBreakdown(row);
 
   let netPnlAfterExitLegCostOnly: number | null = null;
@@ -60,6 +129,19 @@ function attributeRow(row: ExecutionQualityRow): TradeEconomicAttributionRow {
       netPnlAfterExitLegCostOnly = row.grossPnl - cost.totalCostPerShare * row.filledQuantity;
     }
   }
+
+  // Exact algebra from already-real numbers (grossPnl is trades.profit_loss, avgFillPrice/
+  // filledQuantity are real broker fill data) - never an estimate. entryValue = proceeds -
+  // grossPnl; realizedReturnPct = grossPnl / entryValue. Only defined for a SELL leg with a real
+  // grossPnl and a positive implied entry value.
+  let realizedReturnPct: number | null = null;
+  if (row.side === 'SELL' && row.grossPnl !== null && row.avgFillPrice > 0 && row.filledQuantity > 0) {
+    const proceeds = row.avgFillPrice * row.filledQuantity;
+    const entryValue = proceeds - row.grossPnl;
+    if (entryValue > 0) realizedReturnPct = row.grossPnl / entryValue;
+  }
+
+  const forecast = await findForecastForLeg(row);
 
   return {
     orderId: row.orderId,
@@ -77,12 +159,16 @@ function attributeRow(row: ExecutionQualityRow): TradeEconomicAttributionRow {
     decisionTimestamp: row.decisionTimestamp,
     fillTimestamp: row.firstFillAt,
     submissionToFirstFillMs: row.submissionToFirstFillMs,
+    traceId: row.traceId,
+    regime: row.regime,
+    realizedReturnPct,
+    forecast,
   };
 }
 
 export async function buildTradeEconomicAttributionReport(limit = 500, scope?: ExecutionEvidenceClass): Promise<TradeEconomicAttributionRow[]> {
   const rows = await buildExecutionQualityReport(limit, scope);
-  return rows.map(attributeRow);
+  return Promise.all(rows.map(attributeRow));
 }
 
 export interface TradeEconomicAttributionSummary {

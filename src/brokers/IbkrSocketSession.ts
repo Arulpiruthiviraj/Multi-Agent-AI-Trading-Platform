@@ -259,6 +259,20 @@ export class IbkrSocketSession {
    *  and when an order is rehydrated from IB on connect (see connect()'s openOrder handler) - the
    *  crash-recovery fix this whole block exists for depends on the second case specifically. */
   private clientOrderIdIndex = new Map<string, number>();
+  /**
+   * Commission attribution (Priority 13, 2026-09-23). IB's `execDetails` event carries
+   * `Execution.execId` (a genuinely unique per-fill id) plus the `orderId` we already track;
+   * `commissionReport` carries the SAME `execId` (per `CommissionReport.execId` in
+   * @stoqey/ib's own type defs) plus the real commission amount, but does NOT carry orderId
+   * itself. This map is the safe attribution bridge: execId -> orderId, populated in the
+   * execDetails handler, read by the commissionReport handler below. Never guessed - an execId
+   * this process never saw via execDetails simply cannot be attributed and is dropped.
+   */
+  private execIdToOrderId = new Map<string, number>();
+  /** execId -> real IB-reported commission for that one execution. Keyed by execId (not summed
+   *  eagerly) so a duplicate/replayed commissionReport for the same execId is an idempotent
+   *  overwrite, never a double-count - see getAggregateCommissionForOrder() below. */
+  private commissionByExecId = new Map<string, number>();
   private accountId: string | null = null;
   private serverTime: string | null = null;
   private port: number | null = null;
@@ -1034,6 +1048,10 @@ export class IbkrSocketSession {
         // Only skippable when execId is actually present; some IB order types/vintages omit it (a
         // known, honestly-documented residual gap - see DEF-30), in which case this dedup layer
         // can't apply but the cross-stream Math.max reconciliation below still holds.
+        // Populated unconditionally (even on a redelivered execId) so a commissionReport that
+        // arrives after a reconnect-triggered replay of this execDetails can still resolve -
+        // this map is a pure lookup, not a fill-quantity accumulator, so redelivery is harmless.
+        if (execId) this.execIdToOrderId.set(execId, orderId);
         if (execId && row.seenExecutionIds.has(execId)) return;
         if (execId) row.seenExecutionIds.add(execId);
         if (shares > 0) {
@@ -1054,6 +1072,19 @@ export class IbkrSocketSession {
           else row.status = 'PARTIALLY_FILLED';
           row.updatedAt = new Date();
         }
+      });
+
+      // Real commission attribution (Priority 13, 2026-09-23). IB reports commission
+      // asynchronously and separately from the execution itself - CommissionReport.execId is the
+      // ONLY safe join key (confirmed in node_modules/@stoqey/ib/dist/api/report/commissionReport.d.ts
+      // and api.d.ts's `on(EventName.commissionReport, ...)` signature). No orderId is ever
+      // guessed or inferred from ordering/timing - an execId this process has not seen via
+      // execDetails is dropped, never attributed to a best-guess order.
+      ib.on(EventName.commissionReport, (report) => {
+        const execId = (report as any)?.execId ? String((report as any).execId) : null;
+        const commission = Number((report as any)?.commission);
+        if (!execId || !Number.isFinite(commission)) return;
+        this.commissionByExecId.set(execId, commission);
       });
 
       ib.on(EventName.tickPrice, (tickerId: number, field: number, price: number) => {
@@ -1301,6 +1332,25 @@ export class IbkrSocketSession {
 
   listTrackedOrders(): TrackedOrder[] {
     return [...this.trackedOrders.values()];
+  }
+
+  /**
+   * Real, sum-of-real-commissionReport-events total for one IB order, or null when this process
+   * has received zero commissionReport events for any execution it has attributed to this order
+   * (not yet arrived, or an execution whose execId was never seen at all - see
+   * execIdToOrderId's/commissionByExecId's doc comments). Never a guess, never zero-as-default -
+   * callers (IBGatewaySocketAdapter) must treat null as "unknown", exactly like every other
+   * UNAVAILABLE cost-quality case in canonicalCostModel.ts.
+   */
+  getAggregateCommissionForOrder(orderId: number): number | null {
+    let total = 0;
+    let any = false;
+    for (const [execId, oid] of this.execIdToOrderId.entries()) {
+      if (oid !== orderId) continue;
+      const c = this.commissionByExecId.get(execId);
+      if (c !== undefined) { total += c; any = true; }
+    }
+    return any ? total : null;
   }
 
   getTrackedOrder(orderId: number): TrackedOrder | undefined {

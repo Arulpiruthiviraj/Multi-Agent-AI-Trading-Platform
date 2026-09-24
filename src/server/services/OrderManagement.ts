@@ -296,6 +296,28 @@ export class OrderManagementService {
     }
   }
 
+  /**
+   * Canonical Cost Model / Economic Attribution (Priority 13, 2026-09-23). Persists a real,
+   * broker-reported commission onto `trades.commission` when a broker adapter's Order object
+   * actually carries one (currently: IBGatewaySocketAdapter, via IbkrSocketSession's real
+   * commissionReport attribution - see BrokerAdapter.ts's Order.commission doc comment). A pure,
+   * additive, best-effort SET (never an increment - the adapter already reports the real
+   * aggregate-so-far for the order, so re-applying an unchanged value is a safe no-op and a later
+   * larger aggregate correctly overwrites an earlier partial one). Deliberately decoupled from
+   * recordFillProgress()/insertIncrementalFill() (P0.4 fill-ledger idempotency) - this never
+   * touches fill quantity, fill price, or order status, only the separate, already-nullable
+   * commission column. Silently returns if commission is absent (undefined) - undefined is not
+   * zero, per canonicalCostModel.ts's own classifyCommission() contract.
+   */
+  private async persistRealCommissionIfKnown(orderId: string, commission: number | undefined): Promise<void> {
+    if (typeof commission !== 'number' || !Number.isFinite(commission)) return;
+    try {
+      await db.update(trades).set({ commission }).where(eq(trades.id, orderId));
+    } catch (e) {
+      console.error(`[OMS] Failed to persist real commission for order ${orderId} (non-fatal, cost reporting only)`, e);
+    }
+  }
+
   async executeOrder(symbol: string, side: string, quantity: number, reasoning: string, traceId: string, newsDetails?: any, transactionId?: string, quantStrategyId?: string | null, quantStopPrice?: number | null, quantTargetPrice?: number | null, quantInvalidationJson?: string | null, intendedPrice?: number | null) {
     // See resolveOrderBroker()'s doc comment: SELL must close on the broker that opened the
     // position, not whichever broker happens to be active right now. Resolved once, up front, and
@@ -484,6 +506,7 @@ export class OrderManagementService {
       if (brokerOrder.averageFillPrice) {
           fillPrice = brokerOrder.averageFillPrice;
       }
+      await this.persistRealCommissionIfKnown(orderId, brokerOrder.commission);
 
       const acceptedAt = new Date().toISOString();
       await db.update(trades).set({ brokerOrderId, status, price: fillPrice, acceptedAt }).where(eq(trades.id, orderId));
@@ -496,6 +519,7 @@ export class OrderManagementService {
           status = terminal.status;
           filledQuantity = terminal.filledQuantity;
           if (terminal.averageFillPrice) fillPrice = terminal.averageFillPrice;
+          await this.persistRealCommissionIfKnown(orderId, terminal.commission);
         }
       }
 
@@ -897,6 +921,7 @@ export class OrderManagementService {
 
         if (realStatus === 'FILLED' || realStatus === 'PARTIALLY_FILLED') {
           await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice);
+          await this.persistRealCommissionIfKnown(row.id, realOrder.commission);
         }
 
         await db.update(trades).set({
@@ -927,6 +952,7 @@ export class OrderManagementService {
     try {
       const fillPrice = match.averageFillPrice || row.price || 0;
       await this.recordFillProgress(row.id, row.brokerOrderId, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, match.status, match.filledQuantity, fillPrice);
+      await this.persistRealCommissionIfKnown(row.id, match.commission);
 
       const filledAt = match.status === 'FILLED' ? (row.filledAt || new Date().toISOString()) : row.filledAt;
       // Realized P&L for a SELL that only resolves here (past the initial poll window) can't be

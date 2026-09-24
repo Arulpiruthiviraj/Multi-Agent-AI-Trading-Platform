@@ -96,6 +96,41 @@ describe('tradeEconomicAttribution', () => {
     expect(row.cost.commissionQuality).toBe('MEASURED'); // Alpaca equity zero-commission fact
   });
 
+  it('joins the most recent no-look-ahead forecast for symbol+strategy+direction and reports predicted-vs-actual direction (Priority 15)', async () => {
+    await db.insert(schema.quantForecasts).values({
+      forecastId: 'fc-1', symbol: 'AAPL', createdAt: '2026-09-23T12:00:00.000Z', direction: 'SELL',
+      horizonLabel: 'PRIMARY_EVAL_HORIZON', agentName: 'QuantEngine', strategyId: 'MOMENTUM_BREAKOUT',
+      forecastStatus: 'VALID', sampleSize: 40, netExpectedReturn: 0.012, costQuality: 'MEASURED',
+      modelVersion: 'v1', provenanceJson: '{}',
+    });
+    // A later forecast for the SAME key must never be picked for a decision made before it existed
+    // (no look-ahead) - this one is deliberately AFTER sell-alpaca-1's decisionTimestamp.
+    await db.insert(schema.quantForecasts).values({
+      forecastId: 'fc-2-future', symbol: 'AAPL', createdAt: '2026-09-23T23:00:00.000Z', direction: 'SELL',
+      horizonLabel: 'PRIMARY_EVAL_HORIZON', agentName: 'QuantEngine', strategyId: 'MOMENTUM_BREAKOUT',
+      forecastStatus: 'VALID', sampleSize: 40, netExpectedReturn: 0.99, costQuality: 'MEASURED',
+      modelVersion: 'v2', provenanceJson: '{}',
+    });
+
+    const rows = await mod.buildTradeEconomicAttributionReport();
+    const row = rows.find((r) => r.orderId === 'sell-alpaca-1')!;
+    expect(row).toBeDefined();
+    expect(row.forecast).not.toBeNull();
+    expect(row.forecast!.forecastId).toBe('fc-1'); // the earlier one, not the future fc-2
+    expect(row.forecast!.predictedDirection).toBe('SELL');
+    expect(row.forecast!.directionMatched).toBe(true); // trade side SELL matches forecast direction SELL
+    expect(row.forecast!.netExpectedReturn).toBeCloseTo(0.012, 6);
+    expect(row.realizedReturnPct).not.toBeNull();
+  });
+
+  it('leaves forecast null when no strategyId is known - never guesses a grouping key', async () => {
+    const rows = await mod.buildTradeEconomicAttributionReport();
+    const row = rows.find((r) => r.orderId === 'sell-ibkr-1')!;
+    expect(row).toBeDefined();
+    expect(row.strategyId).toBeNull();
+    expect(row.forecast).toBeNull();
+  });
+
   it('formatTradeEconomicAttributionReport renders a readable table without throwing on empty input', () => {
     const emptySummary = mod.summarizeTradeEconomicAttribution([], 'PAPER_ORGANIC');
     expect(() => mod.formatTradeEconomicAttributionReport([], emptySummary)).not.toThrow();

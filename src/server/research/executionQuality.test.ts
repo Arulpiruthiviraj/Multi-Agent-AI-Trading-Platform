@@ -34,6 +34,13 @@ describe('executionQuality (Institutional Transformation Mandate Part 16)', () =
     expect(summary.meanSlippageBps).toBeNull();
   });
 
+  it('computeCancelRate returns null cancelRate (not zero) when no orders exist in scope - run early, before any PAPER_MANUAL fixture in this file exists', async () => {
+    const stats = await mod.computeCancelRate('PAPER_MANUAL');
+    expect(stats.totalOrders).toBe(0);
+    expect(stats.cancelRate).toBeNull();
+    expect(stats.replaceRateSupported).toBe(false);
+  });
+
   it('computes positive (worse) slippage for a BUY that filled above its arrival price', async () => {
     await db.insert(schema.trades).values({
       id: 'order-buy-1', symbol: 'EQAAPL', side: 'BUY', quantity: 10, price: 101, status: 'FILLED',
@@ -152,4 +159,59 @@ describe('executionQuality (Institutional Transformation Mandate Part 16)', () =
     expect(summary.meanSlippageBps).toBeCloseTo(10);
     expect(mod.summarizeExecutionQuality(all, 'REPLAY').meanSlippageBps).toBeCloseTo(9000);
   });
+
+  it('exposes traceId and joins a real regime label from agent_predictions by traceId (Priority 14)', async () => {
+    await db.insert(schema.agentPredictions).values({
+      id: 'pred-regime-1', agentName: 'TechnicalAgent', symbol: 'EQREGIME', prediction: 'BUY',
+      confidence: 0.8, reasoning: 'test', timestamp: new Date().toISOString(),
+      traceId: 'trace-regime-1', regime: 'BULLISH_TREND/NORMAL',
+    });
+    await db.insert(schema.trades).values({
+      id: 'order-regime-1', traceId: 'trace-regime-1', symbol: 'EQREGIME', side: 'BUY', quantity: 1,
+      price: 51, status: 'FILLED', timestamp: new Date().toISOString(), arrivalPrice: 50,
+    });
+    await db.insert(schema.fills).values({
+      orderId: 'order-regime-1', quantity: 1, price: 51, filledAt: new Date().toISOString(), cumulativeQuantity: 1,
+    });
+
+    const rows = await mod.buildExecutionQualityReport();
+    const row = rows.find((r) => r.orderId === 'order-regime-1')!;
+    expect(row.traceId).toBe('trace-regime-1');
+    expect(row.regime).toBe('BULLISH_TREND/NORMAL');
+  });
+
+  it('leaves regime null when no agent_predictions row carries one for this traceId - never fabricated', async () => {
+    const rows = await mod.buildExecutionQualityReport();
+    const row = rows.find((r) => r.orderId === 'order-buy-1')!;
+    expect(row.regime).toBeNull();
+  });
+
+  it('flags hadPartialFill for a multi-increment order and reports a real partialFillRate (Priority 14)', async () => {
+    const rows = await mod.buildExecutionQualityReport();
+    const single = rows.find((r) => r.orderId === 'order-buy-1')!;
+    const partial = rows.find((r) => r.orderId === 'order-partial-1')!;
+    expect(single.hadPartialFill).toBe(false);
+    expect(partial.hadPartialFill).toBe(true);
+
+    // Computed directly against this exact evidence-class cohort's rows (not re-queried, so this
+    // assertion is immune to unrelated fixtures elsewhere in this file changing the cohort size).
+    const cohort = rows.filter((r) => r.evidenceClass === partial.evidenceClass);
+    const summary = mod.summarizeExecutionQuality(rows, partial.evidenceClass);
+    const expectedRate = cohort.filter((r) => r.hadPartialFill).length / cohort.length;
+    expect(summary.partialFillRate).toBeCloseTo(expectedRate, 10);
+    expect(summary.partialFillRate).toBeGreaterThan(0); // order-partial-1 itself guarantees this
+  });
+
+  it('computeCancelRate reports a real CANCELED fraction over ALL attempted orders, never fabricating a "replace" rate', async () => {
+    await db.insert(schema.trades).values([
+      { id: 'cancel-1', symbol: 'EQCANCEL', side: 'BUY', quantity: 1, price: 10, status: 'CANCELED', timestamp: new Date().toISOString(), executionEnvironment: 'PAPER', brokerId: 'ibkr_gateway', traceId: 'trace-cancel-1' },
+      { id: 'cancel-2', symbol: 'EQCANCEL', side: 'BUY', quantity: 1, price: 10, status: 'REJECTED', timestamp: new Date().toISOString(), executionEnvironment: 'PAPER', brokerId: 'ibkr_gateway', traceId: 'trace-cancel-2' },
+    ]);
+    const stats = await mod.computeCancelRate('PAPER_UNATTRIBUTED');
+    expect(stats.totalOrders).toBeGreaterThanOrEqual(2);
+    expect(stats.canceledOrders).toBeGreaterThanOrEqual(1);
+    expect(stats.cancelRate).toBeCloseTo(stats.canceledOrders / stats.totalOrders, 10);
+    expect(stats.replaceRateSupported).toBe(false);
+  });
+
 });
