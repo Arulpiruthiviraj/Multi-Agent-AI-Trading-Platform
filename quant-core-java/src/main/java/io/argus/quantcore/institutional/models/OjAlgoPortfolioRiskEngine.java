@@ -87,4 +87,51 @@ public final class OjAlgoPortfolioRiskEngine {
         MatrixR064 result = w.transpose().multiply(sigma).multiply(w);
         return result.doubleValue(0, 0);
     }
+
+    public record RiskContributionResult(
+        double portfolioVariance,
+        /** RC_i = w_i * (&Sigma;w)_i for every symbol, same order as the input weights. &sum;RC_i == portfolioVariance exactly (Euler decomposition). */
+        double[] riskContributions,
+        /** RC_i / portfolioVariance for every symbol - sums to 1.0. */
+        double[] riskContributionPct
+    ) {
+    }
+
+    /**
+     * Full-portfolio risk-contribution decomposition (Qian 2006 Euler decomposition), generalizing
+     * the single-candidate {@code marginalRiskContributionPct} field in {@link #evaluate} to every
+     * symbol at once. Foundational building block for risk-parity / maximum-diversification analysis
+     * (Argus World-Class Open-Source Quant Expansion roadmap Priority #6, Layer 2 follow-up) - not
+     * itself a diversification ratio or risk-parity optimizer, both of which remain unimplemented.
+     * RESEARCH status, same advisory-only contract as every method in this class: no order authority,
+     * no PositionSizing/RiskEngine/OMS access.
+     *
+     * @param covariance symmetric n x n covariance matrix of position returns.
+     * @param weights    portfolio weights (fraction of equity), same order/length as {@code covariance}.
+     * @return null on malformed input (non-square matrix, dimension mismatch) - never a fabricated result.
+     */
+    public static RiskContributionResult riskContributions(double[][] covariance, double[] weights) {
+        int n = weights.length;
+        if (n == 0 || covariance.length != n) {
+            return null;
+        }
+        for (double[] row : covariance) {
+            if (row.length != n) {
+                return null;
+            }
+        }
+
+        MatrixR064 sigma = toMatrix(covariance);
+        MatrixR064 w = toColumnVector(weights);
+        double variance = portfolioVariance(sigma, w);
+        MatrixR064 sigmaW = sigma.multiply(w);
+
+        double[] rc = new double[n];
+        double[] rcPct = new double[n];
+        for (int i = 0; i < n; i++) {
+            rc[i] = weights[i] * sigmaW.doubleValue(i, 0);
+            rcPct[i] = variance > 0 ? rc[i] / variance : 0.0;
+        }
+        return new RiskContributionResult(variance, rc, rcPct);
+    }
 }
