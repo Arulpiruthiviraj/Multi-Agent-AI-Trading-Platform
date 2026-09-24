@@ -154,7 +154,10 @@ export type EnsembleCallOutcome =
   | 'CIRCUIT_BREAKER_OPEN'
   | 'HTTP_ERROR'
   | 'NETWORK_ERROR_OR_TIMEOUT'
-  | 'EMPTY_VOTES';
+  | 'EMPTY_VOTES'
+  /** Batch 4 (2026-09-23): a 2xx response whose body failed validateFiniteNumericFields() - a
+   *  distinct outcome from HTTP_ERROR (which means the HTTP layer itself reported failure). */
+  | 'MALFORMED_RESPONSE';
 
 export interface InstitutionalEnsembleResult {
   schemaVersion: number;
@@ -254,6 +257,96 @@ interface RawJavaSignal {
   strategyId?: unknown;
   reasoning?: unknown;
   currentPrice?: unknown;
+}
+
+/**
+ * Batch 4 (2026-09-23) - malformed-response validation. Prior to this, every response-returning
+ * fetch method below cast a raw `await res.json()` straight to its typed interface with zero
+ * check that the JSON actually matched - a NaN/Infinity/wrong-typed field from a malformed or
+ * buggy Java response was silently returned as if it were a valid number. This is a real, provable
+ * downstream defect: JavaCoreEnsembleVoteService.ts's own eligibility check
+ * (`ensemble.confidence < tradingSafety.javaCoreEnsembleVoteMinConfidence`) evaluates to `false`
+ * for a NaN confidence exactly like a real qualifying high-confidence value would - the gate that
+ * exists specifically to reject a low-confidence vote silently passes a NaN one through instead,
+ * and neither ChiefTrader's gateTradeIdea() (validates symbol/price only, not confidence) nor
+ * AIOutputValidator (LLM-only path, never applied to Java responses) catches it downstream.
+ *
+ * Same fail-closed contract as every network/circuit-breaker/timeout failure path in this file:
+ * a malformed response returns null and logs QUANT_BRIDGE_MALFORMED_RESPONSE - never a fabricated
+ * substitute value, never a partial/best-effort cast. This does not touch ChiefTrader, RiskEngine,
+ * PositionSizing, OMS, BrokerManager, or any consensus/threshold constant - it only prevents
+ * garbage from ever reaching those systems in the first place, at the same external-process trust
+ * boundary this file's own header already documents (onSignal()'s comment above).
+ */
+interface NumericFieldSpec {
+  key: string;
+  /** Allows `null` through unvalidated (e.g. InstitutionalForecastResult's real INSUFFICIENT_DATA
+   *  nulls) - still validated as a finite number when present and non-null. */
+  nullable?: boolean;
+  /** Field is a 0-1 probability/confidence-like value; also enforced in-range when present. */
+  unitRange?: boolean;
+}
+
+function logMalformedQuantBridgeResponse(context: { endpoint: string; symbol?: string }, detail: string): void {
+  observeSafe(() => {
+    structuredLogger.warn('quant_bridge_malformed_response', {
+      category: 'OBSERVABILITY',
+      component: 'QuantCoreBridge',
+      eventType: 'QUANT_BRIDGE_MALFORMED_RESPONSE',
+      symbol: context.symbol,
+      reasoning: `endpoint=${context.endpoint} ${detail}`,
+    });
+  });
+}
+
+/**
+ * Validates that `fields` exist as finite numbers (or, for `nullable` specs, are finite-or-null)
+ * on a parsed JSON response before the caller casts it to a typed interface. Returns false (and
+ * logs) on the first violation - the caller must treat a `false` return exactly like any other
+ * failure path here (return null, never propagate the raw object).
+ */
+function validateFiniteNumericFields(
+  obj: unknown,
+  fields: (string | NumericFieldSpec)[],
+  context: { endpoint: string; symbol?: string },
+): obj is Record<string, unknown> {
+  if (!obj || typeof obj !== 'object') {
+    logMalformedQuantBridgeResponse(context, 'response body is not an object');
+    return false;
+  }
+  const rec = obj as Record<string, unknown>;
+  for (const f of fields) {
+    const spec: NumericFieldSpec = typeof f === 'string' ? { key: f } : f;
+    const value = rec[spec.key];
+    if (spec.nullable && value === null) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      logMalformedQuantBridgeResponse(context, `field '${spec.key}' is not a finite number (got ${typeof value}: ${JSON.stringify(value)})`);
+      return false;
+    }
+    if (spec.unitRange && (value < 0 || value > 1)) {
+      logMalformedQuantBridgeResponse(context, `field '${spec.key}'=${value} is outside the expected [0,1] range`);
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Defense-in-depth against a stale/misrouted response under connection reuse or retry races
+ * (Batch 4 Task 3) - only checkable for endpoints whose response schema actually echoes the
+ * requested symbol (CoreStrategyAssessment, InstitutionalFeaturesResult, InstitutionalRegimeResult,
+ * InstitutionalVolatilityResult, InstitutionalFactorsResult all do; InstitutionalEnsembleResult,
+ * InstitutionalAdvisoryResult, InstitutionalCorrelationResult, and CoreEnsembleDecision do not -
+ * that is a real, honestly-reported schema gap for those four, not implemented here since adding
+ * an echo field is a Java-side schema change, out of scope for this pass).
+ */
+function validateSymbolEcho(rec: Record<string, unknown>, requestedSymbol: string, endpoint: string): boolean {
+  const echoed = rec.symbol;
+  if (typeof echoed !== 'string' || echoed.toUpperCase() !== requestedSymbol.toUpperCase()) {
+    logMalformedQuantBridgeResponse({ endpoint, symbol: requestedSymbol }, `response symbol echo mismatch (requested ${requestedSymbol}, got ${JSON.stringify(echoed)})`);
+    return false;
+  }
+  return true;
 }
 
 class CircuitBreaker {
@@ -371,7 +464,7 @@ export class QuantCoreBridgeService {
   private logBridgeOutcome(params: {
     endpoint: string;
     symbol?: string;
-    result: 'SUCCESS' | 'HTTP_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR' | 'CIRCUIT_OPEN' | 'JAVA_DISABLED';
+    result: 'SUCCESS' | 'HTTP_ERROR' | 'TIMEOUT' | 'NETWORK_ERROR' | 'CIRCUIT_OPEN' | 'JAVA_DISABLED' | 'MALFORMED_RESPONSE';
     httpStatus?: number;
     errorMessage?: string;
     durationMs?: number;
@@ -779,7 +872,15 @@ export class QuantCoreBridgeService {
       }
       this.institutionalBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'institutional/volatility', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalVolatilityResult;
+      const body = await res.json().catch(() => null);
+      const ctx = { endpoint: 'institutional/volatility', symbol };
+      if (!validateFiniteNumericFields(body, [
+        'omega', 'alpha', 'beta', 'persistence', 'logLikelihood', 'unconditionalVariance',
+        'lastConditionalVariance', 'forecastVariance', 'forecastVolatility', 'returnsUsed',
+        'realizedVolatility', 'realizedVolPercentile',
+      ], ctx)) return null;
+      if (!validateSymbolEcho(body, symbol, ctx.endpoint)) return null;
+      return body as unknown as InstitutionalVolatilityResult;
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/volatility', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
@@ -819,7 +920,21 @@ export class QuantCoreBridgeService {
       }
       this.institutionalBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'institutional/forecast', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalForecastResult;
+      const body = await res.json().catch(() => null);
+      const ctx = { endpoint: 'institutional/forecast', symbol };
+      // meanReturn/medianReturn/... are real, honest nulls on INSUFFICIENT_DATA - nullable:true
+      // allows that through unvalidated while still catching a NaN/Infinity that leaks through.
+      if (!validateFiniteNumericFields(body, [
+        'sampleSize', 'transactionCostBps',
+        { key: 'meanReturn', nullable: true }, { key: 'medianReturn', nullable: true },
+        { key: 'trimmedMeanReturn', nullable: true }, { key: 'stdevReturn', nullable: true },
+        { key: 'meanReturnLower', nullable: true }, { key: 'meanReturnUpper', nullable: true },
+        { key: 'probabilityOfProfit', nullable: true, unitRange: true },
+        { key: 'probabilityOfProfitLower', nullable: true, unitRange: true },
+        { key: 'probabilityOfProfitUpper', nullable: true, unitRange: true },
+        { key: 'netExpectedReturn', nullable: true },
+      ], ctx)) return null;
+      return body as unknown as InstitutionalForecastResult;
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/forecast', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
@@ -854,7 +969,13 @@ export class QuantCoreBridgeService {
       }
       this.institutionalBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'institutional/factors', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalFactorsResult;
+      const body = await res.json().catch(() => null);
+      const ctx = { endpoint: 'institutional/factors', symbol };
+      if (!validateFiniteNumericFields(body, [
+        'momentum', 'meanReversion', 'volumeLiquidity', 'volatility', 'orderFlowProxy', 'composite',
+      ], ctx)) return null;
+      if (!validateSymbolEcho(body, symbol, ctx.endpoint)) return null;
+      return body as unknown as InstitutionalFactorsResult;
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/factors', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
@@ -899,7 +1020,19 @@ export class QuantCoreBridgeService {
       }
       this.researchBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint, symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as Record<string, unknown>;
+      const body = await res.json().catch(() => null);
+      // Each strategyId has its own real field shape (QuantCoreServer.java's
+      // evaluateResearchStrategy() switch) - no single fixed numeric-field list applies across all
+      // of them, so this can only validate the response is a real object, not fabricate a shared
+      // schema. Callers consuming a specific numeric field from this map remain responsible for
+      // their own Number.isFinite check on that field - documented here rather than silently
+      // assumed, since this is the one fetch method in this file that cannot reuse
+      // validateFiniteNumericFields().
+      if (!body || typeof body !== 'object') {
+        logMalformedQuantBridgeResponse({ endpoint, symbol }, 'response body is not an object');
+        return null;
+      }
+      return body as Record<string, unknown>;
     } catch (e) {
       this.researchBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint, symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.researchBreaker.getFailureCount() });
@@ -942,7 +1075,15 @@ export class QuantCoreBridgeService {
       }
       this.institutionalBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint, symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as CoreStrategyAssessment;
+      const body = await res.json().catch(() => null);
+      // score/confidence are real, honest nulls for direction === 'DATA_UNAVAILABLE'.
+      if (!validateFiniteNumericFields(body, [
+        { key: 'score', nullable: true },
+        { key: 'confidence', nullable: true, unitRange: true },
+        'evaluationTimestampMs', 'latencyMs',
+      ], { endpoint, symbol })) return null;
+      if (!validateSymbolEcho(body, symbol, endpoint)) return null;
+      return body as unknown as CoreStrategyAssessment;
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint, symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
@@ -980,7 +1121,17 @@ export class QuantCoreBridgeService {
       }
       this.ensembleBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'quant/ensemble', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as CoreEnsembleDecision;
+      const body = await res.json().catch(() => null);
+      // CoreEnsembleDecision has no symbol/timestamp echo distinct from this bridge's own request
+      // context to cross-check against - see validateSymbolEcho's own doc comment (Task 3 gap).
+      // This is the exact defect class this batch is closing: JavaCoreEnsembleVoteService.ts
+      // compares `ensemble.confidence < javaCoreEnsembleVoteMinConfidence`, which is false (i.e.
+      // silently treated as an eligible vote) for a NaN confidence.
+      if (!validateFiniteNumericFields(body, [
+        'score', { key: 'confidence', unitRange: true }, 'timestampMs',
+        'strategyCount', 'agreeingCount', 'effectiveIndependentCount',
+      ], { endpoint: 'quant/ensemble', symbol })) return null;
+      return body as unknown as CoreEnsembleDecision;
     } catch (e) {
       this.ensembleBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'quant/ensemble', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
@@ -1010,7 +1161,14 @@ export class QuantCoreBridgeService {
       }
       this.institutionalBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'institutional/features', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalFeaturesResult;
+      const body = await res.json().catch(() => null);
+      const ctx = { endpoint: 'institutional/features', symbol };
+      if (!validateFiniteNumericFields(body, [
+        'asOfMs', 'close', 'rsi', 'macd', 'macdSignal', 'bbUpper', 'bbLower', 'atr',
+        'realizedVolatility', 'barsUsed',
+      ], ctx)) return null;
+      if (!validateSymbolEcho(body, symbol, ctx.endpoint)) return null;
+      return body as unknown as InstitutionalFeaturesResult;
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/features', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
@@ -1041,7 +1199,15 @@ export class QuantCoreBridgeService {
       }
       this.institutionalBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'institutional/correlation', result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalCorrelationResult;
+      const body = await res.json().catch(() => null);
+      const ctx = { endpoint: 'institutional/correlation' };
+      if (!validateFiniteNumericFields(body, ['lambda'], ctx)) return null;
+      const matrix = (body as Record<string, unknown>).correlationMatrix;
+      if (!Array.isArray(matrix) || matrix.some((row) => !Array.isArray(row) || row.some((v) => typeof v !== 'number' || !Number.isFinite(v)))) {
+        logMalformedQuantBridgeResponse(ctx, `correlationMatrix is not a well-formed finite-number matrix (${JSON.stringify(matrix)?.slice(0, 200)})`);
+        return null;
+      }
+      return body as unknown as InstitutionalCorrelationResult;
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/correlation', result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });
@@ -1101,9 +1267,19 @@ export class QuantCoreBridgeService {
         return null;
       }
       this.ensembleBreaker.recordSuccess();
+      const body = await res.json().catch(() => null);
+      const ctx = { endpoint: 'institutional/ensemble' };
+      if (!validateFiniteNumericFields(body, [
+        'totalVotes', 'agreeingCount', 'avgConfidenceOfAgreeing', 'effectiveIndependentCount',
+      ], ctx)) {
+        this.ensembleBreaker.recordFailure();
+        logOutcome('MALFORMED_RESPONSE', 'response body failed numeric validation');
+        this.logBridgeOutcome({ endpoint: 'institutional/ensemble', result: 'MALFORMED_RESPONSE', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
+        return null;
+      }
       logOutcome('SUCCESS');
       this.logBridgeOutcome({ endpoint: 'institutional/ensemble', result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalEnsembleResult;
+      return body as unknown as InstitutionalEnsembleResult;
     } catch (e) {
       this.ensembleBreaker.recordFailure();
       logOutcome('NETWORK_ERROR_OR_TIMEOUT', e instanceof Error ? e.message : String(e));
@@ -1141,7 +1317,16 @@ export class QuantCoreBridgeService {
       }
       this.ensembleBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'institutional/advisory', result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalAdvisoryResult;
+      const body = await res.json().catch(() => null);
+      // No symbol/timestamp echo in this schema to cross-check (Task 3 gap - see
+      // validateSymbolEcho's own doc comment). JavaQuantAdvisoryService.ts's own eligibility gate
+      // (`advisory.adjustedConfidence < javaQuantVoteMinConfidence`) has the exact same NaN-passes
+      // silently failure mode this batch is closing for fetchCoreEnsembleDecision().
+      if (!validateFiniteNumericFields(body, [
+        'rawAvgConfidence', 'rawEffectiveIndependentCount', 'regimeMultiplier', 'currentVolatility',
+        'volatilityMultiplier', { key: 'adjustedConfidence', unitRange: true },
+      ], { endpoint: 'institutional/advisory' })) return null;
+      return body as unknown as InstitutionalAdvisoryResult;
     } catch (e) {
       this.ensembleBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/advisory', result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.ensembleBreaker.getFailureCount() });
@@ -1171,7 +1356,13 @@ export class QuantCoreBridgeService {
       }
       this.institutionalBreaker.recordSuccess();
       this.logBridgeOutcome({ endpoint: 'institutional/regime', symbol, result: 'SUCCESS', durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: 0 });
-      return (await res.json()) as InstitutionalRegimeResult;
+      const body = await res.json().catch(() => null);
+      const ctx = { endpoint: 'institutional/regime', symbol };
+      if (!validateFiniteNumericFields(body, [
+        'logLikelihood', 'observationCount', 'volatilityPercentile',
+      ], ctx)) return null;
+      if (!validateSymbolEcho(body, symbol, ctx.endpoint)) return null;
+      return body as unknown as InstitutionalRegimeResult;
     } catch (e) {
       this.institutionalBreaker.recordFailure();
       this.logBridgeOutcome({ endpoint: 'institutional/regime', symbol, result: this.classifyFetchError(e), errorMessage: e instanceof Error ? e.message : String(e), durationMs: Date.now() - startedAt, breakerFailureCountBefore: before, breakerFailureCountAfter: this.institutionalBreaker.getFailureCount() });

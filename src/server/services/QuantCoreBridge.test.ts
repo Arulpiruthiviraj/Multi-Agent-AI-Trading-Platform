@@ -212,7 +212,7 @@ describe('QuantCoreBridgeService.fetchInstitutionalVolatility/fetchInstitutional
 
   it('POSTs bars to the volatility endpoint and returns the parsed GARCH result when enabled', async () => {
     process.env.QUANT_JAVA_CORE_ENABLED = 'true';
-    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', omega: 0.001, alpha: 0.05, beta: 0.9, persistence: 0.95, logLikelihood: -100, unconditionalVariance: 0.02, lastConditionalVariance: 0.019, forecastStepsAhead: 1, forecastVariance: 0.021, forecastVolatility: 0.145, returnsUsed: 39 };
+    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', omega: 0.001, alpha: 0.05, beta: 0.9, persistence: 0.95, logLikelihood: -100, unconditionalVariance: 0.02, lastConditionalVariance: 0.019, forecastStepsAhead: 1, forecastVariance: 0.021, forecastVolatility: 0.145, returnsUsed: 39, realizedVolatility: 0.018, realizedVolPercentile: 0.42, volatilityCompressed: false, volatilityExpanded: false };
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
 
     const bridge = new QuantCoreBridgeService();
@@ -227,7 +227,7 @@ describe('QuantCoreBridgeService.fetchInstitutionalVolatility/fetchInstitutional
 
   it('POSTs bars to the regime endpoint and returns the parsed HMM result when enabled', async () => {
     process.env.QUANT_JAVA_CORE_ENABLED = 'true';
-    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', currentRegime: 'BULL_TRENDING', logLikelihood: -50, observationCount: 30, stateLabels: ['BULL_TRENDING', 'BEAR_TRENDING', 'MEAN_REVERTING', 'HIGH_VOL_CHAOS'], stateMeans: [[0.01, 0.02]], stateVariances: [[0.001, 0.002]] };
+    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', currentRegime: 'BULL_TRENDING', logLikelihood: -50, observationCount: 30, stateLabels: ['BULL_TRENDING', 'BEAR_TRENDING', 'MEAN_REVERTING', 'HIGH_VOL_CHAOS'], stateMeans: [[0.01, 0.02]], stateVariances: [[0.001, 0.002]], volatilityCompressed: false, volatilityExpanded: false, volatilityPercentile: 0.55 };
     fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
 
     const bridge = new QuantCoreBridgeService();
@@ -972,7 +972,8 @@ describe('QuantCoreBridgeService - circuit breaker domain isolation (2026-09-11)
     expect(states.ensemble.isOpen).toBe(false);
 
     fetchSpy.mockClear();
-    fetchSpy.mockResolvedValue(new Response('{}', { status: 200 }));
+    const validEnsembleResult = { schemaVersion: 1, rawSide: 'BUY', totalVotes: 1, agreeingCount: 1, avgConfidenceOfAgreeing: 0.7, effectiveIndependentCount: 1, agreeingModelIds: ['x'], dissentingModelIds: [] };
+    fetchSpy.mockResolvedValue(new Response(JSON.stringify(validEnsembleResult), { status: 200 }));
     const result = await bridge.fetchInstitutionalEnsemble([{ modelId: 'x', family: 'TREND_MOMENTUM', side: 'BUY', confidence: 0.7 }]);
     expect(fetchSpy).toHaveBeenCalledTimes(1); // ensemble attempt actually made, not short-circuited
     expect(result).not.toBeNull();
@@ -991,5 +992,149 @@ describe('QuantCoreBridgeService - circuit breaker domain isolation (2026-09-11)
     const result = await bridge.fetchInstitutionalRegime('AAPL', bars);
     expect(fetchSpy).not.toHaveBeenCalled(); // still open for its own domain
     expect(result).toBeNull();
+  });
+});
+
+describe('QuantCoreBridgeService - malformed-response validation (Batch 4, 2026-09-23)', () => {
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  const bars = Array.from({ length: 40 }, (_, i) => ({
+    timestamp: i, open: 100 + i, high: 101 + i, low: 99 + i, close: 100.5 + i, volume: 1000,
+  }));
+
+  beforeEach(() => {
+    process.env.QUANT_JAVA_CORE_ENABLED = 'true';
+  });
+
+  afterEach(() => {
+    fetchSpy?.mockRestore();
+    warnSpy?.mockRestore();
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('fetchInstitutionalVolatility: a NaN-containing (via non-numeric JSON string) response is caught and returns null, not a fabricated/passthrough value', async () => {
+    // JSON has no NaN literal - the real-world failure mode is a wrong-typed field (string,
+    // null-where-not-allowed, missing key), which is exactly what a malformed/buggy Java response
+    // or a schema drift would produce. This is the same class of silent bug: `Number('garbage')`
+    // is NaN, and `NaN < threshold` is always false, so a naive caller reading this field would
+    // never notice.
+    const malformed = { schemaVersion: 1, symbol: 'AAPL', omega: 'not-a-number', alpha: 0.05, beta: 0.9, persistence: 0.95, logLikelihood: -100, unconditionalVariance: 0.02, lastConditionalVariance: 0.019, forecastStepsAhead: 1, forecastVariance: 0.021, forecastVolatility: 0.145, returnsUsed: 39, realizedVolatility: 0.02, realizedVolPercentile: 0.5 };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalVolatility('AAPL', bars);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchInstitutionalVolatility: a well-formed response passes through unchanged', async () => {
+    const fakeResult = { schemaVersion: 1, symbol: 'AAPL', omega: 0.001, alpha: 0.05, beta: 0.9, persistence: 0.95, logLikelihood: -100, unconditionalVariance: 0.02, lastConditionalVariance: 0.019, forecastStepsAhead: 1, forecastVariance: 0.021, forecastVolatility: 0.145, returnsUsed: 39, realizedVolatility: 0.02, realizedVolPercentile: 0.5, volatilityCompressed: false, volatilityExpanded: false };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(fakeResult), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalVolatility('AAPL', bars);
+
+    expect(result).toEqual(fakeResult);
+  });
+
+  it('fetchInstitutionalVolatility: rejects a response whose symbol echo does not match the requested symbol (stale/misrouted response protection)', async () => {
+    const wrongSymbol = { schemaVersion: 1, symbol: 'MSFT', omega: 0.001, alpha: 0.05, beta: 0.9, persistence: 0.95, logLikelihood: -100, unconditionalVariance: 0.02, lastConditionalVariance: 0.019, forecastStepsAhead: 1, forecastVariance: 0.021, forecastVolatility: 0.145, returnsUsed: 39, realizedVolatility: 0.02, realizedVolPercentile: 0.5 };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(wrongSymbol), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalVolatility('AAPL', bars);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchCoreEnsembleDecision: a NaN/wrong-typed confidence is caught rather than silently passed through to a caller that compares it against a min-confidence threshold', async () => {
+    // Mirrors the real downstream risk this fix addresses: JavaCoreEnsembleVoteService.ts's
+    // `ensemble.confidence < tradingSafety.javaCoreEnsembleVoteMinConfidence` evaluates to
+    // `false` for a NaN confidence, i.e. the low-confidence rejection gate silently does not
+    // reject it. This test proves the malformed value never reaches that comparison at all.
+    const malformed = { schemaVersion: 1, status: 'HEALTHY', direction: 'BUY', score: 0.7, confidence: 'high', reason: 'x', regime: 'TRENDING', timestampMs: 1, featureVersion: 'f', strategyVersion: 's', strategyCount: 5, agreeingCount: 3, effectiveIndependentCount: 1.8, contributingStrategies: [], contributingFamilies: [], assessments: [] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchCoreEnsembleDecision('AAPL', bars);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchCoreEnsembleDecision: rejects a confidence outside the valid [0,1] range', async () => {
+    const outOfRange = { schemaVersion: 1, status: 'HEALTHY', direction: 'BUY', score: 0.7, confidence: 1.5, reason: 'x', regime: 'TRENDING', timestampMs: 1, featureVersion: 'f', strategyVersion: 's', strategyCount: 5, agreeingCount: 3, effectiveIndependentCount: 1.8, contributingStrategies: [], contributingFamilies: [], assessments: [] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(outOfRange), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchCoreEnsembleDecision('AAPL', bars);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchInstitutionalAdvisory: a NaN/wrong-typed adjustedConfidence is caught rather than silently passed through', async () => {
+    // Mirrors JavaQuantAdvisoryService.ts's `advisory.adjustedConfidence < javaQuantVoteMinConfidence`
+    // - the exact same silent-pass-through risk as the ensemble case above, for the other real
+    // independent Java vote path.
+    const votes = [{ modelId: 'factor', family: 'factor', side: 'BUY' as const, confidence: 0.8 }];
+    const malformed = { schemaVersion: 1, rawSide: 'BUY', rawAvgConfidence: 0.8, rawEffectiveIndependentCount: 1, regime: 'BULL_TRENDING', regimeMultiplier: 1, currentVolatility: 0.015, volatilityMultiplier: 1, adjustedConfidence: null, gated: false, reasoning: 'x', agreeingModelIds: ['factor'], dissentingModelIds: [] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalAdvisory(votes, 'BULL_TRENDING', 0.015);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchInstitutionalEnsemble: a malformed body is classified MALFORMED_RESPONSE (distinct from HTTP_ERROR/NETWORK_ERROR_OR_TIMEOUT) and returns null', async () => {
+    const malformed = { schemaVersion: 1, rawSide: 'BUY', totalVotes: null, agreeingCount: 1, avgConfidenceOfAgreeing: 0.7, effectiveIndependentCount: 1, agreeingModelIds: [], dissentingModelIds: [] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalEnsemble([{ modelId: 'x', family: 'TREND_MOMENTUM', side: 'BUY', confidence: 0.7 }]);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchInstitutionalCorrelation: rejects a correlationMatrix containing a non-finite entry', async () => {
+    const malformed = { schemaVersion: 1, symbols: ['SPY', 'IVV'], lambda: 0.94, correlationMatrix: [[1, 'NaN'], [0.98, 1]] };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalCorrelation(['SPY', 'IVV'], [[0.01, 0.02], [0.011, 0.019]]);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchInstitutionalFactors: rejects a malformed composite/momentum field and validates symbol echo', async () => {
+    const malformed = { schemaVersion: 1, symbol: 'AAPL', momentum: 0.1, meanReversion: 0.2, volumeLiquidity: 0.3, volatility: 0.4, orderFlowProxy: 0.5, orderFlowProxyIsRealOrderFlow: false, composite: undefined };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchInstitutionalFactors('AAPL', bars);
+
+    expect(result).toBeNull();
+  });
+
+  it('fetchForecast: allows real, honest nulls (INSUFFICIENT_DATA) through unvalidated but still rejects a genuinely malformed present field', async () => {
+    const honestNulls = { schemaVersion: 1, status: 'INSUFFICIENT_DATA', sampleSize: 3, meanReturn: null, medianReturn: null, trimmedMeanReturn: null, stdevReturn: null, meanReturnLower: null, meanReturnUpper: null, probabilityOfProfit: null, probabilityOfProfitLower: null, probabilityOfProfitUpper: null, transactionCostBps: 5, netExpectedReturn: null };
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(honestNulls), { status: 200 }));
+    const bridge = new QuantCoreBridgeService();
+    const result = await bridge.fetchForecast('AAPL', [0.01, -0.02, 0.03], 5);
+    expect(result).toEqual(honestNulls);
+
+    fetchSpy.mockRestore();
+    const malformed = { ...honestNulls, probabilityOfProfit: 1.5 }; // present but out of [0,1] range
+    fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(new Response(JSON.stringify(malformed), { status: 200 }));
+    const bridge2 = new QuantCoreBridgeService();
+    const result2 = await bridge2.fetchForecast('AAPL', [0.01, -0.02, 0.03], 5);
+    expect(result2).toBeNull();
+  });
+
+  it('does not affect the existing circuit-breaker/timeout/non-2xx failure paths (regression check)', async () => {
+    fetchSpy = vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'));
+    const bridge = new QuantCoreBridgeService();
+    await expect(bridge.fetchInstitutionalVolatility('AAPL', bars)).resolves.toBeNull();
+    await expect(bridge.fetchCoreEnsembleDecision('AAPL', bars)).resolves.toBeNull();
+    await expect(bridge.fetchInstitutionalAdvisory([{ modelId: 'x', family: 'f', side: 'BUY', confidence: 0.7 }], 'BULL_TRENDING', 0.01)).resolves.toBeNull();
   });
 });
