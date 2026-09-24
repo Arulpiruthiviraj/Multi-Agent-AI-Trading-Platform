@@ -10,6 +10,7 @@ import { buildProviderHealthMatrix } from '../observability/providerHealthMatrix
 import { buildConsensusPipelineReport, formatConsensusPipelineReport } from '../observability/consensusPipelineReport';
 import { buildTradingFunnelReport, formatTradingFunnelReport } from '../observability/tradingFunnelReport';
 import { buildQuantEvidenceReport, formatQuantEvidenceReport } from '../observability/quantEvidenceReport';
+import { buildReflectionEngineHealthReport, formatReflectionEngineHealthReport } from '../observability/reflectionEngineHealthReport';
 import { buildExtendedHoursSpreadReport, formatExtendedHoursSpreadReport } from '../observability/extendedHoursSpreadReport';
 import { buildWhyNoTradeReport, formatWhyNoTradeReport } from '../observability/whyNoTradeReport';
 import { buildCalibrationMaturityReport, formatCalibrationMaturityReport } from '../continuous/calibrationMaturity';
@@ -286,6 +287,22 @@ observabilityRouter.get('/quant-evidence', async (req, res) => {
     const report = await buildQuantEvidenceReport(sinceIso);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatQuantEvidenceReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// P1-A follow-up (2026-09-23): read-only view over ReflectionEngine.ts's own in-process cycle
+// instrumentation (inFlight-guard skipped-overlap count, cycle duration, per-table rows
+// scanned/query duration). Purely in-memory (this process only) - no DB query, no new table.
+observabilityRouter.get('/reflection-engine-health', (req, res) => {
+  try {
+    const report = buildReflectionEngineHealthReport();
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatReflectionEngineHealthReport(report));
       return;
     }
     res.json({ ok: true, report });

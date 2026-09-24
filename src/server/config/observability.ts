@@ -27,6 +27,9 @@ export interface ObservabilityConfig {
   marketDataSampleEveryN: number;
   processTelemetryIntervalMs: number;
   processTelemetryRingSize: number;
+  /** P1-A follow-up (2026-09-23): bounded ring size for ReflectionEngine.ts's own cycle-duration /
+   *  row-count / skipped-overlap instrumentation - see config/observability.json's own comment. */
+  reflectionEngineMetricsRingSize: number;
   /** Readiness pass (2026-09-04): processTelemetry's own ring buffer is in-memory only and lost on
    *  process death - exactly the blind spot that made the Sept 2-3 silent-death investigations
    *  depend on Windows' own external resource-exhaustion detector instead of anything Argus itself
@@ -71,7 +74,7 @@ const LEVEL_SET = new Set(['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL']);
 const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'schemaVersion', 'batchFlushMs', 'maxBatchSize', 'maxQueueSize',
   'retentionDays', 'retentionSweepMs', 'marketDataSampleEveryN',
-  'processTelemetryIntervalMs', 'processTelemetryRingSize',
+  'processTelemetryIntervalMs', 'processTelemetryRingSize', 'reflectionEngineMetricsRingSize',
   'memoryTelemetryPersistIntervalMs', 'memoryTelemetryWarningRssMb', 'memoryTelemetryCriticalRssMb',
   'memoryTelemetryWarningCommittedMb', 'memoryTelemetryCriticalCommittedMb',
   'maxPayloadChars', 'promptHashLength',

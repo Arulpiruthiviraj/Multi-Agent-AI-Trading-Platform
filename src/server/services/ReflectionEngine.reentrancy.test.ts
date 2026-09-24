@@ -39,6 +39,9 @@ describe('ReflectionEngine.evaluateAgents re-entrancy guard (real defect: unboun
   });
 
   it('a second call while the first is still in flight is a real no-op, not a second full evaluation', async () => {
+    const { getReflectionEngineSkippedOverlapCount } = await import('../observability/ObservabilityMetrics');
+    const skippedBefore = getReflectionEngineSkippedOverlapCount();
+
     const selectSpy = vi.spyOn(db, 'select');
     selectSpy.mockClear();
 
@@ -49,6 +52,11 @@ describe('ReflectionEngine.evaluateAgents re-entrancy guard (real defect: unboun
     const callsRightAfterSecondInvoke = selectSpy.mock.calls.length;
 
     await Promise.all([first, second]);
+
+    // P1-A follow-up (2026-09-23): the single most direct proof the guard is doing real work, not
+    // dead code - the skipped-overlap counter increments exactly once for the prevented `second`
+    // call above.
+    expect(getReflectionEngineSkippedOverlapCount() - skippedBefore).toBe(1);
 
     // The second call must not have added any of its own select() calls - it returned before
     // doing any work. Comparing against the count captured synchronously right after invoking it

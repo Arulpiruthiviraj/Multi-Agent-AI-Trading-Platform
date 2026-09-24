@@ -22,6 +22,7 @@ import { rawVsEffectiveDirectional, classifyEvidenceStatus, type ClusterableRow 
 import { independenceClusterGapMs, isExcludedFromWeightLearning, secondaryGroupKey } from '../research/predictionIndependencePolicy';
 import { isTelemetryPulsePayload, TELEMETRY_PULSE_TRACE_PREFIX } from '../core/telemetryPulse';
 import { NON_LIVE_OPENING_TRADE_ENVS } from './omsEntryPrice';
+import { recordReflectionEngineCycleSample, incReflectionEngineSkippedOverlap } from '../observability/ObservabilityMetrics';
 
 export class ReflectionEngine {
   private intervalId: NodeJS.Timeout | null = null;
@@ -129,8 +130,25 @@ export class ReflectionEngine {
   }
 
   async evaluateAgents() {
-    if (this.inFlight) return;
+    if (this.inFlight) {
+      // P1-A follow-up (2026-09-23): real, direct proof the guard above is preventing an
+      // overlapping cycle, not dead code - see ObservabilityMetrics.ts's own header comment.
+      // Purely a counter increment at the guard's existing early-return site; the guard's own
+      // control flow (the `return` itself) is unchanged.
+      incReflectionEngineSkippedOverlap();
+      return;
+    }
     this.inFlight = true;
+    // P1-A follow-up: per-cycle instrumentation only, never affecting what gets scored/persisted
+    // below. Row counts capture the RAW row count each full-table-scan query returns (before any
+    // in-memory filter), since that's the actual DB-side scan cost this incident was about.
+    const cycleStartedAt = Date.now();
+    let tradesRowsScanned = 0;
+    let tradesQueryDurationMs = 0;
+    let agentPredictionsRowsScanned = 0;
+    let agentPredictionsQueryDurationMs = 0;
+    let kronosPredictionsRowsScanned = 0;
+    let kronosPredictionsQueryDurationMs = 0;
     console.log("[ReflectionEngine] Measuring AI performance based on real outcomes...");
     try {
       // Real defect fixed (2026-08-26 self-improvement loop audit): this previously read ALL
@@ -148,7 +166,11 @@ export class ReflectionEngine {
       // execution_environment is a legacy pre-tagging row (real trade, no stamp yet), not
       // REPLAY/BACKTEST - it must stay included, only the known-synthetic environments are
       // excluded.
-      const allTrades = (await db.select().from(trades).all())
+      const tradesQueryStartedAt = Date.now();
+      const rawTradesRows = await db.select().from(trades).all();
+      tradesQueryDurationMs = Date.now() - tradesQueryStartedAt;
+      tradesRowsScanned = rawTradesRows.length;
+      const allTrades = rawTradesRows
         .filter(t => !NON_LIVE_OPENING_TRADE_ENVS.has(String(t.executionEnvironment || '').toUpperCase()));
       const now = Date.now();
 
@@ -244,7 +266,11 @@ export class ReflectionEngine {
       // graded WIN and were feeding into this exact aggregate. Filtering here means the very next
       // reflection cycle self-corrects agentPerformanceStats/agentConfidenceCalibration forward,
       // with no need to hand-edit already-persisted historical rows.
-      const predictions = (await db.select().from(agentPredictions).all())
+      const predictionsQueryStartedAt = Date.now();
+      const rawPredictionRows = await db.select().from(agentPredictions).all();
+      agentPredictionsQueryDurationMs = Date.now() - predictionsQueryStartedAt;
+      agentPredictionsRowsScanned = rawPredictionRows.length;
+      const predictions = rawPredictionRows
         .filter(p => !p.traceId || !p.traceId.startsWith(TELEMETRY_PULSE_TRACE_PREFIX));
       const predictionById = new Map(predictions.map(p => [p.id, p]));
       const outcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'agent_predictions'));
@@ -262,7 +288,10 @@ export class ReflectionEngine {
       // KronosEngine: kronos_predictions is its one real forecast ledger (every tick, no
       // duplication) - source its stats/calibration from there directly instead of the
       // agent_predictions copies (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md finding M1).
+      const kronosQueryStartedAt = Date.now();
       const kronosRows = await db.select().from(kronosPredictions).all();
+      kronosPredictionsQueryDurationMs = Date.now() - kronosQueryStartedAt;
+      kronosPredictionsRowsScanned = kronosRows.length;
       const kronosById = new Map(kronosRows.map(k => [String(k.id), k]));
       const kronosOutcomes = await db.select().from(predictionOutcomes).where(eq(predictionOutcomes.sourceTable, 'kronos_predictions'));
       for (const o of kronosOutcomes) {
@@ -409,6 +438,20 @@ export class ReflectionEngine {
       console.error("[ReflectionEngine] Error evaluating agents:", e);
     } finally {
       this.inFlight = false;
+      // P1-A follow-up: recorded on every cycle regardless of success/failure (row-count fields
+      // simply stay 0 for whichever scan never ran before a thrown error) - matches this method's
+      // own `finally`-based inFlight reset above, so a failing cycle is still visible, not silently
+      // absent from the ring.
+      recordReflectionEngineCycleSample({
+        ts: cycleStartedAt,
+        cycleDurationMs: Date.now() - cycleStartedAt,
+        tradesRowsScanned,
+        tradesQueryDurationMs,
+        agentPredictionsRowsScanned,
+        agentPredictionsQueryDurationMs,
+        kronosPredictionsRowsScanned,
+        kronosPredictionsQueryDurationMs,
+      });
     }
   }
 

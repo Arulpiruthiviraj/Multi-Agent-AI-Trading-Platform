@@ -14,6 +14,8 @@
   "marketDataSampleEveryN": 50,
   "processTelemetryIntervalMs": 15000,
   "processTelemetryRingSize": 120,
+  "_reflectionEngineMetricsComment": "P1-A follow-up (2026-09-23): runtime proof, not just inference, that ReflectionEngine.ts's already-committed inFlight re-entrancy guard is doing real work. Bounded in-memory ring only (no new DB table - the operator's explicit concern was not recreating an unbounded-growth incident with the very instrumentation meant to verify its fix). 30 sits inside the requested 20-50 range; at one sample per ~60s reflectionEngineMs cycle this covers roughly the last half hour of cycles.",
+  "reflectionEngineMetricsRingSize": 30,
   "_memoryTelemetryComment": "Readiness pass (2026-09-04): a durable (persisted, not in-memory-only) memory sample on a much coarser cadence than processTelemetryIntervalMs, specifically so a future silent death has real Argus-side memory-trend history to examine instead of relying on Windows' own external resource-exhaustion detector (the only evidence available for the Sept 2-3 deaths). Thresholds are evidence-labeled, not asserted precise: warning=2048MB sits above every healthy Node RSS baseline observed this session (600-800MB in the first 30-60min); critical=3584MB sits just under the ~3.85GB Node RSS peak that immediately preceded a prior silent death - close enough to alert before reaching that exact danger zone, not a proven safe ceiling. Recalibrate once a full RTH session's real Node memory curve (post Chronos-leak-fix) exists.",
   "memoryTelemetryPersistIntervalMs": 300000,
   "memoryTelemetryWarningRssMb": 2048,

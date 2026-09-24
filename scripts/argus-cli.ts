@@ -1071,6 +1071,17 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'reflection-engine-health'() {
+    // P1-A follow-up (2026-09-23): ReflectionEngine.ts's own inFlight-guard skipped-overlap count
+    // plus per-cycle duration / rows-scanned / query-duration for its 3 full-table scans (trades,
+    // agent_predictions, kronos_predictions). In-process ring only (this running engine's own
+    // recent cycles) - not a historical/cross-restart query.
+    const res = await fetch(`${BASE}/api/v2/observability/reflection-engine-health?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 10_000)),
+    });
+    console.log(await res.text());
+  },
   async 'extended-hours-spread'() {
     // 2026-09-23 (operator-directed follow-up to the TSLA gate-25 forensic pass): quote
     // availability / bid-ask completeness / stale-quote rate / gate-25 rejection-reason counts,
@@ -1638,7 +1649,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];
