@@ -30,6 +30,7 @@ import type {
   VerificationResult,
 } from './types';
 import { runtimeIntervals } from '../../config/runtimeIntervals';
+import { createSingleFlightGuard } from '../../core/singleFlightInterval';
 
 const POLL_INTERVAL_MS = runtimeIntervals.openAlicePollMs;
 const REQUEST_TIMEOUT_MS = runtimeIntervals.openAliceRequestTimeoutMs;
@@ -43,6 +44,14 @@ export class OpenAliceVerificationService {
   private activeMcpUrl: string | null = null;
   private readonly pending = new Map<string, VerificationRequest>();
   private pollTimer: NodeJS.Timeout | null = null;
+  // Batch 2 timer/reentrancy sweep (2026-09-23): pollOnce() awaits a real network call to the MCP
+  // adapter (pollForReports) with no visible timeout in this file; POLL_INTERVAL_MS defaults to
+  // 30s (config/runtimeIntervals.json), a real duration a slow/degraded MCP response could exceed.
+  // Prior audit found no leak here (every `pending` entry is deleted on every path), so this is
+  // pure hardening, not a leak fix: it only removes the redundant duplicate MCP round-trip an
+  // overlapping poll would otherwise make - pollOnce() already re-checks `this.pending.get(...)`
+  // before acting, so no double-processing bug existed, only wasted network calls.
+  private pollGuard = createSingleFlightGuard((e) => console.error('[OpenAlice] Poll cycle failed', e));
 
   private constructor() {
     this.enabled = process.env.OPENALICE_ENABLED === 'true';
@@ -207,7 +216,7 @@ export class OpenAliceVerificationService {
   }
 
   private startPolling() {
-    this.pollTimer = setInterval(() => this.pollOnce().catch((e) => console.error('[OpenAlice] Poll cycle failed', e)), POLL_INTERVAL_MS);
+    this.pollTimer = setInterval(() => { void this.pollGuard.run(() => this.pollOnce()); }, POLL_INTERVAL_MS);
   }
 
   stopPolling() {

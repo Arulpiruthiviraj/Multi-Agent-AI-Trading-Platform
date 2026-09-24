@@ -20,6 +20,7 @@ import {
   getPendingEvaluations,
   evaluateAgainstPriceSeries,
   persistEvaluation,
+  recordNoDataAttempt,
 } from './MissedOpportunityDetector';
 import { createSingleFlightGuard, type SingleFlightGuard, type SingleFlightIntervalMetrics } from '../core/singleFlightInterval';
 
@@ -69,10 +70,25 @@ export class MissedOpportunityEvaluator {
 
         let bars = await historicalDataGateway.getBars(record.symbol, '1Min', detectedAtMs, windowEndMs);
         if (bars.length < 2) {
-          await historicalDataGateway.ensureBars(record.symbol, '1Min', detectedAtMs, windowEndMs);
+          try {
+            await historicalDataGateway.ensureBars(record.symbol, '1Min', detectedAtMs, windowEndMs);
+          } catch {
+            // Real defect fix (Batch 2, 2026-09-23): ensureBars() throws when the provider
+            // genuinely has no bars for this symbol/window (HistoricalDataGateway.ts's own "No
+            // historical bars available" error - delisted symbol, provider gap). This used to
+            // propagate to the catch block below, which only logged and left the record PENDING -
+            // re-selected and re-attempted on every single future cycle, forever. Swallow it here
+            // (still never fabricates a bar) and fall through to the bounded-retry accounting.
+          }
           bars = await historicalDataGateway.getBars(record.symbol, '1Min', detectedAtMs, windowEndMs);
         }
-        if (bars.length < 2) continue; // no real data source available - never fabricate, stays PENDING
+        if (bars.length < 2) {
+          // Still no real data after a real fetch attempt - never fabricate. Bounded retry: only
+          // after missedOpportunityMaxEvaluationAttempts real misses does this record stop being
+          // re-selected (see recordNoDataAttempt()'s own doc comment for why this is safe).
+          await recordNoDataAttempt(record.id, continuousIntelligence.missedOpportunityMaxEvaluationAttempts, now);
+          continue;
+        }
 
         // Prefer the record's own stored detection price (real quote at detection time, now that
         // the write-side hardcoded-null bug is fixed) when present; fall back to the first real

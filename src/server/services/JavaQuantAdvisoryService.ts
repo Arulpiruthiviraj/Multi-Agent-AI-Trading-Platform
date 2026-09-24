@@ -47,6 +47,7 @@ import { observeSafe, structuredLogger } from '../observability/StructuredLogger
 import { emitQuantEvidenceObservability } from '../observability/quantEvidenceEmitter';
 import { mapJavaFactorCompositeToQuantEvidence } from '../quant/quantEvidenceAdapters';
 import type { ResearchBar } from '../research/ohlcvTypes';
+import { createSingleFlightGuard } from '../core/singleFlightInterval';
 
 // Reasoned (not fabricated) mapping from FactorAlphaEngine's composite Z-score-like output into an
 // ensemble vote: sign gives direction, magnitude (clamped) gives confidence. composite is already
@@ -81,11 +82,18 @@ export const TIMEFRAME = '1Day';
 class JavaQuantAdvisoryService {
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private cursor = 0;
+  // Batch 2 timer/reentrancy sweep (2026-09-23): a single tick() does real historical-bar fetches
+  // plus 4 parallel Java HTTP calls (garch/regime/factor/features) for one symbol. Pure addition:
+  // an overlapping tick is fully redundant work on a (likely) different symbol from the same
+  // round-robin cursor, not a correctness bug, but wasteful and adds unnecessary Java engine load
+  // under a slow network condition - coalescing wastes nothing since the next tick just resumes
+  // from the same cursor.
+  private tickGuard = createSingleFlightGuard(() => { /* analyzeSymbol already fails closed internally; defense in depth */ });
 
   start(): void {
     if (this.intervalId || !isQuantJavaCoreEnabled()) return;
     this.intervalId = setInterval(() => {
-      this.tick().catch(() => { /* analyzeSymbol already fails closed internally; defense in depth */ });
+      void this.tickGuard.run(() => this.tick());
     }, runtimeIntervals.javaQuantAdvisoryMs);
   }
 

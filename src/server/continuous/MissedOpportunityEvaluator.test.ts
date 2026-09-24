@@ -4,6 +4,7 @@ vi.mock('./MissedOpportunityDetector', () => ({
   getPendingEvaluations: vi.fn(),
   evaluateAgainstPriceSeries: vi.fn(),
   persistEvaluation: vi.fn(),
+  recordNoDataAttempt: vi.fn(),
 }));
 
 vi.mock('../engines/backtest/HistoricalDataGateway', () => ({
@@ -133,5 +134,41 @@ describe('MissedOpportunityEvaluator', () => {
     evaluator.stop();
     await vi.advanceTimersByTimeAsync(continuousIntelligence.missedOpportunityEvaluationIntervalMs * 3);
     expect(getPendingEvaluations).toHaveBeenCalledTimes(2); // no further calls after stop()
+  });
+
+  /**
+   * Real defect fix (Batch 2, 2026-09-23): a symbol with genuinely unavailable historical bars
+   * (ensureBars() throws "No historical bars available...") previously stayed PENDING forever and
+   * was silently swallowed by the outer per-record try/catch, re-attempted (real network call +
+   * console.error) on every single future cycle with no bound. Fixed via recordNoDataAttempt().
+   */
+  it('records a bounded-retry attempt (never marks EVALUATED, never fabricates) when bars remain unavailable after a real fetch attempt', async () => {
+    const { getPendingEvaluations, evaluateAgainstPriceSeries, persistEvaluation, recordNoDataAttempt } = await import('./MissedOpportunityDetector');
+    const { historicalDataGateway } = await import('../engines/backtest/HistoricalDataGateway');
+    const { MissedOpportunityEvaluator } = await import('./MissedOpportunityEvaluator');
+    const { continuousIntelligence } = await import('../config/continuousIntelligence');
+
+    (getPendingEvaluations as any).mockResolvedValue([
+      { id: 'miss-delisted', symbol: 'DELISTED', detectedAt: new Date('2026-09-08T14:00:00.000Z').toISOString(), evaluationHorizonMinutes: 60, priceAtDetection: 10 },
+    ]);
+    (historicalDataGateway.getBars as any).mockResolvedValue([]); // never enough bars, on either call
+    (historicalDataGateway.ensureBars as any).mockRejectedValue(
+      new Error('No historical bars available for DELISTED (1Min) between ... and ....'),
+    );
+
+    const evaluator = new MissedOpportunityEvaluator();
+    const now = new Date('2026-09-08T15:05:00.000Z');
+    await evaluator.evaluatePending(now);
+
+    // The ensureBars() throw must not propagate out and must not be treated as any other kind of
+    // per-record failure - it's routed to the bounded-retry accounting, not fabricated as a result.
+    expect(evaluateAgainstPriceSeries).not.toHaveBeenCalled();
+    expect(persistEvaluation).not.toHaveBeenCalled();
+    expect(recordNoDataAttempt).toHaveBeenCalledTimes(1);
+    expect(recordNoDataAttempt).toHaveBeenCalledWith(
+      'miss-delisted',
+      continuousIntelligence.missedOpportunityMaxEvaluationAttempts,
+      now,
+    );
   });
 });

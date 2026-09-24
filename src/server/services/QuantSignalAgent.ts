@@ -66,6 +66,7 @@ import { getNewsCatalysts, hasRealCatalystEvidence } from './NewsCatalystStore';
 import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
 import { isMultiAssetEnabled } from '../config/multiAsset';
 import { classifyAsset } from '../multiAsset/AssetClassifier';
+import { createSingleFlightGuard } from '../core/singleFlightInterval';
 
 const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
 const LOOKBACK_DAYS = tradingSafety.quantLookbackDays;
@@ -136,6 +137,14 @@ export function deriveColdStartBootstrapIdea(
 
 export class QuantSignalAgent {
   private intervalId: NodeJS.Timeout | null = null;
+  // Batch 2 timer/reentrancy sweep (2026-09-23): runCycle() fans out per-symbol evaluation across
+  // the active universe (bounded concurrency via symbolConcurrency()), including real historical
+  // bar fetches subject to a documented Alpaca 429 backoff path - i.e. it can legitimately run long
+  // under rate-limiting. A cycle outlasting cycleMs would otherwise let a second overlapping
+  // runCycle() storm the same rate-limited API and double-evaluate symbols concurrently. Pure
+  // addition: coalesces (skips), never queues; downstream duplicate-signal/cooldown gates were
+  // already the real safety net for any idea this could double-emit - this only removes wasted work.
+  private cycleGuard = createSingleFlightGuard((e) => console.error('[QuantSignalAgent] Cycle failed', e));
 
   private isEnabled(): boolean {
     return isRuntimeFlagEnabled('QUANT_ENGINE_ENABLED');
@@ -158,9 +167,9 @@ export class QuantSignalAgent {
     if (this.intervalId) return;
     const cycleMs = this.cycleIntervalMs();
     console.log(`[QuantSignalAgent] Starting - real regime/market-context evaluation every ${cycleMs / 1000}s for actively-tracked symbols.`);
-    this.runCycle().catch(e => console.error('[QuantSignalAgent] Initial cycle failed', e));
+    void this.cycleGuard.run(() => this.runCycle());
     this.intervalId = setInterval(() => {
-      this.runCycle().catch(e => console.error('[QuantSignalAgent] Cycle failed', e));
+      void this.cycleGuard.run(() => this.runCycle());
     }, cycleMs);
   }
 
@@ -178,6 +187,10 @@ export class QuantSignalAgent {
    *  caller, exactly the way PredictionOutcomeEvaluator.evaluatePending() already is both
    *  timer-driven and directly callable. */
   async triggerNow(): Promise<void> {
+    // Deliberately NOT routed through cycleGuard: this is the simulator harness's explicit
+    // "give exit/entry logic a real chance to fire on an accelerated synthetic clock" entry point
+    // (see this method's own doc comment above) - coalescing it away under a real timer tick would
+    // silently break that guarantee. The timer path above is the one this guard exists to protect.
     await this.runCycle();
   }
 

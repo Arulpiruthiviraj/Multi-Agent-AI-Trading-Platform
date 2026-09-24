@@ -1595,11 +1595,21 @@ export const missedOpportunities = sqliteTable('missed_opportunities', {
   evidenceAtDecisionJson: text('evidence_at_decision_json').notNull(),
   priceAtDetection: real('price_at_detection'),
   evaluationHorizonMinutes: integer('evaluation_horizon_minutes').notNull(),
-  evaluationStatus: text('evaluation_status').notNull(), // PENDING | EVALUATED
+  evaluationStatus: text('evaluation_status').notNull(), // PENDING | EVALUATED | NOT_EVALUABLE_NO_DATA
   priceAtEvaluation: real('price_at_evaluation'),
   maxFavorableExcursionPct: real('max_favorable_excursion_pct'),
   maxAdverseExcursionPct: real('max_adverse_excursion_pct'),
   evaluatedAt: text('evaluated_at'),
+  // Batch 2 forensic fix (2026-09-23): a symbol with genuinely unavailable historical bars
+  // (delisted, provider gap) previously stayed PENDING forever and was re-selected by
+  // getPendingEvaluations() on every single MissedOpportunityEvaluator cycle - a real log-storm/
+  // wasted-work defect (repeated HistoricalDataGateway.ensureBars() network calls + a console.error
+  // every cycle, indefinitely). These two nullable columns back a bounded retry: after
+  // missedOpportunityMaxEvaluationAttempts (config/continuousIntelligence.json) real no-data
+  // misses, the record is marked evaluationStatus='NOT_EVALUABLE_NO_DATA' (terminal - never
+  // fabricates a result, only stops re-asking a question already answered enough times).
+  evaluationAttempts: integer('evaluation_attempts').notNull().default(0),
+  lastEvaluationAttemptAt: text('last_evaluation_attempt_at'),
 }, (table) => ({
   symbolIdx: index('idx_missed_opportunities_symbol').on(table.symbol, table.detectedAt),
   statusIdx: index('idx_missed_opportunities_status').on(table.evaluationStatus),

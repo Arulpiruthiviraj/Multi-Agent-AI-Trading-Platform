@@ -28,6 +28,7 @@ import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { dbPath, sqliteDb } from '../db';
 import { runtimeIntervals } from '../config/runtimeIntervals';
+import { createSingleFlightGuard } from '../core/singleFlightInterval';
 
 const BACKUP_DIR = path.join(path.dirname(dbPath), 'backups');
 const INTERVAL_MS = runtimeIntervals.dbBackupIntervalMs;
@@ -35,6 +36,12 @@ const RETENTION_DAYS = runtimeIntervals.dbBackupRetentionDays;
 
 export class DbBackupService {
   private intervalId: NodeJS.Timeout | null = null;
+  // Batch 2 timer/reentrancy sweep (2026-09-23): runBackup() does a real fs.copyFile of a file
+  // measured at 4.08GB (see this module's own header) plus a synchronous WAL checkpoint. INTERVAL_MS
+  // is daily so a real overlap is unlikely, but start() also fires an immediate runBackup() before
+  // arming the timer, and any future manual "backup now" trigger would race it - single-flight is a
+  // pure addition here (coalesce, never queue), same contract as every other guard in this pass.
+  private backupGuard = createSingleFlightGuard((e) => console.error('[DbBackupService] Backup cycle failed', e));
 
   start() {
     if (this.intervalId) return;
@@ -43,8 +50,8 @@ export class DbBackupService {
       // copying a multi-GB file; left synchronous for startup-ordering simplicity.
       mkdirSync(BACKUP_DIR, { recursive: true });
     }
-    void this.runBackup();
-    this.intervalId = setInterval(() => { void this.runBackup(); }, INTERVAL_MS);
+    void this.backupGuard.run(() => this.runBackup());
+    this.intervalId = setInterval(() => { void this.backupGuard.run(() => this.runBackup()); }, INTERVAL_MS);
     console.log("[DbBackupService] Daily DB backup scheduled.");
   }
 

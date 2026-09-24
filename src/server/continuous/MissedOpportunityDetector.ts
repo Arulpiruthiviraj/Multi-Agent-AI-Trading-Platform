@@ -213,6 +213,33 @@ export async function persistEvaluation(missId: string, evaluation: EvaluationRe
   }
 }
 
+/**
+ * Real defect fix (Batch 2, 2026-09-23): a symbol with genuinely unavailable historical bars
+ * (delisted, provider gap) previously stayed PENDING forever - getPendingEvaluations() re-selected
+ * it on every single evaluator cycle indefinitely, each time re-attempting a real
+ * HistoricalDataGateway.ensureBars() network call and logging a console.error, forever. Called
+ * from MissedOpportunityEvaluator.ts whenever a due record's bars are still unavailable after a
+ * real fetch attempt. Never marks EVALUATED and never fabricates a result - after
+ * missedOpportunityMaxEvaluationAttempts real misses (config/continuousIntelligence.json), the
+ * record is marked evaluationStatus='NOT_EVALUABLE_NO_DATA' (terminal, honestly labeled, distinct
+ * from both PENDING and EVALUATED) so getPendingEvaluations()'s existing PENDING-only filter
+ * naturally stops re-selecting it - no query change needed.
+ */
+export async function recordNoDataAttempt(missId: string, maxAttempts: number, now: Date = new Date()): Promise<void> {
+  try {
+    const [row] = await db.select().from(missedOpportunities).where(eq(missedOpportunities.id, missId)).limit(1);
+    if (!row) return;
+    const nextAttempts = (row.evaluationAttempts ?? 0) + 1;
+    await db.update(missedOpportunities).set({
+      evaluationAttempts: nextAttempts,
+      lastEvaluationAttemptAt: now.toISOString(),
+      ...(nextAttempts >= maxAttempts ? { evaluationStatus: 'NOT_EVALUABLE_NO_DATA' as const } : {}),
+    }).where(eq(missedOpportunities.id, missId));
+  } catch (e) {
+    console.error('[MissedOpportunityDetector] Failed to record no-data evaluation attempt', e);
+  }
+}
+
 export async function getMissedOpportunities(sinceIso: string, limit = 100): Promise<Array<typeof missedOpportunities.$inferSelect>> {
   return db.select().from(missedOpportunities)
     .where(gte(missedOpportunities.detectedAt, sinceIso))

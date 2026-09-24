@@ -147,6 +147,11 @@ export interface ContinuousIntelligenceConfig {
    *  callers - live query confirmed 592/592 rows PENDING since the table existed). This is the
    *  cadence for the new MissedOpportunityEvaluator worker that closes that gap. */
   missedOpportunityEvaluationIntervalMs: number;
+  /** Batch 2 forensic fix (2026-09-23): bounded retry ceiling for a due record whose historical
+   *  bars are still unavailable after a real ensureBars() attempt - see
+   *  MissedOpportunityDetector.recordNoDataAttempt()'s own doc comment. After this many real
+   *  misses the record is marked terminal (NOT_EVALUABLE_NO_DATA), never retried again. */
+  missedOpportunityMaxEvaluationAttempts: number;
   /** Phase 4H: minimum sample size before a challenger version is eligible for promotion (mirrors Kelly's existing 20-trade floor). */
   championChallengerMinSampleSize: number;
   /** Phase 4H: challenger must beat the champion's metric by at least this margin to pass the promotion gate. */
@@ -315,6 +320,7 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     missedOpportunityEvaluationHorizonMinutes: requireNumber(raw.missedOpportunityEvaluationHorizonMinutes, 'missedOpportunityEvaluationHorizonMinutes'),
     missedOpportunityLookbackMs: requireNumber(raw.missedOpportunityLookbackMs, 'missedOpportunityLookbackMs'),
     missedOpportunityEvaluationIntervalMs: requireNumber(raw.missedOpportunityEvaluationIntervalMs, 'missedOpportunityEvaluationIntervalMs'),
+    missedOpportunityMaxEvaluationAttempts: requireNumber(raw.missedOpportunityMaxEvaluationAttempts, 'missedOpportunityMaxEvaluationAttempts'),
     championChallengerMinSampleSize: requireNumber(raw.championChallengerMinSampleSize, 'championChallengerMinSampleSize'),
     championChallengerMinImprovementMargin: requireNonNegativeNumber(raw.championChallengerMinImprovementMargin, 'championChallengerMinImprovementMargin'),
     calibrationMaxObservationAgeMs: requireNumber(raw.calibrationMaxObservationAgeMs, 'calibrationMaxObservationAgeMs'),

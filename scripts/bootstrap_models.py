@@ -98,6 +98,39 @@ def install_python_requirements() -> bool:
     return True
 
 
+# Investigated (Batch 2, 2026-09-23): checked local_ai_service.py's imports against this file's
+# own requirements-ai.txt - `truststore` (the specific package named in the audit hypothesis) IS
+# present (line 12) and correctly installed by install_python_requirements() above. No missing
+# dependency was found. What WAS missing: a cheap way to know, right after pip install, whether
+# every package local_ai_service.py imports unconditionally at module load time (truststore, torch,
+# transformers, chronos-forecasting) actually imports cleanly - a real gap in one of these
+# previously surfaced only as a raw, unhelpful ImportError traceback the first time an operator ran
+# `npm run ai:serve`, well after this bootstrap script had already reported success. This is a
+# `python -c "import X"` sanity loop only - no model weights are downloaded, matching
+# warmup_huggingface_models()'s own existing (heavier) checks below.
+REQUIRED_SERVICE_IMPORTS = ["truststore", "torch", "transformers", "chronos"]
+
+
+def preflight_check_service_imports() -> bool:
+    all_ok = True
+    for module_name in REQUIRED_SERVICE_IMPORTS:
+        result = subprocess.run(
+            [sys.executable, "-c", f"import {module_name}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            log(f"  OK: import {module_name}")
+        else:
+            all_ok = False
+            log(
+                f"  MISSING/BROKEN: import {module_name} failed - `npm run ai:serve` "
+                f"(scripts/local_ai_service.py) will not start until this is fixed. "
+                f"Re-run `pip install -r requirements-ai.txt`, or install '{module_name}' directly. "
+                f"Details: {result.stderr.strip().splitlines()[-1] if result.stderr.strip() else 'unknown error'}"
+            )
+    return all_ok
+
+
 def pull_ollama_models() -> None:
     for model in OLLAMA_MODELS:
         result = run([OLLAMA_EXE, "pull", model])
@@ -171,6 +204,10 @@ def main() -> int:
 
     deps_ok = install_python_requirements()
     if deps_ok:
+        log("Preflight: verifying local_ai_service.py's required imports actually import cleanly...")
+        imports_ok = preflight_check_service_imports()
+        if not imports_ok:
+            log("One or more required imports are broken - see MISSING/BROKEN lines above before running `npm run ai:serve`.")
         warmup_huggingface_models()
     else:
         log("Skipping Hugging Face warm-up since Python dependencies did not install cleanly.")

@@ -40,6 +40,7 @@
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { isTelemetryPulsePayload } from '../core/telemetryPulse';
+import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { db } from '../db';
 import { trades, settings, brokerConnections, portfolio } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
@@ -115,6 +116,15 @@ export class OrderManagementService {
   private intervalId: NodeJS.Timeout | null = null;
   private crashRecoveryIntervalId: NodeJS.Timeout | null = null;
   private followUpWarned = new Set<string>();
+  // Batch 2 timer/reentrancy sweep (2026-09-23): followUpOpenOrders()/reconcileStaleOrders()/
+  // reconcileInboundBrokerOrders() already tolerate concurrent execution via row-level CAS updates
+  // (see cancelOrder()'s own "CAS guard" comment) rather than serialization - these guards are a
+  // PURE ADDITION that only prevents a whole overlapping cycle from starting when the previous one
+  // (broker round-trip + DB writes) is still in flight; they never change what a single tick does,
+  // and never weaken the existing CAS protection. Coalesce (skip), never queue - the next scheduled
+  // tick re-runs the same real check with nothing lost, matching singleFlightInterval.ts's contract.
+  private followUpGuard = createSingleFlightGuard((e) => console.error('[OMS] follow-up cycle failed', e));
+  private crashRecoveryGuard = createSingleFlightGuard((e) => console.error('[OMS] crash-recovery cycle failed', e));
   /** Unrecognized-open-broker-order ids already warned/paused-for (2026-09-09 P0 sprint) - avoids re-pausing every CRASH_RECOVERY_INTERVAL_MS cycle for the same still-unresolved order. */
   private unknownPendingOrderWarned = new Set<string>();
 
@@ -194,13 +204,15 @@ export class OrderManagementService {
   start() {
     if (this.intervalId) return;
     this.intervalId = setInterval(() => {
-      this.followUpOpenOrders().catch(e => console.error('[OMS] follow-up cycle failed', e));
+      void this.followUpGuard.run(() => this.followUpOpenOrders());
     }, FOLLOWUP_INTERVAL_MS);
 
     if (!this.crashRecoveryIntervalId) {
       this.crashRecoveryIntervalId = setInterval(() => {
-        this.reconcileStaleOrders().catch(e => console.error('[OMS] crash-recovery cycle failed', e));
-        this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));
+        void this.crashRecoveryGuard.run(async () => {
+          await this.reconcileStaleOrders();
+          await this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));
+        });
       }, CRASH_RECOVERY_INTERVAL_MS);
       this.reconcileStaleOrders().catch(e => console.error('[OMS] crash-recovery startup check failed', e));
       this.reconcileInboundBrokerOrders().catch(e => console.error('[OMS] inbound broker fill recovery failed', e));

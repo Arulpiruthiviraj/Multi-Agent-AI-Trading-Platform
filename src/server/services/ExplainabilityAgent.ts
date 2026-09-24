@@ -83,13 +83,22 @@ Use Markdown formatting. Make it sound professional, analytical, and objective.`
 
       const reportText = response.text || "No report generated.";
       
+      // traceId is the primary key (schema.ts:568). ORDER_EXECUTED/RISK_ASSESSMENT_COMPLETED can
+      // both legitimately fire more than once for the same traceId (e.g. a duplicate EventBus
+      // emission, or a partial-fill sequence that re-triggers ORDER_EXECUTED) - a plain insert
+      // then throws a UNIQUE constraint violation that was previously silently swallowed by the
+      // catch block below (console.log only), so the caller had no way to know report generation
+      // "failed" that way vs. any other reason. First report for a given decision lifecycle is
+      // kept: it was generated closest to the actual RISK_ASSESSMENT_COMPLETED/ORDER_EXECUTED
+      // event with the freshest trace data available at the time, and a later duplicate call is a
+      // re-fire of the same underlying event rather than new information that should overwrite it.
       await db.insert(explainabilityReports).values({
          traceId,
          symbol,
          decision: `${decision} - ${outcome}`,
          reportText,
          timestamp: new Date().toISOString()
-      });
+      }).onConflictDoNothing();
       
       console.log(`[ExplainabilityAgent] Generated report for ${traceId} (${symbol})`);
       

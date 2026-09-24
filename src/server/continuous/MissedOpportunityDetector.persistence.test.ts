@@ -101,4 +101,57 @@ describe('MissedOpportunityDetector persistence + learning integration', () => {
     expect(row).toBeDefined();
     expect(row?.priceAtDetection).toBeNull();
   });
+
+  // Real defect fix (Batch 2, 2026-09-23): recordNoDataAttempt() is the bounded-retry mechanism
+  // that stops a record with genuinely unavailable historical bars from being re-selected by
+  // getPendingEvaluations() forever. Proves the real DB transition: stays PENDING (and counting)
+  // under the max, flips to the terminal NOT_EVALUABLE_NO_DATA status at the max, and never resets.
+  describe('recordNoDataAttempt (bounded retry for genuinely unavailable bars)', () => {
+    it('increments evaluationAttempts and stays PENDING while under maxAttempts', async () => {
+      await mod.persistMissedOpportunities([{
+        id: 'miss-nodata-1', symbol: 'DELISTED1', detectedAt: new Date().toISOString(), classification: 'AGENT_MISS',
+        classificationReason: 'test', evidenceAtDecisionJson: '{}', priceAtDetection: 10,
+        evaluationHorizonMinutes: 60, evaluationStatus: 'PENDING',
+      }]);
+
+      await mod.recordNoDataAttempt('miss-nodata-1', 5);
+      let rows = await mod.getMissedOpportunities(new Date(Date.now() - 3_600_000).toISOString());
+      let row = rows.find((r) => r.id === 'miss-nodata-1');
+      expect(row?.evaluationStatus).toBe('PENDING');
+      expect(row?.evaluationAttempts).toBe(1);
+      expect(row?.lastEvaluationAttemptAt).not.toBeNull();
+
+      await mod.recordNoDataAttempt('miss-nodata-1', 5);
+      rows = await mod.getMissedOpportunities(new Date(Date.now() - 3_600_000).toISOString());
+      row = rows.find((r) => r.id === 'miss-nodata-1');
+      expect(row?.evaluationStatus).toBe('PENDING'); // still under the max (2 < 5)
+      expect(row?.evaluationAttempts).toBe(2);
+    });
+
+    it('marks the record terminal (NOT_EVALUABLE_NO_DATA) once attempts reach maxAttempts, and getPendingEvaluations stops selecting it', async () => {
+      await mod.persistMissedOpportunities([{
+        id: 'miss-nodata-2', symbol: 'DELISTED2', detectedAt: new Date(Date.now() - 3_600_000).toISOString(), classification: 'AGENT_MISS',
+        classificationReason: 'test', evidenceAtDecisionJson: '{}', priceAtDetection: 10,
+        evaluationHorizonMinutes: 60, evaluationStatus: 'PENDING',
+      }]);
+
+      const maxAttempts = 3;
+      for (let i = 0; i < maxAttempts; i++) {
+        await mod.recordNoDataAttempt('miss-nodata-2', maxAttempts);
+      }
+
+      const rows = await mod.getMissedOpportunities(new Date(Date.now() - 7_200_000).toISOString());
+      const row = rows.find((r) => r.id === 'miss-nodata-2');
+      expect(row?.evaluationStatus).toBe('NOT_EVALUABLE_NO_DATA');
+      expect(row?.evaluationAttempts).toBe(maxAttempts);
+
+      // The real defect this closes: getPendingEvaluations() must never re-select a terminal row.
+      const pending = await mod.getPendingEvaluations(new Date().toISOString());
+      expect(pending.find((r) => r.id === 'miss-nodata-2')).toBeUndefined();
+    });
+
+    it('does not throw and records nothing for a nonexistent id', async () => {
+      await expect(mod.recordNoDataAttempt('nonexistent-id-xyz', 5)).resolves.toBeUndefined();
+    });
+  });
 });
