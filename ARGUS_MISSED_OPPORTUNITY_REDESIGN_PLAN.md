@@ -847,4 +847,124 @@ Specific non-registry infrastructure to retain and validate includes `ForecastEn
 - Do not equate a registry status, independent agent name or Java implementation with independent alpha.
 - Preserve source and measurement uncertainty in every recall/precision denominator.
 
+## Addendum C — Emerging-Mover Discovery and Autonomous Quant Trading
+
+Added September 26, 2026 in response to the owner's request for multiple early-discovery methods, categorized strategies and an institutional standard of design. This extends the roadmap; it does not authorize implementation or live trading. New proposals below are research hypotheses and design requirements, not additional forensic findings or validated profitable strategies. The earlier evidence gaps remain open.
+
+### Investment objective and the meaning of early discovery
+
+The owner's objective is substantial profit. Translate that into sustainable net expectancy with bounded loss, rather than a requirement to buy and sell continuously. The recommended design is an autonomous, quant-first research and trading platform: continuously observe and manage positions, enter only when validated evidence supports an executable opportunity, and retain cash when it does not. External AI is optional even when available, rather than being the primary engine with an emergency quantitative fallback.
+
+A stock's 10% daily gain is a retrospective description. It may have jumped before the first executable quote, reversed after discovery, or offered a spread that consumed the available return. There are three different opportunities to measure: anticipation before a catalyst or breakout; early detection after public information arrives; and a later continuation/retest entry. Unscheduled news cannot reliably be known in advance. Scheduled events can be watched in advance, but their direction remains uncertain. Argus should report which of these tasks it is attempting.
+
+For illustration only, yesterday's close of $10 and today's first executable ask of $11 already represent a 10% move. Buying at $11 and selling at an executable bid of $10.80 loses money despite the stock still being up 8% from yesterday. The relevant forecast is the remaining return after the actual decision, entry delay and costs.
+
+The earlier $20-per-day objective on $2,000 requires 1% of starting capital daily; 252 such days would yield $5,040, or 252% of initial capital without compounding. This is not a supported forecast or an acceptable daily trade quota. Losing and inactive days must be allowed. Track net trading P&L and subtract data, compute and other operating expenses to assess business viability. Do not increase leverage, order frequency or loss limits to recover a daily shortfall. No audited evidence yet establishes that Argus has a positive deployable edge.
+
+This is a proposed engineering and research standard, not a claim about proprietary Bloomberg or Two Sigma systems or their returns. Institutional discipline means controlled experiments, reliable data, portfolio accounting and operational controls; it does not make a small account equivalent to an institutional trading business.
+
+### Multiple discovery channels to research
+
+Every channel feeds the same durable candidate store. A discovery event authorizes observation and prioritization, not an order. Begin with the first six channels and use available, licensed data; defer specialized feeds until their incremental value justifies cost.
+
+| Channel | Information available at decision time | Proposed early signal | Main trap and required test |
+|---|---|---|---|
+| 1. Scheduled events | Point-in-time earnings/event calendars and prior expectations | Prepare watchlists before earnings and announced corporate events; evaluate surprise only after release | Revised calendars and hindsight expectations; retain each as-of calendar and compare all scheduled events |
+| 2. Public catalyst detection | Company releases, broker/structured news, regulatory filings | New material contract, earnings/guidance change, transaction or regulatory development | Repeated headlines, offerings and ambiguous terms; deduplicate, timestamp, preserve original source and include negative events |
+| 3. Session-correct gap and volume | Fresh quotes/trades, prior completed close, comparable historical session volumes | Gap with unusual participation and acceptable liquidity | Yesterday's volume, splits and wide spreads; repair audited semantics before research |
+| 4. Price/volume acceleration | Rolling intraday bars, trade counts and dollar turnover | Rising short-window return with rising participation relative to that symbol and session | Isolated prints and exhausted moves; test persistence, executable bid/ask and reversal rates |
+| 5. Compression then breakout | Prior range/volatility, current range boundary and volume | Escape from a stable range, with optional retest | False breaks and hindsight range selection; define range and entry rules before replay |
+| 6. Relative strength and sector participation | Synchronized stock, sector and broad-market returns | Stock strength unexplained by the market, supported or challenged by peer participation | Buying broad beta repeatedly; test residual return and portfolio overlap |
+| 7. Persistent trend and orderly pullback | Same-frequency intraday history and session VWAP | Continuation after a pullback/reclaim within a persistent trend | Buying a trend's final rebound; compare continuation with reversal under the same context |
+| 8. Cross-asset/peer event propagation | Public event timestamps and historical relationships | Watch related firms after a sector or supplier/customer event | Spurious historical correlation; require prior relationship definitions and separate OOS evaluation |
+| 9. Liquidity/order-flow changes | Licensed quote/trade feed; depth only where available | Improving executable liquidity accompanying directional participation | Venue-specific imbalance, cancellations and feed limits; defer depth-based alpha without suitable data |
+| 10. Options/positioning context | Timestamped options trades/quotes, historical open interest and borrow information where licensed | Unusual activity as contextual evidence | Delayed open interest, multi-leg trades, stale float and unknown trade intent; never infer an informed buyer from volume alone |
+
+SEC public submissions APIs update as filings are disseminated, making them a legitimate source for a filing detector; they are not a guarantee of zero-delay delivery to Argus. Follow SEC access policy and record actual ingestion latency. [SEC EDGAR API documentation](https://www.sec.gov/search-filings/edgar-application-programming-interfaces), [SEC developer resources](https://www.sec.gov/about/developer-resources).
+
+Extended-hours liquidity and execution require separate treatment from regular-session discovery. The SEC describes lower liquidity, wider spreads and other extended-hours risks; these belong in eligibility and cost estimates, not merely in a news sentiment score. [SEC extended-hours investor bulletin](https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-bulletins-42).
+
+### Durable candidate lifecycle and continuous coverage
+
+Extend the existing discovery, ranking and TradePlan systems. Persist stable instrument identity, source channels, first observation, exchange/provider/receipt timestamps, freshness, session, corporate-action state, feature version and every transition. Distinguish no observation from observed-and-rejected. Preserve candidates through restart, expire stale evidence explicitly and re-evaluate when fresh evidence arrives.
+
+Proposed lifecycle: OBSERVED → DATA_PENDING → RESEARCH_RANKED → EVALUATED → PLAN_READY → EXECUTION_ELIGIBLE → SUBMITTED, with separately recorded rejection, expiry and invalidation reasons. Lifecycle labels are proposed metadata, not new approval authorities. An observation-only alert should remain visible when liquidity or model evidence prevents execution. A TradePlan must carry its expiry, entry conditions, invalidation, holding horizon, exit rules and all outstanding blockers.
+
+Use broad snapshots for inexpensive coverage and a bounded streaming pool for selected candidates. Reserve capacity for open positions and order supervision; allocate the rest using urgency, evidence quality, novelty and missing-data needs. Apply minimum dwell time and promotion/demotion hysteresis to reduce the subscription churn observed in the audit. Measure candidates displaced by the subscription cap. Do not promise full-market live coverage on the current 12-slot backend.
+
+Prepare scheduled-event and overnight-catalyst candidates before the open. Refresh premarket rankings as new information arrives. Reconcile opening-session price discovery before applying regular-session signals; keep midday, closing and overnight tracks separate. Crypto uses its own 24/7 session definitions and maintenance windows. Cadences and latency budgets must be chosen from measured opportunity decay and provider limits, then verified at p95/p99; they are not arbitrary assurances of instant reaction.
+
+### Strategy taxonomy and selection
+
+Organize by economic hypothesis rather than indicator or class name. Proposed initial families are event-driven continuation, trend/momentum, range breakout, conditional mean reversion, and cross-sectional relative strength. Volatility, liquidity, regime and portfolio models normally provide context or constraints; they do not automatically count as additional directional votes. Two strategies based on the same recent returns remain correlated even if one is implemented in Java and another in TypeScript.
+
+Each strategy specification must define its eligible universe, session, horizon, required feeds, feature cutoff, entry trigger, invalidation, profit/time/trailing exits where justified, order policy, re-entry/cooldown behavior and cost model. Version all parameters. Declare whether the strategy needs catalyst interpretation; a strategy that explicitly requires missing news evidence must abstain without stopping unrelated quant strategies.
+
+A proposed suitability layer checks hard eligibility first and then estimates context compatibility. Start with a small, interpretable ruleset and compare it with running the same strategies without regime selection. A learned regime classifier must earn promotion through incremental OOS results. Include UNKNOWN/TRANSITION states; a low-confidence regime label cannot authorize larger risk. Freeze model selection during evaluation, and prevent rapid switching from becoming hidden parameter mining.
+
+Initial research sequence: (1) simple relative-strength/momentum baseline on liquid instruments, (2) volume-confirmed range breakout, (3) catalyst continuation with reliable event timestamps, then (4) mean reversion in explicitly tested conditions. This is a tractable experiment order, not a claim that these will outperform. Research microcap gap strategies in a separate cohort with realistic halt, spread, dilution and participation constraints. Do not deploy every Java model or mix equities, leveraged ETFs and crypto into one leaderboard.
+
+### Evidence aggregation and decision economics
+
+Retain existing thresholds during initial observation/shadow work. A future decision-policy change requires separate validated evidence and approval; adding this design does not change consensus. Extend existing forecast contracts to predict outcomes at matching horizons, and evaluate the current consensus against a calibrated quant-only challenger on the same candidate population.
+
+For an illustrative binary payoff model, expected net P&L equals probability of win × average gross win minus probability of loss × average gross loss minus expected round-trip costs. Real production forecasts should include flat outcomes and a return distribution. At 45% wins, $12 average wins, $8 average losses and $1 cost, the illustrative expectancy is $0; a plausible win rate and attractive-looking chart are insufficient. These numbers are examples, not Argus estimates.
+
+Combine evidence using a simple regularized baseline with chronological training/calibration splits. Compare it with the strongest individual strategy and simple ensemble baselines. Record family dependence and prevent duplicated evidence from inflating conviction. Ranking should estimate remaining net opportunity and downside at the actual entry time. A top-ranked candidate can still have negative net expectancy, in which case no entry is appropriate.
+
+Allocate a shared account risk budget across accepted opportunities, including pending orders and correlated holdings. Size through existing RiskEngine/PositionSizing using executable liquidity, downside and uncertainty. Treat optimization as advisory. Validate fractional quantities, minimum order sizes, settlement/account restrictions, fees and short availability for the actual broker/account before any deployment recommendation. Do not assume margin, shorts or borrowed capital are available. No specific live allocation is prescribed by this plan.
+
+### Autonomous operation, exits and provider outages
+
+Java performs deterministic features, strategy calculations and forecasts; Node orchestrates existing decision and execution authorities. Ordinary quantitative trading must have no blocking dependency on an external or local LLM. AI results arrive asynchronously with source lineage, deadline and expiry. Missing AI evidence is unavailable, not a fabricated HOLD or a favorable replacement vote. Cache only information that remains valid for the current decision.
+
+Outage behavior must be explicit:
+
+| Failure | Required behavior |
+|---|---|
+| All AI providers unavailable | Continue independently validated quant strategies and existing position supervision; suspend only strategies requiring unavailable interpretation |
+| Quote/bar data stale or incomplete | Reject affected new entries; use the documented position-protection and escalation policy without pretending last prices are executable |
+| Java evaluator unavailable | Do not fabricate scores or fall back to unvalidated agents; preserve broker/order reconciliation and risk supervision |
+| Broker connection or order acknowledgment uncertain | Stop affected new submissions, reconcile before retries and prevent duplicate orders |
+| Process restart | Restore candidates, plans, positions and order state; reconcile with broker before resuming entries |
+| Loss/operational limit exceeded | Apply the existing kill-switch policy; never increase risk to meet the income target |
+
+Position management must work without AI and remain separate from the entry scanning workload. Each admitted strategy requires tested exits, stale-signal expiry, maximum holding time where applicable, partial-fill handling and restart recovery. Define broker-native protections only where supported, acknowledging that stop orders cannot guarantee an exit price or a fill during halts/gaps. Do not have Java submit orders directly or replace the protected execution chain.
+
+### Proving early-mover value without hindsight
+
+Keep a retrospective 10%-mover panel as one diagnostic, alongside broader economically meaningful opportunities. Freeze the eligible population and as-of snapshots first, including delisted names, failures, unchanged stocks and unavailable-data cases. Separate close-to-close gains from intraday first-passage events. Correct corporate actions before assigning either label.
+
+For a first-passage study, define in advance the reference price, return threshold, observation session, entry latency, horizon and adverse-move barrier. Label outcomes after the frozen decision time; never feed those labels into the decision. Record whether discovery preceded the threshold, occurred after most of the move, or never happened. A missing executable quote makes capture unknown rather than profitable by assumption.
+
+Report discovery recall, precision among alerts, lead time, entry slippage, adverse excursion, retained upside after discovery, trade net expectancy, turnover, portfolio drawdown and operating expense. Measure avoided losses with a pre-registered rejected-candidate simulation, including unresolved outcomes. Avoided-loss claims cannot simply count every rejection that later fell. Cluster uncertainty by date/event and account for overlapping horizons.
+
+Matched controls must use only pre-decision liquidity, price, gap, turnover, sector/session and catalyst type, then include all later outcomes. The earlier sparse control panel is still provisional; acquire adequate historical quotes/bars before claiming matched executable performance. Use purged chronological splits with separation for overlapping labels, untouched final holdout and walk-forward evaluation. Keep a registry of every tried strategy/parameter set so selecting among many experiments does not conceal failures.
+
+Run shadow comparisons on identical timestamps and candidates: current Argus, quant-only baseline, each added discovery channel, each new family, context selector on/off, ranker on/off, and optional AI on/off. Remove a component if its incremental benefit is unsupported after costs and uncertainty. Stress wider spreads, delayed entries, missing feeds, crashes, halts and provider outages. Organic PAPER fills alone cannot validate queue priority or executable liquidity.
+
+### Integrated delivery program and gates
+
+These work packages refine the preceding migration roadmap. Its OOS, PAPER and rollback requirements remain binding. Do not run all packages simultaneously or interpret this table as implementation authorization.
+
+| Order | Concrete scope and affected components | Evidence needed to proceed |
+|---|---|---|
+| 1. Reliable observations | Fix historical ADV, session RVOL/gap/freshness in MarketUniverseScanner/SnapshotScanner; preserve feed scope and timestamp lineage | Deterministic fixtures plus historical/live read-only comparisons establish correct measurement and bounded missingness; no relaxed gates |
+| 2. Persistent discovery | Durable NewsCatalystStore/candidate transitions, restart recovery, union of discovery sources, refreshed TradePlans and visible blocked candidates | Replay Thursday→Friday restart; recover AKAM-like staged events; trace every frozen candidate and measure coverage/latency |
+| 3. Quant-only baseline | Validate selected Java strategies, forecast semantics, compatible horizons and AI-independent orchestration through existing authorities | Reproducible OOS baseline, full AI-outage exercise, safe no-trade behavior, tested exits and reconciliation |
+| 4. Early-mover channels | Introduce channels 1–6 as observation/shadow inputs; extend existing ranker and bounded subscription scheduling | Incremental early recall with controlled false positives; complete matched cohort and cost-aware replay |
+| 5. Complementary strategies | Add one family at a time, with context suitability and dependence measurements | Portfolio improvement beyond baseline on unseen periods; reject families whose benefit disappears after costs |
+| 6. Portfolio and execution | Advisory allocation/covariance, conservative cost estimation, pending-order exposure and position lifecycle | Stress-tested sizing, realistic fill assumptions, bounded drawdown and correct order/restart behavior |
+| 7. Controlled PAPER graduation | Run frozen versions and measure divergence from shadow forecasts | Predeclared sample and uncertainty requirements, stable operations and no safety regressions; no automatic LIVE promotion |
+
+Before each experiment, specify an economically meaningful minimum improvement and statistical uncertainty limit from the baseline and account cost budget. Do not select those criteria after seeing results. Calendar duration alone is insufficient evidence; neither a winning week nor a handful of dramatic movers establishes reliability. Roll back the affected component on safety regressions, data-contract violations, unreconciled orders or demonstrated deterioration against predeclared controls. Keep research candidate visibility available where safe while disabling execution eligibility.
+
+### Owner-facing evidence and final design recommendation
+
+Mission Control should show emerging candidates even before they qualify to trade: first detection, source, current rank, remaining forecast opportunity, data age, strategy family, supporting/conflicting evidence, expected costs, entry/exit plan and exact blockers. Separately show observed, executable and traded opportunity counts. Display model versions, quant-only health, AI optional status and current account/pending-order exposure. An alert must never visually imply order approval.
+
+Daily reporting should answer: What did we discover early? What was already overextended when discovered? Which channels contributed independent value? Which entries were prevented by missing data versus negative expectancy versus risk? What happened to every frozen candidate afterward? What did the portfolio earn after costs, and how uncertain is that result? Keep the $20 aspiration outside the execution logic.
+
+The recommended end state is a continuously operating quantitative platform with reliable multi-source discovery, a small validated portfolio of complementary strategies, calibrated cost-aware ranking, deterministic position management, optional asynchronous AI and unchanged protected order authority. Build the foundation and prove incremental value before adding complexity. The most valuable initial changes remain the audited data defects and continuity gaps; the largest unresolved research question is whether the resulting forecasts produce a durable net edge.
+
 End of planning deliverable. No implementation follows.
