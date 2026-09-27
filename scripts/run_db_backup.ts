@@ -4,5 +4,10 @@
  */
 import { dbBackupService } from '../src/server/services/DbBackupService';
 
-dbBackupService.runBackup();
-console.log('[run_db_backup] Backup complete.');
+try {
+  const destination = await dbBackupService.runBackup();
+  console.log(`[run_db_backup] Backup verified and complete: ${destination}`);
+} catch (error) {
+  console.error('[run_db_backup] Backup failed:', error);
+  process.exitCode = 1;
+}

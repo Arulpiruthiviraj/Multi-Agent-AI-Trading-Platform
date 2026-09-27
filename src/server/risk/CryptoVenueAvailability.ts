@@ -52,7 +52,8 @@ export function evaluateCryptoVenueAvailability(opts: {
 }): CryptoVenueAvailabilityResult {
   const instrumentEnabled = !!opts.instrument?.enabledForPaper;
   const dataSourceAvailable = opts.priceAgeMs !== null;
-  const dataFresh = dataSourceAvailable && (opts.priceAgeMs as number) <= opts.staleThresholdMs;
+  const dataFresh = dataSourceAvailable && Number.isFinite(opts.priceAgeMs) && opts.priceAgeMs! >= 0
+    && Number.isFinite(opts.staleThresholdMs) && opts.staleThresholdMs >= 0 && opts.priceAgeMs! <= opts.staleThresholdMs;
   const paperBrokerAvailable = isCryptoPaperBrokerAvailable();
 
   const detail = {

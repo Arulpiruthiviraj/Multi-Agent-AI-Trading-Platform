@@ -967,4 +967,96 @@ Daily reporting should answer: What did we discover early? What was already over
 
 The recommended end state is a continuously operating quantitative platform with reliable multi-source discovery, a small validated portfolio of complementary strategies, calibrated cost-aware ranking, deterministic position management, optional asynchronous AI and unchanged protected order authority. Build the foundation and prove incremental value before adding complexity. The most valuable initial changes remain the audited data defects and continuity gaps; the largest unresolved research question is whether the resulting forecasts produce a durable net edge.
 
+## Addendum D — Detailed Fix Plan and Profitability Acceptance Contract
+
+Owner clarification, September 26, 2026: prepare a detailed plan instead of coding. No implementation is authorized by this addendum. Code inspection resumed briefly after the preceding request; no source changes were made. This section translates the recommendations into reviewable engineering work packages. It does not claim that Argus can guarantee income or become profitable merely through engineering improvements.
+
+### What success must mean
+
+The target is a reliable autonomous quantitative system with demonstrated positive net expectancy and an acceptable loss distribution. Separate three milestones: correct software, reliable PAPER operation, and evidence of economic value. Passing one does not establish the others. Even a correctly implemented system may discover that its strategies have no useful edge.
+
+Before research begins, record the account currency, actual broker/account type, permissible instruments and sessions, available capital, maximum tolerable loss/drawdown, and recurring data/compute budget. Those facts constrain deployment, not the immediate read-only planning work. Do not infer account permissions, leverage or acceptable losses from the $2,000 balance. The $20 daily aspiration is an evaluation reference only, never an order trigger or recovery target.
+
+Use two accounting views: trading P&L after spreads, slippage, commissions and applicable financing/borrow costs; and operating P&L after recurring platform/data expenses. Report taxes separately according to the owner's circumstances rather than silently assuming an after-tax result. With fixed capital C and daily operating cost K, earning a desired net dollar amount P requires trading returns of at least (P + K) / C before taxes. This identity exposes the cost hurdle; it does not estimate achievable returns.
+
+### Work package 1 — Correct historical liquidity inputs
+
+**Affected components:** `src/server/continuous/MarketUniverseScanner.ts`, its tests, and downstream consumers such as `src/server/risk/ExtendedHoursLiquidityCache.ts` through the existing interface. Do not bypass the extended-hours policy.
+
+The current `fetchAvgDailyVolumeShares()` uses a global API row limit as if it supplied that many days for every symbol. Specify an explicit historical range ending before the current exchange-local session, fetch all required pagination tokens, and select the configured number of most recent completed daily bars per symbol. Preserve consolidated SIP volume. Derive exchange dates with the existing timezone/calendar utilities, including DST; do not hardcode UTC−04:00. Request enough calendar history to cover weekends and holidays, and expand a bounded range or report insufficient coverage when necessary.
+
+Validate each bar's timestamp and finite nonnegative volume, deduplicate by symbol/session, and exclude current/future sessions. Decide and document minimum historical coverage before implementation; a one-bar average must not silently represent the configured multi-day ADV. Record sample count, first/last session, feed, fallback source and failure reason. Bound pagination, reject token cycles, and do not accept partially fetched results as complete after a failed later page. Preserve the shared FMP budget, but require its fallback to satisfy comparable timestamp/coverage rules; otherwise return unavailable.
+
+**Tests:** multi-symbol symbol-sorted pagination; more than one page for a symbol; duplicate/out-of-order bars; missing timestamps; current-day partial bars; Friday/Monday/holiday/DST boundaries; missing/short listing history; invalid volumes; a later-page failure; repeated token; fallback exhaustion. Assert no credentials appear in diagnostics. Consumer tests must show missing ADV still fails closed.
+
+**Acceptance:** deterministic fixtures return exactly the intended completed-session observations; a read-only provider comparison confirms range/feed/coverage semantics. Better candidate admission is a possible consequence, not the pass criterion. Roll back on incomplete or inconsistent liquidity evidence, not merely because trade count falls.
+
+### Work package 2 — Correct snapshot freshness and session meaning
+
+**Affected components:** `MarketUniverseScanner.ts`, `discoveryGapEvidence.ts`, `SnapshotScanner.ts`, the existing ranking contracts and relevant Java calculation owners.
+
+Separate current executable quote, latest trade, completed daily reference and current-session cumulative volume. Persist their timestamps and feed scopes independently. A previous-day daily bar may supply a historical reference; it cannot stand in for today's participation. Validate bid/ask ordering and freshness before using spread. Classify missing data explicitly rather than treating zero, null and stale as interchangeable. Keep observation-only candidates visible when current execution evidence is unavailable.
+
+Retain distinct names and meanings for overnight gap, return since today's open and return from previous close. Do not change the meaning of an existing persisted field without versioning and auditing consumers. Same-minute premarket RVOL requires a history of comparable premarket cumulative volumes. Until those data exist, publish that feature as unavailable and remove its positive scoring contribution; do not substitute a 2% regular-session denominator or renormalize other scores to manufacture confidence. Regular-session volume estimates must disclose whether they are a simple baseline or a validated intraday profile.
+
+Inspect ranking input/output association as part of this package. The inspected `SnapshotScanner` sorts `scored` and subsequently maps unsorted `scoredInputs` using `scored[i]`; this can associate one symbol's raw metrics with another symbol's input when their orders differ. Reproduce with two deliberately reversed ranks before fixing. Join by stable normalized symbol/observation identity, not by array position after a sort. Add a test that asserts each symbol retains its own momentum, RVOL and range values through persistence.
+
+**Ownership:** new quantitative calculations belong in Java under the repository contract. Before a bug fix, locate any existing Java counterpart. A permitted temporary correction to an unmigrated TypeScript calculation must be labeled and entered into the existing migration plan, with one authoritative path; never create a permanent parallel formula.
+
+**Tests:** replay the stale APUS snapshot; fresh price with stale volume; fresh volume with stale quote; crossed/locked/absent quote; premarket, opening boundary, normal session, early close and after-hours; split/reference inconsistencies; reordered candidate arrays. Assert a missing RVOL cannot become a high-volume confirmation or a profitable forecast.
+
+**Acceptance:** each computed feature has an auditable as-of definition and correct symbol association. Compare revised rankings on the frozen cohort, including rejected candidates; do not evaluate only the six motivating stocks.
+
+### Work package 3 — Preserve discovery across restarts and make it visible
+
+**Affected components:** `NewsCatalystStore`, `NewsEngine`, existing candidate observability, `OpportunityDiscovery`, `TradePlanBuilder` and Mission Control views.
+
+Specify a durable schema through the existing single-writer DB architecture, with a separate reviewed migration when implementation is later authorized. Store candidate identity, source identity, publication/receipt/analysis timestamps, evidence version, expiry, stage and rejection reason. Make event ingestion idempotent. Restore valid staged catalysts on startup, expire old items explicitly, and rebuild in-memory views from durable state without generating duplicate ideas or orders.
+
+Replace the once-per-day plan-creation limitation with a versioned update policy: new qualified candidates can obtain plans during the session; changed evidence can update or invalidate a plan; a plan must not emit duplicate ideas every scan. Preserve original versions so historical queries answer what the operator could actually have seen at 08:45. Display observation-only and blocked candidates distinctly from execution-eligible plans.
+
+**Tests:** known Thursday catalyst followed by Friday restart; duplicate news syndication; expired catalyst; replayed ingestion; changed ticker identity; later intraday entrant after initial plans already exist; repeated scan without changed evidence. Reconcile order state before any execution resumption.
+
+**Acceptance:** the AKAM-like scenario survives restart and appears in the candidate audit, without assuming it deserves a BUY. All plan transitions are reconstructable and idempotent. Preserve the prior schema/data during rollback; do not delete evidence to revert a UI or consumer change.
+
+### Work package 4 — Establish the smallest complete quant-only baseline
+
+Select a small eligible liquid universe and one existing simple strategy as a reproducible baseline before adding a selector or complex ensemble. Use one declared holding horizon and matching bars/labels. Audit input requirements, mathematical implementation, calibration, entry, exit, time expiry, sizing and costs end to end. Reuse Java compute and the existing protected execution chain.
+
+Test with every external AI provider and local LLM unavailable. Eligible quant decisions must still complete; a legitimate abstention must remain possible. Position supervision, risk and reconciliation must not wait for a language model. Strategies whose own required evidence is missing must stop independently. Distinguish an AI-free path from a path that still requires the local Chronos forecaster.
+
+**Acceptance:** deterministic replay reproduces decisions, outages cannot fabricate votes, and isolated PAPER exercises demonstrate order lifecycle and recovery. This proves operation, not positive expectancy. Compare economic results with no-trade/cash, a simple passive exposure baseline where relevant, and the existing Argus policy on the same opportunity population.
+
+### Work package 5 — Research complementary strategies and early discovery
+
+Use the ten channels and family definitions in Addendum C as a bounded experiment backlog. Start with corrected price/volume discovery, relative strength and a simple breakout family; add timestamped catalyst continuation after ingestion is reliable. Mean reversion is a distinct subsequent experiment, not an automatic offsetting trade when momentum loses.
+
+For every experiment, register the hypothesis, exact entry/exit rules, universe, session, holding horizon, feature version, data coverage, parameter choices, cost assumptions and success criteria before viewing its test results. Maintain a ledger of failed trials. Add one component at a time and test ablations so a combined improvement can be attributed. Measure dependence using aligned strategy returns and shared features, not the number of strategy names.
+
+**Acceptance:** the added strategy/channel improves predeclared net utility or recall at controlled false-positive cost on unseen dates with credible uncertainty. Reject an improvement concentrated in one exceptional stock/day or dependent on unrealistic fills. If no candidate survives, stop deployment progression and revise the hypothesis; do not lower the admission standard.
+
+### Work package 6 — Calibrated ranking and portfolio selection
+
+Extend `QuantEvidence`, forecast persistence and the existing ranker. Forecast returns at a defined horizon with downside and uncertainty; calibrate on data separate from fitting and final testing. Model the cost of the intended size and execution style. Keep net expectancy unknown when costs cannot be supported.
+
+Start with a transparent selection rule and constrained equal-risk baseline before introducing learned strategy routing or optimization. Compare the existing consensus with a shadow challenger; retain current production thresholds until a separately reviewed policy change is supported. Portfolio context must account for current positions, pending orders, sector/factor concentration, covariance uncertainty and turnover. Optimizer suggestions remain subject to independent risk and sizing.
+
+**Acceptance:** calibrated predictions beat simple probabilistic baselines and selection improves portfolio outcomes after costs on the same candidate set. Show when ranking chooses no trade. Demonstrate that AMD/NVDA-like shared exposure cannot evade risk limits by using different strategy IDs. Roll back a selector that adds instability without incremental benefit.
+
+### Work package 7 — Economic and operational graduation
+
+Freeze candidate strategies and evaluate BACKTEST → OOS → WALK-FORWARD → ROBUSTNESS → SHADOW → PAPER → VALIDATED. Choose sample requirements using effect size, outcome dependence and uncertainty; do not invent a universal trade-count threshold. Preserve an untouched final holdout and register the chosen metrics and acceptance boundaries before testing.
+
+Report net expectancy with uncertainty, drawdown and recovery duration, tail losses, exposure, turnover, cost sensitivity, calibration, opportunity recall/precision and operating expenses. Separate gross hypothetical returns, executable simulated returns and actual PAPER fills. Present unattributed or missing outcomes explicitly. Test performance with worse spreads, entry delays and missing feeds, including provider and process failures.
+
+Operational gates include no duplicate orders, correct partial fills, broker reconciliation, restart recovery, bounded stale-data behavior and functioning kill switch. Profitability gates include an incremental edge over appropriate baselines, robustness across disjoint periods, and a loss profile compatible with the owner's recorded limits. LIVE deployment is a separate decision after these gates; it is not authorized by this document.
+
+### Reviewable delivery boundaries
+
+Implement later as small reviewable changes in the work-package order. Each change should identify the proven defect or hypothesis, affected consumers, migration/compatibility implications, tests, experiment artifact, risks and rollback mechanism. Changes to architectural truth update `docs/architecture/ARGUS_ARCHITECTURE.md` in the same change, as required by the repository. Keep forensic evidence immutable and label later fixes rather than rewriting history.
+
+Packages 1–3 repair demonstrated data/continuity problems and the newly identified ranking-association issue. Package 4 establishes independent operation. Packages 5–6 determine whether the improved platform can find and select an actual edge. Package 7 determines whether that edge and the operation are strong enough to graduate. No package is justified solely by producing more orders or reaching a daily income quota.
+
+The next authorized deliverable remains this plan. No source/configuration edits, migrations, service restarts, orders, commits or implementation tasks are triggered by completing it.
+
 End of planning deliverable. No implementation follows.

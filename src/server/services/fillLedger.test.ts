@@ -70,5 +70,27 @@ describe('fillLedger idempotency', () => {
     const rows = await db.select().from(fills).where(eq(fills.orderId, orderId));
     expect(rows).toHaveLength(2);
     expect(rows.reduce((s: number, r: { quantity: number }) => s + r.quantity, 0)).toBe(10);
+    expect(rows.reduce((s: number, r: any) => s + r.quantity * r.price, 0)).toBeCloseTo(110);
+    expect(p2.incrementalPrice).toBeCloseTo(70 / 6);
+  });
+
+  it('serializes distinct concurrent watermarks and ignores an older report', async () => {
+    const orderId = 'fill-concurrent-watermarks';
+    const base = { orderId, brokerOrderId: 'b', requestedQuantity: 3, status: 'PARTIALLY_FILLED', averageFillPrice: 11 };
+    await Promise.all([1, 2, 3, 2].map(filledQuantity => insertIncrementalFill({ ...base, filledQuantity })));
+    const rows = await db.select().from(fills).where(eq(fills.orderId, orderId));
+    expect(rows.reduce((s: number, r: any) => s + r.quantity, 0)).toBe(3);
+    expect(rows.reduce((s: number, r: any) => s + r.quantity * r.price, 0)).toBeCloseTo(33);
+  });
+
+  it.each([
+    { filledQuantity: undefined }, { filledQuantity: Infinity }, { filledQuantity: -1 },
+    { filledQuantity: 4 }, { averageFillPrice: undefined }, { averageFillPrice: 0 },
+    { averageFillPrice: NaN }, { averageFillPrice: Infinity },
+  ])('refuses incomplete or invalid economics %j', async (invalid) => {
+    const orderId = 'invalid-fill';
+    await expect(insertIncrementalFill({ orderId, brokerOrderId: 'b', requestedQuantity: 3,
+      status: 'FILLED', filledQuantity: 3, averageFillPrice: 10, ...invalid })).rejects.toThrow();
+    expect(await db.select().from(fills).where(eq(fills.orderId, orderId))).toHaveLength(0);
   });
 });

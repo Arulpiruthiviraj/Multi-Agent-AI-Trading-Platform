@@ -25,6 +25,7 @@
  *   (no ATR, no synthetic volatility estimate) that this deployment cannot honestly compute yet.
  */
 import { randomUUID } from 'node:crypto';
+import { tradingWallTimeToIso } from '../core/TradingCalendar';
 import { db } from '../db';
 import { tradePlans, tradePlanRevalidations } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
@@ -145,7 +146,7 @@ function deriveInvalidationLevel(input: RankingInput, direction: 'BUY' | 'SELL')
 
 /** End of the trading day the plan is FOR (planDate), 16:00 ET, expressed as an ISO instant. */
 function endOfTradingDayIso(planDate: string): string {
-  return new Date(`${planDate}T16:00:00-04:00`).toISOString();
+  return tradingWallTimeToIso(planDate, '16:00');
 }
 
 /**

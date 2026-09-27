@@ -48,7 +48,7 @@ const CHIEF_APPROVAL_OR_LATER_STATUSES = new Set<string>(CHIEF_APPROVAL_OR_LATER
 
 export type MissClassification =
   | 'RANKING_MISS' | 'SUBSCRIPTION_MISS' | 'AGENT_MISS'
-  | 'CONSENSUS_REJECTION' | 'RISK_REJECTION' | 'EXECUTION_MISS' | 'NOT_ACTUALLY_MISS'
+  | 'CONSENSUS_REJECTION' | 'RISK_REJECTION' | 'RISK_NOT_CONFIRMED' | 'EXECUTION_MISS' | 'NOT_ACTUALLY_MISS'
   /** Session-Aware Trading Architecture Phase 7 (2026-09-05): a premarket TradePlan existed for
    *  this symbol (planDate === today) and was INVALIDATED or EXPIRED by TradePlanBuilder's own
    *  revalidation logic before any agent/ChiefTrader/RiskEngine stage was ever reached. Distinct
@@ -100,6 +100,9 @@ export function classifyMiss(signals: FunnelSignals): ClassificationResult {
   }
   if (signals.hadRiskAssessment && signals.riskApproved === false) {
     return { classification: 'RISK_REJECTION', reason: 'ChiefTrader approved, but RiskEngine rejected the resulting assessment.' };
+  }
+  if (!signals.hadRiskAssessment || signals.riskApproved !== true) {
+    return { classification: 'RISK_NOT_CONFIRMED', reason: 'ChiefTrader approved, but no affirmative RiskEngine approval was recorded.' };
   }
   return { classification: 'EXECUTION_MISS', reason: 'Approved by both ChiefTrader and RiskEngine, but no fill was ever recorded.' };
 }

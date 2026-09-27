@@ -51,11 +51,11 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
 
     // Event-loop-safety fix (2026-09-14): runBackup() is now async (real fs.promises I/O,
     // no longer a synchronous multi-GB blocking copy on the live process) - must be awaited.
-    await service.runBackup(); // real call also runs pruning as a side effect
+    const backupFile = await service.runBackup(); // verified snapshot
 
     expect(fs.existsSync(oldFile)).toBe(false); // pruned
     const stamp = new Date().toISOString().slice(0, 10);
-    expect(fs.existsSync(path.join(backupDir, `argus_${stamp}.db`))).toBe(true); // today's backup kept
+    expect(fs.existsSync(backupFile)).toBe(true); // today's backup kept
   });
 
   it('backs up real data, survives real deletion of the "live" file, and restores it byte-for-byte-verifiable', async () => {
@@ -67,11 +67,10 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
 
     const service = new DbBackupService();
     const start = Date.now();
-    await service.runBackup();
+    const backupFile = await service.runBackup();
     const backupDurationMs = Date.now() - start;
 
     const stamp = new Date().toISOString().slice(0, 10);
-    const backupFile = path.join(backupDir, `argus_${stamp}.db`);
     expect(fs.existsSync(backupFile)).toBe(true);
 
     // Independently verify the backup's integrity with a completely separate connection - the

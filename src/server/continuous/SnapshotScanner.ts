@@ -263,6 +263,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
       }
     }
 
+    const scoredBySymbol = new Map(scored.map(row => [row.symbol, row]));
     scored.sort((a, b) => b.momentumScore - a.momentumScore);
     lastRanked = scored;
     lastScoreBySymbol = new Map(scored.map((r) => [r.symbol, r.momentumScore]));
@@ -294,7 +295,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
     // lastStats/getLastSnapshotScanStats()'s existing contract, and never throws into the caller.
     try {
       const marketSession = classifyMarketSession(now.getTime(), TRADING_TIMEZONE, true);
-      const rankingInputs = scoredInputs.map((input, i) => ({
+      const rankingInputs = scoredInputs.map((input) => ({
         symbol: input.symbol,
         last: input.last,
         prevClose: input.prevClose,
@@ -305,9 +306,9 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
         minuteClose: input.minuteClose,
         dailyVolume: input.dailyVolume,
         prevDayVolume: input.prevDayVolume,
-        rawMomentumPct: scored[i].intradayPctChange,
-        rawRelativeVolume: scored[i].relativeVolume,
-        rawRangeExpansion: scored[i].rangeExpansion,
+        rawMomentumPct: scoredBySymbol.get(input.symbol)!.intradayPctChange,
+        rawRelativeVolume: scoredBySymbol.get(input.symbol)!.relativeVolume,
+        rawRangeExpansion: scoredBySymbol.get(input.symbol)!.rangeExpansion,
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
       const planDate = getTradingDateStr(now);

@@ -51,6 +51,21 @@ export function getTradingTimeHHMM(date: Date = new Date()): string {
   return tradingTimeFormatter.format(date);
 }
 
+/** Convert an exchange-local date/time to UTC. Reject nonexistent DST wall times. */
+export function tradingWallTimeToIso(day: string, time: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{2}:\d{2}$/.test(time)) throw new Error('Invalid trading wall time');
+  const target = Date.parse(`${day}T${time}:00Z`);
+  let candidate = target;
+  for (let i = 0; i < 3; i++) {
+    const date = new Date(candidate);
+    const represented = Date.parse(`${getTradingDateStr(date)}T${getTradingTimeHHMM(date)}:00Z`);
+    candidate += target - represented;
+  }
+  const result = new Date(candidate);
+  if (getTradingDateStr(result) !== day || getTradingTimeHHMM(result) !== time) throw new Error('Unresolvable trading wall time');
+  return result.toISOString();
+}
+
 // Same as getTradingTimeHHMM but for an arbitrary IANA zone (AutoTradeScheduler.ts's
 // settings.autoTradeScheduleTimezone) instead of the hardcoded exchange zone. A fresh
 // Intl.DateTimeFormat per call is deliberate and cheap here - this only runs once per scheduler

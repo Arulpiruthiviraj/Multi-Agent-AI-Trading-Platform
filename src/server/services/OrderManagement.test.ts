@@ -25,6 +25,7 @@ const {
     orderBy() { return selectBuilder; },
     limit() { return selectBuilder; },
     get() { return envRow; },
+    all() { return selectBuilder._table === fills ? [...fillsInserts] : [...existingTrades]; },
     then(resolve: any, reject: any) {
       if (throwOnIdempotency) return Promise.reject(new Error('idempotency lookup failed')).then(resolve, reject);
       if (selectBuilder._table === portfolio) return Promise.resolve(portfolioRows).then(resolve, reject);
@@ -32,6 +33,7 @@ const {
     },
   };
   const mockDb = {
+    transaction: (fn: any) => fn(mockDb),
     select: () => {
       selectBuilder._table = null;
       return selectBuilder;
@@ -40,7 +42,7 @@ const {
       values: (v: any) => {
         if (table === trades) { tradesInserts.push(v); currentRow = { ...v }; }
         else if (table === fills) { fillsInserts.push(v); }
-        return Promise.resolve({});
+        return { run: () => ({ changes: 1 }), then: (resolve: any) => resolve({ changes: 1 }) };
       },
     }),
     update: (table?: any) => ({
@@ -220,7 +222,7 @@ describe('OrderManagementService.executeOrder', () => {
   });
 
   it('places a fresh order when no prior trade exists for the traceId, and records the real fill', async () => {
-    const placeOrder = vi.fn(async () => ({ id: 'order-1', status: 'FILLED', averageFillPrice: 100 }));
+    const placeOrder = vi.fn(async () => ({ id: 'order-1', status: 'FILLED', filledQuantity: 10, averageFillPrice: 100 }));
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
 
     await oms.executeOrder('AAPL', 'BUY', 10, 'reasoning', 'fresh-trace');
@@ -283,7 +285,7 @@ describe('OrderManagementService.executeOrder', () => {
 
   it('computes profit_loss via local portfolio fallback when broker positions() throws', async () => {
     setPortfolioRows([{ symbol: 'AAPL', quantity: 5, averagePrice: 100 }]);
-    const placeOrder = vi.fn(async () => ({ id: 'order-fallback', status: 'FILLED', averageFillPrice: 110 }));
+    const placeOrder = vi.fn(async () => ({ id: 'order-fallback', status: 'FILLED', filledQuantity: 5, averageFillPrice: 110 }));
     const positions = vi.fn(async () => { throw new Error('positions unavailable'); });
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions };
 

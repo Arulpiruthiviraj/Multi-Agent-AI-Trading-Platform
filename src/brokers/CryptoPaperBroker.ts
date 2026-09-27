@@ -23,6 +23,7 @@ import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './
 import { getCryptoInstrument, getCryptoPaperExecutionAssumptions } from '../server/config/cryptoInstruments';
 
 interface CryptoPositionState extends Position {
+  entryFees: number;
   /** Realized P&L this position has generated across all prior partial/full exits - reset only
    *  when the position is fully closed and later reopened (a fresh cost basis). */
 }
@@ -38,6 +39,24 @@ export class CryptoPaperBroker implements BrokerPlugin {
   private _orders: Map<string, Order> = new Map();
   private _clientOrderIdIndex: Map<string, string> = new Map(); // clientOrderId -> internal order id
   private _realizedPnl = 0;
+  private triggeredStops = new Set<string>();
+
+  private validateOrder(order: Partial<Order>, excludeOrderId?: string): string | null {
+    if (order.side !== 'BUY' && order.side !== 'SELL') return 'invalid order side';
+    if (!['MARKET', 'LIMIT', 'STOP'].includes(order.type || 'MARKET')) return 'unsupported order type';
+    if (!Number.isFinite(order.quantity) || !(order.quantity! > 0)) return 'invalid quantity';
+    if (order.type === 'LIMIT' && (!Number.isFinite(order.price) || !(order.price! > 0))) return 'invalid limit price';
+    if (order.type === 'STOP' && (!Number.isFinite(order.stopPrice) || !(order.stopPrice! > 0))) return 'invalid stop price';
+    if (order.side === 'SELL') {
+      const reserved = [...this._orders.values()].filter(o => o.id !== excludeOrderId && o.symbol === order.symbol
+        && o.side === 'SELL' && ['PENDING', 'PARTIALLY_FILLED'].includes(o.status))
+        .reduce((sum, o) => sum + o.quantity - o.filledQuantity, 0);
+      if (order.quantity! - (order.filledQuantity || 0) > (this._positions.get(order.symbol!)?.quantity ?? 0) - reserved) {
+        return 'SELL quantity exceeds unreserved held quantity - long-only, no shorting';
+      }
+    }
+    return null;
+  }
 
   constructor(initialCash = 100000) {
     this.initialCash = initialCash;
@@ -135,6 +154,8 @@ export class CryptoPaperBroker implements BrokerPlugin {
     if (!Number.isFinite(quantity) || quantity <= 0) {
       return rejected(`invalid quantity: ${orderData.quantity}`);
     }
+    const invalid = this.validateOrder({ ...orderData, symbol, quantity });
+    if (invalid) return rejected(invalid);
     if (orderData.side === 'SELL') {
       const held = this._positions.get(symbol)?.quantity ?? 0;
       if (quantity > held) {
@@ -165,6 +186,11 @@ export class CryptoPaperBroker implements BrokerPlugin {
     const order = this._orders.get(orderId);
     if (!order) throw new Error('Order not found');
     if (order.status !== 'PENDING') throw new Error('Cannot modify a non-pending order');
+    const allowed = new Set(['quantity', 'price', 'stopPrice']);
+    if (Object.keys(updates).some(key => !allowed.has(key))) throw new Error('Cannot modify protected order fields');
+    const amended = { ...order, ...updates };
+    const invalid = this.validateOrder(amended, orderId);
+    if (invalid || amended.quantity < order.filledQuantity) throw new Error(invalid || 'Quantity below executed quantity');
     Object.assign(order, updates);
     order.updatedAt = new Date();
     return order;
@@ -215,13 +241,15 @@ export class CryptoPaperBroker implements BrokerPlugin {
       if (order.type === 'LIMIT' && order.price !== undefined) {
         shouldEvaluate = (order.side === 'BUY' && fillPrice <= order.price) || (order.side === 'SELL' && fillPrice >= order.price);
       } else if (order.type === 'STOP' && order.stopPrice !== undefined) {
-        shouldEvaluate = (order.side === 'SELL' && fillPrice <= order.stopPrice) || (order.side === 'BUY' && fillPrice >= order.stopPrice);
+        if ((order.side === 'SELL' && fillPrice <= order.stopPrice) || (order.side === 'BUY' && fillPrice >= order.stopPrice)) this.triggeredStops.add(order.id);
+        shouldEvaluate = this.triggeredStops.has(order.id);
       }
       if (!shouldEvaluate) continue;
 
       const remainingQuantity = order.quantity - order.filledQuantity;
       const remainingNotional = remainingQuantity * fillPrice;
-      const fillableNotionalThisTick = Math.min(remainingNotional, assumptions.maxFillNotionalPerTick);
+      const availableNotional = order.side === 'SELL' ? (this._positions.get(order.symbol)?.quantity ?? 0) * fillPrice : remainingNotional;
+      const fillableNotionalThisTick = Math.min(remainingNotional, assumptions.maxFillNotionalPerTick, availableNotional);
       const fillQuantityThisTick = fillableNotionalThisTick / fillPrice;
       const fee = fillableNotionalThisTick * feeRate;
 
@@ -240,6 +268,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
           const newTotalCost = pos.entryPrice * pos.quantity + fillableNotionalThisTick;
           pos.entryPrice = newTotalCost / newQty;
           pos.quantity = newQty;
+          pos.entryFees += fee;
         } else {
           this._positions.set(order.symbol, {
             symbol: order.symbol,
@@ -249,6 +278,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
             marketValue: fillQuantityThisTick * fillPrice,
             unrealizedPnl: 0,
             unrealizedPnlPercent: 0,
+            entryFees: fee,
           });
         }
       } else {
@@ -266,7 +296,9 @@ export class CryptoPaperBroker implements BrokerPlugin {
         const proceeds = sellQty * fillPrice - fee;
         this.cash += proceeds;
         if (pos) {
-          const realizedThisFill = (fillPrice - pos.entryPrice) * sellQty - fee;
+          const allocatedEntryFee = pos.entryFees * (sellQty / pos.quantity);
+          const realizedThisFill = (fillPrice - pos.entryPrice) * sellQty - fee - allocatedEntryFee;
+          pos.entryFees -= allocatedEntryFee;
           this._realizedPnl += realizedThisFill;
           if (pos.quantity <= sellQty) {
             this._positions.delete(order.symbol);
@@ -286,10 +318,10 @@ export class CryptoPaperBroker implements BrokerPlugin {
 
     for (const [symbol, pos] of this._positions) {
       const currentPrice = currentPrices[symbol];
-      if (currentPrice) {
+      if (Number.isFinite(currentPrice) && currentPrice > 0) {
         pos.currentPrice = currentPrice;
         pos.marketValue = currentPrice * pos.quantity;
-        const totalCost = pos.entryPrice * pos.quantity;
+        const totalCost = pos.entryPrice * pos.quantity + pos.entryFees;
         pos.unrealizedPnl = pos.marketValue - totalCost;
         pos.unrealizedPnlPercent = totalCost !== 0 ? pos.unrealizedPnl / totalCost : 0;
       }

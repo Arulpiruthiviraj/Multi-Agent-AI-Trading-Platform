@@ -255,16 +255,7 @@ export class OrderManagementService {
   // ORDER_FILLED. Used both by executeOrder()'s own initial resolution and by the background
   // follow-up job, so a partial fill observed at either stage is recorded identically and
   // re-applying an unchanged broker order is always a safe no-op (newQty resolves to 0).
-  private async recordFillProgress(orderId: string, brokerOrderId: string | null, traceId: string, transactionId: string | undefined, symbol: string, side: string, requestedQuantity: number, status: string, filledQuantity: number | undefined, averageFillPrice: number | undefined): Promise<number> {
-    // Real broker adapters always set filledQuantity; the existing unit-test mocks (predating this
-    // change) return a bare {id, status, averageFillPrice} on a full fill with no filledQuantity
-    // field at all - treat a FILLED status with no explicit filledQuantity as "fully filled" to
-    // preserve that established, already-tested contract exactly.
-    const reportedQty = typeof filledQuantity === 'number' && filledQuantity > 0
-      ? filledQuantity
-      : (status === 'FILLED' ? requestedQuantity : 0);
-    if (reportedQty <= 0) return 0;
-
+  private async recordFillProgress(orderId: string, brokerOrderId: string | null, traceId: string, transactionId: string | undefined, symbol: string, side: string, requestedQuantity: number, status: string, filledQuantity: number | undefined, averageFillPrice: number | undefined, executionBrokerId: string | null): Promise<number> {
     try {
       const result = await insertIncrementalFill({
         orderId,
@@ -275,7 +266,7 @@ export class OrderManagementService {
         averageFillPrice,
       });
       if (result.newQty <= 0) return 0;
-      const fillPrice = averageFillPrice || 0;
+      const fillPrice = result.incrementalPrice!;
       eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
       // Immediate local portfolio sync on every SELL fill increment — do not wait for the next recon tick
       // (stale localQty > 0 with broker flat → false MISSING_REMOTELY / operator pause).
@@ -283,11 +274,7 @@ export class OrderManagementService {
         await syncLocalPortfolioAfterSellFill(symbol, result.newQty);
       }
       if (side === 'BUY' && result.newQty > 0 && fillPrice > 0) {
-        let brokerId: string | null = null;
-        try {
-          brokerId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
-        } catch { /* */ }
-        await syncLocalPortfolioAfterBuyFill(symbol, result.newQty, fillPrice, brokerId);
+        await syncLocalPortfolioAfterBuyFill(symbol, result.newQty, fillPrice, executionBrokerId);
       }
       return result.newQty;
     } catch (e) {
@@ -524,7 +511,7 @@ export class OrderManagementService {
       }
 
       if (status === 'FILLED' || status === 'PARTIALLY_FILLED') {
-        await this.recordFillProgress(orderId, brokerOrderId, traceId, transactionId, symbol, side, quantity, status, filledQuantity, fillPrice);
+        await this.recordFillProgress(orderId, brokerOrderId, traceId, transactionId, symbol, side, quantity, status, filledQuantity, fillPrice, orderBroker.id);
       }
 
       if (side === 'SELL' && status === 'FILLED') {
@@ -920,7 +907,7 @@ export class OrderManagementService {
         console.error(`[OMS] crash-recovery: order ${row.id} was locally ${row.status} (never recorded a brokerOrderId) but ${broker.name} actually has it as ${realStatus} - correcting local state. This is exactly the "crashed after send" scenario Phase 1 closes.`);
 
         if (realStatus === 'FILLED' || realStatus === 'PARTIALLY_FILLED') {
-          await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice);
+          await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice, broker.id);
           await this.persistRealCommissionIfKnown(row.id, realOrder.commission);
         }
 
@@ -951,7 +938,7 @@ export class OrderManagementService {
   private async applyFollowUpUpdate(row: any, match: Order): Promise<void> {
     try {
       const fillPrice = match.averageFillPrice || row.price || 0;
-      await this.recordFillProgress(row.id, row.brokerOrderId, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, match.status, match.filledQuantity, fillPrice);
+      await this.recordFillProgress(row.id, row.brokerOrderId, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, match.status, match.filledQuantity, match.averageFillPrice, row.brokerId ?? null);
       await this.persistRealCommissionIfKnown(row.id, match.commission);
 
       const filledAt = match.status === 'FILLED' ? (row.filledAt || new Date().toISOString()) : row.filledAt;

@@ -24,6 +24,8 @@
  * ==========================================================
  */
 import fs from 'fs/promises';
+import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync } from 'fs';
 import path from 'path';
 import { dbPath, sqliteDb } from '../db';
@@ -62,25 +64,33 @@ export class DbBackupService {
     }
   }
 
-  async runBackup(): Promise<void> {
+  async runBackup(): Promise<string> {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const dest = path.join(BACKUP_DIR, `argus_${stamp}_${randomUUID()}.db`);
+    const temporary = `${dest}.partial`;
     try {
       if (!existsSync(dbPath)) {
-        console.warn("[DbBackupService] No database file to back up yet.");
-        return;
+        throw new Error('No database file to back up');
       }
-      // Recent commits in WAL mode can live only in the -wal file; checkpoint first so a
-      // straight file copy doesn't silently miss them (same approach as /system/export-db).
-      // Genuinely synchronous (better-sqlite3 has no async API) - see this module's own header.
-      sqliteDb.pragma('wal_checkpoint(TRUNCATE)');
-
-      const stamp = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-      const dest = path.join(BACKUP_DIR, `argus_${stamp}.db`);
-      await fs.copyFile(dbPath, dest); // async - libuv threadpool, does not block the event loop
+      await fs.mkdir(BACKUP_DIR, { recursive: true });
+      // SQLite's online backup API includes WAL contents and owns snapshot consistency.
+      await sqliteDb.backup(temporary);
+      const verify = new Database(temporary, { readonly: true, fileMustExist: true });
+      try {
+        const rows = verify.pragma('integrity_check') as Array<{ integrity_check: string }>;
+        if (rows.length !== 1 || rows[0].integrity_check !== 'ok') throw new Error('Backup integrity check failed');
+      } finally {
+        verify.close();
+      }
+      await fs.rename(temporary, dest);
       console.log(`[DbBackupService] Backed up database to ${dest}`);
 
       await this.pruneOldBackups();
+      return dest;
     } catch (e) {
+      await fs.unlink(temporary).catch(() => {});
       console.error("[DbBackupService] Backup failed:", e);
+      throw e;
     }
   }
 

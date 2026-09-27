@@ -1,7 +1,7 @@
 import { db } from '../db';
 import { fills } from '../db/schema';
 import { eq } from 'drizzle-orm';
-  import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
 import { incMetric } from '../observability/ObservabilityMetrics';
 
 export function isUniqueConstraint(err: unknown): boolean {
@@ -23,37 +23,43 @@ export async function insertIncrementalFill(opts: {
   filledQuantity: number | undefined;
   averageFillPrice: number | undefined;
   filledAt?: string;
-}): Promise<{ newQty: number; cumulativeQuantity: number; duplicate: boolean }> {
-  const reportedQty = typeof opts.filledQuantity === 'number' && opts.filledQuantity > 0
-    ? opts.filledQuantity
-    : (opts.status === 'FILLED' ? opts.requestedQuantity : 0);
-  if (reportedQty <= 0) return { newQty: 0, cumulativeQuantity: 0, duplicate: false };
-
-  let priorQty = 0;
-  try {
-    const priorFills = await db.select().from(fills).where(eq(fills.orderId, opts.orderId));
-    priorQty = priorFills.reduce((sum: number, f: { quantity: number }) => sum + f.quantity, 0);
-  } catch (e) {
-    console.error(`[fillLedger] Failed to read prior fills for order ${opts.orderId} - skipping to avoid double-counting`, e);
-    return { newQty: 0, cumulativeQuantity: 0, duplicate: false };
+}): Promise<{ newQty: number; cumulativeQuantity: number; duplicate: boolean; incrementalPrice?: number }> {
+  const reportedQty = opts.filledQuantity;
+  if (reportedQty === 0) return { newQty: 0, cumulativeQuantity: 0, duplicate: false };
+  if (!Number.isFinite(reportedQty) || !(reportedQty! > 0)
+    || !Number.isFinite(opts.requestedQuantity) || !(opts.requestedQuantity > 0)
+    || reportedQty! > opts.requestedQuantity
+    || !Number.isFinite(opts.averageFillPrice) || !(opts.averageFillPrice! > 0)) {
+    throw new Error(`Invalid or incomplete broker fill for ${opts.orderId}; reconciliation required`);
   }
-
-  const newQty = reportedQty - priorQty;
-  if (newQty <= 1e-9) return { newQty: 0, cumulativeQuantity: reportedQty, duplicate: false };
-
-  const fillPrice = opts.averageFillPrice || 0;
-  const filledAt = opts.filledAt || new Date().toISOString();
-  const fillKey = opts.brokerFillId || `${opts.orderId}:${reportedQty}`;
-
   try {
-    await db.insert(fills).values({
-      orderId: opts.orderId,
-      brokerFillId: fillKey,
-      quantity: newQty,
-      price: fillPrice,
-      filledAt,
-      cumulativeQuantity: reportedQty,
-    });
+    // Synchronous transaction: no await may split reading the watermark from its update.
+    // IMMEDIATE also prevents another connection from racing the read/insert pair.
+    const result = db.transaction((tx) => {
+      const prior = tx.select().from(fills).where(eq(fills.orderId, opts.orderId)).all();
+      if (prior.some(f => !Number.isFinite(f.quantity) || !(f.quantity > 0)
+        || !Number.isFinite(f.price) || !(f.price > 0))) {
+        throw new Error(`Invalid existing fill economics for ${opts.orderId}; reconciliation required`);
+      }
+      const priorQty = prior.reduce((sum, f) => sum + f.quantity, 0);
+      const newQty = reportedQty! - priorQty;
+      if (newQty <= 1e-9) return { newQty: 0, cumulativeQuantity: reportedQty!, duplicate: true };
+      const priorNotional = prior.reduce((sum, f) => sum + f.quantity * f.price, 0);
+      const incrementalPrice = (reportedQty! * opts.averageFillPrice! - priorNotional) / newQty;
+      if (!Number.isFinite(incrementalPrice) || !(incrementalPrice > 0)) {
+        throw new Error(`Non-positive incremental fill value for ${opts.orderId}; reconciliation required`);
+      }
+      tx.insert(fills).values({
+        orderId: opts.orderId,
+        brokerFillId: opts.brokerFillId || `${opts.orderId}:${reportedQty}`,
+        quantity: newQty,
+        price: incrementalPrice,
+        filledAt: opts.filledAt || new Date().toISOString(),
+        cumulativeQuantity: reportedQty,
+      }).run();
+      return { newQty, cumulativeQuantity: reportedQty!, duplicate: false, incrementalPrice };
+    }, { behavior: 'immediate' });
+    if (result.newQty === 0) return result;
     incMetric('fills_recorded');
     observeSafe(() => {
       structuredLogger.info('fill_recorded', {
@@ -61,11 +67,11 @@ export async function insertIncrementalFill(opts: {
         component: 'fillLedger',
         eventType: 'FILL_RECORDED',
         orderId: opts.orderId,
-        newQty,
+        newQty: result.newQty,
         cumulativeQuantity: reportedQty,
       });
     });
-    return { newQty, cumulativeQuantity: reportedQty, duplicate: false };
+    return result;
   } catch (e) {
     if (isUniqueConstraint(e)) {
       incMetric('fills_duplicate');

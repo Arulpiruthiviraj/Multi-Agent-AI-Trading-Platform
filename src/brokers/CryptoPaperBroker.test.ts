@@ -8,6 +8,61 @@ describe('CryptoPaperBroker', () => {
     broker = new CryptoPaperBroker(100000);
   });
 
+  it('reconciles net realized profit to cash after an unchanged-price round trip', async () => {
+    await broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: .01 });
+    broker.tick({ 'BTC-USD': 10000 });
+    await broker.placeOrder({ symbol: 'BTC-USD', side: 'SELL', quantity: .01 });
+    broker.tick({ 'BTC-USD': 10000 });
+    const p = await broker.portfolio();
+    expect(p.positions).toHaveLength(0);
+    expect(p.realizedPnl).toBeCloseTo(p.cash - broker.getInitialCash(), 8);
+  });
+
+  it('reserves held inventory across pending sells', async () => {
+    await broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: 1 });
+    broker.tick({ 'BTC-USD': 10000 });
+    const a = await broker.placeOrder({ symbol: 'BTC-USD', side: 'SELL', quantity: .75 });
+    const b = await broker.placeOrder({ symbol: 'BTC-USD', side: 'SELL', quantity: .75 });
+    expect(a.status).toBe('PENDING');
+    expect(b.status).toBe('REJECTED');
+    broker.tick({ 'BTC-USD': 10000 });
+    expect((await broker.positions())[0].quantity).toBeCloseTo(.25);
+  });
+
+  it('rejects invalid amendments without mutating the order or cash', async () => {
+    const o = await broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: .01 });
+    await expect(broker.modifyOrder(o.id, { quantity: -1 })).rejects.toThrow();
+    await expect(broker.modifyOrder(o.id, { status: 'FILLED' })).rejects.toThrow();
+    expect(o.quantity).toBe(.01);
+    expect(o.status).toBe('PENDING');
+    expect((await broker.portfolio()).cash).toBe(broker.getInitialCash());
+  });
+
+  it.each([-10, Infinity, NaN, 0])('ignores invalid position marks %s', async price => {
+    await broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: .01 });
+    broker.tick({ 'BTC-USD': 10000 });
+    broker.tick({ 'BTC-USD': price });
+    expect((await broker.positions())[0].currentPrice).toBe(10000);
+  });
+
+  it('rejects malformed side and missing limit/stop prices', async () => {
+    for (const invalid of [{ side: 'INVALID' }, { type: 'LIMIT' }, { type: 'STOP' }]) {
+      expect((await broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: .01, ...invalid } as any)).status).toBe('REJECTED');
+    }
+  });
+
+  it('keeps a partially filled stop triggered after price rebounds', async () => {
+    await broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: .8 });
+    broker.tick({ 'BTC-USD': 100000 });
+    broker.tick({ 'BTC-USD': 100000 });
+    const stop = await broker.placeOrder({ symbol: 'BTC-USD', side: 'SELL', quantity: .8, type: 'STOP', stopPrice: 90000 });
+    broker.tick({ 'BTC-USD': 80000 });
+    expect(stop.status).toBe('PARTIALLY_FILLED');
+    broker.tick({ 'BTC-USD': 100000 });
+    expect(stop.status).toBe('FILLED');
+    expect((await broker.positions())).toHaveLength(0);
+  });
+
   it('reports crypto capability, no live trading, no shorting', () => {
     const caps = broker.getCapabilities();
     expect(caps.crypto).toBe(true);
