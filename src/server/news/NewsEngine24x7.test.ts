@@ -10,10 +10,17 @@ import {
   recordNewsCatalyst,
   listStagedForOpenCatalysts,
   clearNewsCatalystsForTests,
+  markStagedCatalystConsumed,
+  markStagedCatalystExpired,
+  rehydrateStagedCatalystsFromDb,
+  flushPendingNewsCatalystWritesForTests,
 } from '../services/NewsCatalystStore';
 import { MarketOpenNewsConfluence } from './MarketOpenNewsConfluence';
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
+import { db } from '../db';
+import * as schema from '../db/schema';
+import { eq } from 'drizzle-orm';
 
 describe('NewsEngine 24x7 cadence & staging', () => {
   beforeEach(() => {
@@ -64,6 +71,82 @@ describe('NewsEngine 24x7 cadence & staging', () => {
     const nextOpen = Date.parse('2026-08-19T13:30:00.000Z');
     expect(recorded.expiresAtMs!).toBeGreaterThan(nextOpen);
     expect(listStagedForOpenCatalysts()).toHaveLength(1);
+  });
+
+  describe('durable staging (Phase 2 carryover restart-recovery fix, 2026-09-27)', () => {
+    it('write-through: a staged catalyst is persisted to staged_news_catalysts with STAGED_FOR_OPEN status', async () => {
+      const afterClose = Date.parse('2026-08-18T22:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(afterClose);
+      recordNewsCatalyst({
+        traceId: 'durable-1', symbol: 'MSFT', headline: 'h', source: 'unit', publishedAtMs: afterClose,
+        sentiment: 0.6, credibility: 0.9, catalystStrength: 'HIGH', tradingBias: 'BULLISH',
+        contribution: 0.5, reasoning: 'r', recordedAt: new Date(afterClose).toISOString(),
+        expectedHorizon: 'INTRADAY', referencePrice: 200,
+      });
+      vi.useRealTimers();
+      await flushPendingNewsCatalystWritesForTests();
+      const rows = await db.select().from(schema.stagedNewsCatalysts).where(eq(schema.stagedNewsCatalysts.traceId, 'durable-1'));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].status).toBe('STAGED_FOR_OPEN');
+      expect(rows[0].symbol).toBe('MSFT');
+    });
+
+    it('restart recovery: rehydrateStagedCatalystsFromDb() repopulates the in-memory queue from a durable row this process never wrote (simulates a fresh boot after a crash)', async () => {
+      // Simulate "a prior process staged this and then the machine restarted" by writing directly
+      // to the durable table, bypassing recordNewsCatalyst()/its in-memory side entirely - exactly
+      // what a real crash-then-reboot leaves behind: a DB row, an empty in-memory store.
+      await db.insert(schema.stagedNewsCatalysts).values({
+        traceId: 'durable-restart-1', symbol: 'TSLA', headline: 'Overnight guidance cut', source: 'unit',
+        publishedAtMs: Date.now(), sentiment: -0.7, credibility: 0.85, catalystStrength: 'HIGH',
+        tradingBias: 'BEARISH', contribution: -0.6, reasoning: 'r', recordedAt: new Date().toISOString(),
+        expectedHorizon: 'INTRADAY', referencePrice: 300, status: 'STAGED_FOR_OPEN',
+        expiresAtMs: Date.now() + 24 * 60 * 60 * 1000, clusterId: null, updatedAtMs: Date.now(),
+      });
+      expect(listStagedForOpenCatalysts().find((c) => c.traceId === 'durable-restart-1')).toBeUndefined();
+
+      await rehydrateStagedCatalystsFromDb();
+
+      const rehydrated = listStagedForOpenCatalysts().find((c) => c.traceId === 'durable-restart-1');
+      expect(rehydrated).toBeTruthy();
+      expect(rehydrated!.symbol).toBe('TSLA');
+      expect(rehydrated!.tradingBias).toBe('BEARISH');
+      expect(rehydrated!.status).toBe('STAGED_FOR_OPEN');
+    });
+
+    it('restart recovery never repopulates a durable row that already expired while the process was down - marks it EXPIRED instead of silently re-queueing a stale catalyst', async () => {
+      await db.insert(schema.stagedNewsCatalysts).values({
+        traceId: 'durable-expired-1', symbol: 'AMD', headline: 'stale', source: 'unit',
+        publishedAtMs: Date.now() - 48 * 60 * 60 * 1000, sentiment: 0.5, credibility: 0.9,
+        catalystStrength: 'HIGH', tradingBias: 'BULLISH', contribution: 0.5, reasoning: 'r',
+        recordedAt: new Date().toISOString(), expectedHorizon: 'INTRADAY', referencePrice: 150,
+        status: 'STAGED_FOR_OPEN', expiresAtMs: Date.now() - 60_000, clusterId: null, updatedAtMs: Date.now(),
+      });
+
+      await rehydrateStagedCatalystsFromDb();
+
+      expect(listStagedForOpenCatalysts().find((c) => c.traceId === 'durable-expired-1')).toBeUndefined();
+      await flushPendingNewsCatalystWritesForTests();
+      const rows = await db.select().from(schema.stagedNewsCatalysts).where(eq(schema.stagedNewsCatalysts.traceId, 'durable-expired-1'));
+      expect(rows[0].status).toBe('EXPIRED');
+    });
+
+    it('markStagedCatalystConsumed/Expired persist the status change durably', async () => {
+      const afterClose = Date.parse('2026-08-18T22:00:00.000Z');
+      vi.useFakeTimers();
+      vi.setSystemTime(afterClose);
+      recordNewsCatalyst({
+        traceId: 'durable-consume-1', symbol: 'GOOG', headline: 'h', source: 'unit', publishedAtMs: afterClose,
+        sentiment: 0.6, credibility: 0.9, catalystStrength: 'HIGH', tradingBias: 'BULLISH',
+        contribution: 0.5, reasoning: 'r', recordedAt: new Date(afterClose).toISOString(),
+        expectedHorizon: 'INTRADAY', referencePrice: 140,
+      });
+      vi.useRealTimers();
+      markStagedCatalystConsumed('durable-consume-1');
+      await flushPendingNewsCatalystWritesForTests();
+      const rows = await db.select().from(schema.stagedNewsCatalysts).where(eq(schema.stagedNewsCatalysts.traceId, 'durable-consume-1'));
+      expect(rows[0].status).toBe('CONSUMED');
+    });
   });
 
   it('INTRADAY TTL extends through next session open window (not overnight expiry)', () => {

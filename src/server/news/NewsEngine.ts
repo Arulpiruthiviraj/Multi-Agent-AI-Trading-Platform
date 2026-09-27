@@ -18,7 +18,7 @@ import { generateTraceId } from '../core/traceId';
 import { randomUUID } from 'node:crypto';
 import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
 import { deskIntelligence, newsAgentEmitsTradeIdeas, newsAgentPipelineEnabled, newsAgentObservesPredictions } from '../config/deskIntelligence';
-import { recordNewsCatalyst } from '../services/NewsCatalystStore';
+import { recordNewsCatalyst, rehydrateStagedCatalystsFromDb } from '../services/NewsCatalystStore';
 import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
 import { isPipelineAgentEnabled } from '../core/pipelineAgentGate';
 import { notePipelineAgentFailure, notePipelineAgentSuccess, notePipelineAgentTick } from '../core/pipelineAgentHealth';
@@ -81,7 +81,17 @@ export class NewsEngine {
     }
     console.log('[NewsEngine] Starting News Intelligence Pipeline (24/7; adaptive RTH/off-hours cadence)...');
     this.scheduleAdaptiveInterval();
-    marketOpenNewsConfluence.start();
+    // 2026-09-27 Phase 2 carryover fix: NewsCatalystStore's STAGED_FOR_OPEN queue is now durable
+    // (drizzle/0075_staged_news_catalysts.sql). Must repopulate the in-memory queue from that
+    // table BEFORE MarketOpenNewsConfluence.start() runs, or a restart between an overnight
+    // staging and the next open would present an empty queue exactly as it did before this fix.
+    // Fire-and-forget from this synchronous method's own caller's perspective (start() itself
+    // stays sync, matching every existing call site - ArgusCoreBoot.ts/SystemBootstrap.ts do not
+    // await it today), but internally sequenced: confluence.start() only runs after rehydration
+    // resolves, never in parallel with it.
+    void rehydrateStagedCatalystsFromDb().finally(() => {
+      marketOpenNewsConfluence.start();
+    });
     this.runPipeline();
   }
 

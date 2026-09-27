@@ -29,6 +29,80 @@ describe('CryptoPaperBroker', () => {
     expect((await broker.positions())[0].quantity).toBeCloseTo(.25);
   });
 
+  it('P3 reconciliation invariant: cash_change and realized_pnl both equal gross P&L net of both fees, on an asymmetric round trip', async () => {
+    const rt = new CryptoPaperBroker(100000);
+    const cashBefore = (await rt.portfolio()).cash;
+    await rt.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: 0.5, type: 'MARKET' });
+    rt.tick({ 'BTC-USD': 40000 });
+    const buyOrder = (await rt.orders())[0];
+    expect(buyOrder.status).toBe('FILLED');
+    const entryFillPrice = buyOrder.averageFillPrice!;
+    const grossCost = entryFillPrice * 0.5;
+    // feeBps=10 (config/cryptoInstruments.json) applied to the ACTUAL fill notional.
+    const entryFee = grossCost * (10 / 10000);
+    const cashAfterBuy = (await rt.portfolio()).cash;
+    expect(cashAfterBuy).toBeCloseTo(cashBefore - grossCost - entryFee, 6);
+
+    await rt.placeOrder({ symbol: 'BTC-USD', side: 'SELL', quantity: 0.5, type: 'MARKET' });
+    rt.tick({ 'BTC-USD': 45000 }); // price rose - a real gain to net against fees
+    const sellOrder = (await rt.orders())[1];
+    expect(sellOrder.status).toBe('FILLED');
+    const exitFillPrice = sellOrder.averageFillPrice!;
+    const grossProceeds = exitFillPrice * 0.5;
+    const exitFee = grossProceeds * (10 / 10000);
+
+    const p = await rt.portfolio();
+    expect(p.positions).toHaveLength(0);
+    const expectedCashChange = -grossCost - entryFee + grossProceeds - exitFee;
+    const expectedRealizedPnl = grossProceeds - exitFee - (grossCost + entryFee);
+    expect(p.cash - cashBefore).toBeCloseTo(expectedCashChange, 4);
+    expect(p.realizedPnl).toBeCloseTo(expectedRealizedPnl, 4);
+    // The two invariants must themselves agree (fee-inclusive cash/P&L reconciliation).
+    expect(p.cash - cashBefore).toBeCloseTo(p.realizedPnl, 8);
+  });
+
+  it('P4 conservation invariant: two concurrently-pending SELL orders across bounded per-tick fills never cumulatively exceed the inventory that existed at order-acceptance time, and fees always reflect actually-executed notional', async () => {
+    const rt = new CryptoPaperBroker(1_000_000);
+    // Real config default maxFillNotionalPerTick=50000 - force multi-tick partial fills so both
+    // orders are still competing for the SAME shrinking inventory across several tick() calls,
+    // not resolved instantly in one shot.
+    await rt.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: 3, type: 'MARKET' });
+    let ticks = 0;
+    let buyOrder = (await rt.orders())[0];
+    while (buyOrder.status !== 'FILLED' && ticks < 50) {
+      rt.tick({ 'BTC-USD': 20000 });
+      buyOrder = (await rt.orders())[0];
+      ticks++;
+    }
+    expect(buyOrder.status).toBe('FILLED');
+    const heldAtAcceptance = (await rt.positions())[0].quantity;
+    expect(heldAtAcceptance).toBeCloseTo(3, 6);
+
+    // Both SELLs together exactly consume the held inventory - both legitimately admitted since
+    // the reservation check at placeOrder() time sums correctly (1.5 + 1.5 <= 3).
+    const sellA = await rt.placeOrder({ symbol: 'BTC-USD', side: 'SELL', quantity: 1.5, type: 'MARKET' });
+    const sellB = await rt.placeOrder({ symbol: 'BTC-USD', side: 'SELL', quantity: 1.5, type: 'MARKET' });
+    expect(sellA.status).toBe('PENDING');
+    expect(sellB.status).toBe('PENDING');
+
+    ticks = 0;
+    let a = sellA, b = sellB;
+    while ((a.status !== 'FILLED' || b.status !== 'FILLED') && ticks < 50) {
+      rt.tick({ 'BTC-USD': 20000 });
+      const all = await rt.orders();
+      a = all.find(o => o.id === sellA.id)!;
+      b = all.find(o => o.id === sellB.id)!;
+      // Invariant at every intermediate step, not just the end: cumulative executed quantity
+      // across both concurrent SELLs must never exceed inventory held at order-acceptance time.
+      expect(a.filledQuantity + b.filledQuantity).toBeLessThanOrEqual(heldAtAcceptance + 1e-9);
+      ticks++;
+    }
+    expect(a.status).toBe('FILLED');
+    expect(b.status).toBe('FILLED');
+    expect(a.filledQuantity + b.filledQuantity).toBeCloseTo(heldAtAcceptance, 6);
+    expect((await rt.positions())).toHaveLength(0);
+  });
+
   it('rejects invalid amendments without mutating the order or cash', async () => {
     const o = await broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: .01 });
     await expect(broker.modifyOrder(o.id, { quantity: -1 })).rejects.toThrow();

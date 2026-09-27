@@ -2001,3 +2001,38 @@ export const quantForecasts = sqliteTable('quant_forecasts', {
   symbolIdx: index('idx_quant_forecasts_symbol').on(table.symbol, table.createdAt),
   lookupIdx: index('idx_quant_forecasts_lookup').on(table.symbol, table.agentName, table.strategyId, table.direction, table.horizonLabel, table.createdAt),
 }));
+
+// ARGUS Phase 2 crypto-correctness pass (2026-09-27), Phase-1 carryover: NewsCatalystStore.ts was
+// purely in-memory (module-level Map/array) - a restart between a catalyst being staged
+// STAGED_FOR_OPEN and the next market open silently lost it, and MarketOpenNewsConfluence saw an
+// empty queue after restart. This table is a write-through durable mirror of that store's staged
+// queue ONLY (the ACTIVE per-symbol history in bySymbol is not persisted - lower operational
+// stakes, and NewsCatalystStore.ts's own header already scopes this module to staging, not a
+// general news ledger; news_clusters/news_predictions remain the durable news record of truth).
+// traceId is the natural primary key - it is already globally unique (generateTraceId) and is the
+// same id markStagedCatalystConsumed/markStagedCatalystExpired key off in memory.
+export const stagedNewsCatalysts = sqliteTable('staged_news_catalysts', {
+  traceId: text('trace_id').primaryKey(),
+  symbol: text('symbol').notNull(),
+  headline: text('headline').notNull(),
+  source: text('source').notNull(),
+  publishedAtMs: integer('published_at_ms'),
+  sentiment: real('sentiment'),
+  credibility: real('credibility').notNull(),
+  catalystStrength: text('catalyst_strength').notNull(),
+  tradingBias: text('trading_bias').notNull(),
+  contribution: real('contribution').notNull(),
+  reasoning: text('reasoning').notNull(),
+  recordedAt: text('recorded_at').notNull(),
+  expectedHorizon: text('expected_horizon'),
+  referencePrice: real('reference_price'),
+  status: text('status').notNull(),
+  expiresAtMs: integer('expires_at_ms'),
+  clusterId: text('cluster_id'),
+  // Write-time bookkeeping only (not part of the in-memory NewsCatalyst shape) - lets a boot-time
+  // sweep drop long-dead rows without needing to reconstruct the in-memory pruning logic in SQL.
+  updatedAtMs: integer('updated_at_ms').notNull(),
+}, (table) => ({
+  symbolIdx: index('idx_staged_news_catalysts_symbol').on(table.symbol),
+  statusIdx: index('idx_staged_news_catalysts_status').on(table.status),
+}));

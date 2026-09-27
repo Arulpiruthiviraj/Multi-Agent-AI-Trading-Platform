@@ -4,7 +4,21 @@
  * In-memory last-N news catalysts per symbol + overnight STAGED_FOR_OPEN queue.
  * News is evidence, not an order. RiskEngine news_veto still reads news_clusters independently.
  * Off-hours analysis stages catalysts for market-open confluence — never places orders.
+ *
+ * Durable staging (2026-09-27 Phase 2 carryover). The `staged` queue below is the in-memory
+ * mechanism `MarketOpenNewsConfluence` reads every 15s; it used to be purely module-level state
+ * with zero DB reads/writes, so a restart between a catalyst being staged overnight and the next
+ * market open silently lost it — the confluence worker would see an empty queue after restart.
+ * `staged_news_catalysts` (drizzle/0075_staged_news_catalysts.sql) is a write-through durable
+ * mirror of this queue only (not the ACTIVE per-symbol `bySymbol` history — lower operational
+ * stakes, and news_clusters/news_predictions already carry the durable news record of truth).
+ * Writes are fire-and-forget (never block the synchronous in-memory API these functions have
+ * always exposed to callers); `rehydrateStagedCatalystsFromDb()` must be awaited at boot BEFORE
+ * `MarketOpenNewsConfluence.start()` runs so a restart mid-overnight does not lose the queue.
  */
+import { eq, inArray } from 'drizzle-orm';
+import { db } from '../db';
+import * as schema from '../db/schema';
 import { computeCatalystExpiresAtMs, classifyCatalystHorizon } from '../news/catalystStagingTtl';
 import { isUsEquityRegularSession } from '../news/newsSessionCadence';
 
@@ -36,11 +50,136 @@ const MAX_PER_SYMBOL = 12;
 const bySymbol = new Map<string, NewsCatalyst[]>();
 const staged: NewsCatalyst[] = [];
 
+// Test-only hook: lets tests await the fire-and-forget DB write triggered by the most recent
+// mutation before asserting on persisted state. Never awaited by production callers - the
+// in-memory API these functions expose has always been synchronous and stays that way.
+let lastPersistPromise: Promise<void> = Promise.resolve();
+
+function trackPersist(p: Promise<void>): void {
+  lastPersistPromise = p.catch(() => {});
+}
+
+/** Test-only: await the most recently triggered durable write before asserting on DB state. */
+export async function flushPendingNewsCatalystWritesForTests(): Promise<void> {
+  await lastPersistPromise;
+}
+
+function persistUpsert(c: NewsCatalyst): void {
+  trackPersist((async () => {
+    try {
+      await db.insert(schema.stagedNewsCatalysts).values({
+        traceId: c.traceId,
+        symbol: c.symbol,
+        headline: c.headline,
+        source: c.source,
+        publishedAtMs: c.publishedAtMs,
+        sentiment: c.sentiment,
+        credibility: c.credibility,
+        catalystStrength: c.catalystStrength,
+        tradingBias: c.tradingBias,
+        contribution: c.contribution,
+        reasoning: c.reasoning,
+        recordedAt: c.recordedAt,
+        expectedHorizon: c.expectedHorizon ?? null,
+        referencePrice: c.referencePrice ?? null,
+        status: c.status ?? 'ACTIVE',
+        expiresAtMs: c.expiresAtMs ?? null,
+        clusterId: c.clusterId ?? null,
+        updatedAtMs: Date.now(),
+      }).onConflictDoUpdate({
+        target: schema.stagedNewsCatalysts.traceId,
+        set: {
+          status: c.status ?? 'ACTIVE',
+          expiresAtMs: c.expiresAtMs ?? null,
+          referencePrice: c.referencePrice ?? null,
+          updatedAtMs: Date.now(),
+        },
+      });
+    } catch (e) {
+      console.error('[NewsCatalystStore] Failed to persist staged catalyst (in-memory state unaffected):', e);
+    }
+  })());
+}
+
+function persistStatus(traceId: string, status: NewsCatalystStatus): void {
+  trackPersist((async () => {
+    try {
+      await db.update(schema.stagedNewsCatalysts)
+        .set({ status, updatedAtMs: Date.now() })
+        .where(eq(schema.stagedNewsCatalysts.traceId, traceId));
+    } catch (e) {
+      console.error('[NewsCatalystStore] Failed to persist staged-catalyst status (in-memory state unaffected):', e);
+    }
+  })());
+}
+
+function persistPruneBySize(traceIds: string[]): void {
+  if (traceIds.length === 0) return;
+  trackPersist((async () => {
+    try {
+      await db.delete(schema.stagedNewsCatalysts).where(inArray(schema.stagedNewsCatalysts.traceId, traceIds));
+    } catch (e) {
+      console.error('[NewsCatalystStore] Failed to prune persisted staged catalysts (in-memory state unaffected):', e);
+    }
+  })());
+}
+
+/**
+ * Boot-time read-back. Must be awaited BEFORE `MarketOpenNewsConfluence.start()` so a restart
+ * mid-overnight does not present an empty queue. Repopulates the in-memory `staged` array (and
+ * each catalyst's `bySymbol` entry) from durable rows still in STAGED_FOR_OPEN status; rows that
+ * expired while the process was down are marked EXPIRED here (not silently dropped) matching
+ * pruneExpired()'s own always-visible-status behavior. Never throws — a read failure leaves the
+ * in-memory store empty (fail-open on staging is safe: it only means fewer overnight catalysts are
+ * available for the market-open confluence check, never a fabricated one).
+ */
+export async function rehydrateStagedCatalystsFromDb(): Promise<void> {
+  try {
+    const rows = await db.select().from(schema.stagedNewsCatalysts).where(eq(schema.stagedNewsCatalysts.status, 'STAGED_FOR_OPEN'));
+    const nowMs = Date.now();
+    for (const row of rows) {
+      const catalyst: NewsCatalyst = {
+        traceId: row.traceId,
+        symbol: row.symbol,
+        headline: row.headline,
+        source: row.source,
+        publishedAtMs: row.publishedAtMs,
+        sentiment: row.sentiment,
+        credibility: row.credibility,
+        catalystStrength: row.catalystStrength as NewsCatalyst['catalystStrength'],
+        tradingBias: row.tradingBias as NewsCatalyst['tradingBias'],
+        contribution: row.contribution,
+        reasoning: row.reasoning,
+        recordedAt: row.recordedAt,
+        expectedHorizon: row.expectedHorizon,
+        referencePrice: row.referencePrice,
+        status: row.expiresAtMs != null && row.expiresAtMs <= nowMs ? 'EXPIRED' : 'STAGED_FOR_OPEN',
+        expiresAtMs: row.expiresAtMs,
+        clusterId: row.clusterId,
+      };
+      if (catalyst.status === 'EXPIRED') {
+        persistStatus(catalyst.traceId, 'EXPIRED');
+        continue; // do not repopulate the live queue with something already stale
+      }
+      staged.unshift(catalyst);
+      const list = bySymbol.get(catalyst.symbol) ?? [];
+      list.unshift(catalyst);
+      bySymbol.set(catalyst.symbol, list.slice(0, MAX_PER_SYMBOL));
+    }
+    if (rows.length > 0) {
+      console.log(`[NewsCatalystStore] Rehydrated ${staged.length} STAGED_FOR_OPEN catalyst(s) from durable storage at boot.`);
+    }
+  } catch (e) {
+    console.error('[NewsCatalystStore] Failed to rehydrate staged catalysts from DB at boot - starting with an empty queue:', e);
+  }
+}
+
 function pruneExpired(nowMs = Date.now()): void {
   for (let i = staged.length - 1; i >= 0; i--) {
     const c = staged[i];
     if (c.expiresAtMs != null && c.expiresAtMs <= nowMs) {
       c.status = 'EXPIRED';
+      persistStatus(c.traceId, 'EXPIRED');
       staged.splice(i, 1);
     }
   }
@@ -75,8 +214,11 @@ export function recordNewsCatalyst(catalyst: NewsCatalyst): NewsCatalyst {
   if (shouldStage) {
     pruneExpired(nowMs);
     staged.unshift(enriched);
+    persistUpsert(enriched);
     // Cap staged queue
-    while (staged.length > 200) staged.pop();
+    const overflow: string[] = [];
+    while (staged.length > 200) overflow.push(staged.pop()!.traceId);
+    persistPruneBySize(overflow);
   }
   return enriched;
 }
@@ -123,16 +265,25 @@ export function markStagedCatalystConsumed(traceId: string): void {
     const hit = list.find((x) => x.traceId === traceId);
     if (hit) hit.status = 'CONSUMED';
   }
+  persistStatus(traceId, 'CONSUMED');
 }
 
 export function markStagedCatalystExpired(traceId: string): void {
   const c = staged.find((x) => x.traceId === traceId);
   if (c) c.status = 'EXPIRED';
+  persistStatus(traceId, 'EXPIRED');
 }
 
 export function clearNewsCatalystsForTests(): void {
   bySymbol.clear();
   staged.length = 0;
+  trackPersist((async () => {
+    try {
+      await db.delete(schema.stagedNewsCatalysts);
+    } catch (e) {
+      console.error('[NewsCatalystStore] Failed to clear durable staged catalysts for tests:', e);
+    }
+  })());
 }
 
 export { classifyCatalystHorizon };
