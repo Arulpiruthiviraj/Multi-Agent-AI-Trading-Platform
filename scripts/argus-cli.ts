@@ -1071,6 +1071,31 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'portfolio-impact'() {
+    // Phase 5 (ARGUS_MASTER_REDESIGN_PLAN.md "Portfolio Construction", 2026-09-27): read-only
+    // candidate-impact report - CURRENT real portfolio + a hypothetical trade -> real
+    // marginal-risk-contribution and minimum-variance-optimizer evidence from the Java quant core.
+    // Advisory only, never places or sizes an order. Usage:
+    //   argus-cli portfolio-impact --symbol=AAPL [--side=BUY] [--notional=1000] [--maxWeightPct=0.20] [--lookbackTradingDays=90]
+    const args = process.argv.slice(3);
+    const get = (flag: string) => args.find((a) => a.startsWith(`--${flag}=`))?.slice(flag.length + 3);
+    const symbol = get('symbol');
+    if (!symbol) {
+      console.error('Usage: argus-cli portfolio-impact --symbol=AAPL [--side=BUY|SELL] [--notional=1000] [--maxWeightPct=0.20] [--lookbackTradingDays=90]');
+      process.exitCode = 1;
+      return;
+    }
+    const params = new URLSearchParams({ format: 'text', symbol });
+    for (const [flag, key] of [['side', 'side'], ['notional', 'notional'], ['maxWeightPct', 'maxWeightPct'], ['lookbackTradingDays', 'lookbackTradingDays']] as const) {
+      const v = get(flag);
+      if (v) params.set(key, v);
+    }
+    const res = await fetch(`${BASE}/api/v2/observability/portfolio-impact?${params.toString()}`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 20_000)),
+    });
+    console.log(await res.text());
+  },
   async 'reflection-engine-health'() {
     // P1-A follow-up (2026-09-23): ReflectionEngine.ts's own inFlight-guard skipped-overlap count
     // plus per-cycle duration / rows-scanned / query-duration for its 3 full-table scans (trades,
@@ -1649,7 +1674,7 @@ const commands: Record<string, () => Promise<void>> = {
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],
-      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health']],
+      ['Consensus / funnel observability', ['funnel', 'consensus-shadow', 'consensus-report', 'consensus-debate-health', 'opportunity-snapshot', 'execution-quality', 'trade-economic-attribution', 'forecast', 'daily-attribution', 'provider-health', 'trading-funnel', 'why-no-trade', 'calibration-maturity', 'agent-edge', 'multi-horizon-outcomes', 'strategy-catalog', 'strategy-readiness', 'strategy-fairness', 'strategy-recertification', 'strategy-score-normalization-comparison', 'strategy-profitability', 'rescue-outcomes', 'exploration-health', 'rescue-occupants', 'ai-cost-governor', 'discovery-lineage', 'strategy-scorecard', 'market-data-diagnostics', 'quant-evidence', 'reflection-engine-health', 'portfolio-impact']],
       ['Campaign', ['campaign']],
       ['Replay (Historical Evaluation, MODE B)', ['replay']],
     ];

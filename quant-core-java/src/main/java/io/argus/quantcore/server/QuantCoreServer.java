@@ -34,6 +34,7 @@ import io.argus.quantcore.institutional.models.BtcTan2025BollingerMeanReversionS
 import io.argus.quantcore.institutional.models.BtcAdaptiveBollingerMeanReversionStrategy;
 import io.argus.quantcore.institutional.models.Ta4jTechnicalParityEngine;
 import io.argus.quantcore.institutional.models.OjAlgoPortfolioRiskEngine;
+import io.argus.quantcore.institutional.models.PortfolioOptimizationEngine;
 import io.argus.quantcore.institutional.features.FeaturePipeline;
 import io.argus.quantcore.institutional.features.FeatureSnapshot;
 import io.argus.quantcore.features.RegimeEngine;
@@ -1413,6 +1414,24 @@ public final class QuantCoreServer {
                 out.put("candidateWeightBefore", r.candidateWeightBefore());
                 out.put("candidateWeightAfter", r.candidateWeightAfter());
                 out.put("exceedsMaxWeight", r.exceedsMaxWeight());
+            }
+            // Phase 5 (Master Redesign Plan, "Portfolio Construction" - candidate-impact
+            // reporting), 2026-09-27: wires PortfolioOptimizationEngine's existing, already-tested
+            // real minimum-variance QP solver (Layer 1+2, ojAlgo ExpressionsBasedModel) behind the
+            // SAME generic dispatcher/contract as ojalgo_portfolio_risk above - portfolio-level, not
+            // per-symbol; `closes`/`bars` unused (bars-required contract still applies, caller
+            // passes a minimal 1-bar array); real inputs are `covariance` (n x n) and `maxWeightPct`
+            // in the request body. Advisory only: this is a RESEARCH-status weight RECOMMENDATION,
+            // never a live target - PositionSizing.ts remains the sole real sizing authority and
+            // this class has no placeOrder-equivalent call anywhere.
+            case "portfolio_min_variance_optimizer" -> {
+                double[][] covariance = decodeDoubleMatrix(body.get("covariance"));
+                double maxWeightPct = Json.asDoublePrimitive(body.get("maxWeightPct"), 0.20);
+                var r = PortfolioOptimizationEngine.minimumVariance(covariance, maxWeightPct);
+                out.put("status", r.status().name());
+                out.put("weights", r.weights());
+                out.put("portfolioVariance", r.portfolioVariance());
+                out.put("detail", r.detail());
             }
             case "stochastic_oscillator" -> {
                 int period = (int) Json.asDoublePrimitive(body.get("period"), 14);

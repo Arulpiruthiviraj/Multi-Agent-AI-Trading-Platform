@@ -68,6 +68,12 @@ describe('Architecture protection: BrokerManager access is allowlisted', () => {
     // this enforced test, caught by re-running the full suite rather than by CI at the time.
     // Read-only, no placeOrder/setActiveBroker call.
     'src/server/risk/CryptoVenueAvailability.ts',
+    // Phase 5 (ARGUS_MASTER_REDESIGN_PLAN.md "Portfolio Construction", 2026-09-27): read-only
+    // candidate-impact research report - a single broker.portfolio() read (real current
+    // positions/cash/equity), never setActiveBroker/placeOrder. Advisory-only output consumed by
+    // argus-cli portfolio-impact; see portfolioImpactReport.readOnly.test.ts's own architectural
+    // guarantee tests.
+    'src/server/research/portfolioImpactReport.ts',
   ]);
 
   it('no file outside the reviewed allowlist imports BrokerManager', () => {

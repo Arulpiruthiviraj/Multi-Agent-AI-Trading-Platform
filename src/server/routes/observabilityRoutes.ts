@@ -28,6 +28,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observability/aiCostGovernorReport';
 import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
 import { buildStrategyCatalog, formatStrategyCatalog } from '../research/strategyCatalog';
+import { buildPortfolioImpactReport, formatPortfolioImpactReport } from '../research/portfolioImpactReport';
 import { buildMultiHorizonSummaryReport, formatMultiHorizonSummaryReport } from '../research/multiHorizonOutcomeReport';
 import { buildConsensusDebateHealthReport, formatConsensusDebateHealthReport } from '../research/consensusDebateHealthReport';
 import { buildOpportunitySnapshot, formatOpportunitySnapshot } from '../research/opportunitySnapshot';
@@ -280,6 +281,32 @@ observabilityRouter.get('/trading-funnel', async (req, res) => {
 // Milestone B.1 (2026-09-23): read-only QuantEvidence observability view (argus-cli quant-evidence)
 // - composes already-persisted QUANT_EVIDENCE_PRODUCED / QUANT_EVIDENCE_VALIDATION_FAILED rows
 // only, same pattern as trading-funnel. No consensus/RiskEngine/OMS involvement.
+// Phase 5 (ARGUS_MASTER_REDESIGN_PLAN.md "Portfolio Construction", 2026-09-27): read-only
+// candidate-impact report (argus-cli portfolio-impact). Composes real broker positions + real
+// historical bars + the existing ojalgo_portfolio_risk/portfolio_min_variance_optimizer Java
+// engines - never RiskEngine/OMS/PositionSizing, never places or sizes a real order.
+observabilityRouter.get('/portfolio-impact', async (req, res) => {
+  try {
+    const symbol = String(req.query.symbol || '').trim();
+    if (!symbol) {
+      res.status(400).json({ ok: false, error: 'symbol query param is required' });
+      return;
+    }
+    const side = String(req.query.side || 'BUY').toUpperCase() === 'SELL' ? 'SELL' : 'BUY';
+    const notional = Math.max(0, parseFloat(String(req.query.notional || '1000')) || 1000);
+    const maxWeightPct = Math.min(1, Math.max(0.01, parseFloat(String(req.query.maxWeightPct || '0.20')) || 0.20));
+    const lookbackTradingDays = Math.min(365, Math.max(20, parseInt(String(req.query.lookbackTradingDays || '90'), 10) || 90));
+    const report = await buildPortfolioImpactReport(symbol, side, notional, maxWeightPct, lookbackTradingDays);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatPortfolioImpactReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 observabilityRouter.get('/quant-evidence', async (req, res) => {
   try {
     const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);

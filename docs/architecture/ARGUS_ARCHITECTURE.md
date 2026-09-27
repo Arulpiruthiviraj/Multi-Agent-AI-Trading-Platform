@@ -694,6 +694,23 @@ latest observed quote and its age when the asynchronous Java result arrives, usi
 Missing/stale quotes emit `DESK_NO_TRADE` / `STALE_MARKET_DATA` and no trade idea. Eligible ideas
 carry the observed quote price. This adds no execution authority or threshold relaxation.
 
+**2026-09-27 portfolio-impact research report (Master Redesign Plan Phase 5):** a new,
+read-only, advisory-only reporting tool — `src/server/research/portfolioImpactReport.ts`
+(`GET /api/v2/observability/portfolio-impact`, `argus-cli portfolio-impact`) — answers "what would
+happen to portfolio risk if a hypothetical trade were added," using the real current portfolio
+(`BrokerManager.getActiveBroker().portfolio()`) and real historical bars, routed through the
+existing `QuantCoreBridge`/generic institutional-strategy dispatcher to two Java engines:
+`OjAlgoPortfolioRiskEngine.riskContributions()` (Euler risk-contribution decomposition, already
+existed) and a newly added `portfolio_min_variance_optimizer` dispatcher case exposing the
+already-tested `PortfolioOptimizationEngine.minimumVariance()` (which previously had no HTTP
+endpoint at all). Both remain RESEARCH-status, zero decision-path consumer per
+`config/engineOwnership.json` — this report is their first, and still only, caller, and it never
+imports `OrderManagement`/`RiskEngine`/`ChiefTraderAgent`/`PositionSizing`, never calls
+`.placeOrder(` or `emitTradeIdea`, and fails closed (`BROKER_UNAVAILABLE`,
+`INSUFFICIENT_RETURN_HISTORY`, `JAVA_QUANT_CORE_UNAVAILABLE`) rather than fabricating a covariance
+matrix or optimizer weight. `architecture.protection.test.ts`'s `ALLOWED_BROKER_MANAGER_IMPORTERS`
+allowlist was extended for this file with a dated, reviewed comment — not a silent bypass.
+
 `marketDataReadiness.ts` supplies the same read-only feed evidence to `pipeline-ready` and
 `session-report`: connectivity alone is insufficient; at least one active symbol must have a
 valid, fresh observed price. Its counts describe partial feed coverage, not readiness of every
