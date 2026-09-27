@@ -28,6 +28,9 @@ describe('worstCostQuality', () => {
 });
 
 describe('classifyCommission', () => {
+  it.each(['BTC-USD', 'ETH-USD', 'BTC/USD', 'UNREGISTERED-USD', ''])('never infers free equity commissions for %s', (symbol) => {
+    expect(classifyCommission({ brokerId: 'alpaca', symbol, rawCommission: null })).toEqual({ commissionTotal: null, commissionQuality: 'UNAVAILABLE' });
+  });
   it('uses a real reported commission when present, regardless of broker', () => {
     const result = classifyCommission({ brokerId: 'ibkr_gateway', symbol: 'AAPL', rawCommission: 1.25 });
     expect(result).toEqual({ commissionTotal: 1.25, commissionQuality: 'MEASURED' });

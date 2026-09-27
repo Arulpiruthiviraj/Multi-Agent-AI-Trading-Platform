@@ -22,6 +22,7 @@ import { getLatestCryptoQuotes } from '../crypto/live/AlpacaCryptoMarketData';
 import { listCryptoInstruments, isCryptoMarketDataIngestionEnabled, type CryptoInstrumentDefinition } from '../config/cryptoInstruments';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 import { structuredLogger } from '../observability/StructuredLogger';
+import { createSingleFlightGuard, type SingleFlightIntervalMetrics } from '../core/singleFlightInterval';
 
 function providerSymbolOf(instrument: CryptoInstrumentDefinition): string {
   return `${instrument.baseAsset}/${instrument.quoteAsset}`;
@@ -32,6 +33,9 @@ export class CryptoMarketDataIngestionWorker {
   private running = false;
   private lastTickAtMs: number | null = null;
   private lastError: string | null = null;
+  private generation = 0;
+  private request: AbortController | null = null;
+  private guard = createSingleFlightGuard();
 
   start(): void {
     if (!isCryptoMarketDataIngestionEnabled()) {
@@ -45,6 +49,8 @@ export class CryptoMarketDataIngestionWorker {
   }
 
   stop(): void {
+    this.generation++;
+    this.request?.abort();
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;
@@ -56,19 +62,28 @@ export class CryptoMarketDataIngestionWorker {
     return this.running;
   }
 
-  getStatus(): { running: boolean; lastTickAtMs: number | null; lastError: string | null } {
-    return { running: this.running, lastTickAtMs: this.lastTickAtMs, lastError: this.lastError };
+  getStatus(): { running: boolean; lastTickAtMs: number | null; lastError: string | null; polling: SingleFlightIntervalMetrics } {
+    return { running: this.running, lastTickAtMs: this.lastTickAtMs, lastError: this.lastError, polling: this.guard.getMetrics() };
   }
 
   async tick(): Promise<void> {
+    return this.guard.run(() => this.fetchTick());
+  }
+
+  private async fetchTick(): Promise<void> {
+    const generation = this.generation;
+    const request = new AbortController();
+    this.request = request;
     const instruments = listCryptoInstruments().filter((i) => i.enabledForPaper);
     if (instruments.length === 0) return;
     const providerSymbols = instruments.map(providerSymbolOf);
     let quotes;
     try {
-      quotes = await getLatestCryptoQuotes(providerSymbols);
+      quotes = await getLatestCryptoQuotes(providerSymbols, request.signal);
+      if (generation !== this.generation || request.signal.aborted) return;
       this.lastError = null;
     } catch (e) {
+      if (generation !== this.generation || request.signal.aborted) return;
       // Never fabricate a quote and never throw out of a timer callback - the same instrument
       // simply stays stale (gate 13/12 both already fail closed on that) until the next poll.
       this.lastError = e instanceof Error ? e.message : String(e);
@@ -84,10 +99,11 @@ export class CryptoMarketDataIngestionWorker {
       const q = quotes.get(providerSymbolOf(instrument));
       if (!q || !Number.isFinite(q.midPrice) || q.midPrice <= 0) continue;
       const observedAtMs = Date.parse(q.timestamp);
+      if (!Number.isFinite(observedAtMs) || observedAtMs > Date.now()) continue;
       marketDataWorker.cacheObservedQuote(
         instrument.canonicalSymbol,
         q.midPrice,
-        Number.isFinite(observedAtMs) ? observedAtMs : Date.now(),
+        observedAtMs,
       );
     }
     this.lastTickAtMs = Date.now();

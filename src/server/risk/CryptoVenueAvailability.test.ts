@@ -3,6 +3,10 @@ import { evaluateCryptoVenueAvailability, isCryptoPaperBrokerAvailable } from '.
 import { getCryptoInstrument } from '../config/cryptoInstruments';
 
 describe('evaluateCryptoVenueAvailability', () => {
+  it.each([-1, -Infinity, Infinity, NaN])('rejects invalid quote age %s', (priceAgeMs) => {
+    const result = evaluateCryptoVenueAvailability({ instrument: getCryptoInstrument('BTC-USD')!, priceAgeMs, staleThresholdMs: 300000 });
+    expect(result.reasonCode).toBe('DATA_STALE');
+  });
   it('honestly reports no paper crypto broker exists yet', () => {
     expect(isCryptoPaperBrokerAvailable()).toBe(false);
   });

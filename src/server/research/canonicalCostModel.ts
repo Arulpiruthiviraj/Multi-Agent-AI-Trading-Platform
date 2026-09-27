@@ -23,6 +23,8 @@
  * one UNAVAILABLE component makes the total UNAVAILABLE, never silently treated as zero.
  */
 import type { ExecutionQualityRow } from './executionQuality';
+import { getCryptoInstrument } from '../config/cryptoInstruments';
+import { looksLikeListedTicker } from '../ai/AIOutputValidator';
 
 export const COST_QUALITIES = ['MEASURED', 'ESTIMATED', 'PARTIAL', 'UNAVAILABLE'] as const;
 export type CostQuality = typeof COST_QUALITIES[number];
@@ -39,8 +41,7 @@ export function worstCostQuality(qualities: CostQuality[]): CostQuality {
  * Brokers with a real, documented, verifiable $0 commission schedule for standard US equity
  * orders - a fact about that broker's own published fee schedule, not an assumption. Distinct from
  * Alpaca's real (non-zero) crypto trading fees, so this exception is scoped to non-crypto symbols
- * only (checked via the absence of a `/` in the symbol, matching this codebase's existing
- * BTC/USD-style crypto symbol convention - see config/cryptoInstruments.json).
+ * only (requires the existing equity-symbol validator and excludes the canonical crypto registry).
  */
 const KNOWN_ZERO_EQUITY_COMMISSION_BROKERS = new Set(['alpaca']);
 
@@ -62,8 +63,8 @@ export function classifyCommission(params: {
   if (rawCommission !== null && Number.isFinite(rawCommission)) {
     return { commissionTotal: rawCommission, commissionQuality: 'MEASURED' };
   }
-  const isCrypto = symbol.includes('/');
-  if (!isCrypto && brokerId && KNOWN_ZERO_EQUITY_COMMISSION_BROKERS.has(brokerId)) {
+  const isEquitySymbol = !getCryptoInstrument(symbol) && looksLikeListedTicker(symbol) !== null;
+  if (isEquitySymbol && brokerId && KNOWN_ZERO_EQUITY_COMMISSION_BROKERS.has(brokerId)) {
     return { commissionTotal: 0, commissionQuality: 'MEASURED' };
   }
   return { commissionTotal: null, commissionQuality: 'UNAVAILABLE' };

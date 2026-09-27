@@ -124,6 +124,33 @@ describe('CoinbaseBroker', () => {
   });
 
   describe('placeOrder', () => {
+    it('preserves the caller idempotency key on repeated submissions', async () => {
+      const broker = await authedBroker();
+      broker.liveTrading();
+      armLivePlacement();
+      const send = vi.fn(async () => ({ ok: true, json: async () => ({ success: true, success_response: { order_id: 'same' } }) }));
+      vi.stubGlobal('fetch', send);
+      const input = { symbol: 'BTC-USD', side: 'BUY' as const, type: 'MARKET' as const, quantity: .01, clientOrderId: 'oms-stable-id' };
+      expect((await broker.placeOrder(input)).clientOrderId).toBe(input.clientOrderId);
+      await broker.placeOrder(input);
+      for (const call of vi.mocked(global.fetch).mock.calls) expect(JSON.parse(call[1]!.body as string).client_order_id).toBe(input.clientOrderId);
+    });
+    it.each([{ type: 'STOP', stopPrice: 100 }, { type: 'LIMIT', price: -1 }, { type: 'MARKET', quantity: -1 }, { type: 'MARKET', side: 'INVALID' }])('rejects unsupported or invalid orders before submission %j', async (override) => {
+      const broker = await authedBroker();
+      broker.liveTrading();
+      armLivePlacement();
+      const send = vi.fn();
+      vi.stubGlobal('fetch', send);
+      await expect(broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', quantity: .01, ...override } as any)).rejects.toThrow();
+      expect(send).not.toHaveBeenCalled();
+    });
+    it.each([{}, { success: true }, { success: true, success_response: { order_id: '' } }])('reports ambiguous acknowledgement rather than fabricating a broker ID %j', async (body) => {
+      const broker = await authedBroker();
+      broker.liveTrading();
+      armLivePlacement();
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => body })));
+      await expect(broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', type: 'MARKET', quantity: .01 })).rejects.toThrow(/outcome unknown/);
+    });
     it('refuses to place a real order while in paper mode (the default) - Coinbase has no sandbox to fall back to', async () => {
       const broker = await authedBroker();
       await expect(broker.placeOrder({ symbol: 'BTC-USD', side: 'BUY', type: 'MARKET', quantity: 0.01 }))

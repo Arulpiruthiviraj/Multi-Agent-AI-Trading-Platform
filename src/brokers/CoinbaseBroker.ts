@@ -42,6 +42,7 @@ import { networkEndpoints } from '../server/config/networkEndpoints';
 import { assertLiveOrdersArmed } from '../server/core/LiveTradingConfirmation';
 import { isPaperTradingOnlyEnforced } from '../server/core/tradingModeEnv';
 import { logErrorSafely } from '../server/core/SecretRedaction';
+import { dataTransportLimits } from '../server/config/dataTransportLimits';
 
 const API_HOST = networkEndpoints.broker.coinbase.apiHost;
 const API_BASE = `https://${API_HOST}`;
@@ -131,7 +132,7 @@ export class CoinbaseBroker implements BrokerPlugin {
   }
 
   private async fetchCoinbase(method: string, path: string, body?: any): Promise<any> {
-    const jwt = this.buildJwt(method, path);
+    const jwt = this.buildJwt(method, path.split('?')[0]);
     const res = await fetch(`${API_BASE}${path}`, {
       method,
       headers: {
@@ -139,6 +140,7 @@ export class CoinbaseBroker implements BrokerPlugin {
         'Content-Type': 'application/json',
       },
       body: body ? JSON.stringify(body) : undefined,
+      signal: AbortSignal.timeout(dataTransportLimits.requestTimeoutMs),
     });
     if (!res.ok) {
       const errBody = await res.text();
@@ -235,11 +237,14 @@ export class CoinbaseBroker implements BrokerPlugin {
     }
     const arm = assertLiveOrdersArmed();
     if (!arm.ok) throw new Error(arm.reason);
-    if (!order.symbol || !order.side || !order.quantity) {
+    if (!order.symbol || !['BUY', 'SELL'].includes(order.side ?? '') || !Number.isFinite(order.quantity) || order.quantity! <= 0) {
       throw new Error('placeOrder requires symbol, side, and quantity.');
     }
 
-    const clientOrderId = crypto.randomUUID();
+    if (order.type !== 'MARKET' && order.type !== 'LIMIT') throw new Error('Unsupported Coinbase order type; only MARKET and LIMIT are implemented.');
+    if (order.type === 'LIMIT' && (!Number.isFinite(order.price) || order.price! <= 0)) throw new Error('LIMIT requires a finite positive price.');
+    if (order.clientOrderId !== undefined && (typeof order.clientOrderId !== 'string' || !order.clientOrderId.trim())) throw new Error('Invalid client order ID.');
+    const clientOrderId = order.clientOrderId ?? crypto.randomUUID();
     const baseSize = String(order.quantity);
     const orderConfiguration = order.type === 'LIMIT'
       ? { limit_limit_gtc: { base_size: baseSize, limit_price: String(order.price ?? ''), post_only: false } }
@@ -255,10 +260,14 @@ export class CoinbaseBroker implements BrokerPlugin {
     if (res?.success === false) {
       throw new Error(`Coinbase rejected the order: ${res?.error_response?.message || res?.error_response?.error || 'unknown reason'}`);
     }
+    if (res?.success !== true || typeof res?.success_response?.order_id !== 'string' || !res.success_response.order_id.trim()) {
+      throw new Error('Coinbase order submission outcome unknown: missing broker acknowledgement; reconcile by client order ID before retrying.');
+    }
 
     const now = new Date();
     return {
-      id: res?.success_response?.order_id ?? clientOrderId,
+      id: res.success_response.order_id,
+      clientOrderId,
       symbol: order.symbol,
       side: order.side,
       type: order.type === 'LIMIT' ? 'LIMIT' : 'MARKET',

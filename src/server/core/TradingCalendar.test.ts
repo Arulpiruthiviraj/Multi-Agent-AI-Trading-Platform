@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { getTradingDateStr, getTradingDayStartMs } from './TradingCalendar';
+import { getTradingDateStr, getTradingDayStartMs, tradingWallTimeToIso } from './TradingCalendar';
+
+describe('trading wall-time conversion', () => {
+  it('resolves the same 16:00 close in winter and summer without a fixed UTC offset', () => {
+    expect(tradingWallTimeToIso('2026-12-15', '16:00')).toBe('2026-12-15T21:00:00.000Z');
+    expect(tradingWallTimeToIso('2026-07-15', '16:00')).toBe('2026-07-15T20:00:00.000Z');
+  });
+  it('rejects nonexistent wall times', () => {
+    expect(() => tradingWallTimeToIso('2026-03-08', '02:30')).toThrow();
+  });
+});
 
 describe('getTradingDateStr - real America/New_York trading-day boundary', () => {
   it('resolves a UTC instant just after UTC midnight to the PREVIOUS real New York calendar day (the exact bug this phase fixes)', () => {

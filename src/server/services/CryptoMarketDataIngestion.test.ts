@@ -27,6 +27,32 @@ function mockAlpacaQuotes(body: unknown) {
 }
 
 describe('CryptoMarketDataIngestionWorker', () => {
+  it.each(['invalid', '2999-01-01T00:00:00Z'])('does not publish invalid or future timestamp %s', async (t) => {
+    const publish = vi.spyOn(marketDataWorker, 'cacheObservedQuote');
+    mockAlpacaQuotes({ quotes: { 'BTC/USD': { bp: 9, ap: 10, bs: 1, as: 1, t } } });
+    await new CryptoMarketDataIngestionWorker().tick();
+    expect(publish).not.toHaveBeenCalled();
+  });
+
+  it('coalesces overlapping polls and discards a response arriving after stop', async () => {
+    let resolve!: (response: Response) => void;
+    global.fetch = vi.fn(() => new Promise<Response>((r) => { resolve = r; }));
+    const publish = vi.spyOn(marketDataWorker, 'cacheObservedQuote');
+    const worker = new CryptoMarketDataIngestionWorker();
+    const pending = worker.tick();
+    await worker.tick();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const signal = vi.mocked(global.fetch).mock.calls[0][1]!.signal!;
+    worker.stop();
+    expect(signal.aborted).toBe(true);
+    resolve({ ok: true, json: async () => ({ quotes: { 'BTC/USD': { bp: 9, ap: 10, bs: 1, as: 1, t: new Date().toISOString() } } }) } as Response);
+    await pending;
+    expect(publish).not.toHaveBeenCalled();
+    expect(worker.getStatus().lastTickAtMs).toBeNull();
+    mockAlpacaQuotes({ quotes: {} });
+    await worker.tick();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+  });
   it('start() is a no-op when the flag is off', () => {
     delete process.env[ENV_VAR];
     const worker = new CryptoMarketDataIngestionWorker();

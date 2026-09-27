@@ -2,6 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { isSafeOutboundUrl } from './urlSafety';
 
 describe('isSafeOutboundUrl - SSRF guard', () => {
+  it.each(['::ffff:7f00:1', '::ffff:127.0.0.1', '0:0:0:0:0:ffff:a00:1', 'fe90::1', 'febf::1', '0:0:0:0:0:0:0:1'])('blocks internal IPv6 representation %s', async (ip) => {
+    expect((await isSafeOutboundUrl(`http://[${ip}]/`)).safe).toBe(false);
+  });
+  it('accepts a public IPv6 literal without mistaking brackets for part of a DNS name', async () => {
+    expect((await isSafeOutboundUrl('https://[2606:4700:4700::1111]/')).safe).toBe(true);
+  });
   it('rejects malformed URLs', async () => {
     const r = await isSafeOutboundUrl('not a url');
     expect(r.safe).toBe(false);

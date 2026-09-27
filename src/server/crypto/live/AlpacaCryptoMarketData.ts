@@ -21,6 +21,8 @@
  *     made deliberately, with tests, not smuggled in under a market-data client.
  */
 
+import { dataTransportLimits } from '../../config/dataTransportLimits';
+
 export interface CryptoQuote {
   symbol: string;
   bidPrice: number;
@@ -60,11 +62,13 @@ function authHeaders(): Record<string, string> {
 
 /** Real latest bid/ask for one or more crypto symbols (e.g. ['BTC/USD', 'ETH/USD']). Throws on
  *  a non-200 response rather than returning a fabricated/partial quote. */
-export async function getLatestCryptoQuotes(symbols: readonly string[]): Promise<Map<string, CryptoQuote>> {
+export async function getLatestCryptoQuotes(symbols: readonly string[], signal?: AbortSignal): Promise<Map<string, CryptoQuote>> {
   if (symbols.length === 0) return new Map();
   const url = new URL(`${CRYPTO_DATA_BASE_URL}/latest/quotes`);
   url.searchParams.set('symbols', symbols.join(','));
-  const res = await fetch(url.toString(), { headers: authHeaders() });
+  const res = await fetch(url.toString(), { headers: authHeaders(), signal: AbortSignal.any([
+    AbortSignal.timeout(dataTransportLimits.requestTimeoutMs), ...(signal ? [signal] : []),
+  ]) });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`Alpaca crypto quote request failed: ${res.status} ${res.statusText} ${body}`);
@@ -72,6 +76,8 @@ export async function getLatestCryptoQuotes(symbols: readonly string[]): Promise
   const json = (await res.json()) as { quotes?: Record<string, { ap: number; as: number; bp: number; bs: number; t: string }> };
   const out = new Map<string, CryptoQuote>();
   for (const [symbol, q] of Object.entries(json.quotes ?? {})) {
+    if (!symbols.includes(symbol) || !q || ![q.bp, q.ap, q.bs, q.as].every(Number.isFinite)
+      || q.bp <= 0 || q.ap < q.bp || q.bs < 0 || q.as < 0 || !Number.isFinite(Date.parse(q.t))) continue;
     out.set(symbol, {
       symbol,
       bidPrice: q.bp,
@@ -93,18 +99,25 @@ export async function getCryptoBars(
   startMs: number,
   endMs: number,
 ): Promise<CryptoBar[]> {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) throw new Error('Invalid crypto history range');
   const out: CryptoBar[] = [];
+  const seenTokens = new Set<string>();
+  const byTimestamp = new Map<number, CryptoBar>();
+  const deadline = AbortSignal.timeout(dataTransportLimits.historyTimeoutMs);
+  let pages = 0;
   let pageToken: string | undefined;
   do {
+    deadline.throwIfAborted();
+    if (++pages > dataTransportLimits.maxHistoryPages) throw new Error('Crypto history page limit exceeded; incomplete history');
     const url = new URL(`${CRYPTO_DATA_BASE_URL}/bars`);
     url.searchParams.set('symbols', symbol);
     url.searchParams.set('timeframe', timeframe);
     url.searchParams.set('start', new Date(startMs).toISOString());
     url.searchParams.set('end', new Date(endMs).toISOString());
-    url.searchParams.set('limit', '10000');
+    url.searchParams.set('limit', String(dataTransportLimits.historyPageSize));
     if (pageToken) url.searchParams.set('page_token', pageToken);
 
-    const res = await fetch(url.toString(), { headers: authHeaders() });
+    const res = await fetch(url.toString(), { headers: authHeaders(), signal: AbortSignal.any([deadline, AbortSignal.timeout(dataTransportLimits.requestTimeoutMs)]) });
     if (!res.ok) {
       const body = await res.text().catch(() => '');
       throw new Error(`Alpaca crypto bars request failed for ${symbol}: ${res.status} ${res.statusText} ${body}`);
@@ -114,7 +127,16 @@ export async function getCryptoBars(
       next_page_token?: string | null;
     };
     const bars = json.bars?.[symbol] ?? [];
+    if (!Array.isArray(bars) || bars.length > dataTransportLimits.historyPageSize) throw new Error('Invalid crypto history page');
     for (const b of bars) {
+      const timestamp = b && typeof b.t === 'string' ? Date.parse(b.t) : NaN;
+      if (!Number.isFinite(timestamp) || timestamp < startMs || timestamp > endMs
+        || ![b.o, b.h, b.l, b.c, b.v].every(Number.isFinite) || Math.min(b.o, b.h, b.l, b.c) <= 0
+        || b.v < 0 || b.h < Math.max(b.o, b.l, b.c) || b.l > Math.min(b.o, b.h, b.c)
+        || (b.n != null && (!Number.isSafeInteger(b.n) || b.n < 0))
+        || (b.vw != null && (!Number.isFinite(b.vw) || b.vw <= 0))) {
+        throw new Error('Invalid crypto history bar; incomplete history');
+      }
       out.push({
         timestampMs: new Date(b.t).getTime(),
         open: b.o,
@@ -127,15 +149,23 @@ export async function getCryptoBars(
       });
     }
     pageToken = json.next_page_token ?? undefined;
+    if (pageToken !== undefined && typeof pageToken !== 'string') throw new Error('Invalid crypto history page token');
+    if (pageToken) {
+      if (seenTokens.has(pageToken)) throw new Error('Repeated crypto history page token; incomplete history');
+      seenTokens.add(pageToken);
+    }
   } while (pageToken);
-
-  out.sort((a, b) => a.timestampMs - b.timestampMs);
-  return out;
+  for (const bar of out) {
+    const prior = byTimestamp.get(bar.timestampMs);
+    if (prior && JSON.stringify(prior) !== JSON.stringify(bar)) throw new Error('Conflicting duplicate crypto history bar');
+    byTimestamp.set(bar.timestampMs, bar);
+  }
+  return [...byTimestamp.values()].sort((a, b) => a.timestampMs - b.timestampMs);
 }
 
 /** Real per-account crypto trading eligibility check (read-only, does not place an order). */
 export async function getCryptoAccountStatus(): Promise<{ cryptoStatus: string; tradingBlocked: boolean }> {
-  const res = await fetch('https://paper-api.alpaca.markets/v2/account', { headers: authHeaders() });
+  const res = await fetch('https://paper-api.alpaca.markets/v2/account', { headers: authHeaders(), signal: AbortSignal.timeout(dataTransportLimits.requestTimeoutMs) });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
     throw new Error(`Alpaca account status request failed: ${res.status} ${res.statusText} ${body}`);

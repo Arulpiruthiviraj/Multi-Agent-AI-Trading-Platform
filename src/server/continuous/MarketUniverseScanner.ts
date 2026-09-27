@@ -26,6 +26,8 @@ import { recordPrediction } from '../services/ModelPerformanceTracker';
 import { withDiscoveryCircuitBreaker, resetDiscoveryCircuitBreakersForTests } from '../core/discoveryHttpCircuitBreaker';
 import { normalizeSymbols } from '../core/symbolNormalization';
 import { FmpBudget } from '../services/FmpBudget';
+import { dataTransportLimits } from '../config/dataTransportLimits';
+import { getTradingDateStr, tradingWallTimeToIso } from '../core/TradingCalendar';
 import { validateDiscoveryGap, type DiscoveryGapEvidence } from './discoveryGapEvidence';
 export { validateDiscoveryGap } from './discoveryGapEvidence';
 import {
@@ -265,7 +267,23 @@ async function recordDiscoveryOutcomeProbe(symbol: string, gapPct: number): Prom
 }
 
 interface AlpacaBarsResponse {
-  bars: Record<string, Array<{ v?: number }>> | null;
+  bars: Record<string, Array<{ t?: string; v?: number }>> | null;
+  next_page_token?: string | null;
+}
+
+// Data selection only: preserve the existing arithmetic mean, but require a complete,
+// distinct, completed-day sample before reporting it as the configured lookback ADV.
+function completedVolumes(rows: Array<{ day: string; volume: unknown }>, startDay: string, endDay: string): number[] {
+  const byDay = new Map<string, number>();
+  for (const { day, volume } of rows) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < startDay || day >= endDay) continue;
+    if (typeof volume !== 'number' || !Number.isFinite(volume) || volume < 0) return [];
+    if (byDay.has(day) && byDay.get(day) !== volume) return [];
+    byDay.set(day, volume);
+  }
+  const days = continuousIntelligence.broadUniverseAdvLookbackDays;
+  if (byDay.size < days) return [];
+  return [...byDay].sort(([a], [b]) => b.localeCompare(a)).slice(0, days).map(([, v]) => v);
 }
 
 /**
@@ -279,18 +297,16 @@ interface AlpacaBarsResponse {
  * FundamentalAgent's budget, that is a real, visible tradeoff via FmpBudget.remaining(), not
  * something to hide behind a second budget), and returns null (never fabricated) on any failure.
  */
-async function fetchAvgDailyVolumeSharesFmpFallback(symbol: string): Promise<number | null> {
+async function fetchAvgDailyVolumeSharesFmpFallback(symbol: string, startDay: string, endDay: string): Promise<number | null> {
   if (!process.env.FMP_API_KEY) return null;
   if (!(await FmpBudget.tryConsume(1))) return null;
   try {
     const days = continuousIntelligence.broadUniverseAdvLookbackDays;
-    const url = `${networkEndpoints.marketData.fmpBaseUrl}/historical-price-full/${symbol}?timeseries=${days}&apikey=${process.env.FMP_API_KEY}`;
-    const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const url = `${networkEndpoints.marketData.fmpBaseUrl}/historical-price-full/${symbol}?timeseries=${days + 1}&apikey=${process.env.FMP_API_KEY}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(dataTransportLimits.requestTimeoutMs) });
     if (!response.ok) return null;
-    const body = await response.json() as { historical?: Array<{ volume?: number }> };
-    const volumes = (body.historical ?? [])
-      .map((h) => h.volume)
-      .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+    const body = await response.json() as { historical?: Array<{ date?: string; volume?: number }> };
+    const volumes = completedVolumes((body.historical ?? []).map((h) => ({ day: h.date ?? '', volume: h.volume })), startDay, endDay);
     if (volumes.length === 0) return null;
     return volumes.reduce((a, b) => a + b, 0) / volumes.length;
   } catch (e) {
@@ -330,17 +346,35 @@ export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<
   const days = continuousIntelligence.broadUniverseAdvLookbackDays;
   const out = new Map<string, number>();
   const missing: string[] = [];
+  const endDay = getTradingDateStr(new Date(Date.now()));
+  const endMs = Date.parse(tradingWallTimeToIso(endDay, '00:00'));
+  const startDay = getTradingDateStr(new Date(endMs - days * dataTransportLimits.advCalendarLookbackMultiplier * 86400_000));
   for (let i = 0; i < symbols.length; i += batchSize) {
     const batch = symbols.slice(i, i + batchSize);
-    const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/bars?symbols=${batch.join(',')}&timeframe=1Day&limit=${days}&adjustment=raw&feed=sip`;
     try {
-      const raw = await fetchJson<AlpacaBarsResponse>(url, 15000);
+      const collected = new Map<string, Array<{ t?: string; v?: number }>>();
+      const seen = new Set<string>();
+      const deadline = Date.now() + dataTransportLimits.historyTimeoutMs;
+      let token: string | undefined;
+      let pages = 0;
+      do {
+        if (++pages > dataTransportLimits.maxHistoryPages || Date.now() >= deadline) throw new Error('Incomplete ADV pagination');
+        const url = new URL(`${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/bars`);
+        for (const [key, value] of Object.entries({ symbols: batch.join(','), timeframe: '1Day', limit: String(dataTransportLimits.historyPageSize), adjustment: 'raw', feed: 'sip', start: tradingWallTimeToIso(startDay, '00:00'), end: new Date(endMs - 1).toISOString(), sort: 'desc' })) url.searchParams.set(key, value);
+        if (token) url.searchParams.set('page_token', token);
+        const raw = await fetchJson<AlpacaBarsResponse>(url.toString(), Math.min(dataTransportLimits.requestTimeoutMs, deadline - Date.now()));
+        for (const symbol of batch) {
+          const bars = raw.bars?.[symbol];
+          if (Array.isArray(bars)) collected.set(symbol, [...(collected.get(symbol) ?? []), ...bars]);
+        }
+        token = raw.next_page_token ?? undefined;
+        if (token && (typeof token !== 'string' || seen.has(token))) throw new Error('Invalid or repeated ADV page token');
+        if (token) seen.add(token);
+      } while (token);
       for (const symbol of batch) {
-        const bars = raw.bars?.[symbol];
+        const bars = collected.get(symbol);
         if (!Array.isArray(bars) || bars.length === 0) { missing.push(symbol); continue; }
-        const volumes = bars
-          .map((b) => b.v)
-          .filter((v): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0);
+        const volumes = completedVolumes(bars.map((b) => ({ day: b.t && Number.isFinite(Date.parse(b.t)) ? getTradingDateStr(new Date(b.t)) : '', volume: b.v })), startDay, endDay);
         if (volumes.length === 0) { missing.push(symbol); continue; }
         out.set(symbol, volumes.reduce((a, b) => a + b, 0) / volumes.length);
       }
@@ -350,7 +384,7 @@ export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<
     }
   }
   for (const symbol of missing) {
-    const fallback = await fetchAvgDailyVolumeSharesFmpFallback(symbol);
+    const fallback = await fetchAvgDailyVolumeSharesFmpFallback(symbol, startDay, endDay);
     if (fallback != null) {
       out.set(symbol, fallback);
       console.warn(`[MarketUniverseScanner] ADV for ${symbol} unavailable from Alpaca — served from FMP fallback.`);

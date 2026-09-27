@@ -24,6 +24,23 @@ function mockFetchOnce(status: number, body: unknown) {
 }
 
 describe('getLatestCryptoQuotes', () => {
+  it.each([
+    { bp: -1, ap: 10 }, { bp: 10, ap: 9 }, { bp: Infinity },
+    { bs: -1 }, { as: NaN }, { t: 'invalid' },
+  ])('rejects malformed quote evidence %j', async (override) => {
+    mockFetchOnce(200, { quotes: { 'BTC/USD': { bp: 9, ap: 10, bs: 1, as: 1, t: '2026-09-01T00:00:00Z', ...override } } });
+    expect((await getLatestCryptoQuotes(['BTC/USD'])).size).toBe(0);
+  });
+
+  it('propagates caller cancellation to the request', async () => {
+    const controller = new AbortController();
+    global.fetch = vi.fn((_url, init) => new Promise<Response>((_resolve, reject) => {
+      init!.signal!.addEventListener('abort', () => reject(init!.signal!.reason));
+    }));
+    const pending = getLatestCryptoQuotes(['BTC/USD'], controller.signal);
+    controller.abort();
+    await expect(pending).rejects.toThrow();
+  });
   it('throws rather than fabricating a quote when credentials are missing', async () => {
     delete process.env.ALPACA_API_KEY;
     await expect(getLatestCryptoQuotes(['BTC/USD'])).rejects.toThrow(/ALPACA_API_KEY/);
@@ -57,6 +74,22 @@ describe('getLatestCryptoQuotes', () => {
 });
 
 describe('getCryptoBars', () => {
+  const bar = { t: '2026-09-01T00:00:00Z', o: 100, h: 110, l: 90, c: 105, v: 1 };
+  it('rejects repeated pagination tokens instead of looping forever', async () => {
+    mockFetchOnce(200, { bars: { 'BTC/USD': [bar] }, next_page_token: 'repeat' });
+    await expect(getCryptoBars('BTC/USD', '1Day', 0, Date.now())).rejects.toThrow(/Repeated/);
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+  it('deduplicates identical bars but rejects conflicting copies', async () => {
+    mockFetchOnce(200, { bars: { 'BTC/USD': [bar, bar] } });
+    expect(await getCryptoBars('BTC/USD', '1Day', 0, Date.now())).toHaveLength(1);
+    mockFetchOnce(200, { bars: { 'BTC/USD': [bar, { ...bar, c: 101 }] } });
+    await expect(getCryptoBars('BTC/USD', '1Day', 0, Date.now())).rejects.toThrow(/Conflicting/);
+  });
+  it.each([{ t: 'bad' }, { o: 0 }, { h: 95 }, { l: 106 }, { v: -1 }, { c: NaN }])('rejects invalid history %j', async (override) => {
+    mockFetchOnce(200, { bars: { 'BTC/USD': [{ ...bar, ...override }] } });
+    await expect(getCryptoBars('BTC/USD', '1Day', 0, Date.now())).rejects.toThrow(/Invalid/);
+  });
   it('maps real-shaped Alpaca bar fields correctly', async () => {
     mockFetchOnce(200, {
       bars: { 'BTC/USD': [{ t: '2026-09-01T00:00:00Z', o: 100, h: 110, l: 90, c: 105, v: 1.5, n: 800, vw: 102 }] },

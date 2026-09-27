@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { continuousIntelligence } from '../config/continuousIntelligence';
+import { getTradingDateStr } from '../core/TradingCalendar';
 
 const FLAG = continuousIntelligence.broadUniverseEnabledEnvVar;
 const MOVERS_FLAG = continuousIntelligence.moversEnabledEnvVar;
@@ -26,9 +27,17 @@ import {
   MarketUniverseScannerWorker,
 } from './MarketUniverseScanner';
 
+function completedBars(volumes: number[]) {
+  const cursor = new Date(`${getTradingDateStr(new Date(Date.now()))}T12:00:00Z`);
+  return Array.from({ length: continuousIntelligence.broadUniverseAdvLookbackDays }, (_, i) => {
+    do { cursor.setUTCDate(cursor.getUTCDate() - 1); } while ([0, 6].includes(cursor.getUTCDay()));
+    return { t: cursor.toISOString(), v: volumes[i % volumes.length] };
+  });
+}
+
 function barsResponse(bars: Record<string, number[]>) {
   return jsonResponse({
-    bars: Object.fromEntries(Object.entries(bars).map(([symbol, volumes]) => [symbol, volumes.map((v) => ({ v }))])),
+    bars: Object.fromEntries(Object.entries(bars).map(([symbol, volumes]) => [symbol, completedBars(volumes)])),
   });
 }
 
@@ -135,6 +144,29 @@ describe('MarketUniverseScanner - screenAssets', () => {
 });
 
 describe('MarketUniverseScanner - fetchAvgDailyVolumeShares', () => {
+  it('paginates symbol-grouped bars with an explicit completed-day window', async () => {
+    const bars = completedBars([123]);
+    mockFetch.mockResolvedValueOnce(jsonResponse({ bars: { AAA: bars }, next_page_token: 'second' }));
+    mockFetch.mockResolvedValueOnce(jsonResponse({ bars: { BBB: bars }, next_page_token: null }));
+    const result = await fetchAvgDailyVolumeShares(['AAA', 'BBB']);
+    expect([...result]).toEqual([['AAA', 123], ['BBB', 123]]);
+    const first = new URL(String(mockFetch.mock.calls[0][0]));
+    expect(Date.parse(first.searchParams.get('start')!)).toBeLessThan(Date.parse(bars.at(-1)!.t));
+    expect(getTradingDateStr(new Date(first.searchParams.get('end')!)) < getTradingDateStr(new Date(Date.now()))).toBe(true);
+    expect(new URL(String(mockFetch.mock.calls[1][0])).searchParams.get('page_token')).toBe('second');
+  });
+  it('does not certify a short sample or count duplicate/today bars as completed days', async () => {
+    delete process.env.FMP_API_KEY;
+    const bars = completedBars([123]).slice(1);
+    mockFetch.mockResolvedValueOnce(jsonResponse({ bars: { AAA: [...bars, bars[0], { t: new Date(Date.now()).toISOString(), v: 123 }] } }));
+    expect((await fetchAvgDailyVolumeShares(['AAA'])).has('AAA')).toBe(false);
+  });
+  it('rejects a pagination loop without publishing the partial batch', async () => {
+    delete process.env.FMP_API_KEY;
+    mockFetch.mockResolvedValue(jsonResponse({ bars: { AAA: completedBars([123]) }, next_page_token: 'repeat' }));
+    expect((await fetchAvgDailyVolumeShares(['AAA'])).size).toBe(0);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
   it('computes a real average across the returned daily bars', async () => {
     mockFetch.mockResolvedValueOnce(barsResponse({ AAA: [400_000, 600_000] }));
     const advMap = await fetchAvgDailyVolumeShares(['AAA']);
@@ -177,7 +209,7 @@ describe('MarketUniverseScanner - fetchAvgDailyVolumeShares', () => {
       mockFetch.mockResolvedValueOnce(barsResponse({})); // Alpaca returns nothing for QRVO
       fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async (url: any) => {
         expect(String(url)).toContain('/historical-price-full/QRVO');
-        return { ok: true, json: async () => ({ historical: [{ volume: 900_000 }, { volume: 1_100_000 }] }) } as any;
+        return { ok: true, json: async () => ({ historical: completedBars([900_000, 1_100_000]).map((bar) => ({ date: bar.t.slice(0, 10), volume: bar.v })) }) } as any;
       });
       const advMap = await fetchAvgDailyVolumeShares(['QRVO']);
       expect(advMap.get('QRVO')).toBe(1_000_000);

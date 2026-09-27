@@ -85,9 +85,22 @@ describe('classifyMiss', () => {
     expect(r.classification).toBe('AGENT_MISS');
   });
 
-  it('classifies fully approved with no risk assessment at all as EXECUTION_MISS', () => {
+  /**
+   * Phase 0 regression (P5 - SOURCE_VERIFIED, ARGUS_MASTER_REDESIGN_PLAN.md): a missed candidate
+   * with NO corresponding risk_assessments row must never be described as an execution/order
+   * defect (EXECUTION_MISS implies RiskEngine approved it) - it must be an honest
+   * UNKNOWN/NOT_REACHED-equivalent label instead.
+   */
+  it('does not claim risk approval when no risk assessment exists', () => {
     const r = classifyMiss(baseSignals({ hadFilledTrade: false, hadRiskAssessment: false, riskApproved: null }));
-    expect(r.classification).toBe('EXECUTION_MISS');
+    expect(r.classification).toBe('RISK_NOT_CONFIRMED');
+    expect(r.classification).not.toBe('EXECUTION_MISS');
+  });
+
+  it('does not claim risk approval when a risk_assessments row exists but recorded no affirmative outcome', () => {
+    const r = classifyMiss(baseSignals({ hadFilledTrade: false, hadRiskAssessment: true, riskApproved: null }));
+    expect(r.classification).toBe('RISK_NOT_CONFIRMED');
+    expect(r.classification).not.toBe('EXECUTION_MISS');
   });
 
   it('evaluates first-failure-in-order: subscription miss takes priority over agent miss', () => {
