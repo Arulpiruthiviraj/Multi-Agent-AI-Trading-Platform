@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -56,6 +56,22 @@ describe('DbBackupService - real backup/restore drill (Phase 23)', () => {
     expect(fs.existsSync(oldFile)).toBe(false); // pruned
     const stamp = new Date().toISOString().slice(0, 10);
     expect(fs.existsSync(backupFile)).toBe(true); // today's backup kept
+  });
+
+  it('preserves same-day snapshots and propagates failure without publishing a partial backup', async () => {
+    const service = new DbBackupService();
+    const first = await service.runBackup();
+    const second = await service.runBackup();
+    expect(first).not.toBe(second);
+    expect(fs.existsSync(first)).toBe(true);
+    expect(fs.existsSync(second)).toBe(true);
+    const before = fs.readdirSync(backupDir).sort();
+    const { sqliteDb } = await import('../db');
+    const fail = vi.spyOn(sqliteDb, 'backup').mockRejectedValueOnce(new Error('injected backup failure'));
+    try {
+      await expect(service.runBackup()).rejects.toThrow('injected backup failure');
+      expect(fs.readdirSync(backupDir).sort()).toEqual(before);
+    } finally { fail.mockRestore(); }
   });
 
   it('backs up real data, survives real deletion of the "live" file, and restores it byte-for-byte-verifiable', async () => {

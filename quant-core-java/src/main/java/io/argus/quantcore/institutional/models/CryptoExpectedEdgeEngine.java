@@ -47,10 +47,21 @@ public final class CryptoExpectedEdgeEngine {
      *                          "refuses < 20 closed trades" rule elsewhere in this codebase).
      */
     public static EdgeEstimate estimate(Calibration calibration, double costRateFraction, double safetyMarginPct, int minimumSampleSize) {
-        double winProb = clamp01(calibration.winProbability());
+        if (calibration == null || minimumSampleSize <= 0 || calibration.sampleSize() < 0
+            || !Double.isFinite(calibration.winProbability()) || calibration.winProbability() < 0 || calibration.winProbability() > 1
+            || !Double.isFinite(calibration.avgWinPct()) || calibration.avgWinPct() < 0
+            || !Double.isFinite(calibration.avgLossPct()) || calibration.avgLossPct() < 0
+            || !Double.isFinite(costRateFraction) || costRateFraction < 0
+            || !Double.isFinite(safetyMarginPct) || safetyMarginPct < 0) {
+            throw new IllegalArgumentException("Invalid expected-edge evidence or policy inputs");
+        }
+        double winProb = calibration.winProbability();
         double lossProb = 1.0 - winProb;
         double expectedEdgePct = (winProb * calibration.avgWinPct()) - (lossProb * calibration.avgLossPct());
         double expectedEdgeAfterCostPct = expectedEdgePct - costRateFraction;
+        if (!Double.isFinite(expectedEdgePct) || !Double.isFinite(expectedEdgeAfterCostPct)) {
+            throw new IllegalArgumentException("Expected-edge arithmetic overflow");
+        }
         boolean calibrated = calibration.sampleSize() >= minimumSampleSize;
         boolean sufficientEdge = calibrated && expectedEdgeAfterCostPct > safetyMarginPct;
 
@@ -66,8 +77,4 @@ public final class CryptoExpectedEdgeEngine {
         return new EdgeEstimate(expectedEdgePct, costRateFraction, expectedEdgeAfterCostPct, sufficientEdge, calibrated, reasonCode);
     }
 
-    private static double clamp01(double v) {
-        if (Double.isNaN(v)) return 0.0;
-        return Math.max(0.0, Math.min(1.0, v));
-    }
 }

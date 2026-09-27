@@ -4,6 +4,15 @@
  */
 import { describe, it, expect, afterEach, vi, beforeEach } from 'vitest';
 import { continuousIntelligence } from '../config/continuousIntelligence';
+import { getTradingDateStr } from '../core/TradingCalendar';
+
+function liquidCompletedBars() {
+  const day = new Date(`${getTradingDateStr(new Date(Date.now()))}T12:00:00Z`);
+  return Array.from({ length: continuousIntelligence.broadUniverseAdvLookbackDays }, () => {
+    do { day.setUTCDate(day.getUTCDate() - 1); } while ([0, 6].includes(day.getUTCDay()));
+    return { t: day.toISOString(), v: 2_000_000 };
+  });
+}
 import { eventBus } from '../core/EventBus';
 import { EVENTS } from '../core/eventNames';
 import { marketDataWorker } from '../services/MarketDataWorker';
@@ -259,7 +268,7 @@ describe('OpportunityDiscovery.blendedHotSwapScore - Phase 3 Dynamic Market Data
           json: async () => ({ REALMOVER: { latestTrade: { p: 80 }, dailyBar: { v: 2_000_000, c: 80 }, latestQuote: { bp: 79.9, ap: 80.1 } } }),
         } as any;
       }
-      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ bars: { REALMOVER: [{ v: 2_000_000 }, { v: 2_000_000 }] } }) } as any;
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ bars: { REALMOVER: liquidCompletedBars() } }) } as any;
     });
 
     const { refreshMoversCache } = await import('./MarketUniverseScanner');
@@ -329,7 +338,7 @@ describe('OpportunityDiscovery.blendedHotSwapScore - composable-ranking wiring',
           json: async () => ({ DOUBLEBOOST: { latestTrade: { p: 80 }, dailyBar: { v: 2_000_000, c: 80 }, latestQuote: { bp: 79.9, ap: 80.1 } } }),
         } as any;
       }
-      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ bars: { DOUBLEBOOST: [{ v: 2_000_000 }, { v: 2_000_000 }] } }) } as any;
+      return { ok: true, status: 200, headers: { get: () => null }, json: async () => ({ bars: { DOUBLEBOOST: liquidCompletedBars() } }) } as any;
     });
 
     const { refreshMoversCache } = await import('./MarketUniverseScanner');

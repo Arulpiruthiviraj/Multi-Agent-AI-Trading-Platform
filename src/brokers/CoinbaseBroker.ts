@@ -150,23 +150,42 @@ export class CoinbaseBroker implements BrokerPlugin {
   }
 
   async account(): Promise<any> {
-    return this.fetchCoinbase('GET', '/api/v3/brokerage/accounts');
+    return { accounts: await this.readAllPages('/api/v3/brokerage/accounts', 'accounts'), has_next: false };
+  }
+
+  private async readAllPages(path: string, field: 'accounts' | 'orders'): Promise<any[]> {
+    const rows: any[] = [];
+    const cursors = new Set<string>();
+    let cursor: string | undefined;
+    const deadline = Date.now() + dataTransportLimits.historyTimeoutMs;
+    for (let page = 0; page < dataTransportLimits.maxHistoryPages; page++) {
+      if (Date.now() >= deadline) throw new Error('Coinbase pagination deadline exceeded; incomplete response');
+      const response = await this.fetchCoinbase('GET', cursor ? `${path}?cursor=${encodeURIComponent(cursor)}` : path);
+      if (!Array.isArray(response?.[field]) || typeof response.has_next !== 'boolean') throw new Error('Malformed Coinbase pagination response');
+      rows.push(...response[field]);
+      if (!response.has_next) return rows;
+      if (typeof response.cursor !== 'string' || !response.cursor || cursors.has(response.cursor)) throw new Error('Invalid or repeated Coinbase cursor; incomplete response');
+      cursor = response.cursor;
+      cursors.add(cursor);
+    }
+    throw new Error('Coinbase page limit exceeded; incomplete response');
   }
 
   async portfolio(): Promise<Portfolio> {
-    const positions = await this.positions();
+    const res = await this.account();
+    const positions = await this.positionsFromAccounts(res.accounts);
     // Coinbase spot accounts hold crypto balances directly, not "cash" in the equities-broker
     // sense - available_balance on the account marked default (the primary USD/USDC wallet) is
     // the closest real analogue, found by re-querying accounts here rather than re-deriving it
     // from positions(), which already filters non-zero crypto balances out of the "cash" concept.
-    const res = await this.account();
-    const fiatAccount = (res?.accounts ?? []).find((a: any) => a.currency === 'USD' || a.currency === 'USDC');
-    const cash = fiatAccount ? parseFloat(fiatAccount.available_balance?.value ?? '0') : 0;
+    const fiatAccounts = res.accounts.filter((a: any) => a.currency === 'USD' || a.currency === 'USDC');
+    const cash = fiatAccounts.reduce((sum: number, a: any) => sum + this.accountQuantity(a), 0);
+    const buyingPower = fiatAccounts.reduce((sum: number, a: any) => sum + this.balanceValue(a.available_balance?.value), 0);
     const positionsValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
 
     return {
       cash,
-      buyingPower: cash,
+      buyingPower,
       equity: cash + positionsValue,
       positions,
       unrealizedPnl: positions.reduce((sum, p) => sum + p.unrealizedPnl, 0),
@@ -179,13 +198,28 @@ export class CoinbaseBroker implements BrokerPlugin {
 
   async positions(): Promise<Position[]> {
     const res = await this.account();
-    const accounts = (res?.accounts ?? []).filter((a: any) =>
-      a.currency !== 'USD' && a.currency !== 'USDC' && parseFloat(a.available_balance?.value ?? '0') > 0
+    return this.positionsFromAccounts(res.accounts);
+  }
+
+  private balanceValue(value: unknown): number {
+    if ((typeof value !== 'string' && typeof value !== 'number') || String(value).trim() === '') throw new Error('Coinbase balance unavailable');
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) throw new Error('Invalid Coinbase balance');
+    return parsed;
+  }
+
+  private accountQuantity(account: any): number {
+    return this.balanceValue(account.available_balance?.value) + this.balanceValue(account.hold?.value);
+  }
+
+  private async positionsFromAccounts(allAccounts: any[]): Promise<Position[]> {
+    const accounts = allAccounts.filter((a: any) =>
+      a.currency !== 'USD' && a.currency !== 'USDC' && this.accountQuantity(a) > 0
     );
 
     const positions: Position[] = [];
     for (const acc of accounts) {
-      const quantity = parseFloat(acc.available_balance?.value ?? '0');
+      const quantity = this.accountQuantity(acc);
       const productId = `${acc.currency}-USD`;
       let currentPrice = 0;
       try {
@@ -209,9 +243,10 @@ export class CoinbaseBroker implements BrokerPlugin {
   }
 
   async orders(): Promise<Order[]> {
-    const res = await this.fetchCoinbase('GET', '/api/v3/brokerage/orders/historical/batch');
-    return (res?.orders ?? []).map((o: any) => ({
+    const rows = await this.readAllPages('/api/v3/brokerage/orders/historical/batch', 'orders');
+    return rows.map((o: any) => ({
       id: o.order_id,
+      clientOrderId: o.client_order_id,
       symbol: o.product_id,
       side: (o.side ?? '').toUpperCase() === 'SELL' ? 'SELL' : 'BUY',
       type: mapCoinbaseOrderType(o.order_type),

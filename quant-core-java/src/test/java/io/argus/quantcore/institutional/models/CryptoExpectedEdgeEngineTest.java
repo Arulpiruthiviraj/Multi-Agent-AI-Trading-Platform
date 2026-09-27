@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.within;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CryptoExpectedEdgeEngineTest {
 
@@ -58,18 +59,25 @@ class CryptoExpectedEdgeEngineTest {
     }
 
     @Test
-    void neverFabricatesANegativeWinProbabilityOutOfRangeInputs() {
-        var calibration = new CryptoExpectedEdgeEngine.Calibration(-0.5, 0.05, 0.03, 100);
-        var result = CryptoExpectedEdgeEngine.estimate(calibration, 0.001, 0.0, 20);
-        // clamped to 0 -> expectedEdge = 0*0.05 - 1*0.03 = -0.03
-        assertThat(result.expectedEdgePct()).isCloseTo(-0.03, within(1e-9));
+    void rejectsInvalidProbabilityInsteadOfClampingItIntoEvidence() {
+        for (double probability : new double[] {-0.5, 1.5, Double.NaN, Double.POSITIVE_INFINITY}) {
+            var calibration = new CryptoExpectedEdgeEngine.Calibration(probability, 0.05, 0.03, 100);
+            assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(calibration, 0.001, 0.0, 20))
+                .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Test
-    void clampsAnOutOfRangeWinProbabilityAboveOne() {
-        var calibration = new CryptoExpectedEdgeEngine.Calibration(1.5, 0.05, 0.03, 100);
-        var result = CryptoExpectedEdgeEngine.estimate(calibration, 0.001, 0.0, 20);
-        // clamped to 1 -> expectedEdge = 1*0.05 - 0*0.03 = 0.05
-        assertThat(result.expectedEdgePct()).isCloseTo(0.05, within(1e-9));
+    void rejectsInvalidEconomicsAndZeroSamplePolicy() {
+        var valid = new CryptoExpectedEdgeEngine.Calibration(0.6, 0.05, 0.03, 100);
+        for (double invalid : new double[] {-0.01, Double.NaN, Double.POSITIVE_INFINITY}) {
+            assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(valid, invalid, 0, 20)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(valid, 0, invalid, 20)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(new CryptoExpectedEdgeEngine.Calibration(.6, invalid, .03, 100), 0, 0, 20)).isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(new CryptoExpectedEdgeEngine.Calibration(.6, .05, invalid, 100), 0, 0, 20)).isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(new CryptoExpectedEdgeEngine.Calibration(.6, .05, .03, 0), 0, 0, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(new CryptoExpectedEdgeEngine.Calibration(.6, .05, .03, -1), 0, 0, 20)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> CryptoExpectedEdgeEngine.estimate(null, 0, 0, 20)).isInstanceOf(IllegalArgumentException.class);
     }
 }

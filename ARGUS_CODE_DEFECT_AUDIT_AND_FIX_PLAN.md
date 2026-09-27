@@ -4,6 +4,25 @@ Audit date: September 27, 2026. Source HEAD: `9ed245e1a48776ea29c787ea6d65d22a41
 
 **Analysis only. No application code, configuration, database, runtime flag or order was changed.** This dated audit supplements the master redesign proposal; it does not replace the living architecture reference or authorize implementation. Protected-component fixes require a separately authorized change that preserves ChiefTrader → RiskEngine → PositionSizing → OMS → BrokerManager and all paper/live controls. New quantitative calculations and applicable calculation fixes belong in Java under the repository ownership rules.
 
+## Implementation follow-up — September 27, 2026
+
+The owner subsequently authorized fixing the findings one after another. The original audit below remains a record of the pre-fix source; its analysis-only statement describes that audit, not the later authorized implementation.
+
+Implemented with regression coverage: **F01–F03, F05–F07, F09–F25, F27–F28, F30 and F35**. This is a source/test status, not deployment, trading readiness or evidence of edge. Broader validation is still in progress at this checkpoint.
+
+Partially addressed:
+
+- **F04:** the fill ledger rejects missing/non-finite quantities and prices, rather than synthesizing a full fill or zero economics. OMS still needs an explicit reconciliation-required outcome for rejected fill evidence; logging and returning zero is not complete remediation of the order lifecycle.
+- **F08:** winter/summer regular-session expiry now uses America/New_York wall time. Exchange holidays and early-close session schedules remain unresolved; the current helper is a timezone conversion, not a complete exchange calendar.
+
+Still open: **F26** (unknown Coinbase valuation/cost basis), **F29** (outbound redirect/DNS binding), **F31–F32** (webhook validation and bounded delivery), **F33–F34** (UI asynchronous request lifecycle), and **F36–F37** (Java/Python request/admission bounds).
+
+Next sequence: complete F04 reconciliation semantics; complete F26 without representing unknown economics as zero; fix F29/F31/F32 together around one bounded outbound transport; then UI and inference admission defects. F08 needs an authoritative exchange-session source. Retain the existing trading spine and all safety thresholds throughout.
+
+Limitations: no production restart, historical ledger rewrite, external account change or real order was performed. Existing corrupt historical fill rows are not automatically repaired. Coinbase balances now include held quantities and all paginated wallets, but USDC still follows the adapter's pre-existing dollar-equivalent treatment; price/cost-basis honesty remains F26. Rejecting unsupported Coinbase STOP orders is deliberate—STOP execution support was not introduced.
+
+Coinbase pagination fields were checked against the official [accounts](https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/accounts/list-accounts) and [orders](https://docs.cdp.coinbase.com/api-reference/advanced-trade-api/rest-api/orders/list-orders) API references. External brokerage operation remains unverified.
+
 ## Main conclusion
 
 Fix accounting and data integrity before increasing trading activity. The most consequential findings are in the common fill ledger, broker attribution, backup correctness, crypto order validation, discovery metrics and freshness handling. A successful typecheck does not detect these logical failures.

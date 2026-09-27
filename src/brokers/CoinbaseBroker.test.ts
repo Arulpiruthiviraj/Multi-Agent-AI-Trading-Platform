@@ -27,7 +27,7 @@ function verifyJwtSignature(jwt: string): boolean {
 
 async function authedBroker(): Promise<CoinbaseBroker> {
   const broker = new CoinbaseBroker();
-  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ accounts: [] }) })));
+  vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ accounts: [], has_next: false }) })));
   await broker.authenticate({ apiKey: 'organizations/org1/apiKeys/key1', secretKey: TEST_PRIVATE_KEY_PEM });
   vi.unstubAllGlobals();
   return broker;
@@ -60,7 +60,7 @@ describe('CoinbaseBroker', () => {
       let capturedAuthHeader = '';
       vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: any) => {
         capturedAuthHeader = opts.headers.Authorization;
-        return { ok: true, json: async () => ({ accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [], has_next: false }) };
       }));
       const ok = await broker.authenticate({ apiKey: 'organizations/org1/apiKeys/key1', secretKey: escaped });
       expect(ok).toBe(true);
@@ -80,7 +80,7 @@ describe('CoinbaseBroker', () => {
       let capturedJwt = '';
       vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: any) => {
         capturedJwt = opts.headers.Authorization.replace('Bearer ', '');
-        return { ok: true, json: async () => ({ accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [], has_next: false }) };
       }));
       const broker = new CoinbaseBroker();
       await broker.authenticate({ apiKey: 'organizations/org1/apiKeys/key1', secretKey: TEST_PRIVATE_KEY_PEM });
@@ -92,7 +92,7 @@ describe('CoinbaseBroker', () => {
       let capturedJwt = '';
       vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: any) => {
         capturedJwt = opts.headers.Authorization.replace('Bearer ', '');
-        return { ok: true, json: async () => ({ accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [], has_next: false }) };
       }));
       const broker = new CoinbaseBroker();
       await broker.authenticate({ apiKey: 'organizations/org1/apiKeys/key1', secretKey: TEST_PRIVATE_KEY_PEM });
@@ -114,7 +114,7 @@ describe('CoinbaseBroker', () => {
       const jwts: string[] = [];
       vi.stubGlobal('fetch', vi.fn(async (_url: string, opts: any) => {
         jwts.push(opts.headers.Authorization);
-        return { ok: true, json: async () => ({ accounts: [] }) };
+        return { ok: true, json: async () => ({ accounts: [], has_next: false }) };
       }));
       const broker = new CoinbaseBroker();
       await broker.authenticate({ apiKey: 'organizations/org1/apiKeys/key1', secretKey: TEST_PRIVATE_KEY_PEM });
@@ -236,6 +236,24 @@ describe('CoinbaseBroker', () => {
   });
 
   describe('positions/portfolio mapping from real Coinbase response shapes', () => {
+    it('collects all account pages and rejects repeated cursors', async () => {
+      const broker = await authedBroker();
+      const send = vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ accounts: [{ currency: 'USD' }], has_next: true, cursor: 'next' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ accounts: [{ currency: 'BTC' }], has_next: false }) });
+      vi.stubGlobal('fetch', send);
+      expect((await broker.account()).accounts.map((a: any) => a.currency)).toEqual(['USD', 'BTC']);
+      expect(send.mock.calls[1][0]).toContain('?cursor=next');
+      send.mockResolvedValue({ ok: true, json: async () => ({ accounts: [], has_next: true, cursor: 'same' }) });
+      await expect(broker.account()).rejects.toThrow(/repeated/);
+    });
+    it('includes orders on later pages with their reconciliation key', async () => {
+      const broker = await authedBroker();
+      vi.stubGlobal('fetch', vi.fn()
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ orders: [], has_next: true, cursor: 'next' }) })
+        .mockResolvedValueOnce({ ok: true, json: async () => ({ orders: [{ order_id: 'late', client_order_id: 'oms-key', side: 'BUY', order_type: 'MARKET', status: 'OPEN' }], has_next: false }) }));
+      expect(await broker.orders()).toEqual([expect.objectContaining({ id: 'late', clientOrderId: 'oms-key' })]);
+    });
     it('maps non-zero, non-fiat account balances to positions with real pricing', async () => {
       const broker = await authedBroker();
       vi.stubGlobal('fetch', vi.fn(async (url: string) => {
@@ -243,10 +261,11 @@ describe('CoinbaseBroker', () => {
           return {
             ok: true,
             json: async () => ({
+              has_next: false,
               accounts: [
-                { currency: 'USD', available_balance: { value: '500.00' } },
-                { currency: 'BTC', available_balance: { value: '0.5' } },
-                { currency: 'ETH', available_balance: { value: '0' } }, // zero balance - must be excluded
+                { currency: 'USD', available_balance: { value: '500.00' }, hold: { value: '0' } },
+                { currency: 'BTC', available_balance: { value: '0' }, hold: { value: '0.5' } },
+                { currency: 'ETH', available_balance: { value: '0' }, hold: { value: '0' } }, // zero balance - must be excluded
               ],
             }),
           };
@@ -269,13 +288,16 @@ describe('CoinbaseBroker', () => {
       const broker = await authedBroker();
       vi.stubGlobal('fetch', vi.fn(async (url: string) => {
         if (url.includes('/accounts')) {
-          return { ok: true, json: async () => ({ accounts: [{ currency: 'USD', available_balance: { value: '1234.56' } }] }) };
+          return { ok: true, json: async () => ({ has_next: false, accounts: [
+            { currency: 'USD', available_balance: { value: '1200' }, hold: { value: '100' } },
+            { currency: 'USDC', available_balance: { value: '34.56' }, hold: { value: '10' } },
+          ] }) };
         }
         return { ok: true, json: async () => ({}) };
       }));
 
       const portfolio = await broker.portfolio();
-      expect(portfolio.cash).toBe(1234.56);
+      expect(portfolio.cash).toBeCloseTo(1344.56);
       expect(portfolio.buyingPower).toBe(1234.56);
     });
   });

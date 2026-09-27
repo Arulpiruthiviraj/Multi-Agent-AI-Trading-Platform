@@ -2730,3 +2730,19 @@ observability); `probabilityOfProfit` remains uncomputed (a distinct, pre-existi
 roadmap item's scope); no spread-component measurement beyond what Priority #2 already covers; no
 IBKR commission capture (still the named follow-up from Priority #2). Next per the operator's stated
 order: ojAlgo constrained portfolio optimization, then VaR/ES, then the PIT research warehouse.
+
+## September 27, 2026 — Defect remediation contract corrections
+
+The operator authorized corrective implementation following `ARGUS_CODE_DEFECT_AUDIT_AND_FIX_PLAN.md`. The protected idea → ChiefTrader → RiskEngine → PositionSizing → OMS → BrokerManager path, trading thresholds and enablement defaults are unchanged.
+
+- Fill-ledger updates serialize cumulative-watermark reads and inserts in an immediate SQLite transaction. The incremental fill price is derived from cumulative broker notional less recorded notional. Invalid/missing fill economics are rejected. Local BUY accounting receives the execution broker identity and incremental price. Historical rows are not rewritten; OMS reconciliation handling for rejected economics remains an open follow-up.
+- Backups use SQLite online backup to a unique temporary destination, verify integrity, then rename for publication. CLI callers await completion and receive failures. Scheduled backups retain existing single-flight scheduling. The destination integrity check is synchronous; production-scale latency has not been measured.
+- Snapshot ranking joins metrics by symbol. Regular TradePlan expiry resolves 16:00 America/New_York through the timezone database; holidays/early closes are not yet implemented. Miss classification requires explicit risk approval before assigning an execution miss.
+- ADV uses an explicit completed-day range, bounded pagination and distinct dated observations. Both Alpaca and fallback evidence require the configured sample count. Missing coverage remains unavailable, not proof of illiquidity or permission to lower a gate.
+- Crypto ingestion uses the existing single-flight primitive, cancellation and generation checks. Invalid/future timestamps cannot become fresh observations. Bid/ask evidence is validated; historical pagination is bounded and rejects invalid/conflicting bars. Polling metrics are exposed in worker status. Resource limits live in `config/dataTransportLimits.json`; they are transport bounds, not strategy thresholds.
+- Crypto PAPER accounting charges entry fees to realized P&L proportionally on sale, reserves pending SELL quantities, validates order amendments/marks and latches triggered stops across partial fills. This does not complete the separate crypto live-routing integration.
+- Coinbase retains caller client-order IDs, rejects unsupported order types, and requires a broker acknowledgement ID. Accounts/orders paginate with bounded cursors; balances include held amounts, cash aggregates supported cash wallets, and buying power excludes held cash. Unknown valuation and cost basis remain unresolved under the current non-null portfolio contract. The adapter retains its existing USDC dollar-equivalence assumption; it is not certified valuation evidence.
+- Commission classification excludes registered crypto and non-equity-shaped symbols from the Alpaca equity exception. IPv6 URL screening canonicalizes mapped addresses and checks the full link-local prefix; connection-time DNS binding and redirect policy remain open.
+- Java `CryptoExpectedEdgeEngine` rejects invalid calibration/economic inputs and requires a positive minimum sample policy. Invalid evidence is no longer silently clamped into an apparently calibrated estimate. No signal, vote or execution authority was added.
+
+These are engineering corrections, not alpha validation or LIVE authorization. See the audit follow-up for remaining defects and validation evidence.

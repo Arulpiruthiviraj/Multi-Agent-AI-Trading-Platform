@@ -127,6 +127,19 @@ describe('OrderManagementService.executeOrder', () => {
     expect(tradesInserts.length).toBe(0);
   });
 
+  it('applies late cumulative BUY fills using their incremental price and original broker', async () => {
+    mockBrokerHolder.broker = { id: 'new-active-broker' };
+    setPortfolioRows([{ symbol: 'AAPL', quantity: 1, averagePrice: 100, brokerSource: 'original-broker' }]);
+    fillsInserts.push({ orderId: 'late-order', quantity: 1, price: 100, cumulativeQuantity: 1 });
+    await (oms as any).applyFollowUpUpdate({
+      id: 'late-order', brokerOrderId: 'broker-order', brokerId: 'original-broker',
+      symbol: 'AAPL', side: 'BUY', quantity: 2, price: 100, status: 'PARTIALLY_FILLED',
+      traceId: 'late-trace', transactionId: 'late-tx',
+    }, { id: 'broker-order', status: 'FILLED', filledQuantity: 2, averageFillPrice: 110 });
+    expect(fillsInserts.at(-1)).toMatchObject({ quantity: 1, price: 120 });
+    expect(getPortfolioRows()[0]).toMatchObject({ quantity: 2, averagePrice: 110, brokerSource: 'original-broker' });
+  });
+
   it('aborts before placeOrder when the idempotency lookup throws', async () => {
     setThrowOnIdempotency(true);
     const placeOrder = vi.fn();

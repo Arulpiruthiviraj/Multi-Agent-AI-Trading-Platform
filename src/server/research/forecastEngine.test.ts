@@ -131,10 +131,10 @@ describe('forecastEngine (Institutional Transformation Mandate Part 7)', () => {
     const researchSafety = (await import('../config/researchSafety')).researchSafety;
     for (let i = 0; i < researchSafety.minOosTrades; i++) {
       const tx = `cost-tx-${i}`;
-      await db.insert(schema.consensusDecisions).values({ transactionId: tx, symbol: 'COSTEQ', side: 'SELL', weightedConfidence: .8, threshold: .75, approved: true, createdAt: ts });
+      await db.insert(schema.consensusDecisions).values({ transactionId: tx, symbol: 'CSTEQ', side: 'SELL', weightedConfidence: .8, threshold: .75, approved: true, createdAt: ts });
       await db.insert(schema.consensusEvidence).values({ transactionId: tx, agent: 'TechnicalAgent', side: 'SELL', confidence: .8, weight: 1, agreed: true });
       await db.insert(schema.trades).values({
-        id: tx, transactionId: tx, traceId: `trace-COSTEQ-${i}`, symbol: 'COSTEQ', side: 'SELL', quantity: 10,
+        id: tx, transactionId: tx, traceId: `trace-CSTEQ-${i}`, symbol: 'CSTEQ', side: 'SELL', quantity: 10,
         price: 99.5, arrivalPrice: 100, status: 'FILLED', timestamp: ts, executionEnvironment: 'PAPER',
         brokerId: 'alpaca', profitLoss: -5,
       });
