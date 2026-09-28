@@ -65,6 +65,31 @@ describe('computeDeterministicComponents', () => {
     expect(c.relativeVolume.score).toBe(1);
     expect(c.rangeExpansion.score).toBe(1);
   });
+
+  it('marks relativeVolume unavailable (not zero) when rawRelativeVolumeAvailable is false — premarket honest-null path (2026-09-27)', () => {
+    const c = computeDeterministicComponents({
+      symbol: 'AMD', last: 110, prevClose: 100, open: 105, prevOpen: 99,
+      minuteHigh: 111, minuteLow: 109, minuteClose: 110,
+      dailyVolume: 5_000_000, prevDayVolume: 10_000_000,
+      rawMomentumPct: 10, rawRelativeVolume: 0, rawRelativeVolumeAvailable: false, rawRangeExpansion: 0.02,
+    });
+    expect(c.relativeVolume.available).toBe(false);
+    expect(c.relativeVolume.score).toBeNull();
+    expect(c.relativeVolume.reason).toMatch(/regular session/i);
+    // Every other component computed from real snapshot fields is unaffected.
+    expect(c.momentum.available).toBe(true);
+  });
+
+  it('treats rawRelativeVolumeAvailable=undefined as available, preserving pre-existing fixture/caller behavior', () => {
+    const c = computeDeterministicComponents({
+      symbol: 'AAPL', last: 150, prevClose: 145, open: 148, prevOpen: 144,
+      minuteHigh: 151, minuteLow: 149, minuteClose: 150,
+      dailyVolume: 40_000_000, prevDayVolume: 30_000_000,
+      rawMomentumPct: 3.45, rawRelativeVolume: 1.5, rawRangeExpansion: 0.02,
+    });
+    expect(c.relativeVolume.available).toBe(true);
+    expect(c.relativeVolume.score).toBeGreaterThan(0);
+  });
 });
 
 function fullComponentSet(overrides: Partial<ComponentSet>): ComponentSet {

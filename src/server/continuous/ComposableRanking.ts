@@ -61,6 +61,12 @@ export interface RankingInput {
   /** 0-1 raw values already computed by scoreSnapshotCandidate-equivalent math. */
   rawMomentumPct: number; // intradayPctChange
   rawRelativeVolume: number;
+  /** False outside the REGULAR session (SnapshotScanner.expectedVolumeAtTimeOfDay has no real
+   *  expected-volume-at-time-of-day curve for premarket/after-hours — see its own doc comment on
+   *  the 2026-09-27 "92.37x RVOL" fabrication fix). Optional for backward compatibility with
+   *  existing fixtures/tests built before this field existed; undefined is treated as available
+   *  (matches every prior caller's REGULAR-session-only real-world usage). */
+  rawRelativeVolumeAvailable?: boolean;
   rawRangeExpansion: number;
 }
 
@@ -76,7 +82,9 @@ function clamp01(x: number): number {
 /** Real, deterministic components computable from the SAME snapshot data SnapshotScanner already fetches - no new network calls. */
 export function computeDeterministicComponents(input: RankingInput): Pick<ComponentSet, 'momentum' | 'relativeVolume' | 'rangeExpansion' | 'gap' | 'liquidity'> {
   const momentum: ComponentResult = { score: clamp01(Math.abs(input.rawMomentumPct) / MOMENTUM_SCALE_CAP_PCT), available: true };
-  const relativeVolume: ComponentResult = { score: clamp01(input.rawRelativeVolume / RVOL_SCALE_CAP), available: true };
+  const relativeVolume: ComponentResult = input.rawRelativeVolumeAvailable === false
+    ? { score: null, available: false, reason: 'No expected-volume-at-time-of-day curve outside the regular session (premarket/after-hours) — see SnapshotScanner.expectedVolumeAtTimeOfDay.' }
+    : { score: clamp01(input.rawRelativeVolume / RVOL_SCALE_CAP), available: true };
   const rangeExpansion: ComponentResult = { score: clamp01(input.rawRangeExpansion), available: true };
 
   let gap: ComponentResult;

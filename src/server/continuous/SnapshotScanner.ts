@@ -34,6 +34,12 @@ export interface SnapshotCandidate {
   intradayPctChange: number;
   rangeExpansion: number;
   relativeVolume: number;
+  /** False outside the REGULAR session (no real expected-volume-at-time-of-day curve exists —
+   *  see expectedVolumeAtTimeOfDay's own doc comment). `relativeVolume` is 0 in that case, a
+   *  placeholder for "unavailable," not a real zero RVOL — callers that feed a weighted score
+   *  (ComposableRanking.computeDeterministicComponents) must exclude it rather than treat 0 as
+   *  a real observation when this is false. */
+  relativeVolumeAvailable?: boolean;
   momentumScore: number;
 }
 
@@ -123,11 +129,27 @@ export function minutesSinceRthOpen(now: Date = new Date()): number {
   return Math.max(1, Math.min(RTH_SESSION_MINUTES, mins - open));
 }
 
+/**
+ * Real defect fix (2026-09-27, ARGUS_MISSED_OPPORTUNITY_REDESIGN_PLAN.md Work Package 2 —
+ * the documented "92.37x RVOL" AMD case study): `minutesSinceRthOpen()` clamps its result to a
+ * MINIMUM of 1 regardless of how far before 09:30 ET `now` actually is, so ANY premarket/after-
+ * hours timestamp (4:00am and 9:29am alike) always produced `frac` near 0, which the
+ * `Math.max(0.02, frac)` floor below always won — this function returned exactly
+ * `prevDayVolume * 0.02` for every premarket call, a fabricated, time-invariant number presented
+ * as "expected volume at time of day" and then divided into live volume to produce an inflated,
+ * meaningless RVOL. There is no real premarket expected-volume curve in this codebase (no
+ * intraday-volume-profile data source exists — see ComposableRanking.ts's own
+ * NOT_IMPLEMENTED_COMPONENTS discipline for the same principle applied elsewhere), so outside the
+ * REGULAR session this now honestly returns null (unavailable) rather than substituting a floor.
+ * REGULAR-session behavior (where a genuine very-early `frac` still needs the 2% floor to avoid a
+ * division blowup near the open) is completely unchanged.
+ */
 export function expectedVolumeAtTimeOfDay(
   prevDayVolume: number | null,
   now: Date = new Date(),
 ): number | null {
   if (prevDayVolume == null || !Number.isFinite(prevDayVolume) || prevDayVolume <= 0) return null;
+  if (!isSnapshotScannerRth(now)) return null;
   const frac = minutesSinceRthOpen(now) / RTH_SESSION_MINUTES;
   return prevDayVolume * Math.max(0.02, frac);
 }
@@ -154,17 +176,35 @@ export function scoreSnapshotCandidate(input: SnapshotScoreInput, now: Date = ne
     rangeExpansion = Math.max(0, (hi - lo) / mid);
   }
 
+  // expectedVolumeAtTimeOfDay() is honestly null outside the REGULAR session (no fabricated
+  // floor — see its own doc comment). The full-day-ratio fallback below is only a genuine
+  // time-of-day-adjusted signal when a time-of-day curve was actually computable; outside RTH
+  // there is no real "expected volume at this point in the session" to compare against, so
+  // relativeVolume stays unavailable rather than silently falling back to a differently-scaled
+  // (full prior session vs. partial current session) ratio presented as if it were the same thing.
+  const rth = isSnapshotScannerRth(now);
   const expected = expectedVolumeAtTimeOfDay(input.prevDayVolume, now);
   let relativeVolume = 0;
-  if (input.dailyVolume != null && input.dailyVolume > 0 && expected != null && expected > 0) {
-    relativeVolume = input.dailyVolume / expected;
-  } else if (
-    input.dailyVolume != null && input.dailyVolume > 0
-    && input.prevDayVolume != null && input.prevDayVolume > 0
-  ) {
-    relativeVolume = input.dailyVolume / input.prevDayVolume;
+  let relativeVolumeAvailable = false;
+  if (rth) {
+    if (input.dailyVolume != null && input.dailyVolume > 0 && expected != null && expected > 0) {
+      relativeVolume = input.dailyVolume / expected;
+      relativeVolumeAvailable = true;
+    } else if (
+      input.dailyVolume != null && input.dailyVolume > 0
+      && input.prevDayVolume != null && input.prevDayVolume > 0
+    ) {
+      relativeVolume = input.dailyVolume / input.prevDayVolume;
+      relativeVolumeAvailable = true;
+    }
   }
 
+  // momentumScore is this legacy fused-score path's own diagnostic ordering (getTopMomentumCandidates/
+  // lastRanked), not the live ComposableRanking pipeline TradePlanBuilder consumes. An unavailable
+  // relativeVolume contributes 0 to this sum rather than being excluded/reweighted here — documented,
+  // not silently wrong: ComposableRanking.computeDeterministicComponents (the authoritative, weighted,
+  // persisted score) is the one that must and does exclude an unavailable component from both the
+  // numerator and denominator; see the rawRelativeVolumeAvailable wiring below.
   const momentumScore =
     (Math.abs(intradayPctChange) * SCORE_WEIGHT_PCT)
     + (relativeVolume * SCORE_WEIGHT_RVOL)
@@ -175,6 +215,7 @@ export function scoreSnapshotCandidate(input: SnapshotScoreInput, now: Date = ne
     intradayPctChange,
     rangeExpansion,
     relativeVolume,
+    relativeVolumeAvailable,
     momentumScore,
   };
 }
@@ -308,6 +349,7 @@ export async function refreshSnapshotRanks(now: Date = new Date()): Promise<Snap
         prevDayVolume: input.prevDayVolume,
         rawMomentumPct: scoredBySymbol.get(input.symbol)!.intradayPctChange,
         rawRelativeVolume: scoredBySymbol.get(input.symbol)!.relativeVolume,
+        rawRelativeVolumeAvailable: scoredBySymbol.get(input.symbol)!.relativeVolumeAvailable,
         rawRangeExpansion: scoredBySymbol.get(input.symbol)!.rangeExpansion,
       }));
       const { runRankingCycle } = await import('./ComposableRanking');
