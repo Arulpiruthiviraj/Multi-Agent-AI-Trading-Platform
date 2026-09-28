@@ -1617,6 +1617,38 @@ file — kept separate because `db`/`sqliteDb` are process-wide singletons keyed
 at first import; a second `describe` block in the same test file reusing `await import('../db')`
 gets back the first block's already-closed connection).
 
+## RECONCILIATION_REQUIRED outcome propagation (2026-09-27, `ARGUS_CODE_DEFECT_AUDIT_AND_FIX_PLAN.md` F04 reopened)
+
+**Problem found:** the private `recordFillProgress()` helper in `OrderManagement.ts` — shared by
+`executeOrder()`'s initial post-placement poll, the async follow-up job
+(`applyFollowUpUpdate()`), and the crash-recovery loop in `reconcileStaleOrders()` — already
+correctly rejected missing/non-finite broker fill evidence (via `fillLedger.ts`'s
+`insertIncrementalFill()`) and marked the `trades` row `RECONCILIATION_REQUIRED`. But it returned a
+bare `number`, so none of its three callers could see that outcome; each one unconditionally wrote
+its own locally-tracked broker status (e.g. `FILLED`) a few lines later, silently overwriting
+`RECONCILIATION_REQUIRED` and broadcasting a false `ORDER_EXECUTED`/`ORDER_FILLED`-shaped event for
+an order whose fill economics were never actually recorded.
+
+**Fix:** `recordFillProgress()` now returns `{ newQty: number; reconciliationRequired: boolean }`.
+All three call sites check `reconciliationRequired` and, when true, use `RECONCILIATION_REQUIRED`
+(never the broker-reported status) for their own subsequent `trades` write and execution event; the
+crash-recovery path also skips closing the associated transaction as `RECONCILED` in that case. A
+related defect the new tests surfaced: the crash-recovery write used
+`realOrder.averageFillPrice ?? row.price` — nullish-coalescing does not catch `NaN` (only
+`null`/`undefined`), so a NaN fill price (the exact invalid-economics case this fix exists for)
+reached better-sqlite3's bind step and crashed the whole reconciliation loop
+(`NOT NULL constraint failed: trades.price` — better-sqlite3 binds `NaN` as SQL `NULL`) instead of
+degrading gracefully. Fixed with an explicit `Number.isFinite(...)` check; the other two call sites
+already used truthy/`||` checks, which correctly treat `NaN` as absent.
+
+**Tests:** `OrderManagement.lifecycle.test.ts` gained a new test exercising the initial-poll call
+site directly (a controllable `placeOrderResponseOverride` on the stub broker) and its pre-existing
+follow-up-path F04 test now also has an explicit `reconciliationRequired` check (previously
+protected only incidentally by an unrelated CAS concurrency guard, which does not cover a
+same-cycle repeat-rejection). `OrderManagement.crashRecovery.test.ts` gained a new test asserting
+both the persisted `trades.status` and the captured `ORDER_EXECUTED` event payload never read
+`FILLED` on rejected fill evidence.
+
 ## News prompt-injection isolation (2026-09-09 P0 remediation sprint, `CLAUDE.md` DEF-31)
 
 **Problem found:** `NewsScoringEngine.analyzeWithAI()` interpolated externally-sourced

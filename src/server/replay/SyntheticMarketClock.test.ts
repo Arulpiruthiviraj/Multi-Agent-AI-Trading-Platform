@@ -104,9 +104,20 @@ describe('SyntheticMarketClock', () => {
   });
 
   it('reset() also clears a paused state', () => {
-    const clock = new SyntheticMarketClock(START_SIM);
+    // F04-adjacent investigation (2026-09-27, full-suite flake): this test previously constructed
+    // the clock with no injected nowFn, so reset()/now() both anchored against the REAL Date.now().
+    // At the default speedMultiplier of 1x, any real millisecond that ticked over between the
+    // reset() call and the now() call below shifted the returned value by exactly that many ms,
+    // breaking the exact toBe() assertion. Under light load the two calls almost always land in the
+    // same millisecond; under full-suite CPU contention they occasionally straddle a tick - a real,
+    // reproducible, load-dependent flake, not a SyntheticMarketClock defect. Every sibling test in
+    // this file already uses the deterministic fakeRealClock() helper for exactly this reason; this
+    // one now does too.
+    const real = fakeRealClock(0);
+    const clock = new SyntheticMarketClock(START_SIM, { nowFn: real.nowFn });
     clock.pause();
     expect(clock.paused).toBe(true);
+    real.advanceRealMs(5000); // prove reset() truly re-anchors, not just that no real time passed
     clock.reset(START_SIM + 60_000);
     expect(clock.paused).toBe(false);
     expect(clock.now()).toBe(START_SIM + 60_000);

@@ -32,6 +32,7 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
   let cancelOrderSpy: ReturnType<typeof vi.fn>;
   let placeOrderDelayMs = 0;
   let placeOrderCallCount = 0;
+  let placeOrderResponseOverride: Partial<Order> | null = null;
 
   function stubBroker(): BrokerPlugin {
     return {
@@ -56,11 +57,12 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
       placeOrder: async (o: Partial<Order>) => {
         placeOrderCallCount++;
         if (placeOrderDelayMs > 0) await new Promise(r => setTimeout(r, placeOrderDelayMs));
-        return {
+        const base = {
           id: `broker-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-          symbol: o.symbol!, side: o.side!, type: o.type || 'MARKET', status: 'PARTIALLY_FILLED',
+          symbol: o.symbol!, side: o.side!, type: o.type || 'MARKET', status: 'PARTIALLY_FILLED' as const,
           quantity: o.quantity!, filledQuantity: 0, createdAt: new Date(), updatedAt: new Date(),
         };
+        return placeOrderResponseOverride ? { ...base, ...placeOrderResponseOverride } : base;
       },
       cancelOrder: cancelOrderSpy as any,
       closePosition: async () => false,
@@ -92,6 +94,7 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     canCancelOrders = true;
     placeOrderDelayMs = 0;
     placeOrderCallCount = 0;
+    placeOrderResponseOverride = null;
     cancelOrderSpy = vi.fn(async () => cancelResult);
     const broker = stubBroker();
     BrokerManager.getInstance().registerBroker(broker);
@@ -163,6 +166,36 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     expect(finalRow.status).toBe('FILLED');
     expect(finalRow.filledAt).toBeTruthy();
     expect(executedPayload.status).toBe('FILLED');
+  });
+
+  it('F04: an order FILLED immediately on the initial broker response with invalid fill economics (NaN averageFillPrice) is finalized RECONCILIATION_REQUIRED, not FILLED, and the ORDER_EXECUTED event reports the true outcome', async () => {
+    // Exercises executeOrder()'s own initial-poll call site directly (the broker's immediate
+    // placeOrder() response, before any follow-up cycle) — distinct from the two F04 tests
+    // exercising the async follow-up and crash-recovery call sites.
+    placeOrderResponseOverride = { status: 'FILLED', filledQuantity: 10, averageFillPrice: NaN };
+    const executedEvents: any[] = [];
+    const handler = (payload: any) => executedEvents.push(payload);
+    eventBus.on('ORDER_EXECUTED', handler);
+    try {
+      await oms.executeOrder('BADFILL2', 'BUY', 10, 'test reasoning', 'lifecycle-f04-initial-poll');
+    } finally {
+      eventBus.off('ORDER_EXECUTED', handler);
+    }
+
+    const row = (await db.select().from(schema.trades).where(eq(schema.trades.traceId, 'lifecycle-f04-initial-poll')))[0];
+    expect(row.status).toBe('RECONCILIATION_REQUIRED');
+    expect(row.filledAt).toBeNull(); // never stamped filled on rejected fill evidence
+
+    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, row.id));
+    expect(fillRows).toHaveLength(0);
+
+    const executedPayload = executedEvents.find((e: any) => e.id === row.id);
+    expect(executedPayload).toBeTruthy();
+    expect(executedPayload.status).toBe('RECONCILIATION_REQUIRED'); // never a false FILLED
+
+    const reconRows = await db.select().from(schema.reconciliationEvents).where(eq(schema.reconciliationEvents.matches, false));
+    const match = reconRows.find((r: any) => typeof r.mismatches === 'string' && r.mismatches.includes(row.id) && r.mismatches.includes('INVALID_FILL_ECONOMICS'));
+    expect(match).toBeTruthy();
   });
 
   it('F04: a rejected fill (NaN averageFillPrice) marks the order RECONCILIATION_REQUIRED and is recorded for reconciliation, never silently disappearing or reading as FILLED/PENDING', async () => {

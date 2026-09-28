@@ -5,6 +5,23 @@ import os from 'os';
 import { eq } from 'drizzle-orm';
 import type { BrokerCapabilities, BrokerPlugin, Order } from '../../brokers/BrokerAdapter';
 
+function onceOrderExecuted(eventBus: any, orderId: string, timeoutMs = 2000): Promise<any | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      eventBus.off('ORDER_EXECUTED', handler);
+      resolve(null);
+    }, timeoutMs);
+    const handler = (payload: any) => {
+      if (payload.id === orderId) {
+        clearTimeout(timer);
+        eventBus.off('ORDER_EXECUTED', handler);
+        resolve(payload);
+      }
+    };
+    eventBus.on('ORDER_EXECUTED', handler);
+  });
+}
+
 /**
  * Phase 1, item 3 (ARGUS_SAFETY_HARDENING_REPORT.md) - real coverage for order-level crash
  * recovery. The current audit (FINAL_ANALYSIS.md Section 30.11) found this scenario had zero
@@ -21,6 +38,7 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
   let schema: any;
   let oms: any;
   let BrokerManager: any;
+  let eventBus: any;
 
   let lookupResponses: Record<string, Order | null> = {};
   const lookupSpy = vi.fn(async (clientOrderId: string) => lookupResponses[clientOrderId] ?? null);
@@ -63,6 +81,7 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
     schema = await import('../db/schema');
     ({ oms } = await import('./OrderManagement'));
     ({ BrokerManager } = await import('../../brokers/BrokerManager'));
+    ({ eventBus } = await import('../core/EventBus'));
   });
 
   afterAll(() => {
@@ -122,6 +141,39 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
     // recordFillProgress() path a normal live fill does, not a shortcut.
     const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, 'crash-2'));
     expect(fillRows.length).toBeGreaterThan(0);
+  });
+
+  it('F04: a crash-recovered row the broker reports FILLED but with invalid fill economics (NaN averageFillPrice) is marked RECONCILIATION_REQUIRED, never silently re-stamped FILLED and never broadcast as a clean execution', async () => {
+    await seedCrashedRow('crash-f04-invalid-economics', 'PENDING');
+    lookupResponses['crash-f04-invalid-economics'] = {
+      id: 'real-broker-order-id-f04', clientOrderId: 'crash-f04-invalid-economics', symbol: 'AAPL', side: 'BUY', type: 'MARKET',
+      status: 'FILLED', quantity: 10, filledQuantity: 10, averageFillPrice: NaN,
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+
+    const executedPromise = onceOrderExecuted(eventBus, 'crash-f04-invalid-economics');
+    await oms.reconcileStaleOrders();
+    const executedPayload = await executedPromise;
+
+    // Before the F04 outcome-propagation fix, this crash-recovery loop unconditionally overwrote
+    // trades.status with the broker-reported realStatus ('FILLED') right after recordFillProgress()
+    // had already caught the invalid fill evidence and marked the row RECONCILIATION_REQUIRED —
+    // silently erasing the reconciliation flag and reporting a false clean fill.
+    const [row] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'crash-f04-invalid-economics'));
+    expect(row.status).toBe('RECONCILIATION_REQUIRED');
+
+    // No fill was fabricated from the NaN price.
+    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, 'crash-f04-invalid-economics'));
+    expect(fillRows).toHaveLength(0);
+
+    // The lifecycle event this loop emits must report the true outcome, not a false FILLED.
+    expect(executedPayload).not.toBeNull();
+    expect(executedPayload.status).toBe('RECONCILIATION_REQUIRED');
+
+    // Discoverable through the existing reconciliation history, not just a log line.
+    const reconRows = await db.select().from(schema.reconciliationEvents).where(eq(schema.reconciliationEvents.matches, false));
+    const match = reconRows.find((r: any) => typeof r.mismatches === 'string' && r.mismatches.includes('crash-f04-invalid-economics') && r.mismatches.includes('INVALID_FILL_ECONOMICS'));
+    expect(match).toBeTruthy();
   });
 
   it('a stuck PENDING row the broker confirms it actually accepted (still open) is updated to the real broker status, not silently left PENDING forever', async () => {

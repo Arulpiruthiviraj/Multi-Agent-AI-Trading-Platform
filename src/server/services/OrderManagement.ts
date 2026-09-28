@@ -255,7 +255,17 @@ export class OrderManagementService {
   // ORDER_FILLED. Used both by executeOrder()'s own initial resolution and by the background
   // follow-up job, so a partial fill observed at either stage is recorded identically and
   // re-applying an unchanged broker order is always a safe no-op (newQty resolves to 0).
-  private async recordFillProgress(orderId: string, brokerOrderId: string | null, traceId: string, transactionId: string | undefined, symbol: string, side: string, requestedQuantity: number, status: string, filledQuantity: number | undefined, averageFillPrice: number | undefined, executionBrokerId: string | null): Promise<number> {
+  // F04 outcome propagation (2026-09-27): the return type used to be a bare `number`, which cannot
+  // distinguish "0 new quantity, nothing to do" from "fill evidence was rejected as invalid and the
+  // order now needs operator reconciliation". Every one of this method's three callers (executeOrder's
+  // initial poll, applyFollowUpUpdate, and the crash-recovery loop) independently re-derives and
+  // unconditionally persists its OWN idea of the order's final status/event right after calling this
+  // — none of them were checking the old bare-number return at all, so a RECONCILIATION_REQUIRED this
+  // method had just written to `trades.status` was silently clobbered back to FILLED/PARTIALLY_FILLED
+  // a few lines later, and a real ORDER_EXECUTED/ORDER_FILLED-shaped event still went out. The fix is
+  // this richer outcome object; every caller below now checks `.reconciliationRequired` and folds it
+  // into its own subsequent status write/event instead of ignoring it.
+  private async recordFillProgress(orderId: string, brokerOrderId: string | null, traceId: string, transactionId: string | undefined, symbol: string, side: string, requestedQuantity: number, status: string, filledQuantity: number | undefined, averageFillPrice: number | undefined, executionBrokerId: string | null): Promise<{ newQty: number; reconciliationRequired: boolean }> {
     try {
       const result = await insertIncrementalFill({
         orderId,
@@ -265,7 +275,7 @@ export class OrderManagementService {
         filledQuantity,
         averageFillPrice,
       });
-      if (result.newQty <= 0) return 0;
+      if (result.newQty <= 0) return { newQty: 0, reconciliationRequired: false };
       const fillPrice = result.incrementalPrice!;
       eventBus.emit(EVENTS.ORDER_FILLED, { traceId, transactionId, id: orderId, symbol, side, quantity: result.newQty, price: fillPrice, status, filledAt: new Date().toISOString() });
       // Immediate local portfolio sync on every SELL fill increment — do not wait for the next recon tick
@@ -276,7 +286,7 @@ export class OrderManagementService {
       if (side === 'BUY' && result.newQty > 0 && fillPrice > 0) {
         await syncLocalPortfolioAfterBuyFill(symbol, result.newQty, fillPrice, executionBrokerId);
       }
-      return result.newQty;
+      return { newQty: result.newQty, reconciliationRequired: false };
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.error(`[OMS] Failed to persist fill for order ${orderId}`, e);
@@ -319,7 +329,7 @@ export class OrderManagementService {
           error: message,
         });
       });
-      return 0;
+      return { newQty: 0, reconciliationRequired: true };
     }
   }
 
@@ -551,7 +561,15 @@ export class OrderManagementService {
       }
 
       if (status === 'FILLED' || status === 'PARTIALLY_FILLED') {
-        await this.recordFillProgress(orderId, brokerOrderId, traceId, transactionId, symbol, side, quantity, status, filledQuantity, fillPrice, orderBroker.id);
+        const fillResult = await this.recordFillProgress(orderId, brokerOrderId, traceId, transactionId, symbol, side, quantity, status, filledQuantity, fillPrice, orderBroker.id);
+        if (fillResult.reconciliationRequired) {
+          // F04: fill evidence was rejected as invalid (NaN/non-finite price or quantity).
+          // recordFillProgress() already marked the trades row RECONCILIATION_REQUIRED — override
+          // this function's own `status` now, BEFORE the profitLoss/filledAt logic below reads it,
+          // so this function's own final db.update/emitOrderExecution (below) reports the true
+          // outcome instead of re-stamping the broker's FILLED/PARTIALLY_FILLED status over it.
+          status = 'RECONCILIATION_REQUIRED';
+        }
       }
 
       if (side === 'SELL' && status === 'FILLED') {
@@ -946,16 +964,37 @@ export class OrderManagementService {
       if (realStatus !== row.status || (realOrder.filledQuantity ?? 0) > 0) {
         console.error(`[OMS] crash-recovery: order ${row.id} was locally ${row.status} (never recorded a brokerOrderId) but ${broker.name} actually has it as ${realStatus} - correcting local state. This is exactly the "crashed after send" scenario Phase 1 closes.`);
 
+        // F04: `finalStatus` starts as the broker-reported realStatus but is overridden below if
+        // recordFillProgress() rejected the fill evidence — every write/event after this point uses
+        // finalStatus, never the raw realStatus, so a rejected fill can no longer be silently
+        // re-stamped FILLED/PARTIALLY_FILLED a few lines after recordFillProgress() just marked the
+        // row RECONCILIATION_REQUIRED.
+        let finalStatus: string = realStatus;
+        let fillReconciliationRequired = false;
         if (realStatus === 'FILLED' || realStatus === 'PARTIALLY_FILLED') {
-          await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice, broker.id);
+          const fillResult = await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice, broker.id);
           await this.persistRealCommissionIfKnown(row.id, realOrder.commission);
+          if (fillResult.reconciliationRequired) {
+            fillReconciliationRequired = true;
+            finalStatus = 'RECONCILIATION_REQUIRED';
+          }
         }
 
+        // F04 follow-on: `?? row.price` alone does NOT catch NaN (only null/undefined are
+        // "nullish") - a NaN averageFillPrice (the exact invalid-economics case this whole fix
+        // exists for) passed straight through to `price` and crashed better-sqlite3's bind step
+        // ("NOT NULL constraint failed: trades.price", better-sqlite3 special-cases NaN to a NULL
+        // bind), taking down the whole reconciliation loop instead of degrading to
+        // RECONCILIATION_REQUIRED. The other two recordFillProgress() callers already avoid this
+        // via a truthy/`||` check (NaN is falsy); this one used `??` (NaN is not nullish) and had
+        // no regression test exercising a NaN price through this specific path until now.
+        const safeFillPrice = Number.isFinite(realOrder.averageFillPrice) ? realOrder.averageFillPrice! : row.price;
+
         await db.update(trades).set({
-          status: realStatus,
+          status: finalStatus,
           brokerOrderId: realOrder.id,
-          price: realOrder.averageFillPrice ?? row.price,
-          filledAt: realStatus === 'FILLED' ? new Date().toISOString() : row.filledAt,
+          price: safeFillPrice,
+          filledAt: finalStatus === 'FILLED' ? new Date().toISOString() : row.filledAt,
         }).where(eq(trades.id, row.id));
 
         eventBus.emitOrderExecution({
@@ -965,12 +1004,21 @@ export class OrderManagementService {
           symbol: row.symbol,
           side: row.side,
           quantity: row.quantity,
-          price: realOrder.averageFillPrice ?? row.price,
-          status: realStatus,
+          price: safeFillPrice,
+          status: finalStatus,
           profitLoss: row.profitLoss,
         });
 
-        if (row.transactionId) await updateTransactionStatus(row.transactionId, 'RECONCILED', { closed: true });
+        if (row.transactionId) {
+          // F04: a rejected fill must never be reported to TransactionRegistry as cleanly
+          // RECONCILED/closed — that would tell the desk this transaction is fully resolved when it
+          // actually needs operator reconciliation. Leave the transaction row exactly as-is (it stays
+          // OPEN/EXECUTED and visible) rather than closing it on unverified fill economics; the
+          // reconciliation_events row recordFillProgress() already inserted is the real signal here.
+          if (!fillReconciliationRequired) {
+            await updateTransactionStatus(row.transactionId, 'RECONCILED', { closed: true });
+          }
+        }
       }
     }
   }
@@ -978,10 +1026,19 @@ export class OrderManagementService {
   private async applyFollowUpUpdate(row: any, match: Order): Promise<void> {
     try {
       const fillPrice = match.averageFillPrice || row.price || 0;
-      await this.recordFillProgress(row.id, row.brokerOrderId, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, match.status, match.filledQuantity, match.averageFillPrice, row.brokerId ?? null);
+      const fillResult = await this.recordFillProgress(row.id, row.brokerOrderId, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, match.status, match.filledQuantity, match.averageFillPrice, row.brokerId ?? null);
       await this.persistRealCommissionIfKnown(row.id, match.commission);
 
-      const filledAt = match.status === 'FILLED' ? (row.filledAt || new Date().toISOString()) : row.filledAt;
+      // F04: never let this function's own status write re-stamp match.status (e.g. FILLED) over a
+      // RECONCILIATION_REQUIRED recordFillProgress() just set. This is an explicit check on the
+      // return value rather than relying on the CAS guard below to catch it incidentally — that
+      // guard compares against `row.status` (the value read before this cycle began), which does
+      // NOT protect a row that was already RECONCILIATION_REQUIRED going into this same cycle (a
+      // repeat-rejection retry), since recordFillProgress() would re-set the same value and the CAS
+      // would see no change.
+      const finalStatus = fillResult.reconciliationRequired ? 'RECONCILIATION_REQUIRED' : match.status;
+
+      const filledAt = finalStatus === 'FILLED' ? (row.filledAt || new Date().toISOString()) : row.filledAt;
       // Realized P&L for a SELL that only resolves here (past the initial poll window) can't be
       // computed honestly - the pre-trade entry-price snapshot only exists inside executeOrder()'s
       // own call stack. Left null (never fabricated) rather than guessed from current position data,
@@ -992,7 +1049,7 @@ export class OrderManagementService {
       // - the fill ledger/portfolio sync above already happened and stays correct either way, but
       // trades.status itself must never regress onto data we no longer know is current.
       const updateResult = await db.update(trades).set({
-        status: match.status,
+        status: finalStatus,
         price: fillPrice || row.price,
         filledAt,
       }).where(and(eq(trades.id, row.id), eq(trades.status, row.status)));
@@ -1005,7 +1062,8 @@ export class OrderManagementService {
       // called when followUpOpenOrders() already detected a real change (a status transition or
       // new fill quantity), so every call here is a real observed transition worth broadcasting,
       // terminal or not; TransactionLifecycleTracker itself only treats FILLED/REJECTED/CANCELED
-      // as terminal and correctly leaves a non-terminal status alone.
+      // as terminal and correctly leaves a non-terminal status alone. Uses finalStatus (not
+      // match.status) so a rejected fill is broadcast as RECONCILIATION_REQUIRED, never a false FILLED.
       eventBus.emitOrderExecution({
         traceId: row.traceId,
         transactionId: row.transactionId,
@@ -1014,7 +1072,7 @@ export class OrderManagementService {
         side: row.side,
         quantity: row.quantity,
         price: fillPrice || row.price,
-        status: match.status,
+        status: finalStatus,
         profitLoss: row.profitLoss ?? null,
       });
     } catch (e) {
