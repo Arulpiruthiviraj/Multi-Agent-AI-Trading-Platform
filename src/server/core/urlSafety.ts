@@ -154,5 +154,5 @@ export async function checkUrlSafety(rawUrl: string): Promise<UrlSafetyCheck> {
  *  verdict (config-time write validation in webhooks.ts) and not the resolved connect target. */
 export async function isSafeOutboundUrl(rawUrl: string): Promise<UrlSafetyResult> {
   const result = await checkUrlSafety(rawUrl);
-  return result.safe ? { safe: true } : { safe: false, reason: result.reason };
+  return result.safe === false ? { safe: false, reason: result.reason } : { safe: true };
 }

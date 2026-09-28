@@ -181,14 +181,22 @@ export class CoinbaseBroker implements BrokerPlugin {
     const fiatAccounts = res.accounts.filter((a: any) => a.currency === 'USD' || a.currency === 'USDC');
     const cash = fiatAccounts.reduce((sum: number, a: any) => sum + this.accountQuantity(a), 0);
     const buyingPower = fiatAccounts.reduce((sum: number, a: any) => sum + this.balanceValue(a.available_balance?.value), 0);
-    const positionsValue = positions.reduce((sum, p) => sum + p.marketValue, 0);
+    // F26: a position with valuationStatus UNAVAILABLE contributes 0 to these sums rather than a
+    // fabricated market value/P&L - this deliberately UNDERSTATES equity/unrealizedPnl instead of
+    // inventing a plausible-looking total, and `valuationStatus: 'PARTIAL'` below makes that
+    // incompleteness explicit rather than silent, so a caller relying on equity for a complete
+    // valuation decision can see it is not one.
+    const anyUnavailable = positions.some((p) => p.valuationStatus === 'UNAVAILABLE');
+    const positionsValue = positions.reduce((sum, p) => sum + (p.marketValue ?? 0), 0);
+    const totalUnrealizedPnl = positions.reduce((sum, p) => sum + (p.unrealizedPnl ?? 0), 0);
 
     return {
       cash,
       buyingPower,
       equity: cash + positionsValue,
       positions,
-      unrealizedPnl: positions.reduce((sum, p) => sum + p.unrealizedPnl, 0),
+      unrealizedPnl: totalUnrealizedPnl,
+      valuationStatus: anyUnavailable ? 'PARTIAL' : 'VALUED',
     };
   }
 
@@ -221,22 +229,37 @@ export class CoinbaseBroker implements BrokerPlugin {
     for (const acc of accounts) {
       const quantity = this.accountQuantity(acc);
       const productId = `${acc.currency}-USD`;
-      let currentPrice = 0;
+      // F26 (2026-09-27): previously defaulted to 0 and stayed 0 on lookup failure, so a real
+      // pricing outage silently reported as a known, valid $0 price/exposure/return instead of an
+      // unresolved lookup. `currentPrice` is now null until a real product price is actually
+      // parsed; it is never coerced back to 0.
+      let currentPrice: number | null = null;
       try {
         const product = await this.fetchCoinbase('GET', `/api/v3/brokerage/products/${productId}`);
-        currentPrice = parseFloat(product?.price ?? '0');
+        const parsed = parseFloat(product?.price ?? '');
+        if (Number.isFinite(parsed) && parsed >= 0) currentPrice = parsed;
       } catch (e) {
-        // No real USD market for this asset (or a transient error) - skip pricing rather than
-        // fabricate a value; the position is still reported with a real quantity, just $0 price.
+        // No real USD market for this asset (or a transient error) - leave currentPrice null
+        // rather than fabricate a value; the position is still reported with a real quantity.
       }
+      // Coinbase's account-balance endpoint never carries a cost basis at all (not merely on
+      // failure) - entryPrice is unconditionally unknown from this endpoint, not just on a
+      // pricing-lookup miss. Genuinely null, never a fabricated 0.
+      const entryPrice: number | null = null;
+      const priceKnown = currentPrice !== null;
       positions.push({
         symbol: productId,
         quantity,
-        entryPrice: 0, // Coinbase's account balances don't carry a cost basis - not fabricated, genuinely unknown from this endpoint
+        entryPrice,
         currentPrice,
-        marketValue: quantity * currentPrice,
-        unrealizedPnl: 0, // no entry price to compute this against - see above
-        unrealizedPnlPercent: 0,
+        // marketValue/unrealizedPnl/unrealizedPnlPercent require a real price (marketValue) or a
+        // real price AND a real cost basis (unrealizedPnl*) - both null (never a fabricated 0)
+        // whenever either input is unavailable, so a display layer can render "unavailable"
+        // instead of a misleading, plausible-looking known zero.
+        marketValue: priceKnown ? quantity * currentPrice! : null,
+        unrealizedPnl: null, // entryPrice is unconditionally unknown from this endpoint - see above
+        unrealizedPnlPercent: null,
+        valuationStatus: (priceKnown && entryPrice !== null) ? 'VALUED' : 'UNAVAILABLE',
       });
     }
     return positions;

@@ -82,7 +82,7 @@ export async function safeFetch(rawUrl: string, opts: SafeFetchOptions): Promise
     // address each time so a URL that was safe a moment ago but now resolves internally (DNS
     // rebinding) is caught here, not assumed still-safe from an earlier check.
     const target = await checkUrlSafety(currentUrl);
-    if (!target.safe) {
+    if (target.safe === false) {
       throw new SafeFetchBlockedError(`Blocked outbound URL "${currentUrl}": ${target.reason}`);
     }
 

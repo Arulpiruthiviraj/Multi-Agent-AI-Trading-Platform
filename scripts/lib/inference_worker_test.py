@@ -19,7 +19,12 @@ import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from inference_worker import run_on_inference_worker, get_last_worker_thread_ident  # noqa: E402
+import inference_worker  # noqa: E402
+from inference_worker import (  # noqa: E402
+    InferenceTimeoutError,
+    get_last_worker_thread_ident,
+    run_on_inference_worker,
+)
 
 
 def _record_caller_and_worker_ident():
@@ -130,6 +135,115 @@ class InferenceWorkerTest(unittest.TestCase):
         for i in range(0, len(order), 2):
             self.assertEqual(order[i][0], "start")
             self.assertEqual(order[i + 1], ("end", order[i][1]))
+
+
+class InferenceWorkerTimeoutTest(unittest.TestCase):
+    """F37 (ARGUS_CODE_DEFECT_AUDIT_AND_FIX_PLAN.md): a task deadline for run_on_inference_worker(),
+    plus safe worker recovery when that deadline is exceeded, WITHOUT ever claiming the underlying
+    (uninterruptible, native-like) computation was actually cancelled. Uses only lightweight stub
+    callables (a real sleep, never a real model) - matches the doc's own instruction to use
+    lightweight stub inference and never load a real model for this kind of test.
+    """
+
+    def setUp(self):
+        # Isolate each test from the module-level executor/taint state other tests (and this
+        # class's own other tests) mutate - never touch the real shared state across tests.
+        inference_worker._executor.shutdown(wait=False, cancel_futures=True)
+        inference_worker._executor = inference_worker._new_executor()
+        inference_worker._worker_tainted = False
+
+    def tearDown(self):
+        inference_worker._executor.shutdown(wait=False, cancel_futures=True)
+        inference_worker._executor = inference_worker._new_executor()
+        inference_worker._worker_tainted = False
+
+    def test_task_within_deadline_returns_normally(self):
+        result = run_on_inference_worker(lambda: 42, timeout_seconds=5)
+        self.assertEqual(result, 42)
+
+    def test_task_exceeding_deadline_raises_InferenceTimeoutError_not_the_raw_TimeoutError(self):
+        released = threading.Event()
+
+        def stuck():
+            released.wait(timeout=5)  # simulates an uninterruptible slow/stuck computation
+            return "late"
+
+        with self.assertRaises(InferenceTimeoutError):
+            run_on_inference_worker(stuck, timeout_seconds=0.05)
+
+        released.set()  # let the background task finish so it doesn't leak into other tests
+
+    def test_caller_gets_a_prompt_response_even_though_the_stuck_task_is_still_running(self):
+        """The core timeout-vs-cancellation guarantee: the caller must not be blocked for the
+        full duration of a stuck task - only for its own configured deadline."""
+        started = threading.Event()
+        released = threading.Event()
+
+        def stuck():
+            started.set()
+            released.wait(timeout=5)
+            return "late"
+
+        t0 = time.perf_counter()
+        with self.assertRaises(InferenceTimeoutError):
+            run_on_inference_worker(stuck, timeout_seconds=0.05)
+        elapsed = time.perf_counter() - t0
+
+        self.assertLess(elapsed, 2.0, "caller should not wait anywhere near the stuck task's own duration")
+        self.assertTrue(started.wait(timeout=1), "the stuck task should have actually started on the worker")
+        released.set()
+
+    def test_worker_is_replaced_after_a_timeout_so_new_requests_are_not_queued_behind_the_stuck_one(self):
+        """The real severity this fix addresses: with max_workers=1, a single stuck task used to
+        permanently block every future call. After a timeout, a NEW request must succeed promptly
+        rather than queuing forever behind the abandoned stuck task."""
+        released = threading.Event()
+
+        def stuck():
+            released.wait(timeout=5)
+            return "late"
+
+        with self.assertRaises(InferenceTimeoutError):
+            run_on_inference_worker(stuck, timeout_seconds=0.05)
+
+        # This call must use a fresh worker and succeed quickly - it must NOT hang waiting behind
+        # the still-running stuck task on the abandoned executor.
+        t0 = time.perf_counter()
+        result = run_on_inference_worker(lambda: "fresh worker ok", timeout_seconds=5)
+        elapsed = time.perf_counter() - t0
+        self.assertEqual(result, "fresh worker ok")
+        self.assertLess(elapsed, 2.0, "a new request after a timeout must not be blocked by the abandoned stuck task")
+
+        released.set()
+
+    def test_stray_result_of_an_abandoned_stuck_task_is_never_surfaced_to_a_later_caller(self):
+        """Once abandoned, the stuck task's eventual return value must simply be discarded - never
+        delivered to whatever later, unrelated call happens to be in flight."""
+        released = threading.Event()
+
+        def stuck():
+            released.wait(timeout=5)
+            return "STRAY_RESULT_SHOULD_NEVER_BE_SEEN"
+
+        with self.assertRaises(InferenceTimeoutError):
+            run_on_inference_worker(stuck, timeout_seconds=0.05)
+
+        result = run_on_inference_worker(lambda: "real result", timeout_seconds=5)
+        self.assertEqual(result, "real result")
+
+        released.set()
+        time.sleep(0.2)  # give the abandoned background task a moment to actually finish
+        # No API surfaces the stray result anywhere - its absence from any assertion above is the
+        # proof. A second sanity call confirms the (now further-replaced, if it were ever retained)
+        # worker is still healthy.
+        self.assertEqual(run_on_inference_worker(lambda: "still healthy", timeout_seconds=5), "still healthy")
+
+    def test_omitting_timeout_seconds_preserves_the_original_wait_forever_behavior(self):
+        """Backward compatibility: existing callers that don't pass timeout_seconds must see
+        identical behavior to before this fix (covered further by the pre-existing test class
+        above, which never passes timeout_seconds at all)."""
+        result = run_on_inference_worker(lambda: "no timeout requested")
+        self.assertEqual(result, "no timeout requested")
 
 
 if __name__ == "__main__":

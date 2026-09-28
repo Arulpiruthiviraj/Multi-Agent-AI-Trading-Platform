@@ -74,11 +74,24 @@ export interface Order {
 export interface Position {
   symbol: string;
   quantity: number;
-  entryPrice: number;
-  currentPrice: number;
-  marketValue: number;
-  unrealizedPnl: number;
-  unrealizedPnlPercent: number;
+  // F26 (2026-09-27): entryPrice/currentPrice/marketValue/unrealizedPnl/unrealizedPnlPercent are
+  // `number | null` - null means genuinely UNAVAILABLE (a real pricing/cost-basis lookup failed or
+  // does not exist for this instrument), never a fabricated numeric zero. quantity is never
+  // affected - a real held quantity is always reported even when it cannot be valued. Every
+  // existing adapter that always successfully resolves these values is unaffected (still returns
+  // real numbers with valuationStatus implicitly 'VALUED'); this is additive, not a behavior
+  // change for adapters that don't set valuationStatus explicitly.
+  entryPrice: number | null;
+  currentPrice: number | null;
+  marketValue: number | null;
+  unrealizedPnl: number | null;
+  unrealizedPnlPercent: number | null;
+  /** Explicit valuation-completeness label, matching the CostQuality/UNAVAILABLE convention in
+   *  canonicalCostModel.ts. Undefined (not set by an adapter) is treated as 'VALUED' for backward
+   *  compatibility - only adapters with a real known-incomplete-pricing case (currently
+   *  CoinbaseBroker) need to set this. 'UNAVAILABLE' means at least one of the numeric fields above
+   *  is null and must not be treated as a real zero economic fact by any consumer. */
+  valuationStatus?: 'VALUED' | 'UNAVAILABLE';
 }
 
 export interface Portfolio {
@@ -89,6 +102,11 @@ export interface Portfolio {
   dailyPnl?: number;
   realizedPnl?: number;
   unrealizedPnl?: number;
+  /** F26: 'PARTIAL' when one or more positions carry valuationStatus 'UNAVAILABLE' - signals that
+   *  `equity`/`unrealizedPnl` are computed from an incomplete valuation set (unpriceable positions
+   *  contribute 0 to the sums, which UNDERSTATES true exposure rather than fabricating a
+   *  plausible-looking total). Undefined/omitted means every position was fully valued. */
+  valuationStatus?: 'VALUED' | 'PARTIAL';
 }
 
 export interface AccountActivity {

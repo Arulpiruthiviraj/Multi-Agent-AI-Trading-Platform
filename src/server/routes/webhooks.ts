@@ -232,11 +232,11 @@ webhooksRouter.post("/", async (req: Request, res: Response) => {
   // F31: validate type/events/enabled shape atomically before ever constructing/storing the
   // record - a malformed payload is rejected outright, never partially applied.
   const typeCheck = validateWebhookType(type);
-  if (!typeCheck.valid) return res.status(400).json({ error: typeCheck.reason });
+  if (typeCheck.valid === false) return res.status(400).json({ error: typeCheck.reason });
   const eventsCheck = validateEvents(events !== undefined ? events : ["all"]);
-  if (!eventsCheck.valid) return res.status(400).json({ error: eventsCheck.reason });
+  if (eventsCheck.valid === false) return res.status(400).json({ error: eventsCheck.reason });
   const enabledCheck = validateEnabled(enabled);
-  if (!enabledCheck.valid) return res.status(400).json({ error: enabledCheck.reason });
+  if (enabledCheck.valid === false) return res.status(400).json({ error: enabledCheck.reason });
 
   const newWh: Webhook = {
     id: "wh_" + Date.now() + "_" + Math.floor(Math.random() * 1000),
@@ -268,19 +268,19 @@ webhooksRouter.put("/:id", async (req: Request, res: Response) => {
   let nextEvents: string[] | undefined;
   if (req.body.events !== undefined) {
     const eventsCheck = validateEvents(req.body.events);
-    if (!eventsCheck.valid) return res.status(400).json({ error: eventsCheck.reason });
+    if (eventsCheck.valid === false) return res.status(400).json({ error: eventsCheck.reason });
     nextEvents = eventsCheck.events;
   }
   let nextEnabled: boolean | undefined;
   if (req.body.enabled !== undefined) {
     const enabledCheck = validateEnabled(req.body.enabled);
-    if (!enabledCheck.valid) return res.status(400).json({ error: enabledCheck.reason });
+    if (enabledCheck.valid === false) return res.status(400).json({ error: enabledCheck.reason });
     nextEnabled = enabledCheck.enabled;
   }
   let nextType: Webhook["type"] | undefined;
   if (req.body.type !== undefined) {
     const typeCheck = validateWebhookType(req.body.type);
-    if (!typeCheck.valid) return res.status(400).json({ error: typeCheck.reason });
+    if (typeCheck.valid === false) return res.status(400).json({ error: typeCheck.reason });
     nextType = typeCheck.type;
   }
   let nextName: string | undefined;

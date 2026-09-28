@@ -11,6 +11,7 @@ The Node app polls GET /health periodically and treats it as unavailable (not fa
 if this process isn't running - see KronosModelManager.ts.
 """
 import json
+import math
 import os
 import signal
 import sys
@@ -30,7 +31,7 @@ truststore.inject_into_ssl()
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))
 from bounded_http_server import BoundedThreadingHTTPServer, send_json_and_close, start_graceful_shutdown  # noqa: E402
-from inference_worker import run_on_inference_worker  # noqa: E402
+from inference_worker import InferenceTimeoutError, run_on_inference_worker  # noqa: E402
 
 MODEL_NAME = os.environ.get("CHRONOS_MODEL", "amazon/chronos-t5-mini")
 FINBERT_MODEL_NAME = os.environ.get("FINBERT_MODEL", "ProsusAI/finbert")
@@ -41,6 +42,73 @@ MIN_CONTEXT_LENGTH = 5
 # connection may sit before its handler thread is forced to give it up.
 MAX_CONCURRENT_CONNECTIONS = int(os.environ.get("LOCAL_AI_SERVICE_MAX_CONNECTIONS", "8"))
 CONNECTION_TIMEOUT_SECONDS = int(os.environ.get("LOCAL_AI_SERVICE_CONNECTION_TIMEOUT_S", "30"))
+
+# F37 (ARGUS_CODE_DEFECT_AUDIT_AND_FIX_PLAN.md): request-admission bounds. All env-overridable,
+# same convention as the limits above - not a framework change, just closing the gap that
+# Content-Length/prices/horizon were previously read with no maximum at all (a caller-supplied
+# minimum for `prices` already existed; there was no maximum, and no finiteness check on the
+# values, and no cap on `horizon`).
+MAX_CONTENT_LENGTH_BYTES = int(os.environ.get("LOCAL_AI_SERVICE_MAX_CONTENT_LENGTH_BYTES", str(2_000_000)))  # 2MB
+MAX_CONTEXT_LENGTH = int(os.environ.get("LOCAL_AI_SERVICE_MAX_CONTEXT_LENGTH", "5000"))
+MAX_HORIZON = int(os.environ.get("LOCAL_AI_SERVICE_MAX_HORIZON", "90"))
+MAX_SENTIMENT_TEXT_LENGTH = int(os.environ.get("LOCAL_AI_SERVICE_MAX_SENTIMENT_TEXT_LENGTH", "2000"))
+# Deadline for the actual torch/Chronos/FinBERT computation (not just body reading) - see
+# scripts/lib/inference_worker.py's module docstring for the full timeout-vs-cancellation
+# reasoning. A timeout here means "stop waiting for this response," never "the computation was
+# cancelled."
+FORECAST_INFERENCE_TIMEOUT_SECONDS = float(os.environ.get("LOCAL_AI_SERVICE_FORECAST_TIMEOUT_S", "45"))
+SENTIMENT_INFERENCE_TIMEOUT_SECONDS = float(os.environ.get("LOCAL_AI_SERVICE_SENTIMENT_TIMEOUT_S", "20"))
+
+
+class RequestTooLargeError(Exception):
+    """Raised when a request's Content-Length exceeds MAX_CONTENT_LENGTH_BYTES. Mapped to HTTP 413."""
+
+
+class InvalidRequestError(Exception):
+    """Raised for a structurally well-formed but semantically invalid request body (bad prices,
+    non-finite values, out-of-range horizon, oversized text, ...). Mapped to HTTP 400."""
+
+
+def _read_bounded_json_body(handler: BaseHTTPRequestHandler) -> dict:
+    """Shared F37 admission check for both /forecast and /sentiment: validates Content-Length
+    against MAX_CONTENT_LENGTH_BYTES BEFORE reading any bytes (cheap, no allocation), then parses
+    JSON. A missing/malformed/negative Content-Length is treated as 0 bytes (matching this
+    handler's pre-existing `int(..., 0)` fallback) rather than silently reading an unbounded
+    amount - there is no legitimate case where this service's own HTTP client omits it."""
+    raw_length = handler.headers.get("Content-Length")
+    try:
+        length = int(raw_length) if raw_length is not None else 0
+    except (TypeError, ValueError):
+        length = 0
+    if length < 0:
+        length = 0
+    if length > MAX_CONTENT_LENGTH_BYTES:
+        raise RequestTooLargeError(
+            f"request body of {length} bytes exceeds the maximum of {MAX_CONTENT_LENGTH_BYTES} bytes"
+        )
+    return json.loads(handler.rfile.read(length) or b"{}")
+
+
+def _validate_prices(prices) -> None:
+    if not isinstance(prices, list) or len(prices) < MIN_CONTEXT_LENGTH:
+        raise InvalidRequestError(f"'prices' must be a list of at least {MIN_CONTEXT_LENGTH} numbers")
+    if len(prices) > MAX_CONTEXT_LENGTH:
+        raise InvalidRequestError(f"'prices' has {len(prices)} elements, exceeding the maximum of {MAX_CONTEXT_LENGTH}")
+    for i, p in enumerate(prices):
+        # bool is a subclass of int in Python - explicitly reject it so {"prices": [true, ...]}
+        # doesn't silently coerce to 1/0.
+        if isinstance(p, bool) or not isinstance(p, (int, float)) or not math.isfinite(p):
+            raise InvalidRequestError(f"'prices[{i}]' must be a finite number")
+
+
+def _validate_horizon(horizon_raw) -> int:
+    try:
+        horizon = int(horizon_raw)
+    except (TypeError, ValueError):
+        raise InvalidRequestError("'horizon' must be an integer")
+    if horizon < 1 or horizon > MAX_HORIZON:
+        raise InvalidRequestError(f"'horizon' must be between 1 and {MAX_HORIZON}")
+    return horizon
 
 # Readiness/reliability pass (2026-09-04): scripts/lib/chronosLauncher.ts already guards both
 # official startup paths (npm run dev's ecosystem launcher and the headless engine daemon) with a
@@ -235,21 +303,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         global LAST_INFERENCE_MS
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length) or b"{}")
+            body = _read_bounded_json_body(self)
             prices = body.get("prices")
-            horizon = int(body.get("horizon", 5))
-
-            if not isinstance(prices, list) or len(prices) < MIN_CONTEXT_LENGTH:
-                self._send_json(400, {"error": f"'prices' must be a list of at least {MIN_CONTEXT_LENGTH} numbers"})
-                return
+            _validate_prices(prices)
+            horizon = _validate_horizon(body.get("horizon", 5))
 
             # Routed through the single dedicated inference-worker thread (2026-09-04 phase 2
             # fix) - this handler thread (a brand-new thread per HTTP connection) never itself
             # calls into torch/Chronos. See _run_forecast_inference's docstring and
             # scripts/lib/inference_worker.py for why: calling torch directly from here was
-            # confirmed live to leak a native MKL/OpenMP thread pool per connection.
-            quantiles, latency_ms = run_on_inference_worker(_run_forecast_inference, prices, horizon)
+            # confirmed live to leak a native MKL/OpenMP thread pool per connection. F37: bounded
+            # by FORECAST_INFERENCE_TIMEOUT_SECONDS - see inference_worker.py's module docstring
+            # for why a timeout here never implies the native computation was actually stopped.
+            quantiles, latency_ms = run_on_inference_worker(
+                _run_forecast_inference, prices, horizon, timeout_seconds=FORECAST_INFERENCE_TIMEOUT_SECONDS
+            )
             LAST_INFERENCE_MS = latency_ms
 
             self._send_json(200, {
@@ -260,23 +328,39 @@ class Handler(BaseHTTPRequestHandler):
                 "latencyMs": LAST_INFERENCE_MS,
                 "device": DEVICE,
             })
+        except RequestTooLargeError as e:
+            self._send_json(413, {"error": str(e)})
+        except InvalidRequestError as e:
+            self._send_json(400, {"error": str(e)})
+        except InferenceTimeoutError as e:
+            self._send_json(504, {"error": str(e)})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 
     def _handle_sentiment(self) -> None:
         try:
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length) or b"{}")
+            body = _read_bounded_json_body(self)
             text = body.get("text")
             if not isinstance(text, str) or not text.strip():
-                self._send_json(400, {"error": "'text' must be a non-empty string"})
-                return
+                raise InvalidRequestError("'text' must be a non-empty string")
+            if len(text) > MAX_SENTIMENT_TEXT_LENGTH * 50:
+                # FinBERT truncates internally at 512 tokens and this handler already truncates
+                # to MAX_SENTIMENT_TEXT_LENGTH characters below - this outer check exists only to
+                # reject a PATHOLOGICALLY large text field outright (explicit 400) rather than
+                # silently slicing an enormous string on every request. The x50 margin is
+                # deliberately generous so it never fires on any realistic real-world input.
+                raise InvalidRequestError(
+                    f"'text' has {len(text)} characters, exceeding the maximum of {MAX_SENTIMENT_TEXT_LENGTH * 50}"
+                )
 
             # FinBERT truncates internally at 512 tokens; a hard character cap here just
             # avoids sending pathologically large payloads through the pipeline. Routed through
             # the single dedicated inference-worker thread for the same reason as /forecast above
-            # - this handler thread never itself calls into torch/FinBERT.
-            result = run_on_inference_worker(_run_sentiment_inference, text[:2000])
+            # - this handler thread never itself calls into torch/FinBERT. F37: bounded by
+            # SENTIMENT_INFERENCE_TIMEOUT_SECONDS.
+            result = run_on_inference_worker(
+                _run_sentiment_inference, text[:MAX_SENTIMENT_TEXT_LENGTH], timeout_seconds=SENTIMENT_INFERENCE_TIMEOUT_SECONDS
+            )
             label = result["label"].lower()
             score = float(result["score"])
             signed_score = score if label == "positive" else (-score if label == "negative" else 0.0)
@@ -287,6 +371,12 @@ class Handler(BaseHTTPRequestHandler):
                 "score": score,
                 "signedScore": signed_score,
             })
+        except RequestTooLargeError as e:
+            self._send_json(413, {"error": str(e)})
+        except InvalidRequestError as e:
+            self._send_json(400, {"error": str(e)})
+        except InferenceTimeoutError as e:
+            self._send_json(504, {"error": str(e)})
         except Exception as e:
             self._send_json(500, {"error": str(e)})
 

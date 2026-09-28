@@ -1,6 +1,7 @@
 package io.argus.quantcore.server;
 
 import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpServer;
 import io.argus.quantcore.backtest.engine.Bar;
 import io.argus.quantcore.institutional.math.AugmentedDickeyFuller;
@@ -165,6 +166,13 @@ public final class QuantCoreServer {
         }
     }
 
+    /** Unchecked carrier so a checked {@link IOException} from {@link HttpHandler#handle} can cross a {@link Runnable} boundary. */
+    private static final class UncheckedHandlerIOException extends RuntimeException {
+        UncheckedHandlerIOException(IOException cause) {
+            super(cause);
+        }
+    }
+
     /**
      * F36 admission wrapper applied to every registered route: (1) enforces a bounded number of
      * concurrent in-flight requests (real back-pressure - excess requests get an immediate 503
@@ -190,10 +198,13 @@ public final class QuantCoreServer {
                     "server at capacity - too many concurrent requests, try again shortly"));
                 return;
             }
-            Future<Void> future = computeExecutor.submit(() -> {
-                inner.handle(exchange);
-                return null;
-            });
+            java.util.concurrent.CompletableFuture<Void> future = java.util.concurrent.CompletableFuture.runAsync(() -> {
+                try {
+                    inner.handle(exchange);
+                } catch (IOException e) {
+                    throw new UncheckedHandlerIOException(e);
+                }
+            }, computeExecutor);
             try {
                 future.get(requestDeadlineMs, TimeUnit.MILLISECONDS);
                 admissionSemaphore.release();
@@ -207,6 +218,9 @@ public final class QuantCoreServer {
                 future.whenComplete((v, ex) -> admissionSemaphore.release());
             } catch (ExecutionException ee) {
                 Throwable cause = ee.getCause();
+                if (cause instanceof UncheckedHandlerIOException uw) {
+                    cause = uw.getCause();
+                }
                 if (cause instanceof PayloadTooLargeException || cause instanceof TooManyElementsException) {
                     safeSend(exchange, 413, Map.of("ok", false, "error", String.valueOf(cause.getMessage())));
                 } else {
@@ -326,6 +340,13 @@ public final class QuantCoreServer {
             sendJson(exchange, 200, Map.of("ok", true, "gapDetected", gapDetected));
         } catch (Json.JsonParseException | ClassCastException | NullPointerException e) {
             sendJson(exchange, 400, Map.of("ok", false, "error", "malformed request body"));
+        }
+    }
+
+    /** Shared F36 admission check for manually-decoded list fields (votes/symbols/returns/matrix rows) that don't route through decodeDoubleArray/decodeDoubleMatrix/decodeBars. */
+    private void enforceMaxElements(int size, String label) {
+        if (size > maxArrayLength) {
+            throw new TooManyElementsException(label + " has " + size + " elements, exceeding the maximum of " + maxArrayLength);
         }
     }
 
@@ -885,11 +906,14 @@ public final class QuantCoreServer {
                 sendJson(exchange, 400, Map.of("ok", false, "error", "symbols and returnsByAsset arrays are both required"));
                 return;
             }
+            enforceMaxElements(symbolList.size(), "symbols");
+            enforceMaxElements(returnsList.size(), "returnsByAsset");
             String[] symbols = new String[symbolList.size()];
             for (int i = 0; i < symbolList.size(); i++) symbols[i] = String.valueOf(symbolList.get(i));
             double[][] returnsByAsset = new double[returnsList.size()][];
             for (int i = 0; i < returnsList.size(); i++) {
                 java.util.List<?> row = (java.util.List<?>) returnsList.get(i);
+                enforceMaxElements(row.size(), "returnsByAsset row");
                 double[] arr = new double[row.size()];
                 for (int j = 0; j < row.size(); j++) arr[j] = Json.asDoublePrimitive(row.get(j), Double.NaN);
                 returnsByAsset[i] = arr;
@@ -960,6 +984,7 @@ public final class QuantCoreServer {
                 sendJson(exchange, 400, Map.of("ok", false, "error", "a non-empty votes array is required"));
                 return;
             }
+            enforceMaxElements(voteList.size(), "votes");
             QuantEnsembleEngine.ModelVote[] votes = new QuantEnsembleEngine.ModelVote[voteList.size()];
             for (int i = 0; i < voteList.size(); i++) {
                 Map<String, Object> v = Json.asObject(voteList.get(i));
@@ -984,9 +1009,11 @@ public final class QuantCoreServer {
             Object rawMatrix = body.get("correlationMatrix");
             double[][] correlationMatrix;
             if (rawMatrix instanceof java.util.List<?> matrixList) {
+                enforceMaxElements(matrixList.size(), "correlationMatrix");
                 correlationMatrix = new double[matrixList.size()][];
                 for (int i = 0; i < matrixList.size(); i++) {
                     java.util.List<?> row = (java.util.List<?>) matrixList.get(i);
+                    enforceMaxElements(row.size(), "correlationMatrix row");
                     double[] arr = new double[row.size()];
                     for (int j = 0; j < row.size(); j++) arr[j] = Json.asDoublePrimitive(row.get(j), Double.NaN);
                     correlationMatrix[i] = arr;
@@ -1031,6 +1058,7 @@ public final class QuantCoreServer {
                 sendJson(exchange, 400, Map.of("ok", false, "error", "a historicalReturns array is required (may be empty)"));
                 return;
             }
+            enforceMaxElements(returnsList.size(), "historicalReturns");
             double[] historicalReturns = new double[returnsList.size()];
             for (int i = 0; i < returnsList.size(); i++) {
                 double v = Json.asDoublePrimitive(returnsList.get(i), Double.NaN);
@@ -1107,6 +1135,7 @@ public final class QuantCoreServer {
                 sendJson(exchange, 400, Map.of("ok", false, "error", "a non-empty votes array is required"));
                 return;
             }
+            enforceMaxElements(voteList.size(), "votes");
             String regimeRaw = Json.asString(body.get("regime"));
             double currentVolatility = Json.asDoublePrimitive(body.get("currentVolatility"), Double.NaN);
             if (regimeRaw == null || !Double.isFinite(currentVolatility) || currentVolatility < 0) {
@@ -1145,9 +1174,11 @@ public final class QuantCoreServer {
             Object rawMatrix = body.get("correlationMatrix");
             double[][] correlationMatrix;
             if (rawMatrix instanceof java.util.List<?> matrixList) {
+                enforceMaxElements(matrixList.size(), "correlationMatrix");
                 correlationMatrix = new double[matrixList.size()][];
                 for (int i = 0; i < matrixList.size(); i++) {
                     java.util.List<?> row = (java.util.List<?>) matrixList.get(i);
+                    enforceMaxElements(row.size(), "correlationMatrix row");
                     double[] arr = new double[row.size()];
                     for (int j = 0; j < row.size(); j++) arr[j] = Json.asDoublePrimitive(row.get(j), Double.NaN);
                     correlationMatrix[i] = arr;

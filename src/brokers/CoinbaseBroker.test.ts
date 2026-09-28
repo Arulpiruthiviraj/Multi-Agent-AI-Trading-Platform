@@ -322,6 +322,48 @@ describe('CoinbaseBroker', () => {
       expect(positions[0].marketValue).toBe(30000);
     });
 
+    it('F26: a product-pricing lookup failure reports the position as UNAVAILABLE valuation, never a fabricated zero price/basis/P&L, while quantity remains correct', async () => {
+      const broker = await authedBroker();
+      vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+        if (url.includes('/accounts')) {
+          return {
+            ok: true,
+            json: async () => ({
+              has_next: false,
+              accounts: [
+                { currency: 'USD', available_balance: { value: '500.00' }, hold: { value: '0' } },
+                { currency: 'BTC', available_balance: { value: '0' }, hold: { value: '0.5' } },
+              ],
+            }),
+          };
+        }
+        if (url.includes('/products/BTC-USD')) {
+          // Simulate a real pricing-lookup failure (transient error / no market for this product).
+          return { ok: false, status: 500, json: async () => ({ error: 'unavailable' }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      }));
+
+      const positions = await broker.positions();
+      expect(positions).toHaveLength(1);
+      expect(positions[0].symbol).toBe('BTC-USD');
+      // Quantity is always preserved even when the position cannot be valued.
+      expect(positions[0].quantity).toBe(0.5);
+      expect(positions[0].currentPrice).toBeNull();
+      expect(positions[0].entryPrice).toBeNull();
+      expect(positions[0].marketValue).toBeNull();
+      expect(positions[0].unrealizedPnl).toBeNull();
+      expect(positions[0].unrealizedPnlPercent).toBeNull();
+      expect(positions[0].valuationStatus).toBe('UNAVAILABLE');
+
+      const portfolio = await broker.portfolio();
+      // Equity must not be inflated by a fabricated price, and the portfolio itself must expose
+      // that its valuation is incomplete rather than silently reporting a clean number.
+      expect(portfolio.equity).toBe(500); // cash only - the unpriceable position contributes 0, not a fabricated value
+      expect(portfolio.unrealizedPnl).toBe(0);
+      expect(portfolio.valuationStatus).toBe('PARTIAL');
+    });
+
     it('reports the fiat balance as cash/buyingPower in portfolio()', async () => {
       const broker = await authedBroker();
       vi.stubGlobal('fetch', vi.fn(async (url: string) => {
