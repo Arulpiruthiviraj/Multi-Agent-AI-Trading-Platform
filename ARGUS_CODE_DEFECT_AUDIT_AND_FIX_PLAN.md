@@ -8,14 +8,27 @@ Audit date: September 27, 2026. Source HEAD: `9ed245e1a48776ea29c787ea6d65d22a41
 
 The owner subsequently authorized fixing the findings one after another. The original audit below remains a record of the pre-fix source; its analysis-only statement describes that audit, not the later authorized implementation.
 
-Implemented with regression coverage: **F01–F03, F05–F07, F09–F25, F27–F28, F30 and F35**. This is a source/test status, not deployment, trading readiness or evidence of edge. Broader validation is still in progress at this checkpoint.
+## Corrected status — September 28, 2026 (source-and-test reverification)
+
+The September 27 status lines below (kept for history) had drifted from actual source: F26, F29, F31, F32, F36 and F37 were reported "still open" while their real implementations — each carrying explicit `F26`/`F29`/etc. code comments citing this document — were already present and, on 2026-09-28 re-verification, pass their tests. **Trust this section over the "Implementation follow-up — September 27, 2026" section below it where the two disagree.**
+
+**Implemented and verified (source read + tests re-run 2026-09-28, not merely a cached prior result):**
+- **F01–F03, F05–F07, F09–F25, F27–F28, F30, F35** — carried forward from the September 27 checkpoint, not independently re-verified line-by-line in this pass.
+- **F04** — see below, reopened and completed 2026-09-27/28.
+- **F26** (`CoinbaseBroker.ts`): `currentPrice`/`entryPrice`/`marketValue`/`unrealizedPnl`/`unrealizedPnlPercent` are `number | null` (never a fabricated 0) with an explicit `valuationStatus: 'VALUED' | 'PARTIAL' | 'UNAVAILABLE'`. `CoinbaseBroker.test.ts` 31/31 pass, including the dedicated F26 test. **Downstream-consumer gap found and fixed 2026-09-28** (not part of the original F26 fix): `Position.marketValue: number | null` is the shared, broker-agnostic contract (`BrokerAdapter.ts`), but two consumers of `Position[]` still silently coerced a `null` marketValue to `0` — `PortfolioRebalance.ts`'s drift calculation (a live-path direction input to ChiefTrader) and `portfolioImpactReport.ts`'s covariance/weights computation (advisory-only). Both now refuse/report-incomplete honestly instead (`PortfolioRebalance.ts` reuses its existing `refused` mechanism; `portfolioImpactReport.ts` gained a new `HOLDING_VALUATION_UNAVAILABLE` status matching its existing enum pattern). New regression tests in `PortfolioRebalance.test.ts` and `portfolioImpactReport.readOnly.test.ts`, both green (10/10 and 7/7). No other `Position.marketValue`/`unrealizedPnl` consumers outside `CoinbaseBroker.ts` itself were found using an unguarded `?? 0`/`|| 0` coercion (`InteractiveBrokersWebApiAdapter.ts`'s own `?? 0` is unrelated — that adapter's own API always supplies a real number, not an F26-style unavailable case).
+- **F29/F31/F32** (`webhooks.ts`, `safeFetch.ts`): real vetted outbound transport (`safeFetch.ts`) used by both real dispatch and the test route — connects to the already-validated resolved address (never re-resolves the hostname), re-validates every redirect hop, one overall deadline. Event/type/enabled validation (`validateEvents`/`validateWebhookType`/`validateEnabled`) rejects malformed create/update payloads atomically. `BoundedConcurrencyQueue` bounds in-flight deliveries; non-2xx responses are logged as failures, not silent successes. `safeFetch.test.ts` + `urlSafety.test.ts` + `webhooks.test.ts`: 43/43 pass.
+- **F36** (`QuantCoreServer.java`): bounded `Content-Length` read, admission wrapper on every registered route, bounded manually-decoded list fields. `QuantCoreServerAdmissionBoundsTest`: 7/7 pass (fresh `mvn test` run, not the stale cached surefire report).
+- **F37** (`local_ai_service.py`, `inference_worker.py`): bounded body/price-list/horizon validation before queueing; `run_on_inference_worker()` now takes a real deadline and distinguishes "stopped waiting" from "computation actually canceled" (native computation cannot be interrupted, so a timed-out worker is retired and replaced rather than reused). `inference_worker_test.py` + `local_ai_service_validation_test.py`: 36/36 pass (fresh `pytest` run).
+
+**Implemented, source-verified, but with no dedicated regression test (real gap — do not treat as fully verified):**
+- **F33** (`HistoricalReplayLab.tsx`): "schedule next after complete" polling with `AbortController` + a generation counter, replacing the old always-cancel-the-previous-request `setInterval` loop. Matches the fix intent exactly (explicit `F33 fix (2026-09-27)` comments at the call sites). No `HistoricalReplayLab.test.tsx` exists.
+- **F34** (`TradeReplayModal.tsx`): requests keyed by stable trade identity, playback index clamped/reset when the trace changes length. Matches the fix intent (explicit `F34 fix (2026-09-27)` comments). No `TradeReplayModal.test.tsx` exists.
+- This matches the codebase's own documented, pre-existing frontend test-coverage gap (`CLAUDE.md`'s "UI: App.tsx almost untested... an open test-investment gap"), not a defect specific to these two fixes.
 
 - **F04 (2026-09-27 follow-up, reopened then completed):** the fill ledger's own rejection of missing/non-finite quantities/prices (`fillLedger.ts`) was already correct, but `OrderManagement.ts`'s `recordFillProgress()` returned a bare `number`, so all three callers (`executeOrder()`'s initial poll, the crash-recovery loop in `reconcileStaleOrders()`, and `applyFollowUpUpdate()`) never observed a rejection and unconditionally re-stamped the broker-reported status (e.g. `FILLED`) over the `RECONCILIATION_REQUIRED` the helper had just written, then broadcast a false `ORDER_EXECUTED`/`ORDER_FILLED`-shaped event. Fixed by changing the return type to `{ newQty, reconciliationRequired }` and having every caller fold `reconciliationRequired` into its own subsequent status write/event instead of ignoring it. A second, related defect surfaced by the new crash-recovery regression test: that same loop wrote `price: realOrder.averageFillPrice ?? row.price`, and `??` does not catch `NaN` (only `null`/`undefined`), so a NaN fill price crashed the entire reconciliation loop on a SQLite NOT NULL constraint instead of degrading to `RECONCILIATION_REQUIRED` — fixed with an explicit `Number.isFinite` check. Regression coverage: `OrderManagement.lifecycle.test.ts` (new test exercising the initial-poll call site directly via a controllable `placeOrderResponseOverride`, plus the pre-existing follow-up-path F04 test, now also verified robust against a same-cycle repeat-rejection edge case the old CAS-guard-only protection did not cover), `OrderManagement.crashRecovery.test.ts` (new test exercising the crash-recovery call site, asserting both the persisted `trades.status` and the `ORDER_EXECUTED` event payload never read FILLED on rejected fill evidence). 27/27 tests pass across the three affected files; `tsc --noEmit` clean.
 - **F08:** winter/summer regular-session expiry now uses America/New_York wall time. Exchange holidays and early-close session schedules remain unresolved; the current helper is a timezone conversion, not a complete exchange calendar. **Status remains PARTIAL, not closed** — an uncertainty label on the assumption is not equivalent to implementing an exchange calendar, and this entry must not be read as F08 being resolved.
 
-Still open: **F26** (unknown Coinbase valuation/cost basis), **F29** (outbound redirect/DNS binding), **F31–F32** (webhook validation and bounded delivery), **F33–F34** (UI asynchronous request lifecycle), and **F36–F37** (Java/Python request/admission bounds).
-
-Next sequence: complete F04 reconciliation semantics; complete F26 without representing unknown economics as zero; fix F29/F31/F32 together around one bounded outbound transport; then UI and inference admission defects. F08 needs an authoritative exchange-session source. Retain the existing trading spine and all safety thresholds throughout.
+All 37 numbered findings are now source-implemented except F08 (partial — no exchange calendar). **F33/F34 (2026-09-28 update): now implemented AND tested.** `@testing-library/react` + `happy-dom` added to the project (first React component tests in this repository — `vitest.config.ts`'s `include` extended to `src/**/*.test.tsx`). `HistoricalReplayLab.test.tsx` (3 tests: slow-response-not-starved, busy-gate prevents duplicate submission plus a superseded-generation late-response discard, unmount stops polling) and `TradeReplayModal.test.tsx` (3 tests: stale trade-selection response discarded, playback index clamps on a shorter trace, unmount does not throw) — 6/6 pass, `tsc --noEmit` clean. Every "Still open"/"Next sequence" line below this point is superseded by the corrected section above; kept only as a historical record of what the September 27 checkpoint believed.
 
 Limitations: no production restart, historical ledger rewrite, external account change or real order was performed. Existing corrupt historical fill rows are not automatically repaired. Coinbase balances now include held quantities and all paginated wallets, but USDC still follows the adapter's pre-existing dollar-equivalent treatment; price/cost-basis honesty remains F26. Rejecting unsupported Coinbase STOP orders is deliberate—STOP execution support was not introduced.
 
@@ -332,6 +345,8 @@ Missing later-page holdings/orders can produce false absence during valuation or
 
 **Verification:** price lookup failure and missing basis cannot lower portfolio exposure or appear as a known zero return. Recovery with valid data restores valued status with provenance.
 
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED**, plus a downstream-consumer follow-on fix. See the "Corrected status" section at the top of this document for full detail and test counts.
+
 ### F27 — P1: Malformed success responses receive a fabricated broker order ID
 
 **Evidence:** SOURCE_VERIFIED. `CoinbaseBroker.ts:255–261` rejects only `success === false`; otherwise missing `success_response.order_id` falls back to the generated client UUID as the order ID.
@@ -362,6 +377,8 @@ An initially allowed URL can redirect to an internal target, or resolve differen
 
 **Verification:** local mock transport/DNS fixtures for allowed-to-blocked redirect, changing DNS and mixed address results; confirm no connection to a blocked destination. Do not send requests to metadata services or private production endpoints to test this.
 
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED** (`safeFetch.ts`, used by both real dispatch and the test route). See the "Corrected status" section at the top of this document.
+
 ### F30 — P1: IPv6 private-address handling misses hexadecimal IPv4-mapped loopback
 
 **Evidence:** SOURCE_VERIFIED, ISOLATED_REPRODUCED with mocked DNS. `urlSafety.ts:52–59` unwraps only dotted `::ffff:a.b.c.d`; `::ffff:7f00:1` is recognized as IPv6 but falls through unblocked. The actual guard returned `safe:true` for that mocked resolution. Link-local handling also checks only the textual `fe80:` prefix rather than the whole relevant prefix range.
@@ -378,6 +395,8 @@ An initially allowed URL can redirect to an internal target, or resolve differen
 
 **Verification:** object/string/null/numeric event values, unsupported names and valid arrays. One invalid legacy configuration must not crash the dispatch batch.
 
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED** (`validateEvents`/`validateWebhookType`/`validateEnabled` in `webhooks.ts`). See the "Corrected status" section at the top of this document.
+
 ### F32 — P2: Event webhook dispatch has no timeout/backpressure or HTTP failure handling
 
 **Evidence:** SOURCE_VERIFIED. `webhooks.ts:88–89` fires unbounded fetches without an abort signal and only catches promise rejection. HTTP 4xx/5xx resolves normally and is not reported as a dispatch failure. The separately bounded test route does not protect ordinary event delivery.
@@ -385,6 +404,8 @@ An initially allowed URL can redirect to an internal target, or resolve differen
 **Fix:** bounded queue/concurrency and request timeout through the same vetted transport as F29; inspect status codes, record bounded retries and dropped/failed delivery. Protect the trading event path from slow receivers. Persist delivery requirements only if the product needs durable alerts; do not add a second general event system.
 
 **Verification:** hung receiver, repeated critical events, 429/500, shutdown, retry budget and healthy alternate receiver. Memory/concurrency must remain bounded and failures visible.
+
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED** (`BoundedConcurrencyQueue` + `safeFetch`'s config-driven timeout + non-2xx-is-a-failure in `webhooks.ts`). See the "Corrected status" section at the top of this document.
 
 ## G. Frontend defects
 
@@ -396,6 +417,8 @@ An initially allowed URL can redirect to an internal target, or resolve differen
 
 **Verification:** status latency of 1–2 seconds must still update the UI; switching runs/unmount must prevent stale updates; terminal reports stop polling. This was source-reviewed, not browser-reproduced.
 
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED.** `HistoricalReplayLab.test.tsx` (new, 3/3 pass): slow (>750ms) status response still lands and reschedules rather than being starved; the busy-gated button prevents a duplicate submission and a late secondary-report response correctly still applies to its own (non-superseded) generation; unmounting stops polling with no further requests issued. See the "Corrected status" section at the top of this document.
+
 ### F34 — P2: Trade replay state can mix two selected trades
 
 **Evidence:** SOURCE_VERIFIED. `TradeReplayModal.tsx:49–81` fetches whenever `trade` changes but does not cancel prior requests or clear explainability/timeline state at the start. Late A responses can overwrite B; B with no report can retain A's report. A prior timeline index may exceed the new trace length.
@@ -403,6 +426,8 @@ An initially allowed URL can redirect to an internal target, or resolve differen
 **Fix:** key request state by stable trade/trace identity; reset loading, report, playback and index; abort or ignore old generation responses. Alternatively remount by stable trade ID while still handling request cleanup.
 
 **Verification:** rapidly change A→B with delayed A response, B with no trace/report, shorter B timeline and unmount. Displayed symbol, report and trace must always share the same identity.
+
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED.** `TradeReplayModal.test.tsx` (new, 3/3 pass): a late trace response for an abandoned trade selection is discarded and never leaks into the newly-selected trade's view; the playback index clamps when a shorter trace replaces a longer one; unmounting mid-fetch does not throw. See the "Corrected status" section at the top of this document.
 
 ## H. Java and Python boundary defects
 
@@ -426,6 +451,8 @@ Large or concurrent compute requests can consume unbounded memory/work despite i
 
 **Verification:** oversized body, chunked body beyond limit, excessive bars, concurrent work and slow input. Verify bounded resources and healthy request recovery; no broker access is added.
 
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED.** `QuantCoreServerAdmissionBoundsTest`: 7/7 pass (fresh `mvn -Dtest=QuantCoreServerAdmissionBoundsTest test` run, not a cached result). See the "Corrected status" section at the top of this document.
+
 ### F37 — P2: Python inference accepts unbounded payload/work and can pin its only worker
 
 **Evidence:** SOURCE_VERIFIED. `scripts/local_ai_service.py:238–247,268–280` reads Content-Length without a maximum, checks price list minimum but no maximum/numeric-finite contract, and accepts unbounded integer horizon. `scripts/lib/inference_worker.py:71–72` waits on `future.result()` without a task deadline.
@@ -435,6 +462,8 @@ The bounded HTTP server limits connection threads and socket waiting; it does no
 **Fix:** validate bounded body/context/horizon and finite positive input values before queueing. Enforce bounded admission and queue deadlines. A timeout must not imply native computation was canceled: define safe worker/process recovery if inference cannot be interrupted, preserving single-thread model confinement. Do not revive the already-fixed native thread-pool leak or rewrite the HTTP framework without a demonstrated need.
 
 **Verification:** malformed Content-Length, oversized text/prices, invalid numbers, out-of-range horizon, queued request timeout, simulated stuck worker and controlled recovery. Use lightweight stub inference; never stress the running service for this test.
+
+**Status (2026-09-28): IMPLEMENTED AND VERIFIED.** `inference_worker_test.py` + `local_ai_service_validation_test.py`: 36/36 pass (fresh `pytest` run). Timeout-vs-cancellation handled explicitly: native computation cannot be interrupted, so a timed-out worker is retired and replaced rather than reused, and its stray result is never surfaced to a later caller. See the "Corrected status" section at the top of this document.
 
 ## Integration limitations and unresolved questions — not counted as confirmed coding defects
 

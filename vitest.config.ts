@@ -9,7 +9,9 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts', 'tests/**/*.test.ts'],
+    // .test.tsx added 2026-09-28 for the first real React component tests in this repo
+    // (F33/F34 regression coverage) - every existing .test.ts file is untouched by this addition.
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'scripts/**/*.test.ts', 'tests/**/*.test.ts'],
     globals: false,
     setupFiles: ['./vitest.setup.ts'],
     // Parallel workers sharing Chronos/OpenAlice sockets produced ECONNRESET on in-process

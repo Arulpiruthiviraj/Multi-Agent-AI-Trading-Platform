@@ -2059,3 +2059,47 @@ export const stagedNewsCatalysts = sqliteTable('staged_news_catalysts', {
   symbolIdx: index('idx_staged_news_catalysts_symbol').on(table.symbol),
   statusIdx: index('idx_staged_news_catalysts_status').on(table.status),
 }));
+
+// Crypto Gap Analysis G5 (ARGUS_CRYPTO_TRADING_REDESIGN_PLAN.md, 2026-09-28): CryptoPaperBroker.ts
+// previously held cash/positions/orders purely in an in-memory Map - a process restart silently
+// lost the entire simulated portfolio, and no fill was durable enough to prove idempotent recovery
+// under a duplicate tick(). These three tables are that broker's OWN internal fill ledger and
+// account state (the crypto-paper equivalent of what a real venue's own database would hold) -
+// deliberately separate from the canonical `trades`/`fills` tables, which record what Argus's OMS
+// submitted TO a broker, not a broker's own internal book. A single `id='singleton'` row holds
+// cash/realizedPnl/initialCash; positions/orders are one row per symbol/order id.
+export const cryptoPaperBrokerState = sqliteTable('crypto_paper_broker_state', {
+  id: text('id').primaryKey(), // always the literal 'singleton' - one broker instance, one account
+  cash: real('cash').notNull(),
+  initialCash: real('initial_cash').notNull(),
+  realizedPnl: real('realized_pnl').notNull().default(0),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const cryptoPaperPositions = sqliteTable('crypto_paper_positions', {
+  symbol: text('symbol').primaryKey(),
+  quantity: real('quantity').notNull(),
+  entryPrice: real('entry_price').notNull(),
+  entryFees: real('entry_fees').notNull().default(0),
+  updatedAt: text('updated_at').notNull(),
+});
+
+export const cryptoPaperOrders = sqliteTable('crypto_paper_orders', {
+  id: text('id').primaryKey(),
+  clientOrderId: text('client_order_id'),
+  symbol: text('symbol').notNull(),
+  side: text('side').notNull(),
+  type: text('type').notNull(),
+  status: text('status').notNull(),
+  quantity: real('quantity').notNull(),
+  filledQuantity: real('filled_quantity').notNull().default(0),
+  price: real('price'),
+  stopPrice: real('stop_price'),
+  averageFillPrice: real('average_fill_price'),
+  rejectionReason: text('rejection_reason'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+}, (table) => ({
+  clientOrderIdIdx: uniqueIndex('idx_crypto_paper_orders_client_order_id').on(table.clientOrderId),
+  symbolStatusIdx: index('idx_crypto_paper_orders_symbol_status').on(table.symbol, table.status),
+}));

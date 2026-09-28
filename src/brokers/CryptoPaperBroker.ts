@@ -21,6 +21,30 @@
  */
 import { BrokerPlugin, BrokerCapabilities, Order, Portfolio, Position } from './BrokerAdapter';
 import { getCryptoInstrument, getCryptoPaperExecutionAssumptions } from '../server/config/cryptoInstruments';
+import { db } from '../server/db';
+import { cryptoPaperBrokerState, cryptoPaperOrders, cryptoPaperPositions } from '../server/db/schema';
+import { eq } from 'drizzle-orm';
+
+const STATE_ROW_ID = 'singleton';
+
+function orderToRow(order: Order) {
+  return {
+    id: order.id,
+    clientOrderId: order.clientOrderId ?? null,
+    symbol: order.symbol,
+    side: order.side,
+    type: order.type,
+    status: order.status,
+    quantity: order.quantity,
+    filledQuantity: order.filledQuantity,
+    price: order.price ?? null,
+    stopPrice: order.stopPrice ?? null,
+    averageFillPrice: order.averageFillPrice ?? null,
+    rejectionReason: (order as any).rejectionReason ?? null,
+    createdAt: (order.createdAt instanceof Date ? order.createdAt : new Date(order.createdAt as any)).toISOString(),
+    updatedAt: (order.updatedAt instanceof Date ? order.updatedAt : new Date(order.updatedAt as any)).toISOString(),
+  };
+}
 
 interface CryptoPositionState extends Position {
   entryFees: number;
@@ -34,7 +58,9 @@ export class CryptoPaperBroker implements BrokerPlugin {
   isPaper = true;
 
   private cash: number;
-  private readonly initialCash: number;
+  // Not readonly: initialize() overwrites this from durable state on a restart that finds an
+  // existing crypto_paper_broker_state row - the constructor's value is only the fresh-boot default.
+  private initialCash: number;
   private _positions: Map<string, CryptoPositionState> = new Map();
   private _orders: Map<string, Order> = new Map();
   private _clientOrderIdIndex: Map<string, string> = new Map(); // clientOrderId -> internal order id
@@ -63,8 +89,76 @@ export class CryptoPaperBroker implements BrokerPlugin {
     this.cash = initialCash;
   }
 
+  // G5 (ARGUS_CRYPTO_TRADING_REDESIGN_PLAN.md, 2026-09-28): durable restart recovery. Hydrates the
+  // in-memory Maps (kept as a write-through cache for tick()'s hot synchronous loop) from
+  // crypto_paper_broker_state/_positions/_orders. A fresh deployment with no prior state persists
+  // its own starting snapshot on first boot rather than silently staying unpersisted until the
+  // first real mutation - so even an untouched broker survives a restart identically.
   async initialize(): Promise<void> {
-    console.log('[CryptoPaperBroker] Initialized (PAPER only - no real crypto venue is reachable through this adapter)');
+    const stateRow = db.select().from(cryptoPaperBrokerState).where(eq(cryptoPaperBrokerState.id, STATE_ROW_ID)).get();
+    if (stateRow) {
+      this.cash = stateRow.cash;
+      this._realizedPnl = stateRow.realizedPnl;
+      this.initialCash = stateRow.initialCash;
+    } else {
+      db.insert(cryptoPaperBrokerState).values({
+        id: STATE_ROW_ID, cash: this.cash, initialCash: this.initialCash, realizedPnl: this._realizedPnl,
+        updatedAt: new Date().toISOString(),
+      }).run();
+    }
+
+    const positionRows = db.select().from(cryptoPaperPositions).all();
+    for (const row of positionRows) {
+      this._positions.set(row.symbol, {
+        symbol: row.symbol, quantity: row.quantity, entryPrice: row.entryPrice,
+        // currentPrice/marketValue/unrealizedPnl are derived display fields, recomputed by the
+        // next real tick() against a fresh price - never persisted, never stale-restored as if
+        // they were a live valuation from before the restart.
+        currentPrice: row.entryPrice, marketValue: row.entryPrice * row.quantity, unrealizedPnl: 0, unrealizedPnlPercent: 0,
+        entryFees: row.entryFees,
+      });
+    }
+
+    const orderRows = db.select().from(cryptoPaperOrders).all();
+    for (const row of orderRows) {
+      const order: Order = {
+        id: row.id, clientOrderId: row.clientOrderId ?? undefined, symbol: row.symbol,
+        side: row.side as Order['side'], type: row.type as Order['type'], status: row.status as Order['status'],
+        quantity: row.quantity, filledQuantity: row.filledQuantity,
+        price: row.price ?? undefined, stopPrice: row.stopPrice ?? undefined, averageFillPrice: row.averageFillPrice ?? undefined,
+        createdAt: new Date(row.createdAt), updatedAt: new Date(row.updatedAt),
+      };
+      if (row.rejectionReason) (order as any).rejectionReason = row.rejectionReason;
+      this._orders.set(order.id, order);
+      if (row.clientOrderId) this._clientOrderIdIndex.set(row.clientOrderId, order.id);
+    }
+
+    console.log(`[CryptoPaperBroker] Initialized (PAPER only - no real crypto venue is reachable through this adapter). Restored ${positionRows.length} position(s), ${orderRows.length} order(s) from durable state.`);
+  }
+
+  /** Persists the account-level singleton row (cash/realizedPnl) - always called inside the same
+   *  transaction as any position/order mutation it accompanies, never on its own mid-fill. */
+  private persistState(): void {
+    db.update(cryptoPaperBrokerState).set({
+      cash: this.cash, realizedPnl: this._realizedPnl, updatedAt: new Date().toISOString(),
+    }).where(eq(cryptoPaperBrokerState.id, STATE_ROW_ID)).run();
+  }
+
+  private persistOrder(order: Order): void {
+    const row = orderToRow(order);
+    db.insert(cryptoPaperOrders).values(row)
+      .onConflictDoUpdate({ target: cryptoPaperOrders.id, set: row }).run();
+  }
+
+  private persistPosition(symbol: string): void {
+    const pos = this._positions.get(symbol);
+    if (!pos) {
+      db.delete(cryptoPaperPositions).where(eq(cryptoPaperPositions.symbol, symbol)).run();
+      return;
+    }
+    const row = { symbol, quantity: pos.quantity, entryPrice: pos.entryPrice, entryFees: pos.entryFees, updatedAt: new Date().toISOString() };
+    db.insert(cryptoPaperPositions).values(row)
+      .onConflictDoUpdate({ target: cryptoPaperPositions.symbol, set: row }).run();
   }
   async validateCredentials(): Promise<boolean> { return true; }
   paperTrading(): void {}
@@ -145,6 +239,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
       (order as any).rejectionReason = reason;
       this._orders.set(order.id, order);
       if (orderData.clientOrderId) this._clientOrderIdIndex.set(orderData.clientOrderId, order.id);
+      this.persistOrder(order);
       return order;
     };
 
@@ -179,6 +274,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
     };
     this._orders.set(newOrder.id, newOrder);
     if (orderData.clientOrderId) this._clientOrderIdIndex.set(orderData.clientOrderId, newOrder.id);
+    this.persistOrder(newOrder);
     return newOrder;
   }
 
@@ -193,6 +289,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
     if (invalid || amended.quantity < order.filledQuantity) throw new Error(invalid || 'Quantity below executed quantity');
     Object.assign(order, updates);
     order.updatedAt = new Date();
+    this.persistOrder(order);
     return order;
   }
 
@@ -202,6 +299,7 @@ export class CryptoPaperBroker implements BrokerPlugin {
     if (order.status !== 'PENDING' && order.status !== 'PARTIALLY_FILLED') return false;
     order.status = 'CANCELED';
     order.updatedAt = new Date();
+    this.persistOrder(order);
     return true;
   }
 
@@ -259,61 +357,80 @@ export class CryptoPaperBroker implements BrokerPlugin {
           order.status = 'REJECTED';
           (order as any).rejectionReason = 'insufficient paper cash at fill time';
           order.updatedAt = new Date();
+          this.persistOrder(order);
           continue;
-        }
-        this.cash -= totalCost;
-        const pos = this._positions.get(order.symbol);
-        if (pos) {
-          const newQty = pos.quantity + fillQuantityThisTick;
-          const newTotalCost = pos.entryPrice * pos.quantity + fillableNotionalThisTick;
-          pos.entryPrice = newTotalCost / newQty;
-          pos.quantity = newQty;
-          pos.entryFees += fee;
-        } else {
-          this._positions.set(order.symbol, {
-            symbol: order.symbol,
-            quantity: fillQuantityThisTick,
-            entryPrice: fillPrice,
-            currentPrice: fillPrice,
-            marketValue: fillQuantityThisTick * fillPrice,
-            unrealizedPnl: 0,
-            unrealizedPnlPercent: 0,
-            entryFees: fee,
-          });
         }
       } else {
         // SELL - already validated at placeOrder() time to not exceed the position held then, but
         // re-validate here too (a concurrent SELL on the same symbol could have reduced it since).
-        const pos = this._positions.get(order.symbol);
-        const heldQty = pos?.quantity ?? 0;
-        const sellQty = Math.min(fillQuantityThisTick, heldQty);
-        if (sellQty <= 0) {
+        const heldQty = this._positions.get(order.symbol)?.quantity ?? 0;
+        if (Math.min(fillQuantityThisTick, heldQty) <= 0) {
           order.status = 'REJECTED';
           (order as any).rejectionReason = 'no remaining position to sell at fill time';
           order.updatedAt = new Date();
+          this.persistOrder(order);
           continue;
-        }
-        const proceeds = sellQty * fillPrice - fee;
-        this.cash += proceeds;
-        if (pos) {
-          const allocatedEntryFee = pos.entryFees * (sellQty / pos.quantity);
-          const realizedThisFill = (fillPrice - pos.entryPrice) * sellQty - fee - allocatedEntryFee;
-          pos.entryFees -= allocatedEntryFee;
-          this._realizedPnl += realizedThisFill;
-          if (pos.quantity <= sellQty) {
-            this._positions.delete(order.symbol);
-          } else {
-            pos.quantity -= sellQty;
-          }
         }
       }
 
-      order.filledQuantity += fillQuantityThisTick;
-      order.averageFillPrice = order.averageFillPrice
-        ? (order.averageFillPrice * (order.filledQuantity - fillQuantityThisTick) + fillPrice * fillQuantityThisTick) / order.filledQuantity
-        : fillPrice;
-      order.status = order.filledQuantity >= order.quantity - 1e-12 ? 'FILLED' : 'PARTIALLY_FILLED';
-      order.updatedAt = new Date();
+      // G5 (2026-09-28): the cash/position/order mutation for this one fill is applied and
+      // persisted together as a single atomic unit - a crash between two different orders' fills
+      // within the same tick() call leaves the already-completed fill durably recorded and the
+      // not-yet-reached one untouched (still PENDING/PARTIALLY_FILLED, safely re-evaluated next
+      // tick), never a half-applied fill (e.g. cash debited but the order/position not updated).
+      db.transaction(() => {
+        if (order.side === 'BUY') {
+          const totalCost = fillableNotionalThisTick + fee;
+          this.cash -= totalCost;
+          const pos = this._positions.get(order.symbol);
+          if (pos) {
+            const newQty = pos.quantity + fillQuantityThisTick;
+            const newTotalCost = pos.entryPrice * pos.quantity + fillableNotionalThisTick;
+            pos.entryPrice = newTotalCost / newQty;
+            pos.quantity = newQty;
+            pos.entryFees += fee;
+          } else {
+            this._positions.set(order.symbol, {
+              symbol: order.symbol,
+              quantity: fillQuantityThisTick,
+              entryPrice: fillPrice,
+              currentPrice: fillPrice,
+              marketValue: fillQuantityThisTick * fillPrice,
+              unrealizedPnl: 0,
+              unrealizedPnlPercent: 0,
+              entryFees: fee,
+            });
+          }
+        } else {
+          const pos = this._positions.get(order.symbol);
+          const heldQty = pos?.quantity ?? 0;
+          const sellQty = Math.min(fillQuantityThisTick, heldQty);
+          const proceeds = sellQty * fillPrice - fee;
+          this.cash += proceeds;
+          if (pos) {
+            const allocatedEntryFee = pos.entryFees * (sellQty / pos.quantity);
+            const realizedThisFill = (fillPrice - pos.entryPrice) * sellQty - fee - allocatedEntryFee;
+            pos.entryFees -= allocatedEntryFee;
+            this._realizedPnl += realizedThisFill;
+            if (pos.quantity <= sellQty) {
+              this._positions.delete(order.symbol);
+            } else {
+              pos.quantity -= sellQty;
+            }
+          }
+        }
+
+        order.filledQuantity += fillQuantityThisTick;
+        order.averageFillPrice = order.averageFillPrice
+          ? (order.averageFillPrice * (order.filledQuantity - fillQuantityThisTick) + fillPrice * fillQuantityThisTick) / order.filledQuantity
+          : fillPrice;
+        order.status = order.filledQuantity >= order.quantity - 1e-12 ? 'FILLED' : 'PARTIALLY_FILLED';
+        order.updatedAt = new Date();
+
+        this.persistState();
+        this.persistPosition(order.symbol);
+        this.persistOrder(order);
+      });
     }
 
     for (const [symbol, pos] of this._positions) {

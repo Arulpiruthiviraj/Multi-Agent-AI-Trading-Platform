@@ -547,6 +547,13 @@
       "when": 1790600000000,
       "tag": "0077_trade_plan_close_confidence",
       "breakpoints": true
+    },
+    {
+      "idx": 78,
+      "version": "6",
+      "when": 1790593282631,
+      "tag": "0078_skinny_mockingbird",
+      "breakpoints": true
     }
   ]
 }
