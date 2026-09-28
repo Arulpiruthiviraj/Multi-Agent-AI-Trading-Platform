@@ -711,6 +711,43 @@ imports `OrderManagement`/`RiskEngine`/`ChiefTraderAgent`/`PositionSizing`, neve
 matrix or optimizer weight. `architecture.protection.test.ts`'s `ALLOWED_BROKER_MANAGER_IMPORTERS`
 allowlist was extended for this file with a dated, reviewed comment — not a silent bypass.
 
+**2026-09-27 Phase 6 (Master Redesign Plan, final phase) — governance audit + calibration drift
+report + why-no-trade addition:**
+
+- **Adaptive/self-improvement safety re-verification.** Re-confirmed against current source (not a
+  stale citation): `runEvolutionCycle` (`src/server/research/evolution/StrategyEvolutionEngine.ts`)
+  has exactly two callers in the whole repository, both in
+  `evolutionEndToEnd.test.ts` — no production scheduler, route, or worker calls it, so its `force`
+  option (which bypasses the evidence gate) is unreachable outside a test process. No code change
+  was needed; this is a re-verification, not a fix.
+- **New: Calibration Drift Report** (`src/server/research/calibrationDriftReport.ts`,
+  `GET /api/v2/observability/calibration-drift`, `argus-cli calibration-drift`). Closes a real gap:
+  `CalibrationCandidateBuilder.buildCalibrationCandidates()` (Phase 7D/7E) recomputes each
+  (agent, bucket)'s calibration from its *entire* pooled observation history — no code compared a
+  recent window's effective-sample accuracy against an older window's to flag degradation. This
+  report does exactly that, reusing the same raw-row fetchers
+  (`fetchAgentPredictionRows`/`fetchKronosRows`/`toClusterableRows`, now exported for this purpose)
+  and the same Wilson-interval/effective-sample machinery (`effectiveSampleSize.ts`) — no new data
+  collection, no new table. A bucket is `DRIFT_SUSPECTED_DEGRADED`/`_IMPROVED` only when the two
+  windows' 95% Wilson intervals don't overlap at all, and `INSUFFICIENT_SAMPLE` when either window's
+  effective N is below `continuousIntelligence.calibrationDriftMinEffectiveSample` (8) — never a
+  fabricated verdict. Window lengths (`calibrationDriftRecentWindowMs`/`calibrationDriftPriorWindowMs`,
+  14 days each by default) are policy parameters in `config/continuousIntelligence.json`, not
+  measured values. Purely read-only: never writes `agent_confidence_calibration`, `currentWeight`,
+  or any live gate — a human (or a future, separately-authorized governance step) decides what to
+  do with a flagged bucket. See `calibrationDriftReport.readOnly.test.ts` for the same
+  architectural-guarantee test pattern `portfolioImpactReport.readOnly.test.ts` established.
+- **why-no-trade addition:** `WhyNoTradeReport` gained `nextEligibleReevaluationAt`, computed only
+  for the three cooldown-style RiskEngine gates whose own `OvertradingGuards.ts` detail JSON already
+  records a reference timestamp + `cooldownMs` (`same_symbol_cooldown`, `post_loss_cooldown`) — null
+  for every other rejection reason rather than guessing a time that doesn't exist as a fixed clock
+  value (e.g. `symbol_concentration`, `market_hours`).
+- **Reliability:** re-confirmed (not re-fixed) that `QuantCoreBridge.ts` applies a request deadline
+  (`AbortSignal.timeout(tradingSafety.quantJavaCoreRequestTimeoutMs)`) to every one of its ~15 HTTP
+  call sites and has explicit stale/misrouted-response defense (module comment, line ~335) — this
+  session's own Batch 4 work, still true against current source. No new async-path gap was found or
+  closed this phase beyond the calibration-drift report above.
+
 `marketDataReadiness.ts` supplies the same read-only feed evidence to `pipeline-ready` and
 `session-report`: connectivity alone is insufficient; at least one active symbol must have a
 valid, fresh observed price. Its counts describe partial feed coverage, not readiness of every
