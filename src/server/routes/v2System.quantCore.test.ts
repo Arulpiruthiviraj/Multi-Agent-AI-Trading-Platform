@@ -122,6 +122,11 @@ describe('/api/v2/quant-core routes', () => {
       vi.setConfig({ testTimeout: 15_000 });
     });
 
+    // 2026-09-27 follow-up: the beforeAll() vi.setConfig({ testTimeout: 15_000 }) above was
+    // verified NOT reliably taking effect - a full-suite run reproduced "Test timed out in
+    // 5000ms" (the unmodified default) on one of these tests, not 15000ms. Passing the timeout as
+    // each it()'s own explicit third argument is the vitest-documented, guaranteed-scoped
+    // mechanism; the beforeAll config call is left in place as harmless but is no longer relied on.
     it('returns the full registry as a flat, categorized engine list with real wiring flags', async () => {
       const res = await request(app).get('/api/v2/quant-core/catalog');
       expect(res.status).toBe(200);
@@ -130,7 +135,7 @@ describe('/api/v2/quant-core routes', () => {
       expect(res.body.totalEngines).toBeGreaterThan(100);
       expect(Array.isArray(res.body.engines)).toBe(true);
       expect(res.body.engines.length).toBe(res.body.totalEngines);
-    });
+    }, 15_000);
 
     it('every engine has a real key, name, category, and status field (or null status, never fabricated)', async () => {
       const res = await request(app).get('/api/v2/quant-core/catalog');
@@ -141,14 +146,14 @@ describe('/api/v2/quant-core routes', () => {
         expect(typeof e.category).toBe('string');
         expect(e.status === null || typeof e.status === 'string').toBe(true);
       }
-    });
+    }, 15_000);
 
     it('categorizes a known Options engine correctly', async () => {
       const res = await request(app).get('/api/v2/quant-core/catalog');
       const entry = res.body.engines.find((e: any) => e.key === 'option_iron_condor');
       expect(entry).toBeDefined();
       expect(entry.category).toBe('Options');
-    });
+    }, 15_000);
 
     it('categorizes the two most recently added Stocks/ETFs research engines correctly', async () => {
       const res = await request(app).get('/api/v2/quant-core/catalog');
@@ -158,7 +163,7 @@ describe('/api/v2/quant-core routes', () => {
       expect(smartBeta).toBeDefined();
       expect(positionAveraging.status).toBe('RESEARCH');
       expect(smartBeta.status).toBe('RESEARCH');
-    });
+    }, 15_000);
 
     it('reports real (not fabricated) wiring-state flags reflecting the current env', async () => {
       const res = await request(app).get('/api/v2/quant-core/catalog');
@@ -167,12 +172,12 @@ describe('/api/v2/quant-core routes', () => {
       expect(res.body.wiring.javaLiveIdeasEnabled).toBe(false);
       expect(typeof res.body.wiring.javaFactorCompositeVoteEnabled).toBe('boolean');
       expect(typeof res.body.wiring.quantIndependentQualificationEnabled).toBe('boolean');
-    });
+    }, 15_000);
 
     it('categoryCounts sums to totalEngines', async () => {
       const res = await request(app).get('/api/v2/quant-core/catalog');
       const sum = Object.values(res.body.categoryCounts).reduce((a: number, b: any) => a + b, 0);
       expect(sum).toBe(res.body.totalEngines);
-    });
+    }, 15_000);
   });
 });

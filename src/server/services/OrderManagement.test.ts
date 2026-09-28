@@ -167,7 +167,9 @@ describe('OrderManagementService.executeOrder', () => {
     expect(tradesInserts[0].status).toBe('PENDING');
     expect(tradesInserts[0].submittedAt).toBeTruthy();
 
-    resolvePlaceOrder!({ id: 'order-submit', status: 'FILLED', averageFillPrice: 100 });
+    // F04 (2026-09-27): explicit filledQuantity required for recordFillProgress() to accept
+    // this as a real fill rather than rejecting it as invalid/incomplete fill evidence.
+    resolvePlaceOrder!({ id: 'order-submit', status: 'FILLED', filledQuantity: 10, averageFillPrice: 100 });
     await resultPromise;
     expect(getFinalTradeRow().status).toBe('FILLED');
   });
@@ -258,7 +260,9 @@ describe('OrderManagementService.executeOrder', () => {
   it('polls for a terminal fill when the broker initially returns PENDING, and records the real fill price', async () => {
     vi.useFakeTimers();
     const placeOrder = vi.fn(async () => ({ id: 'order-2', status: 'PENDING' }));
-    const orders = vi.fn(async () => [{ id: 'order-2', status: 'FILLED', averageFillPrice: 123.45 }]);
+    // F04 (2026-09-27): explicit filledQuantity required for recordFillProgress() to accept
+    // this as a real fill rather than rejecting it as invalid/incomplete fill evidence.
+    const orders = vi.fn(async () => [{ id: 'order-2', status: 'FILLED', filledQuantity: 5, averageFillPrice: 123.45 }]);
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders, positions: vi.fn(async () => []) };
 
     const resultPromise = oms.executeOrder('AAPL', 'BUY', 5, 'reasoning', 'poll-trace');
@@ -287,7 +291,10 @@ describe('OrderManagementService.executeOrder', () => {
   });
 
   it('computes real realized P&L on a SELL fill using the pre-trade entry price', async () => {
-    const placeOrder = vi.fn(async () => ({ id: 'order-4', status: 'FILLED', averageFillPrice: 120 }));
+    // F04 (2026-09-27): a real broker's FILLED response always reports filledQuantity; a mock
+    // that omits it is now correctly rejected by fillLedger.ts as invalid fill evidence rather
+    // than silently treated as a clean fill (see the F04 outcome-propagation fix).
+    const placeOrder = vi.fn(async () => ({ id: 'order-4', status: 'FILLED', filledQuantity: 10, averageFillPrice: 120 }));
     const positions = vi.fn(async () => [{ symbol: 'AAPL', quantity: 10, entryPrice: 100 }]);
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions };
 
@@ -315,7 +322,10 @@ describe('OrderManagementService.executeOrder', () => {
     // (implicitly, via the mocked trades select returning []) no prior opening BUY is found either.
     const warnSpy = vi.spyOn(structuredLogger, 'warn');
     setPortfolioRows([]);
-    const placeOrder = vi.fn(async () => ({ id: 'order-unattributable', status: 'FILLED', averageFillPrice: 110 }));
+    // F04 (2026-09-27): filledQuantity must be present for recordFillProgress() to accept this
+    // as a real fill - this test targets the SEPARATE entry-price-attribution failure path, not
+    // fill-evidence rejection, so the fill itself must be valid.
+    const placeOrder = vi.fn(async () => ({ id: 'order-unattributable', status: 'FILLED', filledQuantity: 5, averageFillPrice: 110 }));
     const positions = vi.fn(async () => { throw new Error('positions unavailable'); });
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions };
 
@@ -385,7 +395,9 @@ describe('OrderManagementService.executeOrder', () => {
   });
 
   it('PAPER orders still reach the broker when live readiness is LIVE_NO_GO', async () => {
-    const placeOrder = vi.fn(async () => ({ id: 'paper-ok', status: 'FILLED', averageFillPrice: 50 }));
+    // F04 (2026-09-27): explicit filledQuantity required for recordFillProgress() to accept
+    // this as a real fill rather than rejecting it as invalid/incomplete fill evidence.
+    const placeOrder = vi.fn(async () => ({ id: 'paper-ok', status: 'FILLED', filledQuantity: 2, averageFillPrice: 50 }));
     mockBrokerHolder.broker = { name: 'Test', placeOrder, orders: vi.fn(async () => []), positions: vi.fn(async () => []) };
     await oms.executeOrder('AAPL', 'BUY', 2, 'reasoning', 'paper-nogo-unaffected');
     expect(placeOrder).toHaveBeenCalled();
@@ -405,7 +417,9 @@ describe('OrderManagementService.executeOrder', () => {
     const prev = process.env.PAPER_TRADING_ONLY;
     delete process.env.PAPER_TRADING_ONLY;
     setEnvRow({ tradingMode: null, paperMode: null });
-    const placeOrder = vi.fn(async () => ({ id: 'tsla-1', status: 'FILLED', averageFillPrice: 250 }));
+    // F04 (2026-09-27): explicit filledQuantity required for recordFillProgress() to accept
+    // this as a real fill rather than rejecting it as invalid/incomplete fill evidence.
+    const placeOrder = vi.fn(async () => ({ id: 'tsla-1', status: 'FILLED', filledQuantity: 1, averageFillPrice: 250 }));
     mockBrokerHolder.broker = {
       id: 'alpaca',
       name: 'Alpaca',
