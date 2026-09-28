@@ -42,7 +42,7 @@ import { EVENTS } from '../core/eventNames';
 import { isTelemetryPulsePayload } from '../core/telemetryPulse';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
 import { db } from '../db';
-import { trades, settings, brokerConnections, portfolio } from '../db/schema';
+import { trades, settings, brokerConnections, portfolio, reconciliationEvents } from '../db/schema';
 import { eq, and, notInArray, isNotNull, inArray, isNull, gte } from 'drizzle-orm';
 import crypto from 'crypto';
 import { BrokerManager } from '../../brokers/BrokerManager';
@@ -278,7 +278,47 @@ export class OrderManagementService {
       }
       return result.newQty;
     } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
       console.error(`[OMS] Failed to persist fill for order ${orderId}`, e);
+      // F04 remediation: fillLedger.ts already refuses to synthesize a fabricated fill from
+      // missing/non-finite broker fill evidence. Previously this catch stopped at logging and
+      // returning 0, which left the order's true state ambiguous - a caller re-reading `trades`
+      // would still see whatever pre-existing status was there (often PENDING), never learning
+      // that fill evidence was actively rejected. Mark the order RECONCILIATION_REQUIRED (never
+      // downgrading an order a concurrent path has already resolved to FILLED/REJECTED/CANCELED)
+      // and record a reconciliation_events row through the same table/shape
+      // PortfolioReconciliation.ts already uses for SYNC_FAILURE, so this surfaces through the
+      // existing operator reconciliation history rather than a new, parallel mechanism.
+      try {
+        await db.update(trades)
+          .set({ status: 'RECONCILIATION_REQUIRED' })
+          .where(and(eq(trades.id, orderId), notInArray(trades.status, ['FILLED', 'REJECTED', 'CANCELED'])));
+      } catch (updateErr) {
+        console.error(`[OMS] Failed to mark order ${orderId} RECONCILIATION_REQUIRED after fill-ledger rejection`, updateErr);
+      }
+      try {
+        await db.insert(reconciliationEvents).values({
+          checkedAt: new Date().toISOString(),
+          broker: executionBrokerId || 'unknown',
+          matches: false,
+          mismatches: JSON.stringify([{ type: 'INVALID_FILL_ECONOMICS', orderId, symbol, side, error: message }]),
+          worstImpactDollars: null,
+          actionTaken: null,
+        });
+      } catch (insertErr) {
+        console.error(`[OMS] Failed to persist reconciliation_events row for rejected fill on order ${orderId}`, insertErr);
+      }
+      observeSafe(() => {
+        structuredLogger.warn('fill_reconciliation_required', {
+          category: 'FILL',
+          component: 'OrderManagement',
+          eventType: 'FILL_RECONCILIATION_REQUIRED',
+          orderId,
+          symbol,
+          side,
+          error: message,
+        });
+      });
       return 0;
     }
   }

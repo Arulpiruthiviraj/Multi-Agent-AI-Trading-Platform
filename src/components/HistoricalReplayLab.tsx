@@ -7,6 +7,14 @@ import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 const CAPITAL_PRESETS = [100, 1000, 10000, 100000];
 
+// F33 fix (2026-09-27): the replay-status poll is a "schedule next after complete" loop, not a
+// fixed setInterval - a new poll only starts once the previous one has fully resolved (success,
+// failure, or timeout). REPLAY_POLL_INTERVAL_MS is the gap AFTER completion before the next
+// request starts; REPLAY_POLL_TIMEOUT_MS bounds any single request so a truly hung fetch cannot
+// stall the loop forever without ever completing/rescheduling.
+const REPLAY_POLL_INTERVAL_MS = 750;
+const REPLAY_POLL_TIMEOUT_MS = 10000;
+
 // Centralized replay timestamp formatter - every raw epoch-ms value shown in this component
 // (trades table, event timeline) goes through this so they all render in the same timezone
 // (the replay's own config.timezone, same convention marketSession.ts uses server-side via
@@ -285,11 +293,20 @@ export default function HistoricalReplayLab() {
   const [trades, setTrades] = useState<any[]>([]);
   const [events, setEvents] = useState<any[]>([]);
   const [equity, setEquity] = useState<any[]>([]);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  // Real perf fix (2026-08-18): the 750ms replay-status poll fired 4 concurrent fetches with no
-  // cancellation between ticks - self-limiting (stops at a terminal run status) but still able to
-  // pile up pending requests if any single tick runs long.
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Real perf fix (2026-08-18, superseded by F33 fix 2026-09-27): the 750ms replay-status poll
+  // used to fire on a fixed setInterval regardless of in-flight state, aborting the previous
+  // request every tick - if any single request took longer than 750ms it could be perpetually
+  // canceled before ever completing, leaving the UI stuck even though the backend was fine. The
+  // poll loop below now schedules the next request only after the previous one completes; this
+  // ref instead bounds a single request with a timeout and lets generation changes/unmount cancel
+  // genuinely obsolete work (switching replay runs, or leaving the page).
   const pollAbortRef = useRef<AbortController | null>(null);
+  // Incremented on every stopPolling() (new run started, generation superseded, or unmount) so a
+  // still-in-flight request/timer from an old polling generation can recognize it's stale and
+  // discard its result instead of overwriting newer state - covers both the main status poll and
+  // the secondary terminal-state report fetch.
+  const pollGenerationRef = useRef(0);
   const [universeMode, setUniverseMode] = useState<'ARGUS_DISCOVERY' | 'OPERATOR_SELECTED'>('ARGUS_DISCOVERY');
   const [form, setForm] = useState({
     startDate: '2024-01-02',
@@ -326,24 +343,27 @@ export default function HistoricalReplayLab() {
       })
       .catch((e) => setError(e.message));
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+      // Unmounting is a real cancellation point (unlike an ordinary poll tick): invalidate the
+      // current polling generation and stop any pending timer/in-flight request.
+      pollGenerationRef.current += 1;
+      if (pollRef.current) clearTimeout(pollRef.current);
       pollAbortRef.current?.abort('component-unmounted');
     };
   }, []);
 
-  // Real bug fixed: refreshRun can be called again (by the 750ms poll tick) before a prior call's
-  // own fetches have resolved - e.g. when the server-side status/trades/events/equity requests
-  // take longer than 750ms. The prior call's Promise.all then rejects with AbortError once this
-  // newer call aborts its signal, and that rejection used to propagate all the way out to
-  // createAndStart's try/catch, which displayed it as a real error via setError(e.message) - the
-  // browser's default AbortError message, literally "signal is aborted without reason". Being
-  // superseded by a newer poll is expected, benign concurrency, not a failure: swallow exactly
-  // that case (this call's own signal aborting) and return null so callers skip processing this
-  // stale response instead of surfacing it as an error. Any other thrown error still propagates.
-  const refreshRun = useCallback(async (replayId: string) => {
-    pollAbortRef.current?.abort('superseded-by-newer-replay-status-request');
+  // F33 fix (2026-09-27): this used to abort the PREVIOUS in-flight request every time it was
+  // called, which the old fixed-interval poll invoked every 750ms regardless of whether the prior
+  // request had resolved - if any single status/trades/events/equity round trip took longer than
+  // 750ms, every attempt could be canceled before completing, leaving the UI stuck. The poll loop
+  // (startPolling below) now only calls this again after the previous call has fully settled, so
+  // there is no "next tick" to cancel this one. `generation` still lets a caller recognize this
+  // response as belonging to a superseded run (a different replay run selected, or unmount) and
+  // discard it instead of applying stale state. A bounded per-request timeout (not tied to poll
+  // cadence) guards against a genuinely hung request blocking the reschedule forever.
+  const refreshRun = useCallback(async (replayId: string, generation: number) => {
     const controller = new AbortController();
     pollAbortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort('replay-status-request-timeout'), REPLAY_POLL_TIMEOUT_MS);
     const { signal } = controller;
     try {
       const [status, tradesRes, eventsRes, equityRes] = await Promise.all([
@@ -352,6 +372,7 @@ export default function HistoricalReplayLab() {
         fetch(`/api/v2/research/replay/${replayId}/events`, { signal }).then((r) => r.json()).catch(() => ({ events: [] })),
         fetch(`/api/v2/research/replay/${replayId}/equity`, { signal }).then((r) => r.json()).catch(() => ({ equity: [] })),
       ]);
+      if (generation !== pollGenerationRef.current) return null; // superseded by a newer run/unmount
       setRun(status);
       setTrades(tradesRes.trades || status.trades || []);
       setEvents((eventsRes.events || status.events || []).slice(-80));
@@ -360,6 +381,8 @@ export default function HistoricalReplayLab() {
     } catch (e: any) {
       if (e?.name === 'AbortError' || signal.aborted) return null;
       throw e;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }, []);
 
@@ -383,36 +406,72 @@ export default function HistoricalReplayLab() {
     return { ok: false, status: 'CREATING', error: `Replay ${replayId} did not finish loading data within the wait budget - check the data provider (Historical Replay Lab providers table) or try a smaller symbol universe.` };
   }
 
+  // F33 fix (2026-09-27): stopPolling is the one real cancellation point - it bumps the polling
+  // generation (so any in-flight request/timer from before this call recognizes itself as stale
+  // and discards its result) and cancels the pending timer / in-flight request. Called on a new
+  // run starting (startPolling), a terminal status being reached, or unmount - never on an
+  // ordinary tick, which is exactly the behavior this fix needs to stop cancelling the only
+  // useful in-flight request.
   function stopPolling() {
+    pollGenerationRef.current += 1;
     if (pollRef.current) {
-      clearInterval(pollRef.current);
+      clearTimeout(pollRef.current);
       pollRef.current = null;
     }
+    pollAbortRef.current?.abort('polling-stopped');
   }
 
+  // F33 fix (2026-09-27): "schedule next after complete" instead of setInterval. Each tick awaits
+  // the full refreshRun (and, on a terminal-without-report status, the secondary report fetch)
+  // before scheduling the next one REPLAY_POLL_INTERVAL_MS later - a slow (>750ms) response can no
+  // longer be starved by a new tick canceling it out from under itself. A generation check guards
+  // every async resumption point (after refreshRun, after the secondary report fetch) so a stale
+  // tick from a superseded run/unmount never applies its result or reschedules itself.
   function startPolling(replayId: string) {
     stopPolling();
-    pollRef.current = setInterval(async () => {
+    const generation = pollGenerationRef.current;
+
+    const scheduleNext = () => {
+      if (generation !== pollGenerationRef.current) return;
+      pollRef.current = setTimeout(tick, REPLAY_POLL_INTERVAL_MS);
+    };
+
+    const tick = async () => {
+      if (generation !== pollGenerationRef.current) return;
       try {
-        const status = await refreshRun(replayId);
-        if (!status) return; // superseded by a newer tick's request; that one will update state instead
+        const status = await refreshRun(replayId, generation);
+        if (generation !== pollGenerationRef.current) return; // superseded while the request was in flight
+        if (!status) { scheduleNext(); return; } // timed out / aborted this attempt - retry on schedule
         const terminal = ['COMPLETED', 'PARTIAL', 'FAILED', 'CANCELLED', 'DATA_UNAVAILABLE'].includes(status.status);
         // Wait until performance report is attached (COMPLETED used to race ahead of report build).
-        if (terminal && (status.report || status.status !== 'COMPLETED' && status.status !== 'PARTIAL')) {
-          stopPolling();
+        if (terminal && (status.report || (status.status !== 'COMPLETED' && status.status !== 'PARTIAL'))) {
           setBusy(false);
-        } else if (terminal && !status.report) {
-          const rep = await fetch(`/api/v2/research/replay/${replayId}/report`).then((r) => r.json()).catch(() => null);
-          if (rep?.report) {
-            setRun((prev: any) => ({ ...prev, ...status, report: rep.report, rejectedOrders: status.rejectedOrders || rep.rejectedOrders }));
-            stopPolling();
-            setBusy(false);
+          return; // reached a real terminal state with report (or a terminal state that never gets one) - stop
+        }
+        if (terminal && !status.report) {
+          const reportController = new AbortController();
+          const reportTimeoutId = setTimeout(() => reportController.abort('replay-report-request-timeout'), REPLAY_POLL_TIMEOUT_MS);
+          try {
+            const rep = await fetch(`/api/v2/research/replay/${replayId}/report`, { signal: reportController.signal })
+              .then((r) => r.json())
+              .catch(() => null);
+            if (generation !== pollGenerationRef.current) return; // a late secondary-report response for an old run must not overwrite a newer selection
+            if (rep?.report) {
+              setRun((prev: any) => ({ ...prev, ...status, report: rep.report, rejectedOrders: status.rejectedOrders || rep.rejectedOrders }));
+              setBusy(false);
+              return;
+            }
+          } finally {
+            clearTimeout(reportTimeoutId);
           }
         }
+        scheduleNext();
       } catch {
-        /* keep polling briefly */
+        if (generation === pollGenerationRef.current) scheduleNext(); // keep polling briefly
       }
-    }, 750);
+    };
+
+    tick();
   }
 
   async function loadValidate() {
@@ -543,8 +602,10 @@ export default function HistoricalReplayLab() {
         return;
       }
       if (asyncMode) {
+        // startPolling's own first tick performs the immediate status/trades/events/equity fetch -
+        // no separate refreshRun call is needed (and calling one here would race the tick's own
+        // in-flight request under the new schedule-after-complete polling model).
         startPolling(created.replayId);
-        await refreshRun(created.replayId);
       } else {
         setRun(started);
         setTrades(started.trades || []);

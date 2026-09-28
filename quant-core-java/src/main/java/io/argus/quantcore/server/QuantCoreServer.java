@@ -45,14 +45,22 @@ import io.argus.quantcore.strategy.StrategyRegistry;
 import io.argus.quantcore.strategy.types.StrategyContext;
 import io.argus.quantcore.strategy.types.StrategyEvaluation;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 /**
  * Lightweight, loopback-only embedded HTTP server (JDK's built-in {@code com.sun.net.httpserver}
@@ -69,41 +77,156 @@ public final class QuantCoreServer {
     private final HttpServer server;
     private final Map<String, SymbolState> symbols = new ConcurrentHashMap<>();
 
+    // F36 (ARGUS_CODE_DEFECT_AUDIT_AND_FIX_PLAN.md): admission bounds around the existing
+    // virtual-thread-per-task executor. The threading model itself is unchanged - these are
+    // config-driven (env-overridable, matching StructuredLogger's own LOG_LEVEL convention)
+    // ceilings on body size, array/history length, per-request compute deadline, and concurrent
+    // in-flight work, so a large or slow local caller cannot consume unbounded memory/CPU even
+    // though virtual threads themselves are cheap to spawn. Read per-instance (not static) so
+    // tests can override via System.setProperty(...) before constructing a server.
+    private final long maxRequestBodyBytes;
+    private final int maxArrayLength;
+    private final int maxBarCount;
+    private final long requestDeadlineMs;
+    private final Semaphore admissionSemaphore;
+    private final ExecutorService computeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
     public QuantCoreServer(int port) throws IOException {
         this.server = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
-        server.createContext("/health", this::handleHealth);
-        server.createContext("/api/v1/ticks", this::handleTicks);
-        server.createContext("/api/v1/indicators/", this::handleIndicators);
-        server.createContext("/api/v1/evaluate", this::handleEvaluate);
-        server.createContext("/api/v1/features/regime/", this::handleFeaturesRegime);
-        server.createContext("/api/v1/institutional/factors/", this::handleInstitutionalFactors);
-        server.createContext("/api/v1/institutional/pairs", this::handleInstitutionalPairs);
-        server.createContext("/api/v1/institutional/volatility/", this::handleInstitutionalVolatility);
-        server.createContext("/api/v1/institutional/regime/", this::handleInstitutionalRegime);
-        server.createContext("/api/v1/institutional/features/", this::handleInstitutionalFeatures);
-        server.createContext("/api/v1/institutional/correlation", this::handleInstitutionalCorrelation);
-        server.createContext("/api/v1/institutional/ensemble", this::handleInstitutionalEnsemble);
+        this.maxRequestBodyBytes = resolveConfigLong("QUANT_CORE_MAX_REQUEST_BODY_BYTES", 10_000_000L);
+        this.maxArrayLength = resolveConfigInt("QUANT_CORE_MAX_ARRAY_LENGTH", 20_000);
+        this.maxBarCount = resolveConfigInt("QUANT_CORE_MAX_BAR_COUNT", 20_000);
+        this.requestDeadlineMs = resolveConfigLong("QUANT_CORE_REQUEST_DEADLINE_MS", 30_000L);
+        this.admissionSemaphore = new Semaphore(resolveConfigInt("QUANT_CORE_MAX_CONCURRENT_REQUESTS", 64));
+        server.createContext("/health", bounded(this::handleHealth));
+        server.createContext("/api/v1/ticks", bounded(this::handleTicks));
+        server.createContext("/api/v1/indicators/", bounded(this::handleIndicators));
+        server.createContext("/api/v1/evaluate", bounded(this::handleEvaluate));
+        server.createContext("/api/v1/features/regime/", bounded(this::handleFeaturesRegime));
+        server.createContext("/api/v1/institutional/factors/", bounded(this::handleInstitutionalFactors));
+        server.createContext("/api/v1/institutional/pairs", bounded(this::handleInstitutionalPairs));
+        server.createContext("/api/v1/institutional/volatility/", bounded(this::handleInstitutionalVolatility));
+        server.createContext("/api/v1/institutional/regime/", bounded(this::handleInstitutionalRegime));
+        server.createContext("/api/v1/institutional/features/", bounded(this::handleInstitutionalFeatures));
+        server.createContext("/api/v1/institutional/correlation", bounded(this::handleInstitutionalCorrelation));
+        server.createContext("/api/v1/institutional/ensemble", bounded(this::handleInstitutionalEnsemble));
         // ARGUS MASTER TRANSFORMATION MANDATE Part 7 (2026-09-13): the authoritative Quant
         // Forecast Engine computation - see ForecastEngine.java's own header for why this is not a
         // duplicate of the existing TS-side wilsonInterval()/effectiveSampleSize.ts (different
         // purpose: this is the decision-authoritative forecast, that stays a diagnostic tool).
-        server.createContext("/api/v1/institutional/forecast", this::handleInstitutionalForecast);
-        server.createContext("/api/v1/institutional/advisory", this::handleInstitutionalAdvisory);
+        server.createContext("/api/v1/institutional/forecast", bounded(this::handleInstitutionalForecast));
+        server.createContext("/api/v1/institutional/advisory", bounded(this::handleInstitutionalAdvisory));
         // 2026-09-09: HTTP-exposes 10 previously-endpoint-less RESEARCH-status engines (real,
         // unit-tested Java classes that already existed - see config/engineOwnership.json).
         // Exposing an endpoint is not the same as wiring a live consumer: nothing in
         // JavaQuantAdvisoryService.ts or QuantSignalAgent.ts calls this route yet. It only makes
         // these engines reachable for backtesting/research tooling instead of dead code.
-        server.createContext("/api/v1/institutional/strategy/", this::handleInstitutionalStrategy);
+        server.createContext("/api/v1/institutional/strategy/", bounded(this::handleInstitutionalStrategy));
         // 2026-09-10: real, bars-owning path for the 5 CORE strategies (CoreStrategyRunner) -
         // distinct from /api/v1/evaluate above, which decodes a pre-built StrategyContext a TS
         // caller would have to construct. These two routes compute every feature in Java from raw
         // bars - see FeaturesToStrategyContextAdapter's own header for why that distinction is
         // load-bearing, not stylistic. Neither route emits a trade idea or calls ChiefTrader/
         // RiskEngine/OMS - purely evidence-producing, matching every other route in this file.
-        server.createContext("/api/v1/quant/strategy/", this::handleCoreStrategyAssessment);
-        server.createContext("/api/v1/quant/ensemble/", this::handleCoreEnsembleDecision);
+        server.createContext("/api/v1/quant/strategy/", bounded(this::handleCoreStrategyAssessment));
+        server.createContext("/api/v1/quant/ensemble/", bounded(this::handleCoreEnsembleDecision));
         server.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
+    }
+
+    private static long resolveConfigLong(String name, long defaultValue) {
+        String raw = System.getProperty(name, System.getenv(name));
+        if (raw == null || raw.isBlank()) {
+            return defaultValue;
+        }
+        try {
+            long v = Long.parseLong(raw.trim());
+            return v > 0 ? v : defaultValue;
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+
+    private static int resolveConfigInt(String name, int defaultValue) {
+        long v = resolveConfigLong(name, defaultValue);
+        return v > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) v;
+    }
+
+    /** Thrown when a request body exceeds {@link #maxRequestBodyBytes}. Mapped to HTTP 413 by {@link #bounded}. */
+    private static final class PayloadTooLargeException extends IOException {
+        PayloadTooLargeException(String message) {
+            super(message);
+        }
+    }
+
+    /** Thrown when a request-supplied array/bars field exceeds its configured maximum length. Mapped to HTTP 413 by {@link #bounded}. */
+    private static final class TooManyElementsException extends RuntimeException {
+        TooManyElementsException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * F36 admission wrapper applied to every registered route: (1) enforces a bounded number of
+     * concurrent in-flight requests (real back-pressure - excess requests get an immediate 503
+     * rather than piling up unboundedly on cheap-but-not-free virtual threads); (2) runs the real
+     * handler on a second virtual thread and imposes a wall-clock computation deadline so one
+     * slow/hostile request cannot hold up the response indefinitely; (3) translates the new
+     * PayloadTooLargeException/TooManyElementsException (raised by readBody/decodeBars/array
+     * decoders below) into an explicit HTTP 413, never a silent truncation or an OOM.
+     *
+     * Deadline semantics deliberately mirror the F37 Python fix's own reasoning: a timeout here
+     * means "stop waiting for this response," not "the computation was cancelled." The admission
+     * permit for a timed-out request is released only once the abandoned computation actually
+     * finishes (success or failure) via {@code future.whenComplete}, so a genuinely stuck request
+     * keeps counting against the concurrency budget instead of quietly freeing a slot for more
+     * unbounded work to pile in behind it. The abandoned task's eventual attempt to write to the
+     * (already-responded-to) exchange is expected to fail and is discarded - never surfaced to a
+     * second caller, never allowed to crash the shared executor.
+     */
+    private HttpHandler bounded(HttpHandler inner) {
+        return exchange -> {
+            if (!admissionSemaphore.tryAcquire()) {
+                safeSend(exchange, 503, Map.of("ok", false, "error",
+                    "server at capacity - too many concurrent requests, try again shortly"));
+                return;
+            }
+            Future<Void> future = computeExecutor.submit(() -> {
+                inner.handle(exchange);
+                return null;
+            });
+            try {
+                future.get(requestDeadlineMs, TimeUnit.MILLISECONDS);
+                admissionSemaphore.release();
+            } catch (TimeoutException te) {
+                safeSend(exchange, 503, Map.of("ok", false, "error",
+                    "request exceeded the computation deadline of " + requestDeadlineMs + "ms"));
+                // Do NOT release now - the underlying task may still be running (native/CPU-bound
+                // work is not forcibly interrupted). Release only once it actually completes, so
+                // the concurrency budget reflects real outstanding work, not just responded-to
+                // requests. Any exception the abandoned task eventually throws is discarded here.
+                future.whenComplete((v, ex) -> admissionSemaphore.release());
+            } catch (ExecutionException ee) {
+                Throwable cause = ee.getCause();
+                if (cause instanceof PayloadTooLargeException || cause instanceof TooManyElementsException) {
+                    safeSend(exchange, 413, Map.of("ok", false, "error", String.valueOf(cause.getMessage())));
+                } else {
+                    safeSend(exchange, 500, Map.of("ok", false, "error", "internal error"));
+                }
+                admissionSemaphore.release();
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                admissionSemaphore.release();
+            }
+        };
+    }
+
+    private static void safeSend(HttpExchange exchange, int status, Object body) {
+        try {
+            sendJson(exchange, status, body);
+        } catch (Exception ignored) {
+            // The exchange may already be closed/responded-to by a racing completion - nothing
+            // further to do; never let a best-effort error response crash the request thread.
+        }
     }
 
     public void start() {
@@ -206,9 +329,12 @@ public final class QuantCoreServer {
         }
     }
 
-    private static double[] decodeDoubleArray(Object raw) {
+    private double[] decodeDoubleArray(Object raw) {
         if (!(raw instanceof List<?> rawList)) {
             return new double[0];
+        }
+        if (rawList.size() > maxArrayLength) {
+            throw new TooManyElementsException("array has " + rawList.size() + " elements, exceeding the maximum of " + maxArrayLength);
         }
         double[] out = new double[rawList.size()];
         for (int i = 0; i < rawList.size(); i++) {
@@ -218,9 +344,12 @@ public final class QuantCoreServer {
     }
 
     /** Same decode convention as {@link #decodeDoubleArray}, one level deeper - a JSON array of arrays. */
-    private static double[][] decodeDoubleMatrix(Object raw) {
+    private double[][] decodeDoubleMatrix(Object raw) {
         if (!(raw instanceof List<?> rawRows)) {
             return new double[0][0];
+        }
+        if (rawRows.size() > maxArrayLength) {
+            throw new TooManyElementsException("matrix has " + rawRows.size() + " rows, exceeding the maximum of " + maxArrayLength);
         }
         double[][] out = new double[rawRows.size()][];
         for (int i = 0; i < rawRows.size(); i++) {
@@ -382,7 +511,7 @@ public final class QuantCoreServer {
         }
     }
 
-    private static FeaturesToStrategyContextAdapter.BenchmarkBars decodeBenchmarks(Object raw) {
+    private FeaturesToStrategyContextAdapter.BenchmarkBars decodeBenchmarks(Object raw) {
         if (raw == null) {
             return null;
         }
@@ -397,7 +526,7 @@ public final class QuantCoreServer {
         );
     }
 
-    private static io.argus.quantcore.features.MarketContext.BenchmarkInput decodeBenchmarkInput(Object raw) {
+    private io.argus.quantcore.features.MarketContext.BenchmarkInput decodeBenchmarkInput(Object raw) {
         if (raw == null) {
             return io.argus.quantcore.features.MarketContext.BenchmarkInput.failed("not supplied");
         }
@@ -1165,9 +1294,12 @@ public final class QuantCoreServer {
         return m;
     }
 
-    private static Bar[] decodeBars(Object rawBarsField) {
+    private Bar[] decodeBars(Object rawBarsField) {
         if (!(rawBarsField instanceof List<?> rawList)) {
             return null;
+        }
+        if (rawList.size() > maxBarCount) {
+            throw new TooManyElementsException("bars array has " + rawList.size() + " elements, exceeding the maximum of " + maxBarCount);
         }
         Bar[] bars = new Bar[rawList.size()];
         for (int i = 0; i < rawList.size(); i++) {
@@ -1275,7 +1407,7 @@ public final class QuantCoreServer {
     }
 
     /** Returns null for an unrecognized strategyId, an empty map when the engine itself returns null (insufficient data - never fabricated). */
-    private static Map<String, Object> evaluateResearchStrategy(String strategyId, String symbol, Bar[] bars, Map<String, Object> body) {
+    private Map<String, Object> evaluateResearchStrategy(String strategyId, String symbol, Bar[] bars, Map<String, Object> body) {
         double[] closes = closesOf(bars);
         Map<String, Object> out = new java.util.LinkedHashMap<>();
         out.put("schemaVersion", 1.0);
@@ -1656,8 +1788,39 @@ public final class QuantCoreServer {
         return m;
     }
 
-    private static String readBody(HttpExchange exchange) throws IOException {
-        return new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+    /**
+     * F36: bounded read. Rejects up front on a declared Content-Length above the configured
+     * maximum (cheap, no bytes read), and separately enforces the same maximum while streaming -
+     * a caller can lie about (or omit, e.g. chunked transfer-encoding) Content-Length, so the
+     * declared-length check alone is not sufficient. Never buffers more than
+     * {@link #maxRequestBodyBytes} + one read-chunk before aborting.
+     */
+    private String readBody(HttpExchange exchange) throws IOException {
+        String declaredHeader = exchange.getRequestHeaders().getFirst("Content-Length");
+        if (declaredHeader != null) {
+            try {
+                long declared = Long.parseLong(declaredHeader.trim());
+                if (declared > maxRequestBodyBytes) {
+                    throw new PayloadTooLargeException("request body of " + declared + " bytes exceeds the maximum of " + maxRequestBodyBytes + " bytes");
+                }
+            } catch (NumberFormatException ignored) {
+                // Malformed header - fall through to the bounded streaming read below, which is
+                // the real enforcement mechanism regardless of what the header claims.
+            }
+        }
+        InputStream in = exchange.getRequestBody();
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream(8192);
+        byte[] chunk = new byte[8192];
+        long total = 0;
+        int n;
+        while ((n = in.read(chunk)) != -1) {
+            total += n;
+            if (total > maxRequestBodyBytes) {
+                throw new PayloadTooLargeException("request body exceeds the maximum of " + maxRequestBodyBytes + " bytes");
+            }
+            buffer.write(chunk, 0, n);
+        }
+        return buffer.toString(StandardCharsets.UTF_8);
     }
 
     private static void sendJson(HttpExchange exchange, int status, Object body) throws IOException {

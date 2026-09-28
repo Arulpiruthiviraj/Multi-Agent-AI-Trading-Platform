@@ -165,6 +165,31 @@ describe('OrderManagementService - order lifecycle (Phase 2 hardening)', () => {
     expect(executedPayload.status).toBe('FILLED');
   });
 
+  it('F04: a rejected fill (NaN averageFillPrice) marks the order RECONCILIATION_REQUIRED and is recorded for reconciliation, never silently disappearing or reading as FILLED/PENDING', async () => {
+    await oms.executeOrder('BADFILL', 'BUY', 10, 'test reasoning', 'lifecycle-f04-nan-price');
+    const row = (await db.select().from(schema.trades).where(eq(schema.trades.traceId, 'lifecycle-f04-nan-price')))[0];
+    expect(row.status).toBe('PARTIALLY_FILLED'); // stub's immediate ack still reports filledQuantity: 0
+
+    // Broker now reports the order FILLED, but with a NaN averageFillPrice - fillLedger.ts must
+    // refuse to synthesize a fabricated fill from this, and OMS must not let the order silently
+    // stay/read as PENDING or FILLED as if nothing happened.
+    ordersResponse = [{ id: row.brokerOrderId, symbol: 'BADFILL', side: 'BUY', type: 'MARKET', status: 'FILLED', quantity: 10, filledQuantity: 10, averageFillPrice: NaN, createdAt: new Date(), updatedAt: new Date() }];
+    await ageOrder(row.id, FOLLOWUP_MIN_AGE_MS_PLUS_MARGIN());
+    await oms.followUpOpenOrders();
+
+    const finalRow = (await db.select().from(schema.trades).where(eq(schema.trades.id, row.id)))[0];
+    expect(finalRow.status).toBe('RECONCILIATION_REQUIRED');
+
+    // No fill was fabricated.
+    const fillRows = await db.select().from(schema.fills).where(eq(schema.fills.orderId, row.id));
+    expect(fillRows).toHaveLength(0);
+
+    // The rejection is discoverable through the existing reconciliation history, not just a log line.
+    const reconRows = await db.select().from(schema.reconciliationEvents).where(eq(schema.reconciliationEvents.matches, false));
+    const match = reconRows.find((r: any) => typeof r.mismatches === 'string' && r.mismatches.includes(row.id) && r.mismatches.includes('INVALID_FILL_ECONOMICS'));
+    expect(match).toBeTruthy();
+  });
+
   it('preserves arrival_price untouched through the full PARTIALLY_FILLED -> FILLED transition, even as price mutates (Execution Quality, Part 16)', async () => {
     // Pass an explicit intendedPrice distinct from what the broker eventually reports as the
     // averageFillPrice, so a real, observable divergence exists between the two columns.

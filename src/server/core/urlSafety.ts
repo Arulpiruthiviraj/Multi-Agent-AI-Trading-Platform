@@ -64,7 +64,9 @@ function isBlockedIpv6(ip: string): boolean {
   return false;
 }
 
-function isBlockedIp(ip: string): boolean {
+/** Exported for reuse by safeFetch.ts (F29): the connect-time transport must apply the exact same
+ *  blocked-range policy to the address it is about to connect to, not a re-derived copy of it. */
+export function isBlockedIp(ip: string): boolean {
   const kind = net.isIP(ip);
   if (kind === 4) return isBlockedIpv4(ip);
   if (kind === 6) return isBlockedIpv6(ip);
@@ -76,10 +78,28 @@ export interface UrlSafetyResult {
   reason?: string;
 }
 
+/** A single resolved, policy-checked address safe to connect to for a given URL - shared by
+ *  isSafeOutboundUrl (config-time check) and safeFetch.ts's connect-time transport (F29), so both
+ *  paths apply exactly the same resolution + policy, not two independently-maintained copies. */
+export interface ResolvedSafeTarget {
+  safe: true;
+  hostname: string;
+  /** First safe resolved address. safeFetch connects directly to this - it never re-resolves the
+   *  hostname a second time, which is what would let DNS rebinding slip a connection through. */
+  address: string;
+  family: 4 | 6;
+  protocol: 'http:' | 'https:';
+  port: number;
+}
+
+export type UrlSafetyCheck = ResolvedSafeTarget | { safe: false; reason: string };
+
 /** Real network validation (DNS lookup), not just string matching - resolves the hostname and
- * checks every resolved address, so it can't be defeated by a domain that resolves to an internal
- * IP (DNS rebinding / attacker-controlled DNS). */
-export async function isSafeOutboundUrl(rawUrl: string): Promise<UrlSafetyResult> {
+ *  checks every resolved address, so it can't be defeated by a domain that resolves to an internal
+ *  IP (DNS rebinding / attacker-controlled DNS). Returns the resolved connect target on success so
+ *  callers that actually open the connection (safeFetch.ts) can bind to the exact address that was
+ *  validated instead of re-resolving the hostname later (F29). */
+export async function checkUrlSafety(rawUrl: string): Promise<UrlSafetyCheck> {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -94,19 +114,45 @@ export async function isSafeOutboundUrl(rawUrl: string): Promise<UrlSafetyResult
   if (BLOCKED_HOSTNAMES.has(hostname)) {
     return { safe: false, reason: `"${hostname}" is a blocked internal hostname.` };
   }
-  if (net.isIP(hostname) && isBlockedIp(hostname)) {
-    return { safe: false, reason: `"${hostname}" is a private/internal/reserved IP address.` };
+  const port = parsed.port ? Number(parsed.port) : (parsed.protocol === 'https:' ? 443 : 80);
+  if (net.isIP(hostname)) {
+    if (isBlockedIp(hostname)) {
+      return { safe: false, reason: `"${hostname}" is a private/internal/reserved IP address.` };
+    }
+    return {
+      safe: true,
+      hostname,
+      address: hostname,
+      family: net.isIP(hostname) as 4 | 6,
+      protocol: parsed.protocol as 'http:' | 'https:',
+      port,
+    };
   }
   try {
-    const records = net.isIP(hostname) ? [{ address: hostname }] : await dns.lookup(hostname, { all: true });
+    const records = await dns.lookup(hostname, { all: true });
     if (records.length === 0) return { safe: false, reason: 'No resolved addresses.' };
     for (const rec of records) {
       if (isBlockedIp(rec.address)) {
         return { safe: false, reason: `"${hostname}" resolves to ${rec.address}, a private/internal/reserved IP address.` };
       }
     }
+    const first = records[0];
+    return {
+      safe: true,
+      hostname,
+      address: first.address,
+      family: first.family as 4 | 6,
+      protocol: parsed.protocol as 'http:' | 'https:',
+      port,
+    };
   } catch (e: any) {
     return { safe: false, reason: `Could not resolve "${hostname}": ${e.message}` };
   }
-  return { safe: true };
+}
+
+/** Back-compat convenience wrapper over checkUrlSafety for callers that only need the boolean
+ *  verdict (config-time write validation in webhooks.ts) and not the resolved connect target. */
+export async function isSafeOutboundUrl(rawUrl: string): Promise<UrlSafetyResult> {
+  const result = await checkUrlSafety(rawUrl);
+  return result.safe ? { safe: true } : { safe: false, reason: result.reason };
 }

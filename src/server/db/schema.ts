@@ -263,7 +263,16 @@ export const trades = sqliteTable('trades', {
   side: text('side').notNull(),
   quantity: real('quantity').notNull(),
   price: real('price').notNull(),
-  status: text('status').notNull(), // PENDING, FILLED, REJECTED, CANCELED
+  status: text('status').notNull(), // PENDING, FILLED, REJECTED, CANCELED, RECONCILIATION_REQUIRED
+  // RECONCILIATION_REQUIRED (F04, 2026-09-27): the broker reported fill evidence that
+  // fillLedger.ts's insertIncrementalFill() rejected as missing/non-finite (undefined/NaN/
+  // Infinity quantity or price, or an impossible cumulative quantity). The order's true fill
+  // state is genuinely unresolved - it must never silently read as PENDING (implies "still
+  // working, nothing happened") or FILLED (implies confirmed, priced economics that don't
+  // exist). This status is a terminal-until-operator-reviewed marker surfaced through the same
+  // reconciliation_events history table PortfolioReconciliation already writes to (see
+  // OrderManagement.ts's recordFillProgress() catch branch) - not a second reconciliation
+  // mechanism.
   timestamp: text('timestamp').notNull(),
   reasoning: text('reasoning'),
   traceId: text('trace_id'),
@@ -1515,6 +1524,14 @@ export const tradePlans = sqliteTable('trade_plans', {
   status: text('status').notNull(), // DRAFT | READY | REVALIDATING | VALID | INVALIDATED | EXPIRED | EXECUTED | CLOSED
   createdAt: text('created_at').notNull(),
   validUntil: text('valid_until').notNull(),
+  // F08 (2026-09-27): validUntil is always computed as a regular-session 16:00 ET close via the
+  // canonical TradingCalendar.ts timezone conversion (tradingWallTimeToIso, DST-correct) - but this
+  // codebase has no real NYSE holiday/early-close calendar anywhere (confirmed: SessionLifecycle.ts
+  // documents the same honest gap for classifyMarketSession()). So validUntil itself cannot be
+  // verified against an actual early close or a non-trading day; it is always an ASSUMED regular
+  // close, never a verified one. Additive/nullable so existing rows (all pre-dating this column)
+  // read as unset rather than a fabricated retroactive claim.
+  validUntilConfidence: text('valid_until_confidence'), // ASSUMED_REGULAR_CLOSE_NO_EXCHANGE_CALENDAR
 }, (table) => ({
   planDateIdx: index('idx_trade_plans_plan_date').on(table.planDate, table.setupType),
   symbolIdx: index('idx_trade_plans_symbol').on(table.symbol, table.createdAt),

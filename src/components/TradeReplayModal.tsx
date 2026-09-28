@@ -45,8 +45,25 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
   const [loading, setLoading] = useState(true);
   const [explainabilityReport, setExplainabilityReport] = useState<any>(null);
   const [showExplainability, setShowExplainability] = useState(false);
+  // F34 fix (2026-09-27): stable identity of the currently-selected trade, used to (a) key every
+  // trade-specific reset and (b) let a resolving fetch recognize whether it still belongs to the
+  // CURRENT selection before applying its result. Falls back to symbol+decision+timestamp when
+  // traceId is absent so two different no-traceId trades still don't get confused for each other.
+  const selectedTradeKey = trade?.traceId || `${trade?.symbol ?? ''}|${trade?.decision ?? ''}|${trade?.timestamp ?? ''}`;
 
   useEffect(() => {
+    // Reset ALL trade-specific state immediately, before the new fetch even starts, so a slower
+    // response for the previous trade can never be left on screen while a new trade is selected -
+    // this is the core of F34 (late response for trade A overwriting/leaking into trade B's view).
+    let cancelled = false;
+    const requestKey = selectedTradeKey;
+    setLoading(true);
+    setTraceEvents([]);
+    setExplainabilityReport(null);
+    setShowExplainability(false);
+    setIsPlaying(false);
+    setTimelineIndex(0);
+
     const fetchTrace = async () => {
        // Real API fields are camelCase (traceId, not trace_id) - Drizzle rows never had the
        // snake_case shape this modal was reading; the fetches below always silently failed.
@@ -54,15 +71,20 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
           try {
              const expRes = await fetch(`/api/v2/data/explainability/${trade.traceId}`);
              const expData = await expRes.json();
+             // Ignore a response that resolved after the user moved on to a different trade -
+             // otherwise trade B could inherit trade A's leftover explainability report.
+             if (cancelled || requestKey !== selectedTradeKey) return;
              if (expData.report) {
                  setExplainabilityReport(expData.report);
              }
           } catch(e) {}
        }
+       if (cancelled || requestKey !== selectedTradeKey) return;
        if (trade.traceId) {
           try {
              const res = await fetch(`/api/v2/system/trace/${trade.traceId}`);
              const data = await res.json();
+             if (cancelled || requestKey !== selectedTradeKey) return; // late response for a since-abandoned trade
              if (data.trace && data.trace.length > 0) {
                  setTraceEvents(data.trace);
                  setLoading(false);
@@ -71,6 +93,7 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
           } catch(e) {}
        }
 
+       if (cancelled || requestKey !== selectedTradeKey) return;
        // No real trace data available - previously this silently fabricated a 6-event sample
        // trace with no visual indication it wasn't real, which is exactly the "fake
        // observability" this project's own conventions forbid. Leave traceEvents empty; the
@@ -79,7 +102,23 @@ export default function TradeReplayModal({ trade, onClose }: { trade: any, onClo
        setLoading(false);
     };
     fetchTrace();
-  }, [trade]);
+
+    return () => {
+      // Trade changed again (or modal unmounted) before this fetch resolved - the requestKey
+      // guards above already prevent a stale apply, but marking cancelled short-circuits sooner.
+      cancelled = true;
+    };
+  }, [selectedTradeKey]);
+
+  // F34 fix (2026-09-27): clamp/reset the playback index whenever the trace itself changes length,
+  // so an index left over from a longer previous trace can never point past the end of a shorter
+  // new one (out-of-bounds `traceEvents[timelineIndex]` / stale display).
+  useEffect(() => {
+    setTimelineIndex((prev) => {
+      if (traceEvents.length === 0) return 0;
+      return Math.min(prev, traceEvents.length - 1);
+    });
+  }, [traceEvents]);
 
   useEffect(() => {
     let interval: any;

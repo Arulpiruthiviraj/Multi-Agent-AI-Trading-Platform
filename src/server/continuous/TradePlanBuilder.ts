@@ -86,6 +86,16 @@ export interface TradePlanDraft {
   status: TradePlanStatus;
   createdAt: string;
   validUntil: string;
+  /** F08 (2026-09-27): validUntil is computed through TradingCalendar.ts's canonical
+   *  timezone/DST-correct wall-time-to-instant conversion (tradingWallTimeToIso) - no remaining
+   *  hardcoded UTC offset. It still always assumes a regular 16:00 ET close: this codebase has no
+   *  real NYSE holiday/early-close calendar anywhere (verified - see endOfTradingDayIso()'s doc
+   *  comment), so a genuine early-close or holiday session cannot be detected or honestly
+   *  represented as a different close time. Rather than silently asserting a verified 16:00 close
+   *  on a day this code cannot check, that assumption is labeled explicitly. Always
+   *  'ASSUMED_REGULAR_CLOSE_NO_EXCHANGE_CALENDAR' until a real exchange-calendar data source is
+   *  wired in (tracked as a follow-up, not fabricated here). */
+  validUntilConfidence: 'ASSUMED_REGULAR_CLOSE_NO_EXCHANGE_CALENDAR';
 }
 
 /** Classifies rank into a setup tier. Only PROMOTE/HOLD-tier candidates ever get a plan - a
@@ -144,7 +154,15 @@ function deriveInvalidationLevel(input: RankingInput, direction: 'BUY' | 'SELL')
   return input.minuteHigh ?? (input.prevClose > 0 ? input.prevClose * 1.02 : null);
 }
 
-/** End of the trading day the plan is FOR (planDate), 16:00 ET, expressed as an ISO instant. */
+/** End of the trading day the plan is FOR (planDate), 16:00 ET, expressed as an ISO instant, via
+ *  TradingCalendar.ts's canonical DST-correct wall-time conversion (tradingWallTimeToIso) - not a
+ *  hardcoded UTC offset. F08 residual gap (honest, not fabricated): this always assumes a REGULAR
+ *  session close. No file in this codebase carries a real NYSE holiday/early-close table (checked:
+ *  TradingCalendar.ts, classifyMarketSession()/SessionLifecycle.ts, replaySafety.json - all
+ *  documented as holiday-blind), so an actual 13:00 ET early close or a full holiday cannot be
+ *  detected here. See TradePlanDraft.validUntilConfidence, which always reads
+ *  'ASSUMED_REGULAR_CLOSE_NO_EXCHANGE_CALENDAR' for exactly this reason - never silently claimed
+ *  as a verified close on a day this code cannot check. */
 function endOfTradingDayIso(planDate: string): string {
   return tradingWallTimeToIso(planDate, '16:00');
 }
@@ -210,6 +228,7 @@ export function buildTradePlanDrafts(
       status: 'READY',
       createdAt,
       validUntil,
+      validUntilConfidence: 'ASSUMED_REGULAR_CLOSE_NO_EXCHANGE_CALENDAR',
     });
   }
   return drafts;

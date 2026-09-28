@@ -97,6 +97,19 @@ export interface TradingSafety {
    * completely unchanged.
    */
   quantIndependentQualificationEnabledEnvVar: string;
+  /**
+   * F29/F32 remediation (webhooks.ts SSRF/dispatch hardening). Bounded per-attempt request timeout
+   * for outbound webhook delivery (real event dispatch AND the manual test route), enforced via
+   * AbortSignal inside the same vetted safeFetch transport (src/server/core/safeFetch.ts) - not a
+   * hardcoded literal per CLAUDE.md's "no hardcoded operational thresholds" rule.
+   */
+  webhookDispatchTimeoutMs: number;
+  /** Maximum redirect hops safeFetch will follow before giving up - each hop is independently
+   *  re-validated against the same SSRF policy (urlSafety.ts) before being connected to. */
+  webhookMaxRedirects: number;
+  /** Bounded concurrency for triggerWebhooks() fan-out across configured webhooks per event, so a
+   *  slow/hung receiver cannot let an unbounded number of in-flight sockets accumulate. */
+  webhookDispatchMaxConcurrency: number;
   /** Minimum distinct strategy families that must agree for QuantEngine's internal ensemble to
    *  qualify as independent confirmation on its own. See quantIndependentQualificationEnabledEnvVar. */
   minQuantIndependentFamilies: number;
@@ -745,6 +758,9 @@ const REQUIRED_KEYS: (keyof TradingSafety)[] = [
   'extendedHoursMaxQuoteAgeMs',
   'extendedHoursMaxNotionalDollars',
   'extendedHoursMinAvgDailyVolumeShares',
+  'webhookDispatchTimeoutMs',
+  'webhookMaxRedirects',
+  'webhookDispatchMaxConcurrency',
 ];
 
 function loadTradingSafety(): TradingSafety {
