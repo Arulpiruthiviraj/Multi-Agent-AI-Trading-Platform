@@ -38,7 +38,8 @@ export type PortfolioImpactStatus =
   | 'BROKER_UNAVAILABLE'
   | 'NO_HOLDINGS_AND_NO_CANDIDATE_HISTORY'
   | 'INSUFFICIENT_RETURN_HISTORY'
-  | 'JAVA_QUANT_CORE_UNAVAILABLE';
+  | 'JAVA_QUANT_CORE_UNAVAILABLE'
+  | 'HOLDING_VALUATION_UNAVAILABLE';
 
 export interface HoldingSnapshot {
   symbol: string;
@@ -125,6 +126,21 @@ export async function buildPortfolioImpactReport(
       'BROKER_UNAVAILABLE', 'Broker reported non-positive or missing equity.');
   }
 
+  // F26 downstream-consumer gap (2026-09-28): Position.marketValue is `number | null` across every
+  // broker adapter (BrokerAdapter.ts), not just Coinbase's own UNAVAILABLE case. Silently coercing
+  // a held-but-unvalued position's weight to 0 (the previous behavior) would feed a fabricated
+  // input into the real covariance/variance computation below and corrupt the whole portfolio risk
+  // result, not just this one symbol's row - exactly the kind of invented number this module's own
+  // header promises never to produce. Refuse honestly instead, matching every other early-return in
+  // this function.
+  const unvaluedHeld = positions.filter((p) => p.marketValue === null).map((p) => p.symbol);
+  if (unvaluedHeld.length > 0) {
+    return baseReport(generatedAt, symbol, candidateSide, candidateNotionalDollars, maxWeightPct, lookbackTradingDays,
+      'HOLDING_VALUATION_UNAVAILABLE',
+      `Held position(s) have no valuation (marketValue unavailable): ${unvaluedHeld.join(', ')}. Portfolio-level variance cannot be computed without every holding's real market value.`,
+      equity, cash);
+  }
+
   const heldSymbols = positions.map((p) => p.symbol.toUpperCase());
   const alreadyHeld = heldSymbols.includes(symbol);
   const allSymbols = alreadyHeld ? heldSymbols : [...heldSymbols, symbol];
@@ -167,10 +183,12 @@ export async function buildPortfolioImpactReport(
   }
 
   // Real current weights = real marketValue / real equity. Candidate not yet held enters at
-  // weight 0 (its "before" weight), matching OjAlgoPortfolioRiskEngine's own contract.
+  // weight 0 (its "before" weight), matching OjAlgoPortfolioRiskEngine's own contract. Non-null
+  // assertion is safe here: the HOLDING_VALUATION_UNAVAILABLE guard above already refused the
+  // whole report if any held position's marketValue were null.
   const weights = allSymbols.map((s) => {
     const pos = positions.find((p) => p.symbol.toUpperCase() === s);
-    return pos ? pos.marketValue / equity! : 0;
+    return pos ? pos.marketValue! / equity! : 0;
   });
   const candidateIndex = allSymbols.indexOf(symbol);
   const candidateWeightDelta = candidateSide === 'BUY'

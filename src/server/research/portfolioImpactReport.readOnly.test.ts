@@ -59,6 +59,24 @@ describe('buildPortfolioImpactReport - real behavior against mocked real data so
     expect(report.minVarianceOptimizer).toBeNull();
   });
 
+  it('F26 downstream: reports HOLDING_VALUATION_UNAVAILABLE (never a fabricated zero weight) when a held position has marketValue: null', async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    // Real shape a broker reports when a position's valuation is genuinely unknown (F26) -
+    // marketValue/unrealizedPnl/unrealizedPnlPercent null, never a fabricated zero. Silently
+    // coercing this to weight 0 would corrupt the real covariance/variance computation for every
+    // symbol in the report, not just this one.
+    (BrokerManager.getInstance().getActiveBroker().portfolio as any).mockResolvedValueOnce({
+      cash: 5000, buyingPower: 5000, equity: 10000,
+      positions: [{ symbol: 'BTC-USD', quantity: 0.1, entryPrice: null, currentPrice: null, marketValue: null, unrealizedPnl: null, unrealizedPnlPercent: null }],
+    });
+    const { buildPortfolioImpactReport } = await import('./portfolioImpactReport');
+    const report = await buildPortfolioImpactReport('AAPL', 'BUY', 1000);
+    expect(report.status).toBe('HOLDING_VALUATION_UNAVAILABLE');
+    expect(report.detail).toMatch(/BTC-USD/);
+    expect(report.riskContribution).toBeNull();
+    expect(report.minVarianceOptimizer).toBeNull();
+  });
+
   it('reports INSUFFICIENT_RETURN_HISTORY when real bar history is too thin, never inventing a covariance', async () => {
     const { BrokerManager } = await import('../../brokers/BrokerManager');
     (BrokerManager.getInstance().getActiveBroker().portfolio as any).mockResolvedValueOnce({

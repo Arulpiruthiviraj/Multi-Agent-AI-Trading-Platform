@@ -129,4 +129,25 @@ describe('executeRebalance - real pipeline submission, real drift math', () => {
     expect(result.submitted).toHaveLength(0);
     expect(result.refused[0].reason).toMatch(/no live price/i);
   });
+
+  it('F26 downstream: refuses a held position with an unavailable valuation (marketValue: null) instead of treating it as a fabricated zero drift', async () => {
+    const { BrokerManager } = await import('../../brokers/BrokerManager');
+    const broker = BrokerManager.getInstance().getActiveBroker();
+    // Real shape a Coinbase position reports when its product-pricing lookup fails (F26):
+    // marketValue/unrealizedPnl/unrealizedPnlPercent are null, never a fabricated zero. A live
+    // price is still available from the market data cache (e.g. a different feed), so the
+    // no-live-price refusal above would NOT catch this - it is a distinct gap.
+    (broker as any).portfolio = async () => ({
+      cash: 50000, buyingPower: 50000, equity: 100000,
+      positions: [{ symbol: 'UNVALUEDCOIN', quantity: 10, entryPrice: null, currentPrice: null, marketValue: null, unrealizedPnl: null, unrealizedPnlPercent: null }],
+    });
+    const { marketDataWorker } = await import('./MarketDataWorker');
+    (marketDataWorker as any).latestPrices.set('UNVALUEDCOIN', 100);
+
+    const { executeRebalance } = await import('./PortfolioRebalance');
+    const result = await executeRebalance([{ symbol: 'UNVALUEDCOIN', targetPct: 10 }]);
+    expect(result.submitted).toHaveLength(0);
+    expect(result.refused).toHaveLength(1);
+    expect(result.refused[0].reason).toMatch(/no valuation|marketValue unavailable/i);
+  });
 });

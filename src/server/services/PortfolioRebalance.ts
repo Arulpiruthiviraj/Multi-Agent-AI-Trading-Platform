@@ -75,6 +75,16 @@ export async function executeRebalance(targets: TargetAllocationRequest[]): Prom
       refused.push({ symbol, reason: `No live price and/or invalid account equity for ${symbol} - cannot evaluate real drift without both.` });
       continue;
     }
+    // F26 downstream-consumer gap (2026-09-28): Position.marketValue is `number | null` across
+    // every broker adapter (BrokerAdapter.ts), not just Coinbase's own UNAVAILABLE case - `?? 0`
+    // here previously treated a held-but-unvalued position as a known zero, which could compute a
+    // large fabricated "drift" against the target weight and submit a wrong-direction/wrong-size
+    // rebalance idea for a position whose real value is actually unknown. Refuse this symbol
+    // honestly instead, reusing the exact same refusal shape the no-live-price check above uses.
+    if (existing && existing.marketValue === null) {
+      refused.push({ symbol, reason: `Held position has no valuation (marketValue unavailable) for ${symbol} - cannot evaluate real drift without it.` });
+      continue;
+    }
     const currentValue = existing?.marketValue ?? 0;
     const targetValue = equity * (targetPct / 100);
     const driftPct = ((currentValue - targetValue) / equity) * 100;
