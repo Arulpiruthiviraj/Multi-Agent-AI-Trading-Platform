@@ -128,6 +128,43 @@ describe('whyNoTradeReport', () => {
     expect(report.candidateState).toBe('WATCHING');
   });
 
+  it('computes nextEligibleReevaluationAt from same_symbol_cooldown detail (lastFillMs + cooldownMs) - real timestamp, never fabricated', async () => {
+    await seedTerminalReasonEvent({
+      symbol: 'COOL', traceId: 'trace-cooldown', approved: true, terminalReasonCode: 'CONSENSUS_APPROVED',
+    });
+    const lastFillMs = 1_700_000_000_000;
+    const cooldownMs = 300000;
+    await db.insert(schema.riskAssessments).values({
+      traceId: 'trace-cooldown', symbol: 'COOL', side: 'BUY', approved: false,
+      rejectionGate: 'same_symbol_cooldown', maxQuantity: 0, createdAt: new Date().toISOString(),
+    });
+    await db.insert(schema.riskGateResults).values([
+      { traceId: 'trace-cooldown', gateName: 'emergency_stop', sequence: 1, passed: true },
+      { traceId: 'trace-cooldown', gateName: 'same_symbol_cooldown', sequence: 2, passed: false, detail: JSON.stringify({ cooldownMs, lastFillMs, ageMs: 1000 }) },
+    ]);
+
+    const report = await mod.buildWhyNoTradeReport('COOL');
+    expect(report.nextEligibleReevaluationAt).toBe(new Date(lastFillMs + cooldownMs).toISOString());
+    const text = mod.formatWhyNoTradeReport(report);
+    expect(text).toContain('Next eligible reevaluation:');
+  });
+
+  it('leaves nextEligibleReevaluationAt null for a non-cooldown rejection gate (e.g. symbol_concentration) rather than guessing', async () => {
+    await seedTerminalReasonEvent({
+      symbol: 'NOGUESS', traceId: 'trace-noguess', approved: true, terminalReasonCode: 'CONSENSUS_APPROVED',
+    });
+    await db.insert(schema.riskAssessments).values({
+      traceId: 'trace-noguess', symbol: 'NOGUESS', side: 'BUY', approved: false,
+      rejectionGate: 'symbol_concentration', maxQuantity: 0, createdAt: new Date().toISOString(),
+    });
+    await db.insert(schema.riskGateResults).values([
+      { traceId: 'trace-noguess', gateName: 'symbol_concentration', sequence: 1, passed: false, detail: '{"current":0.22,"max":0.20}' },
+    ]);
+
+    const report = await mod.buildWhyNoTradeReport('NOGUESS');
+    expect(report.nextEligibleReevaluationAt).toBeNull();
+  });
+
   it('formatWhyNoTradeReport renders a readable CLI text block ending in a TRADE/NO_TRADE verdict', async () => {
     await seedTerminalReasonEvent({ symbol: 'TSLA', traceId: 'trace-tsla' });
     const report = await mod.buildWhyNoTradeReport('TSLA');

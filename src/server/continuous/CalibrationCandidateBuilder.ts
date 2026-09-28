@@ -41,6 +41,8 @@ export function calibrationVersionType(agentName: string, bucket: ConfidenceBuck
   return `calibration:${agentName}:${bucket.low}-${bucket.high}`;
 }
 
+export type { RawRow };
+
 export interface CalibrationCandidate {
   agentName: string;
   bucketLow: number;
@@ -72,7 +74,9 @@ interface RawRow {
   regime: string | null;
 }
 
-async function fetchAgentPredictionRows(agentName: string, bucket: ConfidenceBucket): Promise<RawRow[]> {
+/** Exported for calibrationDriftReport.ts (Phase 6) - re-fetches the same raw rows this module
+ * already builds calibration candidates from, so the drift report never duplicates this query. */
+export async function fetchAgentPredictionRows(agentName: string, bucket: ConfidenceBucket): Promise<RawRow[]> {
   const rows = await db.select({
     symbol: agentPredictions.symbol,
     side: agentPredictions.prediction,
@@ -109,7 +113,8 @@ async function fetchAgentPredictionRows(agentName: string, bucket: ConfidenceBuc
  * type mismatch ReflectionEngine.ts's own evaluateAgents() already works around by joining in JS
  * via a String(id) map rather than a SQL join. Mirrored here rather than introduced fresh.
  */
-async function fetchKronosRows(bucket: ConfidenceBucket): Promise<RawRow[]> {
+/** Exported for calibrationDriftReport.ts (Phase 6) - see fetchAgentPredictionRows above. */
+export async function fetchKronosRows(bucket: ConfidenceBucket): Promise<RawRow[]> {
   const kronosRows = await db.select().from(kronosPredictions);
   const inBucket = kronosRows.filter((k) => k.confidence >= bucket.low && (k.confidence < bucket.high || bucket.high >= 1));
   if (inBucket.length === 0) return [];
@@ -133,7 +138,8 @@ async function fetchKronosRows(bucket: ConfidenceBucket): Promise<RawRow[]> {
   return out;
 }
 
-function toClusterableRows(agentName: string, rows: RawRow[]): ClusterableRow[] {
+/** Exported for calibrationDriftReport.ts (Phase 6) - see fetchAgentPredictionRows above. */
+export function toClusterableRows(agentName: string, rows: RawRow[]): ClusterableRow[] {
   return rows.map((r) => ({
     symbol: r.symbol,
     agent: agentName,

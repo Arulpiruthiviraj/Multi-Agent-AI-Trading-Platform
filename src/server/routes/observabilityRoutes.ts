@@ -29,6 +29,7 @@ import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observ
 import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
 import { buildStrategyCatalog, formatStrategyCatalog } from '../research/strategyCatalog';
 import { buildPortfolioImpactReport, formatPortfolioImpactReport } from '../research/portfolioImpactReport';
+import { buildCalibrationDriftReport, formatCalibrationDriftReport } from '../research/calibrationDriftReport';
 import { buildMultiHorizonSummaryReport, formatMultiHorizonSummaryReport } from '../research/multiHorizonOutcomeReport';
 import { buildConsensusDebateHealthReport, formatConsensusDebateHealthReport } from '../research/consensusDebateHealthReport';
 import { buildOpportunitySnapshot, formatOpportunitySnapshot } from '../research/opportunitySnapshot';
@@ -299,6 +300,22 @@ observabilityRouter.get('/portfolio-impact', async (req, res) => {
     const report = await buildPortfolioImpactReport(symbol, side, notional, maxWeightPct, lookbackTradingDays);
     if (req.query.format === 'text') {
       res.type('text/plain').send(formatPortfolioImpactReport(report));
+      return;
+    }
+    res.json({ ok: true, report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// Phase 6 (Master Redesign Plan): read-only recent-vs-prior calibration drift comparison,
+// reusing CalibrationCandidateBuilder.ts's own raw-row fetchers and effectiveSampleSize.ts's
+// Wilson-interval machinery. Never writes agent_confidence_calibration or any live gate.
+observabilityRouter.get('/calibration-drift', async (req, res) => {
+  try {
+    const report = await buildCalibrationDriftReport(new Date());
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatCalibrationDriftReport(report));
       return;
     }
     res.json({ ok: true, report });

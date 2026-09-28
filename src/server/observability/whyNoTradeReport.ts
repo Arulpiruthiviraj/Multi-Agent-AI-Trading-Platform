@@ -35,6 +35,44 @@ export interface WhyNoTradeReport {
     rejectionGate: string | null;
     gateResults: Array<{ gateName: string; passed: boolean; detail: string | null }>;
   };
+  // Phase 6 (Master Redesign Plan "Observability" section, 2026-09-27): narrowly computed for the
+  // three known cooldown-style gates (same_symbol_cooldown / post_loss_cooldown / duplicate_signal)
+  // whose own recorded detail JSON already carries the reference timestamp + cooldown window
+  // (OvertradingGuards.ts) - no new data collection, just cooldownMs + referenceMs already
+  // persisted in risk_gate_results.detail. Null for every other rejection reason (e.g. price
+  // gates, market_hours, capital caps) where "next eligible" isn't a fixed clock time at all -
+  // never fabricated as "now" or "unknown".
+  nextEligibleReevaluationAt: string | null;
+}
+
+const COOLDOWN_GATES_WITH_REFERENCE_TIMESTAMP: Record<string, string> = {
+  same_symbol_cooldown: 'lastFillMs',
+  post_loss_cooldown: 'lastLossMs',
+};
+
+/**
+ * Computes a real "next eligible reevaluation" clock time for the small set of gates whose
+ * OvertradingGuards.ts detail JSON already records both a reference timestamp and cooldownMs.
+ * Never guesses for any other gate - returns null rather than fabricate a time.
+ */
+function computeNextEligibleReevaluationAt(
+  rejectionGate: string | null,
+  gates: Array<{ gateName: string; passed: boolean; detail: string | null }>,
+): string | null {
+  if (!rejectionGate) return null;
+  const referenceField = COOLDOWN_GATES_WITH_REFERENCE_TIMESTAMP[rejectionGate];
+  if (!referenceField) return null;
+  const gate = gates.find((g) => g.gateName === rejectionGate && !g.passed);
+  if (!gate?.detail) return null;
+  try {
+    const detail = JSON.parse(gate.detail);
+    const referenceMs = detail[referenceField];
+    const cooldownMs = detail.cooldownMs;
+    if (typeof referenceMs !== 'number' || typeof cooldownMs !== 'number') return null;
+    return new Date(referenceMs + cooldownMs).toISOString();
+  } catch {
+    return null;
+  }
 }
 
 // Filters by eventType at the SQL level (not just symbol, then in-memory .find over a capped
@@ -66,6 +104,7 @@ export async function buildWhyNoTradeReport(symbol?: string): Promise<WhyNoTrade
       evidenceGroups: [],
       participatingAgents: [],
       risk: { reached: false, approved: null, rejectionGate: null, gateResults: [] },
+      nextEligibleReevaluationAt: null,
     };
   }
 
@@ -106,6 +145,7 @@ export async function buildWhyNoTradeReport(symbol?: string): Promise<WhyNoTrade
       rejectionGate: riskRow?.rejectionGate ?? null,
       gateResults: gateRows,
     },
+    nextEligibleReevaluationAt: computeNextEligibleReevaluationAt(riskRow?.rejectionGate ?? null, gateRows),
   };
 }
 
@@ -147,6 +187,9 @@ export function formatWhyNoTradeReport(r: WhyNoTradeReport): string {
     }
   } else {
     lines.push('RiskEngine: NOT REACHED (no consensus approval for this evaluation)');
+  }
+  if (r.nextEligibleReevaluationAt) {
+    lines.push(`Next eligible reevaluation: ${r.nextEligibleReevaluationAt} (cooldown gate: ${r.risk.rejectionGate})`);
   }
   lines.push('');
   lines.push(`Final: ${r.approved && r.risk.approved ? 'TRADE' : 'NO_TRADE'}`);

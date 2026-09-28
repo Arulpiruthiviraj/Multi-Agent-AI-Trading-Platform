@@ -1096,6 +1096,18 @@ const commands: Record<string, () => Promise<void>> = {
     });
     console.log(await res.text());
   },
+  async 'calibration-drift'() {
+    // Phase 6 (ARGUS_MASTER_REDESIGN_PLAN.md "Adaptive/Self-Improvement Design" +
+    // "Observability", 2026-09-27): read-only recent-vs-prior calibration comparison per
+    // (agent, bucket) - flags DRIFT_SUSPECTED_DEGRADED/IMPROVED when the two windows' 95% Wilson
+    // intervals don't overlap, using already-existing prediction_outcomes data. Advisory only;
+    // never writes agent_confidence_calibration or any live gate.
+    const res = await fetch(`${BASE}/api/v2/observability/calibration-drift?format=text`, {
+      headers: cliAuthHeaders(),
+      signal: AbortSignal.timeout(Number(process.env.ARGUS_CLI_FETCH_TIMEOUT_MS || 20_000)),
+    });
+    console.log(await res.text());
+  },
   async 'reflection-engine-health'() {
     // P1-A follow-up (2026-09-23): ReflectionEngine.ts's own inFlight-guard skipped-overlap count
     // plus per-cycle duration / rows-scanned / query-duration for its 3 full-table scans (trades,

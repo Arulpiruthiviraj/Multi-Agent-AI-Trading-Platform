@@ -158,6 +158,14 @@ export interface ContinuousIntelligenceConfig {
   championChallengerMinImprovementMargin: number;
   /** Phase 7E: a calibration bucket's newest real observation older than this is flagged stale (observability only, not auto-enforced). */
   calibrationMaxObservationAgeMs: number;
+  /** Phase 6 (Master Redesign Plan, 2026-09-27): calibrationDriftReport.ts's recent-vs-prior
+   *  observation window comparison for the same (agent, bucket) - a policy parameter, not a
+   *  measured value. Recent window length, prior window length (ending where recent begins), and
+   *  the minimum effective (clustered) sample each window needs before a drift verdict is issued
+   *  rather than INSUFFICIENT_SAMPLE. */
+  calibrationDriftRecentWindowMs: number;
+  calibrationDriftPriorWindowMs: number;
+  calibrationDriftMinEffectiveSample: number;
   /** Session-Aware Trading Architecture Phase 2 follow-up (2026-09-05): ComposableRanking's
    *  promote/reject bar, selected by real MarketSession instead of one hardcoded pair. Values are
    *  identical across sessions by default - see the JSON file's own comment for why. */
@@ -324,6 +332,9 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     championChallengerMinSampleSize: requireNumber(raw.championChallengerMinSampleSize, 'championChallengerMinSampleSize'),
     championChallengerMinImprovementMargin: requireNonNegativeNumber(raw.championChallengerMinImprovementMargin, 'championChallengerMinImprovementMargin'),
     calibrationMaxObservationAgeMs: requireNumber(raw.calibrationMaxObservationAgeMs, 'calibrationMaxObservationAgeMs'),
+    calibrationDriftRecentWindowMs: requireNumber(raw.calibrationDriftRecentWindowMs, 'calibrationDriftRecentWindowMs'),
+    calibrationDriftPriorWindowMs: requireNumber(raw.calibrationDriftPriorWindowMs, 'calibrationDriftPriorWindowMs'),
+    calibrationDriftMinEffectiveSample: requireNumber(raw.calibrationDriftMinEffectiveSample, 'calibrationDriftMinEffectiveSample'),
     rankingThresholdsBySession: requireRankingThresholdsBySession(raw.rankingThresholdsBySession, 'rankingThresholdsBySession'),
     javaQuantScoreCandidateLimit: requireNumber(raw.javaQuantScoreCandidateLimit, 'javaQuantScoreCandidateLimit'),
     honesty: raw.honesty,
