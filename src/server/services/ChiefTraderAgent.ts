@@ -1109,6 +1109,9 @@ export class ChiefTraderAgent {
       consensusScore: approvedConfidence,
       consensusThreshold: CONSENSUS_APPROVAL_THRESHOLD,
       terminalReason: reason || `Consensus ${(approvedConfidence * 100).toFixed(1)}% vs threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%`,
+      // Same variable already computed above (line ~954) and already logged verbatim into the
+      // `consensus_terminal_reason` structured event - not a new parse/derivation.
+      terminalReasonCode,
       votingMatrix: approvedEvidence.map(e => ({
         agent: e.agent,
         side: e.side,

@@ -1417,6 +1417,12 @@ export const transactionTraces = sqliteTable('transaction_traces', {
   consensusThreshold: real('consensus_threshold'),
   riskSummary: text('risk_summary'),
   terminalReason: text('terminal_reason'),
+  // Additive (2026-09-27): the SAME machine-readable ConsensusTerminalReasonCode
+  // (src/server/core/consensusTerminalReason.ts) ChiefTraderAgent already computes and embeds
+  // inside `terminalReason`'s free-text prose - persisted as its own typed column so consumers of
+  // this table's row don't need to regex-parse prose to get a reliable code. `terminalReason`
+  // itself is completely unchanged for every existing consumer.
+  terminalReasonCode: text('terminal_reason_code'),
   orderId: text('order_id'),
 }, (table) => ({
   symbolIdx: index('idx_transaction_traces_symbol').on(table.symbol, table.createdAt),

@@ -41,6 +41,10 @@ export interface ChiefConsensusInput {
   consensusScore: number;
   consensusThreshold: number;
   terminalReason: string;
+  /** Additive (2026-09-27): same ConsensusTerminalReasonCode ChiefTraderAgent already computes for
+   * the `consensus_terminal_reason` structured log - persisted alongside the free-text reason so
+   * transaction_traces carries a typed code without any regex-parsing of `terminalReason` prose. */
+  terminalReasonCode?: string | null;
   votingMatrix: Array<{
     agent: string;
     side: string;
@@ -153,6 +157,7 @@ class TracingService {
       consensusScore: input.consensusScore,
       consensusThreshold: input.consensusThreshold,
       terminalReason: input.terminalReason,
+      terminalReasonCode: input.terminalReasonCode ?? null,
     });
     // logAgentReasoningRow(), not logAgentThought() - this must NOT re-touch lifecycleStatus,
     // which was just set to its real terminal value above. See that method's docstring.
@@ -199,6 +204,7 @@ class TracingService {
       consensusThreshold: partial.consensusThreshold ?? null,
       riskSummary: partial.riskSummary ?? null,
       terminalReason: partial.terminalReason ?? null,
+      terminalReasonCode: partial.terminalReasonCode ?? null,
       orderId: partial.orderId ?? null,
     };
     this.enqueue({ kind: 'trace', row });
@@ -252,6 +258,7 @@ class TracingService {
               consensusThreshold: item.row.consensusThreshold ?? existing.consensusThreshold,
               riskSummary: item.row.riskSummary ?? existing.riskSummary,
               terminalReason: item.row.terminalReason ?? existing.terminalReason,
+              terminalReasonCode: item.row.terminalReasonCode ?? existing.terminalReasonCode,
               orderId: item.row.orderId ?? existing.orderId,
             }).where(eq(transactionTraces.traceId, item.row.traceId));
           }

@@ -10,7 +10,7 @@ import { researchSafety } from '../../config/researchSafety';
 import type { CanonicalDataset } from '../ohlcvTypes';
 import type { StrategyDefinition } from '../../strategiesEngine/core/types';
 import { evaluateCandidate } from './CandidateEvaluator';
-import type { CoreWalkForwardFold, CoreWalkForwardReport } from '../coreWalkForward';
+import { dominantRegimeForTestWindow, buildRegimeBreakdown, type CoreWalkForwardFold, type CoreWalkForwardReport } from '../coreWalkForward';
 
 function sliceDataset(ds: CanonicalDataset, start: number, end: number): CanonicalDataset {
   return { ...ds, bars: ds.bars.slice(start, end), datasetId: `${ds.datasetId}_${start}_${end}` };
@@ -34,6 +34,7 @@ export function runCandidateWalkForward(candidate: StrategyDefinition, dataset: 
     status: 'INSUFFICIENT_SAMPLE',
     folds: [],
     note: 'Candidate walk-forward (research/evolution) — same fold sizing/rule as coreWalkForward.ts, evaluated via evaluateCandidate() instead of the fixed quant/strategies catalog.',
+    regimeBreakdown: [],
   };
   if (trainLen < 10 || valLen < 5 || testLen < 5) return base;
   if (n < trainLen + valLen + embargo + testLen) return base;
@@ -57,12 +58,13 @@ export function runCandidateWalkForward(candidate: StrategyDefinition, dataset: 
       testTrades: test.metrics.tradeCount,
       testNetPnl: test.metrics.netPnl,
       testExpectancy: test.metrics.expectancy,
+      dominantTestRegime: dominantRegimeForTestWindow(dataset.bars, testStart, testEnd),
     });
     start += testLen;
   }
 
   if (folds.length < minFolds) {
-    return { ...base, foldCount: folds.length, folds, status: 'INSUFFICIENT_SAMPLE' };
+    return { ...base, foldCount: folds.length, folds, status: 'INSUFFICIENT_SAMPLE', regimeBreakdown: buildRegimeBreakdown(folds) };
   }
   const expectancies = folds.map((f) => f.testExpectancy).filter((x): x is number => x != null).sort((a, b) => a - b);
   const pnls = folds.map((f) => f.testNetPnl).filter((x): x is number => x != null).sort((a, b) => a - b);
@@ -76,5 +78,6 @@ export function runCandidateWalkForward(candidate: StrategyDefinition, dataset: 
     medianTestExpectancy: mid(expectancies),
     medianTestNetPnl: mid(pnls),
     status: fragile ? 'FRAGILE' : 'COMPLETED',
+    regimeBreakdown: buildRegimeBreakdown(folds),
   };
 }

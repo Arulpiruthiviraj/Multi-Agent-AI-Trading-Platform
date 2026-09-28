@@ -109,6 +109,81 @@ describe('TracingService persistence', () => {
     expect(tx?.lifecycleStatus).toBe('CONSENSUS_REACHED');
   });
 
+  it('additive (2026-09-27): logChiefConsensus() persists the SAME machine-readable terminalReasonCode ChiefTraderAgent already computes into a dedicated transaction_traces.terminal_reason_code column, without changing terminal_reason prose behavior at all', async () => {
+    const { tracingService } = await import('../services/TracingService');
+    const { db } = await import('../db');
+    const { transactionTraces } = await import('../db/schema');
+    const { eq } = await import('drizzle-orm');
+
+    const cases: Array<{ traceId: string; approved: boolean; terminalReason: string; terminalReasonCode: string; expectedStatus: string }> = [
+      {
+        traceId: 'trace_CODE_1700000000_a1a1',
+        approved: true,
+        terminalReason: '[Chief Consensus Approval] Strong agreement. Final Confidence: 81.0%.',
+        terminalReasonCode: 'CONSENSUS_APPROVED',
+        expectedStatus: 'CONSENSUS_REACHED',
+      },
+      {
+        traceId: 'trace_CODE_1700000000_b2b2',
+        approved: false,
+        terminalReason: '[NO TRADE] Only 1 independent evidence group(s) agreed on BUY (need 2).',
+        terminalReasonCode: 'INSUFFICIENT_AGENT_PARTICIPATION',
+        expectedStatus: 'NO_CONSENSUS',
+      },
+      {
+        traceId: 'trace_CODE_1700000000_c3c3',
+        approved: false,
+        terminalReason: '[NO TRADE] Adversarial debate verdict was HOLD.',
+        terminalReasonCode: 'HARD_VETO',
+        expectedStatus: 'NO_CONSENSUS',
+      },
+    ];
+
+    for (const c of cases) {
+      tracingService.logChiefConsensus({
+        traceId: c.traceId,
+        symbol: 'CODE',
+        approved: c.approved,
+        consensusScore: 0.5,
+        consensusThreshold: 0.75,
+        terminalReason: c.terminalReason,
+        terminalReasonCode: c.terminalReasonCode,
+        votingMatrix: [{ agent: 'TestAgent', side: 'BUY', confidence: 0.5, weight: 1, agreed: c.approved }],
+      });
+    }
+    await tracingService.flush();
+
+    for (const c of cases) {
+      const tx = await db.select().from(transactionTraces).where(eq(transactionTraces.traceId, c.traceId)).get();
+      expect(tx?.terminalReasonCode).toBe(c.terminalReasonCode);
+      // Old free-text column is completely unchanged - byte-for-byte the same string passed in.
+      expect(tx?.terminalReason).toBe(c.terminalReason);
+      expect(tx?.lifecycleStatus).toBe(c.expectedStatus);
+    }
+  });
+
+  it('additive (2026-09-27): omitting terminalReasonCode (existing callers that have not been updated) still writes a null code and leaves terminal_reason behavior untouched', async () => {
+    const { tracingService } = await import('../services/TracingService');
+    const { db } = await import('../db');
+    const { transactionTraces } = await import('../db/schema');
+    const { eq } = await import('drizzle-orm');
+
+    tracingService.logChiefConsensus({
+      traceId: 'trace_CODE_1700000000_nullcode',
+      symbol: 'NUL',
+      approved: true,
+      consensusScore: 0.9,
+      consensusThreshold: 0.75,
+      terminalReason: 'Consensus reached: 0.9 >= 0.75',
+      votingMatrix: [],
+    });
+    await tracingService.flush();
+
+    const tx = await db.select().from(transactionTraces).where(eq(transactionTraces.traceId, 'trace_CODE_1700000000_nullcode')).get();
+    expect(tx?.terminalReasonCode).toBeNull();
+    expect(tx?.terminalReason).toBe('Consensus reached: 0.9 >= 0.75');
+  });
+
   it('real bug fix (2026-08-18 observability program, Phase 15): the pending-write queue never grows past maxQueueSize during a sustained DB outage - a fire-and-forget forensic sink must not exhaust memory while trading keeps running', async () => {
     vi.useFakeTimers();
     try {
