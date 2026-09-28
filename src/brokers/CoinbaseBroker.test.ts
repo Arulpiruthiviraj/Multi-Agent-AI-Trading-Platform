@@ -215,6 +215,44 @@ describe('CoinbaseBroker', () => {
     });
   });
 
+  describe('getOrderByClientOrderId (crash recovery - confirmed-absent vs. ambiguous)', () => {
+    it('throws (ambiguous) when the broker has never been authenticated this session', async () => {
+      const broker = new CoinbaseBroker();
+      await expect(broker.getOrderByClientOrderId('oms-key')).rejects.toThrow(/not authenticated/i);
+    });
+
+    it('throws (ambiguous) when the real historical-orders fetch fails, never returning null on a network error', async () => {
+      const broker = await authedBroker();
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 500, text: async () => 'internal error' })));
+      await expect(broker.getOrderByClientOrderId('oms-key')).rejects.toThrow(/Coinbase API Error/);
+    });
+
+    it('throws (ambiguous) when Coinbase pagination is malformed rather than answering not-found', async () => {
+      const broker = await authedBroker();
+      vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ orders: [], has_next: true, cursor: 'same' }) })));
+      await expect(broker.getOrderByClientOrderId('oms-key')).rejects.toThrow(/repeated/);
+    });
+
+    it('returns null (confirmed absent) once a full successful listing does not contain the client order id', async () => {
+      const broker = await authedBroker();
+      vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ orders: [{ order_id: 'x', client_order_id: 'some-other-key', side: 'BUY', order_type: 'MARKET', status: 'OPEN' }], has_next: false }),
+      })));
+      expect(await broker.getOrderByClientOrderId('oms-key')).toBeNull();
+    });
+
+    it('returns the matching order (mapped the same way orders() maps it) when found', async () => {
+      const broker = await authedBroker();
+      vi.stubGlobal('fetch', vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ orders: [{ order_id: 'real-id', client_order_id: 'oms-key', side: 'SELL', order_type: 'LIMIT', status: 'FILLED', filled_size: '1' }], has_next: false }),
+      })));
+      const result = await broker.getOrderByClientOrderId('oms-key');
+      expect(result).toEqual(expect.objectContaining({ id: 'real-id', clientOrderId: 'oms-key', side: 'SELL', status: 'FILLED' }));
+    });
+  });
+
   describe('cancelOrder', () => {
     it('reports success/failure from the real batch_cancel response shape', async () => {
       const broker = await authedBroker();

@@ -537,7 +537,19 @@ action_doctor() {
   fi
   local api_url="${ARGUS_API_URL:-http://127.0.0.1:3000}"
   local code
-  code="$(curl_cmd -s -o /dev/null -w '%{http_code}' --max-time 2 "$api_url/api/v2/runtime/health" 2>/dev/null)"
+  # Real, reproduced flake (Batch 9): against a confirmed-live, healthy engine, this probe
+  # intermittently (2/4 attempts) reported "API not reachable" before correctly resolving to
+  # "API requires auth" on the very next try. Root cause is NOT curl/process flake - it is the
+  # exact same class of bug scripts/argus-cli.ts's own fetchJson() already found and fixed
+  # (2026-09-23, see its header comment): GET /api/v2/runtime/health is a genuinely heavy
+  # aggregation endpoint (fans out over BrokerManager.getIbkrPathStatus(), computeAiAvailability()
+  # across every registered AI provider, and computeQuantAvailability()'s Java bridge check - see
+  # src/server/routes/v2Runtime.ts) that can legitimately take longer than a couple seconds on a
+  # correctly-running, momentarily-busy engine. --max-time 2 was far tighter than even the OLD
+  # 10s budget argus-cli.ts itself had already outgrown (raised there to 20s). Bounded and
+  # overridable, matching that same fix's own precedent, rather than an unbounded wait.
+  local health_timeout="${ARGUS_DOCTOR_HEALTH_TIMEOUT:-15}"
+  code="$(curl_cmd -s -o /dev/null -w '%{http_code}' --max-time "$health_timeout" "$api_url/api/v2/runtime/health" 2>/dev/null)"
   if [ "$code" = "200" ]; then
     echo "  OK  API reachable / runtime health OK"
   elif [ "$code" = "401" ] || [ "$code" = "403" ]; then

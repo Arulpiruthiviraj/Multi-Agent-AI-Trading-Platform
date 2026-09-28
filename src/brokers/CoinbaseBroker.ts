@@ -315,6 +315,41 @@ export class CoinbaseBroker implements BrokerPlugin {
     };
   }
 
+  /**
+   * Order-lifecycle crash recovery (2026-09-22 follow-up pass) - the Coinbase counterpart to
+   * IBGatewaySocketAdapter.getOrderByClientOrderId() / AlpacaBroker.getOrderByClientOrderId().
+   * OrderManagement.reconcileStaleOrders() calls this generically whenever a broker implements it,
+   * to definitively answer "did Coinbase actually receive this order?" for a local row left in a
+   * PENDING or possibly-wrongly-REJECTED state, instead of guessing from local state alone. Before
+   * this method existed, Coinbase silently took the "not every broker supports lookup-by-client-
+   * order-id" no-op path forever - the exact same structural gap DEF-30 closed for IBKR.
+   *
+   * Unlike IBKR (a stateful streaming socket session with its own in-memory rehydration flag),
+   * Coinbase is a stateless REST adapter - there is no separate "has this session synced order
+   * state yet" flag to check. The real ambiguity here is authentication/network, not rehydration:
+   *  - Not authenticated yet this session (no keyName/privateKeyPem) -> throw (ambiguous: we have
+   *    never asked Coinbase anything, so we cannot say the order is absent).
+   *  - The historical-orders fetch itself fails (network error, malformed pagination response,
+   *    Coinbase API error, pagination deadline/page-limit exceeded) -> throw, exactly as Alpaca's
+   *    own fetchAlpaca() call already does implicitly by not catching. Coinbase's Advanced Trade
+   *    API has no single "get order by client_order_id" endpoint the way Alpaca's client_order_id
+   *    query param does, so this reuses the SAME already-tested readAllPages()/orders() pagination
+   *    path used elsewhere in this file rather than adding a second, ad hoc HTTP call - a genuine
+   *    Coinbase-side "not found" only becomes knowable once that full, successful listing completes
+   *    and the id isn't in it.
+   *  - The listing completes successfully and the client_order_id genuinely isn't present -> return
+   *    null (confirmed absent), the correct signal for reconcileStaleOrders() to treat this as a
+   *    real rejection rather than retry-next-cycle ambiguity.
+   */
+  async getOrderByClientOrderId(clientOrderId: string): Promise<Order | null> {
+    if (!this.keyName || !this.privateKeyPem) {
+      throw new Error(`${this.name} is not authenticated - cannot answer order lookup (ambiguous, not a confirmed absence).`);
+    }
+    const orders = await this.orders();
+    const match = orders.find(o => o.clientOrderId === clientOrderId);
+    return match ?? null;
+  }
+
   async modifyOrder(orderId: string, updates: Partial<Order>): Promise<Order> {
     throw new Error('Not implemented: Coinbase Advanced Trade orders must be canceled and re-placed rather than modified in place.');
   }

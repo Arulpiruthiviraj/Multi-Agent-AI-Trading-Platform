@@ -437,7 +437,13 @@ switch ($cmd) {
         if (Test-Path (Join-Path $ArgusRoot '.env')) { Write-Host "OK  Configuration found (.env present; secrets not printed)" } else { Write-Host "!   .env not found (copy from .env.example)" -ForegroundColor Yellow; $warn = $true }
         if (Test-Path (Join-Path $ArgusRoot 'dist\server.cjs')) { Write-Host "OK  Build artifact present (dist/server.cjs)" } else { Write-Host "!   Production build artifact missing (optional for dev)" -ForegroundColor Yellow; $warn = $true }
         try {
-            $null = Invoke-RestMethod -Uri "$($env:ARGUS_API_URL)/api/v2/runtime/health" -TimeoutSec 2 -ErrorAction Stop
+            # Same root cause as argus.sh's doctor fix (2026-09-27 follow-up pass, kept aligned per
+            # this command's own parity requirement): /api/v2/runtime/health is a genuinely heavy
+            # aggregation endpoint (IBKR path status + AI provider availability fan-out + Java quant
+            # bridge check), not a plain liveness ping - 2s was tighter than even the timeout
+            # scripts/argus-cli.ts's own fetchJson() had already outgrown (raised 10s -> 20s there).
+            $doctorHealthTimeoutSec = if ($env:ARGUS_DOCTOR_HEALTH_TIMEOUT) { [int]$env:ARGUS_DOCTOR_HEALTH_TIMEOUT } else { 15 }
+            $null = Invoke-RestMethod -Uri "$($env:ARGUS_API_URL)/api/v2/runtime/health" -TimeoutSec $doctorHealthTimeoutSec -ErrorAction Stop
             Write-Host "OK  API reachable / runtime health OK"
         } catch {
             $statusCode = $null
