@@ -36,6 +36,12 @@ import { summarizeMarketDataLines, type MarketDataLineSummary, type ReadinessTri
 
 const DEFAULT_STREAM_URL = 'wss://stream.data.alpaca.markets/v2/iex';
 
+/** IBKR marketDataType values (see https://interactivebrokers.github.io/tws-api/tick_types.html).
+ *  Used only for diagnostics label text on getDelayedQuote() - never a gate input. */
+const MARKET_DATA_TYPE_LABEL: Record<number, string> = {
+  1: 'REALTIME', 2: 'FROZEN', 3: 'DELAYED', 4: 'DELAYED_FROZEN',
+};
+
 /**
  * Phase 18 (2026-09-01 rescue-fairness fix). Real evidence (Phase 17 forensic audit): the
  * temporary-rescue pool had no concept of WHY a request was made - a routine repeat-requester
@@ -636,7 +642,19 @@ export class MarketDataWorker {
   /** Diagnostics-only accessor — see recordDelayedQuote()'s doc comment. `isLive` is always
    *  `false` and `dataMode` is always `'DELAYED'`, spelled out explicitly so a caller cannot
    *  mistake this for a live quote shape by accident. `null` per-field means that field has never
-   *  been observed — never fabricated from another field. */
+   *  been observed — never fabricated from another field.
+   *
+   *  2026-09-29: `marketDataType`/`marketDataTypeLabel` preserve IBKR's own session-level
+   *  provenance (1=REALTIME, 2=FROZEN, 3=DELAYED, 4=DELAYED_FROZEN — see IBKR's tick_types docs),
+   *  read from the existing `ibkrBridge.getSubscriptionState()` diagnostics accessor (already
+   *  populated by IbkrSocketSession's real `marketDataType`/`tickReqParams` callbacks — no new
+   *  wiring). Distinct from the tick-field-level signal (66-69 vs 1/2/4) that already, and still,
+   *  structurally decides which map a tick lands in — this is additional provenance for
+   *  diagnostics/research callers, not a new gate. Note: IBKR's streaming tickPrice/tickSize API
+   *  does not deliver a distinct upstream "effective as of" timestamp per delayed tick (checked
+   *  2026-09-29 — requesting genericTick 88/DELAYED_LAST_TIMESTAMP on a STK reqMktData call is
+   *  rejected by IBKR as an invalid generic tick, error 321) — `atMs`/`ageMs` below are receipt
+   *  time only, a lower bound on true data age, never a measured one. */
   getDelayedQuote(symbol: string): {
     bid: { price: number; atMs: number; ageMs: number } | null;
     ask: { price: number; atMs: number; ageMs: number } | null;
@@ -646,6 +664,8 @@ export class MarketDataWorker {
     latestAgeMs: number | null;
     dataMode: 'DELAYED';
     isLive: false;
+    marketDataType: number | null;
+    marketDataTypeLabel: string | null;
   } | null {
     const byField = this.delayedQuotes.get(quoteKey(symbol));
     if (!byField || byField.size === 0) return null;
@@ -655,10 +675,14 @@ export class MarketDataWorker {
       return r ? { price: r.price, atMs: r.atMs, ageMs: Math.max(0, now - r.atMs) } : null;
     };
     const latestAtMs = Math.max(...Array.from(byField.values()).map((r) => r.atMs));
+    const subState = this.ibkrBridge?.getSubscriptionState?.(symbol) as { marketDataType?: number | null } | undefined;
+    const marketDataType = typeof subState?.marketDataType === 'number' ? subState.marketDataType : null;
     return {
       bid: withAge(66), ask: withAge(67), last: withAge(68), close: withAge(69),
       latestAtMs, latestAgeMs: Math.max(0, now - latestAtMs),
       dataMode: 'DELAYED', isLive: false,
+      marketDataType,
+      marketDataTypeLabel: marketDataType != null ? (MARKET_DATA_TYPE_LABEL[marketDataType] ?? `UNKNOWN(${marketDataType})`) : null,
     };
   }
 

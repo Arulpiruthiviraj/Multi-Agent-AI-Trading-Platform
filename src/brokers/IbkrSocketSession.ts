@@ -81,6 +81,30 @@ export function buildIbkrOrder(orderId: number, opts: {
 }
 
 /**
+ * 2026-09-29 (delayed-data research feed). Off by default - zero behavior change unless an
+ * operator explicitly opts in. When true, connect() calls IBKR's own `reqMarketDataType(3)` once
+ * per session, which per IBKR's published API guide permits a delayed-data FALLBACK for symbols
+ * without live entitlement (marketDataType then reports 3/DELAYED for those) - it does not force
+ * a genuinely live-entitled symbol down to delayed (marketDataType keeps reporting 1/REALTIME for
+ * those). This deployment's own diagnostic (2026-09-29, `scripts/ibkr_market_data_diagnostic.ts`)
+ * empirically verified the delayed-fallback half against 5 real symbols (AAPL/MSFT/NVDA/SPY/QQQ,
+ * paper account DUR959160) - none of which currently carry live entitlement on this account, so
+ * the "stays live where entitled" half is IBKR's documented behavior, not independently
+ * re-verified here. Operators should watch the real `marketDataType` callback in production
+ * (`getSubscriptionState()`) rather than assume.
+ *
+ * Whatever this flag does, it can NEVER let delayed data reach RiskEngine/PositionSizing/OMS/
+ * ChiefTrader - that isolation is structural (delayed ticks land only in MarketDataWorker's
+ * separate `delayedQuotes` map, read only by `getDelayedQuote()`, which nothing on the live
+ * decision path calls - see MarketDataWorker.ts's own doc comments and its
+ * `getLatestPrice()/getLatestPriceAgeMs() never read delayedQuotes` regression test) and is
+ * unaffected by this flag's value either way.
+ */
+export function isIbkrDelayedDataResearchEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.IBKR_DELAYED_DATA_RESEARCH_ENABLED === 'true';
+}
+
+/**
  * Per-symbol subscription lifecycle state (2026-09-20 Sept-18 rejection-desync remediation;
  * 2026-09-21 Phase 2 acknowledgement-evidence hardening).
  *
@@ -807,6 +831,18 @@ export class IbkrSocketSession {
         ib.reqIds();
         ib.reqCurrentTime();
         ib.reqManagedAccts();
+        if (isIbkrDelayedDataResearchEnabled()) {
+          console.log(
+            '[IBKR Socket] IBKR_DELAYED_DATA_RESEARCH_ENABLED=true - requesting delayed-data ' +
+            'fallback (reqMarketDataType(3)). See isIbkrDelayedDataResearchEnabled()\'s own doc ' +
+            'comment: delayed ticks remain fully isolated from the live trading path regardless.',
+          );
+          try {
+            ib.reqMarketDataType(3);
+          } catch (e: any) {
+            console.warn(`[IBKR Socket] reqMarketDataType(3) failed: ${e?.message || e}`);
+          }
+        }
       });
 
       ib.on(EventName.disconnected, () => {

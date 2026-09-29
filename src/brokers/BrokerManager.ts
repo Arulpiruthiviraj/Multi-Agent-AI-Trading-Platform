@@ -174,8 +174,19 @@ export class BrokerManager {
              }
          }
 
+         // Configurable Execution Broker Support (2026-09-29): a resolved, otherwise-available
+         // selection whose execution capability flag is off must not boot active anyway — same
+         // fail-closed fallback as the unavailable/non-functional branch below, not a special case.
+         if (activeFound) {
+             const bootCapability = BrokerManager.resolveExecutionCapability(this.activeBroker.id);
+             if (bootCapability.allowed === false) {
+                 console.warn(`[BrokerManager] Boot broker selection '${selectedName}' (from ${selectionSource}) resolved to '${this.activeBroker.id}', but its execution capability is disabled: ${bootCapability.reason} Falling back to Internal Paper Simulator.`);
+                 activeFound = false;
+             }
+         }
+
          if (!activeFound) {
-             console.warn(`[BrokerManager] Broker selection '${selectedName}' (from ${selectionSource}) is unavailable or non-functional. Falling back to Internal Paper Simulator.`);
+             console.warn(`[BrokerManager] Broker selection '${selectedName}' (from ${selectionSource}) is unavailable, non-functional, or execution-disabled. Falling back to Internal Paper Simulator.`);
              this.activeBroker = internalPaper;
          } else {
              console.log(`[BrokerManager] Boot broker selection: '${this.activeBroker.name}' (source: ${selectionSource}).`);
@@ -453,6 +464,44 @@ export class BrokerManager {
   }
 
   /**
+   * Configurable Execution Broker Support (2026-09-29). Pure, unit-testable capability check -
+   * deliberately separate from broker SELECTION (resolveBootBrokerSelection / the id lookups in
+   * setActiveBroker/activateBroker below). Selecting a broker says which adapter to use; this says
+   * whether this deployment/operator has actually opted into executing real orders through it.
+   * Never inferred from geography, account balance, or any other signal Argus itself observes -
+   * see .env.example's own explanation of why (Argus does not own regulatory/eligibility
+   * decisions). A broker id with no explicit flag (internal_paper, coinbase, questrade, crypto_paper)
+   * is always allowed here - this mechanism exists for real-money-capable adapters specifically,
+   * not as a general on/off switch for every registered broker.
+   */
+  public static resolveExecutionCapability(
+    brokerId: string,
+    env: NodeJS.ProcessEnv = process.env,
+  ): { allowed: true } | { allowed: false; reason: string } {
+    if (brokerId === 'alpaca') {
+      if (env.ALPACA_EXECUTION_ENABLED !== 'true') {
+        return {
+          allowed: false,
+          reason: 'ALPACA_EXECUTION_DISABLED: ALPACA_EXECUTION_ENABLED is not "true". This deployment/operator has not opted into Alpaca execution — set ALPACA_EXECUTION_ENABLED=true (only after confirming real Alpaca account eligibility) to allow it.',
+        };
+      }
+      return { allowed: true };
+    }
+    if (brokerId === 'ibkr_gateway' || brokerId === 'ibkr_web') {
+      // Default true — preserves this codebase's existing IBKR-first default behavior for every
+      // deployment/.env that predates this flag and never sets it.
+      if (env.IBKR_EXECUTION_ENABLED === 'false') {
+        return {
+          allowed: false,
+          reason: 'IBKR_EXECUTION_DISABLED: IBKR_EXECUTION_ENABLED is "false". This deployment/operator has explicitly disabled IBKR execution — set IBKR_EXECUTION_ENABLED=true (or unset it) to allow it.',
+        };
+      }
+      return { allowed: true };
+    }
+    return { allowed: true };
+  }
+
+  /**
    * Mid-session switch of the order-placing broker. OMS remains the sole placeOrder caller.
    * IDs: alpaca | ibkr_gateway | ibkr_web | ibkr (auto) | internal_paper | coinbase.
    */
@@ -498,6 +547,14 @@ export class BrokerManager {
     if (!broker) throw new Error(`Broker ${resolvedId} not found`);
     if (NON_FUNCTIONAL_BROKER_IDS.has(resolvedId)) {
       throw new Error(`Broker '${broker.name}' is not a functional adapter (placeOrder is unimplemented). Refusing to select it as active.`);
+    }
+    // Configurable Execution Broker Support (2026-09-29): capability check is independent of and
+    // strictly additional to the selection/functional checks above. Fail closed with a clear
+    // reason — never silently fall back to a different broker (a silent fallback could reroute
+    // real order intent to an adapter the operator never selected).
+    const capability = BrokerManager.resolveExecutionCapability(resolvedId);
+    if (capability.allowed === false) {
+      throw new Error(capability.reason);
     }
 
     const paperOnly = process.env.PAPER_TRADING_ONLY === 'true';
@@ -636,27 +693,77 @@ export class BrokerManager {
   }
 
     /** Rebind MarketDataWorker quote backend after a successful active-broker switch. */
+  /**
+   * Configurable Execution Broker Support (2026-09-29). Pure, unit-testable resolution of which
+   * broker's quote/tick feed backs MarketDataWorker - independent of which broker executes
+   * orders. Unset/blank/unrecognized -> null, meaning "derive from the execution broker" (the
+   * exact prior behavior, preserved as the default for every deployment that never sets this).
+   */
+  public static resolveMarketDataProviderId(env: NodeJS.ProcessEnv = process.env): 'alpaca' | 'ibkr_gateway' | null {
+    const raw = env.MARKET_DATA_PROVIDER?.trim().toLowerCase();
+    if (!raw) return null;
+    if (raw === 'alpaca' || raw === 'ibkr_gateway') return raw;
+    console.warn(`[BrokerManager] MARKET_DATA_PROVIDER='${raw}' is not a recognized value (alpaca | ibkr_gateway) - ignoring, deriving market data from the active execution broker instead.`);
+    return null;
+  }
+
   private async applyMarketDataBinding(broker: BrokerPlugin): Promise<void> {
     try {
       const { marketDataWorker } = await import('../server/services/MarketDataWorker');
       const { loadIbkrConnection } = await import('../server/config/ibkrConnection');
       const { registerHistoricalBarProvider } = await import('../server/engines/backtest/historicalBarProvider');
-      if (broker.id === 'ibkr_gateway' && broker instanceof IBGatewaySocketAdapter) {
+
+      // Configurable Execution Broker Support (2026-09-29): market data source is independent of
+      // the execution broker `broker` (which OMS/RiskEngine/getActiveBroker() continue to use for
+      // every order operation, completely unaffected by anything below). Default
+      // (MARKET_DATA_PROVIDER unset) derives quotes from `broker` exactly as before - zero
+      // behavior change for every existing deployment. An explicit override resolves to a
+      // DIFFERENT registered adapter instance and authenticates it for data purposes only if it
+      // is not already connected.
+      const overrideId = BrokerManager.resolveMarketDataProviderId();
+      let mdBroker: BrokerPlugin = broker;
+      if (overrideId && overrideId !== broker.id) {
+        const candidate = this.brokers.get(overrideId);
+        if (!candidate) {
+          console.warn(`[BrokerManager] MARKET_DATA_PROVIDER='${overrideId}' is not a registered broker - falling back to deriving market data from the execution broker '${broker.id}'.`);
+        } else {
+          mdBroker = candidate;
+          try {
+            const alreadyConnected = overrideId === 'ibkr_gateway'
+              && mdBroker instanceof IBGatewaySocketAdapter
+              && mdBroker.isMarketDataSessionConnected();
+            if (!alreadyConnected) {
+              const connected = await mdBroker.authenticate({});
+              if (!connected) {
+                console.warn(`[BrokerManager] MARKET_DATA_PROVIDER='${overrideId}' failed to authenticate for market data - falling back to the execution broker '${broker.id}' for quotes.`);
+                mdBroker = broker;
+              } else {
+                console.log(`[BrokerManager] Market data provider '${mdBroker.name}' connected independently of execution broker '${broker.name}'.`);
+              }
+            }
+          } catch (e) {
+            logErrorSafely(`[BrokerManager] MARKET_DATA_PROVIDER='${overrideId}' authentication failed`, e);
+            mdBroker = broker;
+          }
+        }
+      }
+
+      if (mdBroker.id === 'ibkr_gateway' && mdBroker instanceof IBGatewaySocketAdapter) {
         const cfg = loadIbkrConnection();
-        broker.setQuoteSink((symbol, price) => marketDataWorker.ingestIbkrQuote(symbol, price));
+        mdBroker.setQuoteSink((symbol, price) => marketDataWorker.ingestIbkrQuote(symbol, price));
         // 2026-09-23 spread forensic follow-up: real IBKR live BID/ASK ticks were already arriving
         // and already correctly field-typed at the socket layer, but were discarded before ever
         // reaching MarketDataWorker's ask-price store - see IbkrSocketSession.bidAskTickHandler's
         // doc comment. Additive only; setQuoteSink's existing behavior above is unchanged.
-        broker.setBidAskTickHandler((symbol, field, price) => marketDataWorker.ingestIbkrBidAsk(symbol, field, price));
-        broker.setMarketDataSubscriptionHandler((symbol) => marketDataWorker.recordMarketDataSubscription(symbol));
+        mdBroker.setBidAskTickHandler((symbol, field, price) => marketDataWorker.ingestIbkrBidAsk(symbol, field, price));
+        mdBroker.setMarketDataSubscriptionHandler((symbol) => marketDataWorker.recordMarketDataSubscription(symbol));
         // 2026-09-04 opportunity-capture remediation: a rejected reqMktData request (e.g. missing
         // market-data-line permissions for that symbol/exchange) used to vanish silently — the
         // symbol stayed in MarketDataWorker's "active" bookkeeping forever with zero real ticks,
         // confirmed live for several rank-1 equity candidates. Purely observational — recordMarketDataError
         // never evicts or resubscribes; it only makes the failure visible via getActiveSlots()/
         // /api/v2/continuous-intelligence/capacity and the structured log below.
-        broker.setMarketDataErrorHandler((symbol, code, message) => {
+        mdBroker.setMarketDataErrorHandler((symbol, code, message) => {
           marketDataWorker.recordMarketDataError(symbol, code, message);
           structuredLogger.warn(`IBKR market-data rejection for ${symbol}: code=${code} ${message}`, {
             category: 'MARKET_DATA',
@@ -671,7 +778,7 @@ export class BrokerManager {
         // caller's Promise - invisible to the observability path above. Deliberately a distinct
         // eventType (IBKR_HISTORICAL_DATA_ERROR, requestType: 'HISTORICAL') so a query can never
         // conflate a streaming entitlement failure with a historical-data one.
-        broker.setHistoricalDataErrorHandler((detail) => {
+        mdBroker.setHistoricalDataErrorHandler((detail) => {
           structuredLogger.warn(`IBKR historical-data rejection for ${detail.symbol}: code=${detail.code} ${detail.message}`, {
             category: 'MARKET_DATA',
             eventType: 'IBKR_HISTORICAL_DATA_ERROR',
@@ -688,14 +795,14 @@ export class BrokerManager {
         // 2026-09-20 remediation (part D): IBKR delayed ticks (field 66-69) - diagnostics store
         // only, NEVER routed through setQuoteSink's live sink (MarketDataWorker.ingestIbkrQuote
         // feeds RiskEngine/PositionSizing/OMS pricing - delayed data must never silently reach it).
-        broker.setDelayedTickHandler((symbol, field, price) => {
+        mdBroker.setDelayedTickHandler((symbol, field, price) => {
           marketDataWorker.recordDelayedQuote(symbol, field, price);
         });
         // 2026-09-20 remediation (Sept 18 rejection-desync fix): bounded per-symbol subscription
         // retry lifecycle. Never per-tick - REJECTED/RETRY fire once per state transition,
         // RECOVERED fires once when real data resumes. See IbkrSocketSession.ts's
         // SubscriptionRecord/markSubscriptionRejected/markSubscriptionRecovered doc comments.
-        broker.setSubscriptionLifecycleHandler((event) => {
+        mdBroker.setSubscriptionLifecycleHandler((event) => {
           if (event.kind === 'REJECTED') {
             structuredLogger.warn(`IBKR market-data subscription rejected for ${event.symbol}: code=${event.errorCode}, retry #${event.retryCount} at ${event.nextRetryAt ? new Date(event.nextRetryAt).toISOString() : 'n/a'}`, {
               category: 'MARKET_DATA',
@@ -777,30 +884,30 @@ export class BrokerManager {
           backend: 'ibkr_gateway',
           hardCapOverride: cfg.maxMarketDataLines,
           ibkrBridge: {
-            subscribe: (sym) => broker.subscribeMarketData(sym),
-            unsubscribe: (sym) => broker.cancelMarketDataBySymbol(sym),
+            subscribe: (sym) => mdBroker.subscribeMarketData(sym),
+            unsubscribe: (sym) => mdBroker.cancelMarketDataBySymbol(sym),
             clear: () => {
-              broker.setQuoteSink(null);
-              broker.setBidAskTickHandler(null);
-              broker.setMarketDataErrorHandler(null);
-              broker.setMarketDataSubscriptionHandler(null);
-              broker.setHistoricalDataErrorHandler(null);
-              broker.setDelayedTickHandler(null);
-              broker.setSubscriptionLifecycleHandler(null);
+              mdBroker.setQuoteSink(null);
+              mdBroker.setBidAskTickHandler(null);
+              mdBroker.setMarketDataErrorHandler(null);
+              mdBroker.setMarketDataSubscriptionHandler(null);
+              mdBroker.setHistoricalDataErrorHandler(null);
+              mdBroker.setDelayedTickHandler(null);
+              mdBroker.setSubscriptionLifecycleHandler(null);
             },
-            isConnected: () => broker.isMarketDataSessionConnected(),
+            isConnected: () => mdBroker.isMarketDataSessionConnected(),
             // 2026-09-21 Phase 2: pull-based diagnostics bridge - the unified subscription-
             // lifecycle view (marketDataDiagnosticsReport.ts) needs to ask "what does IBKR's own
             // real lifecycle record say right now", not just react to push events.
-            getSubscriptionState: (sym) => broker.getSubscriptionState(sym),
-            getAccountEntitlementState: () => broker.getAccountEntitlementState(),
+            getSubscriptionState: (sym) => mdBroker.getSubscriptionState(sym),
+            getAccountEntitlementState: () => mdBroker.getAccountEntitlementState(),
           },
         });
         // Quant / HistoricalDataGateway: IB reqHistoricalData — no Alpaca REST while gateway is active.
         registerHistoricalBarProvider({
           id: 'ibkr_gateway',
           fetchBars: (symbol, timeframe, startMs, endMs) =>
-            broker.getHistoricalBars(symbol, timeframe, startMs, endMs),
+            mdBroker.getHistoricalBars(symbol, timeframe, startMs, endMs),
         });
       } else {
         marketDataWorker.setBrokerQuoteContext({

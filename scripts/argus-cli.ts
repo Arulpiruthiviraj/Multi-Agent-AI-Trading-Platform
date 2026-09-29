@@ -896,6 +896,26 @@ const commands: Record<string, () => Promise<void>> = {
       body: JSON.stringify({ reason }),
     }), null, 2));
   },
+  /**
+   * 2026-09-29: real, missing CLI capability found while operating Argus - switching the active
+   * execution broker at runtime required a raw authenticated HTTP call to POST /api/v1/brokers/active
+   * (integrationRoutes.ts); there was no CLI command for it, unlike resume/pause. This is a thin
+   * wrapper over that same existing route - BrokerManager.setActiveBroker() remains the sole
+   * router, this file still never imports it directly. The route itself persists the selection to
+   * settings.selectedBroker (survives a restart) and applies PAPER_TRADING_ONLY/IBKR preflight
+   * checks server-side, same as switching via the UI.
+   */
+  async 'set-broker'() {
+    const id = cliArgs()[0];
+    if (!id) throw new Error('Usage: argus-cli set-broker <id>  (e.g. alpaca, ibkr_gateway, internal_paper)');
+    console.log(JSON.stringify(await fetchJson('/api/v1/brokers/active', {
+      method: 'POST',
+      body: JSON.stringify({ id }),
+    }), null, 2));
+  },
+  async brokers() {
+    console.log(JSON.stringify(await fetchJson('/api/v1/brokers'), null, 2));
+  },
   async 'research-recommend'() {
     // LangGraph research service (docs/architecture/ARGUS_ARCHITECTURE.md (LangGraph Research Service section)) - shadow-only,
     // never auto-promotes. Pass --strategy=MOMENTUM_BREAKOUT (default GOLDEN_SMA).
@@ -1682,7 +1702,7 @@ const commands: Record<string, () => Promise<void>> = {
     const groups: Array<[string, string[]]> = [
       ['System / lifecycle', ['status', 'health', 'start', 'stop', 'restart', 'wait-ready', 'config']],
       ['Watchdog (detached auto-restart supervisor)', ['watchdog-start', 'watchdog-stop', 'watchdog-restart', 'watchdog-status']],
-      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio']],
+      ['Trading state / portfolio', ['resume', 'pause', 'ready', 'positions', 'portfolio', 'brokers', 'set-broker']],
       ['Discovery / ranking (Phase 4C-4F)', ['ranking', 'subscription-queue', 'trade-plan', 'missed-opportunities']],
       ['Learning / self-evolution (Phase 4G-4H)', ['learning']],
       ['Session lifecycle (Phase 4J)', ['session-lifecycle']],

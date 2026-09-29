@@ -639,6 +639,49 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
       expect(worker.getLatestPrice('AAPL')).toBe(191.5);
       expect(worker.getDelayedQuote('AAPL')?.last).toMatchObject({ price: 999.99 });
     });
+
+    it('a delayed quote recorded milliseconds ago can never pass RiskEngine gate 13 (data_freshness) as live/fresh data - RiskEngine reads only getLatestPrice()/getLatestPriceAgeMs() (see RiskEngine.ts), and neither ever reflects delayedQuotes regardless of recency', () => {
+      // No live quote has ever been recorded for this symbol - the real-world shape of "IBKR
+      // returned 10089 for the live request, only the delayed fallback populated".
+      worker.recordDelayedQuote('TSLA', 68, 250.0);
+      worker.recordDelayedQuote('TSLA', 66, 249.9);
+      worker.recordDelayedQuote('TSLA', 67, 250.1);
+      // The delayed quote itself is genuinely fresh by receipt-time (recorded synchronously above,
+      // well under tradingSafety.json's stalePriceThresholdMs) - if isolation were broken, this is
+      // exactly the case that would silently pass gate 13.
+      const delayed = worker.getDelayedQuote('TSLA');
+      expect(delayed?.latestAgeMs).toBeLessThan(1000);
+      // Gate 13's real inputs (RiskEngine.ts: `marketDataWorker.getLatestPrice(proposal.symbol)` /
+      // `getLatestPriceAgeMs(proposal.symbol)`) must see this symbol as never having ticked at all -
+      // gate 13's own fail-closed rule for a null age (DEF-08) then correctly fails it, never
+      // "passes as fresh" from delayed data.
+      expect(worker.getLatestPrice('TSLA')).toBeNull();
+      expect(worker.getLatestPriceAgeMs('TSLA')).toBeNull();
+    });
+
+    it('preserves IBKR marketDataType provenance (1=REALTIME/2=FROZEN/3=DELAYED/4=DELAYED_FROZEN) on the delayed quote object, sourced from the existing ibkrBridge.getSubscriptionState() diagnostics accessor', () => {
+      worker.setBrokerQuoteContext({
+        backend: 'ibkr_gateway',
+        hardCapOverride: 90,
+        ibkrBridge: {
+          subscribe: () => {},
+          unsubscribe: () => {},
+          clear: () => {},
+          getSubscriptionState: (symbol: string) => (symbol === 'QQQ' ? { marketDataType: 3 } : null),
+        },
+      });
+      worker.recordDelayedQuote('QQQ', 68, 738.84);
+      const q = worker.getDelayedQuote('QQQ');
+      expect(q?.marketDataType).toBe(3);
+      expect(q?.marketDataTypeLabel).toBe('DELAYED');
+    });
+
+    it('marketDataType/marketDataTypeLabel are null, never fabricated, when the bridge has no subscription-state evidence for the symbol', () => {
+      worker.recordDelayedQuote('IWM', 68, 220.0);
+      const q = worker.getDelayedQuote('IWM');
+      expect(q?.marketDataType).toBeNull();
+      expect(q?.marketDataTypeLabel).toBeNull();
+    });
   });
 
   describe('getMarketDataLineSummary() (2026-09-20 remediation, part C — allocation vs entitlement vs reception)', () => {
