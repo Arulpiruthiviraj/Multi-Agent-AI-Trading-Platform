@@ -925,98 +925,124 @@ export class OrderManagementService {
     }
     if (candidates.length === 0) return;
 
-    let broker: BrokerPlugin;
+    let activeBroker: BrokerPlugin;
     try {
-      broker = BrokerManager.getInstance().getActiveBroker();
+      activeBroker = BrokerManager.getInstance().getActiveBroker();
     } catch (e) {
       console.error('[OMS] crash-recovery: no active broker', e);
       return;
     }
-    if (typeof broker.getOrderByClientOrderId !== 'function') {
-      // Honest degradation - not every broker adapter supports lookup-by-client-order-id.
-      // AlpacaBroker and IBGatewaySocketAdapter (DEF-30, 2026-09-09) both implement it; a future
-      // adapter that doesn't is the only case this branch still exists for. Never fabricates a
-      // reconciliation result it can't actually check.
-      return;
+
+    // Real defect found during the configurable-execution-broker review (2026-09-29): this used to
+    // resolve a SINGLE broker via getActiveBroker() and use it for EVERY candidate's lookup,
+    // regardless of which broker each row was actually submitted to (row.brokerId). A candidate
+    // submitted to a broker that is no longer active (e.g. the deployment's execution broker was
+    // switched IBKR -> Alpaca while a PENDING order from the IBKR session was still unconfirmed)
+    // would be looked up against the WRONG broker by client_order_id, find nothing, and get
+    // incorrectly marked REJECTED even though it may genuinely exist on the broker it was actually
+    // sent to. Mirrors followUpOpenOrders()'s dueByBroker grouping: group by trades.broker_id
+    // (falling back to the active broker only for legacy rows with no stamped id) and look each
+    // candidate up against the broker it was actually placed on, never the currently-active one.
+    const candidatesByBroker = new Map<string, { broker: BrokerPlugin; rows: any[] }>();
+    for (const row of candidates) {
+      const brokerId: string = row.brokerId || activeBroker.id;
+      let entry = candidatesByBroker.get(brokerId);
+      if (!entry) {
+        const resolved = brokerId === activeBroker.id ? activeBroker : (BrokerManager.getInstance().getBroker(brokerId) || activeBroker);
+        entry = { broker: resolved, rows: [] };
+        candidatesByBroker.set(brokerId, entry);
+      }
+      entry.rows.push(row);
     }
 
-    for (const row of candidates) {
-      let realOrder: Order | null;
-      try {
-        realOrder = await broker.getOrderByClientOrderId(row.id);
-      } catch (e) {
-        console.error(`[OMS] crash-recovery: lookup failed for order ${row.id}`, e);
+    for (const { broker, rows } of candidatesByBroker.values()) {
+      if (typeof broker.getOrderByClientOrderId !== 'function') {
+        // Honest degradation - not every broker adapter supports lookup-by-client-order-id.
+        // AlpacaBroker and IBGatewaySocketAdapter (DEF-30, 2026-09-09) both implement it; a future
+        // adapter that doesn't is the only case this branch still exists for. Never fabricates a
+        // reconciliation result it can't actually check. Skips only this broker's rows - a different
+        // broker group in the same cycle may still be checkable.
         continue;
       }
 
-      if (!realOrder) {
-        // Confirmed, not assumed: the broker genuinely has no record of this order. A row stuck
-        // PENDING can now be safely and honestly marked REJECTED - a real answer, not a guess.
-        if (row.status === 'PENDING') {
-          await db.update(trades).set({ status: 'REJECTED' }).where(eq(trades.id, row.id));
-          console.warn(`[OMS] crash-recovery: order ${row.id} confirmed NEVER reached ${broker.name} (real lookup by client_order_id found nothing) - marking REJECTED.`);
-          if (row.transactionId) await updateTransactionStatus(row.transactionId, 'RECONCILED', { closed: true });
+      for (const row of rows) {
+        let realOrder: Order | null;
+        try {
+          realOrder = await broker.getOrderByClientOrderId(row.id);
+        } catch (e) {
+          console.error(`[OMS] crash-recovery: lookup failed for order ${row.id} against broker '${broker.id}'`, e);
+          continue;
         }
-        continue;
-      }
 
-      const realStatus = realOrder.status;
-      if (realStatus !== row.status || (realOrder.filledQuantity ?? 0) > 0) {
-        console.error(`[OMS] crash-recovery: order ${row.id} was locally ${row.status} (never recorded a brokerOrderId) but ${broker.name} actually has it as ${realStatus} - correcting local state. This is exactly the "crashed after send" scenario Phase 1 closes.`);
-
-        // F04: `finalStatus` starts as the broker-reported realStatus but is overridden below if
-        // recordFillProgress() rejected the fill evidence — every write/event after this point uses
-        // finalStatus, never the raw realStatus, so a rejected fill can no longer be silently
-        // re-stamped FILLED/PARTIALLY_FILLED a few lines after recordFillProgress() just marked the
-        // row RECONCILIATION_REQUIRED.
-        let finalStatus: string = realStatus;
-        let fillReconciliationRequired = false;
-        if (realStatus === 'FILLED' || realStatus === 'PARTIALLY_FILLED') {
-          const fillResult = await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice, broker.id);
-          await this.persistRealCommissionIfKnown(row.id, realOrder.commission);
-          if (fillResult.reconciliationRequired) {
-            fillReconciliationRequired = true;
-            finalStatus = 'RECONCILIATION_REQUIRED';
+        if (!realOrder) {
+          // Confirmed, not assumed: the broker genuinely has no record of this order. A row stuck
+          // PENDING can now be safely and honestly marked REJECTED - a real answer, not a guess.
+          if (row.status === 'PENDING') {
+            await db.update(trades).set({ status: 'REJECTED' }).where(eq(trades.id, row.id));
+            console.warn(`[OMS] crash-recovery: order ${row.id} confirmed NEVER reached ${broker.name} (real lookup by client_order_id found nothing) - marking REJECTED.`);
+            if (row.transactionId) await updateTransactionStatus(row.transactionId, 'RECONCILED', { closed: true });
           }
+          continue;
         }
 
-        // F04 follow-on: `?? row.price` alone does NOT catch NaN (only null/undefined are
-        // "nullish") - a NaN averageFillPrice (the exact invalid-economics case this whole fix
-        // exists for) passed straight through to `price` and crashed better-sqlite3's bind step
-        // ("NOT NULL constraint failed: trades.price", better-sqlite3 special-cases NaN to a NULL
-        // bind), taking down the whole reconciliation loop instead of degrading to
-        // RECONCILIATION_REQUIRED. The other two recordFillProgress() callers already avoid this
-        // via a truthy/`||` check (NaN is falsy); this one used `??` (NaN is not nullish) and had
-        // no regression test exercising a NaN price through this specific path until now.
-        const safeFillPrice = Number.isFinite(realOrder.averageFillPrice) ? realOrder.averageFillPrice! : row.price;
+        const realStatus = realOrder.status;
+        if (realStatus !== row.status || (realOrder.filledQuantity ?? 0) > 0) {
+          console.error(`[OMS] crash-recovery: order ${row.id} was locally ${row.status} (never recorded a brokerOrderId) but ${broker.name} actually has it as ${realStatus} - correcting local state. This is exactly the "crashed after send" scenario Phase 1 closes.`);
 
-        await db.update(trades).set({
-          status: finalStatus,
-          brokerOrderId: realOrder.id,
-          price: safeFillPrice,
-          filledAt: finalStatus === 'FILLED' ? new Date().toISOString() : row.filledAt,
-        }).where(eq(trades.id, row.id));
+          // F04: `finalStatus` starts as the broker-reported realStatus but is overridden below if
+          // recordFillProgress() rejected the fill evidence — every write/event after this point uses
+          // finalStatus, never the raw realStatus, so a rejected fill can no longer be silently
+          // re-stamped FILLED/PARTIALLY_FILLED a few lines after recordFillProgress() just marked the
+          // row RECONCILIATION_REQUIRED.
+          let finalStatus: string = realStatus;
+          let fillReconciliationRequired = false;
+          if (realStatus === 'FILLED' || realStatus === 'PARTIALLY_FILLED') {
+            const fillResult = await this.recordFillProgress(row.id, realOrder.id, row.traceId, row.transactionId, row.symbol, row.side, row.quantity, realStatus, realOrder.filledQuantity, realOrder.averageFillPrice, broker.id);
+            await this.persistRealCommissionIfKnown(row.id, realOrder.commission);
+            if (fillResult.reconciliationRequired) {
+              fillReconciliationRequired = true;
+              finalStatus = 'RECONCILIATION_REQUIRED';
+            }
+          }
 
-        eventBus.emitOrderExecution({
-          traceId: row.traceId,
-          transactionId: row.transactionId,
-          id: row.id,
-          symbol: row.symbol,
-          side: row.side,
-          quantity: row.quantity,
-          price: safeFillPrice,
-          status: finalStatus,
-          profitLoss: row.profitLoss,
-        });
+          // F04 follow-on: `?? row.price` alone does NOT catch NaN (only null/undefined are
+          // "nullish") - a NaN averageFillPrice (the exact invalid-economics case this whole fix
+          // exists for) passed straight through to `price` and crashed better-sqlite3's bind step
+          // ("NOT NULL constraint failed: trades.price", better-sqlite3 special-cases NaN to a NULL
+          // bind), taking down the whole reconciliation loop instead of degrading to
+          // RECONCILIATION_REQUIRED. The other two recordFillProgress() callers already avoid this
+          // via a truthy/`||` check (NaN is falsy); this one used `??` (NaN is not nullish) and had
+          // no regression test exercising a NaN price through this specific path until now.
+          const safeFillPrice = Number.isFinite(realOrder.averageFillPrice) ? realOrder.averageFillPrice! : row.price;
 
-        if (row.transactionId) {
-          // F04: a rejected fill must never be reported to TransactionRegistry as cleanly
-          // RECONCILED/closed — that would tell the desk this transaction is fully resolved when it
-          // actually needs operator reconciliation. Leave the transaction row exactly as-is (it stays
-          // OPEN/EXECUTED and visible) rather than closing it on unverified fill economics; the
-          // reconciliation_events row recordFillProgress() already inserted is the real signal here.
-          if (!fillReconciliationRequired) {
-            await updateTransactionStatus(row.transactionId, 'RECONCILED', { closed: true });
+          await db.update(trades).set({
+            status: finalStatus,
+            brokerOrderId: realOrder.id,
+            price: safeFillPrice,
+            filledAt: finalStatus === 'FILLED' ? new Date().toISOString() : row.filledAt,
+          }).where(eq(trades.id, row.id));
+
+          eventBus.emitOrderExecution({
+            traceId: row.traceId,
+            transactionId: row.transactionId,
+            id: row.id,
+            symbol: row.symbol,
+            side: row.side,
+            quantity: row.quantity,
+            price: safeFillPrice,
+            status: finalStatus,
+            profitLoss: row.profitLoss,
+          });
+
+          if (row.transactionId) {
+            // F04: a rejected fill must never be reported to TransactionRegistry as cleanly
+            // RECONCILED/closed — that would tell the desk this transaction is fully resolved when it
+            // actually needs operator reconciliation. Leave the transaction row exactly as-is (it stays
+            // OPEN/EXECUTED and visible) rather than closing it on unverified fill economics; the
+            // reconciliation_events row recordFillProgress() already inserted is the real signal here.
+            if (!fillReconciliationRequired) {
+              await updateTransactionStatus(row.transactionId, 'RECONCILED', { closed: true });
+            }
           }
         }
       }

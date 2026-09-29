@@ -235,4 +235,85 @@ describe('OrderManagementService.reconcileStaleOrders - crash recovery (Phase 1)
     const [row] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'crash-5'));
     expect(row.status).toBe('PENDING'); // NOT REJECTED - ambiguous state was correctly left alone, to be retried next cycle
   });
+
+  describe('cross-broker safety (configurable execution broker review, 2026-09-29)', () => {
+    let lookupResponsesB: Record<string, Order | null> = {};
+    const lookupSpyB = vi.fn(async (clientOrderId: string) => lookupResponsesB[clientOrderId] ?? null);
+
+    function stubBrokerB(): BrokerPlugin {
+      const b = stubBroker();
+      return { ...b, id: 'crash-recovery-stub-b', name: 'Crash Recovery Stub Broker B', getOrderByClientOrderId: lookupSpyB };
+    }
+
+    beforeEach(() => {
+      lookupResponsesB = {};
+      lookupSpyB.mockClear();
+    });
+
+    it('a candidate row stamped with a DIFFERENT broker_id than the currently-active broker is looked up against the broker it was actually submitted to, never the active one - the exact defect this review found (reconcileStaleOrders previously ignored row.brokerId entirely)', async () => {
+      // Broker A ("crash-recovery-stub") is registered and active by the outer beforeEach.
+      // Broker B is registered here as a SECOND, non-active broker - simulating a deployment
+      // whose execution broker was switched after this order was originally submitted.
+      const brokerB = stubBrokerB();
+      BrokerManager.getInstance().registerBroker(brokerB);
+      // Active broker stays A (never call setActiveBroker('crash-recovery-stub-b', {})).
+
+      await db.insert(schema.trades).values({
+        id: 'crash-cross-broker', symbol: 'AAPL', side: 'BUY', quantity: 10, price: 0, status: 'PENDING',
+        timestamp: new Date().toISOString(), reasoning: 'test', traceId: 'trace-crash-cross-broker',
+        requestId: 'crash-cross-broker', submittedAt: new Date().toISOString(),
+        brokerOrderId: null,
+        brokerId: 'crash-recovery-stub-b', // submitted to B, even though A is active now
+      });
+      // Broker B genuinely has this order (still open, not filled) - if the fix works, this is
+      // what gets returned and the row must NOT be marked REJECTED.
+      lookupResponsesB['crash-cross-broker'] = {
+        id: 'real-broker-b-order-id', clientOrderId: 'crash-cross-broker', symbol: 'AAPL', side: 'BUY', type: 'MARKET',
+        status: 'PENDING', quantity: 10, filledQuantity: 0,
+        createdAt: new Date(), updatedAt: new Date(),
+      };
+      // The active broker A has never heard of this order - the pre-fix code would have looked
+      // here, found nothing, and incorrectly marked the row REJECTED.
+      lookupResponses['crash-cross-broker'] = null;
+
+      await oms.reconcileStaleOrders();
+
+      expect(lookupSpyB).toHaveBeenCalledWith('crash-cross-broker');
+      expect(lookupSpy).not.toHaveBeenCalledWith('crash-cross-broker');
+
+      const [row] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'crash-cross-broker'));
+      expect(row.status).not.toBe('REJECTED');
+      expect(row.status).toBe('PENDING');
+    });
+
+    it('candidates for two different brokers in the same cycle are each resolved against their own broker, not cross-contaminated', async () => {
+      const brokerB = stubBrokerB();
+      BrokerManager.getInstance().registerBroker(brokerB);
+
+      await seedCrashedRow('crash-multi-a', 'PENDING'); // defaults to the active broker (A) via no brokerId override... but seedCrashedRow doesn't set brokerId, so patch it explicitly:
+      await db.update(schema.trades).set({ brokerId: 'crash-recovery-stub' }).where(eq(schema.trades.id, 'crash-multi-a'));
+
+      await db.insert(schema.trades).values({
+        id: 'crash-multi-b', symbol: 'MSFT', side: 'BUY', quantity: 5, price: 0, status: 'PENDING',
+        timestamp: new Date().toISOString(), reasoning: 'test', traceId: 'trace-crash-multi-b',
+        requestId: 'crash-multi-b', submittedAt: new Date().toISOString(),
+        brokerOrderId: null, brokerId: 'crash-recovery-stub-b',
+      });
+
+      lookupResponses['crash-multi-a'] = null; // A confirms it never received this one -> REJECTED
+      lookupResponsesB['crash-multi-b'] = {
+        id: 'real-broker-b-order-id-2', clientOrderId: 'crash-multi-b', symbol: 'MSFT', side: 'BUY', type: 'MARKET',
+        status: 'FILLED', quantity: 5, filledQuantity: 5, averageFillPrice: 300.0,
+        createdAt: new Date(), updatedAt: new Date(),
+      };
+
+      await oms.reconcileStaleOrders();
+
+      const [rowA] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'crash-multi-a'));
+      const [rowB] = await db.select().from(schema.trades).where(eq(schema.trades.id, 'crash-multi-b'));
+      expect(rowA.status).toBe('REJECTED');
+      expect(rowB.status).toBe('FILLED');
+      expect(rowB.brokerOrderId).toBe('real-broker-b-order-id-2');
+    });
+  });
 });
