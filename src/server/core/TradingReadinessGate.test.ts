@@ -33,6 +33,7 @@ function healthyDefaults() {
     brokerId: 'ibkr_gateway',
   });
   getPipelineAgentSnapshot.mockReturnValue({
+    liveIdeaGenerationEnabled: true, autobotEnabled: true, tradingState: 'TRADING_ENABLED', interruptedSessionHold: false,
     togglable: [
       { id: 'TechnicalAgent', healthy: true, healthLabel: 'RUNNING', available: true },
       { id: 'QuantEngine', healthy: true, healthLabel: 'RUNNING', available: true },
@@ -46,6 +47,24 @@ function healthyDefaults() {
 }
 
 describe('TradingReadinessGate', () => {
+  it('reports the restart hold even with healthy market data, agents and broker', async () => {
+    getPipelineAgentSnapshot.mockReturnValue({ ...getPipelineAgentSnapshot(), liveIdeaGenerationEnabled: false, interruptedSessionHold: true });
+    const snapshot = await getTradingReadinessSnapshot();
+    expect(snapshot.tradingReady).toBe(false);
+    expect(snapshot.nodes.find(n => n.id === 'entryGeneration')).toMatchObject({ ready: false, detail: expect.stringContaining('reconciliation match') });
+    expect(renderTradingReadinessTree(snapshot)).toContain('unclean restart');
+  });
+
+  it.each([
+    [{ tradingState: 'TRADING_PAUSED' }, 'TRADING_PAUSED'],
+    [{ autobotEnabled: false }, 'Autobot disabled'],
+    [{ forensicCheckpointBuyLock: { locked: true } }, 'forensic checkpoint'],
+  ])('exposes an entry gate independently of worker health: %s', async (fields, reason) => {
+    getPipelineAgentSnapshot.mockReturnValue({ ...getPipelineAgentSnapshot(), ...fields, liveIdeaGenerationEnabled: false });
+    const snapshot = await getTradingReadinessSnapshot();
+    expect(snapshot.tradingReady).toBe(false);
+    expect(snapshot.reasons.join(' ')).toContain(reason);
+  });
   it('fails broker readiness when sync/selection exist but the session is offline', async () => {
     brokerReadiness.mockResolvedValue({ ready: false, detail: 'ibkr_gateway: session not authenticated' });
     const result = await getTradingReadinessSnapshot();
@@ -101,6 +120,7 @@ describe('TradingReadinessGate', () => {
 
   it('does not penalize tradingReady when Quant Engine is intentionally disabled by config (notApplicable)', async () => {
     getPipelineAgentSnapshot.mockReturnValue({
+    liveIdeaGenerationEnabled: true, autobotEnabled: true, tradingState: 'TRADING_ENABLED', interruptedSessionHold: false,
       togglable: [
         { id: 'TechnicalAgent', healthy: true, healthLabel: 'RUNNING', available: true },
         { id: 'QuantEngine', healthy: false, healthLabel: 'GATED', available: false },
@@ -158,6 +178,7 @@ describe('TradingReadinessGate', () => {
     // IDLE_WAITING_FOR_MARKET_DATA is the documented, expected pre-market/warmup state
     // (CLAUDE.md "Technical after ~50 ticks") - not a real failure.
     getPipelineAgentSnapshot.mockReturnValue({
+    liveIdeaGenerationEnabled: true, autobotEnabled: true, tradingState: 'TRADING_ENABLED', interruptedSessionHold: false,
       togglable: [
         { id: 'TechnicalAgent', healthy: false, healthLabel: 'IDLE_WAITING_FOR_MARKET_DATA', available: true },
         { id: 'QuantEngine', healthy: false, healthLabel: 'IDLE_WAITING_FOR_MARKET_DATA', available: true },
@@ -179,6 +200,7 @@ describe('TradingReadinessGate', () => {
 
   it('still reports Technical engine not ready when it is genuinely FAILED, not merely waiting for data', async () => {
     getPipelineAgentSnapshot.mockReturnValue({
+    liveIdeaGenerationEnabled: true, autobotEnabled: true, tradingState: 'TRADING_ENABLED', interruptedSessionHold: false,
       togglable: [
         { id: 'TechnicalAgent', healthy: false, healthLabel: 'FAILED', available: true },
         { id: 'QuantEngine', healthy: true, healthLabel: 'RUNNING', available: true },
@@ -212,7 +234,8 @@ describe('TradingReadinessGate', () => {
   });
 
   it('does not excuse a never-ticked TechnicalAgent during the regular session', async () => {
-    getPipelineAgentSnapshot.mockReturnValue({ togglable: [
+    getPipelineAgentSnapshot.mockReturnValue({
+    liveIdeaGenerationEnabled: true, autobotEnabled: true, tradingState: 'TRADING_ENABLED', interruptedSessionHold: false, togglable: [
       { id: 'TechnicalAgent', healthy: false, healthLabel: 'IDLE_WAITING_FOR_MARKET_DATA', available: true },
       { id: 'QuantEngine', healthy: true, healthLabel: 'RUNNING', available: true },
     ] });

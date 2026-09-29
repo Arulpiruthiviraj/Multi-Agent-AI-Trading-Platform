@@ -194,7 +194,7 @@ export class ArgusRuntime {
       const manager = BrokerManager.getInstance();
       const broker = manager.getActiveBroker();
       if (!broker) return { ready: false, detail: 'no active broker' };
-      if (!manager.isReadyForReconciliation()) return { ready: false, detail: `${broker.id}: broker state not synchronized` };
+      if (!manager.isReadyForReconciliation()) return { ready: false, detail: `${broker.id}: broker state ${manager.getSyncState()} (not synchronized)` };
       const snapshot = (broker as typeof broker & { getConnectionSnapshot?: () => Record<string, unknown> }).getConnectionSnapshot?.();
       if (snapshot && ('authenticated' in snapshot || broker.id === 'ibkr_gateway') && snapshot.authenticated !== true) {
         return { ready: false, detail: `${broker.id}: session not authenticated` };

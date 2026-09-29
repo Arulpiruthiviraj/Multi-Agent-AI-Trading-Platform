@@ -109,6 +109,10 @@ export function installObservabilityEventBridge(): void {
         lastError: payload?.lastError,
         providersAttempted: payload?.providersAttempted,
         reason: payload?.reason,
+        code: payload?.code,
+        syncState: payload?.syncState,
+        fromState: payload?.fromState,
+        toState: payload?.toState,
         source: payload?.source,
         momentumScore: payload?.momentumScore,
       });

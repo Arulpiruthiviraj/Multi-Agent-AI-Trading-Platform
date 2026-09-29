@@ -87,7 +87,7 @@ describe('QuantSignalAgent emit fixture (strategy + EV satisfied)', () => {
 
   afterEach(() => vi.unstubAllGlobals());
 
-  it('emits QuantEngine TRADE_IDEA_GENERATED when the fixture clears EV and R:R', async () => {
+  function stubMarketData() {
     const now = Date.now();
     vi.stubGlobal('fetch', vi.fn(async () => ({
       ok: true,
@@ -103,6 +103,35 @@ describe('QuantSignalAgent emit fixture (strategy + EV satisfied)', () => {
     })));
     vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['QFIX']);
     vi.spyOn(marketDataWorker, 'getLatestPriceAgeMs').mockReturnValue(1000);
+  }
+
+  it('records the restart hold for an eligible candidate without emitting an idea', async () => {
+    stubMarketData();
+    const { forceHoldNewEntryIdeasForTests } = await import('../core/sessionRecovery');
+    const { tradingEngine } = await import('../engines/TradingEngine');
+    tradingEngine.state.enabled = true;
+    tradingEngine.state.tradingState = 'TRADING_ENABLED';
+    const ideas: any[] = [];
+    const refusals: any[] = [];
+    const onIdea = (p: any) => ideas.push(p);
+    const onRefusal = (p: any) => refusals.push(p);
+    eventBus.subscribe('TRADE_IDEA_GENERATED', onIdea);
+    eventBus.subscribe('DESK_NO_TRADE', onRefusal);
+    forceHoldNewEntryIdeasForTests(true);
+    try {
+      await new QuantSignalAgent().evaluateSymbol('QHELD');
+      expect(ideas).toEqual([]);
+      expect(refusals).toEqual([expect.objectContaining({ symbol: 'QHELD', code: 'IDEA_GENERATION_GATED' })]);
+      expect(sqliteDb.prepare('SELECT emitted_trade_idea FROM quant_assessments WHERE symbol=?').get('QHELD')).toEqual({ emitted_trade_idea: 0 });
+    } finally {
+      forceHoldNewEntryIdeasForTests(false);
+      eventBus.unsubscribe('TRADE_IDEA_GENERATED', onIdea);
+      eventBus.unsubscribe('DESK_NO_TRADE', onRefusal);
+    }
+  });
+
+  it('emits QuantEngine TRADE_IDEA_GENERATED when the fixture clears EV and R:R', async () => {
+    stubMarketData();
 
     const received: any[] = [];
     const rejected: any[] = [];

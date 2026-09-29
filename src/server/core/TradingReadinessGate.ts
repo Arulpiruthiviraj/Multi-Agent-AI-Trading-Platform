@@ -114,6 +114,16 @@ export async function getTradingReadinessSnapshot(): Promise<TradingReadinessSna
   } catch {
     pipeline = null;
   }
+  const entryReady = pipeline?.liveIdeaGenerationEnabled === true;
+  const entryDetail = pipeline === null ? 'entry gate evidence unavailable'
+    : pipeline.interruptedSessionHold ? 'unclean restart: awaiting a real reconciliation match'
+    : pipeline.tradingState !== 'TRADING_ENABLED' ? `trading state ${pipeline.tradingState}`
+    : !pipeline.autobotEnabled ? 'Autobot disabled'
+    : pipeline.forensicCheckpointBuyLock?.locked ? 'first-fill forensic checkpoint holds new entries'
+    : entryReady ? 'entry generation enabled; consensus and risk checks still required'
+    : 'entry generation held by campaign or another entry gate';
+  nodes.push({ id: 'entryGeneration', label: 'Entry Generation', ready: entryReady, detail: entryDetail });
+  if (!entryReady) reasons.push(`Entry generation blocked: ${entryDetail}`);
   // Pre-market/market-open readiness fix (2026-08-25): IDLE_WAITING_FOR_MARKET_DATA is the
   // documented, expected state outside the regular session before ~50 ticks have arrived (CLAUDE.md "Technical after ~50
   // ticks") or before Alpaca's clock opens - it is not a failure, exactly as `market_hours`
@@ -179,7 +189,7 @@ export function renderTradingReadinessTree(snapshot: TradingReadinessSnapshot): 
   const lines: string[] = ['ARGUS'];
   const top = snapshot.nodes.filter((n) => n.id !== 'aiProviderLayer');
   for (const n of top) {
-    lines.push(`├── ${n.label.padEnd(22)} ${mark(n)}`);
+    lines.push(`├── ${n.label.padEnd(22)} ${mark(n)}${!n.ready && !n.notApplicable ? ` ${n.detail}` : ''}`);
   }
   const ai = snapshot.nodes.find((n) => n.id === 'aiProviderLayer');
   if (ai) {

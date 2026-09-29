@@ -741,6 +741,17 @@ export class QuantSignalAgent {
       }).catch((e) => console.error(`[QuantSignalAgent] Forecast build failed for ${symbol}`, e));
       }
       }
+    } else if (idea) {
+      // An eligible strategy candidate can be held before consensus. Persist that distinction
+      // instead of making it indistinguishable from an EV rejection or an inactive worker.
+      const enabled = isPipelineAgentEnabled('QuantEngine');
+      eventBus.emit(EVENTS.DESK_NO_TRADE, {
+        traceId, symbol,
+        code: enabled ? 'IDEA_GENERATION_GATED' : 'AGENT_DISABLED',
+        reason: enabled
+          ? 'Quant strategy candidate held by the existing entry-generation gate (trading state, Autobot, restart reconciliation, campaign or forensic checkpoint).'
+          : 'Quant strategy candidate held because QuantEngine is disabled in Mission Control.',
+      });
     }
 
     eventBus.emit(EVENTS.QUANT_ASSESSMENT_COMPLETED, { traceId, symbol, regime, marketContext, strategyEvaluations, groupedScores, aiContradictionAnalysis, timestamp: new Date().toISOString(), emittedTradeIdea });

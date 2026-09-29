@@ -1617,6 +1617,71 @@ file — kept separate because `db`/`sqliteDb` are process-wide singletons keyed
 at first import; a second `describe` block in the same test file reusing `await import('../db')`
 gets back the first block's already-closed connection).
 
+## Durable CryptoPaperBroker state (2026-09-28, Crypto Gap Analysis G5, `ARGUS_CRYPTO_TRADING_REDESIGN_PLAN.md`)
+
+**Problem found:** `CryptoPaperBroker.ts` held `cash`/`_positions`/`_orders` purely in in-memory
+`Map`s — a process restart silently lost the entire simulated crypto PAPER portfolio, and no fill
+was durable enough to prove idempotent recovery under a duplicate event.
+
+**Fix:** three new tables — `crypto_paper_broker_state` (singleton row: cash/initialCash/
+realizedPnl), `crypto_paper_positions` (one row per symbol), `crypto_paper_orders` (one row per
+order, unique-indexed on `client_order_id` for the same idempotency guarantee the real OMS path
+already has). Deliberately separate from the canonical `trades`/`fills` tables — those record what
+Argus's OMS submitted TO a broker; these are this broker's OWN internal book, the crypto-paper
+equivalent of what a real venue's own database would hold. `initialize()` hydrates the in-memory
+Maps (kept as a write-through cache for `tick()`'s hot synchronous loop) from durable state, or
+persists a fresh starting snapshot on first boot. Every mutation (`placeOrder()`, `modifyOrder()`,
+`cancelOrder()`, and each order's fill inside `tick()`) persists immediately; a single fill's
+cash/position/order mutation is wrapped in one `db.transaction()` so a crash between two different
+orders' fills within the same `tick()` call leaves the already-completed fill durably recorded and
+the not-yet-reached one untouched, never a half-applied fill. `currentPrice`/`marketValue`/
+`unrealizedPnl` are deliberately NOT persisted (pure display fields re-derived from `entryPrice`/
+`quantity`/`entryFees` by the next real tick, never restored as a stale valuation).
+
+**Migration note:** `drizzle-kit generate` for this change also emitted a large batch of unrelated
+`CREATE TABLE`/`ALTER TABLE` statements (`staged_news_catalysts`, `trades.commission`, etc.) that
+turned out to already exist in the real `data/argus.db` — the drizzle-kit snapshot journal had
+drifted from what was actually applied, independent of this change. The generated migration file
+(`drizzle/0078_skinny_mockingbird.sql`) was manually trimmed to only the three genuinely new
+`crypto_paper_*` table statements before being committed; the regenerated snapshot JSON (which
+schema.ts diffing actually depends on) is correct going forward.
+
+**Tests:** `CryptoPaperBroker.durability.test.ts` (new, 5/5 pass) — fresh-boot snapshot
+persistence, cash/position/order survival across a simulated restart (fresh instance, same DB),
+duplicate-clientOrderId protection surviving that restart, a fully-closed position's row removal
+(not left stale), and write-through consistency between in-memory and durable state after a
+partial fill. Existing `CryptoPaperBroker.test.ts` (27 tests, pre-existing behavior) unaffected —
+32/32 across both files.
+
+## Real (not fabricated) upstream idea generation in the AI-outage baseline test (2026-09-28)
+
+**Problem found:** `aiOutageQuantOnlyBaseline.integration.test.ts` (Master Redesign Plan Phase 3's
+own "all AI unavailable" experiment) proved the DOWNSTREAM half of the quant-only path — a
+directly-constructed idea reaching ChiefTrader → RiskEngine → OMS → a real PAPER fill with a
+genuinely empty `AIRouter` — but its `TechnicalAgent` "idea" was `agent.reviewIdea({side:'BUY',
+confidence:0.88, reasoning:'real RSI/MACD breakout...'})`: a hardcoded payload, not an actual
+indicator computation. It never exercised market data → real strategy calculation → a naturally
+emitted idea.
+
+**Addition (not a replacement):**
+`aiOutageQuantOnlyBaseline.marketDataDriven.integration.test.ts` starts the real `technicalAgent`
+singleton (`TechnicalAgent.ts`), feeds it 50 real `MARKET_DATA` events using a price sequence
+independently re-verified against the live `evaluateTechnicalSignals()` engine (BUY, confidence
+0.831, real RSI/MACD-crossover-derived, matching `technicalSignal.test.ts`'s own `risingTrendPrices`
+fixture at `quantThresholds.technicalHistoryBars`), captures the resulting real
+`TRADE_IDEA_GENERATED` event from the EventBus (never constructed by the test), and feeds that
+unedited payload into `ChiefTraderAgent.reviewIdea()` — same downstream assertions as the original
+file (real fill, no fabricated `ConsensusDebate` vote, `RiskEngine` approval, `PAPER_TRADING_ONLY`).
+
+**Known, explicitly-labeled remaining gap:** the second required independent voice (`QuantEngine`)
+is still a directly-constructed idea in both outage test files. Driving it organically requires
+`QuantSignalAgent.evaluateSymbol()`'s real path — real OHLCV bars plus real regime/momentum/volume/
+support-resistance/market-context computation (including SPY/sector relative strength) — with no
+existing known-good bar-shape fixture anywhere in this repository (`momentumBreakout.test.ts`'s
+`baseFixture()` constructs a `StrategyContext` directly, not from bars). This is substantially
+larger than a bounded batch and is the concrete next step for full upstream coverage, not attempted
+in this pass.
+
 ## RECONCILIATION_REQUIRED outcome propagation (2026-09-27, `ARGUS_CODE_DEFECT_AUDIT_AND_FIX_PLAN.md` F04 reopened)
 
 **Problem found:** the private `recordFillProgress()` helper in `OrderManagement.ts` — shared by
@@ -2832,3 +2897,19 @@ The operator authorized corrective implementation following `ARGUS_CODE_DEFECT_A
 - Java `CryptoExpectedEdgeEngine` rejects invalid calibration/economic inputs and requires a positive minimum sample policy. Invalid evidence is no longer silently clamped into an apparently calibrated estimate. No signal, vote or execution authority was added.
 
 These are engineering corrections, not alpha validation or LIVE authorization. See the audit follow-up for remaining defects and validation evidence.
+
+## September 28, 2026 — Failed broker initialization and zero-idea recovery
+
+A runtime audit found an enabled PAPER session with fresh market data but `BrokerManager.syncState=FAILED`, `interruptedSessionHold=true`, and `liveIdeaGenerationEnabled=false`. Through 15:58 EDT on September 28, all 4,016 quant assessments were non-emitting; there were no recorded ideas, consensus decisions, risk assessments, trades or fills in the trading-date window beginning 04:00 UTC. These are incident observations, not readiness certification.
+
+`BrokerManager.setActiveBroker()` now serializes explicit activations against initialization/reconciliation, authenticates a replacement before disconnecting the prior adapter, and transitions successful activation to `READY` before calling the existing portfolio flush/reconcile path. `READY` here means the reconciliation worker may run, not that reconciliation passed or an order is authorized. A previous `FAILED` state no longer permanently suppresses that worker after a successful explicit reconnection. Authentication failure remains fail-closed; invalid broker IDs do not change the current synchronization state. Boot initialization also checks the adapter's boolean authentication result instead of silently accepting `false`.
+
+The existing restart hold still releases only through a real `RECONCILIATION_MATCH`. This change does not resume `TRADING_PAUSED`, clear `EMERGENCY_STOP`, emit a substitute match, submit an order, or add a retry scheduler. No operational flags, consensus/risk thresholds or AI/quant authority changed.
+
+Diagnostics now include the actual broker sync state in runtime readiness, a separate Entry Generation readiness node with the existing hold/state reason, durable initialization-stage/activation-state events, and preservation of `syncState`, `fromState`, `toState` and `code` in the EventBus observability projection. Quant candidates withheld by the entry gate or agent switch produce explicit `DESK_NO_TRADE` reasons while their original assessment remains persisted. No new quant calculation is introduced.
+
+Regression coverage uses the real manager, reconciliation worker, isolated SQLite and session-recovery listener with a fixture broker. It checks matched, mismatched, unreachable and rejected-authentication cases, overlapping activation refusal, and unchanged paused state. The quant candidate test is a focused refusal/telemetry test using an existing mocked strategy fixture, not a market-data-to-fill certification.
+
+The first controlled deployment reproduced initialization failure in `crypto_paper` with `SqliteError` before broker selection. The real database lacked all three crypto paper tables despite successful migration startup. Migration `0078_skinny_mockingbird` has journal timestamp `1790593282631`, below already-applied `0077` (`1790600000000`); Drizzle compares timestamps with the database watermark and silently skips 0078 on this upgrade path. Fresh databases apply it, explaining why fresh-database tests missed the defect. Forward-only migration `0079_repair_skipped_crypto_paper_tables` creates the same tables/indexes if absent, preserving any existing broker ledger. Historical migration files/timestamps remain unchanged. Regression tests cover the deployed watermark, populated prior tables, fresh full-journal migration, repeat migration, and rejection of future timestamp regressions. This is a reproduced startup cause and compatible with the day's failure chain; the original morning exception was not durably retained.
+
+Deployment verification: after the normal graceful restart and automatic boot migration, engine PID 28476 reported `alpaca: Healthy`; production `reconciliation_events` recorded a real Alpaca match at `2026-09-29T02:22:04.467Z` (September 28, 22:22 EDT), with no action taken. The new readiness node correctly reports `TRADING_PAUSED`; no resume command was issued. `LIVE_NO_GO` was rechecked through the live-readiness endpoint. Off-hours fresh-quote coverage was zero, so this is broker/reconciliation recovery evidence, not next-session organic trading certification.

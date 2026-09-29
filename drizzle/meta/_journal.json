@@ -554,6 +554,13 @@
       "when": 1790593282631,
       "tag": "0078_skinny_mockingbird",
       "breakpoints": true
+    },
+    {
+      "idx": 79,
+      "version": "6",
+      "when": 1790648400000,
+      "tag": "0079_repair_skipped_crypto_paper_tables",
+      "breakpoints": true
     }
   ]
 }

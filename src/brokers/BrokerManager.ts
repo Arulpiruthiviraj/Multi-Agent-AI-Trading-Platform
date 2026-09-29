@@ -68,6 +68,7 @@ export class BrokerManager {
   private brokers: Map<string, BrokerPlugin> = new Map();
   private paperTickFromMarketData = false;
   private syncState: BrokerSyncState = 'READY';
+  private activationInProgress = false;
   /** Crypto Expansion Phase 13 (2026-09-22). ARGUS_CRYPTO_ACTIVE_BROKER - see
    *  resolveCryptoBrokerSelection()'s own doc comment for accepted values and fallback semantics. */
   private cryptoBrokerId: string | null = null;
@@ -110,6 +111,8 @@ export class BrokerManager {
   
   public async initialize() {
      this.syncState = 'INITIALIZING';
+     let initializationStage = 'REGISTER_ADAPTERS';
+     let initializingBrokerId: string | null = null;
      try {
          const internalPaper = new InternalPaperBroker();
          const alpaca = new AlpacaBroker();
@@ -133,10 +136,14 @@ export class BrokerManager {
          this.brokers.set(cryptoPaper.id, cryptoPaper);
          
          // Initialize plugins
+         initializationStage = 'INITIALIZE_ADAPTER';
          for (const broker of this.brokers.values()) {
+             initializingBrokerId = broker.id;
              await broker.initialize();
          }
-         
+
+         initializationStage = 'SELECT_BROKER';
+         initializingBrokerId = null;
          const settings = await db.select().from(schema.settings).limit(1);
 
          const { selectedName, selectionSource } = BrokerManager.resolveBootBrokerSelection({
@@ -186,6 +193,9 @@ export class BrokerManager {
          // ended up being (e.g. after the non-functional/unavailable fallback just above).
          const connection = brokerConnections.find(b => b.brokerName === this.activeBroker.name);
 
+         let authenticated = false;
+         initializationStage = 'AUTHENTICATE';
+         initializingBrokerId = this.activeBroker.id;
          if (connection) {
              // Only pass through credentials this specific broker's own connection row actually has.
              // No cross-broker fallback here - each adapter owns its own env-var fallback internally
@@ -218,7 +228,7 @@ export class BrokerManager {
                  // of authenticating with unknown credentials.
                  console.error(`[BrokerManager] Refusing to activate '${this.activeBroker.name}' with undecryptable credentials — falling back to Internal Paper Simulator.`);
                  this.activeBroker = internalPaper;
-                 await this.activeBroker.authenticate({ initialCash: 100000 });
+                 authenticated = await this.activeBroker.authenticate({ initialCash: 100000 });
              } else {
                  if (connection.paperMode) {
                      this.activeBroker.paperTrading();
@@ -226,7 +236,7 @@ export class BrokerManager {
                      this.activeBroker.liveTrading();
                  }
 
-                 await this.activeBroker.authenticate({
+                 authenticated = await this.activeBroker.authenticate({
                    apiKey: key,
                    secretKey: secret,
                    isLive: connection.paperMode === false,
@@ -234,11 +244,14 @@ export class BrokerManager {
              }
          } else if (this.activeBroker.id === 'alpaca') {
              const mode = String(settings[0]?.tradingMode || '').toUpperCase();
-             await this.activeBroker.authenticate({ isLive: mode === 'LIVE' });
+             authenticated = await this.activeBroker.authenticate({ isLive: mode === 'LIVE' });
          } else {
-             await this.activeBroker.authenticate({ initialCash: 100000 });
+             authenticated = await this.activeBroker.authenticate({ initialCash: 100000 });
          }
 
+         if (!authenticated) throw new Error(`Broker authentication failed for '${this.activeBroker.id}'`);
+
+         initializationStage = 'BIND_MARKET_DATA';
          this.wireInternalPaperTicksFromMarketData();
 
          // Real bug found and fixed this pass: setActiveBroker() (the mid-session broker switch)
@@ -278,6 +291,14 @@ export class BrokerManager {
          logErrorSafely('[BrokerManager] Init Failed', e);
          this.wireInternalPaperTicksFromMarketData();
          this.syncState = 'FAILED';
+         // Keep a durable failure marker: detached engine stdout and the console ring are
+         // insufficient to explain an all-day reconciliation hold after a startup failure.
+         structuredLogger.error('broker_initialization_failed', {
+             category: 'RECONCILIATION', eventType: 'BROKER_INITIALIZATION_FAILED',
+             component: 'BrokerManager', brokerId: this.activeBroker.id, syncState: this.syncState,
+             initializationStage, initializingBrokerId,
+             errorName: e instanceof Error ? e.name : 'UnknownError',
+         });
      }
   }
 
@@ -436,6 +457,37 @@ export class BrokerManager {
    * IDs: alpaca | ibkr_gateway | ibkr_web | ibkr (auto) | internal_paper | coinbase.
    */
   public async setActiveBroker(id: string, credentials?: any): Promise<boolean> {
+    // Reject invalid selections before changing the current adapter's synchronization state.
+    if (id !== 'ibkr') {
+      const candidate = this.brokers.get(id);
+      if (!candidate) throw new Error(`Broker ${id} not found`);
+      if (NON_FUNCTIONAL_BROKER_IDS.has(id)) {
+        throw new Error(`Broker '${candidate.name}' is not a functional adapter (placeOrder is unimplemented). Refusing to select it as active.`);
+      }
+    }
+    if (this.activationInProgress || this.syncState === 'INITIALIZING' || this.syncState === 'SYNCING') {
+      throw new Error(`Broker activation unavailable while broker state is ${this.syncState}`);
+    }
+    this.activationInProgress = true;
+    const previousState = this.syncState;
+    // Prevent reconciliation from comparing two adapters across an asynchronous cutover.
+    this.syncState = 'INITIALIZING';
+    try {
+      return await this.activateBroker(id, credentials);
+    } catch (error) {
+      this.syncState = 'FAILED';
+      throw error;
+    } finally {
+      this.activationInProgress = false;
+      structuredLogger.info('broker_activation_completed', {
+        category: 'RECONCILIATION', eventType: 'BROKER_ACTIVATION_COMPLETED',
+        component: 'BrokerManager', brokerId: this.activeBroker.id,
+        previousState, syncState: this.syncState,
+      });
+    }
+  }
+
+  private async activateBroker(id: string, credentials?: any): Promise<boolean> {
     let resolvedId = id;
     if (id === 'ibkr') {
       resolvedId = await this.resolveIbkrAlias();
@@ -517,7 +569,9 @@ export class BrokerManager {
       }
     }
 
-    if (this.activeBroker && this.activeBroker.id !== resolvedId) {
+    // A failed candidate must not disconnect the previously selected adapter.
+    const connected = await broker.authenticate(authPayload);
+    if (connected && this.activeBroker && this.activeBroker.id !== resolvedId) {
       console.log(`[BrokerManager] Switching from ${this.activeBroker.name} to ${broker.name}`);
       try {
         await this.activeBroker.disconnect();
@@ -526,12 +580,15 @@ export class BrokerManager {
       }
     }
 
-    const connected = await broker.authenticate(authPayload);
     if (connected) {
       this.activeBroker = broker;
       const stampPaper = paperOnly || authPayload.isLive !== true;
       await this.ensureBrokerConnectionPaperStamp(broker, stampPaper);
       await this.applyMarketDataBinding(broker);
+      // READY admits the existing reconciliation worker, not trading. Previously FAILED
+      // survived a successful reconnect forever, so that worker always skipped and the
+      // interrupted-session hold never received a real RECONCILIATION_MATCH.
+      this.syncState = 'READY';
       console.log(`[BrokerManager] Active broker is now ${broker.name} (id=${resolvedId}, paperOnly=${paperOnly}, paperMode=${stampPaper})`);
       // Fail-closed cutover: drop prior adapter's local holdings, then live-reconcile.
       try {

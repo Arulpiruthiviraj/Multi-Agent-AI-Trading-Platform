@@ -17,6 +17,15 @@ import { EVENTS } from '../core/eventNames';
 import { installObservabilityEventBridge, resetObservabilityBridgeForTests } from './instrumentEventBus';
 
 describe('instrumentEventBus - generic wildcard bridge', () => {
+  it('retains the failure state, state transition and reason code needed for a zero-idea audit', () => {
+    eventBus.publish(EVENTS.RECONCILIATION_WARMUP, { reason: 'broker_not_ready', syncState: 'FAILED' });
+    eventBus.publish(EVENTS.TRADING_STATE_CHANGED, { fromState: 'TRADING_PAUSED', toState: 'TRADING_ENABLED', reason: 'operator' });
+    eventBus.publish(EVENTS.DESK_NO_TRADE, { symbol: 'AAPL', code: 'IDEA_GENERATION_GATED', reason: 'entry hold' });
+    const payloadFor = (type: string) => JSON.parse(enqueueObservabilityEvent.mock.calls.find(([r]) => r.eventType === type)![0].payload).payload;
+    expect(payloadFor(EVENTS.RECONCILIATION_WARMUP)).toMatchObject({ syncState: 'FAILED' });
+    expect(payloadFor(EVENTS.TRADING_STATE_CHANGED)).toMatchObject({ fromState: 'TRADING_PAUSED', toState: 'TRADING_ENABLED' });
+    expect(payloadFor(EVENTS.DESK_NO_TRADE)).toMatchObject({ code: 'IDEA_GENERATION_GATED' });
+  });
   beforeEach(() => {
     enqueueObservabilityEvent.mockClear();
     resetObservabilityBridgeForTests();
