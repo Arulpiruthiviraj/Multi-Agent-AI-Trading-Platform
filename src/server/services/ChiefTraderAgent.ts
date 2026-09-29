@@ -711,25 +711,47 @@ export class ChiefTraderAgent {
   /**
    * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2 - explicit separation of
    * rawSignalStrength / historicalReliability / decisionConfidence). historicalReliability and
-   * decisionConfidence still read the STORED `calibratedConfidence` column, exactly as the
-   * original calibrateConfidence() did - that value is not a raw live computation, it's the output
-   * of CalibrationCandidateBuilder.runCalibrationValidationCycle()'s own promotion mechanism, which
-   * has its own statistical-significance gate before ever overwriting the currently-active
-   * calibrated value (see that file's `currentActiveCalibratedConfidence` comparison). An earlier
-   * version of this change recomputed live via calibratedConfidenceForRawSignal() at read-time,
-   * anchored on this round's own raw value instead of the bucket midpoint - a real, well-justified
-   * improvement in isolation, but it silently bypassed that promotion safety net, which is real
-   * production behavior this pass does not have grounds to override. calibratedConfidenceForRawSignal()
-   * stays in ConfidenceCalibration.ts, tested, available for a future pass that either extends the
-   * promotion mechanism to use it or makes a deliberate, reviewed decision to bypass it - not
-   * wired into the live decision path here.
+   * decisionConfidence still read the STORED `agentConfidenceCalibration.calibratedConfidence`
+   * column, exactly as the original calibrateConfidence() did.
    *
-   * What IS new and safe: rawSignalStrength/historicalReliability/sampleSize/dataQuality are now
-   * separately observable per agent per round (Evidence.calibrationDetail, surfaced in
-   * CONSENSUS_TERMINAL_REASON) instead of collapsing into one opaque number, and dataQuality makes
-   * the sample-size question explicit (isCalibrationSampleSufficient(), reusing researchSafety.json's
-   * minPaperTrades/minOosTrades=30 precedent) rather than silently trusting a thin-sample estimate.
-   * decisionConfidence's actual VALUE is unchanged from before this pass in every case.
+   * 2026-09-29 (second Codex review, item 6 - correcting a real, verified contradiction this
+   * comment previously stated): that stored value is written EXCLUSIVELY by ReflectionEngine.ts's
+   * own raw Beta-Binomial recalculation (its `db.insert(agentConfidenceCalibration)...
+   * onConflictDoUpdate` upsert, ~60s cycle) - a live, uncorrected-for-autocorrelation estimate. The
+   * previous version of this comment said the value was "the output of
+   * CalibrationCandidateBuilder.runCalibrationValidationCycle()'s own promotion mechanism" - that
+   * was inaccurate; verified directly against CalibrationCandidateBuilder.ts's own code and header
+   * comment (`buildCalibrationCandidates()` only ever SELECTs from agentConfidenceCalibration,
+   * never writes it - its "promotion" via `ChampionChallenger.createShadowVersion()`/
+   * `promoteToCandidate()`/`decidePromotion()` writes ONLY to the separate, generic
+   * learning_versions/promotion_decisions/rollback_events ledger). Three genuinely distinct roles,
+   * not one contradictory mechanism:
+   *   1. ReflectionEngine.ts - the real, active WRITER of the raw calibratedConfidence value this
+   *      method reads (STANDARD-tier read path, used here, for every agent/bucket unconditionally).
+   *   2. CalibrationCandidateBuilder.ts - an OBSERVATIONAL, read-only validation pipeline. It
+   *      recomputes a cluster-corrected "candidate" estimate from the same underlying
+   *      prediction_outcomes evidence and runs it through the champion/challenger ledger purely to
+   *      produce an audited CHAMPION/CANDIDATE trust verdict - it never feeds that verdict, or any
+   *      value, back into agentConfidenceCalibration itself.
+   *   3. ModerateTierEvaluator.ts's isAgentBucketCalibrationTrustworthy() - a separate, third
+   *      READER of (2)'s champion ledger (not of agentConfidenceCalibration): it additionally
+   *      requires a statistically-validated CHAMPION to exist for an agent's current bucket before
+   *      the MODERATE consensus tier will trust that agent's calibration at all. This method
+   *      (calibrateConfidenceDetailed, the STANDARD-tier path) does not consult that champion
+   *      ledger and is unaffected by whether one exists.
+   * Wiring (2)'s cluster-corrected candidate value into THIS method's own decisionConfidence
+   * (replacing ReflectionEngine's raw estimate here, not just gating MODERATE-tier trust) remains a
+   * distinct, separate, explicitly-deferred protected-decision-model change - proposed, not active.
+   * calibratedConfidenceForRawSignal() (ConfidenceCalibration.ts) stays available, tested, for that
+   * future pass; not wired into the live decision path here.
+   *
+   * What IS new and safe (unchanged from the original 2026-09-11 pass): rawSignalStrength/
+   * historicalReliability/sampleSize/dataQuality are separately observable per agent per round
+   * (Evidence.calibrationDetail, surfaced in CONSENSUS_TERMINAL_REASON) instead of collapsing into
+   * one opaque number, and dataQuality makes the sample-size question explicit
+   * (isCalibrationSampleSufficient(), reusing researchSafety.json's minPaperTrades/minOosTrades=30
+   * precedent) rather than silently trusting a thin-sample estimate. decisionConfidence's actual
+   * VALUE is unchanged by this comment correction - only the documentation of where it comes from.
    */
   private async calibrateConfidenceDetailed(agentName: string, rawConfidence: number): Promise<CalibrationDetail> {
     try {

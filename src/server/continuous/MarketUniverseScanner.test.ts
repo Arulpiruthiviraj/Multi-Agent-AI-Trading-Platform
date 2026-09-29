@@ -722,11 +722,14 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     expect(JSON.parse(rows[rows.length - 1].payload as string).gapMover).toBe(false);
   });
 
-  it('Phase 27 (relative volume): tags a real relative-volume mover using the SAME already-fetched snapshot + ADV data - zero new API call', async () => {
+  it('2026-09-29 (second review, item 5): a real, high today-volume-vs-ADV ratio is NEVER tagged a relative-volume mover - computeRvol() abstains unconditionally rather than compute an incompatible-feed-scope ratio', async () => {
     process.env[MOVERS_FLAG] = 'true';
     mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'HIGHRVOL', percent_change: 6 }]));
     mockFetch.mockResolvedValueOnce(jsonResponse({
-      // Today's volume 6,000,000 vs a real 2,000,000-share ADV -> 3x, above the 2x default threshold.
+      // Today's volume 6,000,000 vs a real 2,000,000-share ADV would be 3x under the old (removed)
+      // incompatible-feed-scope math - real evidence that WOULD have fired the old, mislabeled
+      // computation, deliberately kept to prove the abstention holds even when the raw numbers would
+      // have cleared the threshold.
       HIGHRVOL: { latestTrade: { p: 51 }, dailyBar: { o: 50, v: 6_000_000, c: 51 }, latestQuote: { bp: 50.9, ap: 51.1 } },
     }));
     mockFetch.mockResolvedValueOnce(barsResponse({ HIGHRVOL: [2_000_000, 2_000_000] }));
@@ -741,19 +744,16 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     );
     expect(rows.length).toBeGreaterThan(0);
     const payload = JSON.parse(rows[rows.length - 1].payload as string);
-    expect(payload.rvolMover).toBe(true);
-    expect(payload.rvol).toBeCloseTo(3, 2);
-    // 2026-09-29 (volume-provenance fix): this ratio mixes a real-time IEX numerator with a
-    // full-day SIP/FMP historical denominator - must be labeled non-comparable, never presented
-    // as a calibrated relative-volume measurement.
-    expect(payload.rvolProvenance).toMatchObject({
-      numeratorFeed: 'ALPACA_IEX_SNAPSHOT',
-      denominatorFeed: 'ALPACA_SIP_HISTORICAL_OR_FMP_FALLBACK',
-      comparable: false,
-    });
+    // 2026-09-29 (second review, item 5): a labeled-but-still-computed incompatible ratio was not
+    // enough - computeRvol() now returns null unconditionally, so rvolMover can never assert true
+    // from IEX-numerator/SIP-denominator math again, and rvolProvenance (present only when rvol is
+    // non-null) is correspondingly always null too.
+    expect(payload.rvolMover).toBe(false);
+    expect(payload.rvol).toBeNull();
+    expect(payload.rvolProvenance).toBeNull();
   });
 
-  it('2026-09-29 (volume-provenance fix): rvolProvenance is null, never fabricated, when rvol itself is null (no real ADV was fetched for this symbol)', async () => {
+  it('2026-09-29 (volume-provenance fix, still valid post-abstention): rvolProvenance is null, never fabricated, when no real ADV was fetched for this symbol', async () => {
     process.env[MOVERS_FLAG] = 'true';
     mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'NOADVDATA', percent_change: 6 }]));
     mockFetch.mockResolvedValueOnce(jsonResponse({
@@ -775,11 +775,12 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     expect(payload.rvolProvenance).toBeNull();
   });
 
-  it('Phase 27: real volume below the reviewed relative-volume threshold is never tagged a relative-volume mover', async () => {
+  it('real volume at/below the reviewed relative-volume threshold is never tagged a relative-volume mover (abstention makes this trivially true, but real ADV data still flows through admitted/rvolProvenance correctly)', async () => {
     process.env[MOVERS_FLAG] = 'true';
     mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'NORMALVOL', percent_change: 6 }]));
     mockFetch.mockResolvedValueOnce(jsonResponse({
-      // Today's volume 2,000,000 vs a real 2,000,000-share ADV -> 1x, below the 2x default threshold.
+      // Today's volume 2,000,000 vs a real 2,000,000-share ADV would be 1x under the old (removed)
+      // incompatible-feed-scope math, below the 2x threshold either way.
       NORMALVOL: { latestTrade: { p: 51 }, dailyBar: { o: 50, v: 2_000_000, c: 51 }, latestQuote: { bp: 50.9, ap: 51.1 } },
     }));
     mockFetch.mockResolvedValueOnce(barsResponse({ NORMALVOL: [2_000_000, 2_000_000] }));
@@ -795,7 +796,7 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     expect(rows.length).toBeGreaterThan(0);
     const payload = JSON.parse(rows[rows.length - 1].payload as string);
     expect(payload.rvolMover).toBe(false);
-    expect(payload.rvol).toBeCloseTo(1, 2);
+    expect(payload.rvol).toBeNull();
   });
 
   it('Phase A: logs ADV as the reason when a mover clears price/dollar-volume/spread but fails the real 20-day ADV floor', async () => {

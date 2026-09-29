@@ -1644,15 +1644,32 @@ validation, and tests before any activation, per this session's own authorizatio
 implemented this pass (time/scope), but the diagnostic half (horizon exposure with zero decision
 impact) is ready to build on the next pass without further design work.
 
-**Calibration authority - traced, addressed in the "PROPOSED, NOT ACTIVE" section above.** Every
-real writer (`ReflectionEngine.ts`, real `RAW_BETA_BINOMIAL` Beta-Binomial upserts keyed on
-`(agentName, bucketLow, provider)`) and reader (`ChiefTraderAgent.calibrateConfidenceDetailed()`)
-was traced. The "contradictory comments" claim resolves cleanly: `ReflectionEngine.ts` is the only
-real writer today: `CalibrationCandidateBuilder.ts`'s promotion mechanism is genuinely observational
-(validates candidates, never writes `agentConfidenceCalibration` itself) - the header comment
-describing a "promotion governs the value" mechanism describes a real, built, but not-yet-wired
-path, not a currently-contradicted one. The real, separate, already-fixed-in-this-pass-as-a-proposal
-issue is the provider-selection ambiguity documented above, not a promotion-vs-raw-writer conflict.
+**Calibration authority - traced AND corrected (2026-09-29, second review, item 6 - superseding the
+paragraph below's own prior framing).** A second review pass correctly rejected the framing this
+paragraph originally used ("describes a real, built, but not-yet-wired path, not a currently-
+contradicted one") - explaining *why* two comments disagreed is not the same as fixing the
+disagreement, and `ChiefTraderAgent.ts`'s own comment was, on direct inspection, actually WRONG, not
+just differently-scoped from `CalibrationCandidateBuilder.ts`'s. `ChiefTraderAgent.ts`'s prior
+comment claimed `agentConfidenceCalibration.calibratedConfidence` was "the output of
+`CalibrationCandidateBuilder.runCalibrationValidationCycle()`'s own promotion mechanism, which has
+its own statistical-significance gate before ever overwriting the currently-active calibrated
+value" - verified false by reading `CalibrationCandidateBuilder.ts` directly:
+`buildCalibrationCandidates()` only ever `SELECT`s from `agentConfidenceCalibration` (never writes
+it), and `runCalibrationValidationCycle()`'s "promotion" writes exclusively to the separate,
+generic `learning_versions`/`promotion_decisions`/`rollback_events` ledger via
+`ChampionChallenger.createShadowVersion()`/`promoteToCandidate()`/`decidePromotion()`. The real,
+verified writer of `agentConfidenceCalibration.calibratedConfidence` is `ReflectionEngine.ts` alone
+(its `db.insert(agentConfidenceCalibration)...onConflictDoUpdate` upsert, ~60s cycle) - exactly as
+`CalibrationCandidateBuilder.ts`'s own header already, correctly, said. `ChiefTraderAgent.ts`'s
+comment (`calibrateConfidenceDetailed()`'s doc comment) has been rewritten to state this correctly
+and to explicitly name all three real, distinct roles: (1) `ReflectionEngine.ts` as the sole writer
+this method reads; (2) `CalibrationCandidateBuilder.ts` as an observational-only validation pipeline
+whose champion/challenger promotion never touches `agentConfidenceCalibration`; (3)
+`ModerateTierEvaluator.ts`'s `isAgentBucketCalibrationTrustworthy()` as a separate, third reader
+that consults (2)'s champion ledger (not `agentConfidenceCalibration`) to gate MODERATE-tier trust
+specifically - a check this method (the STANDARD-tier path) does not perform. No behavior changed;
+`decisionConfidence`'s actual computed value is identical before and after this correction - only
+the documentation of its provenance was wrong and is now fixed.
 
 **AI outage / debate-dependency - verified correct, no fabricated vote found.**
 `ChiefTraderAgent.ts:538-549`: when no AI provider is routable at all, ChiefTrader explicitly SKIPS
@@ -1667,6 +1684,137 @@ Quant-only capability (Argus operating with zero AI providers routable) is real 
 exercised by this exact code path in production outage conditions - not merely assumed - though a
 dedicated, isolated "AI fully down for an extended real session" soak was not run as part of this
 pass.
+
+### Second Codex review corrections (2026-09-29, same day, post-post-review)
+
+A second review of the "Discovery-routing correction pass" above found the first pass's own tests
+and fixes still fell short in named ways. This section records what changed in response - see
+`OpportunityDiscoveryToQuantAssessment.integration.test.ts`, `OpportunityDiscovery.ts`,
+`OpportunityDiscovery.test.ts`, and `MarketUniverseScanner.ts` for the actual diffs.
+
+**Items 1-3 (causal integration wiring, honest "simulated" labeling, deterministic capacity
+split).** The integration test previously called `marketDataWorker.subscribe()` and
+`QuantSignalAgent.evaluateSymbol()` directly - proving those methods work in isolation, not that
+discovery's emitted event automatically causes a subscription, or that a real per-cycle evaluation
+automatically reaches the admitted symbol. Rewritten so `(marketDataWorker as
+any).ensureWatchlistListener()` (private, idempotent - the exact handler `start()` registers in
+production) is invoked once in `beforeAll`, and `runOpportunityScan()`'s emitted
+`WATCHLIST_SUBSCRIBE_REQUESTED` event is what causes the real subscription through that listener -
+the test itself never calls `subscribe()` for the discovered symbol. Full capacity is established
+via real, repeated `subscribe()` calls against the real singleton (matching the pattern the
+capacity-split tests already used), not mocked `getActiveSymbols()`/`getDynamicSymbols()` return
+values. The quantitative assessment is reached via `quantSignalAgent.triggerNow()` - the same real,
+production-callable entry point `SyntheticSessionEngine.ts` already uses for an accelerated clock -
+which runs the exact private `runCycle()` the timer calls (fans real `getActiveSymbols()` out to
+`evaluateSymbol()` per symbol with bounded concurrency); the resulting assessment for the symbol
+under test is observed via a call-through spy (`vi.spyOn(QuantSignalAgent.prototype,
+'evaluateSymbol')`, real implementation still executes) rather than a direct, single-symbol call.
+Every reference to `marketDataWorker.ingestIbkrQuote()` is now labeled "simulated market-data
+ingestion" throughout comments and the file's own header, never "provider acknowledgment" - this
+file does not, and structurally cannot without a dedicated harness, exercise a real provider
+subscription acknowledgment/rejection or transport lifecycle (that lives inside
+`IbkrSocketSession`/`AlpacaBroker`'s own socket handling, out of scope for this pass). The single
+non-deterministic capacity test (`admitted || refusedWithSignal`) is replaced with two deterministic
+cases: an entirely dwell-cleared (evictable) full pool that must admit a higher-priority symbol via
+a real bounded eviction, and a genuinely non-evictable full pool (every occupant deliberately left
+within real dwell protection, so `rankEvictionCandidates()` structurally has nothing eligible to
+evict) that must refuse and emit the real `MARKET_DATA_CAPACITY_FULL` signal - asserted separately,
+never combined.
+
+**Item 4 (challenger/incumbent scoring symmetry + cross-cycle double-counting - a real defect, not
+just a test gap).** Verified by direct inspection: `planSnapshotHotSwap()`'s/
+`explainSnapshotHotSwapDecisions()`'s `scoreOf` callback (used to rank the weakest active dynamic
+incumbent for eviction comparison) used `blendedHotSwapScore(sym, baseScoreOf)` - missing the gap
+term challengers were scored with via `priorityScoreOf()` (which adds
+`scoreBroadUniverseChallenger`'s gap contribution on top of `blendedHotSwapScore`). An incumbent's
+own real gap evidence was silently excluded from its own eviction-ranking score while an otherwise-
+identical challenger's counted in full - a genuine source-dependent scoring bias, not a cosmetic
+inconsistency. Separately, and more severe: `baseScoreOf` was `getLastSnapshotScore(s) ??
+marketDataWorker.getDynamicMomentumScore(s) ?? 0` - for any symbol outside SnapshotScanner's own
+scan universe (every broad-universe-only admission), `getLastSnapshotScore` is always null, so
+`baseScoreOf` fell back to `getDynamicMomentumScore(s)` - the SAME `dynamicMomentumScores` map this
+cycle's own `priorityScoreOf()` output (base + mover-bonus + composable + gap) gets stored into.
+Once a broad-universe symbol became an incumbent, a later cycle's `baseScoreOf` call read back its
+own already-bonused final priority as a "raw base" and `priorityScoreOf`/`blendedHotSwapScore` added
+mover-bonus/composable/gap AGAIN on top - an unbounded, cycle-over-cycle compounding defect for any
+incumbent this path applied to.
+
+Fix: `baseScoreOf` now reads `getLastSnapshotScore(s) ?? 0` only - never falls back to the stored,
+already-bonused `dynamicMomentumScores` value. This makes `priorityScoreOf()` safe to use
+identically for both challenger scoring (`combinedTop`'s `momentumScore`) and incumbent scoring
+(`scoreOf` in both `planSnapshotHotSwap` and `explainSnapshotHotSwapDecisions` calls), closing both
+the symmetry gap and the compounding defect with one change. Two new regression tests in
+`OpportunityDiscovery.test.ts` (`2026-09-29 second correction (Codex review item 4)` describe
+block): one proves an incumbent's own gap evidence is correctly weighed against a challenger (not
+silently zeroed by an asymmetric formula); the other runs two real, sequential `runOpportunityScan()`
+cycles - a broad-universe symbol wins cycle 1 purely on gap evidence, becomes cycle 2's incumbent
+(simulated via `getDynamicMomentumScore` returning exactly what cycle 1 propagated - the real shape
+of what `MarketDataWorker.subscribe()` would have stored), and asserts a genuinely stronger new
+challenger correctly wins cycle 2's slot - which only holds because `baseScoreOf` no longer
+compounds; the same test would fail if the removed fallback were reintroduced, since the
+incumbent's compounded score (34) would then exceed the challenger's real score (30).
+
+**Item 5 (volume provenance - abstention, not just labeling).** The first pass added
+`VolumeProvenance`/`RVOL_PROVENANCE` labeling (`comparable: false`) alongside `computeRvol()`'s
+still-computed ratio - correctly flagged as insufficient ("makes the limitation visible; it does
+not make the measurements compatible"). `MarketUniverseScanner.ts`'s `computeRvol()` now returns
+`null` unconditionally: no genuinely compatible same-scope real-time-consolidated-volume source is
+available without a new API entitlement/fetch this pass is not authorized to add (this file's own
+established discipline throughout is "never a new API call" for exactly this class of addition), so
+the honest choice is explicit abstention over a fabricated or silently-biased ratio, per the
+review's own stated alternative. `isRvolMover()` is therefore always `false` and `rvolProvenance` is
+therefore always `null` - confirmed observational-only before this change (never consulted by
+`priorityScoreOf`/`blendedHotSwapScore` or any discovery admission/eviction decision, only
+`PostMarketAnalysis.ts`/`discoveryLineageReport.ts` reporting), so no liquidity/ADV/spread/price gate
+and no discovery admission decision is touched by this change. `discoveryCandidateLedger.ts`'s
+`VolumeProvenance`/`RVOL_PROVENANCE` shape is kept in place, documented as reserved for if/when a
+genuinely compatible source is added, not because the ratio is computed today.
+
+**Item 7 (intraday-bars production-path audit + Java parity - new investigation this pass).** Every
+caller of `computeSupportResistanceFeatures(bars, intradayBars?)` was enumerated directly
+(`grep`-verified, not inferred): `src/server/strategiesEngine/core/MarketSnapshot.ts` (the isolated
+`ANALYSIS_ONLY` research subsystem - never imports the live path), `src/server/engines/backtest/
+BacktestEngine.ts` (SAME_BAR_CLOSE, explicitly non-promotable), `src/server/research/
+argusStrategyReplay.ts` (also the code path `canonicalNextBarEngine.ts`'s NEXT_BAR_OPEN engine
+delegates to for signal generation), and `src/server/research/strategyParityHarness.ts` (the TS-side
+parity-test harness itself) all call it with **daily bars only**, unaffected by this change and
+structurally unable to diverge since they never pass a second argument. **`src/server/services/
+QuantSignalAgent.ts` is the only production/live-path caller that passes `intradayBars`**, gated
+behind the same `isExperimentalStrategyLive('OPENING_RANGE_BREAKOUT')` check `StrategyEngine.ts`
+already uses to decide live participation - zero behavior change for every other strategy and every
+deployment that hasn't opted into this specific experimental strategy. Within
+`computeSupportResistanceFeatures()` itself, only `openingRange()` reads `intradayBars` -
+`previousDay`/`dailyHighLow`/`pivots`/`fibonacci`/`priorChannel20` all still read the main (daily)
+`bars` unchanged, directly asserted by `supportResistance.test.ts`'s `2026-09-29 (intraday-bars-for-
+opening-range fix)` describe block (three cases: intraday supplied, omitted, and an empty array -
+`openingRange` is the only field that ever differs).
+
+Java parity: **no Java equivalent exists for `OPENING_RANGE_BREAKOUT`** - it is one of the TS-only
+`EXPERIMENTAL_STRATEGIES` (`quantExperimentalStrategies.json`), not one of Java's 5 CORE strategies
+(`RangeReversion`/`PullbackContinuation`/`MeanReversion`/`TrendFollowing`/`MomentumBreakout`, see
+Java Quant Core section). The existing TS/Java shadow-parity comparison
+(`QuantSignalAgent.ts`'s `fetchCoreEnsembleDecision` call) already, deliberately, scopes itself to
+`CORE_STRATEGIES` only ("Comparing only against the CORE subset... keeps this an apples-to-apples
+check") - `OPENING_RANGE_BREAKOUT` was already excluded from that comparison before this change, by
+design, not as an oversight this pass introduces. No new TS/Java divergence risk exists because Java
+never computes this feature at all; there is no parity test to add for a feature with no Java
+counterpart.
+
+Java-ownership judgment for this specific change (Java 26 Engine Authority, rule 0): the actual
+`openingRange()`/`premarketHighLow()` calculation logic is pre-existing, unchanged TS code (it
+already correctly reported "unavailable" with no intraday data) - this change extends its DATA
+INPUT (which bars get fetched and passed in), not its calculation. `computeIntradayFetchWindow()`
+is pure date/session-boundary arithmetic (which bars to request), not a market/statistical
+calculation. Classified as data-provisioning/orchestration for an existing TS-owned experimental
+strategy that has no Java counterpart to check first - consistent with, not an exception to, rule
+0's "check `quant-core-java/` for an existing implementation first" (there is none to find, and
+none is being newly authored in TS either).
+
+**Item 8 (full-suite status - precise framing, not "all green").** See this document's own
+Master Completion Ledger / commit history for the exact re-run result recorded alongside this
+change; report it as "full suite completed with N failures; isolated rerun passed" when N > 0,
+never "nothing broke" - isolated-pass-alone is not proof the current change set cannot contribute
+under full-suite load, only that the specific failing file passes in isolation.
 
 ### Market data / discovery behavior outside RTH
 

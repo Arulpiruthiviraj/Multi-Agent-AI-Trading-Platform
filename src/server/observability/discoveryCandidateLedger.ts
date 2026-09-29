@@ -32,19 +32,24 @@ export type DiscoverySource = 'BROAD_UNIVERSE' | 'MARKET_MOVER' | 'NEWS';
 export type DiscoveryRejectReason = ScreenRejectReason | 'ADV_BELOW_FLOOR' | 'ADV_DATA_UNAVAILABLE' | 'NO_SNAPSHOT_DATA' | 'RANK_CAP';
 
 /**
- * 2026-09-29 (volume-provenance fix). Real, verified structural mismatch (MarketUniverseScanner.ts's
- * own 2026-09-16 comment already documents the denominator half of this): computeRvol()'s numerator
- * (today's session volume) comes from Alpaca's real-time `feed=iex` snapshot - IEX-reported volume
- * only, measured live at ~1.5%-10% of true consolidated volume for the same partial trading day
- * (16-symbol same-day comparison, 2026-09-16). Its denominator (avgDailyVolumeShares) comes from
- * `feed=sip` historical daily bars (or an FMP fallback) - full consolidated volume, averaged over
- * complete trading days. Dividing a partial-session, single-venue numerator by a full-day,
- * consolidated denominator understates true relative volume by roughly the same factor the feed
- * mismatch introduces, compounded by comparing a partial session against a full-day average before
- * the session is over. This is a real, currently-open limitation, not something this pass silently
- * corrects (doing so would require either a consolidated real-time feed this account is not shown to
- * be entitled to, or a genuine time-of-day-adjusted intraday ADV curve, both real, separately-scoped
- * follow-ups) - `comparable: false` here is an honest label, not a threshold change.
+ * 2026-09-29 (volume-provenance fix, first pass). Real, verified structural mismatch
+ * (MarketUniverseScanner.ts's own 2026-09-16 comment already documents the denominator half of
+ * this): computeRvol()'s numerator (today's session volume) came from Alpaca's real-time
+ * `feed=iex` snapshot - IEX-reported volume only, measured live at ~1.5%-10% of true consolidated
+ * volume for the same partial trading day (16-symbol same-day comparison, 2026-09-16). Its
+ * denominator (avgDailyVolumeShares) comes from `feed=sip` historical daily bars (or an FMP
+ * fallback) - full consolidated volume, averaged over complete trading days.
+ *
+ * 2026-09-29 (second review, item 5 - superseding update): the first pass only added this
+ * provenance label alongside the still-computed incompatible ratio - a real gap the second review
+ * correctly flagged ("makes the limitation visible; it does not make the measurements
+ * compatible"). MarketUniverseScanner.ts's computeRvol() now abstains unconditionally (returns
+ * null) rather than compute the incompatible ratio at all, so in practice `rvol`/`rvolProvenance`
+ * are now always null and `rvolMover` is now always false - this interface/constant remain in
+ * place as the documented shape for if/when a genuinely compatible same-scope volume source is
+ * added (a real, separately-scoped follow-up requiring either a consolidated real-time feed this
+ * account is not shown to be entitled to, or a new time-of-day-adjusted intraday ADV fetch this
+ * pass is not authorized to add), not because this ratio is computed and labeled today.
  */
 export interface VolumeProvenance {
   numeratorFeed: 'ALPACA_IEX_SNAPSHOT';

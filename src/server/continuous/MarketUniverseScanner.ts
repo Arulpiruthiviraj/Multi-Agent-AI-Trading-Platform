@@ -241,17 +241,38 @@ function isGapMover(snap: AlpacaSnapshot): boolean {
   return snap.gapPct !== null && Math.abs(snap.gapPct) >= continuousIntelligence.gapMoverMinAbsPct;
 }
 
-/** Real today's-volume / ADV ratio - null when no real ADV was fetched for this symbol (ADV is
- *  only fetched for stage-2 liquidity-screen survivors, never fabricated for the rest). */
-function computeRvol(snap: AlpacaSnapshot, advMap: Map<string, number>): number | null {
-  const adv = advMap.get(snap.symbol);
-  if (adv == null || adv <= 0) return null;
-  return snap.volume / adv;
+/**
+ * 2026-09-29 (second Codex review, item 5 - volume-provenance fix follow-up): this function
+ * previously divided snap.volume (Alpaca's real-time `feed=iex` snapshot - IEX-reported volume
+ * only, measured 2026-09-16 at ~1.5%-10% of true consolidated volume for the same partial trading
+ * day) by advMap's `feed=sip`-or-FMP historical daily average (full consolidated volume, complete
+ * trading days). A prior pass added VolumeProvenance labeling (discoveryCandidateLedger.ts's
+ * RVOL_PROVENANCE, comparable:false) alongside the number, but the incompatible ratio itself was
+ * still computed and still fed isRvolMover()'s real true/false classification - making the label
+ * visible without making the underlying number trustworthy in either direction.
+ *
+ * This now explicitly ABSTAINS instead: no compatible same-scope real-time-consolidated-volume
+ * source is currently available without a new API entitlement/fetch this pass is not authorized to
+ * add (a same-scope fix would require either a consolidated real-time feed this account is not
+ * shown to be entitled to, or a genuine second historical-bars fetch scoped to feed=iex - the
+ * latter is a real, separately-scoped new-API-call decision, not a bug fix, and this file's own
+ * established discipline throughout is "never a new API call" for exactly this kind of addition).
+ * Returns null unconditionally - never a fabricated or silently-biased ratio. isRvolMover() already
+ * treats a null rvol as false, so this is a pure abstention: rvolMover never asserts true from
+ * incompatible math again, and never gets counted as evidence anywhere (confirmed: rvolMover is
+ * observational-only - PostMarketAnalysis.ts / discoveryLineageReport.ts reporting - it was never
+ * consulted by priorityScoreOf/blendedHotSwapScore or any discovery admission/eviction decision).
+ * No liquidity/ADV/spread/price gate is touched by this change.
+ */
+function computeRvol(_snap: AlpacaSnapshot, _advMap: Map<string, number>): number | null {
+  return null;
 }
 
 /** Real, config-driven relative-volume-mover classification, symmetric to isGapMover() - true only
  *  when computeRvol() clears the reviewed threshold. Never a new API call, never a bypass of
- *  passesScreen/passesAdvScreen. */
+ *  passesScreen/passesAdvScreen. computeRvol() currently always returns null (see its own doc
+ *  comment) - this always evaluates false until a genuinely compatible same-scope volume source
+ *  exists, rather than asserting a classification from incompatible feed scopes. */
 function isRvolMover(rvol: number | null): boolean {
   return rvol !== null && rvol >= continuousIntelligence.rvolMoverMinRatio;
 }
