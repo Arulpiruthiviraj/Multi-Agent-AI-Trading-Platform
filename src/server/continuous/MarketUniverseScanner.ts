@@ -93,7 +93,18 @@ let assetsCache: { fetchedAt: number; symbols: string[] } | null = null;
 // dollar volume alongside the admitted symbol list - previously discarded at the `.map((s) =>
 // s.symbol)` step, forcing any downstream consumer needing volume (the new
 // BroadUniverseSubscriptionAllocator) to either re-fetch it or fall back to raw insertion order.
-let snapshotCache: { fetchedAt: number; symbols: string[]; dollarVolumeBySymbol: Record<string, number> } | null = null;
+// 2026-09-29 (discovery-to-evaluation coverage fix): gapPctBySymbol carries the SAME real,
+// already-fetched gapPct (dailyBar.o vs current price, see AlpacaSnapshot.gapPct above) alongside
+// the admitted symbol list - previously computed every cycle (used for the Discovery Lineage
+// Ledger's gapMover tag and Phase 5 outcome-learning probe) but discarded at the `.map((s) =>
+// s.symbol)` step, exactly like dollarVolume was before the 2026-09-16 fix above. Without this, a
+// broad-universe-only admission (never part of SnapshotScanner's static momentum universe - see
+// getSnapshotScanUniverse()) had zero real momentum signal available to compete for a hot-swap
+// slot at full stream capacity, which is the confirmed IOVA gap (2026-09-29 forensic audit,
+// docs/audits/archive/ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md): 43 admissions, a real +34% move vs
+// previous close, zero quant assessment, because it could only ever fill an EMPTY slot, never
+// challenge an occupied one.
+let snapshotCache: { fetchedAt: number; symbols: string[]; dollarVolumeBySymbol: Record<string, number>; gapPctBySymbol: Record<string, number | null> } | null = null;
 let lastCycleSymbolLookup: Map<string, BroadUniverseSymbolLookup> | null = null;
 let inFlight = false;
 let lastStats: BroadUniverseStats = {
@@ -447,7 +458,11 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
       .slice(0, continuousIntelligence.broadUniverseMaxCandidates);
     const passing = passingRows.map((s) => s.symbol);
     const passingDollarVolume: Record<string, number> = {};
-    for (const s of passingRows) passingDollarVolume[s.symbol] = s.dollarVolume;
+    const passingGapPct: Record<string, number | null> = {};
+    for (const s of passingRows) {
+      passingDollarVolume[s.symbol] = s.dollarVolume;
+      passingGapPct[s.symbol] = s.gapPct;
+    }
     const passingSet = new Set(passing);
     for (const s of stage2) {
       const admitted = passingSet.has(s.symbol);
@@ -472,7 +487,7 @@ export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
         await recordDiscoveryOutcomeProbe(s.symbol, s.gapPct);
       }
     }
-    snapshotCache = { fetchedAt: Date.now(), symbols: passing, dollarVolumeBySymbol: passingDollarVolume };
+    snapshotCache = { fetchedAt: Date.now(), symbols: passing, dollarVolumeBySymbol: passingDollarVolume, gapPctBySymbol: passingGapPct };
     lastCycleSymbolLookup = symbolLookup;
     lastStats = {
       ran: true,
@@ -517,12 +532,24 @@ export function getCachedBroadUniverseSymbols(): string[] {
  *  fetched dollar volume - added 2026-09-16 for BroadUniverseSubscriptionAllocator.ts, which needs
  *  real liquidity data (not just symbol names) to compute a fair, non-random selection. Never a new
  *  API call - the same data the ADV admission decision itself already used. */
-export function getCachedBroadUniverseCandidatesWithVolume(): { symbol: string; dollarVolume: number }[] {
+export function getCachedBroadUniverseCandidatesWithVolume(): { symbol: string; dollarVolume: number; gapPct: number | null }[] {
   if (!isBroadUniverseEnabled() || !snapshotCache) return [];
   return snapshotCache.symbols.map((symbol) => ({
     symbol,
     dollarVolume: snapshotCache!.dollarVolumeBySymbol[symbol] ?? 0,
+    gapPct: snapshotCache!.gapPctBySymbol[symbol] ?? null,
   }));
+}
+
+/** 2026-09-29 (discovery-to-evaluation coverage fix): single-symbol lookup over the same cached
+ *  gapPct data above - OpportunityDiscovery's hot-swap challenger scoring needs this per candidate
+ *  without re-mapping the whole admitted list every cycle. Null when the symbol was not admitted
+ *  in the most recent broad-universe cycle (never fabricated as 0 - a null gap is "unknown", not
+ *  "flat"). */
+export function getCachedBroadUniverseGapPct(symbol: string): number | null {
+  if (!isBroadUniverseEnabled() || !snapshotCache) return null;
+  const normalized = symbol.trim().toUpperCase();
+  return normalized in snapshotCache.gapPctBySymbol ? snapshotCache.gapPctBySymbol[normalized] : null;
 }
 
 export function getLastBroadUniverseStats(): BroadUniverseStats {

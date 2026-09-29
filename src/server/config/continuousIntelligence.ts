@@ -59,6 +59,24 @@ export interface ContinuousIntelligenceConfig {
    *  score into the real subscription decision. Zero when no composable score is available this
    *  cycle for that symbol (never fabricated as 0-as-penalty). */
   composableRankingHotSwapWeight: number;
+  /** 2026-09-29 (discovery-to-evaluation coverage fix, docs/audits/archive/
+   *  ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md): at full stream capacity, planSnapshotHotSwap() only
+   *  ever received SnapshotScanner's static momentum-universe `top` list as challengers - a
+   *  broad-universe-only admission (e.g. IOVA: 43 admissions, +34% vs prior close, never
+   *  quant-assessed) had no path to compete for an OCCUPIED slot, only an empty one. Bounds how
+   *  many broad-universe/mover/news-catalyst shortlist symbols (not already in the momentum `top`
+   *  list) are scored as hot-swap challengers each cycle - a real cost/noise control, not a
+   *  capacity increase (the existing swap-cap/pacing below is unchanged; this only widens the
+   *  CANDIDATE POOL competing for that same bounded budget). */
+  broadUniverseHotSwapChallengerLimit: number;
+  /** 2026-09-29 (same fix): weight applied to a broad-universe challenger's |gapPct| * 100 (percent
+   *  units, matching SnapshotScanner's own SCORE_WEIGHT_PCT=0.5 convention for intradayPctChange)
+   *  when computing its hot-swap challenger score. gapPct is real, already-fetched evidence
+   *  (MarketUniverseScanner's dailyBar.o-vs-current-price gap, cached alongside dollarVolume) - a
+   *  broad-universe symbol with no mover-bonus and no composable score can still compete on this
+   *  alone, but only when it has a real, positive intraday move; a symbol with no gap evidence at
+   *  all scores exactly 0 from this term (never fabricated). */
+  broadUniverseGapHotSwapWeight: number;
   /** Phase C (Universal Discovery Expansion): minimum absolute intraday gap-vs-open to tag a
    *  candidate gapMover:true in the Discovery Lineage Ledger - observability only. */
   gapMoverMinAbsPct: number;
@@ -292,6 +310,8 @@ function loadContinuousIntelligence(): ContinuousIntelligenceConfig {
     snapshotMomentumScoreEdge: requireNonNegativeNumber(raw.snapshotMomentumScoreEdge, 'snapshotMomentumScoreEdge'),
     moverPriorityScoreBonus: requireNonNegativeNumber(raw.moverPriorityScoreBonus, 'moverPriorityScoreBonus'),
     composableRankingHotSwapWeight: requireNonNegativeNumber(raw.composableRankingHotSwapWeight, 'composableRankingHotSwapWeight'),
+    broadUniverseHotSwapChallengerLimit: requireNumber(raw.broadUniverseHotSwapChallengerLimit, 'broadUniverseHotSwapChallengerLimit'),
+    broadUniverseGapHotSwapWeight: requireNonNegativeNumber(raw.broadUniverseGapHotSwapWeight, 'broadUniverseGapHotSwapWeight'),
     gapMoverMinAbsPct: requireNonNegativeNumber(raw.gapMoverMinAbsPct, 'gapMoverMinAbsPct'),
     gapPctMaxPlausibleOpenToPrevCloseRatio: requireNumber(raw.gapPctMaxPlausibleOpenToPrevCloseRatio, 'gapPctMaxPlausibleOpenToPrevCloseRatio'),
     gapPctMinAbsoluteOpenPrice: requireNonNegativeNumber(raw.gapPctMinAbsoluteOpenPrice, 'gapPctMinAbsoluteOpenPrice'),

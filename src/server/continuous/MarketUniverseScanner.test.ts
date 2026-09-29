@@ -17,6 +17,8 @@ import {
   fetchAvgDailyVolumeShares,
   refreshBroadUniverseCache,
   getCachedBroadUniverseSymbols,
+  getCachedBroadUniverseCandidatesWithVolume,
+  getCachedBroadUniverseGapPct,
   getLastBroadUniverseStats,
   getBroadUniverseSymbolLookup,
   resetMarketUniverseScannerForTests,
@@ -379,6 +381,49 @@ describe('MarketUniverseScanner - refreshBroadUniverseCache end to end', () => {
     expect(rows[0].confidence).toBe(0.5);
   });
 
+  it('2026-09-29 (discovery-to-evaluation coverage fix): getCachedBroadUniverseCandidatesWithVolume() and getCachedBroadUniverseGapPct() expose the real, already-fetched gapPct for an admitted symbol - previously computed every cycle but discarded before OpportunityDiscovery could ever see it', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'BIGGAPPER', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    // Real gap: open $12.78, current $14.76 - matches the IOVA case study's own magnitude.
+    // datedSnapshot()'s fixed +/-0.1 quote offset is too wide in relative bps at this price
+    // (would fail the stage-1 spread screen, broadUniverseMaxSpreadBps=50), so override just the
+    // quote with a tight, realistic one - keeping datedSnapshot's own timestamp fields, which
+    // validateDiscoveryGap needs to accept the gap as fresh (see other tests in this file).
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      BIGGAPPER: { ...datedSnapshot(14.76, 12.78, 5_000_000), latestQuote: { bp: 14.755, ap: 14.765 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ BIGGAPPER: [5_000_000, 5_000_000] }));
+    await refreshBroadUniverseCache();
+
+    const withVolume = getCachedBroadUniverseCandidatesWithVolume();
+    const row = withVolume.find((r) => r.symbol === 'BIGGAPPER');
+    expect(row).toBeDefined();
+    expect(row!.gapPct).toBeCloseTo((14.76 - 12.78) / 12.78, 6);
+
+    expect(getCachedBroadUniverseGapPct('BIGGAPPER')).toBeCloseTo((14.76 - 12.78) / 12.78, 6);
+    expect(getCachedBroadUniverseGapPct('biggapper')).toBeCloseTo((14.76 - 12.78) / 12.78, 6); // case-insensitive lookup
+    expect(getCachedBroadUniverseGapPct('NEVERSEEN')).toBeNull(); // never fabricated for an un-admitted symbol
+  });
+
+  it('2026-09-29: gapPct is null (never fabricated as 0) for an admitted symbol whose snapshot carried no real open price to compute a gap from', async () => {
+    process.env[FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(jsonResponse([
+      { symbol: 'NOGAPDATA', exchange: 'NASDAQ', status: 'active', tradable: true, class: 'us_equity' },
+    ]));
+    const noOpen = datedSnapshot(50, 48, 5_000_000);
+    delete (noOpen.dailyBar as any).o; // gapPct computation has nothing to work from
+    mockFetch.mockResolvedValueOnce(jsonResponse({ NOGAPDATA: noOpen }));
+    mockFetch.mockResolvedValueOnce(barsResponse({ NOGAPDATA: [5_000_000, 5_000_000] }));
+    await refreshBroadUniverseCache();
+
+    const row = getCachedBroadUniverseCandidatesWithVolume().find((r) => r.symbol === 'NOGAPDATA');
+    expect(row).toBeDefined();
+    expect(row!.gapPct).toBeNull();
+    expect(getCachedBroadUniverseGapPct('NOGAPDATA')).toBeNull();
+  });
+
   it('Phase 27: a broad-universe candidate rejected by the rank cap gets no shadow prediction - only truly admitted candidates are probed', async () => {
     process.env[FLAG] = 'true';
     const originalCap = continuousIntelligence.broadUniverseMaxCandidates;
@@ -698,6 +743,36 @@ describe('MarketUniverseScanner - refreshMoversCache end to end', () => {
     const payload = JSON.parse(rows[rows.length - 1].payload as string);
     expect(payload.rvolMover).toBe(true);
     expect(payload.rvol).toBeCloseTo(3, 2);
+    // 2026-09-29 (volume-provenance fix): this ratio mixes a real-time IEX numerator with a
+    // full-day SIP/FMP historical denominator - must be labeled non-comparable, never presented
+    // as a calibrated relative-volume measurement.
+    expect(payload.rvolProvenance).toMatchObject({
+      numeratorFeed: 'ALPACA_IEX_SNAPSHOT',
+      denominatorFeed: 'ALPACA_SIP_HISTORICAL_OR_FMP_FALLBACK',
+      comparable: false,
+    });
+  });
+
+  it('2026-09-29 (volume-provenance fix): rvolProvenance is null, never fabricated, when rvol itself is null (no real ADV was fetched for this symbol)', async () => {
+    process.env[MOVERS_FLAG] = 'true';
+    mockFetch.mockResolvedValueOnce(moversResponse([{ symbol: 'NOADVDATA', percent_change: 6 }]));
+    mockFetch.mockResolvedValueOnce(jsonResponse({
+      NOADVDATA: { latestTrade: { p: 51 }, dailyBar: { o: 50, v: 6_000_000, c: 51 }, latestQuote: { bp: 50.9, ap: 51.1 } },
+    }));
+    mockFetch.mockResolvedValueOnce(barsResponse({})); // no ADV bars at all - passesAdvScreen fails closed, so this logs FILTERED, not ADMITTED
+    await refreshMoversCache();
+    await flushObservabilityStore();
+
+    const { db } = await import('../db');
+    const schema = await import('../db/schema');
+    const { eq, and } = await import('drizzle-orm');
+    const rows = await db.select().from(schema.observabilityEvents).where(
+      and(eq(schema.observabilityEvents.eventType, 'DISCOVERY_CANDIDATE_FILTERED'), eq(schema.observabilityEvents.symbol, 'NOADVDATA')),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    const payload = JSON.parse(rows[rows.length - 1].payload as string);
+    expect(payload.rvol).toBeNull();
+    expect(payload.rvolProvenance).toBeNull();
   });
 
   it('Phase 27: real volume below the reviewed relative-volume threshold is never tagged a relative-volume mover', async () => {

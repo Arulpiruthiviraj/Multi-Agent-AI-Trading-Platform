@@ -31,6 +31,39 @@ export type DiscoverySource = 'BROAD_UNIVERSE' | 'MARKET_MOVER' | 'NEWS';
  *  from a confirmed-illiquid rejection. */
 export type DiscoveryRejectReason = ScreenRejectReason | 'ADV_BELOW_FLOOR' | 'ADV_DATA_UNAVAILABLE' | 'NO_SNAPSHOT_DATA' | 'RANK_CAP';
 
+/**
+ * 2026-09-29 (volume-provenance fix). Real, verified structural mismatch (MarketUniverseScanner.ts's
+ * own 2026-09-16 comment already documents the denominator half of this): computeRvol()'s numerator
+ * (today's session volume) comes from Alpaca's real-time `feed=iex` snapshot - IEX-reported volume
+ * only, measured live at ~1.5%-10% of true consolidated volume for the same partial trading day
+ * (16-symbol same-day comparison, 2026-09-16). Its denominator (avgDailyVolumeShares) comes from
+ * `feed=sip` historical daily bars (or an FMP fallback) - full consolidated volume, averaged over
+ * complete trading days. Dividing a partial-session, single-venue numerator by a full-day,
+ * consolidated denominator understates true relative volume by roughly the same factor the feed
+ * mismatch introduces, compounded by comparing a partial session against a full-day average before
+ * the session is over. This is a real, currently-open limitation, not something this pass silently
+ * corrects (doing so would require either a consolidated real-time feed this account is not shown to
+ * be entitled to, or a genuine time-of-day-adjusted intraday ADV curve, both real, separately-scoped
+ * follow-ups) - `comparable: false` here is an honest label, not a threshold change.
+ */
+export interface VolumeProvenance {
+  numeratorFeed: 'ALPACA_IEX_SNAPSHOT';
+  numeratorScope: 'REAL_TIME_PARTIAL_SESSION_TO_OBSERVATION_TIME';
+  denominatorFeed: 'ALPACA_SIP_HISTORICAL_OR_FMP_FALLBACK';
+  denominatorScope: 'FULL_TRADING_DAY_AVERAGE';
+  comparable: false;
+  reason: string;
+}
+
+export const RVOL_PROVENANCE: VolumeProvenance = {
+  numeratorFeed: 'ALPACA_IEX_SNAPSHOT',
+  numeratorScope: 'REAL_TIME_PARTIAL_SESSION_TO_OBSERVATION_TIME',
+  denominatorFeed: 'ALPACA_SIP_HISTORICAL_OR_FMP_FALLBACK',
+  denominatorScope: 'FULL_TRADING_DAY_AVERAGE',
+  comparable: false,
+  reason: 'Numerator is IEX-only real-time session-to-date volume (~1.5%-10% of true consolidated volume, measured 2026-09-16); denominator is a full-day consolidated historical average. This ratio structurally understates true relative volume and is not a time-of-day-adjusted measurement - treat as a weak, directionally-biased-low signal, never a calibrated relative-volume estimate.',
+};
+
 export function logDiscoveryCandidateDecision(input: {
   symbol: string;
   source: DiscoverySource;
@@ -51,6 +84,11 @@ export function logDiscoveryCandidateDecision(input: {
    *  fetched for the liquidity/ADV screens, never a new API call. */
   rvolMover?: boolean;
   rvol?: number | null;
+  /** 2026-09-29 (volume-provenance fix, docs/audits/archive/ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md):
+   *  rvol's own numerator/denominator come from structurally different, non-comparable sources -
+   *  documented explicitly rather than left implicit. Present only when `rvol` is non-null (the
+   *  computation actually ran). See RVOL_PROVENANCE below for the one real, current description. */
+  rvolProvenance?: VolumeProvenance | null;
 }): void {
   observeSafe(() => {
     structuredLogger.info('discovery_candidate_decision', {
@@ -68,6 +106,7 @@ export function logDiscoveryCandidateDecision(input: {
       gapEvidence: input.gapEvidence ?? null,
       rvolMover: input.rvolMover ?? false,
       rvol: input.rvol ?? null,
+      rvolProvenance: input.rvol != null ? (input.rvolProvenance ?? RVOL_PROVENANCE) : null,
     });
   });
 }

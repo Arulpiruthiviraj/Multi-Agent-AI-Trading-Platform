@@ -117,5 +117,36 @@ describe('indicators/supportResistance', () => {
       expect(features.priorChannel20).not.toBeNull();
       expect(features.priorChannel20!.high).toBeLessThan(features.dailyHighLow!.high);
     });
+
+    describe('2026-09-29 (intraday-bars-for-opening-range fix)', () => {
+      it('uses the optional intradayBars param for openingRange when supplied, while every other daily-appropriate feature keeps reading the main (daily) bars unchanged', () => {
+        const dailyBars = Array.from({ length: 30 }, (_, i) => dailyBar(i, 100 + i, 90 + i, 95 + i));
+        const intraday = [
+          intradayBar(29, 9, 129), intradayBar(29, 9, 131), intradayBar(29, 9, 127),
+          intradayBar(29, 14, 140), // outside the default opening-range window
+        ];
+        const features = computeSupportResistanceFeatures(dailyBars, intraday);
+        // The real fix: openingRange is now available, computed from the intraday set.
+        expect(features.openingRange.available).toBe(true);
+        expect(features.openingRange.data).toEqual({ high: 131, low: 127 });
+        // Everything daily-appropriate is untouched - still reads dailyBars, not intraday.
+        expect(features.previousDay).toEqual({ high: 100 + 28, low: 90 + 28, close: 95 + 28 });
+        expect(features.dailyHighLow).not.toBeNull();
+        expect(features.pivots).not.toBeNull();
+      });
+
+      it('omitting intradayBars preserves the exact prior behavior - openingRange still honestly unavailable on daily-only bars', () => {
+        const dailyBars = Array.from({ length: 30 }, (_, i) => dailyBar(i, 100 + i, 90 + i, 95 + i));
+        const features = computeSupportResistanceFeatures(dailyBars);
+        expect(features.openingRange.available).toBe(false);
+        expect(features.openingRange.reason).toContain('daily-granularity');
+      });
+
+      it('an empty intradayBars array still reports openingRange honestly unavailable, never fabricated from the daily set it was given instead', () => {
+        const dailyBars = Array.from({ length: 30 }, (_, i) => dailyBar(i, 100 + i, 90 + i, 95 + i));
+        const features = computeSupportResistanceFeatures(dailyBars, []);
+        expect(features.openingRange.available).toBe(false);
+      });
+    });
   });
 });

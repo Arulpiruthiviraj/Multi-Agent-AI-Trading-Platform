@@ -67,10 +67,18 @@ import { buildEliteTraderDecision } from '../desk/EliteTraderDecision';
 import { isMultiAssetEnabled } from '../config/multiAsset';
 import { classifyAsset } from '../multiAsset/AssetClassifier';
 import { createSingleFlightGuard } from '../core/singleFlightInterval';
+import { isExperimentalStrategyLive } from '../config/quantExperimentalStrategies';
+import { getTradingDateStr, tradingWallTimeToIso } from '../core/TradingCalendar';
+import { replaySafety } from '../replay/replaySafety';
 
 const DEFAULT_CYCLE_INTERVAL_MS = tradingSafety.quantCycleIntervalMs;
 const LOOKBACK_DAYS = tradingSafety.quantLookbackDays;
 const TIMEFRAME = '1Day';
+/** 2026-09-29 (intraday-bars-for-opening-range fix): a real second granularity, fetched ONLY when
+ *  OPENING_RANGE_BREAKOUT is live (isExperimentalStrategyLive gate below) - every other CORE/
+ *  experimental strategy keeps consuming TIMEFRAME ('1Day') bars unchanged. Never applied
+ *  "indiscriminately" to swing strategies. */
+const INTRADAY_TIMEFRAME = '1Min';
 const MIN_BARS_TO_EVALUATE = MIN_BARS;
 
 // Kept for unit tests of the historical regime mapping. Live evaluateSymbol must NOT emit this
@@ -81,6 +89,23 @@ export interface DerivedIdea {
   side: 'BUY' | 'SELL';
   confidence: number; // 0-1, same scale every other TRADE_IDEA_GENERATED emitter uses
   reasoning: string;
+}
+
+/**
+ * 2026-09-29 (intraday-bars-for-opening-range fix): pure window math, extracted from
+ * evaluateSymbol() so it's directly unit-testable without mocking historicalDataGateway. Bounded to
+ * today's real regular session (America/New_York, DST-correct via TradingCalendar.ts) - never more
+ * than 8h back, never before session open, never after `nowMs`. Returns null when there is no real
+ * window to fetch (session open is at/after `nowMs`, e.g. called before the market has opened
+ * today) - the caller must never fetch a zero/negative-width window.
+ */
+export function computeIntradayFetchWindow(nowMs: number): { startMs: number; endMs: number } | null {
+  const startMinutes = replaySafety.regularSessionStartMinutes;
+  const sessionOpenHHMM = `${String(Math.floor(startMinutes / 60)).padStart(2, '0')}:${String(startMinutes % 60).padStart(2, '0')}`;
+  const sessionOpenMs = Date.parse(tradingWallTimeToIso(getTradingDateStr(new Date(nowMs)), sessionOpenHHMM));
+  const startMs = Math.max(sessionOpenMs, nowMs - 8 * 60 * 60 * 1000);
+  if (startMs >= nowMs) return null;
+  return { startMs, endMs: nowMs };
 }
 
 export function deriveIdeaFromRegime(regime: RegimeResult): DerivedIdea | null {
@@ -273,6 +298,38 @@ export class QuantSignalAgent {
       return null;
     }
 
+    // 2026-09-29 (intraday-bars-for-opening-range fix, docs/audits/archive/
+    // ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md): real, verified gap - 2,027 of 2,072 quant assessments
+    // that day reported OPENING_RANGE_BREAKOUT could not run because only daily-granularity bars
+    // were ever fetched. computeSupportResistanceFeatures()'s openingRange()/premarketHighLow()
+    // were already correctly honest about this (never fabricated a range from a daily candle) - the
+    // actual missing piece was that this agent never even attempted an intraday fetch. Gated behind
+    // the SAME isExperimentalStrategyLive() check StrategyEngine.ts already uses to decide whether
+    // OPENING_RANGE_BREAKOUT participates in live evaluateAll() at all - zero added cost/behavior
+    // change for every deployment that hasn't opted into this specific experimental strategy.
+    // Best-effort and fail-open: any fetch failure leaves intradayBars undefined, and
+    // computeSupportResistanceFeatures() falls back to its pre-existing behavior (daily bars,
+    // openingRange honestly reports unavailable) - never blocks the real daily-bar evaluation this
+    // method exists for.
+    let intradayBars: Bar[] | undefined;
+    if (isExperimentalStrategyLive('OPENING_RANGE_BREAKOUT')) {
+      try {
+        const window = computeIntradayFetchWindow(endMs);
+        if (window) {
+          try {
+            await historicalDataGateway.ensureBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+          } catch (e: any) {
+            const msg = String(e?.message || e);
+            if (!/429|rate-limited|Too Many Requests/i.test(msg)) throw e;
+          }
+          intradayBars = await historicalDataGateway.getBars(symbol, INTRADAY_TIMEFRAME, window.startMs, window.endMs);
+        }
+      } catch (e) {
+        console.warn(`[QuantSignalAgent] ${symbol}: intraday bar fetch for opening-range evaluation failed (non-fatal - falling back to daily-bar-only support/resistance features)`, e);
+        intradayBars = undefined;
+      }
+    }
+
     const regime = classifyRegime(bars);
     // SHADOW-ONLY Java parity check (docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase
     // 2 feature-pipeline follow-up): never awaited - must add zero latency to evaluateSymbol and can
@@ -302,7 +359,7 @@ export class QuantSignalAgent {
       priceAction: regime.features.priceAction,
       momentum: computeMomentumFeatures(bars),
       volume: computeVolumeFeatures(bars),
-      supportResistance: computeSupportResistanceFeatures(bars),
+      supportResistance: computeSupportResistanceFeatures(bars, intradayBars),
       regime,
       marketContext,
       // Additive SMC snapshot. Does not change evaluateAll() unless QUANT_SMC_STRATEGY_ENABLED.
@@ -472,6 +529,15 @@ export class QuantSignalAgent {
     // MIN_SAMPLE_SIZE_FOR_KELLY-equivalent bar Kelly sizing already refuses under, or when the real
     // EV is non-positive - never fabricates a win-rate to let a candidate through. The regime-only
     // fallback below is unaffected - it never claimed EV backing in the first place.
+    // 2026-09-29 (no-trade reason precision fix, docs/audits/archive/ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md):
+    // previously every path that nulled `strategyIdea` below collapsed into the SAME generic
+    // EXPECTED_VALUE_TOO_LOW/INSUFFICIENT_EVIDENCE pair at the DESK_NO_TRADE emission, conflating
+    // five materially different real conditions (audit finding: 1,553 EXPECTED_VALUE_TOO_LOW events
+    // that were "broader than its wording" — missing evidence, a genuinely negative measured EV,
+    // insufficient outcome samples, poor risk/reward, and no eligible strategy at all, all reported
+    // identically). Tracked explicitly here so an operator can distinguish "we measured a real,
+    // non-positive edge" from "we never had enough evidence to measure one at all".
+    let noTradeCode: string | null = null;
     if (strategyIdea && matchedStrategyEvaluation) {
       const stopPrice = matchedStrategyEvaluation.stop.price;
       const targetPrice = matchedStrategyEvaluation.target.price;
@@ -523,15 +589,26 @@ export class QuantSignalAgent {
           matchedStrategyEvaluation = null; // no real strategy evaluation backs this - stop/target/EV all stay null downstream, exactly like the pre-existing regime-only fallback
         } else {
           console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} setup found but is ${stateLabel} for this strategy - no trustworthy EV estimate possible, not emitting a live trade idea from it.`);
+          noTradeCode = 'INSUFFICIENT_SAMPLE';
           strategyIdea = null;
           matchedStrategyEvaluation = null;
         }
-      } else if (!ev || ev.expectedValueR <= 0) {
-        console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} real expected value is ${ev ? ev.expectedValueR.toFixed(3) + 'R' : 'uncomputable'} (${liveWinRate.sampleSize} real closed trades, win rate ${(liveWinRate.winProbability * 100).toFixed(1)}%) - not a real edge, not emitting a live trade idea from it.`);
+      } else if (!ev) {
+        // rr/liveWinRate both exist here (the branch above already handled their absence) - `!ev`
+        // means expectedValue() itself had nothing usable, i.e. riskRewardRatio() returned null
+        // (missing/invalid stop or target price) - a data/setup gap, not a measured negative edge.
+        console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} expected value is uncomputable (no usable stop/target risk-reward this cycle) - not emitting a live trade idea from it.`);
+        noTradeCode = 'EXPECTED_VALUE_UNCOMPUTABLE';
+        strategyIdea = null;
+        matchedStrategyEvaluation = null;
+      } else if (ev.expectedValueR <= 0) {
+        console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} real expected value is ${ev.expectedValueR.toFixed(3)}R (${liveWinRate.sampleSize} real closed trades, win rate ${(liveWinRate.winProbability * 100).toFixed(1)}%) - not a real edge, not emitting a live trade idea from it.`);
+        noTradeCode = 'EXPECTED_VALUE_TOO_LOW';
         strategyIdea = null;
         matchedStrategyEvaluation = null;
       } else if (rr && rr.ratio !== null && rr.ratio < deskIntelligence.minRiskRewardRatio) {
         console.log(`[QuantSignalAgent] ${symbol}: ${matchedStrategyEvaluation.strategy} R:R ${rr.ratio.toFixed(2)} is below desk min ${deskIntelligence.minRiskRewardRatio} - NO TRADE.`);
+        noTradeCode = 'POOR_RISK_REWARD';
         strategyIdea = null;
         matchedStrategyEvaluation = null;
       }
@@ -539,10 +616,16 @@ export class QuantSignalAgent {
 
     const idea = strategyIdea;
     if (!idea) {
+      // noTradeCode is set above whenever a real strategyIdea existed and was then refused by the
+      // EV/sample/R:R checks. When it's still null here, the idea never existed in the first place -
+      // bestStrategyIdea() found no strategy clearing its own setup-confidence threshold this cycle
+      // (NO_ELIGIBLE_STRATEGY) as distinct from having no evaluable strategies at all
+      // (INSUFFICIENT_EVIDENCE, e.g. no qualifying bars/data this cycle).
+      const code = noTradeCode ?? (strategyEvaluations.length > 0 ? 'NO_ELIGIBLE_STRATEGY' : 'INSUFFICIENT_EVIDENCE');
       eventBus.emit(EVENTS.DESK_NO_TRADE, {
         traceId,
         symbol,
-        code: strategyEvaluations.some(e => e.confidence >= 0.01) ? 'EXPECTED_VALUE_TOO_LOW' : 'INSUFFICIENT_EVIDENCE',
+        code,
         reason: 'Quant live emit requires a strategy idea that clears live EV and min R:R. Regime-only fallback is not a trade.',
       });
     }

@@ -181,7 +181,17 @@ export interface SupportResistanceFeatures {
   priorChannel20: OHLC | null;
 }
 
-export function computeSupportResistanceFeatures(bars: Bar[]): SupportResistanceFeatures {
+/**
+ * 2026-09-29 (intraday-bars-for-opening-range fix, docs/audits/archive/
+ * ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md): `intradayBars` is a real, OPTIONAL, second bar set at
+ * finer granularity than `bars` - openingRange() (and only openingRange()) uses it when supplied,
+ * so a caller whose main `bars` are daily (every other feature here - previousDay/dailyHighLow/
+ * pivots/fibonacci/swings/priorChannel20 - is correctly daily-appropriate and unaffected) can still
+ * give this one intraday-only feature real intraday bars without changing anything else. Omitting
+ * it (every existing caller before this fix) preserves the exact prior behavior byte-for-byte -
+ * openingRange(bars, ...) on daily bars, honestly reporting unavailable, exactly as before.
+ */
+export function computeSupportResistanceFeatures(bars: Bar[], intradayBars?: Bar[]): SupportResistanceFeatures {
   const currentPrice = bars.length ? bars[bars.length - 1].close : 0;
   const prevDay = previousDayLevels(bars);
   const lookback = quantExperimentalStrategies.thresholds.donchianPriorLookback;
@@ -207,7 +217,7 @@ export function computeSupportResistanceFeatures(bars: Bar[]): SupportResistance
     fibonacci,
     recentSwings: swings,
     nearest: nearestSupportResistance(currentPrice, candidateLevels),
-    openingRange: openingRange(bars, orWindow),
+    openingRange: openingRange(intradayBars ?? bars, orWindow),
     priorChannel20: rollingHighLow(priorBars, lookback),
   };
 }

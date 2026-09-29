@@ -22,7 +22,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
-import { getCachedBroadUniverseCandidatesWithVolume, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+import { getCachedBroadUniverseCandidatesWithVolume, getCachedBroadUniverseGapPct, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
 import { selectBroadUniverseCandidates } from './BroadUniverseSubscriptionAllocator';
 import {
   getLastComposableScore,
@@ -54,6 +54,15 @@ export interface OpportunityScanStats {
   shortlist: Array<{ symbol: string; assetClass: string; reason: string }>;
   momentumHotSwap: boolean;
   momentumRanked: number;
+  /** 2026-09-29 (discovery-to-evaluation coverage fix): count of broad-universe/mover/news-catalyst
+   *  shortlist symbols (outside SnapshotScanner's static momentum universe) scored as hot-swap
+   *  challengers this cycle - 0 whenever momentum rotation is off or none had real evidence
+   *  (mover-bonus/composable-score/gapPct) to compete on. */
+  broadUniverseChallengers: number;
+  /** How many of those challengers actually won a hot-swap slot this cycle (subset of
+   *  broadUniverseChallengers, bounded by the same existing swap-cap/pacing as momentum-universe
+   *  candidates - never additional swap volume). */
+  broadUniverseHotSwapWinners: number;
   rth: boolean;
   at: string;
   honesty: string;
@@ -72,6 +81,8 @@ const EMPTY: OpportunityScanStats = {
   shortlist: [],
   momentumHotSwap: false,
   momentumRanked: 0,
+  broadUniverseChallengers: 0,
+  broadUniverseHotSwapWinners: 0,
   rth: false,
   at: new Date(0).toISOString(),
   honesty: continuousIntelligence.honesty,
@@ -198,6 +209,34 @@ export function blendedHotSwapScore(sym: string, baseScoreOf: (symbol: string) =
     : withMoverBonus;
 }
 
+/**
+ * 2026-09-29 (discovery-to-evaluation coverage fix, docs/audits/archive/
+ * ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md). Real, confirmed gap: `top` (SnapshotScanner's static
+ * momentum universe) was the ONLY source of hot-swap challengers when the stream is full - a
+ * broad-universe-only admission (never part of that static universe, e.g. IOVA) had zero
+ * momentum/mover/composable signal via blendedHotSwapScore() because `baseScoreOf` only ever
+ * looks up getLastSnapshotScore()/getDynamicMomentumScore(), both scoped to symbols SnapshotScanner
+ * or MarketDataWorker have actually scored - a broad-universe-only symbol returns 0 from both.
+ *
+ * This scores such a symbol using the SAME blendedHotSwapScore() (so a real mover-bonus or
+ * composable-ranking score still counts, when present), PLUS a real, already-fetched gap term
+ * (|gapPct| * 100, percent units matching SnapshotScanner's own SCORE_WEIGHT_PCT convention,
+ * weighted by broadUniverseGapHotSwapWeight) - a broad-universe symbol with a genuine intraday
+ * move can now compete on that evidence alone, never fabricated when gapPct is null (contributes
+ * exactly 0, not treated as "no move").
+ */
+export function scoreBroadUniverseChallenger(
+  sym: string,
+  gapPct: number | null,
+  baseScoreOf: (symbol: string) => number,
+): number {
+  const blended = blendedHotSwapScore(sym, baseScoreOf);
+  const gapTerm = gapPct != null && Number.isFinite(gapPct)
+    ? Math.abs(gapPct) * 100 * continuousIntelligence.broadUniverseGapHotSwapWeight
+    : 0;
+  return blended + gapTerm;
+}
+
 function weakestDynamicScore(
   activeDynamic: string[],
   scoreOf: (symbol: string) => number,
@@ -288,6 +327,19 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
   const rth = isSnapshotScannerRth(now);
   let momentumHotSwap = false;
   let momentumRanked = 0;
+  let broadUniverseChallengerCount = 0;
+  let broadUniverseHotSwapWinnerCount = 0;
+  /** Symbols this cycle's toRequest won via the NEW broad-universe hot-swap challenger path
+   *  (as opposed to the momentum universe or the existing empty-slot topup) - read by the
+   *  WATCHLIST_SUBSCRIBE_REQUESTED reason tagging below, outside the momentum-rotation branch. */
+  const broadUniverseHotSwapWinnerSymbols = new Set<string>();
+  /** 2026-09-29 correction: real priorityScoreOf() value per symbol this cycle, populated by
+   *  whichever branch actually computed one (combinedTop and/or topUpFromBroadUniverse below) -
+   *  read at the WATCHLIST_SUBSCRIBE_REQUESTED emission loop so the score that decided admission
+   *  is the SAME score that seeds MarketDataWorker's real eviction-priority store, instead of the
+   *  emission loop re-deriving (and losing) it via getLastSnapshotScore() alone. Per-cycle,
+   *  discarded after use - not a new persistent scoring store. */
+  const candidatePriorityScores = new Map<string, number>();
   try {
     const active = new Set(marketDataWorker.getActiveSymbols().map((s) => s.toUpperCase()));
     const universe = getOpportunityScanUniverse();
@@ -310,6 +362,34 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
     const cap = marketDataWorker.getEffectiveStreamingCap();
     const emptySlots = Math.max(0, cap - active.size);
     let toRequest: string[] = [];
+    // 2026-09-29 correction (second Codex review, item 4): baseScoreOf must NEVER fall back to
+    // marketDataWorker.getDynamicMomentumScore(s). That map stores this cycle's FINAL priority
+    // (priorityScoreOf's own output: base + mover-bonus + composable*weight + gap*weight),
+    // written by the emission loop below via candidatePriorityScores. A prior version of this
+    // function fell back to that same stored value as a "base" whenever getLastSnapshotScore(s)
+    // was null (true for every broad-universe-only symbol, since SnapshotScanner never scans
+    // outside its own seed/watch/momentum universe) - so a broad-universe symbol admitted in cycle
+    // N had its already-bonused final priority read back as cycle N+1's "raw" base, and
+    // mover-bonus/composable/gap were added AGAIN on top of a number that already included them.
+    // getLastSnapshotScore(s) ?? 0 is the only real, non-compounding raw signal: SnapshotScanner's
+    // own fresh per-cycle recompute for symbols it scans, or a genuine "no fresh momentum evidence"
+    // 0 for a broad-universe-only symbol (which can still compete purely on mover-bonus/composable/
+    // gap - never fabricated, never inflated by its own prior score).
+    const baseScoreOf = (s: string) => getLastSnapshotScore(s) ?? 0;
+    // 2026-09-29 correction (Codex review of the same-day fix): the ONE documented, comparable
+    // priority function for this whole cycle - applied identically to momentum-universe AND
+    // broad-universe candidates (both inside the hot-swap branch below AND the separate
+    // topUpFromBroadUniverse block), so a candidate's source never by itself decides array
+    // position or its stored eviction-priority score. Momentum candidates were previously compared
+    // on raw SnapshotScanner momentumScore while broad-universe challengers were compared on this
+    // blended score - genuinely different scales, silently favoring whichever pool happened to
+    // sort first. Unifying to one function is strictly additive for momentum candidates
+    // (blendedHotSwapScore/gap terms are non-negative) and makes every subsequent comparison,
+    // sort, and stored eviction score apples-to-apples. Because baseScoreOf (above) is now always a
+    // fresh, non-compounding signal, priorityScoreOf is now also safe to use for INCUMBENT scoring
+    // (the scoreOf callback below) with no double-counting risk - see that callback's own comment.
+    const priorityScoreOf = (symbol: string): number =>
+      scoreBroadUniverseChallenger(symbol, getCachedBroadUniverseGapPct(symbol), baseScoreOf);
 
     if (continuousIntelligence.momentumRotationEnabled) {
       const top = await getTopMomentumCandidates(continuousIntelligence.snapshotTopCandidates, { now });
@@ -319,33 +399,94 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       const maxSwaps = emptySlots > 0
         ? Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots)
         : Math.min(continuousIntelligence.momentumHotSwapSlotsPerCycle, 1);
+
+      // 2026-09-29 (discovery-to-evaluation coverage fix): broad-universe/mover/news-catalyst
+      // shortlist symbols NOT already in the momentum `top` list get a real chance to compete for
+      // an OCCUPIED slot too - previously only `top` (SnapshotScanner's static universe) could ever
+      // challenge at full capacity; a broad-universe-only admission (e.g. IOVA) could only ever fill
+      // an EMPTY slot (see topUpFromBroadUniverse below), never displace an occupant. Scored via
+      // priorityScoreOf() (real mover-bonus/composable-score/gapPct evidence only - never a bare
+      // admission), bounded by broadUniverseHotSwapChallengerLimit so this stays a cost-controlled
+      // top-N, not every admitted symbol every cycle.
+      const topSymbols = new Set(top.map((c) => c.symbol));
+      const broadUniverseChallengers: SnapshotCandidate[] = shortlist
+        .filter((row) => !active.has(row.symbol) && !topSymbols.has(row.symbol))
+        .map((row) => ({
+          symbol: row.symbol,
+          intradayPctChange: 0,
+          rangeExpansion: 0,
+          relativeVolume: 0,
+          momentumScore: priorityScoreOf(row.symbol),
+        }))
+        .filter((c) => c.momentumScore > 0)
+        .sort((a, b) => b.momentumScore - a.momentumScore)
+        .slice(0, continuousIntelligence.broadUniverseHotSwapChallengerLimit);
+      const broadUniverseChallengerSymbols = new Set(broadUniverseChallengers.map((c) => c.symbol));
+
+      // 2026-09-29 correction: remap `top`'s own momentumScore through the SAME priorityScoreOf()
+      // before merging, then sort the COMBINED pool once by that single comparable score
+      // (deterministic alphabetical tiebreak). Real defect this closes: `combinedTop =
+      // [...top, ...broadUniverseChallengers]` (unsorted) let planSnapshotHotSwap's array-order
+      // iteration hand the one-slot swap budget to whichever momentum candidate came first in
+      // `top`, even when a much stronger broad-universe challenger was also present - source
+      // determined priority, not score. The prior IOVA-class test masked this by emptying `top`
+      // entirely; it never exercised the case where both pools are non-empty.
+      const rankedTop: SnapshotCandidate[] = top.map((c) => ({ ...c, momentumScore: priorityScoreOf(c.symbol) }));
+      const combinedTop = [...rankedTop, ...broadUniverseChallengers]
+        .sort((a, b) => b.momentumScore - a.momentumScore || a.symbol.localeCompare(b.symbol));
+      // 2026-09-29 correction: the SAME score that decided selection must be what gets stored as
+      // this symbol's ongoing eviction priority (MarketDataWorker.dynamicMomentumScores) - real
+      // defect this closes: the subscription-request emission below previously re-derived score via
+      // getLastSnapshotScore(symbol) alone, which is null/undefined for any broad-universe-only
+      // symbol. MarketDataWorker.subscribe() then never calls dynamicMomentumScores.set() for that
+      // symbol (the `typeof === 'number'` guard fails on undefined), so rankEvictionCandidates()
+      // reads it back as 0 - the worst possible score - on the very next prune, regardless of the
+      // real evidence that won it the slot in the first place. This map is NOT a second persistent
+      // scoring store: it is a per-cycle, discarded-after-use lookup that ensures the ALREADY
+      // existing canonical store (dynamicMomentumScores) gets seeded with the real value instead of
+      // silently dropping to undefined.
+      for (const c of combinedTop) candidatePriorityScores.set(c.symbol, c.momentumScore);
+
+      // 2026-09-29 correction (second Codex review, item 4): scoreOf ranks the weakest ACTIVE
+      // incumbent for eviction comparison against combinedTop's challengers - it must use the SAME
+      // priorityScoreOf() challengers are ranked and sorted with above (momentumScore on
+      // rankedTop/broadUniverseChallengers), not blendedHotSwapScore() alone. The prior asymmetry
+      // meant an incumbent's gap-term evidence was silently excluded from its own eviction-risk
+      // score while an otherwise-identical challenger's gap term counted in full - a real,
+      // source-dependent scoring bias, not just a challenger-side gap. Safe to unify now that
+      // baseScoreOf (above) never reads back an already-bonused stored value.
       const planned = planSnapshotHotSwap({
-        top,
+        top: combinedTop,
         active,
         activeDynamic,
         emptySlots,
         maxSwaps,
         scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
-        scoreOf: (sym) => blendedHotSwapScore(sym, (s) =>
-          getLastSnapshotScore(s)
-          ?? marketDataWorker.getDynamicMomentumScore(s)
-          ?? 0),
+        scoreOf: (sym) => priorityScoreOf(sym),
       });
       toRequest = planned;
       momentumHotSwap = planned.length > 0 && (emptySlots === 0 || rth);
+      const broadUniverseHotSwapWinners = new Set(planned.filter((s) => broadUniverseChallengerSymbols.has(s)));
+      for (const s of broadUniverseHotSwapWinners) broadUniverseHotSwapWinnerSymbols.add(s);
 
       // Phase 4D (Dynamic Subscription Priority Queue, 2026-08-26): recomputes the IDENTICAL
       // decision rule planSnapshotHotSwap already applied above, purely to explain every
       // candidate's outcome (PROMOTED/NOT_PROMOTED/ALREADY_ACTIVE + reason). Never changes
       // `toRequest`/`momentumHotSwap` above - additive telemetry only, wrapped so it can never
-      // affect the real subscribe decision.
+      // affect the real subscribe decision. Now also covers broadUniverseChallengers (combinedTop),
+      // so an operator can see why an admitted broad-universe symbol was or was not promoted, not
+      // just momentum-universe ones.
       try {
+        // Same scoreOf unification as planSnapshotHotSwap above - this explainer recomputes the
+        // IDENTICAL decision rule purely for observability, so it must use the same priorityScoreOf
+        // basis or its PROMOTED/NOT_PROMOTED explanations would silently diverge from the real
+        // decision they claim to explain.
         const decisions = explainSnapshotHotSwapDecisions({
-          top, active, activeDynamic,
+          top: combinedTop, active, activeDynamic,
           emptySlots,
           maxSwaps: emptySlots > 0 ? Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots) : Math.min(continuousIntelligence.momentumHotSwapSlotsPerCycle, 1),
           scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
-          scoreOf: (sym) => blendedHotSwapScore(sym, (s) => getLastSnapshotScore(s) ?? marketDataWorker.getDynamicMomentumScore(s) ?? 0),
+          scoreOf: (sym) => priorityScoreOf(sym),
         });
         for (const d of decisions) {
           observeSafe(() => {
@@ -354,12 +495,15 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
               eventType: `SUBSCRIPTION_${d.action}`,
               symbol: d.symbol,
               reasoning: d.reason,
+              source: broadUniverseChallengerSymbols.has(d.symbol) ? 'BROAD_UNIVERSE_CHALLENGER' : 'MOMENTUM_UNIVERSE',
             });
           });
         }
       } catch (e) {
         console.error('[OpportunityDiscovery] Subscription priority explainer failed (does not affect the real hot-swap decision)', e);
       }
+      broadUniverseChallengerCount = broadUniverseChallengers.length;
+      broadUniverseHotSwapWinnerCount = broadUniverseHotSwapWinners.size;
     } else if (emptySlots > 0) {
       toRequest = shortlist
         .filter((row) => !active.has(row.symbol))
@@ -391,7 +535,14 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
           .filter((row) => !active.has(row.symbol) && !alreadyRequested.has(row.symbol))
           .slice(0, remaining)
           .map((r) => r.symbol);
-        for (const symbol of topUp) topUpFromBroadUniverse.add(symbol);
+        for (const symbol of topUp) {
+          topUpFromBroadUniverse.add(symbol);
+          // 2026-09-29 correction: same score-propagation fix as the hot-swap path above - a
+          // topUp symbol's real priorityScoreOf() (not getLastSnapshotScore(), which is null for
+          // most broad-universe-only symbols) must reach MarketDataWorker.dynamicMomentumScores,
+          // or it is silently treated as the worst-ranked active symbol on the next eviction pass.
+          if (!candidatePriorityScores.has(symbol)) candidatePriorityScores.set(symbol, priorityScoreOf(symbol));
+        }
         toRequest = toRequest.concat(topUp);
       }
     }
@@ -406,12 +557,21 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
     }
 
     for (const symbol of toRequest) {
-      const score = getLastSnapshotScore(symbol) ?? undefined;
+      // 2026-09-29 correction: prefer the real score that actually decided this cycle's selection
+      // (candidatePriorityScores, populated above for every hot-swap/topUp candidate) over
+      // re-deriving from getLastSnapshotScore() alone - the latter is null/undefined for any
+      // broad-universe-only symbol and silently loses real evidence at exactly the point
+      // MarketDataWorker.subscribe() needs it to seed dynamicMomentumScores. Falls back to
+      // getLastSnapshotScore() only for a symbol this cycle never scored (the non-momentum-rotation
+      // branch, or a momentum-universe symbol requested via some other future path).
+      const score = candidatePriorityScores.get(symbol) ?? getLastSnapshotScore(symbol) ?? undefined;
       eventBus.emit(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, {
         symbol,
         source: 'OpportunityDiscovery',
         reason: topUpFromBroadUniverse.has(symbol)
           ? 'BROAD_UNIVERSE_TOPUP'
+          : broadUniverseHotSwapWinnerSymbols.has(symbol)
+          ? 'BROAD_UNIVERSE_HOT_SWAP'
           : (momentumHotSwap ? 'SNAPSHOT_HOT_SWAP' : 'SEED_UNIVERSE_EXPANSION'),
         momentumScore: score,
         honesty: 'Subscribe request only — not a trade idea and not an order.',
@@ -439,6 +599,8 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       shortlist,
       momentumHotSwap,
       momentumRanked,
+      broadUniverseChallengers: broadUniverseChallengerCount,
+      broadUniverseHotSwapWinners: broadUniverseHotSwapWinnerCount,
       rth,
       at: new Date().toISOString(),
       honesty: continuousIntelligence.honesty,

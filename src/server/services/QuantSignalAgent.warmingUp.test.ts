@@ -123,6 +123,9 @@ describe('QuantSignalAgent WARMING_UP sample-size gate', () => {
     const received: any[] = [];
     const listener = (idea: any) => received.push(idea);
     eventBus.subscribe('TRADE_IDEA_GENERATED', listener);
+    const noTrades: any[] = [];
+    const noTradeListener = (p: any) => noTrades.push(p);
+    eventBus.subscribe('DESK_NO_TRADE', noTradeListener);
 
     const { tradingEngine } = await import('../engines/TradingEngine');
     tradingEngine.state.enabled = true;
@@ -131,12 +134,21 @@ describe('QuantSignalAgent WARMING_UP sample-size gate', () => {
     const agent = new QuantSignalAgent();
     const result = await agent.evaluateSymbol('QWARM');
     eventBus.unsubscribe('TRADE_IDEA_GENERATED', listener);
+    eventBus.unsubscribe('DESK_NO_TRADE', noTradeListener);
 
     expect(result).not.toBeNull();
     const mine = received.find((i) => i.symbol === 'QWARM' && i.agent === 'QuantEngine');
     // Bootstrap is off by default in this test, so a WARMING_UP strategy must produce no idea at
     // all - never a "validated" idea fabricated from a 3-trade sample.
     expect(mine).toBeUndefined();
+
+    // 2026-09-29 (no-trade reason precision fix): this is specifically an insufficient-sample
+    // rejection (3 trades, below MIN_SAMPLE_SIZE_FOR_KELLY), not the old generic
+    // EXPECTED_VALUE_TOO_LOW that used to collapse this together with a genuinely-measured
+    // negative expected value - an operator reading DESK_NO_TRADE must be able to tell "not enough
+    // evidence yet" apart from "measured and it's a bad bet".
+    const myNoTrade = noTrades.find((n) => n.symbol === 'QWARM');
+    expect(myNoTrade?.code).toBe('INSUFFICIENT_SAMPLE');
   });
 
   // The bootstrap-enabled emission path itself (WARMING_UP now takes the exact same branch as the

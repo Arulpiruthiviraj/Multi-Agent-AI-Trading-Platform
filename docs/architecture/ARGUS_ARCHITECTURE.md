@@ -1350,6 +1350,324 @@ reimplementations to call the shared function, not to collapse all nine into one
   rather than reading System A's snapshot; System A's `PLAN_BUILDING`/`PLAN_READY`/
   `OPEN_REVALIDATION` values are never set by anything that calls into `TradePlanBuilder`.
 
+### Discovery-to-evaluation coverage fix (2026-09-29)
+
+Real, verified defect (docs/audits/archive/ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md): at full stream
+capacity, `OpportunityDiscovery.ts`'s hot-swap challenger pool (`planSnapshotHotSwap()`'s `top`
+argument) was sourced ONLY from `SnapshotScanner.ts`'s static momentum universe (seed/watch/
+campaign/momentum-scan lists). A broad-universe-only admission — from `MarketUniverseScanner.ts`'s
+ADV-gated scan, the movers funnel, or the news-catalyst funnel, all already computed into the same
+cycle's `shortlist` — could only ever fill an EMPTY streaming slot (`topUpFromBroadUniverse`,
+2026-09-16), never compete for an OCCUPIED one. Case study: IOVA was admitted 43 times over ~3
+hours (real +34% move vs previous close) and never reached a quant assessment, because the stream
+was already at its 12-symbol cap.
+
+**Fix** (`OpportunityDiscovery.ts`, `runOpportunityScan()`'s `momentumRotationEnabled` branch):
+broad-universe/mover/news-catalyst shortlist symbols not already in the momentum `top` list are now
+also scored (`scoreBroadUniverseChallenger()`) and merged into the SAME candidate pool passed to
+`planSnapshotHotSwap()`/`explainSnapshotHotSwapDecisions()` — the existing swap-cap/pacing
+(`momentumHotSwapSlotsPerCycle`, 1 swap/cycle at full capacity) is unchanged; only the pool
+competing for that bounded budget widens. Scoring reuses the existing `blendedHotSwapScore()`
+(real mover-bonus/composable-ranking evidence) plus a new real, already-fetched signal —
+`MarketUniverseScanner.ts`'s `gapPct` (dailyBar.o vs current price), previously computed every
+cycle for the Discovery Lineage Ledger's `gapMover` tag but discarded before reaching this
+decision. A symbol with zero real evidence (no gap, no mover-bonus, no composable score) scores
+exactly 0 and never competes — admission alone was never sufficient. New config:
+`broadUniverseHotSwapChallengerLimit` (15, bounds cost/noise), `broadUniverseGapHotSwapWeight`
+(0.5, matches `SnapshotScanner`'s own `SCORE_WEIGHT_PCT` convention) in `continuousIntelligence.json`.
+Per-candidate outcome (`PROMOTED`/`NOT_PROMOTED`/`ALREADY_ACTIVE` + reason) is now logged via the
+existing `subscription_priority_decision` observability event for broad-universe challengers too,
+tagged `source: 'BROAD_UNIVERSE_CHALLENGER'` vs `'MOMENTUM_UNIVERSE'`. A winning broad-universe
+challenger's `WATCHLIST_SUBSCRIBE_REQUESTED` reason is `BROAD_UNIVERSE_HOT_SWAP`, distinct from the
+existing `SNAPSHOT_HOT_SWAP`/`BROAD_UNIVERSE_TOPUP`. Still never emits `TRADE_IDEA_GENERATED`,
+never imports OMS/RiskEngine/BrokerManager — this remains a subscribe-only discovery decision;
+reaching real evaluation still depends on `QuantSignalAgent`/`TechnicalAgent`/etc. actually
+evaluating the now-streamed symbol on a later cycle.
+
+Same pass: `QuantSignalAgent.ts`'s `DESK_NO_TRADE` emission on a null quant idea previously
+collapsed five distinct real conditions into two generic codes
+(`EXPECTED_VALUE_TOO_LOW`/`INSUFFICIENT_EVIDENCE`). Now tracked explicitly and reported via
+`config/noTradeReasons.json`: `NO_ELIGIBLE_STRATEGY` (no strategy cleared its own setup-confidence
+threshold), `INSUFFICIENT_SAMPLE` (cold-start/warming-up, existing code reused correctly),
+`EXPECTED_VALUE_UNCOMPUTABLE` (new — no usable stop/target risk-reward this cycle),
+`EXPECTED_VALUE_TOO_LOW` (narrowed to its literal meaning — a real, measured, non-positive expected
+value), `POOR_RISK_REWARD` (existing code, now used for the R:R-below-minimum case specifically).
+
+### Volume provenance and intraday-bars-for-opening-range fixes (2026-09-29)
+
+**Volume provenance.** `MarketUniverseScanner.ts`'s discovery-only `computeRvol()` (today's-volume /
+ADV, feeding only the observability `rvolMover` tag, never a gate) mixes a real-time `feed=iex`
+numerator (~1.5%-10% of true consolidated volume per the 2026-09-16 comment already in that file)
+with a `feed=sip`-or-FMP-fallback full-trading-day historical denominator — structurally
+non-comparable, understating true relative volume, and not time-of-day-adjusted. Not corrected
+(would require either a consolidated real-time feed this account is not shown to be entitled to, or
+a genuine intraday ADV curve — both real, separately-scoped follow-ups); instead made honestly
+visible: `src/server/observability/discoveryCandidateLedger.ts` now attaches a `VolumeProvenance`
+descriptor (`RVOL_PROVENANCE`, `comparable: false`, explicit numerator/denominator feed+scope) to
+every `discovery_candidate_decision` event that carries a non-null `rvol`. Checked and confirmed
+unaffected: `SnapshotScanner.ts`'s own `relativeVolume` (the one that actually feeds
+`ComposableRanking` scoring) already uses matched `feed=iex` on both numerator and denominator plus
+a real time-of-day adjustment (`expectedVolumeAtTimeOfDay`) — this fix does not touch that path.
+
+**Intraday bars for `OPENING_RANGE_BREAKOUT`.** `QuantSignalAgent.ts` previously fetched only
+`TIMEFRAME='1Day'` bars for its entire cycle (all 5 CORE strategies plus every live experimental
+one) — `computeSupportResistanceFeatures()`'s `openingRange()`/`premarketHighLow()` were already
+honest about reporting unavailable on daily bars (never fabricated a range from a daily candle),
+but the agent never attempted an intraday fetch at all, so the honest-abstention path was the ONLY
+path (2,027 of 2,072 real assessments that day). `computeSupportResistanceFeatures(bars,
+intradayBars?)` gained a second, optional bar-set parameter, consumed only by `openingRange()` —
+every other daily-appropriate feature (`previousDay`/`dailyHighLow`/`pivots`/`fibonacci`/
+`priorChannel20`) is unaffected and keeps reading the main `bars` unchanged; omitting the new
+parameter preserves the exact prior behavior byte-for-byte. `QuantSignalAgent.evaluateSymbol()`
+now attempts a real, bounded `'1Min'` fetch (`computeIntradayFetchWindow()` — today's real regular-
+session-open, DST-correct via `TradingCalendar.tradingWallTimeToIso`, capped at 8h, never before
+session open) gated behind the SAME `isExperimentalStrategyLive('OPENING_RANGE_BREAKOUT')` check
+`StrategyEngine.ts` already uses to decide live participation — zero added cost/behavior change for
+any deployment that hasn't opted into this specific experimental strategy (`.env.example` default
+`false`; this deployment's own `.env` has it `true`). Fail-open: any fetch failure leaves
+`intradayBars` undefined and the strategy falls back to its pre-existing honest-unavailable
+behavior, never blocking the real daily-bar CORE-strategy evaluation. No swing/CORE strategy's data
+diet changed.
+
+### PROPOSED, NOT ACTIVE — calibration provider-selection patch (2026-09-29 investigation)
+
+**Real, verified bug, not yet fixed** (protected-component change — `ChiefTraderAgent.ts` is on the
+protected list, so this is presented for review rather than silently applied, per this file's own
+governance and CLAUDE.md's "extend through the documented interface only" rule).
+
+`ChiefTraderAgent.calibrateConfidenceDetailed()` (`src/server/services/ChiefTraderAgent.ts:737-739`)
+reads `agentConfidenceCalibration` filtered only by `(agentName, bucketLow)` and takes `rows[0]`,
+with no `ORDER BY` and no `provider` filter. The schema itself
+(`src/server/db/schema.ts:553-558`) documents the intended design explicitly: `provider` defaults
+to `'ALL'` (an aggregate row) precisely so that "every current consumer... still reads and keeps
+reading unchanged," with a real per-provider id row added *alongside* it, never replacing it.
+`ChiefTraderAgent`'s query does not honor that convention.
+
+**Confirmed against the real, live database (read-only query, 2026-09-29):** 5 real (agent, bucket)
+combinations currently have more than one provider row. Worked example — `NewsAgent`, bucket 0.7 —
+has 4 rows with materially different `calibrated_confidence` values:
+
+| provider | wins | losses | calibrated_confidence |
+|---|---|---|---|
+| `271db452-...` | 27 | 25 | 0.5565 |
+| `4afb8961-...` | 0 | 2 | 0.6250 |
+| `ALL` | 62 | 48 | 0.5792 |
+| `ec013fbf-...` | 8 | 4 | 0.7045 |
+
+Without an `ORDER BY`, SQLite's row order for an unindexed multi-row match is not a deliberate,
+guaranteed choice — `ChiefTraderAgent` could be using any of these four real, different values as
+NewsAgent's live `decisionConfidence` for this bucket, not necessarily the intended aggregate.
+
+**Proposed minimal patch** (adds one condition, matching the schema's own documented intent — does
+not change the calibration *model*, only which already-existing row is selected):
+
+```ts
+const rows = await db.select().from(agentConfidenceCalibration).where(
+  and(
+    eq(agentConfidenceCalibration.agentName, agentName),
+    eq(agentConfidenceCalibration.bucketLow, bucket.low),
+    eq(agentConfidenceCalibration.provider, 'ALL'),
+  )
+);
+```
+
+**Why this is a decision-relevant change, not a pure bug fix to apply silently:** for any
+(agent, bucket) with colliding rows, live `decisionConfidence` — and therefore ChiefTrader's
+weighted consensus score for that agent's votes — would change from whatever `rows[0]` happened to
+return today to the `'ALL'` aggregate. That is a real behavior change to the protected consensus
+path, not merely an observability fix, even though the corrected behavior matches the schema's own
+stated design.
+
+**Recommended before activating:** (1) confirm live `decisionConfidence` for `NewsAgent` today
+actually reflects one of the non-`'ALL'` rows (the ambiguity is proven; which row wins in practice
+was not traced further this pass); (2) add a regression test seeding multiple provider rows for the
+same (agent, bucket) and asserting `calibrateConfidenceDetailed()` returns the `'ALL'` row's
+`calibratedConfidence`; (3) apply the patch and re-verify `agent_confidence_calibration`-driven
+CONSENSUS_TERMINAL_REASON telemetry before/after on a real cycle. Not applied in this pass.
+
+### Discovery-routing correction pass (2026-09-29, same day, post-review)
+
+**Two real defects found in the first version of the discovery-to-evaluation fix above**, via
+independent code review (not this session's own testing) after the fix was first reported as
+"complete." Documented here rather than silently amended, per this session's own evidence
+discipline.
+
+1. **Unsorted combined candidate pool.** `combinedTop = [...top, ...broadUniverseChallengers]` was
+   never sorted - `planSnapshotHotSwap()`'s array-order iteration let whichever momentum-universe
+   candidate happened to be listed first consume the single swap-slot budget even when a much
+   stronger broad-universe challenger was also present in the same cycle. The original IOVA-class
+   test did not catch this because it emptied the momentum universe entirely, never exercising the
+   both-pools-present case.
+   **Fix:** one unified, documented scoring function (`priorityScoreOf()`, wrapping
+   `scoreBroadUniverseChallenger()`) is now applied to EVERY candidate regardless of source -
+   momentum-universe candidates' `momentumScore` is remapped through it too (strictly additive:
+   `blendedHotSwapScore`/gap terms are non-negative, so a momentum candidate's score can only
+   increase, never decrease, versus its old raw value). `combinedTop` is sorted descending by this
+   one score with a deterministic alphabetical tiebreak (`symbol.localeCompare`) before being
+   passed to `planSnapshotHotSwap()`/`explainSnapshotHotSwapDecisions()` - the existing swap-cap/
+   pacing inside those functions is untouched.
+2. **Lost score at subscription time.** The `WATCHLIST_SUBSCRIBE_REQUESTED` emission re-derived
+   each symbol's `momentumScore` via `getLastSnapshotScore(symbol)` alone - null/undefined for any
+   broad-universe-only symbol. `MarketDataWorker.subscribe()`'s `dynamicMomentumScores.set()` call
+   is guarded by `typeof momentumScore === 'number'`, so a broad-universe winner's REAL score
+   (the one that just won it the slot) was silently never stored; the very next
+   `rankEvictionCandidates()` pass would then read it back as `0` (the worst possible value) via
+   `dynamicMomentumScores.get(s) ?? 0`, making the symbol the first eviction candidate regardless
+   of the real evidence that admitted it.
+   **Fix:** a per-cycle `candidatePriorityScores` map (populated from `combinedTop` and the
+   separate `topUpFromBroadUniverse` empty-slot path, both using the same `priorityScoreOf()`) is
+   consulted first at the subscription-request emission point, falling back to
+   `getLastSnapshotScore()` only when a symbol was never scored this cycle. This is not a second
+   persistent scoring store - it is a per-cycle, discarded-after-use lookup that ensures the
+   already-existing canonical store (`MarketDataWorker.dynamicMomentumScores`) gets seeded
+   correctly instead of silently dropping to `undefined`.
+
+**Tests added:** stronger-broad-beats-weaker-static (both pools present), the same with reversed
+alphabetical/array positioning, a deterministic-tie case, and an explicit score-propagation
+assertion (`OpportunityDiscovery.test.ts`). A separate real cross-service integration test
+(`OpportunityDiscoveryToQuantAssessment.integration.test.ts`) traces subscription request → the
+real `MarketDataWorker.subscribe()` call → a simulated provider-acknowledgment/fresh-tick
+(`ingestIbkrQuote()`, the same real method the production IBKR tick handler calls) → a real
+`QuantSignalAgent.evaluateSymbol()` call reaching a genuine regime/strategy-evaluation result
+(never a fabricated or forced trade idea - correct abstention is an accepted outcome), plus
+subscription-failure, capacity-refusal, and post-admission-eviction cases against the real
+`marketDataWorker` singleton.
+
+**Known, honestly-scoped limitation not fixed this pass:** once a symbol's priority score is
+seeded, nothing periodically refreshes it for an already-active dynamic symbol - `toRequest` (the
+only path that carries a `momentumScore` into `subscribe()`) only ever contains symbols not yet
+subscribed. This is a **pre-existing property of the whole system**, equally true for
+momentum-universe symbols before this fix existed, not something this fix introduces or makes
+worse for broad-universe symbols specifically. Not addressed in this pass; a real periodic
+rescoring pass for already-active dynamic symbols is a separate, larger change.
+
+**Java-engine-ownership question, addressed directly (not silently assumed):** does
+`scoreBroadUniverseChallenger()` (and the `priorityScoreOf()` wrapper added in this correction
+pass) constitute new quantitative-calculation work that CLAUDE.md's Java 26 Engine Authority
+section requires to live in `quant-core-java/`? Classification, reasoned explicitly:
+
+- **What it is:** a numerical formula combining a real percentage price-gap with existing
+  mover-bonus/composable-ranking bonuses into one additive score, used ONLY to decide which symbol
+  wins a scarce, bounded market-data-streaming slot (a resource-scheduling/cache-priority decision).
+- **What it is not:** it never produces or touches a trading signal, confidence, side, or strategy
+  evaluation - it is never read by `ChiefTraderAgent`, `RiskEngine`, `PositionSizing`, or `OMS`, and
+  it cannot itself cause a trade. Its only effect is "does Argus listen to this symbol's ticks right
+  now" - the same category CLAUDE.md's own carve-out language already names when it says the policy
+  "governs new quant/indicator/strategy compute only, not an automatic migration of the application
+  shell," and lists persistence/safety-control/scheduling-adjacent code as staying in TypeScript.
+- **Direct precedent already in this file:** `blendedHotSwapScore()` - the pre-existing function
+  `scoreBroadUniverseChallenger()` wraps and extends - was itself added in TypeScript on
+  2026-09-02/2026-09-03 (Phase 3 Dynamic Market Data Allocation / Universal Opportunity Discovery
+  follow-up), predating this session, combining a real mover-bonus and a real ComposableRanking
+  score the identical way. This correction pass's gap term is one more additive component in that
+  SAME established pattern, not a new calculation category.
+- **Honest limit of this argument:** a stricter reading of the Java Authority rule's own "no
+  exception invented on the spot" language could still classify the gap term as quant-calculation
+  work subject to Java ownership, since it IS a numeric transform of real market evidence. This is
+  a genuine judgment call, not a settled fact - presented here for explicit operator review rather
+  than silently resolved. If the stricter reading is preferred, the fix is narrow and low-risk: move
+  only the gap-term arithmetic (`|gapPct| * 100 * weight`, a single-line formula) behind the
+  existing `QuantCoreBridge.ts` HTTP integration boundary as a small, dedicated endpoint, leaving
+  the surrounding subscription-scheduling control flow (candidate selection, ranking, capacity
+  management, event emission) exactly where it is - that part is unambiguously control-plane
+  regardless of how the gap term itself is classified.
+
+### Decision-model investigation findings (2026-09-29, investigation only - no protected-path code changed)
+
+Per this session's authorization boundary, items in this section are traced and documented, not
+implemented. No consensus formula, evidence-participation rule, or calibration authority was
+changed.
+
+**Confidence semantics - mathematical property confirmed, not previously stated explicitly.**
+`EvidenceAggregator.netConfidenceFromVotes()` (`src/server/services/EvidenceAggregator.ts:97-112`):
+`weightedConfidence = Σ(confidence_i × weight_i)` over agreeing evidence, minus
+`Σ(confidence_j × weight_j × DISAGREEMENT_PENALTY)` over disagreeing evidence, divided by total
+weight, clamped to `[0,1]`. This is a weighted average with a subtractive penalty term. Confirmed
+directly from the formula: with every weight non-negative, this value can never exceed the highest
+individual `confidence_i` among agreeing evidence - adding more agents at similar calibrated
+confidence redistributes weight but cannot itself push the result past that ceiling, and any
+disagreeing vote can only pull it down further. This means "recruit more correlated-confidence
+agents" is not a path to a stronger consensus number by construction, independent of the
+evidence-independence grouping question `evidenceIndependence.ts` already handles separately.
+
+What each score already means, largely already distinguished in code (this section makes it
+explicit in one place rather than leaving it scattered across comments):
+- **`rawSignalStrength`** (`CalibrationDetail.rawSignalStrength`): the agent's own stated
+  confidence for this idea, untouched - a signal-strength number, not a probability.
+- **`historicalReliability`** (`CalibrationDetail.historicalReliability`): a Beta-Binomial posterior
+  mean anchored on this agent's own real win/loss history in this confidence bucket - directional-
+  accuracy-adjacent, still not a calibrated profit probability.
+- **`decisionConfidence`**: equals `historicalReliability` when real calibration data exists, else
+  falls back to `rawSignalStrength` - this is the ONLY number that actually feeds
+  `netConfidenceFromVotes()`.
+- **`ProbabilisticEnvelope`** (`EvidenceAggregator.ts:51-59`, `expectedReturnPct`/
+  `downsideProbability`/`expectedShortfallPct`/`regimeProbability`/`outOfDistributionProbability`):
+  the net-profit-probability/uncertainty dimension already has a defined shape for a future producer
+  to populate (e.g. a validated `ForecastEngine.java` output) - **zero current producer populates
+  it, and nothing in `aggregate()`/`netConfidenceFromVotes()` reads it.** It exists as
+  infrastructure only.
+- **Consensus score**: the final `netConfidenceFromVotes()` output compared against
+  `tradingSafety.consensusApprovalThreshold` (0.75) - a weighted-vote agreement score, not itself
+  any of the above four quantities, and not a calibrated probability of anything.
+
+**Recommendation (proposal only, not implemented):** any future alternative combination model
+(one that could legitimately let independent, non-correlated agreement exceed a simple weighted
+average - e.g. a proper Bayesian evidence-combination or log-odds pooling formulation) must be
+built as a separate, explicitly-labeled shadow path with out-of-sample validation and correlation
+controls before any activation decision, exactly as this session's own authorization requires. Nothing
+in this pass proposes a specific replacement formula - only that the current ceiling property is a
+real, confirmed mathematical fact worth an explicit operator decision, not an unexamined default.
+
+**Horizon compatibility - real per-source horizon data exists, but is not consulted at consensus
+time.** `config/evaluationHorizons.json` already maps real per-agent (`FundamentalAgent`: 7 days,
+`MacroAgent`: 14 days) and per-quant-strategy (`MOMENTUM_BREAKOUT`: 1 day, `MEAN_REVERSION`: 4h,
+`TREND_FOLLOWING`: 7 days, ...) expected holding periods - but this mapping is consumed ONLY by
+`PredictionOutcomeEvaluator.ts` for GRADING a prediction after the fact (win/loss scoring), never
+by `ChiefTraderAgent`'s consensus gathering, which groups fresh ideas by symbol alone
+(`evidenceIndependence.ts` groups by structural-computation overlap, not by horizon at all). A
+short-horizon SELL (e.g. a 4-hour `MEAN_REVERSION` idea) and a long-horizon BUY (e.g. a 7-day
+`TREND_FOLLOWING` or `MacroAgent` idea) on the same symbol are currently treated as a direct
+contradiction in the SAME weighted vote, when they may both be correct on their own terms.
+
+**Recommended backward-compatible diagnostic extension (proposal only, not implemented this
+pass):** attach each vote's resolved horizon (reusing the SAME `evaluationHorizons.json` lookup
+`PredictionOutcomeEvaluator.ts` already performs - no new data source) to the
+`CONSENSUS_TERMINAL_REASON`/`CONSENSUS_MODEL_COMPARISON` telemetry already emitted per round, and
+compute a diagnostic `horizonSpreadMs`/`potentiallyIncompatibleHorizons` flag - purely observational,
+changing no vote's participation or weight. `ConfluenceCoordinator.ts` (the existing, reviewed
+mechanism for requesting additional same-symbol evaluations) is the right place to extend, per this
+session's authorization, rather than a second coordinator. **The actual protected-path change** -
+deciding whether/how incompatible-horizon evidence should be excluded, separately grouped, or
+weighted differently within `netConfidenceFromVotes()` - is a genuine consensus-math change and is
+explicitly NOT proposed here as a concrete formula; it requires its own reviewed design, shadow
+validation, and tests before any activation, per this session's own authorization boundary. Not
+implemented this pass (time/scope), but the diagnostic half (horizon exposure with zero decision
+impact) is ready to build on the next pass without further design work.
+
+**Calibration authority - traced, addressed in the "PROPOSED, NOT ACTIVE" section above.** Every
+real writer (`ReflectionEngine.ts`, real `RAW_BETA_BINOMIAL` Beta-Binomial upserts keyed on
+`(agentName, bucketLow, provider)`) and reader (`ChiefTraderAgent.calibrateConfidenceDetailed()`)
+was traced. The "contradictory comments" claim resolves cleanly: `ReflectionEngine.ts` is the only
+real writer today: `CalibrationCandidateBuilder.ts`'s promotion mechanism is genuinely observational
+(validates candidates, never writes `agentConfidenceCalibration` itself) - the header comment
+describing a "promotion governs the value" mechanism describes a real, built, but not-yet-wired
+path, not a currently-contradicted one. The real, separate, already-fixed-in-this-pass-as-a-proposal
+issue is the provider-selection ambiguity documented above, not a promotion-vs-raw-writer conflict.
+
+**AI outage / debate-dependency - verified correct, no fabricated vote found.**
+`ChiefTraderAgent.ts:538-549`: when no AI provider is routable at all, ChiefTrader explicitly SKIPS
+the multi-model debate rather than injecting a synthetic fail-closed HOLD vote - the code comment
+states the reasoning directly ("not injecting a fabricated fail-closed HOLD"), and this was verified
+by reading the real branch, not assumed. Consensus is then evaluated on the independent agents' own
+evidence only, with the real `pendingDebateFailClosed` state recorded as a `FAIL_CLOSED_NO_ROUTE`
+diagnostic (an AI-reliability measurement), never as a vote. An in-flight debate for the same symbol
+(`debatePending()`) correctly defers rather than forcing an early decision. Existing veto policy
+(`HARD_VETO_AGENTS`, debate-HOLD penalties) is unchanged and was not touched by this investigation.
+Quant-only capability (Argus operating with zero AI providers routable) is real and already
+exercised by this exact code path in production outage conditions - not merely assumed - though a
+dedicated, isolated "AI fully down for an extended real session" soak was not run as part of this
+pass.
+
 ### Market data / discovery behavior outside RTH
 
 `MarketDataWorker.ts` has **zero session awareness** — connects the Alpaca IEX WebSocket

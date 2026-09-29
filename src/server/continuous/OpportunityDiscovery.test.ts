@@ -31,9 +31,10 @@ import { resetBroadUniverseAllocatorForTests } from './BroadUniverseSubscription
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
 
 /** getCachedBroadUniverseCandidatesWithVolume() shape - descending dollar volume in array order,
- *  matching the real cache's own dollar-volume-sorted admission list. */
-function withVolume(symbols: string[], startingVolume = 100_000_000): { symbol: string; dollarVolume: number }[] {
-  return symbols.map((symbol, i) => ({ symbol, dollarVolume: startingVolume - i * 1000 }));
+ *  matching the real cache's own dollar-volume-sorted admission list. gapPct defaults to null
+ *  (no gap evidence) - tests that need a real gap pass gapPctBySymbol explicitly. */
+function withVolume(symbols: string[], startingVolume = 100_000_000, gapPctBySymbol: Record<string, number | null> = {}): { symbol: string; dollarVolume: number; gapPct: number | null }[] {
+  return symbols.map((symbol, i) => ({ symbol, dollarVolume: startingVolume - i * 1000, gapPct: gapPctBySymbol[symbol] ?? null }));
 }
 
 afterEach(() => {
@@ -202,6 +203,360 @@ describe('OpportunityDiscovery', () => {
       (continuousIntelligence as any).watchUniverseSymbols = originalWatch;
       (continuousIntelligence as any).momentumScanUniverseSymbols = originalMomentumScan;
     }
+  });
+
+  describe('2026-09-29 discovery-to-evaluation coverage fix (docs/audits/archive/ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md): broad-universe hot-swap challengers at FULL capacity', () => {
+    it('an IOVA-class broad-universe symbol (real intraday gap, never part of the momentum universe) can win a hot-swap slot at FULL capacity, not just an empty one', async () => {
+      process.env[FLAG_O] = 'true';
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+        Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
+      );
+      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+        Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
+      );
+      // Real shape: only the actual dynamic occupants (ZZ*) have a dynamic momentum score - a
+      // shortlist symbol that was never streamed has none, exactly like getDynamicMomentumScore()
+      // behaves for a real never-tracked symbol. A blanket 0.5-for-everything mock here would give
+      // every shortlist symbol (not just IOVA) a positive challenger score, defeating the test.
+      vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? 0.5 : null));
+      // Momentum's own static universe has NOTHING today - isolates that IOVA wins purely via the
+      // NEW broad-universe challenger path, not because it happened to also be in `top`.
+      vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+      vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+      // SYNTHETIC test input, not an exact historical reproduction: admitted via the broad-universe
+      // ADV screen, NOT in the momentum universe, with a gapPct in the same rough magnitude the
+      // 2026-09-29 forensic audit's real IOVA case study reported (~+34% vs previous close - the
+      // audit's own gapPct field is computed vs session open elsewhere in this codebase, so this
+      // 0.34 stands in for "a real, large gap", not a literal replay of IOVA's own numbers).
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['IOVA']));
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'IOVA' ? 0.34 : null));
+
+      const subs: Array<{ symbol?: string; reason?: string }> = [];
+      const onSub = (p: { symbol?: string; reason?: string }) => subs.push(p);
+      eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+      const stats = await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z')); // 10:00 ET, full 12/12
+      eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+      expect(stats.ideasEmitted).toBe(0); // still never a trade idea - discovery/subscribe only
+      expect(stats.broadUniverseChallengers).toBe(1);
+      expect(stats.broadUniverseHotSwapWinners).toBe(1);
+      const iovaSub = subs.find((s) => s.symbol === 'IOVA');
+      expect(iovaSub).toBeDefined();
+      expect(iovaSub?.reason).toBe('BROAD_UNIVERSE_HOT_SWAP');
+      // Still respects the same single-swap-per-cycle pacing - not a new capacity increase.
+      expect(subs).toHaveLength(1);
+      // SCOPE OF THIS TEST (2026-09-29 correction): this proves a real WATCHLIST_SUBSCRIBE_REQUESTED
+      // event was emitted for IOVA at source-code level, in-process, with mocked MarketDataWorker/
+      // SnapshotScanner/MarketUniverseScanner collaborators - it does NOT prove a real broker
+      // subscription acknowledgment, a fresh live tick, or a real QuantSignalAgent assessment. See
+      // the integration-style tests below (real-relevant-services coverage) for that further trace.
+    });
+
+    it('a broad-universe admission with zero real evidence (no gap, no mover-bonus, no composable score) never wins a hot-swap slot at full capacity - admission alone is not competitive evidence', async () => {
+      process.env[FLAG_O] = 'true';
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+        Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
+      );
+      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+        Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
+      );
+      vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? 0.5 : null));
+      vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+      vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['NOEVIDENCE']));
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockReturnValue(null); // no gap evidence
+
+      const subs: Array<{ symbol?: string }> = [];
+      const onSub = (p: { symbol?: string }) => subs.push(p);
+      eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+      const stats = await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+      eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+      // Filtered out before ever becoming a challenger (momentumScore === 0) - never scored, never
+      // occupies a swap slot, never emits a subscribe request.
+      expect(stats.broadUniverseChallengers).toBe(0);
+      expect(stats.broadUniverseHotSwapWinners).toBe(0);
+      expect(subs.find((s) => s.symbol === 'NOEVIDENCE')).toBeUndefined();
+    });
+
+    it('respects broadUniverseHotSwapChallengerLimit - only the top-N broad-universe candidates by score are ever scored as challengers, bounding cost even with many admissions', async () => {
+      process.env[FLAG_O] = 'true';
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+        Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
+      );
+      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+        Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
+      );
+      vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? 0.5 : null));
+      vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+      vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+      const originalLimit = continuousIntelligence.broadUniverseHotSwapChallengerLimit;
+      (continuousIntelligence as any).broadUniverseHotSwapChallengerLimit = 3;
+      try {
+        const manySymbols = Array.from({ length: 10 }, (_, i) => `BU${i}`);
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(manySymbols));
+        // Every one has real, distinct gap evidence - without the limit, all 10 would qualify.
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation(
+          (s: string) => 0.05 + (manySymbols.indexOf(s) * 0.01),
+        );
+        const stats = await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+        expect(stats.broadUniverseChallengers).toBe(3);
+      } finally {
+        (continuousIntelligence as any).broadUniverseHotSwapChallengerLimit = originalLimit;
+      }
+    });
+
+    describe('2026-09-29 correction (Codex review): global ranking by comparable score, not source/array-order', () => {
+      function setupFullCapacity(scoreOfZZ = 0.5) {
+        const cap = continuousIntelligence.maxActiveSubscriptions;
+        vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+          Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
+        );
+        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+          Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
+        );
+        vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? scoreOfZZ : null));
+      }
+
+      it('a stronger broad-universe candidate wins the single swap slot over a weaker static-universe candidate present in the SAME cycle - real defect: unsorted combinedTop let array order (static-universe-first) decide instead of score', async () => {
+        process.env[FLAG_O] = 'true';
+        setupFullCapacity();
+        // Weak static candidate: real momentumScore 1, barely above nothing.
+        vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+          { symbol: 'WEAK1', intradayPctChange: 1, rangeExpansion: 0, relativeVolume: 0, momentumScore: 1 },
+        ]);
+        vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s) => (s === 'WEAK1' ? 1 : null));
+        // Strong broad-universe candidate: a real, large gap (SYNTHETIC input, not a literal
+        // historical reproduction - see the IOVA-class test above for the same convention).
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['BROAD']));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'BROAD' ? 0.34 : null));
+
+        const subs: Array<{ symbol?: string; reason?: string }> = [];
+        const onSub = (p: { symbol?: string; reason?: string }) => subs.push(p);
+        eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+        await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+        eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+        // Only ONE slot is available this cycle (full capacity, momentumHotSwapSlotsPerCycle=1) -
+        // the stronger real candidate must win it, regardless of which pool it came from or which
+        // array position it occupied before sorting.
+        expect(subs).toHaveLength(1);
+        expect(subs[0].symbol).toBe('BROAD');
+        expect(subs.find((s) => s.symbol === 'WEAK1')).toBeUndefined();
+      });
+
+      it('reverse ordering: the same outcome holds when the broad-universe candidate is scored first / listed after the static one in source data - ranking, not array position, decides', async () => {
+        process.env[FLAG_O] = 'true';
+        setupFullCapacity();
+        vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+          { symbol: 'AAAAA', intradayPctChange: 1, rangeExpansion: 0, relativeVolume: 0, momentumScore: 1 },
+        ]);
+        vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s) => (s === 'AAAAA' ? 1 : null));
+        // 'AAAAA' < 'ZBROD' alphabetically and momentum-universe entries are placed first
+        // in the raw (pre-sort) array either way - this test exists to prove the SORT (not
+        // whatever the pre-sort array order happens to be) determines the winner.
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['ZBROD']));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'ZBROD' ? 0.5 : null));
+
+        const subs: Array<{ symbol?: string }> = [];
+        const onSub = (p: { symbol?: string }) => subs.push(p);
+        eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+        await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+        eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+        expect(subs).toHaveLength(1);
+        expect(subs[0].symbol).toBe('ZBROD');
+      });
+
+      it('deterministic tie-break: two candidates with EXACTLY equal priority score resolve alphabetically by symbol, not by insertion order', async () => {
+        process.env[FLAG_O] = 'true';
+        setupFullCapacity();
+        // Both candidates score identically: momentum's raw momentumScore vs broad-universe's
+        // gap-derived score are set to the SAME value under the unified priorityScoreOf() formula
+        // (base=0 for both since getDynamicMomentumScore/getLastSnapshotScore don't cover either,
+        // gap term = |gapPct|*100*broadUniverseGapHotSwapWeight(0.5) = 0.20*100*0.5 = 10 for the
+        // broad candidate; the static candidate's own momentumScore is set to the same 10 so both
+        // sides of the merge tie exactly).
+        vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+          { symbol: 'ZEBRA', intradayPctChange: 10, rangeExpansion: 0, relativeVolume: 0, momentumScore: 10 },
+        ]);
+        vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s) => (s === 'ZEBRA' ? 10 : null));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['ALPHA']));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'ALPHA' ? 0.20 : null));
+
+        const subs: Array<{ symbol?: string }> = [];
+        const onSub = (p: { symbol?: string }) => subs.push(p);
+        eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+        await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+        eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+        // 'ALPHA' < 'ZEBRA' alphabetically - the documented deterministic tiebreak (same score ->
+        // symbol.localeCompare) must pick ALPHA, not whichever happened to be first in the array.
+        expect(subs).toHaveLength(1);
+        expect(subs[0].symbol).toBe('ALPHA');
+      });
+
+      it('score propagation: a broad-universe hot-swap winner\'s REAL priority score (not undefined/getLastSnapshotScore) is what gets emitted on WATCHLIST_SUBSCRIBE_REQUESTED, so MarketDataWorker.subscribe() actually seeds a real eviction-priority score instead of silently defaulting the symbol to 0', async () => {
+        process.env[FLAG_O] = 'true';
+        setupFullCapacity();
+        vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+        vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null); // real shape: broad-only symbol has NO snapshot score
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['WINNR']));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'WINNR' ? 0.34 : null));
+
+        const subs: Array<{ symbol?: string; momentumScore?: number }> = [];
+        const onSub = (p: { symbol?: string; momentumScore?: number }) => subs.push(p);
+        eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+        await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+        eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+        const winner = subs.find((s) => s.symbol === 'WINNR');
+        expect(winner).toBeDefined();
+        // Real defect this closes: this used to be `undefined` (getLastSnapshotScore('WINNR')
+        // is null for a broad-universe-only symbol) - MarketDataWorker.subscribe()'s
+        // `typeof === 'number'` guard would then never seed dynamicMomentumScores, and the very next
+        // pruneLeastActiveWatchSymbols() would rank this symbol as score 0, the worst possible value,
+        // regardless of the real +34%-class gap evidence that won it the slot.
+        expect(typeof winner!.momentumScore).toBe('number');
+        expect(winner!.momentumScore).toBeGreaterThan(0);
+      });
+    });
+
+    describe('2026-09-29 second correction (Codex review item 4): challenger/incumbent scoring symmetry and cross-cycle double-counting', () => {
+      it('symmetry: an incumbent with real gap evidence but no snapshot/mover/composable base is correctly weighed against a challenger, not silently scored 0 by ignoring its own gap term', async () => {
+        process.env[FLAG_O] = 'true';
+        const cap = continuousIntelligence.maxActiveSubscriptions;
+        // INCUM is an existing dynamic occupant with ZERO snapshot/mover/composable evidence but a
+        // real, currently-cached broad-universe gap of 0.50 (gapTerm = 0.50*100*0.5 = 25 under the
+        // real broadUniverseGapHotSwapWeight=0.5 default). Every OTHER occupant is a plain static
+        // filler with no gap evidence at all, so INCUM is the only occupant whose real total
+        // priority (25) depends on the gap term being counted at all.
+        vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+          Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : (i === 3 ? 'INCUM' : `ZZ${i}`))),
+        );
+        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+          Array.from({ length: cap - 3 }, (_, i) => (i === 0 ? 'INCUM' : `ZZ${i + 3}`)),
+        );
+        vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(null); // unused by baseScoreOf post-fix; irrelevant here
+        vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([
+          // CHALL: a real but modest momentum-universe challenger, no gap evidence of its own.
+          { symbol: 'CHALL', intradayPctChange: 2, rangeExpansion: 0, relativeVolume: 0, momentumScore: 10 },
+        ]);
+        // baseScoreOf is now sourced ONLY from getLastSnapshotScore (never getDynamicMomentumScore -
+        // that fallback is exactly what this correction removed). The ZZ* incumbents need a real,
+        // fresh snapshot score of their own here so INCUM (score 25, from gap alone) is correctly
+        // NOT the weakest active dynamic symbol relative to CHALL (10) - isolating this test to the
+        // one real question: does INCUM's own gap evidence count toward ITS OWN eviction-ranking
+        // score at all (symmetry), not which of several occupants happens to be weakest overall.
+        vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s: string) => {
+          if (s === 'CHALL') return 10;
+          if (s.startsWith('ZZ')) return 50;
+          return null; // INCUM: no snapshot presence - relies purely on its own gap term
+        });
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue([]);
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'INCUM' ? 0.50 : null));
+
+        const subs: Array<{ symbol?: string }> = [];
+        const onSub = (p: { symbol?: string }) => subs.push(p);
+        eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+        await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+        eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+        // INCUM's real total priority (25, from its own gap term) exceeds CHALL's (10) by more than
+        // scoreEdge - INCUM must survive and CHALL must NOT win the single swap slot. Under the
+        // prior asymmetric scoreOf (blendedHotSwapScore alone, no gap term), INCUM would have been
+        // ranked as the weakest active dynamic symbol (score 0, its gap evidence silently excluded)
+        // and CHALL's mere 10 would have cleared the scoreEdge and wrongly evicted it.
+        expect(subs.find((s) => s.symbol === 'CHALL')).toBeUndefined();
+      });
+
+      it('no cross-cycle double-counting: a broad-universe winner\'s propagated score stays the SAME real value once it becomes an incumbent, so a later cycle cannot compound mover/composable/gap bonuses on top of its own already-bonused stored score', async () => {
+        process.env[FLAG_O] = 'true';
+        const cap = continuousIntelligence.maxActiveSubscriptions;
+
+        // ---- Cycle 1: BROAD wins a hot-swap slot purely on gap evidence (0.34 -> gapTerm 17,
+        // base=0, no mover, no composable) against a weak static candidate. ----
+        vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+          Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
+        );
+        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+          Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
+        );
+        vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(null); // unused by baseScoreOf post-fix
+        vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+        // Weak/no-evidence ZZ* fillers (base 0, same shape as the IOVA-class test above) so BROAD's
+        // own real gap-only evidence (17) is enough to win this cycle's single swap slot.
+        vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['BROAD']));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'BROAD' ? 0.34 : null));
+
+        const cycle1Subs: Array<{ symbol?: string; momentumScore?: number }> = [];
+        const onSub1 = (p: { symbol?: string; momentumScore?: number }) => cycle1Subs.push(p);
+        eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub1);
+        await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+        eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub1);
+
+        const broadWin = cycle1Subs.find((s) => s.symbol === 'BROAD');
+        expect(broadWin).toBeDefined();
+        const broadCycle1Score = broadWin!.momentumScore!;
+        expect(broadCycle1Score).toBeCloseTo(17, 5); // 0.34 * 100 * broadUniverseGapHotSwapWeight(0.5)
+
+        // ---- Cycle 2: BROAD is now a real incumbent (as MarketDataWorker.subscribe() would have
+        // made it after cycle 1 - simulated here by including it in getDynamicSymbols/getActiveSymbols
+        // and mocking getDynamicMomentumScore('BROAD') to return EXACTLY the score cycle 1 propagated,
+        // the real shape of what the stored dynamicMomentumScores map would hold). Gap conditions for
+        // BROAD are unchanged (still 0.34) - a real symbol whose evidence hasn't grown. A genuinely
+        // STRONGER new challenger (gap 0.60 -> gapTerm 30) competes for the single swap slot. ----
+        resetOpportunityScanForTests();
+        SnapshotScanner.resetSnapshotScannerForTests();
+        resetBroadUniverseAllocatorForTests();
+        vi.restoreAllMocks();
+        vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+          Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : (i === 3 ? 'BROAD' : `ZZ${i}`))),
+        );
+        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+          Array.from({ length: cap - 3 }, (_, i) => (i === 0 ? 'BROAD' : `ZZ${i + 3}`)),
+        );
+        // Real shape of what MarketDataWorker.subscribe() would have stored after cycle 1: BROAD's
+        // own dynamicMomentumScores entry equals exactly what cycle 1 propagated. This mock exists so
+        // the OLD, now-removed baseScoreOf fallback (`?? marketDataWorker.getDynamicMomentumScore(s)`)
+        // would have read it back and compounded on top - the fixed baseScoreOf never calls this
+        // method at all, so this mock is deliberately a trap for regression, not a dependency of the
+        // current code path.
+        vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation(
+          (s: string) => (s === 'BROAD' ? broadCycle1Score : null),
+        );
+        vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+        // ZZ* fillers now get a real, strong snapshot base (50, comfortably above BROAD's correct 17
+        // AND its buggy-compounded 34) so BROAD - not a ZZ filler - is deterministically the weakest
+        // active dynamic symbol under EITHER the fixed or the (hypothetical, removed) buggy scoring.
+        // This isolates the assertion below to exactly one question: does STRONG's real 30 clear
+        // BROAD's real eviction-ranking score, whatever that score is computed to be.
+        vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? 50 : null));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['STRNG']));
+        vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => {
+          if (s === 'STRNG') return 0.60;
+          if (s === 'BROAD') return 0.34; // unchanged real evidence, not re-fetched as "new"
+          return null;
+        });
+
+        const cycle2Subs: Array<{ symbol?: string; reason?: string }> = [];
+        const onSub2 = (p: { symbol?: string; reason?: string }) => cycle2Subs.push(p);
+        eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub2);
+        await runOpportunityScan(new Date('2026-08-21T14:05:00.000Z'));
+        eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub2);
+
+        // STRNG (real fresh gapTerm 30) must win the slot over BROAD's real, unchanged, NON-
+        // COMPOUNDED evidence (17) - the fix this test guards. Under the removed buggy fallback,
+        // BROAD's cycle-2 "base" would have read back its own cycle-1 final score (17) and added a
+        // second gap term on top (17 + 17 = 34), which would have out-scored STRNG's 30 and
+        // wrongly kept BROAD in place forever, compounding on every subsequent cycle.
+        expect(cycle2Subs.find((s) => s.symbol === 'STRNG')).toBeDefined();
+      });
+    });
   });
 
   it('2026-09-16 regression: the broad-universe top-up never runs when momentum rotation already filled every empty slot', async () => {

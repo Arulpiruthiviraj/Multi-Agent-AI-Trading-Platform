@@ -28,8 +28,8 @@ import { resetBroadUniverseAllocatorForTests } from './BroadUniverseSubscription
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
 
 /** getCachedBroadUniverseCandidatesWithVolume() shape - descending dollar volume in array order. */
-function withVolume(symbols: string[], startingVolume = 100_000_000): { symbol: string; dollarVolume: number }[] {
-  return symbols.map((symbol, i) => ({ symbol, dollarVolume: startingVolume - i * 1000 }));
+function withVolume(symbols: string[], startingVolume = 100_000_000): { symbol: string; dollarVolume: number; gapPct: number | null }[] {
+  return symbols.map((symbol, i) => ({ symbol, dollarVolume: startingVolume - i * 1000, gapPct: null }));
 }
 
 /** looksLikeListedTicker() requires 1-5 letters only (no digits) - generate realistic-looking,
