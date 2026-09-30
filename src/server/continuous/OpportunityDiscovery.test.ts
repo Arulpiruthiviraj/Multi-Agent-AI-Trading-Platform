@@ -37,6 +37,21 @@ function withVolume(symbols: string[], startingVolume = 100_000_000, gapPctBySym
   return symbols.map((symbol, i) => ({ symbol, dollarVolume: startingVolume - i * 1000, gapPct: gapPctBySymbol[symbol] ?? null }));
 }
 
+/**
+ * 2026-09-30 (IOVA request-to-evaluation gap fix): OpportunityDiscovery.ts's hot-swap planner now
+ * ranks eviction candidates from MarketDataWorker.getEvictionEligibleDynamicSymbols() (the
+ * canonical, dwell/rescue/protected-aware eviction-eligible subset), not the raw getDynamicSymbols()
+ * superset. Every existing test in this file that mocked getDynamicSymbols() to represent "the
+ * dynamic incumbents, all assumed evictable" needs the SAME array mocked for the new method too -
+ * this helper keeps that in one place instead of duplicating two vi.spyOn calls at every site. Tests
+ * that specifically want to prove dwell/rescue-INELIGIBLE incumbents are excluded mock
+ * getEvictionEligibleDynamicSymbols() directly with a narrower set instead of using this helper.
+ */
+function mockDynamicSymbols(symbols: string[]) {
+  vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(symbols);
+  vi.spyOn(marketDataWorker, 'getEvictionEligibleDynamicSymbols').mockReturnValue(symbols);
+}
+
 afterEach(() => {
   delete process.env[FLAG_O];
   resetOpportunityScanForTests();
@@ -112,7 +127,7 @@ describe('OpportunityDiscovery', () => {
     vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
       Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
     );
-    vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+    mockDynamicSymbols(
       Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
     );
     vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(0.5);
@@ -174,7 +189,7 @@ describe('OpportunityDiscovery', () => {
       // Only 3 of the (much larger) real cap active -> plenty of empty slots, same shape as the
       // real live gap (19 active of 90 IBKR cap).
       vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(['SPY', 'QQQ', 'GLD']);
-      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue([]);
+      mockDynamicSymbols([]);
       vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(0);
       // Momentum's own universe has exactly one pick - real production shape: a small, static,
       // curated list, not the broad-universe admission list.
@@ -212,7 +227,7 @@ describe('OpportunityDiscovery', () => {
       vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
         Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
       );
-      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+      mockDynamicSymbols(
         Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
       );
       // Real shape: only the actual dynamic occupants (ZZ*) have a dynamic momentum score - a
@@ -259,7 +274,7 @@ describe('OpportunityDiscovery', () => {
       vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
         Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
       );
-      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+      mockDynamicSymbols(
         Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
       );
       vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? 0.5 : null));
@@ -287,7 +302,7 @@ describe('OpportunityDiscovery', () => {
       vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
         Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
       );
-      vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+      mockDynamicSymbols(
         Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
       );
       vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? 0.5 : null));
@@ -315,7 +330,7 @@ describe('OpportunityDiscovery', () => {
         vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
           Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
         );
-        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+        mockDynamicSymbols(
           Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
         );
         vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? scoreOfZZ : null));
@@ -437,7 +452,7 @@ describe('OpportunityDiscovery', () => {
         vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
           Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : (i === 3 ? 'INCUM' : `ZZ${i}`))),
         );
-        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+        mockDynamicSymbols(
           Array.from({ length: cap - 3 }, (_, i) => (i === 0 ? 'INCUM' : `ZZ${i + 3}`)),
         );
         vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(null); // unused by baseScoreOf post-fix; irrelevant here
@@ -482,7 +497,7 @@ describe('OpportunityDiscovery', () => {
         vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
           Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
         );
-        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+        mockDynamicSymbols(
           Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
         );
         vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(null); // unused by baseScoreOf post-fix
@@ -517,7 +532,7 @@ describe('OpportunityDiscovery', () => {
         vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
           Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : (i === 3 ? 'BROAD' : `ZZ${i}`))),
         );
-        vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+        mockDynamicSymbols(
           Array.from({ length: cap - 3 }, (_, i) => (i === 0 ? 'BROAD' : `ZZ${i + 3}`)),
         );
         // Real shape of what MarketDataWorker.subscribe() would have stored after cycle 1: BROAD's
@@ -565,7 +580,7 @@ describe('OpportunityDiscovery', () => {
     vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
       Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
     );
-    vi.spyOn(marketDataWorker, 'getDynamicSymbols').mockReturnValue(
+    mockDynamicSymbols(
       Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
     );
     vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockReturnValue(0.5);

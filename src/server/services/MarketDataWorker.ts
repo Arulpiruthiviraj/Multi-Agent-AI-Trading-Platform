@@ -321,6 +321,23 @@ export class MarketDataWorker {
     return Array.from(this.activeStreams).filter((s) => !core.has(s));
   }
 
+  /**
+   * 2026-09-30 (IOVA request-to-evaluation gap): the canonical, eviction-ELIGIBLE subset of
+   * getDynamicSymbols() - reuses the SAME rankEvictionCandidates() logic
+   * pruneLeastActiveWatchSymbols() itself evicts from (excludes protected/core, dwell-protected,
+   * and active-rescue symbols), returned weakest-first. Real, verified gap this closes:
+   * OpportunityDiscovery.ts's hot-swap planner previously ranked incumbents from the raw
+   * getDynamicSymbols() superset, which includes symbols this worker would actually REFUSE to
+   * evict (dwell/rescue-protected) - the planner could "promote" a challenger by declaring an
+   * incumbent as the weakest and losing, when that incumbent was never actually evictable, leaving
+   * the challenger's own subscribe() request to be silently refused at capacity with nothing
+   * evicted. Callers planning a hot-swap/eviction decision should rank candidates from THIS method,
+   * never the raw getDynamicSymbols() superset, so planning and actual eviction always agree.
+   */
+  getEvictionEligibleDynamicSymbols(): string[] {
+    return this.rankEvictionCandidates().map((r) => r.symbol);
+  }
+
   getDynamicMomentumScore(symbol: string): number | null {
     const key = quoteKey(symbol);
     const v = this.dynamicMomentumScores.get(key);
@@ -990,6 +1007,43 @@ export class MarketDataWorker {
   }
 
   /**
+   * 2026-09-30 (IOVA request-to-evaluation gap, docs/audits/archive/
+   * ARGUS_FULL_SESSION_REVIEW_2026-09-29.md): every real exit point of subscribe() now logs a
+   * durable, queryable outcome via the SAME structuredLogger/observability_events pattern this
+   * file already uses for rescue grants/denials and priority decisions - not a new parallel
+   * system. Root cause this closes: ensureWatchlistListener() (the real, production
+   * WATCHLIST_SUBSCRIBE_REQUESTED handler) never passed requestedBy, so EVERY discovery-originated
+   * subscribe() call skipped the existing requestedBy-gated SYMBOL_NOT_SUBSCRIBED/
+   * MARKET_DATA_CAPACITY_FULL EventBus observability entirely - a real capacity refusal for a
+   * symbol like IOVA produced only a console.warn, invisible to any persisted query. This method
+   * now always logs ACCEPTED / ALREADY_ACTIVE / REFUSED_CAPACITY / REFUSED_PROVIDER_REJECTED /
+   * REFUSED_INVALID_TICKER regardless of whether a caller supplied requestedBy (falls back to
+   * 'UNSPECIFIED' for the rare legitimate internal/bootstrap caller that doesn't pass one) - a
+   * refusal must never be silent again. The requestedBy-gated EventBus events
+   * (SYMBOL_NOT_SUBSCRIBED/MARKET_DATA_CAPACITY_FULL) are UNCHANGED in shape and still gated on a
+   * real requestedBy (their existing consumers expect a real requester identity, not a synthetic
+   * one) - this logging is additive, not a replacement.
+   */
+  private logSubscriptionOutcome(
+    ticker: string,
+    outcome: 'ACCEPTED' | 'ALREADY_ACTIVE' | 'REFUSED_CAPACITY' | 'REFUSED_PROVIDER_REJECTED' | 'REFUSED_INVALID_TICKER',
+    requestedBy: string,
+    extra: Record<string, unknown> = {},
+  ): void {
+    observeSafe(() => {
+      structuredLogger.info('market_data_subscription_outcome', {
+        category: 'DISCOVERY',
+        eventType: 'MARKET_DATA_SUBSCRIPTION_OUTCOME',
+        symbol: ticker,
+        requestedBy,
+        outcome,
+        reasoning: `subscribe(${ticker}) requestedBy=${requestedBy} -> ${outcome}`,
+        ...extra,
+      });
+    });
+  }
+
+  /**
    * @param opts.requestedBy - real fix (2026-08-24 readiness audit, Part 2): FundamentalAgent/
    * MacroAgent/NewsEngine round-robin through the full idea universe (~122 symbols) but never
    * requested coverage for their own evaluation target - they only ever passively called
@@ -1000,12 +1054,17 @@ export class MarketDataWorker {
    * new SYMBOL_NOT_SUBSCRIBED/MARKET_DATA_CAPACITY_FULL observability below.
    */
   subscribe(symbol: string, opts: { momentumScore?: number; requestedBy?: string } = {}) {
+    const requestedBy = opts.requestedBy || 'UNSPECIFIED';
     const ticker = looksLikeListedTicker(symbol);
-    if (!ticker) return;
+    if (!ticker) {
+      this.logSubscriptionOutcome(symbol, 'REFUSED_INVALID_TICKER', requestedBy);
+      return;
+    }
     if (this.activeStreams.has(ticker)) {
       if (typeof opts.momentumScore === 'number' && Number.isFinite(opts.momentumScore)) {
         this.dynamicMomentumScores.set(ticker, opts.momentumScore);
       }
+      this.logSubscriptionOutcome(ticker, 'ALREADY_ACTIVE', requestedBy, { momentumScore: opts.momentumScore ?? null });
       return;
     }
     if (opts.requestedBy) {
@@ -1021,9 +1080,14 @@ export class MarketDataWorker {
       console.warn(
         `[MarketDataWorker] Refusing subscribe ${ticker} — at hard cap ${cap} (protected/core symbols retained)`,
       );
+      // 2026-09-30: unconditional now - a capacity refusal must always be observable, not only
+      // when the caller happened to pass requestedBy. The EventBus event below stays gated on a
+      // REAL requestedBy (its existing consumers expect a genuine requester identity); the
+      // structured log above/below is the unconditional, always-fires half of this fix.
       if (opts.requestedBy) {
         eventBus.emit(EVENTS.MARKET_DATA_CAPACITY_FULL, { symbol: ticker, requestedBy: opts.requestedBy, cap, active: this.activeStreams.size, at: new Date().toISOString() });
       }
+      this.logSubscriptionOutcome(ticker, 'REFUSED_CAPACITY', requestedBy, { cap, active: this.activeStreams.size, momentumScore: opts.momentumScore ?? null });
       return;
     }
 
@@ -1040,9 +1104,11 @@ export class MarketDataWorker {
         console.warn(`[MarketDataWorker] IB Gateway subscribe ${ticker} failed: ${e?.message || e}`);
         this.activeStreams.delete(ticker);
         this.subscribedAtMs.delete(ticker);
+        this.logSubscriptionOutcome(ticker, 'REFUSED_PROVIDER_REJECTED', requestedBy, { providerError: String(e?.message || e) });
         return;
       }
       console.log(`[MarketDataWorker] IB Gateway subscribed ${ticker} (${this.activeStreams.size}/${cap})`);
+      this.logSubscriptionOutcome(ticker, 'ACCEPTED', requestedBy, { cap, active: this.activeStreams.size, momentumScore: opts.momentumScore ?? null });
       return;
     }
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
@@ -1050,6 +1116,7 @@ export class MarketDataWorker {
       this.ws.send(JSON.stringify({ action: "subscribe", quotes: [ticker], trades: [ticker] }));
     }
     console.log(`[MarketDataWorker] Subscribed to ${ticker} (${this.activeStreams.size}/${cap})`);
+    this.logSubscriptionOutcome(ticker, 'ACCEPTED', requestedBy, { cap, active: this.activeStreams.size, momentumScore: opts.momentumScore ?? null });
   }
 
   /**
@@ -1205,15 +1272,30 @@ export class MarketDataWorker {
     }
   }
 
+  /**
+   * 2026-09-30 (IOVA request-to-evaluation gap): this is the REAL production handler that turns a
+   * discovery-emitted WATCHLIST_SUBSCRIBE_REQUESTED event into an actual subscribe() call - it
+   * previously forwarded symbol/momentumScore only, silently dropping requestedBy. Every real
+   * OpportunityDiscovery emission already carries `source` ('OpportunityDiscovery') and `reason`
+   * (e.g. 'BROAD_UNIVERSE_HOT_SWAP') - combining them gives subscribe()'s own requestedBy-gated
+   * observability (SYMBOL_NOT_SUBSCRIBED/MARKET_DATA_CAPACITY_FULL) a real, specific requester
+   * identity for the first time on this path, and feeds logSubscriptionOutcome() above with real
+   * provenance instead of the 'UNSPECIFIED' fallback. Falls back to 'WATCHLIST_SUBSCRIBE_REQUESTED'
+   * only if a future emitter omits `source` entirely - never blank.
+   */
   private ensureWatchlistListener() {
     if (this.watchlistListening) return;
     this.watchlistListening = true;
     eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, (payload: {
       symbol?: string;
       momentumScore?: number;
+      source?: string;
+      reason?: string;
     }) => {
+      const requestedBy = [payload?.source, payload?.reason].filter(Boolean).join(':') || 'WATCHLIST_SUBSCRIBE_REQUESTED';
       this.subscribe(payload?.symbol || '', {
         momentumScore: typeof payload?.momentumScore === 'number' ? payload.momentumScore : undefined,
+        requestedBy,
       });
     });
   }

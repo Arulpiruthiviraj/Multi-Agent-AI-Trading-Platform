@@ -394,7 +394,20 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
     if (continuousIntelligence.momentumRotationEnabled) {
       const top = await getTopMomentumCandidates(continuousIntelligence.snapshotTopCandidates, { now });
       momentumRanked = top.length;
-      const activeDynamic = marketDataWorker.getDynamicSymbols();
+      // 2026-09-30 (IOVA request-to-evaluation gap, docs/audits/archive/
+      // ARGUS_FULL_SESSION_REVIEW_2026-09-29.md): real, verified eligibility mismatch - the raw
+      // getDynamicSymbols() superset includes dwell-protected and active-rescue symbols this
+      // worker's own rankEvictionCandidates()/pruneLeastActiveWatchSymbols() would refuse to evict.
+      // Planning a hot-swap against that superset let this planner "win" a swap by naming a
+      // never-actually-evictable incumbent as the weakest, so the challenger's own subscribe()
+      // request then hit a silent capacity refusal at execution time with nothing evicted -
+      // exactly IOVA's observed pattern (repeated BROAD_UNIVERSE_HOT_SWAP requests, never
+      // resolved). getEvictionEligibleDynamicSymbols() reuses MarketDataWorker's own canonical
+      // eviction ranking, so planning and actual eviction now always agree - when zero incumbents
+      // are genuinely evictable (e.g. all held by real dwell/rescue protection), this correctly
+      // narrows to an empty pool and plans no swap at all this cycle, rather than repeatedly
+      // planning one the worker cannot fulfill.
+      const activeDynamic = marketDataWorker.getEvictionEligibleDynamicSymbols();
       // Fill empty slots up to maxNewSubscriptionsPerCycle; when full, hot-swap at most 1.
       const maxSwaps = emptySlots > 0
         ? Math.min(continuousIntelligence.maxNewSubscriptionsPerCycle, emptySlots)

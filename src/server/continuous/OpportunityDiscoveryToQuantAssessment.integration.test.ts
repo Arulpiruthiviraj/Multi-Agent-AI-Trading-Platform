@@ -60,6 +60,7 @@ import { EVENTS } from '../core/eventNames';
 import * as SnapshotScanner from './SnapshotScanner';
 import * as MarketUniverseScanner from './MarketUniverseScanner';
 import { resetBroadUniverseAllocatorForTests } from './BroadUniverseSubscriptionAllocator';
+import { structuredLogger } from '../observability/StructuredLogger';
 
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
 
@@ -102,6 +103,7 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
   let sqliteDb: any;
   let eventBus: any;
   let marketDataWorker: any;
+  let MarketDataWorkerClass: any;
   let QuantSignalAgent: any;
   let quantSignalAgent: any;
   let runOpportunityScan: any;
@@ -115,7 +117,7 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
     process.env.ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY || 'test-secret';
     ({ sqliteDb } = await import('../db'));
     ({ eventBus } = await import('../core/EventBus'));
-    ({ marketDataWorker } = await import('../services/MarketDataWorker'));
+    ({ marketDataWorker, MarketDataWorker: MarketDataWorkerClass } = await import('../services/MarketDataWorker'));
     ({ QuantSignalAgent, quantSignalAgent } = await import('../services/QuantSignalAgent'));
     ({ runOpportunityScan, resetOpportunityScanForTests } = await import('./OpportunityDiscovery'));
 
@@ -262,7 +264,7 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
     // to verify. =====
   }, 30000);
 
-  it('subscription failure: a broad-universe candidate that does NOT clear the score edge at REAL full capacity never reaches MarketDataWorker at all - the pipeline correctly stops at stage 1, never silently forcing a subscription', async () => {
+  it('no evidence, no request: a broad-universe candidate that does NOT clear the score edge at REAL full capacity never reaches MarketDataWorker at all - the pipeline correctly stops at stage 1, never silently forcing a subscription (renamed 2026-09-30 - "subscription failure" now names a distinct, provider-rejection test below, per the IOVA-gap mandate\'s own test taxonomy)', async () => {
     process.env[FLAG_O] = 'true';
     const cap = continuousIntelligence.maxActiveSubscriptions;
     establishRealFullEvictableCapacity(cap);
@@ -353,5 +355,206 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
     const active = marketDataWorker.getActiveSymbols();
     expect(active.includes('STRNG')).toBe(true);
     expect(active.includes('WEAKN')).toBe(false);
+  });
+
+  /**
+   * 2026-09-30 (IOVA request-to-evaluation gap, docs/audits/archive/
+   * ARGUS_FULL_SESSION_REVIEW_2026-09-29.md): IOVA received 7 real BROAD_UNIVERSE_HOT_SWAP
+   * WATCHLIST_SUBSCRIBE_REQUESTED events (15:55:50-15:59:59 ET) and was never admitted or
+   * evaluated - and, critically, produced NO observable refusal outcome either, because
+   * ensureWatchlistListener() never forwarded requestedBy, silently skipping subscribe()'s
+   * existing requestedBy-gated observability. These tests reproduce the real production path
+   * end-to-end (real listener, real capacity, real dwell/rescue protection) for every outcome
+   * class the mandate names, and verify the new unconditional MARKET_DATA_SUBSCRIPTION_OUTCOME
+   * logging (structuredLogger, spied call-through - the real implementation still runs) makes
+   * every one of them durably observable with real provenance.
+   */
+  describe('2026-09-30 IOVA request-to-evaluation gap fix', () => {
+    it('requestedBy propagation: a real discovery-originated WATCHLIST_SUBSCRIBE_REQUESTED admission logs a real requestedBy (source:reason), never the UNSPECIFIED fallback', async () => {
+      process.env[FLAG_O] = 'true';
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      establishRealFullEvictableCapacity(cap);
+      vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+      vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['IOVA']));
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'IOVA' ? 0.34 : null));
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+
+      await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+      subscribedThisTest.push('IOVA');
+
+      expect(marketDataWorker.getActiveSymbols()).toContain('IOVA');
+      const outcomeCalls = logSpy.mock.calls.filter((c) => c[1]?.eventType === 'MARKET_DATA_SUBSCRIPTION_OUTCOME' && c[1]?.symbol === 'IOVA');
+      expect(outcomeCalls.length).toBeGreaterThan(0);
+      const requestedBy = outcomeCalls[0][1].requestedBy as string;
+      // Real fix: ensureWatchlistListener() now forwards `${source}:${reason}` from the real
+      // WATCHLIST_SUBSCRIBE_REQUESTED payload - never the 'UNSPECIFIED' fallback for a real
+      // discovery-originated request, and never blank.
+      expect(requestedBy).not.toBe('UNSPECIFIED');
+      expect(requestedBy).toContain('OpportunityDiscovery');
+      expect(outcomeCalls[0][1].outcome).toBe('ACCEPTED');
+    }, 30000);
+
+    it('dwell-protected incumbents: a genuinely full pool where every occupant is within real dwell protection refuses the request and logs REFUSED_CAPACITY with real provenance - never silent', () => {
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      for (let i = 0; i < cap; i++) {
+        const sym = fillerSymbol(i);
+        realSubscribe(sym, 0);
+      }
+      expect(marketDataWorker.getActiveSymbols().length).toBe(cap);
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+
+      marketDataWorker.subscribe('IOVA', { momentumScore: 7.64, requestedBy: 'OpportunityDiscovery:BROAD_UNIVERSE_HOT_SWAP' });
+      subscribedThisTest.push('IOVA');
+
+      expect(marketDataWorker.getActiveSymbols()).not.toContain('IOVA');
+      const outcomeCalls = logSpy.mock.calls.filter((c) => c[1]?.eventType === 'MARKET_DATA_SUBSCRIPTION_OUTCOME' && c[1]?.symbol === 'IOVA');
+      expect(outcomeCalls).toHaveLength(1);
+      expect(outcomeCalls[0][1].outcome).toBe('REFUSED_CAPACITY');
+      expect(outcomeCalls[0][1].requestedBy).toBe('OpportunityDiscovery:BROAD_UNIVERSE_HOT_SWAP');
+    });
+
+    it('rescue-protected incumbents: a genuinely full, dwell-CLEARED pool where every occupant instead holds an active temporary data rescue still refuses the request - a distinct protection mechanism from dwell, not a duplicate test', () => {
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      for (let i = 0; i < cap; i++) {
+        const sym = fillerSymbol(i);
+        realSubscribe(sym, 0);
+        clearDwellProtection(sym); // dwell is NOT what protects these occupants in this test
+        // RENEWAL grant (symbol already active) - structurally exempt from the concurrent-rescue
+        // budget (continuousIntelligence.maxConcurrentTemporaryDataRescues), so all cap occupants
+        // can genuinely hold an active rescue at once, exactly reproducing the real IOVA-day
+        // pattern of many simultaneous rescue grants (27 in the 15:55-16:01 window).
+        const grant = marketDataWorker.requestTemporaryDataRescue(sym, 'test-rescue', { requestClass: 'ROUTINE_RECOVERY' });
+        expect(grant.granted).toBe(true);
+      }
+      expect(marketDataWorker.getActiveSymbols().length).toBe(cap);
+      expect(marketDataWorker.getEvictionEligibleDynamicSymbols()).toHaveLength(0); // none evictable
+
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      marketDataWorker.subscribe('IOVA', { momentumScore: 7.64, requestedBy: 'OpportunityDiscovery:BROAD_UNIVERSE_HOT_SWAP' });
+      subscribedThisTest.push('IOVA');
+
+      expect(marketDataWorker.getActiveSymbols()).not.toContain('IOVA');
+      const outcomeCalls = logSpy.mock.calls.filter((c) => c[1]?.eventType === 'MARKET_DATA_SUBSCRIPTION_OUTCOME' && c[1]?.symbol === 'IOVA');
+      expect(outcomeCalls).toHaveLength(1);
+      expect(outcomeCalls[0][1].outcome).toBe('REFUSED_CAPACITY');
+    });
+
+    it('no eligible eviction (heterogeneous, matching the real IOVA-day mix): some occupants dwell-protected, some rescue-protected, one permanently core-protected - refusal still holds and the planner correctly plans zero swaps rather than one it cannot fulfill', async () => {
+      process.env[FLAG_O] = 'true';
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      const half = Math.floor((cap - 1) / 2);
+      // Occupant 0: dwell-protected (freshly subscribed, never ticked).
+      realSubscribe(fillerSymbol(0), 0);
+      // Occupants 1..half: dwell-cleared but rescue-protected.
+      for (let i = 1; i <= half; i++) {
+        const sym = fillerSymbol(i);
+        realSubscribe(sym, 0);
+        clearDwellProtection(sym);
+        marketDataWorker.requestTemporaryDataRescue(sym, 'test-rescue', { requestClass: 'ROUTINE_RECOVERY' });
+      }
+      // Remaining occupants: dwell-protected (fresh), filling out the rest of capacity.
+      for (let i = half + 1; i < cap; i++) {
+        realSubscribe(fillerSymbol(i), 0);
+      }
+      expect(marketDataWorker.getActiveSymbols().length).toBe(cap);
+      expect(marketDataWorker.getEvictionEligibleDynamicSymbols()).toHaveLength(0);
+
+      // Real discovery planning against this real, fully-protected pool: IOVA has real gap
+      // evidence but zero eligible incumbent to compete against - the planner must correctly
+      // plan NO swap this cycle (not "win" one MarketDataWorker will silently refuse).
+      vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+      vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['IOVA']));
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'IOVA' ? 0.34 : null));
+
+      const subs: Array<{ symbol?: string }> = [];
+      const onSub = (p: { symbol?: string }) => subs.push(p);
+      eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+      const stats = await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+      eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+      // Real, precise explanation, not silence: the planner scored IOVA as a challenger (real
+      // evidence exists) but never requested it, because no incumbent was genuinely evictable.
+      expect(stats.broadUniverseChallengers).toBe(1);
+      expect(subs.find((s) => s.symbol === 'IOVA')).toBeUndefined();
+      expect(marketDataWorker.getActiveSymbols()).not.toContain('IOVA');
+    });
+
+    it('repeated requests: IOVA\'s real 7x pattern against a permanently non-evictable pool - never admitted, never silent, never leaks state across attempts', () => {
+      const cap = continuousIntelligence.maxActiveSubscriptions;
+      for (let i = 0; i < cap; i++) realSubscribe(fillerSymbol(i), 0); // all dwell-protected, fresh
+      expect(marketDataWorker.getActiveSymbols().length).toBe(cap);
+
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      const requestTimes = ['15:55:50', '15:56:27', '15:57:05', '15:57:41', '15:58:19', '15:59:21', '15:59:59'];
+      for (const t of requestTimes) {
+        eventBus.emit(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, {
+          symbol: 'IOVA', source: 'OpportunityDiscovery', reason: 'BROAD_UNIVERSE_HOT_SWAP',
+          momentumScore: 7.640062597809081, honesty: 'Subscribe request only.',
+        });
+      }
+      subscribedThisTest.push('IOVA');
+
+      // Never admitted, across all 7 real attempts.
+      expect(marketDataWorker.getActiveSymbols()).not.toContain('IOVA');
+      expect(marketDataWorker.getActiveSymbols().length).toBe(cap); // no growth, no leak
+      // Never leaks a stale priority-score entry for a symbol that was never actually admitted.
+      expect(marketDataWorker.getDynamicMomentumScore('IOVA')).toBeNull();
+      // Every one of the 7 real attempts produced its own observable, provenance-carrying refusal -
+      // this is the exact gap that made IOVA's real repeated requests indistinguishable from silence.
+      const outcomeCalls = logSpy.mock.calls.filter((c) => c[1]?.eventType === 'MARKET_DATA_SUBSCRIPTION_OUTCOME' && c[1]?.symbol === 'IOVA');
+      expect(outcomeCalls).toHaveLength(requestTimes.length);
+      expect(outcomeCalls.every((c) => c[1].outcome === 'REFUSED_CAPACITY')).toBe(true);
+      expect(outcomeCalls.every((c) => c[1].requestedBy === 'OpportunityDiscovery:BROAD_UNIVERSE_HOT_SWAP')).toBe(true);
+    });
+
+    it('subscription failure: a genuine provider-level rejection (IBKR bridge subscribe() throws) is rolled back and logged as REFUSED_PROVIDER_REJECTED - a distinct outcome from capacity refusal, on an ISOLATED worker instance so no real IBKR/Alpaca connection is ever touched', () => {
+      // Isolated instance (never the shared singleton) - constructing this and switching its
+      // backend to 'ibkr_gateway' (not 'alpaca') never triggers MarketDataWorker.reconnect()
+      // (setBrokerQuoteContext only calls reconnect() when switching AWAY from ibkr_gateway), so
+      // this test never opens or attempts any real external connection.
+      const isolated = new MarketDataWorkerClass();
+      const throwingBridge = {
+        subscribe: (symbol: string) => { throw new Error(`IBKR rejected ${symbol}: contract not found`); },
+        unsubscribe: () => {},
+        clear: () => {},
+      };
+      isolated.setBrokerQuoteContext({ backend: 'ibkr_gateway', ibkrBridge: throwingBridge });
+
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      isolated.subscribe('REJSY', { momentumScore: 5, requestedBy: 'test' });
+
+      expect(isolated.getActiveSymbols()).not.toContain('REJSY'); // real rollback, not a phantom entry
+      const outcomeCalls = logSpy.mock.calls.filter((c) => c[1]?.eventType === 'MARKET_DATA_SUBSCRIPTION_OUTCOME' && c[1]?.symbol === 'REJSY');
+      expect(outcomeCalls).toHaveLength(1);
+      expect(outcomeCalls[0][1].outcome).toBe('REFUSED_PROVIDER_REJECTED');
+      expect(String(outcomeCalls[0][1].providerError)).toContain('contract not found');
+    });
+
+    it('reconnect / generation change: a real unsubscribe+resubscribe cycle (the bookkeeping every reconnect-driven generation change performs) correctly RE-ARMS dwell protection, never leaking a PRIOR generation\'s cleared-dwell state into the new one - on an ISOLATED worker instance, never the real Alpaca reconnect path', () => {
+      // Isolated instance (never the shared singleton, never setBrokerQuoteContext with a backend
+      // change) - this test exercises the exact real bookkeeping primitive a reconnect-driven
+      // generation change depends on (unsubscribe the old registration, resubscribe fresh) without
+      // any risk of a genuine external network attempt from either backend's own reconnect path.
+      const isolated = new MarketDataWorkerClass();
+      isolated.subscribe('GENSY', { momentumScore: 1 });
+      for (let i = 0; i < continuousIntelligence.minDynamicDwellTicks; i++) isolated.ingestIbkrQuote('GENSY', 10 + i * 0.01);
+      expect(isolated.getEvictionEligibleDynamicSymbols()).toContain('GENSY'); // genuinely evictable in this generation
+
+      // Real reconnect-driven generation change bookkeeping: the prior generation's registration is
+      // torn down and a fresh one established - exactly what a real IBKR/Alpaca reconnect's
+      // subscription-rehydration does for a symbol that survives the reconnect.
+      isolated.unsubscribe('GENSY', { force: true });
+      isolated.subscribe('GENSY', { momentumScore: 1 });
+
+      // Real fix under test: GENSY is active again in the new generation, but its dwell timer reset
+      // to "now" (subscribe() always sets a fresh subscribedAtMs for a symbol not already in
+      // activeStreams) - it must NOT still read as eviction-eligible immediately after the
+      // generation change just because the PRIOR generation had cleared its dwell window. A real
+      // reconnect must never let a stale generation's eligibility silently carry into the new one.
+      expect(isolated.getActiveSymbols()).toContain('GENSY');
+      expect(isolated.getEvictionEligibleDynamicSymbols()).not.toContain('GENSY');
+    });
   });
 });
