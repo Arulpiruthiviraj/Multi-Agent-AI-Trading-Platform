@@ -1056,6 +1056,85 @@ describe('MarketDataWorker - duplicate-tick dedup and reconnect-gap detection (P
     });
   });
 
+  // 2026-09-30 (Discovery Challenger Observability Hardening §6 - "make incumbent eligibility
+  // observable"). getEvictionDiagnostics() is a read-only diagnostic covering EVERY current dynamic
+  // symbol (not just the eviction-eligible subset getEvictionEligibleDynamicSymbols() already
+  // returns), reusing the exact same private protection checks - never changes eviction behavior.
+  describe('getEvictionDiagnostics() (2026-09-30 Discovery Challenger Observability Hardening §6)', () => {
+    // authenticate()'s default post-auth batch subscribe fills every dynamic slot at once, through a
+    // path that (real, verified behavior) does not itself register subscribedAtMs the way the real
+    // PUBLIC subscribe() call does - so those default occupants read back as immediately evictable.
+    // Freeing exactly one slot (force-unsubscribe one default) and then using the real public
+    // subscribe() for the test symbol reproduces the genuine "just admitted via subscribe()" shape
+    // the IOVA-class integration tests already rely on for dwell protection.
+    function freeOneDynamicSlot(): void {
+      const [victim] = worker.getDynamicSymbols();
+      expect(victim).toBeTruthy();
+      worker.unsubscribe(victim, { force: true });
+    }
+
+    it('reports a freshly-subscribed dynamic incumbent as dwell-protected and not evictable, with the real reason - and never mutates its actual eviction eligibility', () => {
+      authenticate(instances[0]);
+      freeOneDynamicSlot();
+      worker.subscribe('ZFRSH', { momentumScore: 3 });
+
+      const diagnostics = worker.getEvictionDiagnostics();
+      const entry = diagnostics.find((d) => d.symbol === 'ZFRSH');
+      expect(entry).toBeTruthy();
+      expect(entry!.dwellProtected).toBe(true);
+      expect(entry!.evictable).toBe(false);
+      expect(entry!.reasonNotEvictable).toBe('DWELL_PROTECTED');
+      // Real, unaffected by the diagnostic call: still excluded from the eligible set.
+      expect(worker.getEvictionEligibleDynamicSymbols()).not.toContain('ZFRSH');
+    });
+
+    it('reports a rescue-protected incumbent as not evictable, distinct from dwell protection', async () => {
+      authenticate(instances[0]);
+      freeOneDynamicSlot();
+      worker.subscribe('ZRESQ', { momentumScore: 3 });
+      await expireDynamicDwell();
+      // RENEWAL grant (symbol already active) - exempt from the concurrent-rescue budget, same real
+      // shape the IOVA-class rescue-protection integration test above already relies on.
+      const grant = worker.requestTemporaryDataRescue('ZRESQ', 'test-rescue', { requestClass: 'ROUTINE_RECOVERY' });
+      expect(grant.granted).toBe(true);
+
+      const diagnostics = worker.getEvictionDiagnostics();
+      const entry = diagnostics.find((d) => d.symbol === 'ZRESQ');
+      expect(entry).toBeTruthy();
+      expect(entry!.dwellProtected).toBe(false);
+      expect(entry!.rescueProtected).toBe(true);
+      expect(entry!.evictable).toBe(false);
+      expect(entry!.reasonNotEvictable).toBe('RESCUE_PROTECTED');
+    });
+
+    it('reports a dwell-cleared, unrescued dynamic symbol as genuinely evictable (reasonNotEvictable: null)', async () => {
+      authenticate(instances[0]);
+      freeOneDynamicSlot();
+      worker.subscribe('ZEVIC', { momentumScore: 3 });
+      await expireDynamicDwell();
+
+      const diagnostics = worker.getEvictionDiagnostics();
+      const entry = diagnostics.find((d) => d.symbol === 'ZEVIC');
+      expect(entry).toBeTruthy();
+      expect(entry!.dwellProtected).toBe(false);
+      expect(entry!.rescueProtected).toBe(false);
+      expect(entry!.protectedCore).toBe(false);
+      expect(entry!.evictable).toBe(true);
+      expect(entry!.reasonNotEvictable).toBeNull();
+      expect(worker.getEvictionEligibleDynamicSymbols()).toContain('ZEVIC');
+    });
+
+    it('covers every dynamic symbol, not just the eligible subset - the count and membership match getDynamicSymbols() exactly, never just getEvictionEligibleDynamicSymbols()', () => {
+      authenticate(instances[0]);
+      const dynamicSymbols = worker.getDynamicSymbols();
+      expect(dynamicSymbols.length).toBeGreaterThan(0);
+
+      const diagnostics = worker.getEvictionDiagnostics();
+      expect(diagnostics.length).toBe(dynamicSymbols.length);
+      expect(diagnostics.map((d) => d.symbol).sort()).toEqual([...dynamicSymbols].sort());
+    });
+  });
+
   // Phase 18 (2026-09-01 rescue-fairness fix). Reproduces the exact Phase 17 live failure
   // pattern - AAPL/TSLA/AI (routine repeat-requesters) occupying every slot, denying real
   // exploration promotions (CRM, ONON) - and proves the fairness invariants the mission required.

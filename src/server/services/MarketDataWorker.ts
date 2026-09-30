@@ -338,6 +338,50 @@ export class MarketDataWorker {
     return this.rankEvictionCandidates().map((r) => r.symbol);
   }
 
+  /**
+   * 2026-09-30 (Discovery Challenger Observability Hardening, ARGUS_CHALLENGER_SELECTION_FORENSIC_2026-09-29.md
+   * §6 - "make incumbent eligibility observable"). Read-only diagnostic covering EVERY current
+   * dynamic (non-core) active symbol, not just the eviction-eligible subset
+   * getEvictionEligibleDynamicSymbols() already returns - a caller building a full challenger-vs-
+   * incumbent audit trail needs to see WHY a protected incumbent was skipped, not just the list of
+   * ones that weren't. Reuses the exact same protectedStreamingSet()/isWithinDynamicDwell()/
+   * hasActiveRescue()/dynamicMomentumScores this file's own rankEvictionCandidates() already
+   * computes from - never a second, parallel eligibility rule, and never mutates any state. This
+   * method exists purely for observability; it must never be used to drive an eviction/admission
+   * decision itself (callers needing the real decision still use
+   * getEvictionEligibleDynamicSymbols()/rankEvictionCandidates() as before, unchanged).
+   */
+  getEvictionDiagnostics(): Array<{
+    symbol: string;
+    score: number;
+    ticks: number;
+    protectedCore: boolean;
+    dwellProtected: boolean;
+    rescueProtected: boolean;
+    evictable: boolean;
+    reasonNotEvictable: 'PROTECTED_CORE' | 'DWELL_PROTECTED' | 'RESCUE_PROTECTED' | null;
+  }> {
+    const protectedSet = protectedStreamingSet();
+    return this.getDynamicSymbols().map((symbol) => {
+      const protectedCore = protectedSet.has(symbol);
+      const dwellProtected = !protectedCore && this.isWithinDynamicDwell(symbol);
+      const rescueProtected = !protectedCore && !dwellProtected && this.hasActiveRescue(symbol);
+      const evictable = !protectedCore && !dwellProtected && !rescueProtected;
+      const reasonNotEvictable: 'PROTECTED_CORE' | 'DWELL_PROTECTED' | 'RESCUE_PROTECTED' | null =
+        protectedCore ? 'PROTECTED_CORE' : dwellProtected ? 'DWELL_PROTECTED' : rescueProtected ? 'RESCUE_PROTECTED' : null;
+      return {
+        symbol,
+        score: this.dynamicMomentumScores.get(symbol) ?? 0,
+        ticks: this.tickCounts.get(symbol) ?? 0,
+        protectedCore,
+        dwellProtected,
+        rescueProtected,
+        evictable,
+        reasonNotEvictable,
+      };
+    });
+  }
+
   getDynamicMomentumScore(symbol: string): number | null {
     const key = quoteKey(symbol);
     const v = this.dynamicMomentumScores.get(key);

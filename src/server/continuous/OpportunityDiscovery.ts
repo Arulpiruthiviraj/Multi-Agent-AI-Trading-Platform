@@ -22,7 +22,7 @@ import { marketDataWorker } from '../services/MarketDataWorker';
 import { upsertCandidate, expireStaleCandidates } from './candidateLifecycle';
 import { recordCandidate } from '../core/recentCandidateRegistry';
 import { tradingSafety } from '../config/tradingSafety';
-import { getCachedBroadUniverseCandidatesWithVolume, getCachedBroadUniverseGapPct, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
+import { getCachedBroadUniverseCandidatesWithVolume, getCachedBroadUniverseGapPct, getCachedBroadUniverseSnapshotFetchedAt, getCachedMoverSymbols, getCachedNewsCatalystSymbols, marketUniverseScannerWorker } from './MarketUniverseScanner';
 import { selectBroadUniverseCandidates } from './BroadUniverseSubscriptionAllocator';
 import {
   getLastComposableScore,
@@ -422,19 +422,126 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       // admission), bounded by broadUniverseHotSwapChallengerLimit so this stays a cost-controlled
       // top-N, not every admitted symbol every cycle.
       const topSymbols = new Set(top.map((c) => c.symbol));
-      const broadUniverseChallengers: SnapshotCandidate[] = shortlist
+      // 2026-09-30 (Discovery Challenger Observability Hardening,
+      // ARGUS_CHALLENGER_SELECTION_FORENSIC_2026-09-29.md §1/§3): priorityScoreBreakdownOf's
+      // finalScore field is priorityScoreOf(symbol) itself - the SAME already-defined closure every
+      // other branch of this cycle (rankedTop, scoreOf callbacks, topUp) calls - never a second,
+      // independently-invoked computation, so there is no way for this observability breakdown to
+      // disagree with the real decision. baseScore/gapPct/hasGapEvidence are the real inputs
+      // priorityScoreOf() itself reads. gapTerm mirrors scoreBroadUniverseChallenger()'s own
+      // one-line internal formula for display only - it is never itself used to derive finalScore,
+      // so a future change to that formula cannot silently desync the REAL decision from what gets
+      // logged (only this display mirror would need updating, and staleness there is a
+      // documentation gap, not a decision-path divergence).
+      const priorityScoreBreakdownOf = (symbol: string): {
+        finalScore: number; baseScore: number; gapPct: number | null; gapTerm: number; hasGapEvidence: boolean;
+      } => {
+        const gapPct = getCachedBroadUniverseGapPct(symbol);
+        const baseScore = baseScoreOf(symbol);
+        const finalScore = priorityScoreOf(symbol);
+        const gapTerm = gapPct != null && Number.isFinite(gapPct)
+          ? Math.abs(gapPct) * 100 * continuousIntelligence.broadUniverseGapHotSwapWeight
+          : 0;
+        return { finalScore, baseScore, gapPct, gapTerm, hasGapEvidence: gapPct != null };
+      };
+      // 2026-09-30: discoverySource is a best-effort label inferred from which real, already-cached
+      // admission list currently contains this symbol - shortlist rows themselves carry no source
+      // tag today (a larger, separate change to getOpportunityScanUniverse() this pass does not
+      // make), so this can misattribute a symbol admitted via more than one mechanism this cycle to
+      // whichever check runs first below. Observability-only; never used in any real decision.
+      const cachedBroadUniverseSymbols = new Set(getCachedBroadUniverseCandidatesWithVolume().map((c) => c.symbol));
+      const cachedMoverSymbols = new Set(getCachedMoverSymbols());
+      const cachedNewsCatalystSymbols = new Set(getCachedNewsCatalystSymbols());
+      const inferredDiscoverySourceOf = (symbol: string): string => {
+        if (cachedBroadUniverseSymbols.has(symbol)) return 'BROAD_UNIVERSE';
+        if (cachedMoverSymbols.has(symbol)) return 'MARKET_MOVER';
+        if (cachedNewsCatalystSymbols.has(symbol)) return 'NEWS_CATALYST';
+        return 'SEED_OR_WATCH_OR_UNKNOWN';
+      };
+
+      const broadUniverseEligibleWithBreakdown = shortlist
         .filter((row) => !active.has(row.symbol) && !topSymbols.has(row.symbol))
-        .map((row) => ({
-          symbol: row.symbol,
+        .map((row) => ({ symbol: row.symbol, breakdown: priorityScoreBreakdownOf(row.symbol) }))
+        .filter((c) => c.breakdown.finalScore > 0)
+        .sort((a, b) => b.breakdown.finalScore - a.breakdown.finalScore);
+      const zeroOrExcludedCandidateCount = shortlist.filter((row) => !active.has(row.symbol) && !topSymbols.has(row.symbol)).length
+        - broadUniverseEligibleWithBreakdown.length;
+      const challengerLimit = continuousIntelligence.broadUniverseHotSwapChallengerLimit;
+      const broadUniverseChallengers: SnapshotCandidate[] = broadUniverseEligibleWithBreakdown
+        .slice(0, challengerLimit)
+        .map((c) => ({
+          symbol: c.symbol,
           intradayPctChange: 0,
           rangeExpansion: 0,
           relativeVolume: 0,
-          momentumScore: priorityScoreOf(row.symbol),
-        }))
-        .filter((c) => c.momentumScore > 0)
-        .sort((a, b) => b.momentumScore - a.momentumScore)
-        .slice(0, continuousIntelligence.broadUniverseHotSwapChallengerLimit);
+          momentumScore: c.breakdown.finalScore,
+        }));
       const broadUniverseChallengerSymbols = new Set(broadUniverseChallengers.map((c) => c.symbol));
+      // Shared across the pre-truncation snapshot below and the post-planning swap-outcome summary
+      // further down, so both events correlate to the same cycle and the same budget numbers.
+      const cycleId = `cycle_${now.getTime()}`;
+      // Mirrors planSnapshotHotSwap()'s own internal swapCap clamp (a trivial, one-line formula,
+      // not decision logic prone to drift) so the budget this logs matches what that function
+      // actually enforces, without changing planSnapshotHotSwap()'s signature to return it.
+      const effectiveSwapBudget = emptySlots > 0 ? Math.max(0, maxSwaps) : Math.min(1, Math.max(0, maxSwaps));
+
+      // §1/§4/§7: one bounded per-cycle snapshot (never unbounded per-candidate events) - the
+      // pre-truncation candidate pool, capped at 2x the real challenger limit ("top N + cutoff
+      // neighborhood" per the mandate's own fallback design), plus aggregate counts for everything
+      // outside that bound. This is what makes a BELOW_CHALLENGER_LIMIT vs ZERO_SCORE exclusion
+      // provable after the fact - explainSnapshotHotSwapDecisions() below only ever sees the
+      // post-truncation broadUniverseChallengers list, so a candidate excluded here left no record
+      // at all before this change.
+      try {
+        // §7 (bound the data volume): config/observability.json's maxPayloadChars (8000) truncates
+        // an over-length JSON payload mid-string, which would otherwise corrupt this event's stored
+        // payload for the CLI report (§8) to parse. Real, full-precision JS floats (e.g. 0.0523 can
+        // serialize as "0.05230000000000004") make an untrimmed candidate array's actual length
+        // unpredictable, so both the array bound (challengerLimit + 5, a realistic top-N + cutoff
+        // neighborhood - never unbounded) and each numeric field (rounded to 4 decimal places,
+        // display-only, never fed back into any real comparison) are kept conservative.
+        const detailBound = Math.min(broadUniverseEligibleWithBreakdown.length, challengerLimit + 5);
+        const round4 = (n: number): number => Math.round(n * 10000) / 10000;
+        const snapshotFetchedAt = getCachedBroadUniverseSnapshotFetchedAt();
+        observeSafe(() => {
+          structuredLogger.info('discovery_challenger_cycle_snapshot', {
+            category: 'DISCOVERY',
+            eventType: 'DISCOVERY_CHALLENGER_CYCLE_SNAPSHOT',
+            reasoning: `cycleId=${cycleId} eligible=${broadUniverseEligibleWithBreakdown.length} `
+              + `survivedTruncation=${broadUniverseChallengers.length} zeroOrExcluded=${zeroOrExcludedCandidateCount} `
+              + `challengerLimit=${challengerLimit}`,
+            // Aggregate counts - always present, cheap, covers every candidate this cycle.
+            cycleId,
+            totalShortlisted: shortlist.length,
+            eligibleForChallengerScoring: broadUniverseEligibleWithBreakdown.length,
+            zeroScoreOrExcludedCount: zeroOrExcludedCandidateCount,
+            challengerLimit,
+            survivedTruncationCount: broadUniverseChallengers.length,
+            // Hot-swap budget state (§5) - real values from THIS cycle's own already-computed
+            // emptySlots/maxSwaps, not re-derived.
+            activeSubscriptionCount: active.size,
+            maxActiveSubscriptions: cap,
+            emptySlots,
+            maxSwapsRequested: maxSwaps,
+            effectiveSwapBudget,
+            // Bounded per-candidate detail - top N plus cutoff-neighborhood, real values only.
+            candidates: broadUniverseEligibleWithBreakdown.slice(0, detailBound).map((c, i) => ({
+              symbol: c.symbol,
+              discoverySource: inferredDiscoverySourceOf(c.symbol),
+              baseScore: round4(c.breakdown.baseScore),
+              gapPct: c.breakdown.gapPct != null ? round4(c.breakdown.gapPct) : null,
+              gapTerm: round4(c.breakdown.gapTerm),
+              finalPriorityScore: round4(c.breakdown.finalScore),
+              hasGapEvidence: c.breakdown.hasGapEvidence,
+              gapEvidenceAgeMs: c.breakdown.hasGapEvidence && snapshotFetchedAt != null ? Math.max(0, now.getTime() - snapshotFetchedAt) : null,
+              rankBeforeTruncation: i + 1,
+              survivedTruncation: i < challengerLimit,
+            })),
+          });
+        });
+      } catch (e) {
+        console.error('[OpportunityDiscovery] Challenger cycle snapshot logging failed (observability only, does not affect the real hot-swap decision)', e);
+      }
 
       // 2026-09-29 correction: remap `top`'s own momentumScore through the SAME priorityScoreOf()
       // before merging, then sort the COMBINED pool once by that single comparable score
@@ -482,6 +589,30 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
       const broadUniverseHotSwapWinners = new Set(planned.filter((s) => broadUniverseChallengerSymbols.has(s)));
       for (const s of broadUniverseHotSwapWinners) broadUniverseHotSwapWinnerSymbols.add(s);
 
+      // §5: swap-budget outcome for this cycle, correlated to the pre-truncation snapshot above via
+      // cycleId. planned.length is the real, already-computed number of swaps planSnapshotHotSwap()
+      // actually returned - never re-derived or estimated.
+      try {
+        const swapsConsumed = planned.length;
+        observeSafe(() => {
+          structuredLogger.info('discovery_challenger_swap_outcome', {
+            category: 'DISCOVERY',
+            eventType: 'DISCOVERY_CHALLENGER_SWAP_OUTCOME',
+            reasoning: `cycleId=${cycleId} swapsConsumed=${swapsConsumed} of effectiveSwapBudget=${effectiveSwapBudget}`,
+            cycleId,
+            activeSubscriptionCount: active.size,
+            maxActiveSubscriptions: cap,
+            emptySlots,
+            maxSwapsRequested: maxSwaps,
+            effectiveSwapBudget,
+            swapsConsumed,
+            swapsRemaining: Math.max(0, effectiveSwapBudget - swapsConsumed),
+          });
+        });
+      } catch (e) {
+        console.error('[OpportunityDiscovery] Swap-outcome logging failed (observability only, does not affect the real hot-swap decision)', e);
+      }
+
       // Phase 4D (Dynamic Subscription Priority Queue, 2026-08-26): recomputes the IDENTICAL
       // decision rule planSnapshotHotSwap already applied above, purely to explain every
       // candidate's outcome (PROMOTED/NOT_PROMOTED/ALREADY_ACTIVE + reason). Never changes
@@ -501,14 +632,44 @@ export async function runOpportunityScan(now: Date = new Date()): Promise<Opport
           scoreEdge: continuousIntelligence.snapshotMomentumScoreEdge,
           scoreOf: (sym) => priorityScoreOf(sym),
         });
+        // §2: map the explainer's own free-text action/reason onto the mandate's canonical
+        // taxonomy (ZERO_SCORE, BELOW_CHALLENGER_LIMIT, CHALLENGER_SELECTED, SWAP_CAP_REACHED,
+        // INCUMBENT_NOT_EVICTABLE, COOLDOWN, ALREADY_ACTIVE, ALREADY_PENDING, DUPLICATE, OTHER) -
+        // reuses the explainer's existing reason strings verbatim rather than adding a second,
+        // parallel decision mechanism. ZERO_SCORE/BELOW_CHALLENGER_LIMIT never appear here because
+        // a candidate with a zero score or truncated out never reaches explainSnapshotHotSwapDecisions
+        // at all - those two outcomes are covered by the discovery_challenger_cycle_snapshot event
+        // above instead (aggregate zeroScoreOrExcludedCount / per-candidate survivedTruncation:false).
+        const reasonCodeOf = (d: { action: string; reason: string }): string => {
+          if (d.action === 'ALREADY_ACTIVE') return 'ALREADY_ACTIVE';
+          if (d.action === 'PROMOTED') return 'CHALLENGER_SELECTED';
+          if (d.reason.startsWith('Hot-swap cap reached')) return 'SWAP_CAP_REACHED';
+          if (d.reason.startsWith('No streaming slots available and no non-core dynamic symbol eligible')) return 'INCUMBENT_NOT_EVICTABLE';
+          return 'OTHER';
+        };
         for (const d of decisions) {
+          const reasonCode = reasonCodeOf(d);
           observeSafe(() => {
             structuredLogger.info('subscription_priority_decision', {
               category: 'DISCOVERY',
               eventType: `SUBSCRIPTION_${d.action}`,
               symbol: d.symbol,
               reasoning: d.reason,
+              reasonCode,
               source: broadUniverseChallengerSymbols.has(d.symbol) ? 'BROAD_UNIVERSE_CHALLENGER' : 'MOMENTUM_UNIVERSE',
+              // §5: promotion/displacement detail - only meaningful (and only present) when this
+              // decision actually displaced an incumbent (d.displaces is set by the explainer only
+              // for that exact branch).
+              ...(d.displaces ? {
+                promotedSymbol: d.symbol,
+                displacedSymbol: d.displaces,
+                challengerScore: d.score,
+                // d.displaces names an ACTIVE incumbent being evicted, not a combinedTop candidate,
+                // so it never appears in `decisions` itself - priorityScoreOf(d.displaces) is the
+                // same scoring function the explainer itself used (via its own scoreOf callback) to
+                // rank that incumbent, called again here only to surface it in this log line.
+                incumbentScore: priorityScoreOf(d.displaces),
+              } : {}),
             });
           });
         }

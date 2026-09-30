@@ -27,6 +27,7 @@ import {
 import * as SnapshotScanner from './SnapshotScanner';
 import * as MarketUniverseScanner from './MarketUniverseScanner';
 import { resetBroadUniverseAllocatorForTests } from './BroadUniverseSubscriptionAllocator';
+import { structuredLogger } from '../observability/StructuredLogger';
 
 const FLAG_O = continuousIntelligence.opportunityLoopEnabledEnvVar;
 
@@ -598,6 +599,184 @@ describe('OpportunityDiscovery', () => {
 
     expect(subs).toHaveLength(1); // only the single hot-swap slot, no top-up capacity to spend
     expect(subs[0].symbol).toBe('AMD');
+  });
+});
+
+/**
+ * 2026-09-30 (Discovery Challenger Observability Hardening,
+ * ARGUS_CHALLENGER_SELECTION_FORENSIC_2026-09-29.md follow-up). Observability-only additions to
+ * OpportunityDiscovery's per-cycle hot-swap planning: a bounded pre-truncation challenger-pool
+ * snapshot, a canonical reasonCode on the existing per-decision explainer output, and swap-budget
+ * state. None of these change broadUniverseHotSwapChallengerLimit, momentumHotSwapSlotsPerCycle,
+ * priorityScoreOf(), admission thresholds, subscription capacity, or protection - every test in this
+ * block asserts the REAL subscribe outcome is identical to the un-observed baseline (proven directly
+ * in the "logging cannot alter selection" and "ordering/ranking unaffected" tests), and that the new
+ * structured events carry real, non-fabricated values already used by the real decision.
+ */
+describe('OpportunityDiscovery observability hardening (2026-09-30)', () => {
+  function setupFullCapacity(scoreOfZZ = 0.5) {
+    const cap = continuousIntelligence.maxActiveSubscriptions;
+    vi.spyOn(marketDataWorker, 'getActiveSymbols').mockReturnValue(
+      Array.from({ length: cap }, (_, i) => (i < 3 ? ['SPY', 'QQQ', 'GLD'][i] : `ZZ${i}`)),
+    );
+    mockDynamicSymbols(
+      Array.from({ length: cap - 3 }, (_, i) => `ZZ${i + 3}`),
+    );
+    vi.spyOn(marketDataWorker, 'getDynamicMomentumScore').mockImplementation((s: string) => (s.startsWith('ZZ') ? scoreOfZZ : null));
+  }
+
+  it('a candidate with null gap data and no other evidence logs the exact zero-score exclusion cause, and is never individually named in the bounded candidate detail', async () => {
+    process.env[FLAG_O] = 'true';
+    setupFullCapacity();
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['NOEVD']));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockReturnValue(null); // no gap evidence anywhere
+
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+
+    const snapshotCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'DISCOVERY_CHALLENGER_CYCLE_SNAPSHOT');
+    expect(snapshotCall).toBeTruthy();
+    const fields = snapshotCall![1] as Record<string, unknown>;
+    expect(fields.zeroScoreOrExcludedCount as number).toBeGreaterThanOrEqual(1);
+    const candidates = fields.candidates as Array<Record<string, unknown>>;
+    expect(candidates.find((c) => c.symbol === 'NOEVD')).toBeUndefined(); // zero-score, excluded before the eligible list
+  });
+
+  it('a positive-score candidate ranked outside the challenger limit logs BELOW_CHALLENGER_LIMIT truncation via survivedTruncation:false, with its real rank and score recorded', async () => {
+    process.env[FLAG_O] = 'true';
+    setupFullCapacity();
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+    const originalLimit = continuousIntelligence.broadUniverseHotSwapChallengerLimit;
+    (continuousIntelligence as any).broadUniverseHotSwapChallengerLimit = 3;
+    try {
+      // looksLikeListedTicker() requires ^[A-Z]{1,5}(\.[A-Z])?$ - no digits, max 5 letters (the
+      // pre-existing 'BU0'..'BU9' convention elsewhere in this file relies on those symbols being
+      // REJECTED as invalid tickers before ever reaching challenger scoring, which happens to leave
+      // its own assertions passing for the wrong reason - see this task's own investigation. These
+      // are real, valid-shaped tickers so the real admission/scoring path is genuinely exercised.
+      const manySymbols = ['BUAAA', 'BUBBB', 'BUCCC', 'BUDDD', 'BUEEE', 'BUFFF'];
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(manySymbols));
+      // Distinct, strictly increasing real gap evidence - BUFFF scores highest, BUAAA lowest. null
+      // for every other symbol (the rest of the real scan universe) - a real gap only exists for
+      // these 6, never a synthetic bonus for unrelated seed/watch symbols.
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation(
+        (s: string) => (manySymbols.includes(s) ? 0.05 + (manySymbols.indexOf(s) * 0.01) : null),
+      );
+      const logSpy = vi.spyOn(structuredLogger, 'info');
+      await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+
+      const snapshotCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'DISCOVERY_CHALLENGER_CYCLE_SNAPSHOT');
+      expect(snapshotCall).toBeTruthy();
+      const fields = snapshotCall![1] as Record<string, unknown>;
+      expect(fields.survivedTruncationCount).toBe(3);
+      const candidates = fields.candidates as Array<Record<string, unknown>>;
+      // BUAAA is the weakest of the 6 - real rank 6, truncated out of the top-3 challenger limit.
+      const weakest = candidates.find((c) => c.symbol === 'BUAAA');
+      expect(weakest).toBeTruthy();
+      expect(weakest!.survivedTruncation).toBe(false);
+      expect(weakest!.rankBeforeTruncation).toBe(6);
+      // BUFFF is the strongest - real rank 1, survives truncation.
+      const strongest = candidates.find((c) => c.symbol === 'BUFFF');
+      expect(strongest!.survivedTruncation).toBe(true);
+      expect(strongest!.rankBeforeTruncation).toBe(1);
+    } finally {
+      (continuousIntelligence as any).broadUniverseHotSwapChallengerLimit = originalLimit;
+    }
+  });
+
+  it('a candidate that survives truncation but arrives after the single-swap-per-cycle budget is consumed logs SWAP_CAP_REACHED, and the promoted candidate logs its displaced incumbent', async () => {
+    process.env[FLAG_O] = 'true';
+    setupFullCapacity();
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+    // Two real challengers, both well inside the default challenger limit (15) - only ONE can be
+    // promoted this cycle (momentumHotSwapSlotsPerCycle=1 at full capacity).
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['STRNG', 'RUNUP']));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => {
+      if (s === 'STRNG') return 0.50;
+      if (s === 'RUNUP') return 0.40;
+      return null;
+    });
+
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    const subs: Array<{ symbol?: string }> = [];
+    const onSub = (p: { symbol?: string }) => subs.push(p);
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+    await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+    eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+    // Real decision unchanged: only the stronger candidate is actually requested.
+    expect(subs).toHaveLength(1);
+    expect(subs[0].symbol).toBe('STRNG');
+
+    const decisionCalls = logSpy.mock.calls.filter((c) => c[0] === 'subscription_priority_decision');
+    const strongDecision = decisionCalls.find((c) => c[1]?.symbol === 'STRNG');
+    const runnerUpDecision = decisionCalls.find((c) => c[1]?.symbol === 'RUNUP');
+    expect(strongDecision![1].eventType).toBe('SUBSCRIPTION_PROMOTED');
+    expect(strongDecision![1].reasonCode).toBe('CHALLENGER_SELECTED');
+    expect(strongDecision![1].promotedSymbol).toBe('STRNG');
+    expect(typeof strongDecision![1].displacedSymbol).toBe('string');
+    expect(typeof strongDecision![1].incumbentScore).toBe('number');
+    expect(runnerUpDecision![1].eventType).toBe('SUBSCRIPTION_NOT_PROMOTED');
+    expect(runnerUpDecision![1].reasonCode).toBe('SWAP_CAP_REACHED');
+  });
+
+  it('a logger failure cannot alter the real hot-swap selection - the real subscribe request still fires identically', async () => {
+    process.env[FLAG_O] = 'true';
+    setupFullCapacity();
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['RESIL']));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'RESIL' ? 0.34 : null));
+    // Every structured-log call throws - observeSafe() must swallow it, never propagate into the
+    // real decision path.
+    vi.spyOn(structuredLogger, 'info').mockImplementation(() => { throw new Error('logger unavailable'); });
+
+    const subs: Array<{ symbol?: string }> = [];
+    const onSub = (p: { symbol?: string }) => subs.push(p);
+    eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+    const stats = await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+    eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+
+    expect(subs).toHaveLength(1);
+    expect(subs[0].symbol).toBe('RESIL');
+    expect(stats.broadUniverseHotSwapWinners).toBe(1);
+  });
+
+  it('the new observability calls do not affect ordering/ranking - the same scenario produces an identical real winner whether or not the logger is spied on', async () => {
+    process.env[FLAG_O] = 'true';
+    async function runScenario() {
+      resetOpportunityScanForTests();
+      SnapshotScanner.resetSnapshotScannerForTests();
+      resetBroadUniverseAllocatorForTests();
+      process.env[FLAG_O] = 'true';
+      setupFullCapacity();
+      vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+      vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['STABL', 'WEAKR']));
+      vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => {
+        if (s === 'STABL') return 0.45;
+        if (s === 'WEAKR') return 0.10;
+        return null;
+      });
+      const subs: Array<{ symbol?: string }> = [];
+      const onSub = (p: { symbol?: string }) => subs.push(p);
+      eventBus.subscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+      await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+      eventBus.unsubscribe(EVENTS.WATCHLIST_SUBSCRIBE_REQUESTED, onSub);
+      return subs.map((s) => s.symbol);
+    }
+
+    const withoutSpy = await runScenario();
+    vi.restoreAllMocks();
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    const withSpy = await runScenario();
+    expect(logSpy.mock.calls.length).toBeGreaterThan(0); // real logging did happen this time
+    expect(withSpy).toEqual(withoutSpy); // identical real outcome either way
+    expect(withSpy).toEqual(['STABL']);
   });
 });
 

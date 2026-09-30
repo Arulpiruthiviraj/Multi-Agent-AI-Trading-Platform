@@ -27,6 +27,7 @@ import { buildStrategyScoreNormalizationComparison, formatStrategyScoreNormaliza
 import { marketDataWorker } from '../services/MarketDataWorker';
 import { buildAiCostGovernorReport, formatAiCostGovernorReport } from '../observability/aiCostGovernorReport';
 import { buildDiscoveryLineageReport, formatDiscoveryLineageReport } from '../observability/discoveryLineageReport';
+import { buildDiscoveryChallengerReport, formatDiscoveryChallengerReport } from '../observability/discoveryChallengerReport';
 import { buildStrategyCatalog, formatStrategyCatalog } from '../research/strategyCatalog';
 import { buildPortfolioImpactReport, formatPortfolioImpactReport } from '../research/portfolioImpactReport';
 import { buildCalibrationDriftReport, formatCalibrationDriftReport } from '../research/calibrationDriftReport';
@@ -673,6 +674,24 @@ observabilityRouter.get('/ai-cost-governor', async (req, res) => {
 // decision from MarketUniverseScanner's real liquidity screen, plus how far that symbol got through
 // subscription/evaluation/consensus/risk/OMS. Discovery-stage data only exists for activity after
 // this phase shipped - it cannot retroactively explain an earlier miss, only future ones.
+// 2026-09-30 (Discovery Challenger Observability Hardening): admission -> scoring -> truncation ->
+// swap-budget -> promotion, aggregated across the window from the events OpportunityDiscovery.ts
+// now emits every cycle. Read-only; never mutates or influences the real hot-swap decision.
+observabilityRouter.get('/discovery-challengers', async (req, res) => {
+  try {
+    const hours = Math.min(parseFloat(String(req.query.hours || '24')) || 24, 24 * 30);
+    const sinceIso = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const report = await buildDiscoveryChallengerReport(sinceIso);
+    if (req.query.format === 'text') {
+      res.type('text/plain').send(formatDiscoveryChallengerReport(report));
+      return;
+    }
+    res.json({ ok: true, ...report });
+  } catch (e: any) {
+    if (!res.headersSent) res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 observabilityRouter.get('/discovery-lineage', async (req, res) => {
   try {
     const symbol = typeof req.query.symbol === 'string' ? req.query.symbol : '';

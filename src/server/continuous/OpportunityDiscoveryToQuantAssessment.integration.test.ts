@@ -264,6 +264,75 @@ describe('Discovery-to-quantitative-assessment real cross-service trace (2026-09
     // to verify. =====
   }, 30000);
 
+  // 2026-09-30 (Discovery Challenger Observability Hardening §10 - runtime proof). Section 10 of
+  // the mandate asks for proof, in PAPER, without changing selection behavior, of a complete trace:
+  // admitted -> scorer inputs -> score -> rank -> truncation result -> swap budget -> promotion/
+  // non-promotion reason. The currently-running production engine (started earlier this session via
+  // `argus-cli start --enable-trading`) does not yet have this change loaded and must not be
+  // restarted as a side effect of this task - this test instead reconstructs the full trace against
+  // the REAL OpportunityDiscovery/MarketDataWorker collaborators (same real singleton, same real
+  // production WATCHLIST_SUBSCRIBE_REQUESTED listener as the causal-trace test above), which is the
+  // strongest proof available without restarting the live process. It reuses the exact same real
+  // full-capacity setup and assertions as the pre-existing causal-trace test above (decision outcome
+  // unchanged: TRACE-class symbol is admitted, discovery/subscribe only) and additionally asserts
+  // every new observability field this task added is present and internally consistent.
+  it('runtime proof: the complete admitted -> scorer inputs -> score -> rank -> truncation -> swap budget -> promotion trace is reconstructable from real emitted events, with the real decision outcome unchanged', async () => {
+    process.env[FLAG_O] = 'true';
+    const cap = continuousIntelligence.maxActiveSubscriptions;
+    establishRealFullEvictableCapacity(cap);
+    vi.spyOn(SnapshotScanner, 'getTopMomentumCandidates').mockResolvedValue([]);
+    vi.spyOn(SnapshotScanner, 'getLastSnapshotScore').mockReturnValue(null);
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseCandidatesWithVolume').mockReturnValue(withVolume(['TRACX']));
+    vi.spyOn(MarketUniverseScanner, 'getCachedBroadUniverseGapPct').mockImplementation((s: string) => (s === 'TRACX' ? 0.30 : null));
+
+    const logSpy = vi.spyOn(structuredLogger, 'info');
+    expect(marketDataWorker.getActiveSymbols()).not.toContain('TRACX');
+    const stats = await runOpportunityScan(new Date('2026-08-21T14:00:00.000Z'));
+    expect(stats.ideasEmitted).toBe(0); // unchanged: discovery/subscribe only, never a trade idea
+
+    // Real decision outcome, identical in shape to the pre-existing causal-trace test: the real
+    // production listener admitted TRACX via a real eviction.
+    expect(marketDataWorker.getActiveSymbols()).toContain('TRACX');
+    subscribedThisTest.push('TRACX');
+
+    // STAGE 1: admitted -> scorer inputs -> score -> rank -> truncation result. One bounded
+    // discovery_challenger_cycle_snapshot event covers the whole pre-truncation pool for this cycle.
+    const snapshotCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'DISCOVERY_CHALLENGER_CYCLE_SNAPSHOT');
+    expect(snapshotCall).toBeTruthy();
+    const snapshotFields = snapshotCall![1] as Record<string, unknown>;
+    const candidates = snapshotFields.candidates as Array<Record<string, unknown>>;
+    const trace2Candidate = candidates.find((c) => c.symbol === 'TRACX');
+    expect(trace2Candidate).toBeTruthy(); // real scorer inputs persisted for this exact symbol
+    expect(trace2Candidate!.hasGapEvidence).toBe(true);
+    expect(trace2Candidate!.gapPct).toBeCloseTo(0.30, 5);
+    expect(typeof trace2Candidate!.finalPriorityScore).toBe('number');
+    expect(trace2Candidate!.finalPriorityScore as number).toBeGreaterThan(0);
+    expect(trace2Candidate!.survivedTruncation).toBe(true);
+    expect(typeof trace2Candidate!.rankBeforeTruncation).toBe('number');
+
+    // STAGE 2: swap budget for this cycle - real values, correlated by cycleId to the snapshot above.
+    const swapOutcomeCall = logSpy.mock.calls.find((c) => c[1]?.eventType === 'DISCOVERY_CHALLENGER_SWAP_OUTCOME');
+    expect(swapOutcomeCall).toBeTruthy();
+    const swapFields = swapOutcomeCall![1] as Record<string, unknown>;
+    expect(swapFields.cycleId).toBe(snapshotFields.cycleId); // same cycle, correlatable
+    expect(swapFields.swapsConsumed).toBe(1); // real single-swap-per-cycle pacing, unchanged
+    expect(swapFields.swapsRemaining).toBe(0);
+
+    // STAGE 3: promotion reason - the real per-decision explainer output, extended with the new
+    // canonical reasonCode and displacement detail.
+    const promotedCall = logSpy.mock.calls.find(
+      (c) => c[0] === 'subscription_priority_decision' && c[1]?.symbol === 'TRACX' && c[1]?.eventType === 'SUBSCRIPTION_PROMOTED',
+    );
+    expect(promotedCall).toBeTruthy();
+    const promotedFields = promotedCall![1] as Record<string, unknown>;
+    expect(promotedFields.reasonCode).toBe('CHALLENGER_SELECTED');
+    expect(promotedFields.promotedSymbol).toBe('TRACX');
+    expect(typeof promotedFields.displacedSymbol).toBe('string');
+    expect(marketDataWorker.getActiveSymbols()).not.toContain(promotedFields.displacedSymbol); // really evicted
+    expect(typeof promotedFields.challengerScore).toBe('number');
+    expect(typeof promotedFields.incumbentScore).toBe('number');
+  }, 30000);
+
   it('no evidence, no request: a broad-universe candidate that does NOT clear the score edge at REAL full capacity never reaches MarketDataWorker at all - the pipeline correctly stops at stage 1, never silently forcing a subscription (renamed 2026-09-30 - "subscription failure" now names a distinct, provider-rejection test below, per the IOVA-gap mandate\'s own test taxonomy)', async () => {
     process.env[FLAG_O] = 'true';
     const cap = continuousIntelligence.maxActiveSubscriptions;

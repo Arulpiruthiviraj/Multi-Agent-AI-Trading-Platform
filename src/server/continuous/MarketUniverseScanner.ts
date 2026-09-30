@@ -573,6 +573,21 @@ export function getCachedBroadUniverseGapPct(symbol: string): number | null {
   return normalized in snapshotCache.gapPctBySymbol ? snapshotCache.gapPctBySymbol[normalized] : null;
 }
 
+/**
+ * 2026-09-30 (Discovery Challenger Observability Hardening, ARGUS_CHALLENGER_SELECTION_FORENSIC_2026-09-29.md
+ * §3 - "persist exact scorer inputs... source timestamp, age, missing/null state"). Read-only
+ * exposure of the SAME snapshotCache.fetchedAt getCachedBroadUniverseGapPct() itself already reads
+ * from - not a new cache, not a new fetch, not a per-symbol timestamp (this cache is refreshed as
+ * one batch, so every symbol's gap evidence shares the same real fetch time). Null exactly when
+ * getCachedBroadUniverseGapPct() would also structurally be unable to answer (feature disabled or
+ * no cache populated yet) - callers should treat a null age the same way a null gapPct is already
+ * treated: "unknown", never fabricated as "fresh" or "stale".
+ */
+export function getCachedBroadUniverseSnapshotFetchedAt(): number | null {
+  if (!isBroadUniverseEnabled() || !snapshotCache) return null;
+  return snapshotCache.fetchedAt;
+}
+
 export function getLastBroadUniverseStats(): BroadUniverseStats {
   return lastStats;
 }
