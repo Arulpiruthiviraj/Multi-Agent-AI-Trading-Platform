@@ -94,6 +94,19 @@ export function installObservabilityEventBridge(): void {
       // which made it impossible to measure, from stored data alone, whether the new
       // BROAD_UNIVERSE_TOPUP fix was actually firing or how often, exactly the observability this
       // investigation needed. Added narrowly, same pattern as the two gaps above.
+      //
+      // Real gap found (2026-09-30, ARGUS_FULL_SESSION_REVIEW_2026-09-29.md follow-up), fourth
+      // confirmed instance: MARKET_DATA_GAP_DETECTED's real payload (MarketDataWorker.ts, emitted
+      // the moment a dropped Alpaca WebSocket re-authenticates) carries `gapMs`/`disconnectedAt`/
+      // `reconnectedAt` - the exact fields needed to measure real outage duration for every one of
+      // the 93 recorded MARKET_DATA_DISCONNECTED ("socket closed") events that day. None were in
+      // this whitelist, so every persisted MARKET_DATA_GAP_DETECTED row silently collapsed to `{}`
+      // - confirmed live via a direct read-only query of the real September 29 database (117
+      // full-calendar-day rows, every payload `{}`). This is exactly why the prior full-session
+      // audit could not establish outage duration from stored data alone; MarketDataWorker.ts's own
+      // console.warn already computes and logs gapMs correctly, it just never reached durable
+      // storage. Added narrowly, same pattern as the three gaps above - does not change when/how
+      // often the event fires, only what of its real payload survives into observability_events.
       const singleSymbol = payload?.symbol ?? (Array.isArray(payload?.symbols) ? payload.symbols[0] : undefined);
       const safePayload = redactSecretsDeep({
         symbol: singleSymbol,
@@ -115,6 +128,9 @@ export function installObservabilityEventBridge(): void {
         toState: payload?.toState,
         source: payload?.source,
         momentumScore: payload?.momentumScore,
+        gapMs: payload?.gapMs,
+        disconnectedAt: payload?.disconnectedAt,
+        reconnectedAt: payload?.reconnectedAt,
       });
       logStructured(level, eventType, {
         category,

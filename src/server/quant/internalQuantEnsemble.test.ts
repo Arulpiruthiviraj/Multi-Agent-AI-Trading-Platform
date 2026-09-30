@@ -247,3 +247,37 @@ describe('resolveEnsembleEvidenceForForecast (Master Transformation Mandate Part
     expect(result!.effectiveIndependentCount).toBeLessThan(result!.strategyCount);
   });
 });
+
+describe('computeInternalEnsembleQualification - 2026-09-30 Java bridge fan-out concurrency bound', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('never has more than quantResearchStrategyFanoutMaxConcurrency fetchResearchStrategy calls in flight at once, while still calling all 10 strategies exactly once', async () => {
+    const { quantCoreBridge } = await import('../services/QuantCoreBridge');
+    const { tradingSafety } = await import('../config/tradingSafety');
+    const { JAVA_RESEARCH_STRATEGY_IDS } = await import('./strategyFamilies');
+
+    let inFlight = 0;
+    let peakInFlight = 0;
+    const calledIds: string[] = [];
+    (quantCoreBridge.fetchResearchStrategy as any).mockImplementation(async (id: string) => {
+      calledIds.push(id);
+      inFlight += 1;
+      peakInFlight = Math.max(peakInFlight, inFlight);
+      // Real concurrency contention requires every worker to actually be in flight
+      // simultaneously before any resolves - a synchronous mock would never overlap.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return null;
+    });
+    (quantCoreBridge.fetchInstitutionalEnsemble as any).mockResolvedValue(null);
+    const { computeInternalEnsembleQualification } = await import('./internalQuantEnsemble');
+
+    await computeInternalEnsembleQualification('AAPL', bars as any, [{ strategy: 'TREND_FOLLOWING', side: 'BUY', confidence: 0.7 } as any], 'BUY');
+
+    expect(calledIds.sort()).toEqual([...JAVA_RESEARCH_STRATEGY_IDS].sort());
+    expect(peakInFlight).toBeLessThanOrEqual(tradingSafety.quantResearchStrategyFanoutMaxConcurrency);
+    expect(peakInFlight).toBeGreaterThan(1); // still genuinely parallel, not accidentally serialized to 1
+  });
+});

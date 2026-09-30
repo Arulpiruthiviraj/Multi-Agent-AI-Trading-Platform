@@ -507,6 +507,27 @@ export interface TradingSafety {
    */
   quantJavaCoreTickMaxConcurrency: number;
   /**
+   * 2026-09-30 (ARGUS_FULL_SESSION_REVIEW_2026-09-29.md follow-up, Java bridge timeout
+   * investigation). internalQuantEnsemble.ts's computeInternalEnsembleQualification() previously
+   * fired all JAVA_RESEARCH_STRATEGY_IDS (10 distinct strategy endpoints) via a single unbounded
+   * `Promise.all(...map(...))` for every symbol it evaluates - the same unbounded-fan-out shape
+   * quantJavaCoreTickMaxConcurrency's own doc comment above already diagnosed and fixed for
+   * forwardTick(), just not extended to this separate caller. Real evidence (September 29
+   * production observability_events, read-only query): institutional/strategy/* sub-endpoints
+   * showed a strikingly consistent ~26.9-27.0s max latency and ~2.05s p90 across ALL 10
+   * strategies, and quant/ensemble (called once per symbol immediately after this fan-out) showed
+   * a 1,025-timeout/934-circuit-open outcome out of 4,301 calls (~46% non-success) - a queueing/
+   * contention signature, not 10 independently-slow endpoints. Bounds concurrent dispatch to the
+   * number of distinct strategy FAMILIES these 10 strategy ids collapse into
+   * (strategyFamilies.ts's JAVA_RESEARCH_STRATEGY_FAMILIES: MEAN_REVERSION_FAMILY,
+   * TREND_MOMENTUM, BREAKOUT_VOLATILITY, MARKET_STRUCTURE_FLOW = 4) rather than an invented
+   * number - same-family strategies are already treated as highly correlated by the
+   * correlation-adjusted ensemble math itself, so firing all of a family's strategies
+   * simultaneously has limited independent-evidence value to begin with. This bounds the burst
+   * ONE evaluateSymbol() call can contribute; it does not add a new global admission mechanism.
+   */
+  quantResearchStrategyFanoutMaxConcurrency: number;
+  /**
    * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2). Minimum real
    * (wins+losses) sample size in agent_confidence_calibration before a per-agent/bucket
    * calibrated estimate is trusted as empirical rather than classified INSUFFICIENT_CALIBRATION_DATA.
@@ -817,6 +838,9 @@ function loadTradingSafety(): TradingSafety {
   }
   if (typeof raw.quantJavaCoreTickMaxConcurrency !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: quantJavaCoreTickMaxConcurrency');
+  }
+  if (typeof raw.quantResearchStrategyFanoutMaxConcurrency !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantResearchStrategyFanoutMaxConcurrency');
   }
   if (typeof raw.minCalibrationSampleSize !== 'number') {
     throw new Error('config/tradingSafety.json missing number field: minCalibrationSampleSize');

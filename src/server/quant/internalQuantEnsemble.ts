@@ -164,8 +164,25 @@ export async function computeInternalEnsembleQualification(
     votes.push({ modelId: e.strategy, family, side: e.side, confidence: e.confidence });
   }
 
-  const javaResults = await Promise.all(
-    JAVA_RESEARCH_STRATEGY_IDS.map((id) => quantCoreBridge.fetchResearchStrategy(id, symbol, bars)),
+  // 2026-09-30 (ARGUS_FULL_SESSION_REVIEW_2026-09-29.md follow-up, Java bridge timeout
+  // investigation): previously an unbounded Promise.all fired all JAVA_RESEARCH_STRATEGY_IDS (10)
+  // simultaneously for every symbol - real evidence (see quantResearchStrategyFanoutMaxConcurrency's
+  // own doc comment in tradingSafety.ts) showed a queueing/contention signature across all 10
+  // institutional/strategy/* endpoints plus the immediately-following quant/ensemble call. Bounded
+  // to the same reviewed concurrency cap the timeout-investigation grounded in real family-count
+  // evidence, never an arbitrary number - the real fan-out amount, just spread over fewer
+  // simultaneous requests rather than firing all 10 at once.
+  const fanoutConcurrency = Math.max(1, Math.min(tradingSafety.quantResearchStrategyFanoutMaxConcurrency, JAVA_RESEARCH_STRATEGY_IDS.length));
+  const javaResults: Array<Record<string, unknown> | null> = new Array(JAVA_RESEARCH_STRATEGY_IDS.length).fill(null);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: fanoutConcurrency }, async () => {
+      while (true) {
+        const i = nextIndex++;
+        if (i >= JAVA_RESEARCH_STRATEGY_IDS.length) return;
+        javaResults[i] = await quantCoreBridge.fetchResearchStrategy(JAVA_RESEARCH_STRATEGY_IDS[i], symbol, bars);
+      }
+    }),
   );
   for (let i = 0; i < JAVA_RESEARCH_STRATEGY_IDS.length; i++) {
     const id = JAVA_RESEARCH_STRATEGY_IDS[i];

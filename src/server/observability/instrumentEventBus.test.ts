@@ -116,4 +116,27 @@ describe('instrumentEventBus - generic wildcard bridge', () => {
     expect(parsed.reason).toBe('BROAD_UNIVERSE_TOPUP');
     expect(parsed.source).toBe('OpportunityDiscovery');
   });
+
+  // 2026-09-30 real fix (ARGUS_FULL_SESSION_REVIEW_2026-09-29.md follow-up, fourth confirmed
+  // instance of this same fixed-whitelist gap): MARKET_DATA_GAP_DETECTED's real payload
+  // (MarketDataWorker.ts, emitted on real Alpaca WebSocket re-authentication) carries
+  // gapMs/disconnectedAt/reconnectedAt - none of which were in the extraction whitelist, so every
+  // one of the 117 real rows persisted that day collapsed to `{}`, silently destroying the exact
+  // field (gapMs) needed to measure real outage duration for the 93 regular-session
+  // MARKET_DATA_DISCONNECTED events the September 29 full-session audit could not otherwise attribute.
+  it('persists gapMs/disconnectedAt/reconnectedAt for MARKET_DATA_GAP_DETECTED instead of silently collapsing to {}', () => {
+    eventBus.publish(EVENTS.MARKET_DATA_GAP_DETECTED, {
+      gapMs: 1281,
+      disconnectedAt: 1790685058374,
+      reconnectedAt: 1790685059655,
+    });
+
+    expect(enqueueObservabilityEvent).toHaveBeenCalled();
+    const row = enqueueObservabilityEvent.mock.calls[0][0];
+    expect(row.payload).not.toBe('{"payload":{}}');
+    const parsed = JSON.parse(row.payload).payload;
+    expect(parsed.gapMs).toBe(1281);
+    expect(parsed.disconnectedAt).toBe(1790685058374);
+    expect(parsed.reconnectedAt).toBe(1790685059655);
+  });
 });
