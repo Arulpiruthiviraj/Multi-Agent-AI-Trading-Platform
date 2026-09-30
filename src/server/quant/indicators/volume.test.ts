@@ -107,5 +107,56 @@ describe('indicators/volume', () => {
       expect(typeof features.mfi).toBe('number');
       expect(features.relativeVolume).not.toBeNull();
     });
+
+    describe('2026-09-30 (ORB input-contract fix): VWAP uses real intraday bars when supplied, instead of degenerating to a single daily bar\'s own typical price', () => {
+      // "Today" (the last daily bar) has real intraday range - without intradayBars,
+      // calculateSessionVWAP(dailyBars) filters to just this ONE row (its own midnight-UTC
+      // session boundary matches only itself in a daily series), so "session VWAP" collapses to
+      // this single bar's typical price ((h+l+c)/3) - not a real intraday-cumulative VWAP.
+      const dailyBars: Bar[] = [
+        ...Array.from({ length: 29 }, (_, i) => bar(i, 12, 90 + i * 0.1, 1000)),
+        { timestamp: 29 * 86_400_000, open: 100, high: 110, low: 95, close: 105, volume: 50_000 },
+      ];
+      // Real intraday bars for "today" (day 29), heavily weighted toward a lower early price -
+      // a genuine volume-weighted intraday VWAP must differ from the degenerate single-bar value.
+      const intradayBars: Bar[] = [
+        bar(29, 9.5, 96, 40_000),
+        bar(29, 10, 100, 5_000),
+        bar(29, 10.5, 105, 5_000),
+      ];
+
+      it('without intradayBars: VWAP degenerates to the single daily bar\'s own typical price (the confirmed defect, unchanged for every non-ORB caller)', () => {
+        const features = computeVolumeFeatures(dailyBars);
+        expect(features.vwap.vwap).toBeCloseTo((110 + 95 + 105) / 3, 5); // exactly the degenerate case
+      });
+
+      it('with intradayBars: VWAP is a real volume-weighted intraday session VWAP, genuinely different from the degenerate daily-only value', () => {
+        const features = computeVolumeFeatures(dailyBars, intradayBars);
+        const degenerateVwap = (110 + 95 + 105) / 3;
+        expect(features.vwap.vwap).not.toBeNull();
+        expect(features.vwap.vwap).not.toBeCloseTo(degenerateVwap, 1);
+        // Heavily weighted toward the 96 print (40,000 of 50,000 total volume) - must land close to
+        // 96, not the midpoint of the three intraday prices.
+        expect(features.vwap.vwap!).toBeLessThan(98);
+        expect(features.vwap.vwap!).toBeGreaterThan(95);
+      });
+
+      it('an empty intradayBars array falls back to the daily-only (still honest, still non-fabricated) behavior, same convention as computeSupportResistanceFeatures', () => {
+        const features = computeVolumeFeatures(dailyBars, []);
+        expect(features.vwap.vwap).toBeCloseTo((110 + 95 + 105) / 3, 5);
+      });
+
+      it('relativeVolume/isSpike/volumeROC/obv/mfi/cmf/ad are byte-identical whether or not intradayBars is supplied - only VWAP is affected', () => {
+        const withIntraday = computeVolumeFeatures(dailyBars, intradayBars);
+        const without = computeVolumeFeatures(dailyBars);
+        expect(withIntraday.relativeVolume).toBe(without.relativeVolume);
+        expect(withIntraday.isSpike).toBe(without.isSpike);
+        expect(withIntraday.volumeROC).toBe(without.volumeROC);
+        expect(withIntraday.obv).toBe(without.obv);
+        expect(withIntraday.mfi).toBe(without.mfi);
+        expect(withIntraday.cmf).toBe(without.cmf);
+        expect(withIntraday.ad).toBe(without.ad);
+      });
+    });
   });
 });

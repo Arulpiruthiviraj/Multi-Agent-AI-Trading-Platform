@@ -143,7 +143,27 @@ export interface VolumeFeatures {
   ad: number;
 }
 
-export function computeVolumeFeatures(bars: Bar[]): VolumeFeatures {
+/**
+ * 2026-09-30 (ARGUS_FULL_SESSION_REVIEW_2026-09-29.md follow-up, ORB input-contract verification):
+ * real, confirmed defect found tracing this function's own VWAP path. Every CORE-strategy caller
+ * passes only DAILY bars here (one row per trading day) - computeVWAPContext(bars) ->
+ * calculateSessionVWAP(bars) filters for bars at/after "today's" midnight-UTC boundary, which
+ * against a DAILY series matches at most ONE row (today's own daily OHLCV, if present). A
+ * "session VWAP" built from exactly one bar degenerates to that single bar's own typical price
+ * ((h+l+c)/3) - not a genuine intraday-cumulative VWAP, even though OPENING_RANGE_BREAKOUT's own
+ * "Price above/below session VWAP" condition (openingRangeBreakout.ts) depends on this value being
+ * real. `intradayBars` (optional, additive - mirrors computeSupportResistanceFeatures's own
+ * intradayBars parameter and QuantSignalAgent.ts's existing intraday fetch, gated the same way)
+ * lets VWAP/distance/slope/reclaim-rejection be computed from real 1-minute bars when available -
+ * a genuine session-cumulative VWAP instead of a single-bar approximation. relativeVolume/isSpike/
+ * volumeROC/obv/mfi/cmf/ad are UNCHANGED (still daily-bar-based) - RVOL's own daily-vs-20-day-daily-
+ * average comparison is a coarser, but internally SCOPE-CONSISTENT measure (daily numerator over
+ * daily denominator), not the same degenerate-single-bar defect VWAP had; fixing it would require
+ * a genuine intraday historical ADV curve, a separate, larger, not-yet-built follow-up (see
+ * discoveryCandidateLedger.ts's VolumeProvenance for the same distinction applied to discovery RVOL
+ * - a different calculation, different data source, do not conflate the two).
+ */
+export function computeVolumeFeatures(bars: Bar[], intradayBars?: Bar[]): VolumeFeatures {
   const highs = bars.map(b => b.high);
   const lows = bars.map(b => b.low);
   const closes = bars.map(b => b.close);
@@ -156,7 +176,7 @@ export function computeVolumeFeatures(bars: Bar[]): VolumeFeatures {
     volumeROC: volumeROC(volumes),
     obv: TechnicalIndicators.calculateOBV(closes, volumes),
     mfi: TechnicalIndicators.calculateMFI(highs, lows, closes, volumes),
-    vwap: computeVWAPContext(bars),
+    vwap: intradayBars && intradayBars.length > 0 ? computeVWAPContext(intradayBars) : computeVWAPContext(bars),
     cmf: calculateCMF(bars),
     ad: calculateAD(bars),
   };

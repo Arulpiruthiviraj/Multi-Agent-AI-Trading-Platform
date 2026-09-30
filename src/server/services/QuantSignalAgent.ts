@@ -358,7 +358,12 @@ export class QuantSignalAgent {
       volatility: regime.features.volatility,
       priceAction: regime.features.priceAction,
       momentum: computeMomentumFeatures(bars),
-      volume: computeVolumeFeatures(bars),
+      // 2026-09-30 (ORB input-contract verification): intradayBars now also feeds VWAP (real
+      // session-cumulative VWAP instead of a single-daily-bar degenerate approximation - see
+      // computeVolumeFeatures's own doc comment). Same optional/additive shape and same gating as
+      // supportResistance's own intradayBars parameter below - undefined outside the ORB flag,
+      // zero behavior change for every other strategy/deployment.
+      volume: computeVolumeFeatures(bars, intradayBars),
       supportResistance: computeSupportResistanceFeatures(bars, intradayBars),
       regime,
       marketContext,
