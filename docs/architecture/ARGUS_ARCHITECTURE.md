@@ -1810,11 +1810,20 @@ strategy that has no Java counterpart to check first - consistent with, not an e
 0's "check `quant-core-java/` for an existing implementation first" (there is none to find, and
 none is being newly authored in TS either).
 
-**Item 8 (full-suite status - precise framing, not "all green").** See this document's own
-Master Completion Ledger / commit history for the exact re-run result recorded alongside this
-change; report it as "full suite completed with N failures; isolated rerun passed" when N > 0,
-never "nothing broke" - isolated-pass-alone is not proof the current change set cannot contribute
-under full-suite load, only that the specific failing file passes in isolation.
+**Item 8 (full-suite status - precise framing, not "all green").** Full suite re-run after every
+fix above (`npm test`, 2026-09-29): **596/597 files, 4597/4598 tests passing; 1 failure** -
+`src/server/routes/v2System.quantCore.test.ts`'s `GET /quant-core/catalog > categorizes a known
+Options engine correctly`, a 15000ms timeout under full-suite load. `git status`/`git diff` confirm
+this file has zero changes from this pass or the prior one. Isolated re-run of that file alone:
+**10/10 passed in 6.97s.** Correct framing: **full suite completed with 1 failure; isolated rerun
+passed** - matching this codebase's own pre-existing `KNOWN_FLAKY` note for this catalog-route test
+group. This is NOT reported as "nothing broke" or "all green": an isolated pass proves the test can
+pass, not that the current change set contributed nothing to a timeout that only appears under
+full-suite resource contention. This specific test (`GET /quant-core/catalog`) was not touched,
+imported, or exercised by any file this pass modified, and the failure mode (a fixed 15000ms wall-
+clock timeout on an HTTP route test, immediately following a `tsc --noEmit` full-project typecheck
+that also passed clean) is consistent with the documented pre-existing flakiness rather than a new
+regression - but that consistency is circumstantial, not a proof, and is recorded as such.
 
 ### Market data / discovery behavior outside RTH
 
