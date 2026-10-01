@@ -1,0 +1,1354 @@
+// @ts-nocheck
+import { AIRouter } from '../ai/AIRouter';
+import * as schema from '../db/schema';
+/**
+ * ==========================================================
+ * Module:
+ * ChiefTraderAgent.ts
+ *
+ * Purpose:
+ * Core implementation and logic for the ChiefTraderAgent.ts module within the Argus Trading Terminal.
+ *
+ * Responsibilities:
+ * - State management and logic execution for ChiefTraderAgent
+ * - Interface with backend APIs and EventBus
+ * - Render UI components (if React)
+ *
+ * Inputs:
+ * - Module dependencies and injected props
+ *
+ * Outputs:
+ * - Formatted data or React Elements
+ *
+ * Emits:
+ * - Relevant system events
+ *
+ * Dependencies:
+ * - Standard Argus architecture layers
+ *
+ * Called By:
+ * - Argus Routing / Parent Components
+ *
+ * Never:
+ * - Mutate global state directly without EventBus
+ * - Call AI providers directly (Must use AIRouter)
+ *
+ * ==========================================================
+ */
+
+import { eventBus } from '../core/EventBus';
+import { isTelemetryPulsePayload } from '../core/telemetryPulse';
+import { db } from '../db';
+import { agentPerformanceStats, agentConfidenceCalibration } from '../db/schema';
+import { eq, and, desc } from 'drizzle-orm';
+import { EvidenceAggregator, Evidence, CalibrationDetail, coalesceEvidenceByAgent } from './EvidenceAggregator';
+import { isConsensusIdeaFresh } from '../core/consensusIdeaFreshness';
+import { bucketFor, isCalibrationSampleSufficient } from './ConfidenceCalibration';
+import { shouldTriggerOpenAliceVerification } from '../ai/EscalationPolicy';
+import { openAliceVerificationService } from '../integrations/openalice/OpenAliceVerificationService';
+import { recordConsensusTransaction } from '../core/TransactionRegistry';
+import { tracingService } from './TracingService';
+import { STRATEGY_TYPICAL_HOLDING_PERIOD } from '../quant/strategies/types';
+import { tradingSafety } from '../config/tradingSafety';
+import { runtimeIntervals } from '../config/runtimeIntervals';
+import { agentWeightConfig, defaultAgentWeights } from '../config/agentWeights';
+import { EVENTS } from '../core/eventNames';
+import { parseResearchNote, isBullBearResearchEnabled } from '../ai/research/parseResearchNote';
+import { bullBearResearchConfig } from '../config/bullBearResearch';
+import { recordPitLive } from '../engines/backtest/PitLedgerRecorder';
+import { isLiveIdeaGenerationEnabled } from '../core/ideaGenerationGate';
+import { type LastConsensusOutcome } from '../core/consensusExplanation';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { classifyVote, computeShadowConsensus, computeDebateMarginFromResults } from './EvidenceAwareVote';
+import { recordConsensusModelComparison } from './ConsensusModelComparison';
+import { evaluateModerateTierEligibility, type ModerateTierEligibility } from '../continuous/ModerateTierEvaluator';
+import { isConsensusModerateTierEnabled } from '../config/tradingSafety';
+import { classifyConsensusTerminalReason, type ConsensusTerminalReasonCode } from '../core/consensusTerminalReason';
+import { isQuantJavaCoreEnabled, isQuantIndependentQualificationEnabled } from '../config/tradingSafety';
+import { historicalDataGateway } from '../engines/backtest/HistoricalDataGateway';
+import { quantCoreBridge } from './QuantCoreBridge';
+import { persistConsensusDebateCapture } from './ConsensusDebateForensics';
+import { resolveIndependentEvidenceGroup } from './evidenceIndependence';
+import { classifyEvidenceFamily } from './evidenceFamilyTaxonomy';
+import {
+  MIN_BARS_FOR_ANALYSIS as JAVA_ADVISORY_MIN_BARS,
+  LOOKBACK_DAYS as JAVA_ADVISORY_LOOKBACK_DAYS,
+  TIMEFRAME as JAVA_ADVISORY_TIMEFRAME,
+} from './JavaQuantAdvisoryService';
+
+export const CONSENSUS_APPROVAL_THRESHOLD = tradingSafety.consensusApprovalThreshold;
+/** A professional trader does not act on a single voice. ConsensusDebate is a challenge of
+ *  existing evidence, not an independent source, so it does not count toward this floor. */
+export const MIN_INDEPENDENT_AGREEING_AGENTS = tradingSafety.minIndependentAgreeingAgents;
+const RISK_EXIT_AGENT = agentWeightConfig.riskExitAgent;
+
+async function loadDebateLearnedRulesText(): Promise<string> {
+  try {
+    const rows = await db.select().from(schema.learnedRules)
+      .orderBy(desc(schema.learnedRules.timestamp))
+      .limit(tradingSafety.debateLearnedRulesCount);
+    if (!rows.length) return '';
+    const maxChars = tradingSafety.debateLearnedRuleMaxChars;
+    const lines = rows.map((r, i) => `${i + 1}. ${(r.rule || '').slice(0, maxChars)}`);
+    return `\nRecent learned rules (text only; they do not override RiskEngine):\n${lines.join('\n')}`;
+  } catch (e) {
+    console.warn('[ChiefTrader] Failed to load learned_rules for debate prompt', e);
+    return '';
+  }
+}
+
+/**
+ * Java institutional-layer analysis (GARCH volatility, HMM regime, 5-factor composite) folded
+ * into the debate prompt as text-only context - same pattern and same safety contract as
+ * loadDebateLearnedRulesText() above. Explicitly the sanctioned use QuantCoreBridge.ts's own
+ * fetchInstitutionalVolatility() doc comment describes: "may be used as reasoning/context...
+ * but must never treat them as an independent vote - only ChiefTraderAgent mints those, from
+ * emitTradeIdea." This function does exactly that and nothing more:
+ *
+ * - Does NOT call eventBus.emitTradeIdea, does NOT count toward MIN_INDEPENDENT_AGREEING_AGENTS,
+ *   does NOT touch consensus/confidence math, does NOT record a prediction (JavaQuantAdvisoryService's
+ *   own periodic loop already owns that bookkeeping for whichever symbol its round-robin cursor
+ *   lands on - this on-demand call must not create a second, competing prediction row).
+ * - Off entirely unless isQuantJavaCoreEnabled() (the same base flag every other Java consumer in
+ *   this codebase gates on) - zero bars fetch, zero HTTP calls when disabled, matching this
+ *   file's existing convention (learnedRulesText/researchBlock) of adding no latency when unused.
+ * - Fails closed on every dependency (historicalDataGateway, the three Java HTTP calls): any
+ *   failure, missing data, or all-null result returns '' silently - the debate proceeds exactly
+ *   as it would have before this function existed. Never throws.
+ * - This is the explicit "Phase 3 of the activation plan" gap docs/audits/ARGUS_POST_MIGRATION_ARCHITECTURE_AUDIT.md
+ *   and config/engineOwnership.json flagged as recommended-but-not-done ("wire into ChiefTrader
+ *   reasoning context, advisory-only") - deliberately NOT the stricter, still-unmet
+ *   docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase 3 (a real emitTradeIdea vote,
+ *   gated on a multi-week clean divergence soak that has not run for this layer).
+ */
+export async function loadJavaInstitutionalDebateContext(symbol: string): Promise<string> {
+  if (!isQuantJavaCoreEnabled()) return '';
+  try {
+    const endMs = Date.now();
+    const startMs = endMs - JAVA_ADVISORY_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+    await historicalDataGateway.ensureBars(symbol, JAVA_ADVISORY_TIMEFRAME, startMs, endMs);
+    const bars = await historicalDataGateway.getBars(symbol, JAVA_ADVISORY_TIMEFRAME, startMs, endMs);
+    if (bars.length < JAVA_ADVISORY_MIN_BARS) return '';
+
+    const [garch, regime, factor] = await Promise.all([
+      quantCoreBridge.fetchInstitutionalVolatility(symbol, bars),
+      quantCoreBridge.fetchInstitutionalRegime(symbol, bars),
+      quantCoreBridge.fetchInstitutionalFactors(symbol, bars),
+    ]);
+    if (garch === null && regime === null && factor === null) return '';
+
+    const lines: string[] = [];
+    if (factor !== null) {
+      lines.push(
+        `Factor composite ${factor.composite.toFixed(3)} (momentum ${factor.momentum.toFixed(2)}, ` +
+        `mean-reversion ${factor.meanReversion.toFixed(2)}, volume/liquidity ${factor.volumeLiquidity.toFixed(2)}, ` +
+        `volatility ${factor.volatility.toFixed(2)}, order-flow proxy [OHLC-derived, not L2] ${factor.orderFlowProxy.toFixed(2)})`,
+      );
+    }
+    if (regime !== null) {
+      lines.push(`Regime: ${regime.currentRegime} (HMM log-likelihood ${regime.logLikelihood.toFixed(1)}, ${regime.observationCount} observations)`);
+    }
+    if (garch !== null) {
+      lines.push(
+        `GARCH(1,1): realized volatility ${(garch.realizedVolatility * 100).toFixed(2)}% ` +
+        `(${garch.realizedVolPercentile.toFixed(0)}th percentile${garch.volatilityCompressed ? ', compressed' : ''}${garch.volatilityExpanded ? ', expanded' : ''})`,
+      );
+    }
+    return `\nJava institutional analysis (deterministic math, context only - does not vote or override RiskEngine):\n${lines.join('\n')}`;
+  } catch (e) {
+    console.warn('[ChiefTrader] Failed to load Java institutional context for debate prompt', e);
+    return '';
+  }
+}
+
+function parseLlmJson(content: string | undefined): unknown {
+  if (!content) return null;
+  try {
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
+export class ChiefTraderAgent {
+    private recentIdeas: any[] = [];
+    private lastDebateStartedAt: Map<string, number> = new Map();
+    private lastConsensusEvalAt: Map<string, number> = new Map();
+    private lastConsensusOutcome: LastConsensusOutcome | null = null;
+    /**
+     * Real telemetry-reconciliation finding (ARGUS_CURRENT_STATE_AND_FRIDAY_SESSION_FORENSIC_AUDIT.md
+     * §5/§18): observability_events shows far more CHIEF_CONSENSUS_COMPLETED events than
+     * consensus_decisions rows. Root cause traced this pass: recordConsensusTransaction() (which
+     * persists consensus_decisions) is only ever called on (a) an APPROVED evaluation, or (b)
+     * recordUnresolvedAsNoConsensus()'s own ~60s window-close sweep, which persists AT MOST ONE
+     * NO_CONSENSUS row per symbol per sweep - not one row per intermediate evaluateConsensusSerialized()
+     * cycle. A symbol re-evaluated many times as new ideas trickle in within the same window
+     * correctly collapses to a single persisted row - this is intentional, not a bug or a silent
+     * drop - but the collapsed count itself was previously invisible. Tracked here and logged the
+     * instant a row is finally persisted, then reset, so this ratio is directly observable going
+     * forward instead of needing a forensic audit to reconstruct.
+     */
+    private interimEvaluationsSinceLastPersist: Map<string, number> = new Map();
+    /** Per-symbol count of in-flight adversarial debates. evaluateConsensus must not run for a
+     *  symbol while this is > 0 - otherwise a later low-confidence idea (or a second agent)
+     *  would approve the trade before the debate that was supposed to challenge it finished. */
+    private pendingDebates: Map<string, number> = new Map();
+    /** Active Opportunity Feed CONFIRM requests: consensus side must match operator side. */
+    private manualSideExpectations: Map<string, { side: 'BUY' | 'SELL'; expiresAt: number }> = new Map();
+
+    /** Debounced evaluateConsensus handles per symbol — co-eval window for multi-agent sync. */
+    private consensusAggregationTimers: Map<string, NodeJS.Timeout> = new Map();
+
+    /** ConsensusDebate P0.5 forensic measurement (2026-09-13): records that this symbol's most
+     *  recent debate attempt fail-closed (no real vote cast), so the NEXT evaluateConsensusSerialized()
+     *  run for this symbol - which is what has the real evidence pool - can capture a
+     *  FAIL_CLOSED consensus_debate_predictions row. Read-and-cleared, never left stale across
+     *  unrelated later rounds. */
+    private pendingDebateFailClosed: Map<string, { status: 'FAIL_CLOSED_NO_ROUTE' | 'FAIL_CLOSED_ERROR' | 'FAIL_CLOSED_NO_VERDICT'; providersAttempted: number; providersSucceeded: number; providersFailed: number }> = new Map();
+  
+  // Dynamic weights based on historic performance
+  private agentWeights: Record<string, number> = { ...defaultAgentWeights };
+
+  /**
+   * Register operator CONFIRM BUY/SELL side for this symbol.
+   * If agents later consensus on the opposite side, approval is withheld (fail-closed).
+   */
+  registerManualSideExpectation(symbol: string, side: 'BUY' | 'SELL', ttlMs: number): void {
+    const sym = String(symbol || '').toUpperCase();
+    if (!sym) return;
+    this.manualSideExpectations.set(sym, { side, expiresAt: Date.now() + Math.max(1000, ttlMs) });
+  }
+
+  /**
+   * Real defect found and fixed (2026-09-22, CLI runtime forensics targeted follow-up, Part B -
+   * P1-A heap-growth investigation). `lastDebateStartedAt` was set on every debate start and had
+   * NO delete/eviction anywhere in this file (verified by grep) - unlike every sibling per-symbol
+   * Map in this class (manualSideExpectations, pendingDebates, consensusAggregationTimers), all of
+   * which explicitly delete their own entries. Proven, source-verified unbounded growth: one
+   * entry per distinct symbol that has ever triggered a debate, retained for the life of the
+   * process. Explicitly NOT claimed as the P1-A incident's root cause - that incident's own heap
+   * snapshot showed full traceId-shaped strings (`trace_<SYMBOL>_<epochMs>_<hash>`) dominating,
+   * not bare symbol strings, and a real discovery universe is bounded in the low thousands of
+   * distinct tickers (nowhere near the 18.27M string count the P1-A snapshot found) - but a real,
+   * smaller-scale instance of the same unbounded-Map class of bug, fixed on its own merits.
+   * Opportunistic sweep on every set (amortized, no new timer) - only removes entries already far
+   * past the point they could still affect the cooldown check above (10x the real cooldown - a
+   * generous margin, never touches anything that could still be "cooling").
+   */
+  private recordDebateStarted(symbol: string): void {
+    const now = Date.now();
+    this.lastDebateStartedAt.set(symbol, now);
+    const staleBeforeMs = now - tradingSafety.consensusDebateCooldownMs * 10;
+    for (const [sym, startedAt] of this.lastDebateStartedAt) {
+      if (startedAt < staleBeforeMs) this.lastDebateStartedAt.delete(sym);
+    }
+  }
+
+  private consumeManualSideMismatch(symbol: string, approvedSide: string): string | null {
+    const lock = this.manualSideExpectations.get(symbol);
+    if (!lock) return null;
+    if (Date.now() > lock.expiresAt) {
+      this.manualSideExpectations.delete(symbol);
+      return null;
+    }
+    if (approvedSide === lock.side) {
+      this.manualSideExpectations.delete(symbol);
+      return null;
+    }
+    this.manualSideExpectations.delete(symbol);
+    return `TRADE_REJECTED_CONSENSUS: agents agreed ${approvedSide} but operator requested ${lock.side}`;
+  }
+
+  constructor() {
+    eventBus.on('TRADE_IDEA_GENERATED', (idea) => {
+      // Digital Twin telemetry pulse — UI only; do not start consensus/LLM.
+      if (isTelemetryPulsePayload(idea)) return;
+      this.reviewIdea(idea);
+    });
+
+    // Market-open staged news: confluence ideas already arrive as TRADE_IDEA_GENERATED.
+    // Contradiction is observation-only — never placeOrder; flags sell-the-news dumps.
+    eventBus.on(EVENTS.NEWS_OPEN_CONTRADICTORY_PRICE_ACTION, (payload: any) => {
+      console.log(
+        `[ChiefTrader] CONTRADICTORY_PRICE_ACTION for ${payload?.symbol}: staged news bias rejected by opening ticks`,
+      );
+      this.lastConsensusOutcome = {
+        at: new Date().toISOString(),
+        symbol: String(payload?.symbol || ''),
+        approved: false,
+        side: 'HOLD',
+        independentAgreeingAgents: 0,
+        requiredAgents: MIN_INDEPENDENT_AGREEING_AGENTS,
+        confidence: 0,
+        threshold: CONSENSUS_APPROVAL_THRESHOLD,
+        reason: 'CONTRADICTORY_PRICE_ACTION',
+        agentVotes: [],
+      };
+    });
+
+    eventBus.on(EVENTS.NEWS_OPEN_CONFLUENCE, (payload: any) => {
+      // Soft signal that open confluence fired; consensus still requires quorum via emitTradeIdea path.
+      console.log(
+        `[ChiefTrader] NEWS_OPEN_CONFLUENCE ${payload?.symbol} ${payload?.side} — awaiting independent agent quorum (≥2, ≥0.75)`,
+      );
+    });
+
+    setInterval(() => {
+       this.recordUnresolvedAsNoConsensus().catch(e => console.error('[ChiefTrader] Failed to record NO_CONSENSUS transactions', e));
+       // Real defect found and fixed (2026-08-31 zero-trade consensus-blocker forensic audit):
+       // this used to unconditionally wipe every idea for a symbol with no debate in flight,
+       // regardless of that idea's own age - anchored to wall-clock time since this interval was
+       // registered, not to each idea's receivedAt. A genuinely independent agent's still-fresh
+       // vote (e.g. 10s old, far under consensusIdeaMaxAgeMs) could be discarded here purely
+       // because of its unlucky phase alignment with this fixed-period tick, before a second
+       // agent's vote ever arrived to combine with it - silently capping the real consensus
+       // window well below the documented consensusIdeaMaxAgeMs. Proven with a deterministic
+       // fake-timer test (ChiefTraderAgent.ideaSweepTiming.test.ts) reproducing exactly this
+       // sequence against the real class. Fix: keep an idea if its OWN debate is pending, or if
+       // it is still within consensusIdeaMaxAgeMs by isConsensusIdeaFresh - never lowers or
+       // changes CONSENSUS_APPROVAL_THRESHOLD/MIN_INDEPENDENT_AGREEING_AGENTS, it only stops
+       // discarding still-fresh evidence early.
+       this.recentIdeas = this.recentIdeas.filter(
+         i => (this.pendingDebates.get(i.symbol) || 0) > 0 || isConsensusIdeaFresh(i.receivedAt),
+       );
+    }, runtimeIntervals.chiefTraderIdeaTtlMs);
+    
+    // Sync dynamic weights from database every 10 seconds
+    setInterval(() => this.syncWeights(), runtimeIntervals.chiefTraderWeightSyncMs);
+    this.syncWeights();
+  }
+  
+  async syncWeights() {
+    try {
+        let stats = await db.select().from(agentPerformanceStats).all();
+        if (stats.length === 0) {
+            const defaultAgents = Object.entries(defaultAgentWeights).map(([agentName, currentWeight]) => ({
+                agentName,
+                currentWeight,
+                lastEvaluated: new Date().toISOString(),
+            }));
+            for (const a of defaultAgents) {
+                await db.insert(agentPerformanceStats).values(a);
+            }
+            stats = await db.select().from(agentPerformanceStats).all();
+        }
+        for (const s of stats) {
+            if (s.agentName && s.currentWeight) {
+                this.agentWeights[s.agentName] = s.currentWeight;
+            }
+        }
+    } catch (e) {
+        // ignore error if table is empty
+    }
+}
+
+  private isRiskExit(idea: { agent: string, side: string }): boolean {
+    return idea.agent === RISK_EXIT_AGENT && idea.side === 'SELL';
+  }
+
+  private beginDebate(symbol: string): void {
+    this.pendingDebates.set(symbol, (this.pendingDebates.get(symbol) || 0) + 1);
+  }
+
+  private endDebate(symbol: string): void {
+    const next = (this.pendingDebates.get(symbol) || 1) - 1;
+    if (next <= 0) this.pendingDebates.delete(symbol);
+    else this.pendingDebates.set(symbol, next);
+  }
+
+  private debatePending(symbol: string): boolean {
+    return (this.pendingDebates.get(symbol) || 0) > 0;
+  }
+
+  /**
+   * Schedule (or run immediately) consensus evaluation.
+   * If fewer than minIndependentAgreeingAgents independent votes are present yet, wait
+   * consensusAggregationWindowMs so Technical/Kronos/Quant can land in the same window.
+   * Never lowers 0.75 / min-2 — only delays evaluation.
+   */
+  private scheduleConsensusEvaluation(symbol: string, traceId: string, forceImmediate = false): void {
+    const existing = this.consensusAggregationTimers.get(symbol);
+    if (existing) {
+      clearTimeout(existing);
+      this.consensusAggregationTimers.delete(symbol);
+    }
+
+    const independent = this.recentIdeas.filter(
+      (i) => i.symbol === symbol
+        && isConsensusIdeaFresh(i.receivedAt)
+        && i.agent !== 'ConsensusDebate'
+        && i.agent !== bullBearResearchConfig.bearAgentName,
+    );
+    const windowMs = tradingSafety.consensusAggregationWindowMs;
+    const enoughVotes = independent.length >= MIN_INDEPENDENT_AGREEING_AGENTS;
+
+    if (forceImmediate || enoughVotes || windowMs <= 0) {
+      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.evaluateConsensus(symbol, traceId).catch((e) =>
+        console.error('[ChiefTrader] evaluateConsensus failed', e),
+      );
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      this.consensusAggregationTimers.delete(symbol);
+      this.lastConsensusEvalAt.set(symbol, Date.now());
+      this.evaluateConsensus(symbol, traceId).catch((e) =>
+        console.error('[ChiefTrader] evaluateConsensus failed', e),
+      );
+    }, windowMs);
+    this.consensusAggregationTimers.set(symbol, timer);
+  }
+
+  getLastConsensusOutcome(): LastConsensusOutcome | null {
+    return this.lastConsensusOutcome;
+  }
+
+  /** Last idea per (agent, symbol) wins. Returns true when this replaced an existing vote. */
+  private upsertIdea(idea: any): boolean {
+    const idx = this.recentIdeas.findIndex(i => i.symbol === idea.symbol && i.agent === idea.agent);
+    if (idx >= 0) {
+      this.recentIdeas[idx] = { ...idea, receivedAt: Date.now() };
+      return true;
+    }
+    this.recentIdeas.push({ ...idea, receivedAt: Date.now() });
+    return false;
+  }
+
+  private debateSuccessCount(debateResult: any): number {
+    if (typeof debateResult?.successCount === 'number' && Number.isFinite(debateResult.successCount)) {
+      return Math.max(0, Math.floor(debateResult.successCount));
+    }
+    const results = Array.isArray(debateResult?.results) ? debateResult.results : [];
+    return results.filter((r: any) => r?.status === 'success').length;
+  }
+
+  private debateTelemetry(debateResult: any, successCount: number, verdict: string, confidence: number) {
+    const results = Array.isArray(debateResult?.results) ? debateResult.results : [];
+    const failed = results.filter((r: any) => r?.status && r.status !== 'success');
+    // Phase 4B (SHADOW MODE ONLY, 2026-08-26): real per-model margin math from the SAME
+    // `debateResult.results` AIRouter.routeConsensus() already returns (real decision + real 0-100
+    // confidence per provider - never fabricated). Attached to telemetry only - `confidence` above
+    // (the real, live vote's confidence) is completely unchanged by this.
+    let evidenceAware: ReturnType<typeof computeDebateMarginFromResults> | null = null;
+    try {
+      evidenceAware = computeDebateMarginFromResults(results);
+    } catch (e) {
+      console.error('[ChiefTrader] Shadow debate-margin computation failed (does not affect the real debate vote)', e);
+    }
+    return {
+      providers_attempted: results.length || successCount,
+      providers_succeeded: successCount,
+      providers_failed: failed.length,
+      provider_errors: failed.map((r: any) => `${r.provider || 'unknown'}: ${r.error || r.status}`),
+      final_verdict: verdict,
+      confidence,
+      evidenceAware,
+    };
+  }
+
+  /**
+   * 2026-09-11 consensus fix (real bug, forensically confirmed - see the traceId
+   * trace_GLD_1789148825_bbcf worked example: Kronos raw 0.85 -> calibrated 0.472, a fail-closed
+   * ConsensusDebate HOLD at confidence 0.8 hard-vetoed the round down to 25.1%; excluding the
+   * fail-closed HOLD alone raises it to 47.2%, and combined with raw signal reaches 85%/approved).
+   *
+   * INVARIANT: a fail-closed debate outcome is never directional evidence, regardless of WHICH way
+   * it failed to close. Before this fix, only one of the three ways a debate can fail-close (no
+   * routable provider known in advance - see the noRoutableProviders check above, which already
+   * skips the call entirely and was already correct) actually avoided fabricating a vote. The other
+   * two - routeConsensus() throwing after being attempted, and routeConsensus() resolving with zero
+   * successful providers or no usable verdict - both funnel through this function, and this
+   * function used to call upsertIdea(), turning "the AI produced no answer" into a real, weighted,
+   * confidence-0.8 HOLD vote capable of hard-vetoing an otherwise-qualifying round. That is the
+   * same class of defect the noRoutableProviders comment above already named ("a guaranteed
+   * artifact of an external outage, not a real adversarial review") - it just wasn't applied
+   * consistently to every fail-closed path.
+   *
+   *   AI_RESULT (debate resolved with >=1 successful provider and a real verdict) -> may vote
+   *   AI_NOT_ROUTABLE / AI_TIMEOUT / AI_ERROR / AI_MALFORMED / any other FAIL_CLOSED outcome
+   *     -> never votes, never reaches ChiefTrader's evidence pool, whatever the specific reason
+   *
+   * An actual successfully-produced HOLD verdict (debateSuccessCount() >= 1, handled in the
+   * .then() branch above, not this function) remains real evidence exactly as before - only the
+   * "the model never produced an answer" case is excluded. Telemetry is still recorded (below) so
+   * a fail-closed debate stays observable - it just never becomes a vote.
+   */
+  private pushDebateFailClosed(idea: { traceId: string, symbol: string, currentPrice?: number }, why: string, debateResult?: any): void {
+    const telemetry = this.debateTelemetry(debateResult, 0, 'HOLD', tradingSafety.debateResultConfidence);
+    observeSafe(() => {
+      structuredLogger.info('ai_debate_fail_closed_excluded', {
+        category: 'CONSENSUS',
+        eventType: 'AI_DEBATE_FAIL_CLOSED_EXCLUDED',
+        traceId: idea.traceId,
+        symbol: idea.symbol,
+        reasoning: `why=${why} providersAttempted=${telemetry.providers_attempted} providersSucceeded=${telemetry.providers_succeeded} excludedFromConsensus=true`,
+      });
+    });
+    // ConsensusDebate P0.5 forensic measurement: real AI-reliability telemetry, never a vote (see
+    // this function's own doc comment above and consensus_debate_predictions' schema comment).
+    // 'routeConsensus threw' is the .catch() path (a real error); every other why= string here
+    // comes from the .then() path where the call completed but produced no usable verdict.
+    this.pendingDebateFailClosed.set(idea.symbol, {
+      status: why === 'routeConsensus threw' ? 'FAIL_CLOSED_ERROR' : 'FAIL_CLOSED_NO_VERDICT',
+      providersAttempted: telemetry.providers_attempted,
+      providersSucceeded: telemetry.providers_succeeded,
+      providersFailed: telemetry.providers_failed,
+    });
+  }
+
+  async reviewIdea(idea: { traceId: string, symbol: string, side: string, confidence: number, reasoning: string, agent: string, currentPrice?: number, newsDetails?: any }) {
+    // Autobot-off: do not debate stray entry ideas (no LLM, no CHIEF_APPROVED_IDEA).
+    // PortfolioMonitor risk-exit SELLs still proceed — capital preservation is not an entry vote.
+    if (!isLiveIdeaGenerationEnabled() && !this.isRiskExit(idea)) {
+      console.log(`[ChiefTrader] Ignoring ${idea.agent} ${idea.side} ${idea.symbol} — Autobot off or trading not TRADING_ENABLED`);
+      return;
+    }
+    console.log(`[ChiefTrader] Reviewing ${idea.side} on ${idea.symbol} proposed by ${idea.agent}`);
+    const replacedSameAgent = this.upsertIdea(idea);
+
+    // PortfolioMonitor stop/target/invalidation exits must not wait for a multi-model debate or
+    // for a second independent entry agent - capital preservation is not a consensus question.
+    if (this.isRiskExit(idea)) {
+      this.scheduleConsensusEvaluation(idea.symbol, idea.traceId, true);
+      return;
+    }
+
+    const settings = await db.select().from(schema.settings).limit(1);
+    const adversarialMode = settings.length > 0 ? settings[0].adversarialDebateMode : true;
+    const wantsDebate = adversarialMode && idea.confidence > tradingSafety.debateTriggerConfidence && !idea.agent.includes("Consensus");
+    const debateCooling = Date.now() - (this.lastDebateStartedAt.get(idea.symbol) ?? 0) < tradingSafety.consensusDebateCooldownMs;
+
+    if (wantsDebate && this.debatePending(idea.symbol)) {
+       console.log(`[ChiefTrader] Debate still in flight for ${idea.symbol} - storing ${idea.agent}'s idea and waiting before evaluating consensus.`);
+       return;
+    }
+
+    // Zero-Trade Forensic Audit follow-up: a debate call that has no routable AI provider right
+    // now (every provider auth-failed/quota-exhausted/timed-out) always resolves to
+    // pushDebateFailClosed() - a HOLD vote from 'ConsensusDebate' at debateResultConfidence (0.8).
+    // That vote is real evidence to evaluateConsensus (it can trigger debateSaidHold and drags
+    // down weighted confidence), but it was never actually informed by any model - it is a
+    // guaranteed artifact of an external outage, not a real adversarial review. Skipping the call
+    // entirely when we already know it cannot succeed means consensus is evaluated on the
+    // independent agents' own evidence only - it does NOT add a vote, weaken
+    // CONSENSUS_APPROVAL_THRESHOLD/MIN_INDEPENDENT_AGREEING_AGENTS, or change RiskEngine in any
+    // way; it only removes a fabricated-looking HOLD that a healthy debate would never have cast.
+    // Only checked when a debate would otherwise actually be attempted (wantsDebate && not
+    // cooling) so this never adds an AIRouter round-trip to the common no-debate path.
+    const noRoutableProviders = wantsDebate && !debateCooling
+      && !(await AIRouter.getInstance().hasAnyRoutableProvider());
+
+    if (wantsDebate && debateCooling) {
+       console.log(`[ChiefTrader] Debate cooldown active for ${idea.symbol} - not starting another provider fan-out.`);
+    } else if (noRoutableProviders) {
+       console.log(`[ChiefTrader] Skipping multi-model debate for ${idea.symbol} - no routable AI providers right now. Evaluating consensus on independent-agent evidence only (not injecting a fabricated fail-closed HOLD).`);
+       // ConsensusDebate P0.5 forensic measurement: a real AI-reliability event (no routable
+       // provider at all) - never a vote, same as pushDebateFailClosed's other two cases.
+       this.pendingDebateFailClosed.set(idea.symbol, {
+         status: 'FAIL_CLOSED_NO_ROUTE', providersAttempted: 0, providersSucceeded: 0, providersFailed: 0,
+       });
+    } else if (wantsDebate) {
+        console.log(`[ChiefTrader] Triggering multi-model debate for ${idea.symbol}`);
+        this.beginDebate(idea.symbol);
+        this.recordDebateStarted(idea.symbol);
+
+        const learnedRulesText = await loadDebateLearnedRulesText();
+        const javaInstitutionalContext = await loadJavaInstitutionalDebateContext(idea.symbol);
+        let researchBlock = '';
+        if (isBullBearResearchEnabled()) {
+          try {
+            const router = AIRouter.getInstance();
+            const fieldList = bullBearResearchConfig.requiredFields.join(', ');
+            const context = `Idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}. Return JSON with fields: ${fieldList}. Do not invent numeric market facts.`;
+            const [bullRes, bearRes] = await Promise.all([
+              router.routeTask(bullBearResearchConfig.bullAgentName, `${bullBearResearchConfig.bullRole}\n${context}`, idea.traceId, true),
+              router.routeTask(bullBearResearchConfig.bearAgentName, `${bullBearResearchConfig.bearRole}\n${context}`, idea.traceId, true),
+            ]);
+            const bullNote = parseResearchNote(parseLlmJson(bullRes?.content), 'BULL');
+            const bearNote = parseResearchNote(parseLlmJson(bearRes?.content), 'BEAR');
+            researchBlock = `\n${bullBearResearchConfig.bullAgentName}: ${bullNote.thesisSummary}\n${bullBearResearchConfig.bearAgentName}: ${bearNote.thesisSummary}`;
+            if (bearNote.confidence >= bullBearResearchConfig.bearHoldMinConfidence) {
+              this.upsertIdea({
+                traceId: idea.traceId,
+                symbol: idea.symbol,
+                side: 'HOLD',
+                confidence: bearNote.confidence,
+                currentPrice: idea.currentPrice,
+                reasoning: `[${bullBearResearchConfig.bearAgentName}] ${bearNote.thesisSummary || bearNote.invalidationCondition}`,
+                agent: bullBearResearchConfig.bearAgentName,
+              });
+            }
+          } catch (e) {
+            console.warn('[ChiefTrader] Bull/Bear research failed - debate continues without it', e);
+          }
+        }
+
+        const debatePrompt = `Analyze this trading idea: ${idea.side} ${idea.symbol}. Reason: ${idea.reasoning}.${learnedRulesText}${javaInstitutionalContext}${researchBlock} Actively search for reasons NOT to trade. If the setup is poor, verdict must be HOLD.`;
+
+        AIRouter.getInstance().routeConsensus("ConsensusDebate", debatePrompt, idea.traceId).then(debateResult => {
+           const attempted = Array.isArray(debateResult?.results) ? debateResult.results.length : 0;
+           const successCount = this.debateSuccessCount(debateResult);
+           if (successCount === 0) {
+              console.warn(`[ChiefTrader] Debate for ${idea.symbol}: 0 of ${attempted} providers returned a usable verdict - fail-closed HOLD.`);
+              this.pushDebateFailClosed(idea, `0 of ${attempted} providers returned a usable verdict`, debateResult);
+           } else if (debateResult && debateResult.consensus_verdict) {
+              const consensusSide = debateResult.consensus_verdict;
+              const consensusConfidence = successCount >= 2
+                 ? tradingSafety.debateResultConfidence
+                 : tradingSafety.debateResultConfidence * tradingSafety.debateSingleModelConfidencePenalty;
+              const telemetry = this.debateTelemetry(debateResult, successCount, consensusSide, consensusConfidence);
+
+              this.upsertIdea({
+                 traceId: idea.traceId,
+                 symbol: idea.symbol,
+                 side: consensusSide,
+                 confidence: consensusConfidence,
+                 currentPrice: idea.currentPrice,
+                 reasoning: successCount >= 2
+                    ? `Multi-Model Debate Concluded: ${consensusSide} (Based on ${successCount} successful models; ${telemetry.providers_failed} failed)`
+                    : `Single-Model Debate Concluded: ${consensusSide} (Based on 1 model - confidence discounted, not treated as multi-model consensus)`,
+                 agent: 'ConsensusDebate',
+                 debateTelemetry: telemetry,
+              });
+           } else {
+              console.warn(`[ChiefTrader] Debate for ${idea.symbol} returned no verdict - fail-closed HOLD (do not approve without a debate vote).`);
+              this.pushDebateFailClosed(idea, 'no verdict', debateResult);
+           }
+        }).catch(err => {
+           console.error("[ChiefTrader] Debate failed", err);
+           this.pushDebateFailClosed(idea, 'routeConsensus threw');
+        }).finally(() => {
+           this.endDebate(idea.symbol);
+           if (!this.debatePending(idea.symbol)) {
+             this.lastConsensusEvalAt.delete(idea.symbol);
+             this.scheduleConsensusEvaluation(idea.symbol, idea.traceId, true);
+           }
+        });
+        return;
+    }
+
+    if (this.debatePending(idea.symbol)) {
+       console.log(`[ChiefTrader] Debate still in flight for ${idea.symbol} - storing ${idea.agent}'s idea and waiting before evaluating consensus.`);
+       return;
+    }
+    const lastEval = this.lastConsensusEvalAt.get(idea.symbol) ?? 0;
+    if (replacedSameAgent && Date.now() - lastEval < tradingSafety.consensusEvalMinIntervalMs) {
+       return;
+    }
+    this.scheduleConsensusEvaluation(idea.symbol, idea.traceId, false);
+  }
+
+  private resolveWeight(agentName: string): number {
+    return this.agentWeights[agentName] || (agentName === 'ConsensusDebate' ? agentWeightConfig.consensusDebateWeight : agentWeightConfig.unlistedAgentWeight);
+  }
+
+  /**
+   * Phase 8 of the additive quant layer - assembles the real structured quant detail for
+   * CHIEF_APPROVED_IDEA when the QuantEngine contributed evidence for this approval.
+   * `quantDetail` is attached (via TRADE_IDEA_GENERATED, QuantSignalAgent.ts) to the specific
+   * evidence entry it came from - `evidence` here is a real runtime superset of the typed
+   * `Evidence[]` shape (every idea object retains whatever extra fields it was emitted with, even
+   * though the `Evidence` interface doesn't declare them), so this reads `(e as any).quantDetail`
+   * rather than widening that shared interface for one agent's own extra payload. Returns null
+   * (never a fabricated structure) when no contributing agent this round was QuantEngine.
+   */
+  private buildSupportingQuantDetail(evidence: Evidence[], currentPrice: number | undefined): any {
+    const quantEvidence = evidence.find((e: any) => e.quantDetail) as any;
+    if (!quantEvidence) return null;
+    const { regime, strategyEvaluation, groupedScores, contradictions, aiContradictionAnalysis } = quantEvidence.quantDetail;
+    const structure = regime?.features?.trend?.structure;
+    const side = quantEvidence.side === 'SELL' ? 'SELL' : 'BUY';
+    const structuralLevel = side === 'BUY'
+      ? (structure?.lastSwingHigh ?? strategyEvaluation?.stop?.price ?? null)
+      : (structure?.lastSwingLow ?? strategyEvaluation?.stop?.price ?? null);
+
+    return {
+      regime,
+      selectedStrategy: strategyEvaluation?.strategy ?? null,
+      setupScores: groupedScores,
+      contradictions: [
+        ...(contradictions ?? []),
+        ...(aiContradictionAnalysis?.additionalContradictions ?? []),
+      ],
+      invalidationConditions: strategyEvaluation?.invalidationConditions ?? [],
+      applicableRegimes: strategyEvaluation?.applicableRegimes ?? [],
+      entryRegime: regime?.regime ?? null,
+      structuralLevel,
+      proposedEntry: currentPrice ?? null,
+      // Phase 16F (ARGUS_PHASE16_READINESS_REPORT.md) - real bug fix found via a real TypeScript
+      // error while wiring a live consumer of these two fields for the first time (Phase 16B/16F):
+      // strategyEvaluation.stop/.target are LevelSuggestion objects ({price, basis}), not numbers -
+      // this was passing the whole object through as "proposedStop"/"proposedTarget" since this
+      // method was first written (pre-existing, predates this session's Phase 16 work). Nothing
+      // downstream actually READ these two fields as numbers until Phase 16B, so the bug was real
+      // but silent - it would have stored non-numeric garbage into `trades.quantStopPrice`/
+      // `quantTargetPrice` the first time a real QuantEngine strategy trade executed live.
+      proposedStop: strategyEvaluation?.stop?.price ?? null,
+      proposedTarget: strategyEvaluation?.target?.price ?? null,
+      expectedHoldingPeriod: strategyEvaluation ? STRATEGY_TYPICAL_HOLDING_PERIOD[strategyEvaluation.strategy] ?? null : null,
+      featureSnapshot: quantEvidence.quantDetail.featureSnapshot ?? null,
+      aiReview: aiContradictionAnalysis?.available ? {
+        agreesWithSide: aiContradictionAnalysis.aiAgreesWithSide,
+        scenarioAnalysis: aiContradictionAnalysis.scenarioAnalysis,
+        disagreementNote: aiContradictionAnalysis.disagreementNote,
+      } : null,
+    };
+  }
+
+  /**
+   * Phase 1A - real Beta-Binomial calibration lookup (ConfidenceCalibration.ts). Distinct from
+   * resolveWeight() above: that's a flat, agent-wide scalar from OVERALL win rate; this corrects
+   * THIS SPECIFIC stated confidence against the agent's own real historical accuracy at that
+   * exact confidence level. Falls back to the raw stated confidence unchanged when no real
+   * evaluated history exists yet for this agent/bucket - never fabricates a calibration out of
+   * zero data (the Beta-Binomial prior itself already handles thin samples gracefully; a missing
+   * row just means literally zero real outcomes have ever been evaluated for this bucket).
+   */
+  private async calibrateConfidence(agentName: string, rawConfidence: number): Promise<number> {
+    return (await this.calibrateConfidenceDetailed(agentName, rawConfidence)).decisionConfidence;
+  }
+
+  /**
+   * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2 - explicit separation of
+   * rawSignalStrength / historicalReliability / decisionConfidence). historicalReliability and
+   * decisionConfidence still read the STORED `agentConfidenceCalibration.calibratedConfidence`
+   * column, exactly as the original calibrateConfidence() did.
+   *
+   * 2026-09-29 (second Codex review, item 6 - correcting a real, verified contradiction this
+   * comment previously stated): that stored value is written EXCLUSIVELY by ReflectionEngine.ts's
+   * own raw Beta-Binomial recalculation (its `db.insert(agentConfidenceCalibration)...
+   * onConflictDoUpdate` upsert, ~60s cycle) - a live, uncorrected-for-autocorrelation estimate. The
+   * previous version of this comment said the value was "the output of
+   * CalibrationCandidateBuilder.runCalibrationValidationCycle()'s own promotion mechanism" - that
+   * was inaccurate; verified directly against CalibrationCandidateBuilder.ts's own code and header
+   * comment (`buildCalibrationCandidates()` only ever SELECTs from agentConfidenceCalibration,
+   * never writes it - its "promotion" via `ChampionChallenger.createShadowVersion()`/
+   * `promoteToCandidate()`/`decidePromotion()` writes ONLY to the separate, generic
+   * learning_versions/promotion_decisions/rollback_events ledger). Three genuinely distinct roles,
+   * not one contradictory mechanism:
+   *   1. ReflectionEngine.ts - the real, active WRITER of the raw calibratedConfidence value this
+   *      method reads (STANDARD-tier read path, used here, for every agent/bucket unconditionally).
+   *   2. CalibrationCandidateBuilder.ts - an OBSERVATIONAL, read-only validation pipeline. It
+   *      recomputes a cluster-corrected "candidate" estimate from the same underlying
+   *      prediction_outcomes evidence and runs it through the champion/challenger ledger purely to
+   *      produce an audited CHAMPION/CANDIDATE trust verdict - it never feeds that verdict, or any
+   *      value, back into agentConfidenceCalibration itself.
+   *   3. ModerateTierEvaluator.ts's isAgentBucketCalibrationTrustworthy() - a separate, third
+   *      READER of (2)'s champion ledger (not of agentConfidenceCalibration): it additionally
+   *      requires a statistically-validated CHAMPION to exist for an agent's current bucket before
+   *      the MODERATE consensus tier will trust that agent's calibration at all. This method
+   *      (calibrateConfidenceDetailed, the STANDARD-tier path) does not consult that champion
+   *      ledger and is unaffected by whether one exists.
+   * Wiring (2)'s cluster-corrected candidate value into THIS method's own decisionConfidence
+   * (replacing ReflectionEngine's raw estimate here, not just gating MODERATE-tier trust) remains a
+   * distinct, separate, explicitly-deferred protected-decision-model change - proposed, not active.
+   * calibratedConfidenceForRawSignal() (ConfidenceCalibration.ts) stays available, tested, for that
+   * future pass; not wired into the live decision path here.
+   *
+   * What IS new and safe (unchanged from the original 2026-09-11 pass): rawSignalStrength/
+   * historicalReliability/sampleSize/dataQuality are separately observable per agent per round
+   * (Evidence.calibrationDetail, surfaced in CONSENSUS_TERMINAL_REASON) instead of collapsing into
+   * one opaque number, and dataQuality makes the sample-size question explicit
+   * (isCalibrationSampleSufficient(), reusing researchSafety.json's minPaperTrades/minOosTrades=30
+   * precedent) rather than silently trusting a thin-sample estimate. decisionConfidence's actual
+   * VALUE is unchanged by this comment correction - only the documentation of where it comes from.
+   */
+  private async calibrateConfidenceDetailed(agentName: string, rawConfidence: number): Promise<CalibrationDetail> {
+    try {
+      const bucket = bucketFor(rawConfidence);
+      const rows = await db.select().from(agentConfidenceCalibration).where(
+        and(eq(agentConfidenceCalibration.agentName, agentName), eq(agentConfidenceCalibration.bucketLow, bucket.low))
+      );
+      const row = rows[0];
+      if (!row) {
+        return {
+          rawSignalStrength: rawConfidence,
+          historicalReliability: null,
+          sampleSize: 0,
+          dataQuality: 'NO_CALIBRATION_DATA',
+          decisionConfidence: rawConfidence,
+        };
+      }
+      const sampleSize = row.wins + row.losses;
+      const sufficient = isCalibrationSampleSufficient(row.wins, row.losses, tradingSafety.minCalibrationSampleSize);
+      return {
+        rawSignalStrength: rawConfidence,
+        historicalReliability: row.calibratedConfidence,
+        sampleSize,
+        dataQuality: sufficient ? 'SUFFICIENT_CALIBRATION_DATA' : 'INSUFFICIENT_CALIBRATION_DATA',
+        decisionConfidence: row.calibratedConfidence,
+      };
+    } catch (e) {
+      console.error('[ChiefTrader] Confidence calibration lookup failed - using raw confidence', e);
+      return {
+        rawSignalStrength: rawConfidence,
+        historicalReliability: null,
+        sampleSize: 0,
+        dataQuality: 'NO_CALIBRATION_DATA',
+        decisionConfidence: rawConfidence,
+      };
+    }
+  }
+
+  // Real bug fixed: two risk-exit ideas for the same symbol (e.g. two overlapping
+  // PortfolioMonitor review cycles, or a risk-exit arriving while another is mid-evaluation)
+  // could each independently call evaluateConsensus(), both read this.recentIdeas before either
+  // finished, and both approve a SELL with different traceIds - RiskEngine's own serialization
+  // doesn't prevent this because it queues per-call, not per-symbol, and each of these is a
+  // distinct call. Mirrors RiskEngine.evaluateRisk()'s own promise-chain mutex pattern, but keyed
+  // per-symbol (not global) so unrelated symbols' evaluations never wait on each other.
+  private consensusQueues: Map<string, Promise<void>> = new Map();
+
+  async evaluateConsensus(symbol: string, traceId: string): Promise<void> {
+    const prior = this.consensusQueues.get(symbol) || Promise.resolve();
+    const run = prior.then(() => this.evaluateConsensusSerialized(symbol, traceId));
+    // Never let one evaluation's rejection break the queue for evaluations queued after it.
+    this.consensusQueues.set(symbol, run.then(() => undefined, () => undefined));
+    return run;
+  }
+
+  private async evaluateConsensusSerialized(symbol: string, traceId: string) {
+    if (this.debatePending(symbol)) {
+      console.log(`[ChiefTrader] Refusing to evaluate ${symbol} while an adversarial debate is still in flight.`);
+      return;
+    }
+
+    this.lastConsensusEvalAt.set(symbol, Date.now());
+    const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
+    // Phase 7E (MODERATE tier): raw, pre-calibration confidence per agent - the calibration-trust
+    // bucket lookup must bucket on the SAME raw value calibrateConfidence() itself buckets on.
+    const rawConfidenceByAgent = new Map(relevantIdeas.map(i => [i.agent, i.confidence]));
+    eventBus.emit(EVENTS.CHIEF_CONSENSUS_STARTED, { traceId, symbol, ideaCount: relevantIdeas.length });
+    const riskExitIdeas = relevantIdeas.filter(i => this.isRiskExit(i));
+    const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
+      ...i,
+      ...(await this.calibrateConfidenceDetailed(i.agent, i.confidence).then(detail => ({ confidence: detail.decisionConfidence, calibrationDetail: detail }))),
+      weight: this.resolveWeight(i.agent),
+    }))));
+
+    const result = EvidenceAggregator.aggregate(evidence);
+    const agentsAgreed = result.agreements.map(e => `${e.agent}(wt:${e.weight.toFixed(2)})`).join(", ");
+    const agentsDisagreed = result.disagreements.map(e => `${e.agent}(wt:${e.weight.toFixed(2)})`).join(", ");
+    if (result.disagreements.length > 0) {
+      eventBus.emit(EVENTS.AGENT_DISAGREEMENT, {
+        traceId,
+        symbol,
+        buyEvidence: evidence.filter(e => e.side === 'BUY').map(e => ({ agent: e.agent, confidence: e.confidence, reasoning: e.reasoning })),
+        sellEvidence: evidence.filter(e => e.side === 'SELL').map(e => ({ agent: e.agent, confidence: e.confidence, reasoning: e.reasoning })),
+        holdEvidence: evidence.filter(e => e.side === 'HOLD' && e.confidence > 0).map(e => ({ agent: e.agent, confidence: e.confidence, reasoning: e.reasoning })),
+        disagreementCount: result.disagreements.length,
+        disagreementScore: result.disagreements.length >= 2 ? 'HIGH' : 'MODERATE',
+        winningSide: result.side,
+        winningConfidence: result.confidence,
+      });
+    }
+
+    let approved = false;
+    let reason = "";
+    let approvedSide = result.side;
+    let approvedConfidence = result.confidence;
+    // Prefer the triggering idea's own currentPrice over EvidenceAggregator.aggregate()'s bestPrice,
+    // which picks whichever agreeing evidence happens to sit first in array order - not necessarily
+    // the freshest observation (2026-09-15 finding: a consensus combining a fresh TechnicalAgent tick
+    // with an older, cooldown-throttled KronosEngine forecast picked Kronos's stale price purely
+    // because it appeared first in `evidence`, understating a real BUY's notional by ~5% for
+    // RiskEngine's own capital/sizing gates - real, evidenced via a synthetic certification run, not
+    // synthetic-only: EvidenceAggregator.ts is the same code path every real paper/live consensus
+    // uses). Same fallback-order precedent the risk-exit branch below already applies
+    // (`exitIdea.currentPrice ?? result.currentPrice`) - this is that same correctness principle
+    // applied to the main approval path, not a new pattern.
+    const triggeringIdeaPrice = relevantIdeas.find(i => i.traceId === traceId)?.currentPrice;
+    let approvedPrice = (typeof triggeringIdeaPrice === 'number' && Number.isFinite(triggeringIdeaPrice) && triggeringIdeaPrice > 0)
+      ? triggeringIdeaPrice
+      : result.currentPrice;
+    let approvedEvidence = evidence;
+    let approvedAgreed = agentsAgreed;
+    // Phase 7E/7H (MODERATE consensus tier). Stays 'STRONG' - and moderateEligibility stays null -
+    // for every case where confidence clears CONSENSUS_APPROVAL_THRESHOLD; the STRONG ladder branches
+    // below are otherwise byte-for-byte unchanged.
+    let decisionTier: 'STRONG' | 'MODERATE' | 'QUANT_INDEPENDENT' = 'STRONG';
+    let moderateEligibility: ModerateTierEligibility | null = null;
+
+    // Hoisted out of the `else` branch below (Phase 9I) purely so the post-ladder terminal-reason
+    // classification can reuse these exact same computed values instead of recomputing them - no
+    // behavioral change, same expressions, same scope of use (still only meaningful/used in the
+    // non-risk-exit path).
+    // 2026-09-20 forensic-audit remediation: agent IDENTITY is not the same thing as evidence
+    // INDEPENDENCE. Two structurally-correlated producers (QuantEngine + JavaCoreEnsemble - see
+    // evidenceIndependence.ts's header for the source-verified lineage: both recompute the
+    // identical 5 CORE strategies over the identical bars, just in different languages) previously
+    // satisfied this floor as "2 independent agents" purely by having different name strings. This
+    // was NOT changed to make approval harder or easier as a goal - it makes the EXISTING
+    // MIN_INDEPENDENT_AGREEING_AGENTS requirement measure what it always claimed to measure.
+    const rawAgreeingAgentNames = new Set(
+      result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => e.agent)
+    );
+    const uniqueIndependent = new Set(
+      Array.from(rawAgreeingAgentNames).map(resolveIndependentEvidenceGroup)
+    );
+    const enoughIndependentVoices = uniqueIndependent.size >= MIN_INDEPENDENT_AGREEING_AGENTS;
+    // 2026-09-09, explicit operator override - see this function's own doc comment on
+    // isQuantIndependentQualificationEnabled (config/tradingSafety.json). When enabled, a
+    // QuantEngine idea carrying a real, correlation-adjusted internal-ensemble qualification
+    // (built in QuantSignalAgent.ts's computeInternalEnsembleQualification(), backed by
+    // QuantEnsembleEngine.java - never a naive vote count) can satisfy the independent-voice floor
+    // on its own, at a bar strictly ABOVE the normal 2-agent minimum (minQuantIndependentFamilies
+    // distinct strategy families, minQuantIndependentEffectiveCount effective independent count).
+    // Every other requirement below (STRONG confidence, hard vetoes, RiskEngine, OMS) is completely
+    // unchanged - this only ever substitutes for the SECOND agent, never for confidence or safety.
+    const quantIndependentQualification = evidence.find(
+      (e: any) => e.agent === 'QuantEngine' && e.side === result.side && e.quantDetail?.internalEnsemble?.qualifiesAsIndependent === true,
+    ) as any;
+    const quantIndependentEligible = isQuantIndependentQualificationEnabled() && !!quantIndependentQualification;
+    const debateSaidHold = evidence.some(e => e.agent === 'ConsensusDebate' && e.side === 'HOLD');
+    const bearSaidHold = evidence.some(e => e.agent === bullBearResearchConfig.bearAgentName && e.side === 'HOLD');
+    const aiContradicts = evidence.some((e: any) => {
+      const review = e.quantDetail?.aiContradictionAnalysis;
+      return review?.available === true && review.aiAgreesWithSide === false;
+    });
+
+    if (riskExitIdeas.length > 0) {
+      const exitIdea = riskExitIdeas[riskExitIdeas.length - 1];
+      approved = true;
+      approvedSide = 'SELL';
+      approvedConfidence = exitIdea.confidence;
+      approvedPrice = exitIdea.currentPrice ?? result.currentPrice;
+      reason = `[Risk Exit] ${exitIdea.reasoning}`;
+      approvedAgreed = `${RISK_EXIT_AGENT}(wt:${this.resolveWeight(RISK_EXIT_AGENT).toFixed(2)})`;
+    } else {
+      if (result.side === 'HOLD' || result.confidence <= CONSENSUS_APPROVAL_THRESHOLD) {
+        reason = `[NO TRADE] Confidence ${(result.confidence*100).toFixed(1)}% did not clear ${(CONSENSUS_APPROVAL_THRESHOLD*100).toFixed(0)}%.`;
+
+        // Phase 7E/7H MODERATE tier: only ever reached here, i.e. only for cases that already
+        // failed the STRONG check above - never runs, never changes anything, when confidence
+        // clears CONSENSUS_APPROVAL_THRESHOLD. Gated on isConsensusModerateTierEnabled() BEFORE
+        // doing anything else (not just inside evaluateModerateTierEligibility) so that with the
+        // flag off - the default - this whole block is a no-op and the pre-existing NO-TRADE
+        // rejection reason text is completely unchanged, satisfying "MODERATE-disabled = old
+        // behavior" exactly, not just in decision outcome. Reuses the SAME enoughIndependentVoices/
+        // debateSaidHold/bearSaidHold/aiContradicts this evaluation already computed (no duplicated
+        // veto logic), plus a NEW per-agent calibration-trust gate. See ModerateTierEvaluator.ts.
+        if (isConsensusModerateTierEnabled() && result.side !== 'HOLD' && result.confidence >= tradingSafety.moderateMinConfidence) {
+          moderateEligibility = await evaluateModerateTierEligibility({
+            side: result.side,
+            confidence: result.confidence,
+            enoughIndependentVoices,
+            debateSaidHold,
+            bearSaidHold,
+            aiContradicts,
+            agreeingAgents: result.agreements
+              .filter(e => e.agent !== 'ConsensusDebate')
+              .map(e => ({ agent: e.agent, rawConfidence: rawConfidenceByAgent.get(e.agent) ?? e.confidence })),
+          });
+          if (moderateEligibility.eligible) {
+            approved = true;
+            decisionTier = 'MODERATE';
+            reason = `[Chief Consensus Approval - MODERATE] Confidence ${(result.confidence*100).toFixed(1)}% cleared the MODERATE floor (${(tradingSafety.moderateMinConfidence*100).toFixed(0)}%) with a statistically-validated calibration trust gate. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${result.reasoning}`;
+          } else {
+            reason = `${reason} MODERATE tier also declined: ${moderateEligibility.reason} (${moderateEligibility.reasonCode})`;
+          }
+        }
+      } else if (!enoughIndependentVoices && !quantIndependentEligible) {
+        reason = `[NO TRADE] Only ${uniqueIndependent.size} independent evidence group(s) agreed on ${result.side} (need ${MIN_INDEPENDENT_AGREEING_AGENTS}) from producers [${Array.from(rawAgreeingAgentNames).join(', ') || 'none'}] resolving to groups [${Array.from(uniqueIndependent).join(', ') || 'none'}]. A single voice is not confirmation, and structurally-correlated producers (e.g. QuantEngine + JavaCoreEnsemble) count once.`;
+      } else if (debateSaidHold) {
+        reason = `[NO TRADE] Adversarial debate verdict was HOLD - the thesis did not survive a search for reasons not to trade.`;
+      } else if (bearSaidHold) {
+        reason = `[NO TRADE] ${bullBearResearchConfig.bearAgentName} found a high-confidence case against the trade.`;
+      } else if (aiContradicts) {
+        reason = `[NO TRADE] Quant AI contradiction review disagrees with the deterministic side - thesis challenged, not overwritten.`;
+      } else if (!enoughIndependentVoices && quantIndependentEligible) {
+        approved = true;
+        decisionTier = 'QUANT_INDEPENDENT';
+        const ie = quantIndependentQualification.quantDetail.internalEnsemble;
+        reason = `[Chief Consensus Approval - QUANT_INDEPENDENT] QuantEngine's own internal ensemble stood in for a second agent (explicit operator override, 2026-09-09): ${ie.familyCount} independent strategy families [${ie.agreeingFamilies.join(', ')}], effectiveIndependentCount ${ie.effectiveIndependentCount.toFixed(2)} (correlation-adjusted, QuantEnsembleEngine.java). Final Confidence: ${(result.confidence*100).toFixed(1)}%. Rationale: ${result.reasoning}`;
+      } else {
+        approved = true;
+        reason = `[Chief Consensus Approval] Strong agreement. Final Confidence: ${(result.confidence*100).toFixed(1)}%. Agreed: [${agentsAgreed}]. Disagreed: [${agentsDisagreed || 'None'}]. Rationale: ${result.reasoning}`;
+      }
+    }
+
+    // Phase 9I ("Why No Trade?" diagnostic): pure relabeling of the branches just taken above -
+    // never itself gates approval. Risk-exit ideas already have their own unambiguous outcome
+    // (always approved) so they are exempt from this classification.
+    const holdIsDataUnavailable = result.side === 'HOLD' && evidence.some(
+      (e) => e.side === 'HOLD' && typeof e.reasoning === 'string' && e.reasoning.includes('DATA_UNAVAILABLE'),
+    );
+    let terminalReasonCode: ConsensusTerminalReasonCode = riskExitIdeas.length > 0
+      ? 'CONSENSUS_APPROVED'
+      : classifyConsensusTerminalReason({
+          approved,
+          side: result.side,
+          confidence: result.confidence,
+          strongThreshold: CONSENSUS_APPROVAL_THRESHOLD,
+          enoughIndependentVoices,
+          debateSaidHold,
+          bearSaidHold,
+          aiContradicts,
+          holdIsDataUnavailable,
+          moderateReasonCode: moderateEligibility?.reasonCode,
+        });
+
+    const sideMismatch = this.consumeManualSideMismatch(symbol, approvedSide);
+    if (approved && sideMismatch) {
+      approved = false;
+      reason = sideMismatch;
+      terminalReasonCode = 'AGENT_HOLD';
+      eventBus.emit(EVENTS.TRADE_REJECTED_CONSENSUS, {
+        traceId,
+        symbol,
+        side: approvedSide,
+        confidence: approvedConfidence,
+        reason: sideMismatch,
+      });
+    }
+
+    this.lastConsensusOutcome = {
+      at: new Date().toISOString(),
+      symbol,
+      approved,
+      side: approvedSide,
+      independentAgreeingAgents: uniqueIndependent.size,
+      requiredAgents: MIN_INDEPENDENT_AGREEING_AGENTS,
+      confidence: approvedConfidence,
+      threshold: CONSENSUS_APPROVAL_THRESHOLD,
+      reason: reason || `Consensus ${(approvedConfidence * 100).toFixed(1)}% vs threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%`,
+      agentVotes: evidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence })),
+      decisionTier,
+      terminalReasonCode,
+    };
+
+    // ConsensusDebate P0.5 forensic measurement (2026-09-13, OBSERVATION ONLY - never changes
+    // `approved`/`result` above, which are already fully resolved by this point). Captures either
+    // a real debate vote (ConsensusDebate present in `evidence`) or a fail-closed reliability event
+    // recorded earlier this same round by pushDebateFailClosed()/the noRoutableProviders branch -
+    // never both, and never fabricated when debate was not invoked at all this round.
+    {
+      const debateEvidence = evidence.find((e) => e.agent === 'ConsensusDebate');
+      const pendingFailClosed = this.pendingDebateFailClosed.get(symbol);
+      if (debateEvidence || pendingFailClosed) {
+        this.pendingDebateFailClosed.delete(symbol);
+        const regimeCarrier = evidence.find((e: any) => typeof e.regime === 'string');
+        void persistConsensusDebateCapture({
+          traceId,
+          symbol,
+          evidence,
+          result,
+          withDebateApproved: approved,
+          debateTelemetry: (debateEvidence as any)?.debateTelemetry,
+          failClosed: pendingFailClosed,
+          marketRegime: (regimeCarrier as any)?.regime ?? null,
+        }).catch((e) => console.error('[ChiefTrader] ConsensusDebate forensic capture failed', e));
+      }
+    }
+
+    // Unconditional COMPLETED signal (unlike CHIEF_APPROVED_IDEA, which only fires on approval) -
+    // lets live animation show the Chief Trader node finishing its evaluation even when the
+    // result is "not yet, waiting for more evidence," not just on a successful approval.
+    eventBus.emit(EVENTS.CHIEF_CONSENSUS_COMPLETED, {
+      traceId,
+      symbol,
+      approved,
+      confidence: approvedConfidence,
+      side: approvedSide,
+      threshold: CONSENSUS_APPROVAL_THRESHOLD,
+      reason: reason || undefined,
+      decisionTier,
+      terminalReasonCode,
+    });
+
+    // Phase 9 ("Why No Trade?" aggregated observability): the generic EventBus->observability_events
+    // bridge only persists {symbol} for DESK_NO_TRADE/CHIEF_CONSENSUS_COMPLETED (confirmed via direct
+    // DB inspection, 2026-08-27 - every one of 35k+ historical DESK_NO_TRADE rows carries only
+    // {"symbol":...}), so terminalReasonCode/decisionTier/independent-agent-count were being computed
+    // but never actually queryable from the DB. This is a DEDICATED, explicit structured-log record
+    // (own eventType, unconditional - every round, not just MODERATE ones) so the CLI/API aggregate
+    // report below can be built from real, persisted data rather than re-deriving it from prose.
+    observeSafe(() => {
+      structuredLogger.info('consensus_terminal_reason', {
+        category: 'CONSENSUS',
+        eventType: 'CONSENSUS_TERMINAL_REASON',
+        symbol,
+        traceId,
+        decisionId: traceId,
+        decisionTier,
+        terminalReasonCode,
+        approved,
+        rawConfidence: result.confidence,
+        finalConfidence: approvedConfidence,
+        // 2026-09-20: independentAgentCount is the RAW distinct-producer-name count (kept for
+        // backward-compat with existing forensic queries) - it is NOT the value that gates
+        // approval. independentEvidenceGroupCount (evidenceIndependence.ts) is: structurally
+        // correlated producers (QuantEngine + JavaCoreEnsemble) collapse to one group there.
+        independentAgentCount: rawAgreeingAgentNames.size,
+        independentEvidenceGroupCount: uniqueIndependent.size,
+        requiredIndependentEvidenceGroups: MIN_INDEPENDENT_AGREEING_AGENTS,
+        evidenceGroups: Array.from(rawAgreeingAgentNames).map(agent => ({ agent, group: resolveIndependentEvidenceGroup(agent) })),
+        // 2026-09-23 (Evidence-family/independence roadmap item #1): purely observational
+        // methodology-family/data-dependency classification per agreeing agent - never read by
+        // approval math, additive only. See evidenceFamilyTaxonomy.ts's own doc comment.
+        evidenceFamilies: Array.from(rawAgreeingAgentNames).map(agent => classifyEvidenceFamily(agent)),
+        quantIndependentQualificationContributed: decisionTier === 'QUANT_INDEPENDENT',
+        participatingAgents: evidence.map(e => ({
+          agent: e.agent,
+          side: e.side,
+          confidence: e.confidence,
+          rawSignalStrength: e.calibrationDetail?.rawSignalStrength ?? null,
+          historicalReliability: e.calibrationDetail?.historicalReliability ?? null,
+          calibrationSampleSize: e.calibrationDetail?.sampleSize ?? null,
+          calibrationDataQuality: e.calibrationDetail?.dataQuality ?? null,
+        })),
+        moderateReasonCode: moderateEligibility?.reasonCode,
+      });
+    });
+
+    // Phase 7E/7H explainability (MODERATE tier only - STRONG-path evaluations never populate
+    // moderateEligibility, so this never fires for the unchanged STRONG path).
+    if (moderateEligibility) {
+      const explain = moderateEligibility;
+      observeSafe(() => {
+        structuredLogger.info('moderate_tier_evaluated', {
+          category: 'CONSENSUS',
+          eventType: 'MODERATE_TIER_EVALUATED',
+          symbol,
+          decisionTier,
+          rawConsensus: result.confidence,
+          calibratedConsensus: approvedConfidence,
+          independentAgentCount: rawAgreeingAgentNames.size,
+          independentEvidenceGroupCount: uniqueIndependent.size,
+          participatingAgents: evidence.map(e => e.agent),
+          moderateReasonCode: explain.reasonCode,
+          moderateReason: explain.reason,
+          calibrationTrustDetails: explain.calibrationDetails,
+          paperTradingOnly: process.env.PAPER_TRADING_ONLY !== 'false',
+        });
+      });
+    }
+
+    tracingService.logChiefConsensus({
+      traceId,
+      symbol,
+      approved,
+      consensusScore: approvedConfidence,
+      consensusThreshold: CONSENSUS_APPROVAL_THRESHOLD,
+      terminalReason: reason || `Consensus ${(approvedConfidence * 100).toFixed(1)}% vs threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%`,
+      // Same variable already computed above (line ~954) and already logged verbatim into the
+      // `consensus_terminal_reason` structured event - not a new parse/derivation.
+      terminalReasonCode,
+      votingMatrix: approvedEvidence.map(e => ({
+        agent: e.agent,
+        side: e.side,
+        confidence: e.confidence,
+        weight: e.weight,
+        agreed: e.side === approvedSide,
+        sourceTraceId: e.traceId,
+      })),
+    });
+
+    // Phase 4B (Evidence-Aware Consensus, SHADOW MODE ONLY, 2026-08-26): computes a parallel,
+    // explainable alternative decision from the SAME `evidence` this evaluation already gathered,
+    // for comparison/persistence only. Never reads or writes `approved`/`approvedSide`/
+    // `approvedConfidence`/`reason` - the real decision above is completely unaffected. Wrapped so
+    // a bug here can never throw into the live consensus path.
+    try {
+      const shadowVotes = evidence.map(classifyVote);
+      const shadowWeights: Record<string, number> = {};
+      for (const e of evidence) shadowWeights[e.agent] = e.weight;
+      const shadow = computeShadowConsensus(shadowVotes, shadowWeights, CONSENSUS_APPROVAL_THRESHOLD);
+      // 2026-09-11 addition, SHADOW MODE ONLY, same non-invasive contract as `shadow` above: a
+      // second parallel variant using each agent's RAW, pre-calibration confidence
+      // (rawConfidenceByAgent, already computed above for the MODERATE-tier gate - not a new
+      // fetch) instead of the calibration-substituted value. Tests the "calibration-as-ceiling"
+      // hypothesis directly - does agent confidence, before being replaced by that agent's own
+      // historical accuracy, actually support approvals the live model's calibration ceiling
+      // blocks? Same computeShadowConsensus() math, same HOLD-does-not-dilute fix `shadow` already
+      // validated - only the confidence INPUT differs. Never reads or writes the real decision.
+      const rawSignalEvidence: Evidence[] = evidence.map(e => ({
+        ...e,
+        confidence: rawConfidenceByAgent.get(e.agent) ?? e.confidence,
+      }));
+      const rawSignalVotes = rawSignalEvidence.map(classifyVote);
+      const rawSignalShadow = computeShadowConsensus(rawSignalVotes, shadowWeights, CONSENSUS_APPROVAL_THRESHOLD);
+      recordConsensusModelComparison({
+        traceId, symbol,
+        legacyDecision: approvedSide, legacyApproved: approved, legacyConfidence: approvedConfidence,
+        threshold: CONSENSUS_APPROVAL_THRESHOLD, shadow, rawSignalShadow,
+      });
+    } catch (e) {
+      console.error('[ChiefTrader] Shadow consensus computation failed (does not affect the real decision)', e);
+    }
+
+    for (const e of approvedEvidence) {
+      if (e.side !== 'BUY' && e.side !== 'SELL' && e.side !== 'HOLD') continue;
+      recordPitLive({
+        kind: e.agent === 'NewsAgent' ? 'NEWS_AGENT' : 'AGENT_REASONING',
+        symbol,
+        agent: e.agent,
+        side: e.side,
+        confidence: e.confidence,
+        payloadJson: JSON.stringify({ traceId, reasoning: e.reasoning, currentPrice: e.currentPrice }),
+        source: 'ChiefTraderAgent',
+      });
+    }
+    recordPitLive({
+      kind: 'CHIEF_TRADER',
+      symbol,
+      agent: 'ChiefTrader',
+      side: approved ? approvedSide : 'HOLD',
+      confidence: approvedConfidence,
+      payloadJson: JSON.stringify({ traceId, approved, reason }),
+      source: 'ChiefTraderAgent',
+    });
+
+    if (approved) {
+       // Real bug found and fixed this pass: this used to wipe every recentIdeas entry matching
+       // `symbol`, not just the ones this evaluation actually snapshotted into `relevantIdeas` at
+       // the top of this function. Between that snapshot and here, this function awaited
+       // calibrateConfidence() per idea - a genuinely independent agent's TRADE_IDEA_GENERATED for
+       // the same symbol could arrive and be pushed via upsertIdea() during that window (queued
+       // behind this evaluation by consensusQueues, but its *idea* still landed in recentIdeas
+       // immediately via reviewIdea()). A blanket symbol-wipe here silently discarded that vote
+       // before the queued follow-up evaluation ever got to see it. relevantIdeas holds the exact
+       // object references snapshotted at evaluation start, so filtering on membership in it
+       // removes only what this evaluation actually considered.
+       this.recentIdeas = this.recentIdeas.filter(i => !relevantIdeas.includes(i));
+       this.logAndResetInterimConsensusTally(symbol, 'APPROVED');
+
+       const transactionId = await recordConsensusTransaction({
+         symbol,
+         side: approvedSide,
+         weightedConfidence: approvedConfidence,
+         threshold: CONSENSUS_APPROVAL_THRESHOLD,
+         approved: true,
+         reasoning: reason,
+         // Consensus Quality Audit (2026-08-25): this was previously omitted, so debate_used
+         // silently defaulted to false in the DB even on rounds ConsensusDebate actually voted in.
+         debateUsed: approvedEvidence.some(e => e.agent === 'ConsensusDebate'),
+         evidence: approvedEvidence.map(e => ({
+           sourceTraceId: e.traceId,
+           agent: e.agent,
+           side: e.side,
+           confidence: e.confidence,
+           weight: e.weight,
+           reasoning: e.reasoning,
+           currentPrice: e.currentPrice,
+         })),
+       });
+
+       eventBus.emitChiefApproval({
+         transactionId,
+         traceId: traceId,
+         symbol: symbol,
+         side: approvedSide,
+         confidence: approvedConfidence,
+         currentPrice: approvedPrice,
+         reasoning: reason,
+         agentsContext: approvedAgreed,
+         evidence: approvedEvidence.map(e => ({ agent: e.agent, side: e.side, confidence: e.confidence, weight: e.weight, reasoning: e.reasoning })),
+         supportingQuantDetail: this.buildSupportingQuantDetail(approvedEvidence, approvedPrice),
+         decisionTier,
+       });
+
+       eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'APPROVED', side: approvedSide, reason });
+
+       // Non-blocking, optional independent second opinion (OPENALICE_INTEGRATION_AUDIT.md Phase 3/4).
+       // Fire-and-forget: never awaited, never gates this approval or the RiskEngine call that
+       // follows it. A no-op when OpenAlice isn't configured (see OpenAliceVerificationService).
+       // Its eventual result (which can take minutes) only ever feeds FUTURE decisions.
+       const openAliceTrigger = shouldTriggerOpenAliceVerification({
+         confidence: approvedConfidence,
+         disagreementCount: result.disagreements.length,
+       });
+       if (openAliceTrigger.shouldVerify && approvedSide !== 'HOLD' && riskExitIdeas.length === 0) {
+         openAliceVerificationService.requestVerification({
+           traceId,
+           symbol,
+           side: approvedSide,
+           mode: 'TRADE_VERIFICATION',
+           argusConfidence: approvedConfidence,
+           argusReasoning: reason,
+         });
+       }
+    } else {
+       console.log(`[ChiefTrader] NO TRADE on ${symbol}. ${reason || `Current confidence: ${(result.confidence*100).toFixed(1)}%`}`);
+       // See interimEvaluationsSinceLastPersist's own doc comment - this cycle will NOT get its own
+       // consensus_decisions row (only recordUnresolvedAsNoConsensus's ~60s sweep persists one, at
+       // most, per symbol) - tallied here so that collapse ratio is observable, not reconstructed.
+       this.interimEvaluationsSinceLastPersist.set(symbol, (this.interimEvaluationsSinceLastPersist.get(symbol) ?? 0) + 1);
+       try {
+         const { recordCampaignNearMissConsensus } = await import('./campaignEffortTelemetry');
+         recordCampaignNearMissConsensus(approvedConfidence);
+       } catch { /* fail-open */ }
+       eventBus.emit(EVENTS.DESK_NO_TRADE, {
+         traceId, symbol, side: approvedSide, confidence: approvedConfidence, reason,
+         decisionTier,
+         moderateReasonCode: moderateEligibility?.reasonCode,
+         terminalReasonCode,
+       });
+       eventBus.emit(EVENTS.TRADE_LIFECYCLE, { traceId, symbol, state: 'NO_TRADE', reason });
+    }
+  }
+
+  /** See interimEvaluationsSinceLastPersist's own doc comment. Called at every point this class
+   *  actually persists a consensus_decisions row for a symbol - logs how many intermediate,
+   *  never-individually-persisted evaluateConsensusSerialized() cycles preceded it, then resets. */
+  private logAndResetInterimConsensusTally(symbol: string, outcome: 'APPROVED' | 'NO_CONSENSUS'): void {
+    const interimCount = this.interimEvaluationsSinceLastPersist.get(symbol) ?? 0;
+    this.interimEvaluationsSinceLastPersist.delete(symbol);
+    if (interimCount === 0) return;
+    observeSafe(() => {
+      structuredLogger.info('consensus_interim_evaluations_collapsed', {
+        category: 'CONSENSUS',
+        eventType: 'CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED',
+        symbol,
+        outcome,
+        interimEvaluationCount: interimCount,
+      });
+    });
+  }
+
+  /**
+   * Called just before the 60s recentIdeas clear. Any symbol still holding accumulated ideas
+   * that never crossed CONSENSUS_APPROVAL_THRESHOLD gets a real NO_CONSENSUS transaction row -
+   * otherwise that attempt (and the evidence behind it) would simply vanish with no record,
+   * making "why didn't Argus trade AAPL even though 3 agents said BUY" unanswerable.
+   */
+  private async recordUnresolvedAsNoConsensus() {
+    const symbols = Array.from(new Set(this.recentIdeas.map(i => i.symbol)));
+    for (const symbol of symbols) {
+      if (this.debatePending(symbol)) continue;
+      const relevantIdeas = this.recentIdeas.filter(i => i.symbol === symbol && isConsensusIdeaFresh(i.receivedAt));
+      if (relevantIdeas.length === 0) continue;
+      const evidence: Evidence[] = coalesceEvidenceByAgent(await Promise.all(relevantIdeas.map(async i => ({
+        ...i,
+        ...(await this.calibrateConfidenceDetailed(i.agent, i.confidence).then(detail => ({ confidence: detail.decisionConfidence, calibrationDetail: detail }))),
+        weight: this.resolveWeight(i.agent),
+      }))));
+      const result = EvidenceAggregator.aggregate(evidence);
+      this.logAndResetInterimConsensusTally(symbol, 'NO_CONSENSUS');
+
+      await recordConsensusTransaction({
+        symbol,
+        side: result.side,
+        weightedConfidence: result.confidence,
+        threshold: CONSENSUS_APPROVAL_THRESHOLD,
+        approved: false,
+        reasoning: `No consensus reached before the evaluation window closed. Best side: ${result.side} at ${(result.confidence * 100).toFixed(1)}% (threshold ${(CONSENSUS_APPROVAL_THRESHOLD * 100).toFixed(0)}%). Independent evidence groups: ${new Set(result.agreements.filter(e => e.agent !== 'ConsensusDebate').map(e => resolveIndependentEvidenceGroup(e.agent))).size}.`,
+        debateUsed: evidence.some(e => e.agent === 'ConsensusDebate'),
+        evidence: evidence.map(e => ({
+          sourceTraceId: e.traceId,
+          agent: e.agent,
+          side: e.side,
+          confidence: e.confidence,
+          weight: e.weight,
+          reasoning: e.reasoning,
+          currentPrice: e.currentPrice,
+        })),
+      });
+    }
+  }
+
+}
+export const chiefTrader = new ChiefTraderAgent();
+
+

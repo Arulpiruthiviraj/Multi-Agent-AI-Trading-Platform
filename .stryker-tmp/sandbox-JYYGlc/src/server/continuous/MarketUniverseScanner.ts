@@ -1,0 +1,938 @@
+/**
+ * Broad-universe candidate source for OpportunityDiscovery. Default OFF
+ * (ARGUS_BROAD_UNIVERSE_ENABLED). Read-only Alpaca metadata/market-data calls only - never
+ * imports EventBus, OMS, RiskEngine, or BrokerManager, and never emits TRADE_IDEA_GENERATED or
+ * WATCHLIST_SUBSCRIBE_REQUESTED itself. Produces a plain, liquidity/price/spread-screened symbol
+ * list that OpportunityDiscovery.getOpportunityScanUniverse() merges in and runs through the
+ * exact same evaluateOpportunityCandidate() gate the fixed seed/watch lists already go through.
+ *
+ * Three-stage funnel, each stage cheaper than the last relative to a full market scan:
+ *  1) fetchTradableAssets() - Alpaca's real tradable-assets list (thousands of rows), cached for
+ *     broadUniverseAssetsCacheTtlMs since exchange listings change rarely intraday.
+ *  2) screenAssets() - batched market-data snapshots (price/1-day volume/spread) against every
+ *     tradable asset, filtered by passesScreen() down to a much smaller shortlist.
+ *  3) fetchAvgDailyVolumeShares() - only for stage-2 survivors (not all thousands of assets): a
+ *     real broadUniverseAdvLookbackDays-day average volume in shares via Alpaca's batched
+ *     multi-symbol bars endpoint - a genuine ADV, not a fabricated one from a single day's bar.
+ *     Symbols a batch fails to return bars for are excluded (fail-closed), not assumed liquid.
+ * Final candidate list is ranked by dollar volume descending and capped at broadUniverseMaxCandidates.
+ */
+// @ts-nocheck
+
+import { continuousIntelligence, isBroadUniverseEnabled, isMoversEnabled, isNewsCatalystDiscoveryEnabled } from '../config/continuousIntelligence';
+import { listRecentNewsCatalysts } from '../services/NewsCatalystStore';
+import { networkEndpoints } from '../config/networkEndpoints';
+import { alpacaFetch } from '../core/alpacaTls';
+import { logErrorSafely } from '../core/SecretRedaction';
+import { recordPrediction } from '../services/ModelPerformanceTracker';
+import { withDiscoveryCircuitBreaker, resetDiscoveryCircuitBreakersForTests } from '../core/discoveryHttpCircuitBreaker';
+import { normalizeSymbols } from '../core/symbolNormalization';
+import { FmpBudget } from '../services/FmpBudget';
+import { dataTransportLimits } from '../config/dataTransportLimits';
+import { getTradingDateStr, tradingWallTimeToIso } from '../core/TradingCalendar';
+import { validateDiscoveryGap, type DiscoveryGapEvidence } from './discoveryGapEvidence';
+export { validateDiscoveryGap } from './discoveryGapEvidence';
+import {
+  logDiscoveryCandidateDecision,
+  type DiscoveryRejectReason,
+  type ScreenRejectReason,
+} from '../observability/discoveryCandidateLedger';
+
+interface AlpacaAsset {
+  symbol: string;
+  exchange: string;
+  status: string;
+  tradable: boolean;
+  class: string;
+}
+
+interface AlpacaSnapshot {
+  symbol: string;
+  price: number;
+  dollarVolume: number;
+  spreadBps: number | null;
+  /** Phase C (2026-09-02): today's real intraday gap vs the session open, e.g. 0.05 = +5%. Reuses
+   *  the SAME already-fetched Alpaca snapshot response (dailyBar.o) - zero new API call, zero new
+   *  cost. Null when the response carries no real open price to compute it from. */
+  gapPct: number | null;
+  gapEvidence: DiscoveryGapEvidence & { reason: string };
+  /** Phase 27 (2026-09-02): raw today's-session share volume from the SAME already-fetched
+   *  dailyBar.v used to compute dollarVolume above - kept separately so it can later be divided by
+   *  the real ADV (fetched only for stage-2 survivors) to get a relative-volume ratio. */
+  volume: number;
+}
+
+export interface BroadUniverseStats {
+  ran: boolean;
+  enabled: boolean;
+  assetsFetched: number;
+  screened: number;
+  candidates: number;
+  error: string | null;
+  at: string;
+  /** 2026-09-11 addition: cheap, aggregate stage-1 (price/dollar-volume/spread/no-snapshot-data)
+   *  rejection counts - computed from data this cycle already fetched, zero new API calls. Real
+   *  per-symbol stage-1 logging was deliberately not added (thousands of assets, refreshed every
+   *  15min, would be a genuine observability-volume cost) - this aggregate answers "how many
+   *  candidates never got past stage 1, and roughly why" without that cost. For a SPECIFIC
+   *  symbol's own stage-1/stage-2 outcome, use getBroadUniverseSymbolLookup() instead. */
+  stage1RejectionCounts: Record<ScreenRejectReason | 'NO_SNAPSHOT_DATA', number>;
+}
+
+/** Per-symbol result from the most recently completed broad-universe cycle (2026-09-11 addition) -
+ *  answers "was this specific symbol seen at all, and exactly where did it stop" without needing
+ *  full per-symbol logging for the whole thousands-of-assets universe. Cleared/replaced on every
+ *  refreshBroadUniverseCache() call; null for a symbol this cycle never touched at all (either not
+ *  in the tradable-assets universe, or the scan hasn't run since boot). */
+export interface BroadUniverseSymbolLookup {
+  inTradableAssetsUniverse: boolean;
+  stage1Result: ScreenRejectReason | 'NO_SNAPSHOT_DATA' | 'PASSED' | null;
+  stage2Result: 'ADMITTED' | 'RANK_CAP' | 'ADV_BELOW_FLOOR' | 'ADV_DATA_UNAVAILABLE' | null;
+}
+
+let assetsCache: { fetchedAt: number; symbols: string[] } | null = null;
+// 2026-09-16 (subscription-starvation fix): dollarVolumeBySymbol carries real, already-fetched
+// dollar volume alongside the admitted symbol list - previously discarded at the `.map((s) =>
+// s.symbol)` step, forcing any downstream consumer needing volume (the new
+// BroadUniverseSubscriptionAllocator) to either re-fetch it or fall back to raw insertion order.
+// 2026-09-29 (discovery-to-evaluation coverage fix): gapPctBySymbol carries the SAME real,
+// already-fetched gapPct (dailyBar.o vs current price, see AlpacaSnapshot.gapPct above) alongside
+// the admitted symbol list - previously computed every cycle (used for the Discovery Lineage
+// Ledger's gapMover tag and Phase 5 outcome-learning probe) but discarded at the `.map((s) =>
+// s.symbol)` step, exactly like dollarVolume was before the 2026-09-16 fix above. Without this, a
+// broad-universe-only admission (never part of SnapshotScanner's static momentum universe - see
+// getSnapshotScanUniverse()) had zero real momentum signal available to compete for a hot-swap
+// slot at full stream capacity, which is the confirmed IOVA gap (2026-09-29 forensic audit,
+// docs/audits/archive/ARGUS_MIDDAY_ZERO_TRADE_2026-09-29.md): 43 admissions, a real +34% move vs
+// previous close, zero quant assessment, because it could only ever fill an EMPTY slot, never
+// challenge an occupied one.
+let snapshotCache: { fetchedAt: number; symbols: string[]; dollarVolumeBySymbol: Record<string, number>; gapPctBySymbol: Record<string, number | null> } | null = null;
+let lastCycleSymbolLookup: Map<string, BroadUniverseSymbolLookup> | null = null;
+let inFlight = false;
+let lastStats: BroadUniverseStats = {
+  ran: false,
+  enabled: false,
+  assetsFetched: 0,
+  screened: 0,
+  candidates: 0,
+  error: null,
+  at: new Date(0).toISOString(),
+  stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 },
+};
+
+/** Was `symbol` seen this session's most recent broad-universe cycle, and exactly where did it
+ *  stop? Returns null when the scan hasn't completed a cycle yet since boot - distinguish that
+ *  from a real "not in the tradable universe" answer, which IS a real cycle result. */
+export function getBroadUniverseSymbolLookup(symbol: string): BroadUniverseSymbolLookup | null {
+  if (!lastCycleSymbolLookup) return null;
+  const normalized = symbol.trim().toUpperCase();
+  return lastCycleSymbolLookup.get(normalized) ?? {
+    inTradableAssetsUniverse: assetsCache?.symbols.includes(normalized) ?? false,
+    stage1Result: null,
+    stage2Result: null,
+  };
+}
+
+function authHeaders(): Record<string, string> {
+  return {
+    'APCA-API-KEY-ID': process.env.ALPACA_API_KEY || '',
+    'APCA-API-SECRET-KEY': process.env.ALPACA_SECRET_KEY || '',
+  };
+}
+
+async function fetchJson<T>(url: string, timeoutMs: number): Promise<T> {
+  return withDiscoveryCircuitBreaker('MarketUniverseScanner', async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await alpacaFetch(url, { headers: authHeaders(), signal: controller.signal });
+      if (!res.ok) {
+        throw new Error(`Alpaca request failed ${res.status} for ${url}`);
+      }
+      return (await res.json()) as T;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
+/** Real Alpaca tradable-assets list, cached. Filters to active/tradable US equities on allowed exchanges. */
+export async function fetchTradableAssets(): Promise<string[]> {
+  const now = Date.now();
+  if (assetsCache && now - assetsCache.fetchedAt < continuousIntelligence.broadUniverseAssetsCacheTtlMs) {
+    return assetsCache.symbols;
+  }
+  const allowed = new Set(continuousIntelligence.broadUniverseAllowedExchanges);
+  const url = `${networkEndpoints.broker.alpaca.paperBaseUrl}/v2/assets?status=active&asset_class=us_equity`;
+  const assets = await fetchJson<AlpacaAsset[]>(url, continuousIntelligence.broadUniverseAssetsFetchTimeoutMs);
+  const symbols = assets
+    .filter((a) => a.tradable && a.status === 'active' && allowed.has(a.exchange))
+    .map((a) => a.symbol.trim().toUpperCase())
+    .filter(Boolean);
+  assetsCache = { fetchedAt: now, symbols };
+  return symbols;
+}
+
+/**
+ * Batched snapshot screen: price range, dollar-volume floor, spread ceiling. Returns symbols
+ * ranked by dollar volume descending, capped at broadUniverseMaxCandidates. Never throws for a
+ * single bad batch - a failed batch is just excluded, not fatal to the whole screen.
+ */
+export async function screenAssets(symbols: string[]): Promise<AlpacaSnapshot[]> {
+  const batchSize = continuousIntelligence.broadUniverseSnapshotBatchSize;
+  const results: AlpacaSnapshot[] = [];
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize);
+    const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/snapshots?symbols=${batch.join(',')}&feed=iex`;
+    try {
+      const raw = await fetchJson<Record<string, any>>(url, 15000);
+      for (const symbol of batch) {
+        const snap = raw[symbol];
+        const price = snap?.latestTrade?.p ?? snap?.dailyBar?.c;
+        const volume = snap?.dailyBar?.v;
+        const bid = snap?.latestQuote?.bp;
+        const ask = snap?.latestQuote?.ap;
+        const openPrice = snap?.dailyBar?.o;
+        const prevClose = snap?.prevDailyBar?.c;
+        if (typeof price !== 'number' || !Number.isFinite(price) || price <= 0) continue;
+        if (typeof volume !== 'number' || !Number.isFinite(volume) || volume <= 0) continue;
+        const dollarVolume = price * volume;
+        const spreadBps = (typeof bid === 'number' && typeof ask === 'number' && bid > 0 && ask > 0)
+          ? ((ask - bid) / ((ask + bid) / 2)) * 10000
+          : null;
+        const evidence: DiscoveryGapEvidence = {
+          source: 'ALPACA_IEX_SNAPSHOT', price, open: openPrice ?? null,
+          previousClose: prevClose ?? null,
+          priceTimestamp: (snap?.latestTrade?.p != null ? snap?.latestTrade?.t : snap?.dailyBar?.t) ?? null,
+          openTimestamp: snap?.dailyBar?.t ?? null,
+          previousCloseTimestamp: snap?.prevDailyBar?.t ?? null,
+          high: snap?.dailyBar?.h ?? null, low: snap?.dailyBar?.l ?? null,
+          corporateActionState: 'UNKNOWN',
+        };
+        const validated = validateDiscoveryGap(evidence);
+        results.push({ symbol, price, dollarVolume, spreadBps, gapPct: validated.gapPct,
+          gapEvidence: { ...evidence, reason: validated.reason }, volume });
+      }
+    } catch (e) {
+      logErrorSafely('[MarketUniverseScanner] snapshot batch failed', e);
+    }
+  }
+  return results;
+}
+
+/** Real Phase 18 finding: a symbol that failed this screen previously just vanished from the
+ *  candidate list with zero record of why - the exact gap that made a real, verified market mover
+ *  (FRVO, 2026-09-01 forensic audit) architecturally unexplainable after the fact. Returns the
+ *  specific reason, not just a boolean, so the caller can log it. */
+function evaluateScreen(snap: AlpacaSnapshot): { pass: boolean; reason: ScreenRejectReason | null } {
+  const cfg = continuousIntelligence;
+  if (snap.price < cfg.broadUniverseMinPrice || snap.price > cfg.broadUniverseMaxPrice) return { pass: false, reason: 'PRICE' };
+  if (snap.dollarVolume < cfg.broadUniverseMinDollarVolume) return { pass: false, reason: 'DOLLAR_VOLUME' };
+  if (snap.spreadBps != null && snap.spreadBps > cfg.broadUniverseMaxSpreadBps) return { pass: false, reason: 'SPREAD' };
+  return { pass: true, reason: null };
+}
+
+function passesScreen(snap: AlpacaSnapshot): boolean {
+  return evaluateScreen(snap).pass;
+}
+
+/** Real, config-driven gap-mover classification - true only when this candidate's real intraday
+ *  gap (computed from data already fetched for the liquidity screen) clears the reviewed
+ *  threshold. Never a new API call, never a bypass of passesScreen/passesAdvScreen. */
+function isGapMover(snap: AlpacaSnapshot): boolean {
+  return snap.gapPct !== null && Math.abs(snap.gapPct) >= continuousIntelligence.gapMoverMinAbsPct;
+}
+
+/**
+ * 2026-09-29 (second Codex review, item 5 - volume-provenance fix follow-up): this function
+ * previously divided snap.volume (Alpaca's real-time `feed=iex` snapshot - IEX-reported volume
+ * only, measured 2026-09-16 at ~1.5%-10% of true consolidated volume for the same partial trading
+ * day) by advMap's `feed=sip`-or-FMP historical daily average (full consolidated volume, complete
+ * trading days). A prior pass added VolumeProvenance labeling (discoveryCandidateLedger.ts's
+ * RVOL_PROVENANCE, comparable:false) alongside the number, but the incompatible ratio itself was
+ * still computed and still fed isRvolMover()'s real true/false classification - making the label
+ * visible without making the underlying number trustworthy in either direction.
+ *
+ * This now explicitly ABSTAINS instead: no compatible same-scope real-time-consolidated-volume
+ * source is currently available without a new API entitlement/fetch this pass is not authorized to
+ * add (a same-scope fix would require either a consolidated real-time feed this account is not
+ * shown to be entitled to, or a genuine second historical-bars fetch scoped to feed=iex - the
+ * latter is a real, separately-scoped new-API-call decision, not a bug fix, and this file's own
+ * established discipline throughout is "never a new API call" for exactly this kind of addition).
+ * Returns null unconditionally - never a fabricated or silently-biased ratio. isRvolMover() already
+ * treats a null rvol as false, so this is a pure abstention: rvolMover never asserts true from
+ * incompatible math again, and never gets counted as evidence anywhere (confirmed: rvolMover is
+ * observational-only - PostMarketAnalysis.ts / discoveryLineageReport.ts reporting - it was never
+ * consulted by priorityScoreOf/blendedHotSwapScore or any discovery admission/eviction decision).
+ * No liquidity/ADV/spread/price gate is touched by this change.
+ */
+function computeRvol(_snap: AlpacaSnapshot, _advMap: Map<string, number>): number | null {
+  return null;
+}
+
+/** Real, config-driven relative-volume-mover classification, symmetric to isGapMover() - true only
+ *  when computeRvol() clears the reviewed threshold. Never a new API call, never a bypass of
+ *  passesScreen/passesAdvScreen. computeRvol() currently always returns null (see its own doc
+ *  comment) - this always evaluates false until a genuinely compatible same-scope volume source
+ *  exists, rather than asserting a classification from incompatible feed scopes. */
+function isRvolMover(rvol: number | null): boolean {
+  return rvol !== null && rvol >= continuousIntelligence.rvolMoverMinRatio;
+}
+
+/**
+ * Phase 5 (Discovery -> Outcome Learning). Records a real shadow prediction - "this admitted
+ * mover's own real intraday direction, continuing" - via the EXISTING recordPrediction() pipeline
+ * (ModelPerformanceTracker.ts), never a new grading system. Fails closed (logs, never throws) -
+ * matches recordPrediction()'s own contract, since this must never affect the real discovery
+ * refresh it is called from.
+ */
+async function recordDiscoveryOutcomeProbe(symbol: string, gapPct: number): Promise<void> {
+  try {
+    await recordPrediction({
+      agentName: 'DiscoveryOutcomeTracker',
+      symbol,
+      side: gapPct >= 0 ? 'BUY' : 'SELL',
+      confidence: 0.5, // neutral - this is a discovery-quality probe, never a real trading signal
+      reasoning: `Phase 5 discovery-outcome probe: real intraday gap ${(gapPct * 100).toFixed(1)}% at movers admission - was this discovery signal directionally useful in hindsight?`,
+    });
+  } catch (e) {
+    console.error('[MarketUniverseScanner] Discovery-outcome probe failed (does not affect the real discovery refresh)', e);
+  }
+}
+
+interface AlpacaBarsResponse {
+  bars: Record<string, Array<{ t?: string; v?: number }>> | null;
+  next_page_token?: string | null;
+}
+
+// Data selection only: preserve the existing arithmetic mean, but require a complete,
+// distinct, completed-day sample before reporting it as the configured lookback ADV.
+function completedVolumes(rows: Array<{ day: string; volume: unknown }>, startDay: string, endDay: string): number[] {
+  const byDay = new Map<string, number>();
+  for (const { day, volume } of rows) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || day < startDay || day >= endDay) continue;
+    if (typeof volume !== 'number' || !Number.isFinite(volume) || volume < 0) return [];
+    if (byDay.has(day) && byDay.get(day) !== volume) return [];
+    byDay.set(day, volume);
+  }
+  const days = continuousIntelligence.broadUniverseAdvLookbackDays;
+  if (byDay.size < days) return [];
+  return [...byDay].sort(([a], [b]) => b.localeCompare(a)).slice(0, days).map(([, v]) => v);
+}
+
+/**
+ * Real single-symbol ADV fallback via Financial Modeling Prep's free tier (2026-09-11, real
+ * same-day finding: two genuine gap-movers, QRVO and ASO, were both correctly gap-flagged but
+ * rejected on ADV because Alpaca's free IEX-feed bars endpoint returned nothing usable for them in
+ * that batch - `advShares: null`, not a real low number. Same fallback discipline as
+ * FundamentalAgent.ts's tryFmpFallback(): only ever attempted AFTER the primary source (Alpaca)
+ * has already failed for this specific symbol, shares the SAME FmpBudget daily cap as
+ * FundamentalAgent (no separate carve-out - if broad-universe fallback usage starves
+ * FundamentalAgent's budget, that is a real, visible tradeoff via FmpBudget.remaining(), not
+ * something to hide behind a second budget), and returns null (never fabricated) on any failure.
+ */
+async function fetchAvgDailyVolumeSharesFmpFallback(symbol: string, startDay: string, endDay: string): Promise<number | null> {
+  if (!process.env.FMP_API_KEY) return null;
+  if (!(await FmpBudget.tryConsume(1))) return null;
+  try {
+    const days = continuousIntelligence.broadUniverseAdvLookbackDays;
+    const url = `${networkEndpoints.marketData.fmpBaseUrl}/historical-price-full/${symbol}?timeseries=${days + 1}&apikey=${process.env.FMP_API_KEY}`;
+    const response = await fetch(url, { signal: AbortSignal.timeout(dataTransportLimits.requestTimeoutMs) });
+    if (!response.ok) return null;
+    const body = await response.json() as { historical?: Array<{ date?: string; volume?: number }> };
+    const volumes = completedVolumes((body.historical ?? []).map((h) => ({ day: h.date ?? '', volume: h.volume })), startDay, endDay);
+    if (volumes.length === 0) return null;
+    return volumes.reduce((a, b) => a + b, 0) / volumes.length;
+  } catch (e) {
+    logErrorSafely('[MarketUniverseScanner] FMP ADV fallback failed', e);
+    return null;
+  }
+}
+
+/**
+ * Real broadUniverseAdvLookbackDays-day average daily volume (shares) per symbol, via Alpaca's
+ * batched multi-symbol bars endpoint. Only call this on an already-narrowed shortlist (stage-2
+ * survivors), not the full tradable-assets list - same batching shape as screenAssets(). A batch
+ * that fails, or a symbol with no bars in the response, falls through to a bounded, per-symbol FMP
+ * fallback (see fetchAvgDailyVolumeSharesFmpFallback) rather than being excluded outright - only a
+ * symbol both sources have no answer for is finally excluded (fail-closed), never assumed liquid.
+ *
+ * Real defect found live (2026-09-16, universe-construction forensic audit): this previously read
+ * `feed=iex` - IEX-reported volume only, not total consolidated market volume. A direct, same-day
+ * comparison against `feed=sip` for 16 representative liquid names (SPY/QQQ/AAPL/MSFT/NVDA/AMD/
+ * TSLA/META/INTC/AMZN/GOOGL/AVGO/JPM/XLF/XLE/GLD) found IEX volume consistently only ~1.5%-10%
+ * (averaging ~4%) of SIP consolidated volume - e.g. TSLA showed 414,123 IEX shares vs 19,014,661 SIP
+ * shares for the same partial trading day. Against the unchanged `broadUniverseMinAvgDailyVolumeShares`
+ * floor (500,000), this made the floor effectively require tens of millions of shares of TRUE
+ * consolidated volume to clear - excluding 750 of 1,085 scanned symbols that day via the ADV gate
+ * (106 ADV_BELOW_FLOOR + 644 ADV_DATA_UNAVAILABLE), including mega-caps like TSLA and INTC. This is
+ * NOT the same real-time top-of-book IEX feed this codebase intentionally and correctly uses
+ * elsewhere (screenAssets()'s own snapshot call two functions up stays on `feed=iex` - unrelated
+ * live-quote use case, unchanged here) - this is specifically the historical-daily-bars ADV
+ * calculation, where `feed=sip` is available on the existing account/credentials (verified live: a
+ * direct sip-feed bars call for all 16 symbols returned HTTP 200 with real data, no new entitlement
+ * needed) and correctly reflects true market liquidity instead of one venue's narrow slice of it.
+ * Never fabricates volume - a genuine SIP API failure still falls through to the same FMP fallback
+ * and fail-closed exclusion this function already had.
+ */
+export async function fetchAvgDailyVolumeShares(symbols: string[]): Promise<Map<string, number>> {
+  const batchSize = continuousIntelligence.broadUniverseSnapshotBatchSize;
+  const days = continuousIntelligence.broadUniverseAdvLookbackDays;
+  const out = new Map<string, number>();
+  const missing: string[] = [];
+  const endDay = getTradingDateStr(new Date(Date.now()));
+  const endMs = Date.parse(tradingWallTimeToIso(endDay, '00:00'));
+  const startDay = getTradingDateStr(new Date(endMs - days * dataTransportLimits.advCalendarLookbackMultiplier * 86400_000));
+  for (let i = 0; i < symbols.length; i += batchSize) {
+    const batch = symbols.slice(i, i + batchSize);
+    try {
+      const collected = new Map<string, Array<{ t?: string; v?: number }>>();
+      const seen = new Set<string>();
+      const deadline = Date.now() + dataTransportLimits.historyTimeoutMs;
+      let token: string | undefined;
+      let pages = 0;
+      do {
+        if (++pages > dataTransportLimits.maxHistoryPages || Date.now() >= deadline) throw new Error('Incomplete ADV pagination');
+        const url = new URL(`${networkEndpoints.broker.alpaca.dataBaseUrl}/v2/stocks/bars`);
+        for (const [key, value] of Object.entries({ symbols: batch.join(','), timeframe: '1Day', limit: String(dataTransportLimits.historyPageSize), adjustment: 'raw', feed: 'sip', start: tradingWallTimeToIso(startDay, '00:00'), end: new Date(endMs - 1).toISOString(), sort: 'desc' })) url.searchParams.set(key, value);
+        if (token) url.searchParams.set('page_token', token);
+        const raw = await fetchJson<AlpacaBarsResponse>(url.toString(), Math.min(dataTransportLimits.requestTimeoutMs, deadline - Date.now()));
+        for (const symbol of batch) {
+          const bars = raw.bars?.[symbol];
+          if (Array.isArray(bars)) collected.set(symbol, [...(collected.get(symbol) ?? []), ...bars]);
+        }
+        token = raw.next_page_token ?? undefined;
+        if (token && (typeof token !== 'string' || seen.has(token))) throw new Error('Invalid or repeated ADV page token');
+        if (token) seen.add(token);
+      } while (token);
+      for (const symbol of batch) {
+        const bars = collected.get(symbol);
+        if (!Array.isArray(bars) || bars.length === 0) { missing.push(symbol); continue; }
+        const volumes = completedVolumes(bars.map((b) => ({ day: b.t && Number.isFinite(Date.parse(b.t)) ? getTradingDateStr(new Date(b.t)) : '', volume: b.v })), startDay, endDay);
+        if (volumes.length === 0) { missing.push(symbol); continue; }
+        out.set(symbol, volumes.reduce((a, b) => a + b, 0) / volumes.length);
+      }
+    } catch (e) {
+      logErrorSafely('[MarketUniverseScanner] ADV batch failed', e);
+      missing.push(...batch);
+    }
+  }
+  for (const symbol of missing) {
+    const fallback = await fetchAvgDailyVolumeSharesFmpFallback(symbol, startDay, endDay);
+    if (fallback != null) {
+      out.set(symbol, fallback);
+      console.warn(`[MarketUniverseScanner] ADV for ${symbol} unavailable from Alpaca — served from FMP fallback.`);
+    }
+  }
+  return out;
+}
+
+function passesAdvScreen(symbol: string, advMap: Map<string, number>): boolean {
+  const adv = advMap.get(symbol);
+  return adv != null && adv >= continuousIntelligence.broadUniverseMinAvgDailyVolumeShares;
+}
+
+/** The two ADV rejection reasons genuinely mean different things (2026-09-11 fix) - a symbol with
+ *  a real, measured ADV below the floor is a confirmed-illiquid rejection; a symbol absent from
+ *  advMap entirely (both Alpaca and any FMP fallback had no answer) is a data-availability gap the
+ *  gate still correctly fails closed on, but should not be reported the same way. */
+function advRejectReason(symbol: string, advMap: Map<string, number>): 'ADV_BELOW_FLOOR' | 'ADV_DATA_UNAVAILABLE' {
+  return advMap.has(symbol) ? 'ADV_BELOW_FLOOR' : 'ADV_DATA_UNAVAILABLE';
+}
+
+/** Full refresh: fetch tradable assets, screen them, cache the resulting candidate symbol list. */
+export async function refreshBroadUniverseCache(): Promise<BroadUniverseStats> {
+  const emptyStage1Counts = (): Record<ScreenRejectReason | 'NO_SNAPSHOT_DATA', number> => ({ PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 });
+  if (!isBroadUniverseEnabled()) {
+    lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString(), stage1RejectionCounts: emptyStage1Counts() };
+    return lastStats;
+  }
+  if (inFlight) return lastStats;
+  inFlight = true;
+  try {
+    const assets = await fetchTradableAssets();
+    const screened = await screenAssets(assets);
+    // Stage-1 (price/dollar-volume/spread) rejections are not logged per-symbol here - the
+    // tradable-assets list is thousands of rows, and this stage runs only every
+    // broadUniverseAssetsCacheTtlMs (24h), so per-symbol logging here would be a real
+    // observability-volume cost for comparatively low decision value. Stage-2 (ADV, below) is
+    // already narrowed to price/volume/spread survivors and IS logged per-symbol. A cheap
+    // AGGREGATE of stage-1 outcomes (stage1RejectionCounts, below) and a per-symbol LOOKUP cache
+    // (lastCycleSymbolLookup, populated below) fill the real gap without that per-symbol cost.
+    const stage1Counts = emptyStage1Counts();
+    const screenedSet = new Set(screened.map((s) => s.symbol));
+    const symbolLookup = new Map<string, BroadUniverseSymbolLookup>();
+    for (const symbol of assets) {
+      if (!screenedSet.has(symbol)) {
+        stage1Counts.NO_SNAPSHOT_DATA++;
+        symbolLookup.set(symbol, { inTradableAssetsUniverse: true, stage1Result: 'NO_SNAPSHOT_DATA', stage2Result: null });
+      }
+    }
+    const stage2 = screened.filter((s) => {
+      const result = evaluateScreen(s);
+      if (!result.pass && result.reason) stage1Counts[result.reason]++;
+      symbolLookup.set(s.symbol, { inTradableAssetsUniverse: true, stage1Result: result.pass ? 'PASSED' : result.reason, stage2Result: null });
+      return result.pass;
+    });
+    const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
+    const advPassers = stage2.filter((s) => passesAdvScreen(s.symbol, advMap));
+    const passingRows = advPassers
+      .sort((a, b) => b.dollarVolume - a.dollarVolume)
+      .slice(0, continuousIntelligence.broadUniverseMaxCandidates);
+    const passing = passingRows.map((s) => s.symbol);
+    const passingDollarVolume: Record<string, number> = {};
+    const passingGapPct: Record<string, number | null> = {};
+    for (const s of passingRows) {
+      passingDollarVolume[s.symbol] = s.dollarVolume;
+      passingGapPct[s.symbol] = s.gapPct;
+    }
+    const passingSet = new Set(passing);
+    for (const s of stage2) {
+      const admitted = passingSet.has(s.symbol);
+      // Distinguish an outright ADV-floor failure from a candidate that cleared every real
+      // liquidity gate but still lost the final dollar-volume-desc rank cutoff
+      // (broadUniverseMaxCandidates) - these are different, real reasons, not the same one.
+      const stage2Result: BroadUniverseSymbolLookup['stage2Result'] = admitted ? 'ADMITTED' : (passesAdvScreen(s.symbol, advMap) ? 'RANK_CAP' : advRejectReason(s.symbol, advMap));
+      const reason: DiscoveryRejectReason | null = admitted ? null : (stage2Result as DiscoveryRejectReason);
+      symbolLookup.set(s.symbol, { inTradableAssetsUniverse: true, stage1Result: 'PASSED', stage2Result });
+      const rvol = computeRvol(s, advMap);
+      logDiscoveryCandidateDecision({
+        symbol: s.symbol, source: 'BROAD_UNIVERSE', admitted, reason,
+        price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+        gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence,
+        rvolMover: isRvolMover(rvol), rvol,
+      });
+      // Phase 27 (2026-09-02): extends Phase 5 (Discovery -> Outcome Learning) to the broad-universe
+      // funnel too - previously this only ran for movers. Same EXISTING recordPrediction() pipeline,
+      // same real-direction-signal-only condition (never a fabricated probe when gapPct is null),
+      // bounded by the same broadUniverseMaxCandidates rank cap the `passing` list already enforces.
+      if (admitted && s.gapPct !== null) {
+        await recordDiscoveryOutcomeProbe(s.symbol, s.gapPct);
+      }
+    }
+    snapshotCache = { fetchedAt: Date.now(), symbols: passing, dollarVolumeBySymbol: passingDollarVolume, gapPctBySymbol: passingGapPct };
+    lastCycleSymbolLookup = symbolLookup;
+    lastStats = {
+      ran: true,
+      enabled: true,
+      assetsFetched: assets.length,
+      screened: screened.length,
+      candidates: passing.length,
+      error: null,
+      at: new Date().toISOString(),
+      stage1RejectionCounts: stage1Counts,
+    };
+    return lastStats;
+  } catch (e: any) {
+    logErrorSafely('[MarketUniverseScanner] refresh failed', e);
+    lastStats = {
+      ran: true,
+      enabled: true,
+      assetsFetched: 0,
+      screened: 0,
+      candidates: snapshotCache?.symbols.length || 0,
+      error: e?.message || String(e),
+      at: new Date().toISOString(),
+      stage1RejectionCounts: emptyStage1Counts(),
+    };
+    return lastStats;
+  } finally {
+    inFlight = false;
+  }
+}
+
+/** Synchronous read of whatever the last successful refresh produced. Empty until a refresh has run. */
+export function getCachedBroadUniverseSymbols(): string[] {
+  if (!isBroadUniverseEnabled()) return [];
+  const now = Date.now();
+  if (!snapshotCache || now - snapshotCache.fetchedAt > continuousIntelligence.broadUniverseSnapshotCacheTtlMs) {
+    return snapshotCache?.symbols || [];
+  }
+  return snapshotCache.symbols;
+}
+
+/** Same admitted list as getCachedBroadUniverseSymbols(), paired with each symbol's real, already-
+ *  fetched dollar volume - added 2026-09-16 for BroadUniverseSubscriptionAllocator.ts, which needs
+ *  real liquidity data (not just symbol names) to compute a fair, non-random selection. Never a new
+ *  API call - the same data the ADV admission decision itself already used. */
+export function getCachedBroadUniverseCandidatesWithVolume(): { symbol: string; dollarVolume: number; gapPct: number | null }[] {
+  if (!isBroadUniverseEnabled() || !snapshotCache) return [];
+  return snapshotCache.symbols.map((symbol) => ({
+    symbol,
+    dollarVolume: snapshotCache!.dollarVolumeBySymbol[symbol] ?? 0,
+    gapPct: snapshotCache!.gapPctBySymbol[symbol] ?? null,
+  }));
+}
+
+/** 2026-09-29 (discovery-to-evaluation coverage fix): single-symbol lookup over the same cached
+ *  gapPct data above - OpportunityDiscovery's hot-swap challenger scoring needs this per candidate
+ *  without re-mapping the whole admitted list every cycle. Null when the symbol was not admitted
+ *  in the most recent broad-universe cycle (never fabricated as 0 - a null gap is "unknown", not
+ *  "flat"). */
+export function getCachedBroadUniverseGapPct(symbol: string): number | null {
+  if (!isBroadUniverseEnabled() || !snapshotCache) return null;
+  const normalized = symbol.trim().toUpperCase();
+  return normalized in snapshotCache.gapPctBySymbol ? snapshotCache.gapPctBySymbol[normalized] : null;
+}
+
+/**
+ * 2026-09-30 (Discovery Challenger Observability Hardening, ARGUS_CHALLENGER_SELECTION_FORENSIC_2026-09-29.md
+ * §3 - "persist exact scorer inputs... source timestamp, age, missing/null state"). Read-only
+ * exposure of the SAME snapshotCache.fetchedAt getCachedBroadUniverseGapPct() itself already reads
+ * from - not a new cache, not a new fetch, not a per-symbol timestamp (this cache is refreshed as
+ * one batch, so every symbol's gap evidence shares the same real fetch time). Null exactly when
+ * getCachedBroadUniverseGapPct() would also structurally be unable to answer (feature disabled or
+ * no cache populated yet) - callers should treat a null age the same way a null gapPct is already
+ * treated: "unknown", never fabricated as "fresh" or "stale".
+ */
+export function getCachedBroadUniverseSnapshotFetchedAt(): number | null {
+  if (!isBroadUniverseEnabled() || !snapshotCache) return null;
+  return snapshotCache.fetchedAt;
+}
+
+export function getLastBroadUniverseStats(): BroadUniverseStats {
+  return lastStats;
+}
+
+export function resetMarketUniverseScannerForTests(): void {
+  assetsCache = null;
+  snapshotCache = null;
+  lastCycleSymbolLookup = null;
+  inFlight = false;
+  lastStats = { ran: false, enabled: false, assetsFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(), stage1RejectionCounts: { PRICE: 0, DOLLAR_VOLUME: 0, SPREAD: 0, NO_SNAPSHOT_DATA: 0 } };
+  moversCache = null;
+  moversInFlight = false;
+  lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
+  newsCatalystCache = null;
+  newsCatalystInFlight = false;
+  lastNewsCatalystStats = { ran: false, enabled: false, catalystsConsidered: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString() };
+  resetDiscoveryCircuitBreakersForTests();
+}
+
+// ==========================================================================================
+// Phase 17 (2026-09-01): real Alpaca top-gainers/losers screener - an additional discovery
+// signal ("what's actually moving today"), separate from the liquidity-only broad universe
+// above. Default OFF (ARGUS_MARKET_MOVERS_ENABLED). Same real, already-authenticated Alpaca
+// API - no scraping, no new credential, no new external dependency. A raw mover symbol (Alpaca's
+// real /v1beta1/screener/stocks/movers response includes plenty of sub-$1 warrants and other
+// illiquid names - confirmed live) is never merged into the scan universe unfiltered: it must
+// still clear the exact same passesScreen()/passesAdvScreen() liquidity gates every broad-universe
+// candidate already has to clear. This only ever feeds WATCHLIST_SUBSCRIBE_REQUESTED-style
+// candidates into OpportunityDiscovery's existing evaluateOpportunityCandidate() gate - it never
+// emits TRADE_IDEA_GENERATED, never calls placeOrder, and never bypasses ChiefTrader/RiskEngine.
+// ==========================================================================================
+
+interface AlpacaMover {
+  symbol: string;
+  price: number;
+  change: number;
+  percent_change: number;
+}
+
+interface AlpacaMoversResponse {
+  gainers: AlpacaMover[];
+  losers: AlpacaMover[];
+}
+
+export interface MoverScanStats {
+  ran: boolean;
+  enabled: boolean;
+  gainersFetched: number;
+  losersFetched: number;
+  screened: number;
+  candidates: number;
+  error: string | null;
+  at: string;
+}
+
+let moversCache: { fetchedAt: number; symbols: string[] } | null = null;
+let moversInFlight = false;
+let lastMoverStats: MoverScanStats = {
+  ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(),
+};
+
+/** Real Alpaca top-gainers/losers screener - the same account credentials as every other Alpaca
+ *  call in this file, no scraping. Returns raw symbols (deduped, uppercased) - unscreened. */
+export async function fetchTopMovers(): Promise<{ symbols: string[]; gainersFetched: number; losersFetched: number }> {
+  const top = continuousIntelligence.moversFetchTopNPerSide;
+  const url = `${networkEndpoints.broker.alpaca.dataBaseUrl}/v1beta1/screener/stocks/movers?top=${top}`;
+  const raw = await fetchJson<AlpacaMoversResponse>(url, 15000);
+  const gainers = Array.isArray(raw.gainers) ? raw.gainers : [];
+  const losers = Array.isArray(raw.losers) ? raw.losers : [];
+  const symbols = normalizeSymbols([...gainers, ...losers].map((m) => String(m.symbol || '')));
+  return { symbols, gainersFetched: gainers.length, losersFetched: losers.length };
+}
+
+/** Full refresh: fetch real movers, screen them through the same liquidity/ADV gates as the
+ *  broad universe, cache the resulting candidate symbol list. */
+export async function refreshMoversCache(): Promise<MoverScanStats> {
+  if (!isMoversEnabled()) {
+    lastMoverStats = { ran: false, enabled: false, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString() };
+    return lastMoverStats;
+  }
+  if (moversInFlight) return lastMoverStats;
+  moversInFlight = true;
+  try {
+    const { symbols, gainersFetched, losersFetched } = await fetchTopMovers();
+    const screened = await screenAssets(symbols);
+    // Movers is a small, bounded set (moversFetchTopNPerSide * 2 at most) refreshed every
+    // moversCacheTtlMs (5 min) - unlike the thousands-of-assets broad-universe scan, every decision
+    // here is cheap to log per-symbol, and this is exactly the funnel a real, verified market mover
+    // (FRVO, 2026-09-01 forensic audit) came through before disappearing without a trace.
+    const screenedSymbols = new Set(screened.map((s) => s.symbol));
+    for (const symbol of symbols) {
+      if (!screenedSymbols.has(symbol)) {
+        logDiscoveryCandidateDecision({ symbol, source: 'MARKET_MOVER', admitted: false, reason: 'NO_SNAPSHOT_DATA' });
+      }
+    }
+    const stage2: AlpacaSnapshot[] = [];
+    for (const s of screened) {
+      const result = evaluateScreen(s);
+      if (result.pass) {
+        stage2.push(s);
+      } else {
+        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'MARKET_MOVER', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence });
+      }
+    }
+    const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
+    for (const s of stage2) {
+      const admitted = passesAdvScreen(s.symbol, advMap);
+      const rvol = computeRvol(s, advMap);
+      logDiscoveryCandidateDecision({
+        symbol: s.symbol, source: 'MARKET_MOVER', admitted, reason: admitted ? null : advRejectReason(s.symbol, advMap),
+        price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+        gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence,
+        rvolMover: isRvolMover(rvol), rvol,
+      });
+      // Phase 5 (Discovery -> Outcome Learning, 2026-09-02 forensic-audit follow-up): for an
+      // ADMITTED candidate with a real, already-computed direction signal (gapPct), record a real
+      // shadow prediction via the EXISTING recordPrediction()/PredictionOutcomeEvaluator/
+      // ReflectionEngine pipeline (ModelPerformanceTracker.ts's own established pattern for Java
+      // shadow models) - never a new grading system, never emits TRADE_IDEA_GENERATED, never a
+      // live ChiefTrader vote (this agentName never appears in a real consensus round). This is
+      // how "was this discovery signal useful" gets a REAL, outcome-graded answer over time,
+      // queryable later via the existing agent_performance_stats/agent_confidence_calibration
+      // tables under agentName 'DiscoveryOutcomeTracker' - no new query code needed.
+      if (admitted && s.gapPct !== null) {
+        await recordDiscoveryOutcomeProbe(s.symbol, s.gapPct);
+      }
+    }
+    const passing = stage2
+      .filter((s) => passesAdvScreen(s.symbol, advMap))
+      .sort((a, b) => b.dollarVolume - a.dollarVolume)
+      .map((s) => s.symbol);
+    moversCache = { fetchedAt: Date.now(), symbols: passing };
+    lastMoverStats = {
+      ran: true, enabled: true, gainersFetched, losersFetched, screened: screened.length, candidates: passing.length, error: null, at: new Date().toISOString(),
+    };
+    return lastMoverStats;
+  } catch (e: any) {
+    logErrorSafely('[MarketUniverseScanner] movers refresh failed', e);
+    lastMoverStats = {
+      ran: true, enabled: true, gainersFetched: 0, losersFetched: 0, screened: 0, candidates: moversCache?.symbols.length || 0, error: e?.message || String(e), at: new Date().toISOString(),
+    };
+    return lastMoverStats;
+  } finally {
+    moversInFlight = false;
+  }
+}
+
+/** Synchronous read of whatever the last successful movers refresh produced. Empty until a refresh has run. */
+export function getCachedMoverSymbols(): string[] {
+  if (!isMoversEnabled()) return [];
+  const now = Date.now();
+  if (!moversCache || now - moversCache.fetchedAt > continuousIntelligence.moversCacheTtlMs) {
+    return moversCache?.symbols || [];
+  }
+  return moversCache.symbols;
+}
+
+export function getLastMoverScanStats(): MoverScanStats {
+  return lastMoverStats;
+}
+
+// ==========================================================================================
+// 2026-09-10 (postmarket-audit follow-up): real, confirmed gap. NewsCatalystStore already
+// computes a reviewed "genuine catalyst" bar per symbol (hasRealCatalystEvidence() - the exact
+// bar MarketDataWorker's own reactive discovery-lineage logging already trusts), but nothing
+// proactively fed those symbols INTO the discovery/scan universe - a real catalyst story only
+// ever became visible to discovery reactively, after some OTHER agent had already
+// independently tried to look the symbol up. A symbol with a real, high-impact catalyst but no
+// prior agent interest (confirmed live: SEI, 2026-09-10) was invisible to discovery entirely.
+// Default OFF (ARGUS_NEWS_CATALYST_DISCOVERY_ENABLED). Same liquidity/price/spread/ADV screen as
+// broadUniverse*/movers below - a catalyst story never bypasses those gates, and this never
+// emits TRADE_IDEA_GENERATED or calls placeOrder itself.
+// ==========================================================================================
+
+export interface NewsCatalystScanStats {
+  ran: boolean;
+  enabled: boolean;
+  catalystsConsidered: number;
+  screened: number;
+  candidates: number;
+  error: string | null;
+  at: string;
+}
+
+let newsCatalystCache: { fetchedAt: number; symbols: string[] } | null = null;
+let newsCatalystInFlight = false;
+let lastNewsCatalystStats: NewsCatalystScanStats = {
+  ran: false, enabled: false, catalystsConsidered: 0, screened: 0, candidates: 0, error: null, at: new Date(0).toISOString(),
+};
+
+/** Full refresh: pull symbols with real, reviewed catalyst evidence out of the existing
+ *  in-process NewsCatalystStore, screen them through the exact same liquidity/ADV gates as
+ *  every other discovery source, cache the resulting candidate list. */
+export async function refreshNewsCatalystCache(): Promise<NewsCatalystScanStats> {
+  if (!isNewsCatalystDiscoveryEnabled()) {
+    lastNewsCatalystStats = { ran: false, enabled: false, catalystsConsidered: 0, screened: 0, candidates: 0, error: null, at: new Date().toISOString() };
+    return lastNewsCatalystStats;
+  }
+  if (newsCatalystInFlight) return lastNewsCatalystStats;
+  newsCatalystInFlight = true;
+  try {
+    const recent = listRecentNewsCatalysts(100);
+    const symbols = normalizeSymbols(
+      recent
+        .filter((c) => c.tradingBias !== 'NEUTRAL' && (c.catalystStrength === 'HIGH' || c.catalystStrength === 'MODERATE'))
+        .map((c) => c.symbol),
+    );
+    if (symbols.length === 0) {
+      newsCatalystCache = { fetchedAt: Date.now(), symbols: [] };
+      lastNewsCatalystStats = { ran: true, enabled: true, catalystsConsidered: recent.length, screened: 0, candidates: 0, error: null, at: new Date().toISOString() };
+      return lastNewsCatalystStats;
+    }
+
+    const screened = await screenAssets(symbols);
+    const screenedSymbols = new Set(screened.map((s) => s.symbol));
+    for (const symbol of symbols) {
+      if (!screenedSymbols.has(symbol)) {
+        logDiscoveryCandidateDecision({ symbol, source: 'NEWS', admitted: false, reason: 'NO_SNAPSHOT_DATA' });
+      }
+    }
+    const stage2: AlpacaSnapshot[] = [];
+    for (const s of screened) {
+      const result = evaluateScreen(s);
+      if (result.pass) {
+        stage2.push(s);
+      } else {
+        logDiscoveryCandidateDecision({ symbol: s.symbol, source: 'NEWS', admitted: false, reason: result.reason, price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence });
+      }
+    }
+    const advMap = await fetchAvgDailyVolumeShares(stage2.map((s) => s.symbol));
+    for (const s of stage2) {
+      const admitted = passesAdvScreen(s.symbol, advMap);
+      const rvol = computeRvol(s, advMap);
+      logDiscoveryCandidateDecision({
+        symbol: s.symbol, source: 'NEWS', admitted, reason: admitted ? null : advRejectReason(s.symbol, advMap),
+        price: s.price, dollarVolume: s.dollarVolume, spreadBps: s.spreadBps, advShares: advMap.get(s.symbol) ?? null,
+        gapMover: isGapMover(s), gapPct: s.gapPct, gapEvidence: s.gapEvidence,
+        rvolMover: isRvolMover(rvol), rvol,
+      });
+    }
+    const passing = stage2
+      .filter((s) => passesAdvScreen(s.symbol, advMap))
+      .sort((a, b) => b.dollarVolume - a.dollarVolume)
+      .map((s) => s.symbol);
+    newsCatalystCache = { fetchedAt: Date.now(), symbols: passing };
+    lastNewsCatalystStats = {
+      ran: true, enabled: true, catalystsConsidered: recent.length, screened: screened.length, candidates: passing.length, error: null, at: new Date().toISOString(),
+    };
+    return lastNewsCatalystStats;
+  } catch (e: any) {
+    logErrorSafely('[MarketUniverseScanner] news-catalyst refresh failed', e);
+    lastNewsCatalystStats = {
+      ran: true, enabled: true, catalystsConsidered: 0, screened: 0, candidates: newsCatalystCache?.symbols.length || 0, error: e?.message || String(e), at: new Date().toISOString(),
+    };
+    return lastNewsCatalystStats;
+  } finally {
+    newsCatalystInFlight = false;
+  }
+}
+
+/** Synchronous read of whatever the last successful news-catalyst refresh produced. Empty until a refresh has run. */
+export function getCachedNewsCatalystSymbols(): string[] {
+  if (!isNewsCatalystDiscoveryEnabled()) return [];
+  const now = Date.now();
+  if (!newsCatalystCache || now - newsCatalystCache.fetchedAt > continuousIntelligence.newsCatalystDiscoveryCacheTtlMs) {
+    return newsCatalystCache?.symbols || [];
+  }
+  return newsCatalystCache.symbols;
+}
+
+export function getLastNewsCatalystScanStats(): NewsCatalystScanStats {
+  return lastNewsCatalystStats;
+}
+
+export class MarketUniverseScannerWorker {
+  private intervalId: NodeJS.Timeout | null = null;
+  private moversIntervalId: NodeJS.Timeout | null = null;
+  private newsCatalystIntervalId: NodeJS.Timeout | null = null;
+
+  start(): void {
+    if (!isBroadUniverseEnabled()) {
+      console.log('[MarketUniverseScanner] ARGUS_BROAD_UNIVERSE_ENABLED is not true - idle.');
+    } else if (!this.intervalId) {
+      void refreshBroadUniverseCache();
+      // Real bug found and fixed (2026-09-04 opportunity-capture remediation, confirmed live):
+      // this used to reschedule on `broadUniverseAssetsCacheTtlMs` (86400000ms / 24h) - the TTL
+      // that governs ONLY fetchTradableAssets()'s own internal cache of the raw Alpaca asset list
+      // (correctly a once-a-day concern; the list of tradable US equities barely changes
+      // intraday). `broadUniverseSnapshotCacheTtlMs` (900000ms / 15min) already exists
+      // specifically for the intraday-relevant part of the SAME refresh - the price/volume/spread
+      // screen that DOES need to re-run regularly - but nothing ever scheduled a call on that
+      // cadence; this interval was the only caller of refreshBroadUniverseCache() after boot.
+      // Confirmed live: the one boot-time call failed ("This operation was aborted" - the 15s
+      // fetchTradableAssets() timeout raced Alpaca's full tradable-assets response), and because
+      // this interval would not fire again for 24h, the ENTIRE broad-universe discovery channel
+      // (curated seed/watch lists plus the real Alpaca liquidity-screened universe meant to catch
+      // names like AMC/NTAP that aren't on any curated list) sat completely dead - 0 assets
+      // fetched, 0 candidates cached - for the whole session, with no retry. Rescheduling on
+      // broadUniverseSnapshotCacheTtlMs both matches the cache this refresh is actually meant to
+      // keep warm AND turns a single transient timeout into a self-healing ~15-minute retry
+      // instead of a silent 24-hour outage. fetchTradableAssets()'s own 24h internal cache check
+      // is unchanged, so this does not add extra full-asset-list Alpaca calls - only the
+      // screen/ADV work (already batched, already rate-limited via the discovery circuit breaker)
+      // repeats on the shorter cadence, which is the documented intraday-refresh intent.
+      this.intervalId = setInterval(() => {
+        void refreshBroadUniverseCache();
+      }, continuousIntelligence.broadUniverseSnapshotCacheTtlMs);
+      console.log('[MarketUniverseScanner] Broad-universe refresh started.');
+    }
+    if (!isMoversEnabled()) {
+      console.log('[MarketUniverseScanner] ARGUS_MARKET_MOVERS_ENABLED is not true - idle.');
+    } else if (!this.moversIntervalId) {
+      void refreshMoversCache();
+      this.moversIntervalId = setInterval(() => {
+        void refreshMoversCache();
+      }, continuousIntelligence.moversCacheTtlMs);
+      console.log('[MarketUniverseScanner] Market-movers refresh started.');
+    }
+    if (!isNewsCatalystDiscoveryEnabled()) {
+      console.log('[MarketUniverseScanner] ARGUS_NEWS_CATALYST_DISCOVERY_ENABLED is not true - idle.');
+    } else if (!this.newsCatalystIntervalId) {
+      void refreshNewsCatalystCache();
+      this.newsCatalystIntervalId = setInterval(() => {
+        void refreshNewsCatalystCache();
+      }, continuousIntelligence.newsCatalystDiscoveryCacheTtlMs);
+      console.log('[MarketUniverseScanner] News-catalyst discovery refresh started.');
+    }
+  }
+
+  stop(): void {
+    if (this.intervalId) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
+    if (this.moversIntervalId) {
+      clearInterval(this.moversIntervalId);
+      this.moversIntervalId = null;
+    }
+    if (this.newsCatalystIntervalId) {
+      clearInterval(this.newsCatalystIntervalId);
+      this.newsCatalystIntervalId = null;
+    }
+  }
+}
+
+export const marketUniverseScannerWorker = new MarketUniverseScannerWorker();

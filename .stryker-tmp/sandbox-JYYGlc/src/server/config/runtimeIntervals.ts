@@ -1,0 +1,117 @@
+/**
+ * Loads config/runtimeIntervals.json. Cadences and caps for periodic workers.
+ * Missing required keys fail boot.
+ */
+// @ts-nocheck
+
+import { loadRepoConfigJson } from './loadRepoConfigJson';
+
+export interface RuntimeIntervals {
+  fundamentalAgentMs: number;
+  macroAgentMs: number;
+  portfolioMonitorMs: number;
+  reflectionEngineMs: number;
+  newsEngineMs: number;
+  /** Off-hours / weekend NewsEngine poll cadence (conservation). */
+  newsEngineOffHoursMs: number;
+  /** After 09:30 ET, how long staged catalysts may be matched to opening ticks. */
+  newsOpenConfluenceWindowMs: number;
+  /** ET minutes since midnight when INTRADAY staged catalysts expire (e.g. 630 = 10:30). */
+  newsIntradayStageUntilEtMinutes: number;
+  rssFeedErrorBackoffMs: number;
+  rssFeedFetchTimeoutMs: number;
+  chiefTraderWeightSyncMs: number;
+  chiefTraderIdeaTtlMs: number;
+  systemMetricsMs: number;
+  portfolioReconciliationMs: number;
+  reconciliationBootWarmupMs: number;
+  marketDataReconnectMs: number;
+  networkReconnectBackoffMs: number[];
+  marketDataCrossCheckMs: number;
+  kronosRecheckMs: number;
+  kronosPredictionCooldownMs: number;
+  kronosHttpTimeoutMs: number;
+  /** Max in-flight Chronos /forecast HTTP calls (serialize CPU timeout storms). */
+  kronosForecastMaxConcurrent: number;
+  openAlicePollMs: number;
+  openAliceRequestTimeoutMs: number;
+  openAliceMcpDefaultTimeoutMs: number;
+  modelRuntimeProbeTimeoutMs: number;
+  /** Bounded timeout for a real, cheap Ollama completion capability check (not just /api/tags
+   *  reachability) — a loaded/OOM/misconfigured local model can be slower than the plain
+   *  reachability probe above without being genuinely unavailable. */
+  ollamaCompletionProbeTimeoutMs: number;
+  fundamentalsCacheMaxAgeMs: number;
+  macroCacheMaxAgeMs: number;
+  externalDataRateLimitCooldownMs: number;
+  dbBackupIntervalMs: number;
+  dbBackupRetentionDays: number;
+  eventStoreMaxRecentEvents: number;
+  eventStoreMaxTraces: number;
+  eventStoreSchemaVersion: number;
+  agentActivityWindowMs: number;
+  opportunityWindowHours: number;
+  omsFollowUpMinAgeMs: number;
+  omsFollowUpIntervalMs: number;
+  omsPollForFillTimeoutMs: number;
+  omsPollForFillIntervalMs: number;
+  autoTradeSchedulerMs: number;
+  strategyEngineShadowMs: number;
+  javaQuantAdvisoryMs: number;
+  aiProviderHealthCheckMs: number;
+  /** How often the live SessionLifecycle worker re-classifies PRE_MARKET/REGULAR/AFTER_HOURS/CLOSED. */
+  sessionLifecycleEvalMs: number;
+  /** How often the observational calibration-candidate validation cycle re-runs (Phase 7E). */
+  calibrationValidationCycleMs: number;
+  /** heartbeatWatchdog.ts (R2 remediation) check cadence. */
+  heartbeatWatchdogCheckMs: number;
+  /** Crypto Expansion Phase 4 (2026-09-21): CryptoMarketDataIngestion.ts poll cadence (REST, no
+   *  crypto WebSocket stream exists yet - see AlpacaCryptoMarketData.ts). */
+  cryptoMarketDataIngestionMs: number;
+  /** Real defect fixed 2026-09-22 (CLI forensics pass, live-database-verified): candidate_rankings
+   *  had no retention policy at all - 1.38M+ rows accumulated since this table's introduction with
+   *  zero pruning anywhere in the codebase (unlike observability_events, which has a real
+   *  sweepObservabilityRetention() on retentionDays=14). This is the operationalRetention.ts sweep's
+   *  cutoff, mirroring that same pattern for this table specifically - a rolling ranking-cycle
+   *  snapshot with no long-term audit-trail requirement (distinct from trades/fills/risk_assessments/
+   *  event_traces, which stay unpruned by design as the permanent decision record). */
+  candidateRankingsRetentionDays: number;
+  /** Sweep cadence for the above - mirrors observability.json's retentionSweepMs pattern. */
+  candidateRankingsRetentionSweepMs: number;
+}
+
+const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
+  'fundamentalAgentMs', 'macroAgentMs', 'portfolioMonitorMs', 'reflectionEngineMs', 'newsEngineMs',
+  'newsEngineOffHoursMs', 'newsOpenConfluenceWindowMs', 'newsIntradayStageUntilEtMinutes',
+  'rssFeedErrorBackoffMs', 'rssFeedFetchTimeoutMs',
+  'chiefTraderWeightSyncMs', 'chiefTraderIdeaTtlMs', 'systemMetricsMs', 'portfolioReconciliationMs',
+  'reconciliationBootWarmupMs', 'marketDataReconnectMs', 'networkReconnectBackoffMs', 'marketDataCrossCheckMs', 'kronosRecheckMs', 'kronosPredictionCooldownMs',
+  'kronosHttpTimeoutMs', 'kronosForecastMaxConcurrent', 'openAlicePollMs', 'openAliceRequestTimeoutMs', 'openAliceMcpDefaultTimeoutMs',
+  'modelRuntimeProbeTimeoutMs', 'ollamaCompletionProbeTimeoutMs', 'fundamentalsCacheMaxAgeMs', 'macroCacheMaxAgeMs',
+  'externalDataRateLimitCooldownMs', 'dbBackupIntervalMs', 'dbBackupRetentionDays',
+  'eventStoreMaxRecentEvents', 'eventStoreMaxTraces', 'eventStoreSchemaVersion',
+  'agentActivityWindowMs', 'opportunityWindowHours', 'omsFollowUpMinAgeMs', 'omsFollowUpIntervalMs',
+  'omsPollForFillTimeoutMs', 'omsPollForFillIntervalMs', 'autoTradeSchedulerMs', 'strategyEngineShadowMs',
+  'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
+  'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
+  'candidateRankingsRetentionDays', 'candidateRankingsRetentionSweepMs',
+];
+
+function loadRuntimeIntervals(): RuntimeIntervals {
+  const raw = loadRepoConfigJson<Record<string, unknown>>('runtimeIntervals.json');
+  for (const key of REQUIRED_KEYS) {
+    if (key === 'networkReconnectBackoffMs') {
+      const arr = raw[key];
+      if (!Array.isArray(arr) || arr.length === 0 || !arr.every(v => typeof v === 'number' && Number.isFinite(v))) {
+        throw new Error('config/runtimeIntervals.json missing numeric array field: networkReconnectBackoffMs');
+      }
+      continue;
+    }
+    if (typeof raw[key] !== 'number' || !Number.isFinite(raw[key] as number)) {
+      throw new Error(`config/runtimeIntervals.json missing numeric field: ${key}`);
+    }
+  }
+  return raw as unknown as RuntimeIntervals;
+}
+
+export const runtimeIntervals: RuntimeIntervals = loadRuntimeIntervals();

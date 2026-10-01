@@ -1,0 +1,184 @@
+// @ts-nocheck
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import request from 'supertest';
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+
+/**
+ * Real isolated-temp-SQLite-DB integration test (same established pattern as
+ * CampaignTracker.test.ts) for the new /api/v2/quant-core/health and /api/v2/quant-core/parity
+ * routes — the parity route's whole job is reading real rows back out of observability_events
+ * (where QuantCoreBridge/ParityComparator actually persist divergences), so this proves the real
+ * query/parse path, not a mocked one.
+ */
+describe('/api/v2/quant-core routes', () => {
+  let tmpDbPath: string;
+  let db: any;
+  let sqliteDb: any;
+  let schema: any;
+  let app: express.Express;
+
+  beforeAll(async () => {
+    tmpDbPath = path.join(os.tmpdir(), `argus_quantcore_route_${Date.now()}_${process.pid}.db`);
+    process.env.ARGUS_DB_PATH = tmpDbPath;
+    // Explicit 'false', not delete() - dotenv re-populates process.env from the real .env file
+    // during a later import in this test run, which would silently override a deleted key back
+    // to whatever the real .env currently has (that file's own QUANT_JAVA_CORE_ENABLED value is
+    // an operator setting unrelated to this test and must not leak into it).
+    process.env.QUANT_JAVA_CORE_ENABLED = 'false';
+
+    ({ db, sqliteDb } = await import('../db'));
+    schema = await import('../db/schema');
+    const { v2Router } = await import('./v2System');
+
+    app = express();
+    app.use(express.json());
+    app.use('/api/v2', v2Router);
+  });
+
+  afterAll(() => {
+    try { sqliteDb.close(); } catch { /* already closed */ }
+    for (const suffix of ['', '-shm', '-wal']) {
+      try { fs.unlinkSync(tmpDbPath + suffix); } catch { /* best-effort cleanup */ }
+    }
+    delete process.env.ARGUS_DB_PATH;
+    delete process.env.QUANT_JAVA_CORE_ENABLED;
+  });
+
+  it('GET /quant-core/health reports disabled when QUANT_JAVA_CORE_ENABLED is not set', async () => {
+    const res = await request(app).get('/api/v2/quant-core/health');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.enabled).toBe(false);
+    expect(res.body.connected).toBe(false);
+  });
+
+  it('GET /quant-core/health reports the real liveIdeasEnabled state (Phase 3E dashboard) - false by default even if the base flag were on', async () => {
+    const res = await request(app).get('/api/v2/quant-core/health');
+    expect(res.status).toBe(200);
+    // Neither QUANT_JAVA_CORE_ENABLED nor QUANT_JAVA_CORE_LIVE_IDEAS_ENABLED is set in this test env.
+    expect(res.body.liveIdeasEnabled).toBe(false);
+  });
+
+  it('GET /quant-core/parity returns an empty list when nothing has been recorded', async () => {
+    const res = await request(app).get('/api/v2/quant-core/parity');
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.count).toBe(0);
+    expect(res.body.divergences).toEqual([]);
+  });
+
+  it('GET /quant-core/parity returns real rows persisted to observability_events, newest first', async () => {
+    const older = {
+      id: 'obs-1', ts: 1000, level: 'WARN', category: 'OBSERVABILITY',
+      eventType: 'QUANT_CORE_PARITY_DIVERGENCE', loggerName: 'QuantCoreBridge',
+      message: 'quant_core_parity_divergence', sessionId: 'sess-1', symbol: 'AAPL',
+      payload: JSON.stringify({ divergences: [{ field: 'rsi', tsValue: 60, javaValue: 65, diffPct: 0.083 }] }),
+    };
+    const newer = {
+      id: 'obs-2', ts: 2000, level: 'WARN', category: 'OBSERVABILITY',
+      eventType: 'QUANT_CORE_PARITY_DIVERGENCE', loggerName: 'QuantCoreBridge',
+      message: 'quant_core_parity_divergence', sessionId: 'sess-1', symbol: 'MSFT',
+      payload: JSON.stringify({ divergences: [{ field: 'macd', tsValue: 1.2, javaValue: 1.0, diffPct: 0.167 }] }),
+    };
+    // Unrelated event type must never leak into this route's results.
+    const unrelated = {
+      id: 'obs-3', ts: 3000, level: 'INFO', category: 'SYSTEM',
+      eventType: 'SOME_OTHER_EVENT', loggerName: 'Other', message: 'irrelevant', sessionId: 'sess-1',
+    };
+    await db.insert(schema.observabilityEvents).values(older);
+    await db.insert(schema.observabilityEvents).values(newer);
+    await db.insert(schema.observabilityEvents).values(unrelated);
+
+    const res = await request(app).get('/api/v2/quant-core/parity');
+    expect(res.status).toBe(200);
+    expect(res.body.count).toBe(2);
+    expect(res.body.divergences[0].symbol).toBe('MSFT'); // newest first
+    expect(res.body.divergences[0].divergences[0].field).toBe('macd');
+    expect(res.body.divergences[1].symbol).toBe('AAPL');
+  });
+
+  describe('GET /quant-core/catalog (2026-09-10)', () => {
+    // KNOWN_FLAKY (2026-09-21, tracked explicitly per operator instruction - "distinguish PASS /
+    // KNOWN_FLAKY / FAIL rather than silently treating flaky as pass"). Root-caused, not just
+    // observed:
+    //   - Isolated (`vitest run` on this file alone): 100% reliable across every re-run performed
+    //     this session, ~10s total, all 10 tests green every time.
+    //   - Full suite (`npm test`, 552 files / ~4100 tests): a DIFFERENT one of this block's 5
+    //     tests failed on 4 separate full-suite runs this same day - never the same test twice,
+    //     one failure an explicit "Test timed out in 5000ms" (not an assertion mismatch), and a
+    //     failure recurred once even after raising this block's timeout to 15s.
+    // Together this rules out both "slow code" (config/engineOwnership.json is ~170 entries /
+    // ~69KB, microseconds to parse - nothing here is O(n^2)) and "a real assertion-logic bug"
+    // (which would reproduce deterministically in isolation, and does not). What's left is
+    // scheduling contention specific to running inside vitest's full worker pool at this suite's
+    // real size, not something any timeout value on this one block can fully absorb - a genuine
+    // "next maintenance pass" item (worker-pool/thread concurrency tuning for the full suite), not
+    // something resolved today. The 15s timeout stays as real, honest headroom over the 5s
+    // default; it measurably reduces failure frequency without pretending to eliminate a
+    // suite-level concurrency property this one file's config cannot control.
+    beforeAll(() => {
+      vi.setConfig({ testTimeout: 15_000 });
+    });
+
+    // 2026-09-27 follow-up: the beforeAll() vi.setConfig({ testTimeout: 15_000 }) above was
+    // verified NOT reliably taking effect - a full-suite run reproduced "Test timed out in
+    // 5000ms" (the unmodified default) on one of these tests, not 15000ms. Passing the timeout as
+    // each it()'s own explicit third argument is the vitest-documented, guaranteed-scoped
+    // mechanism; the beforeAll config call is left in place as harmless but is no longer relied on.
+    it('returns the full registry as a flat, categorized engine list with real wiring flags', async () => {
+      const res = await request(app).get('/api/v2/quant-core/catalog');
+      expect(res.status).toBe(200);
+      expect(res.body.ok).toBe(true);
+      // Real registry, not a fabricated count - just assert it's a real, non-trivial catalog.
+      expect(res.body.totalEngines).toBeGreaterThan(100);
+      expect(Array.isArray(res.body.engines)).toBe(true);
+      expect(res.body.engines.length).toBe(res.body.totalEngines);
+    }, 15_000);
+
+    it('every engine has a real key, name, category, and status field (or null status, never fabricated)', async () => {
+      const res = await request(app).get('/api/v2/quant-core/catalog');
+      for (const e of res.body.engines) {
+        expect(typeof e.key).toBe('string');
+        expect(e.key.length).toBeGreaterThan(0);
+        expect(typeof e.name).toBe('string');
+        expect(typeof e.category).toBe('string');
+        expect(e.status === null || typeof e.status === 'string').toBe(true);
+      }
+    }, 15_000);
+
+    it('categorizes a known Options engine correctly', async () => {
+      const res = await request(app).get('/api/v2/quant-core/catalog');
+      const entry = res.body.engines.find((e: any) => e.key === 'option_iron_condor');
+      expect(entry).toBeDefined();
+      expect(entry.category).toBe('Options');
+    }, 15_000);
+
+    it('categorizes the two most recently added Stocks/ETFs research engines correctly', async () => {
+      const res = await request(app).get('/api/v2/quant-core/catalog');
+      const positionAveraging = res.body.engines.find((e: any) => e.key === 'position_averaging');
+      const smartBeta = res.body.engines.find((e: any) => e.key === 'smart_beta_factor');
+      expect(positionAveraging).toBeDefined();
+      expect(smartBeta).toBeDefined();
+      expect(positionAveraging.status).toBe('RESEARCH');
+      expect(smartBeta.status).toBe('RESEARCH');
+    }, 15_000);
+
+    it('reports real (not fabricated) wiring-state flags reflecting the current env', async () => {
+      const res = await request(app).get('/api/v2/quant-core/catalog');
+      // QUANT_JAVA_CORE_ENABLED is explicitly set 'false' in this test's beforeAll.
+      expect(res.body.wiring.javaQuantCoreEnabled).toBe(false);
+      expect(res.body.wiring.javaLiveIdeasEnabled).toBe(false);
+      expect(typeof res.body.wiring.javaFactorCompositeVoteEnabled).toBe('boolean');
+      expect(typeof res.body.wiring.quantIndependentQualificationEnabled).toBe('boolean');
+    }, 15_000);
+
+    it('categoryCounts sums to totalEngines', async () => {
+      const res = await request(app).get('/api/v2/quant-core/catalog');
+      const sum = Object.values(res.body.categoryCounts).reduce((a: number, b: any) => a + b, 0);
+      expect(sum).toBe(res.body.totalEngines);
+    }, 15_000);
+  });
+});

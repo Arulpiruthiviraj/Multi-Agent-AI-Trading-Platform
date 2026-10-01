@@ -1,0 +1,90 @@
+// @ts-nocheck
+import { describe, it, expect } from 'vitest';
+import { assertBrokerEnvironmentAllowsOrder, classifyBrokerEnvironment } from './brokerEnvironment';
+import { evaluateLiveReadiness } from './liveReadinessEngine';
+import { authorizeProductionOrder, assertLiveReadinessAllowsOrder } from './liveOrderAuthorization';
+import { armLiveTrading, disarmLiveTrading, LIVE_TRADING_CONFIRMATION_PHRASE } from './LiveTradingConfirmation';
+import { researchSafety } from '../config/researchSafety';
+
+describe('LIVE readiness engine and broker environment', () => {
+  it('empty tradingMode or unknown paperMode is UNKNOWN, never inferred as PAPER', () => {
+    expect(classifyBrokerEnvironment({ tradingMode: '', paperMode: true })).toBe('UNKNOWN');
+    expect(classifyBrokerEnvironment({ tradingMode: 'Paper', paperMode: null })).toBe('UNKNOWN');
+    expect(assertBrokerEnvironmentAllowsOrder({ tradingMode: 'Paper', paperMode: null }).ok).toBe(false);
+  });
+
+  it('LIVE + paperMode true is UNKNOWN and cannot order', () => {
+    expect(classifyBrokerEnvironment({ tradingMode: 'LIVE', paperMode: true })).toBe('UNKNOWN');
+    expect(assertBrokerEnvironmentAllowsOrder({ tradingMode: 'LIVE', paperMode: true }).ok).toBe(false);
+  });
+
+  it('PAPER + paperMode true is PAPER and may order on the paper path', () => {
+    expect(classifyBrokerEnvironment({ tradingMode: 'Paper', paperMode: true })).toBe('PAPER');
+    expect(assertBrokerEnvironmentAllowsOrder({ tradingMode: 'Paper', paperMode: true }).ok).toBe(true);
+  });
+
+  it('SQLite integer paperMode 0 with LIVE is LIVE classification only', () => {
+    expect(classifyBrokerEnvironment({ tradingMode: 'LIVE', paperMode: 0 })).toBe('LIVE');
+  });
+
+  it('PAPER + paperMode false is UNKNOWN', () => {
+    expect(classifyBrokerEnvironment({ tradingMode: 'Paper', paperMode: false })).toBe('UNKNOWN');
+    expect(assertBrokerEnvironmentAllowsOrder({ tradingMode: 'Paper', paperMode: false }).ok).toBe(false);
+  });
+
+  it('LIVE + paperMode false is LIVE classification only — not a LIVE_READY certificate', () => {
+    expect(classifyBrokerEnvironment({ tradingMode: 'LIVE', paperMode: false })).toBe('LIVE');
+    const r = evaluateLiveReadiness();
+    expect(r.result).toBe('LIVE_NO_GO');
+  });
+
+  it('evaluateLiveReadiness is LIVE_NO_GO with edge 8 and Canadian BLOCKED', () => {
+    const r = evaluateLiveReadiness();
+    expect(r.result).toBe('LIVE_NO_GO');
+    expect(r.tradingEdgeScore).toBe(8);
+    expect(r.organicPaper).toBe('NOT_ESTABLISHED');
+    expect(r.canadianLive).toBe('NOT_AVAILABLE');
+    expect(r.canPlaceOrdersViaResearch).toBe(false);
+    expect(r.failedMandatory).toContain('OOS');
+    expect(r.failedMandatory).toContain('LEGAL_CA');
+    expect(r.failedMandatory).toContain('PAPER_PROFIT_FACTOR');
+    expect(r.failedMandatory).toContain('OMS_HEALTH');
+    expect(r.empiricallyJustifiedToRiskCapital).toBe(false);
+    expect(r.liveEligibility).toBe('FAIL');
+    expect(r.engineeringCapableOfLiveExecution).toBe(true);
+    expect(r.requirementMatrix.length).toBeGreaterThan(20);
+    expect(r.strategyBoard.length).toBeGreaterThanOrEqual(researchSafety.coreStrategyIds.length);
+    expect(r.gates.find((g) => g.id === 'LEGAL_CA')?.verdict).toBe('BLOCKED');
+    expect(r.gates.find((g) => g.id === 'PAPER')?.detail).toMatch(/Organic PAPER FILLED SELL P&L:/);
+    expect(r.gates.find((g) => g.id === 'STRATEGY_CORE')?.verdict).toBe('FAIL');
+    expect(r.gates.find((g) => g.id === 'ZERO_COST_RESEARCH')?.verdict).toBe('PASS');
+    const warehouse = r.gates.find((g) => g.id === 'RESEARCH_WAREHOUSE')?.verdict;
+    expect(['UNAVAILABLE', 'PASS']).toContain(warehouse);
+    expect(r.result).toBe('LIVE_NO_GO');
+    expect(researchSafety.coreStrategyIds).toHaveLength(5);
+  });
+
+  it('cannot return LIVE_READY while CORE is UNTESTED and paper is empty', () => {
+    const r = evaluateLiveReadiness();
+    expect(r.gates.every((g) => g.verdict === 'PASS')).toBe(false);
+  });
+
+  it('assertLiveReadinessAllowsOrder does not block PAPER', () => {
+    expect(assertLiveReadinessAllowsOrder('PAPER').ok).toBe(true);
+  });
+
+  it('LIVE authorization is rejected while evaluateLiveReadiness is LIVE_NO_GO even if LIVE_ARM is set', () => {
+    const prev = process.env.PAPER_TRADING_ONLY;
+    process.env.PAPER_TRADING_ONLY = 'false';
+    armLiveTrading(LIVE_TRADING_CONFIRMATION_PHRASE);
+    try {
+      const gate = authorizeProductionOrder({ tradingMode: 'LIVE', paperMode: false });
+      expect(gate.ok).toBe(false);
+      expect(gate.reason).toMatch(/LIVE_NO_GO/);
+    } finally {
+      disarmLiveTrading();
+      if (prev === undefined) delete process.env.PAPER_TRADING_ONLY;
+      else process.env.PAPER_TRADING_ONLY = prev;
+    }
+  });
+});
