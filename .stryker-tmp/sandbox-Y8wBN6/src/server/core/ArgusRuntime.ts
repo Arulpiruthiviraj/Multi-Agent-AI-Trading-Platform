@@ -1,0 +1,251 @@
+/**
+ * Single explicit Argus runtime lifecycle — coordinates boot state without duplicating
+ * RiskEngine, OMS, BrokerManager, or trading logic.
+ */
+// @ts-nocheck
+
+import { bootArgusCore, isArgusCoreBooted } from './ArgusCoreBoot';
+import { isApiEnabled, isArgusEngineDaemon, isArgusHeadless, isWebUiEnabled } from '../app/runtimeConfig';
+import { tradingEngine } from '../engines/TradingEngine';
+import { system } from './SystemBootstrap';
+import { marketDataWorker } from '../services/MarketDataWorker';
+import { BrokerManager } from '../../brokers/BrokerManager';
+import { evaluateLiveReadiness } from './liveReadinessEngine';
+import { getPipelineAgentSnapshot } from './pipelineAgentSnapshot';
+
+export type ArgusRuntimePhase =
+  | 'STOPPED'
+  | 'STARTING'
+  | 'RUNNING'
+  | 'STOPPING'
+  | 'FAILED'
+  | 'SAFE_MODE';
+
+export interface ArgusRuntimeSnapshot {
+  phase: ArgusRuntimePhase;
+  coreBootedAt: string | null;
+  headless: boolean;
+  engineDaemon: boolean;
+  webUiEnabled: boolean;
+  apiEnabled: boolean;
+  bootError: string | null;
+  pid: number;
+  uptimeMs: number;
+}
+
+export interface ArgusRuntimeHealth {
+  ok: boolean;
+  phase: ArgusRuntimePhase;
+  coreBooted: boolean;
+  tradingState: string;
+  autobotEnabled: boolean;
+  emergencyStopActive: boolean;
+  marketDataConnected: boolean;
+  /** R4 diagnostic-logging fix (2026-09-07 post-audit remediation, §7/§30 P1 finding #3): the
+   *  audit found `marketDataConnected:false` while IBKR's gatewaySocket itself reported CONNECTED,
+   *  cause UNKNOWN at audit time, precisely because this endpoint exposed only the boolean and
+   *  none of getFeedStatus()'s other fields an operator would need to actually diagnose that gap
+   *  (was the WS/socket connected but never authenticated? was there a real lastError - e.g. IBKR
+   *  error 354, market-data-line-not-subscribed? what did the raw readyState say?). Cannot itself
+   *  root-cause the Sept-6 finding (that needs a real Monday-open observation), but the next
+   *  occurrence of this exact symptom will have real evidence attached instead of a bare boolean. */
+  marketDataAuthenticated: boolean;
+  marketDataLastError: string | null;
+  marketDataReadyState: number | null;
+  brokerId: string | null;
+  pipelineRunning: boolean;
+  liveReadiness: string;
+  safeMode: boolean;
+  pid: number;
+  uptimeMs: number;
+  engineDaemon: boolean;
+  /** Opportunity-capture remediation (2026-09-03, Sept-2 forensic-audit follow-up): a raw
+   *  process.memoryUsage() snapshot - the two prior silent engine deaths that day left zero
+   *  crash.log evidence, so this makes memory pressure at least observable in every health poll
+   *  leading up to a future death, even though it cannot itself diagnose a death already past. */
+  memoryRssMb: number;
+  memoryHeapUsedMb: number;
+}
+
+export class ArgusRuntime {
+  private static instance: ArgusRuntime;
+  private phase: ArgusRuntimePhase = 'STOPPED';
+  private coreBootedAt: string | null = null;
+  private bootError: string | null = null;
+
+  static getInstance(): ArgusRuntime {
+    if (!ArgusRuntime.instance) {
+      ArgusRuntime.instance = new ArgusRuntime();
+    }
+    return ArgusRuntime.instance;
+  }
+
+  /** Reset for unit tests only. */
+  resetForTests(): void {
+    this.phase = isArgusCoreBooted() ? 'RUNNING' : 'STOPPED';
+    this.coreBootedAt = null;
+    this.bootError = null;
+  }
+
+  getSnapshot(): ArgusRuntimeSnapshot {
+    return {
+      phase: this.derivePhase(),
+      coreBootedAt: this.coreBootedAt,
+      headless: isArgusHeadless(),
+      engineDaemon: isArgusEngineDaemon(),
+      webUiEnabled: isWebUiEnabled(),
+      apiEnabled: isApiEnabled(),
+      bootError: this.bootError,
+      pid: process.pid,
+      uptimeMs: Math.round(process.uptime() * 1000),
+    };
+  }
+
+  private derivePhase(): ArgusRuntimePhase {
+    if (this.phase === 'FAILED') return 'FAILED';
+    if (this.phase === 'STARTING') return 'STARTING';
+    if (this.phase === 'STOPPING') return 'STOPPING';
+    if (!isArgusCoreBooted() && this.phase !== 'RUNNING') return 'STOPPED';
+    if (
+      tradingEngine.state.emergencyStopActive
+      || tradingEngine.state.tradingState !== 'TRADING_ENABLED'
+    ) {
+      return 'SAFE_MODE';
+    }
+    return this.phase === 'RUNNING' || isArgusCoreBooted() ? 'RUNNING' : 'STOPPED';
+  }
+
+  /** Engine-only initialize — no Express/Vite/WebSocket. Idempotent. */
+  async initialize(): Promise<void> {
+    if (this.phase === 'RUNNING' || isArgusCoreBooted()) {
+      this.phase = 'RUNNING';
+      return;
+    }
+    this.phase = 'STARTING';
+    this.bootError = null;
+    try {
+      await bootArgusCore();
+      this.coreBootedAt = new Date().toISOString();
+      this.phase = 'RUNNING';
+    } catch (e: unknown) {
+      this.phase = 'FAILED';
+      this.bootError = e instanceof Error ? e.message : String(e);
+      throw e;
+    }
+  }
+
+  /** Alias for initialize — runtime is live after core boot. */
+  async start(): Promise<void> {
+    return this.initialize();
+  }
+
+  /**
+   * Safe runtime stop: pause trading + disable Autobot + stop pipeline workers.
+   * Does NOT exit the Node process (HTTP/API may remain up for observability).
+   */
+  async stop(opts: { reason?: string; actor?: string } = {}): Promise<{ ok: boolean; error?: string }> {
+    if (this.phase === 'STOPPED' && !isArgusCoreBooted()) {
+      return { ok: true };
+    }
+    this.phase = 'STOPPING';
+    const reason = opts.reason ?? 'Runtime stop requested';
+    const actor = opts.actor ?? 'ArgusRuntime';
+    try {
+      if (tradingEngine.state.enabled) {
+        await tradingEngine.toggle({ enabled: false });
+      }
+      if (tradingEngine.state.tradingState === 'TRADING_ENABLED') {
+        await tradingEngine.setTradingState('TRADING_PAUSED', { reason, actor });
+      }
+      system.stop();
+      this.phase = 'SAFE_MODE';
+      return { ok: true };
+    } catch (e: unknown) {
+      this.phase = 'FAILED';
+      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  status() {
+    const sys = system.getStatus();
+    return {
+      runtime: this.getSnapshot(),
+      system: sys,
+      autobot: {
+        enabled: tradingEngine.state.enabled,
+        autoBotEnabled: tradingEngine.state.enabled,
+        tradingMode: tradingEngine.state.tradingMode,
+        tradingState: tradingEngine.state.tradingState,
+        emergencyStopActive: tradingEngine.state.emergencyStopActive,
+        budget: tradingEngine.state.budget,
+        strategy: tradingEngine.state.strategy,
+        strategyFocus: tradingEngine.state.strategy,
+        dailyLossLimit: tradingEngine.state.dailyLossLimit,
+        scheduleWindow: tradingEngine.getScheduleWindowStatus(),
+      },
+      consistent: sys.running === tradingEngine.state.enabled,
+      liveReadiness: evaluateLiveReadiness().result,
+      pipelineAgents: getPipelineAgentSnapshot(),
+    };
+  }
+
+  /** Read-only diagnostic: selection/sync state alone cannot prove a broker session is usable. */
+  async brokerReadiness(): Promise<{ ready: boolean; detail: string }> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const manager = BrokerManager.getInstance();
+      const broker = manager.getActiveBroker();
+      if (!broker) return { ready: false, detail: 'no active broker' };
+      if (!manager.isReadyForReconciliation()) return { ready: false, detail: `${broker.id}: broker state ${manager.getSyncState()} (not synchronized)` };
+      const snapshot = (broker as typeof broker & { getConnectionSnapshot?: () => Record<string, unknown> }).getConnectionSnapshot?.();
+      if (snapshot && ('authenticated' in snapshot || broker.id === 'ibkr_gateway') && snapshot.authenticated !== true) {
+        return { ready: false, detail: `${broker.id}: session not authenticated` };
+      }
+      const status = await Promise.race([
+        broker.health(),
+        new Promise<string>(resolve => { timer = setTimeout(() => resolve('TIMEOUT'), 2500); }),
+      ]);
+      return { ready: status.toUpperCase() === 'HEALTHY', detail: `${broker.id}: ${status}` };
+    } catch {
+      return { ready: false, detail: 'broker connection evidence unavailable' };
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  health(): ArgusRuntimeHealth {
+    const feed = marketDataWorker.getFeedStatus();
+    let brokerId: string | null = null;
+    try {
+      brokerId = BrokerManager.getInstance().getActiveBroker()?.id ?? null;
+    } catch {
+      brokerId = null;
+    }
+    const phase = this.derivePhase();
+    const safeMode = phase === 'SAFE_MODE' || tradingEngine.state.emergencyStopActive;
+    const mem = process.memoryUsage();
+    return {
+      ok: isArgusCoreBooted() && this.phase !== 'FAILED',
+      phase,
+      coreBooted: isArgusCoreBooted(),
+      tradingState: tradingEngine.state.tradingState,
+      autobotEnabled: tradingEngine.state.enabled,
+      emergencyStopActive: tradingEngine.state.emergencyStopActive,
+      marketDataConnected: feed.connected,
+      marketDataAuthenticated: feed.authenticated,
+      marketDataLastError: feed.lastError,
+      marketDataReadyState: feed.readyState,
+      brokerId,
+      pipelineRunning: system.getStatus().running,
+      liveReadiness: evaluateLiveReadiness().result,
+      safeMode,
+      pid: process.pid,
+      uptimeMs: Math.round(process.uptime() * 1000),
+      engineDaemon: isArgusEngineDaemon(),
+      memoryRssMb: Math.round((mem.rss / (1024 * 1024)) * 10) / 10,
+      memoryHeapUsedMb: Math.round((mem.heapUsed / (1024 * 1024)) * 10) / 10,
+    };
+  }
+}
+
+export const argusRuntime = ArgusRuntime.getInstance();

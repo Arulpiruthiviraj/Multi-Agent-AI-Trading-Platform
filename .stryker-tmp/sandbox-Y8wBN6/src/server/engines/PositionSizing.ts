@@ -1,0 +1,374 @@
+/**
+ * ==========================================================
+ * Module: PositionSizing
+ *
+ * Purpose:
+ * Phase 2A of FINAL_ANALYSIS.md's 4-phase remediation plan - the exact real position-sizing math
+ * RiskEngine.ts uses live, extracted into a pure function so BacktestEngine can use the identical
+ * logic instead of its previous flat-10%-of-initial-cash rule (a real, previously-documented
+ * inconsistency - FINAL_ANALYSIS.md 15.9 - that meant a backtest "pass" would not have predicted
+ * live sizing behavior even if the underlying edge were real).
+ *
+ * Deliberately NOT done by having BacktestEngine call the live RiskEngine.evaluateRisk()
+ * singleton directly: that method reads the REAL live broker portfolio/current-time market clock
+ * and writes REAL rows to risk_assessments/risk_gate_results plus emits REAL EventBus events that
+ * ChiefTraderAgent/the WebSocket broadcast/TransactionLifecycleTracker all react to. Calling it
+ * from inside a backtest loop would corrupt the live audit trail with simulated data and emit
+ * phantom "live" events during a backtest. This module instead takes accountEquity/buyingPower/
+ * existingPositions/getRecentCloses as plain inputs, so the caller (live RiskEngine or
+ * BacktestEngine) supplies its own real-for-its-context state - live state for RiskEngine,
+ * point-in-time simulated state for BacktestEngine - while the sizing math itself is identical.
+ * ==========================================================
+ */
+// @ts-nocheck
+
+
+import { tradingSafety } from '../config/tradingSafety';
+import { INVALID_ACCOUNT_EQUITY, isPositiveFiniteMoney } from './AccountEquity';
+import { observeSafe, structuredLogger } from '../observability/StructuredLogger';
+import { evaluateQuoteFreshness } from '../core/marketDataQuality';
+import { quantizeQuantityDown } from './QuantityQuantization';
+
+export const MAX_SINGLE_SYMBOL_CONCENTRATION_PCT = tradingSafety.maxSingleSymbolConcentrationPct;
+export const MAX_SECTOR_CONCENTRATION_PCT = tradingSafety.maxSectorConcentrationPct;
+export const CORRELATION_MIN_OVERLAP = tradingSafety.correlationMinOverlap;
+export const CORRELATION_THRESHOLD = tradingSafety.correlationThreshold;
+export const MAX_CORRELATED_EXPOSURE_PCT = tradingSafety.maxCorrelatedExposurePct;
+export const STOP_LOSS_ASSUMPTION_PCT = tradingSafety.stopLossAssumptionPct;
+
+// Same real (if coarse) GICS-style sector map RiskEngine.ts uses - kept here as the single source
+// so both the live engine and the backtest engine sector-cap against identical sector groupings.
+export const SECTOR_MAP: Record<string, string> = {
+  AAPL: 'Technology', MSFT: 'Technology', NVDA: 'Technology', AMD: 'Technology',
+  AVGO: 'Technology', CRM: 'Technology', ORCL: 'Technology', ADBE: 'Technology', INTC: 'Technology',
+  GOOGL: 'Communication Services', GOOG: 'Communication Services', META: 'Communication Services',
+  NFLX: 'Communication Services', DIS: 'Communication Services', TMUS: 'Communication Services',
+  AMZN: 'Consumer Discretionary', TSLA: 'Consumer Discretionary', HD: 'Consumer Discretionary',
+  NKE: 'Consumer Discretionary', SBUX: 'Consumer Discretionary', MCD: 'Consumer Discretionary',
+  JPM: 'Financials', BAC: 'Financials', GS: 'Financials', WFC: 'Financials', MS: 'Financials', V: 'Financials', MA: 'Financials',
+  XOM: 'Energy', CVX: 'Energy', COP: 'Energy', SLB: 'Energy',
+  JNJ: 'Healthcare', PFE: 'Healthcare', UNH: 'Healthcare', LLY: 'Healthcare', MRK: 'Healthcare', ABBV: 'Healthcare',
+  WMT: 'Consumer Staples', PG: 'Consumer Staples', KO: 'Consumer Staples', PEP: 'Consumer Staples', COST: 'Consumer Staples',
+  BA: 'Industrials', CAT: 'Industrials', GE: 'Industrials', UPS: 'Industrials', HON: 'Industrials',
+  SPY: 'Diversified ETF', QQQ: 'Diversified ETF', VOO: 'Diversified ETF', VTI: 'Diversified ETF', DIA: 'Diversified ETF', IWM: 'Diversified ETF',
+};
+
+export function getSector(symbol: string): string | null {
+  const sector = SECTOR_MAP[symbol.toUpperCase()];
+  if (!sector || sector === 'Diversified ETF') return null;
+  return sector;
+}
+
+/** Real Pearson correlation of daily returns (not raw prices). Null on too little overlap. */
+export function returnCorrelation(closesA: number[], closesB: number[]): number | null {
+  const n = Math.min(closesA.length, closesB.length);
+  if (n < CORRELATION_MIN_OVERLAP + 1) return null;
+  const a = closesA.slice(-n), b = closesB.slice(-n);
+  const retA = a.slice(1).map((v, i) => v / a[i] - 1);
+  const retB = b.slice(1).map((v, i) => v / b[i] - 1);
+  const meanA = retA.reduce((s, v) => s + v, 0) / retA.length;
+  const meanB = retB.reduce((s, v) => s + v, 0) / retB.length;
+  let cov = 0, varA = 0, varB = 0;
+  for (let i = 0; i < retA.length; i++) {
+    const da = retA[i] - meanA, db = retB[i] - meanB;
+    cov += da * db; varA += da * da; varB += db * db;
+  }
+  if (varA === 0 || varB === 0) return null;
+  return cov / Math.sqrt(varA * varB);
+}
+
+export interface ExistingPosition {
+  symbol: string;
+  quantity: number;
+  /** Observed mark in the caller's own clock/data context. Entry cost is not a current mark. */
+  mark?: { price: number | null; priceAgeMs: number | null; source: string };
+}
+
+export interface SizingContext {
+  side: 'BUY' | 'SELL';
+  symbol: string;
+  currentPrice: number;
+  accountEquity: number;
+  buyingPower: number;
+  maxTradeSizeDollar: number;
+  maxPortfolioRiskPct: number;
+  existingPositions: ExistingPosition[];
+  maxOpenPositions: number;
+  /** E2B - optional, additive. Defaults to 'FIXED_DOLLAR' (today's exact behavior: the order-
+   * notional cap is maxTradeSizeDollar, a flat number). 'PERCENT_OF_EQUITY' instead derives the
+   * order-notional cap from accountEquity * (percentOfEquityPct / 100), so it scales with the
+   * account instead of staying flat - every other cap (risk-based, buying-power, concentration,
+   * correlation) is unaffected by this setting and still applies on top of it. */
+  sizingMode?: 'FIXED_DOLLAR' | 'PERCENT_OF_EQUITY';
+  /** Only read when sizingMode='PERCENT_OF_EQUITY'. */
+  percentOfEquityPct?: number;
+  /** LIVE: skipped correlation/sector history is FAIL (UNKNOWN), not PASS. Paper keeps SKIPPED. */
+  failClosedUnknownInputs?: boolean;
+  /** Real recent daily closes for correlation, or null if unavailable - caller supplies the
+   * right point-in-time source (live: Alpaca-backed cache; backtest: bars already visible up to
+   * the simulated clock, never a future bar). */
+  getRecentCloses: (symbol: string) => Promise<number[] | null>;
+  /** Crypto Expansion Phase 1 (2026-09-21). Smallest tradable quantity increment - every quantity
+   * this module computes is rounded DOWN to this step (see QuantityQuantization.ts). Omitted (the
+   * default) means step=1, i.e. today's exact whole-share equity behavior - unchanged for every
+   * existing caller that doesn't pass this. Callers derive it from the instrument registry
+   * (config/cryptoInstruments.ts) for registered crypto symbols only. */
+  quantityStep?: number;
+  /** Below this quantity, BUY sizing is rejected (maxQuantity=0) rather than rounded up to meet
+   * it. Omitted = no minimum-quantity floor (today's exact equity behavior). BUY only - SELL/exit
+   * sizing is never capped by this module (see the SELL branch below). */
+  minimumQuantity?: number;
+  /** Below this notional (maxQuantity * currentPrice), BUY sizing is rejected rather than
+   * increased to meet it. Omitted = no minimum-notional floor. BUY only. */
+  minimumNotional?: number;
+}
+
+export interface SizingGateResult {
+  gate: string;
+  passed: boolean;
+  detail: any;
+}
+
+type SizingHonesty = 'PASS' | 'CLAMPED' | 'FAIL' | 'UNKNOWN' | 'SKIPPED';
+
+export interface SizingResult {
+  maxQuantity: number;
+  gates: SizingGateResult[];
+}
+
+/**
+ * The exact real sizing math RiskEngine.ts evaluates live (order-notional cap, single-symbol
+ * concentration, open-positions cap, sector concentration, correlation-based exposure, sufficient-
+ * size) - extracted verbatim in logic, parameterized on inputs instead of live DB/broker state.
+ */
+export async function calculatePositionSizing(ctx: SizingContext): Promise<SizingResult> {
+  const gates: SizingGateResult[] = [];
+  const record = (gate: string, passed: boolean, detail: any) => gates.push({ gate, passed, detail });
+
+  if (!isPositiveFiniteMoney(ctx.accountEquity)) {
+    record(INVALID_ACCOUNT_EQUITY, false, { accountEquity: ctx.accountEquity });
+    record('sufficient_size', false, { maxQuantity: 0, reason: 'INVALID_ACCOUNT_EQUITY' });
+    return { maxQuantity: 0, gates };
+  }
+
+  const riskPerShare = ctx.currentPrice * STOP_LOSS_ASSUMPTION_PCT;
+  const maxRiskAmount = ctx.accountEquity * ctx.maxPortfolioRiskPct;
+  // Crypto Expansion Phase 1 (2026-09-21): shared by both BUY blocks below (notional/risk/BP, and
+  // concentration/sector/correlation). Omitted -> step=1 -> exact existing equity behavior.
+  const quantityStep = ctx.quantityStep ?? 1;
+
+  // E2B - the order-notional cap's dollar figure depends on sizingMode. FIXED_DOLLAR (default,
+  // unchanged behavior) uses maxTradeSizeDollar verbatim; PERCENT_OF_EQUITY derives it from
+  // current equity instead, so the cap scales as the account grows/shrinks rather than staying
+  // flat. Every other cap below (risk-based, buying-power, concentration, correlation) is
+  // computed exactly as before and still applies on top of whichever notional cap wins here.
+  const sizingMode = ctx.sizingMode ?? 'FIXED_DOLLAR';
+  const effectiveNotionalCapDollar = sizingMode === 'PERCENT_OF_EQUITY'
+    ? ctx.accountEquity * ((ctx.percentOfEquityPct ?? tradingSafety.defaultPercentOfEquityPct) / 100)
+    : ctx.maxTradeSizeDollar;
+
+  let maxQuantity: number;
+
+  if (ctx.side === 'BUY') {
+    // Real bug fixed: these three caps (order-notional, risk-per-share, buying-power) are all
+    // "how much NEW capital/risk can be deployed" concepts - they used to apply unconditionally to
+    // SELL too, meaning a protective stop-loss/thesis-invalidation exit could be silently shrunk or
+    // (if buying power was near zero, normal for a mostly-deployed portfolio) rejected outright by
+    // sufficient_size, exactly when the system had decided to reduce risk. SELL never consumes
+    // buying power or deploys new capital - it frees both - matching CapitalAllocation.ts's
+    // explicit "SELL frees capital and never consumes allocation" rule for the identical reason.
+    // The real cap for a SELL is how many shares are actually held, applied by the caller
+    // (RiskEngine.ts clamps to existingPosition.quantity) - this module imposes none for SELL.
+    const maxSharesByRisk = quantizeQuantityDown(maxRiskAmount / riskPerShare, quantityStep);
+    const maxSharesByCapital = quantizeQuantityDown(effectiveNotionalCapDollar / ctx.currentPrice, quantityStep);
+    const maxSharesByBuyingPower = quantizeQuantityDown(ctx.buyingPower / ctx.currentPrice, quantityStep);
+
+    const orderNotionalIsBinding = maxSharesByCapital <= maxSharesByRisk && maxSharesByCapital <= maxSharesByBuyingPower;
+    // Real bug found and fixed this pass: this gate's passed/status only ever looked at
+    // maxSharesByCapital, even though the same recorded detail also carries maxSharesByRisk (the
+    // per-share stop-loss risk cap) as one of the three inputs to maxQuantity. A symbol whose
+    // risk-per-share cap alone zeroed out sizing (tight maxPortfolioRiskPct on a high-price
+    // symbol) still got order_notional_cap: PASS - the trade was still correctly rejected via
+    // sufficient_size below, but the audit trail hid the real reason.
+    const notionalStatus: SizingHonesty = (maxSharesByCapital <= 0 || maxSharesByRisk <= 0) ? 'FAIL' : orderNotionalIsBinding ? 'CLAMPED' : 'PASS';
+    record('order_notional_cap', maxSharesByCapital > 0 && maxSharesByRisk > 0, {
+      status: notionalStatus,
+      sizingMode, effectiveNotionalCapDollar,
+      maxTradeSizeDollar: ctx.maxTradeSizeDollar, percentOfEquityPct: ctx.percentOfEquityPct,
+      maxSharesByCapital, maxSharesByRisk, maxSharesByBuyingPower, isBinding: orderNotionalIsBinding,
+    });
+
+    maxQuantity = Math.min(maxSharesByRisk, maxSharesByCapital, maxSharesByBuyingPower);
+  } else {
+    record('order_notional_cap', true, {
+      status: 'SKIPPED',
+      reason: 'SELL/exit is not capped by notional/risk-per-share/buying-power - those limit new capital deployment and new position risk, not position reduction.',
+    });
+    maxQuantity = Number.MAX_SAFE_INTEGER;
+  }
+
+  if (ctx.side === 'BUY') {
+    // ACTIVE Node sizing authority (engineOwnership.position_sizing; no Java counterpart).
+    // Value each holding at its own observed mark, never at the proposed symbol's price.
+    // The proposal's existing price_validity/data_freshness gates cover same-symbol holdings.
+    const valueHoldings = (positions: ExistingPosition[]) => {
+      const valuations = positions.map(p => {
+        const mark = p.symbol === ctx.symbol
+          ? { price: ctx.currentPrice, priceAgeMs: null, source: 'PROPOSAL_PRICE' }
+          : p.mark;
+        const freshness = p.symbol === ctx.symbol ? null : evaluateQuoteFreshness({ priceAgeMs: mark?.priceAgeMs ?? null });
+        const reason = !Number.isFinite(p.quantity) || p.quantity < 0 ? 'INVALID_HOLDING_QUANTITY'
+          : !mark || !isPositiveFiniteMoney(mark.price) ? 'MISSING_OR_INVALID_HOLDING_PRICE'
+          : !mark.source?.trim() ? 'UNKNOWN_HOLDING_PRICE_SOURCE'
+          : freshness && !freshness.passed ? 'STALE_OR_UNKNOWN_HOLDING_PRICE'
+          : null;
+        return {
+          symbol: p.symbol, quantity: p.quantity, price: mark?.price ?? null,
+          priceAgeMs: mark?.priceAgeMs ?? null, source: mark?.source ?? null,
+          value: reason ? null : p.quantity * mark!.price!, reason,
+        };
+      });
+      const unavailable = valuations.filter(v => v.reason !== null);
+      return {
+        value: unavailable.length ? null : valuations.reduce((sum, v) => sum + v.value!, 0),
+        valuations,
+        unavailableSymbols: unavailable.map(v => v.symbol),
+      };
+    };
+    const existingPosition = ctx.existingPositions.find(p => p.symbol === ctx.symbol);
+    const existingValue = existingPosition ? existingPosition.quantity * ctx.currentPrice : 0;
+    const maxPositionValue = ctx.accountEquity * MAX_SINGLE_SYMBOL_CONCENTRATION_PCT;
+    const remainingRoom = Math.max(0, maxPositionValue - existingValue);
+    const maxSharesByConcentration = quantizeQuantityDown(remainingRoom / ctx.currentPrice, quantityStep);
+    const beforeConcentration = maxQuantity;
+    maxQuantity = Math.min(maxQuantity, maxSharesByConcentration);
+    const concentrationFail = maxSharesByConcentration <= 0;
+    record('symbol_concentration', !concentrationFail, {
+      status: concentrationFail ? 'FAIL' : (beforeConcentration !== maxQuantity ? 'CLAMPED' : 'PASS'),
+      existingValue, maxPositionValue, capPct: MAX_SINGLE_SYMBOL_CONCENTRATION_PCT,
+      boundQuantity: beforeConcentration !== maxQuantity ? maxQuantity : null,
+    });
+    if (concentrationFail) maxQuantity = 0;
+
+    const isNewPosition = !existingPosition;
+    const openPositionsPassed = !isNewPosition || ctx.existingPositions.length < ctx.maxOpenPositions;
+    record('open_positions_cap', openPositionsPassed, { currentOpenPositions: ctx.existingPositions.length, maxOpenPositions: ctx.maxOpenPositions, isNewPosition });
+    if (!openPositionsPassed) maxQuantity = 0;
+
+    const proposalSector = getSector(ctx.symbol);
+    if (proposalSector) {
+      const sectorMarks = valueHoldings(ctx.existingPositions.filter(p => getSector(p.symbol) === proposalSector));
+      const sectorValue = sectorMarks.value;
+      const maxSectorValue = ctx.accountEquity * MAX_SECTOR_CONCENTRATION_PCT;
+      const remainingSectorRoom = sectorValue === null ? 0 : Math.max(0, maxSectorValue - sectorValue);
+      const maxSharesBySector = quantizeQuantityDown(remainingSectorRoom / ctx.currentPrice, quantityStep);
+      const beforeSector = maxQuantity;
+      maxQuantity = Math.min(maxQuantity, maxSharesBySector);
+      const sectorFail = maxSharesBySector <= 0;
+      record('sector_concentration', !sectorFail, {
+        status: sectorValue === null ? 'UNKNOWN' : sectorFail ? 'FAIL' : (beforeSector !== maxQuantity ? 'CLAMPED' : 'PASS'),
+        sector: proposalSector, sectorValue, maxSectorValue, capPct: MAX_SECTOR_CONCENTRATION_PCT,
+        holdingValuations: sectorMarks.valuations, unavailableSymbols: sectorMarks.unavailableSymbols,
+        ...(sectorValue === null ? { reason: 'HOLDING_VALUATION_UNAVAILABLE' } : {}),
+        boundQuantity: beforeSector !== maxQuantity ? maxQuantity : null,
+      });
+      if (sectorFail) maxQuantity = 0;
+    } else if (ctx.failClosedUnknownInputs) {
+      record('sector_concentration', false, { skipped: true, status: 'UNKNOWN', reason: 'symbol not in sector map' });
+      maxQuantity = 0;
+    } else {
+      record('sector_concentration', true, { skipped: true, status: 'SKIPPED', reason: 'symbol not in sector map' });
+    }
+
+    if (ctx.existingPositions.length > 0) {
+      const proposalCloses = await ctx.getRecentCloses(ctx.symbol);
+      if (proposalCloses) {
+        const correlatedPositions: ExistingPosition[] = [];
+        for (const p of ctx.existingPositions) {
+          if (p.symbol === ctx.symbol) { correlatedPositions.push(p); continue; }
+          const otherCloses = await ctx.getRecentCloses(p.symbol);
+          if (!otherCloses) continue;
+          const corr = returnCorrelation(proposalCloses, otherCloses);
+          if (corr !== null && corr > CORRELATION_THRESHOLD) correlatedPositions.push(p);
+        }
+        const correlatedMarks = valueHoldings(correlatedPositions);
+        const correlatedValue = correlatedMarks.value;
+        const maxCorrelatedValue = ctx.accountEquity * MAX_CORRELATED_EXPOSURE_PCT;
+        const remainingCorrelatedRoom = correlatedValue === null ? 0 : Math.max(0, maxCorrelatedValue - correlatedValue);
+        const maxSharesByCorrelation = quantizeQuantityDown(remainingCorrelatedRoom / ctx.currentPrice, quantityStep);
+        const beforeCorr = maxQuantity;
+        maxQuantity = Math.min(maxQuantity, maxSharesByCorrelation);
+        const corrFail = maxSharesByCorrelation <= 0;
+        record('correlation_exposure', !corrFail, {
+          status: correlatedValue === null ? 'UNKNOWN' : corrFail ? 'FAIL' : (beforeCorr !== maxQuantity ? 'CLAMPED' : 'PASS'),
+          correlatedValue, maxCorrelatedValue, capPct: MAX_CORRELATED_EXPOSURE_PCT,
+          holdingValuations: correlatedMarks.valuations, unavailableSymbols: correlatedMarks.unavailableSymbols,
+          ...(correlatedValue === null ? { reason: 'HOLDING_VALUATION_UNAVAILABLE' } : {}),
+          boundQuantity: beforeCorr !== maxQuantity ? maxQuantity : null,
+        });
+        if (corrFail) maxQuantity = 0;
+      } else if (ctx.failClosedUnknownInputs) {
+        record('correlation_exposure', false, { skipped: true, status: 'UNKNOWN', reason: 'no real price history for this symbol' });
+        maxQuantity = 0;
+      } else {
+        record('correlation_exposure', true, { skipped: true, status: 'SKIPPED', reason: 'no real price history for this symbol' });
+      }
+    } else {
+      record('correlation_exposure', true, { skipped: true, status: 'SKIPPED', reason: 'no existing positions to correlate against' });
+    }
+  }
+
+  // Final honesty: a binding clamp that leaves zero shares must not report passed:true.
+  if (maxQuantity === 0) {
+    for (const g of gates) {
+      if (!g.passed) continue;
+      if (g.gate === 'order_notional_cap' && g.detail?.maxSharesByCapital <= 0) {
+        g.passed = false;
+        g.detail = { ...g.detail, status: 'FAIL' };
+      }
+      if (
+        (g.gate === 'symbol_concentration' || g.gate === 'sector_concentration' || g.gate === 'correlation_exposure')
+        && (g.detail?.status === 'CLAMPED' || g.detail?.boundQuantity === 0)
+        && g.detail?.boundQuantity === 0
+      ) {
+        g.passed = false;
+        g.detail = { ...g.detail, status: 'FAIL' };
+      }
+    }
+  }
+
+  // Crypto Expansion Phase 1 (2026-09-21): venue/instrument minimums. BUY only, mirroring every
+  // other cap in this file - SELL/exit sizing is never capped by this module. A calculated
+  // quantity below the minimum is REJECTED, never rounded up to meet it - rounding up would risk
+  // exceeding RiskEngine-approved notional/risk, which this module must never do.
+  let minSizeRejectionReason: 'SIZE_REJECTED_MIN_QUANTITY' | 'SIZE_REJECTED_MIN_NOTIONAL' | null = null;
+  if (ctx.side === 'BUY' && maxQuantity > 0) {
+    const belowMinQuantity = ctx.minimumQuantity !== undefined && maxQuantity < ctx.minimumQuantity;
+    const belowMinNotional = ctx.minimumNotional !== undefined && maxQuantity * ctx.currentPrice < ctx.minimumNotional;
+    if (belowMinQuantity || belowMinNotional) {
+      // Notional checked first when both fail: it's the more informative reason for a caller
+      // sizing a small dollar amount against a coin with plenty of quantity precision.
+      minSizeRejectionReason = belowMinNotional ? 'SIZE_REJECTED_MIN_NOTIONAL' : 'SIZE_REJECTED_MIN_QUANTITY';
+      maxQuantity = 0;
+    }
+  }
+
+  const sufficientSizePassed = maxQuantity > 0;
+  record('sufficient_size', sufficientSizePassed, {
+    maxQuantity, buyingPower: ctx.buyingPower,
+    ...(minSizeRejectionReason ? { reason: minSizeRejectionReason, minimumQuantity: ctx.minimumQuantity ?? null, minimumNotional: ctx.minimumNotional ?? null } : {}),
+  });
+
+  observeSafe(() => {
+    structuredLogger.debug('position_sizing', {
+      category: 'SIZING',
+      component: 'PositionSizing',
+      symbol: ctx.symbol,
+      maxQuantity: Math.max(0, maxQuantity),
+      gateCount: gates.length,
+      failedGates: gates.filter(g => !g.passed).map(g => g.gate),
+    });
+  });
+
+  return { maxQuantity: Math.max(0, maxQuantity), gates };
+}

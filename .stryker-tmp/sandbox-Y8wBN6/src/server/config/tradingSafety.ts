@@ -1,0 +1,916 @@
+/**
+ * Loads config/tradingSafety.json. This is the source of truth for operational/safety
+ * thresholds that used to be scattered as module-level literals.
+ *
+ * Not exposed as a writable API. Restricted-live ceilings stay file-reviewed, never UI-tunable.
+ */
+// @ts-nocheck
+
+import { loadRepoConfigJson } from './loadRepoConfigJson';
+import { isRuntimeFlagEnabled } from './effectiveRuntimeConfig';
+
+export interface TradingSafety {
+  stalePriceThresholdMs: number;
+  /** Bounded wait (NewsEngine's async fresh-price acquisition, waitForFreshPrice.ts) for a
+   *  just-requested subscription to produce its first live tick before giving up and reporting
+   *  NEWS_DATA_UNAVAILABLE - never an unbounded wait, never a stale/fabricated fallback price. */
+  newsPriceWaitTimeoutMs: number;
+  /** Poll cadence while waiting inside newsPriceWaitTimeoutMs. */
+  newsPriceWaitPollIntervalMs: number;
+  /** Reject ticks whose source timestamp is this far in the future (clock skew budget). */
+  tickFutureSkewMs: number;
+  /** Ignore out-of-order ticks older than last accepted tick by more than this epsilon. */
+  tickOutOfOrderEpsilonMs: number;
+  /** Dedup window for MARKET_DATA_REJECTED structured events (do not flood). */
+  marketDataRejectLogDedupMs: number;
+  marketClockCacheMs: number;
+  maxConsecutiveLosses: number;
+  correlationLookbackMs: number;
+  disagreementPenalty: number;
+  consensusApprovalThreshold: number;
+  minIndependentAgreeingAgents: number;
+  /**
+   * Phase 7E (MODERATE consensus tier, 2026-08-27). Additive, PAPER-only, default-OFF env flag.
+   * When enabled, an idea whose confidence falls in [moderateMinConfidence, consensusApprovalThreshold)
+   * can still be approved, but only through the SEPARATE, stricter MODERATE ladder in
+   * ChiefTraderAgent.ts (same independent-agent floor and hard vetoes as the STRONG path, PLUS a
+   * statistically-above-chance calibration-trust gate - see ModerateTierEvaluator.ts). Never changes
+   * the STRONG (>= consensusApprovalThreshold) path's behavior.
+   */
+  consensusModerateTierEnabledEnvVar: string;
+  /**
+   * Lower bound of the MODERATE band. Deliberately reused from ConfidenceCalibration.ts's own
+   * CONFIDENCE_BUCKETS[1].low (also debateTriggerConfidence / minStrategyConfidenceToTrade) rather
+   * than a freshly-picked number, so the MODERATE band never straddles two different calibration
+   * buckets (which would make the per-agent trust lookup ambiguous) and is not an arbitrary
+   * same-day-data artifact. This is a POLICY parameter, not an empirically-proven optimum - see
+   * ModerateTierEvaluator.ts's header for the full justification and the real-data finding it is
+   * based on (as of 2026-08-27, no calibration bucket clears the statistical-significance bar
+   * below, so MODERATE is expected to approve zero ideas until real evidence changes that).
+   */
+  moderateMinConfidence: number;
+  /**
+   * Java Quant Engine independent vote (2026-09-09, explicit operator override of this
+   * codebase's own documented Phase 3 precondition - see docs/architecture/ARGUS_ARCHITECTURE.md
+   * § Java Quant Core and CLAUDE.md's Java 26 Engine Authority section, both updated in the same
+   * change that introduced this). The operator was told directly that the prior recommendation
+   * was to wait for a real multi-week shadow-divergence-tracking window before trusting a
+   * Java-sourced signal enough to vote, and chose to proceed anyway - same pattern as
+   * TradePlanBuilder's 2026-09-05 override. `advisory.adjustedConfidence` (already
+   * regime/volatility-discounted by QuantEnsembleEngine.java, not the raw factor composite) must
+   * clear this floor before JavaQuantAdvisoryService.ts calls emitTradeIdea. A policy parameter,
+   * not an empirically-proven optimum - chosen to match moderateMinConfidence's own reasoning
+   * (the post-discount confidence must clear the same floor a single well-calibrated non-Java
+   * agent would need).
+   */
+  javaQuantVoteMinConfidence: number;
+  /**
+   * 2026-09-10, explicit operator override of this codebase's own stated caution - a distinct
+   * signal source from javaQuantVoteMinConfidence above (that one gates JavaFactorComposite's
+   * 5-factor GARCH/HMM/factor-composite vote; this one gates a genuinely different Java engine -
+   * CoreStrategyRunner's 5 CORE-strategy ensemble - RangeReversion/PullbackContinuation/
+   * MeanReversion/TrendFollowing/MomentumBreakout, each computing its own features from canonical
+   * bars via FeaturesToStrategyContextAdapter, combined via the same QuantEnsembleEngine.java
+   * correlation-adjusted math). Real evidence base at the time this was enabled: ~99 shadow
+   * observations over ~4 hours (see docs/audits/ARGUS_JAVA_QUANT_PHASE2_PRELIMINARY_PARITY_2026-09-10.md)
+   * - well short of this deployment's own documented "multi-week clean-divergence soak"
+   * precondition. The operator was told this directly and chose to override it anyway - the same
+   * pattern as javaQuantVoteMinConfidence's own 2026-09-09 override. `CoreEnsembleDecision.confidence`
+   * must clear this floor, AND `status` must be HEALTHY (never DEGRADED/UNAVAILABLE), before
+   * JavaCoreEnsembleVoteService.ts calls emitTradeIdea.
+   */
+  javaCoreEnsembleVoteMinConfidence: number;
+  /** See javaCoreEnsembleVoteMinConfidence's own doc comment. */
+  javaCoreEnsembleVoteEnabledEnvVar: string;
+  /**
+   * QuantEngine internal-ensemble independent qualification (2026-09-09, explicit operator
+   * override). Default OFF. The 2026-09-09 QuantEngine Expansion design doc
+   * (docs/audits/ARGUS_QUANTENGINE_EXPANSION_DESIGN_2026-09-09.md §16) recommended keeping the
+   * two-agent floor until real correlation/outcome data exists to validate QuantEnsembleEngine.java's
+   * effectiveIndependentCount() math (its correlation matrix is a reviewed assumption, not measured).
+   * The operator was told that directly and chose to override it anyway - same pattern as
+   * TradePlanBuilder (2026-09-05) and the Java factor_composite vote (2026-09-09). When enabled,
+   * ChiefTraderAgent.ts's independent-voice floor can be satisfied by QuantEngine's OWN internal
+   * ensemble alone (multiple strategy families, correlation-adjusted via QuantEnsembleEngine.java)
+   * instead of requiring a second, separate agent - but ONLY when it clears a bar strictly higher
+   * than the normal 2-independent-agent minimum: minQuantIndependentFamilies distinct strategy
+   * families, minQuantIndependentEffectiveCount effective independent count, AND the normal STRONG
+   * confidence threshold. Every other gate (RiskEngine, OMS, hard vetoes, data quality) is
+   * completely unchanged.
+   */
+  quantIndependentQualificationEnabledEnvVar: string;
+  /**
+   * F29/F32 remediation (webhooks.ts SSRF/dispatch hardening). Bounded per-attempt request timeout
+   * for outbound webhook delivery (real event dispatch AND the manual test route), enforced via
+   * AbortSignal inside the same vetted safeFetch transport (src/server/core/safeFetch.ts) - not a
+   * hardcoded literal per CLAUDE.md's "no hardcoded operational thresholds" rule.
+   */
+  webhookDispatchTimeoutMs: number;
+  /** Maximum redirect hops safeFetch will follow before giving up - each hop is independently
+   *  re-validated against the same SSRF policy (urlSafety.ts) before being connected to. */
+  webhookMaxRedirects: number;
+  /** Bounded concurrency for triggerWebhooks() fan-out across configured webhooks per event, so a
+   *  slow/hung receiver cannot let an unbounded number of in-flight sockets accumulate. */
+  webhookDispatchMaxConcurrency: number;
+  /** Minimum distinct strategy families that must agree for QuantEngine's internal ensemble to
+   *  qualify as independent confirmation on its own. See quantIndependentQualificationEnabledEnvVar. */
+  minQuantIndependentFamilies: number;
+  /** Minimum QuantEnsembleEngine.java effectiveIndependentCount (correlation-adjusted, Kish/
+   *  Grinold-Kahn breadth) for the same qualification. See quantIndependentQualificationEnabledEnvVar. */
+  minQuantIndependentEffectiveCount: number;
+  /**
+   * Strategy-selection confluence guard (2026-09-11, "ARGUS - Quant-First Architecture
+   * Transformation" mandate, Section 7 - explicit operator-approved scope). Default OFF.
+   * `bestStrategyIdea()` in StrategyEngine.ts picks the single highest-setupScore eligible
+   * strategy and discards every other evaluation's side - so when the broader, already-built
+   * correlation-adjusted ensemble (internalQuantEnsemble.ts's computeInternalEnsembleQualification,
+   * same QuantEnsembleEngine.java math as minQuantIndependentFamilies/minQuantIndependentEffectiveCount
+   * above) resolves to the OPPOSITE side from bestStrategyIdea()'s pick (`sideMismatch: true`), that
+   * disagreement was previously purely diagnostic (QUANT_CONFLUENCE_SIDE_MISMATCH logging only,
+   * 2026-09-10) - never affected the emitted idea. When this flag is enabled, QuantSignalAgent.ts
+   * additionally checks whether the DISAGREEING side itself clears the SAME independent-qualification
+   * bar (minQuantIndependentFamilies distinct families, minQuantIndependentEffectiveCount effective
+   * independent count) - not a new, separate threshold. If it does, the top-1 idea is NOT emitted
+   * this cycle (a NO_TRADE, code STRATEGY_SELECTION_CONFLUENCE_CONTRADICTED) rather than either (a)
+   * emitting a side the broader evidence actively disagrees with, or (b) silently flipping to the
+   * other side (which this deployment explicitly declined - see the Quant-First mandate discussion).
+   * This can only ever suppress an emission, never invent, flip a side, or lower any threshold -
+   * strictly more conservative than today's behavior, the opposite direction from every other
+   * override in this file.
+   */
+  strategySelectionConfluenceGuardEnabledEnvVar: string;
+  /**
+   * A per-agent-per-bucket calibration champion (ChampionChallengerService.ts CHAMPION status for
+   * versionType calibration:<agent>:<bucketLow>-<bucketHigh>) is only trusted by the MODERATE tier
+   * when its cluster-corrected Wilson LOWER bound exceeds this value. 0.5 is literally chance for a
+   * binary WIN/LOSS outcome - kept config-driven (not a TS literal) per CLAUDE.md, not because it is
+   * a tunable business preference.
+   */
+  moderateCalibrationTrustMinWilsonLowerBound: number;
+  /** Must match config/strategyFocus.json defaultFocus. Catalog/modes stay in strategyFocus.json. */
+  defaultStrategyFocus: string;
+  openAliceUncertainBandLow: number;
+  openAliceUncertainBandHigh: number;
+  maxSingleSymbolConcentrationPct: number;
+  maxSectorConcentrationPct: number;
+  correlationMinOverlap: number;
+  correlationThreshold: number;
+  maxCorrelatedExposurePct: number;
+  stopLossAssumptionPct: number;
+  dailyLossKillSwitchFraction: number;
+  defaultPercentOfEquityPct: number;
+  restrictedLiveMaxOrderNotionalDollars: number;
+  restrictedLiveMaxOpenPositions: number;
+  restrictedLiveMaxDailyLossDollars: number;
+  /** Paper/simulation daily BUY notional. 0 would skip the gate; production JSON must be > 0. LIVE also applies restrictedLiveMaxDailyBuyNotionalDollars. */
+  maxDailyBuyNotionalDollars: number;
+  restrictedLiveMaxDailyBuyNotionalDollars: number;
+  alpacaRequestTimeoutMs: number;
+  alpacaMaxRetries: number;
+  alpacaRetryBaseDelayMs: number;
+  alpacaCircuitBreakerFailureThreshold: number;
+  alpacaCircuitBreakerCooldownMs: number;
+  aiProviderTimeoutMs: number;
+  aiProviderAuthFailureCooldownMs: number;
+  /** Skip 404 / fetch-failed providers this long (in-memory; does not flip DB enabled). */
+  aiProviderUnreachableCooldownMs: number;
+  /** Skip a provider that timed out this long so NewsAgent does not re-pay the timeout every cycle. */
+  aiProviderTimeoutSkipCooldownMs: number;
+  /** Skip a provider classified ACCOUNT_SUSPENDED/QUOTA_EXCEEDED this long — a billing issue does
+   *  not self-heal within a session, so this is deliberately much longer than the timeout/unreachable
+   *  cooldowns above. In-memory only; does not flip DB enabled. */
+  aiProviderQuotaExceededCooldownMs: number;
+  /**
+   * Peak Equity Recovery (2026-08-26): a boot-time integrity check (PeakEquityIntegrity.ts)
+   * treats stored settings.peakEquity as contaminated ONLY when it exceeds real broker equity by
+   * more than this multiplier AND organic PAPER fill history is too small to plausibly explain
+   * such growth (fewer than researchSafety.minPaperTrades closed trades). Deliberately
+   * conservative — a real, legitimate multi-year compounding account could still exceed this ratio
+   * eventually; the paired organic-trade-count check is what keeps this from ever overwriting a
+   * genuine peak. See the module's own header comment for the full decision tree.
+   */
+  peakEquityMaxPlausibleMultiplier: number;
+  /** Free-tier AlphaVantage shared daily HTTP cap (Fund + Macro). */
+  alphaVantageDailyRequestBudget: number;
+  /** Guard against a wedged shared budget-consumption lock permanently starving both Fundamental/MacroAgent. */
+  alphaVantageBudgetLockTimeoutMs: number;
+  /**
+   * Slots of alphaVantageDailyRequestBudget reserved exclusively for MacroAgent (Consensus Quality
+   * Audit, 2026-08-25: real DB evidence showed alphavantage:macro:GLOBAL stuck at fetched_at=0/
+   * payload={} for the entire dataset - MacroAgent's 3 calls/day were always losing the shared
+   * budget race to FundamentalAgent, which burns 1 request per distinct symbol in the idea
+   * universe and ticks more often). Non-MacroAgent callers can only consume up to
+   * (alphaVantageDailyRequestBudget - this value); MacroAgent itself is exempt from that cap.
+   */
+  alphaVantageMacroReservedRequests: number;
+  /**
+   * Fallback fundamentals provider (2026-09-10, real AlphaVantage-daily-cap-exhaustion finding):
+   * Financial Modeling Prep's free tier, used by FundamentalAgent.fetchFundamentals() only when
+   * AlphaVantage itself is exhausted/rate-limited for the day - never the primary source, so this
+   * never competes with alphaVantageDailyRequestBudget's own accounting.
+   */
+  fmpDailyRequestBudget: number;
+  /** Guard against a wedged FMP budget-consumption lock, mirroring alphaVantageBudgetLockTimeoutMs. */
+  fmpBudgetLockTimeoutMs: number;
+  /**
+   * Phase 9D (Zero-Trade Root-Cause Resolution, 2026-08-27): real DB evidence showed MacroAgent's
+   * alphavantage:macro:GLOBAL cache row had fetched_at=0 (never once successfully populated) with a
+   * rolling 24h rate_limited_until that kept getting re-armed. fetchMacro() fires 3 sequential
+   * AlphaVantage calls (INFLATION, FEDERAL_FUNDS_RATE, UNEMPLOYMENT) back-to-back with zero pacing -
+   * plausible enough on its own to trip AlphaVantage's real per-minute limiter even with daily
+   * budget headroom. Small delay between the 3 sub-calls to reduce that risk; see the paired fix in
+   * MacroAgent.ts that also stops treating a purely-internal budget-exhaustion signal as if it were
+   * a genuine external rate-limit response (only the latter should burn the real 24h cooldown).
+   */
+  alphaVantageMacroSubcallDelayMs: number;
+  /**
+   * Phase 9 (same-candidate convergence, 2026-08-27). How long a ConfluenceCoordinator-recorded
+   * candidate symbol (recentCandidateRegistry.ts) stays eligible to preempt FundamentalAgent/
+   * MacroAgent's generic fresh-symbol round-robin. Deliberately wider than consensusIdeaMaxAgeMs
+   * (60s) since Fundamental/Macro only tick every ~60-75s each - a 60s window would almost never
+   * survive to the next tick. 5 minutes matches the scale of stalePriceThresholdMs.
+   */
+  recentCandidatePriorityMaxAgeMs: number;
+  /**
+   * Agent Confluence Architecture Audit (2026-08-25): master switch for ConfluenceCoordinator.ts —
+   * when true, a qualifying TechnicalAgent signal triggers an immediate, independent on-demand
+   * evaluation from QuantEngine/KronosEngine for the same symbol (never NewsAgent — see the
+   * module's own comment). Does not change consensusApprovalThreshold, minIndependentAgreeingAgents,
+   * disagreementPenalty, or any RiskEngine/OMS/broker behavior.
+   */
+  confluenceCoordinatorEnabled: boolean;
+  /** Minimum TechnicalAgent confidence (0-1) required to trigger a confluence check. */
+  confluenceCoordinatorConfidenceThreshold: number;
+  /** Per-symbol cooldown between confluence triggers — avoids re-asking Quant/Kronos to
+   *  re-evaluate a symbol faster than consensusIdeaMaxAgeMs would even keep the result fresh for. */
+  confluenceCoordinatorCooldownMs: number;
+  /** Max parallel LLM providers for routeConsensus (top-K healthy). */
+  consensusMaxProviders: number;
+  /** Max NewsEngine LLM escalations per pipeline cycle. */
+  newsLlmMaxCallsPerCycle: number;
+  omsFollowUpMaxAgeMs: number;
+  aiFailureWindowMs: number;
+  aiFailureThresholdForLivePause: number;
+  crashRecoveryLookbackMs: number;
+  backtestLookbackBars: number;
+  regimeMinBars: number;
+  quantLookbackDays: number;
+  quantCycleIntervalMs: number;
+  /**
+   * Max parallel symbol evaluations inside QuantSignalAgent.runCycle.
+   * Default 1 (sequential) to reduce Alpaca 429 pressure; raise only after measuring
+   * rate-limit headroom. Fail-closed on 429 still aborts the remainder of the cycle.
+   */
+  quantMaxConcurrentSymbols: number;
+  predictionOutcomeIntervalMs: number;
+  /**
+   * P1-A remediation (2026-09-14): PredictionOutcomeEvaluator.evaluatePending() previously fetched
+   * ALL agent_predictions/kronos_predictions/news_predictions/prediction_outcomes rows every cycle
+   * (unbounded .all()) on a bare setInterval with no overlap guard - reproduced in an isolated
+   * harness as sustained, GC-unrecoverable RSS growth that scaled with concurrent invocation count
+   * (docs/audits/ARGUS_MASTER_REMEDIATION_BASELINE.md P1-A section). Bounds each cycle to at most
+   * this many NOT-YET-EVALUATED rows per source table (oldest-first via a bounded anti-join query,
+   * not a monotonic id/timestamp watermark - a watermark risks silently skipping a prediction whose
+   * evaluation was retried/delayed, e.g. the exit-aware walk-forward path, which the anti-join does
+   * not, since a row only stops being a candidate once it actually has a prediction_outcomes row).
+   */
+  predictionOutcomeBatchSize: number;
+  /** Safety valve, not a target: a batch bails out early (processing fewer than batchSize rows,
+   *  finishing the remainder next cycle) if a cycle's per-row work runs long - e.g. a real Alpaca
+   *  ensureBars() network round-trip on a cache miss, unlike the fast local-DB getBars() path this
+   *  was measured against. Kept safely under predictionOutcomeIntervalMs so a cycle self-bounds
+   *  well before the next tick, rather than relying solely on the overlap guard. */
+  predictionOutcomeMaxCycleWallClockMs: number;
+  alertingCooldownMs: number;
+  trainingExampleIntervalMs: number;
+  marketRegimeIntervalMs: number;
+  riskPctAggressive: number;
+  riskPctConservative: number;
+  riskPctBalanced: number;
+  positionRiskElevatedFraction: number;
+  debateTriggerConfidence: number;
+  debateResultConfidence: number;
+  /** Multiplier on debateResultConfidence when exactly 1 provider returned a usable verdict (not a genuine multi-model consensus). */
+  debateSingleModelConfidencePenalty: number;
+  /** Min gap between adversarial debate starts for the same symbol. Reliability, not a safety bypass. */
+  consensusDebateCooldownMs: number;
+  /** Min gap between non-forced consensus evaluations for the same symbol. */
+  consensusEvalMinIntervalMs: number;
+  /**
+   * Debounce before evaluateConsensus after an entry idea lands, so Technical/Kronos/Quant
+   * votes arriving within this window co-evaluate. Does not lower 0.75 / min-2 floors.
+   */
+  consensusAggregationWindowMs: number;
+  /** Wall-clock budget for Opportunity Feed CONFIRM → agent co-eval → ChiefTrader consensus. */
+  manualTradeCoEvalTimeoutMs: number;
+  /** Skip Alpaca fetch when cached bars cover at least this fraction of expected trading days. */
+  quantBarsCacheMinCoverageRatio: number;
+  /**
+   * P1-A remediation Patch B (2026-09-14): bound on HistoricalDataGateway.memoryBars, a real,
+   * standalone unbounded-Map defect found while investigating P1-A (not the proven cause of the
+   * reproduced RSS growth there - that was Patch A's evaluator overlap - but a real leak/bounded-
+   * cache defect in its own right, since the Map had no active eviction beyond a lazy TTL check
+   * that only fires if the SAME key is ever read again). Sized generously above legitimate
+   * same-cycle working-set needs: one bounded evaluator batch (predictionOutcomeBatchSize /
+   * multiHorizonOutcomeTracking.batchSize, both 2000) touches at most a few thousand distinct
+   * symbol|timeframe|hourBucket keys per cycle even in the worst case of every row being a unique
+   * symbol/hour; 5000 gives real headroom above that without picking a bound merely because it
+   * makes a memory graph look good.
+   */
+  historicalBarsMemoryCacheMaxEntries: number;
+  quantBarsRateLimitBaseBackoffMs: number;
+  quantBarsRateLimitMaxBackoffMs: number;
+  /** Idea-agent lastTickAt older than this is reported as enabled+dead. */
+  pipelineAgentDeadAfterMs: number;
+  /**
+   * heartbeatWatchdog.ts (R2, 2026-09-07 post-audit remediation - "no silent-death
+   * observability/supervision"): NewsAgent's own heartbeat (notePipelineAgentTick('NewsAgent'))
+   * ticks unconditionally on its own timer regardless of Autobot/session state (NewsEngine
+   * clustering "stays on with Autobot" per pipelineAgentRuntime.ts's own header) - the one
+   * reliably always-on signal in this codebase, distinct from FundamentalAgent/MacroAgent/
+   * TechnicalAgent whose timers are stopped/started with Autobot or driven only by real market
+   * ticks. A gap this long, corroborated by MarketDataWorker also reporting disconnected, is
+   * treated as a genuine silent-death signature rather than a normal off-hours lull - must stay
+   * comfortably above newsEngineOffHoursMs (runtimeIntervals.json, 300000) so a slow off-hours
+   * cadence alone never trips this.
+   */
+  heartbeatWatchdogSilenceThresholdMs: number;
+  /** Bounded wait for in-flight HTTP requests/WS connections to drain during gracefulShutdown's
+   *  drainTradingProcess() BEFORE sqliteDb.close() runs - not unbounded, so a lingering keep-alive
+   *  socket can never hang process shutdown. See gracefulShutdown.ts's header comment. */
+  gracefulShutdownHttpDrainTimeoutMs: number;
+  debateLearnedRulesCount: number;
+  debateLearnedRuleMaxChars: number;
+  quantExitIdeaConfidence: number;
+  quantStopExitConfidence: number;
+  thesisInvalidationExitConfidence: number;
+  regimeMismatchConfidenceMultiplier: number;
+  minStrategyConfidenceToTrade: number;
+  agentWinRateAlertPct: number;
+  agentWinRateAlertMinPredictions: number;
+  autoFlattenOnReconciliationMismatch: boolean;
+  oosSharpeDegradationMinRatio: number;
+  oosWinRateMinPct: number;
+  permutationTestIterations: number;
+  permutationSignificanceAlpha: number;
+  newsVetoMinImpactScore: number;
+  newsVetoWindowMs: number;
+  newsClusterTimeWindowMs: number;
+  newsClusterTitleSimilarityThreshold: number;
+  newsRiskVetoThreshold: number;
+  newsPredictionEvalIntradayMs: number;
+  newsPredictionEvalShortTermMs: number;
+  newsPredictionEvalMediumTermMs: number;
+  newsPredictionEvalLongerTermMs: number;
+  usEquityRthOpenMinute: number;
+  usEquityRthCloseMinute: number;
+  reconSignificantMismatchDollars: number;
+  reconAccountConsistencyTolerancePct: number;
+  reconAccountConsistencyToleranceFloorDollars: number;
+  reconQtyTolerance: number;
+  /** Position MISSING_LOCALLY / MISSING_REMOTELY must repeat this many cycles before TRADING_PAUSED. */
+  reconPauseConsecutiveMismatchCycles: number;
+  fallbackTakeProfitPct: number;
+  fallbackTrailingStopPct: number;
+  /** InternalPaperBroker seed cash. Not broker equity. Not researchInitialCapital. Not maxTradeSize. */
+  internalPaperDefaultCash: number;
+  /** Fallback order-notional cap when settings.maxTradeSize is unset. Not paper cash. */
+  defaultMaxTradeSizeDollars: number;
+  minSampleSizeForTrust: number;
+  /** Floor between two calibration-insight learned_rules for the SAME underlying agent
+   *  (ReflectionEngine.generateCalibrationInsightRules) - reflectionEngineMs (60s) runs far more
+   *  often than a real evidence-eligibility change, so without this an agent stuck below chance
+   *  would regenerate a near-identical rule every cycle and crowd out genuinely new post-loss
+   *  rules in loadDebateLearnedRulesText()'s "5 most recent" window. Default 24h: daily is often
+   *  enough to reflect a real evidence change, rare enough not to spam. */
+  reflectionCalibrationRuleCooldownMs: number;
+  minTradesForPaperValidation: number;
+  maxKellyFractionOfCapital: number;
+  kellyFractionDefault: number;
+  evaluationHorizonMs: number;
+  /**
+   * Kronos's own forecast horizon (config/quantThresholds.json kronosHorizon/kronosTimeframe) is
+   * tick-based, not a wall-clock duration - there's no clean tick-to-ms conversion. This is a
+   * separate, deliberate wall-clock window PredictionOutcomeEvaluator uses to grade Kronos
+   * forecasts specifically, short enough to be closer to its real short-horizon forecast question
+   * than the generic 60-minute evaluationHorizonMs (ARGUS_PREDICTIVE_EDGE_FORENSIC_AUDIT.md M5).
+   */
+  kronosEvaluationHorizonMs: number;
+  tradingDaysPerYear: number;
+  newsDecisiveSentimentThreshold: number;
+  aiDecisionTemperature: number;
+  minRegimeConfidenceToTrade: number;
+  /**
+   * Additive, default-off (env var must be exactly 'true'). When enabled, a strategy-sourced idea
+   * refused solely for lack of live win-rate history (cold start - zero real closed trades yet for
+   * that strategy) falls back to the regime-only mapping (deriveIdeaFromRegime) instead of no idea
+   * at all. Still flows through the full ChiefTrader -> RiskEngine (24 gates) -> OMS pipeline
+   * unchanged - never bypasses consensus or risk. See ARGUS_PREDICTION_EDGE_AND_LEARNING_
+   * IMPLEMENTATION_AUDIT.md for the cold-start deadlock this addresses.
+   */
+  quantColdStartBootstrapEnabledEnvVar: string;
+  /**
+   * Phase 11 (ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md) - scaffold-only flag
+   * for a future TradingAgents shadow/research adapter. No caller reads this yet; there is no
+   * TradingAgents integration code in this repository at all. Exists so the config contract is
+   * ready without implying the capability itself exists.
+   */
+  tradingAgentsShadowEnabledEnvVar: string;
+  /**
+   * Session-Aware Trading Architecture Phase 5 (2026-09-05, ARGUS_PREMARKET_GAP_ANALYSIS.md §7).
+   * Off by default. Gates ALL of: RiskEngine gate 12's new extended-hours OR-branch (still fails
+   * closed to the existing binary Alpaca-clock check when this is off), the new
+   * extended_hours_execution_policy gate 25 (auto-passes/no-ops when off - it only ever evaluates
+   * when this flag is on AND the session is PRE_MARKET/AFTER_HOURS), and OMS's LIMIT-order
+   * construction for extended hours (falls back to the existing MARKET order when off). Turning
+   * this on does not itself weaken or skip any of the other 24 gates.
+   */
+  extendedHoursExecutionEnabledEnvVar: string;
+  /** Max acceptable real bid/ask spread (basis points, MarketDataWorker.getLatestSpreadBps) for an
+   *  extended-hours order. No L2 feed exists in this codebase - this is the one real spread source
+   *  (Alpaca IEX top-of-book), not a fabricated estimate. */
+  extendedHoursMaxSpreadBps: number;
+  /** Max age (ms) of both the last trade/quote AND the ask side specifically before an
+   *  extended-hours order is refused - premarket/after-hours ticks are naturally sparser than RTH,
+   *  so this is deliberately looser than stalePriceThresholdMs, not the same number reused blindly. */
+  extendedHoursMaxQuoteAgeMs: number;
+  /** Extended-hours notional cap (dollars) - deliberately separate from and typically stricter
+   *  than maxTradeSize/order_notional_cap (gate 16), reflecting the mission's own instruction that
+   *  premarket may require STRICTER controls (wider spreads, lower liquidity, higher volatility),
+   *  never the same or looser bar. */
+  extendedHoursMaxNotionalDollars: number;
+  /** Session-Aware Trading Architecture Phase 5 follow-up (2026-09-05): minimum real average daily
+   *  volume (shares) required for an extended-hours order, sourced from the SAME
+   *  fetchAvgDailyVolumeShares() the broad-universe liquidity screen already uses (via
+   *  ExtendedHoursLiquidityCache.ts) - not a new, duplicate ADV calculation. Default reuses
+   *  continuousIntelligence.json's own existing broadUniverseMinAvgDailyVolumeShares bar (500000)
+   *  rather than inventing an unreviewed number, applied here to a deliberately stricter context. */
+  extendedHoursMinAvgDailyVolumeShares: number;
+  /**
+   * docs/architecture/ARGUS_ARCHITECTURE.md (Java Quant Core section) Phase 2 - gates QuantCoreBridge.ts's
+   * entire subscription to MARKET_DATA. Default off. Even when on, Phase 2 only forwards ticks
+   * and logs shadow-parity divergence (ParityComparator.ts) - it does not call emitTradeIdea.
+   * That is Phase 3, gated by this SAME flag plus its own additional checks in QuantCoreBridge.
+   */
+  quantJavaCoreEnabledEnvVar: string;
+  /** 2026-09-09, explicit operator override - see javaQuantVoteMinConfidence's own doc comment. */
+  javaQuantVoteEnabledEnvVar: string;
+  /** Loopback-only base URL for the local Java advisory process. Never reachable off this host. */
+  quantJavaCoreBaseUrl: string;
+  /** Hard timeout for any single call to the Java process - must never add material latency to
+   *  the live tick pipeline if Java is slow or down. */
+  quantJavaCoreRequestTimeoutMs: number;
+  /** Consecutive failures before QuantCoreBridge's circuit breaker opens (same shape as Alpaca's
+   *  own circuitBreaker fields above - not reused directly since this breaker guards a distinct,
+   *  purely-advisory dependency with no order-path consequence when open). */
+  quantJavaCoreCircuitBreakerFailureThreshold: number;
+  /** Cooldown before the circuit breaker allows another attempt after opening. */
+  quantJavaCoreCircuitBreakerCooldownMs: number;
+  /** Real bug found and fixed 2026-09-13 (Master Transformation Mandate Part 7): an unbounded
+   *  historical-return sample (57,504 real rows for one agent) blew through
+   *  quantJavaCoreRequestTimeoutMs every time it was serialized into one HTTP POST body.
+   *  forecastEngine.ts caps to the most recent N observations before ever calling Java - both a
+   *  reliability fix and the statistically correct choice (recent, representative evidence over an
+   *  unbounded stale-inclusive blend). */
+  forecastEngineMaxSampleSize: number;
+  /** ParityComparator.ts flags a shadow divergence when |ts - java| / |ts| exceeds this fraction
+   *  (0.0001 = 0.01%, matching the migration blueprint's own stated threshold). */
+  quantJavaCoreDivergenceThresholdPct: number;
+  /**
+   * Quant Parity Forensics (2026-08-26): cap on QuantCoreBridge.ts's own local tick-price history
+   * used to compute the TS-side snapshot for compareParity(). Must match
+   * SymbolState.java's CircularDoubleArray CAPACITY (200) - RSI/MACD/Bollinger recompute fresh
+   * over the ENTIRE passed array each call (no incremental state), so once either side has more
+   * ticks than its cap, the two snapshots are being computed over different-length windows of the
+   * same series. That is a genuine, non-algorithmic source of divergence (proven byte-for-byte
+   * identical on identical fixed inputs by RSITest.java/MACDTest.java/BollingerTest.java) and was
+   * the real root cause behind live QUANT_CORE_PARITY_DIVERGENCE events before this was found:
+   * this bridge's own cap was previously a hardcoded 52 (MIN_HISTORY_FOR_PARITY * 2), well short
+   * of Java's 200.
+   */
+  quantJavaCoreLocalHistoryCap: number;
+  /**
+   * 2026-09-11 concurrency/backpressure fix (real, measured root cause - see
+   * QuantCoreBridge.ts's admitOrCoalesceTick() doc comment): forwardTick() previously had no
+   * concurrency ceiling at all, so a burst of MARKET_DATA ticks could fire unboundedly many
+   * simultaneous fetch() calls to Java - measured live at up to 3,326 concurrent in-flight
+   * requests (vs. ~8 under normal load), which starved the Node event loop badly enough that
+   * even the 100ms AbortSignal.timeout() budget was routinely missed by 1-3+ seconds, tripping
+   * the shared CircuitBreaker almost continuously (ticks + ticks_resync caused 99.6% of all
+   * breaker trips in the measured window) and collaterally blocking every other institutional/
+   * quant endpoint sharing that breaker (87.5% of quant/institutional ensemble attempts blocked).
+   * 20 is not an arbitrary number: continuousIntelligence.json's maxActiveSubscriptions (12) is
+   * the real ceiling on how many symbols can be actively ticking at once, plus
+   * maxConcurrentTemporaryDataRescues (6) for temporarily-rescued symbols = 18, with a small
+   * margin for ticks_resync sharing the same limit. Combined with per-symbol coalescing (at most
+   * one in-flight tick request per symbol - a newer tick for a symbol already in flight replaces
+   * the pending one rather than queuing a second request), this bounds concurrency near the real
+   * number of distinct ticking symbols instead of the raw tick arrival rate.
+   */
+  quantJavaCoreTickMaxConcurrency: number;
+  /**
+   * 2026-09-30 (ARGUS_FULL_SESSION_REVIEW_2026-09-29.md follow-up, Java bridge timeout
+   * investigation). internalQuantEnsemble.ts's computeInternalEnsembleQualification() previously
+   * fired all JAVA_RESEARCH_STRATEGY_IDS (10 distinct strategy endpoints) via a single unbounded
+   * `Promise.all(...map(...))` for every symbol it evaluates - the same unbounded-fan-out shape
+   * quantJavaCoreTickMaxConcurrency's own doc comment above already diagnosed and fixed for
+   * forwardTick(), just not extended to this separate caller. Real evidence (September 29
+   * production observability_events, read-only query): institutional/strategy/* sub-endpoints
+   * showed a strikingly consistent ~26.9-27.0s max latency and ~2.05s p90 across ALL 10
+   * strategies, and quant/ensemble (called once per symbol immediately after this fan-out) showed
+   * a 1,025-timeout/934-circuit-open outcome out of 4,301 calls (~46% non-success) - a queueing/
+   * contention signature, not 10 independently-slow endpoints. Bounds concurrent dispatch to the
+   * number of distinct strategy FAMILIES these 10 strategy ids collapse into
+   * (strategyFamilies.ts's JAVA_RESEARCH_STRATEGY_FAMILIES: MEAN_REVERSION_FAMILY,
+   * TREND_MOMENTUM, BREAKOUT_VOLATILITY, MARKET_STRUCTURE_FLOW = 4) rather than an invented
+   * number - same-family strategies are already treated as highly correlated by the
+   * correlation-adjusted ensemble math itself, so firing all of a family's strategies
+   * simultaneously has limited independent-evidence value to begin with. This bounds the burst
+   * ONE evaluateSymbol() call can contribute; it does not add a new global admission mechanism.
+   */
+  quantResearchStrategyFanoutMaxConcurrency: number;
+  /**
+   * 2026-09-11 (ARGUS full trading readiness remediation, Phase 1 item 2). Minimum real
+   * (wins+losses) sample size in agent_confidence_calibration before a per-agent/bucket
+   * calibrated estimate is trusted as empirical rather than classified INSUFFICIENT_CALIBRATION_DATA.
+   * Reuses researchSafety.json's own minPaperTrades/minOosTrades precedent (30) - the same "is this
+   * enough real evidence" bar already used elsewhere in this codebase, not a new invented number.
+   */
+  minCalibrationSampleSize: number;
+  /**
+   * ARGUS_INDEPENDENT_LEARNING_AND_REGIME_IMPLEMENTATION_AUDIT.md Phase 8 - maximum |delta| applied
+   * to agent_performance_stats.currentWeight in a single evaluateAgents() cycle, in either
+   * direction (toward a computed target when evidence is LEARNING_ELIGIBLE, or toward the agent's
+   * static default weight when evidence drops to INSUFFICIENT_EVIDENCE). Prevents one noisy
+   * effective-sample cycle from swinging live ChiefTrader weighting immediately to an extreme -
+   * the same protective intent as a position-sizing cap, applied to learned weight instead of
+   * capital.
+   */
+  maxWeightAdjustmentPerCycle: number;
+  /**
+   * Daily Goal Campaign, TRAIL_STOPS_ONLY action only: the tightened trailing-stop percentage
+   * applied to open positions once today's target is reached under this action
+   * (PortfolioMonitor.ts's resolveEffectiveTrailingStopPct). Only ever tightens the effective stop
+   * (Math.min against the operator's own settings.trailingStopPct) - never loosens it.
+   */
+  campaignTrailStopsOnlyPct: number;
+  /** Max concurrent open names while Daily Goal Campaign is enabled (tightens open_positions_cap). */
+  campaignMaxConcurrentPositions: number;
+  /** Per-trade notional ≤ budget * this fraction when campaign_enabled (velocity sizing). */
+  campaignPositionBudgetFraction: number;
+  campaignOpeningRvolMin: number;
+  campaignOpeningRangeMinutes: number;
+  campaignIntradayAtrTargetMultiple: number;
+  campaignIntradayBreakevenPadPct: number;
+  campaignEodFlattenEtMinutesBeforeClose: number;
+  monteCarloDefaultSeed: number;
+  sameSymbolCooldownMs: number;
+  postLossCooldownMs: number;
+  /** 0 = unlimited FILLED trades per NY session. */
+  maxDailyTrades: number;
+  duplicateSignalWindowMs: number;
+  /** Drop ChiefTrader votes older than this so mismatched timestamps cannot masquerade as a live council. */
+  consensusIdeaMaxAgeMs: number;
+  /** Sliding-window cap on TRADE_IDEA_GENERATED after gates (defense vs idea storms). */
+  maxTradeIdeasPerMinute: number;
+  /** Sliding-window cap on AIRouter.routeTask (defense vs AI storms). Fail-closed HOLD. */
+  maxAiCallsPerMinute: number;
+  /** Value bounds for the safety-relevant numeric fields client-writable via POST /settings.
+   * Real bug fixed: SETTINGS_ALLOWED_FIELDS only ever allowlisted field *names*, never validated
+   * *values* - posting e.g. {"maxPortfolioDrawdownPct": 999} silently disabled the portfolio-
+   * drawdown circuit breaker (the gate is just `drawdownPct < maxPortfolioDrawdownPct`). These
+   * bounds close that class of bug for every numeric settings field RiskEngine/PositionSizing
+   * reads a threshold from - see validateSettingsBounds in configRoutes.ts. */
+  settingsBoundMaxPortfolioDrawdownPctMin: number;
+  settingsBoundMaxPortfolioDrawdownPctMax: number;
+  settingsBoundMaxOrdersPerMinuteMin: number;
+  settingsBoundMaxOrdersPerMinuteMax: number;
+  settingsBoundMaxOpenPositionsMin: number;
+  settingsBoundMaxOpenPositionsMax: number;
+  settingsBoundDailyLossLimitMin: number;
+  settingsBoundDailyLossLimitMax: number;
+  settingsBoundMaxTradeSizeMin: number;
+  settingsBoundMaxTradeSizeMax: number;
+  settingsBoundPercentOfEquityPctMin: number;
+  settingsBoundPercentOfEquityPctMax: number;
+  settingsBoundMinAiConfidenceMin: number;
+  settingsBoundMinAiConfidenceMax: number;
+  settingsBoundTakeProfitPctMin: number;
+  settingsBoundTakeProfitPctMax: number;
+  settingsBoundTrailingStopPctMin: number;
+  settingsBoundTrailingStopPctMax: number;
+  settingsBoundBudgetMin: number;
+  settingsBoundBudgetMax: number;
+  /** PortfolioRebalance.ts: skip a symbol whose current-vs-target drift is smaller than this many
+   * percentage points of total equity - avoids submitting noise-sized trades for a position
+   * that's already effectively at its target allocation. */
+  rebalanceMinDriftPctOfEquity: number;
+}
+
+const REQUIRED_KEYS: (keyof TradingSafety)[] = [
+  'stalePriceThresholdMs',
+  'newsPriceWaitTimeoutMs',
+  'newsPriceWaitPollIntervalMs',
+  'tickFutureSkewMs',
+  'tickOutOfOrderEpsilonMs',
+  'marketDataRejectLogDedupMs',
+  'marketClockCacheMs',
+  'maxConsecutiveLosses',
+  'correlationLookbackMs',
+  'disagreementPenalty',
+  'consensusApprovalThreshold',
+  'minIndependentAgreeingAgents',
+  'moderateMinConfidence',
+  'javaQuantVoteMinConfidence',
+  'javaCoreEnsembleVoteMinConfidence',
+  'minQuantIndependentFamilies',
+  'minQuantIndependentEffectiveCount',
+  'moderateCalibrationTrustMinWilsonLowerBound',
+  'recentCandidatePriorityMaxAgeMs',
+  'openAliceUncertainBandLow',
+  'openAliceUncertainBandHigh',
+  'maxSingleSymbolConcentrationPct',
+  'maxSectorConcentrationPct',
+  'correlationMinOverlap',
+  'correlationThreshold',
+  'maxCorrelatedExposurePct',
+  'stopLossAssumptionPct',
+  'dailyLossKillSwitchFraction',
+  'defaultPercentOfEquityPct',
+  'restrictedLiveMaxOrderNotionalDollars',
+  'restrictedLiveMaxOpenPositions',
+  'restrictedLiveMaxDailyLossDollars',
+  'maxDailyBuyNotionalDollars',
+  'restrictedLiveMaxDailyBuyNotionalDollars',
+  'alpacaRequestTimeoutMs',
+  'alpacaMaxRetries',
+  'alpacaRetryBaseDelayMs',
+  'alpacaCircuitBreakerFailureThreshold',
+  'aiProviderTimeoutMs',
+  'aiProviderAuthFailureCooldownMs',
+  'aiProviderUnreachableCooldownMs',
+  'aiProviderTimeoutSkipCooldownMs',
+  'aiProviderQuotaExceededCooldownMs',
+  'peakEquityMaxPlausibleMultiplier',
+  'alphaVantageDailyRequestBudget',
+  'alphaVantageBudgetLockTimeoutMs',
+  'alphaVantageMacroReservedRequests',
+  'fmpDailyRequestBudget',
+  'fmpBudgetLockTimeoutMs',
+  'alphaVantageMacroSubcallDelayMs',
+  'confluenceCoordinatorConfidenceThreshold',
+  'confluenceCoordinatorCooldownMs',
+  'consensusMaxProviders',
+  'newsLlmMaxCallsPerCycle',
+  'omsFollowUpMaxAgeMs',
+  'alpacaCircuitBreakerCooldownMs',
+  'aiFailureWindowMs',
+  'aiFailureThresholdForLivePause',
+  'crashRecoveryLookbackMs',
+  'backtestLookbackBars',
+  'regimeMinBars',
+  'quantLookbackDays',
+  'quantCycleIntervalMs',
+  'quantMaxConcurrentSymbols',
+  'predictionOutcomeIntervalMs',
+  'predictionOutcomeBatchSize',
+  'predictionOutcomeMaxCycleWallClockMs',
+  'alertingCooldownMs',
+  'trainingExampleIntervalMs',
+  'marketRegimeIntervalMs',
+  'riskPctAggressive',
+  'riskPctConservative',
+  'riskPctBalanced',
+  'positionRiskElevatedFraction',
+  'debateTriggerConfidence',
+  'debateResultConfidence',
+  'debateSingleModelConfidencePenalty',
+  'consensusDebateCooldownMs',
+  'consensusEvalMinIntervalMs',
+  'consensusAggregationWindowMs',
+  'manualTradeCoEvalTimeoutMs',
+  'quantBarsCacheMinCoverageRatio',
+  'historicalBarsMemoryCacheMaxEntries',
+  'quantBarsRateLimitBaseBackoffMs',
+  'quantBarsRateLimitMaxBackoffMs',
+  'pipelineAgentDeadAfterMs',
+  'heartbeatWatchdogSilenceThresholdMs',
+  'gracefulShutdownHttpDrainTimeoutMs',
+  'debateLearnedRulesCount',
+  'debateLearnedRuleMaxChars',
+  'quantExitIdeaConfidence',
+  'quantStopExitConfidence',
+  'thesisInvalidationExitConfidence',
+  'regimeMismatchConfidenceMultiplier',
+  'minStrategyConfidenceToTrade',
+  'agentWinRateAlertPct',
+  'agentWinRateAlertMinPredictions',
+  'oosSharpeDegradationMinRatio',
+  'oosWinRateMinPct',
+  'permutationTestIterations',
+  'permutationSignificanceAlpha',
+  'newsVetoMinImpactScore',
+  'newsVetoWindowMs',
+  'newsClusterTimeWindowMs',
+  'newsClusterTitleSimilarityThreshold',
+  'newsRiskVetoThreshold',
+  'newsPredictionEvalIntradayMs',
+  'newsPredictionEvalShortTermMs',
+  'newsPredictionEvalMediumTermMs',
+  'newsPredictionEvalLongerTermMs',
+  'usEquityRthOpenMinute',
+  'usEquityRthCloseMinute',
+  'reconSignificantMismatchDollars',
+  'reconAccountConsistencyTolerancePct',
+  'reconAccountConsistencyToleranceFloorDollars',
+  'reconQtyTolerance',
+  'reconPauseConsecutiveMismatchCycles',
+  'fallbackTakeProfitPct',
+  'fallbackTrailingStopPct',
+  'internalPaperDefaultCash',
+  'defaultMaxTradeSizeDollars',
+  'minSampleSizeForTrust', 'reflectionCalibrationRuleCooldownMs',
+  'minTradesForPaperValidation',
+  'maxKellyFractionOfCapital',
+  'kellyFractionDefault',
+  'evaluationHorizonMs',
+  'kronosEvaluationHorizonMs',
+  'maxWeightAdjustmentPerCycle',
+  'campaignTrailStopsOnlyPct',
+  'campaignMaxConcurrentPositions',
+  'campaignPositionBudgetFraction',
+  'campaignOpeningRvolMin',
+  'campaignOpeningRangeMinutes',
+  'campaignIntradayAtrTargetMultiple',
+  'campaignIntradayBreakevenPadPct',
+  'campaignEodFlattenEtMinutesBeforeClose',
+  'tradingDaysPerYear',
+  'newsDecisiveSentimentThreshold',
+  'aiDecisionTemperature',
+  'minRegimeConfidenceToTrade',
+  'monteCarloDefaultSeed',
+  'sameSymbolCooldownMs',
+  'postLossCooldownMs',
+  'maxDailyTrades',
+  'duplicateSignalWindowMs',
+  'consensusIdeaMaxAgeMs',
+  'maxTradeIdeasPerMinute',
+  'maxAiCallsPerMinute',
+  'settingsBoundMaxPortfolioDrawdownPctMin',
+  'settingsBoundMaxPortfolioDrawdownPctMax',
+  'settingsBoundMaxOrdersPerMinuteMin',
+  'settingsBoundMaxOrdersPerMinuteMax',
+  'settingsBoundMaxOpenPositionsMin',
+  'settingsBoundMaxOpenPositionsMax',
+  'settingsBoundDailyLossLimitMin',
+  'settingsBoundDailyLossLimitMax',
+  'settingsBoundMaxTradeSizeMin',
+  'settingsBoundMaxTradeSizeMax',
+  'settingsBoundPercentOfEquityPctMin',
+  'settingsBoundPercentOfEquityPctMax',
+  'settingsBoundMinAiConfidenceMin',
+  'settingsBoundMinAiConfidenceMax',
+  'settingsBoundTakeProfitPctMin',
+  'settingsBoundTakeProfitPctMax',
+  'settingsBoundTrailingStopPctMin',
+  'settingsBoundTrailingStopPctMax',
+  'settingsBoundBudgetMin',
+  'settingsBoundBudgetMax',
+  'rebalanceMinDriftPctOfEquity',
+  'extendedHoursMaxSpreadBps',
+  'extendedHoursMaxQuoteAgeMs',
+  'extendedHoursMaxNotionalDollars',
+  'extendedHoursMinAvgDailyVolumeShares',
+  'webhookDispatchTimeoutMs',
+  'webhookMaxRedirects',
+  'webhookDispatchMaxConcurrency',
+];
+
+function loadTradingSafety(): TradingSafety {
+  const raw = loadRepoConfigJson<Record<string, unknown>>('tradingSafety.json');
+  for (const key of REQUIRED_KEYS) {
+    if (typeof raw[key] !== 'number' || !Number.isFinite(raw[key] as number)) {
+      throw new Error(`config/tradingSafety.json missing numeric field: ${key}`);
+    }
+  }
+  if (typeof raw.defaultStrategyFocus !== 'string' || !raw.defaultStrategyFocus) {
+    throw new Error('config/tradingSafety.json missing string field: defaultStrategyFocus');
+  }
+  if (typeof raw.autoFlattenOnReconciliationMismatch !== 'boolean') {
+    throw new Error('config/tradingSafety.json missing boolean field: autoFlattenOnReconciliationMismatch');
+  }
+  if (typeof raw.confluenceCoordinatorEnabled !== 'boolean') {
+    throw new Error('config/tradingSafety.json missing boolean field: confluenceCoordinatorEnabled');
+  }
+  if (typeof raw.quantColdStartBootstrapEnabledEnvVar !== 'string' || !raw.quantColdStartBootstrapEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantColdStartBootstrapEnabledEnvVar');
+  }
+  if (typeof raw.consensusModerateTierEnabledEnvVar !== 'string' || !raw.consensusModerateTierEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: consensusModerateTierEnabledEnvVar');
+  }
+  if (typeof raw.tradingAgentsShadowEnabledEnvVar !== 'string' || !raw.tradingAgentsShadowEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: tradingAgentsShadowEnabledEnvVar');
+  }
+  if (typeof raw.extendedHoursExecutionEnabledEnvVar !== 'string' || !raw.extendedHoursExecutionEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: extendedHoursExecutionEnabledEnvVar');
+  }
+  if (typeof raw.quantJavaCoreEnabledEnvVar !== 'string' || !raw.quantJavaCoreEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantJavaCoreEnabledEnvVar');
+  }
+  if (typeof raw.quantJavaCoreBaseUrl !== 'string' || !raw.quantJavaCoreBaseUrl) {
+    throw new Error('config/tradingSafety.json missing string field: quantJavaCoreBaseUrl');
+  }
+  if (typeof raw.quantJavaCoreRequestTimeoutMs !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreRequestTimeoutMs');
+  }
+  if (typeof raw.quantJavaCoreCircuitBreakerFailureThreshold !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreCircuitBreakerFailureThreshold');
+  }
+  if (typeof raw.quantJavaCoreCircuitBreakerCooldownMs !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreCircuitBreakerCooldownMs');
+  }
+  if (typeof raw.forecastEngineMaxSampleSize !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: forecastEngineMaxSampleSize');
+  }
+  if (typeof raw.quantJavaCoreDivergenceThresholdPct !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreDivergenceThresholdPct');
+  }
+  if (typeof raw.quantJavaCoreLocalHistoryCap !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreLocalHistoryCap');
+  }
+  if (typeof raw.quantJavaCoreTickMaxConcurrency !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantJavaCoreTickMaxConcurrency');
+  }
+  if (typeof raw.quantResearchStrategyFanoutMaxConcurrency !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: quantResearchStrategyFanoutMaxConcurrency');
+  }
+  if (typeof raw.minCalibrationSampleSize !== 'number') {
+    throw new Error('config/tradingSafety.json missing number field: minCalibrationSampleSize');
+  }
+  if (typeof raw.javaQuantVoteEnabledEnvVar !== 'string' || !raw.javaQuantVoteEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: javaQuantVoteEnabledEnvVar');
+  }
+  if (typeof raw.javaCoreEnsembleVoteEnabledEnvVar !== 'string' || !raw.javaCoreEnsembleVoteEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: javaCoreEnsembleVoteEnabledEnvVar');
+  }
+  if (typeof raw.quantIndependentQualificationEnabledEnvVar !== 'string' || !raw.quantIndependentQualificationEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: quantIndependentQualificationEnabledEnvVar');
+  }
+  if (typeof raw.strategySelectionConfluenceGuardEnabledEnvVar !== 'string' || !raw.strategySelectionConfluenceGuardEnabledEnvVar) {
+    throw new Error('config/tradingSafety.json missing string field: strategySelectionConfluenceGuardEnabledEnvVar');
+  }
+  return raw as unknown as TradingSafety;
+}
+
+export const tradingSafety: TradingSafety = loadTradingSafety();
+
+/** Scaffold-only - no caller uses this yet. See tradingAgentsShadowEnabledEnvVar's doc comment above. */
+export function isTradingAgentsShadowEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.tradingAgentsShadowEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See extendedHoursExecutionEnabledEnvVar's doc comment above. */
+export function isExtendedHoursExecutionEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.extendedHoursExecutionEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See quantColdStartBootstrapEnabledEnvVar's doc comment above. */
+export function isQuantColdStartBootstrapEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantColdStartBootstrapEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See consensusModerateTierEnabledEnvVar's doc comment above. */
+export function isConsensusModerateTierEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.consensusModerateTierEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See quantJavaCoreEnabledEnvVar's doc comment above. */
+export function isQuantJavaCoreEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantJavaCoreEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See javaQuantVoteEnabledEnvVar's doc comment above (javaQuantVoteMinConfidence). */
+export function isJavaQuantVoteEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.javaQuantVoteEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See quantIndependentQualificationEnabledEnvVar's doc comment above. */
+export function isQuantIndependentQualificationEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.quantIndependentQualificationEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See strategySelectionConfluenceGuardEnabledEnvVar's doc comment above. */
+export function isStrategySelectionConfluenceGuardEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.strategySelectionConfluenceGuardEnabledEnvVar);
+}
+
+/** Off unless the operator has explicitly set this env var to 'true'. See javaCoreEnsembleVoteMinConfidence's doc comment above. */
+export function isJavaCoreEnsembleVoteEnabled(): boolean {
+  return isRuntimeFlagEnabled(tradingSafety.javaCoreEnsembleVoteEnabledEnvVar);
+}
+
+export function portfolioRiskPctForLevel(riskLevel: string | undefined | null): number {
+  if (riskLevel === 'Aggressive') return tradingSafety.riskPctAggressive;
+  if (riskLevel === 'Conservative') return tradingSafety.riskPctConservative;
+  return tradingSafety.riskPctBalanced;
+}

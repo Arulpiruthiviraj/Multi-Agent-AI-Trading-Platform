@@ -1,0 +1,28 @@
+{
+  "$comment": "Canonical research fill is NEXT_BAR_OPEN. SAME_BAR_CLOSE is BacktestEngine.runStrategyBacktest — do not mix PnL. EXECUTION_MODEL_VERSION stamps every research result.",
+  "EXECUTION_MODEL_VERSION": "argus-research-execution-v1",
+  "NEXT_BAR_OPEN": {
+    "executionModel": "NEXT_BAR_OPEN",
+    "commissionModel": "per_share",
+    "slippageModel": "bps",
+    "spreadModel": "bps",
+    "latencyModel": "none",
+    "note": "Canonical research: signal on closed bar T; fill at bar T+1 open."
+  },
+  "SAME_BAR_CLOSE": {
+    "executionModel": "SAME_BAR_CLOSE",
+    "commissionModel": "per_share",
+    "slippageModel": "dynamic_atr_participation",
+    "spreadModel": "embedded_in_slippage",
+    "latencyModel": "none",
+    "note": "BacktestEngine.run / runStrategyBacktest: evaluate and fill at the same bar close. Optimistic vs live. Not promotion-comparable to NEXT_BAR_OPEN."
+  },
+  "THEORETICAL_ZERO_COST": {
+    "executionModel": "NEXT_BAR_OPEN",
+    "commissionModel": "zero",
+    "slippageModel": "zero",
+    "spreadModel": "zero",
+    "latencyModel": "none",
+    "note": "Theoretical only. Must not be used as promotion evidence."
+  }
+}

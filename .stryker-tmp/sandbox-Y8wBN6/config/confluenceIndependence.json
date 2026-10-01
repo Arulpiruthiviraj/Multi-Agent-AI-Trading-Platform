@@ -1,0 +1,11 @@
+{
+  "$comment": "Independence groups for ConfluenceEngine. Correlated oscillators in the same group do not add as separate votes. Weights are ranking hints, not fitted live-edge claims.",
+  "groups": [
+    { "id": "structure", "weight": 1.0, "members": ["BOS", "CHoCH", "swing", "MOMENTUM_BREAKOUT", "TREND_FOLLOWING", "PULLBACK_CONTINUATION"] },
+    { "id": "oscillators", "weight": 0.35, "members": ["RSI", "MACD", "StochRSI", "CCI"] },
+    { "id": "volume", "weight": 0.8, "members": ["RVOL", "VWAP", "volume"] },
+    { "id": "context", "weight": 0.9, "members": ["SPY", "QQQ", "IWM", "sector", "regime"] },
+    { "id": "catalyst", "weight": 0.7, "members": ["news", "catalyst"] },
+    { "id": "risk", "weight": 1.0, "members": ["RR", "EV", "invalidation", "liquidity"] }
+  ]
+}

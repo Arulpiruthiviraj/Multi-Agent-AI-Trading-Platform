@@ -1,0 +1,35 @@
+{
+  "$comment": "Evaluation-horizon-mismatch remediation (2026-09-04). Before this, PredictionOutcomeEvaluator.ts graded every non-Kronos prediction WIN/LOSS on one blind, universal 60-minute clock (tradingSafety.evaluationHorizonMs) regardless of the source's own actual intended holding period - meaning a fundamental/macro thesis meant to resolve over days was being graded as if it were a scalp. This maps each source to the horizon its OWN already-documented design implies (quant/strategies/types.ts's STRATEGY_TYPICAL_HOLDING_PERIOD, which ChiefTraderAgent.ts already reads for the same strategies - these numbers are this session's first numeric translation of those existing qualitative descriptions into concrete ms, not new claims about strategy behavior). Every value here is a first-approximation grounded in that existing documentation, not an empirically-derived optimum - each is a real, individually reviewable calibration candidate, not a blind guess. Missing entries fall back to tradingSafety.evaluationHorizonMs (unchanged default). Kronos is not listed here - it keeps its own dedicated tradingSafety.kronosEvaluationHorizonMs, unchanged.",
+  "_byAgentNameComment": "Agents with no per-strategy sub-identity. TechnicalAgent and NewsAgent are deliberately NOT overridden - both are genuinely fast-reacting by design (RSI/MACD/Bollinger state transitions; NewsAgent's own ACTIVE_OBSERVE ledger already has its own per-item expectedHorizon elsewhere) - the universal 60-minute default is a reasonable fit for both, not a mismatch.",
+  "byAgentName": {
+    "FundamentalAgent": 604800000,
+    "MacroAgent": 1209600000
+  },
+  "_byQuantStrategyIdComment": "Keyed by the real strategy id predictionIndependencePolicy.ts's secondaryGroupKey() already extracts from QuantEngine's reasoning text (the '__COLD_START_BOOTSTRAP' suffix is stripped before lookup - a strategy's real economic horizon does not change because it is still in cold-start).",
+  "byQuantStrategyId": {
+    "MOMENTUM_BREAKOUT": 86400000,
+    "PULLBACK_CONTINUATION": 604800000,
+    "MEAN_REVERSION": 14400000,
+    "TREND_FOLLOWING": 604800000,
+    "RANGE_REVERSION": 14400000,
+    "SMC_LIQUIDITY_SWEEP": 86400000,
+    "VWAP_VOLUME_STRUCTURE": 86400000,
+    "OPENING_RANGE_BREAKOUT": 23400000,
+    "VWAP_MEAN_REVERSION": 3600000,
+    "DONCHIAN_CHANNEL_BREAKOUT": 86400000,
+    "MA_CROSSOVER": 604800000,
+    "OSCILLATOR_MOMENTUM": 7200000,
+    "BOLLINGER_VOLATILITY": 7200000,
+    "PREVIOUS_PERIOD_BREAKOUT": 86400000,
+    "CANDLESTICK_REVERSAL": 3600000,
+    "GAP_CONTINUATION": 23400000,
+    "FIBONACCI_PULLBACK": 7200000,
+    "VOLUME_CONFIRMATION": 7200000,
+    "SR_BOUNCE": 7200000,
+    "RELATIVE_STRENGTH_ROTATION": 604800000,
+    "STATISTICAL_MEAN_REVERSION": 3600000
+  },
+  "_exitAwareComment": "Exit-aware-evaluation follow-up (2026-09-04): a fixed-horizon single-point check (byQuantStrategyId above) measures an arbitrary snapshot, not TREND_FOLLOWING's own real trailing-stop/ADX-fade exit (trendFollowing.ts has no fixed target by design) - confirmed live: moving that strategy from a 60m to a fixed 7d check made its measured win rate WORSE (46.5%->27.0%), the signature of 'wrong evaluation model', not 'wrong horizon length'. Listed strategy ids here are graded by TrendFollowingExitEvaluator.ts's real walk-forward exit simulation instead of the generic fixed-horizon evaluatePrediction() - byQuantStrategyId above still gates WHEN grading may first be attempted for these ids (unchanged), exitAwareMaxWalkForwardMs bounds how far forward the walk may search for a real exit before an unresolved position is honestly recorded as inconclusive (N_A) rather than retried forever.",
+  "exitAwareStrategyIds": ["TREND_FOLLOWING"],
+  "exitAwareMaxWalkForwardMs": 7776000000
+}

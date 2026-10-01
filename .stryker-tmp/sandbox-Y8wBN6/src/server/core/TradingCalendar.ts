@@ -1,0 +1,102 @@
+/**
+ * ==========================================================
+ * Module: TradingCalendar.ts
+ *
+ * Hardening pass, Phase 3 (daily-loss timezone boundary). RiskEngine.ts's daily-loss circuit
+ * breaker previously computed "today" as `new Date().toISOString().split('T')[0]` - real UTC
+ * midnight, not the real exchange's (NYSE/NASDAQ) midnight. Since America/New_York is UTC-5 (EST)
+ * or UTC-4 (EDT) depending on the time of year, UTC midnight lands at 7 or 8 PM New York time -
+ * the daily-loss baseline was resetting mid-afternoon/evening US trading hours, not at the actual
+ * start of the trading day. A naive fixed UTC-4/UTC-5 offset would itself be wrong twice a year
+ * (DST transitions don't happen on a fixed calendar schedule), so this uses the real IANA
+ * `America/New_York` timezone database via `Intl.DateTimeFormat`, which resolves DST correctly
+ * without any manual offset table.
+ *
+ * Deliberately narrow scope: only calendar-day/session-boundary calculations use this. Every
+ * stored timestamp in the schema (`submittedAt`, `timestamp`, `filledAt`, etc.) stays real UTC
+ * ISO-8601, unchanged - this never touches how anything is persisted, only how "which trading day
+ * is this" is decided.
+ * ==========================================================
+ */
+// @ts-nocheck
+
+
+export const TRADING_TIMEZONE = 'America/New_York';
+
+const tradingDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: TRADING_TIMEZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+// Returns the real trading-exchange calendar date (YYYY-MM-DD, America/New_York) for the given
+// instant - not the UTC calendar date, which can be a different day for several hours around
+// each exchange midnight. `en-CA` formats as YYYY-MM-DD directly; DST is resolved by the ICU
+// timezone database, not a hardcoded offset.
+export function getTradingDateStr(date: Date = new Date()): string {
+  return tradingDateFormatter.format(date);
+}
+
+const tradingTimeFormatter = new Intl.DateTimeFormat('en-GB', {
+  timeZone: TRADING_TIMEZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+// Returns the real exchange-local wall-clock time (HH:MM, 24h, America/New_York) for the given
+// instant. Same DST rationale as getTradingDateStr above - used by AutoTradeSchedule.ts to compare
+// against a user-configured HH:MM trading window without a manual EST/EDT offset table. `en-GB`
+// with hour12:false gives zero-padded 24h HH:MM directly.
+export function getTradingTimeHHMM(date: Date = new Date()): string {
+  return tradingTimeFormatter.format(date);
+}
+
+/** Convert an exchange-local date/time to UTC. Reject nonexistent DST wall times. */
+export function tradingWallTimeToIso(day: string, time: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !/^\d{2}:\d{2}$/.test(time)) throw new Error('Invalid trading wall time');
+  const target = Date.parse(`${day}T${time}:00Z`);
+  let candidate = target;
+  for (let i = 0; i < 3; i++) {
+    const date = new Date(candidate);
+    const represented = Date.parse(`${getTradingDateStr(date)}T${getTradingTimeHHMM(date)}:00Z`);
+    candidate += target - represented;
+  }
+  const result = new Date(candidate);
+  if (getTradingDateStr(result) !== day || getTradingTimeHHMM(result) !== time) throw new Error('Unresolvable trading wall time');
+  return result.toISOString();
+}
+
+// Same as getTradingTimeHHMM but for an arbitrary IANA zone (AutoTradeScheduler.ts's
+// settings.autoTradeScheduleTimezone) instead of the hardcoded exchange zone. A fresh
+// Intl.DateTimeFormat per call is deliberate and cheap here - this only runs once per scheduler
+// tick (default every 60s), not in a hot path, so per-zone formatter caching would be premature.
+export function getTimeHHMMInZone(date: Date, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+}
+
+/**
+ * Returns the real epoch-ms instant of local midnight (America/New_York) for the trading day
+ * `date` falls on - i.e. the start of what getTradingDateStr(date) reports. Added 2026-09-15
+ * (RiskEngine unbounded-query remediation) so RiskEngine.ts's live overtrading-guard query can
+ * bound its WHERE clause by real DST-correct trading-day start instead of fetching the entire
+ * `trades` table. Deliberately implemented as a binary search against the already-proven,
+ * DST-correct getTradingDateStr() (1-second resolution, well within any cooldown-window
+ * granularity this feeds) rather than a second, independent DST offset calculation that could
+ * silently drift out of sync with it - one source of truth for "what day is this" in this zone.
+ */
+export function getTradingDayStartMs(date: Date = new Date()): number {
+  const targetDateStr = getTradingDateStr(date);
+  let lo = date.getTime() - 26 * 60 * 60 * 1000; // always still the prior trading day, even across a DST fall-back
+  let hi = date.getTime();
+  while (hi - lo > 1000) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (getTradingDateStr(new Date(mid)) === targetDateStr) {
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return hi;
+}

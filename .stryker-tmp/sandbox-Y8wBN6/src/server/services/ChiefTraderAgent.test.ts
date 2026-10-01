@@ -1,0 +1,712 @@
+// @ts-nocheck
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { mockDb } = vi.hoisted(() => {
+  const builder: any = {
+    from() { return builder; },
+    where() { return builder; },
+    orderBy() { return builder; },
+    limit() { return builder; },
+    all() { return Promise.resolve([]); },
+    then(resolve: any, reject: any) { return Promise.resolve([]).then(resolve, reject); },
+  };
+  const mockDb = {
+    select: () => builder,
+    insert: () => ({ values: () => Promise.resolve({}) }),
+  };
+  return { mockDb };
+});
+
+const { emitChiefApproval } = vi.hoisted(() => ({ emitChiefApproval: vi.fn() }));
+const { routeConsensus, routeTask, hasAnyRoutableProvider } = vi.hoisted(() => ({ routeConsensus: vi.fn(), routeTask: vi.fn(), hasAnyRoutableProvider: vi.fn() }));
+
+vi.mock('../db', () => ({ db: mockDb }));
+vi.mock('../core/EventBus', () => ({ eventBus: { on: vi.fn(), emit: vi.fn(), publish: vi.fn(), emitChiefApproval } }));
+vi.mock('../ai/AIRouter', () => ({ AIRouter: { getInstance: () => ({ routeConsensus, routeTask, hasAnyRoutableProvider }) } }));
+const { ideaGenEnabled } = vi.hoisted(() => ({ ideaGenEnabled: { value: true } }));
+vi.mock('../core/ideaGenerationGate', () => ({ isLiveIdeaGenerationEnabled: () => ideaGenEnabled.value }));
+
+import { ChiefTraderAgent, CONSENSUS_APPROVAL_THRESHOLD, MIN_INDEPENDENT_AGREEING_AGENTS } from './ChiefTraderAgent';
+import { structuredLogger } from '../observability/StructuredLogger';
+import { DISAGREEMENT_PENALTY, netConfidenceFromVotes } from './EvidenceAggregator';
+import { defaultAgentWeights, agentWeightConfig } from '../config/agentWeights';
+import { loadRepoConfigJson } from '../config/loadRepoConfigJson';
+import { bullBearResearchConfig } from '../config/bullBearResearch';
+import { tradingSafety } from '../config/tradingSafety';
+
+const fixtures = loadRepoConfigJson<{
+  strongAgreementConfidence: number;
+  weakDisagreementConfidence: number;
+  splitConfidence: number;
+  belowThresholdConfidence: number;
+  unweightedAgentConfidence: number;
+}>('consensusFixtures.json');
+const w = defaultAgentWeights;
+
+function buyPair(symbol: string, confidence: number, extra: Record<string, unknown> = {}) {
+  return [
+    { traceId: 't', symbol, side: 'BUY', confidence, agent: 'TechnicalAgent', reasoning: 'tech', ...extra },
+    { traceId: 't', symbol, side: 'BUY', confidence, agent: 'NewsAgent', reasoning: 'news' },
+  ];
+}
+
+describe('ChiefTraderAgent.evaluateConsensus', () => {
+  let agent: any;
+
+  beforeEach(() => {
+    emitChiefApproval.mockClear();
+    routeConsensus.mockReset();
+    routeTask.mockReset();
+    hasAnyRoutableProvider.mockReset().mockResolvedValue(true);
+    ideaGenEnabled.value = true;
+    agent = new ChiefTraderAgent();
+    agent.agentWeights = { ...defaultAgentWeights };
+    agent.recentIdeas = [];
+  });
+
+  it('does not approve a strong single-agent idea - one voice is not independent confirmation', async () => {
+    agent.recentIdeas = [
+      { traceId: 't1', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong momentum' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't1');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it(`approves when two independent agents agree and weighted confidence clears the configured threshold`, async () => {
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+
+    await agent.evaluateConsensus('AAPL', 't1');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.side).toBe('BUY');
+    expect(approval.confidence).toBeCloseTo(0.95, 5);
+  });
+
+  it('2026-09-15 regression: uses the triggering idea\'s own currentPrice, not whichever agreeing agent happens to sit first in evidence array order (a real synthetic-certification finding - a consensus combining a fresh TechnicalAgent tick with an older, cooldown-throttled KronosEngine price picked the stale Kronos price purely by array position, understating RiskEngine\'s real notional by ~5%)', async () => {
+    agent.recentIdeas = [
+      // Deliberately first in array order, but STALE - this is the trap the old
+      // agreeing.find(...) picked by accident.
+      { traceId: 'stale-kronos', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'stale forecast', currentPrice: 246.79 },
+      // The idea that actually triggers this evaluation cycle (traceId matches the
+      // evaluateConsensus() call below) - its own fresh price must win.
+      { traceId: 'fresh-technical', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'fresh oversold read', currentPrice: 259.89 },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'fresh-technical');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.currentPrice).toBe(259.89);
+  });
+
+  it('2026-09-15 regression: falls back to EvidenceAggregator\'s own bestPrice when the triggering idea itself carries no valid currentPrice', async () => {
+    agent.recentIdeas = [
+      { traceId: 'other', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'fallback source', currentPrice: 246.79 },
+      { traceId: 'no-price', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'no price this time' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'no-price');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.currentPrice).toBe(246.79);
+  });
+
+  it('2026-09-11 (full trading readiness remediation, Phase 1 item 2): surfaces the raw/historical/decision confidence decomposition per agent, not just one opaque number', async () => {
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+
+    await agent.evaluateConsensus('AAPL', 'calib-decomp-1');
+
+    const terminalCall = infoSpy.mock.calls.find(c => c[0] === 'consensus_terminal_reason' && (c[1] as any).traceId === 'calib-decomp-1');
+    expect(terminalCall).toBeDefined();
+    const participatingAgents = (terminalCall![1] as any).participatingAgents as Array<any>;
+    expect(participatingAgents.length).toBeGreaterThan(0);
+    for (const p of participatingAgents) {
+      // The mocked DB (this test file's shared mockDb) never returns a real calibration row, so
+      // every agent here has genuinely zero evaluated history - dataQuality must say so explicitly
+      // rather than silently presenting an unearned precise-looking number.
+      expect(p.calibrationDataQuality).toBe('NO_CALIBRATION_DATA');
+      expect(p.rawSignalStrength).toBeCloseTo(0.95, 5);
+      expect(p.historicalReliability).toBeNull();
+    }
+  });
+
+  it('logs the collapsed interim-evaluation count the moment a symbol finally persists (telemetry-reconciliation fix, ARGUS_CURRENT_STATE_AND_FRIDAY_SESSION_FORENSIC_AUDIT.md §5/§18)', async () => {
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
+
+    // Two non-approving cycles for the same symbol - neither persists its own consensus_decisions
+    // row (recordConsensusTransaction is only called on approval or the ~60s no-consensus sweep).
+    agent.recentIdeas = [
+      { traceId: 't2a', symbol: 'AAPL', side: 'BUY', confidence: fixtures.belowThresholdConfidence, agent: 'TechnicalAgent', reasoning: 'weak signal' },
+    ];
+    await agent.evaluateConsensus('AAPL', 't2a');
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+
+    agent.recentIdeas = [
+      { traceId: 't2b', symbol: 'AAPL', side: 'BUY', confidence: fixtures.belowThresholdConfidence, agent: 'TechnicalAgent', reasoning: 'still weak' },
+    ];
+    await agent.evaluateConsensus('AAPL', 't2b');
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(infoSpy).not.toHaveBeenCalledWith('consensus_interim_evaluations_collapsed', expect.anything());
+
+    // Third cycle finally approves - this is where a real consensus_decisions row persists, and
+    // the two prior interim (never individually persisted) cycles should be logged then reset.
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+    await agent.evaluateConsensus('AAPL', 't2c');
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+
+    expect(infoSpy).toHaveBeenCalledWith('consensus_interim_evaluations_collapsed', expect.objectContaining({
+      category: 'CONSENSUS',
+      eventType: 'CONSENSUS_INTERIM_EVALUATIONS_COLLAPSED',
+      symbol: 'AAPL',
+      outcome: 'APPROVED',
+      interimEvaluationCount: 2,
+    }));
+
+    // Counter resets after logging - a subsequent approval with no new interim cycles logs nothing.
+    infoSpy.mockClear();
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+    await agent.evaluateConsensus('AAPL', 't2d');
+    expect(infoSpy).not.toHaveBeenCalledWith('consensus_interim_evaluations_collapsed', expect.anything());
+
+    infoSpy.mockRestore();
+  });
+
+  it('does not approve when weighted confidence stays at or below the configured approval threshold', async () => {
+    agent.recentIdeas = [
+      { traceId: 't2', symbol: 'AAPL', side: 'BUY', confidence: fixtures.belowThresholdConfidence, agent: 'TechnicalAgent', reasoning: 'weak signal' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't2');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('reduces weighted confidence when agents disagree, but still approves if it clears the configured threshold', async () => {
+    agent.recentIdeas = [
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'TechnicalAgent', reasoning: 'buy A' },
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'NewsAgent', reasoning: 'buy B' },
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'FundamentalAgent', reasoning: 'buy C' },
+      { traceId: 't3', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'QuantEngine', reasoning: 'buy D' },
+      { traceId: 't3', symbol: 'AAPL', side: 'SELL', confidence: fixtures.weakDisagreementConfidence, agent: 'KronosEngine', reasoning: 'weak sell' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't3');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.side).toBe('BUY');
+    const expectedWithDisagreement = netConfidenceFromVotes(
+      [
+        { confidence: fixtures.strongAgreementConfidence, weight: w.TechnicalAgent },
+        { confidence: fixtures.strongAgreementConfidence, weight: w.NewsAgent },
+        { confidence: fixtures.strongAgreementConfidence, weight: w.FundamentalAgent },
+        { confidence: fixtures.strongAgreementConfidence, weight: w.QuantEngine },
+      ],
+      [{ confidence: fixtures.weakDisagreementConfidence, weight: w.KronosEngine }],
+    );
+    expect(approval.confidence).toBeCloseTo(expectedWithDisagreement, 4);
+    expect(approval.confidence).toBeLessThan(fixtures.strongAgreementConfidence);
+    expect(approval.confidence).toBeGreaterThan(CONSENSUS_APPROVAL_THRESHOLD);
+  });
+
+  it('does not approve at all when disagreement pulls the winning side at/below the configured approval bar', async () => {
+    agent.recentIdeas = [
+      { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: fixtures.splitConfidence, agent: 'TechnicalAgent', reasoning: 'buy A' },
+      { traceId: 't4', symbol: 'AAPL', side: 'BUY', confidence: fixtures.splitConfidence, agent: 'NewsAgent', reasoning: 'buy B' },
+      { traceId: 't4', symbol: 'AAPL', side: 'SELL', confidence: fixtures.splitConfidence, agent: 'MacroAgent', reasoning: 'sell C' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't4');
+
+    const expected = netConfidenceFromVotes(
+      [{ confidence: fixtures.splitConfidence, weight: w.TechnicalAgent }, { confidence: fixtures.splitConfidence, weight: w.NewsAgent }],
+      [{ confidence: fixtures.splitConfidence, weight: w.MacroAgent }],
+    );
+    expect(expected).toBeLessThanOrEqual(CONSENSUS_APPROVAL_THRESHOLD);
+    expect(DISAGREEMENT_PENALTY).toBeGreaterThan(0);
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('gives an unweighted agent (not in agentWeights) a default weight of 1.0', async () => {
+    agent.recentIdeas = [
+      { traceId: 't5', symbol: 'AAPL', side: 'BUY', confidence: fixtures.unweightedAgentConfidence, agent: 'BrandNewAgent', reasoning: 'novel signal' },
+      { traceId: 't5', symbol: 'AAPL', side: 'BUY', confidence: fixtures.unweightedAgentConfidence, agent: 'NewsAgent', reasoning: 'news confirm' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't5');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.confidence).toBeCloseTo(fixtures.unweightedAgentConfidence, 5);
+    expect(approval.agentsContext).toContain('BrandNewAgent(wt:1.00)');
+  });
+
+  it('gives the ConsensusDebate pseudo-agent a default weight of 0.35 when unweighted, but debate alone is not independent confirmation', async () => {
+    agent.recentIdeas = [
+      { traceId: 't6', symbol: 'AAPL', side: 'BUY', confidence: 0.9, agent: 'ConsensusDebate', reasoning: 'debate result' },
+      { traceId: 't6', symbol: 'AAPL', side: 'BUY', confidence: 0.9, agent: 'TechnicalAgent', reasoning: 'tech' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't6');
+
+    // ConsensusDebate does not count toward the two-independent-agent floor, so this stays NO TRADE.
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('does not approve when the adversarial debate votes HOLD, even if two agents agree on BUY', async () => {
+    agent.recentIdeas = [
+      ...buyPair('AAPL', 0.95),
+      { traceId: 't', symbol: 'AAPL', side: 'HOLD', confidence: 0.8, agent: 'ConsensusDebate', reasoning: 'debate hold' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'thold');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('does not approve when QuantEngine AI contradiction review disagrees with the side', async () => {
+    agent.recentIdeas = [
+      {
+        traceId: 't7b', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'QuantEngine', reasoning: 'quant setup',
+        quantDetail: {
+          regime: { regime: 'BULLISH_TREND' },
+          strategyEvaluation: { strategy: 'MOMENTUM_BREAKOUT', invalidationConditions: [], applicableRegimes: ['BULLISH_TREND'], stop: { price: 145 }, target: { price: 165 } },
+          groupedScores: { overallSetupScore: 78 },
+          contradictions: [],
+          aiContradictionAnalysis: { available: true, aiAgreesWithSide: false, additionalContradictions: ['tape is rolling over'], scenarioAnalysis: 'disagrees', disagreementNote: 'AI disagrees' },
+        },
+      },
+      { traceId: 't7b', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'news' },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't7b');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('approves a PortfolioManager SELL immediately as a risk exit without a second confirming agent', async () => {
+    agent.recentIdeas = [
+      { traceId: 'exit-1', symbol: 'AAPL', side: 'SELL', confidence: fixtures.splitConfidence, agent: agentWeightConfig.riskExitAgent, reasoning: 'Hard stop hit.', currentPrice: 90 },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 'exit-1');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.side).toBe('SELL');
+    expect(approval.reasoning).toContain('Risk Exit');
+  });
+
+  it('still reviews a PortfolioManager SELL when entry idea generation is held after an interrupted session', async () => {
+    ideaGenEnabled.value = false;
+    await agent.reviewIdea({
+      traceId: 'exit-hold',
+      symbol: 'NVDA',
+      side: 'SELL',
+      confidence: 0.9,
+      agent: agentWeightConfig.riskExitAgent,
+      reasoning: 'Hard stop hit.',
+      currentPrice: 90,
+    });
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (emitChiefApproval.mock.calls.length > 0) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].side).toBe('SELL');
+  });
+
+  it('ignores a Technical BUY when entry idea generation is held', async () => {
+    ideaGenEnabled.value = false;
+    await agent.reviewIdea({
+      traceId: 'entry-hold',
+      symbol: 'NVDA',
+      side: 'BUY',
+      confidence: 0.95,
+      agent: 'TechnicalAgent',
+      reasoning: 'momentum',
+      currentPrice: 100,
+    });
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('reviewIdea does not evaluate consensus while a debate is in flight, even if a later low-confidence idea arrives', async () => {
+    let finishDebate: (value: any) => void = () => {};
+    routeConsensus.mockImplementation(() => new Promise(resolve => { finishDebate = resolve; }));
+
+    await agent.reviewIdea({ traceId: 'd1', symbol: 'MSFT', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'd2', symbol: 'MSFT', side: 'BUY', confidence: 0.55, agent: 'MacroAgent', reasoning: 'weak follow-up' });
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+
+    finishDebate({
+      consensus_verdict: 'BUY',
+      successCount: 2,
+      results: [{ status: 'success' }, { status: 'success' }],
+    });
+    const deadline = Date.now() + 2000;
+    while (emitChiefApproval.mock.calls.length === 0 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    // Two independent agents (Technical + Macro) plus debate BUY - should approve once debate settles.
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+  });
+
+  it('2026-09-11 consensus fix: a debate that throws is fail-closed and excluded from evidence entirely - no fabricated ConsensusDebate HOLD vote', async () => {
+    routeConsensus.mockRejectedValue(new Error('llm down'));
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
+
+    await agent.reviewIdea({ traceId: 'df1', symbol: 'NVDA', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'df1', symbol: 'NVDA', side: 'BUY', confidence: 0.55, agent: 'NewsAgent', reasoning: 'confirm' });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    // The fail-closed debate is observable (logged) but never becomes a directional vote - the
+    // real bug this fixes: previously this exact path injected a confidence-0.8 hard-veto HOLD.
+    expect(infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')).toBe(true);
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
+    // TechnicalAgent + NewsAgent still independently qualify - the fail-closed exclusion removes
+    // the fabricated veto, it does not itself invent a new reason to reject or approve.
+  });
+
+  it('2026-09-11 consensus fix: a debate that resolves with no usable verdict is fail-closed and excluded from evidence entirely', async () => {
+    routeConsensus.mockResolvedValue({});
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
+
+    await agent.reviewIdea({ traceId: 'df2', symbol: 'AMD', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'df2', symbol: 'AMD', side: 'BUY', confidence: 0.55, agent: 'NewsAgent', reasoning: 'confirm' });
+
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    expect(infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')).toBe(true);
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
+  });
+
+  // Zero-Trade Forensic Audit follow-up: a debate call that has no routable AI provider always
+  // resolves to a fabricated fail-closed HOLD vote (pushDebateFailClosed). Skipping the call when
+  // AIRouter already knows it cannot succeed removes that artifact - it must never add a fake
+  // approval, and the existing independent-agent/threshold math must still apply unchanged.
+  it('skips the multi-model debate (no routeConsensus call, no fabricated ConsensusDebate HOLD vote) when no AI providers are routable', async () => {
+    hasAnyRoutableProvider.mockResolvedValue(false);
+
+    await agent.reviewIdea({ traceId: 'nr1', symbol: 'IWM', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'nr1', symbol: 'IWM', side: 'BUY', confidence: 0.9, agent: 'NewsAgent', reasoning: 'confirm' });
+
+    const deadline = Date.now() + 2000;
+    while (emitChiefApproval.mock.calls.length === 0 && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 20));
+    }
+
+    expect(routeConsensus).not.toHaveBeenCalled();
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
+    // Two real independent agents agreeing at high confidence still clear consensus on their own
+    // merits - the skip removes the fabricated HOLD, it does not itself add a fake approval.
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].side).toBe('BUY');
+  });
+
+  it('still requires the real independent-agent minimum even when the debate is skipped for no routable providers - a single voice does not approve', async () => {
+    hasAnyRoutableProvider.mockResolvedValue(false);
+
+    await agent.reviewIdea({ traceId: 'nr2', symbol: 'GLD', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await new Promise(r => setTimeout(r, 50));
+
+    expect(routeConsensus).not.toHaveBeenCalled();
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('does not even check provider routability when adversarialDebateMode/confidence would not have triggered a debate anyway (no added AIRouter round-trip on the common path)', async () => {
+    hasAnyRoutableProvider.mockClear();
+
+    // Below debateTriggerConfidence (0.6) - wantsDebate is false regardless of provider health.
+    await agent.reviewIdea({ traceId: 'nr3', symbol: 'AMD', side: 'BUY', confidence: 0.5, agent: 'TechnicalAgent', reasoning: 'weak' });
+
+    expect(hasAnyRoutableProvider).not.toHaveBeenCalled();
+  });
+
+  it('Phase 8: attaches real structured supportingQuantDetail when QuantEngine contributed evidence, without ever changing the deterministic side/confidence', async () => {
+    agent.recentIdeas = [
+      {
+        traceId: 't7', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'QuantEngine', reasoning: 'quant setup', currentPrice: 150,
+        quantDetail: {
+          regime: { regime: 'BULLISH_TREND', trendStrength: 80, volatility: 'NORMAL', marketStructure: 'TRENDING', confidence: 0.85, features: {}, insufficientData: false },
+          strategyEvaluation: {
+            strategy: 'MOMENTUM_BREAKOUT', side: 'BUY', setupScore: 90, confidence: 0.9,
+            conditionsMet: ['a'], conditionsFailed: [], contradictions: ['Elevated RSI'],
+            invalidationConditions: ['Price closes back below the broken level.'],
+            stop: { price: 145, basis: 'test stop' }, target: { price: 165, basis: 'test target' },
+            applicableRegimes: ['BULLISH_TREND'],
+          },
+          groupedScores: { trendScore: 85, momentumScore: 80, volatilityScore: 50, volumeScore: 75, vwapScore: 70, marketScore: 65, sectorScore: 70, relativeStrengthScore: 75, priceStructureScore: 80, overallSetupScore: 78, dataCompletePct: 90 },
+          contradictions: ['Elevated RSI'],
+          aiContradictionAnalysis: { available: true, aiAgreesWithSide: true, additionalContradictions: ['Broader tape looks choppy.'], scenarioAnalysis: 'Real confluence with some risk.', disagreementNote: null },
+        },
+      },
+      { traceId: 't7', symbol: 'AAPL', side: 'BUY', confidence: 0.95, agent: 'NewsAgent', reasoning: 'news confirm', currentPrice: 150 },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't7');
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    const approval = emitChiefApproval.mock.calls[0][0];
+    // The deterministic side/confidence are exactly what QuantEngine's own evidence computed -
+    // never altered by anything in supportingQuantDetail or the AI review it carries.
+    expect(approval.side).toBe('BUY');
+    expect(approval.confidence).toBeCloseTo(0.95, 5);
+
+    const detail = approval.supportingQuantDetail;
+    expect(detail).toBeDefined();
+    expect(detail.selectedStrategy).toBe('MOMENTUM_BREAKOUT');
+    expect(detail.regime.regime).toBe('BULLISH_TREND');
+    expect(detail.setupScores.overallSetupScore).toBe(78);
+    expect(detail.invalidationConditions).toContain('Price closes back below the broken level.');
+    // Phase 16F fix: strategyEvaluation.stop/.target are LevelSuggestion objects ({price, basis}) -
+    // proposedStop/proposedTarget must be the real numeric price a live consumer (RiskAgent ->
+    // trades.quantStopPrice/quantTargetPrice) can actually compare against, not the whole object.
+    expect(detail.proposedStop).toBe(145);
+    expect(detail.proposedTarget).toBe(165);
+    expect(detail.proposedEntry).toBe(150);
+    expect(detail.expectedHoldingPeriod).toContain('Short-term');
+    // Both the deterministic contradiction AND the AI's own additional one are preserved together
+    // - the AI's qualitative read is recorded, never used to replace the deterministic evidence.
+    expect(detail.contradictions).toEqual(['Elevated RSI', 'Broader tape looks choppy.']);
+    expect(detail.aiReview).toEqual({ agreesWithSide: true, scenarioAnalysis: 'Real confluence with some risk.', disagreementNote: null });
+    expect(detail.featureSnapshot).toBeNull();
+  });
+
+  it('reports supportingQuantDetail as null (never a fabricated structure) when no contributing agent was QuantEngine', async () => {
+    agent.recentIdeas = buyPair('AAPL', 0.95);
+
+    await agent.evaluateConsensus('AAPL', 't8');
+
+    const approval = emitChiefApproval.mock.calls[0][0];
+    expect(approval.supportingQuantDetail).toBeNull();
+  });
+
+  it('does not approve when BearResearcher HOLD evidence is present even if two agents agree on BUY', async () => {
+    agent.recentIdeas = [
+      ...buyPair('AAPL', 0.95),
+      {
+        traceId: 't',
+        symbol: 'AAPL',
+        side: 'HOLD',
+        confidence: bullBearResearchConfig.bearHoldMinConfidence,
+        agent: bullBearResearchConfig.bearAgentName,
+        reasoning: 'structured case against the trade',
+      },
+    ];
+
+    await agent.evaluateConsensus('AAPL', 't-bear');
+
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+  });
+
+  it('reviewIdea drops stray entry ideas when Autobot is off and does not call debate/LLM', async () => {
+    ideaGenEnabled.value = false;
+    routeTask.mockResolvedValue({ content: '{}' });
+    await agent.reviewIdea({
+      traceId: 't-off', symbol: 'AAPL', side: 'BUY', confidence: 0.95,
+      agent: 'TechnicalAgent', reasoning: 'stray',
+    });
+    expect(routeTask).not.toHaveBeenCalled();
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(agent.recentIdeas).toHaveLength(0);
+  });
+
+  it('reviewIdea still accepts PortfolioMonitor SELL risk-exits when Autobot is off', async () => {
+    ideaGenEnabled.value = false;
+    await agent.reviewIdea({
+      traceId: 't-exit', symbol: 'AAPL', side: 'SELL', confidence: 0.9,
+      agent: agentWeightConfig.riskExitAgent, reasoning: 'EXIT_CODE=stop',
+    });
+    expect(agent.recentIdeas.length).toBeGreaterThan(0);
+  });
+
+  // Real bug fixed: two evaluateConsensus() calls for the same symbol (e.g. two overlapping
+  // risk-exit ideas) used to run fully independently/concurrently - both could read
+  // this.recentIdeas and both approve before either finished. Now queued per-symbol, mirroring
+  // RiskEngine.evaluateRisk()'s own promise-chain mutex. Proven deterministically by holding the
+  // first call open with a manually-released gate and asserting the second call has not started
+  // while the first is still in flight - no reliance on real timing races.
+  it('serializes two concurrent evaluateConsensus calls for the same symbol - the second never starts before the first finishes', async () => {
+    agent.recentIdeas = [...buyPair('AAPL', fixtures.strongAgreementConfidence)];
+    const order: string[] = [];
+    const realSerialized = agent.evaluateConsensusSerialized.bind(agent);
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    vi.spyOn(agent, 'evaluateConsensusSerialized').mockImplementation(async (symbol: string, traceId: string) => {
+      order.push(`start:${traceId}`);
+      if (traceId === 't1') await gate;
+      await realSerialized(symbol, traceId);
+      order.push(`end:${traceId}`);
+    });
+
+    const p1 = agent.evaluateConsensus('AAPL', 't1');
+    const p2 = agent.evaluateConsensus('AAPL', 't2');
+    await new Promise((r) => setTimeout(r, 0));
+    // t2 must not have started yet - it's queued behind t1, which is still held open by the gate.
+    expect(order).toEqual(['start:t1']);
+
+    releaseFirst();
+    await Promise.all([p1, p2]);
+    expect(order).toEqual(['start:t1', 'end:t1', 'start:t2', 'end:t2']);
+  });
+
+  it('real bug found and fixed: an idea arriving mid-evaluation (during the calibrateConfidence await) is not wiped when that evaluation approves', async () => {
+    agent.recentIdeas = [...buyPair('AAPL', fixtures.strongAgreementConfidence)];
+    let releaseCalibration!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseCalibration = resolve; });
+    let calibrationCalls = 0;
+    const realCalibrateDetailed = (agent as any).calibrateConfidenceDetailed.bind(agent);
+    // evaluateConsensusSerialized calibrates every relevant idea concurrently (Promise.all), so
+    // both calls in this pair start together - gate all of them open until released below.
+    // 2026-09-11: evidence-building now calls calibrateConfidenceDetailed() directly (the fuller,
+    // decomposed lookup) rather than the thin calibrateConfidence() wrapper - gate on the real call.
+    vi.spyOn(agent as any, 'calibrateConfidenceDetailed').mockImplementation(async (agentName: string, rawConfidence: number) => {
+      calibrationCalls += 1;
+      await gate;
+      return realCalibrateDetailed(agentName, rawConfidence);
+    });
+
+    const evalPromise = agent.evaluateConsensus('AAPL', 'race-1');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(calibrationCalls).toBe(2); // evaluateConsensusSerialized is paused inside calibrateConfidence, for both ideas in the pair
+
+    // A genuinely independent third agent's idea for the SAME symbol arrives while the above
+    // evaluation is still mid-flight - exactly what reviewIdea()'s upsertIdea() does in production.
+    const lateIdea = { traceId: 'late', symbol: 'AAPL', side: 'BUY', confidence: fixtures.strongAgreementConfidence, agent: 'KronosEngine', reasoning: 'late arrival' };
+    agent.recentIdeas.push(lateIdea);
+
+    releaseCalibration();
+    await evalPromise;
+
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1); // the original pair still approved as expected
+    // Before the fix, the approval branch wiped every recentIdeas row for AAPL, including this one
+    // that arrived after the snapshot this evaluation actually considered - silently discarding a
+    // real agent's vote before any future evaluation could ever see it.
+    expect(agent.recentIdeas).toContain(lateIdea);
+  });
+
+  it('does not serialize two different symbols against each other', async () => {
+    agent.recentIdeas = [...buyPair('AAPL', fixtures.strongAgreementConfidence), ...buyPair('MSFT', fixtures.strongAgreementConfidence)];
+    const pAAPL = agent.evaluateConsensus('AAPL', 't-aapl');
+    const pMSFT = agent.evaluateConsensus('MSFT', 't-msft');
+    await Promise.all([pAAPL, pMSFT]);
+    expect(emitChiefApproval).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not treat duplicate TechnicalAgent BUY ticks as independent agreement with Kronos SELL', async () => {
+    agent.recentIdeas = [
+      ...Array.from({ length: 50 }, (_, i) => ({
+        traceId: `tech-${i}`, symbol: 'QQQ', side: 'BUY', confidence: 0.9, agent: 'TechnicalAgent', reasoning: 'rsi',
+      })),
+      { traceId: 'k1', symbol: 'QQQ', side: 'SELL', confidence: 0.85, agent: 'KronosEngine', reasoning: 'reversal' },
+    ];
+    await agent.evaluateConsensus('QQQ', 'storm-1');
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    const outcome = agent.getLastConsensusOutcome();
+    expect(outcome.approved).toBe(false);
+    expect(outcome.independentAgreeingAgents).toBeLessThan(MIN_INDEPENDENT_AGREEING_AGENTS);
+  });
+
+  it('approves Technical BUY + Kronos BUY when weighted confidence clears the configured threshold', async () => {
+    agent.recentIdeas = [
+      { traceId: 't', symbol: 'SPY', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'tech' },
+      { traceId: 't', symbol: 'SPY', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'kronos' },
+    ];
+    await agent.evaluateConsensus('SPY', 't-multi');
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].side).toBe('BUY');
+  });
+
+  it('does not count a stale second-agent vote as independent confirmation', async () => {
+    const stale = Date.now() - tradingSafety.consensusIdeaMaxAgeMs - 5_000;
+    agent.recentIdeas = [
+      { traceId: 'stale', symbol: 'DIA', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'old', receivedAt: stale },
+      { traceId: 'fresh', symbol: 'DIA', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'now', receivedAt: Date.now() },
+    ];
+    await agent.evaluateConsensus('DIA', 'fresh');
+    expect(emitChiefApproval).not.toHaveBeenCalled();
+    expect(agent.getLastConsensusOutcome()?.independentAgreeingAgents).toBeLessThan(MIN_INDEPENDENT_AGREEING_AGENTS);
+  });
+
+  it('2026-09-11 consensus fix: a 0-successCount debate (truthy HOLD string, zero real providers) is fail-closed and excluded - no longer hard-vetoes an otherwise-qualifying round', async () => {
+    routeConsensus.mockResolvedValue({
+      consensus_verdict: 'HOLD',
+      successCount: 0,
+      results: [
+        { status: 'error', provider: 'openai', error: 'timeout' },
+        { status: 'error', provider: 'nvidia', error: '404' },
+        { status: 'error', provider: 'gemini', error: 'fetch failed' },
+      ],
+    });
+    const infoSpy = vi.spyOn(structuredLogger, 'info');
+    await agent.reviewIdea({ traceId: 'z1', symbol: 'IWM', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    await agent.reviewIdea({ traceId: 'z1', symbol: 'IWM', side: 'BUY', confidence: 0.95, agent: 'KronosEngine', reasoning: 'confirm' });
+    // Approval happens on a re-evaluation scheduled AFTER the fail-closed exclusion resolves, not
+    // synchronously with it - poll for the approval itself, not just the earlier log event.
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (emitChiefApproval.mock.calls.length > 0) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    // Real bug this fixes: before the fix, this exact scenario (0 of 3 providers succeeded, but a
+    // truthy consensus_verdict string) still hard-vetoed TechnicalAgent+KronosEngine's own
+    // otherwise-clearing 0.95/0.95 agreement down below 75%. The fail-closed HOLD is still
+    // observable (logged), but no longer contaminates the evidence pool - two strong independent
+    // agents now correctly approve on their own merits.
+    expect(infoSpy.mock.calls.some(c => c[0] === 'ai_debate_fail_closed_excluded')).toBe(true);
+    expect(agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate')).toBe(false);
+    expect(emitChiefApproval).toHaveBeenCalledTimes(1);
+    expect(emitChiefApproval.mock.calls[0][0].confidence).toBeCloseTo(0.95, 5);
+  });
+
+  it('does not start a second routeConsensus while a debate is already in flight for that symbol', async () => {
+    routeConsensus.mockImplementation(() => new Promise(() => {}));
+    for (let i = 0; i < 8; i++) {
+      await agent.reviewIdea({
+        traceId: `storm-${i}`,
+        symbol: 'DIA',
+        side: 'BUY',
+        confidence: 0.95,
+        agent: 'TechnicalAgent',
+        reasoning: 'repeat tick',
+      });
+    }
+    expect(routeConsensus).toHaveBeenCalledTimes(1);
+    expect(agent.recentIdeas.filter((i: any) => i.agent === 'TechnicalAgent' && i.symbol === 'DIA')).toHaveLength(1);
+  });
+
+  it('single-model debate text never claims a 3-model consensus', async () => {
+    routeConsensus.mockResolvedValue({
+      consensus_verdict: 'BUY',
+      successCount: 1,
+      results: [{ status: 'success', provider: 'gemini' }, { status: 'error', provider: 'nvidia', error: '404' }],
+    });
+    await agent.reviewIdea({ traceId: 's1', symbol: 'MSFT', side: 'BUY', confidence: 0.95, agent: 'TechnicalAgent', reasoning: 'strong' });
+    const deadline = Date.now() + 2000;
+    while (Date.now() < deadline) {
+      if (agent.recentIdeas.some((i: any) => i.agent === 'ConsensusDebate' && i.side === 'BUY')) break;
+      await new Promise(r => setTimeout(r, 20));
+    }
+    const debate = agent.recentIdeas.find((i: any) => i.agent === 'ConsensusDebate');
+    expect(debate.reasoning).toMatch(/Based on 1 model/);
+    expect(debate.reasoning).not.toMatch(/Based on 2 models|Based on 3 models/);
+    expect(debate.debateTelemetry.providers_succeeded).toBe(1);
+  });
+});

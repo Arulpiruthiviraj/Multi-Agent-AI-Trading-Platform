@@ -1,0 +1,8 @@
+{
+  "$comment": "Model-trust / dissimilarity gate (2026-09-04, Freqtrade FreqAI Dissimilarity Index follow-up). Kronos (Chronos-T5) is the one real trained learned-model path in Argus's live idea pipeline - its own stated confidence describes only how tight its OWN forecast quantiles are, never whether the INPUT price window resembles anything the model has actually been queried on before. This is a real, independent 'is this input in-distribution' gate, deliberately kept OFF unless explicitly enabled, and deliberately NOT wired into any deterministic rule-based strategy (QuantEngine/TechnicalAgent) - those have no learned-model training distribution for this concept to apply to.",
+  "enabledEnvVar": "KRONOS_OOD_GATE_ENABLED",
+  "minReferenceSampleSize": 30,
+  "maxReferenceSampleSize": 500,
+  "oodZThreshold": 3.5,
+  "referenceStatsCacheTtlMs": 300000
+}

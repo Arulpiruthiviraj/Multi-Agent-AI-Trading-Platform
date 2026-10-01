@@ -1,0 +1,79 @@
+{
+  "$comment": "Multi-asset / penny overlay. Default OFF. Thresholds are UNCALIBRATED conservative placeholders — not proven optimal. Flag OFF must leave existing Argus behavior unchanged. Does not enable QUANT_ENGINE_ENABLED, LIVE, or OMS LIMIT orders.",
+  "multiAssetEnabledEnvVar": "ARGUS_MULTI_ASSET_ENABLED",
+  "pennyStockEnabledEnvVar": "ARGUS_PENNY_STOCK_ENABLED",
+  "assetClasses": ["LARGE_CAP", "MID_CAP", "SMALL_CAP", "MICRO_CAP", "PENNY_STOCK", "ETF", "UNKNOWN"],
+  "unknownPolicy": "PASSTHROUGH",
+  "etfSymbols": ["SPY", "QQQ", "IWM", "DIA", "VOO", "VTI", "GLD", "TLT"],
+  "symbolOverrides": {
+    "AAPL": "LARGE_CAP",
+    "MSFT": "LARGE_CAP",
+    "NVDA": "LARGE_CAP",
+    "AMZN": "LARGE_CAP",
+    "TSLA": "LARGE_CAP"
+  },
+  "classification": {
+    "pennyMaxPrice": 5,
+    "marketCapLarge": 10000000000,
+    "marketCapMid": 2000000000,
+    "marketCapSmall": 300000000,
+    "marketCapMicro": 50000000,
+    "priceOnlyPennyIsUncalibrated": true
+  },
+  "execution": {
+    "omsOrderTypeIsMarketOnly": true,
+    "marketOrdersFitPennyAndMicro": false,
+    "marketUnfitReason": "OMS hardcodes MARKET. Low-liquidity MARKET is unfit. LIMIT requires a separately audited OMS change — not done in this overlay."
+  },
+  "safety": {
+    "pennyMinDollarVolume": 500000,
+    "pennyMaxSpreadBps": 150,
+    "pennyMaxSpreadAbs": 0.08,
+    "pennyMaxAtrPct": 0.15,
+    "calibration": "UNCALIBRATED"
+  },
+  "profiles": {
+    "UNKNOWN": {
+      "permittedStrategyIds": null,
+      "maxPositionNotional": null,
+      "maxConcentrationPct": null,
+      "researchCosts": null
+    },
+    "LARGE_CAP": {
+      "permittedStrategyIds": null,
+      "maxPositionNotional": null,
+      "maxConcentrationPct": null,
+      "researchCosts": null
+    },
+    "MID_CAP": {
+      "permittedStrategyIds": null,
+      "maxPositionNotional": null,
+      "maxConcentrationPct": null,
+      "researchCosts": null
+    },
+    "SMALL_CAP": {
+      "permittedStrategyIds": null,
+      "maxPositionNotional": null,
+      "maxConcentrationPct": null,
+      "researchCosts": null
+    },
+    "ETF": {
+      "permittedStrategyIds": null,
+      "maxPositionNotional": null,
+      "maxConcentrationPct": null,
+      "researchCosts": null
+    },
+    "MICRO_CAP": {
+      "permittedStrategyIds": [],
+      "maxPositionNotional": 500,
+      "maxConcentrationPct": 0.05,
+      "researchCosts": { "spreadBps": 40, "slippageBps": 25 }
+    },
+    "PENNY_STOCK": {
+      "permittedStrategyIds": [],
+      "maxPositionNotional": 300,
+      "maxConcentrationPct": 0.03,
+      "researchCosts": { "spreadBps": 80, "slippageBps": 40 }
+    }
+  }
+}
