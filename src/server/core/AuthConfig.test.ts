@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import crypto from 'crypto';
 import {
   isAuthEnabled,
   validateCredentials,
@@ -43,6 +44,22 @@ describe('AuthConfig - validateCredentials', () => {
 
   it('rejects empty-string credentials even when auth is enabled', () => {
     expect(validateCredentials(REAL_ENV, '', '')).toBe(false);
+  });
+
+  it('rejects mismatched-length credentials without throwing (regression: AuthConfig.ts timing-safe comparison, 2026-10-01 defect verification pass)', () => {
+    expect(validateCredentials(REAL_ENV, 'a', REAL_ENV.AUTH_PASSWORD)).toBe(false);
+    expect(validateCredentials(REAL_ENV, 'admin', 'x')).toBe(false);
+    expect(validateCredentials(REAL_ENV, 'admin-with-extra-characters', REAL_ENV.AUTH_PASSWORD)).toBe(false);
+  });
+
+  it('uses crypto.timingSafeEqual rather than a plain === comparison for both username and password (regression: the original implementation used `username === env.AUTH_USERNAME && password === env.AUTH_PASSWORD`, a short-circuiting comparison vulnerable to a character-by-character timing attack)', () => {
+    const spy = vi.spyOn(crypto, 'timingSafeEqual');
+    try {
+      expect(validateCredentials(REAL_ENV, 'admin', REAL_ENV.AUTH_PASSWORD)).toBe(true);
+      expect(spy).toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

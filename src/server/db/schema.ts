@@ -362,8 +362,17 @@ export const fills = sqliteTable('fills', {
   quantity: real('quantity').notNull(),
   price: real('price').notNull(),
   filledAt: text('filled_at').notNull(),
-  /** Broker-reported cumulative filled qty. Unique with orderId so duplicate callbacks cannot double-count. */
-  cumulativeQuantity: real('cumulative_quantity'),
+  /**
+   * Broker-reported cumulative filled qty. Unique with orderId so duplicate callbacks cannot
+   * double-count. 2026-10-01 defect verification pass: was nullable with no production writer
+   * ever leaving it null (fillLedger.ts's insertIncrementalFill() always validates a finite
+   * positive value before insert; 0/0 existing production rows had a null value here) - but SQL
+   * treats every NULL as distinct from every other NULL in a UNIQUE index, so the constraint
+   * itself provided zero duplicate protection against a null cumulativeQuantity from any future
+   * writer. .notNull() makes the schema independently enforce the invariant the application code
+   * already upheld, rather than relying solely on fillLedger.ts never being bypassed.
+   */
+  cumulativeQuantity: real('cumulative_quantity').notNull(),
 }, (table) => ({
   orderCumulativeUniqueIdx: uniqueIndex('idx_fills_order_cumulative').on(table.orderId, table.cumulativeQuantity),
 }));
@@ -391,6 +400,37 @@ export const dailyStrategyPerformance = sqliteTable('daily_strategy_performance'
   updatedAt: integer('updated_at').notNull(),
 }, (table) => ({
   dateStrategyUniqueIdx: uniqueIndex('idx_daily_strategy_performance_date_strategy').on(table.tradingDate, table.quantStrategyId),
+}));
+
+/**
+ * Daily Learning Compaction, Phase 1 (2026-10-01). One durable, machine-readable row per
+ * (tradingDate, sourceType) distilling a high-volume raw table (Phase 1: observability_events only)
+ * into deterministic sufficient statistics, so raw operational rows can be safely purged after a
+ * retention window without losing the quantitative learning signal they represent. `tradingDate`
+ * uses the SAME America/New_York YYYY-MM-DD convention as dailyStrategyPerformance above (not UTC),
+ * for consistency with every other daily-boundary concept already in this schema. Raw-row deletion
+ * is only ever permitted for a (date, sourceType) whose archive row has reached 'VERIFIED' or
+ * 'PURGED' - see DailyCompactionOrchestrator.ts, never a blind time-based delete alone.
+ */
+export const dailyLearningArchive = sqliteTable('daily_learning_archive', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  tradingDate: text('trading_date').notNull(), // America/New_York YYYY-MM-DD
+  sourceType: text('source_type').notNull(), // 'OBSERVABILITY_EVENTS' (Phase 1); more sources later
+  schemaVersion: integer('schema_version').notNull(),
+  windowStartMs: integer('window_start_ms').notNull(),
+  windowEndMs: integer('window_end_ms').notNull(),
+  sourceRowCount: integer('source_row_count').notNull(),
+  summaryJson: text('summary_json').notNull(),
+  summaryChecksum: text('summary_checksum').notNull(),
+  sourceChecksum: text('source_checksum'),
+  compactionStatus: text('compaction_status').notNull(), // PENDING|COMPACTING|COMPACTED|VERIFIED|PURGED|FAILED
+  failureReason: text('failure_reason'),
+  createdAt: integer('created_at').notNull(),
+  verifiedAt: integer('verified_at'),
+  rawPurgedAt: integer('raw_purged_at'),
+}, (table) => ({
+  dateSourceUniqueIdx: uniqueIndex('idx_daily_learning_archive_date_source').on(table.tradingDate, table.sourceType),
+  statusIdx: index('idx_daily_learning_archive_status').on(table.compactionStatus),
 }));
 
 // Phase 3 (TRANSACTION_OBSERVATORY_ARCHITECTURE.md) - RECONCILIATION_MISMATCH/MATCH were

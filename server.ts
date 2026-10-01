@@ -361,6 +361,13 @@ function setSessionCookie(res: Response, token: string) {
     maxAge: SESSION_TTL_MS,
     sameSite: 'lax',
     path: '/',
+    // 2026-10-01 defect verification pass: the cookie previously had no `secure` flag at all, so
+    // it would be sent over plain HTTP even on a connection that was actually TLS-terminated by
+    // this same process. `res.req.secure` reflects the real connection (true only for an actual
+    // TLS socket, since `trust proxy` is not enabled here, so a reverse-proxied HTTPS deployment
+    // is unaffected either way) - zero behavior change for today's always-plain-HTTP deployment
+    // (http.createServer below), strictly safer if TLS is ever terminated directly in this process.
+    secure: res.req.secure,
   });
 }
 

@@ -9,8 +9,15 @@
  * invariant so a future change to the loop can't silently reintroduce
  * look-ahead bias without an immediate hard failure.
  * ==========================================================
+ *
+ * 2026-10-01 (Institutional Architecture Proposal, Phase A3): explicitly implements the general
+ * `Clock` interface (`src/server/core/Clock.ts`) - a non-breaking type annotation only, since
+ * `now(): number` already existed. SyntheticMarketClock already extends this class, so it also
+ * satisfies `Clock` automatically.
  */
-export class ReplayClock {
+import type { Clock } from '../../core/Clock';
+
+export class ReplayClock implements Clock {
   private currentTimeMs: number;
 
   constructor(startTimeMs: number) {

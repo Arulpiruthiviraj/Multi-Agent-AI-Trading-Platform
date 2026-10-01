@@ -45,6 +45,20 @@ export function isAuthEnabled(env: AuthEnv): boolean {
 }
 
 /**
+ * Constant-time string comparison (same pattern as hasValidDevToken below). A plain `===` on
+ * two JS strings short-circuits at the first differing character, which leaks a timing signal an
+ * attacker can use to recover a secret character-by-character over many requests. Equal-length
+ * check first (crypto.timingSafeEqual requires matching buffer lengths and this intentionally
+ * only leaks length, not content).
+ */
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+/**
  * Real credential check. Returns false unconditionally when auth is disabled - there is no
  * scenario in which a login attempt should succeed while no real password is configured.
  */
@@ -52,7 +66,8 @@ export function validateCredentials(env: AuthEnv, username: unknown, password: u
   if (!isAuthEnabled(env)) return false;
   if (typeof username !== 'string' || typeof password !== 'string') return false;
   if (username.length === 0 || password.length === 0) return false;
-  return username === env.AUTH_USERNAME && password === env.AUTH_PASSWORD;
+  if (typeof env.AUTH_USERNAME !== 'string' || typeof env.AUTH_PASSWORD !== 'string') return false;
+  return timingSafeStringEqual(username, env.AUTH_USERNAME) && timingSafeStringEqual(password, env.AUTH_PASSWORD);
 }
 
 export function isSessionValid(session: { expiresAt: number } | null | undefined, now: number = Date.now()): boolean {

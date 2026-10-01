@@ -9,6 +9,8 @@ import { lt } from 'drizzle-orm';
 import { observabilityConfig } from '../config/observability';
 import { incMetric } from './ObservabilityMetrics';
 import type { ObservabilityLevel } from '../config/observability';
+import { purgeVerifiedDays } from '../db/dailyCompaction/DailyCompactionOrchestrator';
+import { observabilityEventsSource } from '../db/dailyCompaction/observabilityEventsSource';
 
 export interface ObservabilityEventRow {
   id: string;
@@ -86,7 +88,19 @@ export async function flushObservabilityStore(): Promise<void> {
   }
 }
 
+/**
+ * Daily Learning Compaction Phase 1 (2026-10-01): once observabilityConfig.dailyCompactionEnabled
+ * is on, raw rows are deleted ONLY through purgeVerifiedDays() - a day without a VERIFIED archive
+ * row is kept regardless of age, and this function never falls back to the blind delete below while
+ * the flag is on. Default is OFF (not yet wired into live boot), so the pre-existing blind
+ * time-based delete below is BYTE-FOR-BYTE UNCHANGED for every deployment that hasn't explicitly
+ * opted in - this is what keeps "existing retention behavior is not weakened" true for Phase 1.
+ */
 export async function sweepObservabilityRetention(nowMs = Date.now()): Promise<number> {
+  if (observabilityConfig.dailyCompactionEnabled) {
+    const result = purgeVerifiedDays(observabilityEventsSource, observabilityConfig.retentionDays, nowMs);
+    return result.totalRowsPurged;
+  }
   const cutoff = nowMs - observabilityConfig.retentionDays * 24 * 60 * 60 * 1000;
   try {
     const result = await db.delete(observabilityEvents).where(lt(observabilityEvents.ts, cutoff));

@@ -8,7 +8,11 @@ const journal = JSON.parse(readFileSync('drizzle/meta/_journal.json', 'utf8')) a
   entries: Array<{ tag: string; when: number }>;
 };
 const previous = journal.entries.find(e => e.tag === '0077_trade_plan_close_confidence')!;
-const repair = journal.entries.find(e => e.tag === '0079_repair_skipped_crypto_paper_tables')!;
+// 2026-10-01: read the real latest journal entry dynamically rather than hardcoding
+// '0079_repair_skipped_crypto_paper_tables' as "the" latest migration - that assumption broke the
+// moment a 0080+ migration was added. This test only cares that migrating a fresh/legacy DB reaches
+// whatever the real newest migration actually is.
+const latest = journal.entries[journal.entries.length - 1];
 const original = readFileSync('drizzle/0078_skinny_mockingbird.sql', 'utf8');
 const tables = ['crypto_paper_broker_state', 'crypto_paper_positions', 'crypto_paper_orders'];
 
@@ -17,6 +21,23 @@ function deployedBeforeCrypto() {
   // Reproduce the production migration watermark. No application imports or production DB.
   sqlite.exec('CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)');
   sqlite.prepare('INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)').run('fixture-0077', previous.when);
+  // 2026-10-01: this fixture only ever claimed the 0077 watermark via the marker row above - it
+  // never actually ran migrations 0001-0077's real CREATE TABLE statements, so any real table from
+  // that era was never created here. That was invisible until a post-0077 migration (0081, fills
+  // cumulativeQuantity NOT NULL) needed to ALTER an existing table rather than only ever CREATE new
+  // ones. Seed the one pre-existing table a later migration now rebuilds, in its real pre-0081
+  // shape, so the watermark this fixture claims is actually true for every table a later migration
+  // might touch - not just the crypto_paper_* tables this file was originally written to cover.
+  sqlite.exec(`CREATE TABLE fills (
+    id integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+    order_id text NOT NULL,
+    broker_fill_id text,
+    quantity real NOT NULL,
+    price real NOT NULL,
+    filled_at text NOT NULL,
+    cumulative_quantity real
+  );
+  CREATE UNIQUE INDEX idx_fills_order_cumulative ON fills (order_id, cumulative_quantity);`);
   return sqlite;
 }
 
@@ -29,7 +50,15 @@ describe('crypto paper migration upgrade repair', () => {
       migrate(db, { migrationsFolder: 'drizzle' });
       for (const table of tables) expect(sqlite.prepare(`SELECT * FROM ${table}`).all()).toEqual([]);
       const migrations = sqlite.prepare('SELECT created_at FROM __drizzle_migrations ORDER BY created_at').all();
-      expect(migrations).toEqual([{ created_at: previous.when }, { created_at: repair.when }]);
+      // Real, dynamic expectation: migrating from the 0077 watermark (a DB that SKIPPED 0078, the
+      // exact scenario this test simulates) applies every later real migration EXCEPT 0078 itself
+      // (which never gets a __drizzle_migrations row in this scenario - that is the real repair
+      // behavior under test) through whatever is actually newest today - hardcoding "exactly one
+      // migration after 0077" broke the moment a 0080+ migration was added.
+      const previousIndex = journal.entries.findIndex((e) => e.tag === previous.tag);
+      expect(migrations).toEqual(
+        journal.entries.slice(previousIndex).filter((e) => e.tag !== '0078_skinny_mockingbird').map((e) => ({ created_at: e.when })),
+      );
       migrate(db, { migrationsFolder: 'drizzle' });
       expect(sqlite.prepare('SELECT created_at FROM __drizzle_migrations ORDER BY created_at').all()).toEqual(migrations);
     } finally { sqlite.close(); }
@@ -56,7 +85,7 @@ describe('crypto paper migration upgrade repair', () => {
     try {
       migrate(drizzle(sqlite), { migrationsFolder: 'drizzle' });
       for (const table of tables) expect(sqlite.prepare(`SELECT * FROM ${table}`).all()).toEqual([]);
-      expect(sqlite.prepare('SELECT MAX(created_at) AS latest FROM __drizzle_migrations').get()).toEqual({ latest: repair.when });
+      expect(sqlite.prepare('SELECT MAX(created_at) AS latest FROM __drizzle_migrations').get()).toEqual({ latest: latest.when });
     } finally { sqlite.close(); }
   });
 });

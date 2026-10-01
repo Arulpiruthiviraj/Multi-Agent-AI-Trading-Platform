@@ -24,6 +24,11 @@ export interface ObservabilityConfig {
   dropPolicy: 'newest' | 'oldest';
   retentionDays: number;
   retentionSweepMs: number;
+  /** Daily Learning Compaction Phase 1 (2026-10-01) - off by default, see config/observability.json's
+   *  own comment. retentionDays above still governs the purge cutoff; this only gates whether the
+   *  compact/verify/purge scheduler runs at all. */
+  dailyCompactionEnabled: boolean;
+  dailyCompactionSweepMs: number;
   marketDataSampleEveryN: number;
   processTelemetryIntervalMs: number;
   processTelemetryRingSize: number;
@@ -73,7 +78,7 @@ const LEVEL_SET = new Set(['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL']);
 
 const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'schemaVersion', 'batchFlushMs', 'maxBatchSize', 'maxQueueSize',
-  'retentionDays', 'retentionSweepMs', 'marketDataSampleEveryN',
+  'retentionDays', 'retentionSweepMs', 'dailyCompactionSweepMs', 'marketDataSampleEveryN',
   'processTelemetryIntervalMs', 'processTelemetryRingSize', 'reflectionEngineMetricsRingSize',
   'memoryTelemetryPersistIntervalMs', 'memoryTelemetryWarningRssMb', 'memoryTelemetryCriticalRssMb',
   'memoryTelemetryWarningCommittedMb', 'memoryTelemetryCriticalCommittedMb',
@@ -105,6 +110,9 @@ function loadObservabilityConfig(): ObservabilityConfig {
   }
   if (typeof raw.heapSnapshotEnabled !== 'boolean') {
     throw new Error('config/observability.json missing boolean field: heapSnapshotEnabled');
+  }
+  if (typeof raw.dailyCompactionEnabled !== 'boolean') {
+    throw new Error('config/observability.json missing boolean field: dailyCompactionEnabled');
   }
   if (typeof raw.heapSnapshotDir !== 'string' || raw.heapSnapshotDir.length === 0) {
     throw new Error('config/observability.json missing string field: heapSnapshotDir');

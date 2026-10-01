@@ -561,6 +561,20 @@
       "when": 1790648400000,
       "tag": "0079_repair_skipped_crypto_paper_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "6",
+      "when": 1790857790157,
+      "tag": "0080_odd_molly_hayes",
+      "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "6",
+      "when": 1790860588167,
+      "tag": "0081_fills_cumulative_quantity_not_null",
+      "breakpoints": true
     }
   ]
 }
