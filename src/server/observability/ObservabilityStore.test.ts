@@ -54,6 +54,8 @@ describe('sweepObservabilityRetention (Daily Learning Compaction Phase 1 gating)
 
   afterEach(() => {
     (observabilityConfig as any).dailyCompactionEnabled = false; // restore real default
+    (observabilityConfig as any).retentionSweepBatchSize = 5000; // restore real default
+    (observabilityConfig as any).retentionSweepMaxBatchesPerCall = 50; // restore real default
   });
 
   it('with dailyCompactionEnabled OFF (the real default), behavior is unchanged: a blind time-based delete regardless of archive state', async () => {
@@ -95,5 +97,29 @@ describe('sweepObservabilityRetention (Daily Learning Compaction Phase 1 gating)
     const deleted = await store.sweepObservabilityRetention(now);
     expect(deleted).toBe(1);
     expect(db.select().from(schema.observabilityEvents).all()).toHaveLength(0);
+  });
+
+  it('2026-10-01 defect verification pass: a backlog larger than one batch is deleted across multiple bounded batches, never one unbatched delete', async () => {
+    (observabilityConfig as any).retentionSweepBatchSize = 10;
+    (observabilityConfig as any).retentionSweepMaxBatchesPerCall = 50;
+    const now = Date.now();
+    const oldTs = now - (observabilityConfig.retentionDays + 1) * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 37; i++) seedEvent(oldTs); // more than one 10-row batch, not a round multiple
+
+    const deleted = await store.sweepObservabilityRetention(now);
+    expect(deleted).toBe(37); // every expired row still gets deleted, just across several batches
+    expect(db.select().from(schema.observabilityEvents).all()).toHaveLength(0);
+  });
+
+  it('2026-10-01 defect verification pass: a single sweep call never exceeds retentionSweepMaxBatchesPerCall * retentionSweepBatchSize rows, so a huge backlog cannot block the event loop in one call', async () => {
+    (observabilityConfig as any).retentionSweepBatchSize = 10;
+    (observabilityConfig as any).retentionSweepMaxBatchesPerCall = 3;
+    const now = Date.now();
+    const oldTs = now - (observabilityConfig.retentionDays + 1) * 24 * 60 * 60 * 1000;
+    for (let i = 0; i < 100; i++) seedEvent(oldTs); // far more than 3*10=30
+
+    const deleted = await store.sweepObservabilityRetention(now);
+    expect(deleted).toBe(30); // bounded to maxBatches * batchSize for this one call
+    expect(db.select().from(schema.observabilityEvents).all()).toHaveLength(70); // the rest waits for the next sweep interval
   });
 });

@@ -53,4 +53,59 @@ describe('Argus capital allocation (broker cash ≠ trading authority)', () => {
     expect(rNan.passed).toBe(false);
     expect(rNan.reason).toMatch(/INVALID_ARGUS_BUDGET/);
   });
+
+  describe('2026-10-01 defect verification pass (finding 4.3): a held position with no resolvable price must not silently count as $0', () => {
+    it('flags the snapshot degraded when a held position has a NaN averagePrice, instead of treating its value as $0', () => {
+      const snap = snapshotCapital({
+        allocated: 100,
+        positions: [{ quantity: 10, averagePrice: Number.NaN }],
+        pendingBuys: [],
+      });
+      expect(snap.degraded).toBe(true);
+      expect(snap.usedPositions).toBe(0); // old behavior would have also been 0 - degraded is the real signal
+      expect(snap.remaining).toBe(100); // old behavior silently reported the full $100 as free - still true here, which is exactly why the guard below must fail-close instead
+    });
+
+    it('flags degraded when averagePrice and avgPrice are both missing (undefined)', () => {
+      const snap = snapshotCapital({ allocated: 100, positions: [{ quantity: 5 }], pendingBuys: [] });
+      expect(snap.degraded).toBe(true);
+    });
+
+    it('does NOT flag degraded for a position with a real, valid price', () => {
+      const snap = snapshotCapital({ allocated: 100, positions: [{ quantity: 1, averagePrice: 60 }], pendingBuys: [] });
+      expect(snap.degraded).toBe(false);
+    });
+
+    it('the real exploit: a NaN-priced position previously let a BUY through that should have been blocked - evaluateAllocationGuard now fails it closed', () => {
+      // Broker reports a real $9000 position (100 shares @ $90) but with a corrupted/missing price field.
+      const snap = snapshotCapital({
+        allocated: 100,
+        positions: [{ quantity: 100, averagePrice: Number.NaN }],
+        pendingBuys: [],
+      });
+      // Old behavior: usedPositions=0, remaining=$100 (the full allocation, as if the $9000 position didn't exist),
+      // so a new $90 BUY would have PASSED here - a real capital-accounting fail-open.
+      const result = evaluateAllocationGuard(snap, 'BUY', 90);
+      expect(result.passed).toBe(false);
+      expect(result.reason).toMatch(/CAPITAL_SNAPSHOT_DEGRADED/);
+    });
+
+    it('SELL/exit is never blocked by a degraded snapshot - capital preservation must not be held hostage by a bad price field', () => {
+      const snap = snapshotCapital({
+        allocated: 100,
+        positions: [{ quantity: 100, averagePrice: Number.NaN }],
+        pendingBuys: [],
+      });
+      expect(snap.degraded).toBe(true);
+      const result = evaluateAllocationGuard(snap, 'SELL', 90);
+      expect(result.passed).toBe(true);
+    });
+
+    it('a zero or negative averagePrice is also treated as unresolved, not a real $0 cost basis', () => {
+      const snap = snapshotCapital({ allocated: 100, positions: [{ quantity: 10, averagePrice: 0 }], pendingBuys: [] });
+      expect(snap.degraded).toBe(true);
+      const snapNeg = snapshotCapital({ allocated: 100, positions: [{ quantity: 10, averagePrice: -5 }], pendingBuys: [] });
+      expect(snapNeg.degraded).toBe(true);
+    });
+  });
 });

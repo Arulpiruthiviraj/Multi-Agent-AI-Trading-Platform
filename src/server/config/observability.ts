@@ -24,6 +24,12 @@ export interface ObservabilityConfig {
   dropPolicy: 'newest' | 'oldest';
   retentionDays: number;
   retentionSweepMs: number;
+  /** 2026-10-01 defect verification pass - see config/observability.json's own comment. Bounds a
+   *  single sweepObservabilityRetention() call to at most retentionSweepMaxBatchesPerCall batches
+   *  of retentionSweepBatchSize rows each, yielding to the event loop between batches, so a large
+   *  backlog drains progressively across multiple sweep intervals instead of blocking in one shot. */
+  retentionSweepBatchSize: number;
+  retentionSweepMaxBatchesPerCall: number;
   /** Daily Learning Compaction Phase 1 (2026-10-01) - off by default, see config/observability.json's
    *  own comment. retentionDays above still governs the purge cutoff; this only gates whether the
    *  compact/verify/purge scheduler runs at all. */
@@ -78,7 +84,8 @@ const LEVEL_SET = new Set(['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL']);
 
 const REQUIRED_NUMBERS: (keyof ObservabilityConfig)[] = [
   'schemaVersion', 'batchFlushMs', 'maxBatchSize', 'maxQueueSize',
-  'retentionDays', 'retentionSweepMs', 'dailyCompactionSweepMs', 'marketDataSampleEveryN',
+  'retentionDays', 'retentionSweepMs', 'retentionSweepBatchSize', 'retentionSweepMaxBatchesPerCall',
+  'dailyCompactionSweepMs', 'marketDataSampleEveryN',
   'processTelemetryIntervalMs', 'processTelemetryRingSize', 'reflectionEngineMetricsRingSize',
   'memoryTelemetryPersistIntervalMs', 'memoryTelemetryWarningRssMb', 'memoryTelemetryCriticalRssMb',
   'memoryTelemetryWarningCommittedMb', 'memoryTelemetryCriticalCommittedMb',

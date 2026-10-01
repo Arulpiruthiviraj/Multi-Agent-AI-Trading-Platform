@@ -3,7 +3,7 @@
  * Isolated from the live trading spine: enqueue never throws; overflow drops; flush errors
  * increment counters and discard that batch (no unbounded re-queue).
  */
-import { db } from '../db';
+import { db, sqliteDb } from '../db';
 import { observabilityEvents } from '../db/schema';
 import { lt } from 'drizzle-orm';
 import { observabilityConfig } from '../config/observability';
@@ -102,12 +102,29 @@ export async function sweepObservabilityRetention(nowMs = Date.now()): Promise<n
     return result.totalRowsPurged;
   }
   const cutoff = nowMs - observabilityConfig.retentionDays * 24 * 60 * 60 * 1000;
+  // 2026-10-01 defect verification pass: previously one single unbatched DELETE, live-reproduced to
+  // block the whole process's event loop (including /health) for 8+ minutes against this
+  // deployment's real 9.8M-row backlog - see config/observability.json's own comment. Deleting by a
+  // bounded id subquery + yielding between batches (setImmediate) keeps any one synchronous slice
+  // small and lets a large backlog drain progressively across multiple sweep intervals instead of
+  // trying to do it all in one blocking transaction.
+  const batchSize = observabilityConfig.retentionSweepBatchSize;
+  const maxBatches = observabilityConfig.retentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    'DELETE FROM observability_events WHERE id IN (SELECT id FROM observability_events WHERE ts < ? LIMIT ?)'
+  );
+  let totalDeleted = 0;
   try {
-    const result = await db.delete(observabilityEvents).where(lt(observabilityEvents.ts, cutoff));
-    return Number((result as { changes?: number })?.changes ?? 0);
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoff, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break; // caught up - fewer than a full batch matched
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
   } catch {
     incMetric('events_persist_failed');
-    return 0;
+    return totalDeleted;
   }
 }
 
