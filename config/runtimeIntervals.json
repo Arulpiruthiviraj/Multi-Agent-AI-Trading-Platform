@@ -50,5 +50,8 @@
   "cryptoMarketDataIngestionMs": 15000,
   "heartbeatWatchdogCheckMs":60000,
   "candidateRankingsRetentionDays": 14,
-  "candidateRankingsRetentionSweepMs": 3600000
+  "candidateRankingsRetentionSweepMs": 3600000,
+  "_candidateRankingsRetentionBatchComment": "2026-10-01 defect verification pass: sweepCandidateRankingsRetention() previously ran one single unbatched DELETE, same class of defect as observability_events's sweep (see config/observability.json's own comment for the first live reproduction). Live-reproduced a second time against this table: with trading freshly enabled and real ranking cycles running, the engine's event loop (including /health) went unresponsive again shortly after boot, CPU pegged near 100% continuously - this file's own 2026-09-22 comment already documented the table had grown to 1.38M+ rows with no retention at all before that date, so a real backlog beyond the 14-day cutoff was plausible. Same batching + yielding fix as ObservabilityStore.ts.",
+  "candidateRankingsRetentionSweepBatchSize": 5000,
+  "candidateRankingsRetentionSweepMaxBatchesPerCall": 50
 }

@@ -70,4 +70,43 @@ describe('sweepCandidateRankingsRetention (real defect: candidate_rankings had n
     const remaining = await db.select().from(schema.candidateRankings);
     expect(remaining.map((r: any) => r.symbol)).toEqual(['RECENT1']);
   });
+
+  describe('2026-10-01 defect verification pass: live-reproduced a second event-loop stall against this exact table (1.38M+ rows historically) - same unbatched-DELETE class of defect as ObservabilityStore.ts, now fixed the same way', () => {
+    let runtimeIntervals: any;
+
+    beforeAll(async () => {
+      ({ runtimeIntervals } = await import('../config/runtimeIntervals'));
+    });
+
+    afterAll(() => {
+      (runtimeIntervals as any).candidateRankingsRetentionSweepBatchSize = 5000;
+      (runtimeIntervals as any).candidateRankingsRetentionSweepMaxBatchesPerCall = 50;
+    });
+
+    it('a backlog larger than one batch is deleted across multiple bounded batches, never one unbatched delete', async () => {
+      (runtimeIntervals as any).candidateRankingsRetentionSweepBatchSize = 10;
+      (runtimeIntervals as any).candidateRankingsRetentionSweepMaxBatchesPerCall = 50;
+      await db.delete(schema.candidateRankings).run();
+      const now = Date.now();
+      const oldIso = new Date(now - 20 * 24 * 60 * 60 * 1000).toISOString();
+      for (let i = 0; i < 37; i++) await db.insert(schema.candidateRankings).values(row(`OLD${i}`, oldIso));
+
+      const deleted = await sweepCandidateRankingsRetention(now);
+      expect(deleted).toBe(37);
+      expect(await db.select().from(schema.candidateRankings)).toHaveLength(0);
+    });
+
+    it('a single sweep call never exceeds maxBatches * batchSize rows, so a huge backlog cannot block the event loop in one call', async () => {
+      (runtimeIntervals as any).candidateRankingsRetentionSweepBatchSize = 10;
+      (runtimeIntervals as any).candidateRankingsRetentionSweepMaxBatchesPerCall = 3;
+      await db.delete(schema.candidateRankings).run();
+      const now = Date.now();
+      const oldIso = new Date(now - 20 * 24 * 60 * 60 * 1000).toISOString();
+      for (let i = 0; i < 100; i++) await db.insert(schema.candidateRankings).values(row(`OLD${i}`, oldIso));
+
+      const deleted = await sweepCandidateRankingsRetention(now);
+      expect(deleted).toBe(30); // bounded to maxBatches(3) * batchSize(10) for this one call
+      expect(await db.select().from(schema.candidateRankings)).toHaveLength(70);
+    });
+  });
 });

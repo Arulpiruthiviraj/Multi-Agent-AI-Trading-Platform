@@ -76,6 +76,11 @@ export interface RuntimeIntervals {
   candidateRankingsRetentionDays: number;
   /** Sweep cadence for the above - mirrors observability.json's retentionSweepMs pattern. */
   candidateRankingsRetentionSweepMs: number;
+  /** 2026-10-01 defect verification pass - see config/runtimeIntervals.json's own comment. Bounds
+   *  a single sweepCandidateRankingsRetention() call the same way observability.json's
+   *  retentionSweepBatchSize/retentionSweepMaxBatchesPerCall bound ObservabilityStore.ts's sweep. */
+  candidateRankingsRetentionSweepBatchSize: number;
+  candidateRankingsRetentionSweepMaxBatchesPerCall: number;
 }
 
 const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
@@ -93,6 +98,7 @@ const REQUIRED_KEYS: (keyof RuntimeIntervals)[] = [
   'javaQuantAdvisoryMs', 'aiProviderHealthCheckMs', 'sessionLifecycleEvalMs', 'calibrationValidationCycleMs',
   'heartbeatWatchdogCheckMs', 'cryptoMarketDataIngestionMs',
   'candidateRankingsRetentionDays', 'candidateRankingsRetentionSweepMs',
+  'candidateRankingsRetentionSweepBatchSize', 'candidateRankingsRetentionSweepMaxBatchesPerCall',
 ];
 
 function loadRuntimeIntervals(): RuntimeIntervals {

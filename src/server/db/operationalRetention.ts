@@ -9,20 +9,37 @@
  * event_traces (the permanent decision record, deliberately never pruned). Mirrors
  * ObservabilityStore.ts's sweep pattern exactly rather than inventing a new one.
  */
-import { db } from './index';
-import { candidateRankings } from './schema';
-import { lt } from 'drizzle-orm';
+import { sqliteDb } from './index';
 import { runtimeIntervals } from '../config/runtimeIntervals';
 
 let retentionTimer: ReturnType<typeof setInterval> | null = null;
 
+/**
+ * 2026-10-01 defect verification pass: previously one single unbatched DELETE, same class of
+ * defect as ObservabilityStore.ts's sweep (see that file's own comment for the first live
+ * reproduction) - live-reproduced a SECOND time against this table specifically, which this
+ * file's own header comment already documents had grown to 1.38M+ rows with zero retention before
+ * 2026-09-22. Same batching + yielding fix: bounded id-subquery deletes, yielding between batches
+ * so no single sweep call can block the event loop regardless of backlog size.
+ */
 export async function sweepCandidateRankingsRetention(nowMs = Date.now()): Promise<number> {
   const cutoffIso = new Date(nowMs - runtimeIntervals.candidateRankingsRetentionDays * 24 * 60 * 60 * 1000).toISOString();
+  const batchSize = runtimeIntervals.candidateRankingsRetentionSweepBatchSize;
+  const maxBatches = runtimeIntervals.candidateRankingsRetentionSweepMaxBatchesPerCall;
+  const deleteBatch = sqliteDb.prepare(
+    'DELETE FROM candidate_rankings WHERE id IN (SELECT id FROM candidate_rankings WHERE cycle_at < ? LIMIT ?)'
+  );
+  let totalDeleted = 0;
   try {
-    const result = await db.delete(candidateRankings).where(lt(candidateRankings.cycleAt, cutoffIso));
-    return Number((result as { changes?: number })?.changes ?? 0);
+    for (let i = 0; i < maxBatches; i++) {
+      const result = deleteBatch.run(cutoffIso, batchSize);
+      totalDeleted += result.changes;
+      if (result.changes < batchSize) break;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    return totalDeleted;
   } catch {
-    return 0;
+    return totalDeleted;
   }
 }
 

@@ -259,7 +259,20 @@ tag name that any future migration would break again. This is a real, legitimate
 not a change to the migration itself, and not a weakening of what the test actually verifies (the
 repair-and-idempotency behavior it exists to prove is unchanged and still fully asserted).
 
-After the fix, re-run: **[filled in once the confirming re-run completes]**
+After the fix, re-run: **605 files / 4,670 tests attempted, 605 passed / 1 failed file, 4,668 passed /
+2 failed tests** — the 2 failures were real, but in `cryptoPaperMigration.test.ts` itself (migration
+`0081`, added later the same session for an unrelated defect-verification finding, exposed that its
+`deployedBeforeCrypto()` fixture never actually created a `fills` table — fixed by seeding the
+fixture with the real pre-0081 `fills` shape; see that commit's own notes). Re-run after that fix: 1
+file/2 tests isolated, both passing.
+
+A final full-suite run was then taken as the authoritative confirmation, after all of this session's
+work (Phase 1 plus a separate, later Independent Code Defect Verification pass covering session-cookie
+security, timing-safe auth comparison, ChiefTrader prompt-injection isolation, a capital-allocation
+fail-open fix, and two live-reproduced event-loop-freeze fixes in unrelated retention sweeps — none of
+which touch this phase's own compaction code path):
+
+**Final confirmed result: 607 files / 4,682 tests, 607 passed / 0 failed, exit code 0.**
 
 Clean TypeScript typecheck confirmed throughout (`tsc --noEmit`, zero errors at every checkpoint).
 
